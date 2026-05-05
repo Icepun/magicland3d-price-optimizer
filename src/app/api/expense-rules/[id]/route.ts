@@ -1,0 +1,33 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import { z } from "zod";
+
+const Schema = z.object({
+  name: z.string().min(1).optional(),
+  type: z.enum(["fixed", "percentage", "per_order"]).optional(),
+  value: z.number().min(0).optional(),
+  categoryName: z.string().nullable().optional(),
+  minPrice: z.number().min(0).optional(),
+  maxPrice: z.number().min(0).optional(),
+  priority: z.number().int().optional(),
+  isActive: z.boolean().optional(),
+});
+
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const data = Schema.parse(await req.json());
+  const rule = await prisma.expenseRule.update({ where: { id }, data });
+  return NextResponse.json(rule);
+}
+
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  await prisma.expenseRule.delete({ where: { id } });
+  return NextResponse.json({ ok: true });
+}

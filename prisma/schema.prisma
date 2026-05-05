@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Product {
+  id               String   @id @default(cuid())
+  barcode          String   @unique
+  sku              String
+  name             String
+  categoryName     String
+  currentSalePrice Float
+  listPrice        Float?
+  stock            Int      @default(0)
+  desi             Float?
+  weight           Float?
+  isActive         Boolean  @default(true)
+  source           String   @default("manual")
+  trendyolId       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  cost            ProductCost?
+  recommendations Recommendation[]
+  priceHistory    PriceHistory[]
+}
+
+model ProductCost {
+  id              String   @id @default(cuid())
+  productId       String   @unique
+  costMode        String   @default("manual")
+  templateId      String?
+  manualCost      Float?
+  materialWeight  Float?
+  printTimeHours  Float?
+  materialCost    Float?
+  electricityCost Float?
+  machineWearCost Float?
+  packagingCost   Float?
+  laborCost       Float?
+  otherCost       Float?
+  wasteRate       Float?
+  totalCost       Float?
+  updatedAt       DateTime @updatedAt
+
+  product  Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  template CostTemplate? @relation(fields: [templateId], references: [id])
+}
+
+model CostTemplate {
+  id                     String  @id @default(cuid())
+  name                   String
+  materialCostPerGram    Float   @default(0)
+  electricityCostPerHour Float   @default(0)
+  machineWearCostPerHour Float   @default(0)
+  defaultPackagingCost   Float   @default(0)
+  defaultLaborCost       Float   @default(0)
+  defaultOtherCost       Float   @default(0)
+  defaultWasteRate       Float   @default(0)
+  isActive               Boolean @default(true)
+
+  productCosts ProductCost[]
+}
+
+model CommissionRule {
+  id              String    @id @default(cuid())
+  name            String
+  categoryName    String?
+  minPrice        Float     @default(0)
+  maxPrice        Float     @default(999999)
+  commissionRate  Float
+  fixedCommission Float     @default(0)
+  validFrom       DateTime?
+  validTo         DateTime?
+  priority        Int       @default(10)
+  isActive        Boolean   @default(true)
+}
+
+model CargoRule {
+  id            String    @id @default(cuid())
+  name          String
+  cargoProvider String?
+  categoryName  String?
+  minPrice      Float     @default(0)
+  maxPrice      Float     @default(999999)
+  minDesi       Float     @default(0)
+  maxDesi       Float     @default(999)
+  cargoCost     Float
+  validFrom     DateTime?
+  validTo       DateTime?
+  priority      Int       @default(10)
+  isActive      Boolean   @default(true)
+}
+
+model ExpenseRule {
+  id           String  @id @default(cuid())
+  name         String
+  type         String
+  value        Float
+  categoryName String?
+  minPrice     Float   @default(0)
+  maxPrice     Float   @default(999999)
+  priority     Int     @default(10)
+  isActive     Boolean @default(true)
+}
+
+model Recommendation {
+  id                String   @id @default(cuid())
+  productId         String
+  currentPrice      Float
+  recommendedPrice  Float
+  currentProfit     Float
+  recommendedProfit Float
+  profitDifference  Float
+  currentMargin     Float
+  recommendedMargin Float
+  reason            String
+  status            String   @default("ready")
+  createdAt         DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model PriceHistory {
+  id           String   @id @default(cuid())
+  productId    String
+  oldPrice     Float
+  newPrice     Float
+  changeSource String
+  changedAt    DateTime @default(now())
+  note         String?
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+model AppSetting {
+  key   String @id
+  value String
+}

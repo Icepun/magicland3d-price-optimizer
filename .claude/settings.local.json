@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git --yes)",
+      "Bash(npx create-next-app@latest app-temp --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git --yes)",
+      "Bash(Get-ChildItem -Name)",
+      "Bash(cp -r 'C:\\\\Users\\\\Berke\\\\Desktop\\\\Magicland 3D Apps\\\\Price Tracker/app-temp/src' 'C:\\\\Users\\\\Berke\\\\Desktop\\\\Magicland 3D Apps\\\\Price Tracker/')",
+      "Bash(cp -r 'C:\\\\Users\\\\Berke\\\\Desktop\\\\Magicland 3D Apps\\\\Price Tracker/app-temp/public' 'C:\\\\Users\\\\Berke\\\\Desktop\\\\Magicland 3D Apps\\\\Price Tracker/')",
+      "Bash(npm install *)",
+      "Bash(npx prisma *)",
+      "Bash(npx shadcn@latest init --defaults --yes)",
+      "Bash(npx shadcn@latest add card table badge input label select dialog sheet tabs badge toast separator scroll-area switch tooltip dropdown-menu alert-dialog popover checkbox --yes)",
+      "Bash(npx shadcn@latest add sonner --yes)",
+      "Bash(npx tsc *)",
+      "Bash(npx shadcn@latest add card badge input label select dialog separator tabs switch dropdown-menu table tooltip scroll-area checkbox --yes)",
+      "Bash(timeout 30 npm run dev)",
+      "Bash(npm run *)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp"
+    ]
+  }
+}
