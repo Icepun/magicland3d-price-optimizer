@@ -109,6 +109,9 @@ function ensureDatabaseUrl() {
     const bundledDbPath = path.join(process.resourcesPath, "prisma", "dev.db");
     if (fs.existsSync(bundledDbPath)) {
       fs.copyFileSync(bundledDbPath, targetDbPath);
+    } else {
+      // Create an empty file so Prisma's query engine doesn't throw SQLITE_CANTOPEN
+      fs.writeFileSync(targetDbPath, "");
     }
   }
 
