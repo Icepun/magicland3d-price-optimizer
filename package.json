@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Trendyol sellers price and profit optimization desktop app",
   "author": "Magicland 3D",
   "private": true,
@@ -95,6 +95,9 @@
         "from": "prisma/dev.db",
         "to": "prisma/dev.db"
       }
+    ],
+    "asarUnpack": [
+      "src/generated/prisma/**/*.node"
     ],
     "win": {
       "target": "nsis",
