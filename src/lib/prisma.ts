@@ -23,4 +23,5 @@ export const prisma =
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+// Always cache globally so the same DB connection is reused across all requests
+globalForPrisma.prisma = prisma;

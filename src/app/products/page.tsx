@@ -109,13 +109,15 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
   }
 
   return (
-    <img
-      src={src}
-      alt={name}
-      className="w-10 h-10 rounded-md object-cover flex-shrink-0 border"
-      onError={() => setErrored(true)}
-      loading="lazy"
-    />
+    <div className="w-10 h-10 rounded-md border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+      <img
+        src={src}
+        alt={name}
+        className="max-w-full max-h-full object-contain"
+        onError={() => setErrored(true)}
+        loading="lazy"
+      />
+    </div>
   );
 }
 

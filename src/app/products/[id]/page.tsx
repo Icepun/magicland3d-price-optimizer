@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { ArrowLeft, Zap, TrendingUp, Target } from "lucide-react";
+import { ArrowLeft, Zap, TrendingUp, Target, Package } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ interface ProductDetail {
   stock: number;
   desi: number | null;
   weight: number | null;
+  imageUrl: string | null;
   source: string;
   cost: {
     costMode: string;
@@ -182,10 +183,23 @@ export default function ProductDetailPage({
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
         <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
           <ArrowLeft className="h-4 w-4" />
         </Link>
+        {product.imageUrl ? (
+          <div className="w-16 h-16 rounded-lg border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+            <img
+              src={product.imageUrl}
+              alt={product.name}
+              className="max-w-full max-h-full object-contain"
+            />
+          </div>
+        ) : (
+          <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+            <Package className="h-8 w-8 text-muted-foreground" />
+          </div>
+        )}
         <div>
           <h1 className="text-xl font-bold">{product.name}</h1>
           <p className="text-sm text-muted-foreground">
