@@ -1,9 +1,16 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import path from "node:path";
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL ?? "";
 
-if (databaseUrl === "file:./dev.db" || databaseUrl === "file:dev.db") {
+// Resolve relative DATABASE_URL to absolute path so Prisma can always find the file.
+// In production, electron/main.js sets an absolute path before Next.js starts.
+if (
+  databaseUrl === "file:./dev.db" ||
+  databaseUrl === "file:dev.db" ||
+  databaseUrl.startsWith("file:./dev.db") ||
+  databaseUrl.startsWith("file:dev.db")
+) {
   const dbPath = path.join(process.cwd(), "prisma", "dev.db").replace(/\\/g, "/");
   process.env.DATABASE_URL = `file:${dbPath}`;
 }
