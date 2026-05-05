@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Plus, Search, Trash2, Package } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
@@ -39,6 +39,7 @@ interface Product {
   listPrice: number | null;
   stock: number;
   desi: number | null;
+  imageUrl: string | null;
   isActive: boolean;
   source: string;
   cost: {
@@ -70,6 +71,8 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
+type FilterMode = "active" | "inactive" | "all";
+
 const STATUS_COLORS = {
   missing: "text-muted-foreground",
   negative: "text-destructive font-medium",
@@ -94,8 +97,31 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function ProductImage({ src, name }: { src: string | null; name: string }) {
+  const [errored, setErrored] = useState(false);
+
+  if (!src || errored) {
+    return (
+      <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+        <Package className="h-5 w-5 text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={name}
+      className="w-10 h-10 rounded-md object-cover flex-shrink-0 border"
+      onError={() => setErrored(true)}
+      loading="lazy"
+    />
+  );
+}
+
 export default function ProductsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
+  const [filterMode, setFilterMode] = useState<FilterMode>("active");
   const [addOpen, setAddOpen] = useState(false);
   const queryClient = useQueryClient();
 
@@ -104,8 +130,8 @@ export default function ProductsPage() {
     isLoading,
     isError,
   } = useQuery<Product[]>({
-    queryKey: ["products"],
-    queryFn: () => fetchJson<Product[]>("/api/products"),
+    queryKey: ["products", filterMode],
+    queryFn: () => fetchJson<Product[]>(`/api/products?filter=${filterMode}`),
   });
 
   const deleteMutation = useMutation({
@@ -175,6 +201,12 @@ export default function ProductsPage() {
     });
   }, [globalFilter, products]);
 
+  const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
+    { value: "active", label: "Aktif" },
+    { value: "inactive", label: "Inaktif" },
+    { value: "all", label: "Tumu" },
+  ];
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -184,7 +216,7 @@ export default function ProductsPage() {
         </Button>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
@@ -194,6 +226,23 @@ export default function ProductsPage() {
             className="pl-9"
           />
         </div>
+
+        <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5">
+          {FILTER_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setFilterMode(opt.value)}
+              className={`px-3 py-1.5 text-sm font-medium rounded-sm transition-colors ${
+                filterMode === opt.value
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         <span className="text-sm text-muted-foreground">
           {filteredProducts.length} urun
         </span>
@@ -203,6 +252,7 @@ export default function ProductsPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[52px]" />
               <TableHead>Urun Adi</TableHead>
               <TableHead>Barkod</TableHead>
               <TableHead>Kategori</TableHead>
@@ -218,20 +268,22 @@ export default function ProductsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                   Yukleniyor...
                 </TableCell>
               </TableRow>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-8 text-destructive">
+                <TableCell colSpan={11} className="text-center py-8 text-destructive">
                   Urunler yuklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
-                  Urun bulunamadi. CSV ile ice aktarin veya manuel ekleyin.
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                  {filterMode === "inactive"
+                    ? "Inaktif urun bulunmuyor."
+                    : "Urun bulunamadi. CSV ile ice aktarin veya manuel ekleyin."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -241,7 +293,13 @@ export default function ProductsPage() {
                 const cost = product.cost?.totalCost ?? product.cost?.manualCost;
 
                 return (
-                  <TableRow key={product.id} className="hover:bg-muted/50">
+                  <TableRow
+                    key={product.id}
+                    className={`hover:bg-muted/50 ${!product.isActive ? "opacity-50" : ""}`}
+                  >
+                    <TableCell className="py-2 pr-0">
+                      <ProductImage src={product.imageUrl} name={product.name} />
+                    </TableCell>
                     <TableCell>
                       <Link
                         href={`/products/${product.id}`}
@@ -249,6 +307,11 @@ export default function ProductsPage() {
                       >
                         {product.name}
                       </Link>
+                      {!product.isActive && (
+                        <Badge variant="secondary" className="ml-2 text-xs">
+                          Inaktif
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       <span className="text-xs text-muted-foreground font-mono">

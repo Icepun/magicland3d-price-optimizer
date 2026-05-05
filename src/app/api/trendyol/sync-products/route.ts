@@ -14,6 +14,7 @@ const Schema = z.object({
 });
 
 function mapProduct(product: TrendyolProduct) {
+  const imageUrl = product.images?.[0]?.url || null;
   return {
     barcode: product.barcode,
     sku: product.stockCode || product.productMainId || product.barcode,
@@ -26,6 +27,7 @@ function mapProduct(product: TrendyolProduct) {
       product.dimensionalWeight === undefined
         ? undefined
         : Number(product.dimensionalWeight),
+    imageUrl,
     isActive: product.archived ? false : true,
     source: "trendyol",
     trendyolId: String(product.id ?? product.productCode ?? ""),

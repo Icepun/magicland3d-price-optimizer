@@ -22,6 +22,7 @@ export interface TrendyolProduct {
   listPrice?: number;
   dimensionalWeight?: number;
   productMainId?: string;
+  images?: Array<{ url?: string }>;
 }
 
 export interface TrendyolProductPage {

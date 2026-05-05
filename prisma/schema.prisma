@@ -19,6 +19,7 @@ model Product {
   stock            Int      @default(0)
   desi             Float?
   weight           Float?
+  imageUrl         String?
   isActive         Boolean  @default(true)
   source           String   @default("manual")
   trendyolId       String?

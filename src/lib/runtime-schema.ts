@@ -101,6 +101,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "weight", "REAL");
     await ensureColumn("Product", "listPrice", "REAL");
     await ensureColumn("Product", "isActive", "BOOLEAN NOT NULL DEFAULT true");
+    await ensureColumn("Product", "imageUrl", "TEXT");
   })();
 
   return schemaReady;

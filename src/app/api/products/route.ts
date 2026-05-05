@@ -17,12 +17,15 @@ const CreateProductSchema = z.object({
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const filter = searchParams.get("filter");
+  const filter = searchParams.get("filter") ?? "active";
   const search = searchParams.get("search");
 
   const where: Record<string, unknown> = {};
 
   if (filter === "active") where.isActive = true;
+  else if (filter === "inactive") where.isActive = false;
+  // filter === "all" → no isActive filter
+
   if (filter === "negative-profit") {
     // We'll compute this in-memory after fetching with costs
   }
