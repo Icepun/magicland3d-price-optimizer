@@ -142,10 +142,6 @@ export default function ProductDetailPage({
   });
 
   // Form states
-  const [costMode, setCostMode] = useState<"manual" | "detailed">("manual");
-  const [manualCost, setManualCost] = useState("");
-  const [manualPackagingCost, setManualPackagingCost] = useState("");
-
   const [filamentTypeId, setFilamentTypeId] = useState("");
   const [filamentWeight, setFilamentWeight] = useState("");
   const [printTimeHours, setPrintTimeHours] = useState("");
@@ -161,10 +157,6 @@ export default function ProductDetailPage({
     if (product?.cost) {
       const c = product.cost;
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setCostMode(c.costMode === "detailed" ? "detailed" : "manual");
-      setManualCost(c.manualCost ? String(c.manualCost) : "");
-      setManualPackagingCost(c.packagingCost ? String(c.packagingCost) : "");
-
       setFilamentTypeId(c.filamentTypeId || "");
       setFilamentWeight(c.filamentWeight ? String(c.filamentWeight) : "");
       setPrintTimeHours(c.printTimeHours ? String(c.printTimeHours) : "");
@@ -203,10 +195,7 @@ export default function ProductDetailPage({
   const calcWasteCost = subtotal * wRate;
   const calculatedTotalCost = subtotal + calcWasteCost;
 
-  const finalEffectiveTotalCost =
-    costMode === "detailed"
-      ? calculatedTotalCost
-      : (parseFloat(manualCost) || 0) + (parseFloat(manualPackagingCost) || 0);
+  const finalEffectiveTotalCost = calculatedTotalCost;
 
   const simulationMutation = useMutation<SimulationResponse, Error, void>({
     mutationFn: () =>
@@ -224,24 +213,17 @@ export default function ProductDetailPage({
   const saveCostMutation = useMutation({
     mutationFn: () => {
       const body = {
-        cost: costMode === "detailed"
-          ? {
-              costMode: "detailed",
-              filamentTypeId: filamentTypeId || null,
-              filamentWeight: fWeight,
-              printTimeHours: pTime,
-              wasteRate: wRate,
-              packagingPoset: pPoset,
-              packagingNaylon: pNaylon,
-              packagingBant: pBant,
-              packagingKart: pKart,
-            }
-          : {
-              costMode: "manual",
-              manualCost: parseFloat(manualCost) || 0,
-              packagingCost: parseFloat(manualPackagingCost) || 0,
-              totalCost: (parseFloat(manualCost) || 0) + (parseFloat(manualPackagingCost) || 0),
-            },
+        cost: {
+          costMode: "detailed",
+          filamentTypeId: filamentTypeId || null,
+          filamentWeight: fWeight,
+          printTimeHours: pTime,
+          wasteRate: wRate,
+          packagingPoset: pPoset,
+          packagingNaylon: pNaylon,
+          packagingBant: pBant,
+          packagingKart: pKart,
+        },
       };
 
       return fetch(`/api/products/${id}`, {
@@ -318,57 +300,8 @@ export default function ProductDetailPage({
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm">Maliyet Hesaplama</CardTitle>
-              <div className="flex gap-1 mt-2 rounded-md border bg-muted/40 p-0.5 text-xs">
-                <button
-                  type="button"
-                  onClick={() => setCostMode("manual")}
-                  className={`flex-1 py-1 text-center font-medium rounded-sm transition-colors ${
-                    costMode === "manual"
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Manuel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCostMode("detailed")}
-                  className={`flex-1 py-1 text-center font-medium rounded-sm transition-colors ${
-                    costMode === "detailed"
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Detaylı Hesaplama
-                </button>
-              </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {costMode === "manual" ? (
-                <>
-                  <div>
-                    <Label className="text-xs">Ürün Maliyeti (TL)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={manualCost}
-                      onChange={(e) => setManualCost(e.target.value)}
-                      placeholder="0.00"
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Ambalaj Maliyeti (TL)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={manualPackagingCost}
-                      onChange={(e) => setManualPackagingCost(e.target.value)}
-                      placeholder="0.00"
-                    />
-                  </div>
-                </>
-              ) : (
-                <>
                   <div className="space-y-3">
                     <p className="text-xs font-semibold text-primary">3D BASKI PARAMETRELERİ</p>
                     <div>
@@ -501,8 +434,6 @@ export default function ProductDetailPage({
                       </div>
                     )}
                   </div>
-                </>
-              )}
 
               <Separator />
 

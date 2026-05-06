@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulateRange } from "@/core/pricing-engine";
 import { generateRecommendations } from "@/core/recommendation-engine";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
 const SimulateSchema = z.object({
@@ -15,6 +16,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await ensureRuntimeSchema();
+
   const { id } = await params;
   const body = await req.json();
   const options = SimulateSchema.parse(body);

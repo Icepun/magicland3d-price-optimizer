@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { calculateDetailedCost } from "@/core/cost-calculator";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
 const UpdateProductSchema = z.object({
@@ -42,6 +43,8 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await ensureRuntimeSchema();
+
   const { id } = await params;
   const product = await prisma.product.findUnique({
     where: { id },
@@ -66,6 +69,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await ensureRuntimeSchema();
+
   const { id } = await params;
   const body = await req.json();
   const { cost, ...productData } = UpdateProductSchema.parse(body);
@@ -132,6 +137,8 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  await ensureRuntimeSchema();
+
   const { id } = await params;
   await prisma.product.delete({ where: { id } });
   return NextResponse.json({ ok: true });

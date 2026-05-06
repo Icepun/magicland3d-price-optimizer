@@ -116,6 +116,44 @@ function ensureDatabaseUrl() {
   }
 
   process.env.DATABASE_URL = `file:${targetDbPath.replace(/\\/g, "/")}`;
+  backupDatabase(targetDbPath);
+}
+
+function backupDatabase(dbPath) {
+  try {
+    if (!fs.existsSync(dbPath)) return;
+
+    const stats = fs.statSync(dbPath);
+    if (stats.size === 0) return;
+
+    const userDataDir = app.getPath("userData");
+    const backupsDir = path.join(userDataDir, "backups");
+    const version = app.getVersion();
+    const markerPath = path.join(backupsDir, `backup-${version}.done`);
+    if (fs.existsSync(markerPath)) return;
+
+    fs.mkdirSync(backupsDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupPath = path.join(backupsDir, `dev-${version}-${timestamp}.db`);
+    fs.copyFileSync(dbPath, backupPath);
+    fs.writeFileSync(markerPath, backupPath, "utf8");
+
+    const backups = fs
+      .readdirSync(backupsDir)
+      .filter((name) => name.startsWith("dev-") && name.endsWith(".db"))
+      .map((name) => ({
+        name,
+        path: path.join(backupsDir, name),
+        time: fs.statSync(path.join(backupsDir, name)).mtimeMs,
+      }))
+      .sort((a, b) => b.time - a.time);
+
+    for (const oldBackup of backups.slice(30)) {
+      fs.rmSync(oldBackup.path, { force: true });
+    }
+  } catch {
+    // Backup failure must never block app startup.
+  }
 }
 
 function ensureCredentialKey() {
