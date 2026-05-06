@@ -12,6 +12,7 @@ const defaultPort = Number(process.env.PORT || 3000);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${defaultPort}`;
 
 let server;
+let isQuittingForUpdate = false;
 let updateState = {
   status: "idle",
   message: app.isPackaged
@@ -21,11 +22,39 @@ let updateState = {
   percent: 0,
 };
 
+app.setAppUserModelId("com.magicland3d.trendyol-price-optimizer");
+
 function setUpdateState(patch) {
   updateState = { ...updateState, ...patch };
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send("updater:status", updateState);
   }
+}
+
+function closeNextServer() {
+  if (!server) return Promise.resolve();
+
+  const currentServer = server;
+  server = undefined;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
+    try {
+      currentServer.closeAllConnections?.();
+      currentServer.closeIdleConnections?.();
+      currentServer.close(finish);
+    } catch {
+      finish();
+    }
+
+    setTimeout(finish, 1500).unref?.();
+  });
 }
 
 function setupAutoUpdater() {
@@ -80,21 +109,32 @@ function setupAutoUpdater() {
     }
     try {
       await autoUpdater.checkForUpdates();
-    } catch (error) {
+    } catch {
       // Ignore, error handled by the "error" event listener above
     }
     return updateState;
   });
   ipcMain.handle("updater:download", async () => {
     if (!app.isPackaged) return updateState;
-    autoUpdater.downloadUpdate().catch((error) => {
+    autoUpdater.downloadUpdate().catch(() => {
       // Ignore, error handled by the "error" event listener above
     });
     return updateState;
   });
-  ipcMain.handle("updater:quit-and-install", () => {
+  ipcMain.handle("updater:quit-and-install", async () => {
     if (app.isPackaged) {
-      autoUpdater.quitAndInstall(false, true);
+      isQuittingForUpdate = true;
+      setUpdateState({
+        status: "installing",
+        message: "Guncelleme kuruluyor, uygulama kapatiliyor",
+        percent: 100,
+      });
+      await closeNextServer();
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.removeAllListeners("close");
+        window.close();
+      }
+      setImmediate(() => autoUpdater.quitAndInstall(true, true));
     }
   });
 }
@@ -263,6 +303,18 @@ app.on("activate", () => {
   }
 });
 
-app.on("before-quit", () => {
-  server?.close();
+app.on("before-quit", (event) => {
+  if (!server) return;
+
+  if (!isQuittingForUpdate) {
+    event.preventDefault();
+    closeNextServer().finally(() => app.quit());
+    return;
+  }
+
+  closeNextServer();
+});
+
+app.on("will-quit", () => {
+  closeNextServer();
 });

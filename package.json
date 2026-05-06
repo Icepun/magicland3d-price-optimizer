@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Trendyol sellers price and profit optimization desktop app",
   "author": "Magicland 3D",
   "private": true,
@@ -102,6 +102,12 @@
     "win": {
       "target": "nsis",
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     },
     "publish": [
       {
