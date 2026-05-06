@@ -9,16 +9,18 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 const Schema = z.object({
   approved: z.boolean().default(true),
   archived: z.boolean().default(false),
-  maxPages: z.coerce.number().int().min(1).max(100).default(10),
+  startPage: z.coerce.number().int().min(0).default(0),
+  maxPages: z.coerce.number().int().min(1).max(100).default(100),
   size: z.coerce.number().int().min(1).max(100).default(100),
 });
 
 function mapProduct(product: TrendyolProduct) {
   const imageUrl = product.images?.[0]?.url || null;
+  const barcode = product.barcode.trim();
   return {
-    barcode: product.barcode,
-    sku: product.stockCode || product.productMainId || product.barcode,
-    name: product.title || product.barcode,
+    barcode,
+    sku: product.stockCode || product.productMainId || barcode,
+    name: product.title || barcode,
     categoryName: product.categoryName || "Trendyol",
     currentSalePrice: Number(product.salePrice ?? 0),
     listPrice: product.listPrice === undefined ? undefined : Number(product.listPrice),
@@ -45,8 +47,9 @@ export async function POST(req: NextRequest) {
   let skipped = 0;
   let totalElements = 0;
   let totalPages = 0;
+  let processedPages = 0;
 
-  for (let page = 0; page < input.maxPages; page += 1) {
+  for (let page = input.startPage; page < input.startPage + input.maxPages; page += 1) {
     const result = await client.listProducts({
       page,
       size: input.size,
@@ -57,6 +60,7 @@ export async function POST(req: NextRequest) {
     const products = result.content ?? [];
     totalElements = result.totalElements ?? totalElements;
     totalPages = result.totalPages ?? totalPages;
+    processedPages += 1;
 
     if (products.length === 0) break;
 
@@ -97,6 +101,8 @@ export async function POST(req: NextRequest) {
       skipped,
       totalElements,
       totalPages,
+      processedPages,
+      nextPage: input.startPage + processedPages,
     });
   } catch (error) {
     return jsonError(error);

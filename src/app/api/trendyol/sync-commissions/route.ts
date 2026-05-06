@@ -8,6 +8,8 @@ import { jsonError } from "@/lib/api-error";
 
 const Schema = z.object({
   days: z.coerce.number().int().min(15).max(365).default(180),
+  startDate: z.coerce.number().int().positive().optional(),
+  endDate: z.coerce.number().int().positive().optional(),
   size: z.coerce.number().int().min(100).max(1000).default(1000),
 });
 
@@ -18,6 +20,10 @@ function getItemTime(item: TrendyolSettlementItem) {
   return Number(item.transactionDate ?? item.orderDate ?? 0);
 }
 
+function normalizeBarcode(barcode: string) {
+  return barcode.trim();
+}
+
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
@@ -25,18 +31,31 @@ export async function POST(req: NextRequest) {
     const client = new TrendyolClient(await getTrendyolCredentials());
 
     const now = Date.now();
-    let end = now;
     const startLimit = now - input.days * DAY_MS;
     const byBarcode = new Map<string, { rate: number; seenAt: number }>();
     let scannedRecords = 0;
+    let processedRanges = 0;
+    let processedPages = 0;
 
-    while (end > startLimit) {
-      const start = Math.max(startLimit, end - RANGE_DAYS * DAY_MS + 1);
+    const ranges =
+      input.startDate && input.endDate
+        ? [{ start: input.startDate, end: input.endDate }]
+        : (() => {
+            const builtRanges: Array<{ start: number; end: number }> = [];
+            let end = now;
+            while (end > startLimit) {
+              const start = Math.max(startLimit, end - RANGE_DAYS * DAY_MS + 1);
+              builtRanges.push({ start, end });
+              end = start - 1;
+            }
+            return builtRanges.reverse();
+          })();
 
+    for (const range of ranges) {
       for (let page = 0; page < 500; page += 1) {
         const result = await client.listSettlements({
-          startDate: start,
-          endDate: end,
+          startDate: range.start,
+          endDate: range.end,
           transactionType: "Sale",
           page,
           size: input.size,
@@ -44,9 +63,10 @@ export async function POST(req: NextRequest) {
 
         const content = result.content ?? [];
         scannedRecords += content.length;
+        processedPages += 1;
 
         for (const item of content) {
-          const barcode = item.barcode?.trim();
+          const barcode = item.barcode ? normalizeBarcode(item.barcode) : "";
           const rate = Number(item.commissionRate);
           if (!barcode || !Number.isFinite(rate) || rate <= 0) continue;
 
@@ -61,20 +81,25 @@ export async function POST(req: NextRequest) {
         if (result.totalPages !== undefined && page >= result.totalPages - 1) break;
       }
 
-      end = start - 1;
+      processedRanges += 1;
     }
 
     let updated = 0;
     let unchanged = 0;
+    let matchedProducts = 0;
     const nowDate = new Date();
+    const products = await prisma.product.findMany({
+      select: { id: true, barcode: true, commissionRate: true },
+    });
+    const productByBarcode = new Map(
+      products.map((product) => [normalizeBarcode(product.barcode), product])
+    );
 
     for (const [barcode, value] of byBarcode) {
-      const product = await prisma.product.findUnique({
-        where: { barcode },
-        select: { id: true, commissionRate: true },
-      });
+      const product = productByBarcode.get(barcode);
       if (!product) continue;
 
+      matchedProducts += 1;
       if (
         product.commissionRate !== null &&
         product.commissionRate !== undefined &&
@@ -105,8 +130,13 @@ export async function POST(req: NextRequest) {
       updated,
       unchanged,
       foundBarcodes: byBarcode.size,
+      matchedProducts,
+      unmatchedBarcodes: byBarcode.size - matchedProducts,
       scannedRecords,
       days: input.days,
+      processedRanges,
+      totalRanges: ranges.length,
+      processedPages,
     });
   } catch (error) {
     return jsonError(error);

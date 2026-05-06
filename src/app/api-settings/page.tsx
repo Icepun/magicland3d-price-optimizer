@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Percent, Settings2, PlugZap, RefreshCw, UploadCloud, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -36,6 +37,35 @@ const Schema = z.object({
 
 type FormData = z.infer<typeof Schema>;
 const DRAFT_KEY = "trendyol-api-settings-draft";
+const DAY_MS = 24 * 60 * 60 * 1000;
+const COMMISSION_DAYS = 365;
+const COMMISSION_RANGE_DAYS = 15;
+
+interface OperationProgress {
+  label: string;
+  detail: string;
+  value: number;
+  startedAt: number;
+}
+
+interface ProductSyncResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  totalElements: number;
+  totalPages: number;
+  processedPages: number;
+  nextPage: number;
+}
+
+interface CommissionSyncResult {
+  updated: number;
+  unchanged: number;
+  foundBarcodes: number;
+  matchedProducts: number;
+  unmatchedBarcodes: number;
+  scannedRecords: number;
+}
 
 function getInitialFormValues(): FormData {
   const fallback: FormData = {
@@ -73,9 +103,62 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+function formatDuration(ms: number) {
+  const seconds = Math.max(1, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} sn`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest > 0 ? `${minutes} dk ${rest} sn` : `${minutes} dk`;
+}
+
+function mergeProductSyncResult(
+  total: ProductSyncResult,
+  next: ProductSyncResult
+): ProductSyncResult {
+  return {
+    created: total.created + next.created,
+    updated: total.updated + next.updated,
+    skipped: total.skipped + next.skipped,
+    totalElements: next.totalElements || total.totalElements,
+    totalPages: next.totalPages || total.totalPages,
+    processedPages: total.processedPages + next.processedPages,
+    nextPage: next.nextPage,
+  };
+}
+
+function mergeCommissionSyncResult(
+  total: CommissionSyncResult,
+  next: CommissionSyncResult
+): CommissionSyncResult {
+  return {
+    updated: total.updated + next.updated,
+    unchanged: total.unchanged + next.unchanged,
+    foundBarcodes: total.foundBarcodes + next.foundBarcodes,
+    matchedProducts: total.matchedProducts + next.matchedProducts,
+    unmatchedBarcodes: total.unmatchedBarcodes + next.unmatchedBarcodes,
+    scannedRecords: total.scannedRecords + next.scannedRecords,
+  };
+}
+
+function buildCommissionRanges() {
+  const now = Date.now();
+  const startLimit = now - COMMISSION_DAYS * DAY_MS;
+  const ranges: Array<{ startDate: number; endDate: number }> = [];
+  let endDate = now;
+
+  while (endDate > startLimit) {
+    const startDate = Math.max(startLimit, endDate - COMMISSION_RANGE_DAYS * DAY_MS + 1);
+    ranges.push({ startDate, endDate });
+    endDate = startDate - 1;
+  }
+
+  return ranges.reverse();
+}
+
 export default function ApiSettingsPage() {
   const queryClient = useQueryClient();
   const [lastResult, setLastResult] = useState<string>("");
+  const [progress, setProgress] = useState<OperationProgress | null>(null);
   const hasDraftRef = useRef(
     typeof window !== "undefined" && Boolean(window.sessionStorage.getItem(DRAFT_KEY))
   );
@@ -159,27 +242,68 @@ export default function ApiSettingsPage() {
   });
 
   const syncMutation = useMutation({
-    mutationFn: () =>
-      fetchJson<{
-        created: number;
-        updated: number;
-        skipped: number;
-        totalElements: number;
-        totalPages: number;
-      }>("/api/trendyol/sync-products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved: true, archived: false, maxPages: 10, size: 100 }),
-      }),
+    mutationFn: async () => {
+      const startedAt = Date.now();
+      let page = 0;
+      let total: ProductSyncResult = {
+        created: 0,
+        updated: 0,
+        skipped: 0,
+        totalElements: 0,
+        totalPages: 0,
+        processedPages: 0,
+        nextPage: 0,
+      };
+
+      setProgress({
+        label: "Urunler cekiliyor",
+        detail: "Trendyol ilk sayfa okunuyor...",
+        value: 3,
+        startedAt,
+      });
+
+      while (page < 100) {
+        const result = await fetchJson<ProductSyncResult>("/api/trendyol/sync-products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            approved: true,
+            archived: false,
+            startPage: page,
+            maxPages: 1,
+            size: 100,
+          }),
+        });
+
+        total = mergeProductSyncResult(total, result);
+        const totalPages = Math.max(1, result.totalPages || total.totalPages || page + 1);
+        const nextPage = result.nextPage ?? page + 1;
+        const value = Math.min(100, Math.round((nextPage / totalPages) * 100));
+
+        setProgress({
+          label: "Urunler cekiliyor",
+          detail: `${nextPage}/${totalPages} sayfa islendi. Gecen sure: ${formatDuration(Date.now() - startedAt)}.`,
+          value,
+          startedAt,
+        });
+
+        page = nextPage;
+        if (page >= totalPages || result.processedPages === 0) break;
+      }
+
+      return total;
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       setLastResult(
-        `Sync tamam. Yeni: ${data.created}, guncellenen: ${data.updated}, atlanan: ${data.skipped}.`
+        `Sync tamam. Yeni: ${data.created}, guncellenen: ${data.updated}, atlanan: ${data.skipped}, sayfa: ${data.processedPages}/${data.totalPages}.`
       );
+      setProgress(null);
       toast.success("Trendyol urunleri senkronize edildi");
     },
     onError: (error) => {
       setLastResult(error.message);
+      setProgress(null);
       toast.error(error.message);
     },
   });
@@ -211,33 +335,77 @@ export default function ApiSettingsPage() {
   });
 
   const syncCommissionsMutation = useMutation({
-    mutationFn: () =>
-      fetchJson<{
-        updated: number;
-        unchanged: number;
-        foundBarcodes: number;
-        scannedRecords: number;
-      }>("/api/trendyol/sync-commissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: 180 }),
-      }),
+    mutationFn: async () => {
+      const startedAt = Date.now();
+      const ranges = buildCommissionRanges();
+      let total: CommissionSyncResult = {
+        updated: 0,
+        unchanged: 0,
+        foundBarcodes: 0,
+        matchedProducts: 0,
+        unmatchedBarcodes: 0,
+        scannedRecords: 0,
+      };
+
+      setProgress({
+        label: "Komisyonlar guncelleniyor",
+        detail: `${ranges.length} donem taranacak.`,
+        value: 1,
+        startedAt,
+      });
+
+      for (let index = 0; index < ranges.length; index += 1) {
+        const range = ranges[index];
+        const result = await fetchJson<CommissionSyncResult>("/api/trendyol/sync-commissions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            days: COMMISSION_DAYS,
+            startDate: range.startDate,
+            endDate: range.endDate,
+          }),
+        });
+
+        total = mergeCommissionSyncResult(total, result);
+        const done = index + 1;
+        const value = Math.round((done / ranges.length) * 100);
+        const elapsed = Date.now() - startedAt;
+        const estimatedTotal = (elapsed / done) * ranges.length;
+        const remaining = Math.max(0, estimatedTotal - elapsed);
+
+        setProgress({
+          label: "Komisyonlar guncelleniyor",
+          detail: `${done}/${ranges.length} donem islendi. Kalan tahmini: ${formatDuration(remaining)}.`,
+          value,
+          startedAt,
+        });
+      }
+
+      return total;
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       queryClient.invalidateQueries({ queryKey: ["recommendations"] });
       setLastResult(
-        `Komisyon sync tamam. Güncellenen: ${data.updated}, aynı kalan: ${data.unchanged}, bulunan barkod: ${data.foundBarcodes}.`
+        `Komisyon sync tamam. Guncellenen: ${data.updated}, ayni kalan: ${data.unchanged}, eslesen urun: ${data.matchedProducts}, finans barkodu: ${data.foundBarcodes}, taranan kayit: ${data.scannedRecords}.`
       );
-      toast.success("Komisyonlar güncellendi");
+      setProgress(null);
+      toast.success("Komisyonlar guncellendi");
     },
     onError: (error) => {
       setLastResult(error.message);
+      setProgress(null);
       toast.error(error.message);
     },
   });
 
   const configured = Boolean(settings?.sellerId && settings.hasApiKey && settings.hasApiSecret);
+  const busy =
+    testMutation.isPending ||
+    syncMutation.isPending ||
+    syncCommissionsMutation.isPending ||
+    updatePricesMutation.isPending;
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
@@ -337,10 +505,10 @@ export default function ApiSettingsPage() {
             <Button
               variant="outline"
               className="w-full"
-              disabled={!configured || testMutation.isPending}
+              disabled={!configured || busy}
               onClick={() => testMutation.mutate()}
             >
-              Test Et
+              {testMutation.isPending ? "Test ediliyor..." : "Test Et"}
             </Button>
           </CardContent>
         </Card>
@@ -355,10 +523,10 @@ export default function ApiSettingsPage() {
             <Button
               variant="outline"
               className="w-full"
-              disabled={!configured || syncCommissionsMutation.isPending}
+              disabled={!configured || busy}
               onClick={() => syncCommissionsMutation.mutate()}
             >
-              Komisyonları Güncelle
+              {syncCommissionsMutation.isPending ? "Guncelleniyor..." : "Komisyonlari Guncelle"}
             </Button>
           </CardContent>
         </Card>
@@ -373,10 +541,10 @@ export default function ApiSettingsPage() {
             <Button
               variant="outline"
               className="w-full"
-              disabled={!configured || syncMutation.isPending}
+              disabled={!configured || busy}
               onClick={() => syncMutation.mutate()}
             >
-              Ürünleri Çek
+              {syncMutation.isPending ? "Cekiliyor..." : "Urunleri Cek"}
             </Button>
           </CardContent>
         </Card>
@@ -391,14 +559,27 @@ export default function ApiSettingsPage() {
             <Button
               variant="outline"
               className="w-full"
-              disabled={!configured || updatePricesMutation.isPending}
+              disabled={!configured || busy}
               onClick={() => updatePricesMutation.mutate()}
             >
-              Kabul Edilenleri Gönder
+              {updatePricesMutation.isPending ? "Gonderiliyor..." : "Kabul Edilenleri Gonder"}
             </Button>
           </CardContent>
         </Card>
       </div>
+
+      {progress && (
+        <Card>
+          <CardContent className="pt-6 space-y-3">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="font-medium">{progress.label}</span>
+              <span className="text-muted-foreground">%{Math.round(progress.value)}</span>
+            </div>
+            <Progress value={progress.value} />
+            <p className="text-xs text-muted-foreground">{progress.detail}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {lastResult && (
         <Card>
