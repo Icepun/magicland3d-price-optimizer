@@ -1,22 +1,26 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { SplashScreen } from "@/components/layout/SplashScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const plusJakartaSans = Plus_Jakarta_Sans({
+  variable: "--font-sans",
+  subsets: ["latin-ext"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Trendyol Price Optimizer",
+  title: "Magicland 3D — Fiyat Optimizasyonu",
   description: "Trendyol satıcıları için fiyat ve kâr optimizasyon aracı",
 };
 
@@ -28,10 +32,12 @@ export default function RootLayout({
   return (
     <html
       lang="tr"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${plusJakartaSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      suppressHydrationWarning
     >
-      <body className="flex h-full">
+      <body className="flex h-full bg-background text-foreground">
         <QueryProvider>
+          <SplashScreen />
           <Sidebar />
           <main className="flex-1 overflow-y-auto bg-background">
             {children}
