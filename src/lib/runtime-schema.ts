@@ -37,6 +37,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "stock" INTEGER NOT NULL DEFAULT 0,
         "desi" REAL,
         "weight" REAL,
+        "imageUrl" TEXT,
         "isActive" BOOLEAN NOT NULL DEFAULT true,
         "source" TEXT NOT NULL DEFAULT 'manual',
         "trendyolId" TEXT,
@@ -53,16 +54,22 @@ export function ensureRuntimeSchema(): Promise<void> {
         "productId" TEXT NOT NULL,
         "costMode" TEXT NOT NULL DEFAULT 'manual',
         "templateId" TEXT,
+        "filamentTypeId" TEXT,
+        "filamentWeight" REAL,
+        "printTimeHours" REAL,
+        "wasteRate" REAL,
+        "packagingPoset" REAL,
+        "packagingNaylon" REAL,
+        "packagingBant" REAL,
+        "packagingKart" REAL,
         "manualCost" REAL,
         "materialWeight" REAL,
-        "printTimeHours" REAL,
         "materialCost" REAL,
         "electricityCost" REAL,
         "machineWearCost" REAL,
-        "packagingCost" REAL,
         "laborCost" REAL,
+        "packagingCost" REAL,
         "otherCost" REAL,
-        "wasteRate" REAL,
         "totalCost" REAL,
         "updatedAt" DATETIME NOT NULL
       )
@@ -70,6 +77,17 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(`
       CREATE UNIQUE INDEX IF NOT EXISTS "ProductCost_productId_key" ON "ProductCost"("productId")
     `);
+
+    // FilamentType table
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "FilamentType" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "costPerGram" REAL NOT NULL,
+        "isActive" BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "Recommendation" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -93,6 +111,7 @@ export function ensureRuntimeSchema(): Promise<void> {
       )
     `);
 
+    // Ensure new columns on existing tables
     await ensureColumn("Product", "trendyolId", "TEXT");
     await ensureColumn("Product", "source", "TEXT NOT NULL DEFAULT 'manual'");
     await ensureColumn("Product", "createdAt", "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP");
@@ -102,6 +121,16 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "listPrice", "REAL");
     await ensureColumn("Product", "isActive", "BOOLEAN NOT NULL DEFAULT true");
     await ensureColumn("Product", "imageUrl", "TEXT");
+
+    // New ProductCost columns
+    await ensureColumn("ProductCost", "filamentTypeId", "TEXT");
+    await ensureColumn("ProductCost", "filamentWeight", "REAL");
+    await ensureColumn("ProductCost", "printTimeHours", "REAL");
+    await ensureColumn("ProductCost", "wasteRate", "REAL");
+    await ensureColumn("ProductCost", "packagingPoset", "REAL");
+    await ensureColumn("ProductCost", "packagingNaylon", "REAL");
+    await ensureColumn("ProductCost", "packagingBant", "REAL");
+    await ensureColumn("ProductCost", "packagingKart", "REAL");
   })();
 
   return schemaReady;

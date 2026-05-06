@@ -21,7 +21,7 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/products", label: "Ürünler", icon: Package },
   { href: "/recommendations", label: "Öneriler", icon: Star },
-  { href: "/cost-templates", label: "Maliyet Şablonları", icon: CalculatorIcon },
+  { href: "/cost-templates", label: "Maliyet Ayarları", icon: CalculatorIcon },
   { href: "/commission-rules", label: "Komisyon Kuralları", icon: Percent },
   { href: "/cargo-rules", label: "Kargo Kuralları", icon: Truck },
   { href: "/expense-rules", label: "Ek Gider Kuralları", icon: Receipt },

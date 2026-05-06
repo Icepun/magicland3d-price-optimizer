@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -14,281 +15,317 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Calculator } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings, Coins } from "lucide-react";
 import { toast } from "sonner";
-import { useForm, useWatch } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { calculateTemplateCost } from "@/core/cost-calculator";
 import { formatCurrency } from "@/lib/utils";
 
-interface CostTemplate {
+interface FilamentType {
   id: string;
   name: string;
-  materialCostPerGram: number;
-  electricityCostPerHour: number;
-  machineWearCostPerHour: number;
-  defaultPackagingCost: number;
-  defaultLaborCost: number;
-  defaultOtherCost: number;
-  defaultWasteRate: number;
+  costPerGram: number;
   isActive: boolean;
 }
 
-const Schema = z.object({
+const FilamentSchema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
-  materialCostPerGram: z.coerce.number().min(0).default(0),
-  electricityCostPerHour: z.coerce.number().min(0).default(0),
-  machineWearCostPerHour: z.coerce.number().min(0).default(0),
-  defaultPackagingCost: z.coerce.number().min(0).default(0),
-  defaultLaborCost: z.coerce.number().min(0).default(0),
-  defaultOtherCost: z.coerce.number().min(0).default(0),
-  defaultWasteRate: z.coerce.number().min(0).max(100).default(0),
+  costPerGram: z.coerce.number().positive("Pozitif bir değer olmalı"),
   isActive: z.boolean().default(true),
 });
 
-type FormData = z.infer<typeof Schema>;
+type FilamentFormData = z.infer<typeof FilamentSchema>;
 
-function TemplateForm({
-  defaultValues,
-  onSubmit,
-  isPending,
-}: {
-  defaultValues?: Partial<FormData>;
-  onSubmit: (d: FormData) => void;
-  isPending: boolean;
-}) {
-  const form = useForm<FormData>({
-    resolver: zodResolver(Schema),
-    defaultValues: {
-      materialCostPerGram: 0,
-      electricityCostPerHour: 0,
-      machineWearCostPerHour: 0,
-      defaultPackagingCost: 0,
-      defaultLaborCost: 0,
-      defaultOtherCost: 0,
-      defaultWasteRate: 0,
-      isActive: true,
-      ...defaultValues,
-    },
-  });
-
-  const [previewWeight, setPreviewWeight] = useState("100");
-  const [previewHours, setPreviewHours] = useState("2");
-
-  const values = useWatch({ control: form.control });
-  const previewCost = calculateTemplateCost({
-    materialWeight: parseFloat(previewWeight) || 0,
-    printTimeHours: parseFloat(previewHours) || 0,
-    materialCostPerGram: values.materialCostPerGram ?? 0,
-    electricityCostPerHour: values.electricityCostPerHour ?? 0,
-    machineWearCostPerHour: values.machineWearCostPerHour ?? 0,
-    packagingCost: values.defaultPackagingCost ?? 0,
-    laborCost: values.defaultLaborCost ?? 0,
-    otherCost: values.defaultOtherCost ?? 0,
-    wasteRate: (values.defaultWasteRate ?? 0) / 100,
-  });
-
-  return (
-    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
-      <div>
-        <Label>Şablon Adı *</Label>
-        <Input {...form.register("name")} placeholder="Küçük PLA Ürün" />
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <div>
-          <Label>Malzeme (TL/g)</Label>
-          <Input type="number" step="0.01" {...form.register("materialCostPerGram")} />
-        </div>
-        <div>
-          <Label>Elektrik (TL/saat)</Label>
-          <Input type="number" step="0.01" {...form.register("electricityCostPerHour")} />
-        </div>
-        <div>
-          <Label>Makine Aşınma (TL/saat)</Label>
-          <Input type="number" step="0.01" {...form.register("machineWearCostPerHour")} />
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <div>
-          <Label>Ambalaj (TL)</Label>
-          <Input type="number" step="0.01" {...form.register("defaultPackagingCost")} />
-        </div>
-        <div>
-          <Label>İşçilik (TL)</Label>
-          <Input type="number" step="0.01" {...form.register("defaultLaborCost")} />
-        </div>
-        <div>
-          <Label>Diğer (TL)</Label>
-          <Input type="number" step="0.01" {...form.register("defaultOtherCost")} />
-        </div>
-      </div>
-      <div>
-        <Label>Fire Oranı (%)</Label>
-        <Input type="number" step="0.1" {...form.register("defaultWasteRate")} />
-      </div>
-
-      <div className="p-3 bg-muted rounded space-y-2">
-        <p className="text-xs font-medium flex items-center gap-1">
-          <Calculator className="h-3.5 w-3.5" /> Ön İzleme
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <Label className="text-xs">Ağırlık (g)</Label>
-            <Input
-              type="number"
-              value={previewWeight}
-              onChange={(e) => setPreviewWeight(e.target.value)}
-              className="h-7 text-xs"
-            />
-          </div>
-          <div>
-            <Label className="text-xs">Baskı Süresi (saat)</Label>
-            <Input
-              type="number"
-              value={previewHours}
-              onChange={(e) => setPreviewHours(e.target.value)}
-              className="h-7 text-xs"
-            />
-          </div>
-        </div>
-        <p className="text-sm font-semibold">
-          Tahmini Maliyet: {formatCurrency(previewCost)}
-        </p>
-      </div>
-
-      <DialogFooter>
-        <Button type="submit" disabled={isPending}>
-          {isPending ? "Kaydediliyor..." : "Kaydet"}
-        </Button>
-      </DialogFooter>
-    </form>
-  );
-}
-
-export default function CostTemplatesPage() {
-  const [open, setOpen] = useState(false);
-  const [editing, setEditing] = useState<CostTemplate | null>(null);
+export default function CostSettingsPage() {
+  const [filamentOpen, setFilamentOpen] = useState(false);
+  const [editingFilament, setEditingFilament] = useState<FilamentType | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: templates = [], isLoading } = useQuery<CostTemplate[]>({
-    queryKey: ["cost-templates"],
-    queryFn: () => fetch("/api/cost-templates").then((r) => r.json()),
+  // Load filament types
+  const { data: filaments = [], isLoading: isFilamentsLoading } = useQuery<FilamentType[]>({
+    queryKey: ["filament-types"],
+    queryFn: () => fetch("/api/filament-types").then((r) => r.json()),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data: FormData) =>
-      fetch("/api/cost-templates", {
+  // Load global app settings
+  const { data: globalSettings = {}, isLoading: isSettingsLoading } = useQuery<Record<string, string>>({
+    queryKey: ["app-settings"],
+    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+  });
+
+  // Global settings mutation
+  const saveSettingsMutation = useMutation({
+    mutationFn: (data: Record<string, string>) =>
+      fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, defaultWasteRate: data.defaultWasteRate / 100 }),
+        body: JSON.stringify(data),
       }).then((r) => r.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["cost-templates"] });
-      toast.success("Şablon eklendi");
-      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
+      toast.success("Genel maliyet oranları kaydedildi");
+    },
+    onError: () => toast.error("Kaydedilemedi"),
+  });
+
+  // Filament mutations
+  const createFilamentMutation = useMutation({
+    mutationFn: (data: FilamentFormData) =>
+      fetch("/api/filament-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      toast.success("Filament tipi eklendi");
+      setFilamentOpen(false);
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: FormData }) =>
-      fetch(`/api/cost-templates/${id}`, {
+  const updateFilamentMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: FilamentFormData }) =>
+      fetch(`/api/filament-types/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, defaultWasteRate: data.defaultWasteRate / 100 }),
+        body: JSON.stringify(data),
       }).then((r) => r.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["cost-templates"] });
-      toast.success("Güncellendi");
-      setEditing(null);
+      queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      toast.success("Filament tipi güncellendi");
+      setEditingFilament(null);
     },
   });
 
-  const deleteMutation = useMutation({
+  const deleteFilamentMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/cost-templates/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetch(`/api/filament-types/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["cost-templates"] });
-      toast.success("Silindi");
+      queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      toast.success("Filament tipi silindi");
     },
   });
+
+  const filamentForm = useForm<FilamentFormData>({
+    resolver: zodResolver(FilamentSchema),
+    defaultValues: { name: "", costPerGram: 0.5, isActive: true },
+  });
+
+  const handleSettingsSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const data = {
+      costElectricityPerHour: formData.get("costElectricityPerHour") as string,
+      costMachineWearPerHour: formData.get("costMachineWearPerHour") as string,
+      costLaborPerHour: formData.get("costLaborPerHour") as string,
+    };
+    saveSettingsMutation.mutate(data);
+  };
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Maliyet Şablonları</h1>
-        <Button onClick={() => setOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-2" /> Şablon Ekle
-        </Button>
+        <div>
+          <h1 className="text-2xl font-bold">Maliyet Ayarları</h1>
+          <p className="text-sm text-muted-foreground">
+            Filament tiplerini ve 3D baskı için ortak elektrik, aşınma ve işçilik giderlerini yönetin.
+          </p>
+        </div>
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        3D baskı ürünleri için malzeme, elektrik ve makine aşınma parametrelerini tanımlayın.
-        Ürüne ağırlık ve baskı süresi girince maliyet otomatik hesaplanır.
-      </p>
-
-      {isLoading ? (
-        <p className="text-muted-foreground">Yükleniyor...</p>
-      ) : templates.length === 0 ? (
-        <Card className="py-12 text-center">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Filament Types Table */}
+        <Card className="lg:col-span-2">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Coins className="h-5 w-5 text-primary" /> Filament Türleri
+              </CardTitle>
+              <CardDescription>
+                Malzeme gram fiyatlarını tanımlayın. Ürün kartlarında bu fiyatlar kullanılır.
+              </CardDescription>
+            </div>
+            <Button onClick={() => {
+              filamentForm.reset({ name: "", costPerGram: 0.5, isActive: true });
+              setFilamentOpen(true);
+            }} size="sm">
+              <Plus className="h-4 w-4 mr-1" /> Ekle
+            </Button>
+          </CardHeader>
           <CardContent>
-            <p className="text-muted-foreground">Henüz şablon yok.</p>
+            {isFilamentsLoading ? (
+              <p className="text-sm text-muted-foreground">Yükleniyor...</p>
+            ) : filaments.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">
+                Henüz filament tipi eklenmemiş.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Filament Adı</TableHead>
+                    <TableHead>Gram Fiyatı</TableHead>
+                    <TableHead>Durum</TableHead>
+                    <TableHead className="text-right">Aksiyon</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filaments.map((f: FilamentType) => (
+                    <TableRow key={f.id}>
+                      <TableCell className="font-medium">{f.name}</TableCell>
+                      <TableCell>{formatCurrency(f.costPerGram)}/g</TableCell>
+                      <TableCell>
+                        {f.isActive ? (
+                          <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Aktif</Badge>
+                        ) : (
+                          <Badge variant="secondary">Pasif</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => {
+                              setEditingFilament(f);
+                              filamentForm.reset(f);
+                            }}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive"
+                            onClick={() => deleteFilamentMutation.mutate(f.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </CardContent>
         </Card>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {templates.map((t) => (
-            <Card key={t.id}>
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm">{t.name}</CardTitle>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(t)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteMutation.mutate(t.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0 space-y-1 text-xs text-muted-foreground">
-                <div className="grid grid-cols-2 gap-x-3">
-                  <span>Malzeme: {t.materialCostPerGram} TL/g</span>
-                  <span>Elektrik: {t.electricityCostPerHour} TL/saat</span>
-                  <span>Makine: {t.machineWearCostPerHour} TL/saat</span>
-                  <span>Ambalaj: {t.defaultPackagingCost} TL</span>
-                  {t.defaultLaborCost > 0 && <span>İşçilik: {t.defaultLaborCost} TL</span>}
-                  {t.defaultWasteRate > 0 && <span>Fire: %{(t.defaultWasteRate * 100).toFixed(1)}</span>}
-                </div>
-                {!t.isActive && <Badge variant="secondary" className="mt-1">Pasif</Badge>}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-lg">
+        {/* Global Cost Rates */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Settings className="h-5 w-5 text-primary" /> Genel Maliyet Oranları
+            </CardTitle>
+            <CardDescription>
+              Tüm ürünlerde ortak kullanılan saatlik 3D baskı giderleri.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isSettingsLoading ? (
+              <p className="text-sm text-muted-foreground">Yükleniyor...</p>
+            ) : (
+              <form onSubmit={handleSettingsSubmit} className="space-y-4">
+                <div className="space-y-1">
+                  <Label htmlFor="costElectricityPerHour">Elektrik Maliyeti (TL/saat)</Label>
+                  <Input
+                    id="costElectricityPerHour"
+                    name="costElectricityPerHour"
+                    type="number"
+                    step="0.01"
+                    defaultValue={globalSettings.costElectricityPerHour || "0.00"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="costMachineWearPerHour">Makine Aşınması (TL/saat)</Label>
+                  <Input
+                    id="costMachineWearPerHour"
+                    name="costMachineWearPerHour"
+                    type="number"
+                    step="0.01"
+                    defaultValue={globalSettings.costMachineWearPerHour || "0.00"}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="costLaborPerHour">İşçilik Maliyeti (TL/saat)</Label>
+                  <Input
+                    id="costLaborPerHour"
+                    name="costLaborPerHour"
+                    type="number"
+                    step="0.01"
+                    defaultValue={globalSettings.costLaborPerHour || "0.00"}
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={saveSettingsMutation.isPending}>
+                  {saveSettingsMutation.isPending ? "Kaydediliyor..." : "Ayarları Kaydet"}
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Filament Create Dialog */}
+      <Dialog open={filamentOpen} onOpenChange={setFilamentOpen}>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Maliyet Şablonu Ekle</DialogTitle>
+            <DialogTitle>Yeni Filament Ekle</DialogTitle>
           </DialogHeader>
-          <TemplateForm onSubmit={(d) => createMutation.mutate(d)} isPending={createMutation.isPending} />
+          <form
+            onSubmit={filamentForm.handleSubmit((d) => createFilamentMutation.mutate(d))}
+            className="space-y-4"
+          >
+            <div className="space-y-1">
+              <Label>Filament Adı</Label>
+              <Input {...filamentForm.register("name")} placeholder="Porima Eco PLA" />
+            </div>
+            <div className="space-y-1">
+              <Label>Gram Fiyatı (TL)</Label>
+              <Input type="number" step="0.001" {...filamentForm.register("costPerGram")} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setFilamentOpen(false)}>
+                İptal
+              </Button>
+              <Button type="submit" disabled={createFilamentMutation.isPending}>
+                Ekle
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!editing} onOpenChange={() => setEditing(null)}>
-        <DialogContent className="max-w-lg">
+      {/* Filament Edit Dialog */}
+      <Dialog open={!!editingFilament} onOpenChange={() => setEditingFilament(null)}>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Şablonu Düzenle</DialogTitle>
+            <DialogTitle>Filament Türünü Düzenle</DialogTitle>
           </DialogHeader>
-          {editing && (
-            <TemplateForm
-              defaultValues={{ ...editing, defaultWasteRate: editing.defaultWasteRate * 100 }}
-              onSubmit={(d) => updateMutation.mutate({ id: editing.id, data: d })}
-              isPending={updateMutation.isPending}
-            />
-          )}
+          <form
+            onSubmit={filamentForm.handleSubmit((d) =>
+              updateFilamentMutation.mutate({ id: editingFilament!.id, data: d })
+            )}
+            className="space-y-4"
+          >
+            <div className="space-y-1">
+              <Label>Filament Adı</Label>
+              <Input {...filamentForm.register("name")} />
+            </div>
+            <div className="space-y-1">
+              <Label>Gram Fiyatı (TL)</Label>
+              <Input type="number" step="0.001" {...filamentForm.register("costPerGram")} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setEditingFilament(null)}>
+                İptal
+              </Button>
+              <Button type="submit" disabled={updateFilamentMutation.isPending}>
+                Güncelle
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

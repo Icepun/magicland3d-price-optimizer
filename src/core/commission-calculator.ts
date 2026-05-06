@@ -1,5 +1,23 @@
 import type { CommissionRuleInput } from "./types";
 
+function normalizeCategory(value: string) {
+  return value.toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+}
+
+function categoryMatchScore(ruleCategoryName: string | null | undefined, productCategoryName: string) {
+  if (!ruleCategoryName) return 0;
+
+  const ruleCategory = normalizeCategory(ruleCategoryName);
+  const productCategory = normalizeCategory(productCategoryName);
+
+  if (!ruleCategory || !productCategory) return 0;
+  if (productCategory === ruleCategory) return 10_000 + ruleCategory.length;
+  if (productCategory.includes(ruleCategory)) return 1_000 + ruleCategory.length;
+  if (ruleCategory.includes(productCategory)) return 500 + productCategory.length;
+
+  return 0;
+}
+
 export function findCommissionRule(
   rules: CommissionRuleInput[],
   salePrice: number,
@@ -11,26 +29,17 @@ export function findCommissionRule(
     if (salePrice < r.minPrice || salePrice > r.maxPrice) return false;
     if (r.validFrom && date < r.validFrom) return false;
     if (r.validTo && date > r.validTo) return false;
+    if (r.categoryName && categoryMatchScore(r.categoryName, categoryName) === 0) {
+      return false;
+    }
     return true;
   });
 
-  // Sort: category-specific first, then by priority desc
+  // Sort: exact/longer category matches first, then by priority desc.
   const sorted = active.sort((a, b) => {
-    const aSpecific = a.categoryName
-      ? categoryName
-          .toLowerCase()
-          .includes(a.categoryName.toLowerCase())
-        ? 1
-        : 0
-      : 0;
-    const bSpecific = b.categoryName
-      ? categoryName
-          .toLowerCase()
-          .includes(b.categoryName.toLowerCase())
-        ? 1
-        : 0
-      : 0;
-    if (aSpecific !== bSpecific) return bSpecific - aSpecific;
+    const aScore = categoryMatchScore(a.categoryName, categoryName);
+    const bScore = categoryMatchScore(b.categoryName, categoryName);
+    if (aScore !== bScore) return bScore - aScore;
     return b.priority - a.priority;
   });
 

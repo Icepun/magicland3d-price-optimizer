@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { FileDown, Plus, Pencil, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -123,6 +123,7 @@ function RuleForm({
 export default function CommissionRulesPage() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CommissionRule | null>(null);
+  const [search, setSearch] = useState("");
   const queryClient = useQueryClient();
 
   const { data: rules = [], isLoading } = useQuery<CommissionRule[]>({
@@ -143,6 +144,22 @@ export default function CommissionRulesPage() {
       setOpen(false);
     },
     onError: () => toast.error("Eklenemedi"),
+  });
+
+  const importTrendyolMutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/commission-rules/import-trendyol", { method: "POST" }).then((r) => {
+        if (!r.ok) throw new Error("Trendyol komisyonları yüklenemedi");
+        return r.json() as Promise<{ created: number; updated: number; total: number }>;
+      }),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(
+        `Trendyol komisyonları hazır: ${result.created} yeni, ${result.updated} güncel`
+      );
+    },
+    onError: () => toast.error("Trendyol komisyonları yüklenemedi"),
   });
 
   const updateMutation = useMutation({
@@ -168,18 +185,50 @@ export default function CommissionRulesPage() {
     },
   });
 
+  const filteredRules = useMemo(() => {
+    const q = search.trim().toLocaleLowerCase("tr-TR");
+    if (!q) return rules;
+
+    return rules.filter((rule) =>
+      [rule.name, rule.categoryName]
+        .filter(Boolean)
+        .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(q))
+    );
+  }, [rules, search]);
+
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Komisyon Kuralları</h1>
-        <Button onClick={() => setOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-2" /> Kural Ekle
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => importTrendyolMutation.mutate()}
+            disabled={importTrendyolMutation.isPending}
+            size="sm"
+          >
+            <FileDown className="h-4 w-4 mr-2" />
+            {importTrendyolMutation.isPending ? "Yükleniyor..." : "Trendyol PDF Yükle"}
+          </Button>
+          <Button onClick={() => setOpen(true)} size="sm">
+            <Plus className="h-4 w-4 mr-2" /> Kural Ekle
+          </Button>
+        </div>
       </div>
 
       <p className="text-sm text-muted-foreground">
-        Kategori ve fiyat aralığına göre komisyon oranı tanımlayın. Daha spesifik ve yüksek öncelikli kurallar önce uygulanır.
+        KDV ve platform hizmet bedeli ek giderlerde kalabilir. Bu sayfa sadece Trendyol kategori komisyonunu hesap motoruna bağlar.
       </p>
+
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Kategori veya kural ara..."
+          className="pl-9"
+        />
+      </div>
 
       {isLoading ? (
         <p className="text-muted-foreground">Yükleniyor...</p>
@@ -189,9 +238,15 @@ export default function CommissionRulesPage() {
             <p className="text-muted-foreground">Henüz kural yok.</p>
           </CardContent>
         </Card>
+      ) : filteredRules.length === 0 ? (
+        <Card className="py-12 text-center">
+          <CardContent>
+            <p className="text-muted-foreground">Aramaya uygun komisyon kuralı bulunamadı.</p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="grid gap-3">
-          {rules.map((rule) => (
+          {filteredRules.map((rule) => (
             <Card key={rule.id} className={!rule.isActive ? "opacity-50" : ""}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">

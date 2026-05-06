@@ -42,6 +42,13 @@ interface Product {
   imageUrl: string | null;
   isActive: boolean;
   source: string;
+  appliedCommissionRule: {
+    id: string;
+    name: string;
+    categoryName: string | null;
+    commissionRate: number;
+    fixedCommission: number;
+  } | null;
   cost: {
     totalCost: number | null;
     manualCost: number | null;
@@ -71,7 +78,7 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
-type FilterMode = "active" | "inactive" | "all";
+type FilterMode = "active" | "out-of-stock" | "inactive" | "all";
 
 const STATUS_COLORS = {
   missing: "text-muted-foreground",
@@ -205,6 +212,7 @@ export default function ProductsPage() {
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
+    { value: "out-of-stock", label: "Stoğu Bitenler" },
     { value: "inactive", label: "Inaktif" },
     { value: "all", label: "Tumu" },
   ];
@@ -258,6 +266,7 @@ export default function ProductsPage() {
               <TableHead>Urun Adi</TableHead>
               <TableHead>Barkod</TableHead>
               <TableHead>Kategori</TableHead>
+              <TableHead>Komisyon</TableHead>
               <TableHead>Satis Fiyati</TableHead>
               <TableHead>Maliyet</TableHead>
               <TableHead>Mevcut Kar</TableHead>
@@ -270,22 +279,24 @@ export default function ProductsPage() {
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
                   Yukleniyor...
                 </TableCell>
               </TableRow>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-destructive">
+                <TableCell colSpan={12} className="text-center py-8 text-destructive">
                   Urunler yuklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
                   {filterMode === "inactive"
                     ? "Inaktif urun bulunmuyor."
-                    : "Urun bulunamadi. CSV ile ice aktarin veya manuel ekleyin."}
+                    : filterMode === "out-of-stock"
+                      ? "Stogu biten aktif urun bulunmuyor."
+                      : "Urun bulunamadi. CSV ile ice aktarin veya manuel ekleyin."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -321,6 +332,22 @@ export default function ProductsPage() {
                       </span>
                     </TableCell>
                     <TableCell>{product.categoryName}</TableCell>
+                    <TableCell>
+                      {product.appliedCommissionRule ? (
+                        <div className="space-y-0.5">
+                          <Badge variant="outline" className="text-xs">
+                            %{(product.appliedCommissionRule.commissionRate * 100).toFixed(2)}
+                          </Badge>
+                          <div className="text-[11px] text-muted-foreground max-w-[160px] truncate">
+                            {product.appliedCommissionRule.categoryName}
+                          </div>
+                        </div>
+                      ) : (
+                        <Badge variant="secondary" className="text-xs">
+                          Eşleşmedi
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>{formatCurrency(product.currentSalePrice)}</TableCell>
                     <TableCell>
                       {cost !== null && cost !== undefined ? (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { findCommissionRule } from "@/core/commission-calculator";
 import { z } from "zod";
 
 const CreateProductSchema = z.object({
@@ -22,8 +23,13 @@ export async function GET(req: NextRequest) {
 
   const where: Record<string, unknown> = {};
 
-  if (filter === "active") where.isActive = true;
-  else if (filter === "inactive") where.isActive = false;
+  if (filter === "active") {
+    where.isActive = true;
+    where.stock = { gt: 0 };
+  } else if (filter === "out-of-stock") {
+    where.isActive = true;
+    where.stock = 0;
+  } else if (filter === "inactive") where.isActive = false;
   // filter === "all" → no isActive filter
 
   if (filter === "negative-profit") {
@@ -39,19 +45,46 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  const products = await prisma.product.findMany({
-    where,
-    include: {
-      cost: true,
-      recommendations: {
-        orderBy: { createdAt: "desc" },
-        take: 1,
+  const [products, commissionRules] = await Promise.all([
+    prisma.product.findMany({
+      where,
+      include: {
+        cost: true,
+        recommendations: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
       },
-    },
-    orderBy: { updatedAt: "desc" },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.commissionRule.findMany({
+      where: { isActive: true },
+      orderBy: [{ priority: "desc" }, { name: "asc" }],
+    }),
+  ]);
+
+  const productsWithCommission = products.map((product) => {
+    const rule = findCommissionRule(
+      commissionRules,
+      product.currentSalePrice,
+      product.categoryName
+    );
+
+    return {
+      ...product,
+      appliedCommissionRule: rule
+        ? {
+            id: rule.id,
+            name: rule.name,
+            categoryName: rule.categoryName,
+            commissionRate: rule.commissionRate,
+            fixedCommission: rule.fixedCommission,
+          }
+        : null,
+    };
   });
 
-  return NextResponse.json(products);
+  return NextResponse.json(productsWithCommission);
 }
 
 export async function POST(req: NextRequest) {

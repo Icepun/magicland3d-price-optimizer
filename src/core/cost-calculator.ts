@@ -21,3 +21,45 @@ export function calculateTemplateCost(input: ProductCostInput): number {
 
   return subtotal + waste;
 }
+
+export interface DetailedCostInput {
+  filamentWeight: number;
+  costPerGram: number;
+  printTimeHours: number;
+  electricityCostPerHour: number;
+  machineWearCostPerHour: number;
+  laborCostPerHour: number;
+  packagingPoset: number;
+  packagingNaylon: number;
+  packagingBant: number;
+  packagingKart: number;
+  wasteRate: number;
+}
+
+export function calculateDetailedCost(input: DetailedCostInput) {
+  const filamentCost = input.filamentWeight * input.costPerGram;
+  const electricityCost = input.printTimeHours * input.electricityCostPerHour;
+  const machineWearCost = input.printTimeHours * input.machineWearCostPerHour;
+  const laborCost = input.printTimeHours * input.laborCostPerHour;
+  const packagingCost =
+    input.packagingPoset +
+    input.packagingNaylon +
+    input.packagingBant +
+    input.packagingKart;
+
+  const subtotal =
+    filamentCost + electricityCost + machineWearCost + laborCost + packagingCost;
+  const wasteCost = subtotal * input.wasteRate;
+  const totalCost = subtotal + wasteCost;
+
+  return {
+    filamentCost,
+    electricityCost,
+    machineWearCost,
+    laborCost,
+    packagingCost,
+    subtotal,
+    wasteCost,
+    totalCost,
+  };
+}

@@ -39,8 +39,11 @@ export async function POST(
   const minNetProfit = options.minNetProfit ?? Number(settingsMap.defaultMinNetProfit ?? 0);
   const minProfitMargin = options.minProfitMargin ?? Number(settingsMap.defaultMinMargin ?? 0);
 
-  const productCost = product.cost?.totalCost ?? product.cost?.manualCost ?? 0;
+  const isDetailed = product.cost?.costMode === "detailed";
   const packagingCost = product.cost?.packagingCost ?? 0;
+  const productCost = isDetailed
+    ? (product.cost?.totalCost ?? 0) - packagingCost
+    : (product.cost?.manualCost ?? 0);
 
   const baseInput = {
     productCost,

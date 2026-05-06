@@ -32,25 +32,50 @@ model Product {
 }
 
 model ProductCost {
-  id              String   @id @default(cuid())
-  productId       String   @unique
-  costMode        String   @default("manual")
-  templateId      String?
+  id             String  @id @default(cuid())
+  productId      String  @unique
+  costMode       String  @default("manual")
+  templateId     String?
+
+  // Per-product: filament
+  filamentTypeId String?
+  filamentWeight Float?
+  printTimeHours Float?
+  wasteRate      Float?
+
+  // Per-product: packaging breakdown
+  packagingPoset  Float?
+  packagingNaylon Float?
+  packagingBant   Float?
+  packagingKart   Float?
+
+  // Legacy / manual override
   manualCost      Float?
   materialWeight  Float?
-  printTimeHours  Float?
+
+  // Calculated breakdowns (cached)
   materialCost    Float?
   electricityCost Float?
   machineWearCost Float?
-  packagingCost   Float?
   laborCost       Float?
+  packagingCost   Float?
   otherCost       Float?
-  wasteRate       Float?
   totalCost       Float?
-  updatedAt       DateTime @updatedAt
 
-  product  Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
-  template CostTemplate? @relation(fields: [templateId], references: [id])
+  updatedAt DateTime @updatedAt
+
+  product      Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  filamentType FilamentType? @relation(fields: [filamentTypeId], references: [id])
+  template     CostTemplate? @relation(fields: [templateId], references: [id])
+}
+
+model FilamentType {
+  id          String  @id @default(cuid())
+  name        String
+  costPerGram Float
+  isActive    Boolean @default(true)
+
+  productCosts ProductCost[]
 }
 
 model CostTemplate {
