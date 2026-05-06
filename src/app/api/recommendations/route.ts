@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { generateRecommendations } from "@/core/recommendation-engine";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 export async function GET() {
+  await ensureRuntimeSchema();
+
   const recommendations = await prisma.recommendation.findMany({
     include: { product: { include: { cost: true } } },
     orderBy: [{ status: "asc" }, { createdAt: "desc" }],
@@ -12,6 +15,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  await ensureRuntimeSchema();
+
   const body = await req.json();
   const { productIds } = body as { productIds?: string[] };
 

@@ -17,6 +17,8 @@ import Link from "next/link";
 interface DashboardData {
   totalProducts: number;
   activeProducts: number;
+  inStockCount: number;
+  outOfStockCount: number;
   missingCost: number;
   negativeProfitCount: number;
   belowMinimumCount: number;
@@ -92,6 +94,9 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{data.totalProducts}</div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Stokta {data.inStockCount} / biten {data.outOfStockCount}
+            </p>
           </CardContent>
         </Card>
 

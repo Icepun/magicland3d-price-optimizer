@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 export async function GET() {
+  await ensureRuntimeSchema();
+
   const [products, commissionRules, cargoRules, expenseRules, settings] =
     await Promise.all([
       prisma.product.findMany({
@@ -27,6 +30,8 @@ export async function GET() {
   let negativeProfitCount = 0;
   let belowMinimumCount = 0;
   let optimizableCount = 0;
+  let inStockCount = 0;
+  let outOfStockCount = 0;
   let currentTotalProfit = 0;
   let optimizedTotalProfit = 0;
 
@@ -34,6 +39,9 @@ export async function GET() {
   const opportunityProducts = [];
 
   for (const product of products) {
+    if (product.stock > 0) inStockCount++;
+    else outOfStockCount++;
+
     const productCost = product.cost?.totalCost ?? product.cost?.manualCost ?? null;
     if (productCost === null) {
       missingCost++;
@@ -113,6 +121,8 @@ export async function GET() {
   return NextResponse.json({
     totalProducts,
     activeProducts: totalProducts,
+    inStockCount,
+    outOfStockCount,
     missingCost,
     negativeProfitCount,
     belowMinimumCount,

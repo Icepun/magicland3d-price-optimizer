@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { findCommissionRule } from "@/core/commission-calculator";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
 const CreateProductSchema = z.object({
@@ -17,6 +18,8 @@ const CreateProductSchema = z.object({
 });
 
 export async function GET(req: NextRequest) {
+  await ensureRuntimeSchema();
+
   const { searchParams } = new URL(req.url);
   const filter = searchParams.get("filter") ?? "active";
   const search = searchParams.get("search");
@@ -88,6 +91,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  await ensureRuntimeSchema();
+
   const body = await req.json();
   const data = CreateProductSchema.parse(body);
 
