@@ -23,6 +23,28 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
   }
 }
 
+async function cleanupPdfCommissionRules() {
+  if (!(await tableExists("CommissionRule"))) return;
+
+  const cleanupKey = "cleanupPdfCommissionRulesAt";
+  const existing = await prisma.appSetting.findUnique({ where: { key: cleanupKey } });
+  if (existing) return;
+
+  await prisma.commissionRule.deleteMany({
+    where: {
+      name: {
+        startsWith: "Trendyol PDF - ",
+      },
+    },
+  });
+
+  await prisma.appSetting.upsert({
+    where: { key: cleanupKey },
+    create: { key: cleanupKey, value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+}
+
 export function ensureRuntimeSchema(): Promise<void> {
   schemaReady ??= (async () => {
     await prisma.$executeRawUnsafe(`
@@ -121,6 +143,9 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "listPrice", "REAL");
     await ensureColumn("Product", "isActive", "BOOLEAN NOT NULL DEFAULT true");
     await ensureColumn("Product", "imageUrl", "TEXT");
+    await ensureColumn("Product", "commissionRate", "REAL");
+    await ensureColumn("Product", "commissionSource", "TEXT");
+    await ensureColumn("Product", "commissionUpdatedAt", "DATETIME");
 
     // New ProductCost columns
     await ensureColumn("ProductCost", "filamentTypeId", "TEXT");
@@ -131,6 +156,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("ProductCost", "packagingNaylon", "REAL");
     await ensureColumn("ProductCost", "packagingBant", "REAL");
     await ensureColumn("ProductCost", "packagingKart", "REAL");
+
+    await cleanupPdfCommissionRules();
   })();
 
   return schemaReady;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { findCommissionRule } from "@/core/commission-calculator";
+import { withProductCommissionRule } from "@/core/product-commission";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
 
   const productsWithCommission = products.map((product) => {
     const rule = findCommissionRule(
-      commissionRules,
+      withProductCommissionRule(product, commissionRules),
       product.currentSalePrice,
       product.categoryName
     );

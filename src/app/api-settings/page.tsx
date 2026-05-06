@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Settings2, PlugZap, RefreshCw, UploadCloud, ShieldCheck } from "lucide-react";
+import { Percent, Settings2, PlugZap, RefreshCw, UploadCloud, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -210,6 +210,33 @@ export default function ApiSettingsPage() {
     },
   });
 
+  const syncCommissionsMutation = useMutation({
+    mutationFn: () =>
+      fetchJson<{
+        updated: number;
+        unchanged: number;
+        foundBarcodes: number;
+        scannedRecords: number;
+      }>("/api/trendyol/sync-commissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 180 }),
+      }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
+      setLastResult(
+        `Komisyon sync tamam. Güncellenen: ${data.updated}, aynı kalan: ${data.unchanged}, bulunan barkod: ${data.foundBarcodes}.`
+      );
+      toast.success("Komisyonlar güncellendi");
+    },
+    onError: (error) => {
+      setLastResult(error.message);
+      toast.error(error.message);
+    },
+  });
+
   const configured = Boolean(settings?.sellerId && settings.hasApiKey && settings.hasApiSecret);
 
   return (
@@ -299,7 +326,7 @@ export default function ApiSettingsPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader>
             <CardTitle className="text-sm flex items-center gap-2">
@@ -314,6 +341,24 @@ export default function ApiSettingsPage() {
               onClick={() => testMutation.mutate()}
             >
               Test Et
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Percent className="h-4 w-4" /> Komisyon
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="outline"
+              className="w-full"
+              disabled={!configured || syncCommissionsMutation.isPending}
+              onClick={() => syncCommissionsMutation.mutate()}
+            >
+              Komisyonları Güncelle
             </Button>
           </CardContent>
         </Card>

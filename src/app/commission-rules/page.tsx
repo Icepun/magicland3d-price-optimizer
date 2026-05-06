@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { FileDown, Plus, Pencil, Search, Trash2 } from "lucide-react";
+import { Plus, Pencil, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -146,22 +146,6 @@ export default function CommissionRulesPage() {
     onError: () => toast.error("Eklenemedi"),
   });
 
-  const importTrendyolMutation = useMutation({
-    mutationFn: () =>
-      fetch("/api/commission-rules/import-trendyol", { method: "POST" }).then((r) => {
-        if (!r.ok) throw new Error("Trendyol komisyonları yüklenemedi");
-        return r.json() as Promise<{ created: number; updated: number; total: number }>;
-      }),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success(
-        `Trendyol komisyonları hazır: ${result.created} yeni, ${result.updated} güncel`
-      );
-    },
-    onError: () => toast.error("Trendyol komisyonları yüklenemedi"),
-  });
-
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: FormData }) =>
       fetch(`/api/commission-rules/${id}`, {
@@ -200,24 +184,15 @@ export default function CommissionRulesPage() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Komisyon Kuralları</h1>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => importTrendyolMutation.mutate()}
-            disabled={importTrendyolMutation.isPending}
-            size="sm"
-          >
-            <FileDown className="h-4 w-4 mr-2" />
-            {importTrendyolMutation.isPending ? "Yükleniyor..." : "Trendyol PDF Yükle"}
-          </Button>
-          <Button onClick={() => setOpen(true)} size="sm">
-            <Plus className="h-4 w-4 mr-2" /> Kural Ekle
-          </Button>
-        </div>
+        <Button onClick={() => setOpen(true)} size="sm">
+          <Plus className="h-4 w-4 mr-2" /> Kural Ekle
+        </Button>
       </div>
 
       <p className="text-sm text-muted-foreground">
-        KDV ve platform hizmet bedeli ek giderlerde kalabilir. Bu sayfa sadece Trendyol kategori komisyonunu hesap motoruna bağlar.
+        Urun bazli komisyonlar Trendyol API sayfasindaki Komisyonlari Guncelle ile
+        cekilir. Bu sayfa sadece gerektiginde genel/fallback komisyon kurali
+        tanimlamak icindir.
       </p>
 
       <div className="relative max-w-sm">

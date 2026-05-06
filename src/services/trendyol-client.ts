@@ -45,6 +45,24 @@ export interface TrendyolBatchResponse {
   [key: string]: unknown;
 }
 
+export interface TrendyolSettlementItem {
+  barcode?: string;
+  transactionDate?: number;
+  orderDate?: number;
+  commissionRate?: number;
+  commissionAmount?: number;
+  transactionType?: string;
+  [key: string]: unknown;
+}
+
+export interface TrendyolSettlementPage {
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+  content?: TrendyolSettlementItem[];
+}
+
 export class TrendyolApiError extends Error {
   constructor(
     public readonly status: number,
@@ -200,6 +218,26 @@ export class TrendyolClient {
   async getBatchRequestResult(batchRequestId: string): Promise<unknown> {
     return this.request(
       `/integration/product/sellers/${this.credentials.sellerId}/products/batch-requests/${batchRequestId}`
+    );
+  }
+
+  async listSettlements(params: {
+    startDate: number;
+    endDate: number;
+    page?: number;
+    size?: number;
+    transactionType?: string;
+  }): Promise<TrendyolSettlementPage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("startDate", String(params.startDate));
+    searchParams.set("endDate", String(params.endDate));
+    searchParams.set("transactionType", params.transactionType ?? "Sale");
+    searchParams.set("supplierId", this.credentials.sellerId);
+    searchParams.set("page", String(params.page ?? 0));
+    searchParams.set("size", String(params.size ?? 1000));
+
+    return this.request<TrendyolSettlementPage>(
+      `/integration/finance/che/sellers/${this.credentials.sellerId}/settlements?${searchParams.toString()}`
     );
   }
 }

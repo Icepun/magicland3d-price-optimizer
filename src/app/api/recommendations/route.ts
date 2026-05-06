@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { generateRecommendations } from "@/core/recommendation-engine";
+import { withProductCommissionRule } from "@/core/product-commission";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 export async function GET() {
@@ -72,7 +73,10 @@ export async function POST(req: NextRequest) {
       packagingCost,
       categoryName: product.categoryName,
       desi: product.desi ?? 1,
-      commissionRules: commissionRules as Parameters<typeof simulatePrice>[0]["commissionRules"],
+      commissionRules: withProductCommissionRule(
+        product,
+        commissionRules as Parameters<typeof simulatePrice>[0]["commissionRules"]
+      ),
       cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
       expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
       minNetProfit,
