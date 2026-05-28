@@ -69,7 +69,7 @@ const ghHeaders = {
 };
 
 async function main() {
-  console.log(`📦 ${owner}/${repo} — ${tag} → latest.yml upload`);
+  console.log(`📦 ${owner}/${repo} — ${tag} → ${ymlName} upload`);
 
   // 1. Release'i bul
   const relRes = await fetch(
@@ -84,10 +84,10 @@ async function main() {
   const release = await relRes.json();
   console.log(`   ✓ release id: ${release.id}`);
 
-  // 2. Mevcut latest.yml asset'i varsa sil
-  const existing = (release.assets || []).find((a) => a.name === "latest.yml");
+  // 2. Mevcut manifest asset'i varsa sil (platforma gore latest.yml / latest-mac.yml)
+  const existing = (release.assets || []).find((a) => a.name === ymlName);
   if (existing) {
-    console.log(`   • mevcut latest.yml siliniyor (id ${existing.id})`);
+    console.log(`   • mevcut ${ymlName} siliniyor (id ${existing.id})`);
     const delRes = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/releases/assets/${existing.id}`,
       { method: "DELETE", headers: ghHeaders }
@@ -97,8 +97,8 @@ async function main() {
     }
   }
 
-  // 3. Yeni latest.yml'i upload et
-  const uploadUrl = `https://uploads.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?name=latest.yml`;
+  // 3. Yeni manifest'i upload et
+  const uploadUrl = `https://uploads.github.com/repos/${owner}/${repo}/releases/${release.id}/assets?name=${ymlName}`;
   const upRes = await fetch(uploadUrl, {
     method: "POST",
     headers: {

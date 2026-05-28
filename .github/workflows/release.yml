@@ -1,0 +1,74 @@
+name: Release
+
+# v* tag'i push edildiginde (orn. v0.9.7) hem macOS hem Windows build'ini alir,
+# ayni GitHub release'e yukler. Boylece iki platform da auto-update ile guncellenir.
+#   git tag v0.9.7 && git push origin v0.9.7
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  # prisma generate + next build icin gerekli (repodaki dev.db yeterli)
+  DATABASE_URL: "file:./prisma/dev.db"
+
+jobs:
+  # Iki build job'u ayni anda calisip ayni release'e yazdigi icin, race olmamasi
+  # adina release'i once burada olusturuyoruz.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --notes "Magicland 3D Hub $TAG"
+          fi
+
+  build-mac:
+    needs: create-release
+    runs-on: macos-latest # arm64 runner — package.json mac target'i da arm64
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Self-signed sertifika (scripts/create-mac-cert.sh ciktilari)
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --mac --publish always
+      - name: Ensure latest-mac.yml uploaded
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/upload-latest-yml.mjs
+
+  build-windows:
+    needs: create-release
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win --publish always
+      - name: Ensure latest.yml uploaded
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/upload-latest-yml.mjs

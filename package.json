@@ -11,7 +11,7 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "next dev --webpack",
-    "build": "next build --webpack",
+    "build": "prisma generate && next build --webpack",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -112,12 +112,15 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
       ],
       "icon": "build/icon.png",
       "category": "public.app-category.business",
-      "artifactName": "Magicland-3D-Hub-${version}-${arch}.${ext}"
+      "artifactName": "Magicland-3D-Hub-${version}-${arch}.${ext}",
+      "identity": "Magicland 3D Hub",
+      "notarize": false,
+      "hardenedRuntime": false
     },
     "dmg": {
       "title": "Magicland 3D Hub ${version}"

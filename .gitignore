@@ -52,4 +52,9 @@ next-env.d.ts
 
 /src/generated/prisma
 test*.db
+
+# macOS code-signing cert (asla commitleme)
+*.p12
+*.p12.b64
+mac-codesign.p12
 app_log.txt
