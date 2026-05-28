@@ -1,8 +1,12 @@
 name: Release
 
-# v* tag'i push edildiginde (orn. v0.9.7) hem macOS hem Windows build'ini alir,
-# ayni GitHub release'e yukler. Boylece iki platform da auto-update ile guncellenir.
-#   git tag v0.9.7 && git push origin v0.9.7
+# v* tag'i push edildiginde (orn. v0.9.14) hem macOS hem Windows build'ini alir.
+#   git tag v0.9.14 && git push origin v0.9.14
+#
+# AKIS: release once TASLAK (draft) olarak olusturulur -> iki platform da taslaga
+# yuklenir -> en sonda yayinlanir. electron-updater taslagi GORMEZ, yani build
+# suresince kullanicinin uygulamasi eski yayinda kalir; "latest-mac.yml 404"
+# yaris hatasi olusmaz. Tum artifact'lar hazir olunca tek seferde yayinlanir.
 on:
   push:
     tags:
@@ -16,19 +20,19 @@ env:
   DATABASE_URL: "file:./prisma/dev.db"
 
 jobs:
-  # Iki build job'u ayni anda calisip ayni release'e yazdigi icin, race olmamasi
-  # adina release'i once burada olusturuyoruz.
+  # Iki build paralel ayni release'e yazdigi icin, race/duplike olmamasi adina
+  # TASLAK release'i once burada bir kez olusturuyoruz.
   create-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Ensure GitHub release exists
+      - name: Ensure draft release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --verify-tag --title "$TAG" \
+            gh release create "$TAG" --draft --verify-tag --title "$TAG" \
               --notes "Magicland 3D Hub $TAG"
           fi
 
@@ -77,10 +81,12 @@ jobs:
           echo "Gecerli imza kimlikleri:"
           security find-identity -v -p codesigning "$KEYCHAIN"
       - run: npx electron-builder --mac --publish always
+      # Guvence: electron-builder bazen latest-mac.yml'i atliyor. Taslaga gh ile
+      # garanti yukle (--clobber: varsa uzerine yaz). gh draft'i tag ile bulur.
+      # continue-on-error: gh yukleyemezse build'i bozma — electron-builder'inki kalir.
       - name: Ensure latest-mac.yml uploaded
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/upload-latest-yml.mjs
+        continue-on-error: true
+        run: gh release upload "${GITHUB_REF_NAME}" dist/latest-mac.yml --clobber
 
   build-windows:
     needs: create-release
@@ -97,6 +103,16 @@ jobs:
       - run: npm run build
       - run: npx electron-builder --win --publish always
       - name: Ensure latest.yml uploaded
+        continue-on-error: true
+        run: gh release upload "${env:GITHUB_REF_NAME}" dist/latest.yml --clobber
+
+  # Her iki build de bitince taslagi YAYINLA — tek seferde, tum artifact'lar hazirken.
+  # Boylece electron-updater yeni surumu ancak tam haliyle gorur (404 yaris yok).
+  publish:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/upload-latest-yml.mjs
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest

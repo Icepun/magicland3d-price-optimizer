@@ -153,7 +153,7 @@
         "provider": "github",
         "owner": "Icepun",
         "repo": "magicland3d-price-optimizer",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ]
   }
