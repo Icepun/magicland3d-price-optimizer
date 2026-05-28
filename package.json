@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.9.13",
+  "version": "0.9.14",
   "description": "Trendyol sellers price and profit optimization desktop app",
   "author": "Magicland 3D",
   "private": true,
@@ -87,7 +87,7 @@
       "output": "dist"
     },
     "npmRebuild": false,
-    "compression": "maximum",
+    "compression": "normal",
     "files": [
       "electron/**/*",
       ".next/**/*",
@@ -116,12 +116,6 @@
     },
     "mac": {
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64"
-          ]
-        },
         {
           "target": "zip",
           "arch": [
