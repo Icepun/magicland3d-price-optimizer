@@ -58,3 +58,6 @@ test*.db
 *.p12.b64
 mac-codesign.p12
 app_log.txt
+
+# yerel release helper (cert şifresi içerir)
+scripts/*.local.sh
