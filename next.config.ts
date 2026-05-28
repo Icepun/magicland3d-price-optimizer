@@ -8,7 +8,6 @@ const nextConfig: NextConfig = {
    * zaten paketleniyor + native dosyalar asarUnpack ile çıkarılıyor.
    */
   serverExternalPackages: [
-    "@prisma/client",
     "@prisma/adapter-libsql",
     "@libsql/client",
     "libsql",

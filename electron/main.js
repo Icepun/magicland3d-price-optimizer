@@ -256,6 +256,42 @@ function setupAutoUpdater() {
   });
 }
 
+/**
+ * Paketli app'te Prisma sorgu motorunun (query_engine-*.node) konumunu açıkça
+ * bildirir. webpack generated client'ı .next/server/chunks'a bundle ettiği için
+ * Prisma motoru asar içinde arıyor; oysa motor app.asar.unpacked'e çıkarılıyor
+ * (asarUnpack). Bu env ile doğru yolu zorla gösteriyoruz → "Query Engine not found"
+ * hatası biter. (Hem local hem Turso modunda klasik motor derleme için gerekli.)
+ */
+function ensurePrismaEngine() {
+  if (!app.isPackaged) return;
+  try {
+    const prismaDir = path.join(
+      process.resourcesPath,
+      "app.asar.unpacked",
+      "src",
+      "generated",
+      "prisma"
+    );
+    if (!fs.existsSync(prismaDir)) {
+      logStartup("ensurePrismaEngine: unpacked prisma dir yok:", prismaDir);
+      return;
+    }
+    const engineFile = fs
+      .readdirSync(prismaDir)
+      .find((f) => f.endsWith(".node") && f.toLowerCase().includes("query"));
+    if (engineFile) {
+      const enginePath = path.join(prismaDir, engineFile);
+      process.env.PRISMA_QUERY_ENGINE_LIBRARY = enginePath;
+      logStartup("Prisma engine:", enginePath);
+    } else {
+      logStartup("ensurePrismaEngine: query engine .node bulunamadı");
+    }
+  } catch (e) {
+    logStartup("ensurePrismaEngine error:", e?.message || e);
+  }
+}
+
 function ensureDatabaseUrl() {
   if (!app.isPackaged) return;
 
@@ -387,6 +423,8 @@ async function startNextServer() {
 
   logStartup("startNextServer: ensuring db url");
   ensureDatabaseUrl();
+  logStartup("startNextServer: ensuring prisma engine");
+  ensurePrismaEngine();
   logStartup("startNextServer: ensuring credential key");
   ensureCredentialKey();
   logStartup("startNextServer: finding port");
