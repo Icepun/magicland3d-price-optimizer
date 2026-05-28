@@ -93,34 +93,28 @@ export async function POST(req: NextRequest) {
       for (const p of data.products) {
         if (!p.barcode) continue;
         try {
+          const productFields = {
+            sku: p.sku ?? p.barcode,
+            name: p.name ?? p.barcode,
+            categoryName: p.categoryName ?? "Imported",
+            currentSalePrice: p.currentSalePrice ?? 0,
+            listPrice: p.listPrice ?? null,
+            stock: p.stock ?? 0,
+            desi: p.desi ?? null,
+            weight: p.weight ?? null,
+            imageUrl: p.imageUrl ?? null,
+            isActive: p.isActive ?? true,
+            hidden: p.hidden ?? false,
+            source: p.source ?? "imported",
+            trendyolId: p.trendyolId ?? null,
+            productMainId: p.productMainId ?? null,
+            commissionRate: p.commissionRate ?? null,
+            commissionSource: p.commissionSource ?? null,
+          };
           await prisma.product.upsert({
             where: { barcode: p.barcode },
-            create: {
-              id: p.id,
-              barcode: p.barcode,
-              sku: p.sku ?? p.barcode,
-              name: p.name ?? p.barcode,
-              categoryName: p.categoryName ?? "Imported",
-              currentSalePrice: p.currentSalePrice ?? 0,
-              listPrice: p.listPrice ?? null,
-              stock: p.stock ?? 0,
-              desi: p.desi ?? null,
-              weight: p.weight ?? null,
-              imageUrl: p.imageUrl ?? null,
-              isActive: p.isActive ?? true,
-              source: p.source ?? "imported",
-              trendyolId: p.trendyolId ?? null,
-              productMainId: p.productMainId ?? null,
-              commissionRate: p.commissionRate ?? null,
-              commissionSource: p.commissionSource ?? null,
-            },
-            update: {
-              sku: p.sku ?? p.barcode,
-              name: p.name ?? p.barcode,
-              categoryName: p.categoryName ?? "Imported",
-              currentSalePrice: p.currentSalePrice ?? 0,
-              stock: p.stock ?? 0,
-            },
+            create: { id: p.id, barcode: p.barcode, ...productFields },
+            update: productFields,
           });
           stats.products++;
         } catch {

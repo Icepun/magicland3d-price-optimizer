@@ -340,6 +340,25 @@ function ensureCredentialKey() {
   if (!process.env.HEPSIBURADA_SETTINGS_FILE) {
     process.env.HEPSIBURADA_SETTINGS_FILE = `${slashedUserData}/hepsiburada-settings.json`;
   }
+
+  // Turso (bulut DB) ayar dosyası + bağlantı env'leri.
+  // turso-settings.json varsa ve url doluysa → prisma Turso'ya bağlanır (çok cihaz
+  // senkron). Yoksa local SQLite'a düşer (mevcut davranış).
+  const tursoSettingsPath = `${slashedUserData}/turso-settings.json`;
+  if (!process.env.TURSO_SETTINGS_FILE) {
+    process.env.TURSO_SETTINGS_FILE = tursoSettingsPath;
+  }
+  try {
+    const tursoRaw = fs.readFileSync(path.join(userDataDir, "turso-settings.json"), "utf8");
+    const turso = JSON.parse(tursoRaw);
+    if (turso && turso.url) {
+      process.env.TURSO_DATABASE_URL = turso.url;
+      if (turso.authToken) process.env.TURSO_AUTH_TOKEN = turso.authToken;
+      logStartup("Turso bulut DB aktif:", turso.url);
+    }
+  } catch {
+    // dosya yok → local SQLite (mevcut davranış)
+  }
 }
 
 function cryptoRandomHex() {

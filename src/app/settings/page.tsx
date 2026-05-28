@@ -10,7 +10,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, Database } from "lucide-react";
+import { Download, Upload, Database, Cloud, CloudOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const Schema = z.object({
@@ -154,6 +154,8 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      <TursoSyncCard />
+
       <DataManagementCard />
 
       <Card>
@@ -245,6 +247,173 @@ function DataManagementCard() {
               if (file) handleImport(file);
             }}
           />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface TursoPublicSettings {
+  url: string;
+  hasAuthToken: boolean;
+  authTokenMasked: string;
+  activeMode: "turso" | "local";
+}
+
+function TursoSyncCard() {
+  const qc = useQueryClient();
+  const { data } = useQuery<TursoPublicSettings>({
+    queryKey: ["turso-settings"],
+    queryFn: () => fetch("/api/turso/settings").then((r) => r.json()),
+  });
+
+  const [url, setUrl] = useState("");
+  const [authToken, setAuthToken] = useState("");
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    if (data) setUrl(data.url || "");
+  }, [data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      fetch("/api/turso/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, authToken: authToken || undefined }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["turso-settings"] });
+      setAuthToken("");
+      toast.success("Turso bilgileri kaydedildi. Test edip uygulamayı yeniden başlat.");
+    },
+    onError: () => toast.error("Kaydedilemedi"),
+  });
+
+  const test = useMutation({
+    mutationFn: () =>
+      fetch("/api/turso/test", { method: "POST" }).then(async (r) => {
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error ?? "Test başarısız");
+        return body as { ok: boolean; message: string };
+      }),
+    onSuccess: (res) => {
+      setTestResult(res);
+      if (res.ok) toast.success("Turso bağlantısı başarılı");
+    },
+    onError: (e: Error) => {
+      setTestResult({ ok: false, message: e.message });
+      toast.error(e.message);
+    },
+  });
+
+  const disconnect = useMutation({
+    mutationFn: () => fetch("/api/turso/settings", { method: "DELETE" }).then((r) => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["turso-settings"] });
+      setUrl("");
+      setTestResult(null);
+      toast.success("Turso bağlantısı kaldırıldı. Yeniden başlatınca local DB'ye döner.");
+    },
+  });
+
+  const activeMode = data?.activeMode ?? "local";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          {activeMode === "turso" ? (
+            <Cloud className="h-4 w-4 text-emerald-500" />
+          ) : (
+            <CloudOff className="h-4 w-4 text-muted-foreground" />
+          )}
+          Veritabanı / Çoklu Cihaz Senkron (Turso)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div
+          className={cn(
+            "text-xs rounded-md px-3 py-2 border",
+            activeMode === "turso"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+              : "bg-muted/40 border-border text-muted-foreground"
+          )}
+        >
+          {activeMode === "turso" ? (
+            <>✓ Şu an <strong>bulut DB (Turso)</strong> aktif — Mac ve Windows aynı veriyi görür.</>
+          ) : (
+            <>Şu an <strong>local veritabanı</strong> kullanılıyor (bu makineye özel). Bulut senkron için aşağıya Turso bilgilerini gir.</>
+          )}
+        </div>
+
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          turso.tech&apos;te ücretsiz veritabanı aç → <strong>Database URL</strong> ve
+          <strong> Auth Token</strong>&apos;ı buraya gir. <u>Aynı bilgileri iki makineye de gir.</u>
+          Kaydedip <strong>Test Et</strong>, sonra uygulamayı yeniden başlat.
+        </p>
+
+        <div>
+          <Label className="text-xs">Database URL</Label>
+          <Input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="libsql://magicland-hub-xxxx.turso.io"
+          />
+        </div>
+        <div>
+          <Label className="text-xs">Auth Token</Label>
+          <Input
+            type="password"
+            value={authToken}
+            onChange={(e) => setAuthToken(e.target.value)}
+            placeholder={data?.hasAuthToken ? data.authTokenMasked : "eyJ..."}
+          />
+          {data?.hasAuthToken && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Token kayıtlı. Değiştirmek istemiyorsan boş bırak.
+            </p>
+          )}
+        </div>
+
+        {testResult && (
+          <div
+            className={cn(
+              "text-xs rounded-md px-3 py-2 border",
+              testResult.ok
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                : "bg-destructive/10 border-destructive/30 text-destructive"
+            )}
+          >
+            {testResult.ok ? "✓ " : "✗ "}
+            {testResult.message}
+          </div>
+        )}
+
+        <div className="grid grid-cols-3 gap-2">
+          <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || !url}>
+            {save.isPending ? "..." : "Kaydet"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => test.mutate()}
+            disabled={test.isPending}
+          >
+            {test.isPending ? "Test ediliyor…" : "Test Et"}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-destructive"
+            onClick={() => {
+              if (confirm("Turso bağlantısı kaldırılsın mı? Yeniden başlatınca local DB'ye döner."))
+                disconnect.mutate();
+            }}
+            disabled={disconnect.isPending}
+          >
+            Kaldır
+          </Button>
         </div>
       </CardContent>
     </Card>

@@ -187,6 +187,81 @@ export function ensureRuntimeSchema(): Promise<void> {
       )
     `);
 
+    // Kural / şablon / fiyat geçmişi tabloları — eskiden sadece bundled dev.db'de
+    // vardı; boş Turso (bulut) DB'de de kurulabilmeleri için burada da yaratılır.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CommissionRule" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "categoryName" TEXT,
+        "minPrice" REAL NOT NULL DEFAULT 0,
+        "maxPrice" REAL NOT NULL DEFAULT 999999,
+        "commissionRate" REAL NOT NULL,
+        "fixedCommission" REAL NOT NULL DEFAULT 0,
+        "validFrom" DATETIME,
+        "validTo" DATETIME,
+        "priority" INTEGER NOT NULL DEFAULT 10,
+        "isActive" BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CargoRule" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "platform" TEXT,
+        "cargoProvider" TEXT,
+        "categoryName" TEXT,
+        "minPrice" REAL NOT NULL DEFAULT 0,
+        "maxPrice" REAL NOT NULL DEFAULT 999999,
+        "minDesi" REAL NOT NULL DEFAULT 0,
+        "maxDesi" REAL NOT NULL DEFAULT 999,
+        "cargoCost" REAL NOT NULL,
+        "validFrom" DATETIME,
+        "validTo" DATETIME,
+        "priority" INTEGER NOT NULL DEFAULT 10,
+        "isActive" BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ExpenseRule" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "platform" TEXT,
+        "type" TEXT NOT NULL,
+        "value" REAL NOT NULL,
+        "categoryName" TEXT,
+        "minPrice" REAL NOT NULL DEFAULT 0,
+        "maxPrice" REAL NOT NULL DEFAULT 999999,
+        "priority" INTEGER NOT NULL DEFAULT 10,
+        "isActive" BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "CostTemplate" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "materialCostPerGram" REAL NOT NULL DEFAULT 0,
+        "electricityCostPerHour" REAL NOT NULL DEFAULT 0,
+        "machineWearCostPerHour" REAL NOT NULL DEFAULT 0,
+        "defaultPackagingCost" REAL NOT NULL DEFAULT 0,
+        "defaultLaborCost" REAL NOT NULL DEFAULT 0,
+        "defaultOtherCost" REAL NOT NULL DEFAULT 0,
+        "defaultWasteRate" REAL NOT NULL DEFAULT 0,
+        "isActive" BOOLEAN NOT NULL DEFAULT true
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PriceHistory" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "productId" TEXT NOT NULL,
+        "oldPrice" REAL NOT NULL,
+        "newPrice" REAL NOT NULL,
+        "changeSource" TEXT NOT NULL,
+        "changedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "note" TEXT
+      )
+    `);
+
     // Ensure new columns on existing tables
     await ensureColumn("Product", "trendyolId", "TEXT");
     await ensureColumn("Product", "source", "TEXT NOT NULL DEFAULT 'manual'");
