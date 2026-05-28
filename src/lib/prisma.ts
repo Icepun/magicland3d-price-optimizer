@@ -34,8 +34,21 @@ function createPrisma(): PrismaClient {
   const log = process.env.NODE_ENV === "development" ? ["error", "warn"] as const : ["error"] as const;
 
   if (tursoUrl) {
-    // Bulut DB — libSQL adapter
-    const adapter = new PrismaLibSQL({ url: tursoUrl, authToken: tursoToken || undefined });
+    // Bulut DB — libSQL adapter, EMBEDDED REPLICA modu.
+    // Yerel kopya dosyası birincil: okumalar yerelden (anında), yazmalar buluta
+    // yazılır, syncInterval ile diğer cihazın değişiklikleri arka planda çekilir.
+    // (Eski "url: tursoUrl" uzak-only mod her sorguyu eu-west-1'e gönderiyordu → 3-4sn.)
+    const replicaPath =
+      process.env.TURSO_REPLICA_PATH?.trim() ||
+      path.join(process.cwd(), "prisma", "turso-replica.db").replace(/\\/g, "/");
+    // Not: readYourWrites native libsql'de zaten varsayılan true (kendi yazdığını
+    // anında okur); @libsql/client Config tipinde olmadığı için burada geçilmiyor.
+    const adapter = new PrismaLibSQL({
+      url: `file:${replicaPath}`,
+      syncUrl: tursoUrl,
+      authToken: tursoToken || undefined,
+      syncInterval: 60, // saniye — periyodik pull (yazmalar zaten anında buluta gider)
+    });
     return new PrismaClient({ adapter, log: [...log] });
   }
 
