@@ -4,13 +4,14 @@ import type {
   SimulationInput,
   SimulationResult,
   ExpenseRuleInput,
+  AppliedExpenseRule,
 } from "./types";
 
 function calculateExpenses(
   rules: ExpenseRuleInput[],
   salePrice: number,
   categoryName: string
-): { fixed: number; variable: number; applied: ExpenseRuleInput[] } {
+): { fixed: number; variable: number; applied: AppliedExpenseRule[] } {
   const applicable = rules.filter((r) => {
     if (!r.isActive) return false;
     if (salePrice < r.minPrice || salePrice > r.maxPrice) return false;
@@ -20,16 +21,21 @@ function calculateExpenses(
 
   let fixed = 0;
   let variable = 0;
+  const applied: AppliedExpenseRule[] = [];
 
   for (const rule of applicable) {
+    let amount = 0;
     if (rule.type === "fixed" || rule.type === "per_order") {
-      fixed += rule.value;
+      amount = rule.value;
+      fixed += amount;
     } else if (rule.type === "percentage") {
-      variable += salePrice * rule.value;
+      amount = salePrice * rule.value;
+      variable += amount;
     }
+    applied.push({ ...rule, amount });
   }
 
-  return { fixed, variable, applied: applicable };
+  return { fixed, variable, applied };
 }
 
 /**

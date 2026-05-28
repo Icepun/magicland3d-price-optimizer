@@ -56,6 +56,16 @@ export interface ExpenseRuleInput {
 }
 
 /**
+ * Bir listing'e uygulanmış tek bir gider kuralı + hesaplanan TL tutarı.
+ * Kâr dökümünde her gider artık tek tek kendi adıyla satır olarak gösterilir
+ * ("Diğer Giderler" toplamı yerine).
+ */
+export interface AppliedExpenseRule extends ExpenseRuleInput {
+  /** Bu kuralın bu fiyat için hesaplanmış gider tutarı (TL). */
+  amount: number;
+}
+
+/**
  * Tek bir listing için kâr hesabı girdisi.
  * Recommendation/öneri sistemi yok — sadece "şu an ne kadar kâr ediyor" hesabı.
  */
@@ -118,5 +128,5 @@ export interface SimulationResult {
   profitMargin: number;
   appliedCommissionRule?: CommissionRuleInput;
   appliedCargoRule?: CargoRuleInput;
-  appliedExpenseRules: ExpenseRuleInput[];
+  appliedExpenseRules: AppliedExpenseRule[];
 }

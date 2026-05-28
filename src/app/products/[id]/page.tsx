@@ -956,14 +956,17 @@ function PlatformProfitCard({
                     <span>Kargo</span>
                     <span>−{formatCurrency(result.cargoCost)}</span>
                   </div>
-                  {(result.fixedExpenses + result.variableExpenses) > 0 && (
-                    <div className="flex justify-between text-muted-foreground">
-                      <span>Diğer Giderler</span>
-                      <span>
-                        −{formatCurrency(result.fixedExpenses + result.variableExpenses)}
-                      </span>
-                    </div>
-                  )}
+                  {result.appliedExpenseRules
+                    .filter((exp) => exp.amount !== 0)
+                    .map((exp) => (
+                      <div
+                        key={exp.id}
+                        className="flex justify-between text-muted-foreground"
+                      >
+                        <span>{exp.name}</span>
+                        <span>−{formatCurrency(exp.amount)}</span>
+                      </div>
+                    ))}
                 </div>
               </>
             ) : (

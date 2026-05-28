@@ -81,6 +81,14 @@ describe("pricing engine", () => {
     expect(result.cargoCost).toBe(20);
     expect(result.fixedExpenses).toBe(5);
     expect(result.variableExpenses).toBe(6);
+    // Her gider kuralı tek tek kendi tutarıyla raporlanır (UI'da adıyla satır olur)
+    expect(result.appliedExpenseRules).toHaveLength(2);
+    expect(
+      result.appliedExpenseRules.find((e) => e.id === "expense-fixed")?.amount
+    ).toBe(5);
+    expect(
+      result.appliedExpenseRules.find((e) => e.id === "expense-variable")?.amount
+    ).toBe(6);
     expect(result.totalCost).toBe(143);
     expect(result.netProfit).toBe(57);
     expect(result.profitMargin).toBeCloseTo(0.285);
