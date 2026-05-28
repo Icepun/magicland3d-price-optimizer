@@ -34,6 +34,19 @@ export function StartupSync() {
 
     let cancelled = false;
 
+    // TEX kargo barem seed (idempotent — bir kez çalışır, AppSetting flag ile)
+    fetch("/api/seed/tex-cargo-rules", { method: "POST" })
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.seeded) {
+          queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
+          toast.success(`TEX kargo bareme yüklendi (${res.added} kural)`);
+        }
+      })
+      .catch(() => {
+        /* sessiz geç, kritik değil */
+      });
+
     async function runStartupSync() {
       const settings = await fetchJson<TrendyolPublicSettings>("/api/trendyol/settings");
       if (!settings.sellerId || !settings.hasApiKey || !settings.hasApiSecret) return;
@@ -58,7 +71,7 @@ export function StartupSync() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["products"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["recommendations"] }),
+        queryClient.invalidateQueries({ queryKey: ["product-profit"] }),
       ]);
 
       if (result.created > 0 || result.updated > 0) {

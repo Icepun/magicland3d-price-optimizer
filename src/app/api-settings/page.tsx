@@ -1,593 +1,686 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Percent, Settings2, PlugZap, RefreshCw, UploadCloud, ShieldCheck } from "lucide-react";
-import { toast } from "sonner";
-import { useForm, useWatch } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { z } from "zod";
+import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2 } from "lucide-react";
 
-interface TrendyolSettings {
+interface TrendyolPublicSettings {
   sellerId: string;
-  hasIntegrationReferenceCode: boolean;
-  integrationReferenceCodeMasked: string;
-  environment: "prod" | "stage";
-  integratorName: string;
   hasApiKey: boolean;
-  hasApiSecret: boolean;
   apiKeyMasked: string;
+  hasApiSecret: boolean;
   apiSecretMasked: string;
+  integratorName: string;
 }
 
-const Schema = z.object({
-  sellerId: z.string().min(1, "Satici ID gerekli"),
-  integrationReferenceCode: z.string().optional(),
-  apiKey: z.string().optional(),
-  apiSecret: z.string().optional(),
-  environment: z.enum(["prod", "stage"]).default("prod"),
-  integratorName: z.string().min(1).max(30).default("SelfIntegration"),
-});
-
-type FormData = z.infer<typeof Schema>;
-const DRAFT_KEY = "trendyol-api-settings-draft";
-const DAY_MS = 24 * 60 * 60 * 1000;
-const COMMISSION_DAYS = 365;
-const COMMISSION_RANGE_DAYS = 15;
-
-interface OperationProgress {
-  label: string;
-  detail: string;
-  value: number;
-  startedAt: number;
+interface ShopifyPublicSettings {
+  shopDomain: string;
+  apiVersion: string;
+  hasStorefrontAccessToken: boolean;
+  storefrontAccessTokenMasked: string;
 }
 
-interface ProductSyncResult {
-  created: number;
-  updated: number;
-  skipped: number;
-  totalElements: number;
-  totalPages: number;
-  processedPages: number;
-  nextPage: number;
-}
-
-interface CommissionSyncResult {
-  updated: number;
-  unchanged: number;
-  foundBarcodes: number;
-  matchedProducts: number;
-  unmatchedBarcodes: number;
-  scannedRecords: number;
-}
-
-function getInitialFormValues(): FormData {
-  const fallback: FormData = {
-    sellerId: "",
-    integrationReferenceCode: "",
-    apiKey: "",
-    apiSecret: "",
-    environment: "prod",
-    integratorName: "SelfIntegration",
-  };
-
-  if (typeof window === "undefined") return fallback;
-
-  try {
-    const rawDraft = window.sessionStorage.getItem(DRAFT_KEY);
-    if (!rawDraft) return fallback;
-    return { ...fallback, ...Schema.partial().parse(JSON.parse(rawDraft)) };
-  } catch {
-    return fallback;
-  }
+interface ShopifyDebugResult {
+  steps: Array<{
+    name: string;
+    status: "ok" | "fail";
+    detail: string;
+    responseStatus?: number;
+    responseBody?: unknown;
+  }>;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const message =
-      typeof data === "object" && data && "error" in data
-        ? String((data as { error?: unknown }).error)
-        : `${url} ${response.status}`;
-    throw new Error(message);
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg =
+      body && typeof body === "object" && "error" in body
+        ? String((body as { error: unknown }).error)
+        : `${url} ${res.status}`;
+    throw new Error(msg);
   }
-
-  return data as T;
+  return body as T;
 }
 
-function formatDuration(ms: number) {
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  if (seconds < 60) return `${seconds} sn`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  return rest > 0 ? `${minutes} dk ${rest} sn` : `${minutes} dk`;
-}
+// ───────────── Trendyol Form ─────────────
+const TrendyolSchema = z.object({
+  sellerId: z.string().min(1, "Seller ID gerekli"),
+  apiKey: z.string().optional(),
+  apiSecret: z.string().optional(),
+  integratorName: z.string().default("SelfIntegration"),
+});
+type TrendyolForm = z.infer<typeof TrendyolSchema>;
 
-function mergeProductSyncResult(
-  total: ProductSyncResult,
-  next: ProductSyncResult
-): ProductSyncResult {
-  return {
-    created: total.created + next.created,
-    updated: total.updated + next.updated,
-    skipped: total.skipped + next.skipped,
-    totalElements: next.totalElements || total.totalElements,
-    totalPages: next.totalPages || total.totalPages,
-    processedPages: total.processedPages + next.processedPages,
-    nextPage: next.nextPage,
-  };
-}
-
-function mergeCommissionSyncResult(
-  total: CommissionSyncResult,
-  next: CommissionSyncResult
-): CommissionSyncResult {
-  return {
-    updated: total.updated + next.updated,
-    unchanged: total.unchanged + next.unchanged,
-    foundBarcodes: total.foundBarcodes + next.foundBarcodes,
-    matchedProducts: total.matchedProducts + next.matchedProducts,
-    unmatchedBarcodes: total.unmatchedBarcodes + next.unmatchedBarcodes,
-    scannedRecords: total.scannedRecords + next.scannedRecords,
-  };
-}
-
-function buildCommissionRanges() {
-  const now = Date.now();
-  const startLimit = now - COMMISSION_DAYS * DAY_MS;
-  const ranges: Array<{ startDate: number; endDate: number }> = [];
-  let endDate = now;
-
-  while (endDate > startLimit) {
-    const startDate = Math.max(startLimit, endDate - COMMISSION_RANGE_DAYS * DAY_MS + 1);
-    ranges.push({ startDate, endDate });
-    endDate = startDate - 1;
-  }
-
-  return ranges.reverse();
-}
-
-export default function ApiSettingsPage() {
-  const queryClient = useQueryClient();
-  const [lastResult, setLastResult] = useState<string>("");
-  const [progress, setProgress] = useState<OperationProgress | null>(null);
-  const hasDraftRef = useRef(
-    typeof window !== "undefined" && Boolean(window.sessionStorage.getItem(DRAFT_KEY))
-  );
-
-  const { data: settings } = useQuery<TrendyolSettings>({
+function TrendyolTab() {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery<TrendyolPublicSettings>({
     queryKey: ["trendyol-settings"],
-    queryFn: () => fetchJson<TrendyolSettings>("/api/trendyol/settings"),
-    retry: false,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    queryFn: () => fetchJson("/api/trendyol/settings"),
   });
 
-  const form = useForm<FormData>({
-    resolver: zodResolver(Schema),
-    defaultValues: getInitialFormValues(),
+  const form = useForm<TrendyolForm>({
+    resolver: zodResolver(TrendyolSchema),
+    defaultValues: {
+      sellerId: settings?.sellerId ?? "",
+      integratorName: settings?.integratorName ?? "SelfIntegration",
+    },
+    values: settings
+      ? {
+          sellerId: settings.sellerId,
+          apiKey: "",
+          apiSecret: "",
+          integratorName: settings.integratorName,
+        }
+      : undefined,
   });
-  const draftValues = useWatch({ control: form.control });
-  const sellerIdPreview = useWatch({ control: form.control, name: "sellerId" });
-  const integratorNamePreview = useWatch({ control: form.control, name: "integratorName" });
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!form.formState.isDirty) return;
-
-    window.sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draftValues));
-    hasDraftRef.current = true;
-  }, [draftValues, form.formState.isDirty]);
-
-  useEffect(() => {
-    if (!settings) return;
-    if (hasDraftRef.current) return;
-    if (form.formState.isDirty) return;
-
-    form.reset({
-      sellerId: settings.sellerId,
-      integrationReferenceCode: "",
-      apiKey: "",
-      apiSecret: "",
-      environment: settings.environment,
-      integratorName: settings.integratorName,
-    });
-  }, [settings, form]);
-
-  const saveMutation = useMutation({
-    mutationFn: (data: FormData) =>
-      fetchJson<TrendyolSettings>("/api/trendyol/settings", {
+  const save = useMutation({
+    mutationFn: (data: TrendyolForm) =>
+      fetchJson("/api/trendyol/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, environment: "prod" }),
       }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(["trendyol-settings"], data);
-      window.sessionStorage.removeItem(DRAFT_KEY);
-      hasDraftRef.current = false;
-      form.reset({
-        sellerId: data.sellerId,
-        integrationReferenceCode: "",
-        apiKey: "",
-        apiSecret: "",
-        environment: data.environment,
-        integratorName: data.integratorName,
-      });
-      toast.success("Trendyol API bilgileri kaydedildi");
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["trendyol-settings"] });
+      toast.success("Trendyol ayarları kaydedildi");
     },
-    onError: (error) => toast.error(error.message),
+    onError: (e: Error) => toast.error(e.message),
   });
 
-  const testMutation = useMutation({
+  const test = useMutation({
+    mutationFn: () => fetchJson("/api/trendyol/test", { method: "POST" }),
+    onSuccess: () => toast.success("Trendyol bağlantısı başarılı"),
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const sync = useMutation({
     mutationFn: () =>
-      fetchJson<{ totalElements: number; totalPages: number }>("/api/trendyol/test", {
+      fetchJson("/api/trendyol/sync-products", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved: true, archived: false, maxPages: 25, size: 100 }),
       }),
-    onSuccess: (data) => {
-      setLastResult(`Baglanti tamam. Trendyol ${data.totalElements} urun raporladi.`);
-      toast.success("Trendyol baglantisi basarili");
+    onSuccess: (data: unknown) => {
+      const d = data as { created: number; updated: number };
+      toast.success(`Trendyol sync: ${d.created} yeni, ${d.updated} güncel`);
+      qc.invalidateQueries({ queryKey: ["products"] });
     },
-    onError: (error) => {
-      setLastResult(error.message);
-      toast.error(error.message);
-    },
+    onError: (e: Error) => toast.error(e.message),
   });
-
-  const syncMutation = useMutation({
-    mutationFn: async () => {
-      const startedAt = Date.now();
-      let page = 0;
-      let total: ProductSyncResult = {
-        created: 0,
-        updated: 0,
-        skipped: 0,
-        totalElements: 0,
-        totalPages: 0,
-        processedPages: 0,
-        nextPage: 0,
-      };
-
-      setProgress({
-        label: "Urunler cekiliyor",
-        detail: "Trendyol ilk sayfa okunuyor...",
-        value: 3,
-        startedAt,
-      });
-
-      while (page < 100) {
-        const result = await fetchJson<ProductSyncResult>("/api/trendyol/sync-products", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            approved: true,
-            archived: false,
-            startPage: page,
-            maxPages: 1,
-            size: 100,
-          }),
-        });
-
-        total = mergeProductSyncResult(total, result);
-        const totalPages = Math.max(1, result.totalPages || total.totalPages || page + 1);
-        const nextPage = result.nextPage ?? page + 1;
-        const value = Math.min(100, Math.round((nextPage / totalPages) * 100));
-
-        setProgress({
-          label: "Urunler cekiliyor",
-          detail: `${nextPage}/${totalPages} sayfa islendi. Gecen sure: ${formatDuration(Date.now() - startedAt)}.`,
-          value,
-          startedAt,
-        });
-
-        page = nextPage;
-        if (page >= totalPages || result.processedPages === 0) break;
-      }
-
-      return total;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      setLastResult(
-        `Sync tamam. Yeni: ${data.created}, guncellenen: ${data.updated}, atlanan: ${data.skipped}, sayfa: ${data.processedPages}/${data.totalPages}.`
-      );
-      setProgress(null);
-      toast.success("Trendyol urunleri senkronize edildi");
-    },
-    onError: (error) => {
-      setLastResult(error.message);
-      setProgress(null);
-      toast.error(error.message);
-    },
-  });
-
-  const updatePricesMutation = useMutation({
-    mutationFn: () =>
-      fetchJson<{ sent: number; skipped: unknown[]; batchRequestId?: string }>(
-        "/api/trendyol/update-prices",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ onlyAccepted: true, dryRun: false }),
-        }
-      ),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      setLastResult(
-        `Fiyat gonderimi tamam. Gonderilen: ${data.sent}, atlanan: ${data.skipped.length}${
-          data.batchRequestId ? `, batch: ${data.batchRequestId}` : ""
-        }.`
-      );
-      toast.success("Kabul edilen oneriler Trendyol'a gonderildi");
-    },
-    onError: (error) => {
-      setLastResult(error.message);
-      toast.error(error.message);
-    },
-  });
-
-  const syncCommissionsMutation = useMutation({
-    mutationFn: async () => {
-      const startedAt = Date.now();
-      const ranges = buildCommissionRanges();
-      let total: CommissionSyncResult = {
-        updated: 0,
-        unchanged: 0,
-        foundBarcodes: 0,
-        matchedProducts: 0,
-        unmatchedBarcodes: 0,
-        scannedRecords: 0,
-      };
-
-      setProgress({
-        label: "Komisyonlar guncelleniyor",
-        detail: `${ranges.length} donem taranacak.`,
-        value: 1,
-        startedAt,
-      });
-
-      for (let index = 0; index < ranges.length; index += 1) {
-        const range = ranges[index];
-        const result = await fetchJson<CommissionSyncResult>("/api/trendyol/sync-commissions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            days: COMMISSION_DAYS,
-            startDate: range.startDate,
-            endDate: range.endDate,
-          }),
-        });
-
-        total = mergeCommissionSyncResult(total, result);
-        const done = index + 1;
-        const value = Math.round((done / ranges.length) * 100);
-        const elapsed = Date.now() - startedAt;
-        const estimatedTotal = (elapsed / done) * ranges.length;
-        const remaining = Math.max(0, estimatedTotal - elapsed);
-
-        setProgress({
-          label: "Komisyonlar guncelleniyor",
-          detail: `${done}/${ranges.length} donem islendi. Kalan tahmini: ${formatDuration(remaining)}.`,
-          value,
-          startedAt,
-        });
-      }
-
-      return total;
-    },
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["recommendations"] });
-      setLastResult(
-        `Komisyon sync tamam. Guncellenen: ${data.updated}, ayni kalan: ${data.unchanged}, eslesen urun: ${data.matchedProducts}, finans barkodu: ${data.foundBarcodes}, taranan kayit: ${data.scannedRecords}.`
-      );
-      setProgress(null);
-      toast.success("Komisyonlar guncellendi");
-    },
-    onError: (error) => {
-      setLastResult(error.message);
-      setProgress(null);
-      toast.error(error.message);
-    },
-  });
-
-  const configured = Boolean(settings?.sellerId && settings.hasApiKey && settings.hasApiSecret);
-  const busy =
-    testMutation.isPending ||
-    syncMutation.isPending ||
-    syncCommissionsMutation.isPending ||
-    updatePricesMutation.isPending;
 
   return (
-    <div className="p-6 space-y-6 max-w-3xl">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Settings2 className="h-6 w-6" /> Trendyol API
-        </h1>
-        <Badge variant={configured ? "default" : "secondary"}>
-          {configured ? "Hazir" : "Eksik Bilgi"}
-        </Badge>
-      </div>
-
+    <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" /> API Bilgileri
+          <CardTitle className="text-sm flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" /> Trendyol API
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <form
-            className="space-y-4"
-            onSubmit={form.handleSubmit((data) => saveMutation.mutate(data))}
-          >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <Label>Satıcı ID (Cari ID)</Label>
-                <Input {...form.register("sellerId")} placeholder="123456" />
-              </div>
-              <div>
-                <Label>Ortam</Label>
-                <select
-                  className="h-9 w-full rounded-md border bg-background px-3 text-sm"
-                  {...form.register("environment")}
-                >
-                  <option value="prod">Canli</option>
-                  <option value="stage">Stage</option>
-                </select>
-              </div>
-            </div>
-
+          <form onSubmit={form.handleSubmit((d) => save.mutate(d))} className="space-y-3">
             <div>
-              <Label>Entegrasyon Referans Kodu</Label>
+              <Label className="text-xs">Seller ID</Label>
+              <Input {...form.register("sellerId")} placeholder="123456" />
+            </div>
+            <div>
+              <Label className="text-xs">API Key</Label>
               <Input
+                {...form.register("apiKey")}
                 type="password"
-                autoComplete="off"
-                {...form.register("integrationReferenceCode")}
-                placeholder={settings?.integrationReferenceCodeMasked || "Paneldeki referans kodu"}
+                placeholder={settings?.hasApiKey ? settings.apiKeyMasked : "Yeni API key girin"}
               />
             </div>
-
             <div>
-              <Label>User-Agent Entegratör Adı</Label>
-              <Input {...form.register("integratorName")} placeholder="SelfIntegration" />
-              <p className="text-xs text-muted-foreground mt-1">
-                Kendi yazılımınız için varsayılan değer SelfIntegration; header:
-                {" "}
-                {sellerIdPreview || "SatıcıID"} - {integratorNamePreview || "SelfIntegration"}.
-              </p>
+              <Label className="text-xs">API Secret</Label>
+              <Input
+                {...form.register("apiSecret")}
+                type="password"
+                placeholder={settings?.hasApiSecret ? settings.apiSecretMasked : "Yeni secret girin"}
+              />
             </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <Label>API Key</Label>
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  {...form.register("apiKey")}
-                  placeholder={settings?.apiKeyMasked || "Yeni API Key"}
-                />
-              </div>
-              <div>
-                <Label>API Secret</Label>
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  {...form.register("apiSecret")}
-                  placeholder={settings?.apiSecretMasked || "Yeni API Secret"}
-                />
-              </div>
+            <div>
+              <Label className="text-xs">Integrator Name</Label>
+              <Input {...form.register("integratorName")} />
             </div>
-
-            <Button type="submit" disabled={saveMutation.isPending}>
-              {saveMutation.isPending ? "Kaydediliyor..." : "Kaydet"}
+            <Button type="submit" size="sm" disabled={save.isPending}>
+              {save.isPending ? "Kaydediliyor…" : "Kaydet"}
             </Button>
           </form>
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm flex items-center gap-2">
-              <PlugZap className="h-4 w-4" /> Bağlantı Testi
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={!configured || busy}
-              onClick={() => testMutation.mutate()}
-            >
-              {testMutation.isPending ? "Test ediliyor..." : "Test Et"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Percent className="h-4 w-4" /> Komisyon
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={!configured || busy}
-              onClick={() => syncCommissionsMutation.mutate()}
-            >
-              {syncCommissionsMutation.isPending ? "Guncelleniyor..." : "Komisyonlari Guncelle"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm flex items-center gap-2">
-              <RefreshCw className="h-4 w-4" /> Ürün Sync
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={!configured || busy}
-              onClick={() => syncMutation.mutate()}
-            >
-              {syncMutation.isPending ? "Cekiliyor..." : "Urunleri Cek"}
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm flex items-center gap-2">
-              <UploadCloud className="h-4 w-4" /> Fiyat Gönder
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Button
-              variant="outline"
-              className="w-full"
-              disabled={!configured || busy}
-              onClick={() => updatePricesMutation.mutate()}
-            >
-              {updatePricesMutation.isPending ? "Gonderiliyor..." : "Kabul Edilenleri Gonder"}
-            </Button>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 gap-3">
+        <Button variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
+          <PlugZap className="h-4 w-4 mr-2" />
+          {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+        </Button>
+        <Button disabled={sync.isPending} onClick={() => sync.mutate()}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
+          {sync.isPending ? "Senkronize ediliyor…" : "Ürünleri Senkronize Et"}
+        </Button>
       </div>
 
-      {progress && (
-        <Card>
-          <CardContent className="pt-6 space-y-3">
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="font-medium">{progress.label}</span>
-              <span className="text-muted-foreground">%{Math.round(progress.value)}</span>
+      <SyncProgressCard isPending={sync.isPending} platform="Trendyol" />
+    </div>
+  );
+}
+
+/**
+ * Sync sırasında belirsiz-progress indikatorü.
+ * Trendyol/Shopify/HB sync API'leri streaming yapmadığı için tek bir
+ * "ürünler çekiliyor, lütfen bekle" göstergesi.
+ */
+function SyncProgressCard({ isPending, platform }: { isPending: boolean; platform: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!isPending) {
+      setElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 500);
+    return () => clearInterval(timer);
+  }, [isPending]);
+
+  if (!isPending) return null;
+
+  // Görsel olarak ilerliyor hissi: ilk 30 saniyede %90'a doğru asymptot
+  const visualProgress = Math.min(90, (elapsed / 30) * 100);
+
+  return (
+    <Card className="border-primary/30 bg-primary/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <CardContent className="pt-5 space-y-3">
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span className="font-medium flex items-center gap-2">
+            <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+            {platform} ürünleri çekiliyor
+          </span>
+          <span className="text-xs text-muted-foreground tabular-nums">{elapsed}s</span>
+        </div>
+        <Progress value={visualProgress} />
+        <p className="text-xs text-muted-foreground">
+          {platform} API tüm ürünleri tarıyor. Mağazanın büyüklüğüne göre 10 saniye –
+          birkaç dakika sürebilir. Bu pencereyi kapatma.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface ShopifySyncResult {
+  totalProducts: number;
+  totalVariants: number;
+  usedBarcode: number;
+  usedSku: number;
+  usedVariantId: number;
+  created: number;
+  updated: number;
+  listingsCreated: number;
+  listingsUpdated: number;
+  sampleProducts: Array<{ title: string; variantCount: number; hasBarcode: boolean }>;
+}
+
+// ───────────── Shopify Form ─────────────
+const ShopifySchema = z.object({
+  shopDomain: z.string().min(1, "Shopify mağaza adı gerekli"),
+  apiVersion: z.string().optional(),
+  storefrontAccessToken: z.string().optional(),
+});
+type ShopifyForm = z.infer<typeof ShopifySchema>;
+
+function ShopifyTab() {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery<ShopifyPublicSettings>({
+    queryKey: ["shopify-settings"],
+    queryFn: () => fetchJson("/api/shopify/settings"),
+  });
+
+  const form = useForm<ShopifyForm>({
+    resolver: zodResolver(ShopifySchema),
+    values: settings
+      ? {
+          shopDomain: settings.shopDomain,
+          apiVersion: settings.apiVersion,
+          storefrontAccessToken: "",
+        }
+      : {
+          shopDomain: "",
+          apiVersion: "2024-10",
+          storefrontAccessToken: "",
+        },
+  });
+
+  const save = useMutation({
+    mutationFn: (data: ShopifyForm) =>
+      fetchJson("/api/shopify/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["shopify-settings"] });
+      toast.success("Shopify ayarları kaydedildi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const disconnect = useMutation({
+    mutationFn: () => fetchJson("/api/shopify/settings", { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["shopify-settings"] });
+      qc.invalidateQueries({ queryKey: ["integrations-status"] });
+      toast.success("Shopify token silindi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const [debugResult, setDebugResult] = useState<ShopifyDebugResult | null>(null);
+  const testConnection = useMutation({
+    mutationFn: () =>
+      fetchJson<ShopifyDebugResult>("/api/shopify/generate-token", { method: "POST" }),
+    onSuccess: (data) => {
+      setDebugResult(data);
+      const allOk = data.steps.every((s) => s.status === "ok");
+      if (allOk) {
+        toast.success("Bağlantı başarılı — ürün çekmeye hazır");
+      } else {
+        toast.error("Bir adımda hata var — detayları aşağıda gör");
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const [lastSyncResult, setLastSyncResult] = useState<ShopifySyncResult | null>(null);
+  const sync = useMutation({
+    mutationFn: () => fetchJson<ShopifySyncResult>("/api/shopify/sync-products", { method: "POST" }),
+    onSuccess: (data) => {
+      setLastSyncResult(data);
+      if (data.created + data.updated > 0) {
+        toast.success(
+          `Shopify sync: ${data.created} yeni, ${data.updated} güncel, ${data.listingsCreated} listing`
+        );
+      } else if (data.totalProducts === 0) {
+        toast.error(
+          "Shopify mağazasında ürün bulunamadı. App scope'larında read_products aktif mi?"
+        );
+      } else {
+        toast.error(
+          `${data.totalProducts} ürün geldi ama hiçbiri eşleştirilemedi. Detaylar aşağıda.`
+        );
+      }
+      qc.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <ShoppingBag className="h-4 w-4" /> Shopify API
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            Admin API Access Token ile çalışır. Aşağıdaki rehberi açıp adımları
+            izle.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={form.handleSubmit((d) => save.mutate(d))} className="space-y-3">
+            <div>
+              <Label className="text-xs">Mağaza Alan Adı</Label>
+              <Input {...form.register("shopDomain")} placeholder="magicland-3d.myshopify.com" />
             </div>
-            <Progress value={progress.value} />
-            <p className="text-xs text-muted-foreground">{progress.detail}</p>
+
+            <ShopifyStorefrontGuide />
+
+            <div>
+              <Label className="text-xs">Storefront Private Access Token</Label>
+              <Input
+                {...form.register("storefrontAccessToken")}
+                type="password"
+                placeholder={
+                  settings?.hasStorefrontAccessToken
+                    ? settings.storefrontAccessTokenMasked
+                    : "shpat_..."
+                }
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {settings?.hasStorefrontAccessToken
+                  ? "Token kayıtlı. Değiştirmek istemiyorsan boş bırak."
+                  : `Headless kanalı → Storefront API → "Özel Erişim Belirteci" üzerinden kopyala.`}
+              </p>
+            </div>
+
+            <div>
+              <Label className="text-xs">API Versiyonu (opsiyonel)</Label>
+              <Input {...form.register("apiVersion")} placeholder="2024-10" />
+            </div>
+            <Button type="submit" size="sm" disabled={save.isPending}>
+              {save.isPending ? "Kaydediliyor…" : "Kaydet"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {settings?.hasStorefrontAccessToken && (
+        <Card className="border-green-500/40 bg-green-500/5">
+          <CardContent className="pt-4 pb-4 flex items-center justify-between gap-3">
+            <div className="text-sm">
+              <div className="flex items-center gap-2 font-medium text-green-500">
+                ✓ Storefront token kayıtlı
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {settings.shopDomain} · token: {settings.storefrontAccessTokenMasked}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disconnect.isPending}
+              onClick={() => {
+                if (confirm("Storefront token silinsin mi? Yeniden yapıştırman gerekir.")) {
+                  disconnect.mutate();
+                }
+              }}
+            >
+              {disconnect.isPending ? "Siliniyor…" : "Token'ı Sıfırla"}
+            </Button>
           </CardContent>
         </Card>
       )}
 
-      {lastResult && (
-        <Card>
-          <CardContent className="pt-6 text-sm text-muted-foreground">
-            {lastResult}
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-2 gap-3">
+        <Button
+          variant="outline"
+          disabled={testConnection.isPending || !settings?.hasStorefrontAccessToken}
+          onClick={() => testConnection.mutate()}
+        >
+          <PlugZap className={`h-4 w-4 mr-2 ${testConnection.isPending ? "animate-spin" : ""}`} />
+          {testConnection.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+        </Button>
+        <Button
+          disabled={sync.isPending || !settings?.hasStorefrontAccessToken}
+          onClick={() => sync.mutate()}
+        >
+          <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
+          {sync.isPending ? "Senkronize ediliyor…" : "Ürünleri Senkronize Et"}
+        </Button>
+      </div>
+
+      {debugResult && !testConnection.isPending && (
+        <ShopifyDebugCard result={debugResult} />
       )}
+
+      <SyncProgressCard isPending={sync.isPending} platform="Shopify" />
+
+      {lastSyncResult && !sync.isPending && <ShopifySyncResultCard result={lastSyncResult} />}
+    </div>
+  );
+}
+
+function ShopifyStorefrontGuide() {
+  return (
+    <details className="text-[11px] bg-muted/40 rounded-md leading-relaxed group" open>
+      <summary className="cursor-pointer p-2.5 font-medium hover:bg-muted/60 rounded-md select-none">
+        🔑 Storefront API token nasıl alınır? (tıkla aç)
+      </summary>
+      <ol className="list-decimal pl-7 pr-3 pb-3 space-y-1.5 text-muted-foreground">
+        <li>
+          Shopify Admin&apos;e gir →{" "}
+          <code className="text-foreground">magicland-3d.myshopify.com/admin</code>
+        </li>
+        <li>
+          Sol menüde <strong className="text-foreground">Apps and sales channels</strong>{" "}
+          (veya Uygulamalar) altında <strong className="text-foreground">Headless</strong>{" "}
+          uygulamasını aç
+        </li>
+        <li>
+          Üstte <strong className="text-foreground">Storefronts</strong> →
+          mağaza vitrinini seç → <strong className="text-foreground">Storefront API</strong>{" "}
+          sekmesine geç
+        </li>
+        <li>
+          <strong className="text-foreground">Storefront API izinleri</strong>{" "}
+          kartında en az şunlar açık olmalı (kalem ikonuyla düzenle):
+          <div className="mt-1 pl-3 font-mono text-[10px] text-foreground">
+            unauthenticated_read_product_listings
+            <br />
+            unauthenticated_read_product_inventory
+          </div>
+        </li>
+        <li>
+          <strong className="text-foreground">Özel Erişim Belirteci</strong>{" "}
+          kartında token göz 👁 ikonuyla görünür kıl → kopyala
+          (<code>shpat_...</code> ile başlar)
+        </li>
+        <li>
+          Aşağıdaki <strong className="text-foreground">Storefront Private Access Token</strong>{" "}
+          alanına yapıştır → <strong className="text-foreground">Kaydet</strong>
+        </li>
+        <li>
+          <strong className="text-foreground">Bağlantıyı Test Et</strong> → iki
+          ✓ yeşil görmelisin → sonra <strong className="text-foreground">Ürünleri Senkronize Et</strong>
+        </li>
+      </ol>
+      <div className="px-3 pb-3 pt-1 text-[10px] text-muted-foreground">
+        <strong>Not:</strong> Storefront API sadece &quot;active&quot; (yayında)
+        ürünleri döner — draft / archive görmek istiyorsan Admin API gerekir, o
+        ayrı bir kurulum.
+      </div>
+    </details>
+  );
+}
+
+function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
+  const allOk = result.steps.every((s) => s.status === "ok");
+  return (
+    <Card className={allOk ? "border-green-500/40 bg-green-500/5" : "border-amber-500/40 bg-amber-500/5"}>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Token + API Test Sonucu</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-xs">
+        {result.steps.map((step, i) => (
+          <div key={i} className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">
+                {step.status === "ok" ? "✓" : "✗"} {step.name}
+              </span>
+              {step.responseStatus && (
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  HTTP {step.responseStatus}
+                </span>
+              )}
+            </div>
+            <p className={step.status === "ok" ? "text-muted-foreground" : "text-amber-500"}>
+              {step.detail}
+            </p>
+            {step.responseBody !== undefined && (
+              <pre className="text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
+                {typeof step.responseBody === "string"
+                  ? step.responseBody
+                  : JSON.stringify(step.responseBody, null, 2)}
+              </pre>
+            )}
+          </div>
+        ))}
+
+        {!allOk && (
+          <div className="border-t border-border/50 pt-3 mt-3 text-[11px] text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Sık karşılaşılan sorunlar:</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>
+                <strong>401/403:</strong> Storefront token yanlış ya da rotate
+                edilmiş. Headless → Storefront API → Özel Erişim Belirteci'ni
+                yeniden kopyala.
+              </li>
+              <li>
+                <strong>0 ürün:</strong> Storefront API izinlerinde{" "}
+                <code>unauthenticated_read_product_listings</code> + {" "}
+                <code>unauthenticated_read_product_inventory</code> kapalı. İzinleri
+                aç ve kaydet.
+              </li>
+              <li>
+                <strong>404:</strong> Mağaza alan adı yanlış.{" "}
+                <code>magaza.myshopify.com</code> formatında olmalı.
+              </li>
+            </ul>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ShopifySyncResultCard({ result }: { result: ShopifySyncResult }) {
+  const noResults = result.created + result.updated === 0;
+  return (
+    <Card className={noResults ? "border-amber-500/40 bg-amber-500/5" : "border-green-500/30 bg-green-500/5"}>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">Son Sync Detayı</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-xs">
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Toplam ürün</span>
+            <span className="font-medium">{result.totalProducts}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Toplam variant</span>
+            <span className="font-medium">{result.totalVariants}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Yeni ana ürün</span>
+            <span className="font-medium text-green-500">{result.created}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Güncellenmiş</span>
+            <span className="font-medium">{result.updated}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Yeni listing</span>
+            <span className="font-medium text-green-500">{result.listingsCreated}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Güncel listing</span>
+            <span className="font-medium">{result.listingsUpdated}</span>
+          </div>
+          {result.usedBarcode > 0 && (
+            <div className="flex justify-between col-span-2">
+              <span className="text-muted-foreground">✓ Barkod kullanıldı</span>
+              <span className="font-medium text-green-500">{result.usedBarcode}</span>
+            </div>
+          )}
+          {result.usedSku > 0 && (
+            <div className="flex justify-between col-span-2">
+              <span className="text-muted-foreground">SKU barkod olarak kullanıldı</span>
+              <span className="font-medium">{result.usedSku}</span>
+            </div>
+          )}
+          {result.usedVariantId > 0 && (
+            <div className="flex justify-between col-span-2">
+              <span className="text-amber-500">⚠ Variant ID kullanıldı (barkod/SKU yok)</span>
+              <span className="font-medium text-amber-500">{result.usedVariantId}</span>
+            </div>
+          )}
+        </div>
+
+        {result.sampleProducts.length > 0 && (
+          <>
+            <div className="border-t border-border/50 pt-2 mt-2">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                İlk Birkaç Ürün
+              </p>
+              <div className="space-y-0.5">
+                {result.sampleProducts.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{p.title}</span>
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      {p.variantCount}v ·{" "}
+                      {p.hasBarcode ? (
+                        <span className="text-green-500">barkodlu</span>
+                      ) : (
+                        <span className="text-amber-500">barkodsuz</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {result.usedVariantId > 0 && (
+          <div className="border-t border-border/50 pt-2 mt-2 text-amber-500">
+            <p className="font-medium mb-1">💡 İpucu</p>
+            <p className="text-muted-foreground text-[11px]">
+              {result.usedVariantId} variant&apos;ın barkodu/SKU&apos;su yoktu, kimlik olarak Shopify
+              variant ID kullanıldı. Trendyol ürünlerini buna manuel olarak
+              eşleştirmen gerekir. Daha kolay olması için Shopify Admin&apos;de variant&apos;lara
+              barkod ekleyebilirsin.
+            </p>
+          </div>
+        )}
+        {noResults && result.totalProducts === 0 && (
+          <div className="border-t border-border/50 pt-2 mt-2 text-amber-500">
+            <p className="font-medium mb-1">⚠️ Mağazada ürün bulunamadı</p>
+            <p className="text-muted-foreground text-[11px]">
+              Olası nedenler: (1) App scope&apos;larında <code>read_products</code> aktif değil.
+              (2) Yanlış mağaza alan adı. (3) Mağaza gerçekten boş.
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ───────────── Ana Sayfa ─────────────
+export default function ApiSettingsPage() {
+  return (
+    <div className="p-6 space-y-5 max-w-3xl">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+          <Settings2 className="h-6 w-6" /> Platform API Ayarları
+        </h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Shopify ana ürün kaynağı, Trendyol satış kanalı — her birinin listing&apos;leri
+          ana ürünlere bağlanır.
+        </p>
+      </div>
+
+      <Tabs defaultValue="shopify">
+        <TabsList>
+          <TabsTrigger value="shopify">
+            <ShoppingBag className="h-3.5 w-3.5 mr-1.5" /> Shopify
+          </TabsTrigger>
+          <TabsTrigger value="trendyol">
+            <ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Trendyol
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="shopify">
+          <ShopifyTab />
+        </TabsContent>
+        <TabsContent value="trendyol">
+          <TrendyolTab />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

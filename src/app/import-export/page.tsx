@@ -109,26 +109,6 @@ export default function ImportExportPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <Download className="h-4 w-4" /> Öneri Raporu İndir
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Tüm önerileri CSV olarak indirin. Mevcut ve önerilen fiyat, kâr farkı ve gerekçe dahildir.
-              </p>
-              <a
-                href="/api/export?type=recommendations"
-                download
-                className={cn(buttonVariants({ variant: "outline" }), "w-full justify-center")}
-              >
-                <Download className="h-4 w-4 mr-2" /> Önerileri İndir
-              </a>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
                 <FileText className="h-4 w-4" /> Ürün Listesi İndir
               </CardTitle>
             </CardHeader>

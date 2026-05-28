@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("trendyolPriceOptimizer", {
   platform: process.platform,
   updater: {
     getStatus: () => ipcRenderer.invoke("updater:get-status"),
+    getLogPath: () => ipcRenderer.invoke("updater:get-log-path"),
     checkForUpdates: () => ipcRenderer.invoke("updater:check"),
     downloadUpdate: () => ipcRenderer.invoke("updater:download"),
     quitAndInstall: () => ipcRenderer.invoke("updater:quit-and-install"),

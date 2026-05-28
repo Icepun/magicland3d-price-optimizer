@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Download, RefreshCw, RotateCcw } from "lucide-react";
+import { Download, RefreshCw, RotateCcw, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,7 @@ const initialState: UpdaterState = {
 export function UpdateWidget() {
   const [state, setState] = useState<UpdaterState>(initialState);
   const [busy, setBusy] = useState(false);
+  const [logPath, setLogPath] = useState<string | null>(null);
 
   const updater = useMemo(() => {
     if (typeof window === "undefined") return undefined;
@@ -35,6 +36,9 @@ export function UpdateWidget() {
     let cancelled = false;
     updater.getStatus().then((nextState) => {
       if (!cancelled) setState(nextState);
+    });
+    updater.getLogPath?.().then((p: string) => {
+      if (!cancelled && p) setLogPath(p);
     });
     const unsubscribe = updater.onStatus(setState);
 
@@ -85,9 +89,21 @@ export function UpdateWidget() {
             Sürüm {state.version || "—"}
           </span>
         </div>
-        <div className="truncate text-[11px] text-muted-foreground pl-3.5">
+        <div className="text-[11px] text-sidebar-foreground/65 pl-3.5 break-all leading-relaxed">
           {state.message}
         </div>
+        {state.status === "error" && logPath && (
+          <div className="pl-3.5 mt-1 flex items-center gap-1">
+            <FileText className="h-3 w-3 shrink-0 text-sidebar-foreground/45" />
+            <span
+              className="text-[10px] text-sidebar-foreground/45 break-all cursor-pointer hover:text-sidebar-foreground/65 transition-colors"
+              title="Kopyalamak için tıkla"
+              onClick={() => navigator.clipboard?.writeText(logPath)}
+            >
+              {logPath}
+            </span>
+          </div>
+        )}
       </div>
 
       {isDownloading && (

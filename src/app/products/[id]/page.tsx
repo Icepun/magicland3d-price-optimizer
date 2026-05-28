@@ -1,39 +1,41 @@
 "use client";
 
-import { use, useState, useEffect } from "react";
+import { use, useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  ReferenceLine,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatCurrency, formatPercent } from "@/lib/utils";
-import { ArrowLeft, Zap, TrendingUp, Target, Package } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
-import type { RecommendationOutput, SimulationResult } from "@/core/types";
+import type { SimulationResult } from "@/core/types";
+import { parsePackagingSettings, computePackagingCost } from "@/core/packaging";
 
 interface FilamentType {
   id: string;
   name: string;
   costPerGram: number;
+}
+
+interface Listing {
+  id: string;
+  productId: string;
+  platform: "shopify" | "trendyol";
+  externalId: string | null;
+  externalSku: string | null;
+  salePrice: number;
+  listPrice: number | null;
+  stock: number;
+  commissionRate: number | null;
+  commissionFixed: number | null;
+  cargoCost: number | null;
   isActive: boolean;
+  lastSyncedAt: string | null;
 }
 
 interface ProductDetail {
@@ -43,75 +45,47 @@ interface ProductDetail {
   name: string;
   categoryName: string;
   currentSalePrice: number;
-  listPrice: number | null;
   stock: number;
   desi: number | null;
-  weight: number | null;
   imageUrl: string | null;
   source: string;
   cost: {
     costMode: string;
     manualCost: number | null;
     packagingCost: number | null;
-    materialWeight: number | null;
-    printTimeHours: number | null;
     totalCost: number | null;
     filamentTypeId: string | null;
     filamentWeight: number | null;
+    printTimeHours: number | null;
     wasteRate: number | null;
     packagingPoset: number | null;
     packagingNaylon: number | null;
     packagingBant: number | null;
     packagingKart: number | null;
-    filamentType?: FilamentType | null;
+    packagingOptionId: string | null;
+    nylonLevel: string | null;
+    tapeUsed: boolean | null;
   } | null;
+  listings: Listing[];
 }
 
-interface SimulationResponse {
-  product: {
-    id: string;
-    name: string;
-    currentSalePrice: number;
-    productCost: number;
-    packagingCost: number;
-  };
-  recommendations: RecommendationOutput;
+interface ProfitPreview {
+  productionCost: number;
+  packagingCost: number;
+  totalCost: number;
+  hasCost: boolean;
+  platforms: Array<{
+    platform: string;
+    listingId: string;
+    salePrice: number;
+    result: SimulationResult | null;
+  }>;
 }
 
-const PIE_COLORS = ["#ef4444", "#3b82f6", "#f59e0b", "#8b5cf6", "#10b981", "#22c55e"];
-
-function DeductionsPie({ result }: { result: SimulationResult }) {
-  const data = [
-    { name: "Ürün Maliyeti", value: result.productCost },
-    { name: "Komisyon", value: result.commissionCost },
-    { name: "Kargo", value: result.cargoCost },
-    { name: "Sabit Gider", value: result.fixedExpenses },
-    { name: "Değişken Gider", value: result.variableExpenses },
-    { name: "Net Kâr", value: Math.max(0, result.netProfit) },
-  ].filter((d) => d.value > 0);
-
-  return (
-    <ResponsiveContainer width="100%" height={220}>
-      <PieChart>
-        <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          innerRadius={55}
-          outerRadius={85}
-          dataKey="value"
-          label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-          labelLine={false}
-        >
-          {data.map((_, i) => (
-            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-          ))}
-        </Pie>
-        <Tooltip formatter={(v: number) => formatCurrency(v)} />
-      </PieChart>
-    </ResponsiveContainer>
-  );
-}
+const PLATFORM_INFO = {
+  shopify: { label: "Shopify", color: "oklch(0.55 0.18 145)" },
+  trendyol: { label: "Trendyol", color: "oklch(0.66 0.22 25)" },
+} as const;
 
 export default function ProductDetailPage({
   params,
@@ -121,122 +95,160 @@ export default function ProductDetailPage({
   const { id } = use(params);
   const queryClient = useQueryClient();
 
-  const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
-
-  // Load product detail
   const { data: product, isLoading } = useQuery<ProductDetail>({
     queryKey: ["product", id],
     queryFn: () => fetch(`/api/products/${id}`).then((r) => r.json()),
   });
 
-  // Load filaments
   const { data: filaments = [] } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],
     queryFn: () => fetch("/api/filament-types").then((r) => r.json()),
   });
 
-  // Load global app settings
   const { data: globalSettings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetch("/api/settings").then((r) => r.json()),
   });
 
-  // Form states
+  // Form state
   const [filamentTypeId, setFilamentTypeId] = useState("");
   const [filamentWeight, setFilamentWeight] = useState("");
   const [printTimeHours, setPrintTimeHours] = useState("");
   const [wasteRate, setWasteRate] = useState("");
+  const [packagingOptionId, setPackagingOptionId] = useState("");
+  const [nylonLevel, setNylonLevel] = useState<"none" | "low" | "medium" | "high">("none");
+  const [tapeUsed, setTapeUsed] = useState(false);
+  const [desiInput, setDesiInput] = useState("");
 
-  const [packagingPoset, setPackagingPoset] = useState("");
-  const [packagingNaylon, setPackagingNaylon] = useState("");
-  const [packagingBant, setPackagingBant] = useState("");
-  const [packagingKart, setPackagingKart] = useState("");
-
-  // Sync initial values when product is loaded
   useEffect(() => {
     if (product?.cost) {
       const c = product.cost;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setFilamentTypeId(c.filamentTypeId || "");
       setFilamentWeight(c.filamentWeight ? String(c.filamentWeight) : "");
       setPrintTimeHours(c.printTimeHours ? String(c.printTimeHours) : "");
       setWasteRate(c.wasteRate ? String(Number(c.wasteRate) * 100) : "");
-
-      setPackagingPoset(c.packagingPoset ? String(c.packagingPoset) : "");
-      setPackagingNaylon(c.packagingNaylon ? String(c.packagingNaylon) : "");
-      setPackagingBant(c.packagingBant ? String(c.packagingBant) : "");
-      setPackagingKart(c.packagingKart ? String(c.packagingKart) : "");
+      setPackagingOptionId(c.packagingOptionId || "");
+      setNylonLevel((c.nylonLevel as "none" | "low" | "medium" | "high") || "none");
+      setTapeUsed(Boolean(c.tapeUsed));
     }
   }, [product]);
 
-  // Real-time detailed cost preview calculation
+  useEffect(() => {
+    if (product) {
+      setDesiInput(product.desi ? String(product.desi) : "");
+    }
+  }, [product]);
+
+  // Paketleme ayarları (Maliyet Ayarları'ndan)
+  const packagingSettings = parsePackagingSettings(globalSettings);
+  const packagingBreakdown = computePackagingCost(
+    { packagingOptionId: packagingOptionId || null, nylonLevel, tapeUsed },
+    packagingSettings
+  );
+  // Bant'ın "Var" seçildiğindeki maliyeti (seçimden bağımsız — label için)
+  const tapeCostPerProduct =
+    packagingSettings.tapeProductsPerRoll > 0
+      ? packagingSettings.tapePrice / packagingSettings.tapeProductsPerRoll
+      : 0;
+
+  // Anlık maliyet hesabı
   const selectedFilament = filaments.find((f) => f.id === filamentTypeId);
   const costPerGram = selectedFilament?.costPerGram || 0;
   const fWeight = parseFloat(filamentWeight) || 0;
   const pTime = parseFloat(printTimeHours) || 0;
   const wRate = (parseFloat(wasteRate) || 0) / 100;
-
-  const pPoset = parseFloat(packagingPoset) || 0;
-  const pNaylon = parseFloat(packagingNaylon) || 0;
-  const pBant = parseFloat(packagingBant) || 0;
-  const pKart = parseFloat(packagingKart) || 0;
-
   const electricityRate = parseFloat(globalSettings.costElectricityPerHour || "0");
   const machineWearRate = parseFloat(globalSettings.costMachineWearPerHour || "0");
   const laborRate = parseFloat(globalSettings.costLaborPerHour || "0");
 
-  const calcFilamentCost = fWeight * costPerGram;
-  const calcElectricityCost = pTime * electricityRate;
-  const calcMachineWearCost = pTime * machineWearRate;
-  const calcLaborCost = pTime * laborRate;
-  const calcPackagingTotal = pPoset + pNaylon + pBant + pKart;
-
-  const subtotal = calcFilamentCost + calcElectricityCost + calcMachineWearCost + calcLaborCost + calcPackagingTotal;
-  const calcWasteCost = subtotal * wRate;
-  const calculatedTotalCost = subtotal + calcWasteCost;
-
-  const finalEffectiveTotalCost = calculatedTotalCost;
-
-  const simulationMutation = useMutation<SimulationResponse, Error, void>({
-    mutationFn: () =>
-      fetch(`/api/products/${id}/simulate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      }).then((r) => r.json()),
-    onSuccess: (data: SimulationResponse) => {
-      const safe = data.recommendations.safe ?? data.recommendations.bestNetProfit;
-      if (safe) setSelectedPrice(safe.salePrice);
-    },
-  });
+  const calcFilament = fWeight * costPerGram;
+  const calcElectricity = pTime * electricityRate;
+  const calcMachineWear = pTime * machineWearRate;
+  const calcLabor = pTime * laborRate;
+  // Fire sadece baskıya uygulanır, paketlemeye değil
+  const printSubtotal = calcFilament + calcElectricity + calcMachineWear + calcLabor;
+  const calcWaste = printSubtotal * wRate;
+  const calcPackaging = packagingBreakdown.total;
+  const calculatedTotalCost = printSubtotal + calcWaste + calcPackaging;
+  // Sabit ek maliyetler (kart/sticker/sakız) — her üründe
+  const fixedExtras = packagingBreakdown.card + packagingBreakdown.sticker + packagingBreakdown.sakiz;
 
   const saveCostMutation = useMutation({
-    mutationFn: () => {
-      const body = {
-        cost: {
-          costMode: "detailed",
-          filamentTypeId: filamentTypeId || null,
-          filamentWeight: fWeight,
-          printTimeHours: pTime,
-          wasteRate: wRate,
-          packagingPoset: pPoset,
-          packagingNaylon: pNaylon,
-          packagingBant: pBant,
-          packagingKart: pKart,
-        },
-      };
-
-      return fetch(`/api/products/${id}`, {
+    mutationFn: () =>
+      fetch(`/api/products/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).then((r) => r.json());
-    },
+        body: JSON.stringify({
+          desi: parseFloat(desiInput) || null,
+          cost: {
+            costMode: "detailed",
+            filamentTypeId: filamentTypeId || null,
+            filamentWeight: fWeight,
+            printTimeHours: pTime,
+            wasteRate: wRate,
+            packagingOptionId: packagingOptionId || null,
+            nylonLevel,
+            tapeUsed,
+          },
+        }),
+      }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", id] });
-      toast.success("Maliyet bilgileri kaydedildi");
+      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Maliyet kaydedildi");
     },
     onError: () => toast.error("Kaydedilemedi"),
+  });
+
+  // Stok güncelleme
+  const updateStockMutation = useMutation({
+    mutationFn: (newStock: number) =>
+      fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stock: Math.max(0, newStock) }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", id] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: () => toast.error("Stok güncellenemedi"),
+  });
+
+  // Real-time kâr önizlemesi — KAYDETMEDEN. Maliyet formu değişince debounce'lu
+  // olarak preview endpoint'e gider, sağ taraftaki platform kartları anında güncellenir.
+  const previewInput = useMemo(
+    () => ({
+      filamentTypeId: filamentTypeId || null,
+      filamentWeight: fWeight,
+      printTimeHours: pTime,
+      wasteRate: wRate,
+      packagingOptionId: packagingOptionId || null,
+      nylonLevel,
+      tapeUsed,
+      desi: parseFloat(desiInput) || null,
+    }),
+    [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput]
+  );
+  const [debouncedInput, setDebouncedInput] = useState(previewInput);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedInput(previewInput), 200);
+    return () => clearTimeout(t);
+  }, [previewInput]);
+
+  const { data: preview } = useQuery<ProfitPreview>({
+    queryKey: ["profit-preview", id, debouncedInput],
+    queryFn: () =>
+      fetch(`/api/products/${id}/profit-preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(debouncedInput),
+      }).then((r) => r.json()),
+    enabled: Boolean(product),
+    placeholderData: (prev) => prev, // değişim sırasında eski sonucu koru (flicker yok)
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   if (isLoading || !product) {
@@ -247,34 +259,16 @@ export default function ProductDetailPage({
     );
   }
 
-  const simData = simulationMutation.data;
-  const allValid = simData?.recommendations.allValid ?? [];
-  const safe = simData?.recommendations.safe;
-  const bestProfit = simData?.recommendations.bestNetProfit;
-  const bestMargin = simData?.recommendations.bestMargin;
-
-  const currentResult = allValid.find(
-    (r) => r.salePrice === product.currentSalePrice
-  );
-  const selectedResult =
-    selectedPrice !== null
-      ? allValid.find((r) => r.salePrice === selectedPrice) ?? currentResult
-      : currentResult;
-
-  const chartData = allValid.map((r) => ({
-    price: r.salePrice,
-    profit: parseFloat(r.netProfit.toFixed(2)),
-    margin: parseFloat((r.profitMargin * 100).toFixed(1)),
-  }));
-
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 max-w-7xl">
+      {/* Header */}
       <div className="flex items-center gap-4">
         <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
           <ArrowLeft className="h-4 w-4" />
         </Link>
         {product.imageUrl ? (
-          <div className="w-16 h-16 rounded-lg border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+          <div className="w-16 h-16 rounded-lg border bg-muted flex items-center justify-center flex-shrink-0 overflow-hidden">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={product.imageUrl}
               alt={product.name}
@@ -286,161 +280,204 @@ export default function ProductDetailPage({
             <Package className="h-8 w-8 text-muted-foreground" />
           </div>
         )}
-        <div>
-          <h1 className="text-xl font-bold">{product.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {product.barcode} · {product.sku} · {product.categoryName}
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl font-bold tracking-tight line-clamp-2 leading-tight">
+            {product.name}
+          </h1>
+          <p className="text-xs text-muted-foreground mt-0.5 truncate">
+            <span className="font-mono">{product.barcode}</span>
+            <span className="mx-1.5">·</span>
+            <span className="font-mono">{product.sku}</span>
+            <span className="mx-1.5">·</span>
+            {product.categoryName}
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left column: Cost calculations */}
-        <div className="space-y-4">
+        {/* Sol: Maliyet formu */}
+        <div className="space-y-4 lg:col-span-1">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Maliyet Hesaplama</CardTitle>
+              <CardTitle className="text-sm">Üretim Maliyeti</CardTitle>
+              <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
+                Filament + elektrik + paketleme. Kargo, komisyon ve KDV her platform için
+                otomatik hesaplanır.
+              </p>
             </CardHeader>
             <CardContent className="space-y-4">
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-primary">3D BASKI PARAMETRELERİ</p>
-                    <div>
-                      <Label className="text-xs">Filament Türü</Label>
-                      <select
-                        value={filamentTypeId}
-                        onChange={(e) => setFilamentTypeId(e.target.value)}
-                        className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                      >
-                        <option value="">Seçin...</option>
-                        {filaments.map((f: FilamentType) => (
-                          <option key={f.id} value={f.id}>
-                            {f.name} ({formatCurrency(f.costPerGram)}/g)
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-xs">Baskı Ağırlığı (g)</Label>
-                        <Input
-                          type="number"
-                          value={filamentWeight}
-                          onChange={(e) => setFilamentWeight(e.target.value)}
-                          placeholder="0"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Süre (saat)</Label>
-                        <Input
-                          type="number"
-                          step="0.1"
-                          value={printTimeHours}
-                          onChange={(e) => setPrintTimeHours(e.target.value)}
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-xs">Fire Oranı (%)</Label>
-                      <Input
-                        type="number"
-                        step="0.1"
-                        value={wasteRate}
-                        onChange={(e) => setWasteRate(e.target.value)}
-                        placeholder="0"
-                      />
-                    </div>
+              <div className="space-y-3">
+                <p className="text-xs font-semibold text-primary">3D BASKI</p>
+                <div>
+                  <Label className="text-xs">Filament Türü</Label>
+                  <select
+                    value={filamentTypeId}
+                    onChange={(e) => setFilamentTypeId(e.target.value)}
+                    className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Seçin...</option>
+                    {filaments.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} ({formatCurrency(f.costPerGram)}/g)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Ağırlık (g)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={filamentWeight}
+                      onChange={(e) => setFilamentWeight(e.target.value)}
+                    />
                   </div>
-
-                  <Separator />
-
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold text-primary">PAKETLEME GİDERLERİ</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-xs">Poşet/Koli (TL)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={packagingPoset}
-                          onChange={(e) => setPackagingPoset(e.target.value)}
-                          placeholder="0.00"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Naylon (TL)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={packagingNaylon}
-                          onChange={(e) => setPackagingNaylon(e.target.value)}
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-xs">Çift Taraf Bant (TL)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={packagingBant}
-                          onChange={(e) => setPackagingBant(e.target.value)}
-                          placeholder="0.00"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Kart/Etiket/Süs (TL)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={packagingKart}
-                          onChange={(e) => setPackagingKart(e.target.value)}
-                          placeholder="0.00"
-                        />
-                      </div>
-                    </div>
+                  <div>
+                    <Label className="text-xs">Süre (saat)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.1"
+                      value={printTimeHours}
+                      onChange={(e) => setPrintTimeHours(e.target.value)}
+                    />
                   </div>
-
-                  <Separator />
-
-                  <div className="space-y-1.5 text-xs text-muted-foreground p-2.5 bg-muted/30 rounded-md">
-                    <div className="flex justify-between">
-                      <span>Malzeme Maliyeti:</span>
-                      <span className="font-mono">{formatCurrency(calcFilamentCost)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Elektrik ({electricityRate} TL/s):</span>
-                      <span className="font-mono">{formatCurrency(calcElectricityCost)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Aşınma ({machineWearRate} TL/s):</span>
-                      <span className="font-mono">{formatCurrency(calcMachineWearCost)}</span>
-                    </div>
-                    {calcLaborCost > 0 && (
-                      <div className="flex justify-between">
-                        <span>İşçilik ({laborRate} TL/s):</span>
-                        <span className="font-mono">{formatCurrency(calcLaborCost)}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between">
-                      <span>Paketleme Kalemleri:</span>
-                      <span className="font-mono">{formatCurrency(calcPackagingTotal)}</span>
-                    </div>
-                    {calcWasteCost > 0 && (
-                      <div className="flex justify-between text-amber-600">
-                        <span>Fire Oranı ({wasteRate}%):</span>
-                        <span className="font-mono">+{formatCurrency(calcWasteCost)}</span>
-                      </div>
-                    )}
-                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Fire (%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={wasteRate}
+                    onChange={(e) => setWasteRate(e.target.value)}
+                  />
+                </div>
+              </div>
 
               <Separator />
 
-              <div className="flex justify-between items-center py-1">
-                <span className="text-xs font-semibold text-foreground uppercase tracking-wider">TOPLAM MALİYET</span>
-                <span className="text-lg font-bold text-foreground">
-                  {formatCurrency(finalEffectiveTotalCost)}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-primary">PAKETLEME</p>
+                  <Link
+                    href="/cost-templates"
+                    className="text-[10px] text-muted-foreground hover:text-primary underline underline-offset-2"
+                  >
+                    Fiyatları düzenle
+                  </Link>
+                </div>
+                <div>
+                  <Label className="text-xs">Poşet / Koli</Label>
+                  <select
+                    value={packagingOptionId}
+                    onChange={(e) => setPackagingOptionId(e.target.value)}
+                    className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Yok</option>
+                    {packagingSettings.options.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {o.name} ({formatCurrency(o.price)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Naylon</Label>
+                    <select
+                      value={nylonLevel}
+                      onChange={(e) => setNylonLevel(e.target.value as "none" | "low" | "medium" | "high")}
+                      className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="none">Yok</option>
+                      <option value="low">Az ({packagingSettings.nylonLowGrams}g)</option>
+                      <option value="medium">Orta ({packagingSettings.nylonMediumGrams}g)</option>
+                      <option value="high">Çok ({packagingSettings.nylonHighGrams}g)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Bant</Label>
+                    <select
+                      value={tapeUsed ? "yes" : "no"}
+                      onChange={(e) => setTapeUsed(e.target.value === "yes")}
+                      className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="no">Yok</option>
+                      <option value="yes">Var ({formatCurrency(tapeCostPerProduct)})</option>
+                    </select>
+                  </div>
+                </div>
+                {fixedExtras > 0 && (
+                  <p className="text-[10px] text-muted-foreground">
+                    + Sabit ek (Kart/Sticker/Sakız): {formatCurrency(fixedExtras)} — her ürüne otomatik
+                  </p>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-primary">KARGO</p>
+                <div>
+                  <Label className="text-xs">Desi</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={desiInput}
+                    onChange={(e) => setDesiInput(e.target.value)}
+                    placeholder="örn. 2"
+                  />
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Trendyol kargosu desi + barem'e göre otomatik hesaplanır. Shopify kargosu
+                    Kargo Kuralları&apos;ndaki Shopify baremine göre.
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-1 text-xs text-muted-foreground tabular-nums">
+                <div className="flex justify-between">
+                  <span>Malzeme</span>
+                  <span>{formatCurrency(calcFilament)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Elektrik</span>
+                  <span>{formatCurrency(calcElectricity)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Aşınma</span>
+                  <span>{formatCurrency(calcMachineWear)}</span>
+                </div>
+                {calcLabor > 0 && (
+                  <div className="flex justify-between">
+                    <span>İşçilik</span>
+                    <span>{formatCurrency(calcLabor)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Paketleme</span>
+                  <span>{formatCurrency(calcPackaging)}</span>
+                </div>
+                {calcWaste > 0 && (
+                  <div className="flex justify-between text-amber-500">
+                    <span>Fire</span>
+                    <span>+{formatCurrency(calcWaste)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex justify-between items-baseline pt-1">
+                <span className="text-xs font-semibold uppercase tracking-wider">
+                  Üretim Maliyeti
+                </span>
+                <span className="text-lg font-bold tabular-nums">
+                  {formatCurrency(calculatedTotalCost)}
                 </span>
               </div>
 
@@ -457,308 +494,492 @@ export default function ProductDetailPage({
 
           <Card>
             <CardHeader className="py-3">
-              <CardTitle className="text-sm">Ürün Satış Bilgisi</CardTitle>
+              <CardTitle className="text-sm">Ürün Bilgileri</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Satış Fiyatı</span>
-                <span className="font-semibold">{formatCurrency(product.currentSalePrice)}</span>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Stok (kendi deponuz)</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={updateStockMutation.isPending || product.stock <= 0}
+                    onClick={() => updateStockMutation.mutate(product.stock - 1)}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <span
+                    className={cn(
+                      "tabular-nums font-bold text-base min-w-[2ch] text-center",
+                      product.stock === 0
+                        ? "text-destructive"
+                        : product.stock === 1
+                          ? "text-amber-500"
+                          : "text-foreground"
+                    )}
+                  >
+                    {product.stock}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={updateStockMutation.isPending}
+                    onClick={() => updateStockMutation.mutate(product.stock + 1)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Stok</span>
-                <span>{product.stock} adet</span>
-              </div>
+              {product.stock <= 1 && (
+                <p
+                  className={cn(
+                    "text-[11px]",
+                    product.stock === 0 ? "text-destructive" : "text-amber-500"
+                  )}
+                >
+                  {product.stock === 0 ? "⚠ Stok tükendi" : "⚠ Stok kritik (1 adet)"}
+                </p>
+              )}
               {product.desi && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Desi</span>
-                  <span>{product.desi} Desi</span>
+                  <span className="tabular-nums">{product.desi}</span>
                 </div>
               )}
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Entegrasyon</span>
-                <Badge variant="outline" className="text-xs uppercase tracking-wide">{product.source}</Badge>
+                <span className="text-muted-foreground">Kaynak</span>
+                <Badge variant="outline" className="text-xs uppercase">
+                  {product.source}
+                </Badge>
               </div>
             </CardContent>
           </Card>
-
-          <Button
-            className="w-full"
-            variant="outline"
-            onClick={() => simulationMutation.mutate()}
-            disabled={simulationMutation.isPending}
-          >
-            <Zap className="h-4 w-4 mr-2" />
-            {simulationMutation.isPending ? "Hesaplanıyor..." : "Maliyet ile Simüle Et"}
-          </Button>
         </div>
 
-        {/* Right column: Simulation outcomes */}
+        {/* Sağ: 3 Platform Yan Yana */}
         <div className="lg:col-span-2 space-y-4">
-          {!simData && (
-            <Card className="flex flex-col items-center justify-center py-20 text-center">
-              <Zap className="h-10 w-10 text-muted-foreground/60 mb-3" />
-              <p className="font-semibold text-foreground">Kâr Simülasyonu Hazır</p>
-              <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                Maliyetleri girdikten sonra &quot;Maliyet ile Simüle Et&quot; butonuna basarak kârlılık grafiklerini ve Trendyol fiyat analizlerini anında görebilirsiniz.
-              </p>
-            </Card>
-          )}
+          <div>
+            <h2 className="text-base font-semibold mb-1">Platform Kâr/Zarar Durumu</h2>
+            <p className="text-xs text-muted-foreground">
+              Bu ürünün her platformdaki listing&apos;i için ayrı kâr hesabı (KDV + kargo +
+              komisyon dahil, indirim payı uygulanmış).
+            </p>
+          </div>
 
-          {simData && (
-            <>
-              {/* Action recommendations */}
-              <div className="grid grid-cols-3 gap-3">
-                {safe && (
-                  <Card
-                    className="cursor-pointer border-2 border-primary bg-primary/5 transition-all hover:bg-primary/10"
-                    onClick={() => setSelectedPrice(safe.salePrice)}
-                  >
-                    <CardHeader className="pb-1 p-3">
-                      <CardTitle className="text-xs flex items-center gap-1 text-primary">
-                        <Target className="h-3.5 w-3.5" /> Güvenli Öneri
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-3 pt-0 space-y-0.5">
-                      <p className="text-lg font-bold">{formatCurrency(safe.salePrice)}</p>
-                      <p className="text-xs text-green-600 font-medium">
-                        {formatCurrency(safe.result.netProfit)} kâr
-                      </p>
-                      <p className="text-xs text-muted-foreground line-clamp-2 mt-1">{safe.reason}</p>
-                    </CardContent>
-                  </Card>
-                )}
-                {bestProfit && bestProfit.salePrice !== safe?.salePrice && (
-                  <Card
-                    className="cursor-pointer border hover:border-primary transition-all p-3"
-                    onClick={() => setSelectedPrice(bestProfit.salePrice)}
-                  >
-                    <CardHeader className="pb-1 p-0">
-                      <CardTitle className="text-xs flex items-center gap-1 text-muted-foreground">
-                        <TrendingUp className="h-3.5 w-3.5 text-green-500" /> En Yüksek Kâr
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0 pt-1 space-y-0.5">
-                      <p className="text-lg font-bold">{formatCurrency(bestProfit.salePrice)}</p>
-                      <p className="text-xs text-green-600 font-medium">
-                        {formatCurrency(bestProfit.result.netProfit)} kâr
-                      </p>
-                    </CardContent>
-                  </Card>
-                )}
-                {bestMargin && bestMargin.salePrice !== safe?.salePrice && (
-                  <Card
-                    className="cursor-pointer border hover:border-primary transition-all p-3"
-                    onClick={() => setSelectedPrice(bestMargin.salePrice)}
-                  >
-                    <CardHeader className="pb-1 p-0">
-                      <CardTitle className="text-xs flex items-center gap-1 text-muted-foreground">
-                        <TrendingUp className="h-3.5 w-3.5 text-blue-500" /> En Yüksek Oran
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0 pt-1 space-y-0.5">
-                      <p className="text-lg font-bold">{formatCurrency(bestMargin.salePrice)}</p>
-                      <p className="text-xs text-blue-600 font-medium">
-                        {formatPercent(bestMargin.result.profitMargin)} kâr oranı
-                      </p>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
-
-              <Tabs defaultValue="charts">
-                <TabsList>
-                  <TabsTrigger value="charts">Grafikler</TabsTrigger>
-                  <TabsTrigger value="breakdown">Kâr Dağılımı</TabsTrigger>
-                  <TabsTrigger value="table">Tüm Fiyatlar</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="charts" className="space-y-4">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-sm">Fiyat vs Net Kâr</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={220}>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                          <XAxis
-                            dataKey="price"
-                            tickFormatter={(v) => `${v} TL`}
-                            tick={{ fontSize: 11 }}
-                          />
-                          <YAxis
-                            tickFormatter={(v) => `${v} TL`}
-                            tick={{ fontSize: 11 }}
-                          />
-                          <Tooltip
-                            formatter={(v: number) => [formatCurrency(v), "Net Kâr"]}
-                            labelFormatter={(l) => `Fiyat: ${formatCurrency(l)}`}
-                          />
-                          <ReferenceLine
-                            x={product.currentSalePrice}
-                            stroke="#94a3b8"
-                            strokeDasharray="4 4"
-                            label={{ value: "Mevcut", fontSize: 11 }}
-                          />
-                          {selectedPrice && selectedPrice !== product.currentSalePrice && (
-                            <ReferenceLine
-                              x={selectedPrice}
-                              stroke="#3b82f6"
-                              strokeDasharray="4 4"
-                              label={{ value: "Seçili", fontSize: 11, fill: "#3b82f6" }}
-                            />
-                          )}
-                          <Line
-                            type="monotone"
-                            dataKey="profit"
-                            stroke="#22c55e"
-                            dot={false}
-                            strokeWidth={2}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="text-sm">Fiyat vs Kâr Oranı (%)</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <ResponsiveContainer width="100%" height={160}>
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                          <XAxis
-                            dataKey="price"
-                            tickFormatter={(v) => `${v} TL`}
-                            tick={{ fontSize: 11 }}
-                          />
-                          <YAxis
-                            tickFormatter={(v) => `%${v}`}
-                            tick={{ fontSize: 11 }}
-                          />
-                          <Tooltip
-                            formatter={(v: number) => [`%${v}`, "Kâr Oranı"]}
-                            labelFormatter={(l) => `Fiyat: ${formatCurrency(l)}`}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="margin"
-                            stroke="#3b82f6"
-                            dot={false}
-                            strokeWidth={2}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </CardContent>
-                  </Card>
-                </TabsContent>
-
-                <TabsContent value="breakdown">
-                  {selectedResult && (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="text-sm">
-                          Gider Dağılımı — {formatCurrency(selectedResult.salePrice)}
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <DeductionsPie result={selectedResult} />
-                        <Separator className="my-3" />
-                        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-                          {[
-                            ["Ürün Maliyeti", selectedResult.productCost],
-                            ["Ambalaj Giderleri", selectedResult.packagingCost],
-                            ["Trendyol Komisyon", selectedResult.commissionCost],
-                            ["Kargo Gideri", selectedResult.cargoCost],
-                            ["Sabit Giderler", selectedResult.fixedExpenses],
-                            ["Değişken Giderler", selectedResult.variableExpenses],
-                          ].map(([label, value]) => (
-                            <div key={String(label)} className="flex justify-between">
-                              <span className="text-muted-foreground">{label}</span>
-                              <span>{formatCurrency(Number(value))}</span>
-                            </div>
-                          ))}
-                          <div className="flex justify-between col-span-2 border-t pt-1 mt-1 font-medium">
-                            <span>Net Kâr</span>
-                            <span className={selectedResult.netProfit < 0 ? "text-destructive" : "text-green-600"}>
-                              {formatCurrency(selectedResult.netProfit)}
-                            </span>
-                          </div>
-                          <div className="flex justify-between col-span-2">
-                            <span className="text-muted-foreground">Kâr Oranı</span>
-                            <span>{formatPercent(selectedResult.profitMargin)}</span>
-                          </div>
-                        </div>
-                        {selectedResult.appliedCommissionRule && (
-                          <div className="mt-3 p-2 bg-muted rounded text-xs text-muted-foreground">
-                            <span className="font-medium">Komisyon Kuralı: </span>
-                            {selectedResult.appliedCommissionRule.name} ·{" "}
-                            %{(selectedResult.appliedCommissionRule.commissionRate * 100).toFixed(0)}
-                          </div>
-                        )}
-                        {selectedResult.appliedCargoRule && (
-                          <div className="mt-1 p-2 bg-muted rounded text-xs text-muted-foreground">
-                            <span className="font-medium">Kargo Kuralı: </span>
-                            {selectedResult.appliedCargoRule.name} ·{" "}
-                            {formatCurrency(selectedResult.appliedCargoRule.cargoCost)}
-                          </div>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="table">
-                  <Card>
-                    <CardContent className="p-0">
-                      <div className="overflow-auto max-h-96">
-                        <table className="w-full text-sm">
-                          <thead className="sticky top-0 bg-muted">
-                            <tr>
-                              <th className="text-left p-2 font-medium">Fiyat</th>
-                              <th className="text-right p-2 font-medium">Komisyon</th>
-                              <th className="text-right p-2 font-medium">Kargo</th>
-                              <th className="text-right p-2 font-medium">Net Kâr</th>
-                              <th className="text-right p-2 font-medium">Kâr %</th>
-                              <th className="text-center p-2 font-medium">Geçerli</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {allValid.map((r) => (
-                              <tr
-                                key={r.salePrice}
-                                className={`border-b cursor-pointer hover:bg-muted/50 ${selectedPrice === r.salePrice ? "bg-primary/10" : ""}`}
-                                onClick={() => setSelectedPrice(r.salePrice)}
-                              >
-                                <td className="p-2 font-medium">
-                                  {formatCurrency(r.salePrice)}
-                                  {r.salePrice === product.currentSalePrice && (
-                                    <Badge variant="outline" className="ml-1 text-xs">Mevcut</Badge>
-                                  )}
-                                </td>
-                                <td className="p-2 text-right">{formatCurrency(r.commissionCost)}</td>
-                                <td className="p-2 text-right">{formatCurrency(r.cargoCost)}</td>
-                                <td className={`p-2 text-right font-medium ${r.netProfit < 0 ? "text-destructive" : "text-green-600"}`}>
-                                  {formatCurrency(r.netProfit)}
-                                </td>
-                                <td className="p-2 text-right">{formatPercent(r.profitMargin)}</td>
-                                <td className="p-2 text-center">
-                                  {r.isValid ? "✓" : "✗"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </TabsContent>
-              </Tabs>
-            </>
-          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {(["shopify", "trendyol"] as const).map((platform) => {
+              const listing = product.listings.find((l) => l.platform === platform);
+              const platformPreview = preview?.platforms.find((p) => p.platform === platform);
+              return (
+                <PlatformProfitCard
+                  key={platform}
+                  platform={platform}
+                  listing={listing ?? null}
+                  productId={product.id}
+                  liveResult={platformPreview?.result ?? null}
+                  hasCost={preview?.hasCost ?? null}
+                />
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Bir platform için listing kâr/zarar kartı. Listing yoksa "Ekle" formu gösterir.
+ */
+function PlatformProfitCard({
+  platform,
+  listing,
+  productId,
+  liveResult,
+  hasCost,
+}: {
+  platform: "shopify" | "trendyol";
+  listing: Listing | null;
+  productId: string;
+  /** Parent'tan gelen real-time kâr önizlemesi (kaydetmeden) */
+  liveResult: SimulationResult | null;
+  /** Maliyet girilmiş mi (preview yüklendiyse). null = preview henüz yüklenmedi */
+  hasCost: boolean | null;
+}) {
+  const info = PLATFORM_INFO[platform];
+  const queryClient = useQueryClient();
+
+  const [editing, setEditing] = useState(false);
+  const [salePrice, setSalePrice] = useState(listing?.salePrice ? String(listing.salePrice) : "");
+  const [commissionRate, setCommissionRate] = useState(
+    listing?.commissionRate ? String(listing.commissionRate * 100) : ""
+  );
+  const [cargoCost, setCargoCost] = useState(
+    listing?.cargoCost ? String(listing.cargoCost) : ""
+  );
+
+  useEffect(() => {
+    if (listing) {
+      setSalePrice(String(listing.salePrice));
+      setCommissionRate(listing.commissionRate ? String(listing.commissionRate * 100) : "");
+      setCargoCost(listing.cargoCost ? String(listing.cargoCost) : "");
+    }
+  }, [listing]);
+
+  const createListing = useMutation({
+    mutationFn: () =>
+      fetch("/api/listings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId,
+          platform,
+          salePrice: parseFloat(salePrice) || 0,
+          commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
+          cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+        }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`${info.label} listing'i eklendi`);
+      setEditing(false);
+    },
+    onError: () => toast.error("Eklenemedi"),
+  });
+
+  const updateListing = useMutation({
+    mutationFn: () =>
+      fetch(`/api/listings/${listing!.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          salePrice: parseFloat(salePrice) || 0,
+          commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
+          cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+        }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Güncellendi");
+      setEditing(false);
+    },
+    onError: () => toast.error("Güncellenemedi"),
+  });
+
+  const deleteListing = useMutation({
+    mutationFn: () => fetch(`/api/listings/${listing!.id}`, { method: "DELETE" }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`${info.label} listing kaldırıldı`);
+    },
+  });
+
+  if (!listing) {
+    return (
+      <Card className="border-dashed">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ backgroundColor: info.color }}
+            />
+            <span style={{ color: info.color }}>{info.label}</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {editing ? (
+            <div className="space-y-2">
+              <div>
+                <Label className="text-xs">Satış Fiyatı (TL)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={salePrice}
+                  onChange={(e) => setSalePrice(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Komisyon (%) — boş bırak otomatik</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={commissionRate}
+                  onChange={(e) => setCommissionRate(e.target.value)}
+                  placeholder="örn. 14"
+                />
+              </div>
+              <div>
+                <Label className="text-xs">Kargo (TL) — boş bırak otomatik</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={cargoCost}
+                  onChange={(e) => setCargoCost(e.target.value)}
+                  placeholder="örn. 65"
+                />
+              </div>
+              <div className="flex gap-2 pt-1">
+                <Button
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => createListing.mutate()}
+                  disabled={createListing.isPending || !salePrice}
+                >
+                  Kaydet
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing(false)}
+                >
+                  İptal
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={() => setEditing(true)}
+            >
+              <Plus className="h-4 w-4 mr-1.5" /> Bu Platforma Ekle
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const result = liveResult;
+  const missingCost = hasCost === false;
+  const isLoss = result && result.netProfit < 0;
+  const isThin = result && !isLoss && result.profitMargin < 0.1;
+  // Trendyol'da komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar
+  const commissionMissing =
+    platform === "trendyol" &&
+    Boolean(result) &&
+    !result?.appliedCommissionRule &&
+    (listing?.commissionRate == null);
+
+  return (
+    <Card
+      className={cn(
+        "border-2 transition-colors",
+        isLoss && "border-destructive/40",
+        !isLoss && isThin && "border-amber-500/40",
+        result && !isLoss && !isThin && "border-green-500/30",
+        !result && "border-muted"
+      )}
+      style={
+        result
+          ? undefined
+          : { borderTopColor: info.color, borderTopWidth: 3, borderTopStyle: "solid" }
+      }
+    >
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <span
+              className="inline-block w-2 h-2 rounded-full"
+              style={{ backgroundColor: info.color }}
+            />
+            <span style={{ color: info.color }}>{info.label}</span>
+          </CardTitle>
+          <div className="flex gap-0.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setEditing((v) => !v)}
+              title="Düzenle"
+            >
+              <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-destructive/70 hover:text-destructive"
+              onClick={() => deleteListing.mutate()}
+              title="Sil"
+            >
+              <Trash2 className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {editing ? (
+          <div className="space-y-2">
+            <div>
+              <Label className="text-xs">Satış Fiyatı</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={salePrice}
+                onChange={(e) => setSalePrice(e.target.value)}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Komisyon (%)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={commissionRate}
+                onChange={(e) => setCommissionRate(e.target.value)}
+                placeholder="otomatik"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Kargo (TL)</Label>
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={cargoCost}
+                onChange={(e) => setCargoCost(e.target.value)}
+                placeholder="otomatik"
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="flex-1"
+                onClick={() => updateListing.mutate()}
+                disabled={updateListing.isPending}
+              >
+                Kaydet
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                İptal
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
+                Satış Fiyatı
+              </p>
+              <p className="text-2xl font-bold tabular-nums mt-0.5">
+                {formatCurrency(listing.salePrice)}
+              </p>
+            </div>
+
+            {commissionMissing && (
+              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-2 font-medium">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>
+                  Trendyol komisyonu girilmemiş! Kâr olduğundan yüksek görünüyor.
+                  Düzenle&apos;den komisyon oranını gir veya Komisyon Kuralları&apos;na ekle.
+                </span>
+              </div>
+            )}
+
+            {missingCost ? (
+              <div className="flex items-start gap-2 text-xs text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>Maliyet eksik — net kâr hesaplanamaz</span>
+              </div>
+            ) : result ? (
+              <>
+                <Separator />
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
+                      Net Kâr
+                    </p>
+                    <p
+                      className={cn(
+                        "text-lg font-bold tabular-nums",
+                        isLoss
+                          ? "text-destructive"
+                          : isThin
+                            ? "text-amber-500"
+                            : "text-green-500"
+                      )}
+                    >
+                      {formatCurrency(result.netProfit)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
+                      Marj
+                    </p>
+                    <p className="text-lg font-bold tabular-nums">
+                      {formatPercent(result.profitMargin)}
+                    </p>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-1 text-[11px] tabular-nums">
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>KDV (%{result.vatRate})</span>
+                    <span>−{formatCurrency(result.vatAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Ürün + Paketleme</span>
+                    <span>
+                      −{formatCurrency(result.productCost + result.packagingCost)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>
+                      Komisyon
+                      {listing.commissionRate !== null && (
+                        <span className="opacity-60 ml-1">
+                          (%{(listing.commissionRate * 100).toFixed(1)})
+                        </span>
+                      )}
+                    </span>
+                    <span>−{formatCurrency(result.commissionCost)}</span>
+                  </div>
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>Kargo</span>
+                    <span>−{formatCurrency(result.cargoCost)}</span>
+                  </div>
+                  {(result.fixedExpenses + result.variableExpenses) > 0 && (
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>Diğer Giderler</span>
+                      <span>
+                        −{formatCurrency(result.fixedExpenses + result.variableExpenses)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">Hesaplanıyor...</p>
+            )}
+
+            {listing.lastSyncedAt && (
+              <div className="text-[10px] text-muted-foreground/70 flex justify-end pt-1">
+                <span>
+                  Sync: {new Date(listing.lastSyncedAt).toLocaleDateString("tr-TR")}
+                </span>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Table,
@@ -22,7 +22,9 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Search, Trash2, Package } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
@@ -41,6 +43,7 @@ interface Product {
   desi: number | null;
   imageUrl: string | null;
   isActive: boolean;
+  hidden: boolean;
   source: string;
   appliedCommissionRule: {
     id: string;
@@ -54,15 +57,27 @@ interface Product {
     manualCost: number | null;
     packagingCost: number | null;
   } | null;
-  recommendations: {
-    recommendedPrice: number;
-    currentProfit: number;
-    recommendedProfit: number;
-    profitDifference: number;
-    currentMargin: number;
-    status: string;
-  }[];
+  /** Güncel ayarlardan yeniden hesaplanan toplam maliyet (zam dahil). */
+  resolvedTotalCost: number | null;
+  /** Fly'da hesaplanan güncel net kâr (KDV+kargo+komisyon dahil, indirim payı uygulanmış). */
+  currentNetProfit: number | null;
+  currentProfitMargin: number | null;
+  hasCost: boolean;
+  platforms: Array<{
+    platform: "shopify" | "trendyol";
+    listingId: string;
+    salePrice: number;
+    stock: number;
+    netProfit: number | null;
+    profitMargin: number | null;
+    commissionMissing: boolean;
+  }>;
 }
+
+const PLATFORM_COLOR: Record<string, string> = {
+  shopify: "oklch(0.55 0.18 145)", // yeşil
+  trendyol: "oklch(0.66 0.22 25)", // turuncu
+};
 
 const AddProductSchema = z.object({
   barcode: z.string().min(1, "Barkod zorunlu"),
@@ -78,23 +93,8 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
-type FilterMode = "active" | "out-of-stock" | "inactive" | "all";
+type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "hidden";
 
-const STATUS_COLORS = {
-  missing: "text-muted-foreground",
-  negative: "text-destructive font-medium",
-  good: "text-green-600 font-medium",
-  no_cost: "text-muted-foreground",
-};
-
-function getProfitStatus(product: Product): keyof typeof STATUS_COLORS {
-  const cost = product.cost?.totalCost ?? product.cost?.manualCost;
-  if (cost === null || cost === undefined) return "missing";
-  const rec = product.recommendations[0];
-  if (!rec) return "no_cost";
-  if (rec.currentProfit < 0) return "negative";
-  return "good";
-}
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -128,11 +128,43 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
   );
 }
 
+/** URL ?filter=... query string'inden ilk filter mode'u oku (SSR safe). */
+function readFilterFromUrl(): FilterMode {
+  if (typeof window === "undefined") return "active";
+  const f = new URLSearchParams(window.location.search).get("filter");
+  if (
+    f === "active" ||
+    f === "out-of-stock" ||
+    f === "inactive" ||
+    f === "all" ||
+    f === "negative-profit" ||
+    f === "missing-cost" ||
+    f === "hidden"
+  ) {
+    return f;
+  }
+  return "active";
+}
+
 export default function ProductsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
   const [addOpen, setAddOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [matchModal, setMatchModal] = useState<{
+    productId: string;
+    productName: string;
+    platform: "trendyol";
+  } | null>(null);
   const queryClient = useQueryClient();
+
+  // URL filter parametresinden başlangıç değeri (mount sonrası, hydration safe)
+  useEffect(() => {
+    const f = readFilterFromUrl();
+    if (f !== filterMode) setFilterMode(f);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const {
     data: products = [],
@@ -141,6 +173,20 @@ export default function ProductsPage() {
   } = useQuery<Product[]>({
     queryKey: ["products", filterMode],
     queryFn: () => fetchJson<Product[]>(`/api/products?filter=${filterMode}`),
+    // Kâr hesabı maliyet/komisyon/kargo/gider ayarlarına bağlı — her açılışta
+    // sunucudan taze çek, cache'teki eski kâr değerini gösterme.
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
+  });
+
+  // Entegrasyon durumu — hangi platformlar konfigüre
+  const { data: integrations } = useQuery<{
+    shopify: boolean;
+    trendyol: boolean;
+  }>({
+    queryKey: ["integrations-status"],
+    queryFn: () => fetchJson("/api/integrations/status"),
   });
 
   const deleteMutation = useMutation({
@@ -148,8 +194,74 @@ export default function ProductsPage() {
       fetch(`/api/products/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success("Urun silindi");
+      toast.success("Ürün silindi");
     },
+  });
+
+  const stockMutation = useMutation({
+    mutationFn: ({ id, stock }: { id: string; stock: number }) =>
+      fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stock: Math.max(0, stock) }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
+    onError: () => toast.error("Stok güncellenemedi"),
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      fetchJson<{ deleted: number }>("/api/products/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      toast.success(`${data.deleted} ürün silindi`);
+    },
+    onError: (e: Error) => toast.error(`Toplu silme hatası: ${e.message}`),
+  });
+
+  const bulkVisibilityMutation = useMutation({
+    mutationFn: ({ ids, hidden }: { ids: string[]; hidden: boolean }) =>
+      fetchJson<{ updated: number }>("/api/products/bulk-visibility", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, hidden }),
+      }),
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      setSelectedIds(new Set());
+      toast.success(
+        variables.hidden
+          ? `${data.updated} ürün gizlendi`
+          : `${data.updated} ürün geri getirildi`
+      );
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  // Tek ürün gizle/göster (satır içi)
+  const toggleHiddenMutation = useMutation({
+    mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) =>
+      fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden }),
+      }).then((r) => r.json()),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success(variables.hidden ? "Ürün gizlendi" : "Ürün geri getirildi");
+    },
+    onError: () => toast.error("İşlem başarısız"),
   });
 
   const form = useForm<AddProductForm>({
@@ -212,18 +324,65 @@ export default function ProductsPage() {
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
+    { value: "negative-profit", label: "Zarar Eden" },
+    { value: "missing-cost", label: "Maliyet Eksik" },
     { value: "out-of-stock", label: "Stoğu Bitenler" },
-    { value: "inactive", label: "Inaktif" },
-    { value: "all", label: "Tumu" },
+    { value: "inactive", label: "İnaktif" },
+    { value: "hidden", label: "Gizlenenler" },
+    { value: "all", label: "Tümü" },
   ];
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Urunler</h1>
-        <Button onClick={() => setAddOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-2" /> Urun Ekle
-        </Button>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Shopify ana ürünleri + Trendyol eşleştirmeleri
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {selectedIds.size > 0 && (
+            <>
+              {filterMode === "hidden" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={bulkVisibilityMutation.isPending}
+                  onClick={() =>
+                    bulkVisibilityMutation.mutate({ ids: [...selectedIds], hidden: false })
+                  }
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  {selectedIds.size} Ürünü Geri Getir
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={bulkVisibilityMutation.isPending}
+                  onClick={() =>
+                    bulkVisibilityMutation.mutate({ ids: [...selectedIds], hidden: true })
+                  }
+                >
+                  <EyeOff className="h-4 w-4 mr-2" />
+                  {selectedIds.size} Seçileni Gizle
+                </Button>
+              )}
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                {selectedIds.size} Seçileni Sil
+              </Button>
+            </>
+          )}
+          <Button onClick={() => setAddOpen(true)} size="sm">
+            <Plus className="h-4 w-4 mr-2" /> Ürün Ekle
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -253,152 +412,276 @@ export default function ProductsPage() {
           ))}
         </div>
 
-        <span className="text-sm text-muted-foreground">
-          {filteredProducts.length} urun
+        <span className="text-sm text-muted-foreground ml-auto">
+          {filteredProducts.length} ürün
         </span>
       </div>
 
-      <div className="rounded-md border">
+      <div className="rounded-lg border bg-card overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-[36px]">
+                <Checkbox
+                  checked={
+                    filteredProducts.length > 0 &&
+                    filteredProducts.every((p) => selectedIds.has(p.id))
+                  }
+                  onCheckedChange={(v) => {
+                    if (v) {
+                      setSelectedIds(new Set(filteredProducts.map((p) => p.id)));
+                    } else {
+                      setSelectedIds(new Set());
+                    }
+                  }}
+                />
+              </TableHead>
               <TableHead className="w-[52px]" />
-              <TableHead>Urun Adi</TableHead>
-              <TableHead>Barkod</TableHead>
-              <TableHead>Kategori</TableHead>
-              <TableHead>Komisyon</TableHead>
-              <TableHead>Satis Fiyati</TableHead>
-              <TableHead>Maliyet</TableHead>
-              <TableHead>Mevcut Kar</TableHead>
-              <TableHead>Kar %</TableHead>
-              <TableHead>Oneri</TableHead>
-              <TableHead>Stok</TableHead>
-              <TableHead />
+              <TableHead>Ürün</TableHead>
+              <TableHead className="text-center w-[110px]">Stok</TableHead>
+              <TableHead className="text-right tabular-nums w-[90px]">Maliyet</TableHead>
+              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.shopify }}>
+                Shopify
+              </TableHead>
+              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.trendyol }}>
+                Trendyol
+              </TableHead>
+              <TableHead className="w-[80px]" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
-              <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
-                  Yukleniyor...
-                </TableCell>
-              </TableRow>
+              <>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+                  <TableRow key={`skeleton-${i}`}>
+                    <TableCell><Skeleton className="h-4 w-4 rounded" /></TableCell>
+                    <TableCell><Skeleton className="h-10 w-10 rounded-md" /></TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-3/4 mb-1.5" />
+                      <Skeleton className="h-2 w-1/2" />
+                    </TableCell>
+                    <TableCell><Skeleton className="h-3 w-16 mx-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-16 ml-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-7 w-7 rounded" /></TableCell>
+                  </TableRow>
+                ))}
+              </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-destructive">
-                  Urunler yuklenemedi.
+                <TableCell colSpan={9} className="text-center py-8 text-destructive">
+                  Ürünler yüklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {filterMode === "inactive"
-                    ? "Inaktif urun bulunmuyor."
+                    ? "İnaktif ürün bulunmuyor."
                     : filterMode === "out-of-stock"
-                      ? "Stogu biten aktif urun bulunmuyor."
-                      : "Urun bulunamadi. CSV ile ice aktarin veya manuel ekleyin."}
+                      ? "Stoğu biten aktif ürün bulunmuyor."
+                      : "Ürün bulunamadı. CSV ile içe aktar veya manuel ekle."}
                 </TableCell>
               </TableRow>
             ) : (
               filteredProducts.map((product) => {
-                const rec = product.recommendations[0];
-                const status = getProfitStatus(product);
-                const cost = product.cost?.totalCost ?? product.cost?.manualCost;
+                const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
+                const findPlatform = (p: "shopify" | "trendyol") =>
+                  product.platforms.find((x) => x.platform === p);
 
                 return (
                   <TableRow
                     key={product.id}
                     className={`hover:bg-muted/50 ${!product.isActive ? "opacity-50" : ""}`}
                   >
+                    <TableCell className="py-2">
+                      <Checkbox
+                        checked={selectedIds.has(product.id)}
+                        onCheckedChange={(v) => {
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (v) next.add(product.id);
+                            else next.delete(product.id);
+                            return next;
+                          });
+                        }}
+                      />
+                    </TableCell>
                     <TableCell className="py-2 pr-0">
                       <ProductImage src={product.imageUrl} name={product.name} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="max-w-0">
                       <Link
                         href={`/products/${product.id}`}
-                        className="font-medium hover:underline"
+                        className="font-medium hover:underline line-clamp-1 block text-sm"
+                        title={product.name}
                       >
                         {product.name}
                       </Link>
-                      {!product.isActive && (
-                        <Badge variant="secondary" className="ml-2 text-xs">
-                          Inaktif
-                        </Badge>
-                      )}
+                      <div className="text-[11px] text-muted-foreground/70 truncate flex items-center gap-1.5 mt-0.5">
+                        <span className="font-mono">{product.barcode}</span>
+                        <span className="opacity-60">·</span>
+                        <span className="truncate">{product.categoryName}</span>
+                      </div>
                     </TableCell>
-                    <TableCell>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {product.barcode}
-                      </span>
-                    </TableCell>
-                    <TableCell>{product.categoryName}</TableCell>
-                    <TableCell>
-                      {product.appliedCommissionRule ? (
-                        <div className="space-y-0.5">
-                          <Badge variant="outline" className="text-xs">
-                            %{(product.appliedCommissionRule.commissionRate * 100).toFixed(2)}
-                          </Badge>
-                          <div className="text-[11px] text-muted-foreground max-w-[160px] truncate">
-                            {product.appliedCommissionRule.categoryName}
-                          </div>
-                        </div>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs">
-                          Eşleşmedi
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>{formatCurrency(product.currentSalePrice)}</TableCell>
-                    <TableCell>
-                      {cost !== null && cost !== undefined ? (
-                        formatCurrency(cost)
-                      ) : (
-                        <Badge variant="secondary" className="text-xs">
-                          Eksik
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {rec ? (
-                        <span className={STATUS_COLORS[status]}>
-                          {formatCurrency(rec.currentProfit)}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {rec ? formatPercent(rec.currentMargin) : <span className="text-muted-foreground text-xs">-</span>}
-                    </TableCell>
-                    <TableCell>
-                      {!rec || rec.status === "no_better_price" ? (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      ) : rec.status === "needs_cost" ? (
-                        <Badge variant="secondary" className="text-xs">Maliyet Eksik</Badge>
-                      ) : (
-                        <span className="text-green-600 text-sm font-medium">
-                          {formatCurrency(rec.recommendedPrice)}{" "}
-                          <span className="text-xs">(+{formatCurrency(rec.profitDifference)})</span>
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>{product.stock}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-1">
-                        <Link
-                          href={`/products/${product.id}`}
-                          className="inline-flex h-8 items-center justify-center rounded-md border bg-background px-3 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground"
-                        >
-                          Detay
-                        </Link>
+                    <TableCell className="py-2">
+                      <div className="flex items-center justify-center gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 text-destructive"
+                          className="h-6 w-6 text-muted-foreground"
+                          disabled={stockMutation.isPending || product.stock <= 0}
+                          onClick={() =>
+                            stockMutation.mutate({ id: product.id, stock: product.stock - 1 })
+                          }
+                        >
+                          <Minus className="h-3 w-3" />
+                        </Button>
+                        <span
+                          className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
+                            product.stock === 0
+                              ? "text-destructive"
+                              : product.stock === 1
+                                ? "text-amber-500"
+                                : "text-foreground"
+                          }`}
+                          title={
+                            product.stock === 0
+                              ? "Stok tükendi"
+                              : product.stock === 1
+                                ? "Kritik stok"
+                                : undefined
+                          }
+                        >
+                          {product.stock}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-muted-foreground"
+                          disabled={stockMutation.isPending}
+                          onClick={() =>
+                            stockMutation.mutate({ id: product.id, stock: product.stock + 1 })
+                          }
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-xs">
+                      {cost !== null && cost !== undefined ? (
+                        formatCurrency(cost)
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
+                      )}
+                    </TableCell>
+                    {(["shopify", "trendyol"] as const).map((platform) => {
+                      const p = findPlatform(platform);
+                      const integrationActive = integrations?.[platform] ?? false;
+
+                      if (!p) {
+                        // Listing yok — entegrasyon konfigüre değilse "Entegrasyon yok", varsa "Ürün Seç"
+                        if (!integrationActive) {
+                          return (
+                            <TableCell key={platform} className="text-center">
+                              <span className="text-[10px] text-muted-foreground/40">
+                                Entegrasyon yok
+                              </span>
+                            </TableCell>
+                          );
+                        }
+                        // Shopify için "Ürün Seç" değil (Shopify ana ürün listesi)
+                        if (platform === "shopify") {
+                          return (
+                            <TableCell key={platform} className="text-center">
+                              <span className="text-[10px] text-muted-foreground/40">—</span>
+                            </TableCell>
+                          );
+                        }
+                        return (
+                          <TableCell key={platform} className="text-center">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-[11px] px-2"
+                              onClick={() =>
+                                setMatchModal({
+                                  productId: product.id,
+                                  productName: product.name,
+                                  platform: "trendyol",
+                                })
+                              }
+                            >
+                              <Link2 className="h-3 w-3 mr-1" />
+                              Ürün Seç
+                            </Button>
+                          </TableCell>
+                        );
+                      }
+                      const isLoss = p.netProfit !== null && p.netProfit < 0;
+                      const isThin =
+                        p.netProfit !== null && p.netProfit >= 0 && (p.profitMargin ?? 0) < 0.1;
+                      return (
+                        <TableCell key={platform} className="text-center">
+                          <div className="text-xs font-medium tabular-nums">
+                            {formatCurrency(p.salePrice)}
+                          </div>
+                          {p.commissionMissing && (
+                            <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
+                              <AlertTriangle className="h-3 w-3" /> Komisyon gir!
+                            </div>
+                          )}
+                          {p.netProfit !== null ? (
+                            <div
+                              className={`text-[11px] tabular-nums mt-0.5 ${
+                                isLoss
+                                  ? "text-destructive font-medium"
+                                  : isThin
+                                    ? "text-amber-500"
+                                    : "text-green-500"
+                              }`}
+                            >
+                              {formatCurrency(p.netProfit)}{" "}
+                              <span className="opacity-70">
+                                ({formatPercent(p.profitMargin ?? 0)})
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-muted-foreground/60 mt-0.5">
+                              maliyet eksik
+                            </div>
+                          )}
+                        </TableCell>
+                      );
+                    })}
+                    <TableCell>
+                      <div className="flex items-center gap-0.5">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          title={product.hidden ? "Geri getir" : "Gizle"}
+                          disabled={toggleHiddenMutation.isPending}
+                          onClick={() =>
+                            toggleHiddenMutation.mutate({ id: product.id, hidden: !product.hidden })
+                          }
+                        >
+                          {product.hidden ? (
+                            <Eye className="h-3.5 w-3.5" />
+                          ) : (
+                            <EyeOff className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive/70 hover:text-destructive"
                           title="Sil"
                           onClick={() => deleteMutation.mutate(product.id)}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </TableCell>
@@ -478,6 +761,173 @@ export default function ProductsPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* Toplu silme onayı */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Toplu Silme Onayı</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <strong>{selectedIds.size}</strong> ürün silinecek. Bu işlem geri alınamaz.
+            Maliyet bilgileri, listings ve fiyat geçmişi de silinir.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>
+              İptal
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => bulkDeleteMutation.mutate([...selectedIds])}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              {bulkDeleteMutation.isPending
+                ? "Siliniyor..."
+                : `${selectedIds.size} Ürünü Sil`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manuel match modal */}
+      {matchModal && (
+        <MatchListingModal
+          productId={matchModal.productId}
+          productName={matchModal.productName}
+          platform={matchModal.platform}
+          onClose={() => setMatchModal(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function MatchListingModal({
+  productId,
+  productName,
+  platform,
+  onClose,
+}: {
+  productId: string;
+  productName: string;
+  platform: "trendyol";
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [search, setSearch] = useState("");
+
+  const { data: unmatched = [], isLoading } = useQuery<
+    Array<{
+      id: string;
+      barcode: string;
+      externalSku: string | null;
+      name: string;
+      price: number;
+      stock: number;
+      imageUrl: string | null;
+    }>
+  >({
+    queryKey: ["unmatched-listings", platform, search],
+    queryFn: () =>
+      fetchJson(
+        `/api/unmatched-listings?platform=${platform}${search ? `&search=${encodeURIComponent(search)}` : ""}`
+      ),
+  });
+
+  const match = useMutation({
+    mutationFn: (unmatchedListingId: string) =>
+      fetchJson("/api/listings/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unmatchedListingId, productId }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Trendyol ürünü eşleştirildi");
+      onClose();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const platformLabel = "Trendyol";
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>{platformLabel} Ürünü Eşleştir</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            <strong className="text-foreground line-clamp-1">{productName}</strong>{" "}
+            ürününe bağlanacak {platformLabel} listing'ini seç.
+          </p>
+        </DialogHeader>
+
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Barkod, SKU veya ürün adı..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto -mx-2 px-2">
+          {isLoading ? (
+            <div className="py-8 flex items-center justify-center text-muted-foreground">
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Yükleniyor...
+            </div>
+          ) : unmatched.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {search
+                ? `"${search}" için sonuç yok`
+                : `Eşleşmemiş ${platformLabel} listing'i bulunmuyor. Önce ${platformLabel} ürünlerini senkronize et.`}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {unmatched.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => match.mutate(u.id)}
+                  disabled={match.isPending}
+                  className="w-full text-left p-3 rounded-md hover:bg-muted/60 transition-colors flex items-center gap-3 border border-transparent hover:border-primary/30 disabled:opacity-50"
+                >
+                  {u.imageUrl ? (
+                    <div className="w-10 h-10 rounded border bg-muted shrink-0 overflow-hidden">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={u.imageUrl}
+                        alt={u.name}
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="w-10 h-10 rounded bg-muted shrink-0 flex items-center justify-center">
+                      <Package className="h-5 w-5 text-muted-foreground/60" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium line-clamp-1">{u.name}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono">
+                      {u.barcode} · {u.externalSku ?? "no-sku"}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-xs font-semibold tabular-nums">
+                      {formatCurrency(u.price)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                      Stok: {u.stock}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

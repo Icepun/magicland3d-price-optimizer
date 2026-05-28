@@ -15,12 +15,15 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Settings, Coins } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings, Coins, Boxes } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { formatCurrency } from "@/lib/utils";
+import { PackagingSettings } from "./PackagingSettings";
 
 interface FilamentType {
   id: string;
@@ -64,7 +67,9 @@ export default function CostSettingsPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
-      toast.success("Genel maliyet oranları kaydedildi");
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Genel maliyet oranları kaydedildi — tüm ürünlere uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),
   });
@@ -79,6 +84,8 @@ export default function CostSettingsPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Filament tipi eklendi");
       setFilamentOpen(false);
     },
@@ -93,6 +100,8 @@ export default function CostSettingsPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Filament tipi güncellendi");
       setEditingFilament(null);
     },
@@ -103,6 +112,8 @@ export default function CostSettingsPage() {
       fetch(`/api/filament-types/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Filament tipi silindi");
     },
   });
@@ -155,11 +166,33 @@ export default function CostSettingsPage() {
           </CardHeader>
           <CardContent>
             {isFilamentsLoading ? (
-              <p className="text-sm text-muted-foreground">Yükleniyor...</p>
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex gap-3 items-center">
+                    <Skeleton className="h-8 w-1/3" />
+                    <Skeleton className="h-8 w-24" />
+                    <Skeleton className="h-8 w-16" />
+                    <Skeleton className="h-8 w-20 ml-auto" />
+                  </div>
+                ))}
+              </div>
             ) : filaments.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-6">
-                Henüz filament tipi eklenmemiş.
-              </p>
+              <EmptyState
+                icon={Boxes}
+                title="Henüz filament tipi yok"
+                description="3D baskıda kullandığın filamentleri (PLA, PETG, ABS vs.) ekle. Maliyet hesabında otomatik kullanılır."
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      filamentForm.reset({ name: "", costPerGram: 0.5, isActive: true });
+                      setFilamentOpen(true);
+                    }}
+                  >
+                    <Plus className="h-4 w-4 mr-2" /> İlk Filamenti Ekle
+                  </Button>
+                }
+              />
             ) : (
               <Table>
                 <TableHeader>
@@ -171,8 +204,12 @@ export default function CostSettingsPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filaments.map((f: FilamentType) => (
-                    <TableRow key={f.id}>
+                  {filaments.map((f: FilamentType, index) => (
+                    <TableRow
+                      key={f.id}
+                      className="animate-in fade-in slide-in-from-bottom-1 duration-300"
+                      style={{ animationDelay: `${index * 30}ms`, animationFillMode: "both" }}
+                    >
                       <TableCell className="font-medium">{f.name}</TableCell>
                       <TableCell>{formatCurrency(f.costPerGram)}/g</TableCell>
                       <TableCell>
@@ -188,6 +225,7 @@ export default function CostSettingsPage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8"
+                            title="Düzenle"
                             onClick={() => {
                               setEditingFilament(f);
                               filamentForm.reset(f);
@@ -199,6 +237,7 @@ export default function CostSettingsPage() {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-destructive"
+                            title="Sil"
                             onClick={() => deleteFilamentMutation.mutate(f.id)}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -225,7 +264,15 @@ export default function CostSettingsPage() {
           </CardHeader>
           <CardContent>
             {isSettingsLoading ? (
-              <p className="text-sm text-muted-foreground">Yükleniyor...</p>
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="space-y-1">
+                    <Skeleton className="h-3 w-32" />
+                    <Skeleton className="h-9 w-full" />
+                  </div>
+                ))}
+                <Skeleton className="h-9 w-24" />
+              </div>
             ) : (
               <form onSubmit={handleSettingsSubmit} className="space-y-4">
                 <div className="space-y-1">
@@ -265,6 +312,16 @@ export default function CostSettingsPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Paketleme & Sabit Ek Maliyetler */}
+      <div className="pt-2">
+        <h2 className="text-lg font-semibold mb-1">Paketleme & Ek Maliyetler</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Buradaki fiyatlar tüm ürünlere otomatik uygulanır. Zam geldiğinde tek yerden
+          güncellersin, tüm kâr hesapları anında değişir.
+        </p>
+        <PackagingSettings />
       </div>
 
       {/* Filament Create Dialog */}

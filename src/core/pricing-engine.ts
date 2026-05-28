@@ -32,6 +32,17 @@ function calculateExpenses(
   return { fixed, variable, applied: applicable };
 }
 
+/**
+ * Tek bir listing için "şu an ne kadar kâr ediyor" hesabı.
+ *
+ * - salePrice = Trendyol/HB/Shopify'da listelenen fiyat (KDV dahil)
+ * - discountBuffer > 0 ise effective fiyat = salePrice * (1 - discountBuffer/100)
+ * - vatRate > 0 ise gelir = effective / (1 + vatRate/100)
+ * - Komisyon: commissionRateOverride varsa onu kullan, yoksa rules
+ * - Kargo: cargoCostOverride varsa onu kullan, yoksa rules
+ *
+ * Recommendation/öneri/simulation range yok — tek noktada net kâr.
+ */
 export function simulatePrice(input: SimulationInput): SimulationResult {
   const {
     salePrice,
@@ -42,35 +53,65 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     commissionRules,
     cargoRules,
     expenseRules,
-    minNetProfit,
-    minProfitMargin,
-    minAllowedPrice,
-    maxAllowedPrice,
     simulationDate = new Date(),
+    vatRate = 0,
+    discountBuffer = 0,
+    commissionRateOverride,
+    commissionFixedOverride,
+    cargoCostOverride,
   } = input;
 
-  const appliedCommissionRule = findCommissionRule(
-    commissionRules,
-    salePrice,
-    categoryName,
-    simulationDate
-  );
-  const appliedCargoRule = findCargoRule(
-    cargoRules,
-    salePrice,
-    categoryName,
-    desi,
-    simulationDate
-  );
+  // Etkili fiyat (kampanya indirimi sonrası).
+  const discountMultiplier = 1 - (discountBuffer || 0) / 100;
+  const effectiveSalePrice = salePrice * discountMultiplier;
 
-  const commissionCost = appliedCommissionRule
-    ? calculateCommission(salePrice, appliedCommissionRule)
-    : 0;
-  const cargoCost = appliedCargoRule ? appliedCargoRule.cargoCost : 0;
+  // KDV ayrıştırması — etkili fiyattan.
+  const vatMultiplier = 1 + (vatRate || 0) / 100;
+  const salePriceExVat = vatMultiplier > 0 ? effectiveSalePrice / vatMultiplier : effectiveSalePrice;
+  const vatAmount = effectiveSalePrice - salePriceExVat;
 
-  const { fixed: fixedExpenses, variable: variableExpenses, applied: appliedExpenseRules } =
-    calculateExpenses(expenseRules, salePrice, categoryName);
+  // Komisyon — önce override, sonra rules
+  let commissionCost = 0;
+  let appliedCommissionRule;
+  if (commissionRateOverride !== undefined || commissionFixedOverride !== undefined) {
+    commissionCost =
+      effectiveSalePrice * (commissionRateOverride ?? 0) + (commissionFixedOverride ?? 0);
+  } else {
+    appliedCommissionRule = findCommissionRule(
+      commissionRules,
+      effectiveSalePrice,
+      categoryName,
+      simulationDate
+    );
+    commissionCost = appliedCommissionRule
+      ? calculateCommission(effectiveSalePrice, appliedCommissionRule)
+      : 0;
+  }
 
+  // Kargo — önce override, sonra rules
+  let cargoCost = 0;
+  let appliedCargoRule;
+  if (cargoCostOverride !== undefined) {
+    cargoCost = cargoCostOverride;
+  } else {
+    appliedCargoRule = findCargoRule(
+      cargoRules,
+      effectiveSalePrice,
+      categoryName,
+      desi,
+      simulationDate
+    );
+    cargoCost = appliedCargoRule ? appliedCargoRule.cargoCost : 0;
+  }
+
+  // Sabit ve değişken giderler (gider kuralları)
+  const {
+    fixed: fixedExpenses,
+    variable: variableExpenses,
+    applied: appliedExpenseRules,
+  } = calculateExpenses(expenseRules, effectiveSalePrice, categoryName);
+
+  // Toplam maliyet — tüm bu kalemler ex-VAT baz (KDV reclaim varsayımı)
   const totalCost =
     productCost +
     packagingCost +
@@ -79,25 +120,17 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     fixedExpenses +
     variableExpenses;
 
-  const netProfit = salePrice - totalCost;
-  const profitMargin = salePrice > 0 ? netProfit / salePrice : 0;
-
-  const invalidReasons: string[] = [];
-  if (minNetProfit !== undefined && netProfit < minNetProfit) {
-    invalidReasons.push(`Net kâr ${netProfit.toFixed(2)} TL < minimum ${minNetProfit} TL`);
-  }
-  if (minProfitMargin !== undefined && profitMargin < minProfitMargin) {
-    invalidReasons.push(`Kâr oranı %${(profitMargin * 100).toFixed(1)} < minimum %${(minProfitMargin * 100).toFixed(1)}`);
-  }
-  if (minAllowedPrice !== undefined && salePrice < minAllowedPrice) {
-    invalidReasons.push(`Fiyat ${salePrice} TL < minimum izin verilen ${minAllowedPrice} TL`);
-  }
-  if (maxAllowedPrice !== undefined && salePrice > maxAllowedPrice) {
-    invalidReasons.push(`Fiyat ${salePrice} TL > maksimum izin verilen ${maxAllowedPrice} TL`);
-  }
+  // Net kâr — KDV hariç gelir - tüm maliyetler
+  const netProfit = salePriceExVat - totalCost;
+  const profitMargin = salePriceExVat > 0 ? netProfit / salePriceExVat : 0;
 
   return {
     salePrice,
+    effectiveSalePrice,
+    salePriceExVat,
+    vatAmount,
+    vatRate: vatRate || 0,
+    discountBuffer: discountBuffer || 0,
     productCost,
     packagingCost,
     commissionCost,
@@ -107,19 +140,8 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     totalCost,
     netProfit,
     profitMargin,
-    isValid: invalidReasons.length === 0,
-    invalidReasons,
     appliedCommissionRule,
     appliedCargoRule,
     appliedExpenseRules,
   };
-}
-
-export function simulateRange(
-  baseInput: Omit<SimulationInput, "salePrice">,
-  prices: number[]
-): SimulationResult[] {
-  return prices.map((price) =>
-    simulatePrice({ ...baseInput, salePrice: price })
-  );
 }

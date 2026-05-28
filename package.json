@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.1.21",
+  "version": "0.9.6",
   "description": "Trendyol sellers price and profit optimization desktop app",
   "author": "Magicland 3D",
   "private": true,
@@ -17,7 +17,8 @@
     "test": "vitest run",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build && electron-builder",
-    "electron:publish": "npm run build && electron-builder --publish always"
+    "electron:publish": "npm run build && electron-builder --publish always && node scripts/upload-latest-yml.mjs",
+    "seed:tex-cargo": "node scripts/seed-tex-cargo-rules.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
@@ -69,6 +70,7 @@
     "electron-builder": "^25.1.8",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
+    "png-to-ico": "^3.0.1",
     "prisma": "^6.3.0",
     "tailwindcss": "^4",
     "typescript": "^5",
@@ -77,19 +79,23 @@
   },
   "build": {
     "appId": "com.magicland3d.trendyol-price-optimizer",
-    "productName": "Trendyol Price Optimizer",
-    "artifactName": "Trendyol-Price-Optimizer-Setup-${version}.${ext}",
+    "productName": "Magicland 3D Hub",
+    "artifactName": "Magicland-3D-Hub-Setup-${version}.${ext}",
     "directories": {
       "output": "dist"
     },
+    "npmRebuild": false,
+    "compression": "store",
     "files": [
       "electron/**/*",
       ".next/**/*",
       "node_modules/**/*",
       "public/**/*",
       "src/generated/prisma/**/*",
+      "build/icon.ico",
       "package.json"
     ],
+    "icon": "build/icon.ico",
     "extraResources": [
       {
         "from": "prisma/dev.db",
@@ -101,13 +107,29 @@
     ],
     "win": {
       "target": "nsis",
+      "icon": "build/icon.ico",
       "signAndEditExecutable": false
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "icon": "build/icon.png",
+      "category": "public.app-category.business",
+      "artifactName": "Magicland-3D-Hub-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Magicland 3D Hub ${version}"
     },
     "nsis": {
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "include": "build/installer.nsh"
     },
     "publish": [
       {

@@ -23,6 +23,47 @@ let updateState = {
 };
 
 app.setAppUserModelId("com.magicland3d.trendyol-price-optimizer");
+// userData/ayar/db klasörü bu isme bağlı — ürün adı (productName) değişse bile
+// SABİT tut ki kullanıcı verisi (ayarlar, db, gizlenen ürünler) taşınmasın/kaybolmasın.
+app.setName("trendyol-price-optimizer");
+
+// =========================================================================
+// GLOBAL STARTUP LOGGER — paketlenmiş app'te startup hataları için.
+// Log: %APPDATA%/Trendyol Price Optimizer/startup.log
+// =========================================================================
+function getStartupLogPath() {
+  try {
+    return path.join(app.getPath("userData"), "startup.log");
+  } catch {
+    return null;
+  }
+}
+function logStartup(...args) {
+  const line = `[${new Date().toISOString()}] ${args
+    .map((a) => (a instanceof Error ? `${a.message}\n${a.stack}` : String(a)))
+    .join(" ")}\n`;
+  console.log("[startup]", ...args);
+  const p = getStartupLogPath();
+  if (p) {
+    try {
+      fs.appendFileSync(p, line, "utf8");
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+// Yakalanmamış hatalarda zorla logla — sessiz crash olmasın
+process.on("uncaughtException", (err) => {
+  logStartup("UNCAUGHT EXCEPTION:", err);
+});
+process.on("unhandledRejection", (err) => {
+  logStartup("UNHANDLED REJECTION:", err);
+});
+
+logStartup("===== Application starting =====");
+logStartup("version:", app.getVersion(), "packaged:", app.isPackaged);
+logStartup("platform:", process.platform, "node:", process.version);
 
 function setUpdateState(patch) {
   updateState = { ...updateState, ...patch };
@@ -53,13 +94,72 @@ function closeNextServer() {
       finish();
     }
 
-    setTimeout(finish, 1500).unref?.();
+    // Max 800ms bekle, sonra zorla devam et
+    setTimeout(finish, 800).unref?.();
   });
+}
+
+let isShuttingDown = false;
+
+/**
+ * Tek bir kapanış akışı — kullanıcı X'e bastığında, app.quit() çağrıldığında,
+ * veya updater "Kur ve Yeniden Başlat" tetiklediğinde hep buradan geçer.
+ *
+ * Kritik: Next.js + Prisma worker process'leri elektron'un beforeQuit ile
+ * temiz kapanmıyor. Bu yüzden sonunda process.exit(0) ile sert kapatma yapıyoruz.
+ * Aksi halde installer "uygulama hâlâ açık" diyerek kuruluma izin vermiyor.
+ */
+async function gracefulShutdown(reason) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  // Window'ları sert kapat (close listener'larını bypass et)
+  for (const win of BrowserWindow.getAllWindows()) {
+    try {
+      win.removeAllListeners("close");
+      win.destroy();
+    } catch {
+      // ignore
+    }
+  }
+
+  // GÜNCELLEME kurulumu: installer'ın dosyaları kilitli bulmaması ve "uygulama
+  // kapatılamaz" dialogu çıkmaması için HEMEN çık. Yavaş server kapatmayı bekleme —
+  // OS process ölünce socket/dosya handle'larını zaten serbest bırakır.
+  if (isQuittingForUpdate) {
+    try { server?.closeAllConnections?.(); } catch { /* ignore */ }
+    try { app.exit(0); } catch { /* ignore */ }
+    setTimeout(() => process.exit(0), 50);
+    return;
+  }
+
+  // HTTP server'ı kapat (max 800ms bekler)
+  await Promise.race([
+    closeNextServer(),
+    new Promise((resolve) => setTimeout(resolve, 1000)),
+  ]);
+
+  // Zorla exit — child process / worker thread / native handle ne kalmışsa
+  // event loop'u beklemeden öldür.
+  setTimeout(() => {
+    try { app.exit(0); } catch { /* ignore */ }
+    setTimeout(() => process.exit(0), 100);
+  }, 50);
 }
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+
+  // Write update logs to a file so they are visible in packaged builds.
+  // Log file: %APPDATA%\Trendyol Price Optimizer\updater.log
+  const logPath = path.join(app.getPath("userData"), "updater.log");
+  const writeLog = (...args) => {
+    const line = `[${new Date().toISOString()}] ${args.map(String).join(" ")}\n`;
+    try { fs.appendFileSync(logPath, line, "utf8"); } catch { /* ignore */ }
+    console.log("[updater]", ...args);
+  };
+  autoUpdater.logger = { info: writeLog, warn: writeLog, error: writeLog, debug: writeLog };
 
   autoUpdater.on("checking-for-update", () => {
     setUpdateState({ status: "checking", message: "Guncelleme kontrol ediliyor", percent: 0 });
@@ -91,6 +191,8 @@ function setupAutoUpdater() {
     });
   });
   autoUpdater.on("error", (error) => {
+    const fullMsg = error?.stack || error?.message || "Guncelleme kontrolu basarisiz";
+    writeLog("error event:", fullMsg);
     setUpdateState({
       status: "error",
       message: error?.message || "Guncelleme kontrolu basarisiz",
@@ -99,6 +201,7 @@ function setupAutoUpdater() {
   });
 
   ipcMain.handle("updater:get-status", () => updateState);
+  ipcMain.handle("updater:get-log-path", () => logPath);
   ipcMain.handle("updater:check", async () => {
     if (!app.isPackaged) {
       setUpdateState({
@@ -122,20 +225,34 @@ function setupAutoUpdater() {
     return updateState;
   });
   ipcMain.handle("updater:quit-and-install", async () => {
-    if (app.isPackaged) {
-      isQuittingForUpdate = true;
-      setUpdateState({
-        status: "installing",
-        message: "Guncelleme kuruluyor, uygulama kapatiliyor",
-        percent: 100,
-      });
-      await closeNextServer();
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.removeAllListeners("close");
-        window.close();
+    if (!app.isPackaged) return;
+
+    writeLog("quit-and-install requested");
+    isQuittingForUpdate = true;
+    setUpdateState({
+      status: "installing",
+      message: "Güncelleme kuruluyor, uygulama kapatılıyor",
+      percent: 100,
+    });
+
+    // electron-updater quitAndInstall'ı çağır — internally app.quit() tetikleyecek
+    // ve before-quit handler'ımız gracefulShutdown ile arkaplan process'leri öldürecek.
+    setImmediate(() => {
+      try {
+        // SILENT kurulum (isSilent=true): installer /S ile çalışır, açık uygulamayı
+        // sessizce zorla kapatır, dosyaları kopyalar, yeniden başlatır. Interaktif
+        // modda (false) "uygulama kapatılamaz, Tekrar dene" dialogu çıkıyordu.
+        writeLog("calling autoUpdater.quitAndInstall(true, true)");
+        autoUpdater.quitAndInstall(true, true);
+      } catch (e) {
+        writeLog("quitAndInstall threw:", e?.message || e);
+        setUpdateState({
+          status: "error",
+          message: `Kurulum başlatılamadı: ${e?.message || e}`,
+          percent: 0,
+        });
       }
-      setImmediate(() => autoUpdater.quitAndInstall(true, true));
-    }
+    });
   });
 }
 
@@ -197,18 +314,32 @@ function backupDatabase(dbPath) {
 }
 
 function ensureCredentialKey() {
-  if (!app.isPackaged || process.env.TRENDYOL_CREDENTIAL_KEY) return;
+  if (!app.isPackaged) return;
 
   const userDataDir = app.getPath("userData");
-  const keyPath = path.join(userDataDir, "trendyol-credentials.key");
-  if (!fs.existsSync(keyPath)) {
-    fs.writeFileSync(keyPath, cryptoRandomHex(), { encoding: "utf8", mode: 0o600 });
+
+  // AES-256 master key (Trendyol/Shopify/Hepsiburada credential şifreleme için)
+  if (!process.env.TRENDYOL_CREDENTIAL_KEY) {
+    const keyPath = path.join(userDataDir, "trendyol-credentials.key");
+    if (!fs.existsSync(keyPath)) {
+      fs.writeFileSync(keyPath, cryptoRandomHex(), { encoding: "utf8", mode: 0o600 });
+    }
+    process.env.TRENDYOL_CREDENTIAL_KEY = fs.readFileSync(keyPath, "utf8").trim();
   }
 
-  process.env.TRENDYOL_CREDENTIAL_KEY = fs.readFileSync(keyPath, "utf8").trim();
-  process.env.TRENDYOL_SETTINGS_FILE = path
-    .join(userDataDir, "trendyol-settings.json")
-    .replace(/\\/g, "/");
+  // Tüm platform settings dosyalarını userData'ya yönlendir.
+  // Aksi takdirde process.cwd() (asar içi veya geçici dizin) kullanılır ve
+  // her uygulama güncellemesinden sonra ayarlar KAYBOLUR.
+  const slashedUserData = userDataDir.replace(/\\/g, "/");
+  if (!process.env.TRENDYOL_SETTINGS_FILE) {
+    process.env.TRENDYOL_SETTINGS_FILE = `${slashedUserData}/trendyol-settings.json`;
+  }
+  if (!process.env.SHOPIFY_SETTINGS_FILE) {
+    process.env.SHOPIFY_SETTINGS_FILE = `${slashedUserData}/shopify-settings.json`;
+  }
+  if (!process.env.HEPSIBURADA_SETTINGS_FILE) {
+    process.env.HEPSIBURADA_SETTINGS_FILE = `${slashedUserData}/hepsiburada-settings.json`;
+  }
 }
 
 function cryptoRandomHex() {
@@ -235,10 +366,15 @@ async function findAvailablePort(preferredPort) {
 async function startNextServer() {
   if (isDev) return startUrl;
 
+  logStartup("startNextServer: ensuring db url");
   ensureDatabaseUrl();
+  logStartup("startNextServer: ensuring credential key");
   ensureCredentialKey();
+  logStartup("startNextServer: finding port");
   const port = await findAvailablePort(defaultPort);
+  logStartup("startNextServer: port =", port);
 
+  logStartup("startNextServer: creating Next.js instance");
   const nextApp = next({
     dev: false,
     dir: app.getAppPath(),
@@ -247,27 +383,34 @@ async function startNextServer() {
   });
   const handle = nextApp.getRequestHandler();
 
+  logStartup("startNextServer: preparing Next.js");
   await nextApp.prepare();
+  logStartup("startNextServer: Next.js prepared");
 
   server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", resolve);
   });
+  logStartup("startNextServer: HTTP server listening on", port);
 
   return `http://127.0.0.1:${port}`;
 }
 
 async function createWindow() {
+  logStartup("createWindow: starting next server");
   const url = await startNextServer();
+  logStartup("createWindow: URL =", url);
 
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
     minWidth: 1100,
     minHeight: 720,
-    title: "Trendyol Price Optimizer",
-    backgroundColor: "#ffffff",
+    title: "Magicland 3D Hub",
+    icon: path.join(__dirname, "..", "build", "icon.ico"),
+    backgroundColor: "#1B1E2A",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -281,20 +424,70 @@ async function createWindow() {
     return { action: "deny" };
   });
 
-  await win.loadURL(url);
+  logStartup("createWindow: loading URL");
+  try {
+    await win.loadURL(url);
+    logStartup("createWindow: URL loaded ✓");
+  } catch (e) {
+    logStartup("createWindow: loadURL failed:", e);
+    // Yine de window'u kapatma — kullanıcı en azından boş pencere görsün
+    win.loadURL(
+      "data:text/html;charset=utf-8," +
+        encodeURIComponent(
+          "<html><body style='font-family:sans-serif;padding:32px;background:#1B1E2A;color:#fff'>" +
+            "<h2>Uygulama başlatılırken hata oluştu</h2>" +
+            "<p>Detaylar: %APPDATA%/Trendyol Price Optimizer/startup.log</p>" +
+            `<pre>${String(e)}</pre>` +
+            "</body></html>"
+        )
+    );
+  }
 
   if (isDev) {
     win.webContents.openDevTools({ mode: "detach" });
   }
 }
 
-app.whenReady().then(() => {
-  setupAutoUpdater();
-  return createWindow();
+app.whenReady().then(async () => {
+  logStartup("app whenReady fired");
+  try {
+    setupAutoUpdater();
+    logStartup("setupAutoUpdater done");
+    await createWindow();
+    logStartup("createWindow done ✓");
+  } catch (e) {
+    logStartup("FATAL during startup:", e);
+    // Hata olursa basit bir error window aç
+    try {
+      const errWin = new BrowserWindow({
+        width: 800,
+        height: 500,
+        backgroundColor: "#1B1E2A",
+        title: "Hata",
+      });
+      errWin.loadURL(
+        "data:text/html;charset=utf-8," +
+          encodeURIComponent(
+            `<html><body style="font-family:sans-serif;padding:32px;background:#1B1E2A;color:#fff">
+              <h2>Uygulama başlatılamadı</h2>
+              <p>Log dosyası: <code>%APPDATA%\\Trendyol Price Optimizer\\startup.log</code></p>
+              <pre style="background:#0d0d17;padding:16px;border-radius:8px;overflow:auto;max-height:300px">${String(
+                e?.stack || e
+              )}</pre>
+              <p style="margin-top:24px">Bu pencereyi kapatabilirsin. Lütfen log dosyasını paylaş.</p>
+            </body></html>`
+          )
+      );
+    } catch (innerErr) {
+      logStartup("error window creation also failed:", innerErr);
+    }
+  }
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    gracefulShutdown("window-all-closed");
+  }
 });
 
 app.on("activate", () => {
@@ -304,17 +497,12 @@ app.on("activate", () => {
 });
 
 app.on("before-quit", (event) => {
-  if (!server) return;
-
-  if (!isQuittingForUpdate) {
-    event.preventDefault();
-    closeNextServer().finally(() => app.quit());
-    return;
-  }
-
-  closeNextServer();
+  if (isShuttingDown) return; // ikinci tur, izin ver
+  if (!server) return; // server yoksa normal akış
+  event.preventDefault();
+  gracefulShutdown(isQuittingForUpdate ? "update-install" : "before-quit");
 });
 
-app.on("will-quit", () => {
-  closeNextServer();
-});
+// Son güvenlik: hiçbir koşulda process arkada kalmasın
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));

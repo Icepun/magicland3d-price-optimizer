@@ -49,92 +49,95 @@
 }
 
 /* =============================================
-   MAGICLAND 3D — Mavi-Mor Premium Dark Theme
+   MAGICLAND 3D — Light/Dark Theme System
+   - Default: light (next-themes ile değiştirilebilir)
+   - .dark class active iken koyu tema
    ============================================= */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  /* Surfaces — koyu lacivert-siyah */
-  --background:        oklch(0.09 0.015 265);
-  --foreground:        oklch(0.93 0.008 265);
+  /* LIGHT THEME — sıcak ofbeyaz tabanlar */
+  --background:        oklch(0.985 0.005 265);
+  --foreground:        oklch(0.20 0.020 265);
 
-  --card:              oklch(0.135 0.018 265);
-  --card-foreground:   oklch(0.93 0.008 265);
+  --card:              oklch(1 0 0);
+  --card-foreground:   oklch(0.20 0.020 265);
 
-  --popover:           oklch(0.155 0.018 265);
-  --popover-foreground: oklch(0.93 0.008 265);
+  --popover:           oklch(1 0 0);
+  --popover-foreground: oklch(0.20 0.020 265);
 
-  /* Primary — Magicland morsu (#7B7FD4 tonu) */
-  --primary:           oklch(0.62 0.20 278);
-  --primary-foreground: oklch(0.98 0.005 265);
+  --primary:           oklch(0.55 0.22 278);
+  --primary-foreground: oklch(0.99 0.005 265);
 
-  --secondary:         oklch(0.19 0.018 265);
-  --secondary-foreground: oklch(0.93 0.008 265);
+  --secondary:         oklch(0.95 0.010 265);
+  --secondary-foreground: oklch(0.25 0.020 265);
 
-  --muted:             oklch(0.17 0.014 265);
-  --muted-foreground:  oklch(0.54 0.012 265);
+  --muted:             oklch(0.95 0.008 265);
+  --muted-foreground:  oklch(0.50 0.015 265);
 
-  --accent:            oklch(0.19 0.020 265);
-  --accent-foreground: oklch(0.93 0.008 265);
+  --accent:            oklch(0.93 0.018 278);
+  --accent-foreground: oklch(0.30 0.022 278);
 
-  --destructive:       oklch(0.63 0.22 25);
+  --destructive:       oklch(0.58 0.22 25);
 
-  --border:            oklch(1 0 0 / 8%);
-  --input:             oklch(1 0 0 / 11%);
-  --ring:              oklch(0.62 0.20 278 / 55%);
+  --border:            oklch(0.20 0.020 265 / 12%);
+  --input:             oklch(0.20 0.020 265 / 16%);
+  --ring:              oklch(0.55 0.22 278 / 50%);
 
-  /* Chart palette — canlı renkler */
-  --chart-1:           oklch(0.62 0.20 278);   /* mor-mavi (primary) */
-  --chart-2:           oklch(0.72 0.18 145);   /* yeşil */
-  --chart-3:           oklch(0.705 0.20 47.6); /* turuncu */
-  --chart-4:           oklch(0.68 0.22 305);   /* leylak */
-  --chart-5:           oklch(0.63 0.22 25);    /* kırmızı */
+  --chart-1:           oklch(0.55 0.22 278);
+  --chart-2:           oklch(0.62 0.20 145);
+  --chart-3:           oklch(0.65 0.20 47.6);
+  --chart-4:           oklch(0.62 0.22 305);
+  --chart-5:           oklch(0.58 0.22 25);
 
-  --radius: 0.625rem;
+  --radius: 0.7rem;
 
-  /* Sidebar — biraz daha koyu, ama aynı tonda */
-  --sidebar:           oklch(0.115 0.016 265);
-  --sidebar-foreground: oklch(0.78 0.010 265);
-  --sidebar-primary:   oklch(0.62 0.20 278);
-  --sidebar-primary-foreground: oklch(0.98 0.005 265);
-  --sidebar-accent:    oklch(0.62 0.20 278 / 13%);
-  --sidebar-accent-foreground: oklch(0.93 0.008 265);
-  --sidebar-border:    oklch(1 0 0 / 6%);
-  --sidebar-ring:      oklch(0.62 0.20 278 / 45%);
+  /* Light sidebar — beyaza yakın, body'den biraz daha gri */
+  --sidebar:           oklch(0.96 0.008 265);
+  --sidebar-foreground: oklch(0.30 0.018 265);
+  --sidebar-primary:   oklch(0.55 0.22 278);
+  --sidebar-primary-foreground: oklch(0.99 0.005 265);
+  --sidebar-accent:    oklch(0.55 0.22 278 / 11%);
+  --sidebar-accent-foreground: oklch(0.30 0.022 278);
+  --sidebar-border:    oklch(0.20 0.020 265 / 8%);
+  --sidebar-ring:      oklch(0.55 0.22 278 / 40%);
 }
 
 .dark {
-  --background:        oklch(0.09 0.015 265);
-  --foreground:        oklch(0.93 0.008 265);
-  --card:              oklch(0.135 0.018 265);
-  --card-foreground:   oklch(0.93 0.008 265);
-  --popover:           oklch(0.155 0.018 265);
-  --popover-foreground: oklch(0.93 0.008 265);
-  --primary:           oklch(0.62 0.20 278);
-  --primary-foreground: oklch(0.98 0.005 265);
-  --secondary:         oklch(0.19 0.018 265);
-  --secondary-foreground: oklch(0.93 0.008 265);
-  --muted:             oklch(0.17 0.014 265);
-  --muted-foreground:  oklch(0.54 0.012 265);
-  --accent:            oklch(0.19 0.020 265);
-  --accent-foreground: oklch(0.93 0.008 265);
-  --destructive:       oklch(0.63 0.22 25);
-  --border:            oklch(1 0 0 / 8%);
-  --input:             oklch(1 0 0 / 11%);
-  --ring:              oklch(0.62 0.20 278 / 55%);
-  --chart-1:           oklch(0.62 0.20 278);
-  --chart-2:           oklch(0.72 0.18 145);
-  --chart-3:           oklch(0.705 0.20 47.6);
-  --chart-4:           oklch(0.68 0.22 305);
-  --chart-5:           oklch(0.63 0.22 25);
-  --sidebar:           oklch(0.115 0.016 265);
-  --sidebar-foreground: oklch(0.78 0.010 265);
-  --sidebar-primary:   oklch(0.62 0.20 278);
-  --sidebar-primary-foreground: oklch(0.98 0.005 265);
-  --sidebar-accent:    oklch(0.62 0.20 278 / 13%);
-  --sidebar-accent-foreground: oklch(0.93 0.008 265);
-  --sidebar-border:    oklch(1 0 0 / 6%);
-  --sidebar-ring:      oklch(0.62 0.20 278 / 45%);
+  color-scheme: dark;
+
+  /* DARK THEME — sıcak lacivert */
+  --background:        oklch(0.155 0.018 265);
+  --foreground:        oklch(0.965 0.005 265);
+  --card:              oklch(0.205 0.020 265);
+  --card-foreground:   oklch(0.965 0.005 265);
+  --popover:           oklch(0.225 0.022 265);
+  --popover-foreground: oklch(0.965 0.005 265);
+  --primary:           oklch(0.66 0.20 278);
+  --primary-foreground: oklch(0.99 0.005 265);
+  --secondary:         oklch(0.255 0.020 265);
+  --secondary-foreground: oklch(0.965 0.005 265);
+  --muted:             oklch(0.235 0.018 265);
+  --muted-foreground:  oklch(0.685 0.014 265);
+  --accent:            oklch(0.265 0.024 265);
+  --accent-foreground: oklch(0.97 0.005 265);
+  --destructive:       oklch(0.66 0.22 25);
+  --border:            oklch(1 0 0 / 12%);
+  --input:             oklch(1 0 0 / 14%);
+  --ring:              oklch(0.66 0.20 278 / 60%);
+  --chart-1:           oklch(0.66 0.20 278);
+  --chart-2:           oklch(0.74 0.18 145);
+  --chart-3:           oklch(0.72 0.20 47.6);
+  --chart-4:           oklch(0.70 0.22 305);
+  --chart-5:           oklch(0.66 0.22 25);
+  --sidebar:           oklch(0.135 0.016 265);
+  --sidebar-foreground: oklch(0.84 0.010 265);
+  --sidebar-primary:   oklch(0.66 0.20 278);
+  --sidebar-primary-foreground: oklch(0.99 0.005 265);
+  --sidebar-accent:    oklch(0.66 0.20 278 / 16%);
+  --sidebar-accent-foreground: oklch(0.97 0.005 265);
+  --sidebar-border:    oklch(1 0 0 / 7%);
+  --sidebar-ring:      oklch(0.66 0.20 278 / 50%);
 }
 
 @layer base {
@@ -144,9 +147,37 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Dark theme'de hafif radial ambient ışık */
+  .dark body {
+    background-image:
+      radial-gradient(
+        ellipse 1200px 700px at 65% -10%,
+        oklch(0.66 0.20 278 / 14%),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 900px 600px at 100% 100%,
+        oklch(0.66 0.22 305 / 8%),
+        transparent 70%
+      );
+    background-attachment: fixed;
+  }
+  /* Light theme'de yumuşak ambient (daha incelikli) */
+  :root:not(.dark) body {
+    background-image:
+      radial-gradient(
+        ellipse 1200px 700px at 65% -10%,
+        oklch(0.55 0.22 278 / 5%),
+        transparent 70%
+      );
+    background-attachment: fixed;
+  }
   html {
     @apply font-sans;
   }
+  /* Heading hiyerarşisi sıkı tutulsun */
+  h1 { @apply tracking-tight; letter-spacing: -0.015em; }
+  h2 { @apply tracking-tight; letter-spacing: -0.01em; }
 }
 
 /* =============================================
@@ -177,25 +208,105 @@
 /* =============================================
    GLOBAL SCROLLBAR (WebKit / Electron)
    ============================================= */
-::-webkit-scrollbar        { width: 5px; height: 5px; }
+::-webkit-scrollbar        { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track  { background: transparent; }
-::-webkit-scrollbar-thumb  { background: oklch(1 0 0 / 11%); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 20%); }
+::-webkit-scrollbar-thumb  {
+  background: var(--border);
+  border-radius: 4px;
+  transition: background 200ms ease;
+}
+.dark ::-webkit-scrollbar-thumb       { background: oklch(1 0 0 / 9%); }
+.dark ::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 18%); }
+:root:not(.dark) ::-webkit-scrollbar-thumb       { background: oklch(0.20 0.020 265 / 18%); }
+:root:not(.dark) ::-webkit-scrollbar-thumb:hover { background: oklch(0.20 0.020 265 / 35%); }
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* =============================================
-   CARD HOVER ELEVATION
+   CARD — Belirgin yüzey + hover elevation
    ============================================= */
 [data-slot="card"] {
-  transition: box-shadow 220ms ease, border-color 220ms ease;
+  background: var(--card);
+  border: 1px solid var(--border);
+  transition: box-shadow 220ms ease, border-color 220ms ease, transform 220ms ease;
 }
-[data-slot="card"]:hover {
-  box-shadow: 0 6px 32px oklch(0 0 0 / 55%);
+.dark [data-slot="card"] {
+  background: linear-gradient(
+    180deg,
+    oklch(1 0 0 / 1.5%) 0%,
+    transparent 100%
+  ),
+  var(--card);
+  border-color: oklch(1 0 0 / 8%);
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 4%) inset,
+    0 1px 2px oklch(0 0 0 / 25%);
+}
+.dark [data-slot="card"]:hover {
+  border-color: oklch(1 0 0 / 14%);
+  box-shadow:
+    0 1px 0 oklch(1 0 0 / 5%) inset,
+    0 8px 32px oklch(0 0 0 / 35%),
+    0 0 0 1px oklch(0.66 0.20 278 / 8%);
+}
+:root:not(.dark) [data-slot="card"] {
+  box-shadow: 0 1px 2px oklch(0.20 0.020 265 / 5%);
+}
+:root:not(.dark) [data-slot="card"]:hover {
+  border-color: oklch(0.55 0.22 278 / 25%);
+  box-shadow: 0 4px 16px oklch(0.20 0.020 265 / 8%);
+}
+
+/* =============================================
+   TABLE — Daha okunabilir, modern stil
+   ============================================= */
+[data-slot="table-container"] {
+  border-radius: var(--radius-md);
+  background: var(--card);
+  border: 1px solid oklch(1 0 0 / 8%);
+}
+table thead th,
+[data-slot="table-head"] {
+  background: oklch(1 0 0 / 2.5%);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: oklch(0.72 0.012 265);
+}
+[data-slot="table-row"]:hover {
+  background: oklch(0.66 0.20 278 / 5%);
+}
+
+/* =============================================
+   INPUT / BUTTON — Daha belirgin focus
+   ============================================= */
+[data-slot="input"]:focus-visible,
+[data-slot="textarea"]:focus-visible {
+  border-color: oklch(0.66 0.20 278 / 50%);
+  box-shadow: 0 0 0 3px oklch(0.66 0.20 278 / 16%);
+}
+
+/* =============================================
+   BADGE — Daha şık variant'lar
+   ============================================= */
+[data-slot="badge"] {
+  font-weight: 500;
+  letter-spacing: 0.005em;
 }
 
 /* =============================================
    TEXT SELECTION
    ============================================= */
 ::selection {
-  background: oklch(0.62 0.20 278 / 28%);
-  color: oklch(0.93 0.008 265);
+  background: oklch(0.66 0.20 278 / 32%);
+  color: oklch(0.99 0.005 265);
+}
+
+/* =============================================
+   FONT FEATURES — Daha düzgün rakam hizalaması (tabular nums)
+   tablolarda fiyat/kar değerleri sabit genişlikte hizalansın
+   ============================================= */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
 }

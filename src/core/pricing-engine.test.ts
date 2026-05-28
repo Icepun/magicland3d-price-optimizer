@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { simulatePrice } from "./pricing-engine";
-import { generateRecommendations } from "./recommendation-engine";
 import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput } from "./types";
 
 const commissionRules: CommissionRuleInput[] = [
@@ -75,24 +74,21 @@ describe("pricing engine", () => {
       commissionRules,
       cargoRules,
       expenseRules,
-      minNetProfit: 20,
-      minProfitMargin: 0.1,
     });
 
     expect(result.appliedCommissionRule?.id).toBe("commission-category");
-    expect(result.commissionCost).toBe(22);
+    expect(result.commissionCost).toBe(22); // 200 * 0.1 + 2
     expect(result.cargoCost).toBe(20);
     expect(result.fixedExpenses).toBe(5);
     expect(result.variableExpenses).toBe(6);
     expect(result.totalCost).toBe(143);
     expect(result.netProfit).toBe(57);
     expect(result.profitMargin).toBeCloseTo(0.285);
-    expect(result.isValid).toBe(true);
   });
 
-  it("marks prices invalid when minimum profit constraints are not met", () => {
+  it("KDV uygulanmadığında (vatRate=0) salePrice ve salePriceExVat eşit", () => {
     const result = simulatePrice({
-      salePrice: 100,
+      salePrice: 200,
       productCost: 80,
       packagingCost: 10,
       categoryName: "Gamepad Stand",
@@ -100,33 +96,84 @@ describe("pricing engine", () => {
       commissionRules,
       cargoRules,
       expenseRules,
-      minNetProfit: 20,
-      minProfitMargin: 0.1,
     });
 
-    expect(result.isValid).toBe(false);
-    expect(result.invalidReasons.length).toBeGreaterThan(0);
+    expect(result.salePrice).toBe(200);
+    expect(result.effectiveSalePrice).toBe(200);
+    expect(result.salePriceExVat).toBe(200);
+    expect(result.vatAmount).toBe(0);
+    expect(result.vatRate).toBe(0);
+    expect(result.netProfit).toBe(57);
   });
 
-  it("generates a safe recommendation when a nearby price improves profit", () => {
-    const output = generateRecommendations(
-      {
-        productCost: 80,
-        packagingCost: 10,
-        categoryName: "Gamepad Stand",
-        desi: 1,
-        commissionRules,
-        cargoRules,
-        expenseRules,
-        minNetProfit: 0,
-        minProfitMargin: 0,
-      },
-      149,
-      { min: 149, max: 249 }
-    );
+  it("KDV %20 ile net kâr KDV hariç bazdan hesaplanır", () => {
+    // salePrice=240 (KDV dahil) → exVat=200 → maliyet 80+10+commission+cargo+expense
+    const result = simulatePrice({
+      salePrice: 240,
+      productCost: 80,
+      packagingCost: 10,
+      categoryName: "Gamepad Stand",
+      desi: 1,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      vatRate: 20,
+    });
 
-    expect(output.allValid.length).toBeGreaterThan(0);
-    expect(output.bestNetProfit?.result.netProfit).toBeGreaterThan(0);
-    expect(output.safe?.salePrice).toBeDefined();
+    expect(result.salePrice).toBe(240);
+    expect(result.effectiveSalePrice).toBe(240);
+    expect(result.salePriceExVat).toBeCloseTo(200, 5);
+    expect(result.vatAmount).toBeCloseTo(40, 5);
+    expect(result.vatRate).toBe(20);
+    // Commission category rule: 240 * 0.1 + 2 = 26
+    expect(result.commissionCost).toBeCloseTo(26, 5);
+    // Total: 80 + 10 + 26 + 20 + 5 + 240*0.03 = 148.2
+    expect(result.totalCost).toBeCloseTo(148.2, 5);
+    expect(result.netProfit).toBeCloseTo(51.8, 5);
+  });
+
+  it("discountBuffer kampanya indirimi sonrası gerçek kâr verir", () => {
+    // salePrice=200 listelenmiş, %10 kampanya indirim payı
+    // effective=180, exVat (KDV %20)=150, costs=...
+    const result = simulatePrice({
+      salePrice: 200,
+      productCost: 80,
+      packagingCost: 10,
+      categoryName: "Gamepad Stand",
+      desi: 1,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      vatRate: 20,
+      discountBuffer: 10,
+    });
+
+    expect(result.salePrice).toBe(200);
+    expect(result.effectiveSalePrice).toBeCloseTo(180, 5);
+    expect(result.salePriceExVat).toBeCloseTo(150, 5);
+    expect(result.discountBuffer).toBe(10);
+  });
+
+  it("commissionRateOverride ve cargoCostOverride platform-spesifik hesap için", () => {
+    const result = simulatePrice({
+      salePrice: 200,
+      productCost: 80,
+      packagingCost: 10,
+      categoryName: "Gamepad Stand",
+      desi: 1,
+      commissionRules: [],
+      cargoRules: [],
+      expenseRules: [],
+      commissionRateOverride: 0.12, // Hepsiburada %12
+      cargoCostOverride: 35, // sabit 35 TL kargo
+    });
+
+    expect(result.appliedCommissionRule).toBeUndefined();
+    expect(result.appliedCargoRule).toBeUndefined();
+    expect(result.commissionCost).toBeCloseTo(24, 5); // 200 * 0.12
+    expect(result.cargoCost).toBe(35);
+    // totalCost = 80 + 10 + 24 + 35 = 149
+    expect(result.totalCost).toBe(149);
+    expect(result.netProfit).toBe(51);
   });
 });

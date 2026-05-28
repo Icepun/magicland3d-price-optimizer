@@ -33,6 +33,7 @@ function mapProduct(product: TrendyolProduct) {
     isActive: product.archived ? false : true,
     source: "trendyol",
     trendyolId: String(product.id ?? product.productCode ?? ""),
+    productMainId: product.productMainId ?? null,
   };
 }
 
@@ -73,17 +74,79 @@ export async function POST(req: NextRequest) {
       const data = mapProduct(trendyolProduct);
       const existing = await prisma.product.findUnique({
         where: { barcode: data.barcode },
-        select: { id: true },
+        select: { id: true, source: true },
       });
 
-      await prisma.product.upsert({
-        where: { barcode: data.barcode },
-        create: data,
-        update: data,
-      });
+      if (!existing) {
+        // Shopify ana ürünü yok — UnmatchedListing'e ekle, ürün oluşturma
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
+           VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(platform, externalId) DO UPDATE SET
+             externalSku=excluded.externalSku,
+             barcode=excluded.barcode,
+             name=excluded.name,
+             categoryName=excluded.categoryName,
+             price=excluded.price,
+             stock=excluded.stock,
+             imageUrl=excluded.imageUrl,
+             lastSeenAt=CURRENT_TIMESTAMP`,
+          `unmatched_trendyol_${data.trendyolId || data.barcode}`,
+          data.trendyolId,
+          data.sku,
+          data.barcode,
+          data.name,
+          data.categoryName,
+          data.currentSalePrice,
+          data.stock,
+          data.imageUrl
+        );
+        skipped += 1;
+        continue;
+      }
 
-      if (existing) updated += 1;
-      else created += 1;
+      // Mevcut ana ürün var — Trendyol external referansları güncelle, ana ürünü değiştirme
+      await prisma.product.update({
+        where: { id: existing.id },
+        data: {
+          trendyolId: data.trendyolId,
+          productMainId: data.productMainId,
+        },
+      });
+      updated += 1;
+
+      // Trendyol Listing upsert
+      const existingListing = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+        `SELECT id FROM Listing WHERE productId = ? AND platform = 'trendyol' LIMIT 1`,
+        existing.id
+      );
+
+      if (existingListing.length > 0) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE Listing SET externalId = ?, externalSku = ?, salePrice = ?, listPrice = ?, stock = ?, isActive = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+          data.trendyolId,
+          data.sku,
+          data.currentSalePrice,
+          data.listPrice ?? null,
+          data.stock,
+          data.isActive ? 1 : 0,
+          existingListing[0].id
+        );
+      } else {
+        const listingId = `listing_${existing.id}_trendyol`;
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+           VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          listingId,
+          existing.id,
+          data.trendyolId,
+          data.sku,
+          data.currentSalePrice,
+          data.listPrice ?? null,
+          data.stock,
+          data.isActive ? 1 : 0
+        );
+      }
     }
 
     if (result.totalPages !== undefined && page >= result.totalPages - 1) break;

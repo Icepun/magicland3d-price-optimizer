@@ -23,6 +23,60 @@ async function ensureColumn(tableName: string, columnName: string, definition: s
   }
 }
 
+/**
+ * v0.5.1 migration: mevcut Trendyol source ürünler için otomatik Trendyol Listing oluştur.
+ * Bir kez çalışır (AppSetting flag).
+ */
+async function migrateTrendyolProductsToListings() {
+  if (!(await tableExists("Listing"))) return;
+  if (!(await tableExists("Product"))) return;
+
+  const migrationKey = "trendyolListingsMigratedAt";
+  const existing = await prisma.appSetting.findUnique({ where: { key: migrationKey } });
+  if (existing) return;
+
+  // Trendyol source ürünleri al — listing'i olmayanlar için listing oluştur
+  const products = await prisma.$queryRawUnsafe<
+    Array<{
+      id: string;
+      source: string;
+      currentSalePrice: number;
+      listPrice: number | null;
+      stock: number;
+      trendyolId: string | null;
+      sku: string;
+      commissionRate: number | null;
+    }>
+  >(
+    `SELECT p.id, p.source, p.currentSalePrice, p.listPrice, p.stock, p.trendyolId, p.sku, p.commissionRate
+     FROM Product p
+     WHERE p.source = 'trendyol'
+       AND NOT EXISTS (SELECT 1 FROM Listing l WHERE l.productId = p.id AND l.platform = 'trendyol')`
+  );
+
+  for (const p of products) {
+    const id = `listing_${p.id}_trendyol`;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, listPrice, stock, commissionRate, isActive, createdAt, updatedAt)
+       VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      id,
+      p.id,
+      p.trendyolId,
+      p.sku,
+      p.currentSalePrice,
+      p.listPrice,
+      p.stock,
+      p.commissionRate
+    );
+  }
+
+  await prisma.appSetting.upsert({
+    where: { key: migrationKey },
+    create: { key: migrationKey, value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+}
+
 async function cleanupPdfCommissionRules() {
   if (!(await tableExists("CommissionRule"))) return;
 
@@ -146,6 +200,23 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "commissionRate", "REAL");
     await ensureColumn("Product", "commissionSource", "TEXT");
     await ensureColumn("Product", "commissionUpdatedAt", "DATETIME");
+    await ensureColumn("Product", "productMainId", "TEXT");
+    await ensureColumn("Product", "hidden", "BOOLEAN NOT NULL DEFAULT false");
+
+    // CargoRule platform alanı (Trendyol/Shopify ayrı baremi)
+    await ensureColumn("CargoRule", "platform", "TEXT");
+    // Eski kurallar (platform yok) Trendyol baremiydi — Shopify'a bulaşmasın diye
+    // platform'u 'trendyol' olarak işaretle. platform dolu olanlar etkilenmez.
+    if (await tableExists("CargoRule")) {
+      await prisma.$executeRawUnsafe(
+        `UPDATE "CargoRule" SET "platform" = 'trendyol' WHERE "platform" IS NULL`
+      );
+    }
+
+    // ExpenseRule platform alanı. NOT: backfill YOK — null = tüm platformlar
+    // (KDV gibi giderler her platforma uygulanır). Kullanıcı platform-spesifik
+    // giderleri (Platform Hizmet Bedeli) manuel olarak Trendyol'a atar.
+    await ensureColumn("ExpenseRule", "platform", "TEXT");
 
     // New ProductCost columns
     await ensureColumn("ProductCost", "filamentTypeId", "TEXT");
@@ -156,8 +227,68 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("ProductCost", "packagingNaylon", "REAL");
     await ensureColumn("ProductCost", "packagingBant", "REAL");
     await ensureColumn("ProductCost", "packagingKart", "REAL");
+    // Seçim bazlı paketleme (fiyat Maliyet Ayarları'ndan dinamik çekilir)
+    await ensureColumn("ProductCost", "packagingOptionId", "TEXT");
+    await ensureColumn("ProductCost", "nylonLevel", "TEXT");
+    await ensureColumn("ProductCost", "tapeUsed", "BOOLEAN");
+
+    // Listing tablosu — 3 platform için ayrı satış kaydı
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Listing" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "productId" TEXT NOT NULL,
+        "platform" TEXT NOT NULL,
+        "externalId" TEXT,
+        "externalSku" TEXT,
+        "salePrice" REAL NOT NULL DEFAULT 0,
+        "listPrice" REAL,
+        "stock" INTEGER NOT NULL DEFAULT 0,
+        "commissionRate" REAL,
+        "commissionFixed" REAL,
+        "cargoCost" REAL,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "lastSyncedAt" DATETIME,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "Listing_productId_platform_key" ON "Listing"("productId", "platform")
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "Listing_platform_isActive_idx" ON "Listing"("platform", "isActive")
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "Listing_externalId_idx" ON "Listing"("externalId")
+    `);
+
+    // UnmatchedListing — Shopify ana ürününe bağlanmamış Trendyol/HB ürünleri
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "UnmatchedListing" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalId" TEXT,
+        "externalSku" TEXT,
+        "barcode" TEXT NOT NULL,
+        "name" TEXT NOT NULL,
+        "categoryName" TEXT,
+        "price" REAL NOT NULL DEFAULT 0,
+        "stock" INTEGER NOT NULL DEFAULT 0,
+        "imageUrl" TEXT,
+        "lastSeenAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "UnmatchedListing_platform_externalId_key" ON "UnmatchedListing"("platform", "externalId")
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "UnmatchedListing_platform_barcode_idx" ON "UnmatchedListing"("platform", "barcode")
+    `);
 
     await cleanupPdfCommissionRules();
+    await migrateTrendyolProductsToListings();
   })();
 
   return schemaReady;

@@ -21,8 +21,12 @@ model Product {
   weight           Float?
   imageUrl         String?
   isActive         Boolean  @default(true)
+  /** Kullanıcı tarafından listeden gizlendi mi (silmeden saklama). */
+  hidden           Boolean  @default(false)
   source           String   @default("manual")
   trendyolId       String?
+  /** Trendyol productMainId — varyant grubu kimliği. Aynı productMainId'ye sahip ürünler birbirinin varyantıdır (renk, beden, boyut). */
+  productMainId    String?
   commissionRate   Float?
   commissionSource String?
   commissionUpdatedAt DateTime?
@@ -32,6 +36,66 @@ model Product {
   cost            ProductCost?
   recommendations Recommendation[]
   priceHistory    PriceHistory[]
+  listings        Listing[]
+}
+
+/**
+ * Listing = bir ana ürünün belirli bir platformdaki kaydı.
+ * Bir ana ürün (Product) 3 listing'e sahip olabilir: Shopify, Trendyol, Hepsiburada.
+ * Her birinde farklı sale price, komisyon oranı override, kargo override.
+ */
+model Listing {
+  id            String   @id @default(cuid())
+  productId     String
+  /** "shopify" | "trendyol" | "hepsiburada" */
+  platform      String
+  /** Platform tarafındaki kimlik (Shopify productId, Trendyol id, HB merchantSku) */
+  externalId    String?
+  /** Platform tarafındaki SKU/stockCode */
+  externalSku   String?
+  /** Listelenen satış fiyatı (KDV dahil) */
+  salePrice     Float
+  listPrice     Float?
+  stock         Int      @default(0)
+  /** Bu platform için özel komisyon oranı override'ı (örn. HB %12). Null ise commissionRules kullanılır. */
+  commissionRate    Float?
+  /** Sabit komisyon override (TL) */
+  commissionFixed   Float?
+  /** Bu platform için özel kargo override (TL). Null ise cargoRules kullanılır. */
+  cargoCost     Float?
+  isActive      Boolean  @default(true)
+  lastSyncedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, platform])
+  @@index([platform, isActive])
+  @@index([externalId])
+}
+
+/**
+ * Trendyol/Hepsiburada'dan çekilen ama Shopify ana ürününe barcode ile match olmayan listing'ler.
+ * Kullanıcı bu listing'leri "Ürün Seç" modalı üzerinden manuel olarak bir Shopify ana ürününe
+ * bağlayabilir. Match yapılınca buradan silinir ve Listing tablosuna eklenir.
+ */
+model UnmatchedListing {
+  id          String   @id @default(cuid())
+  platform    String   // "trendyol" | "hepsiburada"
+  externalId  String?
+  externalSku String?
+  barcode     String
+  name        String
+  categoryName String?
+  price       Float
+  stock       Int      @default(0)
+  imageUrl    String?
+  lastSeenAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@unique([platform, externalId])
+  @@index([platform, barcode])
 }
 
 model ProductCost {
@@ -46,11 +110,20 @@ model ProductCost {
   printTimeHours Float?
   wasteRate      Float?
 
-  // Per-product: packaging breakdown
+  // Per-product: packaging breakdown (legacy manual amounts — kept for backward compat)
   packagingPoset  Float?
   packagingNaylon Float?
   packagingBant   Float?
   packagingKart   Float?
+
+  // Per-product: packaging SELECTIONS (fiyatlar Maliyet Ayarları'ndan çekilir,
+  // zam yapılınca tüm ürünler otomatik güncellenir)
+  /** Seçilen poşet/koli preset id (AppSetting.packagingOptions JSON'undaki id) */
+  packagingOptionId String?
+  /** Naylon seviyesi: "none" | "low" | "medium" | "high" */
+  nylonLevel        String?
+  /** Bant kullanılıyor mu */
+  tapeUsed          Boolean?
 
   // Legacy / manual override
   manualCost      Float?
@@ -113,6 +186,8 @@ model CommissionRule {
 model CargoRule {
   id            String    @id @default(cuid())
   name          String
+  /** "trendyol" | "shopify" — hangi platformun kargo baremi. Null = tüm platformlar. */
+  platform      String?
   cargoProvider String?
   categoryName  String?
   minPrice      Float     @default(0)
@@ -129,6 +204,8 @@ model CargoRule {
 model ExpenseRule {
   id           String  @id @default(cuid())
   name         String
+  /** "trendyol" | "shopify" — sadece o platforma uygulanır. Null = tüm platformlar (örn. KDV). */
+  platform     String?
   type         String
   value        Float
   categoryName String?

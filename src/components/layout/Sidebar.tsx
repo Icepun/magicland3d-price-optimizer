@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Package,
-  Star,
   CalculatorIcon,
   Percent,
   Truck,
@@ -17,11 +16,11 @@ import {
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { UpdateWidget } from "./UpdateWidget";
+import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
   { href: "/",                 label: "Dashboard",          icon: LayoutDashboard },
   { href: "/products",         label: "Ürünler",            icon: Package },
-  { href: "/recommendations",  label: "Öneriler",           icon: Star },
   { href: "/cost-templates",   label: "Maliyet Ayarları",   icon: CalculatorIcon },
   { href: "/commission-rules", label: "Komisyon Kuralları", icon: Percent },
   { href: "/cargo-rules",      label: "Kargo Kuralları",    icon: Truck },
@@ -36,30 +35,44 @@ export function Sidebar() {
 
   return (
     <aside
-      className="flex h-screen w-60 flex-col bg-sidebar shrink-0"
-      style={{ boxShadow: "inset -1px 0 0 oklch(1 0 0 / 6%)" }}
+      className="flex h-screen w-60 flex-col bg-sidebar shrink-0 relative"
+      style={{ boxShadow: "inset -1px 0 0 oklch(1 0 0 / 7%)" }}
     >
-      {/* Logo alanı */}
+      {/* Ambient glow — subtle mor halo (her tema) */}
       <div
-        className="flex h-16 items-center justify-center px-4 shrink-0"
-        style={{ borderBottom: "1px solid oklch(1 0 0 / 6%)" }}
+        className="pointer-events-none absolute inset-x-0 top-0 h-40 opacity-50 dark:opacity-80"
+        style={{
+          background:
+            "radial-gradient(ellipse 200px 120px at 50% 0%, oklch(0.55 0.22 278 / 18%), transparent 70%)",
+        }}
+      />
+
+      {/* Logo + uygulama adı */}
+      <div
+        className="flex flex-col items-center justify-center px-4 py-5 shrink-0 relative"
+        style={{ borderBottom: "1px solid var(--sidebar-border)" }}
       >
         <Image
           src="/logo.png"
           alt="Magicland 3D"
-          width={130}
-          height={52}
+          width={120}
+          height={48}
           priority
           className="object-contain select-none"
           style={{
             filter:
-              "drop-shadow(0 1px 6px oklch(0.62 0.20 278 / 22%))",
+              "drop-shadow(0 2px 12px oklch(0.66 0.20 278 / 35%))",
           }}
         />
+        <div className="mt-3 text-center">
+          <p className="text-[10px] uppercase tracking-[0.30em] text-sidebar-foreground/60 font-semibold">
+            Hub
+          </p>
+        </div>
       </div>
 
       {/* Navigasyon */}
-      <nav className="flex-1 overflow-y-auto p-2 pt-3 space-y-0.5">
+      <nav className="flex-1 overflow-y-auto p-2 pt-3 space-y-0.5 relative">
         {navItems.map(({ href, label, icon: Icon }, index) => {
           const isActive =
             href === "/" ? pathname === "/" : pathname.startsWith(href);
@@ -68,11 +81,10 @@ export function Sidebar() {
               key={href}
               href={href}
               className={cn(
-                "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all duration-200",
-                "border-l-2",
+                "group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] transition-all duration-200",
                 isActive
-                  ? "border-primary bg-sidebar-accent text-sidebar-accent-foreground font-semibold"
-                  : "border-transparent text-sidebar-foreground/60 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground hover:border-sidebar-border"
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-[inset_0_1px_0_oklch(1_0_0_/_5%)]"
+                  : "text-sidebar-foreground/65 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
               )}
               style={{
                 animation: `nav-slide-in 280ms ease forwards`,
@@ -81,19 +93,39 @@ export function Sidebar() {
                 animationFillMode: "forwards",
               } as React.CSSProperties}
             >
+              {/* Aktif item için sol kenar mor çizgi */}
+              {isActive && (
+                <span
+                  className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-full bg-primary"
+                  style={{
+                    boxShadow: "0 0 12px oklch(0.66 0.20 278 / 60%)",
+                  }}
+                />
+              )}
               <Icon
                 className={cn(
-                  "h-4 w-4 shrink-0 transition-colors duration-200",
+                  "h-[15px] w-[15px] shrink-0 transition-all duration-200",
                   isActive
                     ? "text-primary"
-                    : "text-muted-foreground group-hover:text-sidebar-foreground"
+                    : "text-sidebar-foreground/70 group-hover:text-sidebar-foreground"
                 )}
+                strokeWidth={isActive ? 2.2 : 1.8}
               />
               {label}
             </Link>
           );
         })}
       </nav>
+
+      <div
+        className="px-3 py-2 flex items-center justify-between gap-2"
+        style={{ borderTop: "1px solid var(--sidebar-border)" }}
+      >
+        <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/55">
+          Tema
+        </span>
+        <ThemeToggle />
+      </div>
 
       <UpdateWidget />
     </aside>

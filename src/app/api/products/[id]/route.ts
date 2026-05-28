@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { calculateDetailedCost } from "@/core/cost-calculator";
+import { computeFullProductCost } from "@/core/cost-calculator";
+import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
@@ -13,6 +14,7 @@ const UpdateProductSchema = z.object({
   desi: z.number().positive().nullable().optional(),
   weight: z.number().positive().nullable().optional(),
   isActive: z.boolean().optional(),
+  hidden: z.boolean().optional(),
   cost: z
     .object({
       costMode: z.enum(["manual", "template", "detailed"]).optional(),
@@ -25,6 +27,10 @@ const UpdateProductSchema = z.object({
       packagingNaylon: z.number().min(0).nullable().optional(),
       packagingBant: z.number().min(0).nullable().optional(),
       packagingKart: z.number().min(0).nullable().optional(),
+      // Yeni seçim bazlı paketleme
+      packagingOptionId: z.string().nullable().optional(),
+      nylonLevel: z.enum(["none", "low", "medium", "high"]).nullable().optional(),
+      tapeUsed: z.boolean().nullable().optional(),
       manualCost: z.number().min(0).nullable().optional(),
       materialWeight: z.number().min(0).nullable().optional(),
       materialCost: z.number().min(0).nullable().optional(),
@@ -54,8 +60,8 @@ export async function GET(
           filamentType: true,
         }
       },
-      recommendations: { orderBy: { createdAt: "desc" }, take: 5 },
       priceHistory: { orderBy: { changedAt: "desc" }, take: 20 },
+      listings: { orderBy: { platform: "asc" } },
     },
   });
 
@@ -97,18 +103,26 @@ export async function PATCH(
         costPerGram = filament?.costPerGram || 0;
       }
 
-      const calc = calculateDetailedCost({
+      // Dinamik paketleme — seçimlerden + güncel ayarlardan
+      const packagingSettings = parsePackagingSettings(settings);
+      const packaging = computePackagingCost(
+        {
+          packagingOptionId: cost.packagingOptionId,
+          nylonLevel: cost.nylonLevel,
+          tapeUsed: cost.tapeUsed,
+        },
+        packagingSettings
+      );
+
+      const calc = computeFullProductCost({
         filamentWeight: cost.filamentWeight ?? 0,
         costPerGram,
         printTimeHours: cost.printTimeHours ?? 0,
         electricityCostPerHour,
         machineWearCostPerHour,
         laborCostPerHour,
-        packagingPoset: cost.packagingPoset ?? 0,
-        packagingNaylon: cost.packagingNaylon ?? 0,
-        packagingBant: cost.packagingBant ?? 0,
-        packagingKart: cost.packagingKart ?? 0,
         wasteRate: cost.wasteRate ?? 0,
+        packagingCost: packaging.total,
       });
 
       finalCost = {

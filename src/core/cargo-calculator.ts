@@ -1,5 +1,24 @@
 import type { CargoRuleInput } from "./types";
 
+/**
+ * Kuralları platforma göre filtreler. platform alanı null olan kurallar tüm
+ * platformlara uygulanır. Kargo + gider kuralları için ortak kullanılır.
+ */
+export function filterRulesByPlatform<T extends { platform?: string | null }>(
+  rules: T[],
+  platform: string
+): T[] {
+  return rules.filter((r) => !r.platform || r.platform === platform);
+}
+
+/** @deprecated filterRulesByPlatform kullan */
+export function filterCargoRulesByPlatform(
+  rules: CargoRuleInput[],
+  platform: string
+): CargoRuleInput[] {
+  return filterRulesByPlatform(rules, platform);
+}
+
 export function findCargoRule(
   rules: CargoRuleInput[],
   salePrice: number,

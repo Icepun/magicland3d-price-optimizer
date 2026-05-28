@@ -19,7 +19,10 @@
 app-temp/
 
 # production
-/build
+/build/*
+!/build/icon.ico
+!/build/icon.png
+!/build/installer.nsh
 /dist
 
 # misc

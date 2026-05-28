@@ -1,8 +1,21 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
-import { withProductCommissionRule } from "@/core/product-commission";
+import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
+import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
+import { resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+
+type Platform = "shopify" | "trendyol";
+
+interface PlatformStats {
+  platform: Platform;
+  activeListings: number;
+  totalProfit: number;
+  averageMargin: number;
+  negativeProfitCount: number;
+  thinMarginCount: number;
+}
 
 export async function GET() {
   await ensureRuntimeSchema();
@@ -10,10 +23,10 @@ export async function GET() {
   const [products, commissionRules, cargoRules, expenseRules, settings] =
     await Promise.all([
       prisma.product.findMany({
-        where: { isActive: true },
+        where: { isActive: true, hidden: false },
         include: {
-          cost: true,
-          recommendations: { orderBy: { createdAt: "desc" }, take: 1 },
+          cost: { include: { filamentType: true } },
+          listings: { where: { isActive: true } },
         },
       }),
       prisma.commissionRule.findMany({ where: { isActive: true } }),
@@ -22,34 +35,81 @@ export async function GET() {
       prisma.appSetting.findMany(),
     ]);
 
-  const settingsMap = Object.fromEntries(settings.map((s: { key: string; value: string }) => [s.key, s.value]));
+  const settingsMap = Object.fromEntries(
+    settings.map((s) => [s.key, s.value])
+  );
+  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const globalDiscountBuffer = Number(settingsMap.discountBuffer ?? 0);
   const minNetProfit = Number(settingsMap.defaultMinNetProfit ?? 0);
   const minProfitMargin = Number(settingsMap.defaultMinMargin ?? 0);
 
   const totalProducts = products.length;
   let missingCost = 0;
-  let negativeProfitCount = 0;
-  let belowMinimumCount = 0;
-  let optimizableCount = 0;
+  let totalNegativeListings = 0;
   let inStockCount = 0;
   let outOfStockCount = 0;
-  let currentTotalProfit = 0;
-  let optimizedTotalProfit = 0;
+  let lowStockCount = 0;
 
-  const problemProducts = [];
-  const opportunityProducts = [];
+  const lowStockProducts: Array<{
+    id: string;
+    name: string;
+    stock: number;
+    imageUrl: string | null;
+  }> = [];
+
+  const platformStats: Record<Platform, PlatformStats> = {
+    shopify: { platform: "shopify", activeListings: 0, totalProfit: 0, averageMargin: 0, negativeProfitCount: 0, thinMarginCount: 0 },
+    trendyol: { platform: "trendyol", activeListings: 0, totalProfit: 0, averageMargin: 0, negativeProfitCount: 0, thinMarginCount: 0 },
+  };
+
+  const platformMarginSums: Record<Platform, { sum: number; count: number }> = {
+    shopify: { sum: 0, count: 0 },
+    trendyol: { sum: 0, count: 0 },
+  };
+
+  const problemProducts: Array<{
+    id: string;
+    name: string;
+    listingId?: string;
+    platform?: Platform;
+    salePrice: number;
+    problem: "missing_cost" | "negative_profit" | "below_minimum";
+    profit: number | null;
+    margin: number | null;
+  }> = [];
 
   for (const product of products) {
     if (product.stock > 0) inStockCount++;
     else outOfStockCount++;
 
-    const productCost = product.cost?.totalCost ?? product.cost?.manualCost ?? null;
-    if (productCost === null) {
+    // Düşük stok (≤1) takibi
+    if (product.stock <= 1) {
+      lowStockCount++;
+      if (lowStockProducts.length < 30) {
+        lowStockProducts.push({
+          id: product.id,
+          name: product.name,
+          stock: product.stock,
+          imageUrl: product.imageUrl,
+        });
+      }
+    }
+
+    // Maliyeti güncel ayarlardan yeniden hesapla (zam otomatik yansır)
+    const resolved = resolveProductCost(
+      product.cost,
+      settingsMap,
+      product.cost?.filamentType?.costPerGram ?? 0
+    );
+    const productCost = resolved?.productionCost ?? 0;
+    const packagingCost = resolved?.packagingCost ?? 0;
+
+    if (!resolved || resolved.totalCost <= 0) {
       missingCost++;
       problemProducts.push({
         id: product.id,
         name: product.name,
-        currentSalePrice: product.currentSalePrice,
+        salePrice: product.currentSalePrice,
         problem: "missing_cost",
         profit: null,
         margin: null,
@@ -57,86 +117,99 @@ export async function GET() {
       continue;
     }
 
-    const packagingCost = product.cost?.packagingCost ?? 0;
-    const currentResult = simulatePrice({
-      salePrice: product.currentSalePrice,
-      productCost,
-      packagingCost,
-      categoryName: product.categoryName,
-      desi: product.desi ?? 1,
-      commissionRules: withProductCommissionRule(
-        product,
-        commissionRules as Parameters<typeof simulatePrice>[0]["commissionRules"]
-      ),
-      cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
-      expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
-      minNetProfit,
-      minProfitMargin,
-    });
+    // Her aktif listing için kâr hesabı
+    for (const listing of product.listings) {
+      const platform = listing.platform as Platform;
+      if (!platformStats[platform]) continue;
 
-    currentTotalProfit += currentResult.netProfit;
+      platformStats[platform].activeListings++;
 
-    const rec = product.recommendations[0];
-    if (rec) {
-      optimizedTotalProfit += rec.recommendedProfit;
-    } else {
-      optimizedTotalProfit += currentResult.netProfit;
-    }
+      const platformDiscountBuffer = Number(
+        settingsMap[`${platform}_discountBuffer`] ?? globalDiscountBuffer
+      );
 
-    if (currentResult.netProfit < 0) {
-      negativeProfitCount++;
-      problemProducts.push({
-        id: product.id,
-        name: product.name,
-        currentSalePrice: product.currentSalePrice,
-        problem: "negative_profit",
-        profit: currentResult.netProfit,
-        margin: currentResult.profitMargin,
+      const sim = simulatePrice({
+        salePrice: listing.salePrice,
+        productCost,
+        packagingCost,
+        categoryName: product.categoryName,
+        desi: product.desi ?? 1,
+        commissionRules: withProductCommissionRule(
+          product,
+          commissionRules as Parameters<typeof simulatePrice>[0]["commissionRules"]
+        ),
+        cargoRules: filterCargoRulesByPlatform(
+          cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
+          platform
+        ),
+        expenseRules: filterRulesByPlatform(
+          expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
+          platform
+        ),
+        vatRate,
+        discountBuffer: platformDiscountBuffer,
+        ...resolveListingCommissionOverride(listing, settingsMap),
+        cargoCostOverride: listing.cargoCost ?? undefined,
       });
-    } else if (
-      (minNetProfit > 0 && currentResult.netProfit < minNetProfit) ||
-      (minProfitMargin > 0 && currentResult.profitMargin < minProfitMargin)
-    ) {
-      belowMinimumCount++;
-      problemProducts.push({
-        id: product.id,
-        name: product.name,
-        currentSalePrice: product.currentSalePrice,
-        problem: "below_minimum",
-        profit: currentResult.netProfit,
-        margin: currentResult.profitMargin,
-      });
-    }
 
-    if (rec && rec.status === "ready" && rec.profitDifference > 5) {
-      optimizableCount++;
-      opportunityProducts.push({
-        id: product.id,
-        name: product.name,
-        currentSalePrice: product.currentSalePrice,
-        recommendedPrice: rec.recommendedPrice,
-        currentProfit: rec.currentProfit,
-        recommendedProfit: rec.recommendedProfit,
-        profitDifference: rec.profitDifference,
-      });
+      platformStats[platform].totalProfit += sim.netProfit;
+      platformMarginSums[platform].sum += sim.profitMargin;
+      platformMarginSums[platform].count++;
+
+      if (sim.netProfit < 0) {
+        platformStats[platform].negativeProfitCount++;
+        totalNegativeListings++;
+        problemProducts.push({
+          id: product.id,
+          name: product.name,
+          listingId: listing.id,
+          platform,
+          salePrice: listing.salePrice,
+          problem: "negative_profit",
+          profit: sim.netProfit,
+          margin: sim.profitMargin,
+        });
+      } else if (
+        (minNetProfit > 0 && sim.netProfit < minNetProfit) ||
+        (minProfitMargin > 0 && sim.profitMargin < minProfitMargin)
+      ) {
+        platformStats[platform].thinMarginCount++;
+        problemProducts.push({
+          id: product.id,
+          name: product.name,
+          listingId: listing.id,
+          platform,
+          salePrice: listing.salePrice,
+          problem: "below_minimum",
+          profit: sim.netProfit,
+          margin: sim.profitMargin,
+        });
+      }
     }
   }
 
+  // Ortalama marjları hesapla
+  for (const platform of ["shopify", "trendyol"] as Platform[]) {
+    const m = platformMarginSums[platform];
+    platformStats[platform].averageMargin = m.count > 0 ? m.sum / m.count : 0;
+  }
+
+  const grandTotalProfit =
+    platformStats.shopify.totalProfit + platformStats.trendyol.totalProfit;
+
+  // Stok 0 olanlar önce, sonra 1 olanlar
+  lowStockProducts.sort((a, b) => a.stock - b.stock);
+
   return NextResponse.json({
     totalProducts,
-    activeProducts: totalProducts,
     inStockCount,
     outOfStockCount,
+    lowStockCount,
+    lowStockProducts,
     missingCost,
-    negativeProfitCount,
-    belowMinimumCount,
-    optimizableCount,
-    currentTotalProfit,
-    optimizedTotalProfit,
-    potentialIncrease: optimizedTotalProfit - currentTotalProfit,
-    problemProducts: problemProducts.slice(0, 10),
-    opportunityProducts: opportunityProducts
-      .sort((a, b) => b.profitDifference - a.profitDifference)
-      .slice(0, 10),
+    negativeListings: totalNegativeListings,
+    grandTotalProfit,
+    platforms: Object.values(platformStats),
+    problemProducts: problemProducts.slice(0, 30),
   });
 }

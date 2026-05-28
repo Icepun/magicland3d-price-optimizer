@@ -28,6 +28,7 @@ export interface CommissionRuleInput {
 export interface CargoRuleInput {
   id: string;
   name: string;
+  platform?: string | null;
   cargoProvider?: string | null;
   categoryName?: string | null;
   minPrice: number;
@@ -44,6 +45,7 @@ export interface CargoRuleInput {
 export interface ExpenseRuleInput {
   id: string;
   name: string;
+  platform?: string | null;
   type: "fixed" | "percentage" | "per_order";
   value: number;
   categoryName?: string | null;
@@ -53,6 +55,10 @@ export interface ExpenseRuleInput {
   isActive: boolean;
 }
 
+/**
+ * Tek bir listing için kâr hesabı girdisi.
+ * Recommendation/öneri sistemi yok — sadece "şu an ne kadar kâr ediyor" hesabı.
+ */
 export interface SimulationInput {
   salePrice: number;
   productCost: number;
@@ -62,15 +68,45 @@ export interface SimulationInput {
   commissionRules: CommissionRuleInput[];
   cargoRules: CargoRuleInput[];
   expenseRules: ExpenseRuleInput[];
-  minNetProfit?: number;
-  minProfitMargin?: number;
-  minAllowedPrice?: number;
-  maxAllowedPrice?: number;
   simulationDate?: Date;
+  /**
+   * KDV oranı (yüzde olarak, 20 = %20 KDV).
+   * Belirtildiğinde salePrice KDV dahil sayılır;
+   * net kâr salePrice/(1+vat/100) bazından hesaplanır.
+   */
+  vatRate?: number;
+  /**
+   * Kampanya indirim payı (yüzde). Default 0 = indirim yok.
+   * Net kâr `salePrice * (1 - discountBuffer/100)` üzerinden hesaplanır.
+   * Listelenen fiyat değişmez ama kâr hesabı kampanya inse bile garanti olur.
+   */
+  discountBuffer?: number;
+  /**
+   * Komisyon oranı override'ı (yüzde). Belirtilirse commissionRules'a bakmaksızın
+   * doğrudan bu oranı kullanır. Platform listing'leri için lazım: Shopify sabit
+   * %3.2, Trendyol kategori bazlı gibi farklı oranlar.
+   */
+  commissionRateOverride?: number;
+  /**
+   * Sabit komisyon override'ı (TL). Belirtilirse rules'tan değil bu kullanılır.
+   */
+  commissionFixedOverride?: number;
+  /**
+   * Kargo override'ı (TL). Belirtilirse cargoRules'a bakmadan bu kullanılır.
+   */
+  cargoCostOverride?: number;
 }
 
 export interface SimulationResult {
+  /** Listelenen fiyat (KDV dahil, kampanya öncesi). */
   salePrice: number;
+  /** İndirim payı uygulandıktan sonraki etkili fiyat (müşterinin ödediği). */
+  effectiveSalePrice: number;
+  /** effectiveSalePrice / (1 + vatRate/100) */
+  salePriceExVat: number;
+  vatAmount: number;
+  vatRate: number;
+  discountBuffer: number;
   productCost: number;
   packagingCost: number;
   commissionCost: number;
@@ -80,30 +116,7 @@ export interface SimulationResult {
   totalCost: number;
   netProfit: number;
   profitMargin: number;
-  isValid: boolean;
-  invalidReasons: string[];
   appliedCommissionRule?: CommissionRuleInput;
   appliedCargoRule?: CargoRuleInput;
   appliedExpenseRules: ExpenseRuleInput[];
 }
-
-export interface RecommendationCandidate {
-  salePrice: number;
-  result: SimulationResult;
-  type: "bestNetProfit" | "bestMargin" | "safe";
-  reason: string;
-}
-
-export interface RecommendationOutput {
-  bestNetProfit?: RecommendationCandidate;
-  bestMargin?: RecommendationCandidate;
-  safe?: RecommendationCandidate;
-  allValid: SimulationResult[];
-}
-
-export const PSYCHOLOGICAL_PRICES = [
-  49, 79, 99, 119, 139, 149, 169, 179, 189, 199, 219, 229, 249, 269, 279, 289,
-  299, 319, 329, 339, 349, 369, 379, 389, 399, 419, 429, 449, 469, 479, 499,
-  519, 529, 549, 569, 579, 599, 619, 629, 649, 679, 699, 749, 799, 849, 899,
-  949, 999, 1099, 1199, 1299, 1399, 1499, 1599, 1699, 1799, 1899, 1999,
-];

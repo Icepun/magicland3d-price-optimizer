@@ -15,7 +15,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Search, Trash2 } from "lucide-react";
+import { Plus, Pencil, Search, Trash2, Percent, SearchX, ShoppingBag } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -140,6 +143,8 @@ export default function CommissionRulesPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Kural eklendi");
       setOpen(false);
     },
@@ -155,6 +160,8 @@ export default function CommissionRulesPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Kural güncellendi");
       setEditing(null);
     },
@@ -165,6 +172,8 @@ export default function CommissionRulesPage() {
       fetch(`/api/commission-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Kural silindi");
     },
   });
@@ -190,10 +199,12 @@ export default function CommissionRulesPage() {
       </div>
 
       <p className="text-sm text-muted-foreground">
-        Urun bazli komisyonlar Trendyol API sayfasindaki Komisyonlari Guncelle ile
-        cekilir. Bu sayfa sadece gerektiginde genel/fallback komisyon kurali
-        tanimlamak icindir.
+        Aşağıdaki kurallar <strong>Trendyol</strong> kategori bazlı komisyonu içindir.
+        Shopify komisyonu sabittir, ayrı kartta. Trendyol&apos;da ürüne komisyon
+        girilmezse ürün listesinde kırmızı uyarı çıkar.
       </p>
+
+      <ShopifyCommissionCard />
 
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -206,23 +217,49 @@ export default function CommissionRulesPage() {
       </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground">Yükleniyor...</p>
+        <div className="grid gap-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-6 w-20" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-4 w-3/4" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : rules.length === 0 ? (
-        <Card className="py-12 text-center">
-          <CardContent>
-            <p className="text-muted-foreground">Henüz kural yok.</p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={Percent}
+          title="Henüz komisyon kuralı yok"
+          description="Trendyol API sayfasından 'Komisyonları Güncelle' ile ürün bazlı komisyonları çek, ya da fallback için manuel kural ekle."
+          action={
+            <Button onClick={() => setOpen(true)} size="sm">
+              <Plus className="h-4 w-4 mr-2" /> İlk Kuralı Ekle
+            </Button>
+          }
+        />
       ) : filteredRules.length === 0 ? (
-        <Card className="py-12 text-center">
-          <CardContent>
-            <p className="text-muted-foreground">Aramaya uygun komisyon kuralı bulunamadı.</p>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={SearchX}
+          title="Aramaya uygun kural yok"
+          description={`"${search}" için sonuç bulunamadı. Farklı bir kategori veya kural adı deneyin.`}
+        />
       ) : (
         <div className="grid gap-3">
-          {filteredRules.map((rule) => (
-            <Card key={rule.id} className={!rule.isActive ? "opacity-50" : ""}>
+          {filteredRules.map((rule, index) => (
+            <Card
+              key={rule.id}
+              className={cn(
+                "animate-in fade-in slide-in-from-bottom-2 duration-500",
+                !rule.isActive && "opacity-50"
+              )}
+              style={{ animationDelay: `${index * 40}ms`, animationFillMode: "both" }}
+            >
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm font-semibold">{rule.name}</CardTitle>
@@ -235,6 +272,7 @@ export default function CommissionRulesPage() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7"
+                      title="Düzenle"
                       onClick={() => setEditing(rule)}
                     >
                       <Pencil className="h-3.5 w-3.5" />
@@ -243,6 +281,7 @@ export default function CommissionRulesPage() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-destructive"
+                      title="Sil"
                       onClick={() => deleteMutation.mutate(rule.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -301,5 +340,71 @@ export default function CommissionRulesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+/**
+ * Shopify sabit komisyon kartı — AppSetting.shopifyCommissionRate (yüzde).
+ * Shopify listing'lerine override yoksa bu oran uygulanır.
+ */
+function ShopifyCommissionCard() {
+  const qc = useQueryClient();
+  const { data: settings = {} } = useQuery<Record<string, string>>({
+    queryKey: ["app-settings"],
+    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+  });
+  const [value, setValue] = useState<string | null>(null);
+  const current = value ?? settings.shopifyCommissionRate ?? "3.2";
+
+  const save = useMutation({
+    mutationFn: (rate: string) =>
+      fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shopifyCommissionRate: rate }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Shopify komisyonu kaydedildi — tüm Shopify listing'lerine uygulandı");
+    },
+    onError: () => toast.error("Kaydedilemedi"),
+  });
+
+  return (
+    <Card className="border-emerald-500/30 bg-emerald-500/5">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <ShoppingBag className="h-4 w-4 text-emerald-500" /> Shopify Sabit Komisyonu
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-end gap-3">
+          <div className="flex-1 max-w-[180px]">
+            <Label className="text-xs">Komisyon Oranı (%)</Label>
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              step="0.1"
+              value={current}
+              onChange={(e) => setValue(e.target.value)}
+            />
+          </div>
+          <Button
+            size="sm"
+            onClick={() => save.mutate(current)}
+            disabled={save.isPending}
+          >
+            {save.isPending ? "Kaydediliyor..." : "Kaydet"}
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Shopify tüm ürünlerde aynı komisyonu alır (varsayılan %3.2). Bir Shopify
+          listing&apos;inde özel oran girersen o öncelikli olur.
+        </p>
+      </CardContent>
+    </Card>
   );
 }

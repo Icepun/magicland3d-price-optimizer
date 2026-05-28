@@ -22,7 +22,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Receipt } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -31,6 +34,7 @@ import { z } from "zod";
 interface ExpenseRule {
   id: string;
   name: string;
+  platform: string | null;
   type: string;
   value: number;
   categoryName: string | null;
@@ -42,6 +46,7 @@ interface ExpenseRule {
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
+  platform: z.enum(["all", "trendyol", "shopify"]).default("all"),
   type: z.enum(["fixed", "percentage", "per_order"]),
   value: z.coerce.number().min(0),
   categoryName: z.string().optional(),
@@ -59,6 +64,11 @@ const TYPE_LABELS: Record<string, string> = {
   per_order: "Sipariş Başına (TL)",
 };
 
+const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
+  trendyol: { label: "Trendyol", cls: "bg-orange-500/10 text-orange-500 border-orange-500/20" },
+  shopify: { label: "Shopify", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" },
+};
+
 function RuleForm({
   defaultValues,
   onSubmit,
@@ -71,6 +81,7 @@ function RuleForm({
   const form = useForm<FormData>({
     resolver: zodResolver(Schema),
     defaultValues: {
+      platform: "all",
       type: "fixed",
       minPrice: 0,
       maxPrice: 999999,
@@ -82,12 +93,27 @@ function RuleForm({
 
   const expenseType = useWatch({ control: form.control, name: "type" });
   const isActive = useWatch({ control: form.control, name: "isActive" });
+  const platform = useWatch({ control: form.control, name: "platform" });
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
-      <div>
-        <Label>Gider Adı *</Label>
-        <Input {...form.register("name")} placeholder="Platform Hizmet Bedeli" />
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Gider Adı *</Label>
+          <Input {...form.register("name")} placeholder="Platform Hizmet Bedeli" />
+        </div>
+        <div>
+          <Label>Platform *</Label>
+          <select
+            value={platform}
+            onChange={(e) => form.setValue("platform", e.target.value as "all" | "trendyol" | "shopify")}
+            className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="all">Tüm platformlar</option>
+            <option value="trendyol">Sadece Trendyol</option>
+            <option value="shopify">Sadece Shopify</option>
+          </select>
+        </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -169,11 +195,14 @@ export default function ExpenseRulesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...data,
+          platform: data.platform === "all" ? null : data.platform,
           value: data.type === "percentage" ? data.value / 100 : data.value,
         }),
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Kural eklendi");
       setOpen(false);
     },
@@ -187,11 +216,14 @@ export default function ExpenseRulesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...data,
+          platform: data.platform === "all" ? null : data.platform,
           value: data.type === "percentage" ? data.value / 100 : data.value,
         }),
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Güncellendi");
       setEditing(null);
     },
@@ -202,6 +234,8 @@ export default function ExpenseRulesPage() {
       fetch(`/api/expense-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Silindi");
     },
   });
@@ -220,20 +254,59 @@ export default function ExpenseRulesPage() {
       </p>
 
       {isLoading ? (
-        <p className="text-muted-foreground">Yükleniyor...</p>
-      ) : rules.length === 0 ? (
-        <Card className="py-12 text-center">
-          <CardContent>
-            <p className="text-muted-foreground">Henüz ek gider kuralı yok.</p>
-          </CardContent>
-        </Card>
-      ) : (
         <div className="grid gap-3">
-          {rules.map((rule) => (
-            <Card key={rule.id} className={!rule.isActive ? "opacity-50" : ""}>
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-semibold">{rule.name}</CardTitle>
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-6 w-20" />
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Skeleton className="h-4 w-3/4" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : rules.length === 0 ? (
+        <EmptyState
+          icon={Receipt}
+          title="Henüz ek gider kuralı yok"
+          description="Komisyon ve kargo dışındaki platform bedeli, kampanya maliyeti vb. giderleri tanımlayın. Sabit, yüzdesel ya da sipariş başına olabilir."
+          action={
+            <Button onClick={() => setOpen(true)} size="sm">
+              <Plus className="h-4 w-4 mr-2" /> İlk Kuralı Ekle
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid gap-3">
+          {rules.map((rule, index) => (
+            <Card
+              key={rule.id}
+              className={cn(
+                "animate-in fade-in slide-in-from-bottom-2 duration-500",
+                !rule.isActive && "opacity-50"
+              )}
+              style={{ animationDelay: `${index * 40}ms`, animationFillMode: "both" }}
+            >
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[10px]",
+                        rule.platform
+                          ? PLATFORM_BADGE[rule.platform]?.cls
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      {rule.platform ? PLATFORM_BADGE[rule.platform]?.label : "Tümü"}
+                    </Badge>
+                    {rule.name}
+                  </CardTitle>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-xs">
                       {TYPE_LABELS[rule.type]}
@@ -241,10 +314,10 @@ export default function ExpenseRulesPage() {
                     {!rule.isActive && (
                       <Badge variant="secondary" className="text-xs">Pasif</Badge>
                     )}
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditing(rule)}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Düzenle" onClick={() => setEditing(rule)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteMutation.mutate(rule.id)}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Sil" onClick={() => deleteMutation.mutate(rule.id)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -292,6 +365,7 @@ export default function ExpenseRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
+                platform: (editing.platform as "trendyol" | "shopify") ?? "all",
                 type: editing.type as "fixed" | "percentage" | "per_order",
                 value: editing.type === "percentage" ? editing.value * 100 : editing.value,
                 categoryName: editing.categoryName ?? undefined,

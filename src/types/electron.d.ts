@@ -23,6 +23,7 @@ declare global {
       platform: NodeJS.Platform;
       updater?: {
         getStatus: () => Promise<UpdaterState>;
+        getLogPath: () => Promise<string>;
         checkForUpdates: () => Promise<UpdaterState>;
         downloadUpdate: () => Promise<UpdaterState>;
         quitAndInstall: () => Promise<void>;

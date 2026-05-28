@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { SplashScreen } from "@/components/layout/SplashScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
+import { ThemeProvider } from "@/components/providers/ThemeProvider";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   variable: "--font-sans",
@@ -20,8 +21,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Magicland 3D — Fiyat Optimizasyonu",
-  description: "Trendyol satıcıları için fiyat ve kâr optimizasyon aracı",
+  title: "Magicland 3D Hub",
+  description: "Magicland 3D çok platformlu fiyat ve kâr yönetim aracı",
 };
 
 export default function RootLayout({
@@ -32,18 +33,20 @@ export default function RootLayout({
   return (
     <html
       lang="tr"
-      className={`${plusJakartaSans.variable} ${geistMono.variable} dark h-full antialiased`}
+      className={`${plusJakartaSans.variable} ${geistMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <body className="flex h-full bg-background text-foreground">
-        <QueryProvider>
-          <SplashScreen />
-          <Sidebar />
-          <main className="flex-1 overflow-y-auto bg-background">
-            {children}
-          </main>
-          <Toaster richColors position="top-right" />
-        </QueryProvider>
+        <ThemeProvider>
+          <QueryProvider>
+            <SplashScreen />
+            <Sidebar />
+            <main className="flex-1 overflow-y-auto bg-background min-w-0">
+              {children}
+            </main>
+            <Toaster richColors position="top-right" />
+          </QueryProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
