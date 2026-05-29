@@ -15,6 +15,10 @@ interface UpdaterState {
   version: string;
   availableVersion?: string;
   percent?: number;
+  /** İndirme istatistikleri (download-progress) */
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
 }
 
 declare global {

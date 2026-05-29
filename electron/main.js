@@ -180,6 +180,9 @@ function setupAutoUpdater() {
       status: "downloading",
       message: "Guncelleme indiriliyor",
       percent: Math.round(progress.percent || 0),
+      transferred: progress.transferred || 0,
+      total: progress.total || 0,
+      bytesPerSecond: progress.bytesPerSecond || 0,
     });
   });
   autoUpdater.on("update-downloaded", (info) => {

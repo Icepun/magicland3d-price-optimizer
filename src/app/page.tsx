@@ -218,7 +218,7 @@ export default function DashboardPage() {
   if (error || !data) {
     return (
       <div className="p-6">
-        <p className="text-destructive text-sm">Dashboard verileri yüklenemedi.</p>
+        <p className="text-destructive text-sm">Panel verileri yüklenemedi.</p>
       </div>
     );
   }
@@ -226,9 +226,9 @@ export default function DashboardPage() {
   return (
     <div className="p-6 space-y-6 animate-in fade-in duration-300">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Panel</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Ürünler 3 platformda ne kadar kâr veya zarar ettiriyor — net durum.
+          Shopify ve Trendyol&apos;da ürünlerin net kâr/zarar durumu — tek bakışta.
         </p>
       </div>
 
@@ -264,7 +264,7 @@ export default function DashboardPage() {
         <StatCard
           title="Toplam Tahmini Kâr"
           value={formatCurrency(data.grandTotalProfit)}
-          sub="3 platform toplam"
+          sub="Shopify + Trendyol toplam"
           icon={DollarSign}
           accentColor={ACCENTS.green}
           delay={180}

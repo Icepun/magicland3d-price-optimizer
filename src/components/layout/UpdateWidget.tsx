@@ -20,6 +20,18 @@ const initialState: UpdaterState = {
   percent: 0,
 };
 
+function fmtMB(bytes?: number): string {
+  if (!bytes) return "0 MB";
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fmtSpeed(bps?: number): string {
+  if (!bps) return "—";
+  const mbps = bps / 1024 / 1024;
+  if (mbps >= 1) return `${mbps.toFixed(1)} MB/s`;
+  return `${Math.round(bps / 1024)} KB/s`;
+}
+
 export function UpdateWidget() {
   const [state, setState] = useState<UpdaterState>(initialState);
   const [busy, setBusy] = useState(false);
@@ -107,11 +119,19 @@ export function UpdateWidget() {
       </div>
 
       {isDownloading && (
-        <div className="mb-2.5 h-1 overflow-hidden rounded-full bg-sidebar-border">
-          <div
-            className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${state.percent ?? 0}%` }}
-          />
+        <div className="mb-2.5 space-y-1">
+          <div className="h-1.5 overflow-hidden rounded-full bg-sidebar-border">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${state.percent ?? 0}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-sidebar-foreground/55 tabular-nums">
+            <span>
+              {fmtMB(state.transferred)} / {fmtMB(state.total)} · %{state.percent ?? 0}
+            </span>
+            <span>{fmtSpeed(state.bytesPerSecond)}</span>
+          </div>
         </div>
       )}
 
