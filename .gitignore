@@ -61,3 +61,6 @@ app_log.txt
 
 # yerel release helper (cert şifresi içerir)
 scripts/*.local.sh
+
+# geçici lokal test build çıktıları
+/dist-test*

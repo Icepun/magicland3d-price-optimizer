@@ -1,6 +1,29 @@
 import { prisma } from "@/lib/prisma";
+import fs from "node:fs";
+import path from "node:path";
 
 let schemaReady: Promise<void> | null = null;
+
+/**
+ * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
+ * damgayı günceller; aksi halde fast-path ile atlanır.
+ */
+const CURRENT_SCHEMA_VERSION = "10";
+
+/** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
+function logPerf(msg: string) {
+  try {
+    const settingsFile =
+      process.env.TURSO_SETTINGS_FILE || process.env.SHOPIFY_SETTINGS_FILE;
+    const dir = settingsFile ? path.dirname(settingsFile) : process.cwd();
+    fs.appendFileSync(
+      path.join(dir, "perf.log"),
+      `[${new Date().toISOString()}] ${msg}\n`
+    );
+  } catch {
+    /* ignore */
+  }
+}
 
 async function tableExists(tableName: string) {
   const tables = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
@@ -101,6 +124,23 @@ async function cleanupPdfCommissionRules() {
 
 export function ensureRuntimeSchema(): Promise<void> {
   schemaReady ??= (async () => {
+    const __t0 = Date.now();
+    // FAST-PATH: şema zaten güncelse ~50 ardışık CREATE/ALTER/PRAGMA ifadesini ATLA.
+    // Embedded replica'da yazma ifadeleri buluta (eu-west-1) gittiği için bu ~50 ifade
+    // açılışta 10-15 sn'lik gecikmeye yol açıyordu. Tek bir okuma ile (yerel replica,
+    // anında) güncel olup olmadığını kontrol et; güncelse hepsini atla.
+    try {
+      const rows = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
+        `SELECT value FROM AppSetting WHERE key = 'schemaVersion' LIMIT 1`
+      );
+      if (rows?.[0]?.value === CURRENT_SCHEMA_VERSION) {
+        logPerf(`ensureRuntimeSchema FAST-PATH (${Date.now() - __t0}ms)`);
+        return;
+      }
+    } catch {
+      /* AppSetting tablosu yok → ilk kurulum, tam şema kurulumuna devam et */
+    }
+
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "Product" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -364,6 +404,14 @@ export function ensureRuntimeSchema(): Promise<void> {
 
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
+
+    // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      CURRENT_SCHEMA_VERSION
+    );
+    logPerf(`ensureRuntimeSchema FULL setup (${Date.now() - __t0}ms)`);
   })();
 
   return schemaReady;

@@ -1,6 +1,7 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import path from "node:path";
+import fs from "node:fs";
 
 // Tipleri adapter'ın KENDİ createClient imzasından türet — @libsql/client'ı ayrıca
 // import edersek adapter'ın paketlediği farklı @libsql/core sürümüyle tip çakışıyor.
@@ -20,26 +21,45 @@ type LibsqlClient = ReturnType<PrismaLibSQL["createClient"]>;
  */
 class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
   #replicaClient: LibsqlClient | null = null;
+  /** Replica dosyası bu açılıştan ÖNCE var mıydı? (yoksa = ilk kurulum) */
+  #replicaPreexisting = false;
 
   createClient(config: LibsqlConfig): LibsqlClient {
+    const syncUrl = (config as { syncUrl?: string }).syncUrl;
+    if (syncUrl) {
+      // super.createClient'tan ÖNCE bak: replica dosyası zaten var mıydı?
+      // Varsa = önceki oturumun verisi yerelde mevcut → açılışta beklemeden göster.
+      const url = String((config as { url?: string }).url || "");
+      const filePath = url.startsWith("file:") ? url.slice("file:".length) : url;
+      try {
+        this.#replicaPreexisting = filePath ? fs.existsSync(filePath) : false;
+      } catch {
+        this.#replicaPreexisting = false;
+      }
+    }
     const client = super.createClient(config);
     // Sadece gerçek replica (syncUrl'li file) client'ını yakala; :memory: shadow değil.
-    if ((config as { syncUrl?: string }).syncUrl) this.#replicaClient = client;
+    if (syncUrl) this.#replicaClient = client;
     return client;
   }
 
   async connect() {
     const adapter = await super.connect();
     if (this.#replicaClient) {
-      try {
-        // İlk veriyi buluttan çek (replica boşsa doldurur). Bloklar ki ilk sorgu
-        // veriyi görsün. İlk açılışta birkaç sn sürebilir; sonraki açılışlar artımlı.
-        await this.#replicaClient.sync();
-      } catch (e) {
+      // Buluttan çekmeyi ARKA PLANDA başlat — ilk sorgu YEREL replica'dan anında
+      // döner (önceki oturumun verisi). Diğer cihazın değişiklikleri bu sync + 60sn'lik
+      // syncInterval ile kısa sürede gelir.
+      const syncing = this.#replicaClient.sync().catch((e) => {
         console.error(
-          "[prisma] Turso embedded replica ilk sync başarısız:",
+          "[prisma] Turso embedded replica sync başarısız:",
           e instanceof Error ? e.message : e
         );
+      });
+      // SADECE ilk kurulumda (replica dosyası henüz yokken) bekle — yerelde hiç veri
+      // olmadığı için ilk sorgunun veri görmesi şart. Sonraki açılışlarda BEKLEMEYİZ
+      // → 10-15 sn'lik boş ekran ortadan kalkar.
+      if (!this.#replicaPreexisting) {
+        await syncing;
       }
     }
     return adapter;
