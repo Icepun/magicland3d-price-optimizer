@@ -421,40 +421,6 @@ async function findAvailablePort(preferredPort) {
   throw new Error(`No available port found near ${preferredPort}`);
 }
 
-/**
- * Embedded replica ilk senkronu — uygulama açılırken bir kez.
- * libsql, syncUrl ile açıldığında otomatik ilk senkron YAPMAZ (yalnızca periyodik).
- * Bu yüzden ilk açılışta yerel kopyanın buluttaki veriyle dolması için elle sync().
- * Başarısız olursa (offline) uygulamayı bloklamadan devam eder; Prisma yine de
- * mevcut yerel kopyayı okur, periyodik senkron sonra yakalar.
- */
-async function syncTursoReplica() {
-  const url = process.env.TURSO_DATABASE_URL;
-  const replicaPath = process.env.TURSO_REPLICA_PATH;
-  if (!url || !replicaPath) return; // Turso kapalı → local mod, sync gerekmez
-
-  try {
-    const { createClient } = require("@libsql/client");
-    const client = createClient({
-      url: `file:${replicaPath}`,
-      syncUrl: url,
-      authToken: process.env.TURSO_AUTH_TOKEN || undefined,
-    });
-    // Ağ takılırsa açılışı sonsuza dek bekletme: max 15sn. Zaman aşımında devam et;
-    // Prisma'nın periyodik senkronu sonra yakalar.
-    await Promise.race([
-      client.sync(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("sync timeout (15s)")), 15000)
-      ),
-    ]);
-    try { client.close(); } catch { /* ignore */ }
-    logStartup("Turso: ilk senkron tamam");
-  } catch (e) {
-    logStartup("Turso: ilk senkron atlandi:", e?.message || e);
-  }
-}
-
 async function startNextServer() {
   if (isDev) return startUrl;
 
@@ -464,8 +430,6 @@ async function startNextServer() {
   ensurePrismaEngine();
   logStartup("startNextServer: ensuring credential key");
   ensureCredentialKey();
-  logStartup("startNextServer: turso replica ilk senkron");
-  await syncTursoReplica();
   logStartup("startNextServer: finding port");
   const port = await findAvailablePort(defaultPort);
   logStartup("startNextServer: port =", port);

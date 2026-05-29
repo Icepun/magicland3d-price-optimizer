@@ -2,6 +2,50 @@ import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
 import path from "node:path";
 
+// Tipleri adapter'ın KENDİ createClient imzasından türet — @libsql/client'ı ayrıca
+// import edersek adapter'ın paketlediği farklı @libsql/core sürümüyle tip çakışıyor.
+type LibsqlConfig = Parameters<PrismaLibSQL["createClient"]>[0];
+type LibsqlClient = ReturnType<PrismaLibSQL["createClient"]>;
+
+/**
+ * Embedded replica için TEK client kullanan adapter.
+ *
+ * Sorun (0.9.14): electron startup'ta AYRI bir libsql client'la ön-senkron yapıp
+ * kapatıyordu; sonra Prisma KENDİ client'ıyla aynı replica dosyasını açınca libsql
+ * "Can not sync a database without a wal_index" hatası veriyordu (iki sync client
+ * tek dosyada çakışıyor). Embedded replica TEK client ister.
+ *
+ * Çözüm: ön-senkron client'ı kaldırıldı. İlk veri çekimini Prisma'nın kendi client'ı
+ * yapıyor — connect()'te bir kez `sync()`. Sonrası syncInterval ile periyodik.
+ */
+class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
+  #replicaClient: LibsqlClient | null = null;
+
+  createClient(config: LibsqlConfig): LibsqlClient {
+    const client = super.createClient(config);
+    // Sadece gerçek replica (syncUrl'li file) client'ını yakala; :memory: shadow değil.
+    if ((config as { syncUrl?: string }).syncUrl) this.#replicaClient = client;
+    return client;
+  }
+
+  async connect() {
+    const adapter = await super.connect();
+    if (this.#replicaClient) {
+      try {
+        // İlk veriyi buluttan çek (replica boşsa doldurur). Bloklar ki ilk sorgu
+        // veriyi görsün. İlk açılışta birkaç sn sürebilir; sonraki açılışlar artımlı.
+        await this.#replicaClient.sync();
+      } catch (e) {
+        console.error(
+          "[prisma] Turso embedded replica ilk sync başarısız:",
+          e instanceof Error ? e.message : e
+        );
+      }
+    }
+    return adapter;
+  }
+}
+
 /**
  * Veritabanı bağlantısı:
  *  - TURSO_DATABASE_URL set ise → Turso bulut DB (libSQL adapter, çok cihaz senkron)
@@ -43,7 +87,8 @@ function createPrisma(): PrismaClient {
       path.join(process.cwd(), "prisma", "turso-replica.db").replace(/\\/g, "/");
     // Not: readYourWrites native libsql'de zaten varsayılan true (kendi yazdığını
     // anında okur); @libsql/client Config tipinde olmadığı için burada geçilmiyor.
-    const adapter = new PrismaLibSQL({
+    // TEK client (EmbeddedReplicaPrismaLibSQL) — ayrı ön-senkron client'ı YOK.
+    const adapter = new EmbeddedReplicaPrismaLibSQL({
       url: `file:${replicaPath}`,
       syncUrl: tursoUrl,
       authToken: tursoToken || undefined,
