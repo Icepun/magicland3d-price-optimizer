@@ -205,22 +205,6 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
 
     await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "Recommendation" (
-        "id" TEXT NOT NULL PRIMARY KEY,
-        "productId" TEXT NOT NULL,
-        "currentPrice" REAL NOT NULL,
-        "recommendedPrice" REAL NOT NULL,
-        "currentProfit" REAL NOT NULL,
-        "recommendedProfit" REAL NOT NULL,
-        "profitDifference" REAL NOT NULL,
-        "currentMargin" REAL NOT NULL,
-        "recommendedMargin" REAL NOT NULL,
-        "reason" TEXT NOT NULL,
-        "status" TEXT NOT NULL DEFAULT 'ready',
-        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "AppSetting" (
         "key" TEXT NOT NULL PRIMARY KEY,
         "value" TEXT NOT NULL

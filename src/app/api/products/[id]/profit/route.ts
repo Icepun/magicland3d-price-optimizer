@@ -37,7 +37,6 @@ export async function GET(
     settings.map((s: { key: string; value: string }) => [s.key, s.value])
   );
   const vatRate = Number(settingsMap.vatRate ?? 0);
-  const discountBuffer = Number(settingsMap.discountBuffer ?? 0);
 
   // Maliyeti güncel ayarlardan yeniden hesapla (zam otomatik yansır)
   const resolved = resolveProductCost(
@@ -66,7 +65,6 @@ export async function GET(
     cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
     expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
     vatRate,
-    discountBuffer,
   });
 
   return NextResponse.json({ result, missingCost: false });

@@ -93,6 +93,7 @@ export async function POST(req: NextRequest) {
          WHERE l.platform = 'shopify'`
       );
       let changed = 0;
+      const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
         const f = fetched.get(row.barcode);
         if (!f) continue;
@@ -100,6 +101,12 @@ export async function POST(req: NextRequest) {
         const productChanged = Math.abs(f.price - row.productPrice) > 0.001;
         if (!listingChanged && !productChanged) continue;
         if (listingChanged) {
+          history.push({
+            productId: row.productId,
+            oldPrice: row.listingPrice,
+            newPrice: f.price,
+            changeSource: "shopify_sync",
+          });
           await prisma.$executeRawUnsafe(
             `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
             f.price,
@@ -115,6 +122,8 @@ export async function POST(req: NextRequest) {
         }
         changed++;
       }
+      // Fiyat geçmişi — yalnızca değişenler, tek round-trip (Turso yazma maliyeti).
+      if (history.length) await prisma.priceHistory.createMany({ data: history });
       return { checked: rows.length, changed };
     }
 

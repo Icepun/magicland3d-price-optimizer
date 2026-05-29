@@ -20,7 +20,33 @@ export async function PATCH(
   await ensureRuntimeSchema();
   const { id } = await params;
   const data = UpdateSchema.parse(await req.json());
+
+  // Manuel fiyat değişikliğini fiyat geçmişine yaz (yalnızca salePrice gerçekten değişince).
+  let before: { productId: string; salePrice: number } | null = null;
+  if (data.salePrice !== undefined) {
+    before = await prisma.listing.findUnique({
+      where: { id },
+      select: { productId: true, salePrice: true },
+    });
+  }
+
   const updated = await prisma.listing.update({ where: { id }, data });
+
+  if (
+    before &&
+    data.salePrice !== undefined &&
+    Math.abs(before.salePrice - data.salePrice) > 0.001
+  ) {
+    await prisma.priceHistory.create({
+      data: {
+        productId: before.productId,
+        oldPrice: before.salePrice,
+        newPrice: data.salePrice,
+        changeSource: "manual",
+      },
+    });
+  }
+
   return NextResponse.json(updated);
 }
 

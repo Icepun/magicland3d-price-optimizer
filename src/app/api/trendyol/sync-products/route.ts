@@ -78,17 +78,24 @@ export async function POST(req: NextRequest) {
     // ── refresh-prices: yalnızca değişen fiyatı yaz ──────────────────────────
     async function refreshPrices() {
       const rows = await prisma.$queryRawUnsafe<
-        Array<{ listingId: string; salePrice: number; barcode: string }>
+        Array<{ listingId: string; salePrice: number; productId: string; barcode: string }>
       >(
-        `SELECT l.id AS listingId, l.salePrice AS salePrice, p.barcode AS barcode
+        `SELECT l.id AS listingId, l.salePrice AS salePrice, p.id AS productId, p.barcode AS barcode
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'trendyol'`
       );
       let changed = 0;
+      const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
         const f = fetched.get(row.barcode);
         if (!f) continue;
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
+        history.push({
+          productId: row.productId,
+          oldPrice: row.salePrice,
+          newPrice: f.price,
+          changeSource: "trendyol_sync",
+        });
         await prisma.$executeRawUnsafe(
           `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
           f.price,
@@ -97,6 +104,8 @@ export async function POST(req: NextRequest) {
         );
         changed++;
       }
+      // Fiyat geçmişi — yalnızca değişenler, tek round-trip.
+      if (history.length) await prisma.priceHistory.createMany({ data: history });
       return { checked: rows.length, changed };
     }
 

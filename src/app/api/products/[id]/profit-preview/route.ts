@@ -54,7 +54,6 @@ export async function POST(
 
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
   const vatRate = Number(settingsMap.vatRate ?? 0);
-  const globalDiscountBuffer = Number(settingsMap.discountBuffer ?? 0);
 
   // Filament gram fiyatı — gönderilen filamentTypeId'den
   let filamentCostPerGram = 0;
@@ -99,10 +98,6 @@ export async function POST(
       };
     }
 
-    const platformDiscountBuffer = Number(
-      settingsMap[`${listing.platform}_discountBuffer`] ?? globalDiscountBuffer
-    );
-
     const result = simulatePrice({
       salePrice: listing.salePrice,
       productCost,
@@ -119,7 +114,6 @@ export async function POST(
         listing.platform
       ),
       vatRate,
-      discountBuffer: platformDiscountBuffer,
       ...resolveListingCommissionOverride(listing, settingsMap),
       cargoCostOverride: listing.cargoCost ?? undefined,
     });

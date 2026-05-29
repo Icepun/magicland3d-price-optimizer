@@ -63,6 +63,41 @@ export interface TrendyolSettlementPage {
   content?: TrendyolSettlementItem[];
 }
 
+export interface TrendyolOrderLine {
+  productName?: string;
+  barcode?: string;
+  merchantSku?: string;
+  sku?: string;
+  quantity?: number;
+  price?: number;
+  amount?: number;
+}
+
+export interface TrendyolOrder {
+  id?: number | string;
+  orderNumber?: string;
+  /** shipmentPackageStatus: Created, Picking, Invoiced, Shipped, Delivered, Cancelled... */
+  status?: string;
+  orderDate?: number;
+  grossAmount?: number;
+  totalPrice?: number;
+  totalDiscount?: number;
+  customerFirstName?: string;
+  customerLastName?: string;
+  cargoTrackingNumber?: number | string;
+  cargoProviderName?: string;
+  lines?: TrendyolOrderLine[];
+  [key: string]: unknown;
+}
+
+export interface TrendyolOrderPage {
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+  content?: TrendyolOrder[];
+}
+
 export class TrendyolApiError extends Error {
   constructor(
     public readonly status: number,
@@ -238,6 +273,30 @@ export class TrendyolClient {
 
     return this.request<TrendyolSettlementPage>(
       `/integration/finance/che/sellers/${this.credentials.sellerId}/settlements?${searchParams.toString()}`
+    );
+  }
+
+  /** Son siparişler (shipmentPackages). Varsayılan: en son güncellenen 50 sipariş. */
+  async listOrders(params: {
+    page?: number;
+    size?: number;
+    status?: string;
+    startDate?: number;
+    endDate?: number;
+    orderByField?: string;
+    orderByDirection?: "ASC" | "DESC";
+  } = {}): Promise<TrendyolOrderPage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("page", String(params.page ?? 0));
+    searchParams.set("size", String(params.size ?? 50));
+    searchParams.set("orderByField", params.orderByField ?? "PackageLastModifiedDate");
+    searchParams.set("orderByDirection", params.orderByDirection ?? "DESC");
+    if (params.status) searchParams.set("status", params.status);
+    if (params.startDate) searchParams.set("startDate", String(params.startDate));
+    if (params.endDate) searchParams.set("endDate", String(params.endDate));
+
+    return this.request<TrendyolOrderPage>(
+      `/integration/order/sellers/${this.credentials.sellerId}/orders?${searchParams.toString()}`
     );
   }
 }

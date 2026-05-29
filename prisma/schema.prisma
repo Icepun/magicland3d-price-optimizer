@@ -34,7 +34,6 @@ model Product {
   updatedAt        DateTime @updatedAt
 
   cost            ProductCost?
-  recommendations Recommendation[]
   priceHistory    PriceHistory[]
   listings        Listing[]
 }
@@ -213,23 +212,6 @@ model ExpenseRule {
   maxPrice     Float   @default(999999)
   priority     Int     @default(10)
   isActive     Boolean @default(true)
-}
-
-model Recommendation {
-  id                String   @id @default(cuid())
-  productId         String
-  currentPrice      Float
-  recommendedPrice  Float
-  currentProfit     Float
-  recommendedProfit Float
-  profitDifference  Float
-  currentMargin     Float
-  recommendedMargin Float
-  reason            String
-  status            String   @default("ready")
-  createdAt         DateTime @default(now())
-
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 model PriceHistory {

@@ -88,7 +88,6 @@ export async function GET(req: NextRequest) {
     settings.map((s) => [s.key, s.value])
   );
   const vatRate = Number(settingsMap.vatRate ?? 0);
-  const globalDiscountBuffer = Number(settingsMap.discountBuffer ?? 0);
 
   const productsWithProfit = products.map((product) => {
     const productRules = withProductCommissionRule(product, commissionRules);
@@ -123,10 +122,6 @@ export async function GET(req: NextRequest) {
           };
         }
 
-        const platformDiscountBuffer = Number(
-          settingsMap[`${listing.platform}_discountBuffer`] ?? globalDiscountBuffer
-        );
-
         const sim = simulatePrice({
           salePrice: listing.salePrice,
           productCost,
@@ -143,7 +138,6 @@ export async function GET(req: NextRequest) {
             listing.platform
           ),
           vatRate,
-          discountBuffer: platformDiscountBuffer,
           ...resolveListingCommissionOverride(listing, settingsMap),
           cargoCostOverride: listing.cargoCost ?? undefined,
         });
@@ -179,7 +173,6 @@ export async function GET(req: NextRequest) {
         cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
         expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
         vatRate,
-        discountBuffer: globalDiscountBuffer,
       });
       currentNetProfit = sim.netProfit;
       currentProfitMargin = sim.profitMargin;

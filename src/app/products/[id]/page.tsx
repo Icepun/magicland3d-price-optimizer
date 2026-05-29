@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
@@ -253,8 +255,22 @@ export default function ProductDetailPage({
 
   if (isLoading || !product) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-muted-foreground">Yükleniyor...</p>
+      <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300">
+        <div className="flex items-center gap-4">
+          <Skeleton className="h-9 w-9 rounded-md" />
+          <Skeleton className="h-16 w-16 rounded-lg" />
+          <div className="flex-1 space-y-2">
+            <Skeleton className="h-5 w-2/3" />
+            <Skeleton className="h-3 w-1/3" />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <Skeleton className="h-[440px] lg:col-span-1" />
+          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Skeleton className="h-64" />
+            <Skeleton className="h-64" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -586,6 +602,8 @@ export default function ProductDetailPage({
           </div>
         </div>
       </div>
+
+      <PriceHistoryCard productId={product.id} />
     </div>
   );
 }

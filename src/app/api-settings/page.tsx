@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus } from "lucide-react";
+import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound } from "lucide-react";
 
 interface TrendyolPublicSettings {
   sellerId: string;
@@ -28,6 +28,9 @@ interface ShopifyPublicSettings {
   apiVersion: string;
   hasStorefrontAccessToken: boolean;
   storefrontAccessTokenMasked: string;
+  clientId: string;
+  hasClientSecret: boolean;
+  clientSecretMasked: string;
 }
 
 interface ShopifyDebugResult {
@@ -241,6 +244,8 @@ const ShopifySchema = z.object({
   shopDomain: z.string().min(1, "Shopify mağaza adı gerekli"),
   apiVersion: z.string().optional(),
   storefrontAccessToken: z.string().optional(),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
 });
 type ShopifyForm = z.infer<typeof ShopifySchema>;
 
@@ -258,11 +263,15 @@ function ShopifyTab() {
           shopDomain: settings.shopDomain,
           apiVersion: settings.apiVersion,
           storefrontAccessToken: "",
+          clientId: settings.clientId ?? "",
+          clientSecret: "",
         }
       : {
           shopDomain: "",
           apiVersion: "2024-10",
           storefrontAccessToken: "",
+          clientId: "",
+          clientSecret: "",
         },
   });
 
@@ -367,6 +376,36 @@ function ShopifyTab() {
                   ? "Token kayıtlı. Değiştirmek istemiyorsan boş bırak."
                   : `Headless kanalı → Storefront API → "Özel Erişim Belirteci" üzerinden kopyala.`}
               </p>
+            </div>
+
+            <div className="rounded-md border border-border/60 bg-muted/20 p-3 space-y-2.5">
+              <Label className="text-xs flex items-center gap-1.5">
+                <KeyRound className="h-3.5 w-3.5" /> Siparişler için — Client ID + Secret (opsiyonel)
+              </Label>
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Siparişleri görmek için gerekir (Storefront token siparişleri vermez). Shopify dev
+                dashboard → uygulaman → <strong>Ayarlar → Kimlik bilgileri</strong>&apos;ndeki{" "}
+                <strong>İstemci Kimliği</strong> ve <strong>Gizli anahtar</strong>&apos;ı gir. Uygulama
+                bunlarla 24 saatlik erişim token&apos;ını otomatik üretir ve yeniler. Uygulamanın erişim
+                kapsamlarında <strong>sipariş okuma (read_orders)</strong> açık olmalı.
+              </p>
+              <div>
+                <Label className="text-[11px] text-muted-foreground">İstemci Kimliği (Client ID)</Label>
+                <Input {...form.register("clientId")} placeholder="örn. a6aa7fdbb1421cd9..." />
+              </div>
+              <div>
+                <Label className="text-[11px] text-muted-foreground">Gizli Anahtar (Client Secret)</Label>
+                <Input
+                  {...form.register("clientSecret")}
+                  type="password"
+                  placeholder={settings?.hasClientSecret ? settings.clientSecretMasked : "shpss_..."}
+                />
+                {settings?.hasClientSecret && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Gizli anahtar kayıtlı. Değiştirmeyeceksen boş bırak.
+                  </p>
+                )}
+              </div>
             </div>
 
             <div>

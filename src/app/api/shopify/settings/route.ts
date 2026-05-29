@@ -19,6 +19,8 @@ const SaveSchema = z.object({
   shopDomain: z.string().min(1, "Shopify alan adı gerekli"),
   apiVersion: z.string().optional(),
   storefrontAccessToken: z.string().optional(),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
 });
 
 export async function POST(req: NextRequest) {

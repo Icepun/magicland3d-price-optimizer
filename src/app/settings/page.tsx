@@ -10,8 +10,9 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, Database, Cloud, CloudOff } from "lucide-react";
+import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 
 const Schema = z.object({
   vatRate: z.coerce.number().min(0).max(100).default(20),
@@ -195,6 +196,21 @@ function DataManagementCard() {
               if (file) handleImport(file);
             }}
           />
+        </div>
+
+        <div className="pt-3 border-t border-border/50">
+          <p className="text-[11px] text-muted-foreground mb-2">
+            Ürünleri tablo (CSV) olarak toplu içe/dışa aktarmak için:
+          </p>
+          <Link
+            href="/import-export"
+            className={cn(
+              buttonVariants({ variant: "outline", size: "sm" }),
+              "w-full justify-center"
+            )}
+          >
+            <FileSpreadsheet className="h-4 w-4 mr-2" /> CSV İçe / Dışa Aktarma
+          </Link>
         </div>
       </CardContent>
     </Card>

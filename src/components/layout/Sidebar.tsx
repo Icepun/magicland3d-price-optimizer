@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Package,
+  ClipboardList,
   CalculatorIcon,
   Percent,
   Truck,
@@ -20,6 +21,7 @@ import { ThemeToggle } from "./ThemeToggle";
 const navItems = [
   { href: "/",                 label: "Panel",              icon: LayoutDashboard },
   { href: "/products",         label: "Ürünler",            icon: Package },
+  { href: "/orders",           label: "Siparişler",         icon: ClipboardList },
   { href: "/cost-templates",   label: "Maliyet & Paketleme", icon: CalculatorIcon },
   { href: "/commission-rules", label: "Komisyonlar",        icon: Percent },
   { href: "/cargo-rules",      label: "Kargo",              icon: Truck },

@@ -40,11 +40,6 @@ export async function GET(
     settings.map((s) => [s.key, s.value])
   );
   const vatRate = Number(settingsMap.vatRate ?? 0);
-  const discountBuffer = Number(
-    settingsMap[`${listing.platform}_discountBuffer`] ??
-      settingsMap.discountBuffer ??
-      0
-  );
 
   // Maliyeti güncel ayarlardan yeniden hesapla (zam otomatik yansır)
   const resolved = resolveProductCost(
@@ -79,7 +74,6 @@ export async function GET(
       listing.platform
     ),
     vatRate,
-    discountBuffer,
     ...resolveListingCommissionOverride(listing, settingsMap),
     cargoCostOverride: listing.cargoCost ?? undefined,
   });

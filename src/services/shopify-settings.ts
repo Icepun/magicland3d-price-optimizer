@@ -20,12 +20,17 @@ export interface ShopifyCredentials {
   shopDomain: string;
   apiVersion: string;
   storefrontAccessToken: string;
+  /** Yeni dev dashboard: Client ID + Secret → client_credentials → Admin API (siparişler). Opsiyonel. */
+  clientId?: string;
+  clientSecret?: string;
 }
 
 interface StoredShopifySettings {
   shopDomain?: string;
   apiVersion?: string;
   storefrontAccessToken?: string;
+  clientId?: string;
+  clientSecret?: string;
 }
 
 const DEFAULT_API_VERSION = "2024-10";
@@ -61,6 +66,8 @@ export async function getShopifyCredentials(): Promise<ShopifyCredentials> {
   const shopDomain = settings.shopDomain?.trim() ?? "";
   const apiVersion = settings.apiVersion?.trim() || DEFAULT_API_VERSION;
   const storefrontAccessToken = tryDecryptSecret(settings.storefrontAccessToken);
+  const clientId = settings.clientId?.trim() || undefined;
+  const clientSecret = tryDecryptSecret(settings.clientSecret) || undefined;
 
   if (!shopDomain) {
     throw new Error("Shopify mağaza alan adı eksik");
@@ -71,18 +78,22 @@ export async function getShopifyCredentials(): Promise<ShopifyCredentials> {
     );
   }
 
-  return { shopDomain, apiVersion, storefrontAccessToken };
+  return { shopDomain, apiVersion, storefrontAccessToken, clientId, clientSecret };
 }
 
 export async function getPublicShopifySettings() {
   const settings = await readStoredSettings();
   const storefrontAccessToken = tryDecryptSecret(settings.storefrontAccessToken);
+  const clientSecret = tryDecryptSecret(settings.clientSecret);
 
   return {
     shopDomain: settings.shopDomain ?? "",
     apiVersion: settings.apiVersion ?? DEFAULT_API_VERSION,
     hasStorefrontAccessToken: Boolean(storefrontAccessToken),
     storefrontAccessTokenMasked: maskSecret(storefrontAccessToken),
+    clientId: settings.clientId ?? "",
+    hasClientSecret: Boolean(clientSecret),
+    clientSecretMasked: maskSecret(clientSecret),
   };
 }
 
@@ -90,6 +101,8 @@ export async function saveShopifySettings(input: {
   shopDomain: string;
   apiVersion?: string;
   storefrontAccessToken?: string;
+  clientId?: string;
+  clientSecret?: string;
 }) {
   const current = await readStoredSettings();
   const next: StoredShopifySettings = {
@@ -99,6 +112,12 @@ export async function saveShopifySettings(input: {
   };
   if (input.storefrontAccessToken?.trim()) {
     next.storefrontAccessToken = encryptSecret(input.storefrontAccessToken.trim());
+  }
+  if (input.clientId !== undefined) {
+    next.clientId = input.clientId.trim() || undefined;
+  }
+  if (input.clientSecret?.trim()) {
+    next.clientSecret = encryptSecret(input.clientSecret.trim());
   }
   await writeStoredSettings(next);
 }

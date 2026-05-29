@@ -39,9 +39,6 @@ export async function GET() {
     settings.map((s) => [s.key, s.value])
   );
   const vatRate = Number(settingsMap.vatRate ?? 0);
-  const globalDiscountBuffer = Number(settingsMap.discountBuffer ?? 0);
-  const minNetProfit = Number(settingsMap.defaultMinNetProfit ?? 0);
-  const minProfitMargin = Number(settingsMap.defaultMinMargin ?? 0);
 
   const totalProducts = products.length;
   let missingCost = 0;
@@ -73,7 +70,7 @@ export async function GET() {
     listingId?: string;
     platform?: Platform;
     salePrice: number;
-    problem: "missing_cost" | "negative_profit" | "below_minimum";
+    problem: "missing_cost" | "negative_profit";
     profit: number | null;
     margin: number | null;
   }> = [];
@@ -124,10 +121,6 @@ export async function GET() {
 
       platformStats[platform].activeListings++;
 
-      const platformDiscountBuffer = Number(
-        settingsMap[`${platform}_discountBuffer`] ?? globalDiscountBuffer
-      );
-
       const sim = simulatePrice({
         salePrice: listing.salePrice,
         productCost,
@@ -147,7 +140,6 @@ export async function GET() {
           platform
         ),
         vatRate,
-        discountBuffer: platformDiscountBuffer,
         ...resolveListingCommissionOverride(listing, settingsMap),
         cargoCostOverride: listing.cargoCost ?? undefined,
       });
@@ -166,21 +158,6 @@ export async function GET() {
           platform,
           salePrice: listing.salePrice,
           problem: "negative_profit",
-          profit: sim.netProfit,
-          margin: sim.profitMargin,
-        });
-      } else if (
-        (minNetProfit > 0 && sim.netProfit < minNetProfit) ||
-        (minProfitMargin > 0 && sim.profitMargin < minProfitMargin)
-      ) {
-        platformStats[platform].thinMarginCount++;
-        problemProducts.push({
-          id: product.id,
-          name: product.name,
-          listingId: listing.id,
-          platform,
-          salePrice: listing.salePrice,
-          problem: "below_minimum",
           profit: sim.netProfit,
           margin: sim.profitMargin,
         });

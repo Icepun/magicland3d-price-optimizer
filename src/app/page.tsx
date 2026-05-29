@@ -5,16 +5,19 @@ import {
   Package,
   AlertTriangle,
   TrendingDown,
+  TrendingUp,
+  Activity,
   DollarSign,
-  ShoppingBag,
-  ShieldCheck,
+  ClipboardList,
+  ArrowRight,
   PackageX,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatPercent } from "@/lib/utils";
+import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import Link from "next/link";
+import { PlatformLogo } from "@/components/PlatformLogo";
 
 type Platform = "shopify" | "trendyol";
 
@@ -54,9 +57,9 @@ interface DashboardData {
   }[];
 }
 
-const PLATFORM_INFO: Record<Platform, { label: string; color: string; icon: React.ElementType }> = {
-  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)", icon: ShoppingBag },
-  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)", icon: ShieldCheck },
+const PLATFORM_INFO: Record<Platform, { label: string; color: string }> = {
+  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
+  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
 };
 
 const PROBLEM_LABELS: Record<
@@ -65,7 +68,6 @@ const PROBLEM_LABELS: Record<
 > = {
   missing_cost: { label: "Maliyet Eksik", variant: "secondary" },
   negative_profit: { label: "Zarar", variant: "destructive" },
-  below_minimum: { label: "Min. Altında", variant: "outline" },
 };
 
 const ACCENTS = {
@@ -126,7 +128,6 @@ function StatCard({
 
 function PlatformCard({ stats, delay }: { stats: PlatformStats; delay: number }) {
   const info = PLATFORM_INFO[stats.platform];
-  const Icon = info.icon;
 
   return (
     <Link href={`/products?platform=${stats.platform}`}>
@@ -140,7 +141,7 @@ function PlatformCard({ stats, delay }: { stats: PlatformStats; delay: number })
       >
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
-            <Icon className="h-4 w-4" style={{ color: info.color }} />
+            <PlatformLogo platform={stats.platform} className="h-4 w-4" style={{ color: info.color }} />
             <span style={{ color: info.color }}>{info.label}</span>
           </CardTitle>
           <Badge variant="outline" className="text-xs tabular-nums">
@@ -174,6 +175,205 @@ function PlatformCard({ stats, delay }: { stats: PlatformStats; delay: number })
               </span>
             </div>
           )}
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+interface PriceChangeItem {
+  productId: string;
+  productName: string;
+  firstPrice: number;
+  lastPrice: number;
+  changePercent: number;
+  changeCount: number;
+  lastChangedAt: string;
+}
+
+interface PriceChangesData {
+  days: number;
+  totalChanges: number;
+  productsAffected: number;
+  recent: PriceChangeItem[];
+}
+
+function PriceChangesCard({ delay }: { delay: number }) {
+  const { data } = useQuery<PriceChangesData>({
+    queryKey: ["price-changes"],
+    queryFn: () => fetch("/api/dashboard/price-changes?days=30&limit=8").then((r) => r.json()),
+    refetchInterval: 60_000,
+    staleTime: 0,
+  });
+
+  if (!data || data.totalChanges === 0) return null;
+
+  return (
+    <Card
+      className="animate-in fade-in slide-in-from-bottom-2 duration-500"
+      style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
+    >
+      <CardHeader className="border-b border-border/50 pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Activity className="h-4 w-4" style={{ color: ACCENTS.primary }} />
+          Son {data.days} Gün Fiyat Hareketleri
+          <Badge variant="outline" className="ml-1 tabular-nums">
+            {data.totalChanges} değişim · {data.productsAffected} ürün
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-3">
+        <div className="space-y-0.5">
+          {data.recent.map((item) => {
+            const up = item.changePercent >= 0;
+            return (
+              <Link key={item.productId} href={`/products/${item.productId}`}>
+                <div className="flex items-center justify-between py-2 px-3 -mx-3 rounded-lg cursor-pointer transition-all duration-150 hover:bg-muted/40 group">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm truncate group-hover:text-foreground transition-colors">
+                      {item.productName}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
+                      {formatCurrency(item.firstPrice)} → {formatCurrency(item.lastPrice)}
+                      {item.changeCount > 1 && (
+                        <span className="ml-1.5 opacity-70">· {item.changeCount}×</span>
+                      )}
+                    </p>
+                  </div>
+                  <div
+                    className={cn(
+                      "flex items-center gap-1 text-sm font-bold tabular-nums shrink-0 ml-3",
+                      up ? "text-green-500" : "text-destructive"
+                    )}
+                  >
+                    {up ? (
+                      <TrendingUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <TrendingDown className="h-3.5 w-3.5" />
+                    )}
+                    {up ? "+" : ""}
+                    {item.changePercent.toFixed(1)}%
+                  </div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface OrdersSummaryBucket {
+  revenue: number;
+  profit: number;
+  orderCount: number;
+}
+interface OrdersSummary {
+  days: number;
+  shopify: OrdersSummaryBucket;
+  trendyol: OrdersSummaryBucket;
+  total: OrdersSummaryBucket;
+}
+
+function fmtTL(n: number) {
+  try {
+    return new Intl.NumberFormat("tr-TR", {
+      style: "currency",
+      currency: "TRY",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `₺${Math.round(n)}`;
+  }
+}
+
+function OrdersSummaryCard({ delay }: { delay: number }) {
+  const { data, isLoading } = useQuery<{ summary?: OrdersSummary }>({
+    queryKey: ["orders"],
+    queryFn: () => fetch("/api/orders").then((r) => r.json()),
+    staleTime: 5 * 60_000,
+  });
+  const s = data?.summary;
+
+  if (isLoading && !s) {
+    return (
+      <div
+        className="animate-in fade-in slide-in-from-bottom-2 duration-500"
+        style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
+      >
+        <Skeleton className="h-[132px] w-full rounded-xl" />
+      </div>
+    );
+  }
+  if (!s) return null;
+
+  const profitPos = s.total.profit >= 0;
+  const rows: { platform: Platform; bucket: OrdersSummaryBucket }[] = [
+    { platform: "shopify", bucket: s.shopify },
+    { platform: "trendyol", bucket: s.trendyol },
+  ];
+
+  return (
+    <Link href="/orders">
+      <Card
+        className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 cursor-pointer transition-transform hover:-translate-y-0.5"
+        style={{
+          animationDelay: `${delay}ms`,
+          animationFillMode: "both",
+          borderTop: `2px solid ${ACCENTS.primary}`,
+        }}
+      >
+        <CardContent className="p-4 grid gap-4 sm:grid-cols-[1.3fr_1fr]">
+          <div>
+            <div className="flex items-center justify-between mb-2.5">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <ClipboardList className="h-4 w-4" style={{ color: ACCENTS.primary }} />
+                Son {s.days} Gün Siparişleri
+              </h2>
+              <span className="text-[11px] text-primary flex items-center gap-0.5">
+                Tümünü gör <ArrowRight className="h-3 w-3" />
+              </span>
+            </div>
+            <div className="space-y-2">
+              {rows.map(({ platform, bucket }) => {
+                const info = PLATFORM_INFO[platform];
+                return (
+                  <div key={platform} className="flex items-center justify-between">
+                    <span className="flex items-center gap-2 text-sm">
+                      <PlatformLogo platform={platform} className="h-4 w-4" style={{ color: info.color }} />
+                      <span style={{ color: info.color }} className="font-medium">
+                        {info.label}
+                      </span>
+                      <span className="text-[11px] text-muted-foreground tabular-nums">
+                        · {bucket.orderCount} sipariş
+                      </span>
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums">{fmtTL(bucket.revenue)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="sm:border-l sm:border-border/50 sm:pl-4 flex flex-col justify-center gap-2">
+            <div>
+              <p className="text-[11px] text-muted-foreground">Toplam ciro</p>
+              <p className="text-2xl font-bold tabular-nums" style={{ color: ACCENTS.primary }}>
+                {fmtTL(s.total.revenue)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Net kâr (tahmini)</p>
+              <p
+                className="text-lg font-bold tabular-nums"
+                style={{ color: profitPos ? ACCENTS.green : ACCENTS.red }}
+              >
+                {profitPos ? "+" : ""}
+                {fmtTL(s.total.profit)}
+              </p>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </Link>
@@ -271,6 +471,8 @@ export default function DashboardPage() {
         />
       </div>
 
+      <OrdersSummaryCard delay={210} />
+
       {/* Platform Bazlı Kartlar */}
       <div>
         <h2 className="text-base font-semibold mb-3">Platform Bazlı Özet</h2>
@@ -280,6 +482,8 @@ export default function DashboardPage() {
           ))}
         </div>
       </div>
+
+      <PriceChangesCard delay={340} />
 
       {/* Düşük Stok Uyarısı */}
       {data.lowStockCount > 0 && (
