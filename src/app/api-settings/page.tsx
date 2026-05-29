@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2 } from "lucide-react";
+import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus } from "lucide-react";
 
 interface TrendyolPublicSettings {
   sellerId: string;
@@ -107,16 +107,24 @@ function TrendyolTab() {
   });
 
   const sync = useMutation({
-    mutationFn: () =>
-      fetchJson("/api/trendyol/sync-products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved: true, archived: false, maxPages: 25, size: 100 }),
-      }),
-    onSuccess: (data: unknown) => {
-      const d = data as { created: number; updated: number };
-      toast.success(`Trendyol sync: ${d.created} yeni, ${d.updated} güncel`);
+    mutationFn: (mode: "add-new" | "refresh-prices") =>
+      fetchJson<{ linked?: number; unmatched?: number; checked?: number; changed?: number }>(
+        "/api/trendyol/sync-products",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        }
+      ),
+    onSuccess: (d, mode) => {
+      if (mode === "add-new") {
+        toast.success(`Trendyol: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} eşleşmemiş havuzda`);
+      } else {
+        toast.success(`Trendyol fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
+      }
       qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -167,11 +175,23 @@ function TrendyolTab() {
           <PlugZap className="h-4 w-4 mr-2" />
           {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
         </Button>
-        <Button disabled={sync.isPending} onClick={() => sync.mutate()}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
-          {sync.isPending ? "Senkronize ediliyor…" : "Ürünleri Senkronize Et"}
+        <Button
+          variant="outline"
+          disabled={sync.isPending}
+          onClick={() => sync.mutate("add-new")}
+        >
+          <Plus className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "add-new" ? "animate-spin" : ""}`} />
+          {sync.isPending && sync.variables === "add-new" ? "Ekleniyor…" : "Yeni Ürün Ekle"}
         </Button>
       </div>
+      <Button
+        className="w-full"
+        disabled={sync.isPending}
+        onClick={() => sync.mutate("refresh-prices")}
+      >
+        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "refresh-prices" ? "animate-spin" : ""}`} />
+        {sync.isPending && sync.variables === "refresh-prices" ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
+      </Button>
 
       <SyncProgressCard isPending={sync.isPending} platform="Trendyol" />
     </div>
@@ -220,19 +240,6 @@ function SyncProgressCard({ isPending, platform }: { isPending: boolean; platfor
       </CardContent>
     </Card>
   );
-}
-
-interface ShopifySyncResult {
-  totalProducts: number;
-  totalVariants: number;
-  usedBarcode: number;
-  usedSku: number;
-  usedVariantId: number;
-  created: number;
-  updated: number;
-  listingsCreated: number;
-  listingsUpdated: number;
-  sampleProducts: Array<{ title: string; variantCount: number; hasBarcode: boolean }>;
 }
 
 // ───────────── Shopify Form ─────────────
@@ -305,25 +312,26 @@ function ShopifyTab() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const [lastSyncResult, setLastSyncResult] = useState<ShopifySyncResult | null>(null);
   const sync = useMutation({
-    mutationFn: () => fetchJson<ShopifySyncResult>("/api/shopify/sync-products", { method: "POST" }),
-    onSuccess: (data) => {
-      setLastSyncResult(data);
-      if (data.created + data.updated > 0) {
-        toast.success(
-          `Shopify sync: ${data.created} yeni, ${data.updated} güncel, ${data.listingsCreated} listing`
-        );
-      } else if (data.totalProducts === 0) {
-        toast.error(
-          "Shopify mağazasında ürün bulunamadı. App scope'larında read_products aktif mi?"
-        );
+    mutationFn: (mode: "add-new" | "refresh-prices") =>
+      fetchJson<{ added?: number; checked?: number; changed?: number; totalProducts: number }>(
+        "/api/shopify/sync-products",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        }
+      ),
+    onSuccess: (d, mode) => {
+      if (d.totalProducts === 0) {
+        toast.error("Shopify mağazasında ürün bulunamadı. Storefront izinleri açık mı?");
+      } else if (mode === "add-new") {
+        toast.success(`Shopify: ${d.added ?? 0} yeni ürün eklendi`);
       } else {
-        toast.error(
-          `${data.totalProducts} ürün geldi ama hiçbiri eşleştirilemedi. Detaylar aşağıda.`
-        );
+        toast.success(`Shopify fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
       }
       qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -415,21 +423,28 @@ function ShopifyTab() {
           {testConnection.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
         </Button>
         <Button
+          variant="outline"
           disabled={sync.isPending || !settings?.hasStorefrontAccessToken}
-          onClick={() => sync.mutate()}
+          onClick={() => sync.mutate("add-new")}
         >
-          <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
-          {sync.isPending ? "Senkronize ediliyor…" : "Ürünleri Senkronize Et"}
+          <Plus className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "add-new" ? "animate-spin" : ""}`} />
+          {sync.isPending && sync.variables === "add-new" ? "Ekleniyor…" : "Yeni Ürün Ekle"}
         </Button>
       </div>
+      <Button
+        className="w-full"
+        disabled={sync.isPending || !settings?.hasStorefrontAccessToken}
+        onClick={() => sync.mutate("refresh-prices")}
+      >
+        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "refresh-prices" ? "animate-spin" : ""}`} />
+        {sync.isPending && sync.variables === "refresh-prices" ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
+      </Button>
 
       {debugResult && !testConnection.isPending && (
         <ShopifyDebugCard result={debugResult} />
       )}
 
       <SyncProgressCard isPending={sync.isPending} platform="Shopify" />
-
-      {lastSyncResult && !sync.isPending && <ShopifySyncResultCard result={lastSyncResult} />}
     </div>
   );
 }
@@ -540,109 +555,6 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
                 <code>magaza.myshopify.com</code> formatında olmalı.
               </li>
             </ul>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function ShopifySyncResultCard({ result }: { result: ShopifySyncResult }) {
-  const noResults = result.created + result.updated === 0;
-  return (
-    <Card className={noResults ? "border-amber-500/40 bg-amber-500/5" : "border-green-500/30 bg-green-500/5"}>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm">Son Sync Detayı</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 text-xs">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 tabular-nums">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Toplam ürün</span>
-            <span className="font-medium">{result.totalProducts}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Toplam variant</span>
-            <span className="font-medium">{result.totalVariants}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Yeni ana ürün</span>
-            <span className="font-medium text-green-500">{result.created}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Güncellenmiş</span>
-            <span className="font-medium">{result.updated}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Yeni listing</span>
-            <span className="font-medium text-green-500">{result.listingsCreated}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Güncel listing</span>
-            <span className="font-medium">{result.listingsUpdated}</span>
-          </div>
-          {result.usedBarcode > 0 && (
-            <div className="flex justify-between col-span-2">
-              <span className="text-muted-foreground">✓ Barkod kullanıldı</span>
-              <span className="font-medium text-green-500">{result.usedBarcode}</span>
-            </div>
-          )}
-          {result.usedSku > 0 && (
-            <div className="flex justify-between col-span-2">
-              <span className="text-muted-foreground">SKU barkod olarak kullanıldı</span>
-              <span className="font-medium">{result.usedSku}</span>
-            </div>
-          )}
-          {result.usedVariantId > 0 && (
-            <div className="flex justify-between col-span-2">
-              <span className="text-amber-500">⚠ Variant ID kullanıldı (barkod/SKU yok)</span>
-              <span className="font-medium text-amber-500">{result.usedVariantId}</span>
-            </div>
-          )}
-        </div>
-
-        {result.sampleProducts.length > 0 && (
-          <>
-            <div className="border-t border-border/50 pt-2 mt-2">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
-                İlk Birkaç Ürün
-              </p>
-              <div className="space-y-0.5">
-                {result.sampleProducts.map((p, i) => (
-                  <div key={i} className="flex items-center justify-between gap-2">
-                    <span className="truncate">{p.title}</span>
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {p.variantCount}v ·{" "}
-                      {p.hasBarcode ? (
-                        <span className="text-green-500">barkodlu</span>
-                      ) : (
-                        <span className="text-amber-500">barkodsuz</span>
-                      )}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
-        {result.usedVariantId > 0 && (
-          <div className="border-t border-border/50 pt-2 mt-2 text-amber-500">
-            <p className="font-medium mb-1">💡 İpucu</p>
-            <p className="text-muted-foreground text-[11px]">
-              {result.usedVariantId} variant&apos;ın barkodu/SKU&apos;su yoktu, kimlik olarak Shopify
-              variant ID kullanıldı. Trendyol ürünlerini buna manuel olarak
-              eşleştirmen gerekir. Daha kolay olması için Shopify Admin&apos;de variant&apos;lara
-              barkod ekleyebilirsin.
-            </p>
-          </div>
-        )}
-        {noResults && result.totalProducts === 0 && (
-          <div className="border-t border-border/50 pt-2 mt-2 text-amber-500">
-            <p className="font-medium mb-1">⚠️ Mağazada ürün bulunamadı</p>
-            <p className="text-muted-foreground text-[11px]">
-              Olası nedenler: (1) App scope&apos;larında <code>read_products</code> aktif değil.
-              (2) Yanlış mağaza alan adı. (3) Mağaza gerçekten boş.
-            </p>
           </div>
         )}
       </CardContent>

@@ -1,138 +1,175 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { ShopifyClient } from "@/services/shopify-client";
+import { ShopifyClient, type ShopifyProductVariant } from "@/services/shopify-client";
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 
 /**
- * Shopify ürünlerini ana ürün listesi olarak çeker.
+ * Shopify ürün senkronu — 3 mod:
+ *  - "add-new":        sadece YENİ ürünleri ekle (mevcutlara dokunma) → yazma ~0
+ *  - "refresh-prices": mevcut listing'lerde SADECE değişen fiyatı yaz → yazma ~0
+ *  - "full":           ikisi birden (yeni ekle + fiyat tazele)
  *
- * - Status: "any" (active + draft + archived)
- * - Her variant için Product (barcode anahtar). Variant'ta barkod yoksa SKU'yu barkod olarak kullanır.
- * - Her variant için Shopify Listing oluşturur.
- *
- * Detaylı teşhis döner: totalProducts, totalVariants, missingIdentifier, vs.
+ * Turso embedded replica'da okuma bedava (yerel), yazma pahalı (eu-west-1). Bu yüzden
+ * her iki mod da bol okuyup yalnızca gerekeni yazar — eski "her variant'ı upsert" yok.
  */
-export async function POST() {
+const Schema = z.object({
+  mode: z.enum(["full", "add-new", "refresh-prices"]).default("full"),
+});
+
+function identifierFor(variant: ShopifyProductVariant): string {
+  if (variant.barcode?.trim()) return variant.barcode.trim();
+  if (variant.sku?.trim()) return variant.sku.trim();
+  return `shopify-variant-${variant.id}`;
+}
+
+interface FetchedVariant {
+  price: number;
+  sku: string;
+  stock: number;
+  name: string;
+  categoryName: string;
+  imageUrl: string | null;
+  variantId: string;
+  archived: boolean;
+}
+
+async function stampSync() {
+  await prisma.appSetting.upsert({
+    where: { key: "shopifyLastSyncAt" },
+    create: { key: "shopifyLastSyncAt", value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+}
+
+export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
+    const { mode } = Schema.parse(await req.json().catch(() => ({})));
     const credentials = await getShopifyCredentials();
     const client = new ShopifyClient(credentials);
-
-    // Storefront API sadece "active" döner; draft/archived görünmez
     const shopifyProducts = await client.listAllProducts();
 
-    const stats = {
-      totalProducts: shopifyProducts.length,
-      totalVariants: 0,
-      usedBarcode: 0,
-      usedSku: 0,
-      usedVariantId: 0,
-      created: 0,
-      updated: 0,
-      listingsCreated: 0,
-      listingsUpdated: 0,
-      sampleProducts: [] as Array<{ title: string; variantCount: number; hasBarcode: boolean }>,
-    };
-
-    // İlk 5 ürünü teşhis için raporla
-    for (const p of shopifyProducts.slice(0, 5)) {
-      stats.sampleProducts.push({
-        title: p.title,
-        variantCount: p.variants?.length ?? 0,
-        hasBarcode: p.variants?.some((v) => Boolean(v.barcode)) ?? false,
-      });
-    }
-
+    // Çekilen variant'ları identifier -> veri olarak düzleştir
+    const fetched = new Map<string, FetchedVariant>();
+    let totalVariants = 0;
     for (const product of shopifyProducts) {
-      const variants = product.variants ?? [];
-      stats.totalVariants += variants.length;
-
-      for (const variant of variants) {
-        // Identifier önceliği: barcode > sku > shopify variant ID
-        // Variant ID kalıcı + benzersiz; ürün barkodsuz olsa da Shopify katalogunu
-        // ana ürün listesi olarak kullanabiliriz. Trendyol/HB eşleştirmesi
-        // sonradan manuel "Ürün Seç" modalı ile yapılır.
-        let barcode: string;
-        if (variant.barcode?.trim()) {
-          barcode = variant.barcode.trim();
-          stats.usedBarcode++;
-        } else if (variant.sku?.trim()) {
-          barcode = variant.sku.trim();
-          stats.usedSku++;
-        } else {
-          barcode = `shopify-variant-${variant.id}`;
-          stats.usedVariantId++;
-        }
-        const productName = `${product.title}${variant.title && variant.title !== "Default Title" ? ` — ${variant.title}` : ""}`;
-        const price = Number(variant.price);
-
-        const existingProduct = await prisma.product.findUnique({ where: { barcode } });
-
-        let productId: string;
-        if (existingProduct) {
-          productId = existingProduct.id;
-          stats.updated++;
-        } else {
-          const newProduct = await prisma.product.create({
-            data: {
-              barcode,
-              sku: variant.sku || barcode,
-              name: productName,
-              categoryName: product.product_type || "Shopify",
-              currentSalePrice: price || 0,
-              stock: variant.inventory_quantity ?? 0,
-              imageUrl: product.image?.src ?? null,
-              isActive: product.status !== "archived",
-              source: "shopify",
-            },
-          });
-          productId = newProduct.id;
-          stats.created++;
-        }
-
-        // Shopify Listing upsert
-        const externalId = String(variant.id);
-        const existingListing = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
-          `SELECT id FROM Listing WHERE productId = ? AND platform = 'shopify' LIMIT 1`,
-          productId
-        );
-
-        if (existingListing.length > 0) {
-          await prisma.$executeRawUnsafe(
-            `UPDATE Listing SET externalId = ?, externalSku = ?, salePrice = ?, stock = ?, isActive = 1, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
-            externalId,
-            variant.sku || barcode,
-            price || 0,
-            variant.inventory_quantity ?? 0,
-            existingListing[0].id
-          );
-          stats.listingsUpdated++;
-        } else {
-          const id = `listing_${productId}_shopify`;
-          await prisma.$executeRawUnsafe(
-            `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-             VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-            id,
-            productId,
-            externalId,
-            variant.sku || barcode,
-            price || 0,
-            variant.inventory_quantity ?? 0
-          );
-          stats.listingsCreated++;
-        }
+      for (const variant of product.variants ?? []) {
+        totalVariants++;
+        const id = identifierFor(variant);
+        if (fetched.has(id)) continue; // aynı identifier'da ilk gelen kazanır
+        const name = `${product.title}${
+          variant.title && variant.title !== "Default Title" ? ` — ${variant.title}` : ""
+        }`;
+        fetched.set(id, {
+          price: Number(variant.price) || 0,
+          sku: variant.sku || id,
+          stock: variant.inventory_quantity ?? 0,
+          name,
+          categoryName: product.product_type || "Shopify",
+          imageUrl: product.image?.src ?? null,
+          variantId: String(variant.id),
+          archived: product.status === "archived",
+        });
       }
     }
 
-    await prisma.appSetting.upsert({
-      where: { key: "shopifyLastSyncAt" },
-      create: { key: "shopifyLastSyncAt", value: new Date().toISOString() },
-      update: { value: new Date().toISOString() },
-    });
+    // ── refresh-prices: yalnızca değişen fiyatı yaz ──────────────────────────
+    async function refreshPrices() {
+      const rows = await prisma.$queryRawUnsafe<
+        Array<{
+          listingId: string;
+          listingPrice: number;
+          productId: string;
+          barcode: string;
+          productPrice: number;
+        }>
+      >(
+        `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
+                p.barcode AS barcode, p.currentSalePrice AS productPrice
+         FROM Listing l JOIN Product p ON l.productId = p.id
+         WHERE l.platform = 'shopify'`
+      );
+      let changed = 0;
+      for (const row of rows) {
+        const f = fetched.get(row.barcode);
+        if (!f) continue;
+        const listingChanged = Math.abs(f.price - row.listingPrice) > 0.001;
+        const productChanged = Math.abs(f.price - row.productPrice) > 0.001;
+        if (!listingChanged && !productChanged) continue;
+        if (listingChanged) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+            f.price,
+            row.listingId
+          );
+        }
+        if (productChanged) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE Product SET currentSalePrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+            f.price,
+            row.productId
+          );
+        }
+        changed++;
+      }
+      return { checked: rows.length, changed };
+    }
 
-    return NextResponse.json(stats);
+    // ── add-new: yalnızca eksik ürünleri ekle ────────────────────────────────
+    async function addNew() {
+      const existing = await prisma.$queryRawUnsafe<Array<{ barcode: string }>>(
+        `SELECT barcode FROM Product`
+      );
+      const existingSet = new Set(existing.map((r) => r.barcode));
+      let added = 0;
+      for (const [id, f] of fetched) {
+        if (existingSet.has(id)) continue;
+        const newProduct = await prisma.product.create({
+          data: {
+            barcode: id,
+            sku: f.sku,
+            name: f.name,
+            categoryName: f.categoryName,
+            currentSalePrice: f.price,
+            stock: f.stock,
+            imageUrl: f.imageUrl,
+            isActive: !f.archived,
+            source: "shopify",
+          },
+        });
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+           VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          `listing_${newProduct.id}_shopify`,
+          newProduct.id,
+          f.variantId,
+          f.sku,
+          f.price,
+          f.stock
+        );
+        existingSet.add(id);
+        added++;
+      }
+      return { added };
+    }
+
+    let result: Record<string, number> = {};
+    if (mode === "refresh-prices") {
+      result = await refreshPrices();
+    } else if (mode === "add-new") {
+      result = await addNew();
+    } else {
+      // full = önce yeni ekle, sonra fiyatları tazele
+      const a = await addNew();
+      const r = await refreshPrices();
+      result = { ...a, ...r };
+    }
+
+    await stampSync();
+    return NextResponse.json({ mode, totalProducts: shopifyProducts.length, totalVariants, ...result });
   } catch (error) {
     return jsonError(error);
   }
