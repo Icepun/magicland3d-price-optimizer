@@ -55,8 +55,8 @@ interface DashboardData {
 }
 
 const PLATFORM_INFO: Record<Platform, { label: string; color: string; icon: React.ElementType }> = {
-  shopify: { label: "Shopify", color: "oklch(0.55 0.18 145)", icon: ShoppingBag },
-  trendyol: { label: "Trendyol", color: "oklch(0.66 0.22 25)", icon: ShieldCheck },
+  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)", icon: ShoppingBag },
+  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)", icon: ShieldCheck },
 };
 
 const PROBLEM_LABELS: Record<

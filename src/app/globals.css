@@ -205,6 +205,12 @@
   100% { background-position: 200% center; }
 }
 
+/* Belirsiz (indeterminate) ilerleme barı — sync sırasında sürekli akar */
+@keyframes indeterminate-bar {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(420%); }
+}
+
 /* =============================================
    GLOBAL SCROLLBAR (WebKit / Electron)
    ============================================= */

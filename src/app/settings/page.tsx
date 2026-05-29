@@ -14,10 +14,7 @@ import { Download, Upload, Database, Cloud, CloudOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const Schema = z.object({
-  defaultMinNetProfit: z.coerce.number().min(0).default(0),
-  defaultMinMargin: z.coerce.number().min(0).max(100).default(0),
   vatRate: z.coerce.number().min(0).max(100).default(20),
-  discountBuffer: z.coerce.number().min(0).max(50).default(0),
 });
 
 type FormData = z.infer<typeof Schema>;
@@ -32,22 +29,12 @@ export default function SettingsPage() {
 
   const form = useForm<FormData>({
     resolver: zodResolver(Schema),
-    defaultValues: {
-      defaultMinNetProfit: 0,
-      defaultMinMargin: 0,
-      vatRate: 20,
-      discountBuffer: 0,
-    },
+    defaultValues: { vatRate: 20 },
   });
 
   useEffect(() => {
     if (settings) {
-      form.reset({
-        defaultMinNetProfit: Number(settings.defaultMinNetProfit ?? 0),
-        defaultMinMargin: Number(settings.defaultMinMargin ?? 0) * 100,
-        vatRate: Number(settings.vatRate ?? 20),
-        discountBuffer: Number(settings.discountBuffer ?? 0),
-      });
+      form.reset({ vatRate: Number(settings.vatRate ?? 20) });
     }
   }, [settings, form]);
 
@@ -56,12 +43,7 @@ export default function SettingsPage() {
       fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          defaultMinNetProfit: String(data.defaultMinNetProfit),
-          defaultMinMargin: String(data.defaultMinMargin / 100),
-          vatRate: String(data.vatRate),
-          discountBuffer: String(data.discountBuffer),
-        }),
+        body: JSON.stringify({ vatRate: String(data.vatRate) }),
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
@@ -81,54 +63,13 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Minimum Kâr Eşikleri</CardTitle>
+          <CardTitle className="text-base">Vergi (KDV)</CardTitle>
         </CardHeader>
         <CardContent>
           <form
             onSubmit={form.handleSubmit((d) => saveMutation.mutate(d))}
             className="space-y-4"
           >
-            <div>
-              <Label>Minimum Net Kâr (TL)</Label>
-              <Input
-                type="number"
-                step="1"
-                {...form.register("defaultMinNetProfit")}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Bu değerin altındaki kâra sahip fiyatlar simülasyonda &quot;geçersiz&quot; sayılır.
-              </p>
-            </div>
-            <div>
-              <Label>Minimum Kâr Oranı (%)</Label>
-              <Input
-                type="number"
-                step="0.5"
-                {...form.register("defaultMinMargin")}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Örnek: 20 girerseniz kâr oranı %20&apos;nin altındaki fiyatlar elenir.
-              </p>
-            </div>
-
-            <div className="border-t border-border/50 pt-4">
-              <Label>Trendyol İndirim Payı (%)</Label>
-              <Input
-                type="number"
-                step="1"
-                min="0"
-                max="50"
-                {...form.register("discountBuffer")}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Trendyol kampanyaları sırasında listed fiyat üzerinden indirim uygulanır.
-                Bu pay, &quot;kampanya inse bile kâr garantisi&quot; bırakır.
-                Önerilen fiyat <strong>%10 indirim sonrasına</strong> göre hesaplanır;
-                yani Trendyol %10 indirim uyguladığında bile minimum kâr korunur.
-                Sıfır girersen indirim payı yok (tam fiyatla satış varsayılır).
-              </p>
-            </div>
-
             <div>
               <Label>KDV Oranı (%)</Label>
               <Input
@@ -139,11 +80,10 @@ export default function SettingsPage() {
                 {...form.register("vatRate")}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Trendyol&apos;da girilen satış fiyatı KDV dahil sayılır. Net kâr,
-                fiyatın <code className="text-foreground">/(1 + KDV/100)</code> ile bölünmüş
+                Satış fiyatları KDV <strong>dahil</strong> kabul edilir. Net kâr,
+                fiyatın <code className="text-foreground">/(1 + KDV/100)</code> ile
                 KDV hariç bazından hesaplanır. Türkiye&apos;de standart oran <strong>%20</strong>.
-                <br />
-                Sıfır girerseniz KDV uygulanmaz (eski davranış).
+                Sıfır girerseniz KDV uygulanmaz.
               </p>
             </div>
 
@@ -162,11 +102,19 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Uygulama Hakkında</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-1">
-          <p>Magicland 3D Hub</p>
-          <p className="mt-2">
-            Veritabanı: SQLite (lokal). Otomatik güncelleme: GitHub Releases.
-            Veri update sırasında userData klasöründe korunur.
+        <CardContent className="text-sm text-muted-foreground space-y-2">
+          <p className="text-foreground font-medium">Magicland 3D Hub</p>
+          <p>
+            Shopify (ana ürün kaynağı) + Trendyol fiyat & kâr yönetimi. Ürün
+            maliyeti, paketleme, komisyon, kargo ve KDV&apos;den net kâr hesaplar.
+          </p>
+          <p>
+            Veritabanı: Turso bulut (libSQL) — Windows ve Mac aynı veriyi paylaşır,
+            yerel kopyadan anında okur, buluta arka planda senkronlar.
+          </p>
+          <p>
+            Otomatik güncelleme GitHub Releases üzerinden (Windows + Mac). Ayarlar
+            ve veriler güncelleme sırasında korunur.
           </p>
         </CardContent>
       </Card>

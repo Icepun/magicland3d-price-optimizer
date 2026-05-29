@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Table,
@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
@@ -75,8 +75,8 @@ interface Product {
 }
 
 const PLATFORM_COLOR: Record<string, string> = {
-  shopify: "oklch(0.55 0.18 145)", // yeşil
-  trendyol: "oklch(0.66 0.22 25)", // turuncu
+  shopify: "oklch(0.60 0.16 152)", // yeşil
+  trendyol: "oklch(0.72 0.17 60)", // turuncu
 };
 
 const AddProductSchema = z.object({
@@ -93,7 +93,7 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
-type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "hidden";
+type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "hidden" | "most-profitable";
 
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -139,7 +139,8 @@ function readFilterFromUrl(): FilterMode {
     f === "all" ||
     f === "negative-profit" ||
     f === "missing-cost" ||
-    f === "hidden"
+    f === "hidden" ||
+    f === "most-profitable"
   ) {
     return f;
   }
@@ -172,7 +173,11 @@ export default function ProductsPage() {
     isError,
   } = useQuery<Product[]>({
     queryKey: ["products", filterMode],
-    queryFn: () => fetchJson<Product[]>(`/api/products?filter=${filterMode}`),
+    queryFn: () =>
+      // "most-profitable" sunucuda yok → aktif ürünleri çek, client'ta sırala
+      fetchJson<Product[]>(
+        `/api/products?filter=${filterMode === "most-profitable" ? "active" : filterMode}`
+      ),
     // Kâr hesabı maliyet/komisyon/kargo/gider ayarlarına bağlı — her açılışta
     // sunucudan taze çek, cache'teki eski kâr değerini gösterme.
     staleTime: 0,
@@ -314,16 +319,57 @@ export default function ProductsPage() {
     const q = globalFilter.trim().toLocaleLowerCase("tr-TR");
     const list = Array.isArray(products) ? products : [];
 
-    return list.filter((product) => {
+    const searched = list.filter((product) => {
       if (!q) return true;
       return [product.name, product.barcode, product.sku, product.categoryName]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(q));
     });
-  }, [globalFilter, products]);
+
+    // "En Kârlı": ürünün platform listing'lerinin ortalama kâr marjına göre azalan sırala
+    if (filterMode === "most-profitable") {
+      const avgMargin = (p: Product) => {
+        const margins = p.platforms
+          .map((pl) => pl.profitMargin)
+          .filter((m): m is number => m !== null && m !== undefined);
+        if (margins.length === 0) return -Infinity;
+        return margins.reduce((a, b) => a + b, 0) / margins.length;
+      };
+      return [...searched].sort((a, b) => avgMargin(b) - avgMargin(a));
+    }
+
+    return searched;
+  }, [globalFilter, products, filterMode]);
+
+  // Lazy/windowed render — başta 40 satır, scroll'da artar. Filtre/arama değişince
+  // ve sayfaya her girişte (component remount) sıfırlanır.
+  const [visibleCount, setVisibleCount] = useState(40);
+  const sentinelRef = useRef<HTMLTableRowElement>(null);
+
+  useEffect(() => {
+    setVisibleCount(40);
+  }, [filterMode, globalFilter]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((c) => c + 40);
+        }
+      },
+      { rootMargin: "400px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filteredProducts.length, visibleCount]);
+
+  const visibleProducts = filteredProducts.slice(0, visibleCount);
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
+    { value: "most-profitable", label: "En Kârlı" },
     { value: "negative-profit", label: "Zarar Eden" },
     { value: "missing-cost", label: "Maliyet Eksik" },
     { value: "out-of-stock", label: "Stoğu Bitenler" },
@@ -413,7 +459,9 @@ export default function ProductsPage() {
         </div>
 
         <span className="text-sm text-muted-foreground ml-auto">
-          {filteredProducts.length} ürün
+          {visibleCount < filteredProducts.length
+            ? `${visibleProducts.length} / ${filteredProducts.length} ürün`
+            : `${filteredProducts.length} ürün`}
         </span>
       </div>
 
@@ -486,7 +534,8 @@ export default function ProductsPage() {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredProducts.map((product) => {
+              <>
+              {visibleProducts.map((product) => {
                 const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
                 const findPlatform = (p: "shopify" | "trendyol") =>
                   product.platforms.find((x) => x.platform === p);
@@ -687,7 +736,15 @@ export default function ProductsPage() {
                     </TableCell>
                   </TableRow>
                 );
-              })
+              })}
+              {visibleCount < filteredProducts.length && (
+                <TableRow ref={sentinelRef}>
+                  <TableCell colSpan={9} className="text-center py-4">
+                    <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground/50" />
+                  </TableCell>
+                </TableRow>
+              )}
+              </>
             )}
           </TableBody>
         </Table>
@@ -851,6 +908,21 @@ function MatchListingModal({
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const refreshPool = useMutation({
+    mutationFn: () =>
+      fetchJson("/api/trendyol/sync-products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "add-new" }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Trendyol listesi tazelendi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   const platformLabel = "Trendyol";
 
   return (
@@ -864,14 +936,26 @@ function MatchListingModal({
           </p>
         </DialogHeader>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Barkod, SKU veya ürün adı..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Barkod, SKU veya ürün adı..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={refreshPool.isPending}
+            onClick={() => refreshPool.mutate()}
+            title="Trendyol'dan güncel ürün listesini çek"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshPool.isPending ? "animate-spin" : ""}`} />
+            {refreshPool.isPending ? "Tazeleniyor…" : "Tazele"}
+          </Button>
         </div>
 
         <div className="flex-1 overflow-y-auto -mx-2 px-2">

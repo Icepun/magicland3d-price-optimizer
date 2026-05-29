@@ -9,7 +9,6 @@ import {
   Percent,
   Truck,
   Receipt,
-  ArrowUpDown,
   Settings2,
   Settings,
 } from "lucide-react";
@@ -19,14 +18,13 @@ import { UpdateWidget } from "./UpdateWidget";
 import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
-  { href: "/",                 label: "Dashboard",          icon: LayoutDashboard },
+  { href: "/",                 label: "Panel",              icon: LayoutDashboard },
   { href: "/products",         label: "Ürünler",            icon: Package },
-  { href: "/cost-templates",   label: "Maliyet Ayarları",   icon: CalculatorIcon },
-  { href: "/commission-rules", label: "Komisyon Kuralları", icon: Percent },
-  { href: "/cargo-rules",      label: "Kargo Kuralları",    icon: Truck },
-  { href: "/expense-rules",    label: "Ek Gider Kuralları", icon: Receipt },
-  { href: "/import-export",    label: "İçe/Dışa Aktar",    icon: ArrowUpDown },
-  { href: "/api-settings",     label: "Trendyol API",       icon: Settings2 },
+  { href: "/cost-templates",   label: "Maliyet & Paketleme", icon: CalculatorIcon },
+  { href: "/commission-rules", label: "Komisyonlar",        icon: Percent },
+  { href: "/cargo-rules",      label: "Kargo",              icon: Truck },
+  { href: "/expense-rules",    label: "Ek Giderler",        icon: Receipt },
+  { href: "/api-settings",     label: "Entegrasyonlar",     icon: Settings2 },
   { href: "/settings",         label: "Ayarlar",            icon: Settings },
 ];
 

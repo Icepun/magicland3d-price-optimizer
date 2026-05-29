@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus } from "lucide-react";
 
 interface TrendyolPublicSettings {
@@ -175,23 +174,16 @@ function TrendyolTab() {
           <PlugZap className="h-4 w-4 mr-2" />
           {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
         </Button>
-        <Button
-          variant="outline"
-          disabled={sync.isPending}
-          onClick={() => sync.mutate("add-new")}
-        >
-          <Plus className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "add-new" ? "animate-spin" : ""}`} />
-          {sync.isPending && sync.variables === "add-new" ? "Ekleniyor…" : "Yeni Ürün Ekle"}
+        <Button disabled={sync.isPending} onClick={() => sync.mutate("refresh-prices")}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
+          {sync.isPending ? "Güncelleniyor…" : "Fiyatları Güncelle"}
         </Button>
       </div>
-      <Button
-        className="w-full"
-        disabled={sync.isPending}
-        onClick={() => sync.mutate("refresh-prices")}
-      >
-        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "refresh-prices" ? "animate-spin" : ""}`} />
-        {sync.isPending && sync.variables === "refresh-prices" ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
-      </Button>
+      <p className="text-[11px] text-muted-foreground">
+        Trendyol ürünleri buradan eklenmez — Shopify ana ürününe karşılık gelen
+        Trendyol ürününü <strong>Ürünler</strong> sekmesindeki &quot;Ürün Seç&quot; ile eşleştir.
+        Bu buton yalnızca eşleşmiş ürünlerin fiyatlarını günceller.
+      </p>
 
       <SyncProgressCard isPending={sync.isPending} platform="Trendyol" />
     </div>
@@ -199,9 +191,9 @@ function TrendyolTab() {
 }
 
 /**
- * Sync sırasında belirsiz-progress indikatorü.
- * Trendyol/Shopify/HB sync API'leri streaming yapmadığı için tek bir
- * "ürünler çekiliyor, lütfen bekle" göstergesi.
+ * Sync sırasında DÜRÜST belirsiz (indeterminate) gösterge.
+ * İşin gerçek ilerlemesi client'a akmadığı için sahte yüzde göstermiyoruz —
+ * sürekli akan bir bar + geçen saniye sayacı (yanıltıcı "%X" yok).
  */
 function SyncProgressCard({ isPending, platform }: { isPending: boolean; platform: string }) {
   const [elapsed, setElapsed] = useState(0);
@@ -219,23 +211,25 @@ function SyncProgressCard({ isPending, platform }: { isPending: boolean; platfor
 
   if (!isPending) return null;
 
-  // Görsel olarak ilerliyor hissi: ilk 30 saniyede %90'a doğru asymptot
-  const visualProgress = Math.min(90, (elapsed / 30) * 100);
-
   return (
     <Card className="border-primary/30 bg-primary/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
       <CardContent className="pt-5 space-y-3">
         <div className="flex items-center justify-between gap-3 text-sm">
           <span className="font-medium flex items-center gap-2">
             <RefreshCw className="h-4 w-4 animate-spin text-primary" />
-            {platform} ürünleri çekiliyor
+            {platform} işleniyor
           </span>
           <span className="text-xs text-muted-foreground tabular-nums">{elapsed}s</span>
         </div>
-        <Progress value={visualProgress} />
+        <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full w-1/3 rounded-full bg-primary"
+            style={{ animation: "indeterminate-bar 1.2s ease-in-out infinite" }}
+          />
+        </div>
         <p className="text-xs text-muted-foreground">
-          {platform} API tüm ürünleri tarıyor. Mağazanın büyüklüğüne göre 10 saniye –
-          birkaç dakika sürebilir. Bu pencereyi kapatma.
+          {platform} API taranıyor. Mağaza büyüklüğüne göre 10 saniye – birkaç dakika
+          sürebilir. Bu pencereyi kapatma.
         </p>
       </CardContent>
     </Card>

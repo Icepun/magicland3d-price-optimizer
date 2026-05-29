@@ -83,8 +83,8 @@ interface ProfitPreview {
 }
 
 const PLATFORM_INFO = {
-  shopify: { label: "Shopify", color: "oklch(0.55 0.18 145)" },
-  trendyol: { label: "Trendyol", color: "oklch(0.66 0.22 25)" },
+  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
+  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
 } as const;
 
 export default function ProductDetailPage({
