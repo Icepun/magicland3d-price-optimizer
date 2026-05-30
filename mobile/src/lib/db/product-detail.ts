@@ -23,6 +23,7 @@ export interface ListingRow {
   commissionFixed: number | null;
   cargoCost: number | null;
   externalId: string | null;
+  externalSku: string | null;
 }
 
 export interface ProductDetail {

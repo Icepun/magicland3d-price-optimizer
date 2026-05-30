@@ -1,6 +1,14 @@
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
 
+export interface OrderItem {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  /** ürün eşleştirme için aday anahtarlar (barcode/sku/variant-id). */
+  matchKeys: string[];
+}
+
 export interface UnifiedOrder {
   id: string;
   platform: "shopify" | "trendyol";
@@ -9,7 +17,7 @@ export interface UnifiedOrder {
   status: string;
   customer: string | null;
   total: number;
-  items: { name: string; quantity: number }[];
+  items: OrderItem[];
 }
 
 export interface OrdersResult {

@@ -29,7 +29,16 @@ interface TyOrder {
   customerFirstName?: string;
   customerLastName?: string;
   totalPrice: number;
-  lines?: { productName: string; quantity: number }[];
+  lines?: {
+    productName: string;
+    quantity: number;
+    barcode?: string;
+    sku?: string;
+    stockCode?: string;
+    merchantSku?: string;
+    price?: number;
+    amount?: number;
+  }[];
 }
 
 export async function getTrendyolOrders(size = 30): Promise<UnifiedOrder[]> {
@@ -50,6 +59,13 @@ export async function getTrendyolOrders(size = 30): Promise<UnifiedOrder[]> {
     status: o.status,
     customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
     total: o.totalPrice,
-    items: (o.lines ?? []).map((l) => ({ name: l.productName, quantity: l.quantity })),
+    items: (o.lines ?? []).map((l) => ({
+      name: l.productName,
+      quantity: l.quantity,
+      unitPrice: Number(l.price ?? l.amount ?? 0),
+      matchKeys: [l.barcode, l.sku, l.stockCode, l.merchantSku].filter(
+        (k): k is string => !!k && k !== "merchantSku"
+      ),
+    })),
   }));
 }

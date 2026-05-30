@@ -1,33 +1,39 @@
-import { NativeTabs } from "expo-router/unstable-native-tabs";
+import { Tabs } from "expo-router";
+import { SymbolView, type SymbolViewProps } from "expo-symbols";
 
 import { ML } from "@/theme/colors";
 
+function tabIcon(name: SymbolViewProps["name"]) {
+  return ({ color }: { color: string }) => (
+    <SymbolView name={name} tintColor={color} style={{ width: 26, height: 26 }} />
+  );
+}
+
 export default function TabsLayout() {
   return (
-    <NativeTabs
-      backgroundColor={ML.card}
-      labelStyle={{ color: ML.textFaint, selected: { color: ML.accent } }}
-      indicatorColor={ML.accentSoft}
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: ML.accent,
+        tabBarInactiveTintColor: ML.textFaint,
+        tabBarStyle: {
+          backgroundColor: ML.card,
+          borderTopColor: ML.border,
+          borderTopWidth: 1,
+        },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+      }}
     >
-      <NativeTabs.Trigger name="index">
-        <NativeTabs.Trigger.Label>Panel</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="chart.bar.fill" />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="products">
-        <NativeTabs.Trigger.Label>Ürünler</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="shippingbox.fill" />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="orders">
-        <NativeTabs.Trigger.Label>Siparişler</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="bag.fill" />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="settings">
-        <NativeTabs.Trigger.Label>Ayarlar</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon sf="gearshape.fill" />
-      </NativeTabs.Trigger>
-    </NativeTabs>
+      <Tabs.Screen name="index" options={{ title: "Panel", tabBarIcon: tabIcon("chart.bar.fill") }} />
+      <Tabs.Screen
+        name="products"
+        options={{ title: "Ürünler", tabBarIcon: tabIcon("shippingbox.fill") }}
+      />
+      <Tabs.Screen name="orders" options={{ title: "Siparişler", tabBarIcon: tabIcon("bag.fill") }} />
+      <Tabs.Screen
+        name="settings"
+        options={{ title: "Ayarlar", tabBarIcon: tabIcon("gearshape.fill") }}
+      />
+    </Tabs>
   );
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { MotiView } from "moti";
+import { useMemo } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -12,9 +13,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { getAllOrders } from "@/lib/api/orders";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
+import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 
@@ -32,15 +35,34 @@ export default function DashboardScreen() {
     }),
   });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const { data: ordersData } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: 60_000 });
 
-  const summary =
-    products && rules && settings ? computeDashboard(products, rules, settings) : null;
+  const summary = products && rules && settings ? computeDashboard(products, rules, settings) : null;
+
+  const rev = useMemo(() => {
+    if (!ordersData || !products || !rules || !settings) return null;
+    const pm = buildProductMap(products);
+    const acc = {
+      total: 0,
+      profit: 0,
+      shopify: { rev: 0, n: 0 },
+      trendyol: { rev: 0, n: 0 },
+    };
+    for (const o of ordersData.orders) {
+      const op = computeOrderProfit(o, pm, rules, settings);
+      acc.total += op.revenue;
+      acc[o.platform].rev += op.revenue;
+      acc[o.platform].n++;
+      if (op.profit != null) acc.profit += op.profit;
+    }
+    return { ...acc, count: ordersData.orders.length };
+  }, [ordersData, products, rules, settings]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Panel</Text>
-        <Text style={styles.subtitle}>3 platformda net durum</Text>
+        <Text style={styles.subtitle}>Shopify + Trendyol — net durum</Text>
       </View>
 
       {isLoading || !summary ? (
@@ -54,6 +76,40 @@ export default function DashboardScreen() {
             <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
           }
         >
+          {/* Son 30 gün ciro/kâr */}
+          <View style={styles.revCard}>
+            <Text style={styles.revLabel}>SON 30 GÜN</Text>
+            <View style={styles.revTopRow}>
+              <View>
+                <Text style={styles.revCiroLabel}>Ciro</Text>
+                <Text style={styles.revCiro}>{rev ? formatCurrency(rev.total) : "…"}</Text>
+              </View>
+              <View style={{ alignItems: "flex-end" }}>
+                <Text style={styles.revCiroLabel}>Kâr</Text>
+                <Text style={[styles.revProfit, { color: (rev?.profit ?? 0) < 0 ? ML.red : ML.green }]}>
+                  {rev ? formatCurrency(rev.profit) : "…"}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.revSplit}>
+              <View style={styles.revPlat}>
+                <View style={[styles.dot, { backgroundColor: ML.shopify }]} />
+                <Text style={styles.revPlatText}>
+                  Shopify {rev ? formatCurrency(rev.shopify.rev) : "…"}
+                  <Text style={styles.revPlatN}>{rev ? `  ${rev.shopify.n}` : ""}</Text>
+                </Text>
+              </View>
+              <View style={styles.revPlat}>
+                <View style={[styles.dot, { backgroundColor: ML.trendyol }]} />
+                <Text style={styles.revPlatText}>
+                  Trendyol {rev ? formatCurrency(rev.trendyol.rev) : "…"}
+                  <Text style={styles.revPlatN}>{rev ? `  ${rev.trendyol.n}` : ""}</Text>
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Stok/ürün durumu */}
           <View style={styles.grid}>
             <Stat
               label="Toplam Ürün"
@@ -68,20 +124,15 @@ export default function DashboardScreen() {
               onPress={() => router.push({ pathname: "/products", params: { filter: "out-of-stock" } })}
             />
             <Stat
-              label="Zarar Eden"
+              label="Zarar Eden Ürün"
               value={String(summary.lossListings)}
               tone="red"
               onPress={() => router.push({ pathname: "/products", params: { filter: "loss" } })}
-            />
-            <Stat
-              label="Tahmini Kâr"
-              value={formatCurrency(summary.totalProfit)}
-              tone={summary.totalProfit >= 0 ? "green" : "red"}
               wide
             />
           </View>
 
-          <Text style={styles.sectionLabel}>PLATFORM BAZLI</Text>
+          <Text style={styles.sectionLabel}>PLATFORM BAZLI (MARJ)</Text>
           {summary.platforms.map((p) => (
             <PlatformRow key={p.platform} p={p} />
           ))}
@@ -99,7 +150,6 @@ export default function DashboardScreen() {
 
 function PlatformRow({ p }: { p: PlatformSummary }) {
   const accent = p.platform === "shopify" ? ML.shopify : ML.trendyol;
-  const loss = p.totalProfit < 0;
   return (
     <MotiView
       from={{ opacity: 0, translateY: 12 }}
@@ -116,19 +166,15 @@ function PlatformRow({ p }: { p: PlatformSummary }) {
       </View>
       <View style={styles.platformStats}>
         <View>
-          <Text style={styles.miniLabel}>Toplam Kâr</Text>
-          <Text style={[styles.miniValue, { color: loss ? ML.red : ML.green }]}>
-            {formatCurrency(p.totalProfit)}
+          <Text style={styles.miniLabel}>Ortalama Marj</Text>
+          <Text style={[styles.miniValue, { color: p.avgMargin < 0 ? ML.red : ML.green }]}>
+            {formatPercent(p.avgMargin)}
           </Text>
         </View>
         <View style={{ alignItems: "flex-end" }}>
-          <Text style={styles.miniLabel}>Ort. Marj</Text>
-          <Text style={styles.miniValue}>{formatPercent(p.avgMargin)}</Text>
-        </View>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={styles.miniLabel}>Zarar</Text>
+          <Text style={styles.miniLabel}>Zarar Eden</Text>
           <Text style={[styles.miniValue, { color: p.lossCount ? ML.red : ML.textDim }]}>
-            {p.lossCount}
+            {p.lossCount} / {p.listingCount}
           </Text>
         </View>
       </View>
@@ -174,8 +220,25 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
-  content: { padding: 16, gap: 12, paddingBottom: 110 },
+  content: { padding: 16, gap: 12, paddingBottom: 24 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  revCard: {
+    backgroundColor: ML.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: ML.border,
+    padding: 18,
+    gap: 14,
+  },
+  revLabel: { color: ML.accent, fontSize: 11, fontWeight: "800", letterSpacing: 1.2 },
+  revTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
+  revCiroLabel: { color: ML.textDim, fontSize: 12 },
+  revCiro: { color: ML.text, fontSize: 30, fontWeight: "800", letterSpacing: -0.5, marginTop: 2 },
+  revProfit: { fontSize: 22, fontWeight: "800", marginTop: 2 },
+  revSplit: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
+  revPlat: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  revPlatText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
+  revPlatN: { color: ML.textFaint, fontSize: 12, fontWeight: "400" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
   statHalf: { flexGrow: 1, flexBasis: "47%" },
   statWide: { flexGrow: 1, flexBasis: "100%" },

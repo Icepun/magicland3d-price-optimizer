@@ -81,7 +81,7 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
-  content: { padding: 16, gap: 8, paddingBottom: 110 },
+  content: { padding: 16, gap: 8, paddingBottom: 24 },
   card: {
     backgroundColor: ML.card,
     borderRadius: radius.lg,

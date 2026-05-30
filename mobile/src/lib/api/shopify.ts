@@ -31,7 +31,11 @@ const ORDERS_QUERY = `query($first:Int!){
       id name createdAt displayFulfillmentStatus
       totalPriceSet{ shopMoney{ amount } }
       customer{ firstName lastName }
-      lineItems(first:10){ edges{ node{ title quantity } } }
+      lineItems(first:20){ edges{ node{
+        title quantity sku
+        variant{ id barcode sku }
+        discountedUnitPriceSet{ shopMoney{ amount } }
+      } } }
     } }
   }
 }`;
@@ -44,7 +48,17 @@ interface ShEdge {
     displayFulfillmentStatus: string;
     totalPriceSet?: { shopMoney?: { amount?: string } };
     customer?: { firstName?: string; lastName?: string };
-    lineItems: { edges: { node: { title: string; quantity: number } }[] };
+    lineItems: {
+      edges: {
+        node: {
+          title: string;
+          quantity: number;
+          sku?: string | null;
+          variant?: { id?: string | null; barcode?: string | null; sku?: string | null };
+          discountedUnitPriceSet?: { shopMoney?: { amount?: string } };
+        };
+      }[];
+    };
   };
 }
 
@@ -62,7 +76,7 @@ export async function getShopifyOrders(limit = 30): Promise<UnifiedOrder[]> {
   };
   if (json.errors?.length) throw new Error(json.errors[0].message);
   return (json.data?.orders?.edges ?? []).map(({ node }) => ({
-    id: `sh-${node.id}`,
+    id: `sh-${node.id.split("/").pop() ?? node.name}`,
     platform: "shopify" as const,
     orderNumber: node.name,
     date: new Date(node.createdAt).getTime(),
@@ -70,6 +84,21 @@ export async function getShopifyOrders(limit = 30): Promise<UnifiedOrder[]> {
     customer:
       [node.customer?.firstName, node.customer?.lastName].filter(Boolean).join(" ") || null,
     total: Number(node.totalPriceSet?.shopMoney?.amount ?? 0),
-    items: node.lineItems.edges.map((e) => ({ name: e.node.title, quantity: e.node.quantity })),
+    items: node.lineItems.edges.map((e) => {
+      const variantId = e.node.variant?.id?.split("/").pop() ?? null;
+      const keys = [
+        e.node.variant?.barcode,
+        e.node.variant?.sku,
+        e.node.sku,
+        variantId ? `shopify-variant-${variantId}` : null,
+        variantId,
+      ].filter((k): k is string => !!k);
+      return {
+        name: e.node.title,
+        quantity: e.node.quantity,
+        unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
+        matchKeys: keys,
+      };
+    }),
   }));
 }
