@@ -19,6 +19,11 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Icon sf="shippingbox.fill" />
       </NativeTabs.Trigger>
 
+      <NativeTabs.Trigger name="orders">
+        <NativeTabs.Trigger.Label>Siparişler</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="bag.fill" />
+      </NativeTabs.Trigger>
+
       <NativeTabs.Trigger name="settings">
         <NativeTabs.Trigger.Label>Ayarlar</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf="gearshape.fill" />
