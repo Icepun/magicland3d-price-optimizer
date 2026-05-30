@@ -242,7 +242,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
   },
-  chipScroll: { height: 52, flexGrow: 0 },
+  chipScroll: { height: 44, flexGrow: 0, marginBottom: 12 },
   chipRow: { gap: 8, paddingHorizontal: 20, alignItems: "center" },
   chip: {
     height: 36,
