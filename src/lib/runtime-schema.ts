@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "10";
+const CURRENT_SCHEMA_VERSION = "11";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -284,6 +284,40 @@ export function ensureRuntimeSchema(): Promise<void> {
         "changedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "note" TEXT
       )
+    `);
+
+    // Filament makara envanteri + kullanım kaydı (v0.12)
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "FilamentSpool" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "material" TEXT NOT NULL DEFAULT 'PLA',
+        "colorName" TEXT,
+        "colorHex" TEXT NOT NULL DEFAULT '#9ca3af',
+        "brand" TEXT,
+        "totalGrams" REAL NOT NULL DEFAULT 1000,
+        "remainingGrams" REAL NOT NULL DEFAULT 1000,
+        "spoolCost" REAL,
+        "reorderGrams" REAL NOT NULL DEFAULT 200,
+        "vendorUrl" TEXT,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "FilamentUsage" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "spoolId" TEXT NOT NULL,
+        "productId" TEXT,
+        "productName" TEXT,
+        "grams" REAL NOT NULL,
+        "note" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "FilamentUsage_spoolId_idx" ON "FilamentUsage"("spoolId")
     `);
 
     // Ensure new columns on existing tables

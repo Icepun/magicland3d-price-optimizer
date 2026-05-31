@@ -153,6 +153,45 @@ model FilamentType {
   productCosts ProductCost[]
 }
 
+/**
+ * Filament makarası — fiziksel envanter. Her baskıda hangi makaranın kullanıldığı
+ * seçilir, basılan modelin gramajı kadar remainingGrams düşülür. reorderGrams
+ * eşiğinin altına inince "sipariş ver" uyarısı.
+ */
+model FilamentSpool {
+  id             String   @id @default(cuid())
+  name           String
+  material       String   @default("PLA")
+  colorName      String?
+  colorHex       String   @default("#9ca3af")
+  brand          String?
+  totalGrams     Float    @default(1000)
+  remainingGrams Float    @default(1000)
+  spoolCost      Float?
+  reorderGrams   Float    @default(200)
+  vendorUrl      String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  usages FilamentUsage[]
+}
+
+/** Bir makaradan filament düşüm kaydı (baskı / manuel). */
+model FilamentUsage {
+  id          String   @id @default(cuid())
+  spoolId     String
+  productId   String?
+  productName String?
+  grams       Float
+  note        String?
+  createdAt   DateTime @default(now())
+
+  spool FilamentSpool @relation(fields: [spoolId], references: [id], onDelete: Cascade)
+
+  @@index([spoolId])
+}
+
 model CostTemplate {
   id                     String  @id @default(cuid())
   name                   String
