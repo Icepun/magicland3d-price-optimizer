@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -181,7 +182,7 @@ function VariantPicker({ productId, productName, onClose }: { productId: string;
     onError: (e: Error) => toast.error(e.message),
   });
 
-  return (
+  const modal = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50 animate-in fade-in" onClick={onClose} />
       <Card className="relative w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
@@ -245,4 +246,8 @@ function VariantPicker({ productId, productName, onClose }: { productId: string;
       </Card>
     </div>
   );
+
+  // Modal'ı body'ye portalla: animasyonlu (transform'lu) ata kart, fixed konumu
+  // hapsetmesin diye. Aksi halde modal kartın içine sıkışıp arkaya taşıyor.
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : null;
 }
