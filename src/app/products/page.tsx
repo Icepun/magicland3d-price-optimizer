@@ -22,7 +22,8 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
@@ -72,14 +73,8 @@ interface Product {
     profitMargin: number | null;
     commissionMissing: boolean;
   }>;
-  variantChildren?: {
-    id: string;
-    name: string;
-    variantLabel: string | null;
-    imageUrl: string | null;
-    stock: number;
-    currentSalePrice: number;
-  }[];
+  variantLabel?: string | null;
+  variantGroup?: { id: string; name: string } | null;
 }
 
 const PLATFORM_COLOR: Record<string, string> = {
@@ -329,7 +324,7 @@ export default function ProductsPage() {
 
     const searched = list.filter((product) => {
       if (!q) return true;
-      return [product.name, product.barcode, product.sku, product.categoryName]
+      return [product.name, product.barcode, product.sku, product.categoryName, product.variantGroup?.name]
         .filter(Boolean)
         .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(q));
     });
@@ -348,6 +343,55 @@ export default function ProductsPage() {
 
     return searched;
   }, [globalFilter, products, filterMode]);
+
+  // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
+  type DisplayRow =
+    | { kind: "group"; key: string; groupId: string; groupName: string; members: Product[] }
+    | { kind: "product"; key: string; product: Product; isMember: boolean };
+
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (id: string) =>
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Düz ürün listesini grup başlıkları + tekil ürünler haline getir (sıra korunur).
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    const rows: DisplayRow[] = [];
+    const groupIdx = new Map<string, number>();
+    for (const p of filteredProducts) {
+      const g = p.variantGroup;
+      if (g) {
+        const existing = groupIdx.get(g.id);
+        if (existing !== undefined) {
+          (rows[existing] as Extract<DisplayRow, { kind: "group" }>).members.push(p);
+        } else {
+          groupIdx.set(g.id, rows.length);
+          rows.push({ kind: "group", key: `g_${g.id}`, groupId: g.id, groupName: g.name, members: [p] });
+        }
+      } else {
+        rows.push({ kind: "product", key: p.id, product: p, isMember: false });
+      }
+    }
+    return rows;
+  }, [filteredProducts]);
+
+  // Açık grupların üyelerini başlığın hemen altına serpiştir.
+  const flatRows = useMemo<DisplayRow[]>(() => {
+    const out: DisplayRow[] = [];
+    for (const row of displayRows) {
+      out.push(row);
+      if (row.kind === "group" && expandedGroups.has(row.groupId)) {
+        for (const m of row.members) {
+          out.push({ kind: "product", key: `${row.groupId}_${m.id}`, product: m, isMember: true });
+        }
+      }
+    }
+    return out;
+  }, [displayRows, expandedGroups]);
 
   // Lazy/windowed render — başta 40 satır, scroll'da artar. Filtre/arama değişince
   // ve sayfaya her girişte (component remount) sıfırlanır.
@@ -371,9 +415,9 @@ export default function ProductsPage() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [filteredProducts.length, visibleCount]);
+  }, [flatRows.length, visibleCount]);
 
-  const visibleProducts = filteredProducts.slice(0, visibleCount);
+  const visibleRows = flatRows.slice(0, visibleCount);
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
@@ -386,13 +430,76 @@ export default function ProductsPage() {
     { value: "all", label: "Tümü" },
   ];
 
+  // Varyant grubu başlık satırı — genel ad + N varyant + aç/gizle. Üyeler açıkken altına serpilir.
+  const renderGroupRow = (row: Extract<DisplayRow, { kind: "group" }>) => {
+    const expanded = expandedGroups.has(row.groupId);
+    const totalStock = row.members.reduce((s, m) => s + m.stock, 0);
+    const prices = row.members.map((m) => m.currentSalePrice).filter((n) => n > 0);
+    const priceMin = prices.length ? Math.min(...prices) : 0;
+    const priceMax = prices.length ? Math.max(...prices) : 0;
+    const allSelected = row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id));
+    const firstImg = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
+    const labels = row.members.map((m) => m.variantLabel || m.name).join(" · ");
+    const priceText = prices.length
+      ? priceMin === priceMax
+        ? formatCurrency(priceMin)
+        : `${formatCurrency(priceMin)} – ${formatCurrency(priceMax)}`
+      : null;
+    return (
+      <TableRow key={row.key} className="bg-muted/25 hover:bg-muted/40 border-y border-border/60">
+        <TableCell className="py-2">
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={(v) =>
+              setSelectedIds((prev) => {
+                const next = new Set(prev);
+                row.members.forEach((m) => (v ? next.add(m.id) : next.delete(m.id)));
+                return next;
+              })
+            }
+          />
+        </TableCell>
+        <TableCell className="py-2 pr-0">
+          <button onClick={() => toggleGroup(row.groupId)} className="relative block" title={expanded ? "Gizle" : "Aç"}>
+            <ProductImage src={firstImg} name={row.groupName} />
+            <span className="absolute -bottom-1 -right-1 rounded bg-primary text-primary-foreground p-0.5 leading-none">
+              <Layers className="h-2.5 w-2.5" />
+            </span>
+          </button>
+        </TableCell>
+        <TableCell className="max-w-0">
+          <button onClick={() => toggleGroup(row.groupId)} className="flex items-center gap-1.5 w-full text-left">
+            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
+            <span className="font-semibold text-sm truncate">{row.groupName}</span>
+            <Badge variant="secondary" className="shrink-0 tabular-nums">{row.members.length} varyant</Badge>
+          </button>
+          <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
+            {labels}
+            {priceText && <span className="opacity-80"> · {priceText}</span>}
+          </div>
+        </TableCell>
+        <TableCell className="py-2 text-center">
+          <span className="text-xs tabular-nums text-muted-foreground" title="Üyelerin toplam stoğu">Σ {totalStock}</span>
+        </TableCell>
+        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell>
+          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1" onClick={() => toggleGroup(row.groupId)}>
+            {expanded ? "Gizle" : "Aç"}
+          </Button>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Shopify ana ürünleri + Trendyol eşleştirmeleri · varyantlar ana ürünün altında gruplanır
+            Shopify ana ürünleri + Trendyol eşleştirmeleri · varyantlar genel başlık altında tek satırda toplanır
           </p>
         </div>
         <div className="flex gap-2">
@@ -467,9 +574,8 @@ export default function ProductsPage() {
         </div>
 
         <span className="text-sm text-muted-foreground ml-auto">
-          {visibleCount < filteredProducts.length
-            ? `${visibleProducts.length} / ${filteredProducts.length} ürün`
-            : `${filteredProducts.length} ürün`}
+          {displayRows.length} kayıt
+          {filteredProducts.length !== displayRows.length ? ` · ${filteredProducts.length} ürün` : ""}
         </span>
       </div>
 
@@ -542,15 +648,22 @@ export default function ProductsPage() {
               </TableRow>
             ) : (
               <>
-              {visibleProducts.map((product) => {
+              {visibleRows.map((row) => {
+                if (row.kind === "group") return renderGroupRow(row);
+                const product = row.product;
+                const isMember = row.isMember;
                 const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
                 const findPlatform = (p: "shopify" | "trendyol") =>
                   product.platforms.find((x) => x.platform === p);
 
                 return (
                   <TableRow
-                    key={product.id}
-                    className={`hover:bg-muted/50 ${!product.isActive ? "opacity-50" : ""}`}
+                    key={row.key}
+                    className={cn(
+                      "hover:bg-muted/50",
+                      !product.isActive && "opacity-50",
+                      isMember && "bg-muted/15"
+                    )}
                   >
                     <TableCell className="py-2">
                       <Checkbox
@@ -565,7 +678,7 @@ export default function ProductsPage() {
                         }}
                       />
                     </TableCell>
-                    <TableCell className="py-2 pr-0">
+                    <TableCell className={cn("py-2 pr-0", isMember && "pl-6")}>
                       <ProductImage src={product.imageUrl} name={product.name} />
                     </TableCell>
                     <TableCell className="max-w-0">
@@ -581,26 +694,10 @@ export default function ProductsPage() {
                         <span className="opacity-60">·</span>
                         <span className="truncate">{product.categoryName}</span>
                       </div>
-                      {product.variantChildren && product.variantChildren.length > 0 && (
-                        <details className="mt-1.5">
-                          <summary className="text-[11px] font-medium text-primary cursor-pointer select-none w-fit">
-                            {product.variantChildren.length} varyant
-                          </summary>
-                          <div className="mt-1 ml-0.5 pl-2.5 border-l-2 border-primary/20 space-y-0.5">
-                            {product.variantChildren.map((v) => (
-                              <Link
-                                key={v.id}
-                                href={`/products/${v.id}`}
-                                className="flex items-center justify-between gap-2 text-[11px] py-0.5 hover:text-primary"
-                              >
-                                <span className="truncate">{v.variantLabel || v.name}</span>
-                                <span className="text-muted-foreground tabular-nums shrink-0">
-                                  stok {v.stock} · {formatCurrency(v.currentSalePrice)}
-                                </span>
-                              </Link>
-                            ))}
-                          </div>
-                        </details>
+                      {isMember && product.variantLabel && (
+                        <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
+                          <Layers className="h-3 w-3" /> {product.variantLabel}
+                        </span>
                       )}
                     </TableCell>
                     <TableCell className="py-2">
@@ -765,7 +862,7 @@ export default function ProductsPage() {
                   </TableRow>
                 );
               })}
-              {visibleCount < filteredProducts.length && (
+              {visibleCount < flatRows.length && (
                 <TableRow ref={sentinelRef}>
                   <TableCell colSpan={8} className="text-center py-4">
                     <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground/50" />

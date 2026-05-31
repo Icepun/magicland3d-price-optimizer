@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "13";
+const CURRENT_SCHEMA_VERSION = "14";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -118,6 +118,56 @@ async function cleanupPdfCommissionRules() {
   await prisma.appSetting.upsert({
     where: { key: cleanupKey },
     create: { key: cleanupKey, value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+}
+
+/**
+ * v0.14 migration: v0.13'teki parentProductId tabanlı varyant bağlarını VariantGroup'a taşı.
+ * Her ana ürün (çocuğu olan) için bir grup oluşturulur; ana ürün + tüm çocukları o gruba bağlanır.
+ * Hiçbir üye artık "ana" değil — hepsi eşit. Bir kez çalışır (AppSetting flag).
+ */
+async function migrateParentVariantsToGroups() {
+  if (!(await tableExists("Product"))) return;
+  if (!(await tableExists("VariantGroup"))) return;
+
+  const flag = "variantGroupsMigratedAt";
+  const existing = await prisma.appSetting.findUnique({ where: { key: flag } });
+  if (existing) return;
+
+  // Çocuğu olan (parent olarak referans verilen) ürünler
+  const parents = await prisma.$queryRawUnsafe<Array<{ parentProductId: string }>>(
+    `SELECT DISTINCT "parentProductId" FROM "Product" WHERE "parentProductId" IS NOT NULL`
+  );
+
+  for (const { parentProductId } of parents) {
+    if (!parentProductId) continue;
+    const prow = await prisma.$queryRawUnsafe<Array<{ name: string; variantGroupId: string | null }>>(
+      `SELECT "name", "variantGroupId" FROM "Product" WHERE "id" = ? LIMIT 1`,
+      parentProductId
+    );
+    if (!prow?.[0]) continue;
+    if (prow[0].variantGroupId) continue; // zaten gruplu
+    const groupId = `vg_${parentProductId}`;
+    const groupName = prow[0].name || "Varyant Grubu";
+    await prisma.$executeRawUnsafe(
+      `INSERT OR IGNORE INTO "VariantGroup" (id, name, createdAt, updatedAt)
+       VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      groupId,
+      groupName
+    );
+    // Ana ürünü + tüm çocuklarını gruba bağla (hepsi eşit üye)
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Product" SET "variantGroupId" = ? WHERE "id" = ? OR "parentProductId" = ?`,
+      groupId,
+      parentProductId,
+      parentProductId
+    );
+  }
+
+  await prisma.appSetting.upsert({
+    where: { key: flag },
+    create: { key: flag, value: new Date().toISOString() },
     update: { value: new Date().toISOString() },
   });
 }
@@ -320,6 +370,16 @@ export function ensureRuntimeSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "FilamentUsage_spoolId_idx" ON "FilamentUsage"("spoolId")
     `);
 
+    // Varyant grubu — aynı ürünün renk/boy seçeneklerini tek genel başlık altında toplar (v0.14)
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "VariantGroup" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Ensure new columns on existing tables
     await ensureColumn("Product", "trendyolId", "TEXT");
     await ensureColumn("Product", "source", "TEXT NOT NULL DEFAULT 'manual'");
@@ -335,8 +395,12 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "commissionUpdatedAt", "DATETIME");
     await ensureColumn("Product", "productMainId", "TEXT");
     await ensureColumn("Product", "hidden", "BOOLEAN NOT NULL DEFAULT false");
-    await ensureColumn("Product", "parentProductId", "TEXT");
+    await ensureColumn("Product", "parentProductId", "TEXT"); // legacy (v13) — migration kaynağı, artık kullanılmıyor
     await ensureColumn("Product", "variantLabel", "TEXT");
+    await ensureColumn("Product", "variantGroupId", "TEXT");
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`
+    );
 
     // CargoRule platform alanı (Trendyol/Shopify ayrı baremi)
     await ensureColumn("CargoRule", "platform", "TEXT");
@@ -424,6 +488,7 @@ export function ensureRuntimeSchema(): Promise<void> {
 
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
+    await migrateParentVariantsToGroups();
 
     // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner
     await prisma.$executeRawUnsafe(

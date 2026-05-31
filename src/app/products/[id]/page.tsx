@@ -72,15 +72,19 @@ interface ProductDetail {
   } | null;
   listings: Listing[];
   variantLabel: string | null;
-  parent: { id: string; name: string } | null;
-  variantChildren: {
+  variantGroupId: string | null;
+  variantGroup: {
     id: string;
     name: string;
-    variantLabel: string | null;
-    imageUrl: string | null;
-    stock: number;
-    currentSalePrice: number;
-  }[];
+    products: {
+      id: string;
+      name: string;
+      variantLabel: string | null;
+      imageUrl: string | null;
+      stock: number;
+      currentSalePrice: number;
+    }[];
+  } | null;
 }
 
 interface ProfitPreview {
@@ -618,9 +622,7 @@ export default function ProductDetailPage({
       <VariantsCard
         productId={product.id}
         productName={product.name}
-        variantLabel={product.variantLabel}
-        parent={product.parent}
-        childrenVariants={product.variantChildren}
+        group={product.variantGroup}
       />
 
       <PriceLabCard productId={product.id} />

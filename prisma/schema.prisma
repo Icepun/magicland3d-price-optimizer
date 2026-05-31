@@ -27,8 +27,8 @@ model Product {
   trendyolId       String?
   /** Trendyol productMainId — varyant grubu kimliği. Aynı productMainId'ye sahip ürünler birbirinin varyantıdır (renk, beden, boyut). */
   productMainId    String?
-  /** Bu ürün başka bir ürünün varyantıysa, ana ürünün id'si. Varyantlar ana listede gizlenir, ana ürünün altında görünür. */
-  parentProductId  String?
+  /** Ait olduğu varyant grubu (genel başlık). Aynı gruptaki ürünler birbirinin eşit varyantıdır. */
+  variantGroupId   String?
   /** Varyant için okunur etiket (örn. "Kırmızı"). Boşsa ürün adı kullanılır. */
   variantLabel     String?
   commissionRate   Float?
@@ -40,10 +40,24 @@ model Product {
   cost            ProductCost?
   priceHistory    PriceHistory[]
   listings        Listing[]
-  /** Bu ürün bir varyantsa bağlı olduğu ana ürün. */
-  parent          Product?  @relation("ProductVariants", fields: [parentProductId], references: [id], onDelete: SetNull)
-  /** Bu ürünün varyantları (alt ürünler). */
-  variantChildren Product[] @relation("ProductVariants")
+  /** Ait olduğu varyant grubu. */
+  variantGroup    VariantGroup? @relation(fields: [variantGroupId], references: [id], onDelete: SetNull)
+
+  @@index([variantGroupId])
+}
+
+/**
+ * Varyant grubu = aynı ürünün farklı renk/boy seçeneklerini tek genel başlık altında
+ * toplayan üst katman. Her seçenek ayrı bir Product'tır (Shopify'dan ayrı çekilmiş);
+ * hepsi bu gruba bağlanır ve listede tek satırda toplanır. Hiçbir üye "ana ürün" değildir.
+ */
+model VariantGroup {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
 }
 
 /**

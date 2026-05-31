@@ -15,7 +15,7 @@ const UpdateProductSchema = z.object({
   weight: z.number().positive().nullable().optional(),
   isActive: z.boolean().optional(),
   hidden: z.boolean().optional(),
-  parentProductId: z.string().nullable().optional(),
+  variantGroupId: z.string().nullable().optional(),
   variantLabel: z.string().nullable().optional(),
   cost: z
     .object({
@@ -64,11 +64,16 @@ export async function GET(
       },
       priceHistory: { orderBy: { changedAt: "desc" }, take: 20 },
       listings: { orderBy: { platform: "asc" } },
-      variantChildren: {
-        select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
-        orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
+      variantGroup: {
+        select: {
+          id: true,
+          name: true,
+          products: {
+            select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
+            orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
+          },
+        },
       },
-      parent: { select: { id: true, name: true } },
     },
   });
 
@@ -98,10 +103,28 @@ export async function PATCH(
     priceBefore = before?.currentSalePrice ?? null;
   }
 
+  // Varyant grubu değişiyorsa, eski grubu sonradan temizlemek için önceki grubu al.
+  let prevGroupId: string | null = null;
+  if (productData.variantGroupId !== undefined) {
+    const before = await prisma.product.findUnique({
+      where: { id },
+      select: { variantGroupId: true },
+    });
+    prevGroupId = before?.variantGroupId ?? null;
+  }
+
   const product = await prisma.product.update({
     where: { id },
     data: productData,
   });
+
+  // Üye eski gruptan ayrıldıysa ve grup boş kaldıysa grubu sil (yetim grup bırakma).
+  if (prevGroupId && prevGroupId !== productData.variantGroupId) {
+    const remaining = await prisma.product.count({ where: { variantGroupId: prevGroupId } });
+    if (remaining === 0) {
+      await prisma.variantGroup.delete({ where: { id: prevGroupId } }).catch(() => {});
+    }
+  }
 
   if (
     priceBefore !== null &&
@@ -186,11 +209,20 @@ export async function DELETE(
   await ensureRuntimeSchema();
 
   const { id } = await params;
-  // Bu ürünün varyantları varsa, silmeden önce üst seviyeye geri al (kaybolmasınlar).
-  await prisma.product.updateMany({
-    where: { parentProductId: id },
-    data: { parentProductId: null, variantLabel: null },
+  // Silmeden önce grup bilgisini al — silince grup boş kalırsa grubu da temizle.
+  const existing = await prisma.product.findUnique({
+    where: { id },
+    select: { variantGroupId: true },
   });
   await prisma.product.delete({ where: { id } });
+
+  if (existing?.variantGroupId) {
+    const remaining = await prisma.product.count({
+      where: { variantGroupId: existing.variantGroupId },
+    });
+    if (remaining === 0) {
+      await prisma.variantGroup.delete({ where: { id: existing.variantGroupId } }).catch(() => {});
+    }
+  }
   return NextResponse.json({ ok: true });
 }
