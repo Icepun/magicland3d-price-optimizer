@@ -122,7 +122,7 @@ export async function GET() {
   let trendyol: PlatformStatus = { ok: false, count: 0 };
 
   // Ham siparişleri çek (her platform bağımsız) ──────────────────────────────
-  type RawLine = { name: string; quantity: number; unitPrice: number; barcode: string | null; sku: string | null; image: string | null };
+  type RawLine = { name: string; quantity: number; unitPrice: number; image: string | null; matchKeys: string[] };
   type Raw = {
     platform: "shopify" | "trendyol";
     id: string;
@@ -158,9 +158,15 @@ export async function GET() {
           name: l.title,
           quantity: l.quantity,
           unitPrice: l.unitPrice,
-          barcode: l.barcode,
-          sku: l.sku,
           image: l.image,
+          // Çok-anahtarlı eşleştirme: variant barcode/sku, satır sku, variant id (Listing.externalId)
+          matchKeys: [
+            l.barcode,
+            l.variantSku,
+            l.sku,
+            l.variantId,
+            l.variantId ? `shopify-variant-${l.variantId}` : null,
+          ].filter((k): k is string => !!k),
         })),
         trackingNumber: o.trackingNumber,
         cargoProvider: o.cargoProvider,
@@ -195,9 +201,11 @@ export async function GET() {
           name: l.productName ?? l.barcode ?? "Ürün",
           quantity: Number(l.quantity ?? 1),
           unitPrice: Number(l.price ?? 0),
-          barcode: l.barcode ?? null,
-          sku: l.merchantSku ?? l.sku ?? null,
           image: null,
+          // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
+          matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
+            (k): k is string => !!k && k !== "merchantSku"
+          ),
         })),
         trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
         cargoProvider: o.cargoProviderName ?? null,
@@ -213,27 +221,33 @@ export async function GET() {
   const recent = raws.filter((r) => !r.date || new Date(r.date).getTime() >= cutoff);
 
   // Sipariş satırlarını ÜRÜNLERİMİZLE eşleştir → görsel + maliyet + kâr ──────────
-  const barcodes = new Set<string>();
-  const skus = new Set<string>();
+  const allKeys = new Set<string>();
   for (const r of recent) {
     for (const l of r.lines) {
-      if (l.barcode) barcodes.add(l.barcode);
-      if (l.sku) skus.add(l.sku);
+      for (const k of l.matchKeys) allKeys.add(k);
     }
   }
 
-  const byBarcode = new Map<string, Matched>();
-  const bySku = new Map<string, Matched>();
+  // Tek harita: Product.barcode/sku + Listing.externalId/externalSku → ürün
+  const byKey = new Map<string, Matched>();
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
   let vatRate = 0;
 
-  if (barcodes.size > 0 || skus.size > 0) {
+  if (allKeys.size > 0) {
+    const keyList = [...allKeys];
     const [products, cRules, kRules, eRules, settings] = await Promise.all([
       prisma.product.findMany({
-        where: { OR: [{ barcode: { in: [...barcodes] } }, { sku: { in: [...skus] } }] },
-        include: { cost: { include: { filamentType: true } } },
+        where: {
+          OR: [
+            { barcode: { in: keyList } },
+            { sku: { in: keyList } },
+            { listings: { some: { externalId: { in: keyList } } } },
+            { listings: { some: { externalSku: { in: keyList } } } },
+          ],
+        },
+        include: { cost: { include: { filamentType: true } }, listings: true },
       }),
       prisma.commissionRule.findMany({ where: { isActive: true } }),
       prisma.cargoRule.findMany({ where: { isActive: true } }),
@@ -259,8 +273,15 @@ export async function GET() {
         desi: p.desi,
         commissionRate: p.commissionRate,
       };
-      byBarcode.set(p.barcode, m);
-      if (p.sku) bySku.set(p.sku, m);
+      const add = (k: string | null | undefined) => {
+        if (k && !byKey.has(k)) byKey.set(k, m);
+      };
+      add(p.barcode);
+      add(p.sku);
+      for (const l of p.listings) {
+        add(l.externalId);
+        add(l.externalSku);
+      }
     }
   }
 
@@ -291,7 +312,14 @@ export async function GET() {
     let thumb: string | null = null;
 
     const items: UnifiedOrderItem[] = r.lines.map((l) => {
-      const m = (l.barcode && byBarcode.get(l.barcode)) || (l.sku && bySku.get(l.sku)) || null;
+      let m: Matched | null = null;
+      for (const k of l.matchKeys) {
+        const hit = byKey.get(k);
+        if (hit) {
+          m = hit;
+          break;
+        }
+      }
       const image = l.image || m?.imageUrl || null;
       if (image && !thumb) thumb = image;
 

@@ -42,6 +42,8 @@ export interface ShopifyOrderLine {
   unitPrice: number;
   barcode: string | null;
   sku: string | null;
+  variantId: string | null;
+  variantSku: string | null;
   image: string | null;
 }
 
@@ -124,7 +126,7 @@ interface AdminOrdersResponse {
                 title: string;
                 quantity: number;
                 sku: string | null;
-                variant: { barcode: string | null } | null;
+                variant: { id: string | null; barcode: string | null; sku: string | null } | null;
                 image: { url: string } | null;
                 discountedUnitPriceSet: { shopMoney: { amount: string } } | null;
               };
@@ -206,7 +208,7 @@ const ORDERS_QUERY = `
                 title
                 quantity
                 sku
-                variant { barcode }
+                variant { id barcode sku }
                 image { url }
                 discountedUnitPriceSet { shopMoney { amount } }
               }
@@ -476,6 +478,8 @@ export class ShopifyClient {
           unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
           barcode: e.node.variant?.barcode ?? null,
           sku: e.node.sku ?? null,
+          variantId: e.node.variant?.id?.split("/").pop() ?? null,
+          variantSku: e.node.variant?.sku ?? null,
           image: e.node.image?.url ?? null,
         })),
         trackingNumber: tracking?.number ?? null,
