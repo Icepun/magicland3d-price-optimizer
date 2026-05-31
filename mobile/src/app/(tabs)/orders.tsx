@@ -18,6 +18,7 @@ import { getAllOrders, statusInfo, type StatusTone, type UnifiedOrder } from "@/
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { buildProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
+import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 
@@ -30,11 +31,11 @@ const TONE: Record<StatusTone, string> = {
 };
 
 export default function OrdersScreen() {
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const { data, isLoading, refetch } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
-    staleTime: 60_000,
   });
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
   const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
   const { data: rules } = useQuery({
     queryKey: ["rules"],
@@ -74,7 +75,7 @@ export default function OrdersScreen() {
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
           }
           ListHeaderComponent={
             data?.errors.length ? (

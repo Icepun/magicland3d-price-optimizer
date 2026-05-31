@@ -19,6 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfit } from "@/lib/profit";
+import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 
@@ -53,7 +54,7 @@ export default function ProductsScreen() {
     }
   }, [params.filter]);
 
-  const { data: products, isLoading, isError, error, refetch, isRefetching } = useQuery({
+  const { data: products, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
@@ -66,6 +67,7 @@ export default function ProductsScreen() {
     }),
   });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
 
   const items = useMemo<ListItem[]>(() => {
     if (!products || !rules || !settings) return [];
@@ -157,7 +159,7 @@ export default function ProductsScreen() {
             </MotiView>
           )}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
           }
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sonuç yok</Text>

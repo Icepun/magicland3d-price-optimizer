@@ -20,11 +20,12 @@ import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
+import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 
 export default function DashboardScreen() {
-  const { data: products, isLoading, refetch, isRefetching } = useQuery({
+  const { data: products, isLoading, refetch: refetchProducts } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
@@ -37,14 +38,23 @@ export default function DashboardScreen() {
     }),
   });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
-  const { data: ordersData } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: 60_000 });
+  const { data: ordersData, refetch: refetchOrders } = useQuery({
+    queryKey: ["orders"],
+    queryFn: getAllOrders,
+  });
   const { data: notif } = useQuery({
     queryKey: ["notifications"],
     queryFn: getNotifications,
     refetchInterval: 60_000,
   });
 
-  const summary = products && rules && settings ? computeDashboard(products, rules, settings) : null;
+  const summary = useMemo(
+    () => (products && rules && settings ? computeDashboard(products, rules, settings) : null),
+    [products, rules, settings]
+  );
+  const { refreshing, onRefresh } = useManualRefresh(() =>
+    Promise.all([refetchProducts(), refetchOrders()])
+  );
 
   const rev = useMemo(() => {
     if (!ordersData || !products || !rules || !settings) return null;
@@ -97,7 +107,7 @@ export default function DashboardScreen() {
         <ScrollView
           contentContainerStyle={styles.content}
           refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
           }
         >
           {/* Son 30 gün ciro/kâr */}

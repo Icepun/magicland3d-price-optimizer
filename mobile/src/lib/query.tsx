@@ -11,9 +11,13 @@ export function AppQueryProvider({ children }: { children: ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 30_000,
+            // Akıcılık: ekran geçişlerinde gereksiz yeniden çekme YOK (cache kullan).
+            // Tazeleme: elle aşağı çek (pull-to-refresh) ya da mutasyon invalidasyonu.
+            staleTime: 5 * 60_000,
+            gcTime: 30 * 60_000,
             retry: 1,
             refetchOnWindowFocus: false,
+            refetchOnReconnect: false,
           },
         },
       })

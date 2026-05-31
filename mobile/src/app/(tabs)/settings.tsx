@@ -26,8 +26,13 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Ayarlar</Text>
-        <Text style={styles.subtitle}>Masaüstüyle aynı veritabanı</Text>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+          <Text style={styles.backText}>‹</Text>
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Ayarlar</Text>
+          <Text style={styles.subtitle}>Masaüstüyle aynı veritabanı</Text>
+        </View>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
@@ -78,7 +83,9 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
+  header: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4 },
+  back: { width: 36, height: 40, alignItems: "center", justifyContent: "center" },
+  backText: { color: ML.text, fontSize: 36, marginTop: -6 },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 8, paddingBottom: 24 },

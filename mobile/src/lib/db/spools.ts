@@ -62,6 +62,40 @@ export async function consumeSpool(
   return newRemaining;
 }
 
+export interface SpoolInput {
+  name: string;
+  material: string;
+  colorName: string | null;
+  colorHex: string;
+  brand: string | null;
+  totalGrams: number;
+  remainingGrams: number;
+  reorderGrams: number;
+  spoolCost: number | null;
+}
+
+export async function createSpool(s: SpoolInput): Promise<void> {
+  const now = new Date().toISOString();
+  await execute(
+    `INSERT INTO FilamentSpool
+       (id, name, material, colorName, colorHex, brand, totalGrams, remainingGrams, spoolCost, reorderGrams, isActive, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    [genId(), s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, now, now]
+  );
+}
+
+export async function updateSpool(id: string, s: SpoolInput): Promise<void> {
+  await execute(
+    `UPDATE FilamentSpool SET name=?, material=?, colorName=?, colorHex=?, brand=?,
+            totalGrams=?, remainingGrams=?, spoolCost=?, reorderGrams=?, updatedAt=? WHERE id=?`,
+    [s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, new Date().toISOString(), id]
+  );
+}
+
+export async function deleteSpool(id: string): Promise<void> {
+  await execute(`DELETE FROM FilamentSpool WHERE id = ?`, [id]);
+}
+
 /** Makarayı dolu işaretle (remainingGrams = totalGrams). */
 export async function markSpoolFull(id: string): Promise<void> {
   const rows = await query<{ totalGrams: number }>(

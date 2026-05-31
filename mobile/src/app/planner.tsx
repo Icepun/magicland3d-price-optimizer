@@ -1,20 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
+import { getSettingsMap } from "@/lib/db/rules";
+import { updateSetting } from "@/lib/db/rule-crud";
 import { ML, radius } from "@/theme/colors";
 
 interface PlanItem {
@@ -27,10 +21,24 @@ interface PlanItem {
 }
 
 export default function PlannerScreen() {
-  const [target, setTarget] = useState("5");
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
-  const t = Math.max(1, Math.floor(Number(target) || 5));
+  // Hedef stok DB'de (AppSetting) saklanır → masaüstü/telefon senkron, sayfa değişince sıfırlanmaz
+  const savedTarget = Math.max(1, Math.floor(Number(settings?.plannerTargetStock) || 5));
+  const [override, setOverride] = useState<number | null>(null);
+  const t = override ?? savedTarget;
+
+  const saveTarget = useMutation({
+    mutationFn: (v: number) => updateSetting("plannerTargetStock", String(v)),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
+  const changeTarget = (delta: number) => {
+    const next = Math.max(1, t + delta);
+    setOverride(next);
+    saveTarget.mutate(next);
+  };
 
   const plan = useMemo<PlanItem[]>(() => {
     if (!data) return [];
@@ -58,13 +66,22 @@ export default function PlannerScreen() {
       <ScreenHeader title="Üretim Planlayıcı" />
       <View style={styles.targetRow}>
         <Text style={styles.targetLabel}>Hedef stok</Text>
-        <TextInput
-          value={target}
-          onChangeText={setTarget}
-          keyboardType="number-pad"
-          style={styles.targetInput}
-          maxLength={3}
-        />
+        <View style={styles.stepper}>
+          <Pressable
+            onPress={() => changeTarget(-1)}
+            disabled={t <= 1}
+            style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }, t <= 1 && { opacity: 0.3 }]}
+          >
+            <Text style={styles.stepBtnText}>−</Text>
+          </Pressable>
+          <Text style={styles.stepValue}>{t}</Text>
+          <Pressable
+            onPress={() => changeTarget(1)}
+            style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
+          >
+            <Text style={styles.stepBtnText}>+</Text>
+          </Pressable>
+        </View>
       </View>
 
       {isLoading ? (
@@ -149,19 +166,18 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   targetLabel: { color: ML.textDim, fontSize: 14 },
-  targetInput: {
+  stepper: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: ML.card,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: ML.border,
-    color: ML.text,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    fontSize: 16,
-    fontWeight: "700",
-    width: 70,
-    textAlign: "center",
+    overflow: "hidden",
   },
+  stepBtn: { width: 44, height: 40, alignItems: "center", justifyContent: "center" },
+  stepBtnText: { color: ML.accent, fontSize: 24, fontWeight: "700" },
+  stepValue: { color: ML.text, fontSize: 18, fontWeight: "800", minWidth: 40, textAlign: "center" },
   list: { padding: 16, gap: 8, paddingBottom: 24 },
   summary: {
     flexDirection: "row",

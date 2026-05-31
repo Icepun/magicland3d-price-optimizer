@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { SymbolView } from "expo-symbols";
 import { MotiView } from "moti";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -9,6 +10,7 @@ import {
   Platform,
   Pressable,
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -19,11 +21,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ScreenHeader } from "@/components/form";
 import {
   consumeSpool,
+  createSpool,
+  deleteSpool,
   getSpools,
   markSpoolFull,
   spoolStatus,
+  updateSpool,
   type Spool,
+  type SpoolInput,
 } from "@/lib/db/spools";
+import { useManualRefresh } from "@/lib/use-refresh";
 import { ML, radius } from "@/theme/colors";
 
 const STATUS = {
@@ -32,20 +39,26 @@ const STATUS = {
   ok: { label: "Yeterli", color: ML.green },
 } as const;
 
+const MATERIALS = ["PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "Reçine"];
+const SWATCHES = [
+  "#E5E7EB", "#1F2937", "#9CA3AF", "#EF4444", "#F97316", "#FACC15",
+  "#22C55E", "#3B82F6", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16",
+];
+
 export default function SpoolsScreen() {
   const qc = useQueryClient();
-  const { data, isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ["spools"],
-    queryFn: getSpools,
-  });
+  const { data, isLoading, refetch } = useQuery({ queryKey: ["spools"], queryFn: getSpools });
+  const { refreshing, onRefresh } = useManualRefresh(refetch);
   const [consumeTarget, setConsumeTarget] = useState<Spool | null>(null);
+  const [formTarget, setFormTarget] = useState<Spool | "new" | null>(null);
 
   const alertCount = (data ?? []).filter((s) => spoolStatus(s) !== "ok").length;
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["spools"] });
+    qc.invalidateQueries({ queryKey: ["notifications"] });
+  };
 
-  const refill = useMutation({
-    mutationFn: (id: string) => markSpoolFull(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["spools"] }),
-  });
+  const refill = useMutation({ mutationFn: markSpoolFull, onSuccess: invalidate });
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -61,15 +74,11 @@ export default function SpoolsScreen() {
           numColumns={2}
           columnWrapperStyle={{ gap: 10 }}
           contentContainerStyle={styles.list}
-          refreshControl={
-            <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />}
           ListHeaderComponent={
             alertCount > 0 ? (
               <View style={styles.alertBox}>
-                <Text style={styles.alertText}>
-                  ⚠ {alertCount} makara azaldı/bitti — sipariş vermeyi unutma
-                </Text>
+                <Text style={styles.alertText}>⚠ {alertCount} makara azaldı/bitti — sipariş ver</Text>
               </View>
             ) : null
           }
@@ -84,53 +93,46 @@ export default function SpoolsScreen() {
                 spool={item}
                 onConsume={() => setConsumeTarget(item)}
                 onRefill={() => refill.mutate(item.id)}
+                onEdit={() => setFormTarget(item)}
               />
             </MotiView>
           )}
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>
-              Makara yok — masaüstünden ekleyebilirsin
+              Henüz makara yok — sağ alttan ekle
             </Text>
           }
         />
       )}
 
-      <ConsumeModal
-        spool={consumeTarget}
-        onClose={() => setConsumeTarget(null)}
-        onDone={() => {
-          setConsumeTarget(null);
-          qc.invalidateQueries({ queryKey: ["spools"] });
-          qc.invalidateQueries({ queryKey: ["notifications"] });
-        }}
-      />
+      {/* Ekle (FAB) */}
+      <Pressable
+        onPress={() => setFormTarget("new")}
+        style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
+      >
+        <SymbolView name="plus" tintColor="#fff" style={{ width: 26, height: 26 }} />
+      </Pressable>
+
+      <ConsumeModal spool={consumeTarget} onClose={() => setConsumeTarget(null)} onDone={() => { setConsumeTarget(null); invalidate(); }} />
+      <SpoolFormModal target={formTarget} onClose={() => setFormTarget(null)} onDone={() => { setFormTarget(null); invalidate(); }} />
     </SafeAreaView>
   );
 }
 
-function SpoolCard({
-  spool,
-  onConsume,
-  onRefill,
-}: {
-  spool: Spool;
-  onConsume: () => void;
-  onRefill: () => void;
-}) {
+function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onConsume: () => void; onRefill: () => void; onEdit: () => void }) {
   const st = STATUS[spoolStatus(spool)];
   const pct = Math.max(0, Math.min(100, (spool.remainingGrams / Math.max(1, spool.totalGrams)) * 100));
   return (
     <View style={styles.card}>
       <View style={[styles.stripe, { backgroundColor: spool.colorHex }]} />
+      <Pressable onPress={onEdit} hitSlop={6} style={styles.editIcon}>
+        <SymbolView name="pencil" tintColor={ML.textFaint} style={{ width: 16, height: 16 }} />
+      </Pressable>
       <View style={styles.cardBody}>
-        <Text style={styles.name} numberOfLines={1}>
-          {spool.name}
-        </Text>
+        <Text style={styles.name} numberOfLines={1}>{spool.name}</Text>
         <Text style={styles.meta} numberOfLines={1}>
-          {spool.material}
-          {spool.brand ? ` · ${spool.brand}` : ""}
+          {spool.material}{spool.brand ? ` · ${spool.brand}` : ""}
         </Text>
-
         <View style={styles.barTrack}>
           <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: st.color }]} />
         </View>
@@ -143,15 +145,11 @@ function SpoolCard({
             <Text style={[styles.pillText, { color: st.color }]}>{st.label}</Text>
           </View>
         </View>
-
         <View style={styles.actions}>
           <Pressable style={({ pressed }) => [styles.btn, pressed && { opacity: 0.7 }]} onPress={onConsume}>
             <Text style={styles.btnText}>Düş</Text>
           </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.7 }]}
-            onPress={onRefill}
-          >
+          <Pressable style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.7 }]} onPress={onRefill}>
             <Text style={styles.btnGhostText}>Dolu</Text>
           </Pressable>
         </View>
@@ -160,15 +158,7 @@ function SpoolCard({
   );
 }
 
-function ConsumeModal({
-  spool,
-  onClose,
-  onDone,
-}: {
-  spool: Spool | null;
-  onClose: () => void;
-  onDone: () => void;
-}) {
+function ConsumeModal({ spool, onClose, onDone }: { spool: Spool | null; onClose: () => void; onDone: () => void }) {
   const [grams, setGrams] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -180,49 +170,22 @@ function ConsumeModal({
     setBusy(true);
     try {
       await consumeSpool(spool.id, g, { note: note.trim() || null });
-      setGrams("");
-      setNote("");
-      onDone();
-    } finally {
-      setBusy(false);
-    }
+      setGrams(""); setNote(""); onDone();
+    } finally { setBusy(false); }
   }
 
   return (
     <Modal visible={!!spool} transparent animationType="fade" onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        style={styles.modalWrap}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalWrap}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modal}>
           <Text style={styles.modalTitle}>{spool?.name} — gram düş</Text>
           <Text style={styles.modalSub}>Kalan: {spool ? Math.round(spool.remainingGrams) : 0}g</Text>
-          <TextInput
-            value={grams}
-            onChangeText={setGrams}
-            keyboardType="decimal-pad"
-            placeholder="Kaç gram?"
-            placeholderTextColor={ML.textFaint}
-            style={styles.input}
-            autoFocus
-          />
-          <TextInput
-            value={note}
-            onChangeText={setNote}
-            placeholder="Not (opsiyonel)"
-            placeholderTextColor={ML.textFaint}
-            style={styles.input}
-          />
+          <TextInput value={grams} onChangeText={setGrams} keyboardType="decimal-pad" placeholder="Kaç gram?" placeholderTextColor={ML.textFaint} style={styles.input} autoFocus />
+          <TextInput value={note} onChangeText={setNote} placeholder="Not (opsiyonel)" placeholderTextColor={ML.textFaint} style={styles.input} />
           <View style={styles.modalActions}>
-            <Pressable style={styles.modalBtnGhost} onPress={onClose}>
-              <Text style={styles.btnGhostText}>İptal</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]}
-              onPress={submit}
-              disabled={!valid || busy}
-            >
+            <Pressable style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></Pressable>
+            <Pressable style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]} onPress={submit} disabled={!valid || busy}>
               <Text style={styles.btnText}>{busy ? "..." : "Düş"}</Text>
             </Pressable>
           </View>
@@ -232,39 +195,141 @@ function ConsumeModal({
   );
 }
 
+function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | null; onClose: () => void; onDone: () => void }) {
+  const editing = target !== "new" && target !== null;
+  const [name, setName] = useState("");
+  const [material, setMaterial] = useState("PLA");
+  const [brand, setBrand] = useState("");
+  const [colorHex, setColorHex] = useState(SWATCHES[0]);
+  const [total, setTotal] = useState("1000");
+  const [remaining, setRemaining] = useState("1000");
+  const [reorder, setReorder] = useState("200");
+  const [cost, setCost] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (target && target !== "new") {
+      setName(target.name); setMaterial(target.material); setBrand(target.brand ?? "");
+      setColorHex(target.colorHex); setTotal(String(target.totalGrams));
+      setRemaining(String(target.remainingGrams)); setReorder(String(target.reorderGrams));
+      setCost(target.spoolCost != null ? String(target.spoolCost) : "");
+    } else if (target === "new") {
+      setName(""); setMaterial("PLA"); setBrand(""); setColorHex(SWATCHES[0]);
+      setTotal("1000"); setRemaining("1000"); setReorder("200"); setCost("");
+    }
+  }, [target]);
+
+  const num = (s: string) => Number(s.replace(",", ".")) || 0;
+  const valid = name.trim().length > 0 && num(total) > 0;
+
+  async function submit() {
+    if (!valid) return;
+    setBusy(true);
+    const payload: SpoolInput = {
+      name: name.trim(), material, colorName: null, colorHex,
+      brand: brand.trim() || null, totalGrams: num(total),
+      remainingGrams: num(remaining || total), reorderGrams: num(reorder),
+      spoolCost: cost.trim() ? num(cost) : null,
+    };
+    try {
+      if (editing) await updateSpool(target.id, payload);
+      else await createSpool(payload);
+      onDone();
+    } finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (!editing) return;
+    setBusy(true);
+    try { await deleteSpool(target.id); onDone(); } finally { setBusy(false); }
+  }
+
+  return (
+    <Modal visible={!!target} transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.formWrap}>
+        <View style={styles.formSheet}>
+          <View style={styles.formHandle} />
+          <Text style={styles.modalTitle}>{editing ? "Makarayı Düzenle" : "Yeni Makara"}</Text>
+          <ScrollView contentContainerStyle={{ gap: 12, paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+            <Field label="İsim">
+              <TextInput value={name} onChangeText={setName} placeholder="ör. Kırmızı PLA" placeholderTextColor={ML.textFaint} style={styles.input} />
+            </Field>
+            <Field label="Materyal">
+              <View style={styles.chipRow}>
+                {MATERIALS.map((m) => (
+                  <Pressable key={m} onPress={() => setMaterial(m)} style={[styles.chip, material === m && styles.chipOn]}>
+                    <Text style={[styles.chipText, material === m && { color: "#fff", fontWeight: "700" }]}>{m}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </Field>
+            <Field label="Renk">
+              <View style={styles.chipRow}>
+                {SWATCHES.map((c) => (
+                  <Pressable key={c} onPress={() => setColorHex(c)} style={[styles.swatch, { backgroundColor: c }, colorHex === c && styles.swatchOn]} />
+                ))}
+              </View>
+            </Field>
+            <Field label="Marka (opsiyonel)">
+              <TextInput value={brand} onChangeText={setBrand} placeholder="ör. eSUN" placeholderTextColor={ML.textFaint} style={styles.input} />
+            </Field>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Field label="Toplam (g)" flex>
+                <TextInput value={total} onChangeText={setTotal} keyboardType="decimal-pad" style={styles.input} />
+              </Field>
+              <Field label="Kalan (g)" flex>
+                <TextInput value={remaining} onChangeText={setRemaining} keyboardType="decimal-pad" style={styles.input} />
+              </Field>
+            </View>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <Field label="Uyarı eşiği (g)" flex>
+                <TextInput value={reorder} onChangeText={setReorder} keyboardType="decimal-pad" style={styles.input} />
+              </Field>
+              <Field label="Maliyet (₺, ops.)" flex>
+                <TextInput value={cost} onChangeText={setCost} keyboardType="decimal-pad" style={styles.input} />
+              </Field>
+            </View>
+            {editing && (
+              <Pressable onPress={remove} disabled={busy} style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}>
+                <Text style={styles.deleteText}>Makarayı Sil</Text>
+              </Pressable>
+            )}
+          </ScrollView>
+          <View style={styles.modalActions}>
+            <Pressable style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></Pressable>
+            <Pressable style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]} onPress={submit} disabled={!valid || busy}>
+              <Text style={styles.btnText}>{busy ? "..." : "Kaydet"}</Text>
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function Field({ label, children, flex }: { label: string; children: React.ReactNode; flex?: boolean }) {
+  return (
+    <View style={flex ? { flex: 1, gap: 6 } : { gap: 6 }}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   dim: { color: ML.textDim, fontSize: 14 },
-  list: { padding: 16, gap: 10, paddingBottom: 24 },
-  alertBox: {
-    backgroundColor: ML.orangeSoft,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.orange,
-    padding: 12,
-    marginBottom: 10,
-  },
+  list: { padding: 16, gap: 10, paddingBottom: 90 },
+  alertBox: { backgroundColor: ML.orangeSoft, borderRadius: radius.md, borderWidth: 1, borderColor: ML.orange, padding: 12, marginBottom: 10 },
   alertText: { color: ML.orange, fontSize: 13, fontWeight: "600" },
-  card: {
-    flex: 1,
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    overflow: "hidden",
-  },
+  card: { flex: 1, backgroundColor: ML.card, borderRadius: radius.lg, borderWidth: 1, borderColor: ML.borderSoft, overflow: "hidden" },
   stripe: { height: 6, width: "100%" },
+  editIcon: { position: "absolute", top: 12, right: 10, padding: 4, zIndex: 2 },
   cardBody: { padding: 12, gap: 6 },
-  name: { color: ML.text, fontSize: 14, fontWeight: "700" },
+  name: { color: ML.text, fontSize: 14, fontWeight: "700", paddingRight: 20 },
   meta: { color: ML.textFaint, fontSize: 12 },
-  barTrack: {
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: ML.cardElevated,
-    overflow: "hidden",
-    marginTop: 4,
-  },
+  barTrack: { height: 8, borderRadius: 4, backgroundColor: ML.cardElevated, overflow: "hidden", marginTop: 4 },
   barFill: { height: "100%", borderRadius: 4 },
   gramRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   gram: { color: ML.text, fontSize: 14, fontWeight: "800", fontVariant: ["tabular-nums"] },
@@ -272,58 +337,33 @@ const styles = StyleSheet.create({
   pill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
   pillText: { fontSize: 11, fontWeight: "700" },
   actions: { flexDirection: "row", gap: 8, marginTop: 4 },
-  btn: {
-    flex: 1,
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-    paddingVertical: 8,
-    alignItems: "center",
-  },
+  btn: { flex: 1, backgroundColor: ML.accent, borderRadius: radius.md, paddingVertical: 8, alignItems: "center" },
   btnText: { color: "#fff", fontSize: 13, fontWeight: "700" },
-  btnGhost: {
-    flex: 1,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    paddingVertical: 8,
-    alignItems: "center",
-  },
+  btnGhost: { flex: 1, borderRadius: radius.md, borderWidth: 1, borderColor: ML.border, paddingVertical: 8, alignItems: "center" },
   btnGhostText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
-  modalWrap: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "rgba(0,0,0,0.6)" },
-  modal: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.border,
-    padding: 18,
-    gap: 10,
+  fab: {
+    position: "absolute", bottom: 24, right: 20, width: 56, height: 56, borderRadius: 28,
+    backgroundColor: ML.accent, alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 6,
   },
+  modalWrap: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "rgba(0,0,0,0.6)" },
+  modal: { backgroundColor: ML.card, borderRadius: radius.lg, borderWidth: 1, borderColor: ML.border, padding: 18, gap: 10 },
   modalTitle: { color: ML.text, fontSize: 16, fontWeight: "700" },
   modalSub: { color: ML.textDim, fontSize: 13 },
-  input: {
-    backgroundColor: ML.bg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    color: ML.text,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-  },
-  modalActions: { flexDirection: "row", gap: 10, marginTop: 4 },
-  modalBtnGhost: {
-    flex: 1,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
-  modalBtn: {
-    flex: 1,
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-    paddingVertical: 12,
-    alignItems: "center",
-  },
+  input: { backgroundColor: ML.bg, borderRadius: radius.md, borderWidth: 1, borderColor: ML.border, color: ML.text, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
+  modalActions: { flexDirection: "row", gap: 10, marginTop: 6 },
+  modalBtnGhost: { flex: 1, borderRadius: radius.md, borderWidth: 1, borderColor: ML.border, paddingVertical: 12, alignItems: "center" },
+  modalBtn: { flex: 1, backgroundColor: ML.accent, borderRadius: radius.md, paddingVertical: 12, alignItems: "center" },
+  formWrap: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.6)" },
+  formSheet: { backgroundColor: ML.card, borderTopLeftRadius: 24, borderTopRightRadius: 24, borderWidth: 1, borderColor: ML.border, padding: 18, gap: 12, maxHeight: "88%" },
+  formHandle: { alignSelf: "center", width: 40, height: 4, borderRadius: 2, backgroundColor: ML.border, marginBottom: 4 },
+  fieldLabel: { color: ML.textFaint, fontSize: 12, fontWeight: "600" },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: ML.bg, borderWidth: 1, borderColor: ML.border },
+  chipOn: { backgroundColor: ML.accent, borderColor: ML.accent },
+  chipText: { color: ML.textDim, fontSize: 13 },
+  swatch: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: "transparent" },
+  swatchOn: { borderColor: ML.text },
+  deleteBtn: { borderRadius: radius.md, borderWidth: 1, borderColor: ML.red, paddingVertical: 12, alignItems: "center", marginTop: 4 },
+  deleteText: { color: ML.red, fontSize: 14, fontWeight: "700" },
 });
