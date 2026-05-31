@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Factory, Package, Disc3, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,7 +28,25 @@ export default function PlannerPage() {
   });
   const products = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
-  const [target, setTarget] = useState(5);
+  // Hedef stok DB'de (AppSetting) saklanır → masaüstü/telefon senkron
+  const qc = useQueryClient();
+  const { data: settings } = useQuery<Record<string, string>>({
+    queryKey: ["settings"],
+    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    staleTime: 60_000,
+  });
+  const savedTarget = Math.max(1, Number(settings?.plannerTargetStock) || 5);
+  const [override, setOverride] = useState<number | null>(null);
+  const target = override ?? savedTarget;
+  const saveTarget = useMutation({
+    mutationFn: (v: number) =>
+      fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plannerTargetStock: String(v) }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+  });
 
   const plan = useMemo(() => {
     return products
@@ -65,7 +83,11 @@ export default function PlannerPage() {
             type="number"
             min="1"
             value={target}
-            onChange={(e) => setTarget(Math.max(1, Number(e.target.value) || 1))}
+            onChange={(e) => {
+              const v = Math.max(1, Number(e.target.value) || 1);
+              setOverride(v);
+              saveTarget.mutate(v);
+            }}
             className="h-9 w-20"
           />
         </div>
