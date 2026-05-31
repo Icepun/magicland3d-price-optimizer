@@ -11,6 +11,11 @@ export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
     const { ids } = Schema.parse(await req.json());
+    // Silinenlerin varyantlarını üst seviyeye geri al (kaybolmasınlar)
+    await prisma.product.updateMany({
+      where: { parentProductId: { in: ids } },
+      data: { parentProductId: null, variantLabel: null },
+    });
     const result = await prisma.product.deleteMany({ where: { id: { in: ids } } });
     return NextResponse.json({ deleted: result.count });
   } catch (error) {

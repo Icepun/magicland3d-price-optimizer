@@ -1,118 +1,97 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { toast } from "sonner";
-import { Layers, Plus, Trash2, Pencil, X } from "lucide-react";
+import { Layers, Plus, X, Search, Unlink, Package, ArrowUpRight, Check } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, cn } from "@/lib/utils";
 
-interface Variant {
+interface VChild {
   id: string;
   name: string;
-  sku: string | null;
-  barcode: string | null;
-  colorHex: string | null;
+  variantLabel: string | null;
+  imageUrl: string | null;
   stock: number;
-  priceOverride: number | null;
-  filamentWeightOverride: number | null;
+  currentSalePrice: number;
 }
-
-interface FormState {
+interface PickProduct {
+  id: string;
   name: string;
-  colorHex: string;
-  sku: string;
-  stock: string;
-  priceOverride: string;
-  filamentWeightOverride: string;
+  imageUrl: string | null;
+  currentSalePrice: number;
 }
 
-const EMPTY: FormState = { name: "", colorHex: "#e23b3b", sku: "", stock: "0", priceOverride: "", filamentWeightOverride: "" };
+function Thumb({ src }: { src: string | null }) {
+  return (
+    <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
+      {src ? <img src={src} alt="" className="max-w-full max-h-full object-contain" loading="lazy" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
+    </div>
+  );
+}
 
 export function VariantsCard({
   productId,
-  basePrice,
-  baseWeight,
+  productName,
+  variantLabel,
+  parent,
+  childrenVariants,
 }: {
   productId: string;
-  basePrice: number;
-  baseWeight: number | null;
+  productName: string;
+  variantLabel: string | null;
+  parent: { id: string; name: string } | null;
+  childrenVariants: VChild[];
 }) {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery<Variant[]>({
-    queryKey: ["variants", productId],
-    queryFn: () => fetch(`/api/products/${productId}/variants`).then((r) => r.json()),
-  });
-  const variants = Array.isArray(data) ? data : [];
+  const [pickerOpen, setPickerOpen] = useState(false);
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState<FormState>(EMPTY);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["product", productId] });
+    qc.invalidateQueries({ queryKey: ["products"] });
+  };
 
-  function openAdd() {
-    setForm(EMPTY);
-    setEditingId(null);
-    setShowForm(true);
-  }
-  function openEdit(v: Variant) {
-    setForm({
-      name: v.name,
-      colorHex: v.colorHex ?? "#e23b3b",
-      sku: v.sku ?? "",
-      stock: String(v.stock),
-      priceOverride: v.priceOverride != null ? String(v.priceOverride) : "",
-      filamentWeightOverride: v.filamentWeightOverride != null ? String(v.filamentWeightOverride) : "",
-    });
-    setEditingId(v.id);
-    setShowForm(true);
-  }
-  function close() {
-    setShowForm(false);
-    setEditingId(null);
-  }
-
-  const save = useMutation({
-    mutationFn: () => {
-      const body = {
-        name: form.name.trim(),
-        colorHex: form.colorHex || null,
-        sku: form.sku.trim() || null,
-        stock: Number(form.stock) || 0,
-        priceOverride: form.priceOverride ? Number(form.priceOverride) : null,
-        filamentWeightOverride: form.filamentWeightOverride ? Number(form.filamentWeightOverride) : null,
-      };
-      const url = editingId ? `/api/variants/${editingId}` : `/api/products/${productId}/variants`;
-      return fetch(url, {
-        method: editingId ? "PATCH" : "POST",
+  const unlink = useMutation({
+    mutationFn: (id: string) =>
+      fetch(`/api/products/${id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).then((r) => {
-        if (!r.ok) throw new Error("Kaydedilemedi");
-        return r.json();
-      });
-    },
+        body: JSON.stringify({ parentProductId: null, variantLabel: null }),
+      }).then((r) => r.json()),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["variants", productId] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      toast.success(editingId ? "Varyant güncellendi" : "Varyant eklendi");
-      close();
+      refresh();
+      toast.success("Varyant bağı kaldırıldı");
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: () => toast.error("İşlem başarısız"),
   });
 
-  const del = useMutation({
-    mutationFn: (id: string) => fetch(`/api/variants/${id}`, { method: "DELETE" }).then((r) => r.json()),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["variants", productId] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      toast.success("Varyant silindi");
-    },
-  });
+  // Bu ürün başka bir ürünün varyantıysa
+  if (parent) {
+    return (
+      <Card>
+        <CardContent className="py-3 flex items-center gap-3">
+          <Layers className="h-4 w-4 text-primary shrink-0" />
+          <div className="text-sm flex-1 min-w-0">
+            <span className="text-muted-foreground">Bu ürün </span>
+            <Link href={`/products/${parent.id}`} className="font-medium text-primary hover:underline">
+              {parent.name}
+            </Link>
+            <span className="text-muted-foreground"> ürününün varyantı</span>
+            {variantLabel && <span className="font-medium"> — {variantLabel}</span>}
+          </div>
+          <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs shrink-0" onClick={() => unlink.mutate(productId)} disabled={unlink.isPending}>
+            <Unlink className="h-3.5 w-3.5" /> Bağı kaldır
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationDelay: "20ms", animationFillMode: "both" }}>
@@ -121,125 +100,149 @@ export function VariantsCard({
           <CardTitle className="text-sm flex items-center gap-2">
             <Layers className="h-4 w-4 text-primary" />
             Varyantlar
-            {variants.length > 0 && (
-              <Badge variant="outline" className="ml-1 tabular-nums">{variants.length}</Badge>
-            )}
+            {childrenVariants.length > 0 && <Badge variant="outline" className="ml-1 tabular-nums">{childrenVariants.length}</Badge>}
           </CardTitle>
-          {!showForm && (
-            <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={openAdd}>
-              <Plus className="h-3.5 w-3.5" /> Ekle
-            </Button>
-          )}
+          <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setPickerOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> Varyant Ekle
+          </Button>
         </div>
       </CardHeader>
-      <CardContent className="pt-3 space-y-2">
-        {isLoading ? (
-          <Skeleton className="h-16 w-full" />
-        ) : variants.length === 0 && !showForm ? (
-          <p className="text-xs text-muted-foreground py-2">
-            Henüz varyant yok. Aynı ürünün renk/boy/tip seçeneklerini ekleyebilirsin (örn. Kırmızı, Mavi, Büyük Boy).
+      <CardContent className="pt-3">
+        {childrenVariants.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-1.5">
+            Henüz varyant yok. Aynı ürünün renk/boy seçeneklerini (Shopify&apos;dan çekilmiş ayrı ürünleri) buraya
+            bağla; ana listeden gizlenip burada toplanırlar.
           </p>
         ) : (
-          variants.map((v) =>
-            editingId === v.id ? (
-              <VariantForm key={v.id} form={form} setForm={setForm} onSave={() => save.mutate()} onCancel={close} pending={save.isPending} />
-            ) : (
-              <div key={v.id} className="flex items-center gap-2.5 py-1.5 border-b border-border/30 last:border-0">
-                <span className="h-4 w-4 rounded-full border shrink-0" style={{ background: v.colorHex ?? "#9ca3af" }} />
+          <div className="space-y-1.5">
+            {childrenVariants.map((v) => (
+              <div key={v.id} className="flex items-center gap-2.5 py-1">
+                <Thumb src={v.imageUrl} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{v.name}</p>
-                  {v.sku && <p className="text-[10px] text-muted-foreground font-mono truncate">{v.sku}</p>}
+                  <p className="text-sm font-medium truncate">{v.variantLabel || v.name}</p>
+                  {v.variantLabel && <p className="text-[10px] text-muted-foreground truncate">{v.name}</p>}
                 </div>
                 <div className="text-right shrink-0 tabular-nums">
-                  <p className="text-xs font-medium">{formatCurrency(v.priceOverride ?? basePrice)}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {(v.filamentWeightOverride ?? baseWeight ?? 0) > 0 ? `${Math.round(v.filamentWeightOverride ?? baseWeight ?? 0)}g · ` : ""}
-                    stok {v.stock}
-                  </p>
+                  <p className="text-xs font-medium">{formatCurrency(v.currentSalePrice)}</p>
+                  <p className="text-[10px] text-muted-foreground">stok {v.stock}</p>
                 </div>
-                <div className="flex gap-0.5 shrink-0">
-                  <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(v)} title="Düzenle">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    className="h-7 w-7 text-destructive/70 hover:text-destructive"
-                    title="Sil"
-                    onClick={() => del.mutate(v.id)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                <Link href={`/products/${v.id}`} className="shrink-0 p-1.5 rounded text-muted-foreground hover:text-foreground" title="Ürüne git">
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+                <button onClick={() => unlink.mutate(v.id)} className="shrink-0 p-1.5 rounded text-muted-foreground/60 hover:text-destructive" title="Bağı kaldır">
+                  <Unlink className="h-3.5 w-3.5" />
+                </button>
               </div>
-            )
-          )
-        )}
-
-        {showForm && !editingId && (
-          <VariantForm form={form} setForm={setForm} onSave={() => save.mutate()} onCancel={close} pending={save.isPending} />
+            ))}
+          </div>
         )}
       </CardContent>
+
+      {pickerOpen && <VariantPicker productId={productId} productName={productName} onClose={() => setPickerOpen(false)} />}
     </Card>
   );
 }
 
-function VariantForm({
-  form,
-  setForm,
-  onSave,
-  onCancel,
-  pending,
-}: {
-  form: FormState;
-  setForm: (f: FormState) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  pending: boolean;
-}) {
-  const set = (k: keyof FormState, val: string) => setForm({ ...form, [k]: val });
+function VariantPicker({ productId, productName, onClose }: { productId: string; productName: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data } = useQuery<PickProduct[]>({
+    queryKey: ["products", "variant-picker"],
+    queryFn: () => fetch("/api/products?filter=all").then((r) => r.json()),
+  });
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<PickProduct | null>(null);
+  const [label, setLabel] = useState("");
+
+  const list = useMemo(() => {
+    const all = Array.isArray(data) ? data : [];
+    const query = q.trim().toLocaleLowerCase("tr-TR");
+    return all
+      .filter((p) => p.id !== productId)
+      .filter((p) => !query || p.name.toLocaleLowerCase("tr-TR").includes(query))
+      .slice(0, 50);
+  }, [data, q, productId]);
+
+  const link = useMutation({
+    mutationFn: () =>
+      fetch(`/api/products/${selected!.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parentProductId: productId, variantLabel: label.trim() || null }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("Bağlanamadı");
+        return r.json();
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["product", productId] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Varyant eklendi");
+      onClose();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
-    <div className="rounded-lg border bg-muted/20 p-3 space-y-2.5 animate-in fade-in duration-200">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium">{form.name ? "Varyant düzenle" : "Yeni varyant"}</span>
-        <button onClick={onCancel} className="p-0.5 text-muted-foreground hover:text-foreground">
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-      <div className="grid grid-cols-[1fr_auto] gap-2">
-        <div>
-          <Label className="text-[10px]">Ad</Label>
-          <Input className="h-8" value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="örn. Kırmızı / Büyük Boy" />
-        </div>
-        <div>
-          <Label className="text-[10px]">Renk</Label>
-          <input type="color" value={form.colorHex} onChange={(e) => set("colorHex", e.target.value)} className="h-8 w-12 rounded-md border bg-background cursor-pointer" />
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-2">
-        <div>
-          <Label className="text-[10px]">Stok</Label>
-          <Input className="h-8" type="number" value={form.stock} onChange={(e) => set("stock", e.target.value)} />
-        </div>
-        <div>
-          <Label className="text-[10px]">Fiyat (boş=ana)</Label>
-          <Input className="h-8" type="number" value={form.priceOverride} onChange={(e) => set("priceOverride", e.target.value)} placeholder="ana fiyat" />
-        </div>
-        <div>
-          <Label className="text-[10px]">Gramaj (boş=ana)</Label>
-          <Input className="h-8" type="number" value={form.filamentWeightOverride} onChange={(e) => set("filamentWeightOverride", e.target.value)} placeholder="ana gramaj" />
-        </div>
-      </div>
-      <div>
-        <Label className="text-[10px]">SKU (opsiyonel)</Label>
-        <Input className="h-8" value={form.sku} onChange={(e) => set("sku", e.target.value)} />
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" className="flex-1 h-8" disabled={pending || !form.name.trim()} onClick={onSave}>
-          {pending ? "Kaydediliyor…" : "Kaydet"}
-        </Button>
-        <Button size="sm" variant="ghost" className="h-8" onClick={onCancel}>İptal</Button>
-      </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 animate-in fade-in" onClick={onClose} />
+      <Card className="relative w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
+        <CardContent className="p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">Varyant Ekle</h2>
+            <button onClick={onClose} className="p-1 rounded-md text-muted-foreground hover:bg-muted">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {!selected ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">{productName}</span> ürününe varyant olarak bağlanacak
+                ürünü seç:
+              </p>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ürün ara…" className="pl-8 h-9" autoFocus />
+              </div>
+              <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-0.5">
+                {list.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-6">Ürün bulunamadı.</p>
+                ) : (
+                  list.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => setSelected(p)}
+                      className="w-full flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-muted text-left"
+                    >
+                      <Thumb src={p.imageUrl} />
+                      <span className="flex-1 min-w-0 text-sm truncate">{p.name}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums shrink-0">{formatCurrency(p.currentSalePrice)}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2.5 rounded-lg border bg-muted/30 p-2">
+                <Thumb src={selected.imageUrl} />
+                <span className="flex-1 min-w-0 text-sm font-medium truncate">{selected.name}</span>
+                <button onClick={() => setSelected(null)} className="text-[11px] text-primary hover:underline shrink-0">değiştir</button>
+              </div>
+              <div>
+                <Label className="text-xs">Varyant adı (örn. Kırmızı)</Label>
+                <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Kırmızı / Büyük Boy…" autoFocus />
+                <p className="text-[10px] text-muted-foreground mt-1">Boş bırakırsan ürün adı kullanılır. Kolay anlaşılsın diye renk/boy yazabilirsin.</p>
+              </div>
+              <div className="flex gap-2">
+                <Button className="flex-1 gap-1" disabled={link.isPending} onClick={() => link.mutate()}>
+                  <Check className="h-4 w-4" /> {link.isPending ? "Bağlanıyor…" : "Varyant olarak bağla"}
+                </Button>
+                <Button variant="ghost" onClick={() => setSelected(null)}>Geri</Button>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

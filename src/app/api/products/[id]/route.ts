@@ -15,6 +15,8 @@ const UpdateProductSchema = z.object({
   weight: z.number().positive().nullable().optional(),
   isActive: z.boolean().optional(),
   hidden: z.boolean().optional(),
+  parentProductId: z.string().nullable().optional(),
+  variantLabel: z.string().nullable().optional(),
   cost: z
     .object({
       costMode: z.enum(["manual", "template", "detailed"]).optional(),
@@ -62,6 +64,11 @@ export async function GET(
       },
       priceHistory: { orderBy: { changedAt: "desc" }, take: 20 },
       listings: { orderBy: { platform: "asc" } },
+      variantChildren: {
+        select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
+        orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
+      },
+      parent: { select: { id: true, name: true } },
     },
   });
 
@@ -179,6 +186,11 @@ export async function DELETE(
   await ensureRuntimeSchema();
 
   const { id } = await params;
+  // Bu ürünün varyantları varsa, silmeden önce üst seviyeye geri al (kaybolmasınlar).
+  await prisma.product.updateMany({
+    where: { parentProductId: id },
+    data: { parentProductId: null, variantLabel: null },
+  });
   await prisma.product.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

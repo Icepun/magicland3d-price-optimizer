@@ -40,6 +40,8 @@ export async function GET(req: NextRequest) {
   const platformFilter = searchParams.get("platform"); // shopify | trendyol
 
   const where: Record<string, unknown> = {};
+  // Varyantlar (parentProductId dolu) ana listede GÖSTERİLMEZ — ana ürünlerinin altında nested görünür.
+  where.parentProductId = null;
 
   if (filter === "hidden") {
     // Sadece gizlenmiş ürünler
@@ -75,7 +77,10 @@ export async function GET(req: NextRequest) {
         include: {
           cost: { include: { filamentType: true } },
           listings: true,
-          variants: { where: { isActive: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+          variantChildren: {
+            select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
+            orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
+          },
         },
         orderBy: { updatedAt: "desc" },
       }),

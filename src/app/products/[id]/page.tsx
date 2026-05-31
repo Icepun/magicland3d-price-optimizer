@@ -71,6 +71,16 @@ interface ProductDetail {
     tapeUsed: boolean | null;
   } | null;
   listings: Listing[];
+  variantLabel: string | null;
+  parent: { id: string; name: string } | null;
+  variantChildren: {
+    id: string;
+    name: string;
+    variantLabel: string | null;
+    imageUrl: string | null;
+    stock: number;
+    currentSalePrice: number;
+  }[];
 }
 
 interface ProfitPreview {
@@ -607,8 +617,10 @@ export default function ProductDetailPage({
 
       <VariantsCard
         productId={product.id}
-        basePrice={product.currentSalePrice}
-        baseWeight={product.cost?.filamentWeight ?? null}
+        productName={product.name}
+        variantLabel={product.variantLabel}
+        parent={product.parent}
+        childrenVariants={product.variantChildren}
       />
 
       <PriceLabCard productId={product.id} />

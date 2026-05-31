@@ -27,6 +27,10 @@ model Product {
   trendyolId       String?
   /** Trendyol productMainId — varyant grubu kimliği. Aynı productMainId'ye sahip ürünler birbirinin varyantıdır (renk, beden, boyut). */
   productMainId    String?
+  /** Bu ürün başka bir ürünün varyantıysa, ana ürünün id'si. Varyantlar ana listede gizlenir, ana ürünün altında görünür. */
+  parentProductId  String?
+  /** Varyant için okunur etiket (örn. "Kırmızı"). Boşsa ürün adı kullanılır. */
+  variantLabel     String?
   commissionRate   Float?
   commissionSource String?
   commissionUpdatedAt DateTime?
@@ -36,31 +40,10 @@ model Product {
   cost            ProductCost?
   priceHistory    PriceHistory[]
   listings        Listing[]
-  variants        ProductVariant[]
-}
-
-/**
- * Ürün varyantı — aynı ana ürünün renk/boy/tip alt seçenekleri. Kullanıcı manuel ekler;
- * ürün listesinde ana ürünün altında açılır olarak görünür. Fiyat/gramaj override opsiyonel.
- */
-model ProductVariant {
-  id                     String   @id @default(cuid())
-  productId              String
-  name                   String
-  sku                    String?
-  barcode                String?
-  colorHex               String?
-  stock                  Int      @default(0)
-  priceOverride          Float?
-  filamentWeightOverride Float?
-  isActive               Boolean  @default(true)
-  sortOrder              Int      @default(0)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
-
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
-
-  @@index([productId])
+  /** Bu ürün bir varyantsa bağlı olduğu ana ürün. */
+  parent          Product?  @relation("ProductVariants", fields: [parentProductId], references: [id], onDelete: SetNull)
+  /** Bu ürünün varyantları (alt ürünler). */
+  variantChildren Product[] @relation("ProductVariants")
 }
 
 /**

@@ -72,12 +72,13 @@ interface Product {
     profitMargin: number | null;
     commissionMissing: boolean;
   }>;
-  variants?: {
+  variantChildren?: {
     id: string;
     name: string;
-    colorHex: string | null;
+    variantLabel: string | null;
+    imageUrl: string | null;
     stock: number;
-    priceOverride: number | null;
+    currentSalePrice: number;
   }[];
 }
 
@@ -391,7 +392,7 @@ export default function ProductsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Shopify ana ürünleri + Trendyol eşleştirmeleri
+            Shopify ana ürünleri + Trendyol eşleştirmeleri · varyantlar ana ürünün altında gruplanır
           </p>
         </div>
         <div className="flex gap-2">
@@ -519,20 +520,19 @@ export default function ProductsPage() {
                     <TableCell><Skeleton className="h-3 w-16 ml-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-7 w-7 rounded" /></TableCell>
                   </TableRow>
                 ))}
               </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-destructive">
+                <TableCell colSpan={8} className="text-center py-8 text-destructive">
                   Ürünler yüklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   {filterMode === "inactive"
                     ? "İnaktif ürün bulunmuyor."
                     : filterMode === "out-of-stock"
@@ -581,25 +581,23 @@ export default function ProductsPage() {
                         <span className="opacity-60">·</span>
                         <span className="truncate">{product.categoryName}</span>
                       </div>
-                      {product.variants && product.variants.length > 0 && (
-                        <details className="mt-1">
-                          <summary className="text-[11px] text-primary cursor-pointer select-none w-fit">
-                            {product.variants.length} varyant
+                      {product.variantChildren && product.variantChildren.length > 0 && (
+                        <details className="mt-1.5">
+                          <summary className="text-[11px] font-medium text-primary cursor-pointer select-none w-fit">
+                            {product.variantChildren.length} varyant
                           </summary>
-                          <div className="flex flex-wrap gap-1 mt-1.5">
-                            {product.variants.map((v) => (
-                              <span
+                          <div className="mt-1 ml-0.5 pl-2.5 border-l-2 border-primary/20 space-y-0.5">
+                            {product.variantChildren.map((v) => (
+                              <Link
                                 key={v.id}
-                                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-1.5 py-0.5 text-[10px]"
-                                title={v.priceOverride != null ? `${v.priceOverride} TL` : undefined}
+                                href={`/products/${v.id}`}
+                                className="flex items-center justify-between gap-2 text-[11px] py-0.5 hover:text-primary"
                               >
-                                <span
-                                  className="h-2 w-2 rounded-full border"
-                                  style={{ background: v.colorHex ?? "#9ca3af" }}
-                                />
-                                {v.name}
-                                <span className="text-muted-foreground tabular-nums">· {v.stock}</span>
-                              </span>
+                                <span className="truncate">{v.variantLabel || v.name}</span>
+                                <span className="text-muted-foreground tabular-nums shrink-0">
+                                  stok {v.stock} · {formatCurrency(v.currentSalePrice)}
+                                </span>
+                              </Link>
                             ))}
                           </div>
                         </details>
@@ -769,7 +767,7 @@ export default function ProductsPage() {
               })}
               {visibleCount < filteredProducts.length && (
                 <TableRow ref={sentinelRef}>
-                  <TableCell colSpan={9} className="text-center py-4">
+                  <TableCell colSpan={8} className="text-center py-4">
                     <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground/50" />
                   </TableCell>
                 </TableRow>

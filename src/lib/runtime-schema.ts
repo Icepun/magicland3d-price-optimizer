@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "12";
+const CURRENT_SCHEMA_VERSION = "13";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -320,29 +320,6 @@ export function ensureRuntimeSchema(): Promise<void> {
       CREATE INDEX IF NOT EXISTS "FilamentUsage_spoolId_idx" ON "FilamentUsage"("spoolId")
     `);
 
-    // Ürün varyantları (v0.12.1)
-    await prisma.$executeRawUnsafe(`
-      CREATE TABLE IF NOT EXISTS "ProductVariant" (
-        "id" TEXT NOT NULL PRIMARY KEY,
-        "productId" TEXT NOT NULL,
-        "name" TEXT NOT NULL,
-        "sku" TEXT,
-        "barcode" TEXT,
-        "colorHex" TEXT,
-        "stock" INTEGER NOT NULL DEFAULT 0,
-        "priceOverride" REAL,
-        "filamentWeightOverride" REAL,
-        "isActive" BOOLEAN NOT NULL DEFAULT true,
-        "sortOrder" INTEGER NOT NULL DEFAULT 0,
-        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE
-      )
-    `);
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS "ProductVariant_productId_idx" ON "ProductVariant"("productId")
-    `);
-
     // Ensure new columns on existing tables
     await ensureColumn("Product", "trendyolId", "TEXT");
     await ensureColumn("Product", "source", "TEXT NOT NULL DEFAULT 'manual'");
@@ -358,6 +335,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "commissionUpdatedAt", "DATETIME");
     await ensureColumn("Product", "productMainId", "TEXT");
     await ensureColumn("Product", "hidden", "BOOLEAN NOT NULL DEFAULT false");
+    await ensureColumn("Product", "parentProductId", "TEXT");
+    await ensureColumn("Product", "variantLabel", "TEXT");
 
     // CargoRule platform alanı (Trendyol/Shopify ayrı baremi)
     await ensureColumn("CargoRule", "platform", "TEXT");
