@@ -7,7 +7,6 @@ import {
   TrendingDown,
   TrendingUp,
   Activity,
-  DollarSign,
   ClipboardList,
   ArrowRight,
   PackageX,
@@ -150,31 +149,26 @@ function PlatformCard({ stats, delay }: { stats: PlatformStats; delay: number })
         </CardHeader>
         <CardContent className="space-y-2">
           <div className="flex items-baseline justify-between">
-            <span className="text-xs text-muted-foreground">Toplam Kâr</span>
+            <span className="text-xs text-muted-foreground">Ortalama Marj</span>
             <span
               className="text-lg font-bold tabular-nums"
-              style={{ color: stats.totalProfit < 0 ? ACCENTS.red : info.color }}
+              style={{ color: stats.averageMargin < 0 ? ACCENTS.red : info.color }}
             >
-              {formatCurrency(stats.totalProfit)}
-            </span>
-          </div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-xs text-muted-foreground">Ortalama Marj</span>
-            <span className="text-sm font-medium tabular-nums">
               {formatPercent(stats.averageMargin)}
             </span>
           </div>
-          {stats.negativeProfitCount > 0 && (
-            <div className="flex items-baseline justify-between pt-1 border-t border-border/50">
-              <span className="text-xs text-destructive flex items-center gap-1">
-                <TrendingDown className="h-3 w-3" />
-                Zarar Eden
-              </span>
-              <span className="text-sm font-bold text-destructive tabular-nums">
-                {stats.negativeProfitCount}
-              </span>
-            </div>
-          )}
+          <div className="flex items-baseline justify-between pt-1 border-t border-border/50">
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <TrendingDown className="h-3 w-3" />
+              Zarar Eden
+            </span>
+            <span
+              className="text-sm font-bold tabular-nums"
+              style={{ color: stats.negativeProfitCount > 0 ? ACCENTS.red : undefined }}
+            >
+              {stats.negativeProfitCount} / {stats.activeListings}
+            </span>
+          </div>
         </CardContent>
       </Card>
     </Link>
@@ -432,15 +426,18 @@ export default function DashboardPage() {
         </p>
       </div>
 
+      {/* Sipariş bazlı ciro/kâr — son 30 gün (öne çıkan) */}
+      <OrdersSummaryCard delay={0} />
+
       {/* Genel Stat'lar */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard
           title="Toplam Ürün"
           value={data.totalProducts}
           sub={`Stokta ${data.inStockCount} · Biten ${data.outOfStockCount}`}
           icon={Package}
           accentColor={ACCENTS.primary}
-          delay={0}
+          delay={60}
           href="/products"
         />
         <StatCard
@@ -449,7 +446,7 @@ export default function DashboardPage() {
           sub="Net kâr hesabı yapılamıyor"
           icon={AlertTriangle}
           accentColor={ACCENTS.amber}
-          delay={60}
+          delay={120}
           href="/products?filter=missing-cost"
         />
         <StatCard
@@ -458,20 +455,10 @@ export default function DashboardPage() {
           sub="Acil müdahale gerek"
           icon={TrendingDown}
           accentColor={ACCENTS.red}
-          delay={120}
+          delay={180}
           href="/products?filter=negative-profit"
         />
-        <StatCard
-          title="Toplam Tahmini Kâr"
-          value={formatCurrency(data.grandTotalProfit)}
-          sub="Shopify + Trendyol toplam"
-          icon={DollarSign}
-          accentColor={ACCENTS.green}
-          delay={180}
-        />
       </div>
-
-      <OrdersSummaryCard delay={210} />
 
       {/* Platform Bazlı Kartlar */}
       <div>

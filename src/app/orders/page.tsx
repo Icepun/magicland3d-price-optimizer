@@ -342,9 +342,25 @@ function OrderRow({ order }: { order: UnifiedOrder }) {
     <Card className="overflow-hidden transition-colors hover:border-primary/30">
       <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
         <div className="flex items-center gap-3 px-3 py-3">
-          {/* Ürün fotoğrafı + platform rozeti */}
+          {/* Ürün görseli / çeşit kutusu + adet & platform rozeti */}
           <div className="relative shrink-0">
-            <Thumb src={order.image} />
+            {order.items.length > 1 ? (
+              <div className="flex h-12 w-12 flex-col items-center justify-center rounded-lg border bg-muted leading-none">
+                <span className="text-lg font-bold leading-none tabular-nums text-foreground">{order.items.length}</span>
+                <span className="mt-0.5 text-[9px] leading-none text-muted-foreground">çeşit</span>
+              </div>
+            ) : (
+              <Thumb src={order.image} />
+            )}
+
+            {/* Tek ürün ama birden fazla adet → sağ üstte ×N */}
+            {order.items.length <= 1 && order.itemCount > 1 && (
+              <span className="absolute -top-1.5 -right-1.5 z-10 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold tabular-nums text-primary-foreground ring-2 ring-card">
+                ×{order.itemCount}
+              </span>
+            )}
+
+            {/* Platform rozeti */}
             <span
               className="absolute -bottom-1 -right-1 flex items-center justify-center h-5 w-5 rounded-md ring-2 ring-card"
               style={{ backgroundColor: `${info.color.replace(")", " / 18%)")}` }}
