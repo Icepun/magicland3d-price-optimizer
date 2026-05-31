@@ -72,6 +72,13 @@ interface Product {
     profitMargin: number | null;
     commissionMissing: boolean;
   }>;
+  variants?: {
+    id: string;
+    name: string;
+    colorHex: string | null;
+    stock: number;
+    priceOverride: number | null;
+  }[];
 }
 
 const PLATFORM_COLOR: Record<string, string> = {
@@ -574,6 +581,29 @@ export default function ProductsPage() {
                         <span className="opacity-60">·</span>
                         <span className="truncate">{product.categoryName}</span>
                       </div>
+                      {product.variants && product.variants.length > 0 && (
+                        <details className="mt-1">
+                          <summary className="text-[11px] text-primary cursor-pointer select-none w-fit">
+                            {product.variants.length} varyant
+                          </summary>
+                          <div className="flex flex-wrap gap-1 mt-1.5">
+                            {product.variants.map((v) => (
+                              <span
+                                key={v.id}
+                                className="inline-flex items-center gap-1 rounded-full border bg-muted/40 px-1.5 py-0.5 text-[10px]"
+                                title={v.priceOverride != null ? `${v.priceOverride} TL` : undefined}
+                              >
+                                <span
+                                  className="h-2 w-2 rounded-full border"
+                                  style={{ background: v.colorHex ?? "#9ca3af" }}
+                                />
+                                {v.name}
+                                <span className="text-muted-foreground tabular-nums">· {v.stock}</span>
+                              </span>
+                            ))}
+                          </div>
+                        </details>
+                      )}
                     </TableCell>
                     <TableCell className="py-2">
                       <div className="flex items-center justify-center gap-1">

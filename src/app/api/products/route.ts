@@ -72,7 +72,11 @@ export async function GET(req: NextRequest) {
     await Promise.all([
       prisma.product.findMany({
         where,
-        include: { cost: { include: { filamentType: true } }, listings: true },
+        include: {
+          cost: { include: { filamentType: true } },
+          listings: true,
+          variants: { where: { isActive: true }, orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }] },
+        },
         orderBy: { updatedAt: "desc" },
       }),
       prisma.commissionRule.findMany({

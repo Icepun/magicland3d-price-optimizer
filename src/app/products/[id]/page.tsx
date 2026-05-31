@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
+import { VariantsCard } from "@/components/products/VariantsCard";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
@@ -603,6 +604,12 @@ export default function ProductDetailPage({
           </div>
         </div>
       </div>
+
+      <VariantsCard
+        productId={product.id}
+        basePrice={product.currentSalePrice}
+        baseWeight={product.cost?.filamentWeight ?? null}
+      />
 
       <PriceLabCard productId={product.id} />
 
