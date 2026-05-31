@@ -211,6 +211,18 @@
   100% { transform: translateX(420%); }
 }
 
+/* Yazıcı progress barı — üstünden geçen parıltı */
+@keyframes printer-shimmer {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(260%); }
+}
+
+/* Baskı bitince konfeti */
+@keyframes confetti-fall {
+  0%   { transform: translateY(-8px) rotate(0deg);   opacity: 1; }
+  100% { transform: translateY(150px) rotate(420deg); opacity: 0; }
+}
+
 /* =============================================
    GLOBAL SCROLLBAR (WebKit / Electron)
    ============================================= */
