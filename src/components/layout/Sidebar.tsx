@@ -4,10 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  BarChart3,
   Package,
   ClipboardList,
   Printer,
   Disc3,
+  Factory,
   CalculatorIcon,
   Percent,
   Truck,
@@ -19,14 +21,17 @@ import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { UpdateWidget } from "./UpdateWidget";
 import { ThemeToggle } from "./ThemeToggle";
+import { NotificationBell } from "./NotificationBell";
 
 const navItems = [
   { href: "/",                 label: "Panel",              icon: LayoutDashboard },
+  { href: "/reports",          label: "Raporlar",           icon: BarChart3 },
   { href: "/products",         label: "Ürünler",            icon: Package },
   { href: "/orders",           label: "Siparişler",         icon: ClipboardList },
   { href: "/printers",         label: "Yazıcılar",          icon: Printer },
   { href: "/cost-templates",   label: "Maliyet & Paketleme", icon: CalculatorIcon },
   { href: "/spools",           label: "Filament",           icon: Disc3 },
+  { href: "/planner",          label: "Üretim",             icon: Factory },
   { href: "/commission-rules", label: "Komisyonlar",        icon: Percent },
   { href: "/cargo-rules",      label: "Kargo",              icon: Truck },
   { href: "/expense-rules",    label: "Ek Giderler",        icon: Receipt },
@@ -125,10 +130,13 @@ export function Sidebar() {
         className="px-3 py-2 flex items-center justify-between gap-2"
         style={{ borderTop: "1px solid var(--sidebar-border)" }}
       >
-        <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/55">
-          Tema
-        </span>
-        <ThemeToggle />
+        <NotificationBell />
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/55">
+            Tema
+          </span>
+          <ThemeToggle />
+        </div>
       </div>
 
       <UpdateWidget />
