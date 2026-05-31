@@ -12,8 +12,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { SymbolView } from "expo-symbols";
 
 import { getAllOrders } from "@/lib/api/orders";
+import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
@@ -36,6 +38,11 @@ export default function DashboardScreen() {
   });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { data: ordersData } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: 60_000 });
+  const { data: notif } = useQuery({
+    queryKey: ["notifications"],
+    queryFn: getNotifications,
+    refetchInterval: 60_000,
+  });
 
   const summary = products && rules && settings ? computeDashboard(products, rules, settings) : null;
 
@@ -61,8 +68,25 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Panel</Text>
-        <Text style={styles.subtitle}>Shopify + Trendyol — net durum</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Panel</Text>
+          <Text style={styles.subtitle}>Shopify + Trendyol — net durum</Text>
+        </View>
+        <Pressable onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
+          <SymbolView name="bell.fill" tintColor={ML.textDim} style={{ width: 24, height: 24 }} />
+          {notif && notif.counts.total > 0 ? (
+            <View
+              style={[
+                styles.bellBadge,
+                { backgroundColor: notif.counts.critical > 0 ? ML.red : ML.orange },
+              ]}
+            >
+              <Text style={styles.bellBadgeText}>
+                {notif.counts.total > 9 ? "9+" : notif.counts.total}
+              </Text>
+            </View>
+          ) : null}
+        </Pressable>
       </View>
 
       {isLoading || !summary ? (
@@ -217,7 +241,28 @@ function Stat({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  bell: { padding: 6 },
+  bellBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: ML.bg,
+  },
+  bellBadgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 12, paddingBottom: 24 },

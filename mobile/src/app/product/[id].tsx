@@ -3,6 +3,7 @@ import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { MotiView } from "moti";
+import { useMemo } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -13,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getProductDetail } from "@/lib/db/product-detail";
+import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getPriceHistory, setProductStock, type PriceChange } from "@/lib/db/products";
 import {
   getCommissionRules,
@@ -22,6 +23,7 @@ import {
   getSettingsMap,
 } from "@/lib/db/rules";
 import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
+import { computePriceLab } from "@/lib/price-lab";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 
@@ -53,6 +55,12 @@ export default function ProductDetailScreen() {
     queryFn: () => getPriceHistory(id),
   });
 
+  const { data: variantGroup } = useQuery({
+    queryKey: ["variant-group", product?.variantGroupId],
+    queryFn: () => getVariantGroup(product!.variantGroupId!),
+    enabled: !!product?.variantGroupId,
+  });
+
   const stockMutation = useMutation({
     mutationFn: (newStock: number) => setProductStock(id, newStock),
     onMutate: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
@@ -66,6 +74,11 @@ export default function ProductDetailScreen() {
     product && rules && settings
       ? computeProductProfit(product, rules, settings)
       : null;
+
+  const priceLab = useMemo(
+    () => (product && rules && settings ? computePriceLab(product, rules, settings) : null),
+    [product, rules, settings]
+  );
 
   if (isLoading || !product) {
     return (
@@ -96,6 +109,48 @@ export default function ProductDetailScreen() {
             <Text style={styles.sku}>{product.sku}</Text>
           </View>
         </View>
+
+        {/* Varyant grubu */}
+        {variantGroup && variantGroup.members.length > 1 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>VARYANT GRUBU · {variantGroup.name.toUpperCase()}</Text>
+            {variantGroup.members.map((m) => {
+              const isCurrent = m.id === product.id;
+              return (
+                <Pressable
+                  key={m.id}
+                  disabled={isCurrent}
+                  onPress={() => router.push(`/product/${m.id}`)}
+                  style={({ pressed }) => [
+                    styles.variantRow,
+                    pressed && !isCurrent && { opacity: 0.6 },
+                  ]}
+                >
+                  {m.imageUrl ? (
+                    <Image source={{ uri: m.imageUrl }} style={styles.variantThumb} contentFit="cover" />
+                  ) : (
+                    <View style={[styles.variantThumb, styles.thumbEmpty]} />
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.variantLabel} numberOfLines={1}>
+                      {m.variantLabel || m.name}
+                    </Text>
+                    <Text style={styles.variantMeta}>
+                      {m.stock} adet · {formatCurrency(m.currentSalePrice)}
+                    </Text>
+                  </View>
+                  {isCurrent ? (
+                    <View style={styles.curBadge}>
+                      <Text style={styles.curBadgeText}>bu ürün</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.variantChevron}>›</Text>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
 
         {/* Stok editörü */}
         <View style={styles.section}>
@@ -151,6 +206,76 @@ export default function ProductDetailScreen() {
                 : "Maliyet girilmemiş — kâr hesaplanamıyor."}
             </Text>
           </View>
+        )}
+
+        {/* Fiyat Laboratuvarı */}
+        {priceLab?.hasCost && (
+          <>
+            <Text style={[styles.sectionLabel, { marginTop: 8, marginLeft: 4 }]}>
+              FİYAT LABORATUVARI
+            </Text>
+            {priceLab.targets.map((t) => {
+              const accent = t.platform === "shopify" ? ML.shopify : ML.trendyol;
+              return (
+                <View key={t.platform} style={styles.section}>
+                  <View style={styles.platformHead}>
+                    <View style={[styles.dot, { backgroundColor: accent }]} />
+                    <Text style={[styles.platformName, { color: accent }]}>
+                      {t.platform === "shopify" ? "Shopify" : "Trendyol"}
+                    </Text>
+                    <Text style={styles.salePrice}>{formatPercent(t.currentMargin)}</Text>
+                  </View>
+                  <Text style={styles.plHint}>Hedef marj için satış fiyatı (KDV dahil)</Text>
+                  <View style={styles.plGrid}>
+                    {t.rows.map((r) => (
+                      <View key={r.margin} style={styles.plCell}>
+                        <Text style={styles.plMargin}>%{r.margin}</Text>
+                        <Text style={styles.plPrice}>
+                          {r.price == null ? "—" : formatCurrency(r.price)}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              );
+            })}
+            {priceLab.campaign && (
+              <View style={styles.section}>
+                <Text style={[styles.sectionLabel, { marginBottom: 8 }]}>
+                  SHOPIFY KAMPANYA SİMÜLATÖRÜ
+                </Text>
+                <View style={styles.campHead}>
+                  <Text style={[styles.campH, { flex: 1 }]}>İndirim</Text>
+                  <Text style={[styles.campH, { width: 80, textAlign: "right" }]}>Fiyat</Text>
+                  <Text style={[styles.campH, { width: 80, textAlign: "right" }]}>Net kâr</Text>
+                  <Text style={[styles.campH, { width: 48, textAlign: "right" }]}>Marj</Text>
+                </View>
+                {priceLab.campaign.rows.map((r) => (
+                  <View
+                    key={r.discount}
+                    style={[styles.campRow, r.profit < 0 && { backgroundColor: ML.redSoft }]}
+                  >
+                    <Text style={[styles.campVal, { flex: 1, fontWeight: "700" }]}>%{r.discount}</Text>
+                    <Text style={[styles.campVal, { width: 80, textAlign: "right" }]}>
+                      {formatCurrency(r.effectivePrice)}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.campVal,
+                        { width: 80, textAlign: "right", color: r.profit < 0 ? ML.red : ML.green },
+                      ]}
+                    >
+                      {formatCurrency(r.profit)}
+                    </Text>
+                    <Text style={[styles.campVal, { width: 48, textAlign: "right" }]}>
+                      {formatPercent(r.margin)}
+                    </Text>
+                  </View>
+                ))}
+                <Text style={styles.plHint}>Kırmızı satır = o indirimde zarara geçiyorsun</Text>
+              </View>
+            )}
+          </>
         )}
 
         {/* Fiyat geçmişi */}
@@ -368,4 +493,40 @@ const styles = StyleSheet.create({
   histPrice: { color: ML.text, fontSize: 14, fontWeight: "600" },
   histSource: { color: ML.textFaint, fontSize: 12, marginTop: 2 },
   histDate: { color: ML.textDim, fontSize: 12 },
+  plHint: { color: ML.textFaint, fontSize: 11, marginTop: 4 },
+  plGrid: { flexDirection: "row", gap: 8, marginTop: 8 },
+  plCell: {
+    flex: 1,
+    backgroundColor: ML.bg,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  plMargin: { color: ML.textFaint, fontSize: 11, fontWeight: "700" },
+  plPrice: { color: ML.text, fontSize: 13, fontWeight: "700", marginTop: 2, fontVariant: ["tabular-nums"] },
+  campHead: { flexDirection: "row", alignItems: "center", paddingBottom: 4 },
+  campH: { color: ML.textFaint, fontSize: 11, fontWeight: "700" },
+  campRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 7,
+    paddingHorizontal: 6,
+    marginHorizontal: -6,
+    borderRadius: radius.sm,
+  },
+  campVal: { color: ML.textDim, fontSize: 13, fontVariant: ["tabular-nums"] },
+  variantRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8,
+  },
+  variantThumb: { width: 40, height: 40, borderRadius: radius.sm, backgroundColor: ML.cardElevated },
+  variantLabel: { color: ML.text, fontSize: 14, fontWeight: "600" },
+  variantMeta: { color: ML.textFaint, fontSize: 12, marginTop: 2 },
+  curBadge: { backgroundColor: ML.accentSoft, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  curBadgeText: { color: ML.accent, fontSize: 11, fontWeight: "700" },
+  variantChevron: { color: ML.textFaint, fontSize: 22 },
 });

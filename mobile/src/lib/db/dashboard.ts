@@ -15,6 +15,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     {
       sql: `SELECT p.id, p.name, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
                    p.stock, p.desi, p.imageUrl, p.source, p.commissionRate,
+                   p.variantGroupId, p.variantLabel,
                    pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost,
                    pc.filamentTypeId, pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
@@ -50,6 +51,8 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     imageUrl: p.imageUrl,
     source: p.source,
     commissionRate: p.commissionRate,
+    variantGroupId: p.variantGroupId,
+    variantLabel: p.variantLabel,
     cost: p.hasCost
       ? {
           costMode: p.costMode,

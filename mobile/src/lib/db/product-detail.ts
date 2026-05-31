@@ -1,4 +1,4 @@
-import { batch } from "@/lib/turso";
+import { batch, query } from "@/lib/turso";
 
 export interface ProductCostRow {
   costMode: string;
@@ -38,15 +38,31 @@ export interface ProductDetail {
   imageUrl: string | null;
   source: string;
   commissionRate: number | null;
+  variantGroupId: string | null;
+  variantLabel: string | null;
   cost: ProductCostRow | null;
   listings: ListingRow[];
+}
+
+export interface VariantMember {
+  id: string;
+  name: string;
+  variantLabel: string | null;
+  imageUrl: string | null;
+  stock: number;
+  currentSalePrice: number;
+}
+export interface VariantGroupInfo {
+  id: string;
+  name: string;
+  members: VariantMember[];
 }
 
 export async function getProductDetail(id: string): Promise<ProductDetail | null> {
   const [pRes, cRes, lRes] = await batch([
     {
       sql: `SELECT id, name, sku, barcode, categoryName, currentSalePrice, stock,
-                   desi, imageUrl, source, commissionRate
+                   desi, imageUrl, source, commissionRate, variantGroupId, variantLabel
               FROM Product WHERE id = ?`,
       args: [id],
     },
@@ -76,4 +92,20 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
     cost: (cRes.rows[0] as unknown as ProductCostRow) ?? null,
     listings: lRes.rows as unknown as ListingRow[],
   };
+}
+
+/** Bir varyant grubunun üyelerini getir (renk/beden kardeş ürünler). */
+export async function getVariantGroup(groupId: string): Promise<VariantGroupInfo | null> {
+  const g = await query<{ id: string; name: string }>(
+    `SELECT id, name FROM VariantGroup WHERE id = ?`,
+    [groupId]
+  ).catch(() => [] as { id: string; name: string }[]);
+  if (!g.length) return null;
+  const members = await query<VariantMember>(
+    `SELECT id, name, variantLabel, imageUrl, stock, currentSalePrice
+       FROM Product WHERE variantGroupId = ?
+      ORDER BY variantLabel COLLATE NOCASE, name COLLATE NOCASE`,
+    [groupId]
+  );
+  return { id: g[0].id, name: g[0].name, members };
 }

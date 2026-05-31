@@ -1,10 +1,11 @@
 import { Tabs } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import type { ColorValue } from "react-native";
 
 import { ML } from "@/theme/colors";
 
 function tabIcon(name: SymbolViewProps["name"]) {
-  return ({ color }: { color: string }) => (
+  return ({ color }: { color: ColorValue }) => (
     <SymbolView name={name} tintColor={color} style={{ width: 26, height: 26 }} />
   );
 }
@@ -31,9 +32,12 @@ export default function TabsLayout() {
       />
       <Tabs.Screen name="orders" options={{ title: "Siparişler", tabBarIcon: tabIcon("bag.fill") }} />
       <Tabs.Screen
-        name="settings"
-        options={{ title: "Ayarlar", tabBarIcon: tabIcon("gearshape.fill") }}
+        name="reports"
+        options={{ title: "Raporlar", tabBarIcon: tabIcon("chart.pie.fill") }}
       />
+      <Tabs.Screen name="more" options={{ title: "Daha", tabBarIcon: tabIcon("ellipsis.circle.fill") }} />
+      {/* Ayarlar tab bar'da gizli — "Daha" hub'ından açılır */}
+      <Tabs.Screen name="settings" options={{ href: null }} />
     </Tabs>
   );
 }
