@@ -3,14 +3,13 @@ const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
 
 const projectRoot = __dirname;
-const repoRoot = path.resolve(projectRoot, "..");
-const sharedCore = path.resolve(repoRoot, "src", "core");
+const sharedCore = path.resolve(projectRoot, "src", "core");
 
 const config = getDefaultConfig(projectRoot);
 
-// Masaüstü uygulamasıyla AYNI iş mantığını paylaş (kâr/maliyet/KDV/kural hesapları).
-// ../src/core saf TypeScript — Node/Prisma bağımlılığı yok, RN'e doğrudan import edilir.
-config.watchFolders = [sharedCore];
+// Masaüstüyle AYNI iş mantığı (kâr/maliyet/KDV/kural). src/core, masaüstündeki
+// ../src/core'un kopyasıdır — EAS bulut build'i parent dizini yüklemediği için
+// vendor'landı. Güncellemek için: `npm run sync-core`. Saf TS, Node/Prisma yok.
 config.resolver.extraNodeModules = {
   ...(config.resolver.extraNodeModules || {}),
   "@core": sharedCore,

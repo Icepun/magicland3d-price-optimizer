@@ -10,7 +10,7 @@
         "./assets/*"
       ],
       "@core/*": [
-        "../src/core/*"
+        "./src/core/*"
       ]
     }
   },

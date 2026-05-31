@@ -9,7 +9,10 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.magicland3d.hub"
+      "bundleIdentifier": "com.magicland3d.hub",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.magicland3d.hub",
@@ -41,6 +44,19 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "94ecc654-9a9e-41b2-974f-a9d3aa090696"
+      }
+    },
+    "owner": "icepun",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/94ecc654-9a9e-41b2-974f-a9d3aa090696"
     }
   }
 }
