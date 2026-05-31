@@ -309,7 +309,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
   ];
 
   return (
-    <Link href="/orders">
+    <Link href="/orders" className="group block">
       <Card
         className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 cursor-pointer transition-transform hover:-translate-y-0.5"
         style={{
@@ -318,55 +318,56 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
           borderTop: `2px solid ${ACCENTS.primary}`,
         }}
       >
-        <CardContent className="p-4 grid gap-4 sm:grid-cols-[1.3fr_1fr]">
-          <div>
-            <div className="flex items-center justify-between mb-2.5">
-              <h2 className="text-sm font-semibold flex items-center gap-2">
-                <ClipboardList className="h-4 w-4" style={{ color: ACCENTS.primary }} />
-                Son {s.days} Gün Siparişleri
-              </h2>
-              <span className="text-[11px] text-primary flex items-center gap-0.5">
-                Tümünü gör <ArrowRight className="h-3 w-3" />
-              </span>
-            </div>
-            <div className="space-y-2">
-              {rows.map(({ platform, bucket }) => {
-                const info = PLATFORM_INFO[platform];
-                return (
-                  <div key={platform} className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm">
-                      <PlatformLogo platform={platform} className="h-4 w-4" style={{ color: info.color }} />
-                      <span style={{ color: info.color }} className="font-medium">
-                        {info.label}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground tabular-nums">
-                        · {bucket.orderCount} sipariş
-                      </span>
-                    </span>
-                    <span className="text-sm font-semibold tabular-nums">{fmtTL(bucket.revenue)}</span>
-                  </div>
-                );
-              })}
-            </div>
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-sm font-semibold flex items-center gap-2">
+              <ClipboardList className="h-4 w-4" style={{ color: ACCENTS.primary }} />
+              Son {s.days} Gün Siparişleri
+            </h2>
+            <span className="text-[11px] text-primary flex items-center gap-0.5 transition-transform group-hover:translate-x-0.5">
+              Tümünü gör <ArrowRight className="h-3 w-3" />
+            </span>
           </div>
 
-          <div className="sm:border-l sm:border-border/50 sm:pl-4 flex flex-col justify-center gap-2">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {/* Toplam ciro */}
             <div>
               <p className="text-[11px] text-muted-foreground">Toplam ciro</p>
-              <p className="text-2xl font-bold tabular-nums" style={{ color: ACCENTS.primary }}>
+              <p className="text-2xl font-bold tabular-nums leading-tight" style={{ color: ACCENTS.primary }}>
                 {fmtTL(s.total.revenue)}
               </p>
+              <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{s.total.orderCount} sipariş</p>
             </div>
-            <div>
-              <p className="text-[11px] text-muted-foreground">Net kâr (tahmini)</p>
+
+            {/* Net kâr */}
+            <div className="sm:border-l sm:border-border/50 sm:pl-4">
+              <p className="text-[11px] text-muted-foreground">Net kâr</p>
               <p
-                className="text-lg font-bold tabular-nums"
+                className="text-2xl font-bold tabular-nums leading-tight"
                 style={{ color: profitPos ? ACCENTS.green : ACCENTS.red }}
               >
                 {profitPos ? "+" : ""}
                 {fmtTL(s.total.profit)}
               </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">tahmini</p>
             </div>
+
+            {/* Shopify + Trendyol kırılımı */}
+            {rows.map(({ platform, bucket }) => {
+              const info = PLATFORM_INFO[platform];
+              return (
+                <div key={platform} className="sm:border-l sm:border-border/50 sm:pl-4">
+                  <p className="text-[11px] flex items-center gap-1.5">
+                    <PlatformLogo platform={platform} className="h-3 w-3" style={{ color: info.color }} />
+                    <span style={{ color: info.color }} className="font-medium">
+                      {info.label}
+                    </span>
+                  </p>
+                  <p className="text-xl font-bold tabular-nums leading-tight mt-0.5">{fmtTL(bucket.revenue)}</p>
+                  <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{bucket.orderCount} sipariş</p>
+                </div>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
