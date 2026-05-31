@@ -15,7 +15,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     {
       sql: `SELECT p.id, p.name, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
                    p.stock, p.desi, p.imageUrl, p.source, p.commissionRate,
-                   p.variantGroupId, p.variantLabel,
+                   p.variantGroupId, p.variantLabel, vg.name AS variantGroupName,
                    pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost,
                    pc.filamentTypeId, pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
@@ -23,6 +23,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
               FROM Product p
               LEFT JOIN ProductCost pc ON pc.productId = p.id
               LEFT JOIN FilamentType ft ON ft.id = pc.filamentTypeId
+              LEFT JOIN VariantGroup vg ON vg.id = p.variantGroupId
              WHERE p.isActive = 1 AND p.hidden = 0`,
     },
     {
@@ -53,6 +54,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     commissionRate: p.commissionRate,
     variantGroupId: p.variantGroupId,
     variantLabel: p.variantLabel,
+    variantGroupName: p.variantGroupName ?? null,
     cost: p.hasCost
       ? {
           costMode: p.costMode,

@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
+import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
 import { getPriceHistory, setProductStock, type PriceChange } from "@/lib/db/products";
 import {
   getCommissionRules,
@@ -61,12 +61,21 @@ export default function ProductDetailScreen() {
     enabled: !!product?.variantGroupId,
   });
 
+  // Optimistic: UI anında değişir, DB yazımı arka planda; hata olursa geri al.
   const stockMutation = useMutation({
     mutationFn: (newStock: number) => setProductStock(id, newStock),
-    onMutate: () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["product", id] });
-      qc.invalidateQueries({ queryKey: ["products"] });
+    onMutate: async (newStock: number) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await qc.cancelQueries({ queryKey: ["product", id] });
+      const prev = qc.getQueryData<ProductDetail>(["product", id]);
+      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock: newStock } : o));
+      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
+        o ? o.map((p) => (p.id === id ? { ...p, stock: newStock } : p)) : o
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["product", id], ctx.prev);
     },
   });
 

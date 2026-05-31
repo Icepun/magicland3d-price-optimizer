@@ -40,9 +40,13 @@ const STATUS = {
 } as const;
 
 const MATERIALS = ["PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "Reçine"];
+// Zengin palet (hex girişi de var → her rengi seçebilirsin)
 const SWATCHES = [
-  "#E5E7EB", "#1F2937", "#9CA3AF", "#EF4444", "#F97316", "#FACC15",
-  "#22C55E", "#3B82F6", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16",
+  "#FFFFFF", "#E5E7EB", "#9CA3AF", "#4B5563", "#1F2937", "#000000",
+  "#FCA5A5", "#EF4444", "#B91C1C", "#FDBA74", "#F97316", "#C2410C",
+  "#FDE68A", "#FACC15", "#CA8A04", "#86EFAC", "#22C55E", "#15803D",
+  "#67E8F9", "#06B6D4", "#0E7490", "#93C5FD", "#3B82F6", "#1D4ED8",
+  "#C4B5FD", "#8B5CF6", "#6D28D9", "#F9A8D4", "#EC4899", "#BE185D",
 ];
 
 export default function SpoolsScreen() {
@@ -53,12 +57,42 @@ export default function SpoolsScreen() {
   const [formTarget, setFormTarget] = useState<Spool | "new" | null>(null);
 
   const alertCount = (data ?? []).filter((s) => spoolStatus(s) !== "ok").length;
+
+  // Optimistic: ["spools"] cache'i anında güncellenir, DB arka planda yazılır, hata olursa geri alınır.
+  const patchSpool = (id: string, patch: Partial<Spool>) =>
+    qc.setQueryData<Spool[]>(["spools"], (o) => (o ? o.map((s) => (s.id === id ? { ...s, ...patch } : s)) : o));
+  const bumpNotif = () => qc.invalidateQueries({ queryKey: ["notifications"] });
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["spools"] });
-    qc.invalidateQueries({ queryKey: ["notifications"] });
+    bumpNotif();
   };
 
-  const refill = useMutation({ mutationFn: markSpoolFull, onSuccess: invalidate });
+  const refill = useMutation({
+    mutationFn: markSpoolFull,
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: ["spools"] });
+      const prev = qc.getQueryData<Spool[]>(["spools"]);
+      const sp = prev?.find((s) => s.id === id);
+      if (sp) patchSpool(id, { remainingGrams: sp.totalGrams });
+      bumpNotif();
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(["spools"], ctx.prev),
+  });
+
+  const consumeMut = useMutation({
+    mutationFn: ({ id, grams, note }: { id: string; grams: number; note: string | null }) =>
+      consumeSpool(id, grams, { note }),
+    onMutate: async ({ id, grams }) => {
+      await qc.cancelQueries({ queryKey: ["spools"] });
+      const prev = qc.getQueryData<Spool[]>(["spools"]);
+      const sp = prev?.find((s) => s.id === id);
+      if (sp) patchSpool(id, { remainingGrams: Math.max(0, sp.remainingGrams - grams) });
+      bumpNotif();
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(["spools"], ctx.prev),
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -113,7 +147,14 @@ export default function SpoolsScreen() {
         <SymbolView name="plus" tintColor="#fff" style={{ width: 26, height: 26 }} />
       </Pressable>
 
-      <ConsumeModal spool={consumeTarget} onClose={() => setConsumeTarget(null)} onDone={() => { setConsumeTarget(null); invalidate(); }} />
+      <ConsumeModal
+        spool={consumeTarget}
+        onClose={() => setConsumeTarget(null)}
+        onConsume={(grams, note) => {
+          if (consumeTarget) consumeMut.mutate({ id: consumeTarget.id, grams, note });
+          setConsumeTarget(null);
+        }}
+      />
       <SpoolFormModal target={formTarget} onClose={() => setFormTarget(null)} onDone={() => { setFormTarget(null); invalidate(); }} />
     </SafeAreaView>
   );
@@ -158,20 +199,17 @@ function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onCon
   );
 }
 
-function ConsumeModal({ spool, onClose, onDone }: { spool: Spool | null; onClose: () => void; onDone: () => void }) {
+function ConsumeModal({ spool, onClose, onConsume }: { spool: Spool | null; onClose: () => void; onConsume: (grams: number, note: string | null) => void }) {
   const [grams, setGrams] = useState("");
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
   const g = Number(grams.replace(",", "."));
   const valid = g > 0;
 
-  async function submit() {
+  function submit() {
     if (!spool || !valid) return;
-    setBusy(true);
-    try {
-      await consumeSpool(spool.id, g, { note: note.trim() || null });
-      setGrams(""); setNote(""); onDone();
-    } finally { setBusy(false); }
+    onConsume(g, note.trim() || null);
+    setGrams("");
+    setNote("");
   }
 
   return (
@@ -185,8 +223,8 @@ function ConsumeModal({ spool, onClose, onDone }: { spool: Spool | null; onClose
           <TextInput value={note} onChangeText={setNote} placeholder="Not (opsiyonel)" placeholderTextColor={ML.textFaint} style={styles.input} />
           <View style={styles.modalActions}>
             <Pressable style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></Pressable>
-            <Pressable style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]} onPress={submit} disabled={!valid || busy}>
-              <Text style={styles.btnText}>{busy ? "..." : "Düş"}</Text>
+            <Pressable style={[styles.modalBtn, !valid && { opacity: 0.4 }]} onPress={submit} disabled={!valid}>
+              <Text style={styles.btnText}>Düş</Text>
             </Pressable>
           </View>
         </View>
@@ -264,9 +302,33 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | n
               </View>
             </Field>
             <Field label="Renk">
-              <View style={styles.chipRow}>
+              <View style={styles.colorRow}>
+                <View style={[styles.colorPreview, { backgroundColor: colorHex }]} />
+                <TextInput
+                  value={colorHex}
+                  onChangeText={(t) => {
+                    const v = t.startsWith("#") ? t : "#" + t;
+                    setColorHex(v.toUpperCase().slice(0, 7));
+                  }}
+                  placeholder="#RRGGBB"
+                  placeholderTextColor={ML.textFaint}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={7}
+                  style={[styles.input, { flex: 1 }]}
+                />
+              </View>
+              <View style={[styles.chipRow, { marginTop: 8 }]}>
                 {SWATCHES.map((c) => (
-                  <Pressable key={c} onPress={() => setColorHex(c)} style={[styles.swatch, { backgroundColor: c }, colorHex === c && styles.swatchOn]} />
+                  <Pressable
+                    key={c}
+                    onPress={() => setColorHex(c)}
+                    style={[
+                      styles.swatch,
+                      { backgroundColor: c },
+                      colorHex.toUpperCase() === c.toUpperCase() && styles.swatchOn,
+                    ]}
+                  />
                 ))}
               </View>
             </Field>
@@ -362,7 +424,9 @@ const styles = StyleSheet.create({
   chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: ML.bg, borderWidth: 1, borderColor: ML.border },
   chipOn: { backgroundColor: ML.accent, borderColor: ML.accent },
   chipText: { color: ML.textDim, fontSize: 13 },
-  swatch: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: "transparent" },
+  colorRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  colorPreview: { width: 44, height: 44, borderRadius: radius.md, borderWidth: 1, borderColor: ML.border },
+  swatch: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, borderColor: "transparent" },
   swatchOn: { borderColor: ML.text },
   deleteBtn: { borderRadius: radius.md, borderWidth: 1, borderColor: ML.red, paddingVertical: 12, alignItems: "center", marginTop: 4 },
   deleteText: { color: ML.red, fontSize: 14, fontWeight: "700" },

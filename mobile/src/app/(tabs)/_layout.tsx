@@ -36,8 +36,6 @@ export default function TabsLayout() {
         options={{ title: "Raporlar", tabBarIcon: tabIcon("chart.pie.fill") }}
       />
       <Tabs.Screen name="more" options={{ title: "Daha", tabBarIcon: tabIcon("ellipsis.circle.fill") }} />
-      {/* Ayarlar tab bar'da gizli — "Daha" hub'ından açılır */}
-      <Tabs.Screen name="settings" options={{ href: null }} />
     </Tabs>
   );
 }

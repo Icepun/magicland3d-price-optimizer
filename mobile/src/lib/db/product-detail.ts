@@ -40,6 +40,7 @@ export interface ProductDetail {
   commissionRate: number | null;
   variantGroupId: string | null;
   variantLabel: string | null;
+  variantGroupName?: string | null;
   cost: ProductCostRow | null;
   listings: ListingRow[];
 }

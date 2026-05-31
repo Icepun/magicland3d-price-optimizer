@@ -41,12 +41,28 @@ interface ListItem {
   hasCost: boolean;
   anyLoss: boolean;
   platforms: { platform: "shopify" | "trendyol"; netProfit: number | null }[];
+  variantGroupId: string | null;
+  variantGroupName: string | null;
+  variantLabel: string | null;
 }
+
+type Row =
+  | { kind: "product"; item: ListItem }
+  | { kind: "member"; item: ListItem }
+  | { kind: "group"; id: string; name: string; members: ListItem[] };
 
 export default function ProductsScreen() {
   const params = useLocalSearchParams<{ filter?: string }>();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const toggleGroup = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     if (params.filter && FILTERS.some((f) => f.key === params.filter)) {
@@ -85,6 +101,9 @@ export default function ProductsScreen() {
           platform: pl.platform,
           netProfit: profit.hasCost ? pl.result.netProfit : null,
         })),
+        variantGroupId: p.variantGroupId,
+        variantGroupName: p.variantGroupName ?? null,
+        variantLabel: p.variantLabel,
       };
     });
   }, [products, rules, settings]);
@@ -95,9 +114,49 @@ export default function ProductsScreen() {
     else if (filter === "loss") list = list.filter((i) => i.anyLoss);
     else if (filter === "no-cost") list = list.filter((i) => !i.hasCost);
     const q = search.trim().toLowerCase();
-    if (q) list = list.filter((i) => i.name.toLowerCase().includes(q) || i.category.toLowerCase().includes(q));
+    if (q)
+      list = list.filter(
+        (i) =>
+          i.name.toLowerCase().includes(q) ||
+          i.category.toLowerCase().includes(q) ||
+          (i.variantGroupName ?? "").toLowerCase().includes(q)
+      );
     return list;
   }, [items, filter, search]);
+
+  // Varyant kardeşlerini tek "grup" satırına topla (tıklayınca açılır) — masaüstündeki gibi.
+  const rows = useMemo<Row[]>(() => {
+    const groups = new Map<string, ListItem[]>();
+    const order: string[] = [];
+    const byId = new Map<string, ListItem>();
+    for (const it of filtered) {
+      if (it.variantGroupId) {
+        if (!groups.has(it.variantGroupId)) {
+          groups.set(it.variantGroupId, []);
+          order.push("g:" + it.variantGroupId);
+        }
+        groups.get(it.variantGroupId)!.push(it);
+      } else {
+        order.push("p:" + it.id);
+        byId.set(it.id, it);
+      }
+    }
+    const out: Row[] = [];
+    for (const o of order) {
+      if (o.startsWith("g:")) {
+        const gid = o.slice(2);
+        const members = groups.get(gid)!;
+        if (members.length === 1) out.push({ kind: "product", item: members[0] });
+        else {
+          out.push({ kind: "group", id: gid, name: members[0].variantGroupName || "Varyant grubu", members });
+          if (expanded.has(gid)) for (const m of members) out.push({ kind: "member", item: m });
+        }
+      } else {
+        out.push({ kind: "product", item: byId.get(o.slice(2))! });
+      }
+    }
+    return out;
+  }, [filtered, expanded]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -146,16 +205,22 @@ export default function ProductsScreen() {
         </View>
       ) : (
         <FlatList
-          data={filtered}
-          keyExtractor={(p) => p.id}
+          data={rows}
+          keyExtractor={(r) =>
+            r.kind === "group" ? "g-" + r.id : (r.kind === "member" ? "m-" : "p-") + r.item.id
+          }
           contentContainerStyle={styles.list}
-          renderItem={({ item, index }) => (
+          renderItem={({ item: row, index }) => (
             <MotiView
-              from={{ opacity: 0, translateY: 12 }}
+              from={{ opacity: 0, translateY: 10 }}
               animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: "timing", duration: 260, delay: Math.min(index, 10) * 24 }}
+              transition={{ type: "timing", duration: 200, delay: Math.min(index, 8) * 18 }}
             >
-              <ProductCard item={item} />
+              {row.kind === "group" ? (
+                <GroupHeader row={row} open={expanded.has(row.id)} onToggle={() => toggleGroup(row.id)} />
+              ) : (
+                <ProductCard item={row.item} member={row.kind === "member"} />
+              )}
             </MotiView>
           )}
           refreshControl={
@@ -170,12 +235,12 @@ export default function ProductsScreen() {
   );
 }
 
-function ProductCard({ item }: { item: ListItem }) {
+function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
   const out = item.stock <= 0;
   return (
     <Pressable
       onPress={() => router.push(`/product/${item.id}`)}
-      style={({ pressed }) => [styles.card, pressed && { backgroundColor: ML.cardElevated }]}
+      style={({ pressed }) => [styles.card, member && styles.memberCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
       {item.imageUrl ? (
         <Image source={{ uri: item.imageUrl }} style={styles.thumb} contentFit="cover" transition={150} />
@@ -187,7 +252,7 @@ function ProductCard({ item }: { item: ListItem }) {
 
       <View style={styles.cardBody}>
         <Text style={styles.name} numberOfLines={1}>
-          {item.name}
+          {member ? item.variantLabel || item.name : item.name}
         </Text>
         <View style={styles.metaRow}>
           <Text style={styles.category} numberOfLines={1}>
@@ -224,6 +289,45 @@ function ProductCard({ item }: { item: ListItem }) {
           <Text style={styles.noCost}>maliyet yok</Text>
         )}
       </View>
+    </Pressable>
+  );
+}
+
+function GroupHeader({
+  row,
+  open,
+  onToggle,
+}: {
+  row: { id: string; name: string; members: ListItem[] };
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const totalStock = row.members.reduce((s, m) => s + m.stock, 0);
+  const img = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
+  return (
+    <Pressable
+      onPress={onToggle}
+      style={({ pressed }) => [styles.card, styles.groupCard, pressed && { backgroundColor: ML.cardElevated }]}
+    >
+      {img ? (
+        <Image source={{ uri: img }} style={styles.thumb} contentFit="cover" transition={150} />
+      ) : (
+        <View style={[styles.thumb, styles.thumbEmpty]}>
+          <Text style={styles.thumbEmptyText}>—</Text>
+        </View>
+      )}
+      <View style={styles.cardBody}>
+        <Text style={styles.name} numberOfLines={1}>
+          {row.name}
+        </Text>
+        <View style={styles.metaRow}>
+          <View style={styles.groupBadge}>
+            <Text style={styles.groupBadgeText}>{row.members.length} varyant</Text>
+          </View>
+          <Text style={styles.stockText}>{totalStock} adet</Text>
+        </View>
+      </View>
+      <Text style={[styles.chevron, open && { transform: [{ rotate: "90deg" }] }]}>›</Text>
     </Pressable>
   );
 }
@@ -285,4 +389,9 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   dim: { color: ML.textDim, fontSize: 14 },
   errorTitle: { color: ML.red, fontSize: 18, fontWeight: "700" },
+  groupCard: { backgroundColor: ML.cardElevated },
+  groupBadge: { backgroundColor: ML.accentSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  groupBadgeText: { color: ML.accent, fontSize: 11, fontWeight: "700" },
+  chevron: { color: ML.textFaint, fontSize: 24, paddingHorizontal: 2 },
+  memberCard: { marginLeft: 22 },
 });
