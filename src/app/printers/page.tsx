@@ -761,6 +761,30 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
 interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
 interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 
+type PrintProg = { stage: "upload" | "start" | "done"; pct: number | null };
+
+function PrintProgress({ p }: { p: PrintProg }) {
+  const label = p.stage === "start" ? "Baskı başlatılıyor…" : p.stage === "done" ? "Başlatıldı 🎉" : "Yazıcıya yükleniyor…";
+  const showPct = p.stage === "upload" && p.pct != null;
+  return (
+    <div className="space-y-1.5 rounded-lg border bg-muted/30 p-2.5">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-muted-foreground flex items-center gap-1.5">
+          {p.stage !== "done" && <Loader2 className="h-3 w-3 animate-spin" />}{label}
+        </span>
+        {showPct && <span className="tabular-nums font-semibold">{p.pct}%</span>}
+      </div>
+      <div className="h-2 rounded-full bg-muted overflow-hidden">
+        {showPct ? (
+          <div className="h-full bg-primary rounded-full transition-all duration-200" style={{ width: `${p.pct}%` }} />
+        ) : (
+          <div className="h-full w-1/2 bg-primary/70 rounded-full animate-pulse" />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function StartModal({ target, onClose }: { target: { id: string; name: string; brand: string }; onClose: () => void }) {
   const qc = useQueryClient();
   const multiColor = target.brand === "bambu" || target.brand === "snapmaker";
@@ -771,21 +795,57 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   });
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<PrintableModel | null>(null);
+  const [printing, setPrinting] = useState(false);
+  const [progress, setProgress] = useState<PrintProg | null>(null);
 
-  const print = useMutation({
-    mutationFn: (v: { fileId: string; amsMapping?: number[]; useAms?: boolean }) =>
-      fetchJson(`/api/models/${v.fileId}/print`, {
+  // POST → NDJSON akışı; her satır bir ilerleme olayı → progress bar'ı güncelle.
+  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean } = {}) => {
+    setPrinting(true);
+    setProgress({ stage: "upload", pct: 0 });
+    try {
+      const res = await fetch(`/api/models/${fileId}/print`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amsMapping: v.amsMapping, useAms: v.useAms }),
-      }),
-    onSuccess: () => {
+        body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms }),
+      });
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({} as { error?: string }));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let errMsg: string | null = null;
+      let ok = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: { stage: string; pct?: number | null; message?: string };
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
+          else if (ev.stage === "done") ok = true;
+          else setProgress({ stage: ev.stage === "start" ? "start" : "upload", pct: ev.pct ?? null });
+        }
+      }
+      if (errMsg) throw new Error(errMsg);
+      if (!ok) throw new Error("Baskı tamamlanmadı (akış beklenmedik kapandı)");
+      setProgress({ stage: "done", pct: 100 });
       toast.success("Baskı başlatıldı 🎉");
       onClose();
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
+    } catch (e) {
+      toast.error((e as Error).message);
+      setProgress(null);
+    } finally {
+      setPrinting(false);
+    }
+  };
 
   const models = useMemo(() => {
     const all = data?.models ?? [];
@@ -799,16 +859,17 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
         printerId={target.id}
         model={picked}
         isBambu={isBambu}
-        printing={print.isPending}
+        printing={printing}
+        progress={progress}
         onBack={() => setPicked(null)}
         onClose={onClose}
-        onConfirm={(opts) => print.mutate({ fileId: picked.fileId, ...opts })}
+        onConfirm={(opts) => runPrint(picked.fileId, opts)}
       />
     );
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
       <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Baskı Başlat — {target.name}</DialogTitle>
@@ -834,8 +895,8 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
             models.map((m) => (
               <button
                 key={m.fileId}
-                onClick={() => (multiColor ? setPicked(m) : print.mutate({ fileId: m.fileId }))}
-                disabled={print.isPending}
+                onClick={() => (multiColor ? setPicked(m) : runPrint(m.fileId))}
+                disabled={printing}
                 className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50"
               >
                 <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
@@ -850,6 +911,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
             ))
           )}
         </div>
+        {progress && <PrintProgress p={progress} />}
       </DialogContent>
     </Dialog>
   );
@@ -881,9 +943,9 @@ function nearestSlotId(hex: string, slots: PrinterSlot[]): number | null {
 }
 
 function SlotStep({
-  printerId, model, isBambu, printing, onBack, onClose, onConfirm,
+  printerId, model, isBambu, printing, progress, onBack, onClose, onConfirm,
 }: {
-  printerId: string; model: PrintableModel; isBambu: boolean; printing: boolean;
+  printerId: string; model: PrintableModel; isBambu: boolean; printing: boolean; progress: PrintProg | null;
   onBack: () => void; onClose: () => void;
   onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean }) => void;
 }) {
@@ -945,7 +1007,7 @@ function SlotStep({
   };
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
       <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
@@ -1055,8 +1117,10 @@ function SlotStep({
           </div>
         )}
 
+        {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
+
         <DialogFooter>
-          <Button variant="ghost" onClick={onBack}>Geri</Button>
+          <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>
           <Button disabled={printing} onClick={start}>
             {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>

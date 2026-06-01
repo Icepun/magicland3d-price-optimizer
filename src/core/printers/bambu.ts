@@ -185,17 +185,21 @@ function controlHostV4(addr: unknown): string | null {
 /**
  * Bambu SD kartına FTP (implicit TLS 990, bblp + access code) ile dosya yükle.
  *
- * Bambu'nun FTP sunucusunun İKİ bilinen hatası var; ikisi de "Timeout (control socket)"
- * olarak görünür:
- *   1) EPSV komutuna yanıt vermez. basic-ftp default'u önce EPSV dener → kontrol soketi
- *      cevap bekleyip timeout'a düşer. ÇÖZÜM: prepareTransfer'ı doğrudan PASV'a sabitle.
- *   2) PASV yanıtında host olarak 0.0.0.0 döndürür → veri bağlantısı kurulamaz, transfer
- *      asılır, kontrol soketi timeout olur. ÇÖZÜM: PASV yanıtındaki host'u kontrol
- *      bağlantısının gerçek IP'siyle değiştir (sonra basic-ftp'nin kendi TLS-session-reuse'lu
- *      bağlanma mantığı çalışır).
- * Hata olursa FTP konuşma dökümünü mesaja ekle (sonraki testte tam adımı görmek için).
+ * Bambu'nun FTP sunucusunun İKİ hatası "Timeout (control socket)" olarak görünür:
+ *   1) EPSV'ye yanıt vermez → basic-ftp önce EPSV dener, kontrol soketi timeout olur.
+ *      ÇÖZÜM: prepareTransfer'ı doğrudan PASV'a sabitle (EPSV'yi atla).
+ *   2) PASV yanıtında host olarak 0.0.0.0 döndürür → veri bağlantısı (Windows'ta loopback'e
+ *      gidip) asılır, kontrol soketi timeout olur. ÇÖZÜM: PASV yanıtındaki host'u
+ *      YAPILANDIRILMIŞ yazıcı IP'siyle değiştir (socket.remoteAddress boş gelebiliyor → ona güvenme).
+ * onProgress: yükleme yüzdesi (0..100). Hata olursa FTP konuşma dökümünü mesaja ekle.
  */
-async function bambuFtpUpload(host: string, accessCode: string, fileBuf: Buffer, remoteName: string): Promise<void> {
+async function bambuFtpUpload(
+  host: string,
+  accessCode: string,
+  fileBuf: Buffer,
+  remoteName: string,
+  onProgress?: (pct: number) => void
+): Promise<void> {
   const ftp = new FtpClient(30000);
   ftp.ftp.verbose = false;
   const ctx = ftp.ftp as unknown as {
@@ -203,19 +207,24 @@ async function bambuFtpUpload(host: string, accessCode: string, fileBuf: Buffer,
     socket: { remoteAddress?: string };
   };
   const trace: string[] = [];
+  const total = fileBuf.length;
+  // Yapılandırılmış host IPv4 ise onu kullan (kesin); değilse kontrol soketinin IP'sine düş.
+  const hostV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ? host : null;
   const origRequest = ctx.request.bind(ctx);
   ctx.request = (cmd: string) =>
     origRequest(cmd).then(
       (res) => {
-        if (typeof cmd === "string" && /^\s*PASV/i.test(cmd)) {
-          const h = controlHostV4(ctx.socket && ctx.socket.remoteAddress);
-          if (h && typeof res?.message === "string") {
-            // "227 ... (0,0,0,0,193,52)" → host oktetlerini kontrol IP'siyle değiştir, portu koru
+        if (typeof cmd === "string" && /^\s*PASV/i.test(cmd) && typeof res?.message === "string") {
+          const target = hostV4 || controlHostV4(ctx.socket && ctx.socket.remoteAddress);
+          if (target) {
+            // "227 ... (0,0,0,0,193,52)" → host oktetlerini yazıcı IP'siyle değiştir, portu koru
             res.message = res.message.replace(
               /(\d{1,3},\d{1,3},\d{1,3},\d{1,3})(\s*,\s*\d{1,3}\s*,\s*\d{1,3})/,
-              `${h.replace(/\./g, ",")}$2`
+              `${target.replace(/\./g, ",")}$2`
             );
           }
+          const mm = res.message.match(/(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})/);
+          if (mm) trace.push(`DATA→${mm[1]}.${mm[2]}.${mm[3]}.${mm[4]}:${(+mm[5]) * 256 + (+mm[6])}`);
         }
         const safe = /^\s*PASS/i.test(String(cmd)) ? "PASS***" : String(cmd).trim();
         trace.push(`${safe}»${res?.code ?? "?"}`);
@@ -225,6 +234,9 @@ async function bambuFtpUpload(host: string, accessCode: string, fileBuf: Buffer,
     );
   // EPSV'yi atla: doğrudan PASV (host yukarıda düzeltiliyor).
   ftp.prepareTransfer = enterPassiveModeIPv4;
+  if (onProgress) {
+    ftp.trackProgress((info) => { if (total > 0) onProgress(Math.min(99, Math.round((info.bytesOverall / total) * 100))); });
+  }
 
   try {
     await ftp.access({
@@ -232,10 +244,12 @@ async function bambuFtpUpload(host: string, accessCode: string, fileBuf: Buffer,
       secure: "implicit", secureOptions: { rejectUnauthorized: false },
     });
     await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
+    onProgress?.(100);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`FTP yükleme başarısız (${msg}) · iz: ${trace.join(" ")}`);
   } finally {
+    try { ftp.trackProgress(); } catch { /* tracker'ı durdur */ }
     ftp.close();
   }
 }
@@ -251,9 +265,9 @@ export async function bambuUploadAndPrint(
   serial: string,
   fileBuf: Buffer,
   remoteName: string,
-  opts: { amsMapping?: number[]; useAms?: boolean } = {}
+  opts: { amsMapping?: number[]; useAms?: boolean; onProgress?: (pct: number) => void } = {}
 ): Promise<void> {
-  await bambuFtpUpload(host, accessCode, fileBuf, remoteName);
+  await bambuFtpUpload(host, accessCode, fileBuf, remoteName, opts.onProgress);
 
   const conn = ensureConn(host, accessCode, serial);
   const isGcode = /\.(gcode|gco|g)$/i.test(remoteName);
