@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound } from "lucide-react";
+import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store } from "lucide-react";
 
 interface TrendyolPublicSettings {
   sellerId: string;
@@ -31,6 +31,14 @@ interface ShopifyPublicSettings {
   clientId: string;
   hasClientSecret: boolean;
   clientSecretMasked: string;
+}
+
+interface HepsiburadaPublicSettings {
+  merchantId: string;
+  hasUsername: boolean;
+  usernameMasked: string;
+  hasPassword: boolean;
+  passwordMasked: string;
 }
 
 interface ShopifyDebugResult {
@@ -595,6 +603,125 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
   );
 }
 
+// ───────────── Hepsiburada Form ─────────────
+const HepsiburadaSchema = z.object({
+  merchantId: z.string().min(1, "merchantId gerekli"),
+  username: z.string().optional(),
+  password: z.string().optional(),
+});
+type HepsiburadaForm = z.infer<typeof HepsiburadaSchema>;
+
+function HepsiburadaTab() {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery<HepsiburadaPublicSettings>({
+    queryKey: ["hepsiburada-settings"],
+    queryFn: () => fetchJson("/api/hepsiburada/settings"),
+  });
+
+  const form = useForm<HepsiburadaForm>({
+    resolver: zodResolver(HepsiburadaSchema),
+    defaultValues: { merchantId: "", username: "", password: "" },
+    values: settings ? { merchantId: settings.merchantId, username: "", password: "" } : undefined,
+  });
+
+  const save = useMutation({
+    mutationFn: (data: HepsiburadaForm) =>
+      fetchJson("/api/hepsiburada/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["hepsiburada-settings"] });
+      qc.invalidateQueries({ queryKey: ["integrations-status"] });
+      toast.success("Hepsiburada ayarları kaydedildi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const [sample, setSample] = useState<unknown>(null);
+  const test = useMutation({
+    mutationFn: () => fetchJson<{ ok: boolean; sample?: unknown }>("/api/hepsiburada/test", { method: "POST" }),
+    onSuccess: (d) => {
+      setSample(d.sample ?? null);
+      toast.success("Hepsiburada bağlantısı başarılı");
+    },
+    onError: (e: Error) => {
+      setSample(null);
+      toast.error(e.message);
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Store className="h-4 w-4" /> Hepsiburada API
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            HTTP Basic Auth — Satıcı paneli → mağaza adı → Hesabım → Entegrasyon → Entegratör Bilgileri'nden
+            <strong> kullanıcı adı + şifre</strong>, merchantId ise mağaza kimliğin.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={form.handleSubmit((d) => save.mutate(d))} className="space-y-3">
+            <div>
+              <Label className="text-xs">Merchant ID (Mağaza ID)</Label>
+              <Input {...form.register("merchantId")} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+            </div>
+            <div>
+              <Label className="text-xs">Entegrasyon Kullanıcı Adı</Label>
+              <Input
+                {...form.register("username")}
+                type="password"
+                placeholder={settings?.hasUsername ? settings.usernameMasked : "API kullanıcı adı"}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Entegrasyon Şifresi</Label>
+              <Input
+                {...form.register("password")}
+                type="password"
+                placeholder={settings?.hasPassword ? settings.passwordMasked : "API şifresi"}
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={save.isPending}>
+              {save.isPending ? "Kaydediliyor…" : "Kaydet"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Button variant="outline" className="w-full" disabled={test.isPending} onClick={() => test.mutate()}>
+        <PlugZap className={`h-4 w-4 mr-2 ${test.isPending ? "animate-spin" : ""}`} />
+        {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+      </Button>
+
+      {sample !== null && (
+        <Card className="border-green-500/40 bg-green-500/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Test başarılı — dönen örnek</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all max-h-64">
+              {JSON.stringify(sample, null, 2).slice(0, 4000)}
+            </pre>
+            <p className="text-[11px] text-muted-foreground mt-2">
+              Bu örneği bana iletirsen ürün/sipariş alan adlarını birebir eşleyip senkronu kurarım.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      <p className="text-[11px] text-muted-foreground">
+        Önce kaydet + <strong>Bağlantıyı Test Et</strong>. Auth doğrulanınca ürün eşleştirme + sipariş
+        senkronu (Trendyol&apos;daki gibi) eklenecek.
+      </p>
+    </div>
+  );
+}
+
 // ───────────── Ana Sayfa ─────────────
 export default function ApiSettingsPage() {
   return (
@@ -604,8 +731,8 @@ export default function ApiSettingsPage() {
           <Settings2 className="h-6 w-6" /> Platform API Ayarları
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Shopify ana ürün kaynağı, Trendyol satış kanalı — her birinin listing&apos;leri
-          ana ürünlere bağlanır.
+          Shopify ana ürün kaynağı; Trendyol + Hepsiburada satış kanalları — her birinin
+          listing&apos;leri ana ürünlere bağlanır.
         </p>
       </div>
 
@@ -617,6 +744,9 @@ export default function ApiSettingsPage() {
           <TabsTrigger value="trendyol">
             <ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Trendyol
           </TabsTrigger>
+          <TabsTrigger value="hepsiburada">
+            <Store className="h-3.5 w-3.5 mr-1.5" /> Hepsiburada
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="shopify">
@@ -624,6 +754,9 @@ export default function ApiSettingsPage() {
         </TabsContent>
         <TabsContent value="trendyol">
           <TrendyolTab />
+        </TabsContent>
+        <TabsContent value="hepsiburada">
+          <HepsiburadaTab />
         </TabsContent>
       </Tabs>
     </div>
