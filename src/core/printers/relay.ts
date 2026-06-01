@@ -19,6 +19,7 @@ import { getBambuStatus, bambuControl, mapBambuState } from "./bambu";
 
 const TICK_MS = 10_000;
 let started = false;
+let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
 const lastKey = new Map<string, string>();
 
 export function startPrinterRelay() {
@@ -129,57 +130,63 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
 }
 
 async function tick(): Promise<void> {
-  await ensureRuntimeSchema();
-  // Telefonun yazdığı komutları/değişiklikleri çabuk görmek için yerel replica'yı tazele
-  await syncTursoReplica().catch(() => {});
-
-  const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
-  if (configs.length === 0) return;
-
-  // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için)
-  const matches = await prisma.printFileProduct.findMany();
-  const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${m.filename}`, m.productId]));
-  const pids = [...new Set(matches.map((m) => m.productId))];
-  const products = pids.length
-    ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
-    : [];
-  const productMap = new Map(products.map((p) => [p.id, { name: p.name, imageUrl: p.imageUrl }]));
-
-  // 1) Snapshot'lar (değiştiyse yaz)
-  for (const c of configs) {
-    let snap: SnapFields | null = null;
-    try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
-    if (!snap) continue;
-    const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec].join("|");
-    if (lastKey.get(c.id) === key) continue;
-    lastKey.set(c.id, key);
-    try {
-      await prisma.printerSnapshot.upsert({
-        where: { printerConfigId: c.id },
-        create: { printerConfigId: c.id, ...snap },
-        update: snap,
-      });
-    } catch { /* yazılamadıysa sonraki tick dener */ }
-  }
-
-  // 2) Bekleyen komutlar
-  let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null }[] = [];
+  if (ticking) return; // önceki tick hâlâ sürüyorsa atla — yavaş/çevrimdışı yazıcıda tick'ler üst üste binip birikmesin
+  ticking = true;
   try {
-    pending = await prisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
-  } catch { return; }
+    await ensureRuntimeSchema();
+    // Telefonun yazdığı komutları/değişiklikleri çabuk görmek için yerel replica'yı tazele
+    await syncTursoReplica().catch(() => {});
 
-  for (const cmd of pending) {
+    const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
+    if (configs.length === 0) return;
+
+    // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için)
+    const matches = await prisma.printFileProduct.findMany();
+    const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${m.filename}`, m.productId]));
+    const pids = [...new Set(matches.map((m) => m.productId))];
+    const products = pids.length
+      ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
+      : [];
+    const productMap = new Map(products.map((p) => [p.id, { name: p.name, imageUrl: p.imageUrl }]));
+
+    // 1) Snapshot'lar — PARALEL (çevrimdışı/yavaş yazıcı diğerlerini bekletmesin; toplam süre = en yavaş yazıcı)
+    await Promise.all(configs.map(async (c) => {
+      let snap: SnapFields | null = null;
+      try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
+      if (!snap) return;
+      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec].join("|");
+      if (lastKey.get(c.id) === key) return;
+      lastKey.set(c.id, key);
+      try {
+        await prisma.printerSnapshot.upsert({
+          where: { printerConfigId: c.id },
+          create: { printerConfigId: c.id, ...snap },
+          update: snap,
+        });
+      } catch { /* yazılamadıysa sonraki tick dener */ }
+    }));
+
+    // 2) Bekleyen komutlar (sıralı — komut sırası korunmalı)
+    let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null }[] = [];
     try {
-      const c = configs.find((x) => x.id === cmd.printerConfigId)
-        ?? ((await prisma.printerConfig.findUnique({ where: { id: cmd.printerConfigId } })) as Cfg | null);
-      if (!c) throw new Error("Yazıcı bulunamadı");
-      await executeCommand(c, cmd);
-      await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
-    } catch (e) {
-      await prisma.printCommand.update({
-        where: { id: cmd.id },
-        data: { status: "error", error: e instanceof Error ? e.message : "hata", processedAt: new Date() },
-      }).catch(() => {});
+      pending = await prisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
+    } catch { return; }
+
+    for (const cmd of pending) {
+      try {
+        const c = configs.find((x) => x.id === cmd.printerConfigId)
+          ?? ((await prisma.printerConfig.findUnique({ where: { id: cmd.printerConfigId } })) as Cfg | null);
+        if (!c) throw new Error("Yazıcı bulunamadı");
+        await executeCommand(c, cmd);
+        await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
+      } catch (e) {
+        await prisma.printCommand.update({
+          where: { id: cmd.id },
+          data: { status: "error", error: e instanceof Error ? e.message : "hata", processedAt: new Date() },
+        }).catch(() => {});
+      }
     }
+  } finally {
+    ticking = false;
   }
 }

@@ -115,7 +115,7 @@ function parseStatus(status: any): MoonrakerStatus {
 
 async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus | null> {
   try {
-    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 3500);
+    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 2500);
     if (!res.ok) return null;
     const status = unwrap(await res.json())?.status;
     if (!status) return null;

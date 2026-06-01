@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
@@ -281,6 +281,21 @@ const STATUS_META: Record<PrinterStatus, { label: string; cls: string }> = {
   error: { label: "Hata", cls: "bg-destructive/15 text-destructive border-destructive/30" },
 };
 
+// Konfeti — yalnız "accent" prop'una bağlı; memo ile her saniyelik render'da 18 düğüm YENİDEN kurulmaz.
+const Confetti = memo(function Confetti({ accent }: { accent: string }) {
+  const colors = ["#e23b3b", "#2b6cf0", "#15c47e", "#f5b400", "#9b5de5", accent];
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
+      {Array.from({ length: 18 }).map((_, i) => {
+        const left = (i * 53) % 100;
+        const delay = (i % 6) * 0.1;
+        const dur = 1.2 + (i % 5) * 0.22;
+        return <span key={i} className="absolute -top-2 h-2 w-1.5 rounded-[1px]" style={{ left: `${left}%`, background: colors[i % colors.length], animation: `confetti-fall ${dur}s ease-in ${delay}s infinite` }} />;
+      })}
+    </div>
+  );
+});
+
 function PrinterCard({
   printer, now, index, busy, onPause, onResume, onCancel, onStart, onMatch,
 }: {
@@ -308,8 +323,8 @@ function PrinterCard({
   const isPaused = status === "paused";
   const offline = isReal && !online;
 
-  const nozzle = printer.temps.nozzleTarget > 0 ? printer.temps.nozzle + Math.round(Math.sin(now / 800 + index) * 1.5) : printer.temps.nozzle;
-  const bed = printer.temps.bedTarget > 0 ? printer.temps.bed + Math.round(Math.cos(now / 1100 + index) * 1) : printer.temps.bed;
+  const nozzle = printer.temps.nozzle; // gerçek değer (5sn poll); sahte sn-bazlı titreme kaldırıldı
+  const bed = printer.temps.bed;
   const sm = STATUS_META[status];
 
   return (
@@ -487,20 +502,6 @@ function PrintInImage({ image, productName, progress, accent, printing }: { imag
       {printing && pct < 100 && (
         <div className="absolute inset-x-0 h-[2px] transition-[bottom] duration-1000 ease-linear" style={{ bottom: `${pct}%`, background: accent, boxShadow: `0 0 10px 1px ${accent}` }} />
       )}
-    </div>
-  );
-}
-
-function Confetti({ accent }: { accent: string }) {
-  const colors = ["#e23b3b", "#2b6cf0", "#15c47e", "#f5b400", "#9b5de5", accent];
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
-      {Array.from({ length: 18 }).map((_, i) => {
-        const left = (i * 53) % 100;
-        const delay = (i % 6) * 0.1;
-        const dur = 1.2 + (i % 5) * 0.22;
-        return <span key={i} className="absolute -top-2 h-2 w-1.5 rounded-[1px]" style={{ left: `${left}%`, background: colors[i % colors.length], animation: `confetti-fall ${dur}s ease-in ${delay}s infinite` }} />;
-      })}
     </div>
   );
 }

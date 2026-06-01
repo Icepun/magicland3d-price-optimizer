@@ -42,6 +42,7 @@ interface Conn {
   print: Record<string, any>;
   connected: boolean;
   lastError: string | null;
+  hasData: boolean; // ilk "report" geldi mi (Object.keys taraması yerine ucuz bayrak)
 }
 
 const conns = new Map<string, Conn>();
@@ -62,7 +63,7 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
     clientId: `mg3d_${Math.random().toString(16).slice(2, 10)}`,
   });
 
-  const conn: Conn = { client, print: {}, connected: false, lastError: null };
+  const conn: Conn = { client, print: {}, connected: false, lastError: null, hasData: false };
   conns.set(k, conn);
 
   const reportTopic = `device/${serial}/report`;
@@ -82,8 +83,10 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
     try {
       const msg = JSON.parse(payload.toString());
       if (msg?.print && typeof msg.print === "object") {
-        // Bambu artımlı (yalnızca değişen alanlar) gönderir → birleştir.
+        // Bambu artımlı (yalnızca değişen alanlar) gönderir → birleştir. Aynı anahtarlar üzerine
+        // yazılır (sınırsız büyümez); ams/hms gibi diziler referansla değişir.
         Object.assign(conn.print, msg.print);
+        conn.hasData = true;
       }
     } catch {
       /* JSON olmayan mesajları yok say */
@@ -100,15 +103,15 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const conn = ensureConn(host, accessCode, serial);
 
   // İlk bağlantıda ilk "report" gelene kadar kısa bekle (en fazla ~2.2sn).
-  if (Object.keys(conn.print).length === 0) {
+  if (!conn.hasData) {
     const deadline = Date.now() + 2200;
-    while (Date.now() < deadline && Object.keys(conn.print).length === 0) {
+    while (Date.now() < deadline && !conn.hasData) {
       await new Promise((r) => setTimeout(r, 150));
     }
   }
 
   const p = conn.print;
-  const hasData = Object.keys(p).length > 0;
+  const hasData = conn.hasData;
   if (!hasData) {
     return {
       online: false, gcodeState: null, percent: 0, remainingSec: null,
