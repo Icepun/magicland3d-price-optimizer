@@ -225,23 +225,63 @@ function normalizeHex(c: unknown): string {
   return "#9ca3af";
 }
 
+type MoonrakerSlot = { slot: number; color: string; type: string; empty: boolean };
+
+/** U1 CFS `filament_detect` objesini esnek şekilde slot dizisine çevir (şekil belirsiz → defansif). */
+function parseFilamentDetect(fd: any): MoonrakerSlot[] {
+  let arr: any[] = [];
+  if (Array.isArray(fd)) arr = fd;
+  else if (Array.isArray(fd?.slots)) arr = fd.slots;
+  else if (Array.isArray(fd?.filaments)) arr = fd.filaments;
+  else if (Array.isArray(fd?.trays)) arr = fd.trays;
+  else if (fd && typeof fd === "object") {
+    const keys = Object.keys(fd).filter((k) => /^(t|e|slot|ch|tray)?_?\d+(_filament)?$/i.test(k)).sort();
+    arr = keys.map((k) => fd[k]);
+  }
+  const out: MoonrakerSlot[] = [];
+  arr.forEach((v, i) => {
+    const o = (v && typeof v === "object" ? v : {}) as Record<string, any>;
+    const rfid = (o.rfid ?? o.tag ?? {}) as Record<string, any>;
+    const color = o.color ?? o.colour ?? o.hex ?? o.rgb ?? rfid.color ?? rfid.colour;
+    const typeRaw = o.material ?? o.type ?? o.filament_type ?? rfid.material ?? rfid.type ?? o.vendor;
+    const type = typeof typeRaw === "string" && typeRaw.toUpperCase() !== "NONE" ? typeRaw : "";
+    const det = o.detected ?? o.filament_detected ?? o.present ?? o.loaded ?? o.filament_present;
+    out.push({ slot: i, color: normalizeHex(color), type, empty: det === false });
+  });
+  return out;
+}
+
 /**
- * Snapmaker U1 (CFS) renkli slotları — DEFANSİF. Moonraker objelerini keşfedip
- * filament/cfs/rfid içerenleri sorgular, renk/materyal alanlarını esnek okur.
- * Çözemezse [] döner (UI "renkler okunamadı" der, baskı yine de başlar — gcode'da gömülü).
+ * Snapmaker U1 (CFS) renkli slotları. Önce dokümante `filament_detect` objesi okunur (RFID:
+ * materyal + renk hex — YALNIZ Snapmaker'ın kendi filamentinde; 3. partide renk gelmez, materyal/
+ * doluluk yine gösterilir). Olmazsa filament/cfs/rfid içeren objeler keşfedilir. Çözemezse [].
+ * NOT: U1 tool-changer'dır; slot ataması dilimleyicide gcode'a gömülüdür → bu okuma sadece gösterim.
  */
-export async function fetchMoonrakerSlots(host: string, port: number): Promise<{ slot: number; color: string; type: string }[]> {
+export async function fetchMoonrakerSlots(host: string, port: number): Promise<MoonrakerSlot[]> {
+  // 1) Dokümante yol: filament_detect
+  try {
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?filament_detect`, undefined, 4000);
+    if (res.ok) {
+      const fd = unwrap(await res.json())?.status?.filament_detect;
+      if (fd && typeof fd === "object") {
+        try { console.log(`[moonraker-cfs] ${host} filament_detect:`, JSON.stringify(fd).slice(0, 600)); } catch { /* log atla */ }
+        const parsed = parseFilamentDetect(fd);
+        if (parsed.length) return parsed;
+      }
+    }
+  } catch { /* keşfe düş */ }
+  // 2) Keşif: filament/cfs/rfid/tray içeren objeler
   try {
     const listRes = await mfetch(`${moonrakerBase(host, port)}/printer/objects/list`, undefined, 4000);
     if (!listRes.ok) return [];
     const objs: string[] = unwrap(await listRes.json())?.objects ?? [];
     const cand = objs.filter((o) => /filament|cfs|rfid|spool|tray|ams/i.test(o)).slice(0, 16);
     if (!cand.length) return [];
-    const q = cand.map((o) => `${encodeURIComponent(o)}`).join("&");
+    const q = cand.map((o) => encodeURIComponent(o)).join("&");
     const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 4000);
     if (!res.ok) return [];
     const status = unwrap(await res.json())?.status ?? {};
-    const slots: { slot: number; color: string; type: string }[] = [];
+    const slots: MoonrakerSlot[] = [];
     let i = 0;
     for (const val of Object.values(status)) {
       const v = (val ?? {}) as Record<string, unknown>;
@@ -249,7 +289,7 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<{
       const color = v.color ?? v.colour ?? v.hex ?? v.rgb ?? rfid.color ?? rfid.colour;
       const type = v.material ?? v.type ?? v.filament_type ?? rfid.material;
       if (color != null || type != null) {
-        slots.push({ slot: i, color: normalizeHex(color), type: typeof type === "string" ? type : "" });
+        slots.push({ slot: i, color: normalizeHex(color), type: typeof type === "string" ? type : "", empty: false });
       }
       i++;
     }

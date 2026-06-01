@@ -1026,7 +1026,7 @@ function SlotStep({
     const map = Array.from({ length: maxIdx + 1 }, () => -1);
     printColors.forEach((c, i) => { map[c.index] = assign[i] ?? 0; });
     if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map } : { useAms: false });
-    else onConfirm({ amsMapping: map });
+    else onConfirm({}); // Snapmaker: slot dilimleyicide gömülü, baskı-anı remap yok → olduğu gibi bas
   };
 
   return (
@@ -1035,8 +1035,9 @@ function SlotStep({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Renkler baskı dosyasından okundu. Her birini yazıcıdaki bir slota ata.
-            {mappingApplies ? " Bambu bunu AMS eşlemesi olarak uygular." : isBambu ? "" : " Snapmaker'da sıra dilimlemeden gelir; bu eşleme doğrulama içindir."}
+            {isBambu
+              ? "Renkler baskı dosyasından okundu. Her rengi bir AMS slotuna ata."
+              : "Renkler baskı dosyasından okundu. Snapmaker'da hangi kafanın (slot) basacağı dilimleyicide (Orca) belirlenir — bu ekran doğrulama içindir."}
           </p>
         </DialogHeader>
 
@@ -1059,7 +1060,7 @@ function SlotStep({
               </div>
             ) : (
               <p className="text-[11px] text-muted-foreground">
-                {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı. "}Numarayla eşleyebilirsin.
+                {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı (RFID yalnız Snapmaker'ın kendi filamentinde okunur). "}{isBambu ? "Numarayla eşleyebilirsin." : ""}
               </p>
             )}
 
@@ -1099,24 +1100,30 @@ function SlotStep({
                         </p>
                       </div>
                     </div>
-                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    <div className="flex gap-1.5 flex-wrap flex-1">
-                      {pickSlots.map((s) => {
-                        const sel = chosen === s.slot;
-                        return (
-                          <button
-                            key={s.slot}
-                            onClick={() => setOne(i, s.slot)}
-                            title={`Slot ${s.slot + 1}${s.type ? ` · ${s.type}` : ""}`}
-                            className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10 ring-1 ring-primary/30" : "border-border hover:bg-muted")}
-                          >
-                            <span className="font-bold tabular-nums">{s.slot + 1}</span>
-                            <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: s.color }} />
-                            {sel && <Check className="h-3 w-3 text-primary" />}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {isBambu ? (
+                      <>
+                        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <div className="flex gap-1.5 flex-wrap flex-1">
+                          {pickSlots.map((s) => {
+                            const sel = chosen === s.slot;
+                            return (
+                              <button
+                                key={s.slot}
+                                onClick={() => setOne(i, s.slot)}
+                                title={`Slot ${s.slot + 1}${s.type ? ` · ${s.type}` : ""}`}
+                                className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10 ring-1 ring-primary/30" : "border-border hover:bg-muted")}
+                              >
+                                <span className="font-bold tabular-nums">{s.slot + 1}</span>
+                                <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: s.color }} />
+                                {sel && <Check className="h-3 w-3 text-primary" />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="ml-auto text-[10px] text-muted-foreground italic shrink-0">dilimlemede atanır</span>
+                    )}
                   </div>
                 );
               })}
@@ -1126,6 +1133,13 @@ function SlotStep({
               <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 Ham .gcode: slot eşlemesi dilimlemede sabittir; AMS'i yukarıdaki sıraya göre yükle. Uygulamadan tam eşleme için .3mf yükle.
+              </p>
+            )}
+
+            {!isBambu && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+                Snapmaker bir tool-changer: hangi kafanın (slot) basacağı dilimleyicide (Orca) belirlenir, baskı sırasında uygulamadan değiştirilemez. Renk yanlış slottaysa Orca'da o filamenti doğru kafaya atayıp yeniden dilimle, ya da filamenti doğru kafaya tak.
               </p>
             )}
 
