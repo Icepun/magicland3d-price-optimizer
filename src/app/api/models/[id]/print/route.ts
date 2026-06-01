@@ -91,7 +91,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
           } else {
             send({ stage: "upload", pct: null }); // Moonraker: belirsiz (fetch byte takibi yok)
-            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName);
+            // Snapmaker kafa seçimi (amsMapping) verildiyse gcode tool index'leri remap edilir.
+            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, amsMapping);
           }
 
           send({ stage: "start" });

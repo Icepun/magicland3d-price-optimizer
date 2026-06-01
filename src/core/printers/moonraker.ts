@@ -191,12 +191,42 @@ export async function moonrakerStart(host: string, port: number, filename: strin
   if (!res.ok) throw new Error(`Baskı başlatılamadı (HTTP ${res.status})`);
 }
 
-/** Dosyayı yazıcıya yükle ve hemen baskıyı başlat (Moonraker upload print=true). */
-export async function moonrakerUploadAndPrint(host: string, port: number, fileBuf: Buffer, filename: string): Promise<void> {
+/**
+ * Snapmaker U1 (tool-changer) gcode'unda tool/kafa atamasını yeniden eşle.
+ * toolMap[dilimleyici_filament_index] = fiziksel kafa (0-tabanlı). SADECE araç-bağlamlı satırlarda
+ * (`T<n>` tek başına = aktif kafa seçimi; `M104/M109/M108 ... T<n> ...` = kafa sıcaklığı) T token'ı
+ * değiştirilir. Tek-yön + tek-geçiş (çift değişim yok). G-hareketleri / `M106 P..` fan / yorumlar /
+ * `SM_PRINT_... EXTRUDER=N` (tüm slotları besler) DOKUNULMAZ. Identity (i→i) ise metin aynen döner.
+ * Tool-changer'da `T<n>` komutu kafa ofsetlerini firmware'de uygular → bare T + sıcaklık remap yeterli.
+ */
+export function remapMoonrakerTools(text: string, toolMap: Record<number, number>): string {
+  const keys = Object.keys(toolMap).map(Number);
+  if (!keys.length || keys.every((k) => toolMap[k] === k)) return text; // identity → değişiklik yok
+  return text.split("\n").map((line) => {
+    const t = line.trimStart();
+    if (!(/^T\d+\s*$/.test(t) || /^M(?:104|109|108)\b/.test(t))) return line;
+    return line.replace(/\bT(\d+)\b/g, (m, d) => {
+      const n = Number(d);
+      return n in toolMap ? `T${toolMap[n]}` : m;
+    });
+  }).join("\n");
+}
+
+/** Dosyayı yazıcıya yükle ve hemen baskıyı başlat (Moonraker upload print=true).
+ *  headMapping (Snapmaker kafa seçimi) verilir + kimlik-dışı + .gcode ise tool index'leri remap edilir. */
+export async function moonrakerUploadAndPrint(host: string, port: number, fileBuf: Buffer, filename: string, headMapping?: number[]): Promise<void> {
+  let body = fileBuf;
+  if (headMapping && headMapping.length && /\.(gcode|gco|g)$/i.test(filename)) {
+    const toolMap: Record<number, number> = {};
+    headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
+    const remapped = remapMoonrakerTools(fileBuf.toString("latin1"), toolMap);
+    if (remapped.length !== fileBuf.length) body = Buffer.from(remapped, "latin1");
+    else if (remapped !== fileBuf.toString("latin1")) body = Buffer.from(remapped, "latin1");
+  }
   const fd = new FormData();
   fd.append("root", "gcodes");
   fd.append("print", "true");
-  fd.append("file", new Blob([new Uint8Array(fileBuf)]), filename);
+  fd.append("file", new Blob([new Uint8Array(body)]), filename);
   // Büyük gcode dosyaları için uzun timeout (LAN içi).
   const res = await mfetch(`${moonrakerBase(host, port)}/server/files/upload`, { method: "POST", body: fd }, 180000);
   if (!res.ok) {
