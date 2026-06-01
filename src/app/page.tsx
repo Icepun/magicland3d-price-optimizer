@@ -425,9 +425,6 @@ export default function DashboardPage() {
     <div className="p-6 space-y-6 animate-in fade-in duration-300">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Panel</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Shopify ve Trendyol&apos;da ürünlerin net kâr/zarar durumu — tek bakışta.
-        </p>
       </div>
 
       {/* Sipariş bazlı ciro/kâr — son 30 gün (öne çıkan) */}
