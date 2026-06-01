@@ -33,6 +33,7 @@ export interface MoonrakerStatus {
   printDurationSec: number;
   currentLayer: number | null;
   totalLayer: number | null;
+  zHeight: number | null; // gcode_move.gcode_position[2] — layer tahmini için
   nozzle: number;
   nozzleTarget: number;
   bed: number;
@@ -44,6 +45,8 @@ export interface MoonrakerMeta {
   thumbnailRelPath: string | null;
   filamentType: string | null;
   totalLayer: number | null;
+  layerHeight: number | null;
+  firstLayerHeight: number | null;
 }
 
 export interface MoonrakerFile {
@@ -53,7 +56,7 @@ export interface MoonrakerFile {
 }
 
 const QUERY =
-  "print_stats&virtual_sdcard=progress&display_status=progress&extruder=temperature,target&heater_bed=temperature,target";
+  "print_stats&virtual_sdcard=progress&display_status=progress&extruder=temperature,target&heater_bed=temperature,target&gcode_move=gcode_position";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
 const portCache = new Map<string, number>();
@@ -88,18 +91,21 @@ function parseStatus(status: any): MoonrakerStatus {
   const ds = status.display_status ?? {};
   const ex = status.extruder ?? {};
   const hb = status.heater_bed ?? {};
+  const gm = status.gcode_move ?? {};
   const progress = Math.min(1, Math.max(0,
     typeof vs.progress === "number" ? vs.progress
       : typeof ds.progress === "number" ? ds.progress
         : 0));
+  const zPos = Array.isArray(gm.gcode_position) && typeof gm.gcode_position[2] === "number" ? gm.gcode_position[2] : null;
   return {
     online: true,
     state: (ps.state as MoonrakerState) || "standby",
     filename: ps.filename || null,
     progress,
     printDurationSec: typeof ps.print_duration === "number" ? ps.print_duration : 0,
-    currentLayer: ps.info?.current_layer ?? null,
-    totalLayer: ps.info?.total_layer ?? null,
+    currentLayer: typeof ps.info?.current_layer === "number" ? ps.info.current_layer : null,
+    totalLayer: typeof ps.info?.total_layer === "number" ? ps.info.total_layer : null,
+    zHeight: zPos,
     nozzle: Math.round(ex.temperature ?? 0),
     nozzleTarget: Math.round(ex.target ?? 0),
     bed: Math.round(hb.temperature ?? 0),
@@ -122,7 +128,7 @@ async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus 
 export async function fetchMoonrakerStatus(host: string, port: number): Promise<MoonrakerStatus> {
   const offline: MoonrakerStatus = {
     online: false, state: "standby", filename: null, progress: 0, printDurationSec: 0,
-    currentLayer: null, totalLayer: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
+    currentLayer: null, totalLayer: null, zHeight: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
   };
   const cached = portCache.get(host);
   const order = cached != null
@@ -155,6 +161,8 @@ export async function fetchMoonrakerMeta(host: string, port: number, filename: s
       thumbnailRelPath: thumbs[0]?.relative_path ?? null,
       filamentType: r.filament_type ?? null,
       totalLayer: typeof r.layer_count === "number" ? r.layer_count : null,
+      layerHeight: typeof r.layer_height === "number" ? r.layer_height : null,
+      firstLayerHeight: typeof r.first_layer_height === "number" ? r.first_layer_height : null,
     };
   } catch {
     return null;

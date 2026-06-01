@@ -31,6 +31,9 @@ export interface PrinterJob {
   productImage: string | null;
   startedAt: string;
   endsAt: string;
+  progress: number; // 0..1 — GERÇEK ilerleme (snapshot), zaman tahmini değil
+  remainingSec: number; // kalan saniye (snapshot anına göre)
+  layerCurrent: number | null; // gerçek güncel katman (yoksa null → gösterme)
   layerTotal: number;
   filamentType: string;
   filamentColor: string;
@@ -153,13 +156,13 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
     if (rel < c.printSec) {
       return {
         ...common, status: "printing" as const, temps: simTemps(filament.type, "hot"),
-        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
+        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: Math.min(1, Math.max(0, rel / c.printSec)), remainingSec: Math.max(0, c.printSec - rel), layerCurrent: Math.round((rel / c.printSec) * c.layerTotal), layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
       };
     }
     if (rel < c.printSec + c.finishedSec) {
       return {
         ...common, status: "finished" as const, temps: simTemps(filament.type, "cooling"),
-        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
+        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: 1, remainingSec: 0, layerCurrent: c.layerTotal, layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
       };
     }
     return { ...common, status: "idle" as const, temps: simTemps(filament.type, "ambient"), job: null };
@@ -231,6 +234,9 @@ export async function GET() {
             productImage: matched?.imageUrl || null,
             startedAt: new Date(startMs).toISOString(),
             endsAt: new Date(endMs).toISOString(),
+            progress: pct,
+            remainingSec: remaining,
+            layerCurrent: bs.layerNum,
             layerTotal: bs.totalLayerNum ?? 0,
             filamentType: "PLA",
             filamentColor: "#9ca3af",
@@ -259,8 +265,7 @@ export async function GET() {
 
       if (hasJob && st.filename) {
         const meta = await fetchMoonrakerMeta(c.host, c.port, st.filename);
-        // İlerleme-doğru tahmini toplam süre: end = start + printDuration/progress
-        // → istemcinin hesapladığı ilerleme = gerçek ilerleme.
+        // Kalan süre: slicer tahmini (varsa) ya da printDuration/progress'ten.
         let estTotalSec: number;
         if (st.progress >= 0.01 && st.printDurationSec > 0) {
           estTotalSec = st.printDurationSec / st.progress;
@@ -269,8 +274,20 @@ export async function GET() {
         } else {
           estTotalSec = Math.max(st.printDurationSec, 60);
         }
+        const remainingSec = Math.max(0, estTotalSec - st.printDurationSec);
         const startMs = nowMs - st.printDurationSec * 1000;
-        const endMs = startMs + estTotalSec * 1000;
+        const endMs = nowMs + remainingSec * 1000;
+
+        // Güncel katman: Klipper info.current_layer (slicer yazıyorsa) → yoksa
+        // Z yüksekliğinden tahmin (Fluidd gibi): floor((z - ilk_katman) / katman_yük.) + 1.
+        const totalLayer = st.totalLayer ?? meta?.totalLayer ?? 0;
+        let layerCurrent: number | null = st.currentLayer;
+        if ((layerCurrent == null || layerCurrent <= 0) && st.zHeight != null && meta?.layerHeight && meta.layerHeight > 0) {
+          const flh = meta.firstLayerHeight ?? meta.layerHeight;
+          const est = Math.floor((st.zHeight - flh) / meta.layerHeight + 1e-4) + 1;
+          layerCurrent = totalLayer > 0 ? Math.max(1, Math.min(est, totalLayer)) : Math.max(1, est);
+        }
+
         matchedId = matchMap.get(`${c.id}::${st.filename}`) ?? null;
         const matched = matchedId ? productMap.get(matchedId) : undefined;
         const thumb = meta?.thumbnailRelPath
@@ -281,7 +298,10 @@ export async function GET() {
           productImage: matched?.imageUrl || thumb,
           startedAt: new Date(startMs).toISOString(),
           endsAt: new Date(endMs).toISOString(),
-          layerTotal: st.totalLayer ?? meta?.totalLayer ?? 0,
+          progress: st.progress,
+          remainingSec,
+          layerCurrent,
+          layerTotal: totalLayer,
           filamentType: meta?.filamentType || "PLA",
           filamentColor: "#9ca3af",
         };

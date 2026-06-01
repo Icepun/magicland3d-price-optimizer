@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
-  RefreshCw, Settings2, Plus, Trash2, Pause, Play, Square, Pencil, WifiOff,
+  RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, Minus, ArrowRight, AlertTriangle,
 } from "lucide-react";
 import {
@@ -26,6 +26,9 @@ interface PrinterJob {
   productImage: string | null;
   startedAt: string;
   endsAt: string;
+  progress: number;
+  remainingSec: number;
+  layerCurrent: number | null;
   layerTotal: number;
   filamentType: string;
   filamentColor: string;
@@ -74,6 +77,19 @@ function fmtRemaining(sec: number) {
   if (h > 0) return `${h}sa ${m}dk`;
   if (m > 0) return `${m}dk ${s.toString().padStart(2, "0")}sn`;
   return `${s}sn`;
+}
+
+/** Bitiş saati — bugünse "HH:MM", yarınsa "yarın HH:MM", sonraysa "g.a HH:MM". */
+function fmtClock(ms: number, nowMs: number): string {
+  const d = new Date(ms);
+  const hh = d.getHours().toString().padStart(2, "0");
+  const mm = d.getMinutes().toString().padStart(2, "0");
+  const cur = new Date(nowMs);
+  const dayDiff = Math.floor((d.setHours(0, 0, 0, 0) - cur.setHours(0, 0, 0, 0)) / 86400000);
+  const d2 = new Date(ms);
+  if (dayDiff <= 0) return `${hh}:${mm}`;
+  if (dayDiff === 1) return `yarın ${hh}:${mm}`;
+  return `${d2.getDate()}.${d2.getMonth() + 1} ${hh}:${mm}`;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -274,15 +290,16 @@ function PrinterCard({
   const { job, status, accent, online } = printer;
   const isReal = printer.type !== "sim";
 
-  let progress = 0, remainingSec = 0, layerCurrent = 0;
+  // Gerçek snapshot değerleri (zaman-interpolasyonu DEĞİL). remainingSec endsAt'a
+  // sabitlenmiş canlı geri sayım; progress/layer doğrudan yazıcıdan gelir.
+  let progress = 0, remainingSec = 0, endMs = 0;
+  let layerCurrent: number | null = null;
   if (job) {
-    const start = new Date(job.startedAt).getTime();
-    const end = new Date(job.endsAt).getTime();
-    const dur = Math.max(1, end - start);
-    progress = clamp((now - start) / dur, 0, 1);
-    remainingSec = Math.max(0, (end - now) / 1000);
+    endMs = new Date(job.endsAt).getTime();
+    progress = clamp(job.progress, 0, 1);
+    remainingSec = Math.max(0, (endMs - now) / 1000);
+    layerCurrent = job.layerCurrent;
     if (status === "finished") { progress = 1; remainingSec = 0; }
-    layerCurrent = Math.round(progress * job.layerTotal);
   }
   const pct = Math.round(progress * 100);
   const finishingNow = status === "printing" && remainingSec <= 0.5;
@@ -356,7 +373,7 @@ function PrinterCard({
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
-                {job.layerTotal > 0 && (
+                {job.layerTotal > 0 && layerCurrent != null && (
                   <span className="inline-flex items-center gap-1"><Layers className="h-3.5 w-3.5" /> {layerCurrent}/{job.layerTotal}</span>
                 )}
                 <span className="inline-flex items-center gap-1.5">
@@ -408,7 +425,7 @@ function PrinterCard({
               <span className="text-muted-foreground inline-flex items-center gap-1">
                 {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
                   : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
-                    : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı</>)}
+                    : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now)}</>)}
               </span>
             </div>
           </div>
@@ -430,7 +447,7 @@ function PrinterCard({
               )}
               {(isPrinting || isPaused) && (
                 <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10" disabled={busy} onClick={onCancel}>
-                  <Square className="h-3.5 w-3.5" /> İptal
+                  <Ban className="h-3.5 w-3.5" /> İptal
                 </Button>
               )}
               {(printer.type === "moonraker" || printer.type === "bambu") && (status === "idle" || status === "finished" || status === "error") && (
