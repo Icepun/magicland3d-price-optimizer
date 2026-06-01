@@ -31,7 +31,7 @@ interface UnifiedOrderItem {
   image: string | null;
 }
 interface UnifiedOrder {
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   id: string;
   orderNumber: string;
   date: string | null;
@@ -62,14 +62,16 @@ interface SummaryBucket {
 }
 interface OrdersResponse {
   orders: UnifiedOrder[];
-  summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; total: SummaryBucket };
+  summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; hepsiburada: SummaryBucket; total: SummaryBucket };
   shopify: PlatformStatus;
   trendyol: PlatformStatus;
+  hepsiburada: PlatformStatus;
 }
 
 const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
+  hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
 } as const;
 
 const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: string }> = {
@@ -109,7 +111,7 @@ export default function OrdersPage() {
     refetchOnMount: "always",
   });
 
-  const [platform, setPlatform] = useState<"all" | "shopify" | "trendyol">("all");
+  const [platform, setPlatform] = useState<"all" | "shopify" | "trendyol" | "hepsiburada">("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
   const [search, setSearch] = useState("");
 
@@ -156,7 +158,7 @@ export default function OrdersPage() {
       {/* 30 günlük özet şeridi */}
       {summary && summary.total.orderCount > 0 && (
         <Card className="overflow-hidden">
-          <CardContent className="py-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <CardContent className="py-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
             <SummaryStat label={`${summary.total.orderCount} sipariş`} value={fmtMoney(summary.total.revenue)} sub="Toplam ciro" strong />
             <SummaryStat
               label="Net kâr"
@@ -166,6 +168,7 @@ export default function OrdersPage() {
             />
             <SummaryStat label="Shopify" value={fmtMoney(summary.shopify.revenue)} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
             <SummaryStat label="Trendyol" value={fmtMoney(summary.trendyol.revenue)} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
+            <SummaryStat label="Hepsiburada" value={fmtMoney(summary.hepsiburada.revenue)} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
           </CardContent>
         </Card>
       )}
@@ -193,11 +196,14 @@ export default function OrdersPage() {
       {data?.trendyol && !data.trendyol.ok && !data.trendyol.notConfigured && (
         <PlatformError platform="Trendyol" message={data.trendyol.error} />
       )}
+      {data?.hepsiburada && !data.hepsiburada.ok && !data.hepsiburada.notConfigured && (
+        <PlatformError platform="Hepsiburada" message={data.hepsiburada.error} />
+      )}
 
       {/* Kontroller */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
-          {(["all", "shopify", "trendyol"] as const).map((p) => (
+          {(["all", "shopify", "trendyol", "hepsiburada"] as const).map((p) => (
             <button
               key={p}
               onClick={() => setPlatform(p)}
@@ -269,7 +275,7 @@ function SummaryStat({
   value: string;
   sub: string;
   color?: string;
-  platform?: "shopify" | "trendyol";
+  platform?: "shopify" | "trendyol" | "hepsiburada";
   strong?: boolean;
 }) {
   const c = platform ? PLATFORM_INFO[platform].color : color;

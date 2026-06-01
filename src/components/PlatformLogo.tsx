@@ -11,10 +11,29 @@ export function PlatformLogo({
   className,
   style,
 }: {
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   className?: string;
   style?: CSSProperties;
 }) {
+  if (platform === "hepsiburada") {
+    // Hepsiburada: turuncu alışveriş çantası (marka diline sadık temiz versiyon)
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className={className}
+        style={style}
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M5.5 7.5 H18.5 L17.4 20 H6.6 Z" />
+        <path d="M9 7.5 V6 a3 3 0 0 1 6 0 V7.5" />
+      </svg>
+    );
+  }
   if (platform === "shopify") {
     return (
       <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true">

@@ -6,7 +6,7 @@ import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-
 import { resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
-type Platform = "shopify" | "trendyol";
+type Platform = "shopify" | "trendyol" | "hepsiburada";
 
 interface PlatformStats {
   platform: Platform;
@@ -57,11 +57,13 @@ export async function GET() {
   const platformStats: Record<Platform, PlatformStats> = {
     shopify: { platform: "shopify", activeListings: 0, totalProfit: 0, averageMargin: 0, negativeProfitCount: 0, thinMarginCount: 0 },
     trendyol: { platform: "trendyol", activeListings: 0, totalProfit: 0, averageMargin: 0, negativeProfitCount: 0, thinMarginCount: 0 },
+    hepsiburada: { platform: "hepsiburada", activeListings: 0, totalProfit: 0, averageMargin: 0, negativeProfitCount: 0, thinMarginCount: 0 },
   };
 
   const platformMarginSums: Record<Platform, { sum: number; count: number }> = {
     shopify: { sum: 0, count: 0 },
     trendyol: { sum: 0, count: 0 },
+    hepsiburada: { sum: 0, count: 0 },
   };
 
   const problemProducts: Array<{

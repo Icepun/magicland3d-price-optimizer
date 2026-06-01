@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -8,6 +9,8 @@ import {
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { TrendyolClient } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
+import { HepsiburadaClient } from "@/services/hepsiburada-client";
+import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { simulatePrice } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
 import { withProductCommissionRule } from "@/core/product-commission";
@@ -30,7 +33,7 @@ export interface UnifiedOrderItem {
 }
 
 export interface UnifiedOrder {
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   id: string;
   orderNumber: string;
   date: string | null;
@@ -82,6 +85,46 @@ function trendyolStatus(s?: string): { kind: OrderStatusKind; label: string } {
   return { kind: "other", label: s || "Bilinmiyor" };
 }
 
+// ── Hepsiburada yardımcıları (yanıt şekli Test'le doğrulanana dek defansif) ──
+const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
+  Open: { kind: "pending", label: "Yeni Sipariş" },
+  New: { kind: "pending", label: "Yeni Sipariş" },
+  Packaged: { kind: "processing", label: "Paketlendi" },
+  ReadyToShip: { kind: "processing", label: "Kargoya Hazır" },
+  Shipped: { kind: "shipped", label: "Kargoda" },
+  InTransit: { kind: "shipped", label: "Yolda" },
+  Delivered: { kind: "delivered", label: "Teslim Edildi" },
+  Cancelled: { kind: "cancelled", label: "İptal" },
+  CancelledByMerchant: { kind: "cancelled", label: "İptal (Satıcı)" },
+  CancelledByCustomer: { kind: "cancelled", label: "İptal (Müşteri)" },
+  Returned: { kind: "cancelled", label: "İade" },
+};
+function hbStatus(s: string): { kind: OrderStatusKind; label: string } {
+  return HB_STATUS[s] ?? { kind: "other", label: s || "Bilinmiyor" };
+}
+function hbNum(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (v && typeof v === "object" && "amount" in (v as Record<string, unknown>)) {
+    return Number((v as { amount?: unknown }).amount) || 0;
+  }
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function hbStr(...vals: unknown[]): string {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim()) return v.trim();
+    if (typeof v === "number") return String(v);
+  }
+  return "";
+}
+function hbArray(o: Record<string, unknown>, keys: string[]): Record<string, unknown>[] {
+  if (Array.isArray(o)) return o as Record<string, unknown>[];
+  for (const k of keys) {
+    if (Array.isArray(o?.[k])) return o[k] as Record<string, unknown>[];
+  }
+  return [];
+}
+
 function shopifyStatus(
   fulfillment: string | null,
   financial: string | null,
@@ -120,11 +163,12 @@ export async function GET() {
   const orders: UnifiedOrder[] = [];
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
+  let hepsiburada: PlatformStatus = { ok: false, count: 0 };
 
   // Ham siparişleri çek (her platform bağımsız) ──────────────────────────────
   type RawLine = { name: string; quantity: number; unitPrice: number; image: string | null; matchKeys: string[] };
   type Raw = {
-    platform: "shopify" | "trendyol";
+    platform: "shopify" | "trendyol" | "hepsiburada";
     id: string;
     orderNumber: string;
     date: string | null;
@@ -217,6 +261,56 @@ export async function GET() {
     trendyol = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
   }
 
+  try {
+    const client = new HepsiburadaClient(await getHepsiburadaCredentials());
+    const res = (await client.listOrders({ limit: 100 })) as Record<string, unknown>;
+    const hbOrders = hbArray(res, ["orders", "items", "data", "content", "result"]);
+    for (const [i, oo] of hbOrders.entries()) {
+      const o = oo as Record<string, any>;
+      const st = hbStatus(hbStr(o.status, o.orderStatus, o.packageStatus, o.shipmentStatus));
+      const lineItems = hbArray(o, ["items", "details", "lines", "orderItems"]);
+      const lines: RawLine[] = lineItems.map((li) => {
+        const l = li as Record<string, any>;
+        return {
+          name: hbStr(l.productName, l.title, l.name, l.barcode) || "Ürün",
+          quantity: Math.max(1, Math.floor(hbNum(l.quantity ?? l.amount ?? 1))),
+          unitPrice: hbNum(l.unitPrice ?? l.price ?? l.totalPrice ?? l.amount),
+          image: null,
+          matchKeys: [l.barcode, l.merchantSku, l.sku, l.stockCode, l.hepsiburadaSku].filter(
+            (k): k is string => typeof k === "string" && !!k
+          ),
+        };
+      });
+      const total =
+        hbNum(o.totalPrice ?? o.totalAmount ?? o.amount) ||
+        lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
+      const dateRaw = o.orderDate ?? o.createdDate ?? o.createdAt ?? o.date;
+      let date: string | null = null;
+      if (dateRaw != null) {
+        const d = new Date(typeof dateRaw === "number" ? dateRaw : String(dateRaw));
+        if (!isNaN(d.getTime())) date = d.toISOString();
+      }
+      raws.push({
+        platform: "hepsiburada",
+        id: `hb-${hbStr(o.orderNumber, o.id, o.orderId) || i}`,
+        orderNumber: hbStr(o.orderNumber, o.id, o.orderId) || "—",
+        date,
+        statusKind: st.kind,
+        statusLabel: st.label,
+        total,
+        currency: "TRY",
+        customer: hbStr(o.customerName, [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ")) || null,
+        lines,
+        trackingNumber: hbStr(o.cargoTrackingNumber, o.trackingNumber) || null,
+        cargoProvider: hbStr(o.cargoCompany, o.cargoProviderName, o.cargoCompanyName) || null,
+      });
+    }
+    hepsiburada = { ok: true, count: hbOrders.length };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı";
+    hepsiburada = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
+  }
+
   // Son 30 güne filtrele (tarihsiz olanları da tut)
   const recent = raws.filter((r) => !r.date || new Date(r.date).getTime() >= cutoff);
 
@@ -285,7 +379,7 @@ export async function GET() {
     }
   }
 
-  function profitFor(platform: "shopify" | "trendyol", m: Matched, unitPrice: number, qty: number): number | null {
+  function profitFor(platform: "shopify" | "trendyol" | "hepsiburada", m: Matched, unitPrice: number, qty: number): number | null {
     if (m.productionCost + m.packagingCost <= 0 || unitPrice <= 0) return null;
     const sim = simulatePrice({
       salePrice: unitPrice,
@@ -368,23 +462,26 @@ export async function GET() {
   const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0 });
   const sShopify = empty();
   const sTrendyol = empty();
+  const sHepsiburada = empty();
   for (const o of orders) {
     if (o.statusKind === "cancelled") continue;
-    const bucket = o.platform === "shopify" ? sShopify : sTrendyol;
+    const bucket =
+      o.platform === "shopify" ? sShopify : o.platform === "trendyol" ? sTrendyol : sHepsiburada;
     bucket.revenue += o.total;
     bucket.profit += o.profit ?? 0;
     bucket.orderCount += 1;
   }
   const total: SummaryBucket = {
-    revenue: sShopify.revenue + sTrendyol.revenue,
-    profit: sShopify.profit + sTrendyol.profit,
-    orderCount: sShopify.orderCount + sTrendyol.orderCount,
+    revenue: sShopify.revenue + sTrendyol.revenue + sHepsiburada.revenue,
+    profit: sShopify.profit + sTrendyol.profit + sHepsiburada.profit,
+    orderCount: sShopify.orderCount + sTrendyol.orderCount + sHepsiburada.orderCount,
   };
 
   return NextResponse.json({
     orders,
-    summary: { days: WINDOW_DAYS, shopify: sShopify, trendyol: sTrendyol, total },
+    summary: { days: WINDOW_DAYS, shopify: sShopify, trendyol: sTrendyol, hepsiburada: sHepsiburada, total },
     shopify,
     trendyol,
+    hepsiburada,
   });
 }

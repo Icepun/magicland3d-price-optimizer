@@ -18,7 +18,7 @@ import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import Link from "next/link";
 import { PlatformLogo } from "@/components/PlatformLogo";
 
-type Platform = "shopify" | "trendyol";
+type Platform = "shopify" | "trendyol" | "hepsiburada";
 
 interface PlatformStats {
   platform: Platform;
@@ -59,6 +59,7 @@ interface DashboardData {
 const PLATFORM_INFO: Record<Platform, { label: string; color: string }> = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
+  hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
 };
 
 const PROBLEM_LABELS: Record<
@@ -267,6 +268,7 @@ interface OrdersSummary {
   days: number;
   shopify: OrdersSummaryBucket;
   trendyol: OrdersSummaryBucket;
+  hepsiburada: OrdersSummaryBucket;
   total: OrdersSummaryBucket;
 }
 
@@ -306,6 +308,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
   const rows: { platform: Platform; bucket: OrdersSummaryBucket }[] = [
     { platform: "shopify", bucket: s.shopify },
     { platform: "trendyol", bucket: s.trendyol },
+    { platform: "hepsiburada", bucket: s.hepsiburada },
   ];
 
   return (
