@@ -257,12 +257,25 @@ export default function ProductsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hidden }),
       }).then((r) => r.json()),
+    // Optimistic: ürün ANINDA mevcut listeden çıkar (gizlenince aktif görünümde, geri
+    // gelince gizli görünümünde kalmamalı). UI beklemez; hata olursa geri alınır.
+    onMutate: async ({ id }) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.filter((p) => p.id !== id) : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error("İşlem başarısız");
+    },
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      // Liste optimistic güncellendi → tekrar çekme yok. Panel sayacı tazelensin.
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success(variables.hidden ? "Ürün gizlendi" : "Ürün geri getirildi");
     },
-    onError: () => toast.error("İşlem başarısız"),
   });
 
   const form = useForm<AddProductForm>({

@@ -184,8 +184,20 @@ export async function GET(req: NextRequest) {
       currentProfitMargin = sim.profitMargin;
     }
 
+    // Payload kırpma (694KB→~yarısı): liste + planner yalnızca aşağıdaki alanları kullanıyor.
+    // Ham `listings` (client `platforms` özetini kullanır), tam `cost` objesi ve `filamentType`
+    // YANITA KONMAZ — sunucu bunları kâr hesabı için kullandı, göndermeye gerek yok.
     return {
       ...product,
+      listings: undefined, // ham listing'ler gönderilmez (JSON.stringify undefined'ı atar)
+      cost: product.cost
+        ? {
+            totalCost: product.cost.totalCost,
+            manualCost: product.cost.manualCost,
+            packagingCost: product.cost.packagingCost,
+            filamentWeight: product.cost.filamentWeight, // planner kullanıyor
+          }
+        : null,
       appliedCommissionRule: rule
         ? {
             id: rule.id,

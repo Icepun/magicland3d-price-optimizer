@@ -10,4 +10,18 @@ export async function register() {
   } catch (e) {
     console.error("[instrumentation] yazıcı relay başlatılamadı:", e);
   }
+
+  // DB warmup: ilk kullanıcı isteğinin SOĞUK gecikmesini (~2-3sn: Prisma engine init +
+  // embedded replica bağlantısı/ilk sync) açılışta absorbe et ki ilk navigasyon ANINDA
+  // gelsin. Non-blocking — hata önemsiz.
+  void (async () => {
+    try {
+      const { ensureRuntimeSchema } = await import("./lib/runtime-schema");
+      const { prisma } = await import("./lib/prisma");
+      await ensureRuntimeSchema();
+      await prisma.$queryRawUnsafe("SELECT 1");
+    } catch {
+      /* warmup hatası kullanıcıyı etkilemez */
+    }
+  })();
 }
