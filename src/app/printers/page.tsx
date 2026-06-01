@@ -110,8 +110,12 @@ export default function PrintersPage() {
     staleTime: 0,
   });
 
-  const [now, setNow] = useState(() => Date.now());
+  // SSR/prerender (build-zamanı) ile client ilk render'ı birebir aynı tut (now=0)
+  // → hydration mismatch (React #418, boş ekran) olmaz. Gerçek zaman mount sonrası
+  // gelir (sadece client) ve canlı geri sayım sürer.
+  const [now, setNow] = useState(0);
   useEffect(() => {
+    setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
@@ -312,7 +316,7 @@ function PrinterCard({
   if (job) {
     endMs = new Date(job.endsAt).getTime();
     progress = clamp(job.progress, 0, 1);
-    remainingSec = Math.max(0, (endMs - now) / 1000);
+    remainingSec = now > 0 ? Math.max(0, (endMs - now) / 1000) : 0;
     layerCurrent = job.layerCurrent;
     if (status === "finished") { progress = 1; remainingSec = 0; }
   }

@@ -487,6 +487,27 @@ async function createWindow() {
     return { action: "deny" };
   });
 
+  // Renderer (web) tarafındaki konsol/hata/çökmeleri ana sürece logla.
+  // Boş-ekran teşhisi için kritik; sahada da renderer çökmesini görünür kılar.
+  win.webContents.on("console-message", (_e, level, message, line, sourceId) => {
+    // level: 0=verbose 1=info 2=warning 3=error
+    if (level >= 2) {
+      logStartup("[renderer]", `(${level}) ${message} @ ${sourceId}:${line}`);
+    }
+  });
+  win.webContents.on("render-process-gone", (_e, details) => {
+    logStartup("[renderer] render-process-gone:", JSON.stringify(details));
+  });
+  win.webContents.on("unresponsive", () => {
+    logStartup("[renderer] unresponsive");
+  });
+  win.webContents.on("preload-error", (_e, preloadPath, error) => {
+    logStartup("[renderer] preload-error:", preloadPath, String(error));
+  });
+  win.webContents.on("did-fail-load", (_e, code, desc, validatedURL) => {
+    logStartup("[renderer] did-fail-load:", code, desc, validatedURL);
+  });
+
   logStartup("createWindow: loading URL");
   try {
     await win.loadURL(url);

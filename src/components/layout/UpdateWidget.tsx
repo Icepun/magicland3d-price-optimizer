@@ -36,6 +36,12 @@ export function UpdateWidget() {
   const [state, setState] = useState<UpdaterState>(initialState);
   const [busy, setBusy] = useState(false);
   const [logPath, setLogPath] = useState<string | null>(null);
+  // SSR ve ilk client render'da `false` → sunucu çıktısıyla (null) birebir aynı.
+  // Böylece Electron'da preload `window.trendyolPriceOptimizer` enjekte etse bile
+  // ilk render'da widget çizilmez → hydration mismatch (React #418, boş ekran) olmaz.
+  // mounted=true olunca (sadece client'ta) widget belirir.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const updater = useMemo(() => {
     if (typeof window === "undefined") return undefined;
@@ -60,7 +66,7 @@ export function UpdateWidget() {
     };
   }, [updater]);
 
-  if (!updater) return null;
+  if (!mounted || !updater) return null;
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
