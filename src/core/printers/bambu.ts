@@ -273,23 +273,18 @@ async function bambuFtpUpload(
       // veri bağlantısı reddediliyordu → "Timeout (control socket)".)
       secureOptions: { rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host },
     });
-    // Veri kanalını büyük dosyadan ÖNCE kanıtla (kök listesi).
-    stage = "list";
-    const before = await ftp.list();
-    trace.push(`LIST»${before.length}`);
+    // ÖNEMLİ: upload'tan ÖNCE LIST yapma! Bambu vsftpd'de art arda 2. veri bağlantısı reddediliyor
+    // (basic-ftp ilk veri bağlantısının TLS oturumunu saklayıp sonrakinde kullanıyor → kontrol
+    // oturumuyla uyuşmuyor). Upload TEK veri bağlantısı olmalı → doğrudan yükle (ilk bağlantı = kabul).
     stage = "upload";
     await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
-    // Yüklemeyi DOĞRULA: önce SIZE, olmazsa LIST'te ada bak.
-    stage = "verify";
-    let okSize = -1;
-    try { okSize = await ftp.size(remoteName); trace.push(`SIZE»${okSize}`); } catch { /* SIZE yok olabilir */ }
-    let verified = okSize === total;
-    if (!verified) {
-      const after = await ftp.list();
-      verified = after.some((f) => f.name === remoteName && (f.size === total || f.size <= 0 || total <= 0));
-      trace.push(`VERIFY»${verified}`);
-    }
-    if (!verified) throw new Error("VERIFY_FAILED");
+    // uploadFrom çözüldüyse sunucu 226 demiştir = yükleme tamam. SIZE bir KONTROL komutudur
+    // (yeni veri bağlantısı AÇMAZ) → ek doğrulama için güvenli; yoksa 226'ya güven.
+    try {
+      const sz = await ftp.size(remoteName);
+      trace.push(`SIZE»${sz}`);
+      if (total > 0 && sz >= 0 && Math.abs(sz - total) > 4096) console.warn(`[bambu-ftp] ${host} boyut uyumsuz: ${sz} != ${total}`);
+    } catch { trace.push("SIZE»?"); /* SIZE desteklenmiyorsa 226 yeterli */ }
     onProgress?.(100);
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
