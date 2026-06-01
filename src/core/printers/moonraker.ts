@@ -10,7 +10,11 @@
  *   GET  /server/files/metadata?filename=...
  *   GET  /server/files/gcodes/<relative_path>   (thumbnail)
  * Yanıtlar { result: ... } ile sarılı gelir; defansif olarak result ?? gövde okunur.
- * Tüm fetch'ler LAN içi http; tek bir yazıcı yavaşsa paneli kilitlemesin diye timeout'lu.
+ *
+ * PORT FARKI (önemli): Elegoo Neptune 4 serisi Moonraker'ı nginx ARKASINDAN **port 80**'de
+ * sunar (Fluidd de 80'de). Snapmaker U1 / standart Klipper ise **7125**'te. Bu yüzden
+ * yapılandırılan port çalışmazsa otomatik olarak 80 ve 7125 denenir; çalışan port host
+ * bazında önbelleğe alınır (sonraki isteklerde doğrudan kullanılır).
  */
 
 export type MoonrakerState =
@@ -51,8 +55,17 @@ export interface MoonrakerFile {
 const QUERY =
   "print_stats&virtual_sdcard=progress&display_status=progress&extruder=temperature,target&heater_bed=temperature,target";
 
-export function moonrakerBase(host: string, port: number) {
-  return `http://${host}:${port || 7125}`;
+/** host → çalışan Moonraker portu (runtime önbelleği). */
+const portCache = new Map<string, number>();
+
+function candidatePorts(configured: number): number[] {
+  return [...new Set([configured, 80, 7125].filter((p) => Number.isFinite(p) && p > 0))];
+}
+
+/** Önbellekteki çalışan port (yoksa yapılandırılan) ile temel URL. */
+export function moonrakerBase(host: string, port: number): string {
+  const p = portCache.get(host) ?? port ?? 7125;
+  return `http://${host}:${p}`;
 }
 
 async function mfetch(url: string, init: RequestInit | undefined, timeoutMs: number) {
@@ -69,41 +82,60 @@ function unwrap(json: any): any {
   return json && typeof json === "object" && "result" in json ? json.result : json;
 }
 
+function parseStatus(status: any): MoonrakerStatus {
+  const ps = status.print_stats ?? {};
+  const vs = status.virtual_sdcard ?? {};
+  const ds = status.display_status ?? {};
+  const ex = status.extruder ?? {};
+  const hb = status.heater_bed ?? {};
+  const progress = Math.min(1, Math.max(0,
+    typeof vs.progress === "number" ? vs.progress
+      : typeof ds.progress === "number" ? ds.progress
+        : 0));
+  return {
+    online: true,
+    state: (ps.state as MoonrakerState) || "standby",
+    filename: ps.filename || null,
+    progress,
+    printDurationSec: typeof ps.print_duration === "number" ? ps.print_duration : 0,
+    currentLayer: ps.info?.current_layer ?? null,
+    totalLayer: ps.info?.total_layer ?? null,
+    nozzle: Math.round(ex.temperature ?? 0),
+    nozzleTarget: Math.round(ex.target ?? 0),
+    bed: Math.round(hb.temperature ?? 0),
+    bedTarget: Math.round(hb.target ?? 0),
+  };
+}
+
+async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus | null> {
+  try {
+    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 3500);
+    if (!res.ok) return null;
+    const status = unwrap(await res.json())?.status;
+    if (!status) return null;
+    return parseStatus(status);
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchMoonrakerStatus(host: string, port: number): Promise<MoonrakerStatus> {
   const offline: MoonrakerStatus = {
     online: false, state: "standby", filename: null, progress: 0, printDurationSec: 0,
     currentLayer: null, totalLayer: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
   };
-  try {
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${QUERY}`, undefined, 3500);
-    if (!res.ok) return offline;
-    const status = unwrap(await res.json())?.status;
-    if (!status) return offline;
-    const ps = status.print_stats ?? {};
-    const vs = status.virtual_sdcard ?? {};
-    const ds = status.display_status ?? {};
-    const ex = status.extruder ?? {};
-    const hb = status.heater_bed ?? {};
-    const progress = Math.min(1, Math.max(0,
-      typeof vs.progress === "number" ? vs.progress
-        : typeof ds.progress === "number" ? ds.progress
-          : 0));
-    return {
-      online: true,
-      state: (ps.state as MoonrakerState) || "standby",
-      filename: ps.filename || null,
-      progress,
-      printDurationSec: typeof ps.print_duration === "number" ? ps.print_duration : 0,
-      currentLayer: ps.info?.current_layer ?? null,
-      totalLayer: ps.info?.total_layer ?? null,
-      nozzle: Math.round(ex.temperature ?? 0),
-      nozzleTarget: Math.round(ex.target ?? 0),
-      bed: Math.round(hb.temperature ?? 0),
-      bedTarget: Math.round(hb.target ?? 0),
-    };
-  } catch {
-    return offline;
+  const cached = portCache.get(host);
+  const order = cached != null
+    ? [cached, ...candidatePorts(port).filter((p) => p !== cached)]
+    : candidatePorts(port);
+  for (const p of order) {
+    const st = await tryStatusAt(host, p);
+    if (st) {
+      portCache.set(host, p);
+      return st;
+    }
   }
+  return offline;
 }
 
 export async function fetchMoonrakerMeta(host: string, port: number, filename: string): Promise<MoonrakerMeta | null> {
@@ -162,13 +194,19 @@ export async function moonrakerFiles(host: string, port: number): Promise<Moonra
   }));
 }
 
-export async function testMoonraker(host: string, port: number): Promise<{ ok: boolean; hostname?: string; state?: string; error?: string }> {
-  try {
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/info`, undefined, 4000);
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const r = unwrap(await res.json());
-    return { ok: true, hostname: r?.hostname, state: r?.state };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "bağlanılamadı" };
+/** Kaydetmeden önce bağlantı testi — çalışan portu da döndürür (UI port alanını günceller). */
+export async function testMoonraker(host: string, port: number): Promise<{ ok: boolean; hostname?: string; state?: string; port?: number; error?: string }> {
+  let lastErr = "";
+  for (const p of candidatePorts(port)) {
+    try {
+      const res = await mfetch(`http://${host}:${p}/printer/info`, undefined, 4000);
+      if (!res.ok) { lastErr = `HTTP ${res.status}`; continue; }
+      const r = unwrap(await res.json());
+      portCache.set(host, p);
+      return { ok: true, hostname: r?.hostname, state: r?.state, port: p };
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : "bağlanılamadı";
+    }
   }
+  return { ok: false, error: lastErr || "bağlanılamadı" };
 }

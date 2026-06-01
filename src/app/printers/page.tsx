@@ -612,10 +612,15 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
     if (!host.trim()) { toast.error("Önce IP/host gir"); return; }
     setTest({ state: "loading" });
     try {
-      const r = await fetchJson<{ ok: boolean; hostname?: string; error?: string }>(
+      const r = await fetchJson<{ ok: boolean; hostname?: string; port?: number; error?: string }>(
         `/api/printers/test?host=${encodeURIComponent(host.trim())}&port=${Number(port) || 7125}`
       );
-      setTest(r.ok ? { state: "ok", msg: r.hostname } : { state: "fail", msg: r.error });
+      if (r.ok) {
+        if (r.port && r.port !== Number(port)) setPort(String(r.port)); // Elegoo → 80'e otomatik düzelt
+        setTest({ state: "ok", msg: r.port ? `port ${r.port}${r.hostname ? ` · ${r.hostname}` : ""}` : r.hostname });
+      } else {
+        setTest({ state: "fail", msg: r.error });
+      }
     } catch (e) {
       setTest({ state: "fail", msg: e instanceof Error ? e.message : "hata" });
     }
