@@ -11,8 +11,8 @@ import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 
 interface SummaryBucket { revenue: number; profit: number; orderCount: number }
 interface OrdersResp {
-  orders: { platform: "shopify" | "trendyol"; items: { name: string; quantity: number }[]; total: number }[];
-  summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; total: SummaryBucket };
+  orders: { platform: "shopify" | "trendyol" | "hepsiburada"; items: { name: string; quantity: number }[]; total: number }[];
+  summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; hepsiburada: SummaryBucket; total: SummaryBucket };
 }
 interface ProductRow {
   id: string;
@@ -24,6 +24,7 @@ interface ProductRow {
 
 const SHOPIFY = "oklch(0.60 0.16 152)";
 const TRENDYOL = "oklch(0.72 0.17 60)";
+const HEPSIBURADA = "oklch(0.66 0.19 38)";
 const PRIMARY = "oklch(0.62 0.20 278)";
 
 function fmtK(n: number) {
@@ -70,6 +71,7 @@ export default function ReportsPage() {
     ? [
         { platform: "Shopify", Ciro: Math.round(summary.shopify.revenue), Kâr: Math.round(summary.shopify.profit), color: SHOPIFY },
         { platform: "Trendyol", Ciro: Math.round(summary.trendyol.revenue), Kâr: Math.round(summary.trendyol.profit), color: TRENDYOL },
+        { platform: "Hepsiburada", Ciro: Math.round(summary.hepsiburada.revenue), Kâr: Math.round(summary.hepsiburada.profit), color: HEPSIBURADA },
       ]
     : [];
 

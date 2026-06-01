@@ -174,7 +174,7 @@ export async function GET() {
   }
 
   const grandTotalProfit =
-    platformStats.shopify.totalProfit + platformStats.trendyol.totalProfit;
+    platformStats.shopify.totalProfit + platformStats.trendyol.totalProfit + platformStats.hepsiburada.totalProfit;
 
   // Stok 0 olanlar önce, sonra 1 olanlar
   lowStockProducts.sort((a, b) => a.stock - b.stock);
