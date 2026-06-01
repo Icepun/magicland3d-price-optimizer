@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Square, Pencil, WifiOff,
-  Check, X, Search, Package, Link2, Minus,
+  Check, X, Search, Package, Link2, Minus, ArrowRight, AlertTriangle,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -855,6 +855,31 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   );
 }
 
+interface FileColor { index: number; hex: string; type: string; grams: number | null }
+interface ColorInfo { colors: FileColor[]; source: string; fileKind: "gcode" | "3mf" | "other"; originalName?: string; missing?: boolean }
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((hex || "").trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+/** Gözle uyumlu ağırlıklı renk mesafesi (düşük = benzer). */
+function colorDistance(a: string, b: string): number {
+  const ra = hexToRgb(a), rb = hexToRgb(b);
+  if (!ra || !rb) return Number.MAX_SAFE_INTEGER;
+  const rmean = (ra[0] + rb[0]) / 2;
+  const dr = ra[0] - rb[0], dg = ra[1] - rb[1], db = ra[2] - rb[2];
+  return Math.sqrt((2 + rmean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rmean) / 256) * db * db);
+}
+function nearestSlotId(hex: string, slots: PrinterSlot[]): number | null {
+  const usable = slots.filter((s) => !s.empty && hexToRgb(s.color));
+  if (!usable.length) return null;
+  let best = usable[0], bestD = colorDistance(hex, usable[0].color);
+  for (const s of usable) { const d = colorDistance(hex, s.color); if (d < bestD) { bestD = d; best = s; } }
+  return best.slot;
+}
+
 function SlotStep({
   printerId, model, isBambu, printing, onBack, onClose, onConfirm,
 }: {
@@ -862,61 +887,81 @@ function SlotStep({
   onBack: () => void; onClose: () => void;
   onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean }) => void;
 }) {
-  const { data, isLoading } = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
+  const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
     queryKey: ["printer-slots", printerId],
     queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
   });
-  const slots = useMemo(() => data?.slots ?? [], [data]);
+  const colorsQ = useQuery<ColorInfo>({
+    queryKey: ["model-colors", model.fileId],
+    queryFn: () => fetchJson(`/api/models/${model.fileId}/colors`),
+  });
+  const isLoading = slotsQ.isLoading || colorsQ.isLoading;
+
+  const slots = useMemo(() => slotsQ.data?.slots ?? [], [slotsQ.data]);
   // Slot okunamazsa numarayla yine de eşlemek için 4 jenerik slot
   const pickSlots: PrinterSlot[] = slots.length
     ? slots
     : [0, 1, 2, 3].map((n) => ({ slot: n, color: "#9ca3af", type: "", empty: false }));
+
+  const fileColors = useMemo(() => colorsQ.data?.colors ?? [], [colorsQ.data]);
+  const usingFile = fileColors.length > 0;
+  const fileKind = colorsQ.data?.fileKind;
+  // Ham .gcode'da (Bambu) AMS eşlemesi UYGULANMAZ (sıra dilimde sabit). .3mf'te uygulanır.
+  const mappingApplies = isBambu && fileKind === "3mf";
+  const rawGcodeBambu = isBambu && fileKind === "gcode";
+
+  const [manualCount, setManualCount] = useState(1);
   const [useAms, setUseAms] = useState(true);
-  const [count, setCount] = useState(1);
-  const [mapping, setMapping] = useState<number[]>([]);
+  const [assign, setAssign] = useState<number[]>([]); // printColors sırasına paralel: seçilen slot id
 
+  const printColors: FileColor[] = useMemo(
+    () => (usingFile ? fileColors : Array.from({ length: manualCount }, (_, i) => ({ index: i, hex: "#9ca3af", type: "", grams: null }))),
+    [usingFile, fileColors, manualCount]
+  );
+
+  // Otomatik eşleme: dosya rengi → en yakın yüklü slot (yoksa sıra ile)
   useEffect(() => {
-    if (mapping.length === 0) setMapping([pickSlots[0]?.slot ?? 0]);
-  }, [mapping.length, pickSlots]);
-
-  const setColorCount = (n: number) => {
-    const c = Math.max(1, Math.min(4, n));
-    setCount(c);
-    setMapping((prev) => {
-      const next = [...prev];
-      while (next.length < c) {
-        const used = new Set(next);
-        const free = pickSlots.find((s) => !used.has(s.slot)) ?? pickSlots[next.length % pickSlots.length];
-        next.push(free?.slot ?? next.length);
-      }
-      return next.slice(0, c);
+    if (isLoading) return;
+    setAssign((prev) => {
+      if (prev.length === printColors.length && prev.every((v) => v != null)) return prev;
+      return printColors.map((c, i) => {
+        const near = usingFile && slots.length ? nearestSlotId(c.hex, slots) : null;
+        return near != null ? near : (pickSlots[i % pickSlots.length]?.slot ?? i);
+      });
     });
-  };
-  const assign = (i: number, slot: number) => setMapping((prev) => { const n = [...prev]; n[i] = slot; return n; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, printColors.length, usingFile, slots.length]);
+
+  const setOne = (i: number, slot: number) => setAssign((prev) => { const n = [...prev]; n[i] = slot; return n; });
+  const setCount = (n: number) => setManualCount(Math.max(1, Math.min(4, n)));
 
   const start = () => {
-    const map = mapping.slice(0, count);
+    // ams_mapping: dilimleyici filament index'ine göre yerleştir, boşlukları -1 ile doldur
+    const maxIdx = printColors.reduce((m, c) => Math.max(m, c.index), 0);
+    const map = Array.from({ length: maxIdx + 1 }, () => -1);
+    printColors.forEach((c, i) => { map[c.index] = assign[i] ?? 0; });
     if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map } : { useAms: false });
     else onConfirm({ amsMapping: map });
   };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Baskının her rengini bir slota ata. {isBambu ? "Bambu bunu AMS eşlemesi olarak uygular." : "Snapmaker'da renk sırası dilimlemeden gelir; bu eşleme doğrulama içindir."}
+            Renkler baskı dosyasından okundu. Her birini yazıcıdaki bir slota ata.
+            {mappingApplies ? " Bambu bunu AMS eşlemesi olarak uygular." : isBambu ? "" : " Snapmaker'da sıra dilimlemeden gelir; bu eşleme doğrulama içindir."}
           </p>
         </DialogHeader>
 
         {isLoading ? (
-          <div className="py-6 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
+          <div className="py-10 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
         ) : (
-          <div className="space-y-3">
+          <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
             {slots.length > 0 ? (
               <div>
-                <p className="text-[11px] text-muted-foreground mb-1.5">Yüklü slotlar</p>
+                <p className="text-[11px] text-muted-foreground mb-1.5">Yazıcıdaki slotlar</p>
                 <div className="flex flex-wrap gap-1.5">
                   {slots.map((s) => (
                     <span key={s.slot} className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
@@ -929,42 +974,75 @@ function SlotStep({
               </div>
             ) : (
               <p className="text-[11px] text-muted-foreground">
-                {data?.error ? `Slotlar okunamadı: ${data.error}. ` : "Yüklü renk okunamadı. "}Numarayla yine de eşleyebilirsin.
+                {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı. "}Numarayla eşleyebilirsin.
               </p>
             )}
 
-            <div className="flex items-center gap-2">
-              <span className="text-sm">Baskı renk sayısı</span>
-              <div className="flex items-center gap-1 ml-auto">
-                <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setColorCount(count - 1)} disabled={count <= 1}><Minus className="h-3.5 w-3.5" /></Button>
-                <span className="w-6 text-center font-bold tabular-nums">{count}</span>
-                <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setColorCount(count + 1)} disabled={count >= 4}><Plus className="h-3.5 w-3.5" /></Button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              {Array.from({ length: count }).map((_, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-16 shrink-0">Renk {i + 1}</span>
-                  <div className="flex gap-1.5 flex-wrap">
-                    {pickSlots.map((s) => {
-                      const sel = mapping[i] === s.slot;
-                      return (
-                        <button
-                          key={s.slot}
-                          onClick={() => assign(i, s.slot)}
-                          className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10" : "border-border hover:bg-muted")}
-                        >
-                          <span className="font-bold tabular-nums">{s.slot + 1}</span>
-                          <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: s.color }} />
-                          {sel && <Check className="h-3 w-3 text-primary" />}
-                        </button>
-                      );
-                    })}
+            {!usingFile && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5 space-y-2">
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+                  {colorsQ.data?.missing ? "Dosya bu cihazda yok." : "Dosyadan renk okunamadı — renk sayısını elle seç."}
+                </p>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs">Renk sayısı</span>
+                  <div className="flex items-center gap-1 ml-auto">
+                    <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setCount(manualCount - 1)} disabled={manualCount <= 1}><Minus className="h-3.5 w-3.5" /></Button>
+                    <span className="w-6 text-center font-bold tabular-nums">{manualCount}</span>
+                    <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setCount(manualCount + 1)} disabled={manualCount >= 4}><Plus className="h-3.5 w-3.5" /></Button>
                   </div>
                 </div>
-              ))}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              {usingFile && (
+                <p className="text-[11px] text-muted-foreground truncate">
+                  Baskıda <b>{printColors.length}</b> renk · <span className="font-mono">{colorsQ.data?.originalName}</span>
+                </p>
+              )}
+              {printColors.map((c, i) => {
+                const chosen = assign[i];
+                return (
+                  <div key={i} className="flex items-center gap-2.5 rounded-lg border p-2">
+                    <div className="flex items-center gap-2 w-[124px] shrink-0">
+                      <span className="h-7 w-7 rounded-md border shadow-inner shrink-0" style={{ background: c.hex }} />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium truncate">Renk {i + 1}</p>
+                        <p className="text-[10px] text-muted-foreground truncate font-mono">
+                          {(c.type ? `${c.type} ` : "") + (usingFile ? c.hex : "")}{c.grams != null ? ` · ${c.grams}g` : ""}
+                        </p>
+                      </div>
+                    </div>
+                    <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <div className="flex gap-1.5 flex-wrap flex-1">
+                      {pickSlots.map((s) => {
+                        const sel = chosen === s.slot;
+                        return (
+                          <button
+                            key={s.slot}
+                            onClick={() => setOne(i, s.slot)}
+                            title={`Slot ${s.slot + 1}${s.type ? ` · ${s.type}` : ""}`}
+                            className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10 ring-1 ring-primary/30" : "border-border hover:bg-muted")}
+                          >
+                            <span className="font-bold tabular-nums">{s.slot + 1}</span>
+                            <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: s.color }} />
+                            {sel && <Check className="h-3 w-3 text-primary" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
+
+            {rawGcodeBambu && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+                Ham .gcode: slot eşlemesi dilimlemede sabittir; AMS'i yukarıdaki sıraya göre yükle. Uygulamadan tam eşleme için .3mf yükle.
+              </p>
+            )}
 
             {isBambu && (
               <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
@@ -980,7 +1058,7 @@ function SlotStep({
         <DialogFooter>
           <Button variant="ghost" onClick={onBack}>Geri</Button>
           <Button disabled={printing} onClick={start}>
-            {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({count} renk)</>}
+            {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>
         </DialogFooter>
       </DialogContent>

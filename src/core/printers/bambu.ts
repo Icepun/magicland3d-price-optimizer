@@ -17,7 +17,7 @@
  * "report" push'lar; route sadece bellekteki son durumu okur.
  */
 import mqtt, { type MqttClient } from "mqtt";
-import { Client as FtpClient } from "basic-ftp";
+import { Client as FtpClient, enterPassiveModeIPv4 } from "basic-ftp";
 import { Readable } from "node:stream";
 
 export interface BambuStatus {
@@ -175,6 +175,71 @@ export async function getBambuAmsSlots(host: string, accessCode: string, serial:
   return slots;
 }
 
+/** "::ffff:192.168.1.13" / "192.168.1.13" → "192.168.1.13" (yoksa null). */
+function controlHostV4(addr: unknown): string | null {
+  if (typeof addr !== "string") return null;
+  const m = addr.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Bambu SD kartına FTP (implicit TLS 990, bblp + access code) ile dosya yükle.
+ *
+ * Bambu'nun FTP sunucusunun İKİ bilinen hatası var; ikisi de "Timeout (control socket)"
+ * olarak görünür:
+ *   1) EPSV komutuna yanıt vermez. basic-ftp default'u önce EPSV dener → kontrol soketi
+ *      cevap bekleyip timeout'a düşer. ÇÖZÜM: prepareTransfer'ı doğrudan PASV'a sabitle.
+ *   2) PASV yanıtında host olarak 0.0.0.0 döndürür → veri bağlantısı kurulamaz, transfer
+ *      asılır, kontrol soketi timeout olur. ÇÖZÜM: PASV yanıtındaki host'u kontrol
+ *      bağlantısının gerçek IP'siyle değiştir (sonra basic-ftp'nin kendi TLS-session-reuse'lu
+ *      bağlanma mantığı çalışır).
+ * Hata olursa FTP konuşma dökümünü mesaja ekle (sonraki testte tam adımı görmek için).
+ */
+async function bambuFtpUpload(host: string, accessCode: string, fileBuf: Buffer, remoteName: string): Promise<void> {
+  const ftp = new FtpClient(30000);
+  ftp.ftp.verbose = false;
+  const ctx = ftp.ftp as unknown as {
+    request: (cmd: string) => Promise<{ code: number; message: string }>;
+    socket: { remoteAddress?: string };
+  };
+  const trace: string[] = [];
+  const origRequest = ctx.request.bind(ctx);
+  ctx.request = (cmd: string) =>
+    origRequest(cmd).then(
+      (res) => {
+        if (typeof cmd === "string" && /^\s*PASV/i.test(cmd)) {
+          const h = controlHostV4(ctx.socket && ctx.socket.remoteAddress);
+          if (h && typeof res?.message === "string") {
+            // "227 ... (0,0,0,0,193,52)" → host oktetlerini kontrol IP'siyle değiştir, portu koru
+            res.message = res.message.replace(
+              /(\d{1,3},\d{1,3},\d{1,3},\d{1,3})(\s*,\s*\d{1,3}\s*,\s*\d{1,3})/,
+              `${h.replace(/\./g, ",")}$2`
+            );
+          }
+        }
+        const safe = /^\s*PASS/i.test(String(cmd)) ? "PASS***" : String(cmd).trim();
+        trace.push(`${safe}»${res?.code ?? "?"}`);
+        return res;
+      },
+      (err: Error) => { trace.push(`${String(cmd).trim()}»ERR`); throw err; }
+    );
+  // EPSV'yi atla: doğrudan PASV (host yukarıda düzeltiliyor).
+  ftp.prepareTransfer = enterPassiveModeIPv4;
+
+  try {
+    await ftp.access({
+      host, port: 990, user: "bblp", password: accessCode,
+      secure: "implicit", secureOptions: { rejectUnauthorized: false },
+    });
+    await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`FTP yükleme başarısız (${msg}) · iz: ${trace.join(" ")}`);
+  } finally {
+    ftp.close();
+  }
+}
+
 /**
  * Bambu'da baskı başlat: dosyayı SD'ye FTP ile yükle (implicit TLS 990) + MQTT ile başlat.
  * .3mf → project_file (plate + ams_mapping); .gcode → gcode_file (ham).
@@ -188,21 +253,7 @@ export async function bambuUploadAndPrint(
   remoteName: string,
   opts: { amsMapping?: number[]; useAms?: boolean } = {}
 ): Promise<void> {
-  const ftp = new FtpClient(20000);
-  ftp.ftp.verbose = false;
-  try {
-    await ftp.access({
-      host,
-      port: 990,
-      user: "bblp",
-      password: accessCode,
-      secure: "implicit",
-      secureOptions: { rejectUnauthorized: false },
-    });
-    await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
-  } finally {
-    ftp.close();
-  }
+  await bambuFtpUpload(host, accessCode, fileBuf, remoteName);
 
   const conn = ensureConn(host, accessCode, serial);
   const isGcode = /\.(gcode|gco|g)$/i.test(remoteName);
