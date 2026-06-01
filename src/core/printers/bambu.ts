@@ -346,7 +346,7 @@ export async function bambuUploadAndPrint(
   serial: string,
   fileBuf: Buffer,
   originalName: string,
-  opts: { amsMapping?: number[]; useAms?: boolean; onProgress?: (pct: number) => void } = {}
+  opts: { amsMapping?: number[]; useAms?: boolean; onProgress?: (pct: number) => void; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } } = {}
 ): Promise<{ matchName: string }> {
   // PREFLIGHT: yazıcı çevrimiçi + boşta mı? (UI butonu gizlese de 2. istemci / bayat poll'a karşı sunucu kontrolü)
   const pre = await getBambuStatus(host, accessCode, serial);
@@ -375,8 +375,8 @@ export async function bambuUploadAndPrint(
           file: "",
           url: `ftp:///${remoteName}`,
           md5: fileMd5,
-          timelapse: false, bed_type: "auto", bed_leveling: true,
-          flow_cali: true, vibration_cali: true, layer_inspect: false,
+          timelapse: opts.prefs?.timelapse ?? false, bed_type: "auto", bed_leveling: opts.prefs?.bedLeveling ?? false,
+          flow_cali: opts.prefs?.flowCali ?? false, vibration_cali: false, layer_inspect: false,
           ams_mapping: opts.amsMapping ?? [0],
           use_ams: opts.useAms ?? false,
         },

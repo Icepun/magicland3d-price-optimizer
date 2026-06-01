@@ -779,6 +779,7 @@ interface PrintableModel { fileId: string; productId: string; productName: strin
 interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 
 type PrintProg = { stage: "status" | "upload" | "start" | "confirm" | "done"; pct: number | null };
+type PrintPrefs = { timelapse: boolean; bedLeveling: boolean; flowCali: boolean };
 
 function PrintProgress({ p }: { p: PrintProg }) {
   const label =
@@ -821,14 +822,14 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   const [progress, setProgress] = useState<PrintProg | null>(null);
 
   // POST → NDJSON akışı; her satır bir ilerleme olayı → progress bar'ı güncelle.
-  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean } = {}) => {
+  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
       const res = await fetch(`/api/models/${fileId}/print`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms }),
+        body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms, prefs: opts.prefs }),
       });
       if (!res.ok || !res.body) {
         const j = await res.json().catch(() => ({} as { error?: string }));
@@ -970,7 +971,7 @@ function SlotStep({
 }: {
   printerId: string; model: PrintableModel; isBambu: boolean; printing: boolean; progress: PrintProg | null;
   onBack: () => void; onClose: () => void;
-  onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean }) => void;
+  onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => void;
 }) {
   const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
     queryKey: ["printer-slots", printerId],
@@ -997,6 +998,7 @@ function SlotStep({
 
   const [manualCount, setManualCount] = useState(1);
   const [useAms, setUseAms] = useState(true);
+  const [prefs, setPrefs] = useState<PrintPrefs>({ timelapse: false, bedLeveling: false, flowCali: false });
   const [assign, setAssign] = useState<number[]>([]); // printColors sırasına paralel: seçilen slot id
 
   const printColors: FileColor[] = useMemo(
@@ -1025,8 +1027,8 @@ function SlotStep({
     const maxIdx = printColors.reduce((m, c) => Math.max(m, c.index), 0);
     const map = Array.from({ length: maxIdx + 1 }, () => -1);
     printColors.forEach((c, i) => { map[c.index] = assign[i] ?? 0; });
-    if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map } : { useAms: false });
-    else onConfirm({ amsMapping: map }); // Snapmaker: kafa eşlemesi → route'ta gcode tool remap
+    if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map, prefs } : { useAms: false, prefs });
+    else onConfirm({ amsMapping: map, prefs }); // Snapmaker: kafa eşlemesi → route'ta gcode tool remap
   };
 
   return (
@@ -1136,6 +1138,22 @@ function SlotStep({
                 Snapmaker tool-changer: seçtiğin kafa gcode'a uygulanır (varsayılanı değiştirmezsen dosya olduğu gibi basılır). Filamentin fiziksel olarak seçtiğin kafada/slotta olduğundan emin ol. İlk denemeyi küçük bir baskıyla yapman önerilir.
               </p>
             )}
+
+            <div className="space-y-1.5 pt-2 border-t border-border/50">
+              <p className="text-[11px] text-muted-foreground">Baskı seçenekleri (varsayılan kapalı — istersen aç)</p>
+              {([
+                { k: "bedLeveling" as const, label: "Otomatik tabla terazileme" },
+                { k: "flowCali" as const, label: "Akış kalibrasyonu" },
+                { k: "timelapse" as const, label: "Timelapse (hızlandırılmış video)" },
+              ]).map((o) => (
+                <button key={o.k} onClick={() => setPrefs((p) => ({ ...p, [o.k]: !p[o.k] }))} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground w-full">
+                  <span className={cn("h-4 w-4 rounded border flex items-center justify-center shrink-0", prefs[o.k] ? "bg-primary border-primary" : "border-border")}>
+                    {prefs[o.k] && <Check className="h-3 w-3 text-primary-foreground" />}
+                  </span>
+                  {o.label}
+                </button>
+              ))}
+            </div>
 
             {isBambu && (
               <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">

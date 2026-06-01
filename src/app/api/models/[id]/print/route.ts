@@ -23,6 +23,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       ? body.amsMapping.map((n: unknown) => Number(n))
       : undefined;
     const useAms: boolean | undefined = typeof body?.useAms === "boolean" ? body.useAms : undefined;
+    const prefsRaw = body?.prefs && typeof body.prefs === "object" ? body.prefs : {};
+    const prefs = { timelapse: !!prefsRaw.timelapse, bedLeveling: !!prefsRaw.bedLeveling, flowCali: !!prefsRaw.flowCali };
 
     const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
@@ -85,14 +87,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
           if (isBambu) {
             const r = await bambuUploadAndPrint(printer.host, printer.accessCode!, printer.serial!, buf, mf.originalName, {
-              amsMapping, useAms,
+              amsMapping, useAms, prefs,
               onProgress: (pct) => send({ stage: "upload", pct }),
             });
             matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
           } else {
             send({ stage: "upload", pct: null }); // Moonraker: belirsiz (fetch byte takibi yok)
-            // Snapmaker kafa seçimi (amsMapping) verildiyse gcode tool index'leri remap edilir.
-            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, amsMapping);
+            // Snapmaker: kafa seçimi (amsMapping) + baskı tercihleri → gcode tool remap / makro aç-kapa.
+            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, { headMapping: amsMapping, prefs });
           }
 
           send({ stage: "start" });

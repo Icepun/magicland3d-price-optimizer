@@ -212,16 +212,43 @@ export function remapMoonrakerTools(text: string, toolMap: Record<number, number
   }).join("\n");
 }
 
+export interface MoonrakerPrefs { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean }
+
+/**
+ * Baskı tercihleri (default OFF) gcode'a uygulanır: KAPALI olan tercihin makro satırları yorum yapılır.
+ * Snapmaker U1: timelapse → `TIMELAPSE*` (START + her katman TAKE_FRAME); bedLeveling → `BED_MESH_CALIBRATE`
+ * (kapalıyken yazıcının KAYITLI mesh'i kullanılır); flowCali → `SM_PRINT_FLOW_CALIBRATE`. `G28` homing /
+ * `DETECT_BED_PLATE` / hareketlere DOKUNULMAZ. Açık (true) bırakılan tercih gcode'da olduğu gibi kalır.
+ */
+export function applyMoonrakerPrefs(text: string, prefs: MoonrakerPrefs): string {
+  const res: RegExp[] = [];
+  if (prefs.timelapse === false) res.push(/^\s*TIMELAPSE\w*/i);
+  if (prefs.bedLeveling === false) res.push(/^\s*BED_MESH_CALIBRATE\b/i);
+  if (prefs.flowCali === false) res.push(/^\s*SM_PRINT_FLOW_CALIBRATE\b/i);
+  if (!res.length) return text;
+  return text.split("\n").map((line) => (res.some((re) => re.test(line)) ? `; [kapali] ${line.trim()}` : line)).join("\n");
+}
+
 /** Dosyayı yazıcıya yükle ve hemen baskıyı başlat (Moonraker upload print=true).
- *  headMapping (Snapmaker kafa seçimi) verilir + kimlik-dışı + .gcode ise tool index'leri remap edilir. */
-export async function moonrakerUploadAndPrint(host: string, port: number, fileBuf: Buffer, filename: string, headMapping?: number[]): Promise<void> {
+ *  opts.headMapping (Snapmaker kafa seçimi) → tool index remap; opts.prefs → makro aç/kapa. Sadece .gcode'da. */
+export async function moonrakerUploadAndPrint(
+  host: string,
+  port: number,
+  fileBuf: Buffer,
+  filename: string,
+  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs } = {}
+): Promise<void> {
   let body = fileBuf;
-  if (headMapping && headMapping.length && /\.(gcode|gco|g)$/i.test(filename)) {
-    const toolMap: Record<number, number> = {};
-    headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
-    const remapped = remapMoonrakerTools(fileBuf.toString("latin1"), toolMap);
-    if (remapped.length !== fileBuf.length) body = Buffer.from(remapped, "latin1");
-    else if (remapped !== fileBuf.toString("latin1")) body = Buffer.from(remapped, "latin1");
+  const isGcode = /\.(gcode|gco|g)$/i.test(filename);
+  if (isGcode && ((opts.headMapping && opts.headMapping.length) || opts.prefs)) {
+    let text = fileBuf.toString("latin1");
+    if (opts.headMapping && opts.headMapping.length) {
+      const toolMap: Record<number, number> = {};
+      opts.headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
+      text = remapMoonrakerTools(text, toolMap);
+    }
+    if (opts.prefs) text = applyMoonrakerPrefs(text, opts.prefs);
+    body = Buffer.from(text, "latin1");
   }
   const fd = new FormData();
   fd.append("root", "gcodes");
