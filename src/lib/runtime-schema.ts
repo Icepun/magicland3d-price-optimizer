@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "14";
+const CURRENT_SCHEMA_VERSION = "15";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -485,6 +485,42 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS "UnmatchedListing_platform_barcode_idx" ON "UnmatchedListing"("platform", "barcode")
     `);
+
+    // 3D yazıcı bağlantıları (v0.15) — Moonraker (Elegoo/Snapmaker) + Bambu
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PrinterConfig" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "brand" TEXT NOT NULL,
+        "model" TEXT,
+        "type" TEXT NOT NULL DEFAULT 'moonraker',
+        "host" TEXT NOT NULL,
+        "port" INTEGER NOT NULL DEFAULT 7125,
+        "accent" TEXT,
+        "accessCode" TEXT,
+        "serial" TEXT,
+        "enabled" BOOLEAN NOT NULL DEFAULT true,
+        "sortOrder" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PrintFileProduct" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "printerConfigId" TEXT NOT NULL,
+        "filename" TEXT NOT NULL,
+        "productId" TEXT NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "PrintFileProduct_printerConfigId_filename_key" ON "PrintFileProduct"("printerConfigId", "filename")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "PrintFileProduct_productId_idx" ON "PrintFileProduct"("productId")`
+    );
 
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();

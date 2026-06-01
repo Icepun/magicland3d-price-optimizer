@@ -291,3 +291,47 @@ model AppSetting {
   key   String @id
   value String
 }
+
+/**
+ * Fiziksel 3D yazıcı bağlantısı. Moonraker (Elegoo Neptune 4 Pro/Plus, Snapmaker U1)
+ * veya Bambu (A1) — host/IP üzerinden LAN'da canlı durum + kontrol.
+ */
+model PrinterConfig {
+  id         String   @id @default(cuid())
+  name       String
+  /** "elegoo" | "snapmaker" | "bambu" */
+  brand      String
+  model      String?
+  /** "moonraker" | "bambu" */
+  type       String   @default("moonraker")
+  /** IP veya hostname, örn. "192.168.1.18" */
+  host       String
+  /** Moonraker varsayılan 7125; Bambu MQTT 8883 */
+  port       Int      @default(7125)
+  /** Kart vurgu rengi (oklch). Boşsa palette'ten atanır. */
+  accent     String?
+  /** Bambu LAN access code (yazıcı ekranından). */
+  accessCode String?
+  /** Bambu cihaz seri no. */
+  serial     String?
+  enabled    Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+/**
+ * Bir yazıcıdaki belirli bir gcode dosyasının hangi katalog ürününe karşılık geldiği
+ * (manuel eşleştirme). Aynı dosya tekrar basılınca ürün otomatik hatırlanır.
+ */
+model PrintFileProduct {
+  id              String   @id @default(cuid())
+  printerConfigId String
+  filename        String
+  productId       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([printerConfigId, filename])
+  @@index([productId])
+}
