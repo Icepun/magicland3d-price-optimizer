@@ -183,6 +183,20 @@ export async function moonrakerStart(host: string, port: number, filename: strin
   if (!res.ok) throw new Error(`Baskı başlatılamadı (HTTP ${res.status})`);
 }
 
+/** Dosyayı yazıcıya yükle ve hemen baskıyı başlat (Moonraker upload print=true). */
+export async function moonrakerUploadAndPrint(host: string, port: number, fileBuf: Buffer, filename: string): Promise<void> {
+  const fd = new FormData();
+  fd.append("root", "gcodes");
+  fd.append("print", "true");
+  fd.append("file", new Blob([new Uint8Array(fileBuf)]), filename);
+  // Büyük gcode dosyaları için uzun timeout (LAN içi).
+  const res = await mfetch(`${moonrakerBase(host, port)}/server/files/upload`, { method: "POST", body: fd }, 180000);
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Yükleme/baskı başarısız (HTTP ${res.status}) ${t.slice(0, 140)}`.trim());
+  }
+}
+
 export async function moonrakerFiles(host: string, port: number): Promise<MoonrakerFile[]> {
   const res = await mfetch(`${moonrakerBase(host, port)}/server/files/list?root=gcodes`, undefined, 6000);
   if (!res.ok) throw new Error(`Dosya listesi alınamadı (HTTP ${res.status})`);

@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Square, Pencil, WifiOff,
-  Check, X, Search, Package, FileText, Link2,
+  Check, X, Search, Package, Link2,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -213,14 +213,7 @@ export default function PrintersPage() {
       {manageOpen && <ManageModal onClose={() => setManageOpen(false)} />}
       {matchTarget && <MatchModal target={matchTarget} onClose={() => setMatchTarget(null)} />}
       {startTarget && (
-        <StartModal
-          target={startTarget}
-          onClose={() => setStartTarget(null)}
-          onStart={(filename) => {
-            action.mutate({ id: startTarget.id, action: "start", filename });
-            setStartTarget(null);
-          }}
-        />
+        <StartModal target={startTarget} onClose={() => setStartTarget(null)} />
       )}
 
       <Dialog open={!!cancelTarget} onOpenChange={(o) => !o && setCancelTarget(null)}>
@@ -765,45 +758,64 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
 
 // ───────────────────────── Baskı başlat (dosya seç) modalı ─────────────────────────
 
-interface GcodeFile { path: string; modified: number; size: number }
+interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
 
-function StartModal({ target, onClose, onStart }: { target: { id: string; name: string }; onClose: () => void; onStart: (filename: string) => void }) {
-  const { data, isLoading, isError, error } = useQuery<{ files: GcodeFile[] }>({
-    queryKey: ["printer-files", target.id],
-    queryFn: () => fetchJson<{ files: GcodeFile[] }>(`/api/printers/${target.id}/files`),
+function StartModal({ target, onClose }: { target: { id: string; name: string }; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { data, isLoading, isError, error } = useQuery<{ models: PrintableModel[] }>({
+    queryKey: ["printable-models", target.id],
+    queryFn: () => fetchJson<{ models: PrintableModel[] }>(`/api/printers/${target.id}/printable-models`),
   });
   const [q, setQ] = useState("");
 
-  const files = useMemo(() => {
-    const all = data?.files ?? [];
+  const models = useMemo(() => {
+    const all = data?.models ?? [];
     const query = q.trim().toLocaleLowerCase("tr-TR");
-    return all.filter((f) => !query || f.path.toLocaleLowerCase("tr-TR").includes(query)).slice(0, 100);
+    return all.filter((m) => !query || m.productName.toLocaleLowerCase("tr-TR").includes(query)).slice(0, 100);
   }, [data, q]);
+
+  const print = useMutation({
+    mutationFn: (fileId: string) => fetchJson(`/api/models/${fileId}/print`, { method: "POST" }),
+    onSuccess: () => {
+      toast.success("Baskı başlatıldı 🎉");
+      onClose();
+      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Baskı Başlat — {target.name}</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-1">Yazıcıdaki bir gcode dosyasını seç. Seçilen dosyanın baskısı hemen başlar.</p>
+          <p className="text-xs text-muted-foreground mt-1">Bu yazıcı için eklediğin ürün modellerinden birini seç; dosya yazıcıya yüklenip baskı hemen başlar.</p>
         </DialogHeader>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Dosya ara…" className="pl-8 h-9" autoFocus />
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ürün ara…" className="pl-8 h-9" autoFocus />
         </div>
         <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-0.5 min-h-[140px]">
           {isLoading ? (
             <div className="py-8 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
           ) : isError ? (
-            <p className="text-xs text-destructive text-center py-6">{(error as Error)?.message || "Dosyalar alınamadı"}</p>
-          ) : files.length === 0 ? (
-            <p className="text-xs text-muted-foreground text-center py-6">Dosya bulunamadı.</p>
+            <p className="text-xs text-destructive text-center py-6">{(error as Error)?.message || "Modeller alınamadı"}</p>
+          ) : models.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-xs text-muted-foreground">Bu yazıcı için yüklenmiş model yok.</p>
+              <p className="text-[11px] text-muted-foreground/70 mt-1">Bir ürünün sayfasından bu yazıcı için baskı dosyası yükle.</p>
+            </div>
           ) : (
-            files.map((f) => (
-              <button key={f.path} onClick={() => onStart(f.path)} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left">
-                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                <span className="flex-1 min-w-0 text-sm truncate">{f.path}</span>
-                <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{(f.size / 1024 / 1024).toFixed(1)} MB</span>
+            models.map((m) => (
+              <button key={m.fileId} onClick={() => print.mutate(m.fileId)} disabled={print.isPending} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
+                <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
+                  {m.imageUrl ? <img src={m.imageUrl} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm truncate">{m.productName}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono truncate">{m.originalName}</p>
+                </div>
+                <Play className="h-4 w-4 text-primary shrink-0" />
               </button>
             ))
           )}

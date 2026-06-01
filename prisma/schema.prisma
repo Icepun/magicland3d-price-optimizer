@@ -40,6 +40,7 @@ model Product {
   cost            ProductCost?
   priceHistory    PriceHistory[]
   listings        Listing[]
+  modelFiles      ProductModelFile[]
   /** Ait olduğu varyant grubu. */
   variantGroup    VariantGroup? @relation(fields: [variantGroupId], references: [id], onDelete: SetNull)
 
@@ -334,4 +335,33 @@ model PrintFileProduct {
 
   @@unique([printerConfigId, filename])
   @@index([productId])
+}
+
+/**
+ * Bir ürünün belirli bir yazıcı için dilimlenmiş baskı dosyası (gcode/3mf).
+ * Dosya byte'ları uygulama tarafında diskte (userData/models) saklanır; burada
+ * sadece metadata + disk yolu tutulur. "Bas" → dosya yazıcıya yüklenip başlatılır.
+ */
+model ProductModelFile {
+  id              String   @id @default(cuid())
+  productId       String
+  printerConfigId String
+  /** Kullanıcının orijinal dosya adı (yazıcıya bu adla yüklenir). */
+  originalName    String
+  /** Diskteki tam yol (userData/models/...). */
+  storedPath      String
+  /** "gcode" | "gco" | "3mf" */
+  fileType        String
+  sizeBytes       Int      @default(0)
+  /** Filament gramajı (maliyet + makara düşümü entegrasyonu için, opsiyonel). */
+  gramaj          Float?
+  /** Tahmini baskı süresi (dakika, opsiyonel). */
+  estPrintMin     Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, printerConfigId])
+  @@index([printerConfigId])
 }
