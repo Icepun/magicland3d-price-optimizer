@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "17";
+const CURRENT_SCHEMA_VERSION = "18";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -549,6 +549,41 @@ export function ensureRuntimeSchema(): Promise<void> {
     );
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_printerConfigId_idx" ON "ProductModelFile"("printerConfigId")`
+    );
+
+    // Telefon relay'i (v0.17) — yazıcı durum snapshot'ı + uzaktan komut kuyruğu
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PrinterSnapshot" (
+        "printerConfigId" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "brand" TEXT NOT NULL,
+        "status" TEXT NOT NULL,
+        "online" BOOLEAN NOT NULL DEFAULT false,
+        "productName" TEXT,
+        "productImage" TEXT,
+        "progress" REAL NOT NULL DEFAULT 0,
+        "nozzle" INTEGER NOT NULL DEFAULT 0,
+        "bed" INTEGER NOT NULL DEFAULT 0,
+        "currentFilename" TEXT,
+        "etaSec" INTEGER,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PrintCommand" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "printerConfigId" TEXT NOT NULL,
+        "action" TEXT NOT NULL,
+        "modelFileId" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "error" TEXT,
+        "source" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "processedAt" DATETIME
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "PrintCommand_status_idx" ON "PrintCommand"("status")`
     );
 
     await cleanupPdfCommissionRules();

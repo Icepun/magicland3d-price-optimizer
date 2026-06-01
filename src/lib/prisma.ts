@@ -64,6 +64,17 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
     }
     return adapter;
   }
+
+  /** Relay için: yerel replica'yı buluttan ANINDA tazele (telefon komutlarını çabuk görmek için). */
+  async syncNow(): Promise<void> {
+    if (this.#replicaClient) {
+      try {
+        await this.#replicaClient.sync();
+      } catch (e) {
+        console.error("[prisma] relay sync hatası:", e instanceof Error ? e.message : e);
+      }
+    }
+  }
 }
 
 /**
@@ -94,6 +105,9 @@ if (!tursoUrl) {
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
+/** Turso modunda relay'in zorla-senkron için kullanacağı adapter referansı. */
+let _tursoAdapter: EmbeddedReplicaPrismaLibSQL | null = null;
+
 function createPrisma(): PrismaClient {
   const log = process.env.NODE_ENV === "development" ? ["error", "warn"] as const : ["error"] as const;
 
@@ -114,6 +128,7 @@ function createPrisma(): PrismaClient {
       authToken: tursoToken || undefined,
       syncInterval: 60, // saniye — periyodik pull (yazmalar zaten anında buluta gider)
     });
+    _tursoAdapter = adapter; // relay zorla-senkron için
     return new PrismaClient({ adapter, log: [...log] });
   }
 
@@ -125,3 +140,8 @@ export const prisma = globalForPrisma.prisma ?? createPrisma();
 
 // Aynı bağlantı tüm isteklerde yeniden kullanılsın
 globalForPrisma.prisma = prisma;
+
+/** Relay: yerel Turso replica'yı zorla senkronla (Turso modu değilse no-op). */
+export async function syncTursoReplica(): Promise<void> {
+  if (_tursoAdapter) await _tursoAdapter.syncNow();
+}

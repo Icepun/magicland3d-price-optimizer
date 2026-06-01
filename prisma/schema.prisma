@@ -369,3 +369,48 @@ model ProductModelFile {
   @@index([printerConfigId])
   @@index([productId, printerConfigId])
 }
+
+/**
+ * Yazıcının son canlı durumu — masaüstü (LAN'da) periyodik yazar, telefon okur.
+ * Telefon LAN'a erişemediği için uzaktan izlemeyi bu snapshot sağlar.
+ */
+model PrinterSnapshot {
+  printerConfigId String   @id
+  name            String
+  brand           String
+  /** printing | paused | finished | idle | error | offline */
+  status          String
+  online          Boolean  @default(false)
+  productName     String?
+  productImage    String?
+  /** 0..1 */
+  progress        Float    @default(0)
+  nozzle          Int      @default(0)
+  bed             Int      @default(0)
+  currentFilename String?
+  /** Kalan saniye (varsa). */
+  etaSec          Int?
+  updatedAt       DateTime @updatedAt
+}
+
+/**
+ * Telefondan (ya da başka cihazdan) gönderilen baskı komutu. Masaüstü relay'i
+ * bekleyen komutları işler (LAN'da yazıcıya uygular) ve sonucu yazar.
+ */
+model PrintCommand {
+  id              String    @id @default(cuid())
+  printerConfigId String
+  /** start | pause | resume | cancel */
+  action          String
+  /** start için: basılacak model dosyası (ProductModelFile.id). */
+  modelFileId     String?
+  /** pending | done | error */
+  status          String    @default("pending")
+  error           String?
+  /** Komutu gönderen ("mobile" vb.). */
+  source          String?
+  createdAt       DateTime  @default(now())
+  processedAt     DateTime?
+
+  @@index([status])
+}
