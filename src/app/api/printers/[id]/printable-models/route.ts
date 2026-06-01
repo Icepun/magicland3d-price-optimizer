@@ -13,7 +13,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const files = await prisma.productModelFile.findMany({
       where: { printerConfigId: id },
       include: { product: { select: { id: true, name: true, imageUrl: true } } },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ productId: "asc" }, { sortOrder: "asc" }],
     });
     return NextResponse.json({
       models: files.map((f) => ({
@@ -21,6 +21,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         productId: f.productId,
         productName: f.product.name,
         imageUrl: f.product.imageUrl,
+        label: f.label,
         originalName: f.originalName,
         sizeBytes: f.sizeBytes,
         gramaj: f.gramaj,

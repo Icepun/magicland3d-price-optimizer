@@ -8,7 +8,7 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "16";
+const CURRENT_SCHEMA_VERSION = "17";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -522,24 +522,30 @@ export function ensureRuntimeSchema(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS "PrintFileProduct_productId_idx" ON "PrintFileProduct"("productId")`
     );
 
-    // Ürün baskı modelleri (v0.16) — ürün+yazıcı başına dilimlenmiş dosya metadata'sı
+    // Ürün baskı modelleri (v0.16) — ürün+yazıcı başına dilimlenmiş dosyalar (v0.17: çoklu parça)
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "ProductModelFile" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "productId" TEXT NOT NULL,
         "printerConfigId" TEXT NOT NULL,
+        "label" TEXT,
         "originalName" TEXT NOT NULL,
         "storedPath" TEXT NOT NULL,
         "fileType" TEXT NOT NULL,
         "sizeBytes" INTEGER NOT NULL DEFAULT 0,
         "gramaj" REAL,
         "estPrintMin" INTEGER,
+        "sortOrder" INTEGER NOT NULL DEFAULT 0,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // v0.17: çoklu parça → eski (product+printer) TEKİL index'ini kaldır + yeni kolonlar
+    await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "ProductModelFile_productId_printerConfigId_key"`);
+    await ensureColumn("ProductModelFile", "label", "TEXT");
+    await ensureColumn("ProductModelFile", "sortOrder", "INTEGER NOT NULL DEFAULT 0");
     await prisma.$executeRawUnsafe(
-      `CREATE UNIQUE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_key" ON "ProductModelFile"("productId", "printerConfigId")`
+      `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_printerConfigId_idx" ON "ProductModelFile"("printerConfigId")`

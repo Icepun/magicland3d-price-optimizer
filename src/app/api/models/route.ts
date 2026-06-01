@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 interface LibFile {
   id: string;
   printerConfigId: string;
+  label: string | null;
   originalName: string;
   sizeBytes: number;
   gramaj: number | null;
@@ -25,7 +26,7 @@ export async function GET() {
   const [files, printers] = await Promise.all([
     prisma.productModelFile.findMany({
       include: { product: { select: { id: true, name: true, imageUrl: true } } },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     prisma.printerConfig.findMany({
       where: { enabled: true },
@@ -44,6 +45,7 @@ export async function GET() {
     row.files.push({
       id: f.id,
       printerConfigId: f.printerConfigId,
+      label: f.label,
       originalName: f.originalName,
       sizeBytes: f.sizeBytes,
       gramaj: f.gramaj,

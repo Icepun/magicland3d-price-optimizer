@@ -346,6 +346,8 @@ model ProductModelFile {
   id              String   @id @default(cuid())
   productId       String
   printerConfigId String
+  /** Parça adı (örn. "Gövde", "Kapak"). Bir ürün+yazıcı için birden çok parça olabilir. */
+  label           String?
   /** Kullanıcının orijinal dosya adı (yazıcıya bu adla yüklenir). */
   originalName    String
   /** Diskteki tam yol (userData/models/...). */
@@ -357,11 +359,13 @@ model ProductModelFile {
   gramaj          Float?
   /** Tahmini baskı süresi (dakika, opsiyonel). */
   estPrintMin     Int?
+  /** Parça sıralaması (aynı ürün+yazıcı içinde). */
+  sortOrder       Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  @@unique([productId, printerConfigId])
   @@index([printerConfigId])
+  @@index([productId, printerConfigId])
 }

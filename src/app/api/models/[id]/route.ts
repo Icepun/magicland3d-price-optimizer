@@ -6,6 +6,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 
 const PatchSchema = z.object({
+  label: z.string().trim().max(80).nullable().optional(),
   gramaj: z.coerce.number().min(0).nullable().optional(),
   estPrintMin: z.coerce.number().int().min(0).nullable().optional(),
 });

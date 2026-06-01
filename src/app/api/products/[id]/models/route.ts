@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
@@ -16,7 +17,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const { id } = await params;
     const files = await prisma.productModelFile.findMany({
       where: { productId: id },
-      orderBy: { createdAt: "asc" },
+      orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     });
     return NextResponse.json(files);
   } catch (error) {
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const form = await req.formData();
     const file = form.get("file");
     const printerConfigId = String(form.get("printerConfigId") || "");
+    const labelRaw = form.get("label");
     const gramajRaw = form.get("gramaj");
     const estRaw = form.get("estPrintMin");
 
@@ -45,24 +47,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const buf = Buffer.from(await file.arrayBuffer());
     const dir = getModelsDir();
 
-    // Aynı ürün+yazıcı için eski dosya varsa diskten temizle
-    const existing = await prisma.productModelFile.findUnique({
-      where: { productId_printerConfigId: { productId: id, printerConfigId } },
-    });
-    if (existing?.storedPath) {
-      try { fs.unlinkSync(existing.storedPath); } catch { /* yoksa boşver */ }
-    }
-
-    const storedPath = path.join(dir, `${id}__${printerConfigId}.${ext}`);
+    // Her yükleme YENİ bir parça → benzersiz dosya adı (üzerine yazma yok)
+    const storedPath = path.join(dir, `${crypto.randomUUID()}.${ext}`);
     fs.writeFileSync(storedPath, buf);
 
+    const label = labelRaw != null && String(labelRaw).trim() !== "" ? String(labelRaw).trim() : null;
     const gramaj = gramajRaw != null && String(gramajRaw).trim() !== "" ? Number(gramajRaw) : null;
     const estPrintMin = estRaw != null && String(estRaw).trim() !== "" ? Math.round(Number(estRaw)) : null;
+    const sortOrder = await prisma.productModelFile.count({ where: { productId: id, printerConfigId } });
 
-    const saved = await prisma.productModelFile.upsert({
-      where: { productId_printerConfigId: { productId: id, printerConfigId } },
-      create: { productId: id, printerConfigId, originalName: file.name, storedPath, fileType: ext, sizeBytes: buf.length, gramaj, estPrintMin },
-      update: { originalName: file.name, storedPath, fileType: ext, sizeBytes: buf.length, gramaj, estPrintMin },
+    const saved = await prisma.productModelFile.create({
+      data: { productId: id, printerConfigId, label, originalName: file.name, storedPath, fileType: ext, sizeBytes: buf.length, gramaj, estPrintMin, sortOrder },
     });
     return NextResponse.json(saved, { status: 201 });
   } catch (error) {

@@ -758,7 +758,7 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
 
 // ───────────────────────── Baskı başlat (dosya seç) modalı ─────────────────────────
 
-interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
+interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
 
 function StartModal({ target, onClose }: { target: { id: string; name: string }; onClose: () => void }) {
   const qc = useQueryClient();
@@ -812,7 +812,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string };
                   {m.imageUrl ? <img src={m.imageUrl} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm truncate">{m.productName}</p>
+                  <p className="text-sm truncate">{m.productName}{m.label ? ` — ${m.label}` : ""}</p>
                   <p className="text-[10px] text-muted-foreground font-mono truncate">{m.originalName}</p>
                 </div>
                 <Play className="h-4 w-4 text-primary shrink-0" />
