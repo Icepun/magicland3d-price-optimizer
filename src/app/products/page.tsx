@@ -448,8 +448,13 @@ export default function ProductsPage() {
         : `${formatCurrency(priceMin)} – ${formatCurrency(priceMax)}`
       : null;
     return (
-      <TableRow key={row.key} className="bg-muted/25 hover:bg-muted/40 border-y border-border/60">
-        <TableCell className="py-2">
+      <TableRow
+        key={row.key}
+        onClick={() => toggleGroup(row.groupId)}
+        title={expanded ? "Varyantları gizle" : "Varyantları aç"}
+        className="bg-muted/25 hover:bg-muted/40 border-y border-border/60 cursor-pointer"
+      >
+        <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={allSelected}
             onCheckedChange={(v) =>
@@ -462,19 +467,19 @@ export default function ProductsPage() {
           />
         </TableCell>
         <TableCell className="py-2 pr-0">
-          <button onClick={() => toggleGroup(row.groupId)} className="relative block" title={expanded ? "Gizle" : "Aç"}>
+          <span className="relative block w-fit">
             <ProductImage src={firstImg} name={row.groupName} />
             <span className="absolute -bottom-1 -right-1 rounded bg-primary text-primary-foreground p-0.5 leading-none">
               <Layers className="h-2.5 w-2.5" />
             </span>
-          </button>
+          </span>
         </TableCell>
         <TableCell className="max-w-0">
-          <button onClick={() => toggleGroup(row.groupId)} className="flex items-center gap-1.5 w-full text-left">
+          <div className="flex items-center gap-1.5 w-full">
             <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
             <span className="font-semibold text-sm truncate">{row.groupName}</span>
             <Badge variant="secondary" className="shrink-0 tabular-nums">{row.members.length} varyant</Badge>
-          </button>
+          </div>
           <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
             {labels}
             {priceText && <span className="opacity-80"> · {priceText}</span>}
@@ -486,11 +491,8 @@ export default function ProductsPage() {
         <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
         <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
         <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell>
-          <Button variant="ghost" size="sm" className="h-7 text-xs px-2 gap-1" onClick={() => toggleGroup(row.groupId)}>
-            {expanded ? "Gizle" : "Aç"}
-          </Button>
-        </TableCell>
+        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell className="w-[80px]" />
       </TableRow>
     );
   };
