@@ -19,6 +19,7 @@
 import mqtt, { type MqttClient } from "mqtt";
 import { Client as FtpClient, enterPassiveModeIPv4 } from "basic-ftp";
 import { Readable } from "node:stream";
+import crypto from "node:crypto";
 
 export interface BambuStatus {
   online: boolean;
@@ -32,6 +33,8 @@ export interface BambuStatus {
   bed: number;
   bedTarget: number;
   filename: string | null;
+  printError: number | null; // print.print_error (0 = sorun yok)
+  hmsCount: number; // print.hms[] uzunluğu (aktif uyarı sayısı)
 }
 
 interface Conn {
@@ -110,6 +113,7 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     return {
       online: false, gcodeState: null, percent: 0, remainingSec: null,
       layerNum: null, totalLayerNum: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0, filename: null,
+      printError: null, hmsCount: 0,
     };
   }
 
@@ -126,6 +130,8 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     bed: Math.round(p.bed_temper ?? 0),
     bedTarget: Math.round(p.bed_target_temper ?? 0),
     filename: p.subtask_name || p.gcode_file || null,
+    printError: typeof p.print_error === "number" ? p.print_error : null,
+    hmsCount: Array.isArray(p.hms) ? p.hms.length : 0,
   };
 }
 
@@ -182,6 +188,25 @@ function controlHostV4(addr: unknown): string | null {
   return m ? m[1] : null;
 }
 
+/** Türkçe/özel karakterleri temizleyip güvenli ASCII uzak dosya adı üretir.
+ *  ".gcode.3mf" → ".3mf". stem = yazıcının subtask_name olarak raporladığı ad (ürün eşleştirme anahtarı). */
+const TR_MAP: Record<string, string> = { "ç": "c", "Ç": "C", "ğ": "g", "Ğ": "G", "ı": "i", "İ": "I", "ö": "o", "Ö": "O", "ş": "s", "Ş": "S", "ü": "u", "Ü": "U" };
+function safeRemoteName(original: string): { remote: string; stem: string } {
+  const low = original.toLowerCase();
+  const ext = low.endsWith(".gcode.3mf") || low.endsWith(".3mf") ? ".3mf"
+    : low.endsWith(".gcode") ? ".gcode"
+    : low.endsWith(".gco") ? ".gco"
+    : low.endsWith(".g") ? ".g"
+    : (original.match(/\.[^.]+$/)?.[0]?.toLowerCase() ?? "");
+  const cutLen = low.endsWith(".gcode.3mf") ? ".gcode.3mf".length : ext.length;
+  let stem = original.slice(0, original.length - cutLen);
+  stem = stem.replace(/[çÇğĞıİöÖşŞüÜ]/g, (ch) => TR_MAP[ch] ?? ch);
+  stem = stem.normalize("NFKD").replace(/[^\x20-\x7E]/g, "");
+  stem = stem.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/_+/g, "_").replace(/^[_.-]+|[_.-]+$/g, "");
+  if (!stem) stem = "print";
+  return { remote: `${stem}${ext}`, stem };
+}
+
 /**
  * Bambu SD kartına FTP (implicit TLS 990, bblp + access code) ile dosya yükle.
  *
@@ -200,7 +225,7 @@ async function bambuFtpUpload(
   remoteName: string,
   onProgress?: (pct: number) => void
 ): Promise<void> {
-  const ftp = new FtpClient(30000);
+  const ftp = new FtpClient(45000);
   ftp.ftp.verbose = false;
   const ctx = ftp.ftp as unknown as {
     request: (cmd: string) => Promise<{ code: number; message: string }>;
@@ -238,16 +263,44 @@ async function bambuFtpUpload(
     ftp.trackProgress((info) => { if (total > 0) onProgress(Math.min(99, Math.round((info.bytesOverall / total) * 100))); });
   }
 
+  let stage = "connect";
   try {
     await ftp.access({
       host, port: 990, user: "bblp", password: accessCode,
-      secure: "implicit", secureOptions: { rejectUnauthorized: false },
+      secure: "implicit",
+      // TLS 1.2'ye sabitle → vsftpd'nin zorunlu kıldığı veri-kanalı TLS oturum yeniden kullanımı
+      // çalışır. (Node 22 default TLS 1.3'te oturum bileti async geldiği için reuse başarısız olup
+      // veri bağlantısı reddediliyordu → "Timeout (control socket)".)
+      secureOptions: { rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host },
     });
+    // Veri kanalını büyük dosyadan ÖNCE kanıtla (kök listesi).
+    stage = "list";
+    const before = await ftp.list();
+    trace.push(`LIST»${before.length}`);
+    stage = "upload";
     await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
+    // Yüklemeyi DOĞRULA: önce SIZE, olmazsa LIST'te ada bak.
+    stage = "verify";
+    let okSize = -1;
+    try { okSize = await ftp.size(remoteName); trace.push(`SIZE»${okSize}`); } catch { /* SIZE yok olabilir */ }
+    let verified = okSize === total;
+    if (!verified) {
+      const after = await ftp.list();
+      verified = after.some((f) => f.name === remoteName && (f.size === total || f.size <= 0 || total <= 0));
+      trace.push(`VERIFY»${verified}`);
+    }
+    if (!verified) throw new Error("VERIFY_FAILED");
     onProgress?.(100);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new Error(`FTP yükleme başarısız (${msg}) · iz: ${trace.join(" ")}`);
+    const raw = e instanceof Error ? e.message : String(e);
+    // Tam teknik döküm SADECE sunucu konsoluna (trace'te PASS*** maskeli → access code asla loglanmaz).
+    console.error(`[bambu-ftp] ${host} ${stage} basarisiz: ${raw} · iz: ${trace.join(" ")}`);
+    const userMsg = stage === "connect"
+      ? "Yazıcıya FTP bağlantısı kurulamadı (TLS / port 990)."
+      : raw === "VERIFY_FAILED"
+        ? "Yükleme doğrulanamadı — dosya yazıcıya tam ulaşmadı."
+        : "Dosya yazıcıya yüklenemedi (veri bağlantısı).";
+    throw new Error(`${userMsg} · iz: ${trace.join(" ")}`);
   } finally {
     try { ftp.trackProgress(); } catch { /* tracker'ı durdur */ }
     ftp.close();
@@ -255,42 +308,57 @@ async function bambuFtpUpload(
 }
 
 /**
- * Bambu'da baskı başlat: dosyayı SD'ye FTP ile yükle (implicit TLS 990) + MQTT ile başlat.
- * .3mf → project_file (plate + ams_mapping); .gcode → gcode_file (ham).
- * NOT: project_file param/url/ams_mapping kombinasyonu firmware'e duyarlı — ilk testte oturtulacak.
+ * Bambu'da baskı başlat: PREFLIGHT (durum/IDLE) → güvenli ad → FTPS yükle+doğrula → MQTT.
+ *  .3mf → project_file (plate + ams_mapping, url ftp:///<ad>); .gcode → gcode_file (ham, /<ad>).
+ * A1'de SD yok → dosya FTP kökünde (dahili eMMC), url ftp şeması. bed_leveling tek-L (firmware böyle bekliyor).
+ * Döndürür { matchName }: yazıcının subtask_name olarak raporlayacağı ad (ürün eşleştirme anahtarı).
  */
 export async function bambuUploadAndPrint(
   host: string,
   accessCode: string,
   serial: string,
   fileBuf: Buffer,
-  remoteName: string,
+  originalName: string,
   opts: { amsMapping?: number[]; useAms?: boolean; onProgress?: (pct: number) => void } = {}
-): Promise<void> {
+): Promise<{ matchName: string }> {
+  // PREFLIGHT: yazıcı çevrimiçi + boşta mı? (UI butonu gizlese de 2. istemci / bayat poll'a karşı sunucu kontrolü)
+  const pre = await getBambuStatus(host, accessCode, serial);
+  if (!pre.online) throw new Error("Yazıcıya bağlanılamadı (MQTT). IP ve access code'u kontrol edin.");
+  const preState = mapBambuState(pre.gcodeState);
+  if (preState === "printing" || preState === "paused") {
+    throw new Error("Yazıcı şu an meşgul (baskı sürüyor veya duraklatılmış).");
+  }
+
+  const isGcode = /\.(gcode|gco|g)$/i.test(originalName) && !/\.3mf$/i.test(originalName);
+  const { remote: remoteName, stem } = safeRemoteName(originalName);
+
   await bambuFtpUpload(host, accessCode, fileBuf, remoteName, opts.onProgress);
 
   const conn = ensureConn(host, accessCode, serial);
-  const isGcode = /\.(gcode|gco|g)$/i.test(remoteName);
-  const subtask = remoteName.replace(/\.[^.]+$/, "");
+  const fileMd5 = crypto.createHash("md5").update(fileBuf).digest("hex");
   const payload: Record<string, unknown> = isGcode
-    ? { print: { sequence_id: "0", command: "gcode_file", param: `/mnt/sdcard/${remoteName}` } }
+    ? { print: { sequence_id: "0", command: "gcode_file", param: `/${remoteName}` } }
     : {
         print: {
           sequence_id: "0",
           command: "project_file",
           param: "Metadata/plate_1.gcode",
           project_id: "0", profile_id: "0", task_id: "0", subtask_id: "0",
-          subtask_name: subtask,
+          subtask_name: stem,
           file: "",
-          url: `file:///mnt/sdcard/${remoteName}`,
-          md5: "",
-          timelapse: false, bed_type: "auto", bed_levelling: true,
-          flow_cali: false, vibration_cali: true, layer_inspect: false,
+          url: `ftp:///${remoteName}`,
+          md5: fileMd5,
+          timelapse: false, bed_type: "auto", bed_leveling: true,
+          flow_cali: true, vibration_cali: true, layer_inspect: false,
           ams_mapping: opts.amsMapping ?? [0],
           use_ams: opts.useAms ?? false,
         },
       };
   conn.client.publish(`device/${serial}/request`, JSON.stringify(payload), { qos: 1 });
+  // A1/P1 seyrek (delta) raporlar → durum geçişini görebilmek için tam durum iste.
+  conn.client.publish(`device/${serial}/request`, JSON.stringify({ pushing: { sequence_id: "0", command: "pushall" } }), { qos: 0 });
+
+  return { matchName: stem };
 }
 
 /** gcode_state → panel durumu. */

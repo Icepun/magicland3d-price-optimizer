@@ -778,10 +778,15 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
 interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
 interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 
-type PrintProg = { stage: "upload" | "start" | "done"; pct: number | null };
+type PrintProg = { stage: "status" | "upload" | "start" | "confirm" | "done"; pct: number | null };
 
 function PrintProgress({ p }: { p: PrintProg }) {
-  const label = p.stage === "start" ? "Baskı başlatılıyor…" : p.stage === "done" ? "Başlatıldı 🎉" : "Yazıcıya yükleniyor…";
+  const label =
+    p.stage === "status" ? "Yazıcı kontrol ediliyor…"
+      : p.stage === "start" ? "Baskı komutu gönderiliyor…"
+        : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
+          : p.stage === "done" ? "Başlatıldı 🎉"
+            : "Yazıcıya yükleniyor…";
   const showPct = p.stage === "upload" && p.pct != null;
   return (
     <div className="space-y-1.5 rounded-lg border bg-muted/30 p-2.5">
@@ -847,7 +852,8 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
           try { ev = JSON.parse(line); } catch { continue; }
           if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
           else if (ev.stage === "done") ok = true;
-          else setProgress({ stage: ev.stage === "start" ? "start" : "upload", pct: ev.pct ?? null });
+          else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") setProgress({ stage: ev.stage, pct: null });
+          else setProgress({ stage: "upload", pct: ev.pct ?? null });
         }
       }
       if (errMsg) throw new Error(errMsg);

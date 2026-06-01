@@ -187,3 +187,21 @@ export function readModelColors(filePath: string): ModelColorInfo {
   } catch { /* none döner */ }
   return { colors: [], source: "none", fileKind: is3mf ? "3mf" : isGcode ? "gcode" : "other" };
 }
+
+/**
+ * Dosya gerçekten DİLİMLENMİŞ bir Bambu/Orca 3MF mi? (içinde Metadata/plate_*.gcode var mı)
+ * STL/OBJ veya unsliced 3MF → false. .gcode dosyaları zaten dilimli sayılır (true).
+ */
+export function is3mfSliced(filePath: string): boolean {
+  const low = filePath.toLowerCase();
+  if (/\.(gcode|gco|g)$/.test(low) && !low.endsWith(".3mf")) return true; // ham gcode = dilimli
+  if (!low.endsWith(".3mf")) return false; // .stl/.obj vb. dilimli değil
+  try {
+    const files = unzipSync(new Uint8Array(fs.readFileSync(filePath)), {
+      filter: (f) => /\.gcode$/i.test(f.name),
+    });
+    return Object.keys(files).some((k) => /Metadata\/.*plate.*\.gcode$/i.test(k) || /\.gcode$/i.test(k));
+  } catch {
+    return false;
+  }
+}
