@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Square, Pencil, WifiOff,
-  Check, X, Search, Package, Link2,
+  Check, X, Search, Package, Link2, Minus,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -867,84 +867,120 @@ function SlotStep({
     queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
   });
   const slots = useMemo(() => data?.slots ?? [], [data]);
+  // Slot okunamazsa numarayla yine de eşlemek için 4 jenerik slot
+  const pickSlots: PrinterSlot[] = slots.length
+    ? slots
+    : [0, 1, 2, 3].map((n) => ({ slot: n, color: "#9ca3af", type: "", empty: false }));
   const [useAms, setUseAms] = useState(true);
-  const [slotSel, setSlotSel] = useState<number | null>(null);
+  const [count, setCount] = useState(1);
+  const [mapping, setMapping] = useState<number[]>([]);
 
   useEffect(() => {
-    if (slotSel === null && slots.length) {
-      const f = slots.find((s) => !s.empty) ?? slots[0];
-      setSlotSel(f.slot);
-    }
-  }, [slots, slotSel]);
+    if (mapping.length === 0) setMapping([pickSlots[0]?.slot ?? 0]);
+  }, [mapping.length, pickSlots]);
+
+  const setColorCount = (n: number) => {
+    const c = Math.max(1, Math.min(4, n));
+    setCount(c);
+    setMapping((prev) => {
+      const next = [...prev];
+      while (next.length < c) {
+        const used = new Set(next);
+        const free = pickSlots.find((s) => !used.has(s.slot)) ?? pickSlots[next.length % pickSlots.length];
+        next.push(free?.slot ?? next.length);
+      }
+      return next.slice(0, c);
+    });
+  };
+  const assign = (i: number, slot: number) => setMapping((prev) => { const n = [...prev]; n[i] = slot; return n; });
 
   const start = () => {
-    if (isBambu) {
-      if (useAms && slotSel != null) onConfirm({ useAms: true, amsMapping: [-1, -1, -1, -1, slotSel] });
-      else onConfirm({ useAms: false });
-    } else {
-      onConfirm({});
-    }
+    const map = mapping.slice(0, count);
+    if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map } : { useAms: false });
+    else onConfirm({ amsMapping: map });
   };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk / Slot — {model.productName}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            {isBambu
-              ? "AMS'teki yüklü renkler. Tek renkli baskıda slotu seç; çok renkliyi ilk denemede birlikte oturtacağız."
-              : "Yüklü CFS renkleri (doğrulama). Renk-slot eşlemesi dilimlemede yapıldı; baskı ona göre başlar."}
+            Baskının her rengini bir slota ata. {isBambu ? "Bambu bunu AMS eşlemesi olarak uygular." : "Snapmaker'da renk sırası dilimlemeden gelir; bu eşleme doğrulama içindir."}
           </p>
         </DialogHeader>
 
         {isLoading ? (
           <div className="py-6 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
-        ) : slots.length === 0 ? (
-          <p className="text-xs text-muted-foreground py-3">
-            {data?.error
-              ? `Slot bilgisi alınamadı: ${data.error}`
-              : isBambu ? "Yüklü renk okunamadı (AMS bağlı mı?)." : "Yüklü renk okunamadı — dilimlemedeki renklerle basılır."}
-          </p>
         ) : (
-          <div className="space-y-1.5 py-1 max-h-72 overflow-y-auto">
-            {slots.map((s) => {
-              const selectable = isBambu && useAms && !s.empty;
-              const selected = isBambu && useAms && slotSel === s.slot;
-              return (
-                <button
-                  key={s.slot}
-                  disabled={!selectable}
-                  onClick={() => selectable && setSlotSel(s.slot)}
-                  className={cn(
-                    "w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors",
-                    selected ? "border-primary bg-primary/10" : "border-border",
-                    selectable ? "hover:bg-muted cursor-pointer" : "cursor-default"
-                  )}
-                >
-                  <span className="flex items-center justify-center h-7 w-7 rounded bg-muted text-xs font-bold tabular-nums shrink-0">{s.slot + 1}</span>
-                  <span className="h-6 w-6 rounded-full border border-black/10 shrink-0" style={{ background: s.color }} />
-                  <span className="flex-1 min-w-0 text-sm truncate">{s.empty ? "Boş" : s.type || "Filament"}</span>
-                  {selected && <Check className="h-4 w-4 text-primary shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-        )}
+          <div className="space-y-3">
+            {slots.length > 0 ? (
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-1.5">Yüklü slotlar</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {slots.map((s) => (
+                    <span key={s.slot} className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
+                      <span className="font-bold tabular-nums">{s.slot + 1}</span>
+                      <span className="h-3.5 w-3.5 rounded-full border border-black/10" style={{ background: s.color }} />
+                      {s.empty ? "boş" : s.type || "—"}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                {data?.error ? `Slotlar okunamadı: ${data.error}. ` : "Yüklü renk okunamadı. "}Numarayla yine de eşleyebilirsin.
+              </p>
+            )}
 
-        {isBambu && (
-          <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
-            <span className={cn("h-4 w-4 rounded border flex items-center justify-center", useAms ? "bg-primary border-primary" : "border-border")}>
-              {useAms && <Check className="h-3 w-3 text-primary-foreground" />}
-            </span>
-            AMS kullan (kapalıysa harici makaradan basar)
-          </button>
+            <div className="flex items-center gap-2">
+              <span className="text-sm">Baskı renk sayısı</span>
+              <div className="flex items-center gap-1 ml-auto">
+                <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setColorCount(count - 1)} disabled={count <= 1}><Minus className="h-3.5 w-3.5" /></Button>
+                <span className="w-6 text-center font-bold tabular-nums">{count}</span>
+                <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setColorCount(count + 1)} disabled={count >= 4}><Plus className="h-3.5 w-3.5" /></Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              {Array.from({ length: count }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground w-16 shrink-0">Renk {i + 1}</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {pickSlots.map((s) => {
+                      const sel = mapping[i] === s.slot;
+                      return (
+                        <button
+                          key={s.slot}
+                          onClick={() => assign(i, s.slot)}
+                          className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10" : "border-border hover:bg-muted")}
+                        >
+                          <span className="font-bold tabular-nums">{s.slot + 1}</span>
+                          <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: s.color }} />
+                          {sel && <Check className="h-3 w-3 text-primary" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {isBambu && (
+              <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
+                <span className={cn("h-4 w-4 rounded border flex items-center justify-center", useAms ? "bg-primary border-primary" : "border-border")}>
+                  {useAms && <Check className="h-3 w-3 text-primary-foreground" />}
+                </span>
+                AMS kullan (kapalıysa harici makaradan basar)
+              </button>
+            )}
+          </div>
         )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack}>Geri</Button>
           <Button disabled={printing} onClick={start}>
-            {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas</>}
+            {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({count} renk)</>}
           </Button>
         </DialogFooter>
       </DialogContent>

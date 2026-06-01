@@ -221,7 +221,7 @@ export async function bambuUploadAndPrint(
           md5: "",
           timelapse: false, bed_type: "auto", bed_levelling: true,
           flow_cali: false, vibration_cali: true, layer_inspect: false,
-          ams_mapping: opts.amsMapping ?? [-1, -1, -1, -1, 0],
+          ams_mapping: opts.amsMapping ?? [0],
           use_ams: opts.useAms ?? false,
         },
       };
