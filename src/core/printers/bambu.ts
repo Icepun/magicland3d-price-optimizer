@@ -17,6 +17,8 @@
  * "report" push'lar; route sadece bellekteki son durumu okur.
  */
 import mqtt, { type MqttClient } from "mqtt";
+import { Client as FtpClient } from "basic-ftp";
+import { Readable } from "node:stream";
 
 export interface BambuStatus {
   online: boolean;
@@ -135,6 +137,95 @@ export function bambuControl(host: string, accessCode: string, serial: string, a
     JSON.stringify({ print: { sequence_id: "0", command, param: "" } }),
     { qos: 1 }
   );
+}
+
+export interface BambuSlot { slot: number; color: string; type: string; remain: number | null; empty: boolean }
+
+function hexFromBambu(c?: unknown): string {
+  if (typeof c === "string" && c.replace(/[^0-9a-fA-F]/g, "").length >= 6) return `#${c.slice(0, 6)}`;
+  return "#9ca3af";
+}
+
+/** AMS slotları (numara + renk + materyal) — baskı öncesi yüklü filamentleri göstermek için. */
+export async function getBambuAmsSlots(host: string, accessCode: string, serial: string): Promise<BambuSlot[]> {
+  const conn = ensureConn(host, accessCode, serial);
+  if (!conn.print?.ams) {
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline && !conn.print?.ams) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+  const units = conn.print?.ams?.ams;
+  if (!Array.isArray(units)) return [];
+  const slots: BambuSlot[] = [];
+  for (const unit of units) {
+    const trays = Array.isArray(unit?.tray) ? unit.tray : [];
+    for (const t of trays) {
+      const idNum = Number(t?.id);
+      const type = typeof t?.tray_type === "string" ? t.tray_type : "";
+      slots.push({
+        slot: Number.isFinite(idNum) ? idNum : slots.length,
+        color: hexFromBambu(t?.tray_color),
+        type,
+        remain: typeof t?.remain === "number" ? t.remain : null,
+        empty: !type,
+      });
+    }
+  }
+  return slots;
+}
+
+/**
+ * Bambu'da baskı başlat: dosyayı SD'ye FTP ile yükle (implicit TLS 990) + MQTT ile başlat.
+ * .3mf → project_file (plate + ams_mapping); .gcode → gcode_file (ham).
+ * NOT: project_file param/url/ams_mapping kombinasyonu firmware'e duyarlı — ilk testte oturtulacak.
+ */
+export async function bambuUploadAndPrint(
+  host: string,
+  accessCode: string,
+  serial: string,
+  fileBuf: Buffer,
+  remoteName: string,
+  opts: { amsMapping?: number[]; useAms?: boolean } = {}
+): Promise<void> {
+  const ftp = new FtpClient(20000);
+  ftp.ftp.verbose = false;
+  try {
+    await ftp.access({
+      host,
+      port: 990,
+      user: "bblp",
+      password: accessCode,
+      secure: "implicit",
+      secureOptions: { rejectUnauthorized: false },
+    });
+    await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
+  } finally {
+    ftp.close();
+  }
+
+  const conn = ensureConn(host, accessCode, serial);
+  const isGcode = /\.(gcode|gco|g)$/i.test(remoteName);
+  const subtask = remoteName.replace(/\.[^.]+$/, "");
+  const payload: Record<string, unknown> = isGcode
+    ? { print: { sequence_id: "0", command: "gcode_file", param: `/mnt/sdcard/${remoteName}` } }
+    : {
+        print: {
+          sequence_id: "0",
+          command: "project_file",
+          param: "Metadata/plate_1.gcode",
+          project_id: "0", profile_id: "0", task_id: "0", subtask_id: "0",
+          subtask_name: subtask,
+          file: "",
+          url: `file:///mnt/sdcard/${remoteName}`,
+          md5: "",
+          timelapse: false, bed_type: "auto", bed_levelling: true,
+          flow_cali: false, vibration_cali: true, layer_inspect: false,
+          ams_mapping: opts.amsMapping ?? [-1, -1, -1, -1, 0],
+          use_ams: opts.useAms ?? false,
+        },
+      };
+  conn.client.publish(`device/${serial}/request`, JSON.stringify(payload), { qos: 1 });
 }
 
 /** gcode_state → panel durumu. */

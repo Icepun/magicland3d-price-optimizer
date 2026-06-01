@@ -209,6 +209,48 @@ export async function moonrakerFiles(host: string, port: number): Promise<Moonra
 }
 
 /** Kaydetmeden önce bağlantı testi — çalışan portu da döndürür (UI port alanını günceller). */
+function normalizeHex(c: unknown): string {
+  if (typeof c === "string") {
+    const h = c.startsWith("#") ? c.slice(1) : c;
+    if (/^[0-9a-fA-F]{6,8}$/.test(h)) return `#${h.slice(0, 6)}`;
+  }
+  return "#9ca3af";
+}
+
+/**
+ * Snapmaker U1 (CFS) renkli slotları — DEFANSİF. Moonraker objelerini keşfedip
+ * filament/cfs/rfid içerenleri sorgular, renk/materyal alanlarını esnek okur.
+ * Çözemezse [] döner (UI "renkler okunamadı" der, baskı yine de başlar — gcode'da gömülü).
+ */
+export async function fetchMoonrakerSlots(host: string, port: number): Promise<{ slot: number; color: string; type: string }[]> {
+  try {
+    const listRes = await mfetch(`${moonrakerBase(host, port)}/printer/objects/list`, undefined, 4000);
+    if (!listRes.ok) return [];
+    const objs: string[] = unwrap(await listRes.json())?.objects ?? [];
+    const cand = objs.filter((o) => /filament|cfs|rfid|spool|tray|ams/i.test(o)).slice(0, 16);
+    if (!cand.length) return [];
+    const q = cand.map((o) => `${encodeURIComponent(o)}`).join("&");
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 4000);
+    if (!res.ok) return [];
+    const status = unwrap(await res.json())?.status ?? {};
+    const slots: { slot: number; color: string; type: string }[] = [];
+    let i = 0;
+    for (const val of Object.values(status)) {
+      const v = (val ?? {}) as Record<string, unknown>;
+      const rfid = (v.rfid ?? {}) as Record<string, unknown>;
+      const color = v.color ?? v.colour ?? v.hex ?? v.rgb ?? rfid.color ?? rfid.colour;
+      const type = v.material ?? v.type ?? v.filament_type ?? rfid.material;
+      if (color != null || type != null) {
+        slots.push({ slot: i, color: normalizeHex(color), type: typeof type === "string" ? type : "" });
+      }
+      i++;
+    }
+    return slots;
+  } catch {
+    return [];
+  }
+}
+
 export async function testMoonraker(host: string, port: number): Promise<{ ok: boolean; hostname?: string; state?: string; port?: number; error?: string }> {
   let lastErr = "";
   for (const p of candidatePorts(port)) {

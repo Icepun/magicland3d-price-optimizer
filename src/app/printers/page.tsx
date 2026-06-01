@@ -102,7 +102,7 @@ export default function PrintersPage() {
 
   const [manageOpen, setManageOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
-  const [startTarget, setStartTarget] = useState<{ id: string; name: string } | null>(null);
+  const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string } | null>(null);
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
@@ -203,7 +203,7 @@ export default function PrintersPage() {
               onPause={() => action.mutate({ id: p.id, action: "pause" })}
               onResume={() => action.mutate({ id: p.id, action: "resume" })}
               onCancel={() => setCancelTarget({ id: p.id, name: p.name })}
-              onStart={() => setStartTarget({ id: p.id, name: p.name })}
+              onStart={() => setStartTarget({ id: p.id, name: p.name, brand: p.brand })}
               onMatch={() => p.currentFilename && setMatchTarget({ id: p.id, filename: p.currentFilename })}
             />
           ))}
@@ -433,7 +433,7 @@ function PrinterCard({
                   <Square className="h-3.5 w-3.5" /> İptal
                 </Button>
               )}
-              {printer.type === "moonraker" && (status === "idle" || status === "finished" || status === "error") && (
+              {(printer.type === "moonraker" || printer.type === "bambu") && (status === "idle" || status === "finished" || status === "error") && (
                 <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onStart}>
                   <Play className="h-3.5 w-3.5" /> Baskı Başlat
                 </Button>
@@ -759,23 +759,26 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
 // ───────────────────────── Baskı başlat (dosya seç) modalı ─────────────────────────
 
 interface PrintableModel { fileId: string; productId: string; productName: string; imageUrl: string | null; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null }
+interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 
-function StartModal({ target, onClose }: { target: { id: string; name: string }; onClose: () => void }) {
+function StartModal({ target, onClose }: { target: { id: string; name: string; brand: string }; onClose: () => void }) {
   const qc = useQueryClient();
+  const multiColor = target.brand === "bambu" || target.brand === "snapmaker";
+  const isBambu = target.brand === "bambu";
   const { data, isLoading, isError, error } = useQuery<{ models: PrintableModel[] }>({
     queryKey: ["printable-models", target.id],
     queryFn: () => fetchJson<{ models: PrintableModel[] }>(`/api/printers/${target.id}/printable-models`),
   });
   const [q, setQ] = useState("");
-
-  const models = useMemo(() => {
-    const all = data?.models ?? [];
-    const query = q.trim().toLocaleLowerCase("tr-TR");
-    return all.filter((m) => !query || m.productName.toLocaleLowerCase("tr-TR").includes(query)).slice(0, 100);
-  }, [data, q]);
+  const [picked, setPicked] = useState<PrintableModel | null>(null);
 
   const print = useMutation({
-    mutationFn: (fileId: string) => fetchJson(`/api/models/${fileId}/print`, { method: "POST" }),
+    mutationFn: (v: { fileId: string; amsMapping?: number[]; useAms?: boolean }) =>
+      fetchJson(`/api/models/${v.fileId}/print`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amsMapping: v.amsMapping, useAms: v.useAms }),
+      }),
     onSuccess: () => {
       toast.success("Baskı başlatıldı 🎉");
       onClose();
@@ -784,12 +787,34 @@ function StartModal({ target, onClose }: { target: { id: string; name: string };
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const models = useMemo(() => {
+    const all = data?.models ?? [];
+    const query = q.trim().toLocaleLowerCase("tr-TR");
+    return all.filter((m) => !query || m.productName.toLocaleLowerCase("tr-TR").includes(query)).slice(0, 100);
+  }, [data, q]);
+
+  if (picked) {
+    return (
+      <SlotStep
+        printerId={target.id}
+        model={picked}
+        isBambu={isBambu}
+        printing={print.isPending}
+        onBack={() => setPicked(null)}
+        onClose={onClose}
+        onConfirm={(opts) => print.mutate({ fileId: picked.fileId, ...opts })}
+      />
+    );
+  }
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Baskı Başlat — {target.name}</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-1">Bu yazıcı için eklediğin ürün modellerinden birini seç; dosya yazıcıya yüklenip baskı hemen başlar.</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {multiColor ? "Modeli seç → sonraki adımda renk/slot." : "Modeli seç; dosya yazıcıya yüklenip baskı hemen başlar."}
+          </p>
         </DialogHeader>
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -807,7 +832,12 @@ function StartModal({ target, onClose }: { target: { id: string; name: string };
             </div>
           ) : (
             models.map((m) => (
-              <button key={m.fileId} onClick={() => print.mutate(m.fileId)} disabled={print.isPending} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
+              <button
+                key={m.fileId}
+                onClick={() => (multiColor ? setPicked(m) : print.mutate({ fileId: m.fileId }))}
+                disabled={print.isPending}
+                className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50"
+              >
                 <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
                   {m.imageUrl ? <img src={m.imageUrl} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
                 </div>
@@ -820,6 +850,103 @@ function StartModal({ target, onClose }: { target: { id: string; name: string };
             ))
           )}
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SlotStep({
+  printerId, model, isBambu, printing, onBack, onClose, onConfirm,
+}: {
+  printerId: string; model: PrintableModel; isBambu: boolean; printing: boolean;
+  onBack: () => void; onClose: () => void;
+  onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean }) => void;
+}) {
+  const { data, isLoading } = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
+    queryKey: ["printer-slots", printerId],
+    queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
+  });
+  const slots = useMemo(() => data?.slots ?? [], [data]);
+  const [useAms, setUseAms] = useState(true);
+  const [slotSel, setSlotSel] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (slotSel === null && slots.length) {
+      const f = slots.find((s) => !s.empty) ?? slots[0];
+      setSlotSel(f.slot);
+    }
+  }, [slots, slotSel]);
+
+  const start = () => {
+    if (isBambu) {
+      if (useAms && slotSel != null) onConfirm({ useAms: true, amsMapping: [-1, -1, -1, -1, slotSel] });
+      else onConfirm({ useAms: false });
+    } else {
+      onConfirm({});
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk / Slot — {model.productName}</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            {isBambu
+              ? "AMS'teki yüklü renkler. Tek renkli baskıda slotu seç; çok renkliyi ilk denemede birlikte oturtacağız."
+              : "Yüklü CFS renkleri (doğrulama). Renk-slot eşlemesi dilimlemede yapıldı; baskı ona göre başlar."}
+          </p>
+        </DialogHeader>
+
+        {isLoading ? (
+          <div className="py-6 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
+        ) : slots.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-3">
+            {data?.error
+              ? `Slot bilgisi alınamadı: ${data.error}`
+              : isBambu ? "Yüklü renk okunamadı (AMS bağlı mı?)." : "Yüklü renk okunamadı — dilimlemedeki renklerle basılır."}
+          </p>
+        ) : (
+          <div className="space-y-1.5 py-1 max-h-72 overflow-y-auto">
+            {slots.map((s) => {
+              const selectable = isBambu && useAms && !s.empty;
+              const selected = isBambu && useAms && slotSel === s.slot;
+              return (
+                <button
+                  key={s.slot}
+                  disabled={!selectable}
+                  onClick={() => selectable && setSlotSel(s.slot)}
+                  className={cn(
+                    "w-full flex items-center gap-3 rounded-lg border p-2 text-left transition-colors",
+                    selected ? "border-primary bg-primary/10" : "border-border",
+                    selectable ? "hover:bg-muted cursor-pointer" : "cursor-default"
+                  )}
+                >
+                  <span className="flex items-center justify-center h-7 w-7 rounded bg-muted text-xs font-bold tabular-nums shrink-0">{s.slot + 1}</span>
+                  <span className="h-6 w-6 rounded-full border border-black/10 shrink-0" style={{ background: s.color }} />
+                  <span className="flex-1 min-w-0 text-sm truncate">{s.empty ? "Boş" : s.type || "Filament"}</span>
+                  {selected && <Check className="h-4 w-4 text-primary shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {isBambu && (
+          <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
+            <span className={cn("h-4 w-4 rounded border flex items-center justify-center", useAms ? "bg-primary border-primary" : "border-border")}>
+              {useAms && <Check className="h-3 w-3 text-primary-foreground" />}
+            </span>
+            AMS kullan (kapalıysa harici makaradan basar)
+          </button>
+        )}
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onBack}>Geri</Button>
+          <Button disabled={printing} onClick={start}>
+            {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas</>}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

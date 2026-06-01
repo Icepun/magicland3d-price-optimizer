@@ -24,6 +24,8 @@ const nextConfig: NextConfig = {
     // mqtt (Bambu Lab LAN bağlantısı) — dinamik require + ws/tls içerir, webpack
     // bundle etmesin; runtime'da node_modules'tan require edilsin.
     "mqtt",
+    // basic-ftp (Bambu SD'ye 3MF yükleme) — net/tls; webpack bundle etmesin.
+    "basic-ftp",
   ],
 };
 
