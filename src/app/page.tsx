@@ -332,7 +332,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
             {/* Toplam ciro */}
             <div>
               <p className="text-[11px] text-muted-foreground">Toplam ciro</p>
@@ -467,10 +467,25 @@ export default function DashboardPage() {
       {/* Platform Bazlı Kartlar */}
       <div>
         <h2 className="text-base font-semibold mb-3">Platform Bazlı Özet</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {data.platforms.map((p, i) => (
-            <PlatformCard key={p.platform} stats={p} delay={240 + i * 60} />
-          ))}
+        <div className="space-y-3">
+          {/* Üst: pazaryerleri (Trendyol + Hepsiburada) yan yana */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {data.platforms
+              .filter((p) => p.platform === "trendyol" || p.platform === "hepsiburada")
+              .map((p, i) => (
+                <PlatformCard key={p.platform} stats={p} delay={240 + i * 60} />
+              ))}
+          </div>
+          {/* Alt: Shopify (ana kaynak) ortalı, bir kart genişliğinde */}
+          {data.platforms
+            .filter((p) => p.platform === "shopify")
+            .map((p) => (
+              <div key={p.platform} className="md:flex md:justify-center">
+                <div className="md:w-[calc(50%-0.375rem)]">
+                  <PlatformCard stats={p} delay={360} />
+                </div>
+              </div>
+            ))}
         </div>
       </div>
 
