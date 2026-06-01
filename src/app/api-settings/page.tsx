@@ -652,6 +652,25 @@ function HepsiburadaTab() {
     },
   });
 
+  const sync = useMutation({
+    mutationFn: (mode: "add-new" | "refresh-prices") =>
+      fetchJson<{ linked?: number; unmatched?: number; checked?: number; changed?: number }>(
+        "/api/hepsiburada/sync-products",
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) }
+      ),
+    onSuccess: (d, mode) => {
+      if (mode === "add-new") {
+        toast.success(`Hepsiburada: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} eşleşmemiş havuzda`);
+      } else {
+        toast.success(`Hepsiburada fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
+      }
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <div className="space-y-4">
       <Card>
@@ -693,9 +712,19 @@ function HepsiburadaTab() {
         </CardContent>
       </Card>
 
-      <Button variant="outline" className="w-full" disabled={test.isPending} onClick={() => test.mutate()}>
-        <PlugZap className={`h-4 w-4 mr-2 ${test.isPending ? "animate-spin" : ""}`} />
-        {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+      <div className="grid grid-cols-2 gap-3">
+        <Button variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
+          <PlugZap className={`h-4 w-4 mr-2 ${test.isPending ? "animate-spin" : ""}`} />
+          {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+        </Button>
+        <Button variant="outline" disabled={sync.isPending} onClick={() => sync.mutate("add-new")}>
+          <Plus className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "add-new" ? "animate-spin" : ""}`} />
+          {sync.isPending && sync.variables === "add-new" ? "Ekleniyor…" : "Yeni Ürün Ekle"}
+        </Button>
+      </div>
+      <Button className="w-full" disabled={sync.isPending} onClick={() => sync.mutate("refresh-prices")}>
+        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "refresh-prices" ? "animate-spin" : ""}`} />
+        {sync.isPending && sync.variables === "refresh-prices" ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
       </Button>
 
       {sample !== null && (
@@ -715,9 +744,12 @@ function HepsiburadaTab() {
       )}
 
       <p className="text-[11px] text-muted-foreground">
-        Önce kaydet + <strong>Bağlantıyı Test Et</strong>. Auth doğrulanınca ürün eşleştirme + sipariş
-        senkronu (Trendyol&apos;daki gibi) eklenecek.
+        Önce kaydet + <strong>Bağlantıyı Test Et</strong>. Sonra <strong>Yeni Ürün Ekle</strong> →
+        barkodu eşleşenler bağlanır, kalanlar <strong>Ürünler → &quot;Ürün Seç&quot;</strong> ile manuel
+        eşleştirilir. <strong>Fiyatları Güncelle</strong> yalnızca eşleşmiş HB listing fiyatlarını tazeler.
       </p>
+
+      <SyncProgressCard isPending={sync.isPending} platform="Hepsiburada" />
     </div>
   );
 }

@@ -30,7 +30,7 @@ interface FilamentType {
 interface Listing {
   id: string;
   productId: string;
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   externalId: string | null;
   externalSku: string | null;
   salePrice: number;
@@ -104,6 +104,7 @@ interface ProfitPreview {
 const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
+  hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
 } as const;
 
 export default function ProductDetailPage({
@@ -601,8 +602,8 @@ export default function ProductDetailPage({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {(["shopify", "trendyol"] as const).map((platform) => {
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
               const listing = product.listings.find((l) => l.platform === platform);
               const platformPreview = preview?.platforms.find((p) => p.platform === platform);
               return (
@@ -645,7 +646,7 @@ function PlatformProfitCard({
   liveResult,
   hasCost,
 }: {
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   listing: Listing | null;
   productId: string;
   /** Parent'tan gelen real-time kâr önizlemesi (kaydetmeden) */

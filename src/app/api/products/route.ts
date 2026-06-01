@@ -148,9 +148,9 @@ export async function GET(req: NextRequest) {
           cargoCostOverride: listing.cargoCost ?? undefined,
         });
 
-        // Trendyol'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi)
+        // Trendyol/Hepsiburada'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi)
         const commissionMissing =
-          listing.platform === "trendyol" &&
+          (listing.platform === "trendyol" || listing.platform === "hepsiburada") &&
           listing.commissionRate == null &&
           !sim.appliedCommissionRule;
 

@@ -65,7 +65,7 @@ interface Product {
   currentProfitMargin: number | null;
   hasCost: boolean;
   platforms: Array<{
-    platform: "shopify" | "trendyol";
+    platform: "shopify" | "trendyol" | "hepsiburada";
     listingId: string;
     salePrice: number;
     stock: number;
@@ -80,6 +80,7 @@ interface Product {
 const PLATFORM_COLOR: Record<string, string> = {
   shopify: "oklch(0.60 0.16 152)", // yeşil
   trendyol: "oklch(0.72 0.17 60)", // turuncu
+  hepsiburada: "oklch(0.66 0.19 38)", // HB turuncu
 };
 
 const AddProductSchema = z.object({
@@ -159,7 +160,7 @@ export default function ProductsPage() {
   const [matchModal, setMatchModal] = useState<{
     productId: string;
     productName: string;
-    platform: "trendyol";
+    platform: "trendyol" | "hepsiburada";
   } | null>(null);
   const queryClient = useQueryClient();
 
@@ -192,6 +193,7 @@ export default function ProductsPage() {
   const { data: integrations } = useQuery<{
     shopify: boolean;
     trendyol: boolean;
+    hepsiburada: boolean;
   }>({
     queryKey: ["integrations-status"],
     queryFn: () => fetchJson("/api/integrations/status"),
@@ -608,6 +610,9 @@ export default function ProductsPage() {
               <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.trendyol }}>
                 Trendyol
               </TableHead>
+              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.hepsiburada }}>
+                Hepsiburada
+              </TableHead>
               <TableHead className="w-[80px]" />
             </TableRow>
           </TableHeader>
@@ -626,19 +631,20 @@ export default function ProductsPage() {
                     <TableCell><Skeleton className="h-3 w-16 ml-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-7 w-7 rounded" /></TableCell>
                   </TableRow>
                 ))}
               </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-8 text-destructive">
+                <TableCell colSpan={9} className="text-center py-8 text-destructive">
                   Ürünler yüklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {filterMode === "inactive"
                     ? "İnaktif ürün bulunmuyor."
                     : filterMode === "out-of-stock"
@@ -653,7 +659,7 @@ export default function ProductsPage() {
                 const product = row.product;
                 const isMember = row.isMember;
                 const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
-                const findPlatform = (p: "shopify" | "trendyol") =>
+                const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
                   product.platforms.find((x) => x.platform === p);
 
                 return (
@@ -751,7 +757,7 @@ export default function ProductsPage() {
                         <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
                       )}
                     </TableCell>
-                    {(["shopify", "trendyol"] as const).map((platform) => {
+                    {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
                       const p = findPlatform(platform);
                       const integrationActive = integrations?.[platform] ?? false;
 
@@ -784,7 +790,7 @@ export default function ProductsPage() {
                                 setMatchModal({
                                   productId: product.id,
                                   productName: product.name,
-                                  platform: "trendyol",
+                                  platform: platform as "trendyol" | "hepsiburada",
                                 })
                               }
                             >
@@ -864,7 +870,7 @@ export default function ProductsPage() {
               })}
               {visibleCount < flatRows.length && (
                 <TableRow ref={sentinelRef}>
-                  <TableCell colSpan={8} className="text-center py-4">
+                  <TableCell colSpan={9} className="text-center py-4">
                     <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground/50" />
                   </TableCell>
                 </TableRow>
@@ -992,7 +998,7 @@ function MatchListingModal({
 }: {
   productId: string;
   productName: string;
-  platform: "trendyol";
+  platform: "trendyol" | "hepsiburada";
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -1035,7 +1041,7 @@ function MatchListingModal({
 
   const refreshPool = useMutation({
     mutationFn: () =>
-      fetchJson("/api/trendyol/sync-products", {
+      fetchJson(`/api/${platform}/sync-products`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: "add-new" }),
@@ -1048,7 +1054,7 @@ function MatchListingModal({
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const platformLabel = "Trendyol";
+  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
