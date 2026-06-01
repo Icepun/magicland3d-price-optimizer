@@ -17,8 +17,8 @@
  * "report" push'lar; route sadece bellekteki son durumu okur.
  */
 import mqtt, { type MqttClient } from "mqtt";
-import { Client as FtpClient, enterPassiveModeIPv4 } from "basic-ftp";
-import { Readable } from "node:stream";
+import * as tls from "node:tls";
+import * as net from "node:net";
 import crypto from "node:crypto";
 
 export interface BambuStatus {
@@ -181,11 +181,16 @@ export async function getBambuAmsSlots(host: string, accessCode: string, serial:
   return slots;
 }
 
-/** "::ffff:192.168.1.13" / "192.168.1.13" → "192.168.1.13" (yoksa null). */
-function controlHostV4(addr: unknown): string | null {
-  if (typeof addr !== "string") return null;
-  const m = addr.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  return m ? m[1] : null;
+/** Bir soket olayını promise'e çevir (timeout + tek seferlik error guard ile). */
+function onceEvt(em: NodeJS.EventEmitter, ev: string, timeoutMs: number, label: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const to = setTimeout(() => { cleanup(); reject(new Error(`${label} zaman aşımı`)); }, timeoutMs);
+    const ok = () => { cleanup(); resolve(); };
+    const er = (e: Error) => { cleanup(); reject(e); };
+    const cleanup = () => { clearTimeout(to); em.removeListener(ev, ok); em.removeListener("error", er); };
+    em.once(ev, ok);
+    em.once("error", er);
+  });
 }
 
 /** Türkçe/özel karakterleri temizleyip güvenli ASCII uzak dosya adı üretir.
@@ -208,15 +213,15 @@ function safeRemoteName(original: string): { remote: string; stem: string } {
 }
 
 /**
- * Bambu SD kartına FTP (implicit TLS 990, bblp + access code) ile dosya yükle.
- *
- * Bambu'nun FTP sunucusunun İKİ hatası "Timeout (control socket)" olarak görünür:
- *   1) EPSV'ye yanıt vermez → basic-ftp önce EPSV dener, kontrol soketi timeout olur.
- *      ÇÖZÜM: prepareTransfer'ı doğrudan PASV'a sabitle (EPSV'yi atla).
- *   2) PASV yanıtında host olarak 0.0.0.0 döndürür → veri bağlantısı (Windows'ta loopback'e
- *      gidip) asılır, kontrol soketi timeout olur. ÇÖZÜM: PASV yanıtındaki host'u
- *      YAPILANDIRILMIŞ yazıcı IP'siyle değiştir (socket.remoteAddress boş gelebiliyor → ona güvenme).
- * onProgress: yükleme yüzdesi (0..100). Hata olursa FTP konuşma dökümünü mesaja ekle.
+ * Bambu deposuna (A1: dahili eMMC = FTP kökü) implicit FTPS (990) ile RAW Node-`tls` upload.
+ * basic-ftp'nin upload yolu Bambu vsftpd ile çalışmıyordu: LIST/indirme TLS-1.2 ile çalışıyor ama
+ * STOR/yükleme veri bağlantısı asılıyor (basic-ftp upload'ta data secureConnect'i kendi akışında
+ * bekliyor; vsftpd ssl_session_reuse + implicit data ile uyumsuz). Bu yüzden soketleri elle sürüyoruz:
+ *   - Kontrol: implicit TLS 1.2 (vsftpd ssl_session_reuse_required), self-signed cert.
+ *   - PASV → port'u al, host'u YOK SAY (0.0.0.0 olabilir) → bilinen yazıcı IP'sine bağlan.
+ *   - Veri soketi: kontrol TLS OTURUMUNU yeniden kullan (session) → vsftpd kabul eder.
+ *   - STOR → 150 → veriyi parça parça yaz (onProgress) → 226.
+ * Access code asla loglanmaz (trace'te PASS***).
  */
 async function bambuFtpUpload(
   host: string,
@@ -225,80 +230,107 @@ async function bambuFtpUpload(
   remoteName: string,
   onProgress?: (pct: number) => void
 ): Promise<void> {
-  const ftp = new FtpClient(45000);
-  ftp.ftp.verbose = false;
-  const ctx = ftp.ftp as unknown as {
-    request: (cmd: string) => Promise<{ code: number; message: string }>;
-    socket: { remoteAddress?: string };
-  };
   const trace: string[] = [];
   const total = fileBuf.length;
-  // Yapılandırılmış host IPv4 ise onu kullan (kesin); değilse kontrol soketinin IP'sine düş.
-  const hostV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) ? host : null;
-  const origRequest = ctx.request.bind(ctx);
-  ctx.request = (cmd: string) =>
-    origRequest(cmd).then(
-      (res) => {
-        if (typeof cmd === "string" && /^\s*PASV/i.test(cmd) && typeof res?.message === "string") {
-          const target = hostV4 || controlHostV4(ctx.socket && ctx.socket.remoteAddress);
-          if (target) {
-            // "227 ... (0,0,0,0,193,52)" → host oktetlerini yazıcı IP'siyle değiştir, portu koru
-            res.message = res.message.replace(
-              /(\d{1,3},\d{1,3},\d{1,3},\d{1,3})(\s*,\s*\d{1,3}\s*,\s*\d{1,3})/,
-              `${target.replace(/\./g, ",")}$2`
-            );
-          }
-          const mm = res.message.match(/(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})/);
-          if (mm) trace.push(`DATA→${mm[1]}.${mm[2]}.${mm[3]}.${mm[4]}:${(+mm[5]) * 256 + (+mm[6])}`);
-        }
-        const safe = /^\s*PASS/i.test(String(cmd)) ? "PASS***" : String(cmd).trim();
-        trace.push(`${safe}»${res?.code ?? "?"}`);
-        return res;
-      },
-      (err: Error) => { trace.push(`${String(cmd).trim()}»ERR`); throw err; }
-    );
-  // EPSV'yi atla: doğrudan PASV (host yukarıda düzeltiliyor).
-  ftp.prepareTransfer = enterPassiveModeIPv4;
-  if (onProgress) {
-    ftp.trackProgress((info) => { if (total > 0) onProgress(Math.min(99, Math.round((info.bytesOverall / total) * 100))); });
-  }
-
+  const baseTls: tls.ConnectionOptions = { rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host };
+  let ctrl: tls.TLSSocket | null = null;
+  let dataPlain: net.Socket | null = null;
+  let data: tls.TLSSocket | null = null;
+  let inbuf = "";
+  let ctrlErr: Error | null = null;
+  let dataErr: Error | null = null;
   let stage = "connect";
-  try {
-    await ftp.access({
-      host, port: 990, user: "bblp", password: accessCode,
-      secure: "implicit",
-      // TLS 1.2'ye sabitle → vsftpd'nin zorunlu kıldığı veri-kanalı TLS oturum yeniden kullanımı
-      // çalışır. (Node 22 default TLS 1.3'te oturum bileti async geldiği için reuse başarısız olup
-      // veri bağlantısı reddediliyordu → "Timeout (control socket)".)
-      secureOptions: { rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host },
+
+  // Kontrol yanıtını oku (FTP final satırı: "NNN <metin>"; çok satırlı yanıtta öncekiler atılır).
+  const nextReply = (timeoutMs = 20000): Promise<{ code: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = setInterval(() => {
+        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+        const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
+        if (m) {
+          clearInterval(tick);
+          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+          resolve({ code: parseInt(m[1], 10), text: m[2] });
+        } else if (Date.now() > deadline) {
+          clearInterval(tick);
+          reject(new Error("kontrol yanıtı zaman aşımı"));
+        }
+      }, 40);
     });
-    // ÖNEMLİ: upload'tan ÖNCE LIST yapma! Bambu vsftpd'de art arda 2. veri bağlantısı reddediliyor
-    // (basic-ftp ilk veri bağlantısının TLS oturumunu saklayıp sonrakinde kullanıyor → kontrol
-    // oturumuyla uyuşmuyor). Upload TEK veri bağlantısı olmalı → doğrudan yükle (ilk bağlantı = kabul).
+
+  const cmd = async (line: string, label?: string): Promise<{ code: number; text: string }> => {
+    if (!ctrl) throw new Error("kontrol soketi yok");
+    ctrl.write(line + "\r\n");
+    const r = await nextReply();
+    trace.push(`${label ?? line.split(" ")[0]}»${r.code}`);
+    return r;
+  };
+
+  try {
+    ctrl = tls.connect({ ...baseTls, host, port: 990 });
+    ctrl.on("error", (e: Error) => { ctrlErr = e; });
+    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+    await onceEvt(ctrl, "secureConnect", 15000, "kontrol TLS");
+    ctrl.setTimeout(0);
+    await nextReply(); // 220 karşılama
+    stage = "login";
+    if ((await cmd("USER bblp")).code >= 400) throw new Error("USER reddedildi");
+    if ((await cmd(`PASS ${accessCode}`, "PASS***")).code >= 400) throw new Error("login reddedildi (access code?)");
+    await cmd("TYPE I");
+    stage = "pasv";
+    const pasv = await cmd("PASV");
+    const mm = pasv.text.match(/(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})/);
+    if (!mm) throw new Error("PASV ayrıştırılamadı");
+    const dataPort = (+mm[5]) * 256 + (+mm[6]);
+    trace.push(`DATA→${host}:${dataPort}`); // PASV host'u (0.0.0.0 olabilir) YOK SAYILIR
+    stage = "data-conn";
+    dataPlain = net.connect(dataPort, host);
+    dataPlain.on("error", (e: Error) => { dataErr = e; });
+    await onceEvt(dataPlain, "connect", 15000, "veri soketi");
+    stage = "data-tls";
+    // Veri soketini kontrol TLS OTURUMUYLA sar (vsftpd oturum yeniden kullanımı şart koşuyor).
+    data = tls.connect({
+      ...baseTls,
+      socket: dataPlain,
+      session: ctrl.getSession() ?? undefined,
+      secureContext: tls.createSecureContext({ minVersion: "TLSv1.2", maxVersion: "TLSv1.2" }),
+    });
+    data.on("error", (e: Error) => { dataErr = e; });
+    await onceEvt(data, "secureConnect", 15000, "veri TLS");
+    trace.push(`DATA-TLS${data.isSessionReused() ? "+reuse" : ""}`);
+    stage = "stor";
+    ctrl.write(`STOR ${remoteName}\r\n`);
+    const r150 = await nextReply();
+    trace.push(`STOR»${r150.code}`);
+    if (r150.code >= 400) throw new Error(`STOR reddedildi (${r150.code})`);
     stage = "upload";
-    await ftp.uploadFrom(Readable.from(fileBuf), remoteName);
-    // uploadFrom çözüldüyse sunucu 226 demiştir = yükleme tamam. SIZE bir KONTROL komutudur
-    // (yeni veri bağlantısı AÇMAZ) → ek doğrulama için güvenli; yoksa 226'ya güven.
-    try {
-      const sz = await ftp.size(remoteName);
-      trace.push(`SIZE»${sz}`);
-      if (total > 0 && sz >= 0 && Math.abs(sz - total) > 4096) console.warn(`[bambu-ftp] ${host} boyut uyumsuz: ${sz} != ${total}`);
-    } catch { trace.push("SIZE»?"); /* SIZE desteklenmiyorsa 226 yeterli */ }
+    const CHUNK = 256 * 1024;
+    for (let off = 0; off < total; off += CHUNK) {
+      if (dataErr) throw dataErr;
+      const chunk = fileBuf.subarray(off, Math.min(off + CHUNK, total));
+      if (!data.write(chunk)) await onceEvt(data, "drain", 30000, "veri akış");
+      onProgress?.(Math.min(99, Math.round(((off + chunk.length) / total) * 100)));
+    }
+    data.end();
+    await onceEvt(data, "close", 30000, "veri kapanış");
+    data = null;
+    const done = await nextReply(30000); // 226 Transfer complete
+    trace.push(`DONE»${done.code}`);
+    if (done.code >= 400) throw new Error(`transfer tamamlanmadı (${done.code})`);
     onProgress?.(100);
+    try { ctrl.write("QUIT\r\n"); } catch { /* yoksay */ }
   } catch (e) {
     const raw = e instanceof Error ? e.message : String(e);
-    // Tam teknik döküm SADECE sunucu konsoluna (trace'te PASS*** maskeli → access code asla loglanmaz).
     console.error(`[bambu-ftp] ${host} ${stage} basarisiz: ${raw} · iz: ${trace.join(" ")}`);
-    const userMsg = stage === "connect"
-      ? "Yazıcıya FTP bağlantısı kurulamadı (TLS / port 990)."
-      : raw === "VERIFY_FAILED"
-        ? "Yükleme doğrulanamadı — dosya yazıcıya tam ulaşmadı."
-        : "Dosya yazıcıya yüklenemedi (veri bağlantısı).";
+    const userMsg = stage === "connect" || stage === "login"
+      ? "Yazıcıya FTP bağlantısı kurulamadı (TLS / port 990 / access code)."
+      : "Dosya yazıcıya yüklenemedi (veri bağlantısı).";
     throw new Error(`${userMsg} · iz: ${trace.join(" ")}`);
   } finally {
-    try { ftp.trackProgress(); } catch { /* tracker'ı durdur */ }
-    ftp.close();
+    try { data?.destroy(); } catch { /* yoksay */ }
+    try { dataPlain?.destroy(); } catch { /* yoksay */ }
+    try { ctrl?.destroy(); } catch { /* yoksay */ }
   }
 }
 
