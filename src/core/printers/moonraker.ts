@@ -284,10 +284,17 @@ function normalizeHex(c: unknown): string {
 
 type MoonrakerSlot = { slot: number; color: string; type: string; empty: boolean };
 
-/** U1 CFS `filament_detect` objesini esnek şekilde slot dizisine çevir (şekil belirsiz → defansif). */
+/**
+ * U1 CFS `filament_detect` objesini slot dizisine çevir.
+ * Gerçek yapı (Snapmaker u1-klipper / Extended-Firmware dokümanı):
+ *   result.status.filament_detect.info[channel] = { MAIN_TYPE, SUB_TYPE, RGB_1 (int), ALPHA, VENDOR, OFFICIAL }
+ *   boş slot = {} ;  renk RGB_1 sayısı (örn 3368652 → 0x3366CC → "#3366CC"); manuel girilen renk de buraya yazılır.
+ * Eski/farklı şekiller için defansif yedekler de var.
+ */
 function parseFilamentDetect(fd: any): MoonrakerSlot[] {
   let arr: any[] = [];
-  if (Array.isArray(fd)) arr = fd;
+  if (Array.isArray(fd?.info)) arr = fd.info;            // U1 gerçek yol
+  else if (Array.isArray(fd)) arr = fd;
   else if (Array.isArray(fd?.slots)) arr = fd.slots;
   else if (Array.isArray(fd?.filaments)) arr = fd.filaments;
   else if (Array.isArray(fd?.trays)) arr = fd.trays;
@@ -299,11 +306,30 @@ function parseFilamentDetect(fd: any): MoonrakerSlot[] {
   arr.forEach((v, i) => {
     const o = (v && typeof v === "object" ? v : {}) as Record<string, any>;
     const rfid = (o.rfid ?? o.tag ?? {}) as Record<string, any>;
-    const color = o.color ?? o.colour ?? o.hex ?? o.rgb ?? rfid.color ?? rfid.colour;
-    const typeRaw = o.material ?? o.type ?? o.filament_type ?? rfid.material ?? rfid.type ?? o.vendor;
-    const type = typeof typeRaw === "string" && typeRaw.toUpperCase() !== "NONE" ? typeRaw : "";
-    const det = o.detected ?? o.filament_detected ?? o.present ?? o.loaded ?? o.filament_present;
-    out.push({ slot: i, color: normalizeHex(color), type, empty: det === false });
+
+    // Renk: önce RGB_1 (sayı), sonra color_hex / color string'leri.
+    const rgbNum = typeof o.RGB_1 === "number" ? o.RGB_1
+      : typeof o.rgb_1 === "number" ? o.rgb_1
+      : typeof o.RGB === "number" ? o.RGB
+      : typeof rfid.RGB_1 === "number" ? rfid.RGB_1 : null;
+    let color = "#9ca3af";
+    if (rgbNum != null && rgbNum > 0) {
+      color = `#${(rgbNum & 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`;
+    } else {
+      const hx = normalizeHex(o.color_hex ?? o.colorHex ?? o.color ?? o.colour ?? o.hex ?? rfid.color);
+      if (hx !== "#9ca3af") color = hx;
+    }
+
+    // Materyal: MAIN_TYPE (+ Basic dışı SUB_TYPE), sonra eski alanlar.
+    const main = o.MAIN_TYPE ?? o.material ?? o.type ?? o.filament_type ?? rfid.material ?? rfid.type;
+    const sub = typeof o.SUB_TYPE === "string" ? o.SUB_TYPE : "";
+    const type = (typeof main === "string" && main && main.toUpperCase() !== "NONE")
+      ? (sub && sub.toLowerCase() !== "basic" ? `${main} ${sub}` : main)
+      : "";
+
+    // Dolu mu? RGB/renk/tip/OFFICIAL varsa dolu; boş {} → boş slot.
+    const filled = (rgbNum != null && rgbNum > 0) || color !== "#9ca3af" || !!type || o.OFFICIAL === true;
+    out.push({ slot: i, color, type, empty: !filled });
   });
   return out;
 }
