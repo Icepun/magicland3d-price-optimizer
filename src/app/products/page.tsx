@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useStockWriter } from "@/lib/use-stock-writer";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
@@ -208,18 +209,8 @@ export default function ProductsPage() {
     },
   });
 
-  const stockMutation = useMutation({
-    mutationFn: ({ id, stock }: { id: string; stock: number }) =>
-      fetch(`/api/products/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stock: Math.max(0, stock) }),
-      }).then((r) => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-    },
-    onError: () => toast.error("Stok güncellenemedi"),
-  });
+  // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
+  const { adjustStock } = useStockWriter();
 
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) =>
@@ -714,10 +705,8 @@ export default function ProductsPage() {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-muted-foreground"
-                          disabled={stockMutation.isPending || product.stock <= 0}
-                          onClick={() =>
-                            stockMutation.mutate({ id: product.id, stock: product.stock - 1 })
-                          }
+                          disabled={product.stock <= 0}
+                          onClick={() => adjustStock(product.id, -1, product.stock)}
                         >
                           <Minus className="h-3 w-3" />
                         </Button>
@@ -743,10 +732,7 @@ export default function ProductsPage() {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-muted-foreground"
-                          disabled={stockMutation.isPending}
-                          onClick={() =>
-                            stockMutation.mutate({ id: product.id, stock: product.stock + 1 })
-                          }
+                          onClick={() => adjustStock(product.id, 1, product.stock)}
                         >
                           <Plus className="h-3 w-3" />
                         </Button>

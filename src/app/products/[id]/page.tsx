@@ -14,6 +14,7 @@ import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { useStockWriter } from "@/lib/use-stock-writer";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
@@ -251,19 +252,8 @@ export default function ProductDetailPage({
   });
 
   // Stok güncelleme
-  const updateStockMutation = useMutation({
-    mutationFn: (newStock: number) =>
-      fetch(`/api/products/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stock: Math.max(0, newStock) }),
-      }).then((r) => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["product", id] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-    },
-    onError: () => toast.error("Stok güncellenemedi"),
-  });
+  // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
+  const { adjustStock } = useStockWriter();
 
   // Real-time kâr önizlemesi — KAYDETMEDEN. Maliyet formu değişince debounce'lu
   // olarak preview endpoint'e gider, sağ taraftaki platform kartları anında güncellenir.
@@ -582,8 +572,8 @@ export default function ProductDetailPage({
                     variant="outline"
                     size="icon"
                     className="h-7 w-7"
-                    disabled={updateStockMutation.isPending || product.stock <= 0}
-                    onClick={() => updateStockMutation.mutate(product.stock - 1)}
+                    disabled={product.stock <= 0}
+                    onClick={() => adjustStock(id, -1, product.stock)}
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
@@ -603,8 +593,7 @@ export default function ProductDetailPage({
                     variant="outline"
                     size="icon"
                     className="h-7 w-7"
-                    disabled={updateStockMutation.isPending}
-                    onClick={() => updateStockMutation.mutate(product.stock + 1)}
+                    onClick={() => adjustStock(id, 1, product.stock)}
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
