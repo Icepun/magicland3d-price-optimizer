@@ -221,6 +221,35 @@ export default function ProductDetailPage({
     onError: () => toast.error("Kaydedilemedi"),
   });
 
+  // Bu maliyeti (ve desi) aynı varyant grubundaki TÜM ürünlere uygula
+  const applyCostToVariantsMutation = useMutation({
+    mutationFn: () =>
+      fetch(`/api/products/${id}/apply-cost-to-variants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          desi: parseFloat(desiInput) || null,
+          cost: {
+            costMode: "detailed",
+            filamentTypeId: filamentTypeId || null,
+            filamentWeight: fWeight,
+            printTimeHours: pTime,
+            wasteRate: wRate,
+            packagingOptionId: packagingOptionId || null,
+            nylonLevel,
+            tapeUsed,
+          },
+        }),
+      }).then((r) => r.json()),
+    onSuccess: (d: { count?: number }) => {
+      queryClient.invalidateQueries({ queryKey: ["product", id] });
+      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success(`Maliyet ${d?.count ?? ""} varyanta uygulandı`);
+    },
+    onError: () => toast.error("Varyantlara uygulanamadı"),
+  });
+
   // Stok güncelleme
   const updateStockMutation = useMutation({
     mutationFn: (newStock: number) =>
@@ -523,6 +552,21 @@ export default function ProductDetailPage({
               >
                 {saveCostMutation.isPending ? "Kaydediliyor..." : "Kaydet ve Uygula"}
               </Button>
+
+              {(product.variantGroup?.products?.length ?? 0) > 1 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => applyCostToVariantsMutation.mutate()}
+                  disabled={applyCostToVariantsMutation.isPending}
+                  title="Aynı varyant grubundaki tüm ürünlere bu maliyeti (ve desi) uygular"
+                >
+                  {applyCostToVariantsMutation.isPending
+                    ? "Uygulanıyor..."
+                    : `Bu maliyeti tüm varyantlara uygula (${product.variantGroup?.products?.length})`}
+                </Button>
+              )}
             </CardContent>
           </Card>
 
