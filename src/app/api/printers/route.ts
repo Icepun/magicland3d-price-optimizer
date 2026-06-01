@@ -7,6 +7,7 @@ import {
   moonrakerThumbUrl,
   type MoonrakerState,
 } from "@/core/printers/moonraker";
+import { getBambuStatus, mapBambuState } from "@/core/printers/bambu";
 
 export const dynamic = "force-dynamic";
 
@@ -204,7 +205,46 @@ export async function GET() {
       };
 
       if (c.type === "bambu") {
-        return { ...base, note: "Bambu bağlantısı yakında (Faz 2)" };
+        if (!c.accessCode || !c.serial) {
+          return { ...base, note: "Access code + seri no gerekli (Yönet → düzenle)" };
+        }
+        const bs = await getBambuStatus(c.host, c.accessCode, c.serial);
+        if (!bs.online) {
+          return { ...base, note: `Çevrimdışı — ${c.host} (LAN + Developer Mode açık mı?)` };
+        }
+        const bStatus = mapBambuState(bs.gcodeState);
+        const bHasJob = !!bs.filename && (bStatus === "printing" || bStatus === "paused" || bStatus === "finished");
+        let bJob: PrinterJob | null = null;
+        let bMatchedId: string | null = null;
+        if (bHasJob && bs.filename) {
+          const pct = Math.min(1, Math.max(0, bs.percent / 100));
+          const remaining = bs.remainingSec ?? 0;
+          let totalSec: number;
+          if (pct > 0.001 && pct < 1 && remaining > 0) totalSec = remaining / (1 - pct);
+          else totalSec = Math.max(60, remaining);
+          const endMs = nowMs + remaining * 1000;
+          const startMs = endMs - totalSec * 1000;
+          bMatchedId = matchMap.get(`${c.id}::${bs.filename}`) ?? null;
+          const matched = bMatchedId ? productMap.get(bMatchedId) : undefined;
+          bJob = {
+            productName: matched?.name || cleanFilename(bs.filename),
+            productImage: matched?.imageUrl || null,
+            startedAt: new Date(startMs).toISOString(),
+            endsAt: new Date(endMs).toISOString(),
+            layerTotal: bs.totalLayerNum ?? 0,
+            filamentType: "PLA",
+            filamentColor: "#9ca3af",
+          };
+        }
+        return {
+          ...base,
+          online: true,
+          status: bStatus,
+          currentFilename: bs.filename,
+          matchedProductId: bMatchedId,
+          temps: { nozzle: bs.nozzle, nozzleTarget: bs.nozzleTarget, bed: bs.bed, bedTarget: bs.bedTarget },
+          job: bJob,
+        };
       }
 
       const st = await fetchMoonrakerStatus(c.host, c.port);

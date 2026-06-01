@@ -21,6 +21,9 @@ const nextConfig: NextConfig = {
     "@prisma/adapter-libsql",
     "@libsql/client",
     "libsql",
+    // mqtt (Bambu Lab LAN bağlantısı) — dinamik require + ws/tls içerir, webpack
+    // bundle etmesin; runtime'da node_modules'tan require edilsin.
+    "mqtt",
   ],
 };
 

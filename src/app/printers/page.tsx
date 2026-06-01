@@ -59,6 +59,8 @@ interface PrinterConfig {
   host: string;
   port: number;
   enabled: boolean;
+  accessCode?: string | null;
+  serial?: string | null;
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -438,7 +440,7 @@ function PrinterCard({
                   <Square className="h-3.5 w-3.5" /> İptal
                 </Button>
               )}
-              {(status === "idle" || status === "finished" || status === "error") && (
+              {printer.type === "moonraker" && (status === "idle" || status === "finished" || status === "error") && (
                 <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onStart}>
                   <Play className="h-3.5 w-3.5" /> Baskı Başlat
                 </Button>
@@ -578,9 +580,13 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
   const [model, setModel] = useState(config?.model ?? "");
   const [host, setHost] = useState(config?.host ?? "");
   const [port, setPort] = useState(String(config?.port ?? 7125));
+  const [accessCode, setAccessCode] = useState(config?.accessCode ?? "");
+  const [serial, setSerial] = useState(config?.serial ?? "");
   const [test, setTest] = useState<{ state: "idle" | "loading" | "ok" | "fail"; msg?: string }>({ state: "idle" });
 
   const brandInfo = BRANDS.find((b) => b.value === brand) ?? BRANDS[0];
+  const isBambu = brandInfo.type === "bambu";
+  const bambuMissing = isBambu && (!accessCode.trim() || !serial.trim());
 
   const save = useMutation({
     mutationFn: () => {
@@ -591,6 +597,8 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
         type: brandInfo.type,
         host: host.trim(),
         port: Number(port) || brandInfo.port,
+        accessCode: isBambu ? (accessCode.trim() || null) : null,
+        serial: isBambu ? (serial.trim() || null) : null,
       };
       return config
         ? fetchJson(`/api/printers/config/${config.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
@@ -646,10 +654,22 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
         </div>
       </div>
 
-      {brandInfo.type === "bambu" ? (
-        <p className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/25 rounded-md px-2.5 py-1.5">
-          Bambu Lab bağlantısı (MQTT + access code) Faz 2'de eklenecek. Şimdilik kaydedebilirsin ama canlı veri gelmez.
-        </p>
+      {isBambu ? (
+        <>
+          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+            Yazıcıda <strong>LAN Modu</strong> + <strong>Geliştirici (Developer) Modu</strong> açık olmalı. Access code ve seri no yazıcı ekranındadır (Ayarlar → WLAN).
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Access Code</Label>
+              <Input value={accessCode} onChange={(e) => setAccessCode(e.target.value)} placeholder="8 haneli kod" className="font-mono" />
+            </div>
+            <div>
+              <Label className="text-xs">Seri No</Label>
+              <Input value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="00M00A..." className="font-mono" />
+            </div>
+          </div>
+        </>
       ) : (
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" size="sm" className="gap-1.5" disabled={test.state === "loading"} onClick={runTest}>
@@ -662,7 +682,7 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
       )}
 
       <div className="flex gap-2 pt-1">
-        <Button className="flex-1" disabled={save.isPending || !name.trim() || !host.trim()} onClick={() => save.mutate()}>
+        <Button className="flex-1" disabled={save.isPending || !name.trim() || !host.trim() || bambuMissing} onClick={() => save.mutate()}>
           {save.isPending ? "Kaydediliyor…" : config ? "Güncelle" : "Ekle"}
         </Button>
         <Button variant="ghost" onClick={onCancel}>Vazgeç</Button>
