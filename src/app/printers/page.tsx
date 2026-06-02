@@ -1086,9 +1086,27 @@ function SlotStep({
                 </div>
               </div>
             ) : (
-              <p className="text-[11px] text-muted-foreground">
-                {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı (RFID yalnız Snapmaker'ın kendi filamentinde okunur). "}{isBambu ? "Numarayla eşleyebilirsin." : ""}
-              </p>
+              <>
+                <p className="text-[11px] text-muted-foreground">
+                  {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı (RFID yalnız Snapmaker'ın kendi filamentinde okunur). "}{isBambu ? "Numarayla eşleyebilirsin." : ""}
+                </p>
+                {!isBambu && (
+                  <button
+                    onClick={async () => {
+                      try {
+                        const r = await fetchJson<{ debug?: unknown }>(`/api/printers/${printerId}/slots?debug=1`);
+                        await navigator.clipboard.writeText(JSON.stringify(r.debug ?? r, null, 2));
+                        toast.success("Yazıcı tanılama bilgisi panoya kopyalandı — geliştiriciye yapıştır.");
+                      } catch {
+                        toast.error("Tanılama alınamadı");
+                      }
+                    }}
+                    className="text-[11px] text-primary hover:underline inline-flex items-center gap-1 mt-1"
+                  >
+                    <AlertTriangle className="h-3 w-3" /> Renk okunamıyor mu? Tanılamayı kopyala
+                  </button>
+                )}
+              </>
             )}
 
             {!usingFile && (
@@ -1160,25 +1178,29 @@ function SlotStep({
             {!isBambu && (
               <p className="text-[11px] text-muted-foreground flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0 text-amber-500" />
-                Snapmaker tool-changer: seçtiğin kafa gcode'a uygulanır (varsayılanı değiştirmezsen dosya olduğu gibi basılır). Filamentin fiziksel olarak seçtiğin kafada/slotta olduğundan emin ol. İlk denemeyi küçük bir baskıyla yapman önerilir.
+                Snapmaker: dosya <strong className="text-foreground/80">dilimlendiği gibi</strong> basılır (tabla terazileme / akış kalibrasyonu / start makroları Orca&apos;daki ayarına göre çalışır). Seçtiğin kafa gcode&apos;a uygulanır; filamentin fiziksel olarak o kafada/slotta olduğundan emin ol.
               </p>
             )}
 
-            <div className="space-y-1.5 pt-2 border-t border-border/50">
-              <p className="text-[11px] text-muted-foreground">Baskı seçenekleri (varsayılan kapalı — istersen aç)</p>
-              {([
-                { k: "bedLeveling" as const, label: "Otomatik tabla terazileme" },
-                { k: "flowCali" as const, label: "Akış kalibrasyonu" },
-                { k: "timelapse" as const, label: "Timelapse (hızlandırılmış video)" },
-              ]).map((o) => (
-                <button key={o.k} onClick={() => setPrefs((p) => ({ ...p, [o.k]: !p[o.k] }))} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground w-full">
-                  <span className={cn("h-4 w-4 rounded border flex items-center justify-center shrink-0", prefs[o.k] ? "bg-primary border-primary" : "border-border")}>
-                    {prefs[o.k] && <Check className="h-3 w-3 text-primary-foreground" />}
-                  </span>
-                  {o.label}
-                </button>
-              ))}
-            </div>
+            {/* Baskı seçenekleri YALNIZCA Bambu'da (MQTT ile uygulanır). Snapmaker/Moonraker'da
+                gcode'a dokunmuyoruz (makroları yorumlamak baskıyı bozuyordu) → dosya olduğu gibi gider. */}
+            {isBambu && (
+              <div className="space-y-1.5 pt-2 border-t border-border/50">
+                <p className="text-[11px] text-muted-foreground">Baskı seçenekleri (varsayılan kapalı — istersen aç)</p>
+                {([
+                  { k: "bedLeveling" as const, label: "Otomatik tabla terazileme" },
+                  { k: "flowCali" as const, label: "Akış kalibrasyonu" },
+                  { k: "timelapse" as const, label: "Timelapse (hızlandırılmış video)" },
+                ]).map((o) => (
+                  <button key={o.k} onClick={() => setPrefs((p) => ({ ...p, [o.k]: !p[o.k] }))} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground w-full">
+                    <span className={cn("h-4 w-4 rounded border flex items-center justify-center shrink-0", prefs[o.k] ? "bg-primary border-primary" : "border-border")}>
+                      {prefs[o.k] && <Check className="h-3 w-3 text-primary-foreground" />}
+                    </span>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {isBambu && (
               <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">

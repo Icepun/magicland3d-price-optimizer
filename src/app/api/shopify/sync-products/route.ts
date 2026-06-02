@@ -52,18 +52,22 @@ export async function POST(req: NextRequest) {
     const client = new ShopifyClient(credentials);
     const shopifyProducts = await client.listAllProducts();
 
-    // Çekilen variant'ları identifier -> veri olarak düzleştir
+    // Çekilen variant'ları düzleştir. İKİ harita:
+    //  - fetched: identifier (barcode/sku/variant-fallback) → ilk kurulumdaki eşleştirme
+    //  - fetchedByVariantId: Shopify variant id → DEĞİŞMEZ anahtar. Kullanıcı ürün barkodunu
+    //    (Trendyol/sipariş eşleştirmesi için) elle değiştirince barkod-eşleşmesi kaçar; bu yüzden
+    //    fiyat/görsel tazelemesi Listing.externalId (=variant id) ile yapılır → barkoddan bağımsız.
     const fetched = new Map<string, FetchedVariant>();
+    const fetchedByVariantId = new Map<string, FetchedVariant>();
     let totalVariants = 0;
     for (const product of shopifyProducts) {
       for (const variant of product.variants ?? []) {
         totalVariants++;
         const id = identifierFor(variant);
-        if (fetched.has(id)) continue; // aynı identifier'da ilk gelen kazanır
         const name = `${product.title}${
           variant.title && variant.title !== "Default Title" ? ` — ${variant.title}` : ""
         }`;
-        fetched.set(id, {
+        const data: FetchedVariant = {
           price: Number(variant.price) || 0,
           sku: variant.sku || id,
           stock: variant.inventory_quantity ?? 0,
@@ -73,7 +77,9 @@ export async function POST(req: NextRequest) {
           imageUrl: variant.image ?? product.image?.src ?? null,
           variantId: String(variant.id),
           archived: product.status === "archived",
-        });
+        };
+        fetchedByVariantId.set(data.variantId, data);
+        if (!fetched.has(id)) fetched.set(id, data); // aynı identifier'da ilk gelen kazanır
       }
     }
 
@@ -85,13 +91,14 @@ export async function POST(req: NextRequest) {
           listingPrice: number;
           productId: string;
           barcode: string;
+          variantId: string | null;
           productPrice: number;
           imageUrl: string | null;
           imageManual: number;
         }>
       >(
         `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
-                p.barcode AS barcode, p.currentSalePrice AS productPrice,
+                p.barcode AS barcode, l.externalId AS variantId, p.currentSalePrice AS productPrice,
                 p.imageUrl AS imageUrl, p.imageManual AS imageManual
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'shopify'`
@@ -100,7 +107,9 @@ export async function POST(req: NextRequest) {
       let imagesFixed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
-        const f = fetched.get(row.barcode);
+        // Önce DEĞİŞMEZ variant id ile eşleştir (kullanıcı barkodu değiştirmiş olabilir),
+        // olmazsa barkoda düş. Böylece barkodu düzenlenen ürünlerin fiyat/görseli de tazelenir.
+        const f = (row.variantId ? fetchedByVariantId.get(row.variantId) : undefined) ?? fetched.get(row.barcode);
         if (!f) continue;
         // Görsel backfill/düzeltme — yalnızca elle ayarlanmamış (imageManual=0) ürünlerde,
         // ve gerçekten değişmişse (diff-write → tekrar tekrar yazma yok).

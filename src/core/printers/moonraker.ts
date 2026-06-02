@@ -254,19 +254,26 @@ export async function moonrakerUploadAndPrint(
   port: number,
   fileBuf: Buffer,
   filename: string,
+  // prefs ARTIK uygulanmıyor (bkz. aşağıdaki not) — imza geriye dönük uyum için korunuyor.
   opts: { headMapping?: number[]; prefs?: MoonrakerPrefs } = {}
 ): Promise<void> {
+  // KRİTİK: Dosyayı OLABİLDİĞİNCE dilimlendiği haliyle (byte-for-byte) yükle. Daha önce
+  // applyMoonrakerPrefs varsayılan olarak BED_MESH_CALIBRATE / SM_PRINT_FLOW_CALIBRATE /
+  // TIMELAPSE makrolarını YORUM yapıyordu; Snapmaker U1'de bu makrolar başlangıç dizisinin
+  // (filament yükleme + ısıtma) parçası → yorumlanınca "filament hatası, nozzle ısınmıyor".
+  // Doğrudan baskıyla aynı davranış için artık SADECE gerçek (identity olmayan) kafa remap'inde
+  // gcode'a dokunuyoruz; aksi halde orijinal buffer aynen gönderilir.
   let body = fileBuf;
   const isGcode = /\.(gcode|gco|g)$/i.test(filename);
-  if (isGcode && ((opts.headMapping && opts.headMapping.length) || opts.prefs)) {
-    let text = fileBuf.toString("latin1");
-    if (opts.headMapping && opts.headMapping.length) {
-      const toolMap: Record<number, number> = {};
-      opts.headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
-      text = remapMoonrakerTools(text, toolMap);
+  if (isGcode && opts.headMapping && opts.headMapping.length) {
+    const toolMap: Record<number, number> = {};
+    opts.headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
+    const keys = Object.keys(toolMap).map(Number);
+    const isIdentity = !keys.length || keys.every((k) => toolMap[k] === k);
+    if (!isIdentity) {
+      const remapped = remapMoonrakerTools(fileBuf.toString("latin1"), toolMap);
+      body = Buffer.from(remapped, "latin1");
     }
-    if (opts.prefs) text = applyMoonrakerPrefs(text, opts.prefs);
-    body = Buffer.from(text, "latin1");
   }
   const fd = new FormData();
   fd.append("root", "gcodes");
@@ -371,26 +378,41 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<M
       }
     }
   } catch { /* keşfe düş */ }
-  // 2) Keşif: filament/cfs/rfid/tray içeren objeler
+  // 2) Keşif: CFS/filament ile ilgili objeleri bul (firmware sürümüne göre ad değişebilir:
+  //    filament_detect, cfs, box, feeder, mmu, tray...). Geniş filtre + iki strateji.
   try {
     const listRes = await mfetch(`${moonrakerBase(host, port)}/printer/objects/list`, undefined, 4000);
     if (!listRes.ok) return [];
     const objs: string[] = unwrap(await listRes.json())?.objects ?? [];
-    const cand = objs.filter((o) => /filament|cfs|rfid|spool|tray|ams/i.test(o)).slice(0, 16);
+    const cand = objs
+      .filter((o) => /filament|cfs|rfid|spool|tray|ams|slot|channel|colou?r|material|feeder|box|mmu/i.test(o))
+      .slice(0, 24);
     if (!cand.length) return [];
     const q = cand.map((o) => encodeURIComponent(o)).join("&");
     const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 4000);
     if (!res.ok) return [];
     const status = unwrap(await res.json())?.status ?? {};
+    // Strateji A: CFS-tarzı .info[] dizisi taşıyan bir obje varsa onu parse et (filament_detect şeması).
+    for (const val of Object.values(status)) {
+      const v = (val ?? {}) as Record<string, unknown>;
+      if (Array.isArray((v as { info?: unknown }).info)) {
+        const parsed = parseFilamentDetect(v);
+        if (parsed.length) return parsed;
+      }
+    }
+    // Strateji B: her objeyi tek slot say (color/type alanları).
     const slots: MoonrakerSlot[] = [];
     let i = 0;
     for (const val of Object.values(status)) {
       const v = (val ?? {}) as Record<string, unknown>;
       const rfid = (v.rfid ?? {}) as Record<string, unknown>;
-      const color = v.color ?? v.colour ?? v.hex ?? v.rgb ?? rfid.color ?? rfid.colour;
-      const type = v.material ?? v.type ?? v.filament_type ?? rfid.material;
+      const color = v.color ?? v.colour ?? v.hex ?? v.rgb ?? (v as { RGB_1?: unknown }).RGB_1 ?? rfid.color ?? rfid.colour;
+      const type = v.material ?? v.type ?? v.filament_type ?? (v as { MAIN_TYPE?: unknown }).MAIN_TYPE ?? rfid.material;
       if (color != null || type != null) {
-        slots.push({ slot: i, color: normalizeHex(color), type: typeof type === "string" ? type : "", empty: false });
+        const rgbHex = typeof color === "number" && color > 0
+          ? `#${(color & 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`
+          : normalizeHex(color);
+        slots.push({ slot: i, color: rgbHex, type: typeof type === "string" ? type : "", empty: false });
       }
       i++;
     }
@@ -398,6 +420,39 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<M
   } catch {
     return [];
   }
+}
+
+/**
+ * TANILAMA: yazıcının açığa çıkardığı obje listesi + filament_detect ham yanıtı + CFS aday
+ * objelerinin ham değerleri. Slot renkleri okunamadığında kullanıcı bunu paylaşır → şema eşlenir.
+ */
+export async function fetchMoonrakerSlotDebug(
+  host: string,
+  port: number
+): Promise<{ objects: string[]; filamentDetect: unknown; candidates: Record<string, unknown> }> {
+  const base = moonrakerBase(host, port);
+  let objects: string[] = [];
+  let filamentDetect: unknown = null;
+  const candidates: Record<string, unknown> = {};
+  try {
+    const listRes = await mfetch(`${base}/printer/objects/list`, undefined, 4000);
+    if (listRes.ok) objects = unwrap(await listRes.json())?.objects ?? [];
+  } catch { /* yoksa boş */ }
+  try {
+    const fdRes = await mfetch(`${base}/printer/objects/query?filament_detect`, undefined, 4000);
+    if (fdRes.ok) filamentDetect = unwrap(await fdRes.json())?.status?.filament_detect ?? null;
+  } catch { /* yoksa null */ }
+  const cand = objects
+    .filter((o) => /filament|cfs|rfid|spool|tray|ams|slot|channel|colou?r|material|feeder|box|mmu/i.test(o))
+    .slice(0, 24);
+  if (cand.length) {
+    try {
+      const q = cand.map((o) => encodeURIComponent(o)).join("&");
+      const res = await mfetch(`${base}/printer/objects/query?${q}`, undefined, 4000);
+      if (res.ok) Object.assign(candidates, unwrap(await res.json())?.status ?? {});
+    } catch { /* atla */ }
+  }
+  return { objects, filamentDetect, candidates };
 }
 
 export async function testMoonraker(host: string, port: number): Promise<{ ok: boolean; hostname?: string; state?: string; port?: number; error?: string }> {
