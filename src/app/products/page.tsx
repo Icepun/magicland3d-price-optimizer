@@ -214,7 +214,7 @@ const ProductRow = memo(function ProductRow({
   onAliasCancel: () => void;
   onMatch: (productId: string, productName: string, platform: "trendyol" | "hepsiburada") => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, name: string) => void;
 }) {
   const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
   const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
@@ -423,7 +423,7 @@ const ProductRow = memo(function ProductRow({
             size="icon"
             className="h-8 w-8 text-destructive/70 hover:text-destructive"
             title="Sil"
-            onClick={() => onDelete(product.id)}
+            onClick={() => onDelete(product.id, product.name)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -440,6 +440,7 @@ export default function ProductsPage() {
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [matchModal, setMatchModal] = useState<{
     productId: string;
     productName: string;
@@ -460,10 +461,12 @@ export default function ProductsPage() {
     isError,
   } = useQuery<Product[]>({
     queryKey: ["products", filterMode],
-    queryFn: () =>
-      // "most-profitable" sunucuda yok → aktif ürünleri çek, client'ta sırala
+    queryFn: ({ signal }) =>
+      // "most-profitable" sunucuda yok → aktif ürünleri çek, client'ta sırala.
+      // signal: başka sayfaya geçince bu (ağır) fetch iptal olur → birikme/boşa parse yok.
       fetchJson<Product[]>(
-        `/api/products?filter=${filterMode === "most-profitable" ? "active" : filterMode}`
+        `/api/products?filter=${filterMode === "most-profitable" ? "active" : filterMode}`,
+        { signal }
       ),
     // Kâr hesabı maliyet/komisyon/kargo/gider ayarlarına bağlı — her açılışta
     // sunucudan taze çek, cache'teki eski kâr değerini gösterme.
@@ -662,7 +665,11 @@ export default function ProductsPage() {
     (id: string, hidden: boolean) => toggleHiddenMutation.mutate({ id, hidden }),
     [toggleHiddenMutation]
   );
-  const handleDelete = useCallback((id: string) => deleteMutation.mutate(id), [deleteMutation]);
+  // Silme ANINDA değil — önce onay penceresi (yanlışlıkla tıklama veri kaybettirmesin).
+  const handleDelete = useCallback(
+    (id: string, name: string) => setDeleteConfirm({ id, name }),
+    []
+  );
 
   const form = useForm<AddProductForm>({
     resolver: zodResolver(AddProductSchema),
@@ -1208,6 +1215,33 @@ export default function ProductsPage() {
               {bulkDeleteMutation.isPending
                 ? "Siliniyor..."
                 : `${selectedIds.size} Ürünü Sil`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tekli silme onayı — yanlışlıkla tıklamaya karşı */}
+      <Dialog open={!!deleteConfirm} onOpenChange={(o) => !o && setDeleteConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Ürünü Sil</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <strong className="text-foreground">{deleteConfirm?.name}</strong> silinecek. Bu işlem geri
+            alınamaz — maliyet bilgileri, listings ve fiyat geçmişi de silinir.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
+              İptal
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (deleteConfirm) deleteMutation.mutate(deleteConfirm.id);
+                setDeleteConfirm(null);
+              }}
+            >
+              Sil
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -196,7 +196,7 @@ interface PriceChangesData {
 function PriceChangesCard({ delay }: { delay: number }) {
   const { data } = useQuery<PriceChangesData>({
     queryKey: ["price-changes"],
-    queryFn: () => fetch("/api/dashboard/price-changes?days=30&limit=8").then((r) => r.json()),
+    queryFn: ({ signal }) => fetch("/api/dashboard/price-changes?days=30&limit=8", { signal }).then((r) => r.json()),
     refetchInterval: 60_000,
     staleTime: 0,
   });
@@ -287,7 +287,7 @@ function fmtTL(n: number) {
 function OrdersSummaryCard({ delay }: { delay: number }) {
   const { data, isLoading } = useQuery<{ summary?: OrdersSummary }>({
     queryKey: ["orders"],
-    queryFn: () => fetch("/api/orders").then((r) => r.json()),
+    queryFn: ({ signal }) => fetch("/api/orders", { signal }).then((r) => r.json()),
     staleTime: 5 * 60_000,
   });
   const s = data?.summary;
@@ -381,7 +381,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
 export default function DashboardPage() {
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
-    queryFn: () => fetch("/api/dashboard").then((r) => r.json()),
+    queryFn: ({ signal }) => fetch("/api/dashboard", { signal }).then((r) => r.json()),
     refetchInterval: 60_000, // açıkken dakikada bir tazele (canlı kâr özeti)
     staleTime: 15_000,
     refetchOnMount: true,

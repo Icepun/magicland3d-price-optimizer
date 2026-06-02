@@ -80,6 +80,7 @@ export function VariantsCard({
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
   const [labelDraft, setLabelDraft] = useState("");
   const [confirmDissolve, setConfirmDissolve] = useState(false);
+  const [confirmUnlinkId, setConfirmUnlinkId] = useState<string | null>(null);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["product"] });
@@ -319,14 +320,36 @@ export function VariantsCard({
                       <ArrowUpRight className="h-3.5 w-3.5" />
                     </Link>
                   )}
-                  <button
-                    onClick={() => unlink.mutate(m.id)}
-                    disabled={unlink.isPending}
-                    className="shrink-0 p-1.5 rounded text-muted-foreground/60 hover:text-destructive disabled:opacity-50"
-                    title="Gruptan çıkar"
-                  >
-                    <Unlink className="h-3.5 w-3.5" />
-                  </button>
+                  {confirmUnlinkId === m.id ? (
+                    <span className="shrink-0 flex items-center gap-0.5">
+                      <button
+                        onClick={() => {
+                          unlink.mutate(m.id);
+                          setConfirmUnlinkId(null);
+                        }}
+                        disabled={unlink.isPending}
+                        className="p-1.5 rounded text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                        title="Evet, gruptan çıkar"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => setConfirmUnlinkId(null)}
+                        className="p-1.5 rounded text-muted-foreground hover:bg-muted"
+                        title="Vazgeç"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmUnlinkId(m.id)}
+                      className="shrink-0 p-1.5 rounded text-muted-foreground/60 hover:text-destructive"
+                      title="Gruptan çıkar"
+                    >
+                      <Unlink className="h-3.5 w-3.5" />
+                    </button>
+                  )}
                 </>
               )}
             </div>

@@ -106,7 +106,7 @@ function fmtDate(iso: string | null) {
 export default function OrdersPage() {
   const { data, isLoading, isFetching, refetch, error } = useQuery<OrdersResponse>({
     queryKey: ["orders"],
-    queryFn: () => fetch("/api/orders").then((r) => r.json()),
+    queryFn: ({ signal }) => fetch("/api/orders", { signal }).then((r) => r.json()),
     // 5dk taze: sekmeye dönüşte 3 pazaryeri API'sini tekrar çağırma (anında cache). Tazelemek için "Yenile".
     staleTime: 5 * 60_000,
     refetchOnMount: true,
