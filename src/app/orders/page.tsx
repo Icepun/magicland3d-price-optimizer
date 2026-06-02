@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   ChevronDown,
+  ArrowUpRight,
   Truck,
   AlertTriangle,
   PackageX,
@@ -30,6 +31,8 @@ interface UnifiedOrderItem {
   name: string;
   quantity: number;
   image: string | null;
+  productId?: string | null;
+  madeToOrder?: boolean;
 }
 interface UnifiedOrder {
   platform: "shopify" | "trendyol" | "hepsiburada";
@@ -425,13 +428,33 @@ function OrderRow({ order }: { order: UnifiedOrder }) {
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Ürünler ({order.itemCount} adet)</p>
               <div className="space-y-2">
-                {order.items.map((it, i) => (
-                  <div key={i} className="flex items-center gap-2.5">
-                    <Thumb src={it.image} size="h-9 w-9" />
-                    <span className="flex-1 min-w-0 truncate text-xs text-foreground/90">{it.name}</span>
-                    <span className="tabular-nums text-xs text-muted-foreground shrink-0">×{it.quantity}</span>
-                  </div>
-                ))}
+                {order.items.map((it, i) => {
+                  const body = (
+                    <>
+                      <Thumb src={it.image} size="h-9 w-9" />
+                      <span className="flex-1 min-w-0 truncate text-xs text-foreground/90">
+                        {it.name}
+                        {it.madeToOrder && (
+                          <span className="ml-1.5 text-[9px] text-amber-500">· sipariş üzerine</span>
+                        )}
+                      </span>
+                      {it.productId && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
+                      <span className="tabular-nums text-xs text-muted-foreground shrink-0">×{it.quantity}</span>
+                    </>
+                  );
+                  return it.productId ? (
+                    <Link
+                      key={i}
+                      href={`/products/${it.productId}`}
+                      className="flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md hover:bg-muted/50 transition-colors"
+                      title="Ürün sayfasına git (maliyet/kâr detayı)"
+                    >
+                      {body}
+                    </Link>
+                  ) : (
+                    <div key={i} className="flex items-center gap-2.5">{body}</div>
+                  );
+                })}
               </div>
             </div>
 

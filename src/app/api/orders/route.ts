@@ -30,6 +30,10 @@ export interface UnifiedOrderItem {
   name: string;
   quantity: number;
   image: string | null;
+  /** Eşleşen ürünün id'si (varsa) — siparişler sayfasından ürün detayına gitmek için. */
+  productId?: string | null;
+  /** Bu ürün "sipariş üzerine üretilir" mi (bildirim/etiket için). */
+  madeToOrder?: boolean;
 }
 
 export interface UnifiedOrder {
@@ -150,6 +154,7 @@ interface Matched {
   categoryName: string;
   desi: number | null;
   commissionRate: number | null;
+  madeToOrder: boolean;
 }
 
 type CommissionRules = Parameters<typeof simulatePrice>[0]["commissionRules"];
@@ -383,6 +388,7 @@ export async function GET() {
         categoryName: p.categoryName,
         desi: p.desi,
         commissionRate: p.commissionRate,
+        madeToOrder: p.madeToOrder,
       };
       const add = (k: string | null | undefined) => {
         if (k && !byKey.has(k)) byKey.set(k, m);
@@ -461,7 +467,13 @@ export async function GET() {
       } else {
         anyUnmatched = true;
       }
-      return { name: l.name, quantity: l.quantity, image };
+      return {
+        name: l.name,
+        quantity: l.quantity,
+        image,
+        productId: m?.id ?? null,
+        madeToOrder: m?.madeToOrder ?? false,
+      };
     });
 
     // KARGO: tüm gönderiye BİR KEZ — toplam desiye göre (ürün/adet başına tekrar değil).

@@ -17,6 +17,7 @@ interface ProductRow {
   name: string;
   imageUrl: string | null;
   stock: number;
+  madeToOrder?: boolean;
   cost?: { filamentWeight: number | null } | null;
 }
 
@@ -50,7 +51,8 @@ export default function PlannerPage() {
 
   const plan = useMemo(() => {
     return products
-      .filter((p) => p.stock < target)
+      // "Sipariş üzerine üretilir" ürünler stok tutmaz → üretim planına girmez.
+      .filter((p) => !p.madeToOrder && p.stock < target)
       .map((p) => {
         const printQty = Math.max(1, target - p.stock);
         const gramPer = p.cost?.filamentWeight ?? 0;
