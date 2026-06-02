@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Table,
@@ -176,6 +176,250 @@ function readFilterFromUrl(): FilterMode {
   }
   return "active";
 }
+
+/**
+ * Tek ürün satırı — memo'lu: yalnızca KENDİ prop'ları değişince render olur. Scroll'da
+ * visibleCount artınca mevcut satırlar (product ref'i + primitive prop'ları aynı kaldığı için)
+ * yeniden render OLMAZ → uzun listede scroll yağ gibi akar. Tüm handler'lar parent'ta useCallback.
+ */
+const ProductRow = memo(function ProductRow({
+  product,
+  isMember,
+  isSelected,
+  isEditingAlias,
+  aliasValue,
+  integrations,
+  onToggleSelect,
+  onAdjustStock,
+  onAliasStart,
+  onAliasChange,
+  onAliasCommit,
+  onAliasCancel,
+  onMatch,
+  onToggleHidden,
+  onDelete,
+}: {
+  product: Product;
+  isMember: boolean;
+  isSelected: boolean;
+  isEditingAlias: boolean;
+  aliasValue: string;
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  onToggleSelect: (id: string, checked: boolean) => void;
+  onAdjustStock: (id: string, delta: number, current: number) => void;
+  onAliasStart: (id: string, current: string) => void;
+  onAliasChange: (value: string) => void;
+  onAliasCommit: () => void;
+  onAliasCancel: () => void;
+  onMatch: (productId: string, productName: string, platform: "trendyol" | "hepsiburada") => void;
+  onToggleHidden: (id: string, hidden: boolean) => void;
+  onDelete: (id: string) => void;
+}) {
+  const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
+  const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
+    product.platforms.find((x) => x.platform === p);
+
+  return (
+    <TableRow
+      className={cn(
+        "group hover:bg-muted/50",
+        !product.isActive && "opacity-50",
+        isMember && "bg-muted/15"
+      )}
+    >
+      <TableCell className="py-2">
+        <Checkbox checked={isSelected} onCheckedChange={(v) => onToggleSelect(product.id, !!v)} />
+      </TableCell>
+      <TableCell className={cn("py-2 pr-0", isMember && "pl-6")}>
+        <ProductImage src={product.imageUrl} name={product.name} />
+      </TableCell>
+      <TableCell className="max-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
+          {isEditingAlias ? (
+            <input
+              autoFocus
+              value={aliasValue}
+              maxLength={80}
+              placeholder="takma ad"
+              onChange={(e) => onAliasChange(e.target.value)}
+              onBlur={onAliasCommit}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onAliasCommit();
+                else if (e.key === "Escape") onAliasCancel();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="shrink-0 w-24 rounded border border-primary/40 bg-background px-1.5 py-0.5 text-[11px] font-medium outline-none focus:border-primary"
+            />
+          ) : product.alias ? (
+            <button
+              type="button"
+              title="Takma adı düzenle"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onAliasStart(product.id, product.alias ?? "");
+              }}
+              className="shrink-0 max-w-[8rem] truncate rounded bg-primary/15 text-primary text-[10px] font-semibold px-1.5 py-0.5 hover:bg-primary/25 transition-colors"
+            >
+              {product.alias}
+            </button>
+          ) : (
+            <button
+              type="button"
+              title="Takma ad ekle"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onAliasStart(product.id, "");
+              }}
+              className="shrink-0 grid place-items-center h-5 w-5 rounded text-muted-foreground/40 hover:text-primary hover:bg-primary/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+            >
+              <Tag className="h-3 w-3" />
+            </button>
+          )}
+          <Link
+            href={`/products/${product.id}`}
+            className="font-medium hover:underline line-clamp-1 block text-sm min-w-0"
+            title={product.name}
+          >
+            {product.name}
+          </Link>
+        </div>
+        <div className="text-[11px] text-muted-foreground/70 truncate flex items-center gap-1.5 mt-0.5">
+          <span className="font-mono">{product.barcode}</span>
+          <span className="opacity-60">·</span>
+          <span className="truncate">{product.categoryName}</span>
+        </div>
+        {isMember && product.variantLabel && (
+          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
+            <Layers className="h-3 w-3" /> {product.variantLabel}
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="py-2">
+        <div className="flex items-center justify-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground"
+            disabled={product.stock <= 0}
+            onClick={() => onAdjustStock(product.id, -1, product.stock)}
+          >
+            <Minus className="h-3 w-3" />
+          </Button>
+          <span
+            className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
+              product.stock === 0
+                ? "text-destructive"
+                : product.stock === 1
+                  ? "text-amber-500"
+                  : "text-foreground"
+            }`}
+            title={
+              product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined
+            }
+          >
+            {product.stock}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 text-muted-foreground"
+            onClick={() => onAdjustStock(product.id, 1, product.stock)}
+          >
+            <Plus className="h-3 w-3" />
+          </Button>
+        </div>
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-xs">
+        {cost !== null && cost !== undefined ? (
+          formatCurrency(cost)
+        ) : (
+          <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
+        )}
+      </TableCell>
+      {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
+        const p = findPlatform(platform);
+        const integrationActive = integrations?.[platform] ?? false;
+        if (!p) {
+          if (!integrationActive) {
+            return (
+              <TableCell key={platform} className="text-center">
+                <span className="text-[10px] text-muted-foreground/40">Entegrasyon yok</span>
+              </TableCell>
+            );
+          }
+          if (platform === "shopify") {
+            return (
+              <TableCell key={platform} className="text-center">
+                <span className="text-[10px] text-muted-foreground/40">—</span>
+              </TableCell>
+            );
+          }
+          return (
+            <TableCell key={platform} className="text-center">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px] px-2"
+                onClick={() => onMatch(product.id, product.name, platform as "trendyol" | "hepsiburada")}
+              >
+                <Link2 className="h-3 w-3 mr-1" />
+                Ürün Seç
+              </Button>
+            </TableCell>
+          );
+        }
+        const isLoss = p.netProfit !== null && p.netProfit < 0;
+        const isThin = p.netProfit !== null && p.netProfit >= 0 && (p.profitMargin ?? 0) < 0.1;
+        return (
+          <TableCell key={platform} className="text-center">
+            <div className="text-xs font-medium tabular-nums">{formatCurrency(p.salePrice)}</div>
+            {p.commissionMissing && (
+              <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Komisyon gir!
+              </div>
+            )}
+            {p.netProfit !== null ? (
+              <div
+                className={`text-[11px] tabular-nums mt-0.5 ${
+                  isLoss ? "text-destructive font-medium" : isThin ? "text-amber-500" : "text-green-500"
+                }`}
+              >
+                {formatCurrency(p.netProfit)}{" "}
+                <span className="opacity-70">({formatPercent(p.profitMargin ?? 0)})</span>
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted-foreground/60 mt-0.5">maliyet eksik</div>
+            )}
+          </TableCell>
+        );
+      })}
+      <TableCell>
+        <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            title={product.hidden ? "Geri getir" : "Gizle"}
+            onClick={() => onToggleHidden(product.id, !product.hidden)}
+          >
+            {product.hidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-destructive/70 hover:text-destructive"
+            title="Sil"
+            onClick={() => onDelete(product.id)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+});
 
 export default function ProductsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
@@ -366,14 +610,46 @@ export default function ProductsPage() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"] }),
   });
 
-  const commitAlias = () => {
-    if (!aliasEdit) return;
-    const value = aliasEdit.value.trim();
-    if (value !== aliasEdit.original.trim()) {
-      setAliasMutation.mutate({ id: aliasEdit.id, alias: value || null });
+  // aliasEdit'i ref'te tut → commitAlias her render'da yeni closure olmaz (memo kırılmaz).
+  const aliasEditRef = useRef(aliasEdit);
+  aliasEditRef.current = aliasEdit;
+  const commitAlias = useCallback(() => {
+    const ae = aliasEditRef.current;
+    if (!ae) return;
+    const value = ae.value.trim();
+    if (value !== ae.original.trim()) {
+      setAliasMutation.mutate({ id: ae.id, alias: value || null });
     }
     setAliasEdit(null);
-  };
+  }, [setAliasMutation]);
+
+  // ProductRow'a geçilen STABİL handler'lar — useCallback, böylece scroll'da memo'lu satırlar
+  // (prop ref'leri değişmediği için) yeniden render olmaz.
+  const handleToggleSelect = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+  const handleAliasStart = useCallback((id: string, current: string) => {
+    setAliasEdit({ id, value: current, original: current });
+  }, []);
+  const handleAliasChange = useCallback((value: string) => {
+    setAliasEdit((prev) => (prev ? { ...prev, value } : prev));
+  }, []);
+  const handleAliasCancel = useCallback(() => setAliasEdit(null), []);
+  const handleMatch = useCallback(
+    (productId: string, productName: string, platform: "trendyol" | "hepsiburada") =>
+      setMatchModal({ productId, productName, platform }),
+    []
+  );
+  const handleToggleHidden = useCallback(
+    (id: string, hidden: boolean) => toggleHiddenMutation.mutate({ id, hidden }),
+    [toggleHiddenMutation]
+  );
+  const handleDelete = useCallback((id: string) => deleteMutation.mutate(id), [deleteMutation]);
 
   const form = useForm<AddProductForm>({
     resolver: zodResolver(AddProductSchema),
@@ -537,17 +813,19 @@ export default function ProductsPage() {
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
+    // TEK gözlemci — `visibleCount` deps'te DEĞİL: yoksa her +40'ta observer yeniden kurulup
+    // sentinel hâlâ margin içindeyse anında tekrar tetikleniyordu (cascade → render fırtınası).
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
           setVisibleCount((c) => c + 40);
         }
       },
-      { rootMargin: "400px" }
+      { rootMargin: "300px" }
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [flatRows.length, visibleCount]);
+  }, [flatRows.length]);
 
   const visibleRows = flatRows.slice(0, visibleCount);
 
@@ -789,254 +1067,25 @@ export default function ProductsPage() {
               {visibleRows.map((row) => {
                 if (row.kind === "group") return renderGroupRow(row);
                 const product = row.product;
-                const isMember = row.isMember;
-                const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
-                const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
-                  product.platforms.find((x) => x.platform === p);
-
                 return (
-                  <TableRow
+                  <ProductRow
                     key={row.key}
-                    className={cn(
-                      "group hover:bg-muted/50",
-                      !product.isActive && "opacity-50",
-                      isMember && "bg-muted/15"
-                    )}
-                  >
-                    <TableCell className="py-2">
-                      <Checkbox
-                        checked={selectedIds.has(product.id)}
-                        onCheckedChange={(v) => {
-                          setSelectedIds((prev) => {
-                            const next = new Set(prev);
-                            if (v) next.add(product.id);
-                            else next.delete(product.id);
-                            return next;
-                          });
-                        }}
-                      />
-                    </TableCell>
-                    <TableCell className={cn("py-2 pr-0", isMember && "pl-6")}>
-                      <ProductImage src={product.imageUrl} name={product.name} />
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        {aliasEdit?.id === product.id ? (
-                          <input
-                            autoFocus
-                            value={aliasEdit.value}
-                            maxLength={80}
-                            placeholder="takma ad"
-                            onChange={(e) => setAliasEdit({ ...aliasEdit, value: e.target.value })}
-                            onBlur={commitAlias}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") commitAlias();
-                              else if (e.key === "Escape") setAliasEdit(null);
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="shrink-0 w-24 rounded border border-primary/40 bg-background px-1.5 py-0.5 text-[11px] font-medium outline-none focus:border-primary"
-                          />
-                        ) : product.alias ? (
-                          <button
-                            type="button"
-                            title="Takma adı düzenle"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setAliasEdit({ id: product.id, value: product.alias ?? "", original: product.alias ?? "" });
-                            }}
-                            className="shrink-0 max-w-[8rem] truncate rounded bg-primary/15 text-primary text-[10px] font-semibold px-1.5 py-0.5 hover:bg-primary/25 transition-colors"
-                          >
-                            {product.alias}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            title="Takma ad ekle"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setAliasEdit({ id: product.id, value: "", original: "" });
-                            }}
-                            className="shrink-0 grid place-items-center h-5 w-5 rounded text-muted-foreground/40 hover:text-primary hover:bg-primary/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-                          >
-                            <Tag className="h-3 w-3" />
-                          </button>
-                        )}
-                        <Link
-                          href={`/products/${product.id}`}
-                          className="font-medium hover:underline line-clamp-1 block text-sm min-w-0"
-                          title={product.name}
-                        >
-                          {product.name}
-                        </Link>
-                      </div>
-                      <div className="text-[11px] text-muted-foreground/70 truncate flex items-center gap-1.5 mt-0.5">
-                        <span className="font-mono">{product.barcode}</span>
-                        <span className="opacity-60">·</span>
-                        <span className="truncate">{product.categoryName}</span>
-                      </div>
-                      {isMember && product.variantLabel && (
-                        <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
-                          <Layers className="h-3 w-3" /> {product.variantLabel}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="py-2">
-                      <div className="flex items-center justify-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-muted-foreground"
-                          disabled={product.stock <= 0}
-                          onClick={() => adjustStock(product.id, -1, product.stock)}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <span
-                          className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
-                            product.stock === 0
-                              ? "text-destructive"
-                              : product.stock === 1
-                                ? "text-amber-500"
-                                : "text-foreground"
-                          }`}
-                          title={
-                            product.stock === 0
-                              ? "Stok tükendi"
-                              : product.stock === 1
-                                ? "Kritik stok"
-                                : undefined
-                          }
-                        >
-                          {product.stock}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-muted-foreground"
-                          onClick={() => adjustStock(product.id, 1, product.stock)}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums text-xs">
-                      {cost !== null && cost !== undefined ? (
-                        formatCurrency(cost)
-                      ) : (
-                        <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
-                      )}
-                    </TableCell>
-                    {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
-                      const p = findPlatform(platform);
-                      const integrationActive = integrations?.[platform] ?? false;
-
-                      if (!p) {
-                        // Listing yok — entegrasyon konfigüre değilse "Entegrasyon yok", varsa "Ürün Seç"
-                        if (!integrationActive) {
-                          return (
-                            <TableCell key={platform} className="text-center">
-                              <span className="text-[10px] text-muted-foreground/40">
-                                Entegrasyon yok
-                              </span>
-                            </TableCell>
-                          );
-                        }
-                        // Shopify için "Ürün Seç" değil (Shopify ana ürün listesi)
-                        if (platform === "shopify") {
-                          return (
-                            <TableCell key={platform} className="text-center">
-                              <span className="text-[10px] text-muted-foreground/40">—</span>
-                            </TableCell>
-                          );
-                        }
-                        return (
-                          <TableCell key={platform} className="text-center">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-[11px] px-2"
-                              onClick={() =>
-                                setMatchModal({
-                                  productId: product.id,
-                                  productName: product.name,
-                                  platform: platform as "trendyol" | "hepsiburada",
-                                })
-                              }
-                            >
-                              <Link2 className="h-3 w-3 mr-1" />
-                              Ürün Seç
-                            </Button>
-                          </TableCell>
-                        );
-                      }
-                      const isLoss = p.netProfit !== null && p.netProfit < 0;
-                      const isThin =
-                        p.netProfit !== null && p.netProfit >= 0 && (p.profitMargin ?? 0) < 0.1;
-                      return (
-                        <TableCell key={platform} className="text-center">
-                          <div className="text-xs font-medium tabular-nums">
-                            {formatCurrency(p.salePrice)}
-                          </div>
-                          {p.commissionMissing && (
-                            <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
-                              <AlertTriangle className="h-3 w-3" /> Komisyon gir!
-                            </div>
-                          )}
-                          {p.netProfit !== null ? (
-                            <div
-                              className={`text-[11px] tabular-nums mt-0.5 ${
-                                isLoss
-                                  ? "text-destructive font-medium"
-                                  : isThin
-                                    ? "text-amber-500"
-                                    : "text-green-500"
-                              }`}
-                            >
-                              {formatCurrency(p.netProfit)}{" "}
-                              <span className="opacity-70">
-                                ({formatPercent(p.profitMargin ?? 0)})
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="text-[10px] text-muted-foreground/60 mt-0.5">
-                              maliyet eksik
-                            </div>
-                          )}
-                        </TableCell>
-                      );
-                    })}
-                    <TableCell>
-                      <div className="flex items-center gap-0.5">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                          title={product.hidden ? "Geri getir" : "Gizle"}
-                          disabled={toggleHiddenMutation.isPending}
-                          onClick={() =>
-                            toggleHiddenMutation.mutate({ id: product.id, hidden: !product.hidden })
-                          }
-                        >
-                          {product.hidden ? (
-                            <Eye className="h-3.5 w-3.5" />
-                          ) : (
-                            <EyeOff className="h-3.5 w-3.5" />
-                          )}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive/70 hover:text-destructive"
-                          title="Sil"
-                          onClick={() => deleteMutation.mutate(product.id)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+                    product={product}
+                    isMember={row.isMember}
+                    isSelected={selectedIds.has(product.id)}
+                    isEditingAlias={aliasEdit?.id === product.id}
+                    aliasValue={aliasEdit?.id === product.id ? aliasEdit.value : ""}
+                    integrations={integrations}
+                    onToggleSelect={handleToggleSelect}
+                    onAdjustStock={adjustStock}
+                    onAliasStart={handleAliasStart}
+                    onAliasChange={handleAliasChange}
+                    onAliasCommit={commitAlias}
+                    onAliasCancel={handleAliasCancel}
+                    onMatch={handleMatch}
+                    onToggleHidden={handleToggleHidden}
+                    onDelete={handleDelete}
+                  />
                 );
               })}
               {visibleCount < flatRows.length && (
