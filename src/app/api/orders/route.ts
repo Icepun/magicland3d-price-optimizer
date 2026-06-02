@@ -14,7 +14,7 @@ import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { simulatePrice } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
 import { withProductCommissionRule } from "@/core/product-commission";
-import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
+import { filterCargoRulesByPlatform, filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
 
 const WINDOW_DAYS = 30;
 
@@ -400,7 +400,9 @@ export async function GET() {
     }
   }
 
-  function profitFor(platform: "shopify" | "trendyol" | "hepsiburada", m: Matched, unitPrice: number, qty: number): number | null {
+  // Satır kârı — KARGOSUZ (cargoCostOverride: 0). Kargo gönderiye bir kez, sipariş düzeyinde
+  // toplam desiye göre ayrıca düşülür (her ürün/adet için tekrar tekrar değil).
+  function lineProfitNoCargo(platform: "shopify" | "trendyol" | "hepsiburada", m: Matched, unitPrice: number, qty: number): number | null {
     if (m.productionCost + m.packagingCost <= 0 || unitPrice <= 0) return null;
     const sim = simulatePrice({
       salePrice: unitPrice,
@@ -415,6 +417,7 @@ export async function GET() {
       cargoRules: filterCargoRulesByPlatform(cargoRules, platform),
       expenseRules: filterRulesByPlatform(expenseRules, platform),
       vatRate,
+      cargoCostOverride: 0,
     });
     return sim.netProfit * qty;
   }
@@ -426,6 +429,8 @@ export async function GET() {
     let anyUnmatched = false;
     let thumb: string | null = null;
 
+    let totalDesi = 0;
+    let cargoCategory = "";
     const items: UnifiedOrderItem[] = r.lines.map((l) => {
       let m: Matched | null = null;
       for (const k of l.matchKeys) {
@@ -444,10 +449,12 @@ export async function GET() {
       if (image && !thumb) thumb = image;
 
       if (m) {
-        const p = profitFor(r.platform, m, l.unitPrice, l.quantity);
+        const p = lineProfitNoCargo(r.platform, m, l.unitPrice, l.quantity);
         if (p !== null) {
           orderProfit += p;
           anyProfit = true;
+          totalDesi += (m.desi ?? 1) * l.quantity;
+          if (!cargoCategory) cargoCategory = m.categoryName;
         } else {
           anyUnmatched = true;
         }
@@ -456,6 +463,18 @@ export async function GET() {
       }
       return { name: l.name, quantity: l.quantity, image };
     });
+
+    // KARGO: tüm gönderiye BİR KEZ — toplam desiye göre (ürün/adet başına tekrar değil).
+    // 2 ürünlü / 2 adetli siparişte tek kargo bedeli düşülür (eski hata: her satır için ayrı).
+    if (anyProfit) {
+      const cargoRule = findCargoRule(
+        filterCargoRulesByPlatform(cargoRules, r.platform),
+        r.total,
+        cargoCategory,
+        totalDesi || 1
+      );
+      if (cargoRule) orderProfit -= cargoRule.cargoCost;
+    }
 
     orders.push({
       platform: r.platform,
