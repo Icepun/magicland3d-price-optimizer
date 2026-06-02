@@ -326,6 +326,7 @@ function PrinterCard({
   const isPrinting = status === "printing";
   const isPaused = status === "paused";
   const offline = isReal && !online;
+  const isError = status === "error";
 
   const nozzle = printer.temps.nozzle; // gerçek değer (5sn poll); sahte sn-bazlı titreme kaldırıldı
   const bed = printer.temps.bed;
@@ -333,7 +334,11 @@ function PrinterCard({
 
   return (
     <Card
-      className={cn("relative overflow-hidden animate-in fade-in slide-in-from-bottom-3 duration-500", offline && "opacity-70")}
+      className={cn(
+        "relative overflow-hidden animate-in fade-in slide-in-from-bottom-3 duration-500",
+        offline && "opacity-70",
+        isError && "border-destructive/55 ring-1 ring-destructive/35 shadow-[0_10px_34px_-10px] shadow-destructive/40"
+      )}
       style={{
         animationDelay: `${index * 80}ms`, animationFillMode: "both",
         borderColor: isPrinting && online ? alpha(accent, 35) : undefined,
@@ -345,9 +350,23 @@ function PrinterCard({
           <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />
         </div>
       )}
+      {isError && <div className="absolute inset-x-0 top-0 h-[3px] bg-destructive" />}
       {isFinished && online && <Confetti accent={accent} />}
 
       <CardContent className="p-4 space-y-3.5">
+        {/* Acil: baskı durdu / yazıcı hatası */}
+        {isError && (
+          <div className="flex items-center gap-2.5 rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2">
+            <AlertTriangle className="h-4 w-4 text-destructive shrink-0 motion-safe:animate-pulse" />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-destructive leading-tight">Baskı durdu — yazıcıda sorun var</p>
+              <p className="text-[11px] text-destructive/80 truncate">
+                {job?.productName ? `${job.productName} · ` : ""}kontrol et
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Üst: marka + durum */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -370,6 +389,7 @@ function PrinterCard({
             >
               {isPrinting && <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: accent }} />}
               {isFinished && <Sparkles className="h-3 w-3" />}
+              {isError && <AlertTriangle className="h-3 w-3" />}
               {sm.label}
             </span>
           )}

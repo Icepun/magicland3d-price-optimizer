@@ -420,3 +420,24 @@ model PrintCommand {
 
   @@index([status])
 }
+
+/**
+ * Kalıcı bildirim — olay-anında üretilir (ör. stoğu biten/sipariş-üzerine ürüne
+ * sipariş gelmesi). `id` aynı zamanda tekilleştirme anahtarıdır (örn.
+ * "order-stock:ty-123:prod_abc") → createMany(skipDuplicates) ile tekrar yazılmaz.
+ * Düşük stok / filament / yazıcı uyarıları ANLIK hesaplanır (bu tabloda DEĞİL).
+ */
+model Notification {
+  id             String    @id
+  /** order-stock | order-made | (gelecekte: printer-done vb.) */
+  type           String
+  /** critical | warning */
+  severity       String
+  title          String
+  body           String
+  href           String
+  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime?
+
+  @@index([acknowledgedAt])
+}

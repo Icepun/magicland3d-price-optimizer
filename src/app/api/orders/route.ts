@@ -155,6 +155,7 @@ interface Matched {
   desi: number | null;
   commissionRate: number | null;
   madeToOrder: boolean;
+  stock: number;
 }
 
 type CommissionRules = Parameters<typeof simulatePrice>[0]["commissionRules"];
@@ -389,6 +390,7 @@ export async function GET() {
         desi: p.desi,
         commissionRate: p.commissionRate,
         madeToOrder: p.madeToOrder,
+        stock: p.stock,
       };
       const add = (k: string | null | undefined) => {
         if (k && !byKey.has(k)) byKey.set(k, m);
@@ -428,8 +430,17 @@ export async function GET() {
     return sim.netProfit * qty;
   }
 
+  // Olay-anı bildirim adayları (stoğu biten / sipariş-üzerine ürüne sipariş).
+  // Sadece AKSİYON gereken (pending/processing) + SON 7 GÜN siparişler → tekilleştirilmiş.
+  const PLATFORM_LABEL: Record<string, string> = { shopify: "Shopify", trendyol: "Trendyol", hepsiburada: "Hepsiburada" };
+  const notifCutoff = Date.now() - 7 * 86_400_000;
+  const notifs: { id: string; type: string; severity: string; title: string; body: string; href: string }[] = [];
+
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of recent) {
+    const actionable =
+      (r.statusKind === "pending" || r.statusKind === "processing") &&
+      (!r.date || new Date(r.date).getTime() >= notifCutoff);
     let orderProfit = 0;
     let anyProfit = false;
     let anyUnmatched = false;
@@ -463,6 +474,31 @@ export async function GET() {
           if (!cargoCategory) cargoCategory = m.categoryName;
         } else {
           anyUnmatched = true;
+        }
+        // Bildirim: aktif siparişte sipariş-üzerine ürün → üretim hatırlatıcı (uyarı);
+        // değilse stok 0/negatif → acil (sattık ama gönderemiyoruz).
+        if (actionable) {
+          const qty = l.quantity > 1 ? ` ×${l.quantity}` : "";
+          const tail = `${PLATFORM_LABEL[r.platform]} #${r.orderNumber}${qty}`;
+          if (m.madeToOrder) {
+            notifs.push({
+              id: `order-made:${r.id}:${m.id}`,
+              type: "order-made",
+              severity: "warning",
+              title: "Sipariş üzerine üretim",
+              body: `${m.name} — ${tail}`,
+              href: `/products/${m.id}`,
+            });
+          } else if (m.stock <= 0) {
+            notifs.push({
+              id: `order-stock:${r.id}:${m.id}`,
+              type: "order-stock",
+              severity: "critical",
+              title: "Stoğu biten ürüne sipariş!",
+              body: `${m.name} — ${tail} · stok yok`,
+              href: `/products/${m.id}`,
+            });
+          }
         }
       } else {
         anyUnmatched = true;
@@ -506,6 +542,20 @@ export async function GET() {
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
     });
+  }
+
+  // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ /
+  // BOZMAZ). id tekilleştirme anahtarı; SQLite "INSERT OR IGNORE" ile aynı satır bir
+  // kez yazılır (Prisma createMany SQLite'ta skipDuplicates desteklemiyor). Tek round-trip.
+  if (notifs.length > 0) {
+    const placeholders = notifs.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+    const params = notifs.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href]);
+    void prisma
+      .$executeRawUnsafe(
+        `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
+        ...params
+      )
+      .catch(() => {/* tablo yoksa/yazma hatası → sessiz geç */});
   }
 
   // En yeni üstte

@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Bell, Package, Disc3, X, Check } from "lucide-react";
+import { Bell, Package, Disc3, Printer, ShoppingCart, X, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AppAlert {
   id: string;
-  type: "stock" | "filament";
+  type: "stock" | "filament" | "printer" | "order";
   severity: "critical" | "warning";
   title: string;
   body: string;
@@ -42,9 +42,23 @@ export function NotificationBell() {
   });
   const alerts = data?.alerts ?? [];
 
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   useEffect(() => setDismissed(readSet(DISMISS_KEY)), []);
+
+  // Kalıcı (sipariş) bildirimlerini sunucuda da "okundu" işaretle → cihazlar-arası.
+  // Anlık (stok/filament/yazıcı) id'ler eşleşmez, zararsız. Sonra listeyi tazele.
+  function ackServer(ids: string[]) {
+    if (ids.length === 0) return;
+    fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    })
+      .then(() => qc.invalidateQueries({ queryKey: ["notifications"] }))
+      .catch(() => {/* ignore */});
+  }
 
   // Yeni kritik uyarılar için masaüstü (Electron) bildirimi — bir kez
   useEffect(() => {
@@ -75,12 +89,14 @@ export function NotificationBell() {
     next.add(id);
     setDismissed(next);
     writeSet(DISMISS_KEY, next);
+    ackServer([id]);
   }
   function dismissAll() {
     const next = new Set(dismissed);
     visible.forEach((a) => next.add(a.id));
     setDismissed(next);
     writeSet(DISMISS_KEY, next);
+    ackServer(visible.map((a) => a.id));
   }
 
   return (
@@ -120,7 +136,8 @@ export function NotificationBell() {
                 <p className="text-xs text-muted-foreground text-center py-6">Yeni bildirim yok 🎉</p>
               ) : (
                 visible.map((a) => {
-                  const Icon = a.type === "filament" ? Disc3 : Package;
+                  const Icon =
+                    a.type === "filament" ? Disc3 : a.type === "printer" ? Printer : a.type === "order" ? ShoppingCart : Package;
                   return (
                     <div key={a.id} className="flex items-start gap-2 px-3 py-2 border-b border-border/40 last:border-0 hover:bg-muted/40 group">
                       <span

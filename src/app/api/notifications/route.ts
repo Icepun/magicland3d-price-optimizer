@@ -13,7 +13,7 @@ export type AlertSeverity = "critical" | "warning";
 
 export interface AppAlert {
   id: string;
-  type: "stock" | "filament";
+  type: "stock" | "filament" | "printer" | "order";
   severity: AlertSeverity;
   title: string;
   body: string;
@@ -26,7 +26,7 @@ export async function GET() {
   try {
     await ensureRuntimeSchema();
 
-    const [lowStock, spools] = await Promise.all([
+    const [lowStock, spools, printers, stored] = await Promise.all([
       prisma.product.findMany({
         where: { isActive: true, hidden: false, stock: { lte: 1 } },
         select: { id: true, name: true, stock: true },
@@ -36,6 +36,16 @@ export async function GET() {
         where: { isActive: true },
         select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
       }),
+      // Yazıcı durumları (relay yazar): hata = baskı durdu → acil; duraklatıldı = uyarı.
+      prisma.printerSnapshot.findMany({
+        select: { printerConfigId: true, name: true, status: true, online: true, productName: true },
+      }).catch(() => []),
+      // Kalıcı olay-anı bildirimleri (sipariş kaynaklı) — okunmamış olanlar.
+      prisma.notification.findMany({
+        where: { acknowledgedAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }).catch(() => []),
     ]);
 
     for (const p of lowStock) {
@@ -61,6 +71,41 @@ export async function GET() {
         href: "/spools",
       });
     }
+
+    for (const pr of printers) {
+      const job = pr.productName ? ` — ${pr.productName}` : "";
+      if (pr.status === "error") {
+        alerts.push({
+          id: `printer-${pr.printerConfigId}`,
+          type: "printer",
+          severity: "critical",
+          title: "Yazıcı hatası — baskı durdu",
+          body: `${pr.name}${job}`,
+          href: "/printers",
+        });
+      } else if (pr.status === "paused" && pr.online) {
+        alerts.push({
+          id: `printer-${pr.printerConfigId}`,
+          type: "printer",
+          severity: "warning",
+          title: "Baskı duraklatıldı",
+          body: `${pr.name}${job}`,
+          href: "/printers",
+        });
+      }
+    }
+
+    // Kalıcı sipariş bildirimleri (stoğu biten / sipariş-üzerine ürüne sipariş)
+    for (const n of stored) {
+      alerts.push({
+        id: n.id,
+        type: "order",
+        severity: n.severity === "critical" ? "critical" : "warning",
+        title: n.title,
+        body: n.body,
+        href: n.href,
+      });
+    }
   } catch {
     /* tablo yoksa boş dön */
   }
@@ -70,4 +115,26 @@ export async function GET() {
 
   const critical = alerts.filter((a) => a.severity === "critical").length;
   return NextResponse.json({ alerts, counts: { total: alerts.length, critical, warning: alerts.length - critical } });
+}
+
+/**
+ * Bildirim(ler)i "okundu" işaretle — KALICI (sipariş) bildirimleri için cihazlar-arası.
+ * Anlık hesaplanan (stok/filament/yazıcı) id'ler hiçbir satırla eşleşmez → zararsız no-op
+ * (onlar istemcide localStorage ile gizlenir).
+ */
+export async function POST(req: Request) {
+  try {
+    const body = (await req.json()) as { ids?: unknown };
+    const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
+    if (ids.length > 0) {
+      await ensureRuntimeSchema();
+      await prisma.notification.updateMany({
+        where: { id: { in: ids } },
+        data: { acknowledgedAt: new Date() },
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+  return NextResponse.json({ ok: true });
 }

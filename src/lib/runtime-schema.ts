@@ -9,9 +9,10 @@ let schemaReady: Promise<void> | null = null;
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
 // v19: Product.alias + Listing.barcode (0.19.15/0.19.16). v20: Product.madeToOrder (0.19.21).
+// v21: Notification tablosu (0.19.30) — olay-anı bildirimleri (stoğu biten/sipariş-üzerine ürüne sipariş).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "20";
+const CURRENT_SCHEMA_VERSION = "21";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -591,6 +592,24 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "PrintCommand_status_idx" ON "PrintCommand"("status")`
+    );
+
+    // Kalıcı bildirimler (v21) — olay-anı uyarıları (stoğu biten/sipariş-üzerine ürüne sipariş).
+    // id = tekilleştirme anahtarı (createMany skipDuplicates ile tekrar yazılmaz).
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "Notification" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "type" TEXT NOT NULL,
+        "severity" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "body" TEXT NOT NULL,
+        "href" TEXT NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "acknowledgedAt" DATETIME
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "Notification_acknowledgedAt_idx" ON "Notification"("acknowledgedAt")`
     );
 
     await cleanupPdfCommissionRules();
