@@ -93,7 +93,7 @@ export async function GET(req: NextRequest) {
       prisma.product.findMany({
         where,
         include: {
-          cost: { include: { filamentType: true } },
+          cost: { include: { filamentType: { select: { costPerGram: true } } } },
           listings: true,
           variantGroup: { select: { id: true, name: true } },
         },

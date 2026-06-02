@@ -63,12 +63,10 @@ export async function GET(
   const product = await prisma.product.findUnique({
     where: { id },
     include: {
-      cost: {
-        include: {
-          filamentType: true,
-        }
-      },
-      priceHistory: { orderBy: { changedAt: "desc" }, take: 20 },
+      // cost: sadece skaler kolonlar (filamentTypeId dahil) — filamentType JOIN'i sayfada
+      // kullanılmıyor (filament maliyeti ayrı ["filament-types"] sorgusundan çözülüyor).
+      // priceHistory KALDIRILDI — detay sayfası onu okumuyor (ayrı PriceHistoryCard kendi çeker).
+      cost: true,
       listings: { orderBy: { platform: "asc" } },
       variantGroup: {
         select: {
@@ -219,7 +217,9 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json(product);
+  // Caller'lar yanıt gövdesini kullanmıyor (optimistic cache + refetch yok) → tam ürünü
+  // serileştirme; yalnızca onay dön.
+  return NextResponse.json({ ok: true });
 }
 
 export async function DELETE(

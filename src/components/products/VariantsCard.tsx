@@ -83,8 +83,10 @@ export function VariantsCard({
   const [confirmUnlinkId, setConfirmUnlinkId] = useState<string | null>(null);
 
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["product"] });
-    qc.invalidateQueries({ queryKey: ["products"] });
+    // SADECE bu ürünü tazele (prefix ["product"] DEĞİL → diğer ürün cache'lerini boşuna bayatlatma).
+    // Üyelik değişen işlemler (unlink/dissolve) için bu ürünün refetch'i gerekli; liste lazy.
+    qc.invalidateQueries({ queryKey: ["product", productId] });
+    qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
   };
 
   const renameGroup = useMutation({
@@ -112,7 +114,8 @@ export function VariantsCard({
       toast.error("Grup adı güncellenemedi (geri alındı)");
     },
     onSuccess: () => toast.success("Grup adı güncellendi"),
-    onSettled: () => refresh(),
+    // Optimistic onMutate zaten cache'i yamaladı → ürünü refetch etme; liste sadece bayat işaretlenir.
+    onSettled: () => qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" }),
   });
 
   const unlink = useMutation({
@@ -161,7 +164,8 @@ export function VariantsCard({
       toast.error("Etiket güncellenemedi (geri alındı)");
     },
     onSuccess: () => toast.success("Etiket güncellendi"),
-    onSettled: () => refresh(),
+    // Optimistic onMutate zaten cache'i yamaladı → ürünü refetch etme; liste sadece bayat işaretlenir.
+    onSettled: () => qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" }),
   });
 
   const dissolve = useMutation({
@@ -405,7 +409,7 @@ function CreateGroupModal({ productId, productName, onClose }: { productId: stri
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success("Varyant grubu oluşturuldu");
       onClose();
     },
@@ -498,7 +502,7 @@ function VariantPicker({
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success("Varyant gruba eklendi");
       onClose();
     },

@@ -264,10 +264,10 @@ export default function ProductDetailPage({
     },
     onSuccess: () => toast.success("Maliyet kaydedildi"),
     onSettled: () => {
-      // Sunucu doğrulaması + liste tazeleme (optimistic UI zaten anında güncellendi).
-      queryClient.invalidateQueries({ queryKey: ["product", id] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      // Maliyet optimistic yazıldı + canlı önizleme (preview) zaten form'dan güncel →
+      // ["product",id] ve preview REFETCH YOK (yaz-anında ağır refetch/donma sebebiydi).
+      // Liste sadece bayat işaretlenir → tekrar ziyarette tazelenir.
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
     },
   });
 
@@ -292,9 +292,9 @@ export default function ProductDetailPage({
         }),
       }).then((r) => r.json()),
     onSuccess: (d: { count?: number }) => {
-      queryClient.invalidateQueries({ queryKey: ["product", id] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      // Açık ürünün maliyeti zaten gösteriliyor; ağır refetch yok — sadece bayat işaretle.
+      queryClient.invalidateQueries({ queryKey: ["product", id], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success(`Maliyet ${d?.count ?? ""} varyanta uygulandı`);
     },
     onError: () => toast.error("Varyantlara uygulanamadı"),
@@ -329,12 +329,25 @@ export default function ProductDetailPage({
     },
     retry: (n, e) => n < 2 && !(e instanceof Error && /barkod|kullanıl/i.test(e.message)),
     retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
+    // Optimistic: cache'i anında yama → ["product",id] REFETCH YOK (yaz-sonrası donma yok).
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["product", id] });
+      const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
+      const alias = aliasInput.trim() || null;
+      const bc = barcodeInput.trim();
+      queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
+        old ? { ...old, alias, ...(bc ? { barcode: bc } : {}) } : old
+      );
+      return { prev };
+    },
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      toast.error(e?.message || "Kaydedilemedi");
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["product", id] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success("Kaydedildi");
     },
-    onError: (e: Error) => toast.error(e?.message || "Kaydedilemedi"),
   });
 
   // "Sipariş üzerine üretilir" toggle — optimistic (anında, hata olursa geri al).
@@ -362,10 +375,11 @@ export default function ProductDetailPage({
     },
     onSuccess: (_d, madeToOrder) =>
       toast.success(madeToOrder ? "Sipariş üzerine üretilir olarak işaretlendi" : "Stok takibine alındı"),
+    // Optimistic onMutate yeterli → ["product",id]'i YENİDEN ÇEKME (yaz-sonrası ağır refetch = 2-3sn donma).
+    // Liste/panel sadece "bayat" işaretlenir (refetchType:"none") → o ekrana gidince tazelenir, şimdi değil.
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["product", id] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
   });
 
@@ -904,8 +918,7 @@ function PlatformProfitCard({
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success(`${info.label} listing'i eklendi`);
       setEditing(false);
     },
@@ -925,8 +938,7 @@ function PlatformProfitCard({
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success("Güncellendi");
       setEditing(false);
     },
@@ -937,8 +949,7 @@ function PlatformProfitCard({
     mutationFn: () => fetch(`/api/listings/${listing!.id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success(`${info.label} listing kaldırıldı`);
     },
   });

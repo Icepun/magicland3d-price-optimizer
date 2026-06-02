@@ -25,7 +25,7 @@ export async function GET() {
       prisma.product.findMany({
         where: { isActive: true, hidden: false },
         include: {
-          cost: { include: { filamentType: true } },
+          cost: { include: { filamentType: { select: { costPerGram: true } } } },
           listings: { where: { isActive: true } },
         },
       }),

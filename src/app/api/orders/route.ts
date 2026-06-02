@@ -358,7 +358,7 @@ export async function GET() {
             { name: { in: nameList } },
           ],
         },
-        include: { cost: { include: { filamentType: true } }, listings: true },
+        include: { cost: { include: { filamentType: { select: { costPerGram: true } } } }, listings: true },
       }),
       prisma.commissionRule.findMany({ where: { isActive: true } }),
       prisma.cargoRule.findMany({ where: { isActive: true } }),

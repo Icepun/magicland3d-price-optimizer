@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -199,6 +199,7 @@ const ProductRow = memo(function ProductRow({
   onMatch,
   onToggleHidden,
   onDelete,
+  onToggleMadeToOrder,
 }: {
   product: Product;
   isMember: boolean;
@@ -215,6 +216,7 @@ const ProductRow = memo(function ProductRow({
   onMatch: (productId: string, productName: string, platform: "trendyol" | "hepsiburada") => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
   onDelete: (id: string, name: string) => void;
+  onToggleMadeToOrder: (id: string, value: boolean) => void;
 }) {
   const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
   const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
@@ -308,18 +310,18 @@ const ProductRow = memo(function ProductRow({
             </span>
           </div>
         ) : (
-          <div className="flex items-center justify-center gap-1">
+          <div className="flex items-center justify-center gap-1.5">
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon"
-              className="h-6 w-6 text-muted-foreground"
+              className="h-7 w-7 text-muted-foreground"
               disabled={product.stock <= 0}
               onClick={() => onAdjustStock(product.id, -1, product.stock)}
             >
-              <Minus className="h-3 w-3" />
+              <Minus className="h-4 w-4" />
             </Button>
             <span
-              className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
+              className={`tabular-nums text-sm font-semibold min-w-[2ch] text-center ${
                 product.stock === 0
                   ? "text-destructive"
                   : product.stock === 1
@@ -333,12 +335,12 @@ const ProductRow = memo(function ProductRow({
               {product.stock}
             </span>
             <Button
-              variant="ghost"
+              variant="outline"
               size="icon"
-              className="h-6 w-6 text-muted-foreground"
+              className="h-7 w-7 text-muted-foreground"
               onClick={() => onAdjustStock(product.id, 1, product.stock)}
             >
-              <Plus className="h-3 w-3" />
+              <Plus className="h-4 w-4" />
             </Button>
           </div>
         )}
@@ -409,6 +411,18 @@ const ProductRow = memo(function ProductRow({
       })}
       <TableCell>
         <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-8 w-8",
+              product.madeToOrder ? "text-primary" : "text-muted-foreground/50 hover:text-foreground"
+            )}
+            title={product.madeToOrder ? "Sipariş üzerine üretilir (kapat)" : "Sipariş üzerine üretilir olarak işaretle"}
+            onClick={() => onToggleMadeToOrder(product.id, !product.madeToOrder)}
+          >
+            <Hammer className="h-3.5 w-3.5" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -669,6 +683,36 @@ export default function ProductsPage() {
   const handleDelete = useCallback(
     (id: string, name: string) => setDeleteConfirm({ id, name }),
     []
+  );
+
+  // Listeden "Sipariş üzerine üretilir" hızlı toggle — optimistic (anında), refetch YOK.
+  const setMadeToOrderMutation = useMutation({
+    mutationFn: ({ id, madeToOrder }: { id: string; madeToOrder: boolean }) =>
+      fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ madeToOrder }),
+      }).then((r) => {
+        if (!r.ok) throw new Error("madeToOrder");
+        return r.json();
+      }),
+    onMutate: async ({ id, madeToOrder }) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, madeToOrder } : p)) : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error("İşlem başarısız (geri alındı)");
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" }),
+  });
+  const handleToggleMadeToOrder = useCallback(
+    (id: string, madeToOrder: boolean) => setMadeToOrderMutation.mutate({ id, madeToOrder }),
+    [setMadeToOrderMutation]
   );
 
   const form = useForm<AddProductForm>({
@@ -1108,6 +1152,7 @@ export default function ProductsPage() {
                     onMatch={handleMatch}
                     onToggleHidden={handleToggleHidden}
                     onDelete={handleDelete}
+                    onToggleMadeToOrder={handleToggleMadeToOrder}
                   />
                 );
               })}
