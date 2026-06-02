@@ -8,7 +8,10 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-const CURRENT_SCHEMA_VERSION = "18";
+// v19: Product.alias + Listing.barcode kolonları eklendi (0.19.15/0.19.16).
+// ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
+//     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
+const CURRENT_SCHEMA_VERSION = "19";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
