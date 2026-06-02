@@ -397,6 +397,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "hidden", "BOOLEAN NOT NULL DEFAULT false");
     await ensureColumn("Product", "parentProductId", "TEXT"); // legacy (v13) — migration kaynağı, artık kullanılmıyor
     await ensureColumn("Product", "variantLabel", "TEXT");
+    await ensureColumn("Product", "alias", "TEXT");
     await ensureColumn("Product", "variantGroupId", "TEXT");
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`

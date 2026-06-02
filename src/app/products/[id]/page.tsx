@@ -49,6 +49,7 @@ interface ProductDetail {
   barcode: string;
   sku: string;
   name: string;
+  alias: string | null;
   categoryName: string;
   currentSalePrice: number;
   stock: number;
@@ -140,6 +141,8 @@ export default function ProductDetailPage({
   const [nylonLevel, setNylonLevel] = useState<"none" | "low" | "medium" | "high">("none");
   const [tapeUsed, setTapeUsed] = useState(false);
   const [desiInput, setDesiInput] = useState("");
+  const [aliasInput, setAliasInput] = useState("");
+  const [barcodeInput, setBarcodeInput] = useState("");
 
   useEffect(() => {
     if (product?.cost) {
@@ -157,6 +160,8 @@ export default function ProductDetailPage({
   useEffect(() => {
     if (product) {
       setDesiInput(product.desi ? String(product.desi) : "");
+      setAliasInput(product.alias ?? "");
+      setBarcodeInput(product.barcode ?? "");
     }
   }, [product]);
 
@@ -292,6 +297,43 @@ export default function ProductDetailPage({
       toast.success(`Maliyet ${d?.count ?? ""} varyanta uygulandı`);
     },
     onError: () => toast.error("Varyantlara uygulanamadı"),
+  });
+
+  // Takma ad + barkod kaydet. Barkod siparişlerin ürünle eşleşmesini sağlar (UNIQUE);
+  // çakışmada 409 → retry YOK (kalıcı hata). Geçici ağ kopmasında 2 kez tekrar dener.
+  const saveIdentityMutation = useMutation({
+    mutationFn: async () => {
+      const body: { alias: string | null; barcode?: string } = {
+        alias: aliasInput.trim() || null,
+      };
+      const bc = barcodeInput.trim();
+      if (bc && bc !== product?.barcode) body.barcode = bc;
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 12_000);
+      try {
+        const r = await fetch(`/api/products/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(j?.error || `HTTP ${r.status}`);
+        }
+        return r.json();
+      } finally {
+        clearTimeout(to);
+      }
+    },
+    retry: (n, e) => n < 2 && !(e instanceof Error && /barkod|kullanıl/i.test(e.message)),
+    retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", id] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("Kaydedildi");
+    },
+    onError: (e: Error) => toast.error(e?.message || "Kaydedilemedi"),
   });
 
   // Stok güncelleme
@@ -608,6 +650,53 @@ export default function ProductDetailPage({
               <CardTitle className="text-sm">Ürün Bilgileri</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
+              {/* Takma ad + barkod — arama ve sipariş eşleşmesi için kimlik alanları */}
+              <div className="space-y-2 pb-1">
+                <div>
+                  <label className="text-[11px] text-muted-foreground">
+                    Takma ad <span className="opacity-60">(listede gösterilir + aramada bulunur)</span>
+                  </label>
+                  <Input
+                    value={aliasInput}
+                    onChange={(e) => setAliasInput(e.target.value)}
+                    maxLength={80}
+                    placeholder="örn. kırmızı vazo"
+                    className="h-8 mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground">
+                    Barkod <span className="opacity-60">(siparişler bununla eşleşir)</span>
+                  </label>
+                  <Input
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    maxLength={120}
+                    placeholder="GTIN / EAN / Trendyol barkodu"
+                    className="h-8 mt-1 font-mono"
+                  />
+                  {barcodeInput.startsWith("shopify-variant-") && (
+                    <p className="text-[10px] text-amber-500 mt-1 leading-snug">
+                      ⚠ Bu otomatik bir kimlik. Trendyol/HB siparişlerinin eşleşmesi için ürünün
+                      gerçek barkodunu girin (tüm platformlarda aynı olmalı).
+                    </p>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full h-8"
+                  disabled={
+                    saveIdentityMutation.isPending ||
+                    (aliasInput.trim() === (product.alias ?? "") &&
+                      barcodeInput.trim() === product.barcode)
+                  }
+                  onClick={() => saveIdentityMutation.mutate()}
+                >
+                  {saveIdentityMutation.isPending ? "Kaydediliyor..." : "Takma ad / barkodu kaydet"}
+                </Button>
+              </div>
+              <Separator />
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Stok (kendi deponuz)</span>
                 <div className="flex items-center gap-2">

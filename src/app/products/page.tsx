@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,11 +33,30 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
+/**
+ * Türkçe-duyarlı arama normalleştirme: küçük harfe indir + diakritikleri sadeleştir
+ * ("Kırmızı" → "kirmizi", "ŞıK" → "sik"). Kullanıcı aksansız/eksik yazsa da bulur.
+ */
+function normalizeSearch(s: string): string {
+  return s
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/ş/g, "s")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/â/g, "a")
+    .replace(/î/g, "i")
+    .replace(/û/g, "u");
+}
+
 interface Product {
   id: string;
   barcode: string;
   sku: string;
   name: string;
+  alias: string | null;
   categoryName: string;
   currentSalePrice: number;
   listPrice: number | null;
@@ -304,6 +323,52 @@ export default function ProductsPage() {
     },
   });
 
+  // Satır-içi takma ad düzenleme (id + anlık değer + orijinal — değişmediyse yazma yok).
+  const [aliasEdit, setAliasEdit] = useState<{ id: string; value: string; original: string } | null>(null);
+
+  const setAliasMutation = useMutation({
+    mutationFn: async ({ id, alias }: { id: string; alias: string | null }) => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 12_000);
+      try {
+        const res = await fetch(`/api/products/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alias }),
+          signal: ctrl.signal,
+        });
+        if (!res.ok) throw new Error("alias");
+        return res.json();
+      } finally {
+        clearTimeout(t);
+      }
+    },
+    retry: 2,
+    // Optimistic: çip anında güncellenir; kısa kopmada sessizce tekrar dener, kalıcı hatada geri alır.
+    onMutate: async ({ id, alias }) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, alias } : p)) : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error("Takma ad kaydedilemedi — bağlantını kontrol et (geri alındı)");
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"] }),
+  });
+
+  const commitAlias = () => {
+    if (!aliasEdit) return;
+    const value = aliasEdit.value.trim();
+    if (value !== aliasEdit.original.trim()) {
+      setAliasMutation.mutate({ id: aliasEdit.id, alias: value || null });
+    }
+    setAliasEdit(null);
+  };
+
   const form = useForm<AddProductForm>({
     resolver: zodResolver(AddProductSchema),
     defaultValues: { stock: 0 },
@@ -351,14 +416,26 @@ export default function ProductsPage() {
   });
 
   const filteredProducts = useMemo(() => {
-    const q = globalFilter.trim().toLocaleLowerCase("tr-TR");
+    // Sorguyu kelimelere böl; her kelime (sırasız) eşleşmeli. Böylece "vazo kırmızı"
+    // ile "Kırmızı Vazo" da bulunur. Türkçe-duyarlı + aksansız tolere edilir.
+    const tokens = normalizeSearch(globalFilter.trim()).split(/\s+/).filter(Boolean);
     const list = Array.isArray(products) ? products : [];
 
     const searched = list.filter((product) => {
-      if (!q) return true;
-      return [product.name, product.barcode, product.sku, product.categoryName, product.variantGroup?.name]
-        .filter(Boolean)
-        .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(q));
+      if (tokens.length === 0) return true;
+      const hay = normalizeSearch(
+        [
+          product.name,
+          product.alias,
+          product.barcode,
+          product.sku,
+          product.categoryName,
+          product.variantGroup?.name,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      );
+      return tokens.every((t) => hay.includes(t));
     });
 
     // "En Kârlı": ürünün platform listing'lerinin ortalama kâr marjına göre azalan sırala
@@ -698,7 +775,7 @@ export default function ProductsPage() {
                   <TableRow
                     key={row.key}
                     className={cn(
-                      "hover:bg-muted/50",
+                      "group hover:bg-muted/50",
                       !product.isActive && "opacity-50",
                       isMember && "bg-muted/15"
                     )}
@@ -720,13 +797,57 @@ export default function ProductsPage() {
                       <ProductImage src={product.imageUrl} name={product.name} />
                     </TableCell>
                     <TableCell className="max-w-0">
-                      <Link
-                        href={`/products/${product.id}`}
-                        className="font-medium hover:underline line-clamp-1 block text-sm"
-                        title={product.name}
-                      >
-                        {product.name}
-                      </Link>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        {aliasEdit?.id === product.id ? (
+                          <input
+                            autoFocus
+                            value={aliasEdit.value}
+                            maxLength={80}
+                            placeholder="takma ad"
+                            onChange={(e) => setAliasEdit({ ...aliasEdit, value: e.target.value })}
+                            onBlur={commitAlias}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") commitAlias();
+                              else if (e.key === "Escape") setAliasEdit(null);
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="shrink-0 w-24 rounded border border-primary/40 bg-background px-1.5 py-0.5 text-[11px] font-medium outline-none focus:border-primary"
+                          />
+                        ) : product.alias ? (
+                          <button
+                            type="button"
+                            title="Takma adı düzenle"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setAliasEdit({ id: product.id, value: product.alias ?? "", original: product.alias ?? "" });
+                            }}
+                            className="shrink-0 max-w-[8rem] truncate rounded bg-primary/15 text-primary text-[10px] font-semibold px-1.5 py-0.5 hover:bg-primary/25 transition-colors"
+                          >
+                            {product.alias}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            title="Takma ad ekle"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setAliasEdit({ id: product.id, value: "", original: "" });
+                            }}
+                            className="shrink-0 grid place-items-center h-5 w-5 rounded text-muted-foreground/40 hover:text-primary hover:bg-primary/10 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                          >
+                            <Tag className="h-3 w-3" />
+                          </button>
+                        )}
+                        <Link
+                          href={`/products/${product.id}`}
+                          className="font-medium hover:underline line-clamp-1 block text-sm min-w-0"
+                          title={product.name}
+                        >
+                          {product.name}
+                        </Link>
+                      </div>
                       <div className="text-[11px] text-muted-foreground/70 truncate flex items-center gap-1.5 mt-0.5">
                         <span className="font-mono">{product.barcode}</span>
                         <span className="opacity-60">·</span>

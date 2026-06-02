@@ -13,6 +13,8 @@ model Product {
   barcode          String   @unique
   sku              String
   name             String
+  /** Kullanıcının verdiği kısa takma ad — listede gösterilir ve aramada kullanılır. */
+  alias            String?
   categoryName     String
   currentSalePrice Float
   listPrice        Float?

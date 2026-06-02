@@ -7,6 +7,11 @@ import { z } from "zod";
 
 const UpdateProductSchema = z.object({
   name: z.string().min(1).optional(),
+  // Barkod elle düzeltilebilir: Shopify'da gerçek barkod yoksa "shopify-variant-X" fallback'i
+  // yazılır; kullanıcı gerçek (Trendyol/HB ile ortak) barkodu girince siparişler eşleşir.
+  barcode: z.string().trim().min(1).max(120).optional(),
+  // Kısa takma ad — listede gösterilir + aramada kullanılır. Boş gönderilirse temizlenir.
+  alias: z.string().max(80).nullable().optional(),
   categoryName: z.string().min(1).optional(),
   currentSalePrice: z.number().positive().optional(),
   listPrice: z.number().positive().nullable().optional(),
@@ -93,6 +98,11 @@ export async function PATCH(
   const body = await req.json();
   const { cost, ...productData } = UpdateProductSchema.parse(body);
 
+  // Boş takma ad → null (DB'de tutarlı). Barkod trim'lendi (şemada).
+  if (typeof productData.alias === "string") {
+    productData.alias = productData.alias.trim() || null;
+  }
+
   // Manuel fiyat değişikliğini fiyat geçmişine yaz (yalnızca fiyat gerçekten değişince).
   let priceBefore: number | null = null;
   if (productData.currentSalePrice !== undefined) {
@@ -113,10 +123,19 @@ export async function PATCH(
     prevGroupId = before?.variantGroupId ?? null;
   }
 
-  const product = await prisma.product.update({
-    where: { id },
-    data: productData,
-  });
+  // Barkod UNIQUE — kullanıcı başka üründe kullanılan bir barkod girerse net hata dön.
+  const product = await prisma.product
+    .update({ where: { id }, data: productData })
+    .catch((e: unknown) => {
+      if ((e as { code?: string })?.code === "P2002") return null;
+      throw e;
+    });
+  if (!product) {
+    return NextResponse.json(
+      { error: "Bu barkod başka bir üründe kullanılıyor." },
+      { status: 409 }
+    );
+  }
 
   // Üye eski gruptan ayrıldıysa ve grup boş kaldıysa grubu sil (yetim grup bırakma).
   if (prevGroupId && prevGroupId !== productData.variantGroupId) {
