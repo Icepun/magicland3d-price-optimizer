@@ -210,23 +210,37 @@ export async function moonrakerStart(host: string, port: number, filename: strin
 }
 
 /**
- * Snapmaker U1 (tool-changer) gcode'unda tool/kafa atamasını yeniden eşle.
- * toolMap[dilimleyici_filament_index] = fiziksel kafa (0-tabanlı). SADECE araç-bağlamlı satırlarda
- * (`T<n>` tek başına = aktif kafa seçimi; `M104/M109/M108 ... T<n> ...` = kafa sıcaklığı) T token'ı
- * değiştirilir. Tek-yön + tek-geçiş (çift değişim yok). G-hareketleri / `M106 P..` fan / yorumlar /
- * `SM_PRINT_... EXTRUDER=N` (tüm slotları besler) DOKUNULMAZ. Identity (i→i) ise metin aynen döner.
- * Tool-changer'da `T<n>` komutu kafa ofsetlerini firmware'de uygular → bare T + sıcaklık remap yeterli.
+ * Snapmaker U1 (tool-changer) gcode'unda tool/kafa + CFS kanal atamasını yeniden eşle.
+ * toolMap[dilimleyici_filament_index] = fiziksel kafa (0-tabanlı). U1'de kafa i ↔ CFS kanalı i SABİT,
+ * bu yüzden hem kafa hem besleme kanalı AYNI eşlemeyle değiştirilir — yoksa kafa değişir ama filament
+ * eski kanaldan beslenir → seçilen kafa boş kalır → "filament anomaly / runout".
+ * Değiştirilen satırlar:
+ *   - `T<n>` tek başına (aktif kafa seçimi) + `M104/M109/M108 ... T<n>` (kafa sıcaklığı)
+ *   - `USE_CHANNEL CHANNEL=<n>` (CFS besleme kanalı) — Snapmaker filament yükleme makrosu
+ * G-hareketleri / `M106 P..` fan / yorumlar DOKUNULMAZ. Identity (i→i) ise metin aynen döner.
+ * NOT: gcode başka bir kanal/extruder komutu kullanıyorsa (örn. M620/SM_ EXTRUDER=) buraya eklenecek —
+ * gerçek U1 gcode'u görülünce doğrulanır.
  */
 export function remapMoonrakerTools(text: string, toolMap: Record<number, number>): string {
   const keys = Object.keys(toolMap).map(Number);
   if (!keys.length || keys.every((k) => toolMap[k] === k)) return text; // identity → değişiklik yok
   return text.split("\n").map((line) => {
     const t = line.trimStart();
-    if (!(/^T\d+\s*$/.test(t) || /^M(?:104|109|108)\b/.test(t))) return line;
-    return line.replace(/\bT(\d+)\b/g, (m, d) => {
-      const n = Number(d);
-      return n in toolMap ? `T${toolMap[n]}` : m;
-    });
+    // Tool seç / sıcaklık → T token'ını eşle
+    if (/^T\d+\s*$/.test(t) || /^M(?:104|109|108)\b/.test(t)) {
+      return line.replace(/\bT(\d+)\b/g, (m, d) => {
+        const n = Number(d);
+        return n in toolMap ? `T${toolMap[n]}` : m;
+      });
+    }
+    // CFS besleme kanalı → CHANNEL=n eşle (kafa ile aynı eşleme; head i ↔ channel i)
+    if (/^USE_CHANNEL\b/i.test(t)) {
+      return line.replace(/\bCHANNEL\s*=\s*(\d+)/i, (m, d) => {
+        const n = Number(d);
+        return n in toolMap ? `CHANNEL=${toolMap[n]}` : m;
+      });
+    }
+    return line;
   }).join("\n");
 }
 
