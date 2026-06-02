@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { PlatformLogo } from "@/components/PlatformLogo";
 
@@ -442,7 +443,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <StatCard
           title="Toplam Ürün"
-          value={data.totalProducts}
+          value={<AnimatedNumber value={data.totalProducts} />}
           sub={`Stokta ${data.inStockCount} · Biten ${data.outOfStockCount}`}
           icon={Package}
           accentColor={ACCENTS.primary}
@@ -451,7 +452,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Maliyet Eksik"
-          value={data.missingCost}
+          value={<AnimatedNumber value={data.missingCost} />}
           sub="Net kâr hesabı yapılamıyor"
           icon={AlertTriangle}
           accentColor={ACCENTS.amber}
@@ -460,7 +461,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="Zarar Eden Listings"
-          value={data.negativeListings}
+          value={<AnimatedNumber value={data.negativeListings} />}
           sub="Acil müdahale gerek"
           icon={TrendingDown}
           accentColor={ACCENTS.red}

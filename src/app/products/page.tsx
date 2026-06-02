@@ -13,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
   DialogContent,
@@ -717,36 +718,45 @@ export default function ProductsPage() {
     [setMadeToOrderMutation]
   );
 
-  // "Fiyatları Güncelle" — tüm yapılandırılmış platformların satış fiyatlarını pazaryerinden çek
-  // (refresh-prices: yalnızca DEĞİŞEN fiyatı yazar). Fiyatlar artık SADECE bu butonla tazelenir.
-  const refreshPricesMutation = useMutation({
-    mutationFn: async () => {
-      const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter(
-        (p) => integrations?.[p]
-      );
-      if (platforms.length === 0) throw new Error("Yapılandırılmış platform yok");
-      const results = await Promise.all(
-        platforms.map((p) =>
-          fetch(`/api/${p}/sync-products`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mode: "refresh-prices" }),
-          })
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-        )
-      );
-      return results.reduce((s: number, r) => s + (r?.changed ?? 0), 0);
-    },
-    onSuccess: (changed: number) => {
-      // Bu refetch İSTENİYOR (kullanıcı tetikledi) → liste mounted, yeni fiyatlarla tazelenir.
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
-      queryClient.invalidateQueries({ queryKey: ["price-changes"], refetchType: "none" });
-      toast.success(changed > 0 ? `Fiyatlar güncellendi: ${changed} değişiklik` : "Fiyatlar zaten güncel");
-    },
-    onError: (e: Error) => toast.error(e?.message || "Fiyat güncelleme başarısız"),
-  });
+  // "Yenile" — TEK buton: tüm platformların fiyatlarını çeker + liste/panel/siparişleri DB'den
+  // tazeler (başka cihazdaki değişiklikler dahil). İlerleme çubuğu aşamayı + %'yi + X/Y'yi gösterir.
+  const [refreshProgress, setRefreshProgress] = useState<{ total: number; done: number; label: string } | null>(null);
+  const runRefreshAll = async () => {
+    if (refreshProgress) return; // zaten çalışıyor
+    const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter((p) => integrations?.[p]);
+    const label = (p: string) =>
+      `${p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : "Shopify"} fiyatları çekiliyor…`;
+    const total = platforms.length + 1; // +1: liste/panel tazeleme adımı
+    let done = 0;
+    let changed = 0;
+    setRefreshProgress({ total, done, label: platforms.length ? label(platforms[0]) : "Yenileniyor…" });
+    for (const p of platforms) {
+      setRefreshProgress({ total, done, label: label(p) });
+      const res = await fetch(`/api/${p}/sync-products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "refresh-prices" }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      changed += res?.changed ?? 0;
+      done += 1;
+      setRefreshProgress({ total, done, label: label(p) });
+    }
+    // Son adım: DB + cache tazele (kullanıcı tetikledi → bu refetch İSTENİYOR; cross-device dahil).
+    setRefreshProgress({ total, done, label: "Liste & panel güncelleniyor…" });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["products"] }),
+      queryClient.invalidateQueries({ queryKey: ["orders"] }),
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["price-changes"] }),
+      queryClient.invalidateQueries({ queryKey: ["unmatched-listings"] }),
+    ]);
+    done += 1;
+    setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
+    toast.success(changed > 0 ? `Yenilendi · ${changed} fiyat değişti` : "Her şey güncel");
+    setTimeout(() => setRefreshProgress(null), 1000);
+  };
 
   const form = useForm<AddProductForm>({
     resolver: zodResolver(AddProductSchema),
@@ -1049,16 +1059,34 @@ export default function ProductsPage() {
               </Button>
             </>
           )}
-          <Button
-            onClick={() => refreshPricesMutation.mutate()}
-            size="sm"
-            variant="outline"
-            disabled={refreshPricesMutation.isPending}
-            title="Tüm platformların satış fiyatlarını pazaryerinden çek (yalnızca bunu yapınca fiyat tazelenir)"
-          >
-            <RefreshCw className={cn("h-4 w-4 mr-2", refreshPricesMutation.isPending && "animate-spin")} />
-            {refreshPricesMutation.isPending ? "Güncelleniyor…" : "Fiyatları Güncelle"}
-          </Button>
+          {refreshProgress ? (
+            <div className="flex flex-col gap-1 min-w-[210px] px-1 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="text-muted-foreground truncate flex items-center gap-1.5">
+                  <RefreshCw className="h-3 w-3 animate-spin shrink-0" />
+                  {refreshProgress.label}
+                </span>
+                <span className="tabular-nums font-semibold shrink-0">
+                  {refreshProgress.done}/{refreshProgress.total} · %
+                  {Math.round((refreshProgress.done / refreshProgress.total) * 100)}
+                </span>
+              </div>
+              <Progress
+                value={(refreshProgress.done / refreshProgress.total) * 100}
+                className="h-1.5"
+              />
+            </div>
+          ) : (
+            <Button
+              onClick={runRefreshAll}
+              size="sm"
+              variant="outline"
+              title="Fiyatları çek + liste/panel/siparişleri tazele (başka cihazdaki değişiklikler dahil)"
+            >
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Yenile
+            </Button>
+          )}
           <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürünü barkoduyla ekle">
             <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
           </Button>

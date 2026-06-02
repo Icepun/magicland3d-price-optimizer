@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import {
   ClipboardList,
@@ -161,16 +162,16 @@ export default function OrdersPage() {
       {summary && summary.total.orderCount > 0 && (
         <Card className="overflow-hidden">
           <CardContent className="py-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <SummaryStat label={`${summary.total.orderCount} sipariş`} value={fmtMoney(summary.total.revenue)} sub="Toplam ciro" strong />
+            <SummaryStat label={`${summary.total.orderCount} sipariş`} value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />} sub="Toplam ciro" strong />
             <SummaryStat
               label="Net kâr"
-              value={fmtMoney(summary.total.profit)}
+              value={<AnimatedNumber value={summary.total.profit} format={fmtMoney} />}
               sub="tahmini (eşleşen)"
               color={summary.total.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)"}
             />
-            <SummaryStat label="Shopify" value={fmtMoney(summary.shopify.revenue)} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
-            <SummaryStat label="Trendyol" value={fmtMoney(summary.trendyol.revenue)} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
-            <SummaryStat label="Hepsiburada" value={fmtMoney(summary.hepsiburada.revenue)} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
+            <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
+            <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
+            <SummaryStat label="Hepsiburada" value={<AnimatedNumber value={summary.hepsiburada.revenue} format={fmtMoney} />} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
           </CardContent>
         </Card>
       )}
@@ -274,7 +275,7 @@ function SummaryStat({
   strong,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   sub: string;
   color?: string;
   platform?: "shopify" | "trendyol" | "hepsiburada";
