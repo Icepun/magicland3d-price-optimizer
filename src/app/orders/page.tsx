@@ -107,8 +107,10 @@ export default function OrdersPage() {
   const { data, isLoading, isFetching, refetch, error } = useQuery<OrdersResponse>({
     queryKey: ["orders"],
     queryFn: () => fetch("/api/orders").then((r) => r.json()),
+    // 5dk taze: sekmeye dönüşte 3 pazaryeri API'sini tekrar çağırma (anında cache). Tazelemek için "Yenile".
     staleTime: 5 * 60_000,
-    refetchOnMount: "always",
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   const [platform, setPlatform] = useState<"all" | "shopify" | "trendyol" | "hepsiburada">("all");

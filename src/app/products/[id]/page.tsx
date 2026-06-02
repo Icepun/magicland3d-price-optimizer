@@ -195,31 +195,74 @@ export default function ProductDetailPage({
   const fixedExtras = packagingBreakdown.card + packagingBreakdown.sticker + packagingBreakdown.sakiz;
 
   const saveCostMutation = useMutation({
-    mutationFn: () =>
-      fetch(`/api/products/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          desi: parseFloat(desiInput) || null,
-          cost: {
-            costMode: "detailed",
-            filamentTypeId: filamentTypeId || null,
-            filamentWeight: fWeight,
-            printTimeHours: pTime,
-            wasteRate: wRate,
-            packagingOptionId: packagingOptionId || null,
-            nylonLevel,
-            tapeUsed,
-          },
-        }),
-      }).then((r) => r.json()),
-    onSuccess: () => {
+    mutationFn: async () => {
+      // Timeout: ağ ölürse istek asılı kalmasın → başarısız say (sonra retry / rollback).
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 12_000);
+      try {
+        const r = await fetch(`/api/products/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          signal: ctrl.signal,
+          body: JSON.stringify({
+            desi: parseFloat(desiInput) || null,
+            cost: {
+              costMode: "detailed",
+              filamentTypeId: filamentTypeId || null,
+              filamentWeight: fWeight,
+              printTimeHours: pTime,
+              wasteRate: wRate,
+              packagingOptionId: packagingOptionId || null,
+              nylonLevel,
+              tapeUsed,
+            },
+          }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      } finally {
+        clearTimeout(to);
+      }
+    },
+    retry: 2, // geçici kopmada otomatik tekrar (PATCH idempotent → çift-yazma riski yok)
+    retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
+    // OPTIMISTIC: detay cache'ini anında güncelle → kullanıcı beklemez.
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["product", id] });
+      const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
+      queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
+        old
+          ? {
+              ...old,
+              desi: parseFloat(desiInput) || null,
+              cost: {
+                ...(old.cost ?? {}),
+                costMode: "detailed",
+                filamentTypeId: filamentTypeId || null,
+                filamentWeight: fWeight,
+                printTimeHours: pTime,
+                wasteRate: wRate,
+                packagingOptionId: packagingOptionId || null,
+                nylonLevel,
+                tapeUsed,
+              } as ProductDetail["cost"],
+            }
+          : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      // DÜRÜSTLÜK: yazma kalıcı başarısızsa UI'ı GERİ AL + net uyarı → kullanıcı yanıltılmaz.
+      if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      toast.error("Kaydedilemedi — bağlantını kontrol et (değişiklik geri alındı)");
+    },
+    onSuccess: () => toast.success("Maliyet kaydedildi"),
+    onSettled: () => {
+      // Sunucu doğrulaması + liste tazeleme (optimistic UI zaten anında güncellendi).
       queryClient.invalidateQueries({ queryKey: ["product", id] });
       queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success("Maliyet kaydedildi");
     },
-    onError: () => toast.error("Kaydedilemedi"),
   });
 
   // Bu maliyeti (ve desi) aynı varyant grubundaki TÜM ürünlere uygula

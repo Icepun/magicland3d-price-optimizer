@@ -185,9 +185,12 @@ export default function ProductsPage() {
       ),
     // Kâr hesabı maliyet/komisyon/kargo/gider ayarlarına bağlı — her açılışta
     // sunucudan taze çek, cache'teki eski kâr değerini gösterme.
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
+    // Akıllı tazeleme: 15sn taze say → sekmeye dönüşte/odakta gereksiz ağır refetch yok (anında cache).
+    // Değişiklikler (maliyet/stok/gizle/KDV vb.) zaten ["products"] invalidate ediyor → liste yine de doğru
+    // kalır; invalidate edilen sorgu mount'ta tazelenir. ("always" + focus refetch = her dönüşte flash idi.)
+    staleTime: 15_000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false,
   });
 
   // Entegrasyon durumu — hangi platformlar konfigüre
@@ -219,14 +222,27 @@ export default function ProductsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids }),
       }),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    // Optimistic: seçilenleri listeden ANINDA çıkar + seçimi/dialog'u kapat; hata olursa geri al.
+    onMutate: async (ids) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      const idset = new Set(ids);
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.filter((p) => !idset.has(p.id)) : old
+      );
       setSelectedIds(new Set());
       setBulkDeleteOpen(false);
-      toast.success(`${data.deleted} ürün silindi`);
+      return { prev };
     },
-    onError: (e: Error) => toast.error(`Toplu silme hatası: ${e.message}`),
+    onError: (e: Error, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error(`Toplu silme başarısız: ${e.message} (geri alındı)`);
+    },
+    onSuccess: (data) => toast.success(`${data.deleted} ürün silindi`),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
   });
 
   const bulkVisibilityMutation = useMutation({
@@ -236,17 +252,27 @@ export default function ProductsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ids, hidden }),
       }),
-    onSuccess: (data, variables) => {
+    // Optimistic: seçilenler mevcut görünümden ANINDA kalkar + seçim temizlenir; hata olursa geri al.
+    onMutate: async ({ ids }) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      const idset = new Set(ids);
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.filter((p) => !idset.has(p.id)) : old
+      );
+      setSelectedIds(new Set());
+      return { prev };
+    },
+    onError: (e: Error, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error(`${e.message} (geri alındı)`);
+    },
+    onSuccess: (data, variables) =>
+      toast.success(variables.hidden ? `${data.updated} ürün gizlendi` : `${data.updated} ürün geri getirildi`),
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      setSelectedIds(new Set());
-      toast.success(
-        variables.hidden
-          ? `${data.updated} ürün gizlendi`
-          : `${data.updated} ürün geri getirildi`
-      );
     },
-    onError: (e: Error) => toast.error(e.message),
   });
 
   // Tek ürün gizle/göster (satır içi)

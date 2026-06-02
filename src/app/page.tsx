@@ -382,10 +382,10 @@ export default function DashboardPage() {
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: () => fetch("/api/dashboard").then((r) => r.json()),
-    refetchInterval: 60_000,
-    staleTime: 0,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
+    refetchInterval: 60_000, // açıkken dakikada bir tazele (canlı kâr özeti)
+    staleTime: 15_000,
+    refetchOnMount: true,
+    refetchOnWindowFocus: false, // odakta her seferinde ağır /api/dashboard recompute etme
   });
 
   if (isLoading) {
