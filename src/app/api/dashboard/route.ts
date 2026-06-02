@@ -78,19 +78,22 @@ export async function GET() {
   }> = [];
 
   for (const product of products) {
-    if (product.stock > 0) inStockCount++;
-    else outOfStockCount++;
+    // "Sipariş üzerine üretilir" ürünler stok tutmaz → stok sayımına/uyarısına girmez.
+    if (!product.madeToOrder) {
+      if (product.stock > 0) inStockCount++;
+      else outOfStockCount++;
 
-    // Düşük stok (≤1) takibi
-    if (product.stock <= 1) {
-      lowStockCount++;
-      if (lowStockProducts.length < 30) {
-        lowStockProducts.push({
-          id: product.id,
-          name: product.name,
-          stock: product.stock,
-          imageUrl: product.imageUrl,
-        });
+      // Düşük stok (≤1) takibi
+      if (product.stock <= 1) {
+        lowStockCount++;
+        if (lowStockProducts.length < 30) {
+          lowStockProducts.push({
+            id: product.id,
+            name: product.name,
+            stock: product.stock,
+            imageUrl: product.imageUrl,
+          });
+        }
       }
     }
 

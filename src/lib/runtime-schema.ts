@@ -8,10 +8,10 @@ let schemaReady: Promise<void> | null = null;
  * Şema sürümü. Şema değiştiğinde ARTIR → tüm CREATE/ALTER bir kez daha çalışıp
  * damgayı günceller; aksi halde fast-path ile atlanır.
  */
-// v19: Product.alias + Listing.barcode kolonları eklendi (0.19.15/0.19.16).
+// v19: Product.alias + Listing.barcode (0.19.15/0.19.16). v20: Product.madeToOrder (0.19.21).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "19";
+const CURRENT_SCHEMA_VERSION = "20";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -401,6 +401,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "parentProductId", "TEXT"); // legacy (v13) — migration kaynağı, artık kullanılmıyor
     await ensureColumn("Product", "variantLabel", "TEXT");
     await ensureColumn("Product", "alias", "TEXT");
+    await ensureColumn("Product", "madeToOrder", "BOOLEAN NOT NULL DEFAULT false");
     await ensureColumn("Product", "variantGroupId", "TEXT");
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`

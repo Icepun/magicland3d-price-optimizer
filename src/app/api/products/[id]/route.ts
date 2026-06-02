@@ -20,6 +20,7 @@ const UpdateProductSchema = z.object({
   weight: z.number().positive().nullable().optional(),
   isActive: z.boolean().optional(),
   hidden: z.boolean().optional(),
+  madeToOrder: z.boolean().optional(),
   variantGroupId: z.string().nullable().optional(),
   variantLabel: z.string().nullable().optional(),
   cost: z

@@ -53,6 +53,7 @@ interface ProductDetail {
   categoryName: string;
   currentSalePrice: number;
   stock: number;
+  madeToOrder: boolean;
   desi: number | null;
   imageUrl: string | null;
   source: string;
@@ -334,6 +335,38 @@ export default function ProductDetailPage({
       toast.success("Kaydedildi");
     },
     onError: (e: Error) => toast.error(e?.message || "Kaydedilemedi"),
+  });
+
+  // "Sipariş üzerine üretilir" toggle — optimistic (anında, hata olursa geri al).
+  const setMadeToOrderMutation = useMutation({
+    mutationFn: async (madeToOrder: boolean) => {
+      const r = await fetch(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ madeToOrder }),
+      });
+      if (!r.ok) throw new Error("Kaydedilemedi");
+      return r.json();
+    },
+    onMutate: async (madeToOrder) => {
+      await queryClient.cancelQueries({ queryKey: ["product", id] });
+      const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
+      queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
+        old ? { ...old, madeToOrder } : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      toast.error("Kaydedilemedi — bağlantını kontrol et (geri alındı)");
+    },
+    onSuccess: (_d, madeToOrder) =>
+      toast.success(madeToOrder ? "Sipariş üzerine üretilir olarak işaretlendi" : "Stok takibine alındı"),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["product", id] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
   });
 
   // Stok güncelleme
@@ -699,39 +732,43 @@ export default function ProductDetailPage({
               <Separator />
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">Stok (kendi deponuz)</span>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={product.stock <= 0}
-                    onClick={() => adjustStock(id, -1, product.stock)}
-                  >
-                    <Minus className="h-3.5 w-3.5" />
-                  </Button>
-                  <span
-                    className={cn(
-                      "tabular-nums font-bold text-base min-w-[2ch] text-center",
-                      product.stock === 0
-                        ? "text-destructive"
-                        : product.stock === 1
-                          ? "text-amber-500"
-                          : "text-foreground"
-                    )}
-                  >
-                    {product.stock}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-7 w-7"
-                    onClick={() => adjustStock(id, 1, product.stock)}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
+                {product.madeToOrder ? (
+                  <span className="text-xs text-muted-foreground italic">takip edilmez</span>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7"
+                      disabled={product.stock <= 0}
+                      onClick={() => adjustStock(id, -1, product.stock)}
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </Button>
+                    <span
+                      className={cn(
+                        "tabular-nums font-bold text-base min-w-[2ch] text-center",
+                        product.stock === 0
+                          ? "text-destructive"
+                          : product.stock === 1
+                            ? "text-amber-500"
+                            : "text-foreground"
+                      )}
+                    >
+                      {product.stock}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => adjustStock(id, 1, product.stock)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
               </div>
-              {product.stock <= 1 && (
+              {!product.madeToOrder && product.stock <= 1 && (
                 <p
                   className={cn(
                     "text-[11px]",
@@ -741,6 +778,19 @@ export default function ProductDetailPage({
                   {product.stock === 0 ? "⚠ Stok tükendi" : "⚠ Stok kritik (1 adet)"}
                 </p>
               )}
+              {/* Sipariş üzerine üretilir → stok takibi yok, "stok 0" uyarısı verilmez */}
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Sipariş üzerine üretilir</span>
+                <Button
+                  variant={product.madeToOrder ? "default" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={setMadeToOrderMutation.isPending}
+                  onClick={() => setMadeToOrderMutation.mutate(!product.madeToOrder)}
+                >
+                  {product.madeToOrder ? "Evet" : "Hayır"}
+                </Button>
+              </div>
               {product.desi && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Desi</span>

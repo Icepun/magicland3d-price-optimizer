@@ -25,6 +25,8 @@ model Product {
   isActive         Boolean  @default(true)
   /** Kullanıcı tarafından listeden gizlendi mi (silmeden saklama). */
   hidden           Boolean  @default(false)
+  /** Sipariş üzerine üretilir — stok tutulmaz, "stok 0" uyarısı verilmez. */
+  madeToOrder      Boolean  @default(false)
   source           String   @default("manual")
   trendyolId       String?
   /** Trendyol productMainId — varyant grubu kimliği. Aynı productMainId'ye sahip ürünler birbirinin varyantıdır (renk, beden, boyut). */

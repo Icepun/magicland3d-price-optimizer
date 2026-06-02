@@ -71,6 +71,7 @@ interface Product {
   imageUrl: string | null;
   isActive: boolean;
   hidden: boolean;
+  madeToOrder: boolean;
   source: string;
   appliedCommissionRule: {
     id: string;
@@ -297,39 +298,50 @@ const ProductRow = memo(function ProductRow({
         )}
       </TableCell>
       <TableCell className="py-2">
-        <div className="flex items-center justify-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground"
-            disabled={product.stock <= 0}
-            onClick={() => onAdjustStock(product.id, -1, product.stock)}
-          >
-            <Minus className="h-3 w-3" />
-          </Button>
-          <span
-            className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
-              product.stock === 0
-                ? "text-destructive"
-                : product.stock === 1
-                  ? "text-amber-500"
-                  : "text-foreground"
-            }`}
-            title={
-              product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined
-            }
-          >
-            {product.stock}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground"
-            onClick={() => onAdjustStock(product.id, 1, product.stock)}
-          >
-            <Plus className="h-3 w-3" />
-          </Button>
-        </div>
+        {product.madeToOrder ? (
+          <div className="flex justify-center">
+            <span
+              className="text-[10px] leading-tight text-center text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5"
+              title="Sipariş üzerine üretilir — stok takip edilmez"
+            >
+              Sipariş<br />üzerine
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-muted-foreground"
+              disabled={product.stock <= 0}
+              onClick={() => onAdjustStock(product.id, -1, product.stock)}
+            >
+              <Minus className="h-3 w-3" />
+            </Button>
+            <span
+              className={`tabular-nums text-sm font-semibold min-w-[1.5ch] text-center ${
+                product.stock === 0
+                  ? "text-destructive"
+                  : product.stock === 1
+                    ? "text-amber-500"
+                    : "text-foreground"
+              }`}
+              title={
+                product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined
+              }
+            >
+              {product.stock}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-muted-foreground"
+              onClick={() => onAdjustStock(product.id, 1, product.stock)}
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
       </TableCell>
       <TableCell className="text-right tabular-nums text-xs">
         {cost !== null && cost !== undefined ? (

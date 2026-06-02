@@ -235,8 +235,8 @@ export async function GET(req: NextRequest) {
   } else if (filter === "missing-cost") {
     filtered = filtered.filter((p) => !p.hasCost);
   } else if (filter === "out-of-stock") {
-    // Local stok bazında (Shopify/platform stoğu değil)
-    filtered = filtered.filter((p) => p.stock === 0);
+    // Local stok bazında; "sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
+    filtered = filtered.filter((p) => p.stock === 0 && !p.madeToOrder);
   }
 
   if (platformFilter) {
