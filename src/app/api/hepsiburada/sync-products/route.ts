@@ -152,9 +152,9 @@ export async function POST(req: NextRequest) {
         if (productId) {
           if (!listedSet.has(productId)) {
             await prisma.$executeRawUnsafe(
-              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-              `listing_${productId}_hepsiburada`, productId, f.hbId, f.sku, f.price, f.listPrice, f.stock, f.isActive ? 1 : 0
+              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              `listing_${productId}_hepsiburada`, productId, f.hbId, f.sku, barcode, f.price, f.listPrice, f.stock, f.isActive ? 1 : 0
             );
             listedSet.add(productId);
             linked++;

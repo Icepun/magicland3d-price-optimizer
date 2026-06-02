@@ -51,6 +51,12 @@ function normalizeSearch(s: string): string {
     .replace(/û/g, "u");
 }
 
+/**
+ * Türkçe alfabetik sıralama (ç, ğ, ı, ö, ş, ü doğru yerde — sona atılmaz).
+ * sensitivity: "base" → büyük/küçük harf duyarsız; numeric → "Kol 2" < "Kol 10".
+ */
+const trCollator = new Intl.Collator("tr-TR", { sensitivity: "base", numeric: true });
+
 interface Product {
   id: string;
   barcode: string;
@@ -485,8 +491,25 @@ export default function ProductsPage() {
         rows.push({ kind: "product", key: p.id, product: p, isMember: false });
       }
     }
+    // "En Kârlı" dışındaki tüm modlarda Türkçe alfabetik sırala (görünür etikete göre).
+    // Böylece sıra İSME bağlı olur → stok/maliyet düzenleyince ürün başa fırlamaz, yerinde kalır.
+    if (filterMode !== "most-profitable") {
+      rows.sort((a, b) =>
+        trCollator.compare(
+          a.kind === "group" ? a.groupName : a.product.name,
+          b.kind === "group" ? b.groupName : b.product.name
+        )
+      );
+      for (const r of rows) {
+        if (r.kind === "group") {
+          r.members.sort((a, b) =>
+            trCollator.compare(a.variantLabel || a.name, b.variantLabel || b.name)
+          );
+        }
+      }
+    }
     return rows;
-  }, [filteredProducts]);
+  }, [filteredProducts, filterMode]);
 
   // Açık grupların üyelerini başlığın hemen altına serpiştir.
   const flatRows = useMemo<DisplayRow[]>(() => {
@@ -1171,20 +1194,26 @@ function MatchListingModal({
   });
 
   const match = useMutation({
-    mutationFn: (unmatchedListingId: string) =>
-      fetchJson("/api/listings/match", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unmatchedListingId, productId }),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
-      toast.success("Trendyol ürünü eşleştirildi");
-      onClose();
+    // Tüm yan-etkiler mutationFn İÇİNDE: onMutate modalı anında kapatıp komponenti
+    // unmount edince onSuccess/onError tetiklenmeyebilir; mutationFn ise her hâlde tamamlanır.
+    mutationFn: async (unmatchedListingId: string) => {
+      try {
+        const res = await fetchJson("/api/listings/match", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unmatchedListingId, productId }),
+        });
+        qc.invalidateQueries({ queryKey: ["products"] });
+        qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+        qc.invalidateQueries({ queryKey: ["dashboard"] });
+        toast.success("Ürün eşleştirildi");
+        return res;
+      } catch (e) {
+        toast.error(`Eşleştirilemedi: ${e instanceof Error ? e.message : "tekrar dene"}`);
+        throw e;
+      }
     },
-    onError: (e: Error) => toast.error(e.message),
+    onMutate: () => onClose(), // modalı ANINDA kapat — kullanıcı server'ı beklemez
   });
 
   const refreshPool = useMutation({

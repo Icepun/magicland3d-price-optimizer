@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
         data: {
           externalId: unmatched.externalId,
           externalSku: unmatched.externalSku,
+          barcode: unmatched.barcode || null,
           salePrice: unmatched.price,
           stock: unmatched.stock,
           isActive: true,
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
           platform: unmatched.platform,
           externalId: unmatched.externalId,
           externalSku: unmatched.externalSku,
+          barcode: unmatched.barcode || null,
           salePrice: unmatched.price,
           stock: unmatched.stock,
           isActive: true,

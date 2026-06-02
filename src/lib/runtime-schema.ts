@@ -440,6 +440,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "platform" TEXT NOT NULL,
         "externalId" TEXT,
         "externalSku" TEXT,
+        "barcode" TEXT,
         "salePrice" REAL NOT NULL DEFAULT 0,
         "listPrice" REAL,
         "stock" INTEGER NOT NULL DEFAULT 0,
@@ -462,6 +463,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS "Listing_externalId_idx" ON "Listing"("externalId")
     `);
+    await ensureColumn("Listing", "barcode", "TEXT");
 
     // UnmatchedListing — Shopify ana ürününe bağlanmamış Trendyol/HB ürünleri
     await prisma.$executeRawUnsafe(`

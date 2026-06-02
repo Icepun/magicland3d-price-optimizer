@@ -77,6 +77,8 @@ model Listing {
   externalId    String?
   /** Platform tarafındaki SKU/stockCode */
   externalSku   String?
+  /** Bu platformdaki barkod (her platformda farklı olabilir). Siparişler bununla eşleşir. */
+  barcode       String?
   /** Listelenen satış fiyatı (KDV dahil) */
   salePrice     Float
   listPrice     Float?

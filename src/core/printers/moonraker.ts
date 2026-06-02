@@ -56,7 +56,7 @@ export interface MoonrakerFile {
 }
 
 const QUERY =
-  "print_stats&virtual_sdcard=progress&display_status=progress&extruder=temperature,target&heater_bed=temperature,target&gcode_move=gcode_position";
+  "print_stats&virtual_sdcard=progress&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
 const portCache = new Map<string, number>();
@@ -85,11 +85,29 @@ function unwrap(json: any): any {
   return json && typeof json === "object" && "result" in json ? json.result : json;
 }
 
+/**
+ * 3MF metadata'sındaki materyal dizgesi çok-kafalı baskıda kafa-başına birleşik gelir
+ * ("PLA:PLA", "PLA;PETG;PLA"). Ayır → kırp → tekrarı kaldır. Hepsi aynıysa tek değer ("PLA"),
+ * farklıysa "PLA · PETG". Boşsa null.
+ */
+function cleanFilamentType(s: unknown): string | null {
+  if (typeof s !== "string" || !s.trim()) return null;
+  const uniq = [...new Set(s.split(/[;:,/|]+/).map((p) => p.trim()).filter(Boolean))];
+  return uniq.length ? uniq.join(" · ") : null;
+}
+
 function parseStatus(status: any): MoonrakerStatus {
   const ps = status.print_stats ?? {};
   const vs = status.virtual_sdcard ?? {};
   const ds = status.display_status ?? {};
-  const ex = status.extruder ?? {};
+  // Tool-changer (Snapmaker U1): AKTİF kafanın sıcaklığını göster. toolhead.extruder aktif
+  // ekstruderin adını verir ("extruder", "extruder1"...). Boştaki kafa 0'ı göstermeyiz.
+  const th = status.toolhead ?? {};
+  const activeExName = typeof th.extruder === "string" && th.extruder ? th.extruder : "extruder";
+  const ex =
+    (status[activeExName] && typeof status[activeExName] === "object"
+      ? status[activeExName]
+      : status.extruder) ?? {};
   const hb = status.heater_bed ?? {};
   const gm = status.gcode_move ?? {};
   const progress = Math.min(1, Math.max(0,
@@ -159,7 +177,7 @@ export async function fetchMoonrakerMeta(host: string, port: number, filename: s
     return {
       estimatedTimeSec: typeof r.estimated_time === "number" ? r.estimated_time : null,
       thumbnailRelPath: thumbs[0]?.relative_path ?? null,
-      filamentType: r.filament_type ?? null,
+      filamentType: cleanFilamentType(r.filament_type),
       totalLayer: typeof r.layer_count === "number" ? r.layer_count : null,
       layerHeight: typeof r.layer_height === "number" ? r.layer_height : null,
       firstLayerHeight: typeof r.first_layer_height === "number" ? r.first_layer_height : null,

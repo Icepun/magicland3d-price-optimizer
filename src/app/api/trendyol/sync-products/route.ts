@@ -127,12 +127,13 @@ export async function POST(req: NextRequest) {
         if (productId) {
           if (!listedSet.has(productId)) {
             await prisma.$executeRawUnsafe(
-              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
               `listing_${productId}_trendyol`,
               productId,
               f.trendyolId,
               f.sku,
+              barcode,
               f.price,
               f.listPrice,
               f.stock,

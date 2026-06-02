@@ -189,7 +189,16 @@ export async function GET(req: NextRequest) {
     // YANITA KONMAZ — sunucu bunları kâr hesabı için kullandı, göndermeye gerek yok.
     return {
       ...product,
-      listings: undefined, // ham listing'ler gönderilmez (JSON.stringify undefined'ı atar)
+      // YALIN payload (H4): client/planner bu alanları KULLANMAZ → yanıttan düşür
+      // (JSON.stringify undefined'ı atar). 312 ürün × birkaç alan = anlamlı boyut tasarrufu.
+      listings: undefined,
+      weight: undefined,
+      trendyolId: undefined,
+      productMainId: undefined,
+      commissionSource: undefined,
+      commissionUpdatedAt: undefined,
+      createdAt: undefined,
+      updatedAt: undefined,
       cost: product.cost
         ? {
             totalCost: product.cost.totalCost,

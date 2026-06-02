@@ -183,7 +183,11 @@ export async function GET() {
   };
   const raws: Raw[] = [];
 
-  try {
+  // Üç platformu PARALEL çek — toplam gecikme = en yavaş tek platform (sıralı toplam DEĞİL).
+  // Bloklar bağımsız: her biri kendi raws'ını push'lar + kendi durum değişkenini atar (yarış yok).
+  await Promise.all([
+   (async () => {
+   try {
     const client = new ShopifyClient(await getShopifyCredentials());
     const list = await client.listOrders({ sinceDays: WINDOW_DAYS, limit: 100 });
     for (const o of list) {
@@ -225,8 +229,9 @@ export async function GET() {
       shopify = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
     }
   }
-
-  try {
+   })(),
+   (async () => {
+   try {
     const client = new TrendyolClient(await getTrendyolCredentials());
     const page = await client.listOrders({ size: 100 });
     for (const [i, o] of (page.content ?? []).entries()) {
@@ -260,8 +265,9 @@ export async function GET() {
     const msg = e instanceof Error ? e.message : "Trendyol siparişleri alınamadı";
     trendyol = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
   }
-
-  try {
+   })(),
+   (async () => {
+   try {
     const client = new HepsiburadaClient(await getHepsiburadaCredentials());
     const res = (await client.listOrders({ limit: 100 })) as Record<string, unknown>;
     const hbOrders = hbArray(res, ["orders", "items", "data", "content", "result"]);
@@ -310,27 +316,36 @@ export async function GET() {
     const msg = e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı";
     hepsiburada = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
   }
+   })(),
+  ]);
 
   // Son 30 güne filtrele (tarihsiz olanları da tut)
   const recent = raws.filter((r) => !r.date || new Date(r.date).getTime() >= cutoff);
 
   // Sipariş satırlarını ÜRÜNLERİMİZLE eşleştir → görsel + maliyet + kâr ──────────
   const allKeys = new Set<string>();
+  const shopifyNames = new Set<string>(); // Shopify barkod tutmaz → ada göre eşleştirme
   for (const r of recent) {
     for (const l of r.lines) {
       for (const k of l.matchKeys) allKeys.add(k);
+      if (r.platform === "shopify" && l.name) shopifyNames.add(l.name);
     }
   }
 
-  // Tek harita: Product.barcode/sku + Listing.externalId/externalSku → ürün
+  // Tek harita: Product.barcode/sku + Listing.externalId/externalSku/barcode → ürün
   const byKey = new Map<string, Matched>();
+  // Shopify ad-eşleştirme haritası (null = çakışma: aynı ad birden çok üründe → eşleştirme).
+  const byName = new Map<string, Matched | null>();
+  const normName = (s: string | null | undefined) =>
+    (s ?? "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
   let vatRate = 0;
 
-  if (allKeys.size > 0) {
+  if (allKeys.size > 0 || shopifyNames.size > 0) {
     const keyList = [...allKeys];
+    const nameList = [...shopifyNames];
     const [products, cRules, kRules, eRules, settings] = await Promise.all([
       prisma.product.findMany({
         where: {
@@ -339,6 +354,8 @@ export async function GET() {
             { sku: { in: keyList } },
             { listings: { some: { externalId: { in: keyList } } } },
             { listings: { some: { externalSku: { in: keyList } } } },
+            { listings: { some: { barcode: { in: keyList } } } },
+            { name: { in: nameList } },
           ],
         },
         include: { cost: { include: { filamentType: true } }, listings: true },
@@ -375,7 +392,11 @@ export async function GET() {
       for (const l of p.listings) {
         add(l.externalId);
         add(l.externalSku);
+        add(l.barcode); // platform-bazlı barkod (her platformda farklı olabilir)
       }
+      // Shopify ad-eşleştirme: aynı ad birden çok üründe varsa null (belirsiz → eşleştirme).
+      const nk = normName(p.name);
+      if (nk) byName.set(nk, byName.has(nk) ? null : m);
     }
   }
 
@@ -413,6 +434,11 @@ export async function GET() {
           m = hit;
           break;
         }
+      }
+      // Anahtarlar tutmadı + Shopify ise: ürün adıyla eşleştir (Shopify barkod tutmaz).
+      if (!m && r.platform === "shopify") {
+        const named = byName.get(normName(l.name));
+        if (named) m = named;
       }
       const image = l.image || m?.imageUrl || null;
       if (image && !thumb) thumb = image;

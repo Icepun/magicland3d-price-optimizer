@@ -46,6 +46,10 @@ interface PickProduct {
   currentSalePrice: number;
   variantGroup: { id: string; name: string } | null;
 }
+/** ["product", productId] detay cache'inin optimistic güncelleme için kullanılan kısmı. */
+type DetailCache = {
+  variantGroup?: { id: string; name: string; products?: VMember[] } | null;
+} & Record<string, unknown>;
 
 function Thumb({ src, className }: { src: string | null; className?: string }) {
   return (
@@ -92,12 +96,22 @@ export function VariantsCard({
         if (!r.ok) throw new Error("Güncellenemedi");
         return r.json();
       }),
-    onSuccess: () => {
-      refresh();
+    // Optimistic: editörü anında kapat + grup adını cache'te anında değiştir.
+    onMutate: async (name: string) => {
       setEditingName(false);
-      toast.success("Grup adı güncellendi");
+      await qc.cancelQueries({ queryKey: ["product", productId] });
+      const prev = qc.getQueryData<DetailCache>(["product", productId]);
+      qc.setQueryData<DetailCache>(["product", productId], (old) =>
+        old?.variantGroup ? { ...old, variantGroup: { ...old.variantGroup, name } } : old
+      );
+      return { prev };
     },
-    onError: () => toast.error("Grup adı güncellenemedi"),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["product", productId], ctx.prev);
+      toast.error("Grup adı güncellenemedi (geri alındı)");
+    },
+    onSuccess: () => toast.success("Grup adı güncellendi"),
+    onSettled: () => refresh(),
   });
 
   const unlink = useMutation({
@@ -121,12 +135,32 @@ export function VariantsCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variantLabel: label.trim() || null }),
       }).then((r) => r.json()),
-    onSuccess: () => {
-      refresh();
+    // Optimistic: etiket editörünü anında kapat + üyenin etiketini cache'te anında değiştir.
+    onMutate: async ({ id, label }) => {
       setEditingLabelId(null);
-      toast.success("Etiket güncellendi");
+      await qc.cancelQueries({ queryKey: ["product", productId] });
+      const prev = qc.getQueryData<DetailCache>(["product", productId]);
+      qc.setQueryData<DetailCache>(["product", productId], (old) =>
+        old?.variantGroup?.products
+          ? {
+              ...old,
+              variantGroup: {
+                ...old.variantGroup,
+                products: old.variantGroup.products.map((p) =>
+                  p.id === id ? { ...p, variantLabel: label.trim() || null } : p
+                ),
+              },
+            }
+          : old
+      );
+      return { prev };
     },
-    onError: () => toast.error("Etiket güncellenemedi"),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["product", productId], ctx.prev);
+      toast.error("Etiket güncellenemedi (geri alındı)");
+    },
+    onSuccess: () => toast.success("Etiket güncellendi"),
+    onSettled: () => refresh(),
   });
 
   const dissolve = useMutation({
