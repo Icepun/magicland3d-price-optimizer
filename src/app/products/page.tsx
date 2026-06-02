@@ -1244,6 +1244,12 @@ function MatchListingModal({
 }) {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Arama debounce: her tuşta fetch + yeni cache anahtarı oluşturma (250ms sonra bir kez).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const { data: unmatched = [], isLoading } = useQuery<
     Array<{
@@ -1256,10 +1262,10 @@ function MatchListingModal({
       imageUrl: string | null;
     }>
   >({
-    queryKey: ["unmatched-listings", platform, search],
+    queryKey: ["unmatched-listings", platform, debouncedSearch],
     queryFn: () =>
       fetchJson(
-        `/api/unmatched-listings?platform=${platform}${search ? `&search=${encodeURIComponent(search)}` : ""}`
+        `/api/unmatched-listings?platform=${platform}${debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : ""}`
       ),
   });
 
@@ -1410,6 +1416,12 @@ function MarketplaceAddModal({
   const configured = (["trendyol", "hepsiburada"] as const).filter((p) => integrations?.[p]);
   const [platform, setPlatform] = useState<"trendyol" | "hepsiburada">(configured[0] ?? "trendyol");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  // Arama debounce: her tuşta fetch + yeni cache anahtarı oluşturma (250ms sonra bir kez).
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const { data: unmatched = [], isLoading } = useQuery<
     Array<{
@@ -1422,10 +1434,10 @@ function MarketplaceAddModal({
       imageUrl: string | null;
     }>
   >({
-    queryKey: ["unmatched-listings", platform, search],
+    queryKey: ["unmatched-listings", platform, debouncedSearch],
     queryFn: () =>
       fetchJson(
-        `/api/unmatched-listings?platform=${platform}${search ? `&search=${encodeURIComponent(search)}` : ""}`
+        `/api/unmatched-listings?platform=${platform}${debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : ""}`
       ),
   });
 

@@ -15,7 +15,10 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             // zaten yansır; çok-cihaz tazeliği için embedded replica ~60sn'de senkronlanır +
             // manuel yenile / refetchInterval'lı query'ler (printer, bildirim) çalışmaya devam eder.
             staleTime: 5 * 60_000, // 5 dk taze say
-            gcTime: 30 * 60_000, // 30 dk cache'te tut
+            // 10 dk: kullanılmayan (observer'sız) sorgular bu sürede toplanır. 30dk idi →
+            // çok sayıda 368-ürünlük büyük payload heap'te birikip 15-20dk'da GC baskısı +
+            // jank yaratıyordu. 10dk hâlâ ekranlar arası anında geçişe yetiyor.
+            gcTime: 10 * 60_000,
             retry: false,
             refetchOnMount: false, // mount'ta otomatik refetch yok → cache anında
             refetchOnWindowFocus: false,

@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -438,21 +438,30 @@ function VariantPicker({
   const qc = useQueryClient();
   const { data } = useQuery<PickProduct[]>({
     queryKey: ["products", "variant-picker"],
-    queryFn: () => fetch("/api/products?filter=all").then((r) => r.json()),
+    // lite=1: kâr hesabı olmadan hafif liste (ad/resim/fiyat) — picker'ı yormaz.
+    queryFn: () => fetch("/api/products?filter=all&lite=1").then((r) => r.json()),
   });
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [selected, setSelected] = useState<PickProduct | null>(null);
   const [label, setLabel] = useState("");
+
+  // Arama debounce: input anında yazılır (q), filtre 200ms sonra (debouncedQ) → her tuşta
+  // 50 satırı yeniden süzme/render yok, yazma akıcı kalır.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 200);
+    return () => clearTimeout(t);
+  }, [q]);
 
   const exclude = useMemo(() => new Set(excludeIds), [excludeIds]);
   const list = useMemo(() => {
     const all = Array.isArray(data) ? data : [];
-    const query = q.trim().toLocaleLowerCase("tr-TR");
+    const query = debouncedQ.trim().toLocaleLowerCase("tr-TR");
     return all
       .filter((p) => !exclude.has(p.id))
       .filter((p) => !query || p.name.toLocaleLowerCase("tr-TR").includes(query))
       .slice(0, 50);
-  }, [data, q, exclude]);
+  }, [data, debouncedQ, exclude]);
 
   const link = useMutation({
     mutationFn: () =>

@@ -70,6 +70,24 @@ export async function GET(req: NextRequest) {
     ];
   }
 
+  // LITE mod (varyant seçici vb.): kâr hesabı YOK → 368 ürün için ağır simülasyon + büyük
+  // cache nesnesi oluşmaz. Sadece liste/seçim için gereken küçük alanlar döner.
+  if (searchParams.get("lite")) {
+    const lite = await prisma.product.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        alias: true,
+        imageUrl: true,
+        currentSalePrice: true,
+        variantGroup: { select: { id: true, name: true } },
+      },
+      orderBy: { name: "asc" },
+    });
+    return NextResponse.json(lite);
+  }
+
   const [products, commissionRules, cargoRules, expenseRules, settings] =
     await Promise.all([
       prisma.product.findMany({
