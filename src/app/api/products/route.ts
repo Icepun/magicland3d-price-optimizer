@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { findCommissionRule } from "@/core/commission-calculator";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
-import { simulatePrice } from "@/core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
@@ -29,6 +29,7 @@ interface PlatformSummary {
   netProfit: number | null;
   profitMargin: number | null;
   commissionMissing: boolean;
+  minOrderQty?: number;
 }
 
 export async function GET(req: NextRequest) {
@@ -163,7 +164,12 @@ export async function GET(req: NextRequest) {
           ),
           vatRate,
           ...resolveListingCommissionOverride(listing, settingsMap),
-          cargoCostOverride: listing.cargoCost ?? undefined,
+          // Shopify sepet min 150₺ → <150₺ ürün tek başına satılamaz, kargo paylaşılır → katma (0).
+          cargoCostOverride:
+            listing.cargoCost ??
+            (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
+          // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden (fiyattan otomatik).
+          minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
         });
 
         // Trendyol/Hepsiburada'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi)
@@ -180,6 +186,7 @@ export async function GET(req: NextRequest) {
           netProfit: sim.netProfit,
           profitMargin: sim.profitMargin,
           commissionMissing,
+          minOrderQty: sim.minOrderQty, // Trendyol >1 → liste "×N" rozeti gösterir
         };
       });
 

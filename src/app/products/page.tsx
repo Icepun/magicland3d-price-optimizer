@@ -100,6 +100,7 @@ interface Product {
     netProfit: number | null;
     profitMargin: number | null;
     commissionMissing: boolean;
+    minOrderQty?: number;
   }>;
   variantLabel?: string | null;
   variantGroup?: { id: string; name: string } | null;
@@ -406,6 +407,14 @@ const ProductRow = memo(function ProductRow({
               </div>
             ) : (
               <div className="text-[10px] text-muted-foreground/60 mt-0.5">maliyet eksik</div>
+            )}
+            {(p.minOrderQty ?? 1) > 1 && (
+              <div
+                className="text-[9px] text-amber-500/90 mt-0.5"
+                title={`Trendyol min sipariş ${p.minOrderQty} adet — kâr ${p.minOrderQty} ürün üzerinden hesaplandı`}
+              >
+                min {p.minOrderQty} adet
+              </div>
             )}
           </TableCell>
         );

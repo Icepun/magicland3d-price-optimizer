@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { simulatePrice } from "./pricing-engine";
+import { simulatePrice, trendyolMinQty } from "./pricing-engine";
 import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput } from "./types";
 
 const commissionRules: CommissionRuleInput[] = [
@@ -183,5 +183,44 @@ describe("pricing engine", () => {
     // totalCost = 80 + 10 + 24 + 35 = 149
     expect(result.totalCost).toBe(149);
     expect(result.netProfit).toBe(51);
+  });
+
+  it("trendyolMinQty fiyat baremini doğru uygular (üst sınır hariç)", () => {
+    expect(trendyolMinQty(0)).toBe(6);
+    expect(trendyolMinQty(24.99)).toBe(6);
+    expect(trendyolMinQty(25)).toBe(4);
+    expect(trendyolMinQty(34.99)).toBe(4);
+    expect(trendyolMinQty(35)).toBe(3);
+    expect(trendyolMinQty(49.99)).toBe(3);
+    expect(trendyolMinQty(50)).toBe(2);
+    expect(trendyolMinQty(74.99)).toBe(2);
+    expect(trendyolMinQty(75)).toBe(1);
+    expect(trendyolMinQty(199.99)).toBe(1);
+  });
+
+  it("minOrderQty>1: gelir+ürün+komisyon+değişken gider ×N, KARGO ve sabit gider TEK kez", () => {
+    // 50₺ × 3 adet. Birim: commission 50*0.1+2=7, variable 50*0.03=1.5. desi*qty=0.5*3=1.5 → kargo 20.
+    const result = simulatePrice({
+      salePrice: 50,
+      productCost: 10,
+      packagingCost: 2,
+      categoryName: "Gamepad Stand",
+      desi: 0.5,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      minOrderQty: 3,
+    });
+
+    expect(result.minOrderQty).toBe(3);
+    expect(result.cargoCost).toBe(20); // TEK kez (3× değil)
+    expect(result.fixedExpenses).toBe(5); // TEK kez
+    expect(result.productCost).toBe(30); // 10 × 3
+    expect(result.packagingCost).toBe(6); // 2 × 3
+    expect(result.commissionCost).toBe(21); // 7 × 3
+    expect(result.variableExpenses).toBe(4.5); // 1.5 × 3
+    // totalCost = 30 + 6 + 21 + 20 + 5 + 4.5 = 86.5 ; gelir 150 → kâr 63.5
+    expect(result.totalCost).toBeCloseTo(86.5, 5);
+    expect(result.netProfit).toBeCloseTo(63.5, 5);
   });
 });

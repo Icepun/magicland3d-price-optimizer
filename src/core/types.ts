@@ -105,6 +105,12 @@ export interface SimulationInput {
    * Kargo override'ı (TL). Belirtilirse cargoRules'a bakmadan bu kullanılır.
    */
   cargoCostOverride?: number;
+  /**
+   * Minimum sipariş adedi (Trendyol bareni gibi). Default 1.
+   * >1 ise SİPARİŞ = N adet kabul edilir: gelir + ürün/paketleme/komisyon/değişken gider × N,
+   * KARGO tek kez (birleşik desi = desi×N), sabit gider tek kez. netProfit = N-adetlik sipariş kârı.
+   */
+  minOrderQty?: number;
 }
 
 export interface SimulationResult {
@@ -126,6 +132,8 @@ export interface SimulationResult {
   totalCost: number;
   netProfit: number;
   profitMargin: number;
+  /** Hesabın kaç adetlik sipariş üzerinden yapıldığı (Trendyol min sipariş). 1 = tekil. */
+  minOrderQty: number;
   appliedCommissionRule?: CommissionRuleInput;
   appliedCargoRule?: CargoRuleInput;
   appliedExpenseRules: AppliedExpenseRule[];

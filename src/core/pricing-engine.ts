@@ -39,6 +39,19 @@ function calculateExpenses(
 }
 
 /**
+ * Trendyol "Minimum Sipariş Adedi" bareni: fiyat → müşterinin almak ZORUNDA olduğu min adet.
+ * Trendyol satıcı panelindeki ayara göre (75₺ altı ürünlerde min adet artar). Üst sınır hariç:
+ * <25₺→6, <35₺→4, <50₺→3, <75₺→2, ≥75₺→1. Yalnızca Trendyol için kullanılır.
+ */
+export function trendyolMinQty(price: number): number {
+  if (price < 25) return 6;
+  if (price < 35) return 4;
+  if (price < 50) return 3;
+  if (price < 75) return 2;
+  return 1;
+}
+
+/**
  * Tek bir listing için "şu an ne kadar kâr ediyor" hesabı.
  *
  * - salePrice = Trendyol/HB/Shopify'da listelenen fiyat (KDV dahil)
@@ -65,7 +78,11 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     commissionRateOverride,
     commissionFixedOverride,
     cargoCostOverride,
+    minOrderQty,
   } = input;
+
+  // Min sipariş adedi (Trendyol bareni). >1 ise hesap N adetlik SİPARİŞ üzerinden yapılır.
+  const qty = Math.max(1, Math.round(minOrderQty || 1));
 
   // Etkili fiyat (kampanya indirimi sonrası).
   const discountMultiplier = 1 - (discountBuffer || 0) / 100;
@@ -104,7 +121,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
       cargoRules,
       effectiveSalePrice,
       categoryName,
-      desi,
+      desi * qty, // N adetlik sipariş tek pakette → birleşik desiyle barem
       simulationDate
     );
     cargoCost = appliedCargoRule ? appliedCargoRule.cargoCost : 0;
@@ -117,35 +134,36 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     applied: appliedExpenseRules,
   } = calculateExpenses(expenseRules, effectiveSalePrice, categoryName);
 
-  // Toplam maliyet — tüm bu kalemler ex-VAT baz (KDV reclaim varsayımı)
-  const totalCost =
-    productCost +
-    packagingCost +
-    commissionCost +
-    cargoCost +
-    fixedExpenses +
-    variableExpenses;
+  // SİPARİŞ bazlı toplam: per-unit kalemler (ürün/paketleme/komisyon/değişken gider) × qty;
+  // KARGO ve sabit gider TEK kez (N ürün tek pakette gider). qty=1 → davranış aynı.
+  const oProduct = productCost * qty;
+  const oPackaging = packagingCost * qty;
+  const oCommission = commissionCost * qty;
+  const oVariable = variableExpenses * qty;
+  const orderRevenueExVat = salePriceExVat * qty;
+  const totalCost = oProduct + oPackaging + oCommission + cargoCost + fixedExpenses + oVariable;
 
-  // Net kâr — KDV hariç gelir - tüm maliyetler
-  const netProfit = salePriceExVat - totalCost;
-  const profitMargin = salePriceExVat > 0 ? netProfit / salePriceExVat : 0;
+  // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler
+  const netProfit = orderRevenueExVat - totalCost;
+  const profitMargin = orderRevenueExVat > 0 ? netProfit / orderRevenueExVat : 0;
 
   return {
     salePrice,
     effectiveSalePrice,
-    salePriceExVat,
+    salePriceExVat, // birim (KDV hariç) gelir — sipariş geliri = salePriceExVat × minOrderQty
     vatAmount,
     vatRate: vatRate || 0,
     discountBuffer: discountBuffer || 0,
-    productCost,
-    packagingCost,
-    commissionCost,
+    productCost: oProduct,
+    packagingCost: oPackaging,
+    commissionCost: oCommission,
     cargoCost,
     fixedExpenses,
-    variableExpenses,
+    variableExpenses: oVariable,
     totalCost,
     netProfit,
     profitMargin,
+    minOrderQty: qty,
     appliedCommissionRule,
     appliedCargoRule,
     appliedExpenseRules,

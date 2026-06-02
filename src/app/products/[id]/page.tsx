@@ -1203,6 +1203,15 @@ function PlatformProfitCardImpl({
                   </div>
                 </div>
 
+                {result.minOrderQty > 1 && (
+                  <div
+                    className="rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-1 text-[11px] font-medium"
+                    title="Trendyol min sipariş adedi — kâr bu adetlik sipariş üzerinden hesaplandı"
+                  >
+                    Trendyol min sipariş: {result.minOrderQty} adet · kâr {formatCurrency(result.salePrice * result.minOrderQty)} ciro üzerinden
+                  </div>
+                )}
+
                 <Separator />
 
                 <div className="space-y-1 text-[11px] tabular-nums">

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice } from "@/core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { resolveProductCost } from "@/core/product-cost";
@@ -115,7 +115,12 @@ export async function POST(
       ),
       vatRate,
       ...resolveListingCommissionOverride(listing, settingsMap),
-      cargoCostOverride: listing.cargoCost ?? undefined,
+      // Shopify sepet min 150₺ → <150₺ üründe kargo paylaşılır → katma (0).
+      cargoCostOverride:
+        listing.cargoCost ??
+        (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
+      // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden.
+      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
     });
 
     return {
