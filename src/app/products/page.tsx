@@ -23,9 +23,10 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
+import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
 import Link from "next/link";
@@ -202,6 +203,7 @@ const ProductRow = memo(function ProductRow({
   onToggleHidden,
   onDelete,
   onToggleMadeToOrder,
+  onPrint,
 }: {
   product: Product;
   isMember: boolean;
@@ -219,6 +221,7 @@ const ProductRow = memo(function ProductRow({
   onToggleHidden: (id: string, hidden: boolean) => void;
   onDelete: (id: string, name: string) => void;
   onToggleMadeToOrder: (id: string, value: boolean) => void;
+  onPrint: (id: string, name: string) => void;
 }) {
   const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
   const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
@@ -424,6 +427,15 @@ const ProductRow = memo(function ProductRow({
           <Button
             variant="ghost"
             size="icon"
+            className="h-8 w-8 text-muted-foreground/60 hover:text-primary"
+            title="Baskı başlat"
+            onClick={() => onPrint(product.id, product.name)}
+          >
+            <Printer className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
             className={cn(
               "h-8 w-8",
               product.madeToOrder ? "text-primary" : "text-muted-foreground/50 hover:text-foreground"
@@ -465,6 +477,7 @@ export default function ProductsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
   const [matchModal, setMatchModal] = useState<{
     productId: string;
     productName: string;
@@ -694,6 +707,10 @@ export default function ProductsPage() {
   // Silme ANINDA değil — önce onay penceresi (yanlışlıkla tıklama veri kaybettirmesin).
   const handleDelete = useCallback(
     (id: string, name: string) => setDeleteConfirm({ id, name }),
+    []
+  );
+  const handlePrint = useCallback(
+    (id: string, name: string) => setPrintTarget({ id, name }),
     []
   );
 
@@ -1233,6 +1250,7 @@ export default function ProductsPage() {
                     onToggleHidden={handleToggleHidden}
                     onDelete={handleDelete}
                     onToggleMadeToOrder={handleToggleMadeToOrder}
+                    onPrint={handlePrint}
                   />
                 );
               })}
@@ -1385,6 +1403,15 @@ export default function ProductsPage() {
       {/* Pazaryeri (Shopify'da olmayan) ürünü doğrudan ekleme modalı */}
       {marketplaceOpen && (
         <MarketplaceAddModal integrations={integrations} onClose={() => setMarketplaceOpen(false)} />
+      )}
+
+      {/* Hızlı baskı — yazıcı/parça seç → yükle & başlat */}
+      {printTarget && (
+        <ProductPrintModal
+          productId={printTarget.id}
+          productName={printTarget.name}
+          onClose={() => setPrintTarget(null)}
+        />
       )}
     </div>
   );

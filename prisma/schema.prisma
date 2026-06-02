@@ -22,6 +22,8 @@ model Product {
   desi             Float?
   weight           Float?
   imageUrl         String?
+  /** Görsel kullanıcı tarafından elle seçildi/yüklendi mi → sync (Yenile) onu EZMEZ. */
+  imageManual      Boolean  @default(false)
   isActive         Boolean  @default(true)
   /** Kullanıcı tarafından listeden gizlendi mi (silmeden saklama). */
   hidden           Boolean  @default(false)

@@ -69,7 +69,8 @@ export async function POST(req: NextRequest) {
           stock: variant.inventory_quantity ?? 0,
           name,
           categoryName: product.product_type || "Shopify",
-          imageUrl: product.image?.src ?? null,
+          // Varyanta özel görsel öncelikli; yoksa ürün featuredImage'ine düş.
+          imageUrl: variant.image ?? product.image?.src ?? null,
           variantId: String(variant.id),
           archived: product.status === "archived",
         });
@@ -85,18 +86,32 @@ export async function POST(req: NextRequest) {
           productId: string;
           barcode: string;
           productPrice: number;
+          imageUrl: string | null;
+          imageManual: number;
         }>
       >(
         `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
-                p.barcode AS barcode, p.currentSalePrice AS productPrice
+                p.barcode AS barcode, p.currentSalePrice AS productPrice,
+                p.imageUrl AS imageUrl, p.imageManual AS imageManual
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'shopify'`
       );
       let changed = 0;
+      let imagesFixed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
         const f = fetched.get(row.barcode);
         if (!f) continue;
+        // Görsel backfill/düzeltme — yalnızca elle ayarlanmamış (imageManual=0) ürünlerde,
+        // ve gerçekten değişmişse (diff-write → tekrar tekrar yazma yok).
+        if (!row.imageManual && f.imageUrl && f.imageUrl !== row.imageUrl) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE Product SET imageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+            f.imageUrl,
+            row.productId
+          );
+          imagesFixed++;
+        }
         const listingChanged = Math.abs(f.price - row.listingPrice) > 0.001;
         const productChanged = Math.abs(f.price - row.productPrice) > 0.001;
         if (!listingChanged && !productChanged) continue;
@@ -124,7 +139,7 @@ export async function POST(req: NextRequest) {
       }
       // Fiyat geçmişi — yalnızca değişenler, tek round-trip (Turso yazma maliyeti).
       if (history.length) await prisma.priceHistory.createMany({ data: history });
-      return { checked: rows.length, changed };
+      return { checked: rows.length, changed, imagesFixed };
     }
 
     // ── add-new: yalnızca eksik ürünleri ekle ────────────────────────────────

@@ -13,9 +13,10 @@ import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
+import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
-import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus } from "lucide-react";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -56,6 +57,7 @@ interface ProductDetail {
   madeToOrder: boolean;
   desi: number | null;
   imageUrl: string | null;
+  imageManual?: boolean;
   source: string;
   cost: {
     costMode: string;
@@ -143,6 +145,7 @@ export default function ProductDetailPage({
   const [tapeUsed, setTapeUsed] = useState(false);
   const [desiInput, setDesiInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
+  const [imageEditorOpen, setImageEditorOpen] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState("");
 
   useEffect(() => {
@@ -451,20 +454,26 @@ export default function ProductDetailPage({
         <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
           <ArrowLeft className="h-4 w-4" />
         </Link>
-        {product.imageUrl ? (
-          <div className="w-16 h-16 rounded-lg border bg-muted flex items-center justify-center flex-shrink-0 overflow-hidden">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
+        <button
+          type="button"
+          onClick={() => setImageEditorOpen(true)}
+          title="Görseli düzenle"
+          className="group relative w-16 h-16 rounded-lg border bg-muted flex items-center justify-center flex-shrink-0 overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/40"
+        >
+          {product.imageUrl ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img
               src={product.imageUrl}
               alt={product.name}
               className="max-w-full max-h-full object-contain"
             />
-          </div>
-        ) : (
-          <div className="w-16 h-16 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+          ) : (
             <Package className="h-8 w-8 text-muted-foreground" />
-          </div>
-        )}
+          )}
+          <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 group-hover:opacity-100 transition-opacity">
+            <Camera className="h-5 w-5 text-white" />
+          </span>
+        </button>
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold tracking-tight line-clamp-2 leading-tight">
             {product.name}
@@ -861,6 +870,21 @@ export default function ProductDetailPage({
       <PriceLabCard productId={product.id} />
 
       <PriceHistoryCard productId={product.id} />
+
+      {imageEditorOpen && (
+        <ProductImageEditorDialog
+          productId={product.id}
+          productName={product.name}
+          imageUrl={product.imageUrl}
+          onClose={() => setImageEditorOpen(false)}
+          onChanged={(url) => {
+            queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
+              old ? { ...old, imageUrl: url, imageManual: url != null } : old
+            );
+            queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+          }}
+        />
+      )}
     </div>
   );
 }

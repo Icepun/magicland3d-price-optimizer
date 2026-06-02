@@ -24,6 +24,8 @@ export interface ShopifyProductVariant {
   sku: string;
   barcode: string | null;
   inventory_quantity: number;
+  /** Varyanta özel görsel (yoksa null → ürün featuredImage'ine düşülür). */
+  image: string | null;
 }
 
 export interface ShopifyProduct {
@@ -91,6 +93,7 @@ interface StorefrontProductsResponse {
                 barcode: string | null;
                 price: { amount: string };
                 quantityAvailable: number | null;
+                image: { url: string } | null;
               };
             }>;
           };
@@ -165,6 +168,9 @@ const PRODUCTS_QUERY = `
                   amount
                 }
                 quantityAvailable
+                image {
+                  url
+                }
               }
             }
           }
@@ -317,6 +323,7 @@ export class ShopifyClient {
             sku: v.sku ?? "",
             barcode: v.barcode ?? null,
             inventory_quantity: v.quantityAvailable ?? 0,
+            image: v.image?.url ?? null,
           };
         });
 

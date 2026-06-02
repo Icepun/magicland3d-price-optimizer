@@ -18,12 +18,14 @@ import {
   Pencil,
   FolderPlus,
   Trash2,
+  Camera,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
 import { formatCurrency, cn } from "@/lib/utils";
 
 interface VMember {
@@ -84,6 +86,7 @@ function VariantsCardImpl({
   const [labelDraft, setLabelDraft] = useState("");
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [confirmUnlinkId, setConfirmUnlinkId] = useState<string | null>(null);
+  const [editImageId, setEditImageId] = useState<string | null>(null);
 
   const refresh = () => {
     // SADECE bu ürünü tazele (prefix ["product"] DEĞİL → diğer ürün cache'lerini boşuna bayatlatma).
@@ -273,7 +276,17 @@ function VariantsCardImpl({
                 isCurrent && "bg-primary/5 ring-1 ring-primary/20"
               )}
             >
-              <Thumb src={m.imageUrl} />
+              <button
+                type="button"
+                onClick={() => setEditImageId(m.id)}
+                title="Görseli düzenle"
+                className="group/thumb relative shrink-0 rounded-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+              >
+                <Thumb src={m.imageUrl} />
+                <span className="absolute inset-0 flex items-center justify-center rounded-md bg-black/50 opacity-0 group-hover/thumb:opacity-100 transition-opacity">
+                  <Camera className="h-3.5 w-3.5 text-white" />
+                </span>
+              </button>
               <div className="min-w-0 flex-1">
                 {editingLabelId === m.id ? (
                   <div className="flex items-center gap-1.5">
@@ -390,6 +403,37 @@ function VariantsCardImpl({
           onClose={() => setPickerOpen(false)}
         />
       )}
+
+      {editImageId && (() => {
+        const m = members.find((x) => x.id === editImageId);
+        if (!m) return null;
+        return (
+          <ProductImageEditorDialog
+            productId={m.id}
+            productName={m.variantLabel || m.name}
+            imageUrl={m.imageUrl}
+            onClose={() => setEditImageId(null)}
+            onChanged={(url) => {
+              // Bu üyeyi grup cache'inde anında güncelle; düzenlenen üye AÇIK ürünse
+              // üst seviye imageUrl'i de yamala. Liste sadece bayatlatılır (refetch yok).
+              qc.setQueryData<DetailCache>(["product", productId], (old) => {
+                if (!old?.variantGroup?.products) return old;
+                return {
+                  ...old,
+                  ...(m.id === productId ? { imageUrl: url, imageManual: url != null } : {}),
+                  variantGroup: {
+                    ...old.variantGroup,
+                    products: old.variantGroup.products.map((p) =>
+                      p.id === m.id ? { ...p, imageUrl: url } : p
+                    ),
+                  },
+                };
+              });
+              qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+            }}
+          />
+        );
+      })()}
     </Card>
   );
 }

@@ -18,6 +18,9 @@ const UpdateProductSchema = z.object({
   stock: z.number().int().min(0).optional(),
   desi: z.number().positive().nullable().optional(),
   weight: z.number().positive().nullable().optional(),
+  // Görsel: elle URL yapıştırma / kaldırma. imageManual=true → sync (Yenile) ezmez.
+  imageUrl: z.string().trim().max(2000).nullable().optional(),
+  imageManual: z.boolean().optional(),
   isActive: z.boolean().optional(),
   hidden: z.boolean().optional(),
   madeToOrder: z.boolean().optional(),
@@ -100,6 +103,15 @@ export async function PATCH(
   // Boş takma ad → null (DB'de tutarlı). Barkod trim'lendi (şemada).
   if (typeof productData.alias === "string") {
     productData.alias = productData.alias.trim() || null;
+  }
+
+  // Görsel elle ayarlanıyorsa (URL set/temizle) ve imageManual açıkça verilmemişse:
+  // dolu URL → manuel (sync ezmesin); boş/null → otomatik (sync yeniden doldurabilsin).
+  if (productData.imageUrl !== undefined) {
+    productData.imageUrl = productData.imageUrl || null;
+    if (productData.imageManual === undefined) {
+      productData.imageManual = !!productData.imageUrl;
+    }
   }
 
   // Manuel fiyat değişikliğini fiyat geçmişine yaz (yalnızca fiyat gerçekten değişince).

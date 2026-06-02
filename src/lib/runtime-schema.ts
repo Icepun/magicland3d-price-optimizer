@@ -10,9 +10,10 @@ let schemaReady: Promise<void> | null = null;
  */
 // v19: Product.alias + Listing.barcode (0.19.15/0.19.16). v20: Product.madeToOrder (0.19.21).
 // v21: Notification tablosu (0.19.30) — olay-anı bildirimleri (stoğu biten/sipariş-üzerine ürüne sipariş).
+// v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "21";
+const CURRENT_SCHEMA_VERSION = "22";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -403,6 +404,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "variantLabel", "TEXT");
     await ensureColumn("Product", "alias", "TEXT");
     await ensureColumn("Product", "madeToOrder", "BOOLEAN NOT NULL DEFAULT false");
+    await ensureColumn("Product", "imageManual", "BOOLEAN NOT NULL DEFAULT false");
     await ensureColumn("Product", "variantGroupId", "TEXT");
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`

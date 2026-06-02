@@ -24,3 +24,10 @@ export function getModelsDir(): string {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+/** Kullanıcının elle yüklediği ürün görsellerinin saklandığı klasör (yoksa oluşturur). */
+export function getImagesDir(): string {
+  const dir = path.join(getUserDataDir(), "images");
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
