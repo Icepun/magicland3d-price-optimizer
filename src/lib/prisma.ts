@@ -23,6 +23,10 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
   #replicaClient: LibsqlClient | null = null;
   /** Replica dosyası bu açılıştan ÖNCE var mıydı? (yoksa = ilk kurulum) */
   #replicaPreexisting = false;
+  /** Aynı anda iki native sync olmasın (üst üste = veri bozulma riski + sorgu blokajı uzar). */
+  #syncing = false;
+  /** Bulut erişim kontrolü için syncUrl'in HTTPS karşılığı. */
+  #syncHttpUrl: string | null = null;
 
   createClient(config: LibsqlConfig): LibsqlClient {
     const syncUrl = (config as { syncUrl?: string }).syncUrl;
@@ -36,6 +40,7 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
       } catch {
         this.#replicaPreexisting = false;
       }
+      this.#syncHttpUrl = syncUrl.replace(/^libsql:\/\//i, "https://").replace(/^wss?:\/\//i, "https://");
     }
     const client = super.createClient(config);
     // Sadece gerçek replica (syncUrl'li file) client'ını yakala; :memory: shadow değil.
@@ -43,37 +48,61 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
     return client;
   }
 
+  /**
+   * Bulut 2sn içinde erişilebilir mi? KRİTİK: libSQL embedded replica `sync()`'i SQL sorgularını
+   * BLOKE eder (bilinen kısıt, libsql#979). Ağ yokken bloke eden native sync'i HİÇ çağırmamak için
+   * önce hızlı bir erişim kontrolü yaparız → ağ kopunca uygulama DONMAZ.
+   */
+  async #cloudReachable(): Promise<boolean> {
+    if (!this.#syncHttpUrl) return true;
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2000);
+    try {
+      await fetch(this.#syncHttpUrl, { method: "GET", signal: ctrl.signal, cache: "no-store" });
+      return true; // herhangi bir HTTP yanıtı (401/404 dahil) = erişilebilir
+    } catch {
+      return false; // ağ hatası / timeout = erişilemez → sync ATLA
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
   async connect() {
     const adapter = await super.connect();
-    if (this.#replicaClient) {
-      // Buluttan çekmeyi ARKA PLANDA başlat — ilk sorgu YEREL replica'dan anında
-      // döner (önceki oturumun verisi). Diğer cihazın değişiklikleri bu sync + 60sn'lik
-      // syncInterval ile kısa sürede gelir.
-      const syncing = this.#replicaClient.sync().catch((e) => {
-        console.error(
-          "[prisma] Turso embedded replica sync başarısız:",
-          e instanceof Error ? e.message : e
-        );
-      });
-      // SADECE ilk kurulumda (replica dosyası henüz yokken) bekle — yerelde hiç veri
-      // olmadığı için ilk sorgunun veri görmesi şart. Sonraki açılışlarda BEKLEMEYİZ
-      // → 10-15 sn'lik boş ekran ortadan kalkar.
-      if (!this.#replicaPreexisting) {
-        await syncing;
+    // İlk kurulumda (yerelde HİÇ veri yok) bir kez senkronla — ama açılışı kilitleme:
+    // erişim varsa + en fazla 6sn. MEVCUT kurulumda connect'te SENKRON YOK; çünkü sync()
+    // sorguları bloke ediyor → ilk sorgu/açılış donardı. Tazeleme relay'in periyodik
+    // (erişim-kontrollü) syncNow'ı ile arka planda gelir.
+    if (this.#replicaClient && !this.#replicaPreexisting) {
+      try {
+        if (await this.#cloudReachable()) {
+          await Promise.race([
+            this.#replicaClient.sync(),
+            new Promise((r) => setTimeout(r, 6000)),
+          ]);
+        }
+      } catch {
+        /* ilk sync başarısızsa boş yerelle aç; relay sonra doldurur */
       }
     }
     return adapter;
   }
 
-  /** Relay için: yerel replica'yı buluttan ANINDA tazele (telefon komutlarını çabuk görmek için). */
+  /**
+   * Relay: yerel replica'yı buluttan tazele. Re-entrancy guard + erişim kontrolü + sınırlı bekleme.
+   * Native sync bitene dek guard AÇIK kalır (timeout'ta sıfırlanmaz) → üst üste native sync olmaz.
+   */
   async syncNow(): Promise<void> {
-    if (this.#replicaClient) {
-      try {
-        await this.#replicaClient.sync();
-      } catch (e) {
-        console.error("[prisma] relay sync hatası:", e instanceof Error ? e.message : e);
-      }
-    }
+    if (!this.#replicaClient || this.#syncing) return;
+    if (!(await this.#cloudReachable())) return; // ağ yok → bloke eden native sync'i çağırma
+    this.#syncing = true;
+    const client = this.#replicaClient;
+    const done = client
+      .sync()
+      .catch((e) => console.error("[prisma] sync:", e instanceof Error ? e.message : e))
+      .finally(() => { this.#syncing = false; });
+    // Çağıran en fazla 9sn bekler; native sync arka planda devam edebilir (guard onu korur).
+    await Promise.race([done, new Promise((r) => setTimeout(r, 9000))]);
   }
 }
 
@@ -126,7 +155,9 @@ function createPrisma(): PrismaClient {
       url: `file:${replicaPath}`,
       syncUrl: tursoUrl,
       authToken: tursoToken || undefined,
-      syncInterval: 60, // saniye — periyodik pull (yazmalar zaten anında buluta gider)
+      // syncInterval KALDIRILDI: native otomatik periyodik sync, ağ değişince/kopunca askıda kalıp
+      // SQL sorgularını bloke ediyordu (libSQL bilinen kısıt #979) → uygulama donuyordu. Tazeleme
+      // artık SADECE relay'in erişim-kontrollü + guard'lı syncNow'ı ile (donma riski yok).
     });
     _tursoAdapter = adapter; // relay zorla-senkron için
     return new PrismaClient({ adapter, log: [...log] });
