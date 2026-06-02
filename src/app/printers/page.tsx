@@ -1031,12 +1031,18 @@ function SlotStep({
     [usingFile, fileColors, manualCount]
   );
 
-  // Otomatik eşleme: dosya rengi → en yakın yüklü slot (yoksa sıra ile)
+  // Otomatik eşleme.
+  // ⚠️ Snapmaker (tool-changer): kafa↔slot↔renk eşlemesi dilimleyicide (Orca) gcode'a GÖMÜLÜ.
+  //    Renge göre "en yakın yüklü slot"a remap YAPMA → yanlış kafaya gönderir, o kafa ısınmaz,
+  //    filament hareket etmez → "Filament Anomaly / runout" hatası. Varsayılan = IDENTITY
+  //    (dilimlendiği kafa). Kullanıcı isterse elle değiştirir.
+  //    Bambu (AMS, flush): her renk herhangi bir slottan beslenebilir → renge göre en yakın slot.
   useEffect(() => {
     if (isLoading) return;
     setAssign((prev) => {
       if (prev.length === printColors.length && prev.every((v) => v != null)) return prev;
       return printColors.map((c, i) => {
+        if (!isBambu) return c.index; // Snapmaker: dilimlendiği gibi (identity)
         const near = usingFile && slots.length ? nearestSlotId(c.hex, slots) : null;
         return near != null ? near : (pickSlots[i % pickSlots.length]?.slot ?? i);
       });
