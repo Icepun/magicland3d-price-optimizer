@@ -425,6 +425,7 @@ export default function ProductsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
   const [addOpen, setAddOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [matchModal, setMatchModal] = useState<{
@@ -952,6 +953,9 @@ export default function ProductsPage() {
               </Button>
             </>
           )}
+          <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürünü barkoduyla ekle">
+            <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
+          </Button>
           <Button onClick={() => setAddOpen(true)} size="sm">
             <Plus className="h-4 w-4 mr-2" /> Ürün Ekle
           </Button>
@@ -1206,6 +1210,11 @@ export default function ProductsPage() {
           onClose={() => setMatchModal(null)}
         />
       )}
+
+      {/* Pazaryeri (Shopify'da olmayan) ürünü doğrudan ekleme modalı */}
+      {marketplaceOpen && (
+        <MarketplaceAddModal integrations={integrations} onClose={() => setMarketplaceOpen(false)} />
+      )}
     </div>
   );
 }
@@ -1368,6 +1377,202 @@ function MatchListingModal({
             </div>
           )}
         </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * Pazaryeri ürünü ekleme modalı: Shopify'da OLMAYAN, sadece Trendyol/HB'de bulunan ürünleri
+ * (UnmatchedListing havuzu) doğrudan yeni Product olarak ekler. Verisi pazaryerinden gelir.
+ * Eklenince listeden düşer + ürünler listesine girer (stok takibi yapılabilir). Modal açık kalır.
+ */
+function MarketplaceAddModal({
+  integrations,
+  onClose,
+}: {
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const configured = (["trendyol", "hepsiburada"] as const).filter((p) => integrations?.[p]);
+  const [platform, setPlatform] = useState<"trendyol" | "hepsiburada">(configured[0] ?? "trendyol");
+  const [search, setSearch] = useState("");
+
+  const { data: unmatched = [], isLoading } = useQuery<
+    Array<{
+      id: string;
+      barcode: string;
+      externalSku: string | null;
+      name: string;
+      price: number;
+      stock: number;
+      imageUrl: string | null;
+    }>
+  >({
+    queryKey: ["unmatched-listings", platform, search],
+    queryFn: () =>
+      fetchJson(
+        `/api/unmatched-listings?platform=${platform}${search ? `&search=${encodeURIComponent(search)}` : ""}`
+      ),
+  });
+
+  const promote = useMutation({
+    mutationFn: async (listingId: string) => {
+      const res = await fetch(`/api/unmatched-listings/${listingId}/promote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(j?.error || "Eklenemedi");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      // Modal AÇIK kalır (peş peşe ekleme): eklenen listeden düşer, ürün listesine girer.
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success("Ürün eklendi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const refreshPool = useMutation({
+    mutationFn: () =>
+      fetchJson(`/api/${platform}/sync-products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "add-new" }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+      toast.success("Pazaryeri listesi tazelendi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle>Pazaryeri Ürünü Ekle</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Shopify&apos;da olmayan, sadece {platformLabel}&apos;de bulunan ürünü yeni ürün olarak
+            ekle — adı, resmi, fiyatı, stoğu pazaryerinden gelir.
+          </p>
+        </DialogHeader>
+
+        {configured.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground">
+            Önce Trendyol veya Hepsiburada entegrasyonunu yapılandır.
+          </div>
+        ) : (
+          <>
+            {configured.length > 1 && (
+              <div className="flex items-center gap-1 rounded-lg bg-muted p-1 w-fit">
+                {configured.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setPlatform(p)}
+                    className={cn(
+                      "px-3 py-1 rounded-md text-xs font-medium transition-colors",
+                      platform === p ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {p === "hepsiburada" ? "Hepsiburada" : "Trendyol"}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Barkod, SKU veya ürün adı..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={refreshPool.isPending}
+                onClick={() => refreshPool.mutate()}
+                title={`${platformLabel}'dan güncel ürün listesini çek`}
+              >
+                <RefreshCw className={`h-4 w-4 mr-1.5 ${refreshPool.isPending ? "animate-spin" : ""}`} />
+                {refreshPool.isPending ? "Tazeleniyor…" : "Tazele"}
+              </Button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto -mx-2 px-2">
+              {isLoading ? (
+                <div className="py-8 flex items-center justify-center text-muted-foreground">
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Yükleniyor...
+                </div>
+              ) : unmatched.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">
+                  {search
+                    ? `"${search}" için sonuç yok`
+                    : `Eklenebilecek ${platformLabel} ürünü yok. "Tazele" ile listeyi güncelle.`}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {unmatched.map((u) => {
+                    const adding = promote.isPending && promote.variables === u.id;
+                    return (
+                      <div
+                        key={u.id}
+                        className="w-full p-3 rounded-md flex items-center gap-3 border border-transparent hover:bg-muted/40"
+                      >
+                        {u.imageUrl ? (
+                          <div className="w-10 h-10 rounded border bg-muted shrink-0 overflow-hidden">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={u.imageUrl} alt={u.name} className="w-full h-full object-contain" />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded bg-muted shrink-0 flex items-center justify-center">
+                            <Package className="h-5 w-5 text-muted-foreground/60" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium line-clamp-1">{u.name}</p>
+                          <p className="text-[10px] text-muted-foreground font-mono">
+                            {u.barcode} · {u.externalSku ?? "no-sku"}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-xs font-semibold tabular-nums">{formatCurrency(u.price)}</p>
+                          <p className="text-[10px] text-muted-foreground tabular-nums">Stok: {u.stock}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          className="shrink-0 h-8"
+                          disabled={promote.isPending}
+                          onClick={() => promote.mutate(u.id)}
+                        >
+                          {adding ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <>
+                              <Plus className="h-3.5 w-3.5 mr-1" /> Ekle
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
