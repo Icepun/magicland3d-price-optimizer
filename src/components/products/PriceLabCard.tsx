@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FlaskConical, Target, Tag, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +32,9 @@ function platformInfo(p: string) {
   return PLATFORM[p as keyof typeof PLATFORM] ?? { label: p, color: "oklch(0.62 0.20 278)" };
 }
 
-export function PriceLabCard({ productId }: { productId: string }) {
+// memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
+export const PriceLabCard = memo(PriceLabCardImpl);
+function PriceLabCardImpl({ productId }: { productId: string }) {
   const { data, isLoading } = useQuery<PriceLab>({
     queryKey: ["price-lab", productId],
     queryFn: () => fetch(`/api/products/${productId}/price-lab`).then((r) => r.json()),

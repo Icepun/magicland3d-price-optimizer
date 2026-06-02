@@ -1,5 +1,6 @@
 "use client";
 
+import { memo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   LineChart,
@@ -52,7 +53,9 @@ function fmtDateTime(iso: string) {
   });
 }
 
-export function PriceHistoryCard({ productId }: { productId: string }) {
+// memo: Recharts grafiği pahalı — detay cache'i her değişince (madeToOrder/maliyet) yeniden çizilmesin.
+export const PriceHistoryCard = memo(PriceHistoryCardImpl);
+function PriceHistoryCardImpl({ productId }: { productId: string }) {
   const { data, isLoading } = useQuery<PriceHistoryEntry[]>({
     queryKey: ["price-history", productId],
     queryFn: () =>

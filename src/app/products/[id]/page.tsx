@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useMemo } from "react";
+import { use, useState, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -867,8 +867,11 @@ export default function ProductDetailPage({
 
 /**
  * Bir platform için listing kâr/zarar kartı. Listing yoksa "Ekle" formu gösterir.
+ * memo: detay cache'i değişince (örn. madeToOrder/alias optimistic toggle — listings ref'i AYNI
+ * kalır) bu ağır kart GEREKSİZ yere render olmasın → toggle anlık hisseder. (Impl hoist edilir.)
  */
-function PlatformProfitCard({
+const PlatformProfitCard = memo(PlatformProfitCardImpl);
+function PlatformProfitCardImpl({
   platform,
   listing,
   productId,

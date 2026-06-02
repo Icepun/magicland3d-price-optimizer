@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -63,7 +63,10 @@ function Thumb({ src, className }: { src: string | null; className?: string }) {
   );
 }
 
-export function VariantsCard({
+// memo: detay cache'i değişince (örn. madeToOrder/maliyet optimistic toggle — group ref'i AYNI kalır)
+// bu kart gereksiz render olmasın → toggle anlık hisseder. (Impl hoist edilir.)
+export const VariantsCard = memo(VariantsCardImpl);
+function VariantsCardImpl({
   productId,
   productName,
   group,

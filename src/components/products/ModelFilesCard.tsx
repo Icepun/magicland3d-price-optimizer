@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileBox, Upload, Trash2, Loader2, Printer } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,7 +38,9 @@ function uploadPart(productId: string, printerConfigId: string, file: File, onPr
   });
 }
 
-export function ModelFilesCard({ productId }: { productId: string }) {
+// memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
+export const ModelFilesCard = memo(ModelFilesCardImpl);
+function ModelFilesCardImpl({ productId }: { productId: string }) {
   const qc = useQueryClient();
   const { data: printers = [] } = useQuery<PrinterCfg[]>({
     queryKey: ["printer-configs"],
@@ -98,7 +100,21 @@ function PrinterGroup({ printer, parts, productId, onChanged }: { printer: Print
   const patchField = useMutation({
     mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
       fetch(`/api/models/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json()),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["product-models", productId] }),
+    // Optimistic: etiket/gramaj cache'te anında güncellenir → REFETCH YOK. (Eski refetch, blur'da
+    // yazdığın değeri uncontrolled input'ta eziyordu + ağır.) Hata olursa geri alınır.
+    onMutate: async ({ id, body }) => {
+      await qc.cancelQueries({ queryKey: ["product-models", productId] });
+      const prev = qc.getQueryData<ModelFile[]>(["product-models", productId]);
+      qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
+        Array.isArray(old) ? old.map((f) => (f.id === id ? ({ ...f, ...body } as ModelFile) : f)) : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["product-models", productId], ctx.prev);
+      toast.error("Kaydedilemedi (geri alındı)");
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["models"], refetchType: "none" }),
   });
 
   const handleFiles = async (fileList: FileList) => {
