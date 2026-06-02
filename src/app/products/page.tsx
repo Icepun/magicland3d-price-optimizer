@@ -482,12 +482,14 @@ export default function ProductsPage() {
         `/api/products?filter=${filterMode === "most-profitable" ? "active" : filterMode}`,
         { signal }
       ),
-    // Kâr hesabı maliyet/komisyon/kargo/gider ayarlarına bağlı — her açılışta
-    // sunucudan taze çek, cache'teki eski kâr değerini gösterme.
-    // Akıllı tazeleme: 15sn taze say → sekmeye dönüşte/odakta gereksiz ağır refetch yok (anında cache).
-    // Değişiklikler (maliyet/stok/gizle/KDV vb.) zaten ["products"] invalidate ediyor → liste yine de doğru
-    // kalır; invalidate edilen sorgu mount'ta tazelenir. ("always" + focus refetch = her dönüşte flash idi.)
-    staleTime: 15_000,
+    // CACHE-FIRST: liste cache'te yaşar, KENDİLİĞİNDEN tazelenmez (staleTime: Infinity).
+    // Yalnızca bir değişiklik onu invalidate edince refetch olur:
+    //   • stok/maliyet/gizle/alias/madeToOrder düzeni → optimistic (zaten cache'te güncel)
+    //   • Maliyet&Paketleme / Kargo / Ek Giderler / KDV değişimi → invalidate ["products"]
+    //   • "Fiyatları Güncelle" butonu / ürün ekle-sil → invalidate ["products"]
+    // refetchOnMount:true → invalidate edilmişse bir sonraki girişte tazeler, edilmemişse anında cache.
+    // (Eski 15sn: her ~15sn'de bir girişte 368 ürünü baştan çekip kasıyordu — kaldırıldı.)
+    staleTime: Infinity,
     refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
@@ -714,6 +716,37 @@ export default function ProductsPage() {
     (id: string, madeToOrder: boolean) => setMadeToOrderMutation.mutate({ id, madeToOrder }),
     [setMadeToOrderMutation]
   );
+
+  // "Fiyatları Güncelle" — tüm yapılandırılmış platformların satış fiyatlarını pazaryerinden çek
+  // (refresh-prices: yalnızca DEĞİŞEN fiyatı yazar). Fiyatlar artık SADECE bu butonla tazelenir.
+  const refreshPricesMutation = useMutation({
+    mutationFn: async () => {
+      const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter(
+        (p) => integrations?.[p]
+      );
+      if (platforms.length === 0) throw new Error("Yapılandırılmış platform yok");
+      const results = await Promise.all(
+        platforms.map((p) =>
+          fetch(`/api/${p}/sync-products`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "refresh-prices" }),
+          })
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        )
+      );
+      return results.reduce((s: number, r) => s + (r?.changed ?? 0), 0);
+    },
+    onSuccess: (changed: number) => {
+      // Bu refetch İSTENİYOR (kullanıcı tetikledi) → liste mounted, yeni fiyatlarla tazelenir.
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["price-changes"], refetchType: "none" });
+      toast.success(changed > 0 ? `Fiyatlar güncellendi: ${changed} değişiklik` : "Fiyatlar zaten güncel");
+    },
+    onError: (e: Error) => toast.error(e?.message || "Fiyat güncelleme başarısız"),
+  });
 
   const form = useForm<AddProductForm>({
     resolver: zodResolver(AddProductSchema),
@@ -1016,6 +1049,16 @@ export default function ProductsPage() {
               </Button>
             </>
           )}
+          <Button
+            onClick={() => refreshPricesMutation.mutate()}
+            size="sm"
+            variant="outline"
+            disabled={refreshPricesMutation.isPending}
+            title="Tüm platformların satış fiyatlarını pazaryerinden çek (yalnızca bunu yapınca fiyat tazelenir)"
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", refreshPricesMutation.isPending && "animate-spin")} />
+            {refreshPricesMutation.isPending ? "Güncelleniyor…" : "Fiyatları Güncelle"}
+          </Button>
           <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürünü barkoduyla ekle">
             <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
           </Button>

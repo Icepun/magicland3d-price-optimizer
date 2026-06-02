@@ -35,54 +35,8 @@ export function StartupSync() {
         });
     }
 
-    // 2) Arka planda fiyat tazeleme — oturum başına bir kez
-    if (sessionStorage.getItem("startup-price-refresh") === "done") return;
-    sessionStorage.setItem("startup-price-refresh", "done");
-
-    let cancelled = false;
-
-    (async () => {
-      let integrations: { shopify?: boolean; trendyol?: boolean } = {};
-      try {
-        integrations = await fetch("/api/integrations/status").then((r) => r.json());
-      } catch {
-        return;
-      }
-      if (cancelled) return;
-
-      const refresh = (platform: "shopify" | "trendyol") =>
-        fetch(`/api/${platform}/sync-products`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "refresh-prices" }),
-        })
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null);
-
-      const jobs: Array<Promise<{ changed?: number } | null>> = [];
-      if (integrations.shopify) jobs.push(refresh("shopify"));
-      if (integrations.trendyol) jobs.push(refresh("trendyol"));
-      if (jobs.length === 0) return;
-
-      const results = await Promise.all(jobs);
-      if (cancelled) return;
-
-      const totalChanged = results.reduce(
-        (sum, r) => sum + (r?.changed ?? 0),
-        0
-      );
-
-      // Yalnızca fiyat gerçekten değiştiyse listeyi tazele (gereksiz refetch yok)
-      if (totalChanged > 0) {
-        queryClient.invalidateQueries({ queryKey: ["products"] });
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-        toast.success(`Fiyatlar güncellendi: ${totalChanged} değişiklik`);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    // 2) Otomatik fiyat tazeleme KALDIRILDI — cache-first felsefe: fiyatlar açılışta otomatik
+    //    ÇEKİLMEZ. Kullanıcı Ürünler sayfasındaki "Fiyatları Güncelle" butonuna basınca çekilir.
   }, [queryClient]);
 
   return null;

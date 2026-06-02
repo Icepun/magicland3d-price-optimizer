@@ -197,8 +197,9 @@ function PriceChangesCard({ delay }: { delay: number }) {
   const { data } = useQuery<PriceChangesData>({
     queryKey: ["price-changes"],
     queryFn: ({ signal }) => fetch("/api/dashboard/price-changes?days=30&limit=8", { signal }).then((r) => r.json()),
-    refetchInterval: 60_000,
-    staleTime: 0,
+    // Fiyat geçmişi yalnızca fiyat değişince değişir (manuel "Fiyatları Güncelle") → interval yok.
+    staleTime: Infinity,
+    refetchOnMount: true,
   });
 
   if (!data || data.totalChanges === 0) return null;
@@ -288,7 +289,10 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
   const { data, isLoading } = useQuery<{ summary?: OrdersSummary }>({
     queryKey: ["orders"],
     queryFn: ({ signal }) => fetch("/api/orders", { signal }).then((r) => r.json()),
+    // Panele girince son-30-gün siparişlerini arkadan tazele (bayatsa); cache anında görünür,
+    // istek bitince sayılar güncellenir (SWR). 5dk içinde tekrar girişte fetch yok.
     staleTime: 5 * 60_000,
+    refetchOnMount: true,
   });
   const s = data?.summary;
 
@@ -382,10 +386,14 @@ export default function DashboardPage() {
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ["dashboard"],
     queryFn: ({ signal }) => fetch("/api/dashboard", { signal }).then((r) => r.json()),
-    refetchInterval: 60_000, // açıkken dakikada bir tazele (canlı kâr özeti)
-    staleTime: 15_000,
+    // CACHE-FIRST: ürün-türevi kartlar (toplam ürün, eksik maliyet, kâr özeti) sadece ürün/maliyet
+    // değişince invalidate olur (ürün edit + cost/kargo/gider/KDV ayarları zaten invalidate ediyor).
+    // 60sn'lik interval kaldırıldı (açıkken her dakika ağır /api/dashboard recompute = gereksiz).
+    // refetchOnMount:true → invalidate edilmişse girişte tazeler; aksi halde anında cache (isLoading
+    // sadece İLK yüklemede true → arka plan refetch'inde cache görünür, SWR).
+    staleTime: Infinity,
     refetchOnMount: true,
-    refetchOnWindowFocus: false, // odakta her seferinde ağır /api/dashboard recompute etme
+    refetchOnWindowFocus: false,
   });
 
   if (isLoading) {
