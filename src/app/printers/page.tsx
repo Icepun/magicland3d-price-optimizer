@@ -1014,6 +1014,18 @@ function SlotStep({
     ? slots
     : [0, 1, 2, 3].map((n) => ({ slot: n, color: "#9ca3af", type: "", empty: false }));
 
+  // Elle slot rengi kaydet (yazıcı 3. parti filamenti renk okuyamaz → kullanıcı bir kez ayarlar, kalır).
+  const qcSlots = useQueryClient();
+  const saveSlotColor = async (slot: number, color: string) => {
+    const next = (slots.length ? slots : pickSlots).map((s) => ({ slot: s.slot, color: s.slot === slot ? color : s.color, type: s.type }));
+    try {
+      await fetchJson(`/api/printers/${printerId}/slots`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slots: next }),
+      });
+      qcSlots.invalidateQueries({ queryKey: ["printer-slots", printerId] });
+    } catch { /* sessiz */ }
+  };
+
   const fileColors = useMemo(() => colorsQ.data?.colors ?? [], [colorsQ.data]);
   const usingFile = fileColors.length > 0;
   const fileKind = colorsQ.data?.fileKind;
@@ -1080,12 +1092,19 @@ function SlotStep({
           <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
             {slots.length > 0 ? (
               <div>
-                <p className="text-[11px] text-muted-foreground mb-1.5">Yazıcıdaki slotlar</p>
+                <p className="text-[11px] text-muted-foreground mb-1.5">Yazıcıdaki slotlar — rengi ayarlamak için noktaya dokun</p>
                 <div className="flex flex-wrap gap-1.5">
                   {slots.map((s) => (
                     <span key={s.slot} className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
                       <span className="font-bold tabular-nums">{s.slot + 1}</span>
-                      <span className="h-3.5 w-3.5 rounded-full border border-black/10" style={{ background: s.color }} />
+                      <label className="relative h-4 w-4 rounded-full border border-black/20 cursor-pointer shrink-0" style={{ background: s.color }} title="Rengi ayarla">
+                        <input
+                          type="color"
+                          value={/^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : "#9ca3af"}
+                          onChange={(e) => saveSlotColor(s.slot, e.target.value)}
+                          className="absolute inset-0 opacity-0 cursor-pointer"
+                        />
+                      </label>
                       {s.empty ? "boş" : s.type || "—"}
                     </span>
                   ))}
