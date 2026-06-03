@@ -369,13 +369,54 @@ function parseFilamentDetect(fd: any, present?: (i: number) => boolean | null): 
 }
 
 /**
- * Snapmaker U1 (CFS) renkli slotları. Önce dokümante `filament_detect` objesi okunur (RFID:
- * materyal + renk hex — YALNIZ Snapmaker'ın kendi filamentinde; 3. partide renk gelmez, materyal/
- * doluluk yine gösterilir). Olmazsa filament/cfs/rfid içeren objeler keşfedilir. Çözemezse [].
- * NOT: U1 tool-changer'dır; slot ataması dilimleyicide gcode'a gömülüdür → bu okuma sadece gösterim.
+ * Snapmaker U1 `print_task_config` → kafa başına RENK + TİP + DOLULUK.
+ * Gerçek kaynak (u1-klipper/print_task_config.py): touchscreen + Snapmaker Orca buradan okur.
+ *   filament_color_rgba: ["RRGGBBAA"×4]  ·  filament_type: [...]  ·  filament_exist: [bool×4]
+ * RFID'siz (3. parti) elle ayarlanan renkler de BURADA (filament_detect'te değil).
+ */
+function parsePrintTaskConfig(ptc: any): MoonrakerSlot[] | null {
+  if (!ptc || typeof ptc !== "object") return null;
+  const rgba = ptc.filament_color_rgba;
+  const multi = ptc.filament_color_multi;
+  const types = ptc.filament_type;
+  const subs = ptc.filament_sub_type;
+  const exist = ptc.filament_exist;
+  if (!Array.isArray(rgba) && !Array.isArray(multi)) return null;
+  const n = Math.max(Array.isArray(rgba) ? rgba.length : 0, Array.isArray(multi) ? multi.length : 0);
+  const out: MoonrakerSlot[] = [];
+  for (let i = 0; i < n; i++) {
+    let hex: string | null = null;
+    const r = Array.isArray(rgba) ? rgba[i] : null;
+    if (typeof r === "string" && /^[0-9a-fA-F]{6,8}$/.test(r)) hex = r.slice(0, 6).toUpperCase(); // RRGGBBAA → RGB
+    if (!hex) {
+      const c = Array.isArray(multi) ? multi[i]?.colors?.[0] : null;
+      if (typeof c === "string" && /^[0-9a-fA-F]{6}$/.test(c)) hex = c.toUpperCase();
+    }
+    const main = Array.isArray(types) && typeof types[i] === "string" ? types[i] : "";
+    const sub = Array.isArray(subs) && typeof subs[i] === "string" ? subs[i] : "";
+    const hasType = !!main && main.toUpperCase() !== "NONE";
+    const type = hasType ? (sub && !["basic", "none", ""].includes(sub.toLowerCase()) ? `${main} ${sub}` : main) : "";
+    const present = Array.isArray(exist) ? exist[i] === true : null;
+    out.push({ slot: i, color: hex ? `#${hex}` : "#9ca3af", type, empty: present != null ? !present : (!hex && !type) });
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * Snapmaker U1 slot renkleri. ÖNCE print_task_config (gerçek renk/tip/doluluk — touchscreen'in
+ * yazdığı yer), olmazsa filament_detect (RFID) + motion sensor, olmazsa keşif.
  */
 export async function fetchMoonrakerSlots(host: string, port: number): Promise<MoonrakerSlot[]> {
-  // 1) filament_detect (renk/tip) + filament_motion_sensor e0..e3 (gerçek doluluk) — tek sorgu.
+  // 1) print_task_config — kafa başına renk + tip + doluluk (asıl kaynak).
+  try {
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?print_task_config`, undefined, 5000);
+    if (res.ok) {
+      const ptc = unwrap(await res.json())?.status?.print_task_config;
+      const parsed = parsePrintTaskConfig(ptc);
+      if (parsed) return parsed;
+    }
+  } catch { /* sonraki yola düş */ }
+  // 2) filament_detect (RFID) + filament_motion_sensor e0..e3 (doluluk) — yedek.
   try {
     const objs = [
       "filament_detect",
