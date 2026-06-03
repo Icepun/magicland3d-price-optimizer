@@ -2,14 +2,16 @@
 
 import { memo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileBox, Upload, Trash2, Loader2, Printer } from "lucide-react";
+import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
+interface VariantGroupLite { id: string; name: string; products: { id: string }[] }
 interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number }
 
 function fmtSize(b: number) {
@@ -17,12 +19,13 @@ function fmtSize(b: number) {
 }
 
 /** XHR ile yükle — gerçek upload progress için (fetch progress vermiyor). */
-function uploadPart(productId: string, printerConfigId: string, file: File, onProgress: (p: number) => void): Promise<void> {
+function uploadPart(productId: string, printerConfigId: string, file: File, onProgress: (p: number) => void, applyToVariants = false): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const fd = new FormData();
     fd.append("file", file);
     fd.append("printerConfigId", printerConfigId);
+    if (applyToVariants) fd.append("applyToVariants", "true");
     xhr.open("POST", `/api/products/${productId}/models`);
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
     xhr.onload = () => {
@@ -40,7 +43,7 @@ function uploadPart(productId: string, printerConfigId: string, file: File, onPr
 
 // memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
 export const ModelFilesCard = memo(ModelFilesCardImpl);
-function ModelFilesCardImpl({ productId }: { productId: string }) {
+function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; variantGroup?: VariantGroupLite | null }) {
   const qc = useQueryClient();
   const { data: printers = [] } = useQuery<PrinterCfg[]>({
     queryKey: ["printer-configs"],
@@ -51,8 +54,15 @@ function ModelFilesCardImpl({ productId }: { productId: string }) {
     queryFn: () => fetch(`/api/products/${productId}/models`).then((r) => r.json()),
   });
 
+  const memberCount = variantGroup?.products?.length ?? 0;
+  const inGroup = memberCount >= 2;
+  const [applyToVariants, setApplyToVariants] = useState(false);
+  const shareOn = inGroup && applyToVariants;
+
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["product-models", productId] });
+    // Paylaşımlı yükleme diğer varyantların listesini de değiştirir → hepsini bayat işaretle.
+    qc.invalidateQueries({ queryKey: ["product-models"], refetchType: "none" });
     qc.invalidateQueries({ queryKey: ["models"] });
   };
 
@@ -65,6 +75,25 @@ function ModelFilesCardImpl({ productId }: { productId: string }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-3 space-y-3">
+        {inGroup && (
+          <button
+            type="button"
+            onClick={() => setApplyToVariants((v) => !v)}
+            className={cn(
+              "w-full flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors",
+              shareOn ? "border-primary/40 bg-primary/[0.06]" : "border-dashed hover:bg-muted/40"
+            )}
+          >
+            <span className={cn("flex items-center justify-center h-5 w-5 rounded border shrink-0 transition-colors", shareOn ? "bg-primary border-primary" : "border-border")}>
+              {shareOn && <Check className="h-3.5 w-3.5 text-primary-foreground" />}
+            </span>
+            <Layers className="h-4 w-4 text-primary shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium">Tüm varyantlara uygula</p>
+              <p className="text-[11px] text-muted-foreground">Yüklediğin dosya bu ürünün {memberCount} varyantının hepsinde görünür. Aynı model, farklı renk için idealdir.</p>
+            </div>
+          </button>
+        )}
         {printers.length === 0 ? (
           <p className="text-xs text-muted-foreground py-1.5">
             Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>'ten yazıcı ekle; sonra her yazıcı için parça parça dosya yükle. Çok parçalı ürünlerde tüm parçaları ekleyebilirsin.
@@ -76,6 +105,7 @@ function ModelFilesCardImpl({ productId }: { productId: string }) {
               printer={p}
               parts={files.filter((f) => f.printerConfigId === p.id)}
               productId={productId}
+              applyToVariants={shareOn}
               onChanged={refresh}
             />
           ))
@@ -85,7 +115,7 @@ function ModelFilesCardImpl({ productId }: { productId: string }) {
   );
 }
 
-function PrinterGroup({ printer, parts, productId, onChanged }: { printer: PrinterCfg; parts: ModelFile[]; productId: string; onChanged: () => void }) {
+function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }: { printer: PrinterCfg; parts: ModelFile[]; productId: string; applyToVariants: boolean; onChanged: () => void }) {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<number | null>(null);
@@ -124,7 +154,7 @@ function PrinterGroup({ printer, parts, productId, onChanged }: { printer: Print
       setUploadingName(f.name);
       setProgress(0);
       try {
-        await uploadPart(productId, printer.id, f, (p) => setProgress(p));
+        await uploadPart(productId, printer.id, f, (p) => setProgress(p), applyToVariants);
         ok++;
       } catch (e) {
         toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
@@ -134,7 +164,7 @@ function PrinterGroup({ printer, parts, productId, onChanged }: { printer: Print
     setUploadingName("");
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
-    if (ok > 0) toast.success(`${printer.name}: ${ok} parça yüklendi`);
+    if (ok > 0) toast.success(`${printer.name}: ${ok} parça yüklendi${applyToVariants ? " · tüm varyantlara" : ""}`);
   };
 
   return (

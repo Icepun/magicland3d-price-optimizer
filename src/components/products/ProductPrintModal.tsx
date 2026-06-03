@@ -2,13 +2,15 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import Link from "next/link";
-import { Printer, Play, Loader2, FileBox, Package, CheckCircle2, ChevronRight } from "lucide-react";
+import { Printer, Play, Loader2, FileBox, Package } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import {
+  SlotStep, PrintProgress, runPrintStream,
+  type PrintableModel, type PrintProg, type PrintPrefs,
+} from "@/components/printers/print-flow";
 
 interface ModelFile {
   id: string;
@@ -28,24 +30,15 @@ interface PrinterCfg {
   accent: string | null;
 }
 
-type Stage = "status" | "upload" | "start" | "confirm" | "done";
-const STAGE_LABEL: Record<Stage, string> = {
-  status: "Yazıcı kontrol ediliyor…",
-  upload: "Dosya yükleniyor…",
-  start: "Baskı başlatılıyor…",
-  confirm: "Onaylanıyor…",
-  done: "Baskı başladı!",
-};
-
 function fmtSize(b: number) {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
 /**
- * Ürünler listesinden hızlı baskı: bu ürünün modeli OLAN yazıcıları gösterir,
- * parçaya basınca yazıcıya yükleyip baskıyı başlatır. NDJSON akışını satır satır
- * okuyup belirli (determinate) ilerleme çubuğu gösterir — asla boş ekran.
- * (Bambu, AMS renk eşleştirmesi gerektirdiği için Modeller/Detay sayfasına yönlendirilir.)
+ * Ürünler listesinden hızlı baskı: bu ürünün modeli OLAN yazıcıları gösterir.
+ * Tek renkli (Elegoo) → parçaya bas, yüklenip baskı başlar. Çok renkli (Bambu/Snapmaker)
+ * → renk/slot eşleme adımı (SlotStep) açılır, oradan basılır. Akış paylaşılan print-flow
+ * modülünden gelir → Bambu artık Detay'a gitmeden buradan da basabilir.
  */
 export function ProductPrintModal({
   productId,
@@ -69,10 +62,10 @@ export function ProductPrintModal({
   });
   const isLoading = lf || lp;
 
-  const [busyFile, setBusyFile] = useState<string | null>(null);
-  const [stage, setStage] = useState<Stage | null>(null);
-  const [pct, setPct] = useState<number | null>(null);
-  const printing = busyFile !== null;
+  const [printing, setPrinting] = useState(false);
+  const [progress, setProgress] = useState<PrintProg | null>(null);
+  // Çok renkli baskıda seçilen parça + yazıcı → SlotStep'e geçilir.
+  const [picked, setPicked] = useState<{ file: ModelFile; printer: PrinterCfg } | null>(null);
 
   // Bu ürün için dosyası OLAN yazıcılar (sadece basılabilir olanlar listelenir).
   const groups = useMemo(() => {
@@ -83,72 +76,57 @@ export function ProductPrintModal({
       .filter((g) => g.parts.length > 0);
   }, [files, printers]);
 
-  async function runPrint(fileId: string) {
-    setBusyFile(fileId);
-    setStage("status");
-    setPct(null);
+  const isMultiColor = (pr: PrinterCfg) => pr.brand === "bambu" || pr.brand === "snapmaker";
+
+  async function runPrint(fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) {
+    setPrinting(true);
+    setProgress({ stage: "upload", pct: 0 });
     try {
-      const res = await fetch(`/api/models/${fileId}/print`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (!res.ok || !res.body) {
-        const b = await res.json().catch(() => ({}) as { error?: string });
-        throw new Error((b as { error?: string }).error || "Baskı başlatılamadı");
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      let errored = false;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) {
-          const t = line.trim();
-          if (!t) continue;
-          let o: { stage?: string; pct?: number; message?: string };
-          try {
-            o = JSON.parse(t);
-          } catch {
-            continue;
-          }
-          if (o.stage === "upload") {
-            setStage("upload");
-            setPct(typeof o.pct === "number" ? o.pct : null);
-          } else if (o.stage === "start") {
-            setStage("start");
-            setPct(null);
-          } else if (o.stage === "confirm") setStage("confirm");
-          else if (o.stage === "done") setStage("done");
-          else if (o.stage === "status") setStage("status");
-          else if (o.stage === "error") {
-            errored = true;
-            toast.error(o.message || "Yazıcı baskıyı reddetti");
-          }
-        }
-      }
-      if (!errored) {
-        setStage("done");
-        toast.success("Baskı başlatıldı 🎉");
-        setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-        setTimeout(onClose, 750);
-      } else {
-        setStage(null);
-      }
+      await runPrintStream(fileId, opts, setProgress);
+      toast.success("Baskı başlatıldı 🎉");
+      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
+      setTimeout(onClose, 750);
     } catch (e) {
-      setStage(null);
       toast.error(e instanceof Error ? e.message : "Baskı başlatılamadı");
+      setProgress(null);
     } finally {
-      setBusyFile(null);
+      setPrinting(false);
     }
   }
 
+  const startPart = (printer: PrinterCfg, part: ModelFile) => {
+    if (isMultiColor(printer)) setPicked({ file: part, printer });
+    else runPrint(part.id);
+  };
+
+  // ── Renk/slot eşleme adımı (Bambu/Snapmaker) ──
+  if (picked) {
+    const model: PrintableModel = {
+      fileId: picked.file.id,
+      productId,
+      productName,
+      imageUrl: null,
+      label: picked.file.label,
+      originalName: picked.file.originalName,
+      sizeBytes: picked.file.sizeBytes,
+      gramaj: picked.file.gramaj,
+    };
+    return (
+      <SlotStep
+        printerId={picked.printer.id}
+        model={model}
+        isBambu={picked.printer.brand === "bambu"}
+        printing={printing}
+        progress={progress}
+        onBack={() => { setPicked(null); setProgress(null); }}
+        onClose={onClose}
+        onConfirm={(opts) => runPrint(picked.file.id, opts)}
+      />
+    );
+  }
+
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -168,20 +146,13 @@ export function ProductPrintModal({
             <Package className="h-9 w-9 mx-auto text-muted-foreground/30" />
             <p className="mt-3 font-medium text-sm">Baskı dosyası yok</p>
             <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
-              Bu ürün için hiçbir yazıcıya baskı dosyası yüklenmemiş.
+              Bu ürün için hiçbir yazıcıya baskı dosyası yüklenmemiş. Ürün detayındaki Baskı Dosyaları kartından yükleyebilirsin.
             </p>
-            <Link
-              href={`/products/${productId}`}
-              onClick={onClose}
-              className="inline-flex items-center gap-1 text-xs text-primary mt-3 hover:underline"
-            >
-              Ürün detayında yükle <ChevronRight className="h-3 w-3" />
-            </Link>
           </div>
         ) : (
           <div className="space-y-3 max-h-[55vh] overflow-y-auto -mx-1 px-1">
             {groups.map(({ printer, parts }) => {
-              const canPrint = printer.type === "moonraker";
+              const multi = isMultiColor(printer);
               return (
                 <div key={printer.id} className="rounded-xl border overflow-hidden">
                   <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
@@ -191,15 +162,13 @@ export function ProductPrintModal({
                     />
                     <span className="text-sm font-semibold truncate">{printer.name}</span>
                     <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{parts.length} parça</span>
-                    {!canPrint && (
-                      <span className="ml-auto text-[10px] text-amber-600 dark:text-amber-400 shrink-0">
-                        Bambu — Detay’dan
-                      </span>
+                    {multi && (
+                      <span className="ml-auto text-[10px] text-muted-foreground shrink-0">renk eşlemeli</span>
                     )}
                   </div>
                   <div className="divide-y">
                     {parts.map((part, i) => {
-                      const isBusy = busyFile === part.id;
+                      const isBusy = printing && progress != null;
                       return (
                         <div key={part.id} className="flex items-center gap-2.5 px-3 py-2">
                           <span className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary text-[11px] font-bold tabular-nums shrink-0">
@@ -212,24 +181,15 @@ export function ProductPrintModal({
                               {part.gramaj ? ` · ${part.gramaj} gr` : ""}
                             </p>
                           </div>
-                          {canPrint ? (
-                            <Button
-                              size="sm"
-                              className="h-8 gap-1.5 shrink-0"
-                              disabled={printing}
-                              onClick={() => runPrint(part.id)}
-                            >
-                              {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Bas
-                            </Button>
-                          ) : (
-                            <Link
-                              href={`/products/${productId}`}
-                              onClick={onClose}
-                              className="shrink-0 inline-flex items-center h-8 px-2.5 rounded-md border text-xs font-medium hover:bg-muted/50 transition-colors"
-                            >
-                              Aç
-                            </Link>
-                          )}
+                          <Button
+                            size="sm"
+                            className="h-8 gap-1.5 shrink-0"
+                            disabled={printing}
+                            onClick={() => startPart(printer, part)}
+                          >
+                            {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : multi ? <Printer className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                            {multi ? "Renk seç" : "Bas"}
+                          </Button>
                         </div>
                       );
                     })}
@@ -240,37 +200,7 @@ export function ProductPrintModal({
           </div>
         )}
 
-        {/* Canlı ilerleme — belirli (determinate) çubuk; asla donuk/boş ekran */}
-        {stage && (
-          <div className="rounded-lg border bg-card px-3 py-2.5 space-y-1.5 animate-in fade-in slide-in-from-bottom-1">
-            <div className="flex items-center gap-2 text-xs font-medium">
-              {stage === "done" ? (
-                <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-              ) : (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-              )}
-              {STAGE_LABEL[stage]}
-              {stage === "upload" && pct != null && (
-                <span className="ml-auto tabular-nums text-muted-foreground">%{Math.round(pct)}</span>
-              )}
-            </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-              {stage === "done" ? (
-                <div className="h-full w-full rounded-full bg-green-500 transition-all duration-300" />
-              ) : stage === "upload" && pct != null ? (
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-300"
-                  style={{ width: `${Math.max(4, Math.min(100, pct))}%` }}
-                />
-              ) : (
-                <div
-                  className="h-full w-1/3 rounded-full bg-primary"
-                  style={{ animation: "indeterminate-bar 1.6s ease-in-out infinite" }}
-                />
-              )}
-            </div>
-          </div>
-        )}
+        {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
       </DialogContent>
     </Dialog>
   );

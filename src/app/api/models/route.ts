@@ -25,6 +25,9 @@ export async function GET() {
   await ensureRuntimeSchema();
   const [files, printers] = await Promise.all([
     prisma.productModelFile.findMany({
+      // "__custom__" = özel baskı dosyaları (ürüne bağlı değil) → kütüphanede gösterme.
+      // Bu sentinel'in Product kaydı yoktur → include null döner → eskiden f.product.name patlıyordu.
+      where: { NOT: { productId: "__custom__" } },
       include: { product: { select: { id: true, name: true, imageUrl: true } } },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
@@ -37,6 +40,7 @@ export async function GET() {
 
   const map = new Map<string, LibRow>();
   for (const f of files) {
+    if (!f.product) continue; // ürünü silinmiş yetim dosya → atla (crash guard)
     let row = map.get(f.productId);
     if (!row) {
       row = { productId: f.productId, name: f.product.name, imageUrl: f.product.imageUrl, files: [] };

@@ -865,7 +865,7 @@ export default function ProductDetailPage({
         group={product.variantGroup}
       />
 
-      <ModelFilesCard productId={product.id} />
+      <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
 
       <PriceLabCard productId={product.id} />
 
