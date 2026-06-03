@@ -117,6 +117,7 @@ function TrendyolTab() {
   });
 
   const sync = useMutation({
+    meta: { silent: true }, // kendi SyncProgressCard'ı var → global katman gösterme
     mutationFn: (mode: "add-new" | "refresh-prices") =>
       fetchJson<{ linked?: number; unmatched?: number; checked?: number; changed?: number }>(
         "/api/trendyol/sync-products",
@@ -324,6 +325,7 @@ function ShopifyTab() {
   });
 
   const sync = useMutation({
+    meta: { silent: true }, // kendi SyncProgressCard'ı var → global katman gösterme
     mutationFn: (mode: "add-new" | "refresh-prices") =>
       fetchJson<{ added?: number; checked?: number; changed?: number; totalProducts: number }>(
         "/api/shopify/sync-products",
