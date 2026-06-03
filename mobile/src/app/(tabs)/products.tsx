@@ -214,25 +214,37 @@ export default function ProductsScreen() {
             r.kind === "group" ? "g-" + r.id : (r.kind === "member" ? "m-" : "p-") + r.item.id
           }
           contentContainerStyle={styles.list}
-          renderItem={({ item: row, index }) => (
-            <MotiView
-              from={{ opacity: 0, translateY: 10 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: "timing", duration: 200, delay: Math.min(index, 8) * 18 }}
-            >
-              {row.kind === "group" ? (
+          renderItem={({ item: row, index }) => {
+            const content =
+              row.kind === "group" ? (
                 <GroupHeader row={row} open={expanded.has(row.id)} onToggle={() => toggleGroup(row.id)} />
               ) : (
                 <ProductCard item={row.item} member={row.kind === "member"} />
-              )}
-            </MotiView>
-          )}
+              );
+            // Giriş animasyonu yalnızca ilk ekrandaki öğelerde — derin kaydırmada her
+            // satırda Reanimated mount animasyonu çalışıp kasmaya yol açmasın.
+            if (index >= 8) return content;
+            return (
+              <MotiView
+                from={{ opacity: 0, translateY: 10 }}
+                animate={{ opacity: 1, translateY: 0 }}
+                transition={{ type: "timing", duration: 200, delay: index * 18 }}
+              >
+                {content}
+              </MotiView>
+            );
+          }}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
           }
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sonuç yok</Text>
           }
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews
         />
       )}
     </SafeAreaView>

@@ -89,18 +89,28 @@ export default function OrdersScreen() {
               </View>
             ) : null
           }
-          renderItem={({ item, index }) => (
-            <MotiView
-              from={{ opacity: 0, translateY: 12 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: "timing", duration: 240, delay: Math.min(index, 10) * 22 }}
-            >
-              <OrderCard order={item} profit={profitOf.get(item.id)} />
-            </MotiView>
-          )}
+          renderItem={({ item, index }) => {
+            const card = <OrderCard order={item} profit={profitOf.get(item.id)} />;
+            // Giriş animasyonu yalnızca ilk ekrandaki öğelerde — derin kaydırmada kasmasın.
+            if (index >= 10) return card;
+            return (
+              <MotiView
+                from={{ opacity: 0, translateY: 12 }}
+                animate={{ opacity: 1, translateY: 0 }}
+                transition={{ type: "timing", duration: 240, delay: index * 22 }}
+              >
+                {card}
+              </MotiView>
+            );
+          }}
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sipariş yok</Text>
           }
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          windowSize={7}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews
         />
       )}
     </SafeAreaView>
