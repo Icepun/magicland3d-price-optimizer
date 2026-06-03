@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { StartupSync } from "./StartupSync";
 import { GlobalBusyOverlay } from "@/components/ui/global-busy-overlay";
+import { PerfHud } from "@/components/perf/PerfHud";
 
 export function QueryProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -34,6 +35,7 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       <StartupSync />
       {children}
       <GlobalBusyOverlay />
+      <PerfHud />
     </QueryClientProvider>
   );
 }
