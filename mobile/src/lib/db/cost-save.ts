@@ -22,6 +22,8 @@ function newId(): string {
 }
 
 export interface CostInput {
+  mode?: "detailed" | "manual"; // varsayılan detailed
+  manualCost?: number | null; // manuel modda tek toplam maliyet
   filamentTypeId: string | null;
   filamentWeight: number;
   printTimeHours: number;
@@ -31,16 +33,18 @@ export interface CostInput {
   tapeUsed: boolean;
 }
 
-/** ProductCost upsert (detailed mod) — masaüstü PATCH /api/products/[id] cost ile aynı alanlar. */
+/** ProductCost upsert (detailed VEYA manual mod) — masaüstü PATCH /api/products/[id] cost ile aynı alanlar. */
 export async function saveProductCost(productId: string, c: CostInput): Promise<void> {
   const now = new Date().toISOString();
+  const mode = c.mode ?? "detailed";
   await execute(
     `INSERT INTO ProductCost
-       (id, productId, costMode, filamentTypeId, filamentWeight, printTimeHours,
+       (id, productId, costMode, manualCost, filamentTypeId, filamentWeight, printTimeHours,
         wasteRate, packagingOptionId, nylonLevel, tapeUsed, updatedAt)
-     VALUES (?, ?, 'detailed', ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(productId) DO UPDATE SET
-       costMode      = 'detailed',
+       costMode      = excluded.costMode,
+       manualCost    = excluded.manualCost,
        filamentTypeId = excluded.filamentTypeId,
        filamentWeight = excluded.filamentWeight,
        printTimeHours = excluded.printTimeHours,
@@ -52,6 +56,8 @@ export async function saveProductCost(productId: string, c: CostInput): Promise<
     [
       newId(),
       productId,
+      mode,
+      c.manualCost ?? null,
       c.filamentTypeId,
       c.filamentWeight,
       c.printTimeHours,

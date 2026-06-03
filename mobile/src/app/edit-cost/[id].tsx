@@ -48,6 +48,8 @@ export default function EditCostScreen() {
   const [nylonLevel, setNylonLevel] = useState<NylonLevel>("none");
   const [tapeUsed, setTapeUsed] = useState(false);
   const [desi, setDesi] = useState("");
+  const [mode, setMode] = useState<"detailed" | "manual">("detailed");
+  const [manualCost, setManualCost] = useState("");
 
   useEffect(() => {
     if (!product) return;
@@ -60,6 +62,8 @@ export default function EditCostScreen() {
     setNylonLevel((c?.nylonLevel as NylonLevel) ?? "none");
     setTapeUsed(!!c?.tapeUsed);
     setDesi(product.desi ? String(product.desi) : "");
+    setMode((c?.costMode as "detailed" | "manual") === "manual" ? "manual" : "detailed");
+    setManualCost(c?.manualCost != null ? String(c.manualCost) : "");
   }, [product]);
 
   const packagingOptions = settings ? parsePackagingSettings(settings).options : [];
@@ -68,17 +72,29 @@ export default function EditCostScreen() {
   // Canlı önizleme — @core resolveProductCost ile (kaydetmeden)
   const preview = settings
     ? resolveProductCost(
-        {
-          costMode: "detailed",
-          manualCost: null,
-          totalCost: null,
-          filamentWeight: parseFloat(weight) || 0,
-          printTimeHours: parseFloat(time) || 0,
-          wasteRate: (parseFloat(waste) || 0) / 100,
-          packagingOptionId,
-          nylonLevel,
-          tapeUsed,
-        },
+        mode === "manual"
+          ? {
+              costMode: "manual",
+              manualCost: parseFloat(manualCost) || 0,
+              totalCost: null,
+              filamentWeight: 0,
+              printTimeHours: 0,
+              wasteRate: 0,
+              packagingOptionId: null,
+              nylonLevel: "none",
+              tapeUsed: false,
+            }
+          : {
+              costMode: "detailed",
+              manualCost: null,
+              totalCost: null,
+              filamentWeight: parseFloat(weight) || 0,
+              printTimeHours: parseFloat(time) || 0,
+              wasteRate: (parseFloat(waste) || 0) / 100,
+              packagingOptionId,
+              nylonLevel,
+              tapeUsed,
+            },
         settings,
         costPerGram
       )
@@ -86,15 +102,30 @@ export default function EditCostScreen() {
 
   const save = useMutation({
     mutationFn: async () => {
-      await saveProductCost(id, {
-        filamentTypeId,
-        filamentWeight: parseFloat(weight) || 0,
-        printTimeHours: parseFloat(time) || 0,
-        wasteRate: (parseFloat(waste) || 0) / 100,
-        packagingOptionId,
-        nylonLevel,
-        tapeUsed,
-      });
+      if (mode === "manual") {
+        await saveProductCost(id, {
+          mode: "manual",
+          manualCost: parseFloat(manualCost) || 0,
+          filamentTypeId: null,
+          filamentWeight: 0,
+          printTimeHours: 0,
+          wasteRate: 0,
+          packagingOptionId: null,
+          nylonLevel: "none",
+          tapeUsed: false,
+        });
+      } else {
+        await saveProductCost(id, {
+          mode: "detailed",
+          filamentTypeId,
+          filamentWeight: parseFloat(weight) || 0,
+          printTimeHours: parseFloat(time) || 0,
+          wasteRate: (parseFloat(waste) || 0) / 100,
+          packagingOptionId,
+          nylonLevel,
+          tapeUsed,
+        });
+      }
       await setProductDesi(id, parseFloat(desi) || null);
     },
     onSuccess: () => {
@@ -125,6 +156,15 @@ export default function EditCostScreen() {
           {product.name}
         </Text>
 
+        <Segmented
+          items={[
+            { key: "detailed", label: "Detaylı" },
+            { key: "manual", label: "Manuel" },
+          ]}
+          selected={mode}
+          onSelect={(k) => setMode(k as "detailed" | "manual")}
+        />
+
         {/* Canlı önizleme */}
         <View style={styles.preview}>
           <View>
@@ -137,6 +177,15 @@ export default function EditCostScreen() {
           </View>
         </View>
 
+        {mode === "manual" && (
+          <View style={styles.fieldRow}>
+            <NumberField label="Maliyet (₺)" value={manualCost} onChange={setManualCost} />
+            <NumberField label="Desi" value={desi} onChange={setDesi} />
+          </View>
+        )}
+
+        {mode === "detailed" && (
+          <>
         {/* Filament */}
         <Label text="FİLAMENT" />
         <ChipRow
@@ -182,6 +231,8 @@ export default function EditCostScreen() {
           selected={tapeUsed ? "yes" : "no"}
           onSelect={(k) => setTapeUsed(k === "yes")}
         />
+          </>
+        )}
 
         <Pressable
           onPress={() => save.mutate()}
