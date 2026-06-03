@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
@@ -120,6 +120,12 @@ export default function OrdersPage() {
   const [platform, setPlatform] = useState<"all" | "shopify" | "trendyol" | "hepsiburada">("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
   const [search, setSearch] = useState("");
+  // Arama debounce: kutu anında yazılır (search), filtre 200ms sonra (debouncedSearch).
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
   const summary = data?.summary;

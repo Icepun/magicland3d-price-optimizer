@@ -20,7 +20,7 @@ import { getBambuStatus, bambuControl, mapBambuState } from "./bambu";
 const TICK_MS = 10_000;
 let started = false;
 let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
-let tickCount = 0; // her 3. tick'te (~30sn) replica pull — sync() sorguları bloke ettiği için sıklığı düşük tut
+let tickCount = 0; // her 6. tick'te (~60sn) replica pull — sync() sorguları kısa süre bloke ettiği için sıklığı düşük tut (60sn = periyodik takılma yarıya iner; telefon komutları yine ≤60sn'de görülür)
 const lastKey = new Map<string, string>();
 
 export function startPrinterRelay() {
@@ -135,10 +135,10 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     await ensureRuntimeSchema();
-    // Replica pull'u HER tick'te değil ~30sn'de bir (sync() SQL sorgularını kısa süre bloke
+    // Replica pull'u HER tick'te değil ~60sn'de bir (sync() SQL sorgularını kısa süre bloke
     // ediyor — sıklığı düşürünce blokaj seyrekleşir). Yazmalar (snapshot upsert) zaten anında
     // buluta gider, sync gerektirmez. syncNow ayrıca erişim-kontrollü + guard'lı.
-    if (tickCount++ % 3 === 0) await syncTursoReplica().catch(() => {});
+    if (tickCount++ % 6 === 0) await syncTursoReplica().catch(() => {});
 
     const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
     if (configs.length === 0) return;

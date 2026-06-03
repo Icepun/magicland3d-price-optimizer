@@ -471,6 +471,14 @@ const ProductRow = memo(function ProductRow({
 
 export default function ProductsPage() {
   const [globalFilter, setGlobalFilter] = useState("");
+  // Arama debounce: kutuya yazı ANINDA yazılır (globalFilter), pahalı filtreleme 200ms sonra
+  // (debouncedFilter) çalışır → her tuşta yüzlerce üründe normalize+filtre+grupla+sırala
+  // fırtınası olmaz, yazarken takılma biter.
+  const [debouncedFilter, setDebouncedFilter] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedFilter(globalFilter), 200);
+    return () => clearTimeout(t);
+  }, [globalFilter]);
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
   const [addOpen, setAddOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
@@ -833,7 +841,7 @@ export default function ProductsPage() {
   const filteredProducts = useMemo(() => {
     // Sorguyu kelimelere böl; her kelime (sırasız) eşleşmeli. Böylece "vazo kırmızı"
     // ile "Kırmızı Vazo" da bulunur. Türkçe-duyarlı + aksansız tolere edilir.
-    const tokens = normalizeSearch(globalFilter.trim()).split(/\s+/).filter(Boolean);
+    const tokens = normalizeSearch(debouncedFilter.trim()).split(/\s+/).filter(Boolean);
     const list = Array.isArray(products) ? products : [];
 
     const searched = list.filter((product) => {
@@ -866,7 +874,7 @@ export default function ProductsPage() {
     }
 
     return searched;
-  }, [globalFilter, products, filterMode]);
+  }, [debouncedFilter, products, filterMode]);
 
   // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
   type DisplayRow =
