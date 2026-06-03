@@ -3,6 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { patchProductsInCache } from "@/lib/products-cache";
 
 type ProductLike = { id: string; stock: number };
 
@@ -74,9 +75,9 @@ export function useStockWriter() {
         }
         pending.current.delete(id);
         toast.error("Stok kaydedilemedi — bağlantı yavaş");
-        // Otoritatif değeri geri çek (optimistic değeri düzelt).
+        // Otoritatif değeri geri çek (optimistic değeri düzelt) — SADECE bu ürün (tüm liste değil).
         qc.invalidateQueries({ queryKey: ["product", id] });
-        qc.invalidateQueries({ queryKey: ["products"] });
+        patchProductsInCache(qc, [id]);
       }
     },
     [qc]

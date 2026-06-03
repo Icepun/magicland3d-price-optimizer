@@ -2,12 +2,12 @@
 
 import { use, useState, useEffect, useMemo, memo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { patchProductsInCache } from "@/lib/products-cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
@@ -147,7 +147,6 @@ export default function ProductDetailPage({
   const [desiInput, setDesiInput] = useState("");
   const [aliasInput, setAliasInput] = useState("");
   const [imageEditorOpen, setImageEditorOpen] = useState(false);
-  const [barcodeInput, setBarcodeInput] = useState("");
 
   useEffect(() => {
     if (product?.cost) {
@@ -166,7 +165,6 @@ export default function ProductDetailPage({
     if (product) {
       setDesiInput(product.desi ? String(product.desi) : "");
       setAliasInput(product.alias ?? "");
-      setBarcodeInput(product.barcode ?? "");
     }
   }, [product]);
 
@@ -266,12 +264,13 @@ export default function ProductDetailPage({
       if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
       toast.error("Kaydedilemedi — bağlantını kontrol et (değişiklik geri alındı)");
     },
-    onSuccess: () => toast.success("Maliyet kaydedildi"),
-    onSettled: () => {
-      // Maliyet optimistic yazıldı + canlı önizleme (preview) zaten form'dan güncel →
-      // ["product",id] ve preview REFETCH YOK (yaz-anında ağır refetch/donma sebebiydi).
-      // Liste sadece bayat işaretlenir → tekrar ziyarette tazelenir.
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+    onSuccess: () => {
+      toast.success("Maliyet kaydedildi");
+      // Maliyet değişti → SADECE gerekeni fetch'le: Fiyat Lab'i tazele (maliyete bağlı) +
+      // listede YALNIZ bu ürünü güncelle. Tüm 368 ürün DEĞİL → minimum okuma, donma yok.
+      // Detay + canlı önizleme zaten form'dan günceldir (ekstra okuma yok).
+      queryClient.invalidateQueries({ queryKey: ["price-lab", id] });
+      patchProductsInCache(queryClient, [id]);
     },
   });
 
@@ -297,9 +296,11 @@ export default function ProductDetailPage({
       }).then((r) => r.json()),
     meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
-      // Açık ürünün maliyeti zaten gösteriliyor; ağır refetch yok — sadece bayat işaretle.
-      queryClient.invalidateQueries({ queryKey: ["product", id], refetchType: "none" });
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      // Maliyet grup üyelerine uygulandı → Fiyat Lab'i tazele + listede SADECE grup üyelerini
+      // güncelle (tüm liste değil → minimum okuma).
+      queryClient.invalidateQueries({ queryKey: ["price-lab", id] });
+      const groupIds = product?.variantGroup?.products.map((p) => p.id) ?? [];
+      patchProductsInCache(queryClient, [id, ...groupIds]);
       toast.success(`Maliyet ${d?.count ?? ""} varyanta uygulandı`);
     },
     onError: () => toast.error("Varyantlara uygulanamadı"),
@@ -309,11 +310,6 @@ export default function ProductDetailPage({
   // çakışmada 409 → retry YOK (kalıcı hata). Geçici ağ kopmasında 2 kez tekrar dener.
   const saveIdentityMutation = useMutation({
     mutationFn: async () => {
-      const body: { alias: string | null; barcode?: string } = {
-        alias: aliasInput.trim() || null,
-      };
-      const bc = barcodeInput.trim();
-      if (bc && bc !== product?.barcode) body.barcode = bc;
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 12_000);
       try {
@@ -321,7 +317,7 @@ export default function ProductDetailPage({
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           signal: ctrl.signal,
-          body: JSON.stringify(body),
+          body: JSON.stringify({ alias: aliasInput.trim() || null }),
         });
         if (!r.ok) {
           const j = (await r.json().catch(() => null)) as { error?: string } | null;
@@ -332,16 +328,20 @@ export default function ProductDetailPage({
         clearTimeout(to);
       }
     },
-    retry: (n, e) => n < 2 && !(e instanceof Error && /barkod|kullanıl/i.test(e.message)),
+    retry: 2,
     retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
     // Optimistic: cache'i anında yama → ["product",id] REFETCH YOK (yaz-sonrası donma yok).
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ["product", id] });
       const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
       const alias = aliasInput.trim() || null;
-      const bc = barcodeInput.trim();
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
-        old ? { ...old, alias, ...(bc ? { barcode: bc } : {}) } : old
+        old ? { ...old, alias } : old
+      );
+      // Alias listede gösterilir → orada da optimistic yamala (fetch YOK).
+      queryClient.setQueriesData<Array<{ id: string; alias?: string | null }>>(
+        { queryKey: ["products"] },
+        (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, alias } : p)) : old)
       );
       return { prev };
     },
@@ -372,6 +372,11 @@ export default function ProductDetailPage({
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
         old ? { ...old, madeToOrder } : old
       );
+      // M2O kâr-etkilemez → listede de optimistic yamala (fetch YOK, anında doğru).
+      queryClient.setQueriesData<Array<{ id: string; madeToOrder?: boolean }>>(
+        { queryKey: ["products"] },
+        (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, madeToOrder } : p)) : old)
+      );
       return { prev };
     },
     onError: (_e, _v, ctx) => {
@@ -380,10 +385,8 @@ export default function ProductDetailPage({
     },
     onSuccess: (_d, madeToOrder) =>
       toast.success(madeToOrder ? "Sipariş üzerine üretilir olarak işaretlendi" : "Stok takibine alındı"),
-    // Optimistic onMutate yeterli → ["product",id]'i YENİDEN ÇEKME (yaz-sonrası ağır refetch = 2-3sn donma).
-    // Liste/panel sadece "bayat" işaretlenir (refetchType:"none") → o ekrana gidince tazelenir, şimdi değil.
+    // Optimistic yeter → REFETCH YOK. Panel sadece bayat işaretlenir (o ekrana gidince tazelenir).
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
   });
@@ -454,7 +457,7 @@ export default function ProductDetailPage({
   return (
     <div className="p-6 space-y-6 max-w-7xl">
       {/* Header */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-start gap-4">
         <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
           <ArrowLeft className="h-4 w-4" />
         </Link>
@@ -483,12 +486,86 @@ export default function ProductDetailPage({
             {product.name}
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
-            <span className="font-mono">{product.barcode}</span>
-            <span className="mx-1.5">·</span>
             <span className="font-mono">{product.sku}</span>
             <span className="mx-1.5">·</span>
             {product.categoryName}
           </p>
+          {/* Hızlı kimlik + stok — eski "Ürün Bilgileri" kartından buraya taşındı (barkod artık platform kartlarında) */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Takma ad</span>
+              <Input
+                value={aliasInput}
+                onChange={(e) => setAliasInput(e.target.value)}
+                onBlur={() => {
+                  if (aliasInput.trim() !== (product.alias ?? "")) saveIdentityMutation.mutate();
+                }}
+                maxLength={80}
+                placeholder="örn. kırmızı vazo"
+                className="h-7 w-44 text-xs"
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Stok</span>
+              {product.madeToOrder ? (
+                <span className="text-xs text-muted-foreground italic">takip edilmez</span>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    disabled={product.stock <= 0}
+                    onClick={() => adjustStock(id, -1, product.stock)}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <span
+                    className={cn(
+                      "tabular-nums font-bold text-sm min-w-[2ch] text-center",
+                      product.stock === 0
+                        ? "text-destructive"
+                        : product.stock === 1
+                          ? "text-amber-500"
+                          : "text-foreground"
+                    )}
+                  >
+                    {product.stock}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => adjustStock(id, 1, product.stock)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                  {product.stock <= 1 && (
+                    <span
+                      className={cn(
+                        "text-[11px] ml-0.5",
+                        product.stock === 0 ? "text-destructive" : "text-amber-500"
+                      )}
+                    >
+                      {product.stock === 0 ? "⚠ tükendi" : "⚠ kritik"}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Sipariş üzerine</span>
+              <Button
+                variant={product.madeToOrder ? "default" : "outline"}
+                size="sm"
+                className="h-7 text-xs"
+                disabled={setMadeToOrderMutation.isPending}
+                onClick={() => setMadeToOrderMutation.mutate(!product.madeToOrder)}
+              >
+                {product.madeToOrder ? "Evet" : "Hayır"}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -704,134 +781,6 @@ export default function ProductDetailPage({
               )}
             </CardContent>
           </Card>
-
-          <Card>
-            <CardHeader className="py-3">
-              <CardTitle className="text-sm">Ürün Bilgileri</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {/* Takma ad + barkod — arama ve sipariş eşleşmesi için kimlik alanları */}
-              <div className="space-y-2 pb-1">
-                <div>
-                  <label className="text-[11px] text-muted-foreground">
-                    Takma ad <span className="opacity-60">(listede gösterilir + aramada bulunur)</span>
-                  </label>
-                  <Input
-                    value={aliasInput}
-                    onChange={(e) => setAliasInput(e.target.value)}
-                    maxLength={80}
-                    placeholder="örn. kırmızı vazo"
-                    className="h-8 mt-1"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground">
-                    Barkod <span className="opacity-60">(siparişler bununla eşleşir)</span>
-                  </label>
-                  <Input
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    maxLength={120}
-                    placeholder="GTIN / EAN / Trendyol barkodu"
-                    className="h-8 mt-1 font-mono"
-                  />
-                  {barcodeInput.startsWith("shopify-variant-") && (
-                    <p className="text-[10px] text-amber-500 mt-1 leading-snug">
-                      ⚠ Bu otomatik bir kimlik. Trendyol/HB siparişlerinin eşleşmesi için ürünün
-                      gerçek barkodunu girin (tüm platformlarda aynı olmalı).
-                    </p>
-                  )}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full h-8"
-                  disabled={
-                    saveIdentityMutation.isPending ||
-                    (aliasInput.trim() === (product.alias ?? "") &&
-                      barcodeInput.trim() === product.barcode)
-                  }
-                  onClick={() => saveIdentityMutation.mutate()}
-                >
-                  {saveIdentityMutation.isPending ? "Kaydediliyor..." : "Takma ad / barkodu kaydet"}
-                </Button>
-              </div>
-              <Separator />
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Stok (kendi deponuz)</span>
-                {product.madeToOrder ? (
-                  <span className="text-xs text-muted-foreground italic">takip edilmez</span>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7"
-                      disabled={product.stock <= 0}
-                      onClick={() => adjustStock(id, -1, product.stock)}
-                    >
-                      <Minus className="h-3.5 w-3.5" />
-                    </Button>
-                    <span
-                      className={cn(
-                        "tabular-nums font-bold text-base min-w-[2ch] text-center",
-                        product.stock === 0
-                          ? "text-destructive"
-                          : product.stock === 1
-                            ? "text-amber-500"
-                            : "text-foreground"
-                      )}
-                    >
-                      {product.stock}
-                    </span>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-7 w-7"
-                      onClick={() => adjustStock(id, 1, product.stock)}
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
-              </div>
-              {!product.madeToOrder && product.stock <= 1 && (
-                <p
-                  className={cn(
-                    "text-[11px]",
-                    product.stock === 0 ? "text-destructive" : "text-amber-500"
-                  )}
-                >
-                  {product.stock === 0 ? "⚠ Stok tükendi" : "⚠ Stok kritik (1 adet)"}
-                </p>
-              )}
-              {/* Sipariş üzerine üretilir → stok takibi yok, "stok 0" uyarısı verilmez */}
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground">Sipariş üzerine üretilir</span>
-                <Button
-                  variant={product.madeToOrder ? "default" : "outline"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  disabled={setMadeToOrderMutation.isPending}
-                  onClick={() => setMadeToOrderMutation.mutate(!product.madeToOrder)}
-                >
-                  {product.madeToOrder ? "Evet" : "Hayır"}
-                </Button>
-              </div>
-              {product.desi && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Desi</span>
-                  <span className="tabular-nums">{product.desi}</span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Kaynak</span>
-                <Badge variant="outline" className="text-xs uppercase">
-                  {product.source}
-                </Badge>
-              </div>
-            </CardContent>
-          </Card>
         </div>
 
         {/* Sağ: 3 Platform Yan Yana */}
@@ -885,7 +834,11 @@ export default function ProductDetailPage({
             queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
               old ? { ...old, imageUrl: url, imageManual: url != null } : old
             );
-            queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+            // Görsel kâr-etkilemez → listede de optimistic yamala (fetch YOK).
+            queryClient.setQueriesData<Array<{ id: string; imageUrl?: string | null }>>(
+              { queryKey: ["products"] },
+              (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, imageUrl: url } : p)) : old)
+            );
           }}
         />
       )}
@@ -937,8 +890,9 @@ function PlatformProfitCardImpl({
     }
   }, [listing]);
 
-  // Barkod alanı yalnızca Hepsiburada'da: üstteki ürün barkodu = Trendyol barkodu; HB barkodu farklı (#7).
-  const showBarcodeField = platform === "hepsiburada";
+  // Barkod alanı pazaryeri kartlarında (Trendyol + Hepsiburada): her platformun sipariş-eşleşme
+  // barkodu ayrı tutulur. Shopify ana ürün kaynağı → barkodu zaten oradan gelir, kartta gösterilmez.
+  const showBarcodeField = platform !== "shopify";
 
   const createListing = useMutation({
     mutationFn: () =>
@@ -959,7 +913,8 @@ function PlatformProfitCardImpl({
       // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
       // (yoksa oran etiketi güncellenir ama komisyon tutarı sayfaya tekrar girilene dek 0 kalır).
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
+      patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
       toast.success(`${info.label} listing'i eklendi`);
       setEditing(false);
     },
@@ -983,7 +938,8 @@ function PlatformProfitCardImpl({
       // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
       // (yoksa oran etiketi güncellenir ama komisyon tutarı sayfaya tekrar girilene dek 0 kalır).
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
+      patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
       toast.success("Güncellendi");
       setEditing(false);
     },
@@ -995,7 +951,8 @@ function PlatformProfitCardImpl({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
-      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
+      patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
       toast.success(`${info.label} listing kaldırıldı`);
     },
   });
@@ -1051,11 +1008,11 @@ function PlatformProfitCardImpl({
               </div>
               {showBarcodeField && (
                 <div>
-                  <Label className="text-xs">Hepsiburada Barkodu</Label>
+                  <Label className="text-xs">{info.label} Barkodu</Label>
                   <Input
                     value={listingBarcode}
                     onChange={(e) => setListingBarcode(e.target.value)}
-                    placeholder="HB siparişleri bununla eşleşir"
+                    placeholder={`${info.label} siparişleri bununla eşleşir`}
                     className="font-mono"
                   />
                 </div>

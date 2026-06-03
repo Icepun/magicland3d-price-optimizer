@@ -31,9 +31,10 @@ interface PriceHistoryEntry {
 
 /** changeSource → platform etiketi + renk (Shopify yeşil, Trendyol turuncu, manuel mor). */
 const SOURCE_META: Record<string, { label: string; color: string }> = {
-  shopify_sync: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
-  trendyol_sync: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
-  manual: { label: "Manuel", color: "oklch(0.62 0.20 278)" },
+  shopify_sync: { label: "Shopify", color: "oklch(0.60 0.16 152)" }, // yeşil
+  trendyol_sync: { label: "Trendyol", color: "oklch(0.72 0.17 60)" }, // turuncu (sarı-turuncu)
+  hepsiburada_sync: { label: "Hepsiburada", color: "oklch(0.64 0.21 30)" }, // turuncu-kırmızı (HB)
+  manual: { label: "Manuel", color: "oklch(0.62 0.20 278)" }, // mor
 };
 
 function sourceMeta(src: string) {

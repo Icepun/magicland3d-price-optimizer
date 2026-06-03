@@ -26,6 +26,7 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
+import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -152,11 +153,14 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
   return (
     <div className="w-10 h-10 rounded-md border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
       <img
-        src={src}
+        src={thumbUrl(src, 100) ?? src}
         alt={name}
+        width={40}
+        height={40}
         className="max-w-full max-h-full object-contain"
         onError={() => setErrored(true)}
         loading="lazy"
+        decoding="async"
       />
     </div>
   );
@@ -540,8 +544,21 @@ export default function ProductsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
       fetch(`/api/products/${id}`, { method: "DELETE" }).then((r) => r.json()),
+    // Optimistic: ürünü listeden ANINDA çıkar (fetch YOK); hata olursa geri al.
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.filter((p) => p.id !== id) : old
+      );
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
+      toast.error("Silinemedi (geri alındı)");
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       toast.success("Ürün silindi");
     },
   });
@@ -574,8 +591,8 @@ export default function ProductsPage() {
     },
     onSuccess: (data) => toast.success(`${data.deleted} ürün silindi`),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
+      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
   });
 
@@ -604,8 +621,8 @@ export default function ProductsPage() {
     onSuccess: (data, variables) =>
       toast.success(variables.hidden ? `${data.updated} ürün gizlendi` : `${data.updated} ürün geri getirildi`),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
+      queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
   });
 

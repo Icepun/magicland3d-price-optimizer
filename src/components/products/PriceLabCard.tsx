@@ -81,14 +81,44 @@ function PriceLabCardImpl({ productId }: { productId: string }) {
                         </span>
                       </div>
                       <div className="grid grid-cols-4 gap-1.5">
-                        {t.rows.map((r) => (
-                          <div key={r.margin} className="rounded-lg border bg-muted/30 px-2 py-1.5 text-center">
-                            <div className="text-[10px] text-muted-foreground">%{r.margin} marj</div>
-                            <div className="text-xs font-bold tabular-nums mt-0.5">
-                              {r.price != null ? formatCurrency(r.price) : "—"}
+                        {t.rows.map((r) => {
+                          // Renk: hedef fiyatı güncel satış fiyatıyla kıyasla. ±%5 içinde → nötr;
+                          // %5'ten UCUZA satılabiliyorsa (hedef < güncel) → yeşil (rahat ulaşılır);
+                          // %5'ten PAHALI gerekiyorsa (hedef > güncel) → kırmızı (şu an bu marja yetmiyor).
+                          const cur = t.currentPrice;
+                          let tone: "neutral" | "green" | "red" = "neutral";
+                          if (r.price != null && cur > 0) {
+                            if (r.price > cur * 1.05) tone = "red";
+                            else if (r.price < cur * 0.95) tone = "green";
+                          }
+                          return (
+                            <div
+                              key={r.margin}
+                              className={cn(
+                                "rounded-lg border px-2 py-1.5 text-center transition-colors",
+                                tone === "green"
+                                  ? "border-green-500/40 bg-green-500/10"
+                                  : tone === "red"
+                                    ? "border-destructive/40 bg-destructive/10"
+                                    : "border-border bg-muted/30"
+                              )}
+                            >
+                              <div className="text-[10px] text-muted-foreground">%{r.margin} marj</div>
+                              <div
+                                className={cn(
+                                  "text-xs font-bold tabular-nums mt-0.5",
+                                  tone === "green"
+                                    ? "text-green-600 dark:text-green-500"
+                                    : tone === "red"
+                                      ? "text-destructive"
+                                      : "text-foreground"
+                                )}
+                              >
+                                {r.price != null ? formatCurrency(r.price) : "—"}
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   );

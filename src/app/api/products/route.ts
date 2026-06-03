@@ -40,11 +40,19 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get("search");
   const platformFilter = searchParams.get("platform"); // shopify | trendyol
 
+  // TEKİL/ÇOKLU ürün tazeleme: ?ids=a,b,c → SADECE bu ürünler, filtreden bağımsız hesaplanıp döner.
+  // Amaç: bir ürünün maliyeti/listing'i değişince TÜM 368 ürünü değil yalnız o ürünü çekmek
+  // (minimum DB okuma → donma yok). İstemci sonucu ["products"] cache'ine yamalar.
+  const idsParam = searchParams.get("ids");
+  const idList = idsParam ? idsParam.split(",").map((s) => s.trim()).filter(Boolean) : null;
+
   const where: Record<string, unknown> = {};
   // Tüm ürünler düz olarak döner; varyant grubu üyeleri istemci tarafında tek satırda
   // toplanır (her ürün kendi variantGroup bilgisini taşır).
 
-  if (filter === "hidden") {
+  if (idList) {
+    where.id = { in: idList };
+  } else if (filter === "hidden") {
     // Sadece gizlenmiş ürünler
     where.hidden = true;
   } else {
@@ -250,24 +258,27 @@ export async function GET(req: NextRequest) {
   });
 
   let filtered = productsWithProfit;
-  if (filter === "negative-profit") {
-    filtered = filtered.filter((p) => {
-      if (p.platforms.length > 0) {
-        return p.platforms.some((pl) => pl.netProfit !== null && pl.netProfit < 0);
-      }
-      return p.currentNetProfit !== null && p.currentNetProfit < 0;
-    });
-  } else if (filter === "missing-cost") {
-    filtered = filtered.filter((p) => !p.hasCost);
-  } else if (filter === "out-of-stock") {
-    // Local stok bazında; "sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
-    filtered = filtered.filter((p) => p.stock === 0 && !p.madeToOrder);
-  }
+  // ids modu (tekil/çoklu cache patch) → post-filtre YOK: istenen ürünler filtreden bağımsız aynen döner.
+  if (!idList) {
+    if (filter === "negative-profit") {
+      filtered = filtered.filter((p) => {
+        if (p.platforms.length > 0) {
+          return p.platforms.some((pl) => pl.netProfit !== null && pl.netProfit < 0);
+        }
+        return p.currentNetProfit !== null && p.currentNetProfit < 0;
+      });
+    } else if (filter === "missing-cost") {
+      filtered = filtered.filter((p) => !p.hasCost);
+    } else if (filter === "out-of-stock") {
+      // Local stok bazında; "sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
+      filtered = filtered.filter((p) => p.stock === 0 && !p.madeToOrder);
+    }
 
-  if (platformFilter) {
-    filtered = filtered.filter((p) =>
-      p.platforms.some((pl) => pl.platform === platformFilter)
-    );
+    if (platformFilter) {
+      filtered = filtered.filter((p) =>
+        p.platforms.some((pl) => pl.platform === platformFilter)
+      );
+    }
   }
 
   return NextResponse.json(filtered);
