@@ -65,6 +65,27 @@ logStartup("===== Application starting =====");
 logStartup("version:", app.getVersion(), "packaged:", app.isPackaged);
 logStartup("platform:", process.platform, "node:", process.version);
 
+// ── Tek-instance kilidi ──────────────────────────────────────────────────────
+// İkinci bir instance açılırsa AYNI embedded replica dosyasını açar; libSQL tek-client
+// ister → replica WAL bozulur → native açılış Node event loop'unu kilitler → server
+// hiçbir isteğe (statik dahil) cevap veremez → uygulama "açılmaz". (Bu, sahada yaşanan
+// boş-ekran/açılmama sorununun kök nedeniydi.) İkinci instance hemen çıkar; mevcut
+// pencere öne getirilir.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  logStartup("İkinci instance tespit edildi — çıkılıyor (single-instance lock)");
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    }
+  });
+}
+
 function setUpdateState(patch) {
   updateState = { ...updateState, ...patch };
   for (const window of BrowserWindow.getAllWindows()) {
@@ -509,19 +530,58 @@ async function createWindow() {
   });
 
   logStartup("createWindow: loading URL");
+  const healFlag = path.join(app.getPath("userData"), ".replica-healed");
   try {
-    await win.loadURL(url);
+    // Server bozuk embedded replica yüzünden event-loop'u kilitlerse loadURL ASLA dönmez.
+    // 30sn timeout ile yakala (sağlıklı yükleme ~2-3sn).
+    await Promise.race([
+      win.loadURL(url),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("loadURL 30sn'de yanıt vermedi — server kilitli olabilir")),
+          30000
+        )
+      ),
+    ]);
     logStartup("createWindow: URL loaded ✓");
+    try {
+      fs.rmSync(healFlag, { force: true });
+    } catch {
+      /* başarılı yükleme → heal bayrağını temizle (sonraki gerçek arıza yine onarılabilsin) */
+    }
   } catch (e) {
-    logStartup("createWindow: loadURL failed:", e);
-    // Yine de window'u kapatma — kullanıcı en azından boş pencere görsün
+    logStartup("createWindow: loadURL başarısız/timeout:", String(e));
+    // SELF-HEAL: en olası sebep bozuk embedded replica (libsql native event-loop kilidi).
+    // Replica CACHE'ini temizleyip BİR KEZ yeniden başlat. Turso config + bulut verisi korunur.
+    const replicaPath = process.env.TURSO_REPLICA_PATH;
+    let healedRecently = false;
+    try {
+      healedRecently = Date.now() - fs.statSync(healFlag).mtimeMs < 90_000;
+    } catch {
+      /* bayrak yok */
+    }
+    if (replicaPath && !healedRecently) {
+      try {
+        for (const suffix of ["", "-wal", "-shm", "-info", "-client_wal_index"]) {
+          fs.rmSync(replicaPath + suffix, { force: true });
+        }
+        fs.writeFileSync(healFlag, String(Date.now()));
+        logStartup("SELF-HEAL: bozuk replica temizlendi → uygulama yeniden başlatılıyor");
+        app.relaunch();
+        app.exit(0);
+        return;
+      } catch (healErr) {
+        logStartup("SELF-HEAL hatası:", String(healErr));
+      }
+    }
+    // Heal denendi ama hâlâ sorun (veya replica yolu yok) → anlaşılır hata göster
     win.loadURL(
       "data:text/html;charset=utf-8," +
         encodeURIComponent(
           "<html><body style='font-family:sans-serif;padding:32px;background:#1B1E2A;color:#fff'>" +
-            "<h2>Uygulama başlatılırken hata oluştu</h2>" +
-            "<p>Detaylar: %APPDATA%/Trendyol Price Optimizer/startup.log</p>" +
-            `<pre>${String(e)}</pre>` +
+            "<h2>Uygulama başlatılamadı</h2>" +
+            "<p>Yerel veri önbelleği onarımı denendi ama sorun sürüyor. Uygulamayı kapatıp tekrar açın; sürerse startup.log'u iletin.</p>" +
+            `<pre style='color:#F87171;white-space:pre-wrap'>${String(e)}</pre>` +
             "</body></html>"
         )
     );
@@ -533,6 +593,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return; // ikinci instance — hiçbir kurulum yapma, çıkıyoruz
   logStartup("app whenReady fired");
   try {
     setupAutoUpdater();
