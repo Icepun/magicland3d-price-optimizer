@@ -1,6 +1,6 @@
 import { query } from "@/lib/turso";
 
-export type AlertType = "stock" | "filament";
+export type AlertType = "stock" | "filament" | "print";
 export type Severity = "critical" | "warning";
 
 export interface AppAlert {
@@ -60,6 +60,22 @@ export async function getNotifications(): Promise<NotificationsResult> {
       severity: crit ? "critical" : "warning",
       title: crit ? "Filament bitti" : "Filament azaldı",
       body: `${s.name} — ${Math.round(s.remainingGrams)}g kaldı`,
+      productId: null,
+    });
+  }
+
+  // Yazıcı baskı bildirimleri — masaüstü relay PrinterSnapshot'a yazar (bitti/hata).
+  const printAlerts = await query<{ name: string; status: string; productName: string | null }>(
+    `SELECT name, status, productName FROM PrinterSnapshot WHERE status IN ('finished', 'error')`
+  ).catch(() => []);
+  for (const pr of printAlerts) {
+    const err = pr.status === "error";
+    alerts.push({
+      id: `print-${pr.name}`,
+      type: "print",
+      severity: err ? "critical" : "warning",
+      title: err ? "Baskı hatası" : "Baskı tamamlandı",
+      body: pr.productName ? `${pr.name} — ${pr.productName}` : pr.name,
       productId: null,
     });
   }

@@ -55,6 +55,32 @@ export default function ReportsScreen() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
   }, [orders]);
 
+  // Son 30 gün — 6 ardışık 5 günlük kovaya ciro (yalnızca yüklü sipariş verisinden).
+  const trend = useMemo(() => {
+    const DAY = 86_400_000;
+    const BUCKETS = 6;
+    const SPAN = 5 * DAY;
+    const now = Date.now();
+    const start = now - BUCKETS * SPAN; // son 30 gün
+    const sums = new Array(BUCKETS).fill(0) as number[];
+    if (orders) {
+      for (const o of orders.orders) {
+        if (o.date < start || o.date > now) continue;
+        const idx = Math.min(BUCKETS - 1, Math.floor((o.date - start) / SPAN));
+        sums[idx] += o.total;
+      }
+    }
+    const fmtDay = (t: number) => {
+      const d = new Date(t);
+      return `${d.getDate()}.${d.getMonth() + 1}`;
+    };
+    return sums.map((rev, i) => {
+      const from = start + i * SPAN;
+      const to = from + SPAN - DAY; // kovanın son günü
+      return { label: `${fmtDay(from)}–${fmtDay(to)}`, rev };
+    });
+  }, [orders]);
+
   const profitability = useMemo(() => {
     if (!products || !rules || !settings) return { top: [], loss: [] };
     const rows = products
@@ -84,6 +110,8 @@ export default function ReportsScreen() {
   const avgBasket = rev.count > 0 ? rev.total / rev.count : 0;
   const maxBar = Math.max(...PLATFORMS.map((p) => rev.byPlat[p].rev), 1);
   const maxQty = topSellers[0]?.qty ?? 1;
+  const maxTrend = Math.max(...trend.map((t) => t.rev), 1);
+  const trendHasData = trend.some((t) => t.rev > 0);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -114,6 +142,24 @@ export default function ReportsScreen() {
             />
           ))}
         </View>
+
+        {/* 30 günlük ciro trendi */}
+        {trendHasData && (
+          <>
+            <Text style={styles.sectionLabel}>30 GÜN CİRO TRENDİ</Text>
+            <View style={styles.card}>
+              {trend.map((t, i) => (
+                <View key={i} style={styles.trendRow}>
+                  <Text style={styles.trendLabel}>{t.label}</Text>
+                  <View style={styles.sellerBarWrap}>
+                    <View style={[styles.trendBar, { width: `${Math.max(2, (t.rev / maxTrend) * 100)}%` }]} />
+                  </View>
+                  <Text style={styles.trendVal}>{formatCurrency(t.rev)}</Text>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
 
         {/* En çok satanlar */}
         {topSellers.length > 0 && (
@@ -252,6 +298,10 @@ const styles = StyleSheet.create({
   sellerBarWrap: { flex: 1, height: 8, borderRadius: 4, backgroundColor: ML.cardElevated, overflow: "hidden" },
   sellerBar: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   sellerQty: { color: ML.text, fontSize: 13, fontWeight: "700", width: 28, textAlign: "right" },
+  trendRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  trendLabel: { color: ML.textDim, fontSize: 12, width: 78, fontVariant: ["tabular-nums"] },
+  trendBar: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
+  trendVal: { color: ML.text, fontSize: 13, fontWeight: "700", width: 72, textAlign: "right", fontVariant: ["tabular-nums"] },
   profitRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   profitName: { color: ML.textDim, fontSize: 13, flex: 1 },
   profitVal: { fontSize: 14, fontWeight: "700", fontVariant: ["tabular-nums"] },

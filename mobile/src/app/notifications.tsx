@@ -64,7 +64,12 @@ function AlertRow({ alert }: { alert: AppAlert }) {
   const crit = alert.severity === "critical";
   const color = crit ? ML.red : ML.orange;
   const soft = crit ? ML.redSoft : ML.orangeSoft;
-  const icon = alert.type === "stock" ? "shippingbox.fill" : "circle.dashed";
+  const icon =
+    alert.type === "stock"
+      ? "shippingbox.fill"
+      : alert.type === "print"
+        ? "printer.fill"
+        : "circle.dashed";
   return (
     <Pressable
       onPress={() => alert.productId && router.push(`/product/${alert.productId}`)}
