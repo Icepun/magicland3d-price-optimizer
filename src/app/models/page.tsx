@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useMemo, useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Boxes, Search, Package, Play, Loader2, Layers, FileBox } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,6 +12,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import {
+  SlotStep, PrintProgress, runPrintStream,
+  type PrintableModel, type PrintProg, type PrintPrefs,
+} from "@/components/printers/print-flow";
 
 interface LibPrinter { id: string; name: string; brand: string; type: string }
 interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string }
@@ -104,27 +108,20 @@ export default function ModelsPage() {
                   {printers.map((pr) => {
                     const cnt = p.files.filter((f) => f.printerConfigId === pr.id).length;
                     const has = cnt > 0;
-                    const canPrint = has && pr.type === "moonraker";
                     return (
                       <button
                         key={pr.id}
                         disabled={!has}
-                        onClick={() => {
-                          if (!has) return;
-                          if (pr.type === "moonraker") setParts({ product: p, printer: pr });
-                          else toast.info("Bambu'da uygulamadan baskı başlatma henüz yok");
-                        }}
+                        onClick={() => { if (has) setParts({ product: p, printer: pr }); }}
                         className={cn(
                           "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors",
                           has
-                            ? canPrint
-                              ? "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 cursor-pointer"
-                              : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                            ? "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 cursor-pointer"
                             : "border-dashed border-border text-muted-foreground/45"
                         )}
-                        title={has ? (canPrint ? `${pr.name}: parçaları gör & bas` : "Bambu — yakında") : `${pr.name}: dosya yok`}
+                        title={has ? `${pr.name}: parçaları gör & bas` : `${pr.name}: dosya yok`}
                       >
-                        {canPrint && <Play className="h-3 w-3" />}
+                        {has && <Play className="h-3 w-3" />}
                         {pr.name}
                         {has && <span className="ml-0.5 tabular-nums opacity-80">·{cnt}</span>}
                       </button>
@@ -170,26 +167,50 @@ function EmptyHint({ title, desc }: { title: string; desc: string }) {
 function PartsModal({ product, printer, onClose }: { product: LibProduct; printer: LibPrinter; onClose: () => void }) {
   const qc = useQueryClient();
   const parts = product.files.filter((f) => f.printerConfigId === printer.id);
+  const multiColor = printer.brand === "bambu" || printer.brand === "snapmaker";
 
-  const print = useMutation({
-    mutationFn: (fileId: string) =>
-      fetch(`/api/models/${fileId}/print`, { method: "POST" }).then(async (r) => {
-        if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.error || "Başlatılamadı"); }
-        return r.json();
-      }),
-    onSuccess: () => {
+  const [printing, setPrinting] = useState(false);
+  const [progress, setProgress] = useState<PrintProg | null>(null);
+  const [picked, setPicked] = useState<LibFile | null>(null);
+
+  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+    setPrinting(true);
+    setProgress({ stage: "upload", pct: 0 });
+    try {
+      await runPrintStream(fileId, opts, setProgress);
       toast.success("Baskı başlatıldı 🎉");
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
+      setTimeout(onClose, 750);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Başlatılamadı");
+      setProgress(null);
+    } finally {
+      setPrinting(false);
+    }
+  };
+
+  const startPart = (part: LibFile) => { if (multiColor) setPicked(part); else runPrint(part.id); };
+
+  // Çok renkli (Bambu/Snapmaker) → renk/slot eşleme adımı (paylaşılan SlotStep).
+  if (picked) {
+    const model: PrintableModel = {
+      fileId: picked.id, productId: product.productId, productName: product.name, imageUrl: product.imageUrl,
+      label: picked.label, originalName: picked.originalName, sizeBytes: picked.sizeBytes, gramaj: picked.gramaj,
+    };
+    return (
+      <SlotStep
+        printerId={printer.id} model={model} isBambu={printer.brand === "bambu"} printing={printing} progress={progress}
+        onBack={() => { setPicked(null); setProgress(null); }} onClose={onClose} onConfirm={(opts) => runPrint(picked.id, opts)}
+      />
+    );
+  }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> {product.name}</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. Bir parçaya bas → yazıcıya yüklenip baskı başlar.</p>
+          <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. {multiColor ? "Parçaya bas → renk/slot eşle → baskı." : "Bir parçaya bas → yazıcıya yüklenip baskı başlar."}</p>
         </DialogHeader>
         <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {parts.map((part, i) => (
@@ -201,12 +222,13 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
                   <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}{part.gramaj ? ` · ${part.gramaj} gr` : ""}
                 </p>
               </div>
-              <Button size="sm" className="h-8 gap-1.5 shrink-0" disabled={print.isPending} onClick={() => print.mutate(part.id)}>
-                {print.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Bas
+              <Button size="sm" className="h-8 gap-1.5 shrink-0" disabled={printing} onClick={() => startPart(part)}>
+                {printing && progress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {multiColor ? "Renk seç" : "Bas"}
               </Button>
             </div>
           ))}
         </div>
+        {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
         <p className="text-[11px] text-muted-foreground/70">
           Çok parçalı baskıda parçaları sırayla bas (biri biterken diğerini başlat). Otomatik kuyruk sonraki güncellemede.
         </p>
