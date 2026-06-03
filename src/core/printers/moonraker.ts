@@ -325,52 +325,47 @@ type MoonrakerSlot = { slot: number; color: string; type: string; empty: boolean
 
 /**
  * U1 CFS `filament_detect` objesini slot dizisine çevir.
- * Gerçek yapı (Snapmaker u1-klipper / Extended-Firmware dokümanı):
- *   result.status.filament_detect.info[channel] = { MAIN_TYPE, SUB_TYPE, RGB_1 (int), ALPHA, VENDOR, OFFICIAL }
- *   boş slot = {} ;  renk RGB_1 sayısı (örn 3368652 → 0x3366CC → "#3366CC"); manuel girilen renk de buraya yazılır.
- * Eski/farklı şekiller için defansif yedekler de var.
+ * Gerçek yapı (Snapmaker/u1-klipper · klippy/extras/filament_detect.py get_status):
+ *   status.filament_detect = { info: [4 kanal], state: [4] }
+ *   info[i] = { VENDOR, MAIN_TYPE, SUB_TYPE, RGB_1 (int), ARGB_COLOR, ALPHA, OFFICIAL, ... }
+ *   YÜKLÜ DEĞİL varsayılan: MAIN_TYPE="NONE", RGB_1=0xFFFFFF (beyaz), OFFICIAL=false → renk YOK say.
+ * `present(i)` = filament_motion_sensor e{i}_filament.filament_detected (gerçek doluluk).
  */
-function parseFilamentDetect(fd: any): MoonrakerSlot[] {
+function parseFilamentDetect(fd: any, present?: (i: number) => boolean | null): MoonrakerSlot[] {
   let arr: any[] = [];
-  if (Array.isArray(fd?.info)) arr = fd.info;            // U1 gerçek yol
+  if (Array.isArray(fd?.info)) arr = fd.info;
   else if (Array.isArray(fd)) arr = fd;
   else if (Array.isArray(fd?.slots)) arr = fd.slots;
   else if (Array.isArray(fd?.filaments)) arr = fd.filaments;
   else if (Array.isArray(fd?.trays)) arr = fd.trays;
-  else if (fd && typeof fd === "object") {
-    const keys = Object.keys(fd).filter((k) => /^(t|e|slot|ch|tray)?_?\d+(_filament)?$/i.test(k)).sort();
-    arr = keys.map((k) => fd[k]);
-  }
-  const out: MoonrakerSlot[] = [];
-  arr.forEach((v, i) => {
-    const o = (v && typeof v === "object" ? v : {}) as Record<string, any>;
-    const rfid = (o.rfid ?? o.tag ?? {}) as Record<string, any>;
+  else return [];
 
-    // Renk: önce RGB_1 (sayı), sonra color_hex / color string'leri.
-    const rgbNum = typeof o.RGB_1 === "number" ? o.RGB_1
+  return arr.map((v, i) => {
+    const o = (v && typeof v === "object" ? v : {}) as Record<string, any>;
+    const rgb: number | null =
+      typeof o.RGB_1 === "number" ? o.RGB_1
       : typeof o.rgb_1 === "number" ? o.rgb_1
-      : typeof o.RGB === "number" ? o.RGB
-      : typeof rfid.RGB_1 === "number" ? rfid.RGB_1 : null;
+      : typeof o.ARGB_COLOR === "number" ? (o.ARGB_COLOR & 0xffffff)
+      : null;
+    const main = typeof o.MAIN_TYPE === "string" ? o.MAIN_TYPE : (typeof o.material === "string" ? o.material : "");
+    const sub = typeof o.SUB_TYPE === "string" ? o.SUB_TYPE : "";
+    const hasType = !!main && main.toUpperCase() !== "NONE";
+    const type = hasType ? (sub && !["basic", "none", ""].includes(sub.toLowerCase()) ? `${main} ${sub}` : main) : "";
+    const official = o.OFFICIAL === true;
+    const vendorKnown = typeof o.VENDOR === "string" && o.VENDOR.toUpperCase() !== "NONE";
+    // Varsayılan beyaz + başka bilgi yoksa "renk yok" (boş slot beyaz görünmesin).
+    const realColor = rgb != null && rgb >= 0 && !(rgb === 0xffffff && !hasType && !official && !vendorKnown);
     let color = "#9ca3af";
-    if (rgbNum != null && rgbNum > 0) {
-      color = `#${(rgbNum & 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`;
-    } else {
-      const hx = normalizeHex(o.color_hex ?? o.colorHex ?? o.color ?? o.colour ?? o.hex ?? rfid.color);
+    if (realColor) color = `#${(rgb! & 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`;
+    else {
+      const hx = normalizeHex(o.color_hex ?? o.colorHex ?? o.color ?? o.colour ?? o.hex);
       if (hx !== "#9ca3af") color = hx;
     }
-
-    // Materyal: MAIN_TYPE (+ Basic dışı SUB_TYPE), sonra eski alanlar.
-    const main = o.MAIN_TYPE ?? o.material ?? o.type ?? o.filament_type ?? rfid.material ?? rfid.type;
-    const sub = typeof o.SUB_TYPE === "string" ? o.SUB_TYPE : "";
-    const type = (typeof main === "string" && main && main.toUpperCase() !== "NONE")
-      ? (sub && sub.toLowerCase() !== "basic" ? `${main} ${sub}` : main)
-      : "";
-
-    // Dolu mu? RGB/renk/tip/OFFICIAL varsa dolu; boş {} → boş slot.
-    const filled = (rgbNum != null && rgbNum > 0) || color !== "#9ca3af" || !!type || o.OFFICIAL === true;
-    out.push({ slot: i, color, type, empty: !filled });
+    const detected = present ? present(i) : null;
+    const hasInfo = hasType || official || vendorKnown || color !== "#9ca3af";
+    const empty = detected != null ? !detected : !hasInfo;
+    return { slot: i, color, type, empty };
   });
-  return out;
 }
 
 /**
@@ -380,14 +375,24 @@ function parseFilamentDetect(fd: any): MoonrakerSlot[] {
  * NOT: U1 tool-changer'dır; slot ataması dilimleyicide gcode'a gömülüdür → bu okuma sadece gösterim.
  */
 export async function fetchMoonrakerSlots(host: string, port: number): Promise<MoonrakerSlot[]> {
-  // 1) Dokümante yol: filament_detect
+  // 1) filament_detect (renk/tip) + filament_motion_sensor e0..e3 (gerçek doluluk) — tek sorgu.
   try {
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?filament_detect`, undefined, 4000);
+    const objs = [
+      "filament_detect",
+      "filament_motion_sensor e0_filament", "filament_motion_sensor e1_filament",
+      "filament_motion_sensor e2_filament", "filament_motion_sensor e3_filament",
+    ];
+    const q = objs.map((o) => encodeURIComponent(o)).join("&");
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 5000);
     if (res.ok) {
-      const fd = unwrap(await res.json())?.status?.filament_detect;
-      if (fd && typeof fd === "object") {
-        try { console.log(`[moonraker-cfs] ${host} filament_detect:`, JSON.stringify(fd).slice(0, 600)); } catch { /* log atla */ }
-        const parsed = parseFilamentDetect(fd);
+      const status = unwrap(await res.json())?.status ?? {};
+      const fd = status.filament_detect;
+      if (fd && Array.isArray(fd.info)) {
+        const present = (i: number): boolean | null => {
+          const ms = status[`filament_motion_sensor e${i}_filament`];
+          return ms && typeof ms.filament_detected === "boolean" ? ms.filament_detected : null;
+        };
+        const parsed = parseFilamentDetect(fd, present);
         if (parsed.length) return parsed;
       }
     }

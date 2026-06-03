@@ -1092,27 +1092,9 @@ function SlotStep({
                 </div>
               </div>
             ) : (
-              <>
-                <p className="text-[11px] text-muted-foreground">
-                  {slotsQ.data?.error ? `Slot bilgisi okunamadı: ${slotsQ.data.error}. ` : "Yazıcıdan yüklü renk okunamadı (RFID yalnız Snapmaker'ın kendi filamentinde okunur). "}{isBambu ? "Numarayla eşleyebilirsin." : ""}
-                </p>
-                {!isBambu && (
-                  <button
-                    onClick={async () => {
-                      try {
-                        const r = await fetchJson<{ debug?: unknown }>(`/api/printers/${printerId}/slots?debug=1`);
-                        await navigator.clipboard.writeText(JSON.stringify(r.debug ?? r, null, 2));
-                        toast.success("Yazıcı tanılama bilgisi panoya kopyalandı — geliştiriciye yapıştır.");
-                      } catch {
-                        toast.error("Tanılama alınamadı");
-                      }
-                    }}
-                    className="text-[11px] text-primary hover:underline inline-flex items-center gap-1 mt-1"
-                  >
-                    <AlertTriangle className="h-3 w-3" /> Renk okunamıyor mu? Tanılamayı kopyala
-                  </button>
-                )}
-              </>
+              <p className="text-[11px] text-muted-foreground">
+                Yazıcıdaki renkler okunamadı. Numarayla eşleyebilirsin.
+              </p>
             )}
 
             {!usingFile && (
@@ -1185,14 +1167,14 @@ function SlotStep({
             ) : rawGcodeBambu ? (
               <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
-                Ham .gcode: slot eşlemesi dilimlemede sabittir; AMS&apos;i yukarıdaki sıraya göre yükle. Uygulamadan tam eşleme için .3mf yükle.
+                Filamenti yukarıdaki slot sırasına göre yükle.
               </p>
             ) : null}
 
             {!isBambu && (
               <p className="text-[11px] text-muted-foreground flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0 text-amber-500" />
-                Snapmaker: dosya <strong className="text-foreground/80">dilimlendiği gibi</strong> basılır (tabla terazileme / akış kalibrasyonu / start makroları Orca&apos;daki ayarına göre çalışır). Seçtiğin kafa gcode&apos;a uygulanır; filamentin fiziksel olarak o kafada/slotta olduğundan emin ol.
+                Filamentin seçtiğin kafada olduğundan emin ol.
               </p>
             )}
 
