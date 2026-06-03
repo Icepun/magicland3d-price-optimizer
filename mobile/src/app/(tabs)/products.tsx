@@ -23,6 +23,7 @@ import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import type { Platform } from "@/lib/platforms";
+import { thumbUrl } from "@/lib/image";
 
 type FilterKey = "all" | "out-of-stock" | "loss" | "no-cost";
 
@@ -39,6 +40,7 @@ interface ListItem {
   category: string;
   imageUrl: string | null;
   stock: number;
+  madeToOrder: number;
   hasCost: boolean;
   anyLoss: boolean;
   platforms: { platform: Platform; netProfit: number | null }[];
@@ -96,6 +98,7 @@ export default function ProductsScreen() {
         category: p.categoryName,
         imageUrl: p.imageUrl,
         stock: p.stock,
+        madeToOrder: p.madeToOrder,
         hasCost: profit.hasCost,
         anyLoss: profit.platforms.some((pl) => pl.result.netProfit < 0),
         platforms: profit.platforms.map((pl) => ({
@@ -111,7 +114,7 @@ export default function ProductsScreen() {
 
   const filtered = useMemo(() => {
     let list = items;
-    if (filter === "out-of-stock") list = list.filter((i) => i.stock <= 0);
+    if (filter === "out-of-stock") list = list.filter((i) => i.stock <= 0 && !i.madeToOrder);
     else if (filter === "loss") list = list.filter((i) => i.anyLoss);
     else if (filter === "no-cost") list = list.filter((i) => !i.hasCost);
     const q = search.trim().toLowerCase();
@@ -244,7 +247,7 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
       style={({ pressed }) => [styles.card, member && styles.memberCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
       {item.imageUrl ? (
-        <Image source={{ uri: item.imageUrl }} style={styles.thumb} contentFit="cover" transition={150} />
+        <Image source={{ uri: thumbUrl(item.imageUrl, 160)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={item.id} />
       ) : (
         <View style={[styles.thumb, styles.thumbEmpty]}>
           <Text style={styles.thumbEmptyText}>—</Text>
@@ -311,7 +314,7 @@ function GroupHeader({
       style={({ pressed }) => [styles.card, styles.groupCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
       {img ? (
-        <Image source={{ uri: img }} style={styles.thumb} contentFit="cover" transition={150} />
+        <Image source={{ uri: thumbUrl(img, 160)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={row.id} />
       ) : (
         <View style={[styles.thumb, styles.thumbEmpty]}>
           <Text style={styles.thumbEmptyText}>—</Text>

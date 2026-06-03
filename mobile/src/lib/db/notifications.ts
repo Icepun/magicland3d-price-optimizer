@@ -27,7 +27,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
 
   const lowStock = await query<{ id: string; name: string; stock: number }>(
     `SELECT id, name, stock FROM Product
-      WHERE isActive = 1 AND hidden = 0 AND stock <= 1
+      WHERE isActive = 1 AND hidden = 0 AND madeToOrder = 0 AND stock <= 1
       ORDER BY stock ASC LIMIT 50`
   ).catch(() => []);
   for (const p of lowStock) {

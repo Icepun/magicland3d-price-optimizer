@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getAllOrders, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
+import { thumbUrl } from "@/lib/image";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { buildProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
@@ -119,7 +120,7 @@ function PhotoBox({ profit, accent }: { profit?: OrderProfit; accent: string }) 
   return (
     <View>
       {profit?.image ? (
-        <Image source={{ uri: profit.image }} style={styles.photo} contentFit="cover" transition={150} />
+        <Image source={{ uri: thumbUrl(profit.image, 160)! }} style={styles.photo} contentFit="cover" transition={150} />
       ) : (
         <View style={[styles.photo, styles.photoEmpty]}>
           <View style={[styles.platDotBig, { backgroundColor: accent }]} />

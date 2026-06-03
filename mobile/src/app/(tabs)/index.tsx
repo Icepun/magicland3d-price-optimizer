@@ -181,7 +181,7 @@ export default function DashboardScreen() {
 }
 
 function PlatformRow({ p }: { p: PlatformSummary }) {
-  const accent = p.platform === "shopify" ? ML.shopify : ML.trendyol;
+  const accent = ML[p.platform];
   return (
     <MotiView
       from={{ opacity: 0, translateY: 12 }}
@@ -192,7 +192,7 @@ function PlatformRow({ p }: { p: PlatformSummary }) {
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
-          {p.platform === "shopify" ? "Shopify" : "Trendyol"}
+          {PLATFORM_LABEL[p.platform]}
         </Text>
         <Text style={styles.listingCount}>{p.listingCount} listing</Text>
       </View>

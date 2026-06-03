@@ -35,7 +35,7 @@ export function computeDashboard(
   let lossListings = 0;
 
   for (const p of products) {
-    if (p.stock <= 0) outOfStock++;
+    if (p.stock <= 0 && !p.madeToOrder) outOfStock++;
     const profit = computeProductProfit(p, rules, settings);
     if (!profit.hasCost) {
       missingCost++;

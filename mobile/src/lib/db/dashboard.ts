@@ -14,7 +14,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
   const [prodRes, listRes] = await batch([
     {
       sql: `SELECT p.id, p.name, p.alias, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
-                   p.stock, p.desi, p.imageUrl, p.source, p.commissionRate,
+                   p.stock, p.desi, p.imageUrl, p.source, p.madeToOrder, p.commissionRate,
                    p.variantGroupId, p.variantLabel, vg.name AS variantGroupName,
                    pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost,
                    pc.filamentTypeId, pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
@@ -52,6 +52,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     desi: p.desi,
     imageUrl: p.imageUrl,
     source: p.source,
+    madeToOrder: p.madeToOrder,
     commissionRate: p.commissionRate,
     variantGroupId: p.variantGroupId,
     variantLabel: p.variantLabel,

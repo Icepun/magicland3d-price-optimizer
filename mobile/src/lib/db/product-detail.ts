@@ -39,6 +39,7 @@ export interface ProductDetail {
   desi: number | null;
   imageUrl: string | null;
   source: string;
+  madeToOrder: number; // 1 = sipariş üzerine üretilir (stoklanmaz → planner/stok-uyarısı dışı)
   commissionRate: number | null;
   variantGroupId: string | null;
   variantLabel: string | null;
@@ -65,7 +66,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
   const [pRes, cRes, lRes] = await batch([
     {
       sql: `SELECT id, name, alias, sku, barcode, categoryName, currentSalePrice, stock,
-                   desi, imageUrl, source, commissionRate, variantGroupId, variantLabel
+                   desi, imageUrl, source, madeToOrder, commissionRate, variantGroupId, variantLabel
               FROM Product WHERE id = ?`,
       args: [id],
     },

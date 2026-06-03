@@ -5,6 +5,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
+import { thumbUrl } from "@/lib/image";
 import { statusInfo, type OrdersResult, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
@@ -110,7 +111,7 @@ export default function OrderDetailScreen() {
           return (
             <View key={i} style={styles.lineRow}>
               {p?.imageUrl ? (
-                <Image source={{ uri: p.imageUrl }} style={styles.lineImg} contentFit="cover" />
+                <Image source={{ uri: thumbUrl(p.imageUrl, 128)! }} style={styles.lineImg} contentFit="cover" />
               ) : (
                 <View style={[styles.lineImg, styles.lineImgEmpty]} />
               )}

@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
 import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
+import { thumbUrl } from "@/lib/image";
 import { ML, radius } from "@/theme/colors";
 
 function brandColor(brand: string): string {
@@ -39,8 +41,27 @@ export default function PrintersScreen() {
     refetchInterval: 4000,
   });
 
+  // Relay tazeliğini saymak için periyodik tik — veri değişmese de "X önce" yaşı artsın
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, []);
+
   const printing = snapshots.filter((s) => s.status === "printing").length;
   const online = snapshots.filter((s) => s.online).length;
+
+  // Masaüstü relay'i en son ne zaman yazdı? (en taze updatedAt). Stale ise "masaüstü açık mı?"
+  const lastUpdate = useMemo(() => {
+    let max = 0;
+    for (const s of snapshots) {
+      const t = Date.parse(s.updatedAt);
+      if (!Number.isNaN(t) && t > max) max = t;
+    }
+    return max;
+  }, [snapshots]);
+  const ageMs = lastUpdate > 0 ? Math.max(0, now - lastUpdate) : 0;
+  const stale = lastUpdate > 0 && ageMs > 90_000;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -50,6 +71,16 @@ export default function PrintersScreen() {
         <Chip text={`${online} çevrimiçi`} color={ML.green} />
         <Chip text={`${printing} yazdırıyor`} color={ML.accent} />
       </View>
+      {snapshots.length > 0 ? (
+        <View style={styles.liveBar}>
+          <View style={[styles.liveDot, { backgroundColor: stale ? ML.orange : ML.green }]} />
+          <Text style={[styles.liveText, stale && { color: ML.orange }]}>
+            {stale
+              ? `Canlı değil · ${fmtAge(ageMs)} güncellendi — masaüstü açık mı?`
+              : `Canlı · ${fmtAge(ageMs)} güncellendi`}
+          </Text>
+        </View>
+      ) : null}
 
       {isLoading ? (
         <View style={styles.center}><ActivityIndicator color={ML.accent} /></View>
@@ -90,7 +121,7 @@ function PrinterCard({ s }: { s: PrinterSnapshot }) {
         <>
           <View style={styles.body}>
             {s.productImage ? (
-              <Image source={{ uri: s.productImage }} style={styles.thumb} contentFit="cover" transition={150} />
+              <Image source={{ uri: thumbUrl(s.productImage, 96)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={s.printerConfigId} />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]} />
             )}
@@ -127,12 +158,24 @@ function Chip({ text, color }: { text: string; color?: string }) {
   );
 }
 
+function fmtAge(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 10) return "az önce";
+  if (s < 60) return `${s} sn önce`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} dk önce`;
+  return `${Math.floor(m / 60)} sa önce`;
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: ML.card, borderRadius: 999, borderWidth: 1, borderColor: ML.border, paddingHorizontal: 12, paddingVertical: 6 },
   chipDot: { width: 7, height: 7, borderRadius: 4 },
   chipText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
+  liveBar: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 16, paddingBottom: 10 },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
+  liveText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 8 },
   emptyTitle: { color: ML.text, fontSize: 16, fontWeight: "700" },
   emptyDesc: { color: ML.textDim, fontSize: 13, textAlign: "center", lineHeight: 19 },

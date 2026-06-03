@@ -7,6 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
+import { thumbUrl } from "@/lib/image";
 import { getSettingsMap } from "@/lib/db/rules";
 import { updateSetting } from "@/lib/db/rule-crud";
 import { ML, radius } from "@/theme/colors";
@@ -43,7 +44,7 @@ export default function PlannerScreen() {
   const plan = useMemo<PlanItem[]>(() => {
     if (!data) return [];
     return data
-      .filter((p) => p.stock < t)
+      .filter((p) => !p.madeToOrder && p.stock < t)
       .map((p) => {
         const printQty = Math.max(1, t - p.stock);
         return {
@@ -111,7 +112,7 @@ export default function PlannerScreen() {
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: ML.cardElevated }]}
             >
               {item.imageUrl ? (
-                <Image source={{ uri: item.imageUrl }} style={styles.thumb} contentFit="cover" />
+                <Image source={{ uri: thumbUrl(item.imageUrl, 120)! }} style={styles.thumb} contentFit="cover" recyclingKey={item.id} />
               ) : (
                 <View style={[styles.thumb, styles.thumbEmpty]} />
               )}

@@ -17,6 +17,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
+import { thumbUrl } from "@/lib/image";
 import { getPriceHistory, setProductStock, setProductAlias, type PriceChange } from "@/lib/db/products";
 import {
   getCommissionRules,
@@ -129,7 +130,7 @@ export default function ProductDetailScreen() {
         {/* Ürün başlığı */}
         <View style={styles.titleRow}>
           {product.imageUrl ? (
-            <Image source={{ uri: product.imageUrl }} style={styles.thumb} contentFit="cover" />
+            <Image source={{ uri: thumbUrl(product.imageUrl, 200)! }} style={styles.thumb} contentFit="cover" />
           ) : (
             <View style={[styles.thumb, styles.thumbEmpty]} />
           )}
@@ -167,7 +168,7 @@ export default function ProductDetailScreen() {
                   ]}
                 >
                   {m.imageUrl ? (
-                    <Image source={{ uri: m.imageUrl }} style={styles.variantThumb} contentFit="cover" />
+                    <Image source={{ uri: thumbUrl(m.imageUrl, 120)! }} style={styles.variantThumb} contentFit="cover" recyclingKey={m.id} />
                   ) : (
                     <View style={[styles.variantThumb, styles.thumbEmpty]} />
                   )}
