@@ -945,6 +945,9 @@ function PlatformProfitCardImpl({
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
+      // (yoksa oran etiketi güncellenir ama komisyon tutarı sayfaya tekrar girilene dek 0 kalır).
+      queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success(`${info.label} listing'i eklendi`);
       setEditing(false);
@@ -965,6 +968,9 @@ function PlatformProfitCardImpl({
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
+      // (yoksa oran etiketi güncellenir ama komisyon tutarı sayfaya tekrar girilene dek 0 kalır).
+      queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success("Güncellendi");
       setEditing(false);
@@ -976,6 +982,7 @@ function PlatformProfitCardImpl({
     mutationFn: () => fetch(`/api/listings/${listing!.id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
+      queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       toast.success(`${info.label} listing kaldırıldı`);
     },
