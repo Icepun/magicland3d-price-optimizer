@@ -188,6 +188,150 @@ export function readModelColors(filePath: string): ModelColorInfo {
   return { colors: [], source: "none", fileKind: is3mf ? "3mf" : isGcode ? "gcode" : "other" };
 }
 
+// ── Baskı meta verisi (süre / gramaj / önizleme) — özel baskı ekranı için ──────────────
+export interface ModelMeta {
+  grams: number | null; // toplam kullanılan filament (g)
+  estPrintMin: number | null; // tahmini baskı süresi (dakika)
+  thumbnail: string | null; // data URL (PNG önizleme)
+}
+
+function parseTimeToMin(s: string): number | null {
+  let total = 0;
+  let found = false;
+  const h = /(\d+)\s*h/i.exec(s);
+  if (h) { total += Number(h[1]) * 60; found = true; }
+  const m = /(\d+)\s*m(?:in)?\b/i.exec(s);
+  if (m) { total += Number(m[1]); found = true; }
+  const sec = /(\d+)\s*s\b/i.exec(s);
+  if (sec) { total += Number(sec[1]) / 60; found = true; }
+  return found ? Math.max(1, Math.round(total)) : null;
+}
+
+/** gcode başlığındaki gömülü PNG önizlemeyi (en büyüğünü) data URL olarak çıkar. */
+function gcodeThumbnail(text: string): string | null {
+  const re = /;\s*thumbnail\s+begin\s+(\d+)x(\d+)\s+\d+\s*([\s\S]*?);\s*thumbnail\s+end/gi;
+  let best: { area: number; b64: string } | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const area = Number(m[1]) * Number(m[2]);
+    const b64 = m[3].replace(/^\s*;/gm, "").replace(/\s+/g, "");
+    if (b64 && (!best || area > best.area)) best = { area, b64 };
+  }
+  return best ? `data:image/png;base64,${best.b64}` : null;
+}
+
+function gcodeMeta(text: string): ModelMeta {
+  let grams: number | null = null;
+  const tot = headerValue(text, "total filament used \\[g\\]");
+  if (tot) { const g = parseFloat(tot); if (Number.isFinite(g)) grams = Math.round(g * 10) / 10; }
+  if (grams == null) {
+    const used = headerValue(text, "filament used \\[g\\]");
+    if (used) {
+      const sum = splitList(used).map((x) => parseFloat(x)).filter((n) => Number.isFinite(n)).reduce((a, b) => a + b, 0);
+      if (sum > 0) grams = Math.round(sum * 10) / 10;
+    }
+  }
+  const t =
+    headerValue(text, "estimated printing time \\(normal mode\\)") ||
+    headerValue(text, "estimated printing time") ||
+    headerValue(text, "model printing time") ||
+    headerValue(text, "total estimated time");
+  return { grams, estPrintMin: t ? parseTimeToMin(t) : null, thumbnail: gcodeThumbnail(text) };
+}
+
+function meta3mf(buf: Buffer): ModelMeta {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(new Uint8Array(buf), {
+      filter: (f) => /\.config$/i.test(f.name) || /Metadata\/.*\.(png|gcode)$/i.test(f.name),
+    });
+  } catch {
+    return { grams: null, estPrintMin: null, thumbnail: null };
+  }
+  let grams: number | null = null;
+  let estPrintMin: number | null = null;
+  let thumbnail: string | null = null;
+
+  const sliceKey = Object.keys(files).find((k) => /slice_info\.config$/i.test(k));
+  if (sliceKey) {
+    const xml = strFromU8(files[sliceKey]);
+    const usedG = [...xml.matchAll(/used_g\s*=\s*"([^"]+)"/gi)].map((m) => parseFloat(m[1])).filter((n) => Number.isFinite(n));
+    if (usedG.length) grams = Math.round(usedG.reduce((a, b) => a + b, 0) * 10) / 10;
+    const pred = /(?:prediction|time)\s*=\s*"(\d+)"/i.exec(xml) || /key\s*=\s*"prediction"\s+value\s*=\s*"(\d+)"/i.exec(xml);
+    if (pred) estPrintMin = Math.max(1, Math.round(Number(pred[1]) / 60));
+  }
+
+  const pngKeys = Object.keys(files).filter((k) => /Metadata\/.*\.png$/i.test(k));
+  if (pngKeys.length) {
+    const key = pngKeys.find((k) => /plate_1\.png$/i.test(k)) || pngKeys.sort((a, b) => files[b].length - files[a].length)[0];
+    thumbnail = `data:image/png;base64,${Buffer.from(files[key]).toString("base64")}`;
+  }
+
+  if (estPrintMin == null || grams == null) {
+    const gkey =
+      Object.keys(files).find((k) => /Metadata\/.*plate.*\.gcode$/i.test(k)) ||
+      Object.keys(files).find((k) => /\.gcode$/i.test(k));
+    if (gkey) {
+      const gm = gcodeMeta(strFromU8(files[gkey]).slice(0, 400_000));
+      estPrintMin = estPrintMin ?? gm.estPrintMin;
+      grams = grams ?? gm.grams;
+    }
+  }
+  return { grams, estPrintMin, thumbnail };
+}
+
+/**
+ * Bambu baskı için: .3mf içindeki GERÇEK plate gcode yolu + PROJEDEKİ TOPLAM filament sayısı.
+ * BambuStudio ams_mapping'i TÜM proje filamentleri üzerinden (kullanılmayan = -1) ve plate
+ * param'ını gerçek dosya adıyla gönderir. Biz de aynısını yapmalıyız, yoksa A1 reddeder.
+ */
+export function readBambuPrintMeta(filePath: string): { plateParam: string; filamentCount: number } {
+  const def = { plateParam: "Metadata/plate_1.gcode", filamentCount: 0 };
+  const lower = filePath.toLowerCase();
+  const countFromHeader = (text: string): number => {
+    const raw =
+      headerValue(text, "filament_colour") || headerValue(text, "filament_color") ||
+      headerValue(text, "extruder_colour") || headerValue(text, "extruder_color");
+    return raw ? splitList(raw).filter((x) => normHex(x)).length : 0;
+  };
+  try {
+    if (lower.endsWith(".3mf")) {
+      const files = unzipSync(new Uint8Array(fs.readFileSync(filePath)), {
+        filter: (f) => /\.config$/i.test(f.name) || /Metadata\/.*plate.*\.gcode$/i.test(f.name),
+      });
+      const gkey =
+        Object.keys(files).find((k) => /Metadata\/plate_\d+\.gcode$/i.test(k)) ||
+        Object.keys(files).find((k) => /Metadata\/.*plate.*\.gcode$/i.test(k));
+      const plateParam = gkey || def.plateParam;
+      let filamentCount = 0;
+      const projKey = Object.keys(files).find((k) => /project_settings\.config$/i.test(k));
+      if (projKey) {
+        try {
+          const j = JSON.parse(strFromU8(files[projKey]));
+          if (Array.isArray(j.filament_colour)) filamentCount = j.filament_colour.length;
+        } catch { /* yoksay */ }
+      }
+      if (!filamentCount && gkey) filamentCount = countFromHeader(strFromU8(files[gkey]).slice(0, 200_000));
+      return { plateParam, filamentCount };
+    }
+    return { plateParam: def.plateParam, filamentCount: countFromHeader(readHeadTail(filePath, 200_000)) };
+  } catch {
+    return def;
+  }
+}
+
+/** Bir model dosyasının baskı meta verisi: toplam gramaj + süre + önizleme görseli. */
+export function readModelMeta(filePath: string): ModelMeta {
+  const lower = filePath.toLowerCase();
+  const is3mf = lower.endsWith(".3mf");
+  const isGcode = !is3mf && /\.(gcode|gco|g)$/i.test(lower);
+  try {
+    if (is3mf) return meta3mf(fs.readFileSync(filePath));
+    if (isGcode) return gcodeMeta(readHeadTail(filePath, 400_000));
+  } catch { /* boş döner */ }
+  return { grams: null, estPrintMin: null, thumbnail: null };
+}
+
 /**
  * Dosya gerçekten DİLİMLENMİŞ bir Bambu/Orca 3MF mi? (içinde Metadata/plate_*.gcode var mı)
  * STL/OBJ veya unsliced 3MF → false. .gcode dosyaları zaten dilimli sayılır (true).

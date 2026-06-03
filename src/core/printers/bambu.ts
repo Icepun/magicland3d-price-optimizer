@@ -35,6 +35,13 @@ export interface BambuStatus {
   filename: string | null;
   printError: number | null; // print.print_error (0 = sorun yok)
   hmsCount: number; // print.hms[] uzunluğu (aktif uyarı sayısı)
+  hmsCodes: string[]; // print.hms[] → okunur HMS kodları (ör. "0700-8001-0002-0008")
+}
+
+/** Bambu HMS girişini ({attr,code}) okunur koda çevir: AAAA-BBBB-CCCC-DDDD (hex). */
+function formatHms(attr: number, code: number): string {
+  const h = (n: number) => (n >>> 0).toString(16).toUpperCase().padStart(4, "0");
+  return `${h((attr >>> 16) & 0xffff)}-${h(attr & 0xffff)}-${h((code >>> 16) & 0xffff)}-${h(code & 0xffff)}`;
 }
 
 interface Conn {
@@ -116,9 +123,13 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     return {
       online: false, gcodeState: null, percent: 0, remainingSec: null,
       layerNum: null, totalLayerNum: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0, filename: null,
-      printError: null, hmsCount: 0,
+      printError: null, hmsCount: 0, hmsCodes: [],
     };
   }
+  const hmsArr = Array.isArray(p.hms) ? p.hms : [];
+  const hmsCodes = hmsArr
+    .map((h: any) => (h && typeof h.attr === "number" && typeof h.code === "number" ? formatHms(h.attr, h.code) : null))
+    .filter((x: string | null): x is string => !!x);
 
   const remainingMin = typeof p.mc_remaining_time === "number" ? p.mc_remaining_time : null;
   return {
@@ -134,7 +145,8 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     bedTarget: Math.round(p.bed_target_temper ?? 0),
     filename: p.subtask_name || p.gcode_file || null,
     printError: typeof p.print_error === "number" ? p.print_error : null,
-    hmsCount: Array.isArray(p.hms) ? p.hms.length : 0,
+    hmsCount: hmsArr.length,
+    hmsCodes,
   };
 }
 
@@ -349,7 +361,7 @@ export async function bambuUploadAndPrint(
   serial: string,
   fileBuf: Buffer,
   originalName: string,
-  opts: { amsMapping?: number[]; useAms?: boolean; onProgress?: (pct: number) => void; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } } = {}
+  opts: { amsMapping?: number[]; useAms?: boolean; plateParam?: string; onProgress?: (pct: number) => void; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } } = {}
 ): Promise<{ matchName: string }> {
   // PREFLIGHT: yazıcı çevrimiçi + boşta mı? (UI butonu gizlese de 2. istemci / bayat poll'a karşı sunucu kontrolü)
   const pre = await getBambuStatus(host, accessCode, serial);
@@ -372,7 +384,8 @@ export async function bambuUploadAndPrint(
         print: {
           sequence_id: "0",
           command: "project_file",
-          param: "Metadata/plate_1.gcode",
+          // GERÇEK plate gcode yolu (Studio gibi) — sabit plate_1 değil; yanlışsa A1 reddeder.
+          param: opts.plateParam || "Metadata/plate_1.gcode",
           project_id: "0", profile_id: "0", task_id: "0", subtask_id: "0",
           subtask_name: stem,
           file: "",
@@ -380,10 +393,14 @@ export async function bambuUploadAndPrint(
           md5: fileMd5,
           timelapse: opts.prefs?.timelapse ?? false, bed_type: "auto", bed_leveling: opts.prefs?.bedLeveling ?? false,
           flow_cali: opts.prefs?.flowCali ?? false, vibration_cali: false, layer_inspect: false,
+          // ams_mapping: TÜM proje filamentleri üzerinden, kullanılmayan = -1 (route'ta dolduruldu).
           ams_mapping: opts.amsMapping ?? [0],
           use_ams: opts.useAms ?? false,
         },
       };
+  try {
+    console.error("[bambu-print] payload:", JSON.stringify((payload as any).print));
+  } catch { /* log atla */ }
   conn.client.publish(`device/${serial}/request`, JSON.stringify(payload), { qos: 1 });
   // A1/P1 seyrek (delta) raporlar → durum geçişini görebilmek için tam durum iste.
   conn.client.publish(`device/${serial}/request`, JSON.stringify({ pushing: { sequence_id: "0", command: "pushall" } }), { qos: 0 });

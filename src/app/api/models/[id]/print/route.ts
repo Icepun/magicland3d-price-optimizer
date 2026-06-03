@@ -5,7 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { moonrakerUploadAndPrint } from "@/core/printers/moonraker";
 import { bambuUploadAndPrint, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
-import { readModelColors, is3mfSliced } from "@/core/printers/model-colors";
+import { readModelColors, is3mfSliced, readBambuPrintMeta } from "@/core/printers/model-colors";
 
 export const dynamic = "force-dynamic";
 
@@ -101,8 +101,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           let matchFilename = mf.originalName.replace(/\.[^.]+$/, "");
 
           if (isBambu) {
+            // BambuStudio gibi: ams_mapping'i PROJE filament sayısına -1 ile DOLDUR (kullanılmayan
+            // filamentler -1) + GERÇEK plate gcode yolunu gönder. Eksik uzunluk/yanlış plate → A1 reddeder.
+            const { plateParam, filamentCount } = readBambuPrintMeta(mf.storedPath);
+            let bambuMapping = amsMapping;
+            if (Array.isArray(bambuMapping) && filamentCount > bambuMapping.length) {
+              bambuMapping = [...bambuMapping];
+              while (bambuMapping.length < filamentCount) bambuMapping.push(-1);
+            }
             const r = await bambuUploadAndPrint(printer.host, printer.accessCode!, printer.serial!, buf, mf.originalName, {
-              amsMapping, useAms, prefs,
+              amsMapping: bambuMapping, useAms, plateParam, prefs,
               onProgress: (pct) => send({ stage: "upload", pct }),
             });
             matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
@@ -129,9 +137,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               const s = await getBambuStatus(printer.host, printer.accessCode!, printer.serial!);
               if (s.printError && s.printError !== 0) {
                 const hex = `0x${(s.printError >>> 0).toString(16).toUpperCase()}`;
+                const hms = s.hmsCodes.length ? ` HMS: ${s.hmsCodes.join(", ")}.` : "";
                 send({
                   stage: "error",
-                  message: `Yazıcı baskıyı reddetti (hata ${hex}). Sık neden: eşlenen AMS slotu boş / yanlış filament, ya da dosya tam dilimlenmiş .3mf değil. Slotların dolu olduğunu + renk eşleşmesini kontrol et; çok renkli baskıda Bambu Studio'dan dilimlenmiş .3mf ver.`,
+                  message: `Yazıcı baskıyı reddetti (hata ${hex}).${hms} Sık neden: eşlenen AMS slotu boş / yanlış filament tipi. Slotların dolu olduğunu + renk eşleşmesini kontrol et.`,
                 });
                 printerErrored = true; break;
               }
