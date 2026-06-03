@@ -29,6 +29,14 @@ export async function setProductStock(id: string, stock: number): Promise<void> 
   );
 }
 
+/** Ürün takma adını güncelle (alias — mobilde düzenlenebilir kısa ad). Boş → null. */
+export async function setProductAlias(id: string, alias: string): Promise<void> {
+  await execute(
+    `UPDATE Product SET alias = ?, updatedAt = ? WHERE id = ?`,
+    [alias.trim() || null, new Date().toISOString(), id]
+  );
+}
+
 export interface PriceChange {
   id: string;
   oldPrice: number;

@@ -13,7 +13,7 @@ interface ProductCostFlat extends ProductCostRow {
 export async function getDashboardData(): Promise<ProductDetail[]> {
   const [prodRes, listRes] = await batch([
     {
-      sql: `SELECT p.id, p.name, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
+      sql: `SELECT p.id, p.name, p.alias, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
                    p.stock, p.desi, p.imageUrl, p.source, p.commissionRate,
                    p.variantGroupId, p.variantLabel, vg.name AS variantGroupName,
                    pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost,
@@ -43,6 +43,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
   return (prodRes.rows as unknown as (ProductDetail & ProductCostFlat)[]).map((p) => ({
     id: p.id,
     name: p.name,
+    alias: p.alias,
     sku: p.sku,
     barcode: p.barcode,
     categoryName: p.categoryName,

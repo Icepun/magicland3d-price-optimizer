@@ -3,19 +3,21 @@ import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { MotiView } from "moti";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
-import { getPriceHistory, setProductStock, type PriceChange } from "@/lib/db/products";
+import { getPriceHistory, setProductStock, setProductAlias, type PriceChange } from "@/lib/db/products";
 import {
   getCommissionRules,
   getCargoRules,
@@ -26,6 +28,7 @@ import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
 import { computePriceLab } from "@/lib/price-lab";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
+import { PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -79,6 +82,23 @@ export default function ProductDetailScreen() {
     },
   });
 
+  // Alias (takma ad) — optimistic düzenleme.
+  const [aliasOpen, setAliasOpen] = useState(false);
+  const [aliasDraft, setAliasDraft] = useState("");
+  const aliasMutation = useMutation({
+    mutationFn: (a: string) => setProductAlias(id, a),
+    onMutate: async (a: string) => {
+      const v = a.trim() || null;
+      await qc.cancelQueries({ queryKey: ["product", id] });
+      const prev = qc.getQueryData<ProductDetail>(["product", id]);
+      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, alias: v } : o));
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["product", id], ctx.prev);
+    },
+  });
+
   const profit =
     product && rules && settings
       ? computeProductProfit(product, rules, settings)
@@ -116,6 +136,17 @@ export default function ProductDetailScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{product.name}</Text>
             <Text style={styles.sku}>{product.sku}</Text>
+            <Pressable
+              onPress={() => {
+                setAliasDraft(product.alias ?? "");
+                setAliasOpen(true);
+              }}
+              hitSlop={6}
+            >
+              <Text style={styles.alias}>
+                {product.alias ? `✎ "${product.alias}"` : "✎ takma ad ekle"}
+              </Text>
+            </Pressable>
           </View>
         </View>
 
@@ -224,13 +255,13 @@ export default function ProductDetailScreen() {
               FİYAT LABORATUVARI
             </Text>
             {priceLab.targets.map((t) => {
-              const accent = t.platform === "shopify" ? ML.shopify : ML.trendyol;
+              const accent = ML[t.platform];
               return (
                 <View key={t.platform} style={styles.section}>
                   <View style={styles.platformHead}>
                     <View style={[styles.dot, { backgroundColor: accent }]} />
                     <Text style={[styles.platformName, { color: accent }]}>
-                      {t.platform === "shopify" ? "Shopify" : "Trendyol"}
+                      {PLATFORM_LABEL[t.platform]}
                     </Text>
                     <Text style={styles.salePrice}>{formatPercent(t.currentMargin)}</Text>
                   </View>
@@ -309,6 +340,47 @@ export default function ProductDetailScreen() {
           </>
         )}
       </ScrollView>
+
+      <Modal
+        visible={aliasOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAliasOpen(false)}
+      >
+        <Pressable style={styles.aliasBackdrop} onPress={() => setAliasOpen(false)}>
+          <Pressable style={styles.aliasCard} onPress={() => {}}>
+            <Text style={styles.aliasModalTitle}>Takma ad</Text>
+            <Text style={styles.aliasModalHint}>Liste ve aramada görünen kısa ad.</Text>
+            <TextInput
+              value={aliasDraft}
+              onChangeText={setAliasDraft}
+              placeholder="örn. Kırmızı Kedi Figürü"
+              placeholderTextColor={ML.textFaint}
+              style={styles.aliasInput}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={() => {
+                aliasMutation.mutate(aliasDraft);
+                setAliasOpen(false);
+              }}
+            />
+            <View style={styles.aliasBtns}>
+              <Pressable onPress={() => setAliasOpen(false)} hitSlop={8}>
+                <Text style={styles.aliasCancel}>İptal</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  aliasMutation.mutate(aliasDraft);
+                  setAliasOpen(false);
+                }}
+                hitSlop={8}
+              >
+                <Text style={styles.aliasSave}>Kaydet</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -316,7 +388,7 @@ export default function ProductDetailScreen() {
 function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
   const r = p.result;
   const loss = r.netProfit < 0;
-  const accent = p.platform === "shopify" ? ML.shopify : ML.trendyol;
+  const accent = ML[p.platform];
   return (
     <MotiView
       from={{ opacity: 0, translateY: 16 }}
@@ -327,7 +399,7 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
-          {p.platform === "shopify" ? "Shopify" : "Trendyol"}
+          {PLATFORM_LABEL[p.platform]}
         </Text>
         <Text style={styles.salePrice}>{formatCurrency(p.salePrice)}</Text>
       </View>
@@ -469,6 +541,35 @@ const styles = StyleSheet.create({
   platformHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   platformName: { fontSize: 16, fontWeight: "700", flex: 1 },
+  alias: { color: ML.accent, fontSize: 12, fontWeight: "600", marginTop: 3 },
+  aliasBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    padding: 28,
+  },
+  aliasCard: {
+    backgroundColor: ML.card,
+    borderRadius: radius.lg,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: ML.border,
+  },
+  aliasModalTitle: { color: ML.text, fontSize: 17, fontWeight: "800", marginBottom: 4 },
+  aliasModalHint: { color: ML.textFaint, fontSize: 12, marginBottom: 12 },
+  aliasInput: {
+    backgroundColor: ML.bg,
+    borderWidth: 1,
+    borderColor: ML.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: ML.text,
+    fontSize: 15,
+  },
+  aliasBtns: { flexDirection: "row", justifyContent: "flex-end", gap: 22, marginTop: 16 },
+  aliasCancel: { color: ML.textDim, fontSize: 15, fontWeight: "600" },
+  aliasSave: { color: ML.accent, fontSize: 15, fontWeight: "800" },
   salePrice: { color: ML.text, fontSize: 18, fontWeight: "800" },
   kpiRow: { flexDirection: "row", justifyContent: "space-between", marginVertical: 4 },
   kpiLabel: { color: ML.textFaint, fontSize: 10, fontWeight: "700", letterSpacing: 1 },

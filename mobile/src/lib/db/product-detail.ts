@@ -30,6 +30,7 @@ export interface ListingRow {
 export interface ProductDetail {
   id: string;
   name: string;
+  alias: string | null;
   sku: string;
   barcode: string;
   categoryName: string;
@@ -63,7 +64,7 @@ export interface VariantGroupInfo {
 export async function getProductDetail(id: string): Promise<ProductDetail | null> {
   const [pRes, cRes, lRes] = await batch([
     {
-      sql: `SELECT id, name, sku, barcode, categoryName, currentSalePrice, stock,
+      sql: `SELECT id, name, alias, sku, barcode, categoryName, currentSalePrice, stock,
                    desi, imageUrl, source, commissionRate, variantGroupId, variantLabel
               FROM Product WHERE id = ?`,
       args: [id],
