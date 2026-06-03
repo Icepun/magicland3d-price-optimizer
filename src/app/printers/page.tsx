@@ -1174,12 +1174,20 @@ function SlotStep({
               })}
             </div>
 
-            {rawGcodeBambu && (
+            {rawGcodeBambu && printColors.length > 1 ? (
+              <div className="rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2 text-[11px] text-destructive flex items-start gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+                <span>
+                  <strong>Çok renkli baskıda ham .gcode çalışmaz</strong> — Bambu, AMS eşleme tablosunu taşımadığı için yazıcı reddeder.
+                  Bambu Studio&apos;da plakayı dilimle → <strong>&quot;Dilimlenmiş plaka dosyasını dışa aktar&quot;</strong> ile aldığın <strong>.3mf</strong>&apos;i yükle.
+                </span>
+              </div>
+            ) : rawGcodeBambu ? (
               <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
-                Ham .gcode: slot eşlemesi dilimlemede sabittir; AMS'i yukarıdaki sıraya göre yükle. Uygulamadan tam eşleme için .3mf yükle.
+                Ham .gcode: slot eşlemesi dilimlemede sabittir; AMS&apos;i yukarıdaki sıraya göre yükle. Uygulamadan tam eşleme için .3mf yükle.
               </p>
-            )}
+            ) : null}
 
             {!isBambu && (
               <p className="text-[11px] text-muted-foreground flex items-start gap-1.5">
@@ -1223,7 +1231,7 @@ function SlotStep({
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>
-          <Button disabled={printing} onClick={start}>
+          <Button disabled={printing || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
             {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>
         </DialogFooter>

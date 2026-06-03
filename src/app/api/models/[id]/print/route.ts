@@ -45,6 +45,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         { status: 400 }
       );
     }
+    // 1b) Bambu ÇOK RENKLİ baskı: ham .gcode AMS eşleme tablosunu TAŞIMAZ → LAN modunda
+    //     yazıcı "AMS mapping table alınamadı" ile reddeder (kriptik print_error, ör. 83902467).
+    //     Bambu Studio'dan "dilimlenmiş plaka dosyası" (.3mf) gerekir. Net yönlendir.
+    if (printer.type === "bambu") {
+      const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
+      if (isRawGcode && readModelColors(mf.storedPath).colors.length > 1) {
+        return NextResponse.json(
+          {
+            error:
+              "Bambu çok renkli baskı için ham .gcode yetmiyor — AMS eşleme tablosunu taşımadığı için yazıcı reddediyor. Bambu Studio'da plakayı dilimle → sağ üstteki oka tıkla → \"Dilimlenmiş plaka dosyasını dışa aktar\" ile aldığın .3mf dosyasını yükle.",
+          },
+          { status: 400 }
+        );
+      }
+    }
     // 2) AMS renk eşleştirmesi tutarlı mı? (her renk dolu bir slota; eksik/boş slot → başlatma)
     if (printer.type === "bambu" && useAms && Array.isArray(amsMapping)) {
       const colors = readModelColors(mf.storedPath).colors;
@@ -113,7 +128,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               await new Promise((r) => setTimeout(r, 1600));
               const s = await getBambuStatus(printer.host, printer.accessCode!, printer.serial!);
               if (s.printError && s.printError !== 0) {
-                send({ stage: "error", message: `Yazıcı baskıyı reddetti (hata ${s.printError}). Renk eşleştirme / dosya / HMS kodunu kontrol edin.` });
+                const hex = `0x${(s.printError >>> 0).toString(16).toUpperCase()}`;
+                send({
+                  stage: "error",
+                  message: `Yazıcı baskıyı reddetti (hata ${hex}). Sık neden: eşlenen AMS slotu boş / yanlış filament, ya da dosya tam dilimlenmiş .3mf değil. Slotların dolu olduğunu + renk eşleşmesini kontrol et; çok renkli baskıda Bambu Studio'dan dilimlenmiş .3mf ver.`,
+                });
                 printerErrored = true; break;
               }
               const ms = mapBambuState(s.gcodeState);
