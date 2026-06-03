@@ -140,9 +140,9 @@ function nearestSlotId(hex: string, slots: PrinterSlot[]): number | null {
 }
 
 export function SlotStep({
-  printerId, model, isBambu, printing, progress, onBack, onClose, onConfirm,
+  printerId, model, isBambu, isSnapmaker, printing, progress, onBack, onClose, onConfirm,
 }: {
-  printerId: string; model: PrintableModel; isBambu: boolean; printing: boolean; progress: PrintProg | null;
+  printerId: string; model: PrintableModel; isBambu: boolean; isSnapmaker?: boolean; printing: boolean; progress: PrintProg | null;
   onBack: () => void; onClose: () => void;
   onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => void;
 }) {
@@ -344,9 +344,10 @@ export function SlotStep({
               </p>
             )}
 
-            {/* Baskı seçenekleri YALNIZCA Bambu'da (MQTT ile uygulanır). Snapmaker/Moonraker'da
-                gcode'a dokunmuyoruz (makroları yorumlamak baskıyı bozuyordu) → dosya olduğu gibi gider. */}
-            {isBambu && (
+            {/* Baskı/calibration seçenekleri — Bambu (MQTT param) + Snapmaker U1 (native print_task_config
+                tercihi: BED_LEVEL/FLOW_CALIBRATE/TIME_LAPSE_CAMERA; gcode'a DOKUNMAZ, priming'i bozmaz).
+                Elegoo'da bu seçenekler yok. */}
+            {(isBambu || isSnapmaker) && (
               <div className="space-y-1.5 pt-2 border-t border-border/50">
                 <p className="text-[11px] text-muted-foreground">Baskı seçenekleri (varsayılan kapalı — istersen aç)</p>
                 {([

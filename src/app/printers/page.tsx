@@ -941,7 +941,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
   if (picked) {
     return (
-      <SlotStep printerId={target.id} model={picked} isBambu={isBambu} printing={printing} progress={progress}
+      <SlotStep printerId={target.id} model={picked} isBambu={isBambu} isSnapmaker={target.brand === "snapmaker"} printing={printing} progress={progress}
         onBack={() => setPicked(null)} onClose={onClose} onConfirm={(opts) => runPrint(picked.fileId, opts)} />
     );
   }
@@ -1121,7 +1121,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     };
     return (
       <SlotStep
-        printerId={picked.id} model={model} isBambu={isBambu} printing={printing} progress={progress}
+        printerId={picked.id} model={model} isBambu={isBambu} isSnapmaker={picked.brand === "snapmaker"} printing={printing} progress={progress}
         onBack={() => setSlotMode(false)} onClose={onClose} onConfirm={(opts) => runPrint(file.fileId, opts)}
       />
     );

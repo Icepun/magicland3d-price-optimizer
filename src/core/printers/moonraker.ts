@@ -246,59 +246,131 @@ export function remapMoonrakerTools(text: string, toolMap: Record<number, number
 
 export interface MoonrakerPrefs { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean }
 
-/**
- * Baskı tercihleri (default OFF) gcode'a uygulanır: KAPALI olan tercihin makro satırları yorum yapılır.
- * Snapmaker U1: timelapse → `TIMELAPSE*` (START + her katman TAKE_FRAME); bedLeveling → `BED_MESH_CALIBRATE`
- * (kapalıyken yazıcının KAYITLI mesh'i kullanılır); flowCali → `SM_PRINT_FLOW_CALIBRATE`. `G28` homing /
- * `DETECT_BED_PLATE` / hareketlere DOKUNULMAZ. Açık (true) bırakılan tercih gcode'da olduğu gibi kalır.
- */
-export function applyMoonrakerPrefs(text: string, prefs: MoonrakerPrefs): string {
-  const res: RegExp[] = [];
-  if (prefs.timelapse === false) res.push(/^\s*TIMELAPSE\w*/i);
-  if (prefs.bedLeveling === false) res.push(/^\s*BED_MESH_CALIBRATE\b/i);
-  if (prefs.flowCali === false) res.push(/^\s*SM_PRINT_FLOW_CALIBRATE\b/i);
-  if (!res.length) return text;
-  return text.split("\n").map((line) => (res.some((re) => re.test(line)) ? `; [kapali] ${line.trim()}` : line)).join("\n");
+/** POST /printer/gcode/script — keyfi komut (Snapmaker gelişmiş başlatma için). */
+async function moonrakerGcodeScript(host: string, port: number, script: string): Promise<void> {
+  const res = await mfetch(
+    `${moonrakerBase(host, port)}/printer/gcode/script?script=${encodeURIComponent(script)}`,
+    { method: "POST" },
+    30000
+  );
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Baskı başlatılamadı (HTTP ${res.status}) ${t.slice(0, 180)}`.trim());
+  }
 }
 
-/** Dosyayı yazıcıya yükle ve hemen baskıyı başlat (Moonraker upload print=true).
- *  opts.headMapping (Snapmaker kafa seçimi) → tool index remap; opts.prefs → makro aç/kapa. Sadece .gcode'da. */
+/** Ham Moonraker metadata — Snapmaker WITH_PARAMETERS alanları için. Yükleme sonrası tarama
+ *  gecikebilir → filament_type gelene kadar kısa poll. */
+async function moonrakerRawMeta(host: string, port: number, filename: string): Promise<Record<string, unknown>> {
+  for (let i = 0; i < 8; i++) {
+    try {
+      const res = await mfetch(
+        `${moonrakerBase(host, port)}/server/files/metadata?filename=${encodeURIComponent(filename)}`,
+        undefined, 6000
+      );
+      if (res.ok) {
+        const m = unwrap(await res.json());
+        if (m && typeof m === "object" && ((m as any).filament_type != null || i >= 4)) return m as Record<string, unknown>;
+      }
+    } catch { /* tekrar dene */ }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return {};
+}
+
+/** Yedek: gcode başlığından `; filament_type = PLA;PLA` çek (metadata taraması yetişmezse). */
+function filamentTypeFromGcode(buf: Buffer): string | null {
+  const head = buf.subarray(0, 4096).toString("latin1");
+  const tail = buf.subarray(Math.max(0, buf.length - 8192)).toString("latin1");
+  const re = /^;\s*filament_type\s*=\s*(.+)$/im;
+  const m = re.exec(head) || re.exec(tail);
+  return m ? m[1].trim() : null;
+}
+
+const SM_META_FIELDS = [
+  "line_width", "layer_height", "outer_wall_speed", "nozzle_diameter_list", "nozzle_temp",
+  "filament_type", "filament_flow_ratio", "filament_diameter", "filament_max_vol_speed",
+  "filament_used_g", "filament_used_mm",
+];
+function pyRepr(v: unknown): string {
+  if (Array.isArray(v)) return "[" + v.map((x) => (typeof x === "string" ? `'${x}'` : String(x))).join(", ") + "]";
+  return String(v);
+}
+
+/**
+ * Snapmaker U1 native baskı komutu — moonraker `start_print_advanced` + `_fill_metadata` BİREBİR replikası.
+ * KRİTİK: `SDCARD_PRINT_FILE_WITH_PARAMETERS` önce `SET_PRINT_TASK_PARAMETERS` çalıştırıp `print_task_config`'i
+ * (özellikle her kafanın `filament_type`'ını gcode başlığından) doldurur. Düz `SDCARD_PRINT_FILE` bunu YAPMAZ →
+ * `filament_type=='NONE'` → preamble'daki `SM_PRINT_FLOW_CALIBRATE`/filament kontrolü `id=523,code=39` "not edit
+ * filament" PAUSE → SAHTE runout, nozzle ısınmaz. (Kaynak: u1-moonraker klippy_apis.py, u1-klipper print_task_config.py.)
+ * Calibration tercihleri DEFAULT 0/OFF — native preference (gcode'a dokunmadan; `flow_calibrate==0` makroyu
+ * zararsızca erken döndürür, priming'i BOZMAZ).
+ */
+function buildSnapmakerStartScript(filename: string, meta: Record<string, unknown>, prefs?: MoonrakerPrefs): string {
+  const esc = filename.replace(/"/g, '\\"');
+  let s = `SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME="${esc}"`;
+  s += ` BED_LEVEL="${prefs?.bedLeveling ? 1 : 0}" FLOW_CALIBRATE="${prefs?.flowCali ? 1 : 0}" TIME_LAPSE_CAMERA="${prefs?.timelapse ? 1 : 0}"`;
+  for (const field of SM_META_FIELDS) {
+    let out: string | null = null;
+    if (field === "filament_used_g") {
+      const w = (meta as any).filament_weight;
+      if (w != null) out = pyRepr(w);
+    } else if (field === "filament_type") {
+      const ft = (meta as any).filament_type;
+      if (ft != null) out = "[" + String(ft).split(";").map((it) => `'${it || "NONE"}'`).join(", ") + "]";
+    } else {
+      const v = (meta as any)[field];
+      if (v != null && v !== "") out = pyRepr(v);
+    }
+    if (out != null) s += ` ${field.toUpperCase()}="${out}"`;
+  }
+  return s;
+}
+
+/**
+ * Dosyayı yükle + baskıyı başlat.
+ *  - **Snapmaker U1** → upload(`print=false`) + `SDCARD_PRINT_FILE_WITH_PARAMETERS` (native akış: print_task_config'i
+ *    doldurur → SAHTE runout YOK; calibration tercihlerini geçirir).
+ *  - **Diğer Moonraker (Elegoo)** → upload(`print=true`) (atomik; bu makro Elegoo'da yok).
+ *  Dosya byte-for-byte gider; SADECE gerçek (identity olmayan) kafa remap'inde gcode'a dokunulur.
+ */
 export async function moonrakerUploadAndPrint(
   host: string,
   port: number,
   fileBuf: Buffer,
   filename: string,
-  // prefs ARTIK uygulanmıyor (bkz. aşağıdaki not) — imza geriye dönük uyum için korunuyor.
-  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs } = {}
+  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs; brand?: string } = {}
 ): Promise<void> {
-  // KRİTİK: Dosyayı OLABİLDİĞİNCE dilimlendiği haliyle (byte-for-byte) yükle. Daha önce
-  // applyMoonrakerPrefs varsayılan olarak BED_MESH_CALIBRATE / SM_PRINT_FLOW_CALIBRATE /
-  // TIMELAPSE makrolarını YORUM yapıyordu; Snapmaker U1'de bu makrolar başlangıç dizisinin
-  // (filament yükleme + ısıtma) parçası → yorumlanınca "filament hatası, nozzle ısınmıyor".
-  // Doğrudan baskıyla aynı davranış için artık SADECE gerçek (identity olmayan) kafa remap'inde
-  // gcode'a dokunuyoruz; aksi halde orijinal buffer aynen gönderilir.
+  const isSnapmaker = (opts.brand || "").toLowerCase() === "snapmaker";
   let body = fileBuf;
   const isGcode = /\.(gcode|gco|g)$/i.test(filename);
   if (isGcode && opts.headMapping && opts.headMapping.length) {
     const toolMap: Record<number, number> = {};
     opts.headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
     const keys = Object.keys(toolMap).map(Number);
-    const isIdentity = !keys.length || keys.every((k) => toolMap[k] === k);
-    if (!isIdentity) {
-      const remapped = remapMoonrakerTools(fileBuf.toString("latin1"), toolMap);
-      body = Buffer.from(remapped, "latin1");
+    if (keys.length && !keys.every((k) => toolMap[k] === k)) {
+      body = Buffer.from(remapMoonrakerTools(fileBuf.toString("latin1"), toolMap), "latin1");
     }
   }
+  // Upload — Snapmaker: print=false (başlatma ayrı, parametreli); diğer: print=true (atomik).
   const fd = new FormData();
   fd.append("root", "gcodes");
-  fd.append("print", "true");
+  fd.append("print", isSnapmaker ? "false" : "true");
   fd.append("file", new Blob([new Uint8Array(body)]), filename);
-  // Büyük gcode dosyaları için uzun timeout (LAN içi).
   const res = await mfetch(`${moonrakerBase(host, port)}/server/files/upload`, { method: "POST", body: fd }, 180000);
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`Yükleme/baskı başarısız (HTTP ${res.status}) ${t.slice(0, 140)}`.trim());
+    throw new Error(`Yükleme başarısız (HTTP ${res.status}) ${t.slice(0, 140)}`.trim());
   }
+  if (!isSnapmaker) return; // Elegoo: print=true zaten başlattı.
+
+  // Snapmaker: native start_print_advanced replikası → print_task_config dolar, sahte runout önlenir.
+  const meta = await moonrakerRawMeta(host, port, filename);
+  if ((meta as any).filament_type == null) {
+    const ft = filamentTypeFromGcode(body);
+    if (ft) (meta as any).filament_type = ft;
+  }
+  await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, opts.prefs));
 }
 
 export async function moonrakerFiles(host: string, port: number): Promise<MoonrakerFile[]> {

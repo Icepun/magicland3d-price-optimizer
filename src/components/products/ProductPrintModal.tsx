@@ -116,6 +116,7 @@ export function ProductPrintModal({
         printerId={picked.printer.id}
         model={model}
         isBambu={picked.printer.brand === "bambu"}
+        isSnapmaker={picked.printer.brand === "snapmaker"}
         printing={printing}
         progress={progress}
         onBack={() => { setPicked(null); setProgress(null); }}

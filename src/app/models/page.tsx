@@ -199,7 +199,7 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
     };
     return (
       <SlotStep
-        printerId={printer.id} model={model} isBambu={printer.brand === "bambu"} printing={printing} progress={progress}
+        printerId={printer.id} model={model} isBambu={printer.brand === "bambu"} isSnapmaker={printer.brand === "snapmaker"} printing={printing} progress={progress}
         onBack={() => { setPicked(null); setProgress(null); }} onClose={onClose} onConfirm={(opts) => runPrint(picked.id, opts)}
       />
     );
