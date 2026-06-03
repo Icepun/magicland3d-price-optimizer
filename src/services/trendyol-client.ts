@@ -13,6 +13,10 @@ export interface TrendyolProduct {
   productCode?: number | string;
   approved?: boolean;
   archived?: boolean;
+  /** Satışta mı (pasif/satışa-kapalı = false). Tükendi ürünlerde true kalır. */
+  onSale?: boolean;
+  rejected?: boolean;
+  blacklisted?: boolean;
   barcode: string;
   title?: string;
   categoryName?: string;

@@ -151,12 +151,50 @@ export class HepsiburadaClient {
     );
   }
 
-  /** Ödemesi tamamlanmış siparişler (OMS). Sayfalı. */
+  /** Ödemesi tamamlanmış siparişler (OMS · "Open"/Paketlenecek). Sayfalı. */
   async listOrders(params: { offset?: number; limit?: number } = {}): Promise<unknown> {
     const offset = params.offset ?? 0;
     const limit = params.limit ?? 50;
     return this.request<unknown>(
       `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
+    );
+  }
+
+  /**
+   * Katalog: mağazanın TÜM ürünleri — ürün ADI, görsel(ler) (sadece dosya adı), **barkod (HB barkodu)**,
+   * varyant grubu, kategori. Listing API'si bunları döndürmez → isim/barkod buradan zenginleştirilir.
+   * Yanıt: `{ success, data:[{ merchantSku, barcode, hbSku, productName, images:[...], variantGroupId,
+   * categoryName, status }], totalPages, totalElements }`. (DOĞRULANDI canlı.)
+   */
+  async listCatalogProducts(params: { page?: number; size?: number } = {}): Promise<unknown> {
+    const page = params.page ?? 0;
+    const size = params.size ?? 100;
+    // Spring-pageable: page (0-tabanlı) + size. offset/limit YOK SAYILIR (DOĞRULANDI canlı).
+    return this.request<unknown>(
+      `${this.hosts.mpop}/product/api/products/all-products-of-merchant/${encodeURIComponent(this.credentials.merchantId)}?page=${page}&size=${size}`
+    );
+  }
+
+  /**
+   * Paket statü listesi — `/orders` (Open) DIŞINDAKİ siparişler. status: "" = paketlenmiş/yolda,
+   * "shipped" | "delivered" | "undelivered". **ÖZET döner (OrderNumber + tarih; tutar/kalem YOK)** →
+   * tutarlar `getOrderDetail` ile çekilir. (DOĞRULANDI canlı: delivered 35, shipped 4, undelivered 1.)
+   */
+  async listPackages(
+    status: "" | "shipped" | "delivered" | "undelivered" = "",
+    params: { offset?: number; limit?: number } = {}
+  ): Promise<unknown> {
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? 100;
+    const mid = encodeURIComponent(this.credentials.merchantId);
+    const path = status ? `/packages/merchantid/${mid}/${status}` : `/packages/merchantid/${mid}`;
+    return this.request<unknown>(`${this.hosts.oms}${path}?offset=${offset}&limit=${limit}`);
+  }
+
+  /** Sipariş detayı (kalem + tutarlar). Özet paket uçlarının döndürmediği fiyatlar buradan. */
+  async getOrderDetail(orderNumber: string): Promise<unknown> {
+    return this.request<unknown>(
+      `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}/ordernumber/${encodeURIComponent(orderNumber)}`
     );
   }
 }

@@ -1495,6 +1495,11 @@ function MatchListingModal({
 
   const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
 
+  // Windowed render: 300+ listing'i tek seferde DOM'a basmak modalı kasıyordu → başta 60, scroll'da artar.
+  const [visibleCount, setVisibleCount] = useState(60);
+  useEffect(() => { setVisibleCount(60); }, [debouncedSearch]);
+  const visible = unmatched.slice(0, visibleCount);
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
@@ -1528,7 +1533,15 @@ function MatchListingModal({
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto -mx-2 px-2">
+        <div
+          className="flex-1 overflow-y-auto -mx-2 px-2"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 240 && visibleCount < unmatched.length) {
+              setVisibleCount((c) => c + 60);
+            }
+          }}
+        >
           {isLoading ? (
             <div className="py-8 flex items-center justify-center text-muted-foreground">
               <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Yükleniyor...
@@ -1541,7 +1554,7 @@ function MatchListingModal({
             </div>
           ) : (
             <div className="space-y-1">
-              {unmatched.map((u) => (
+              {visible.map((u) => (
                 <button
                   key={u.id}
                   onClick={() => match.mutate(u.id)}
@@ -1578,6 +1591,11 @@ function MatchListingModal({
                   </div>
                 </button>
               ))}
+              {visibleCount < unmatched.length && (
+                <p className="text-center text-[11px] text-muted-foreground py-2">
+                  {visible.length} / {unmatched.length} gösteriliyor — kaydır veya ara
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1665,6 +1683,11 @@ function MarketplaceAddModal({
 
   const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
 
+  // Windowed render: 300+ satırı tek seferde basmak modalı kasıyordu → başta 60, scroll'da artar.
+  const [visibleCount, setVisibleCount] = useState(60);
+  useEffect(() => { setVisibleCount(60); }, [debouncedSearch, platform]);
+  const visible = unmatched.slice(0, visibleCount);
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
@@ -1721,7 +1744,15 @@ function MarketplaceAddModal({
               </Button>
             </div>
 
-            <div className="flex-1 overflow-y-auto -mx-2 px-2">
+            <div
+              className="flex-1 overflow-y-auto -mx-2 px-2"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                if (el.scrollHeight - el.scrollTop - el.clientHeight < 240 && visibleCount < unmatched.length) {
+                  setVisibleCount((c) => c + 60);
+                }
+              }}
+            >
               {isLoading ? (
                 <div className="py-8 flex items-center justify-center text-muted-foreground">
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Yükleniyor...
@@ -1734,7 +1765,7 @@ function MarketplaceAddModal({
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {unmatched.map((u) => {
+                  {visible.map((u) => {
                     const adding = promote.isPending && promote.variables === u.id;
                     return (
                       <div
@@ -1778,6 +1809,11 @@ function MarketplaceAddModal({
                       </div>
                     );
                   })}
+                  {visibleCount < unmatched.length && (
+                    <p className="text-center text-[11px] text-muted-foreground py-2">
+                      {visible.length} / {unmatched.length} gösteriliyor — kaydır veya ara
+                    </p>
+                  )}
                 </div>
               )}
             </div>

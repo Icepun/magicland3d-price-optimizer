@@ -53,6 +53,15 @@ function mapProduct(p: TrendyolProduct): FetchedTrendyol {
   };
 }
 
+/** Trendyol ürünü AKTİF mi? Arşivli / satışa-kapalı (onSale:false) / reddedilmiş / kara-liste → HARİÇ.
+ *  Tükendi (quantity 0 ama onSale:true) → DAHİL. (onSale tanımsızsa dahil sayılır — güvenli varsayılan.) */
+function isActiveTrendyolProduct(p: TrendyolProduct): boolean {
+  if (p.archived === true) return false;
+  if (p.onSale === false) return false;
+  if (p.rejected === true || p.blacklisted === true) return false;
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
@@ -69,6 +78,7 @@ export async function POST(req: NextRequest) {
       if (products.length === 0) break;
       for (const tp of products) {
         if (!tp.barcode?.trim()) continue;
+        if (!isActiveTrendyolProduct(tp)) continue; // sadece AKTİF (satışta + tükenen)
         const data = mapProduct(tp);
         if (!fetched.has(data.barcode)) fetched.set(data.barcode, data);
       }
@@ -163,6 +173,17 @@ export async function POST(req: NextRequest) {
           );
           unmatched++;
         }
+      }
+
+      // Temizlik: artık AKTİF listede olmayan Trendyol unmatched'leri sil (arşivlenen/kapatılan/silinen).
+      // keepIds boşsa (geçici API durumu) temizlik YAPMA. (Sayfa hatası tüm sync'i throw eder.)
+      const keepIds = [...fetched.values()].map((f) => `unmatched_trendyol_${f.trendyolId || f.barcode}`);
+      if (keepIds.length) {
+        const ph = keepIds.map(() => "?").join(",");
+        await prisma.$executeRawUnsafe(
+          `DELETE FROM UnmatchedListing WHERE platform = 'trendyol' AND id NOT IN (${ph})`,
+          ...keepIds
+        );
       }
       return { linked, unmatched };
     }

@@ -35,6 +35,7 @@ interface Listing {
   platform: "shopify" | "trendyol" | "hepsiburada";
   externalId: string | null;
   externalSku: string | null;
+  barcode: string | null;
   salePrice: number;
   listPrice: number | null;
   stock: number;
@@ -921,14 +922,20 @@ function PlatformProfitCardImpl({
   const [cargoCost, setCargoCost] = useState(
     listing?.cargoCost ? String(listing.cargoCost) : ""
   );
+  // Bu platformun sipariş-eşleşme barkodu (HB barkodu Trendyol'dan farklı → ayrı girilir, #7).
+  const [listingBarcode, setListingBarcode] = useState(listing?.barcode ?? "");
 
   useEffect(() => {
     if (listing) {
       setSalePrice(String(listing.salePrice));
       setCommissionRate(listing.commissionRate ? String(listing.commissionRate * 100) : "");
       setCargoCost(listing.cargoCost ? String(listing.cargoCost) : "");
+      setListingBarcode(listing.barcode ?? "");
     }
   }, [listing]);
+
+  // Barkod alanı yalnızca Hepsiburada'da: üstteki ürün barkodu = Trendyol barkodu; HB barkodu farklı (#7).
+  const showBarcodeField = platform === "hepsiburada";
 
   const createListing = useMutation({
     mutationFn: () =>
@@ -941,6 +948,7 @@ function PlatformProfitCardImpl({
           salePrice: parseFloat(salePrice) || 0,
           commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
           cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+          ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
       }).then((r) => r.json()),
     onSuccess: () => {
@@ -964,6 +972,7 @@ function PlatformProfitCardImpl({
           salePrice: parseFloat(salePrice) || 0,
           commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
           cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+          ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
       }).then((r) => r.json()),
     onSuccess: () => {
@@ -1037,6 +1046,17 @@ function PlatformProfitCardImpl({
                   placeholder="örn. 65"
                 />
               </div>
+              {showBarcodeField && (
+                <div>
+                  <Label className="text-xs">Hepsiburada Barkodu</Label>
+                  <Input
+                    value={listingBarcode}
+                    onChange={(e) => setListingBarcode(e.target.value)}
+                    placeholder="HB siparişleri bununla eşleşir"
+                    className="font-mono"
+                  />
+                </div>
+              )}
               <div className="flex gap-2 pt-1">
                 <Button
                   size="sm"
@@ -1163,6 +1183,17 @@ function PlatformProfitCardImpl({
                 placeholder="otomatik"
               />
             </div>
+            {showBarcodeField && (
+              <div>
+                <Label className="text-xs">Hepsiburada Barkodu</Label>
+                <Input
+                  value={listingBarcode}
+                  onChange={(e) => setListingBarcode(e.target.value)}
+                  placeholder="HB siparişleri bununla eşleşir"
+                  className="font-mono"
+                />
+              </div>
+            )}
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -1187,6 +1218,17 @@ function PlatformProfitCardImpl({
                 {formatCurrency(listing.salePrice)}
               </p>
             </div>
+
+            {showBarcodeField && (
+              <div className="flex items-center gap-1.5 text-[11px]">
+                <span className="uppercase tracking-wider text-[10px] text-muted-foreground/80">Barkod</span>
+                {listing.barcode ? (
+                  <span className="font-mono text-foreground">{listing.barcode}</span>
+                ) : (
+                  <span className="text-amber-500">girilmedi — siparişler eşleşmeyebilir</span>
+                )}
+              </div>
+            )}
 
             {commissionMissing && (
               <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-2 font-medium">

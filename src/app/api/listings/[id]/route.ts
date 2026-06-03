@@ -5,6 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 const UpdateSchema = z.object({
   salePrice: z.number().min(0).optional(),
+  barcode: z.string().trim().nullable().optional(),
   listPrice: z.number().min(0).nullable().optional(),
   stock: z.number().int().min(0).optional(),
   commissionRate: z.number().min(0).max(1).nullable().optional(),

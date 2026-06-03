@@ -98,6 +98,7 @@ const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
   Shipped: { kind: "shipped", label: "Kargoda" },
   InTransit: { kind: "shipped", label: "Yolda" },
   Delivered: { kind: "delivered", label: "Teslim Edildi" },
+  UnDelivered: { kind: "cancelled", label: "Teslim Edilemedi" },
   Cancelled: { kind: "cancelled", label: "İptal" },
   CancelledByMerchant: { kind: "cancelled", label: "İptal (Satıcı)" },
   CancelledByCustomer: { kind: "cancelled", label: "İptal (Müşteri)" },
@@ -121,12 +122,43 @@ function hbStr(...vals: unknown[]): string {
   }
   return "";
 }
-function hbArray(o: Record<string, unknown>, keys: string[]): Record<string, unknown>[] {
+function hbArray(o: unknown, keys: string[]): Record<string, unknown>[] {
   if (Array.isArray(o)) return o as Record<string, unknown>[];
+  if (!o || typeof o !== "object") return [];
+  const r = o as Record<string, unknown>;
   for (const k of keys) {
-    if (Array.isArray(o?.[k])) return o[k] as Record<string, unknown>[];
+    if (Array.isArray(r[k])) return r[k] as Record<string, unknown>[];
   }
   return [];
+}
+function hbDate(...vals: unknown[]): string | null {
+  for (const v of vals) {
+    if (v == null || v === "") continue;
+    const d = new Date(typeof v === "number" ? v : String(v));
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  return null;
+}
+/** HB sipariş/detay kalemi → RawLine şekli (tutar + eşleştirme anahtarları). */
+function hbLineRaw(li: Record<string, any>): { name: string; quantity: number; unitPrice: number; image: string | null; matchKeys: string[] } {
+  const qty = Math.max(1, Math.floor(hbNum(li.quantity ?? li.amount ?? 1)));
+  const unit = hbNum(li.unitPrice ?? li.price) || (hbNum(li.totalPrice) / qty);
+  return {
+    name: hbStr(li.productName, li.name, li.title, li.barcode, li.merchantSku) || "Ürün",
+    quantity: qty,
+    unitPrice: unit,
+    image: null,
+    matchKeys: [li.merchantSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter((k): k is string => typeof k === "string" && !!k),
+  };
+}
+/** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
+async function mapLimit<T>(items: T[], limit: number, fn: (x: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (i < items.length) { const idx = i++; await fn(items[idx]); }
+    })
+  );
 }
 
 function shopifyStatus(
@@ -275,49 +307,84 @@ export async function GET() {
    (async () => {
    try {
     const client = new HepsiburadaClient(await getHepsiburadaCredentials());
-    const res = (await client.listOrders({ limit: 100 })) as Record<string, unknown>;
-    const hbOrders = hbArray(res, ["orders", "items", "data", "content", "result"]);
-    for (const [i, oo] of hbOrders.entries()) {
-      const o = oo as Record<string, any>;
-      const st = hbStatus(hbStr(o.status, o.orderStatus, o.packageStatus, o.shipmentStatus));
-      const lineItems = hbArray(o, ["items", "details", "lines", "orderItems"]);
-      const lines: RawLine[] = lineItems.map((li) => {
-        const l = li as Record<string, any>;
-        return {
-          name: hbStr(l.productName, l.title, l.name, l.barcode) || "Ürün",
-          quantity: Math.max(1, Math.floor(hbNum(l.quantity ?? l.amount ?? 1))),
-          unitPrice: hbNum(l.unitPrice ?? l.price ?? l.totalPrice ?? l.amount),
-          image: null,
-          matchKeys: [l.barcode, l.merchantSku, l.sku, l.stockCode, l.hepsiburadaSku].filter(
-            (k): k is string => typeof k === "string" && !!k
-          ),
-        };
-      });
-      const total =
-        hbNum(o.totalPrice ?? o.totalAmount ?? o.amount) ||
-        lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0);
-      const dateRaw = o.orderDate ?? o.createdDate ?? o.createdAt ?? o.date;
-      let date: string | null = null;
-      if (dateRaw != null) {
-        const d = new Date(typeof dateRaw === "number" ? dateRaw : String(dateRaw));
-        if (!isNaN(d.getTime())) date = d.toISOString();
+    // HB siparişleri TEK uçta gelmez: /orders sadece "Open" (paketlenecek) verir; kargoda/teslim
+    // siparişler /packages/.../{shipped|delivered|undelivered} ÖZETLERİNDE (tutar YOK) → detay ayrı çekilir.
+    type HbAgg = { status: string; date: string | null; customer: string | null; lines: RawLine[] | null };
+    const agg = new Map<string, HbAgg>();
+
+    // a) Open siparişler — /orders FLAT kalem listesi (orderNumber tekrar eder) → orderNumber'a göre grupla.
+    const openRes = await client.listOrders({ limit: 100 });
+    for (const li of hbArray(openRes, ["items", "orders", "data", "content", "result"]) as Record<string, any>[]) {
+      const on = hbStr(li.orderNumber, li.orderId, li.id);
+      if (!on) continue;
+      let e = agg.get(on);
+      if (!e) {
+        e = { status: hbStr(li.status) || "Open", date: hbDate(li.orderDate, li.createdDate), customer: hbStr(li.customerName) || null, lines: [] };
+        agg.set(on, e);
       }
+      (e.lines as RawLine[]).push(hbLineRaw(li));
+    }
+
+    // b) Paket özetleri (paketlenmiş / kargoda / teslim / teslim-edilemedi) — OrderNumber + tarih topla.
+    const pkgStatuses: Array<["" | "shipped" | "delivered" | "undelivered", string]> =
+      [["", "Packaged"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["undelivered", "UnDelivered"]];
+    const pkgResults = await Promise.all(
+      pkgStatuses.map(async ([s]) => {
+        const items: Record<string, any>[] = [];
+        for (let off = 0; off < 3000; off += 100) {
+          const arr = hbArray(await client.listPackages(s, { offset: off, limit: 100 }), ["items", "data", "content", "result"]);
+          if (!arr.length) break;
+          items.push(...(arr as Record<string, any>[]));
+          if (arr.length < 100) break;
+        }
+        return items;
+      })
+    );
+    for (const [idx, pkgs] of pkgResults.entries()) {
+      const label = pkgStatuses[idx][1];
+      for (const p of pkgs) {
+        const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+        if (!on || agg.has(on)) continue;
+        agg.set(on, { status: label, date: hbDate(p.DeliveredDate, p.ShippedDate, p.CreatedDate, p.orderDate, p.PackageReadyDate), customer: null, lines: null });
+      }
+    }
+
+    // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz detay çağrısı olmasın).
+    for (const [on, e] of [...agg]) if (e.date && new Date(e.date).getTime() < cutoff) agg.delete(on);
+
+    // c) Tutarı olmayan (özetten gelen) siparişlerin kalem/tutar detayını PARALEL çek (concurrency 8, cap 250).
+    const needDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on).slice(0, 250);
+    await mapLimit(needDetail, 8, async (on) => {
+      try {
+        const d = (await client.getOrderDetail(on)) as Record<string, any>;
+        const e = agg.get(on);
+        if (!e) return;
+        e.lines = (hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, any>[]).map(hbLineRaw);
+        e.customer = e.customer ?? (hbStr((d.customer ?? {}).name, d.customerName) || null);
+        if (!e.date) e.date = hbDate(d.orderDate, d.createdDate);
+      } catch { /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır */ }
+    });
+
+    // d) Birleşik raws.
+    for (const [on, e] of agg) {
+      const st = hbStatus(e.status);
+      const lines = e.lines ?? [];
       raws.push({
         platform: "hepsiburada",
-        id: `hb-${hbStr(o.orderNumber, o.id, o.orderId) || i}`,
-        orderNumber: hbStr(o.orderNumber, o.id, o.orderId) || "—",
-        date,
+        id: `hb-${on}`,
+        orderNumber: on,
+        date: e.date,
         statusKind: st.kind,
         statusLabel: st.label,
-        total,
+        total: lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0),
         currency: "TRY",
-        customer: hbStr(o.customerName, [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ")) || null,
+        customer: e.customer,
         lines,
-        trackingNumber: hbStr(o.cargoTrackingNumber, o.trackingNumber) || null,
-        cargoProvider: hbStr(o.cargoCompany, o.cargoProviderName, o.cargoCompanyName) || null,
+        trackingNumber: null,
+        cargoProvider: null,
       });
     }
-    hepsiburada = { ok: true, count: hbOrders.length };
+    hepsiburada = { ok: true, count: agg.size };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı";
     hepsiburada = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };

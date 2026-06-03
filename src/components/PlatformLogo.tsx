@@ -1,10 +1,14 @@
-import type { CSSProperties } from "react";
+"use client";
+/* eslint-disable @next/next/no-img-element */
+
+import { useState, type CSSProperties } from "react";
 
 /**
- * Platform marka logoları — currentColor ile boyanır (marka rengini parent verir).
- * - Shopify: resmi alışveriş çantası glyph'i (Simple Icons yolu).
- * - Trendyol: turuncu kimliğe uygun "t + yukarı büyüme oku" markı (resmi SVG
- *   indirilemediği için marka diline sadık, elle çizilmiş temiz versiyon).
+ * Platform marka logosu.
+ * ÖNCE kullanıcının yüklediği gerçek logoyu dener: `public/brands/<platform>.png`
+ * (örn. `public/brands/trendyol.png`, `public/brands/hepsiburada.png`). Dosya yoksa/yüklenmemişse
+ * yerleşik tek-renk SVG'ye (currentColor ile temaya uyumlu) düşer. Yani logo eklemeden de çalışır,
+ * eklenince otomatik gerçek logo görünür.
  */
 export function PlatformLogo({
   platform,
@@ -15,20 +19,26 @@ export function PlatformLogo({
   className?: string;
   style?: CSSProperties;
 }) {
-  if (platform === "hepsiburada") {
-    // Hepsiburada: turuncu alışveriş çantası (marka diline sadık temiz versiyon)
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if (!imgFailed) {
     return (
-      <svg
-        viewBox="0 0 24 24"
-        className={className}
-        style={style}
+      <img
+        src={`/brands/${platform}.png`}
+        alt=""
         aria-hidden="true"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
+        className={className}
+        style={{ objectFit: "contain", ...style }}
+        onError={() => setImgFailed(true)}
+      />
+    );
+  }
+
+  // ── Yerleşik SVG fallback (logo yüklenmemişse) ──
+  if (platform === "hepsiburada") {
+    return (
+      <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true"
+        fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <path d="M5.5 7.5 H18.5 L17.4 20 H6.6 Z" />
         <path d="M9 7.5 V6 a3 3 0 0 1 6 0 V7.5" />
       </svg>
@@ -44,19 +54,10 @@ export function PlatformLogo({
       </svg>
     );
   }
-  // Trendyol: "t" + yukarı büyüme oku
+  // Trendyol
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      style={style}
-      aria-hidden="true"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2.1}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true"
+      fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round">
       <path d="M9.4 18.6 V8.8" />
       <path d="M5.9 10.4 H12.9" />
       <path d="M9.4 8.8 C10.1 6.2 12.6 5 16 5.9" />

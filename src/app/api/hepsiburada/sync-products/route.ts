@@ -8,14 +8,18 @@ import { jsonError } from "@/lib/api-error";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
- * Hepsiburada ürün/listing senkronu — Trendyol ile aynı mantık (Shopify ana ürün kaynağı):
- *  - "add-new":        barkodu eşleşen HB listing'lerini Listing olarak bağla; eşleşmeyenleri
+ * Hepsiburada ürün/listing senkronu (Shopify ana ürün kaynağı):
+ *  - "add-new":        barkodu/SKU'su eşleşen HB listing'lerini Listing olarak bağla; eşleşmeyenleri
  *                      UnmatchedListing havuzunda tazele ("Ürün Seç" ile manuel eşleştirilir).
- *  - "refresh-prices": mevcut HB listing'lerinde yalnızca değişen fiyatı yaz.
+ *  - "refresh-prices": mevcut HB listing'lerinde değişen fiyat/stok'u yaz.
  *  - "full":           ikisi birden.
  *
- * NOT: HB listing yanıt şekli hesapla doğrulanana dek DEFANSİF okunuyor (çok olası alan adları
- * denenir). Test'te gerçek örneği görünce mapListing tek yerde keskinleştirilir.
+ * SADECE AKTİF ürünler: satışta + tükenen (stok 0). Satıcı-kapalı (deactivationReasons "ByMerchant"),
+ * kilitli (isLocked), askıda/dondurulmuş (isSuspended/isFrozen) ATLANIR.
+ *
+ * İSİM/BARKOD: Listing API'si sadece sku/fiyat/stok verir → ürün ADI + HB barkodu KATALOG'tan
+ * (all-products-of-merchant) merchantSku ile join edilir. (Görsel: katalog yalnız dosya adı verir,
+ * çözülebilir CDN URL'i olmadığından şimdilik görsel yok.)
  */
 const Schema = z.object({
   mode: z.enum(["full", "add-new", "refresh-prices"]).default("full"),
@@ -24,16 +28,13 @@ const Schema = z.object({
 });
 
 interface FetchedHb {
-  barcode: string;
-  sku: string;
+  merchantSku: string; // satıcı stok kodu — siparişlerin eşleştiği anahtar (externalSku)
+  hbBarcode: string;   // HB ürün barkodu (katalog) — gösterim/referans (#7)
+  hbSku: string;       // hepsiburadaSku (externalId)
   name: string;
   categoryName: string;
   price: number;
-  listPrice: number | null;
   stock: number;
-  imageUrl: string | null;
-  hbId: string;
-  isActive: boolean;
 }
 
 function num(v: unknown): number {
@@ -42,7 +43,6 @@ function num(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
-
 function firstStr(...vals: unknown[]): string {
   for (const v of vals) {
     if (typeof v === "string" && v.trim()) return v.trim();
@@ -50,48 +50,24 @@ function firstStr(...vals: unknown[]): string {
   }
   return "";
 }
-
-function extractImage(item: any): string | null {
-  const img = item.image ?? item.imageUrl ?? (Array.isArray(item.images) ? item.images[0] : undefined);
-  if (!img) return null;
-  if (typeof img === "string") return img;
-  if (typeof img === "object" && img.url) return String(img.url);
-  return null;
-}
-
-/** HB listing yanıtından öğeleri çıkar (olası saklayıcı alanlar). */
-function extractItems(res: any): any[] {
+function arrField(res: any, keys: string[]): any[] {
   if (Array.isArray(res)) return res;
   if (!res || typeof res !== "object") return [];
-  for (const key of ["listings", "items", "data", "content", "products", "result"]) {
-    if (Array.isArray(res[key])) return res[key];
-  }
-  // data.listings gibi iç içe
-  if (res.data && typeof res.data === "object") {
-    for (const key of ["listings", "items", "content", "products"]) {
-      if (Array.isArray(res.data[key])) return res.data[key];
-    }
-  }
+  for (const k of keys) if (Array.isArray(res[k])) return res[k];
+  if (res.data && typeof res.data === "object") for (const k of keys) if (Array.isArray(res.data[k])) return res.data[k];
   return [];
 }
 
-function mapListing(item: any): FetchedHb | null {
-  const barcode = firstStr(item.barcode, item.productBarcode, item.gtin, item.merchantSku, item.stockCode);
-  if (!barcode) return null;
-  const hbId = firstStr(item.hepsiburadaSku, item.listingId, item.id, item.merchantSku, barcode);
-  return {
-    barcode,
-    sku: firstStr(item.merchantSku, item.stockCode, item.sku, barcode),
-    name: firstStr(item.productName, item.title, item.name, item.description) || barcode,
-    categoryName: firstStr(item.categoryName, item.category) || "Hepsiburada",
-    price: num(item.price ?? item.salePrice ?? item.listingPrice ?? item.unitPrice),
-    listPrice: item.listPrice != null || item.originalPrice != null ? num(item.listPrice ?? item.originalPrice) : null,
-    stock: Math.max(0, Math.floor(num(item.availableStock ?? item.stock ?? item.quantity))),
-    imageUrl: extractImage(item),
-    hbId,
-    isActive: item.isActive ?? item.isSalable ?? (item.archived != null ? !item.archived : true),
-  };
+/** Listing AKTİF mi? Kilitli/askıda/dondurulmuş VEYA satıcı-kapalı (ByMerchant) → HARİÇ.
+ *  Boş deactivationReasons (satışta) veya sadece stok/fiyat-0 (tükendi) → DAHİL. (Canlı veriyle doğrulandı.) */
+function isActiveHbListing(item: any): boolean {
+  if (item?.isLocked === true || item?.isSuspended === true || item?.isFrozen === true) return false;
+  const reasons = Array.isArray(item?.deactivationReasons) ? item.deactivationReasons : [];
+  if (reasons.includes("ByMerchant")) return false;
+  return true;
 }
+
+interface CatalogInfo { productName: string; barcode: string; categoryName: string }
 
 export async function POST(req: NextRequest) {
   try {
@@ -99,37 +75,68 @@ export async function POST(req: NextRequest) {
     const input = Schema.parse(await req.json().catch(() => ({})));
     const client = new HepsiburadaClient(await getHepsiburadaCredentials());
 
-    // Tüm sayfaları çek (offset/limit) → barcode -> veri
+    // 1) KATALOG: merchantSku → ürün adı + HB barkod + kategori (isim/barkod zenginleştirme).
+    const catalog = new Map<string, CatalogInfo>();
+    for (let page = 0; page < 60; page++) {
+      const res = (await client.listCatalogProducts({ page, size: 100 })) as any;
+      const items = arrField(res, ["data", "content", "products", "items"]);
+      for (const it of items as any[]) {
+        const msku = firstStr(it.merchantSku, it.stockCode);
+        if (!msku || catalog.has(msku)) continue;
+        catalog.set(msku, {
+          productName: firstStr(it.productName, it.title, it.name),
+          barcode: firstStr(it.barcode, it.gtin),
+          categoryName: firstStr(it.categoryName, it.category),
+        });
+      }
+      const totalPages = Number(res?.totalPages);
+      if (res?.last === true || items.length === 0 || (Number.isFinite(totalPages) && page + 1 >= totalPages)) break;
+    }
+
+    // 2) LISTING'ler (fiyat/stok/aktiflik) — sayfalı; SADECE AKTİF + katalogla join. Key = merchantSku.
     const fetched = new Map<string, FetchedHb>();
     for (let page = 0; page < input.maxPages; page += 1) {
       const res = await client.listListings({ offset: page * input.limit, limit: input.limit });
-      const items = extractItems(res);
+      const items = arrField(res, ["listings", "items", "data", "content", "products", "result"]);
       if (items.length === 0) break;
-      for (const it of items) {
-        const data = mapListing(it);
-        if (data && !fetched.has(data.barcode)) fetched.set(data.barcode, data);
+      for (const it of items as any[]) {
+        if (!isActiveHbListing(it)) continue;
+        const msku = firstStr(it.merchantSku, it.stockCode, it.sku);
+        if (!msku || fetched.has(msku)) continue;
+        const cat = catalog.get(msku);
+        fetched.set(msku, {
+          merchantSku: msku,
+          hbBarcode: firstStr(cat?.barcode, it.barcode) || msku,
+          hbSku: firstStr(it.hepsiburadaSku, it.listingId, it.productId) || msku,
+          name: firstStr(cat?.productName) || msku,
+          categoryName: firstStr(cat?.categoryName) || "Hepsiburada",
+          price: num(it.price ?? it.salePrice ?? it.listingPrice),
+          stock: Math.max(0, Math.floor(num(it.availableStock ?? it.stock ?? it.quantity))),
+        });
       }
       if (items.length < input.limit) break;
     }
 
     async function refreshPrices() {
+      // HB Listing → fetched eşlemesi externalSku (=merchantSku) ile (product.barcode = Trendyol barkodu, DEĞİL).
       const rows = await prisma.$queryRawUnsafe<
-        Array<{ listingId: string; salePrice: number; productId: string; barcode: string }>
+        Array<{ listingId: string; salePrice: number; productId: string; externalSku: string | null; barcode: string | null }>
       >(
-        `SELECT l.id AS listingId, l.salePrice AS salePrice, p.id AS productId, p.barcode AS barcode
-         FROM Listing l JOIN Product p ON l.productId = p.id
-         WHERE l.platform = 'hepsiburada'`
+        `SELECT l.id AS listingId, l.salePrice AS salePrice, l.productId AS productId, l.externalSku AS externalSku, l.barcode AS barcode
+         FROM Listing l WHERE l.platform = 'hepsiburada'`
       );
+      const byBarcode = new Map<string, FetchedHb>();
+      for (const f of fetched.values()) byBarcode.set(f.hbBarcode, f);
       let changed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
-        const f = fetched.get(row.barcode);
+        const f = (row.externalSku && fetched.get(row.externalSku)) || (row.barcode && byBarcode.get(row.barcode)) || null;
         if (!f) continue;
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({ productId: row.productId, oldPrice: row.salePrice, newPrice: f.price, changeSource: "hepsiburada_sync" });
         await prisma.$executeRawUnsafe(
-          `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
-          f.price, f.listPrice, row.listingId
+          `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+          f.price, f.stock, row.listingId
         );
         changed++;
       }
@@ -138,8 +145,9 @@ export async function POST(req: NextRequest) {
     }
 
     async function addNew() {
-      const prods = await prisma.$queryRawUnsafe<Array<{ id: string; barcode: string }>>(`SELECT id, barcode FROM Product`);
-      const barcodeToProductId = new Map(prods.map((p) => [p.barcode, p.id]));
+      const prods = await prisma.$queryRawUnsafe<Array<{ id: string; barcode: string; sku: string }>>(`SELECT id, barcode, sku FROM Product`);
+      const keyToProductId = new Map<string, string>();
+      for (const p of prods) { if (p.barcode) keyToProductId.set(p.barcode, p.id); if (p.sku) keyToProductId.set(p.sku, p.id); }
       const listed = await prisma.$queryRawUnsafe<Array<{ productId: string }>>(
         `SELECT productId FROM Listing WHERE platform = 'hepsiburada'`
       );
@@ -147,14 +155,15 @@ export async function POST(req: NextRequest) {
 
       let linked = 0;
       let unmatched = 0;
-      for (const [barcode, f] of fetched) {
-        const productId = barcodeToProductId.get(barcode);
+      for (const f of fetched.values()) {
+        // HB barkodu VEYA merchantSku ürünün barcode/sku'suyla tutarsa otomatik bağla; tutmazsa havuz.
+        const productId = keyToProductId.get(f.hbBarcode) || keyToProductId.get(f.merchantSku);
         if (productId) {
           if (!listedSet.has(productId)) {
             await prisma.$executeRawUnsafe(
               `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-              `listing_${productId}_hepsiburada`, productId, f.hbId, f.sku, barcode, f.price, f.listPrice, f.stock, f.isActive ? 1 : 0
+               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, NULL, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+              `listing_${productId}_hepsiburada`, productId, f.hbSku, f.merchantSku, f.hbBarcode, f.price, f.stock
             );
             listedSet.add(productId);
             linked++;
@@ -162,15 +171,26 @@ export async function POST(req: NextRequest) {
         } else {
           await prisma.$executeRawUnsafe(
             `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
-             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
              ON CONFLICT(platform, externalId) DO UPDATE SET
                externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
-               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock,
-               imageUrl=excluded.imageUrl, lastSeenAt=CURRENT_TIMESTAMP`,
-            `unmatched_hepsiburada_${f.hbId || barcode}`, f.hbId, f.sku, barcode, f.name, f.categoryName, f.price, f.stock, f.imageUrl
+               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock, lastSeenAt=CURRENT_TIMESTAMP`,
+            `unmatched_hepsiburada_${f.hbSku || f.merchantSku}`, f.hbSku, f.merchantSku, f.hbBarcode, f.name, f.categoryName, f.price, f.stock
           );
           unmatched++;
         }
+      }
+
+      // Temizlik: artık AKTİF listede olmayan HB unmatched'leri sil (kapatılan/kilitlenen/silinen).
+      // (Tüm aktif set güvenle çekildi — herhangi bir sayfa hatası tüm sync'i throw eder, buraya gelinmez.)
+      // keepIds boşsa (hiç aktif ürün gelmedi — muhtemelen geçici API durumu) → TEMİZLİK YOK (veri silme riski).
+      const keepIds = [...fetched.values()].map((f) => `unmatched_hepsiburada_${f.hbSku || f.merchantSku}`);
+      if (keepIds.length) {
+        const ph = keepIds.map(() => "?").join(",");
+        await prisma.$executeRawUnsafe(
+          `DELETE FROM UnmatchedListing WHERE platform = 'hepsiburada' AND id NOT IN (${ph})`,
+          ...keepIds
+        );
       }
       return { linked, unmatched };
     }
@@ -186,7 +206,7 @@ export async function POST(req: NextRequest) {
       update: { value: new Date().toISOString() },
     });
 
-    return NextResponse.json({ mode: input.mode, fetched: fetched.size, ...result });
+    return NextResponse.json({ mode: input.mode, fetched: fetched.size, catalog: catalog.size, ...result });
   } catch (error) {
     return jsonError(error);
   }
