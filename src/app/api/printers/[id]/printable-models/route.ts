@@ -11,16 +11,19 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     await ensureRuntimeSchema();
     const { id } = await params;
     const files = await prisma.productModelFile.findMany({
-      where: { printerConfigId: id },
+      // "__custom__" = özel baskı dosyaları (ürüne bağlı değil) → ürün listesinde gösterme.
+      where: { printerConfigId: id, NOT: { productId: "__custom__" } },
       include: { product: { select: { id: true, name: true, imageUrl: true } } },
       orderBy: [{ productId: "asc" }, { sortOrder: "asc" }],
     });
     return NextResponse.json({
-      models: files.map((f) => ({
+      models: files
+        .filter((f) => f.product) // ürünü silinmiş yetim dosyaları ele
+        .map((f) => ({
         fileId: f.id,
         productId: f.productId,
-        productName: f.product.name,
-        imageUrl: f.product.imageUrl,
+        productName: f.product!.name,
+        imageUrl: f.product!.imageUrl,
         label: f.label,
         originalName: f.originalName,
         sizeBytes: f.sizeBytes,

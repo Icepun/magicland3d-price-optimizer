@@ -1,12 +1,13 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, Minus, ArrowRight, AlertTriangle,
+  Upload, FileBox, Weight,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -124,6 +125,7 @@ export default function PrintersPage() {
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string } | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
   const simulated = data?.simulated ?? false;
@@ -168,6 +170,9 @@ export default function PrintersPage() {
           <Button variant="outline" size="sm" disabled={isFetching} onClick={() => refetch()} className="gap-2">
             <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             Yenile
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className="gap-2" disabled={simulated || printers.length === 0}>
+            <Upload className="h-4 w-4" /> Özel Baskı
           </Button>
           <Button size="sm" onClick={() => setManageOpen(true)} className="gap-2">
             <Settings2 className="h-4 w-4" /> Yönet
@@ -235,6 +240,7 @@ export default function PrintersPage() {
       {startTarget && (
         <StartModal target={startTarget} onClose={() => setStartTarget(null)} />
       )}
+      {customOpen && <CustomPrintModal printers={printers} onClose={() => setCustomOpen(false)} />}
 
       <Dialog open={!!cancelTarget} onOpenChange={(o) => !o && setCancelTarget(null)}>
         <DialogContent>
@@ -961,6 +967,193 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
           )}
         </div>
         {progress && <PrintProgress p={progress} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ───────────────────────── Özel Baskı (ürüne bağlı olmayan ad-hoc baskı) ─────────────────────────
+function fmtDur(min: number | null): string {
+  if (!min || min <= 0) return "—";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h > 0 ? `${h}sa ${m}dk` : `${m}dk`;
+}
+interface CustomUpload {
+  fileId: string; originalName: string; fileKind: "gcode" | "3mf" | "other";
+  sizeBytes: number; grams: number | null; estPrintMin: number | null; thumbnail: string | null; colorCount: number;
+}
+function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [picked, setPicked] = useState<{ id: string; name: string; brand: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [file, setFile] = useState<CustomUpload | null>(null);
+  const [slotMode, setSlotMode] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [progress, setProgress] = useState<PrintProg | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const printable = useMemo(() => printers.filter((p) => p.type !== "sim"), [printers]);
+  const isBambu = picked?.brand === "bambu";
+  const multiColor = picked?.brand === "bambu" || picked?.brand === "snapmaker";
+
+  const upload = async (f: File) => {
+    if (!picked) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("printerConfigId", picked.id);
+      const res = await fetch("/api/custom-print/upload", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error || "Yüklenemedi");
+      setFile(data as CustomUpload);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // NDJSON akışlı baskı (StartModal ile aynı mantık).
+  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+    setPrinting(true);
+    setProgress({ stage: "upload", pct: 0 });
+    try {
+      const res = await fetch(`/api/models/${fileId}/print`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms, prefs: opts.prefs }),
+      });
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({} as { error?: string }));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = ""; let errMsg: string | null = null; let ok = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev: { stage: string; pct?: number | null; message?: string };
+          try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
+          else if (ev.stage === "done") ok = true;
+          else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") setProgress({ stage: ev.stage, pct: null });
+          else setProgress({ stage: "upload", pct: ev.pct ?? null });
+        }
+      }
+      if (errMsg) throw new Error(errMsg);
+      if (!ok) throw new Error("Baskı tamamlanmadı (akış beklenmedik kapandı)");
+      setProgress({ stage: "done", pct: 100 });
+      toast.success("Baskı başlatıldı 🎉");
+      onClose();
+      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
+    } catch (e) {
+      toast.error((e as Error).message);
+      setProgress(null);
+    } finally {
+      setPrinting(false);
+    }
+  };
+
+  // Renk eşleme adımı (Bambu/Snapmaker) — mevcut SlotStep'i yeniden kullan.
+  if (slotMode && file && picked) {
+    const model: PrintableModel = {
+      fileId: file.fileId, productId: "__custom__", productName: file.originalName,
+      imageUrl: file.thumbnail, label: null, originalName: file.originalName, sizeBytes: file.sizeBytes, gramaj: file.grams,
+    };
+    return (
+      <SlotStep
+        printerId={picked.id} model={model} isBambu={isBambu} printing={printing} progress={progress}
+        onBack={() => setSlotMode(false)} onClose={onClose} onConfirm={(opts) => runPrint(file.fileId, opts)}
+      />
+    );
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !printing && !uploading && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Upload className="h-4 w-4 text-primary" /> Özel Baskı</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            {!picked ? "Baskı yapacağın yazıcıyı seç." : !file ? "Bu yazıcı için gcode/3mf dosyası yükle." : "Önizle ve bas."}
+          </p>
+        </DialogHeader>
+
+        {!picked ? (
+          <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
+            {printable.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-6">Bağlı yazıcı yok.</p>
+            ) : (
+              printable.map((p) => {
+                const busy = p.status === "printing" || p.status === "paused";
+                return (
+                  <button
+                    key={p.id} disabled={busy}
+                    onClick={() => setPicked({ id: p.id, name: p.name, brand: p.brand })}
+                    className="w-full flex items-center gap-2.5 p-2 rounded-lg border hover:bg-muted text-left disabled:opacity-50"
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ background: p.online ? p.accent : "#9ca3af" }} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium truncate">{p.name}</p>
+                      <p className="text-[10px] text-muted-foreground">{p.model || p.brand}{busy ? " · meşgul" : !p.online ? " · çevrimdışı" : ""}</p>
+                    </div>
+                    <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                  </button>
+                );
+              })
+            )}
+          </div>
+        ) : !file ? (
+          <div className="space-y-3">
+            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs flex items-center gap-2">
+              <Printer className="h-3.5 w-3.5 text-primary" /> {picked.name}
+              <button onClick={() => setPicked(null)} className="ml-auto text-primary hover:underline">değiştir</button>
+            </div>
+            <input ref={fileRef} type="file" accept=".gcode,.gco,.g,.3mf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
+            <button
+              onClick={() => fileRef.current?.click()} disabled={uploading}
+              className="w-full rounded-xl border-2 border-dashed py-10 flex flex-col items-center gap-2 hover:border-primary/40 hover:bg-primary/[0.03] transition-colors disabled:opacity-60"
+            >
+              {uploading ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <FileBox className="h-6 w-6 text-muted-foreground/50" />}
+              <span className="text-sm font-medium">{uploading ? "Yükleniyor…" : "gcode / 3mf seç"}</span>
+              <span className="text-[11px] text-muted-foreground">{isBambu ? "Bambu çok renkli için dilimlenmiş .3mf" : "dosyayı seçmek için tıkla"}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex gap-3">
+              <div className="h-24 w-24 shrink-0 rounded-xl border bg-muted flex items-center justify-center overflow-hidden">
+                {file.thumbnail ? <img src={file.thumbnail} alt="" className="max-w-full max-h-full object-contain" /> : <Box className="h-8 w-8 text-muted-foreground/30" />}
+              </div>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="text-sm font-medium truncate" title={file.originalName}>{file.originalName}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+                  <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" /> {fmtDur(file.estPrintMin)}</span>
+                  <span className="inline-flex items-center gap-1"><Weight className="h-3 w-3" /> {file.grams != null ? `${Math.round(file.grams)} g` : "—"}</span>
+                  {file.colorCount > 0 && <span className="inline-flex items-center gap-1"><Layers className="h-3 w-3" /> {file.colorCount} renk</span>}
+                </div>
+                <p className="text-[10px] text-muted-foreground/70 inline-flex items-center gap-1"><Printer className="h-3 w-3" /> {picked.name}</p>
+              </div>
+            </div>
+            {progress && <PrintProgress p={progress} />}
+            <DialogFooter className="gap-2">
+              <Button variant="ghost" onClick={() => { setFile(null); setProgress(null); }} disabled={printing}>Geri</Button>
+              {multiColor ? (
+                <Button onClick={() => setSlotMode(true)} disabled={printing} className="gap-1.5"><Layers className="h-4 w-4" /> Renk ayarına geç</Button>
+              ) : (
+                <Button onClick={() => runPrint(file.fileId)} disabled={printing} className="gap-1.5">
+                  {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Bas
+                </Button>
+              )}
+            </DialogFooter>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
