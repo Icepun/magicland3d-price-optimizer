@@ -295,6 +295,7 @@ export default function ProductDetailPage({
           },
         }),
       }).then((r) => r.json()),
+    meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
       // Açık ürünün maliyeti zaten gösteriliyor; ağır refetch yok — sadece bayat işaretle.
       queryClient.invalidateQueries({ queryKey: ["product", id], refetchType: "none" });
@@ -422,8 +423,10 @@ export default function ProductDetailPage({
       }).then((r) => r.json()),
     enabled: Boolean(product),
     placeholderData: (prev) => prev, // değişim sırasında eski sonucu koru (flicker yok)
-    staleTime: 0,
-    refetchOnMount: "always",
+    // Maliyet girdisi (debouncedInput) queryKey'de → değer DEĞİŞİNCE zaten yeni POST olur. Aynı girdi
+    // için tekrar tekrar POST atma: staleTime ver + her mount'ta "always" refetch'i kaldır (sayfayı her
+    // açışta/değişiklikte gereksiz preview isteği → sunucu kasması azalır).
+    staleTime: 60_000,
   });
 
   if (isLoading || !product) {

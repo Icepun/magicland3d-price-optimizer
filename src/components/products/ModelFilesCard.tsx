@@ -216,14 +216,6 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 />
                 <p className="text-[10px] text-muted-foreground/70 truncate px-1">{part.originalName} · {fmtSize(part.sizeBytes)}</p>
               </div>
-              <Input
-                defaultValue={part.gramaj ?? ""}
-                placeholder="gr"
-                inputMode="numeric"
-                onBlur={(e) => { const v = e.target.value.trim(); if (v !== String(part.gramaj ?? "")) patchField.mutate({ id: part.id, body: { gramaj: v === "" ? null : Number(v) } }); }}
-                className="h-7 w-12 text-xs shrink-0"
-                title="Filament gramajı (maliyet / makara için)"
-              />
               <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0" disabled={del.isPending} onClick={() => del.mutate(part.id)} title="Parçayı sil">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>

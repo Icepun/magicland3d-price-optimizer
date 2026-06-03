@@ -388,6 +388,8 @@ model PrinterSnapshot {
   brand           String
   /** printing | paused | finished | idle | error | offline */
   status          String
+  /** Hata/duraklatma nedeni (Moonraker print_stats.message / Bambu hata kodu). Bildirimde gösterilir. */
+  statusMessage   String?
   online          Boolean  @default(false)
   productName     String?
   productImage    String?

@@ -13,7 +13,7 @@ let schemaReady: Promise<void> | null = null;
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "22";
+const CURRENT_SCHEMA_VERSION = "23";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -579,6 +579,8 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // v23: baskı bitti/hata bildirimi için hata-nedeni kolonu (mevcut kurulumlara)
+    await ensureColumn("PrinterSnapshot", "statusMessage", "TEXT");
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "PrintCommand" (
         "id" TEXT NOT NULL PRIMARY KEY,

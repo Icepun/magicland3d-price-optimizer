@@ -26,18 +26,18 @@ function useDelayedFlag(active: boolean, showDelay: number, minVisible: number) 
 }
 
 /**
- * Global yazma/işlem katmanı (Trendyol tarzı): veri yazılırken ekranı kibarca karartır,
+ * Global yazma/işlem katmanı: uzun/bloklayan bir işlem sırasında ekranı kibarca karartır,
  * animasyonlu loading gösterir, ETKİLEŞİMİ BLOKLAR (kullanıcı işlem biterken başka yere gidemez).
- * Tetikleyici: optimistic OLMAYAN mutation'lar (onMutate'i olmayanlar) — yani gerçekten bekleten
- * yazmalar — + elle `runBlocking(...)`. `meta:{silent:true}` hariç tutar, `meta:{blocking:true}` zorlar.
+ * OPT-IN: SADECE `meta:{blocking:true}` işaretli mutation'larda (toplu sil/gizle, varyantlara uygula
+ * gibi gerçekten bekleten, yerel geri-bildirimi olmayan işlemler) + elle `runBlocking(...)` çıkar.
+ * Eskiden "onMutate'i olmayan her mutation" tetikliyordu → küçük yazmalarda olur olmadık yerde
+ * yanıp sönüyordu. Artık her butonun kendi "Kaydediliyor…" durumu var; katman yalnız büyük işlemlerde.
  */
 export function GlobalBusyOverlay() {
   const blocking = useIsMutating({
     predicate: (m) => {
-      const o = m.options as { onMutate?: unknown; meta?: { blocking?: boolean; silent?: boolean } };
-      if (o.meta?.silent) return false; // kendi ilerleme arayüzü olanlar (sync vb.)
-      if (o.meta?.blocking) return true;
-      return !o.onMutate; // onMutate = optimistic → katman gösterme
+      const o = m.options as { meta?: { blocking?: boolean } };
+      return Boolean(o.meta?.blocking); // yalnızca açıkça blocking işaretliler
     },
   });
   const { busy, label } = useBusyState();

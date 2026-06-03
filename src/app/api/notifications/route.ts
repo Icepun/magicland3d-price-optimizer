@@ -9,7 +9,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
  *
  * Kaynaklar (ucuz DB okuması): düşük/biten stok + düşük/biten filament makara.
  */
-export type AlertSeverity = "critical" | "warning";
+export type AlertSeverity = "critical" | "warning" | "success";
 
 export interface AppAlert {
   id: string;
@@ -38,7 +38,7 @@ export async function GET() {
       }),
       // Yazıcı durumları (relay yazar): hata = baskı durdu → acil; duraklatıldı = uyarı.
       prisma.printerSnapshot.findMany({
-        select: { printerConfigId: true, name: true, status: true, online: true, productName: true },
+        select: { printerConfigId: true, name: true, status: true, statusMessage: true, online: true, productName: true },
       }).catch(() => []),
       // Kalıcı olay-anı bildirimleri (sipariş kaynaklı) — okunmamış olanlar.
       prisma.notification.findMany({
@@ -74,22 +74,34 @@ export async function GET() {
 
     for (const pr of printers) {
       const job = pr.productName ? ` — ${pr.productName}` : "";
+      const reason = pr.statusMessage ? ` · ${pr.statusMessage}` : "";
       if (pr.status === "error") {
+        // Kendi kendine durdu / hata → KIRMIZI + neden (varsa)
         alerts.push({
-          id: `printer-${pr.printerConfigId}`,
+          id: `printer-${pr.printerConfigId}-error`,
           type: "printer",
           severity: "critical",
-          title: "Yazıcı hatası — baskı durdu",
+          title: "Baskı hatayla durdu",
+          body: `${pr.name}${job}${reason}`,
+          href: "/printers",
+        });
+      } else if (pr.status === "finished") {
+        // Baskı tamamlandı → YEŞİL
+        alerts.push({
+          id: `printer-${pr.printerConfigId}-done`,
+          type: "printer",
+          severity: "success",
+          title: "Baskı tamamlandı",
           body: `${pr.name}${job}`,
           href: "/printers",
         });
       } else if (pr.status === "paused" && pr.online) {
         alerts.push({
-          id: `printer-${pr.printerConfigId}`,
+          id: `printer-${pr.printerConfigId}-paused`,
           type: "printer",
           severity: "warning",
           title: "Baskı duraklatıldı",
-          body: `${pr.name}${job}`,
+          body: `${pr.name}${job}${reason}`,
           href: "/printers",
         });
       }
@@ -110,11 +122,14 @@ export async function GET() {
     /* tablo yoksa boş dön */
   }
 
-  // Kritikler üstte
-  alerts.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
+  // Sıralama: kritik (kırmızı) → uyarı (sarı) → başarı (yeşil)
+  const rank = (s: AlertSeverity) => (s === "critical" ? 0 : s === "warning" ? 1 : 2);
+  alerts.sort((a, b) => rank(a.severity) - rank(b.severity));
 
   const critical = alerts.filter((a) => a.severity === "critical").length;
-  return NextResponse.json({ alerts, counts: { total: alerts.length, critical, warning: alerts.length - critical } });
+  const warning = alerts.filter((a) => a.severity === "warning").length;
+  const success = alerts.filter((a) => a.severity === "success").length;
+  return NextResponse.json({ alerts, counts: { total: alerts.length, critical, warning, success } });
 }
 
 /**

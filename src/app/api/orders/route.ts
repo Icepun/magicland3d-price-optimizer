@@ -271,34 +271,52 @@ export async function GET() {
    (async () => {
    try {
     const client = new TrendyolClient(await getTrendyolCredentials());
-    const page = await client.listOrders({ size: 100 });
-    for (const [i, o] of (page.content ?? []).entries()) {
-      const st = trendyolStatus(o.status);
-      raws.push({
-        platform: "trendyol",
-        id: `ty-${o.orderNumber ?? o.id ?? i}`,
-        orderNumber: String(o.orderNumber ?? o.id ?? "—"),
-        date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
-        statusKind: st.kind,
-        statusLabel: st.label,
-        total: Number(o.totalPrice ?? o.grossAmount ?? 0),
-        currency: "TRY",
-        customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
-        lines: (o.lines ?? []).map((l) => ({
-          name: l.productName ?? l.barcode ?? "Ürün",
-          quantity: Number(l.quantity ?? 1),
-          unitPrice: Number(l.price ?? 0),
-          image: null,
-          // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
-          matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
-            (k): k is string => !!k && k !== "merchantSku"
-          ),
-        })),
-        trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
-        cargoProvider: o.cargoProviderName ?? null,
-      });
+    // Trendyol /orders (shipmentPackages): statü filtresi YOK → TÜM statüler (oluşturuldu/kargoda/
+    // teslim/iptal) gelir. Ama tek sayfa size:100 son-100'le sınırlıydı → 30 günde 100+ sipariş varsa
+    // eksik çekiyordu (kâr yanlış). Çözüm: son 30 günü 14 GÜNLÜK pencerelerle (Trendyol startDate/endDate
+    // aralık limiti ≤2 hafta) tara + her pencerede sayfala. (Route ayrıca orderDate'e göre 30 güne kırpar.)
+    const CHUNK = 14 * 86_400_000;
+    const seenTy = new Set<string>();
+    let tyCount = 0;
+    for (let chunkEnd = Date.now(); chunkEnd > cutoff; chunkEnd -= CHUNK) {
+      const chunkStart = Math.max(cutoff, chunkEnd - CHUNK);
+      for (let pageNo = 0; pageNo < 50; pageNo++) {
+        const page = await client.listOrders({ page: pageNo, size: 100, startDate: chunkStart, endDate: chunkEnd });
+        const content = page.content ?? [];
+        for (const [i, o] of content.entries()) {
+          const key = String(o.id ?? o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`);
+          if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
+          seenTy.add(key);
+          const st = trendyolStatus(o.status);
+          raws.push({
+            platform: "trendyol",
+            id: `ty-${o.id ?? o.orderNumber ?? key}`,
+            orderNumber: String(o.orderNumber ?? o.id ?? "—"),
+            date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
+            statusKind: st.kind,
+            statusLabel: st.label,
+            total: Number(o.totalPrice ?? o.grossAmount ?? 0),
+            currency: "TRY",
+            customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
+            lines: (o.lines ?? []).map((l) => ({
+              name: l.productName ?? l.barcode ?? "Ürün",
+              quantity: Number(l.quantity ?? 1),
+              unitPrice: Number(l.price ?? 0),
+              image: null,
+              // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
+              matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
+                (k): k is string => !!k && k !== "merchantSku"
+              ),
+            })),
+            trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
+            cargoProvider: o.cargoProviderName ?? null,
+          });
+          tyCount++;
+        }
+        if (content.length < 100) break; // son sayfa
+      }
     }
-    trendyol = { ok: true, count: page.content?.length ?? 0 };
+    trendyol = { ok: true, count: tyCount };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Trendyol siparişleri alınamadı";
     trendyol = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };

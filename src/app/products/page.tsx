@@ -518,10 +518,12 @@ export default function ProductsPage() {
     //   • stok/maliyet/gizle/alias/madeToOrder düzeni → optimistic (zaten cache'te güncel)
     //   • Maliyet&Paketleme / Kargo / Ek Giderler / KDV değişimi → invalidate ["products"]
     //   • "Fiyatları Güncelle" butonu / ürün ekle-sil → invalidate ["products"]
-    // refetchOnMount:true → invalidate edilmişse bir sonraki girişte tazeler, edilmemişse anında cache.
-    // (Eski 15sn: her ~15sn'de bir girişte 368 ürünü baştan çekip kasıyordu — kaldırıldı.)
+    // refetchOnMount:false → sayfaya her DÖNÜŞTE otomatik refetch YOK. Bir düzenleme listeyi yalnızca
+    // BAYAT işaretler; gerçek tazeleme SADECE "Yenile"/sync ile olur (o an mounted query'yi invalidate
+    // edince aktif refetch tetiklenir). Böylece her geri dönüşte 368 ürün + ~736 kâr simülasyonu baştan
+    // çekilip uygulama donmuyor. (Kullanıcı isteği: "ben Yenile demedikçe sürekli veri çekme.")
     staleTime: Infinity,
-    refetchOnMount: true,
+    refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
 
@@ -670,7 +672,8 @@ export default function ProductsPage() {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error("Takma ad kaydedilemedi — bağlantını kontrol et (geri alındı)");
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"] }),
+    // Optimistic zaten çipi güncelledi → tüm listeyi refetch ETME (refetchType:none = sadece bayat işaretle).
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" }),
   });
 
   // aliasEdit'i ref'te tut → commitAlias her render'da yeni closure olmaz (memo kırılmaz).

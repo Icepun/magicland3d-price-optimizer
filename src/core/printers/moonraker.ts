@@ -28,6 +28,8 @@ export type MoonrakerState =
 export interface MoonrakerStatus {
   online: boolean;
   state: MoonrakerState;
+  /** print_stats.message — hata/duraklatma nedeni (örn. "Filament runout"). Yoksa null. */
+  message: string | null;
   filename: string | null;
   progress: number; // 0..1
   printDurationSec: number;
@@ -118,6 +120,7 @@ function parseStatus(status: any): MoonrakerStatus {
   return {
     online: true,
     state: (ps.state as MoonrakerState) || "standby",
+    message: typeof ps.message === "string" && ps.message.trim() ? ps.message.trim() : null,
     filename: ps.filename || null,
     progress,
     printDurationSec: typeof ps.print_duration === "number" ? ps.print_duration : 0,
@@ -145,7 +148,7 @@ async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus 
 
 export async function fetchMoonrakerStatus(host: string, port: number): Promise<MoonrakerStatus> {
   const offline: MoonrakerStatus = {
-    online: false, state: "standby", filename: null, progress: 0, printDurationSec: 0,
+    online: false, state: "standby", message: null, filename: null, progress: 0, printDurationSec: 0,
     currentLayer: null, totalLayer: null, zHeight: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
   };
   const cached = portCache.get(host);

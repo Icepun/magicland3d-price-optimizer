@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 interface AppAlert {
   id: string;
   type: "stock" | "filament" | "printer" | "order";
-  severity: "critical" | "warning";
+  severity: "critical" | "warning" | "success";
   title: string;
   body: string;
   href: string;
@@ -143,7 +143,11 @@ export function NotificationBell() {
                       <span
                         className={cn(
                           "mt-0.5 shrink-0 h-6 w-6 rounded-md flex items-center justify-center",
-                          a.severity === "critical" ? "bg-destructive/15 text-destructive" : "bg-amber-500/15 text-amber-500"
+                          a.severity === "critical"
+                            ? "bg-destructive/15 text-destructive"
+                            : a.severity === "success"
+                              ? "bg-emerald-500/15 text-emerald-500"
+                              : "bg-amber-500/15 text-amber-500"
                         )}
                       >
                         <Icon className="h-3.5 w-3.5" />

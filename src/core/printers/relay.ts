@@ -32,6 +32,7 @@ export function startPrinterRelay() {
 
 interface SnapFields {
   name: string; brand: string; status: string; online: boolean;
+  statusMessage: string | null; // hata/duraklatma nedeni (error/paused'da dolar)
   productName: string | null; productImage: string | null;
   progress: number; nozzle: number; bed: number;
   currentFilename: string | null; etaSec: number | null;
@@ -57,15 +58,17 @@ async function buildSnapshot(
   const baseName = c.name;
   if (c.type === "bambu") {
     if (!c.accessCode || !c.serial) {
-      return { name: baseName, brand: c.brand, status: "offline", online: false, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
+      return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
     }
     const bs = await getBambuStatus(c.host, c.accessCode, c.serial);
-    if (!bs.online) return { name: baseName, brand: c.brand, status: "offline", online: false, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
+    if (!bs.online) return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
     const status = mapBambuState(bs.gcodeState);
     const matchedId = bs.filename ? matchMap.get(`${c.id}::${bs.filename}`) : undefined;
     const matched = matchedId ? productMap.get(matchedId) : undefined;
+    const statusMessage =
+      status === "error" ? `Baskı hatayla durdu${bs.printError ? ` (kod: ${bs.printError})` : ""}` : null;
     return {
-      name: baseName, brand: c.brand, status, online: true,
+      name: baseName, brand: c.brand, status, online: true, statusMessage,
       productName: matched?.name ?? bs.filename ?? null,
       productImage: matched?.imageUrl ?? null,
       progress: Math.min(1, Math.max(0, bs.percent / 100)),
@@ -76,7 +79,7 @@ async function buildSnapshot(
 
   // Moonraker
   const st = await fetchMoonrakerStatus(c.host, c.port);
-  if (!st.online) return { name: baseName, brand: c.brand, status: "offline", online: false, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
+  if (!st.online) return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
   const status = moonrakerStatusName(st.state);
   let productName: string | null = null;
   let productImage: string | null = null;
@@ -96,6 +99,7 @@ async function buildSnapshot(
   }
   return {
     name: baseName, brand: c.brand, status, online: true,
+    statusMessage: status === "error" || status === "paused" ? st.message : null,
     productName, productImage,
     progress: st.progress, nozzle: st.nozzle, bed: st.bed,
     currentFilename: st.filename, etaSec,
@@ -157,7 +161,7 @@ async function tick(): Promise<void> {
       let snap: SnapFields | null = null;
       try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
       if (!snap) return;
-      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec].join("|");
+      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec, snap.statusMessage].join("|");
       if (lastKey.get(c.id) === key) return;
       lastKey.set(c.id, key);
       try {
