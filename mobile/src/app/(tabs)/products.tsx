@@ -34,6 +34,22 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "no-cost", label: "Maliyetsiz" },
 ];
 
+/**
+ * Türkçe-duyarlı arama normalizasyonu: şapka/aksan katlama + küçük harf.
+ * "Şık"→"sik", "İSTANBUL"→"istanbul", "Ğücé"→"guce" → sorgu ve veri aynı düzleme iner,
+ * böylece kullanıcı Türkçe karakter yazsa da yazmasa da eşleşir. (Hermes-güvenli: normalize() yok.)
+ */
+function foldTr(s: string): string {
+  return s
+    .replace(/[İIı]/g, "i")
+    .replace(/[Şş]/g, "s")
+    .replace(/[Çç]/g, "c")
+    .replace(/[Ğğ]/g, "g")
+    .replace(/[Öö]/g, "o")
+    .replace(/[Üü]/g, "u")
+    .toLowerCase();
+}
+
 interface ListItem {
   id: string;
   name: string;
@@ -47,6 +63,8 @@ interface ListItem {
   variantGroupId: string | null;
   variantGroupName: string | null;
   variantLabel: string | null;
+  /** Önceden normalize edilmiş arama metni (ad+takma ad+sku+barkod+kategori+varyant). */
+  search: string;
 }
 
 type Row =
@@ -108,6 +126,11 @@ export default function ProductsScreen() {
         variantGroupId: p.variantGroupId,
         variantGroupName: p.variantGroupName ?? null,
         variantLabel: p.variantLabel,
+        search: foldTr(
+          [p.name, p.alias, p.sku, p.barcode, p.categoryName, p.variantLabel, p.variantGroupName]
+            .filter(Boolean)
+            .join(" ")
+        ),
       };
     });
   }, [products, rules, settings]);
@@ -117,14 +140,12 @@ export default function ProductsScreen() {
     if (filter === "out-of-stock") list = list.filter((i) => i.stock <= 0 && !i.madeToOrder);
     else if (filter === "loss") list = list.filter((i) => i.anyLoss);
     else if (filter === "no-cost") list = list.filter((i) => !i.hasCost);
-    const q = search.trim().toLowerCase();
-    if (q)
-      list = list.filter(
-        (i) =>
-          i.name.toLowerCase().includes(q) ||
-          i.category.toLowerCase().includes(q) ||
-          (i.variantGroupName ?? "").toLowerCase().includes(q)
-      );
+    const q = foldTr(search.trim());
+    if (q) {
+      // Çok-kelimeli, sırasız: her kelime herhangi bir alanda (ad/takma ad/sku/barkod/kategori/varyant) geçmeli.
+      const tokens = q.split(/\s+/).filter(Boolean);
+      list = list.filter((i) => tokens.every((t) => i.search.includes(t)));
+    }
     return list;
   }, [items, filter, search]);
 
