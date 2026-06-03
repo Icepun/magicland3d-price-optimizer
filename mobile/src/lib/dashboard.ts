@@ -1,8 +1,9 @@
 import { computeProductProfit, type Rules } from "@/lib/profit";
 import type { ProductDetail } from "@/lib/db/product-detail";
+import { PLATFORMS, type Platform } from "@/lib/platforms";
 
 export interface PlatformSummary {
-  platform: "shopify" | "trendyol";
+  platform: Platform;
   listingCount: number;
   totalProfit: number;
   avgMargin: number;
@@ -24,10 +25,10 @@ export function computeDashboard(
   rules: Rules,
   settings: Record<string, string>
 ): DashboardSummary {
-  const acc: Record<string, { profit: number; margin: number; count: number; loss: number }> = {
-    shopify: { profit: 0, margin: 0, count: 0, loss: 0 },
-    trendyol: { profit: 0, margin: 0, count: 0, loss: 0 },
-  };
+  const acc: Record<string, { profit: number; margin: number; count: number; loss: number }> =
+    Object.fromEntries(
+      PLATFORMS.map((p) => [p, { profit: 0, margin: 0, count: 0, loss: 0 }])
+    );
   let outOfStock = 0;
   let missingCost = 0;
   let totalProfit = 0;
@@ -54,7 +55,7 @@ export function computeDashboard(
     }
   }
 
-  const platforms: PlatformSummary[] = (["shopify", "trendyol"] as const).map((plat) => ({
+  const platforms: PlatformSummary[] = PLATFORMS.map((plat) => ({
     platform: plat,
     listingCount: acc[plat].count,
     totalProfit: acc[plat].profit,

@@ -10,6 +10,7 @@ import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { computeProductProfit } from "@/lib/profit";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
+import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function ReportsScreen() {
   const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: 60_000 });
@@ -25,26 +26,26 @@ export default function ReportsScreen() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   const rev = useMemo(() => {
-    const acc = {
-      total: 0,
-      profit: 0,
-      count: 0,
-      shopify: { rev: 0, profit: 0 },
-      trendyol: { rev: 0, profit: 0 },
-    };
-    if (!orders || !products || !rules || !settings) return acc;
+    const byPlat: Record<string, { rev: number; profit: number }> = Object.fromEntries(
+      PLATFORMS.map((p) => [p, { rev: 0, profit: 0 }])
+    );
+    let total = 0;
+    let profit = 0;
+    let count = 0;
+    if (!orders || !products || !rules || !settings) return { total, profit, count, byPlat };
     const pm = buildProductMap(products);
     for (const o of orders.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
-      acc.total += op.revenue;
-      acc.count++;
-      acc[o.platform].rev += op.revenue;
+      total += op.revenue;
+      count++;
+      const b = byPlat[o.platform];
+      if (b) b.rev += op.revenue;
       if (op.profit != null) {
-        acc.profit += op.profit;
-        acc[o.platform].profit += op.profit;
+        profit += op.profit;
+        if (b) b.profit += op.profit;
       }
     }
-    return acc;
+    return { total, profit, count, byPlat };
   }, [orders, products, rules, settings]);
 
   const topSellers = useMemo(() => {
@@ -81,14 +82,14 @@ export default function ReportsScreen() {
   }
 
   const avgBasket = rev.count > 0 ? rev.total / rev.count : 0;
-  const maxBar = Math.max(rev.shopify.rev, rev.trendyol.rev, 1);
+  const maxBar = Math.max(...PLATFORMS.map((p) => rev.byPlat[p].rev), 1);
   const maxQty = topSellers[0]?.qty ?? 1;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Raporlar</Text>
-        <Text style={styles.subtitle}>Son 30 gün — Shopify + Trendyol</Text>
+        <Text style={styles.subtitle}>Son 30 gün — 3 platform</Text>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {/* Stat kartları */}
@@ -102,20 +103,16 @@ export default function ReportsScreen() {
         {/* Platform karşılaştırma */}
         <Text style={styles.sectionLabel}>PLATFORM</Text>
         <View style={styles.card}>
-          <PlatformBar
-            name="Shopify"
-            color={ML.shopify}
-            rev={rev.shopify.rev}
-            profit={rev.shopify.profit}
-            pct={(rev.shopify.rev / maxBar) * 100}
-          />
-          <PlatformBar
-            name="Trendyol"
-            color={ML.trendyol}
-            rev={rev.trendyol.rev}
-            profit={rev.trendyol.profit}
-            pct={(rev.trendyol.rev / maxBar) * 100}
-          />
+          {PLATFORMS.map((plat) => (
+            <PlatformBar
+              key={plat}
+              name={PLATFORM_LABEL[plat]}
+              color={ML[plat]}
+              rev={rev.byPlat[plat].rev}
+              profit={rev.byPlat[plat].profit}
+              pct={(rev.byPlat[plat].rev / maxBar) * 100}
+            />
+          ))}
         </View>
 
         {/* En çok satanlar */}

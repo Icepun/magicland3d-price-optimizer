@@ -1,4 +1,4 @@
-import { simulatePrice } from "@core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
 import { resolveProductCost } from "@core/product-cost";
 import {
   withProductCommissionRule,
@@ -8,12 +8,13 @@ import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@core/cargo-c
 
 import type { ProductDetail, ListingRow } from "@/lib/db/product-detail";
 import type { Rules } from "@/lib/profit";
+import type { Platform } from "@/lib/platforms";
 
 const MARGINS = [20, 30, 40, 50];
 const DISCOUNTS = [10, 15, 20, 25, 30];
 
 export interface PriceLabTarget {
-  platform: "shopify" | "trendyol";
+  platform: Platform;
   currentPrice: number;
   currentMargin: number;
   rows: { margin: number; price: number | null }[];
@@ -61,7 +62,10 @@ export function computePriceLab(
       expenseRules: filterRulesByPlatform(rules.expense, listing.platform),
       vatRate,
       ...resolveListingCommissionOverride(listing, settings),
-      cargoCostOverride: listing.cargoCost ?? undefined,
+      cargoCostOverride:
+        listing.cargoCost ??
+        (listing.platform === "shopify" && salePrice < 150 ? 0 : undefined),
+      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
     });
 
   // Marj fiyata göre monoton artar → ikili arama

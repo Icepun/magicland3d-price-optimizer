@@ -22,6 +22,7 @@ import { computeProductProfit } from "@/lib/profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
+import type { Platform } from "@/lib/platforms";
 
 type FilterKey = "all" | "out-of-stock" | "loss" | "no-cost";
 
@@ -40,7 +41,7 @@ interface ListItem {
   stock: number;
   hasCost: boolean;
   anyLoss: boolean;
-  platforms: { platform: "shopify" | "trendyol"; netProfit: number | null }[];
+  platforms: { platform: Platform; netProfit: number | null }[];
   variantGroupId: string | null;
   variantGroupName: string | null;
   variantLabel: string | null;
@@ -272,7 +273,7 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
               <View
                 style={[
                   styles.platDot,
-                  { backgroundColor: pl.platform === "shopify" ? ML.shopify : ML.trendyol },
+                  { backgroundColor: ML[pl.platform] },
                 ]}
               />
               <Text

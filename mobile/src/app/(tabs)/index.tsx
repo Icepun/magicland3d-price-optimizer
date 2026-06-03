@@ -23,6 +23,7 @@ import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
+import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function DashboardScreen() {
   const { data: products, isLoading, refetch: refetchProducts } = useQuery({
@@ -59,20 +60,22 @@ export default function DashboardScreen() {
   const rev = useMemo(() => {
     if (!ordersData || !products || !rules || !settings) return null;
     const pm = buildProductMap(products);
-    const acc = {
-      total: 0,
-      profit: 0,
-      shopify: { rev: 0, n: 0 },
-      trendyol: { rev: 0, n: 0 },
-    };
+    const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
+      PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
+    );
+    let total = 0;
+    let profit = 0;
     for (const o of ordersData.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
-      acc.total += op.revenue;
-      acc[o.platform].rev += op.revenue;
-      acc[o.platform].n++;
-      if (op.profit != null) acc.profit += op.profit;
+      total += op.revenue;
+      const b = byPlat[o.platform];
+      if (b) {
+        b.rev += op.revenue;
+        b.n++;
+      }
+      if (op.profit != null) profit += op.profit;
     }
-    return { ...acc, count: ordersData.orders.length };
+    return { total, profit, byPlat, count: ordersData.orders.length };
   }, [ordersData, products, rules, settings]);
 
   return (
@@ -80,7 +83,7 @@ export default function DashboardScreen() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Panel</Text>
-          <Text style={styles.subtitle}>Shopify + Trendyol — net durum</Text>
+          <Text style={styles.subtitle}>Shopify + Trendyol + Hepsiburada</Text>
         </View>
         <Pressable onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
           <SymbolView name="bell.fill" tintColor={ML.textDim} style={{ width: 24, height: 24 }} />
@@ -126,20 +129,15 @@ export default function DashboardScreen() {
               </View>
             </View>
             <View style={styles.revSplit}>
-              <View style={styles.revPlat}>
-                <View style={[styles.dot, { backgroundColor: ML.shopify }]} />
-                <Text style={styles.revPlatText}>
-                  Shopify {rev ? formatCurrency(rev.shopify.rev) : "…"}
-                  <Text style={styles.revPlatN}>{rev ? `  ${rev.shopify.n}` : ""}</Text>
-                </Text>
-              </View>
-              <View style={styles.revPlat}>
-                <View style={[styles.dot, { backgroundColor: ML.trendyol }]} />
-                <Text style={styles.revPlatText}>
-                  Trendyol {rev ? formatCurrency(rev.trendyol.rev) : "…"}
-                  <Text style={styles.revPlatN}>{rev ? `  ${rev.trendyol.n}` : ""}</Text>
-                </Text>
-              </View>
+              {PLATFORMS.map((plat) => (
+                <View key={plat} style={styles.revPlat}>
+                  <View style={[styles.dot, { backgroundColor: ML[plat] }]} />
+                  <Text style={styles.revPlatText}>
+                    {PLATFORM_LABEL[plat]} {rev ? formatCurrency(rev.byPlat[plat].rev) : "…"}
+                    <Text style={styles.revPlatN}>{rev ? `  ${rev.byPlat[plat].n}` : ""}</Text>
+                  </Text>
+                </View>
+              ))}
             </View>
           </View>
 
@@ -290,8 +288,8 @@ const styles = StyleSheet.create({
   revCiroLabel: { color: ML.textDim, fontSize: 12 },
   revCiro: { color: ML.text, fontSize: 30, fontWeight: "800", letterSpacing: -0.5, marginTop: 2 },
   revProfit: { fontSize: 22, fontWeight: "800", marginTop: 2 },
-  revSplit: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
-  revPlat: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  revSplit: { gap: 8 },
+  revPlat: { flexDirection: "row", alignItems: "center", gap: 6 },
   revPlatText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
   revPlatN: { color: ML.textFaint, fontSize: 12, fontWeight: "400" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },

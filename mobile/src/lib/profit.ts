@@ -1,4 +1,4 @@
-import { simulatePrice } from "@core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
 import { resolveProductCost } from "@core/product-cost";
 import {
   withProductCommissionRule,
@@ -16,12 +16,15 @@ import type {
 } from "@core/types";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
+import type { Platform } from "@/lib/platforms";
 
 export interface PlatformProfit {
   listingId: string;
-  platform: "shopify" | "trendyol";
+  platform: Platform;
   salePrice: number;
   result: SimulationResult;
+  /** Trendyol min sipariş adedi (>1 ise liste "×N" rozeti gösterir). */
+  minOrderQty: number;
 }
 
 export interface ProductProfit {
@@ -70,13 +73,19 @@ export function computeProductProfit(
       expenseRules: filterRulesByPlatform(rules.expense, listing.platform),
       vatRate,
       ...resolveListingCommissionOverride(listing, settings),
-      cargoCostOverride: listing.cargoCost ?? undefined,
+      // Shopify sepet min 150₺ → <150₺ ürün tek başına satılamaz, kargo paylaşılır → 0.
+      cargoCostOverride:
+        listing.cargoCost ??
+        (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
+      // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden (masaüstüyle birebir).
+      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
     });
     return {
       listingId: listing.id,
       platform: listing.platform,
       salePrice: listing.salePrice,
       result,
+      minOrderQty: result.minOrderQty,
     };
   });
 

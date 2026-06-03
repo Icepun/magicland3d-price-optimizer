@@ -11,6 +11,7 @@ import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } fr
 import { buildProductMap, computeOrderProfit, matchLine } from "@/lib/order-profit";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
+import { PLATFORM_LABEL } from "@/lib/platforms";
 
 const TONE: Record<StatusTone, string> = {
   green: ML.green,
@@ -48,7 +49,7 @@ export default function OrderDetailScreen() {
     );
   }
 
-  const accent = order.platform === "shopify" ? ML.shopify : ML.trendyol;
+  const accent = ML[order.platform];
   const st = statusInfo(order);
   const profit =
     products && rules && settings
@@ -66,7 +67,7 @@ export default function OrderDetailScreen() {
         <View style={styles.headRow}>
           <View style={[styles.platDot, { backgroundColor: accent }]} />
           <Text style={[styles.platName, { color: accent }]}>
-            {order.platform === "shopify" ? "Shopify" : "Trendyol"}
+            {PLATFORM_LABEL[order.platform]}
           </Text>
           <View style={[styles.statusBadge, { backgroundColor: TONE[st.tone] + "22" }]}>
             <Text style={[styles.statusText, { color: TONE[st.tone] }]}>{st.label}</Text>

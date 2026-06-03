@@ -1,4 +1,5 @@
 import { batch, query } from "@/lib/turso";
+import type { Platform } from "@/lib/platforms";
 
 export interface ProductCostRow {
   costMode: string;
@@ -16,7 +17,7 @@ export interface ProductCostRow {
 
 export interface ListingRow {
   id: string;
-  platform: "shopify" | "trendyol";
+  platform: Platform;
   salePrice: number;
   stock: number;
   commissionRate: number | null;

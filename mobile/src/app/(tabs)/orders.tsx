@@ -67,7 +67,7 @@ export default function OrdersScreen() {
       {isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
-          <Text style={styles.dim}>Shopify + Trendyol çekiliyor…</Text>
+          <Text style={styles.dim}>Shopify + Trendyol + Hepsiburada çekiliyor…</Text>
         </View>
       ) : (
         <FlatList
@@ -135,7 +135,7 @@ function PhotoBox({ profit, accent }: { profit?: OrderProfit; accent: string }) 
 }
 
 function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfit }) {
-  const accent = order.platform === "shopify" ? ML.shopify : ML.trendyol;
+  const accent = ML[order.platform];
   const st = statusInfo(order);
   const first = order.items[0];
   return (

@@ -41,31 +41,58 @@ interface TyOrder {
   }[];
 }
 
-export async function getTrendyolOrders(size = 30): Promise<UnifiedOrder[]> {
+const WINDOW_DAYS = 30;
+
+/**
+ * Son 30 GÜNÜN siparişleri (masaüstü route.ts ile birebir): /orders statü filtresi YOK →
+ * TÜM statüler gelir. Ama tek sayfa size:100 son-100'le sınırlı → 30 günde 100+ sipariş varsa
+ * eksik çekerdi (kâr yanlış). Çözüm: 14 GÜNLÜK pencerelerle (Trendyol startDate/endDate aralık
+ * limiti ≤2 hafta) tara + her pencerede sayfala; id'ye göre tekilleştir.
+ */
+export async function getTrendyolOrders(): Promise<UnifiedOrder[]> {
   if (!SELLER || !KEY || !SECRET) return [];
   const token = base64(`${KEY}:${SECRET}`);
   const ua = `${SELLER} - ${INTEGRATOR.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30) || "SelfIntegration"}`;
-  const res = await fetch(
-    `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=0&size=${size}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
-    { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
-  );
-  if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
-  const json = (await res.json()) as { content?: TyOrder[] };
-  return (json.content ?? []).map((o) => ({
-    id: `ty-${o.orderNumber}`,
-    platform: "trendyol" as const,
-    orderNumber: o.orderNumber,
-    date: o.orderDate,
-    status: o.status,
-    customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
-    total: o.totalPrice,
-    items: (o.lines ?? []).map((l) => ({
-      name: l.productName,
-      quantity: l.quantity,
-      unitPrice: Number(l.price ?? l.amount ?? 0),
-      matchKeys: [l.barcode, l.sku, l.stockCode, l.merchantSku].filter(
-        (k): k is string => !!k && k !== "merchantSku"
-      ),
-    })),
-  }));
+
+  const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
+  const CHUNK = 14 * 86_400_000;
+  const seen = new Set<string>();
+  const orders: UnifiedOrder[] = [];
+
+  for (let chunkEnd = Date.now(); chunkEnd > cutoff; chunkEnd -= CHUNK) {
+    const chunkStart = Math.max(cutoff, chunkEnd - CHUNK);
+    for (let pageNo = 0; pageNo < 50; pageNo++) {
+      const res = await fetch(
+        `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${chunkStart}&endDate=${chunkEnd}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
+        { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
+      );
+      if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
+      const json = (await res.json()) as { content?: TyOrder[] };
+      const content = json.content ?? [];
+      for (const [i, o] of content.entries()) {
+        const key = String(o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`);
+        if (seen.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
+        seen.add(key);
+        orders.push({
+          id: `ty-${o.orderNumber}`,
+          platform: "trendyol" as const,
+          orderNumber: o.orderNumber,
+          date: o.orderDate,
+          status: o.status,
+          customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
+          total: o.totalPrice,
+          items: (o.lines ?? []).map((l) => ({
+            name: l.productName,
+            quantity: l.quantity,
+            unitPrice: Number(l.price ?? l.amount ?? 0),
+            matchKeys: [l.barcode, l.sku, l.stockCode, l.merchantSku].filter(
+              (k): k is string => !!k && k !== "merchantSku"
+            ),
+          })),
+        });
+      }
+      if (content.length < 100) break; // son sayfa
+    }
+  }
+  return orders;
 }

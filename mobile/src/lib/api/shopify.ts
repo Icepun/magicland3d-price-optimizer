@@ -25,8 +25,8 @@ async function getAdminToken(): Promise<string> {
   return json.access_token;
 }
 
-const ORDERS_QUERY = `query($first:Int!){
-  orders(first:$first, sortKey:CREATED_AT, reverse:true){
+const ORDERS_QUERY = `query($first:Int!,$query:String){
+  orders(first:$first, sortKey:CREATED_AT, reverse:true, query:$query){
     edges{ node{
       id name createdAt displayFulfillmentStatus
       totalPriceSet{ shopMoney{ amount } }
@@ -62,13 +62,18 @@ interface ShEdge {
   };
 }
 
-export async function getShopifyOrders(limit = 30): Promise<UnifiedOrder[]> {
+// Masaüstü WINDOW_DAYS=30 ile aynı: son 30 günü çek ("last N" değil).
+const SINCE_DAYS = 30;
+
+export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
   if (!SHOP || !CID || !CSECRET) return [];
   const token = await getAdminToken();
+  // Masaüstü ShopifyClient.listOrders ile birebir: created_at:>=<ISO> filtresi (sinceDays=30).
+  const sinceQuery = `created_at:>=${new Date(Date.now() - SINCE_DAYS * 86_400_000).toISOString()}`;
   const res = await fetch(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
     method: "POST",
     headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: ORDERS_QUERY, variables: { first: limit } }),
+    body: JSON.stringify({ query: ORDERS_QUERY, variables: { first: limit, query: sinceQuery } }),
   });
   const json = (await res.json()) as {
     data?: { orders?: { edges: ShEdge[] } };

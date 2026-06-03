@@ -42,7 +42,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "sync-core": "rm -rf src/core && cp -R ../src/core src/core && rm -f src/core/*.test.ts"
+    "sync-core": "rm -rf src/core && cp -R ../src/core src/core && rm -rf src/core/printers && rm -f src/core/*.test.ts"
   },
   "private": true
 }

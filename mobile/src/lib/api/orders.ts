@@ -1,5 +1,7 @@
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
+import { getHepsiburadaOrders } from "@/lib/api/hepsiburada";
+import type { Platform } from "@/lib/platforms";
 
 export interface OrderItem {
   name: string;
@@ -11,7 +13,7 @@ export interface OrderItem {
 
 export interface UnifiedOrder {
   id: string;
-  platform: "shopify" | "trendyol";
+  platform: Platform;
   orderNumber: string;
   date: number;
   status: string;
@@ -25,9 +27,13 @@ export interface OrdersResult {
   errors: string[];
 }
 
-/** Shopify + Trendyol siparişlerini paralel çek, birleştir, tarihe göre sırala. */
+/** Shopify + Trendyol + Hepsiburada siparişlerini paralel çek, birleştir, tarihe göre sırala. */
 export async function getAllOrders(): Promise<OrdersResult> {
-  const [sh, ty] = await Promise.allSettled([getShopifyOrders(), getTrendyolOrders()]);
+  const [sh, ty, hb] = await Promise.allSettled([
+    getShopifyOrders(),
+    getTrendyolOrders(),
+    getHepsiburadaOrders(),
+  ]);
   const orders: UnifiedOrder[] = [];
   const errors: string[] = [];
 
@@ -35,6 +41,8 @@ export async function getAllOrders(): Promise<OrdersResult> {
   else errors.push(`Shopify: ${sh.reason?.message ?? sh.reason}`);
   if (ty.status === "fulfilled") orders.push(...ty.value);
   else errors.push(`Trendyol: ${ty.reason?.message ?? ty.reason}`);
+  if (hb.status === "fulfilled") orders.push(...hb.value);
+  else errors.push(`Hepsiburada: ${hb.reason?.message ?? hb.reason}`);
 
   orders.sort((a, b) => b.date - a.date);
   return { orders, errors };
@@ -63,7 +71,23 @@ const SHOPIFY_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   ON_HOLD: { label: "Beklemede", tone: "orange" },
 };
 
+// HB ham statüleri (hepsiburada.ts'ten gelen etiketler) → rozet.
+const HEPSIBURADA_STATUS: Record<string, { label: string; tone: StatusTone }> = {
+  Open: { label: "Yeni", tone: "orange" },
+  New: { label: "Yeni", tone: "orange" },
+  Packaged: { label: "Hazırlanıyor", tone: "orange" },
+  Shipped: { label: "Kargoda", tone: "accent" },
+  Delivered: { label: "Teslim", tone: "green" },
+  UnDelivered: { label: "Teslim edilemedi", tone: "red" },
+  Cancelled: { label: "İptal", tone: "red" },
+};
+
 export function statusInfo(o: UnifiedOrder): { label: string; tone: StatusTone } {
-  const map = o.platform === "trendyol" ? TRENDYOL_STATUS : SHOPIFY_STATUS;
+  const map =
+    o.platform === "trendyol"
+      ? TRENDYOL_STATUS
+      : o.platform === "hepsiburada"
+        ? HEPSIBURADA_STATUS
+        : SHOPIFY_STATUS;
   return map[o.status] ?? { label: o.status, tone: "dim" };
 }
