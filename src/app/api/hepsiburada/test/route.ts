@@ -7,8 +7,15 @@ export async function POST() {
   try {
     const client = new HepsiburadaClient(await getHepsiburadaCredentials());
     const result = await client.test();
+    const total = (result.sample as { totalCount?: number } | null)?.totalCount;
     // Dönen ham örneği de geri ver → UI'da gösterip gerçek alan adlarını teyit edeceğiz.
-    return NextResponse.json({ ok: true, sample: result.sample, checkedAt: new Date().toISOString() });
+    return NextResponse.json({
+      ok: true,
+      environment: result.environment,
+      totalCount: typeof total === "number" ? total : undefined,
+      sample: result.sample,
+      checkedAt: new Date().toISOString(),
+    });
   } catch (error) {
     return jsonError(error);
   }

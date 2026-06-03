@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store } from "lucide-react";
 
 interface TrendyolPublicSettings {
@@ -35,10 +36,10 @@ interface ShopifyPublicSettings {
 
 interface HepsiburadaPublicSettings {
   merchantId: string;
-  hasUsername: boolean;
-  usernameMasked: string;
-  hasPassword: boolean;
-  passwordMasked: string;
+  developerUsername: string;
+  environment: "test" | "prod";
+  hasSecretKey: boolean;
+  secretKeyMasked: string;
 }
 
 interface ShopifyDebugResult {
@@ -608,8 +609,9 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
 // ───────────── Hepsiburada Form ─────────────
 const HepsiburadaSchema = z.object({
   merchantId: z.string().min(1, "merchantId gerekli"),
-  username: z.string().optional(),
-  password: z.string().optional(),
+  secretKey: z.string().optional(),
+  developerUsername: z.string().optional(),
+  environment: z.enum(["test", "prod"]),
 });
 type HepsiburadaForm = z.infer<typeof HepsiburadaSchema>;
 
@@ -622,9 +624,12 @@ function HepsiburadaTab() {
 
   const form = useForm<HepsiburadaForm>({
     resolver: zodResolver(HepsiburadaSchema),
-    defaultValues: { merchantId: "", username: "", password: "" },
-    values: settings ? { merchantId: settings.merchantId, username: "", password: "" } : undefined,
+    defaultValues: { merchantId: "", secretKey: "", developerUsername: "", environment: "test" },
+    values: settings
+      ? { merchantId: settings.merchantId, secretKey: "", developerUsername: settings.developerUsername, environment: settings.environment }
+      : undefined,
   });
+  const environment = form.watch("environment");
 
   const save = useMutation({
     mutationFn: (data: HepsiburadaForm) =>
@@ -643,10 +648,12 @@ function HepsiburadaTab() {
 
   const [sample, setSample] = useState<unknown>(null);
   const test = useMutation({
-    mutationFn: () => fetchJson<{ ok: boolean; sample?: unknown }>("/api/hepsiburada/test", { method: "POST" }),
+    mutationFn: () => fetchJson<{ ok: boolean; environment?: "test" | "prod"; totalCount?: number; sample?: unknown }>("/api/hepsiburada/test", { method: "POST" }),
     onSuccess: (d) => {
       setSample(d.sample ?? null);
-      toast.success("Hepsiburada bağlantısı başarılı");
+      const envLabel = d.environment === "prod" ? "Canlı" : "Test";
+      const count = typeof d.totalCount === "number" ? ` · ${d.totalCount} ürün` : "";
+      toast.success(`Hepsiburada bağlantısı başarılı (${envLabel})${count}`);
     },
     onError: (e: Error) => {
       setSample(null);
@@ -681,31 +688,48 @@ function HepsiburadaTab() {
             <Store className="h-4 w-4" /> Hepsiburada API
           </CardTitle>
           <p className="text-[11px] text-muted-foreground mt-1">
-            HTTP Basic Auth — Satıcı paneli → mağaza adı → Hesabım → Entegrasyon → Entegratör Bilgileri'nden
-            <strong> kullanıcı adı + şifre</strong>, merchantId ise mağaza kimliğin.
+            Mağaza kimliği + gizli anahtar + geliştirici kullanıcı adı. Önce Test, onaylanınca Canlı.
           </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={form.handleSubmit((d) => save.mutate(d))} className="space-y-3">
             <div>
+              <Label className="text-xs">Ortam</Label>
+              <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border bg-muted/30 p-1">
+                {(["test", "prod"] as const).map((env) => (
+                  <button
+                    key={env}
+                    type="button"
+                    onClick={() => form.setValue("environment", env, { shouldDirty: true })}
+                    className={cn(
+                      "rounded-md py-1.5 text-xs font-medium transition-colors",
+                      environment === env
+                        ? env === "prod"
+                          ? "bg-green-600 text-white shadow-sm"
+                          : "bg-amber-500 text-white shadow-sm"
+                        : "text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    {env === "test" ? "Test" : "Canlı"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
               <Label className="text-xs">Merchant ID (Mağaza ID)</Label>
               <Input {...form.register("merchantId")} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
             </div>
             <div>
-              <Label className="text-xs">Entegrasyon Kullanıcı Adı</Label>
+              <Label className="text-xs">Gizli Anahtar (Secret Key)</Label>
               <Input
-                {...form.register("username")}
+                {...form.register("secretKey")}
                 type="password"
-                placeholder={settings?.hasUsername ? settings.usernameMasked : "API kullanıcı adı"}
+                placeholder={settings?.hasSecretKey ? settings.secretKeyMasked : "Gizli anahtar"}
               />
             </div>
             <div>
-              <Label className="text-xs">Entegrasyon Şifresi</Label>
-              <Input
-                {...form.register("password")}
-                type="password"
-                placeholder={settings?.hasPassword ? settings.passwordMasked : "API şifresi"}
-              />
+              <Label className="text-xs">Geliştirici Kullanıcı Adı</Label>
+              <Input {...form.register("developerUsername")} placeholder="örn. magicland3d_dev" />
             </div>
             <Button type="submit" size="sm" disabled={save.isPending}>
               {save.isPending ? "Kaydediliyor…" : "Kaydet"}

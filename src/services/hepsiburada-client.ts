@@ -1,27 +1,31 @@
 /**
  * Hepsiburada Marketplace API istemcisi.
  *
- * Auth (doğrulandı): HTTP Basic Auth — base64(kullanıcıAdı:şifre) Authorization header'ında,
- * merchantId (GUID) isteklerde path parametresi. HB ayrıca bir User-Agent ister.
+ * Auth (DOĞRULANDI, 2026-06 test hesabıyla canlı): HTTP Basic Auth = base64(merchantId:secretKey)
+ * + ZORUNLU `User-Agent: <developerUsername>` header. merchantId ayrıca path param.
+ * Ortam: "test" (SIT) veya "prod" (canlı) — host'lar buna göre seçilir.
  *
- * NOT: HB geliştirici dokümanları girişe kapalı olduğundan kesin endpoint yolları + yanıt
- * şekilleri kullanıcının kendi hesabıyla "Test Bağlantısı" ile doğrulanacak; o yüzden host'lar
- * sabit, yollar tek yerde — gerekirse 1 satırda düzeltilir. Yanıtlar defansif okunur.
+ * Kanonik bilgi: docs/hepsiburada/ (README/test-certification/business-rules-faq).
  */
+
+export type HbEnvironment = "test" | "prod";
 
 export interface HepsiburadaCredentials {
   merchantId: string;
-  username: string;
-  password: string;
+  secretKey: string;
+  developerUsername: string;
+  environment: HbEnvironment;
 }
 
 export interface HepsiburadaListing {
   merchantSku?: string;
   hepsiburadaSku?: string;
+  listingId?: string;
   sku?: string;
   barcode?: string;
   productBarcode?: string;
   productName?: string;
+  productId?: string;
   price?: number;
   availableStock?: number;
   stock?: number;
@@ -51,11 +55,22 @@ export interface HepsiburadaOrder {
   [k: string]: unknown;
 }
 
-const HOSTS = {
-  oms: "https://oms-external.hepsiburada.com",
-  listing: "https://listing-external.hepsiburada.com",
-  mpop: "https://mpop.hepsiburada.com",
-};
+/** Ortam bazlı host'lar. test = SIT (-sit), prod = canlı. (README §0) */
+export function hepsiburadaHosts(env: HbEnvironment) {
+  return env === "prod"
+    ? {
+        oms: "https://oms-external.hepsiburada.com",
+        omsStub: "https://oms-external.hepsiburada.com", // canlıda test sipariş üretimi yok
+        listing: "https://listing-external.hepsiburada.com",
+        mpop: "https://mpop.hepsiburada.com",
+      }
+    : {
+        oms: "https://oms-external-sit.hepsiburada.com",
+        omsStub: "https://oms-stub-external-sit.hepsiburada.com", // sadece TEST sipariş üretimi (DOĞRULANDI)
+        listing: "https://listing-external-sit.hepsiburada.com", // DOĞRULANDI
+        mpop: "https://mpop-sit.hepsiburada.com",
+      };
+}
 
 export class HepsiburadaApiError extends Error {
   constructor(public readonly status: number, message: string, public readonly details?: unknown) {
@@ -65,16 +80,23 @@ export class HepsiburadaApiError extends Error {
 }
 
 export class HepsiburadaClient {
-  constructor(private readonly credentials: HepsiburadaCredentials) {}
+  private readonly hosts: ReturnType<typeof hepsiburadaHosts>;
+  constructor(private readonly credentials: HepsiburadaCredentials) {
+    this.hosts = hepsiburadaHosts(credentials.environment);
+  }
+
+  get environment(): HbEnvironment {
+    return this.credentials.environment;
+  }
 
   private headers(): HeadersInit {
-    const token = Buffer.from(`${this.credentials.username}:${this.credentials.password}`, "utf8").toString("base64");
+    const token = Buffer.from(`${this.credentials.merchantId}:${this.credentials.secretKey}`, "utf8").toString("base64");
     return {
       Authorization: `Basic ${token}`,
       Accept: "application/json",
       "Content-Type": "application/json",
-      // HB User-Agent zorunlu tutuyor; kullanıcı adı (entegratör adı) konvansiyonu.
-      "User-Agent": this.credentials.username || this.credentials.merchantId || "MagiclandHub",
+      // HB User-Agent'ı ZORUNLU tutuyor → developer username (entegratör adı). Eksikse 403.
+      "User-Agent": this.credentials.developerUsername || "MagiclandHub",
     };
   }
 
@@ -91,9 +113,9 @@ export class HepsiburadaClient {
       if (Array.isArray(cand)) return cand.map(String).join(", ");
       if (cand) return String(cand);
     }
-    if (status === 401) return "Yetkilendirme başarısız. Kullanıcı adı / şifre / merchantId'yi kontrol edin.";
-    if (status === 403) return "Hepsiburada isteği engelledi (yetki/User-Agent). Entegrasyon kullanıcısının izinleri açık mı?";
-    if (status === 404) return "Adres bulunamadı (endpoint). Bu uç henüz hesabınızla doğrulanmadı.";
+    if (status === 401) return "Yetkilendirme başarısız. merchantId / gizli anahtar (secret key) doğru mu?";
+    if (status === 403) return "Hepsiburada isteği engelledi. Geliştirici kullanıcı adı (User-Agent) doğru mu, yetki tanımlı mı?";
+    if (status === 404) return "Adres bulunamadı (endpoint). Ortam (Test/Canlı) seçimi doğru mu?";
     if (status === 429) return "Hepsiburada servis limitine takıldı. Biraz bekleyin.";
     return fallback;
   }
@@ -112,20 +134,20 @@ export class HepsiburadaClient {
     return body as T;
   }
 
-  /** Bağlantı testi: az veriyle listing uç noktasına vurur. Auth + erişim doğrulanır. */
-  async test(): Promise<{ ok: true; sample: unknown }> {
+  /** Bağlantı testi: az veriyle listing uç noktasına vurur. Auth + ortam + erişim doğrulanır. */
+  async test(): Promise<{ ok: true; environment: HbEnvironment; sample: unknown }> {
     const sample = await this.request<unknown>(
-      `${HOSTS.listing}/listings/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=0&limit=1`
+      `${this.hosts.listing}/listings/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=0&limit=1`
     );
-    return { ok: true, sample };
+    return { ok: true, environment: this.credentials.environment, sample };
   }
 
-  /** Mağaza listing'leri (fiyat/stok/sku). Sayfalı. */
+  /** Mağaza listing'leri (fiyat/stok/sku). Sayfalı. (DOĞRULANDI şema: README §0) */
   async listListings(params: { offset?: number; limit?: number } = {}): Promise<unknown> {
     const offset = params.offset ?? 0;
     const limit = params.limit ?? 100;
     return this.request<unknown>(
-      `${HOSTS.listing}/listings/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
+      `${this.hosts.listing}/listings/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
     );
   }
 
@@ -134,7 +156,7 @@ export class HepsiburadaClient {
     const offset = params.offset ?? 0;
     const limit = params.limit ?? 50;
     return this.request<unknown>(
-      `${HOSTS.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
+      `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
     );
   }
 }

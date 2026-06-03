@@ -20,7 +20,7 @@ export async function GET() {
       trendyol?.sellerId && trendyol.hasApiKey && trendyol.hasApiSecret
     ),
     hepsiburada: Boolean(
-      hepsiburada?.merchantId && hepsiburada.hasUsername && hepsiburada.hasPassword
+      hepsiburada?.merchantId && hepsiburada.hasSecretKey && hepsiburada.developerUsername
     ),
   });
 }

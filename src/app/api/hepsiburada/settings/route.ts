@@ -5,11 +5,18 @@ import { jsonError } from "@/lib/api-error";
 
 const Schema = z.object({
   merchantId: z.string().min(1, "merchantId zorunlu"),
-  username: z.string().optional(),
-  password: z.string().optional(),
+  secretKey: z.string().optional(),
+  developerUsername: z.string().optional(),
+  environment: z.enum(["test", "prod"]).optional(),
 });
 
-const emptySettings = { merchantId: "", hasUsername: false, hasPassword: false, usernameMasked: "", passwordMasked: "" };
+const emptySettings = {
+  merchantId: "",
+  developerUsername: "",
+  environment: "test" as const,
+  hasSecretKey: false,
+  secretKeyMasked: "",
+};
 
 export async function GET() {
   try {
