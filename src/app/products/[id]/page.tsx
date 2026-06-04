@@ -913,9 +913,10 @@ function PlatformProfitCardImpl({
   const missingCost = hasCost === false;
   const isLoss = result && result.netProfit < 0;
   const isThin = result && !isLoss && result.profitMargin < 0.1;
-  // Trendyol'da komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar
+  // Pazaryerinde (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar.
+  // Shopify sabit komisyonlu → uyarı gerekmez.
   const commissionMissing =
-    platform === "trendyol" &&
+    (platform === "trendyol" || platform === "hepsiburada") &&
     Boolean(result) &&
     !result?.appliedCommissionRule &&
     (listing?.commissionRate == null);
@@ -1053,7 +1054,7 @@ function PlatformProfitCardImpl({
               <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-2 font-medium">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>
-                  Trendyol komisyonu girilmemiş! Kâr olduğundan yüksek görünüyor.
+                  {info.label} komisyonu girilmemiş! Kâr olduğundan yüksek görünüyor.
                   Düzenle&apos;den komisyon oranını gir veya Komisyon Kuralları&apos;na ekle.
                 </span>
               </div>
