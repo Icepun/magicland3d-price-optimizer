@@ -1,19 +1,50 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useIsFetching } from "@tanstack/react-query";
 import Image from "next/image";
 
+/**
+ * Açılış ekranı — DÜRÜST (sabit zamanlayıcı değil).
+ *
+ * Eskiden sabit 2.6sn/3.3sn timer'dı: uygulama hazır olmadan kaybolup iskelet/boş flaş yaratıyor
+ * ya da hazırsa gereksiz bekletiyordu ("garip açılış"). Artık panel verisi (["dashboard"] sorgusu)
+ * GERÇEKTEN gelince kapanır:
+ *   • Açılışta dashboard fetch başlar (inFlight>0) → biter (inFlight=0) → hazır.
+ *   • MIN: logo flaş etmesin diye en az 550ms görünür.
+ *   • MAX: fail-safe — veri hiç gelmese bile 7sn'de kapanır (asılı kalmaz).
+ */
 export function SplashScreen() {
   const [visible, setVisible] = useState(true);
   const [mounted, setMounted] = useState(true);
 
+  // Panel verisi havada mı? (0 = boşta). İlk açılışta 0→>0→0 seyreder.
+  const dashFetching = useIsFetching({ queryKey: ["dashboard"] });
+  const sawFetchRef = useRef(false);
+  const fetchingRef = useRef(dashFetching);
+  fetchingRef.current = dashFetching;
+  if (dashFetching > 0) sawFetchRef.current = true;
+
   useEffect(() => {
-    const fadeTimer = setTimeout(() => setVisible(false), 2600);
-    const unmountTimer = setTimeout(() => setMounted(false), 3300);
-    return () => {
-      clearTimeout(fadeTimer);
-      clearTimeout(unmountTimer);
+    const MIN_MS = 550; // logo flaş etmesin
+    const MAX_MS = 7000; // fail-safe: hiçbir zaman asılı kalmasın
+    const start = performance.now();
+    let done = false;
+    const hide = () => {
+      if (done) return;
+      done = true;
+      setVisible(false);
+      setTimeout(() => setMounted(false), 700); // fade süresiyle aynı
     };
+    const id = setInterval(() => {
+      const elapsed = performance.now() - start;
+      const dataReady = sawFetchRef.current && fetchingRef.current === 0;
+      if ((dataReady && elapsed >= MIN_MS) || elapsed >= MAX_MS) {
+        clearInterval(id);
+        hide();
+      }
+    }, 80);
+    return () => clearInterval(id);
   }, []);
 
   if (!mounted) return null;
