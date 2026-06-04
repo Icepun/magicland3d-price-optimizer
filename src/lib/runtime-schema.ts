@@ -13,7 +13,7 @@ let schemaReady: Promise<void> | null = null;
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "23";
+const CURRENT_SCHEMA_VERSION = "24";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -409,6 +409,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`
     );
+    // Varyant grubu model paylaşımı (v0.19.62): açıksa yüklenen dosya tüm varyantlara fan-out edilir.
+    await ensureColumn("VariantGroup", "shareModels", "BOOLEAN NOT NULL DEFAULT false");
 
     // CargoRule platform alanı (Trendyol/Shopify ayrı baremi)
     await ensureColumn("CargoRule", "platform", "TEXT");

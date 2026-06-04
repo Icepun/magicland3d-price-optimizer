@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
-interface VariantGroupLite { id: string; name: string; products: { id: string }[] }
+interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
 interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number }
 
 function fmtSize(b: number) {
@@ -56,8 +56,45 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
 
   const memberCount = variantGroup?.products?.length ?? 0;
   const inGroup = memberCount >= 2;
-  const [applyToVariants, setApplyToVariants] = useState(false);
+  // Paylaşım modu GRUP özelliğidir (VariantGroup.shareModels) → kalıcı: sayfa değişse de cihaz değişse de korunur.
+  // Yerel state prop'tan seed'lenir; başka sayfaya gidip dönünce komponent remount olur ve cache'teki kalıcı değerle yeniden seed olur.
+  const [applyToVariants, setApplyToVariants] = useState(variantGroup?.shareModels ?? false);
   const shareOn = inGroup && applyToVariants;
+
+  // Paylaşımı aç/kapa: optimistic (anında çevir) + DB'ye yaz + grubun TÜM üyelerinin detay
+  // cache'ini yamala (grup özelliği → her varyantta tutarlı). Minimum DB: refetch yok.
+  type ShareSlice = { variantGroup?: { shareModels?: boolean } | null };
+  const patchMembers = (val: boolean) => {
+    for (const m of variantGroup?.products ?? []) {
+      qc.setQueryData<ShareSlice>(["product", m.id], (old) =>
+        old?.variantGroup ? { ...old, variantGroup: { ...old.variantGroup, shareModels: val } } : old
+      );
+    }
+  };
+  const toggleShare = useMutation({
+    mutationFn: async (next: boolean) => {
+      if (!variantGroup) throw new Error("no group");
+      const r = await fetch(`/api/variant-groups/${variantGroup.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shareModels: next }),
+      });
+      if (!r.ok) throw new Error("Kaydedilemedi");
+      return next;
+    },
+    onMutate: (next: boolean) => {
+      const prev = applyToVariants;
+      setApplyToVariants(next);
+      patchMembers(next);
+      return { prev };
+    },
+    onError: (_e, _next, ctx) => {
+      const prev = ctx?.prev ?? false;
+      setApplyToVariants(prev);
+      patchMembers(prev);
+      toast.error("Paylaşım ayarı kaydedilemedi");
+    },
+  });
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["product-models", productId] });
@@ -78,9 +115,11 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
         {inGroup && (
           <button
             type="button"
-            onClick={() => setApplyToVariants((v) => !v)}
+            onClick={() => toggleShare.mutate(!applyToVariants)}
+            disabled={toggleShare.isPending}
+            aria-pressed={shareOn}
             className={cn(
-              "w-full flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors",
+              "w-full flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors disabled:opacity-70",
               shareOn ? "border-primary/40 bg-primary/[0.06]" : "border-dashed hover:bg-muted/40"
             )}
           >
@@ -89,8 +128,15 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
             </span>
             <Layers className="h-4 w-4 text-primary shrink-0" />
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium">Tüm varyantlara uygula</p>
-              <p className="text-[11px] text-muted-foreground">Yüklediğin dosya bu ürünün {memberCount} varyantının hepsinde görünür. Aynı model, farklı renk için idealdir.</p>
+              <p className="text-xs font-medium flex items-center gap-1.5">
+                Tüm varyantlara uygula
+                {shareOn && <span className="text-[10px] font-semibold text-primary">· Açık</span>}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {shareOn
+                  ? `Yüklediğin her dosya ${memberCount} varyantın hepsine eklenir — bu ayar kayıtlı kalır.`
+                  : `Dosyalar yalnızca bu varyanta eklenir. Aç → ${memberCount} varyanta birden uygulanır (aynı model, farklı renk).`}
+              </p>
             </div>
           </button>
         )}

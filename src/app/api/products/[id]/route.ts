@@ -75,6 +75,7 @@ export async function GET(
         select: {
           id: true,
           name: true,
+          shareModels: true,
           products: {
             select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
             orderBy: [{ variantLabel: "asc" }, { name: "asc" }],

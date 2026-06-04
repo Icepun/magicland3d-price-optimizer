@@ -3,11 +3,16 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
-const UpdateSchema = z.object({
-  name: z.string().min(1, "Grup adı zorunlu"),
-});
+const UpdateSchema = z
+  .object({
+    name: z.string().min(1, "Grup adı zorunlu").optional(),
+    shareModels: z.boolean().optional(),
+  })
+  .refine((d) => d.name !== undefined || d.shareModels !== undefined, {
+    message: "Güncellenecek alan yok",
+  });
 
-/** Grubu yeniden adlandır. */
+/** Grubu yeniden adlandır ve/veya model paylaşım modunu değiştir. */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,11 +20,11 @@ export async function PATCH(
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const { name } = UpdateSchema.parse(await req.json());
-    const group = await prisma.variantGroup.update({
-      where: { id },
-      data: { name: name.trim() },
-    });
+    const body = UpdateSchema.parse(await req.json());
+    const data: { name?: string; shareModels?: boolean } = {};
+    if (body.name !== undefined) data.name = body.name.trim();
+    if (body.shareModels !== undefined) data.shareModels = body.shareModels;
+    const group = await prisma.variantGroup.update({ where: { id }, data });
     return NextResponse.json(group);
   } catch (error) {
     return NextResponse.json(

@@ -14,6 +14,7 @@ import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
 import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
+import { MatchListingModal } from "@/components/products/MatchListingModal";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera } from "lucide-react";
@@ -83,6 +84,7 @@ interface ProductDetail {
   variantGroup: {
     id: string;
     name: string;
+    shareModels: boolean;
     products: {
       id: string;
       name: string;
@@ -818,6 +820,7 @@ export default function ProductDetailPage({
                   platform={platform}
                   listing={listing ?? null}
                   productId={product.id}
+                  productName={product.name}
                   liveResult={platformPreview?.result ?? null}
                   hasCost={preview?.hasCost ?? null}
                 />
@@ -871,12 +874,14 @@ function PlatformProfitCardImpl({
   platform,
   listing,
   productId,
+  productName,
   liveResult,
   hasCost,
 }: {
   platform: "shopify" | "trendyol" | "hepsiburada";
   listing: Listing | null;
   productId: string;
+  productName: string;
   /** Parent'tan gelen real-time kâr önizlemesi (kaydetmeden) */
   liveResult: SimulationResult | null;
   /** Maliyet girilmiş mi (preview yüklendiyse). null = preview henüz yüklenmedi */
@@ -886,6 +891,7 @@ function PlatformProfitCardImpl({
   const queryClient = useQueryClient();
 
   const [editing, setEditing] = useState(false);
+  const [matchOpen, setMatchOpen] = useState(false);
   const [salePrice, setSalePrice] = useState(listing?.salePrice ? String(listing.salePrice) : "");
   const [commissionRate, setCommissionRate] = useState(
     listing?.commissionRate ? String(listing.commissionRate * 100) : ""
@@ -1050,7 +1056,27 @@ function PlatformProfitCardImpl({
                 </Button>
               </div>
             </div>
+          ) : platform !== "shopify" ? (
+            // Trendyol / HB: ürünler sayfasındaki gibi eşleştirme akışı (barkod yapıştır / listeden seç).
+            <div className="space-y-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setMatchOpen(true)}
+              >
+                <Plus className="h-4 w-4 mr-1.5" /> Bu Platforma Ekle
+              </Button>
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="w-full text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+              >
+                Listede yok mu? Manuel gir
+              </button>
+            </div>
           ) : (
+            // Shopify ana ürün kaynağı — eşleştirme havuzu yok, manuel ekleme.
             <Button
               variant="outline"
               size="sm"
@@ -1059,6 +1085,20 @@ function PlatformProfitCardImpl({
             >
               <Plus className="h-4 w-4 mr-1.5" /> Bu Platforma Ekle
             </Button>
+          )}
+          {matchOpen && platform !== "shopify" && (
+            <MatchListingModal
+              productId={productId}
+              productName={productName}
+              platform={platform}
+              onClose={() => setMatchOpen(false)}
+              onMatched={() => {
+                queryClient.invalidateQueries({ queryKey: ["product", productId] });
+                queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
+                queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
+                patchProductsInCache(queryClient, [productId]);
+              }}
+            />
           )}
         </CardContent>
       </Card>

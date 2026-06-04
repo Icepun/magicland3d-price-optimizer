@@ -61,6 +61,8 @@ model Product {
 model VariantGroup {
   id        String   @id @default(cuid())
   name      String
+  /** Açıksa: gruba yüklenen baskı dosyaları tüm varyantlara fan-out edilir (aynı model, farklı renk). */
+  shareModels Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
