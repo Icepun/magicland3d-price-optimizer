@@ -221,16 +221,31 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
     })
   );
   for (const [idx, pkgs] of pkgResults.entries()) {
-    const label = pkgStatuses[idx][1];
+    const [statusCode, label] = pkgStatuses[idx];
+    // Statüsüz /packages ucu (paketlenecek/gönderime-hazır/kargoda) TAM sipariş verir: kalem+tutar
+    // `items` içinde gelir → packageNumber/id anahtarıyla DOĞRUDAN işlenir (detay fetch GEREKMEZ).
+    // (Masaüstü v0.19.56: önceden sadece teslim edilenler görünüyordu.)
+    const isFullOrder = statusCode === "";
     for (const p of pkgs) {
-      const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-      if (!on || agg.has(on)) continue;
-      agg.set(on, {
-        status: label,
-        date: hbDateMs(p.DeliveredDate, p.ShippedDate, p.CreatedDate, p.orderDate, p.PackageReadyDate),
-        customer: null,
-        lines: null,
-      });
+      if (isFullOrder) {
+        const key = hbStr(p.packageNumber, p.id, p.OrderNumber, p.orderNumber);
+        if (!key || agg.has(key)) continue;
+        agg.set(key, {
+          status: hbStr(p.status) || label,
+          date: hbDateMs(p.orderDate, p.CreatedDate, p.PackageReadyDate),
+          customer: hbStr(p.recipientName, p.customerName) || null,
+          lines: (hbArray(p, ["items", "lines", "orderItems"]) as Record<string, unknown>[]).map(hbLineRaw),
+        });
+      } else {
+        const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+        if (!on || agg.has(on)) continue;
+        agg.set(on, {
+          status: label,
+          date: hbDateMs(p.DeliveredDate, p.ShippedDate, p.UndeliveredDate, p.CreatedDate, p.orderDate, p.PackageReadyDate),
+          customer: null,
+          lines: null,
+        });
+      }
     }
   }
 
@@ -250,7 +265,10 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
       );
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       e.customer = e.customer ?? (hbStr((d.customer ?? {}).name, d.customerName) || null);
-      if (e.date == null) e.date = hbDateMs(d.orderDate, d.createdDate);
+      // Sipariş VERME tarihini tercih et (kargo/teslim değil) → liste + 30g penceresi sipariş tarihine
+      // göre (masaüstü v0.19.58). Paketten gelen ShippedDate/DeliveredDate bununla ezilir.
+      const od = hbDateMs(d.orderDate, d.createdDate);
+      if (od != null) e.date = od;
     } catch {
       /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır */
     }
