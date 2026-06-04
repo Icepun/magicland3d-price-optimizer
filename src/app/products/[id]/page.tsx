@@ -700,9 +700,6 @@ function PlatformProfitCardImpl({
   const [commissionRate, setCommissionRate] = useState(
     listing?.commissionRate ? String(listing.commissionRate * 100) : ""
   );
-  const [cargoCost, setCargoCost] = useState(
-    listing?.cargoCost ? String(listing.cargoCost) : ""
-  );
   // Bu platformun sipariş-eşleşme barkodu (HB barkodu Trendyol'dan farklı → ayrı girilir, #7).
   const [listingBarcode, setListingBarcode] = useState(listing?.barcode ?? "");
 
@@ -710,7 +707,6 @@ function PlatformProfitCardImpl({
     if (listing) {
       setSalePrice(String(listing.salePrice));
       setCommissionRate(listing.commissionRate ? String(listing.commissionRate * 100) : "");
-      setCargoCost(listing.cargoCost ? String(listing.cargoCost) : "");
       setListingBarcode(listing.barcode ?? "");
     }
   }, [listing]);
@@ -729,7 +725,7 @@ function PlatformProfitCardImpl({
           platform,
           salePrice: parseFloat(salePrice) || 0,
           commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
-          cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+          cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
       }).then((r) => r.json()),
@@ -754,7 +750,7 @@ function PlatformProfitCardImpl({
         body: JSON.stringify({
           salePrice: parseFloat(salePrice) || 0,
           commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
-          cargoCost: cargoCost ? parseFloat(cargoCost) : null,
+          cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
       }).then((r) => r.json()),
@@ -818,17 +814,6 @@ function PlatformProfitCardImpl({
                   value={commissionRate}
                   onChange={(e) => setCommissionRate(e.target.value)}
                   placeholder="örn. 14"
-                />
-              </div>
-              <div>
-                <Label className="text-xs">Kargo (TL) — boş bırak otomatik</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={cargoCost}
-                  onChange={(e) => setCargoCost(e.target.value)}
-                  placeholder="örn. 65"
                 />
               </div>
               {showBarcodeField && (
@@ -989,17 +974,6 @@ function PlatformProfitCardImpl({
                 step="0.01"
                 value={commissionRate}
                 onChange={(e) => setCommissionRate(e.target.value)}
-                placeholder="otomatik"
-              />
-            </div>
-            <div>
-              <Label className="text-xs">Kargo (TL)</Label>
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                value={cargoCost}
-                onChange={(e) => setCargoCost(e.target.value)}
                 placeholder="otomatik"
               />
             </div>
