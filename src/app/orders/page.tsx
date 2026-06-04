@@ -1,7 +1,8 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import {
@@ -88,8 +89,13 @@ const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: s
 };
 const STATUS_ORDER: OrderStatusKind[] = ["pending", "processing", "shipped", "delivered", "cancelled"];
 
+// Formatter'ları MODÜL seviyesinde bir kez kur (her hücrede yeni Intl nesnesi pahalı → satır başına ×N).
+const _fmtTRY0 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 0, maximumFractionDigits: 0 });
+const _fmtTRY2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const _fmtDT = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 function fmtMoney(amount: number, currency = "TRY") {
   try {
+    if (currency === "TRY") return _fmtTRY0.format(amount);
     return new Intl.NumberFormat("tr-TR", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
   } catch {
     return `${Math.round(amount)} ${currency}`;
@@ -97,6 +103,7 @@ function fmtMoney(amount: number, currency = "TRY") {
 }
 function fmtMoney2(amount: number, currency = "TRY") {
   try {
+    if (currency === "TRY") return _fmtTRY2.format(amount);
     return new Intl.NumberFormat("tr-TR", { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
   } catch {
     return `${amount.toFixed(2)} ${currency}`;
@@ -104,7 +111,11 @@ function fmtMoney2(amount: number, currency = "TRY") {
 }
 function fmtDate(iso: string | null) {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+  try {
+    return _fmtDT.format(new Date(iso));
+  } catch {
+    return "—";
+  }
 }
 
 export default function OrdersPage() {
@@ -137,7 +148,7 @@ export default function OrdersPage() {
   }, [orders]);
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     return orders.filter((o) => {
       if (platform !== "all" && o.platform !== platform) return false;
       if (status !== "all" && o.statusKind !== status) return false;
@@ -147,7 +158,44 @@ export default function OrdersPage() {
       }
       return true;
     });
-  }, [orders, platform, status, search]);
+  }, [orders, platform, status, debouncedSearch]);
+
+  // ── Virtualization (Ürünler'le aynı kanıtlanmış desen) — uzun sipariş listesinde DOM birikmesin. ──
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setScrollEl(document.querySelector<HTMLElement>("main"));
+  }, []);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useEffect(() => {
+    if (!scrollEl) return;
+    const measure = () => {
+      const el = listRef.current;
+      if (!el || !scrollEl) return;
+      setScrollMargin(
+        el.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [scrollEl, isLoading, platform, status, filtered.length]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: filtered.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => 84,
+    overscan: 8,
+    scrollMargin,
+    getItemKey: (i) => {
+      const o = filtered[i];
+      return o ? `${o.platform}-${o.id}` : i;
+    },
+  });
+  const vItems = rowVirtualizer.getVirtualItems();
+  const padTop = vItems.length > 0 ? Math.max(0, vItems[0].start - scrollMargin) : 0;
+  const padBottom =
+    vItems.length > 0 ? Math.max(0, rowVirtualizer.getTotalSize() - vItems[vItems.length - 1].end) : 0;
 
   return (
     <div className="p-6 space-y-5 max-w-5xl">
@@ -265,10 +313,23 @@ export default function OrdersPage() {
           }
         />
       ) : (
-        <div className="space-y-2">
-          {filtered.map((o) => (
-            <OrderRow key={`${o.platform}-${o.id}`} order={o} />
-          ))}
+        <div ref={listRef}>
+          {padTop > 0 && <div style={{ height: padTop }} />}
+          {vItems.map((vi) => {
+            const o = filtered[vi.index];
+            if (!o) return null;
+            return (
+              <div
+                key={`${o.platform}-${o.id}`}
+                data-index={vi.index}
+                ref={rowVirtualizer.measureElement}
+                className="pb-2"
+              >
+                <OrderRow order={o} />
+              </div>
+            );
+          })}
+          {padBottom > 0 && <div style={{ height: padBottom }} />}
         </div>
       )}
     </div>
@@ -348,7 +409,7 @@ function Thumb({ src, size = "h-12 w-12" }: { src: string | null; size?: string 
   );
 }
 
-function OrderRow({ order }: { order: UnifiedOrder }) {
+const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
   const [open, setOpen] = useState(false);
   const info = PLATFORM_INFO[order.platform];
   const st = STATUS_STYLE[order.statusKind];
@@ -503,4 +564,4 @@ function OrderRow({ order }: { order: UnifiedOrder }) {
       )}
     </Card>
   );
-}
+});
