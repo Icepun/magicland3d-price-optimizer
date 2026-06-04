@@ -135,6 +135,10 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
 }
 
 async function tick(): Promise<void> {
+  // UYKU/UYANMA KORUMASI: Mac uyurken/uyanırken DB ağ-op'larını (snapshot yazma + sync) ATLA.
+  // main.js powerMonitor bu globalThis flag'ini set eder. Aksi halde libSQL embedded-replica'nın
+  // native ağ op'u ölü bağlantıda (timeout YOK) asılıp ana event-loop'u DONDURUYOR.
+  if ((globalThis as { __MLHUB_DB_PAUSED__?: boolean }).__MLHUB_DB_PAUSED__) return;
   if (ticking) return; // önceki tick hâlâ sürüyorsa atla — yavaş/çevrimdışı yazıcıda tick'ler üst üste binip birikmesin
   ticking = true;
   try {
@@ -156,6 +160,8 @@ async function tick(): Promise<void> {
       : [];
     const productMap = new Map(products.map((p) => [p.id, { name: p.name, imageUrl: p.imageUrl }]));
 
+    // suspend yukarıdaki (yerel) okumalar sırasında geldiyse buluta yazmaları da atla — defense in depth.
+    if ((globalThis as { __MLHUB_DB_PAUSED__?: boolean }).__MLHUB_DB_PAUSED__) return;
     // 1) Snapshot'lar — PARALEL (çevrimdışı/yavaş yazıcı diğerlerini bekletmesin; toplam süre = en yavaş yazıcı)
     await Promise.all(configs.map(async (c) => {
       let snap: SnapFields | null = null;

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, powerMonitor } = require("electron");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -528,6 +528,37 @@ async function createWindow() {
   win.webContents.on("did-fail-load", (_e, code, desc, validatedURL) => {
     logStartup("[renderer] did-fail-load:", code, desc, validatedURL);
   });
+
+  // ── Uyku/uyanma DONMA koruması ──────────────────────────────────────────────
+  // Sorun: Mac uyurken/uyanırken libSQL embedded-replica'nın ağ op'ları (relay'in snapshot
+  // yazması + sync()) ölü bağlantıda asılıp ana event-loop'u DONDURUYOR (native çağrı, timeout YOK).
+  // Çözüm: uykuda DB ağ-op'larını duraklat (relay tick'i globalThis.__MLHUB_DB_PAUSED__ okur);
+  // uyanınca renderer'ı erken tazele + ağ tam gelene kadar grace bekleyip relay'i sürdür.
+  if (!globalThis.__MLHUB_POWER_HOOKED__) {
+    globalThis.__MLHUB_POWER_HOOKED__ = true;
+    let resumeTimer = null;
+    powerMonitor.on("suspend", () => {
+      globalThis.__MLHUB_DB_PAUSED__ = true;
+      logStartup("[power] suspend → DB ağ-op'ları duraklatıldı (relay durdu)");
+    });
+    powerMonitor.on("resume", () => {
+      logStartup("[power] resume → grace başladı (relay duraklı)");
+      if (resumeTimer) clearTimeout(resumeTimer);
+      // Renderer'ı erken tazele — API okumaları yerel replica'dan gelir (ağ beklemez) → donmuş UI hızlı kurtulur.
+      setTimeout(() => {
+        const w = BrowserWindow.getAllWindows()[0];
+        if (w && !w.isDestroyed()) {
+          w.webContents.reload();
+          logStartup("[power] renderer tazelendi");
+        }
+      }, 1200);
+      // Ağ tam gelene kadar relay duraklı kalsın → uyanış sonrası ilk tick ölü bağlantıda asılmasın.
+      resumeTimer = setTimeout(() => {
+        globalThis.__MLHUB_DB_PAUSED__ = false;
+        logStartup("[power] grace bitti → DB/relay devam");
+      }, 8000);
+    });
+  }
 
   logStartup("createWindow: loading URL");
   const healFlag = path.join(app.getPath("userData"), ".replica-healed");
