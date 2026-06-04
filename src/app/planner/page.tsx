@@ -4,12 +4,14 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Factory, Package, Disc3, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Factory, Package, Disc3, AlertTriangle, CheckCircle2, Printer } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { cn } from "@/lib/utils";
 
 interface ProductRow {
@@ -39,6 +41,8 @@ export default function PlannerPage() {
   const savedTarget = Math.max(1, Number(settings?.plannerTargetStock) || 5);
   const [override, setOverride] = useState<number | null>(null);
   const target = override ?? savedTarget;
+  // Baskı modalı — Ürünler sayfasındakiyle AYNI akış (yazıcı seçimi + Snapmaker/Bambu renk + başlat).
+  const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
   const saveTarget = useMutation({
     mutationFn: (v: number) =>
       fetch("/api/settings", {
@@ -70,13 +74,10 @@ export default function PlannerPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Factory className="h-6 w-6 text-primary" /> Üretim Planı
-            <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary/12 text-primary border border-primary/25">
-              Demo
-            </span>
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Stoğu hedefin altındaki ürünler — ne basmalısın + gereken filament. (Demo: şimdilik stoğa
-            göre; ileride açık siparişleri de katarız.)
+            Stoğu hedefin altındaki ürünler — ne, kaç adet basmalısın + gereken filament. Sağdaki{" "}
+            <span className="font-medium text-foreground">Bas</span> ile o ürünü doğrudan bir yazıcıya gönder.
           </p>
         </div>
         <div className="shrink-0">
@@ -165,11 +166,29 @@ export default function PlannerPage() {
                       <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">~{Math.round(p.filament)} g</div>
                     )}
                   </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0 gap-1.5"
+                    onClick={() => setPrintTarget({ id: p.id, name: p.name })}
+                    title="Bu ürünü bir yazıcıya gönder (yazıcı + renk seç, başlat)"
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    Bas
+                  </Button>
                 </CardContent>
               </Card>
             ))}
           </div>
         </>
+      )}
+
+      {printTarget && (
+        <ProductPrintModal
+          productId={printTarget.id}
+          productName={printTarget.name}
+          onClose={() => setPrintTarget(null)}
+        />
       )}
     </div>
   );
