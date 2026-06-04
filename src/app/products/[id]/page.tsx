@@ -1145,11 +1145,11 @@ function PlatformProfitCardImpl({
             </div>
             {showBarcodeField && (
               <div>
-                <Label className="text-xs">Hepsiburada Barkodu</Label>
+                <Label className="text-xs">{info.label} Barkodu</Label>
                 <Input
                   value={listingBarcode}
                   onChange={(e) => setListingBarcode(e.target.value)}
-                  placeholder="HB siparişleri bununla eşleşir"
+                  placeholder={`${info.label} siparişleri bununla eşleşir`}
                   className="font-mono"
                 />
               </div>
