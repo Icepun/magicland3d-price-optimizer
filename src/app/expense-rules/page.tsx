@@ -46,7 +46,7 @@ interface ExpenseRule {
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
-  platform: z.enum(["all", "trendyol", "shopify"]).default("all"),
+  platform: z.enum(["all", "trendyol", "shopify", "hepsiburada"]).default("all"),
   type: z.enum(["fixed", "percentage", "per_order"]),
   value: z.coerce.number().min(0),
   categoryName: z.string().optional(),
@@ -67,6 +67,7 @@ const TYPE_LABELS: Record<string, string> = {
 const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
   trendyol: { label: "Trendyol", cls: "bg-orange-500/10 text-orange-500 border-orange-500/20" },
   shopify: { label: "Shopify", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" },
+  hepsiburada: { label: "Hepsiburada", cls: "bg-violet-500/10 text-violet-500 border-violet-500/20" },
 };
 
 function RuleForm({
@@ -106,12 +107,13 @@ function RuleForm({
           <Label>Platform *</Label>
           <select
             value={platform}
-            onChange={(e) => form.setValue("platform", e.target.value as "all" | "trendyol" | "shopify")}
+            onChange={(e) => form.setValue("platform", e.target.value as "all" | "trendyol" | "shopify" | "hepsiburada")}
             className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="all">Tüm platformlar</option>
             <option value="trendyol">Sadece Trendyol</option>
             <option value="shopify">Sadece Shopify</option>
+            <option value="hepsiburada">Sadece Hepsiburada</option>
           </select>
         </div>
       </div>
@@ -365,7 +367,7 @@ export default function ExpenseRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
-                platform: (editing.platform as "trendyol" | "shopify") ?? "all",
+                platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada") ?? "all",
                 type: editing.type as "fixed" | "percentage" | "per_order",
                 value: editing.type === "percentage" ? editing.value * 100 : editing.value,
                 categoryName: editing.categoryName ?? undefined,

@@ -4,7 +4,7 @@ import { z } from "zod";
 
 const Schema = z.object({
   name: z.string().min(1),
-  platform: z.enum(["trendyol", "shopify"]).nullable().optional(),
+  platform: z.enum(["trendyol", "shopify", "hepsiburada"]).nullable().optional(),
   type: z.enum(["fixed", "percentage", "per_order"]),
   value: z.number().min(0),
   categoryName: z.string().nullable().optional(),

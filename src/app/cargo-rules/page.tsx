@@ -43,7 +43,7 @@ interface CargoRule {
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
-  platform: z.enum(["trendyol", "shopify"]).default("trendyol"),
+  platform: z.enum(["trendyol", "shopify", "hepsiburada"]).default("trendyol"),
   cargoProvider: z.string().optional(),
   categoryName: z.string().optional(),
   minPrice: z.coerce.number().min(0).default(0),
@@ -58,6 +58,7 @@ const Schema = z.object({
 const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
   trendyol: { label: "Trendyol", cls: "bg-orange-500/10 text-orange-500 border-orange-500/20" },
   shopify: { label: "Shopify", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" },
+  hepsiburada: { label: "Hepsiburada", cls: "bg-violet-500/10 text-violet-500 border-violet-500/20" },
 };
 
 type FormData = z.infer<typeof Schema>;
@@ -98,11 +99,12 @@ function RuleForm({
           <Label>Platform *</Label>
           <select
             value={platform}
-            onChange={(e) => form.setValue("platform", e.target.value as "trendyol" | "shopify")}
+            onChange={(e) => form.setValue("platform", e.target.value as "trendyol" | "shopify" | "hepsiburada")}
             className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="trendyol">Trendyol</option>
             <option value="shopify">Shopify</option>
+            <option value="hepsiburada">Hepsiburada</option>
           </select>
         </div>
       </div>
@@ -363,7 +365,7 @@ export default function CargoRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
-                platform: (editing.platform as "trendyol" | "shopify") ?? "trendyol",
+                platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada") ?? "trendyol",
                 cargoProvider: editing.cargoProvider ?? undefined,
                 categoryName: editing.categoryName ?? undefined,
               }}
