@@ -729,7 +729,7 @@ function HepsiburadaTab() {
             </div>
             <div>
               <Label className="text-xs">Geliştirici Kullanıcı Adı</Label>
-              <Input {...form.register("developerUsername")} placeholder="örn. magicland3d_dev" />
+              <Input {...form.register("developerUsername")} placeholder="örn. firmaadi_dev" />
             </div>
             <Button type="submit" size="sm" disabled={save.isPending}>
               {save.isPending ? "Kaydediliyor…" : "Kaydet"}
