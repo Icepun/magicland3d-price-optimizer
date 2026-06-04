@@ -44,8 +44,15 @@ export async function getAllOrders(): Promise<OrdersResult> {
   if (hb.status === "fulfilled") orders.push(...hb.value);
   else errors.push(`Hepsiburada: ${hb.reason?.message ?? hb.reason}`);
 
-  orders.sort((a, b) => b.date - a.date);
-  return { orders, errors };
+  // Masaüstü route.ts:414 ile AYNI merkezi kırpma: orderDate'i 30 GÜNDEN ESKİ siparişleri ele.
+  // Gerekçe: Trendyol /orders, PackageLastModifiedDate'e göre döndürür → 30+ gün önce VERİLEN ama
+  // yakında durumu değişen (ör. Teslim Edildi) siparişler de gelir. "Son 30 gün" = son 30 günde
+  // VERİLEN sipariş → orderDate'e göre kırp. Tarihsizleri tut (HB/Shopify zaten pencere içinde).
+  const cutoff = Date.now() - 30 * 86_400_000;
+  const recent = orders.filter((o) => !o.date || o.date >= cutoff);
+
+  recent.sort((a, b) => b.date - a.date);
+  return { orders: recent, errors };
 }
 
 export type StatusTone = "green" | "orange" | "accent" | "red" | "dim";
