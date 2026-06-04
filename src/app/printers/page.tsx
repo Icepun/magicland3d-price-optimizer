@@ -115,15 +115,21 @@ export default function PrintersPage() {
     staleTime: 0,
   });
 
-  // SSR/prerender (build-zamanı) ile client ilk render'ı birebir aynı tut (now=0)
-  // → hydration mismatch (React #418, boş ekran) olmaz. Gerçek zaman mount sonrası
-  // gelir (sadece client) ve canlı geri sayım sürer.
+  // Canlı geri sayım (now) saniyede bir güncellenir → tüm yazıcı kartları o sıklıkta render olur.
+  // Yazıcılar ÇOĞU zaman boştadır; boştayken saniyelik tik = sürekli boşa arka-plan render (jank).
+  // Bu yüzden tik YALNIZCA aktif baskı varken çalışır. Boştayken now=0 (SSR ile de uyumlu, geri sayım yok).
+  // (SSR/prerender ile ilk client render'ı now=0 kalarak eşleşir → hydration mismatch olmaz.)
+  const anyPrinting = (data?.printers ?? []).some((p) => p.status === "printing");
   const [now, setNow] = useState(0);
   useEffect(() => {
+    if (!anyPrinting) {
+      setNow(0);
+      return;
+    }
     setNow(Date.now());
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [anyPrinting]);
 
   const [manageOpen, setManageOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
