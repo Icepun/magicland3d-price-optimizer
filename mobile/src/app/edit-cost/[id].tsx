@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -16,8 +16,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
-import { getProductDetail } from "@/lib/db/product-detail";
-import { getFilamentTypes, saveProductCost, setProductDesi } from "@/lib/db/cost-save";
+import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
+import { getFilamentTypes, saveProductCost, setProductDesi, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
@@ -39,6 +39,11 @@ export default function EditCostScreen() {
   });
   const { data: filaments = [] } = useQuery({ queryKey: ["filaments"], queryFn: getFilamentTypes });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const { data: variantGroup } = useQuery({
+    queryKey: ["variant-group", product?.variantGroupId],
+    queryFn: () => getVariantGroup(product!.variantGroupId!),
+    enabled: !!product?.variantGroupId,
+  });
 
   const [filamentTypeId, setFilamentTypeId] = useState<string | null>(null);
   const [weight, setWeight] = useState("");
@@ -50,21 +55,56 @@ export default function EditCostScreen() {
   const [desi, setDesi] = useState("");
   const [mode, setMode] = useState<"detailed" | "manual">("detailed");
   const [manualCost, setManualCost] = useState("");
+  const [applyAll, setApplyAll] = useState(false);
+  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const baselineRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!product) return;
     const c = product.cost;
-    setFilamentTypeId(c?.filamentTypeId ?? null);
-    setWeight(c?.filamentWeight ? String(c.filamentWeight) : "");
-    setTime(c?.printTimeHours ? String(c.printTimeHours) : "");
-    setWaste(c?.wasteRate ? String(c.wasteRate * 100) : "");
-    setPackagingOptionId(c?.packagingOptionId ?? null);
-    setNylonLevel((c?.nylonLevel as NylonLevel) ?? "none");
-    setTapeUsed(!!c?.tapeUsed);
-    setDesi(product.desi ? String(product.desi) : "");
-    setMode((c?.costMode as "detailed" | "manual") === "manual" ? "manual" : "detailed");
-    setManualCost(c?.manualCost != null ? String(c.manualCost) : "");
+    // Yüklenen değerleri tek nesnede topla → baseline (mount/hydration auto-save'i TETİKLEMESİN;
+    // yalnızca kullanıcı bir şey değiştirince kaydedilir). Key sırası `formKey` ile birebir aynı olmalı.
+    const v = {
+      mode: ((c?.costMode as "detailed" | "manual") === "manual" ? "manual" : "detailed") as "detailed" | "manual",
+      filamentTypeId: c?.filamentTypeId ?? null,
+      weight: c?.filamentWeight ? String(c.filamentWeight) : "",
+      time: c?.printTimeHours ? String(c.printTimeHours) : "",
+      waste: c?.wasteRate ? String(c.wasteRate * 100) : "",
+      packagingOptionId: c?.packagingOptionId ?? null,
+      nylonLevel: ((c?.nylonLevel as NylonLevel) ?? "none") as NylonLevel,
+      tapeUsed: !!c?.tapeUsed,
+      desi: product.desi ? String(product.desi) : "",
+      manualCost: c?.manualCost != null ? String(c.manualCost) : "",
+      applyAll: false,
+    };
+    setMode(v.mode);
+    setFilamentTypeId(v.filamentTypeId);
+    setWeight(v.weight);
+    setTime(v.time);
+    setWaste(v.waste);
+    setPackagingOptionId(v.packagingOptionId);
+    setNylonLevel(v.nylonLevel);
+    setTapeUsed(v.tapeUsed);
+    setDesi(v.desi);
+    setManualCost(v.manualCost);
+    setApplyAll(false);
+    baselineRef.current = JSON.stringify(v);
+    setStatus("idle");
   }, [product]);
+
+  const formKey = JSON.stringify({
+    mode,
+    filamentTypeId,
+    weight,
+    time,
+    waste,
+    packagingOptionId,
+    nylonLevel,
+    tapeUsed,
+    desi,
+    manualCost,
+    applyAll,
+  });
 
   const packagingOptions = settings ? parsePackagingSettings(settings).options : [];
   const costPerGram = filaments.find((f) => f.id === filamentTypeId)?.costPerGram ?? 0;
@@ -100,10 +140,9 @@ export default function EditCostScreen() {
       )
     : null;
 
-  const save = useMutation({
-    mutationFn: async () => {
-      if (mode === "manual") {
-        await saveProductCost(id, {
+  const buildInput = (): CostInput =>
+    mode === "manual"
+      ? {
           mode: "manual",
           manualCost: parseFloat(manualCost) || 0,
           filamentTypeId: null,
@@ -113,9 +152,8 @@ export default function EditCostScreen() {
           packagingOptionId: null,
           nylonLevel: "none",
           tapeUsed: false,
-        });
-      } else {
-        await saveProductCost(id, {
+        }
+      : {
           mode: "detailed",
           filamentTypeId,
           filamentWeight: parseFloat(weight) || 0,
@@ -124,23 +162,53 @@ export default function EditCostScreen() {
           packagingOptionId,
           nylonLevel,
           tapeUsed,
-        });
-      }
+        };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const input = buildInput();
+      await saveProductCost(id, input);
       await setProductDesi(id, parseFloat(desi) || null);
+      // "Tüm varyantlara uygula" açıksa aynı maliyeti grubun diğer üyelerine de yaz (desi hariç → fiziksel boyut varyanta özel).
+      if (applyAll && variantGroup) {
+        for (const m of variantGroup.members) {
+          if (m.id !== id) await saveProductCost(m.id, input);
+        }
+      }
     },
     onSuccess: () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      qc.invalidateQueries({ queryKey: ["product", id] });
+      qc.invalidateQueries({ queryKey: ["product"] });
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-      router.back();
+      setStatus("saved");
     },
   });
+
+  // Otomatik kaydet — form baseline'dan farklıysa 700ms debounce ile kaydet (Kaydet butonu yok).
+  useEffect(() => {
+    if (!product || baselineRef.current == null || formKey === baselineRef.current) return;
+    setStatus("saving");
+    const t = setTimeout(() => {
+      save.mutate(undefined, { onSuccess: () => { baselineRef.current = formKey; } });
+    }, 700);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formKey, product]);
+
+  // Çıkışta bekleyen değişikliği hemen kaydet (debounce dolmadan geri basılırsa kaybolmasın).
+  const handleBack = () => {
+    if (baselineRef.current != null && formKey !== baselineRef.current) {
+      baselineRef.current = formKey;
+      save.mutate();
+    }
+    router.back();
+  };
 
   if (isLoading || !product) {
     return (
       <SafeAreaView style={styles.safe}>
-        <Header />
+        <Header onBack={handleBack} />
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>
@@ -150,7 +218,7 @@ export default function EditCostScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Header />
+      <Header onBack={handleBack} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.productName} numberOfLines={1}>
           {product.name}
@@ -234,17 +302,35 @@ export default function EditCostScreen() {
           </>
         )}
 
-        <Pressable
-          onPress={() => save.mutate()}
-          disabled={save.isPending}
-          style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }]}
-        >
-          {save.isPending ? (
-            <ActivityIndicator color="#fff" />
+        {variantGroup && variantGroup.members.length > 1 ? (
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync();
+              setApplyAll((v) => !v);
+            }}
+            style={styles.applyAllRow}
+          >
+            <View style={[styles.checkbox, applyAll && styles.checkboxOn]}>
+              {applyAll ? <Text style={styles.checkboxTick}>✓</Text> : null}
+            </View>
+            <Text style={styles.applyAllText}>
+              Bu maliyeti tüm varyantlara uygula ({variantGroup.members.length} ürün)
+            </Text>
+          </Pressable>
+        ) : null}
+
+        <View style={styles.statusRow}>
+          {status === "saving" ? (
+            <>
+              <ActivityIndicator color={ML.textDim} size="small" />
+              <Text style={styles.statusText}>Kaydediliyor…</Text>
+            </>
+          ) : status === "saved" ? (
+            <Text style={[styles.statusText, { color: ML.green }]}>✓ Otomatik kaydedildi</Text>
           ) : (
-            <Text style={styles.saveText}>Kaydet</Text>
+            <Text style={styles.statusText}>Değişiklikler otomatik kaydedilir</Text>
           )}
-        </Pressable>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -346,10 +432,10 @@ function Label({ text }: { text: string }) {
   return <Text style={styles.label}>{text}</Text>;
 }
 
-function Header() {
+function Header({ onBack }: { onBack?: () => void }) {
   return (
     <View style={styles.header}>
-      <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+      <Pressable onPress={onBack ?? (() => router.back())} hitSlop={12} style={styles.back}>
         <Text style={styles.backText}>‹</Text>
       </Pressable>
       <Text style={styles.headerTitle}>Maliyet Düzenle</Text>
@@ -425,12 +511,19 @@ const styles = StyleSheet.create({
   segment: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
   segmentOn: { backgroundColor: ML.accent },
   segmentText: { color: ML.textDim, fontSize: 15 },
-  saveBtn: {
-    backgroundColor: ML.accent,
-    borderRadius: radius.lg,
-    paddingVertical: 16,
+  applyAllRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 22, paddingVertical: 4 },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.sm,
+    borderWidth: 2,
+    borderColor: ML.border,
     alignItems: "center",
-    marginTop: 24,
+    justifyContent: "center",
   },
-  saveText: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  checkboxOn: { backgroundColor: ML.accent, borderColor: ML.accent },
+  checkboxTick: { color: "#fff", fontSize: 15, fontWeight: "900" },
+  applyAllText: { color: ML.text, fontSize: 14, fontWeight: "600", flex: 1 },
+  statusRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 16, height: 22 },
+  statusText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
 });
