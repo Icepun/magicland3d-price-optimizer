@@ -60,6 +60,8 @@ const TRENDYOL_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   Cancelled: { label: "İptal", tone: "red" },
   Returned: { label: "İade", tone: "red" },
   UnSupplied: { label: "Tedarik yok", tone: "red" },
+  UnDelivered: { label: "Teslim edilemedi", tone: "red" },
+  UnPacked: { label: "Bölündü", tone: "red" },
 };
 
 const SHOPIFY_STATUS: Record<string, { label: string; tone: StatusTone }> = {
@@ -69,6 +71,8 @@ const SHOPIFY_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   IN_PROGRESS: { label: "Hazırlanıyor", tone: "orange" },
   RESTOCKED: { label: "İade", tone: "red" },
   ON_HOLD: { label: "Beklemede", tone: "orange" },
+  REFUNDED: { label: "İade", tone: "red" },
+  CANCELLED: { label: "İptal", tone: "red" },
 };
 
 // HB ham statüleri (hepsiburada.ts'ten gelen etiketler) → rozet.
@@ -77,9 +81,13 @@ const HEPSIBURADA_STATUS: Record<string, { label: string; tone: StatusTone }> = 
   New: { label: "Yeni", tone: "orange" },
   Packaged: { label: "Hazırlanıyor", tone: "orange" },
   Shipped: { label: "Kargoda", tone: "accent" },
+  InTransit: { label: "Yolda", tone: "accent" },
   Delivered: { label: "Teslim", tone: "green" },
   UnDelivered: { label: "Teslim edilemedi", tone: "red" },
   Cancelled: { label: "İptal", tone: "red" },
+  CancelledByMerchant: { label: "İptal", tone: "red" },
+  CancelledByCustomer: { label: "İptal", tone: "red" },
+  Returned: { label: "İade", tone: "red" },
 };
 
 export function statusInfo(o: UnifiedOrder): { label: string; tone: StatusTone } {
@@ -90,4 +98,21 @@ export function statusInfo(o: UnifiedOrder): { label: string; tone: StatusTone }
         ? HEPSIBURADA_STATUS
         : SHOPIFY_STATUS;
   return map[o.status] ?? { label: o.status, tone: "dim" };
+}
+
+/**
+ * Masaüstü orders route.ts'in "cancelled" kind setiyle BİREBİR (iptal/iade/teslim-edilemedi/
+ * bölündü/tedarik-yok). Masaüstü özet hesabı bunları atlar (`if statusKind==="cancelled" continue`)
+ * → ciro/kâr/sipariş-sayısı yalnızca ciro getiren siparişleri sayar. Mobil de aynısını yapsın ki
+ * iki taraf eşleşsin. (Liste yine hepsini gösterir — kırmızı rozetle.)
+ */
+const CANCELLED_STATUS: Record<Platform, Set<string>> = {
+  shopify: new Set(["CANCELLED", "REFUNDED"]),
+  trendyol: new Set(["Cancelled", "UnDelivered", "UnPacked", "Returned", "UnSupplied"]),
+  hepsiburada: new Set(["UnDelivered", "Cancelled", "CancelledByMerchant", "CancelledByCustomer", "Returned"]),
+};
+
+/** Sipariş ciro getirmiyor mu (iptal/iade/teslim-edilemedi)? Özet metriklerinden hariç tutulur. */
+export function isCancelledOrder(o: UnifiedOrder): boolean {
+  return CANCELLED_STATUS[o.platform]?.has(o.status) ?? false;
 }

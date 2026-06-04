@@ -28,7 +28,7 @@ async function getAdminToken(): Promise<string> {
 const ORDERS_QUERY = `query($first:Int!,$query:String){
   orders(first:$first, sortKey:CREATED_AT, reverse:true, query:$query){
     edges{ node{
-      id name createdAt displayFulfillmentStatus
+      id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt
       totalPriceSet{ shopMoney{ amount } }
       customer{ firstName lastName }
       lineItems(first:20){ edges{ node{
@@ -46,6 +46,8 @@ interface ShEdge {
     name: string;
     createdAt: string;
     displayFulfillmentStatus: string;
+    displayFinancialStatus?: string;
+    cancelledAt?: string | null;
     totalPriceSet?: { shopMoney?: { amount?: string } };
     customer?: { firstName?: string; lastName?: string };
     lineItems: {
@@ -64,6 +66,17 @@ interface ShEdge {
 
 // Masaüstü WINDOW_DAYS=30 ile aynı: son 30 günü çek ("last N" değil).
 const SINCE_DAYS = 30;
+
+/**
+ * Masaüstü shopifyStatus önceliğiyle BİREBİR: iptal > iade(financial) > fulfillment durumu.
+ * Böylece iptal/iade Shopify siparişleri (orders.ts isCancelledOrder ile) ciro/kâr özetinden elenir.
+ */
+function shopifyStatusKey(node: ShEdge["node"]): string {
+  if (node.cancelledAt) return "CANCELLED";
+  const fin = node.displayFinancialStatus;
+  if (fin === "REFUNDED" || fin === "PARTIALLY_REFUNDED") return "REFUNDED";
+  return node.displayFulfillmentStatus;
+}
 
 export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
   if (!SHOP || !CID || !CSECRET) return [];
@@ -85,7 +98,7 @@ export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
     platform: "shopify" as const,
     orderNumber: node.name,
     date: new Date(node.createdAt).getTime(),
-    status: node.displayFulfillmentStatus,
+    status: shopifyStatusKey(node),
     customer:
       [node.customer?.firstName, node.customer?.lastName].filter(Boolean).join(" ") || null,
     total: Number(node.totalPriceSet?.shopMoney?.amount ?? 0),

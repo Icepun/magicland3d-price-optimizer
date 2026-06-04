@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
@@ -56,12 +56,23 @@ export default function OrdersScreen() {
     return map;
   }, [data, products, rules, settings]);
 
+  // Başlık sayısı masaüstü özetiyle aynı: iptal/iade hariç "aktif" sipariş. Liste yine hepsini gösterir.
+  const counts = useMemo(() => {
+    if (!data) return null;
+    const active = data.orders.filter((o) => !isCancelledOrder(o)).length;
+    return { active, cancelled: data.orders.length - active };
+  }, [data]);
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Siparişler</Text>
         <Text style={styles.subtitle}>
-          {data ? `${data.orders.length} sipariş · son 30` : "yükleniyor…"}
+          {counts
+            ? counts.cancelled > 0
+              ? `${counts.active} sipariş · ${counts.cancelled} iptal · son 30`
+              : `${counts.active} sipariş · son 30`
+            : "yükleniyor…"}
         </Text>
       </View>
 

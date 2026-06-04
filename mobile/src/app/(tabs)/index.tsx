@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
-import { getAllOrders } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
 import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
@@ -65,7 +65,10 @@ export default function DashboardScreen() {
     );
     let total = 0;
     let profit = 0;
+    let count = 0;
     for (const o of ordersData.orders) {
+      // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
+      if (isCancelledOrder(o)) continue;
       const op = computeOrderProfit(o, pm, rules, settings);
       total += op.revenue;
       const b = byPlat[o.platform];
@@ -74,8 +77,9 @@ export default function DashboardScreen() {
         b.n++;
       }
       if (op.profit != null) profit += op.profit;
+      count++;
     }
-    return { total, profit, byPlat, count: ordersData.orders.length };
+    return { total, profit, byPlat, count };
   }, [ordersData, products, rules, settings]);
 
   return (
