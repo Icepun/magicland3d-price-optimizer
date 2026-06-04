@@ -197,7 +197,10 @@ type ExpenseRules = Parameters<typeof simulatePrice>[0]["expenseRules"];
 export async function GET() {
   await ensureRuntimeSchema();
 
-  const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
+  // Gün başına sabitlenmiş cutoff — mobil (mobile/src/lib/api/window.ts orderWindowCutoff) ile
+  // BİREBİR aynı formül. İki uygulama da aynı UTC günü boyunca aynı değeri üretir → sipariş
+  // sayısı/ciro/kâr ne zaman yenilenirse yenilensin eşleşir (kayan saniye sınırı yok).
+  const cutoff = (Math.floor(Date.now() / 86_400_000) - WINDOW_DAYS) * 86_400_000;
   const orders: UnifiedOrder[] = [];
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
@@ -227,7 +230,9 @@ export async function GET() {
    (async () => {
    try {
     const client = new ShopifyClient(await getShopifyCredentials());
-    const list = await client.listOrders({ sinceDays: WINDOW_DAYS, limit: 100 });
+    // +1 gün: gün-başı cutoff'tan biraz daha geniş çek (superset); aşağıdaki `recent` filtresi
+    // (cutoff = gün başı) tam kırpar → mobil ile aynı pencere. Shopify created_at = orderDate.
+    const list = await client.listOrders({ sinceDays: WINDOW_DAYS + 1, limit: 100 });
     for (const o of list) {
       const st = shopifyStatus(o.fulfillmentStatus, o.financialStatus, Boolean(o.cancelledAt));
       raws.push({

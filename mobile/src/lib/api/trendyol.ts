@@ -1,4 +1,5 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
+import { orderWindowCutoff } from "@/lib/api/window";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -41,8 +42,6 @@ interface TyOrder {
   }[];
 }
 
-const WINDOW_DAYS = 30;
-
 /**
  * Son 30 GÜNÜN siparişleri (masaüstü route.ts ile birebir): /orders statü filtresi YOK →
  * TÜM statüler gelir. Ama tek sayfa size:100 son-100'le sınırlı → 30 günde 100+ sipariş varsa
@@ -54,7 +53,7 @@ export async function getTrendyolOrders(): Promise<UnifiedOrder[]> {
   const token = base64(`${KEY}:${SECRET}`);
   const ua = `${SELLER} - ${INTEGRATOR.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30) || "SelfIntegration"}`;
 
-  const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
+  const cutoff = orderWindowCutoff();
   const CHUNK = 14 * 86_400_000;
   const seen = new Set<string>();
   const orders: UnifiedOrder[] = [];

@@ -1,4 +1,5 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
+import { orderWindowCutoff } from "@/lib/api/window";
 
 const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
 const VER = process.env.EXPO_PUBLIC_SHOPIFY_API_VERSION || "2024-10";
@@ -64,9 +65,6 @@ interface ShEdge {
   };
 }
 
-// Masaüstü WINDOW_DAYS=30 ile aynı: son 30 günü çek ("last N" değil).
-const SINCE_DAYS = 30;
-
 /**
  * Masaüstü shopifyStatus önceliğiyle BİREBİR: iptal > iade(financial) > fulfillment durumu.
  * Böylece iptal/iade Shopify siparişleri (orders.ts isCancelledOrder ile) ciro/kâr özetinden elenir.
@@ -82,7 +80,7 @@ export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
   if (!SHOP || !CID || !CSECRET) return [];
   const token = await getAdminToken();
   // Masaüstü ShopifyClient.listOrders ile birebir: created_at:>=<ISO> filtresi (sinceDays=30).
-  const sinceQuery = `created_at:>=${new Date(Date.now() - SINCE_DAYS * 86_400_000).toISOString()}`;
+  const sinceQuery = `created_at:>=${new Date(orderWindowCutoff()).toISOString()}`;
   const res = await fetch(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
     method: "POST",
     headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },

@@ -1,6 +1,7 @@
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
 import { getHepsiburadaOrders } from "@/lib/api/hepsiburada";
+import { orderWindowCutoff } from "@/lib/api/window";
 import type { Platform } from "@/lib/platforms";
 
 export interface OrderItem {
@@ -44,11 +45,12 @@ export async function getAllOrders(): Promise<OrdersResult> {
   if (hb.status === "fulfilled") orders.push(...hb.value);
   else errors.push(`Hepsiburada: ${hb.reason?.message ?? hb.reason}`);
 
-  // Masaüstü route.ts:414 ile AYNI merkezi kırpma: orderDate'i 30 GÜNDEN ESKİ siparişleri ele.
+  // Masaüstü route.ts ile AYNI merkezi kırpma: orderDate'i pencere dışında kalan siparişleri ele.
   // Gerekçe: Trendyol /orders, PackageLastModifiedDate'e göre döndürür → 30+ gün önce VERİLEN ama
   // yakında durumu değişen (ör. Teslim Edildi) siparişler de gelir. "Son 30 gün" = son 30 günde
-  // VERİLEN sipariş → orderDate'e göre kırp. Tarihsizleri tut (HB/Shopify zaten pencere içinde).
-  const cutoff = Date.now() - 30 * 86_400_000;
+  // VERİLEN sipariş → orderDate'e göre kırp. cutoff gün başına sabit (iki platform aynı sayıyı
+  // göstersin diye). Tarihsizleri tut (HB/Shopify zaten pencere içinde).
+  const cutoff = orderWindowCutoff();
   const recent = orders.filter((o) => !o.date || o.date >= cutoff);
 
   recent.sort((a, b) => b.date - a.date);
