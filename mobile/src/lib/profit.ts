@@ -25,6 +25,9 @@ export interface PlatformProfit {
   result: SimulationResult;
   /** Trendyol min sipariş adedi (>1 ise liste "×N" rozeti gösterir). */
   minOrderQty: number;
+  /** Pazaryeri (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → kâr
+   *  olduğundan yüksek görünür. Masaüstü ürün detayı v0.19.66 ile aynı uyarı koşulu. */
+  commissionMissing: boolean;
 }
 
 export interface ProductProfit {
@@ -86,6 +89,10 @@ export function computeProductProfit(
       salePrice: listing.salePrice,
       result,
       minOrderQty: result.minOrderQty,
+      commissionMissing:
+        (listing.platform === "trendyol" || listing.platform === "hepsiburada") &&
+        !result.appliedCommissionRule &&
+        listing.commissionRate == null,
     };
   });
 

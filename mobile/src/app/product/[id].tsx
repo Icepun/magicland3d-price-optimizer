@@ -418,6 +418,14 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
         </View>
       </View>
 
+      {p.commissionMissing ? (
+        <View style={styles.commWarn}>
+          <Text style={styles.commWarnText}>
+            ⚠️ {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş — kâr olduğundan yüksek görünüyor. Masaüstünden komisyon oranını gir veya kurallara ekle.
+          </Text>
+        </View>
+      ) : null}
+
       <View style={styles.divider} />
       <BreakdownRow label={`KDV (%${r.vatRate})`} value={r.vatAmount} />
       <BreakdownRow label="Ürün + Paketleme" value={r.productCost + r.packagingCost} />
@@ -539,6 +547,8 @@ const styles = StyleSheet.create({
   stockNumber: { color: ML.text, fontSize: 40, fontWeight: "800" },
   stockUnit: { color: ML.textFaint, fontSize: 13, marginTop: -2 },
   divider: { height: 1, backgroundColor: ML.border, marginVertical: 8 },
+  commWarn: { backgroundColor: ML.red + "18", borderWidth: 1, borderColor: ML.red + "44", borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 8, marginTop: 8 },
+  commWarnText: { color: ML.red, fontSize: 12, fontWeight: "600", lineHeight: 17 },
   platformHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   platformName: { fontSize: 16, fontWeight: "700", flex: 1 },
