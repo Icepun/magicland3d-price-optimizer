@@ -67,13 +67,18 @@ export default function ReportsPage() {
     [productList]
   );
 
-  const platformChart = summary
-    ? [
-        { platform: "Shopify", Ciro: Math.round(summary.shopify.revenue), Kâr: Math.round(summary.shopify.profit), color: SHOPIFY },
-        { platform: "Trendyol", Ciro: Math.round(summary.trendyol.revenue), Kâr: Math.round(summary.trendyol.profit), color: TRENDYOL },
-        { platform: "Hepsiburada", Ciro: Math.round(summary.hepsiburada.revenue), Kâr: Math.round(summary.hepsiburada.profit), color: HEPSIBURADA },
-      ]
-    : [];
+  // useMemo: veri değişmedikçe AYNI dizi referansı → recharts BarChart gereksiz yere yeniden çizmez.
+  const platformChart = useMemo(
+    () =>
+      summary
+        ? [
+            { platform: "Shopify", Ciro: Math.round(summary.shopify.revenue), Kâr: Math.round(summary.shopify.profit), color: SHOPIFY },
+            { platform: "Trendyol", Ciro: Math.round(summary.trendyol.revenue), Kâr: Math.round(summary.trendyol.profit), color: TRENDYOL },
+            { platform: "Hepsiburada", Ciro: Math.round(summary.hepsiburada.revenue), Kâr: Math.round(summary.hepsiburada.profit), color: HEPSIBURADA },
+          ]
+        : [],
+    [summary]
+  );
 
   const loading = ordersLoading || productsLoading;
 
