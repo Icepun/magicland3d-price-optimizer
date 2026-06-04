@@ -298,10 +298,20 @@ export default function ProductDetailPage({
       }).then((r) => r.json()),
     meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
-      // Maliyet grup üyelerine uygulandı → Fiyat Lab'i tazele + listede SADECE grup üyelerini
-      // güncelle (tüm liste değil → minimum okuma).
-      queryClient.invalidateQueries({ queryKey: ["price-lab", id] });
+      // Maliyet grup üyelerine uygulandı.
       const groupIds = product?.variantGroup?.products.map((p) => p.id) ?? [];
+      const siblingIds = groupIds.filter((gid) => gid !== id);
+      // Mevcut varyant: aktif sorgu → hemen tazele.
+      queryClient.invalidateQueries({ queryKey: ["price-lab", id] });
+      // Diğer varyantların pasif detay/önizleme cache'lerini TEMİZLE → o varyanta girince taze çekilir.
+      // (refetchOnMount:false olduğundan sadece "stale" işaretlemek yetmiyor; eski maliyet görünüyordu →
+      //  "gir-çık edince geliyor" sorunu. removeQueries: veri silinince bir sonraki ziyarette zorunlu fetch.)
+      for (const sid of siblingIds) {
+        queryClient.removeQueries({ queryKey: ["product", sid] });
+        queryClient.removeQueries({ queryKey: ["profit-preview", sid] });
+        queryClient.removeQueries({ queryKey: ["price-lab", sid] });
+      }
+      // Listede SADECE grup üyelerini güncelle (tüm liste değil → minimum okuma).
       patchProductsInCache(queryClient, [id, ...groupIds]);
       toast.success(`Maliyet ${d?.count ?? ""} varyanta uygulandı`);
     },
