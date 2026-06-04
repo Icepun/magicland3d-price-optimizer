@@ -148,7 +148,7 @@ function hbLineRaw(li: Record<string, any>): { name: string; quantity: number; u
     quantity: qty,
     unitPrice: unit,
     image: null,
-    matchKeys: [li.merchantSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter((k): k is string => typeof k === "string" && !!k),
+    matchKeys: [li.merchantSku, li.hbSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter((k): k is string => typeof k === "string" && !!k),
   };
 }
 /** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
@@ -364,11 +364,26 @@ export async function GET() {
       })
     );
     for (const [idx, pkgs] of pkgResults.entries()) {
-      const label = pkgStatuses[idx][1];
+      const [statusCode, label] = pkgStatuses[idx];
+      // Statüsüz /packages ucu = paketlenecek/gönderime-hazır/kargoda (status "Open" vb.). Bu uç
+      // OrderNumber YERİNE packageNumber/id kullanır VE kalem+tutarı `items` içinde TAM verir →
+      // ayrı bir status'a göre değil, doğrudan tam sipariş olarak işlenir (detay fetch GEREKMEZ).
+      const isFullOrder = statusCode === "";
       for (const p of pkgs) {
-        const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-        if (!on || agg.has(on)) continue;
-        agg.set(on, { status: label, date: hbDate(p.DeliveredDate, p.ShippedDate, p.CreatedDate, p.orderDate, p.PackageReadyDate), customer: null, lines: null });
+        if (isFullOrder) {
+          const key = hbStr(p.packageNumber, p.id, p.OrderNumber, p.orderNumber);
+          if (!key || agg.has(key)) continue;
+          agg.set(key, {
+            status: hbStr(p.status) || label,
+            date: hbDate(p.orderDate, p.CreatedDate, p.PackageReadyDate),
+            customer: hbStr(p.recipientName, p.customerName) || null,
+            lines: (hbArray(p, ["items", "lines", "orderItems"]) as Record<string, any>[]).map(hbLineRaw),
+          });
+        } else {
+          const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+          if (!on || agg.has(on)) continue;
+          agg.set(on, { status: label, date: hbDate(p.DeliveredDate, p.ShippedDate, p.UndeliveredDate, p.CreatedDate, p.orderDate, p.PackageReadyDate), customer: null, lines: null });
+        }
       }
     }
 
