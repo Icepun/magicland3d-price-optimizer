@@ -384,11 +384,14 @@ function deriveBarem(rules: CargoRule[]): {
   provider: string | null;
 } {
   const active = rules.filter((r) => r.isActive);
+  // Düz tutar = desi-bağımsız (tüm desi aralığını kapsar: minDesi 0 → maxDesi 999). Desi baremi = alt-aralık.
+  // (HB'nin son baremi 19.01–999 desi; minDesi>0 olduğu için düz değil, doğru şekilde desi sayılır.)
+  const isFlat = (r: CargoRule) => r.minDesi <= 0 && r.maxDesi >= 999;
   const flat = active
-    .filter((r) => r.maxDesi >= 999)
+    .filter(isFlat)
     .map((r) => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, cost: r.cargoCost }))
     .sort((a, b) => a.minPrice - b.minPrice);
-  const desiRules = active.filter((r) => r.maxDesi < 999);
+  const desiRules = active.filter((r) => !isFlat(r));
   const desi = desiRules
     .map((r) => ({ fromDesi: r.minDesi, toDesi: r.maxDesi, cost: r.cargoCost }))
     .sort((a, b) => a.fromDesi - b.fromDesi);
@@ -564,6 +567,8 @@ export default function CargoRulesPage() {
 
   const trendyolBarem = deriveBarem(trendyolRules);
   const shopifyBarem = deriveBarem(shopifyRules);
+  const hepsiburadaRules = rules.filter((r) => r.platform === "hepsiburada");
+  const hepsiburadaBarem = deriveBarem(hepsiburadaRules);
 
   return (
     <div className="p-6 space-y-5 max-w-4xl">
@@ -646,11 +651,25 @@ export default function CargoRulesPage() {
               <CargoBaremView
                 provider="HepsiJet"
                 vatNote={`Fiyatlar KDV dahil (%20)${applyHb.isPending ? " · uygulanıyor…" : ""}`}
-                flatTiers={hb?.mode === "avantajli" ? hb?.flatTiers ?? [] : []}
-                desiBrackets={hb?.desiBrackets ?? []}
-                desiThreshold={hb?.mode === "avantajli" ? 400 : 0}
-                loading={!hb}
+                flatTiers={hepsiburadaBarem.flat}
+                desiBrackets={hepsiburadaBarem.desi}
+                desiThreshold={hepsiburadaBarem.desiThreshold}
+                loading={isLoading || applyHb.isPending}
               />
+              {!isLoading && (
+                <div className="space-y-1.5">
+                  <p className="text-[10px] text-muted-foreground">
+                    Kargo fiyatı değişince buradan güncelle. Üstteki desteği açıp kapatmak baremi resmi tarifeye sıfırlar.
+                  </p>
+                  <AdvancedRules
+                    rules={hepsiburadaRules}
+                    onAdd={() => setOpen(true)}
+                    onEdit={setEditing}
+                    onDelete={(id) => deleteMutation.mutate(id)}
+                    onToggle={onToggleRule}
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -662,7 +681,7 @@ export default function CargoRulesPage() {
             <DialogTitle>Kargo Kuralı Ekle</DialogTitle>
           </DialogHeader>
           <RuleForm
-            defaultValues={{ platform: tab === "hepsiburada" ? "trendyol" : tab }}
+            defaultValues={{ platform: tab }}
             onSubmit={(d) => createMutation.mutate(d)}
             isPending={createMutation.isPending}
           />

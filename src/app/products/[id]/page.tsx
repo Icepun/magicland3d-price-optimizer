@@ -18,7 +18,7 @@ import { MatchListingModal } from "@/components/products/MatchListingModal";
 import { CostEditor, type CostValues, type CostInitial } from "@/components/products/CostEditor";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
-import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera } from "lucide-react";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -450,6 +450,27 @@ export default function ProductDetailPage({
   const applyMutate = applyCostToVariantsMutation.mutate;
   const handleApplyToVariants = useCallback(() => applyMutate(), [applyMutate]);
 
+  // Bu ürünü elle tazele (her ihtimale karşı) — uygulama mount'ta otomatik refetch yapmaz, bu yüzden
+  // başka cihazdaki değişiklik veya kargo/komisyon kuralı güncellemesi için manuel yenileme.
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["product", id] }),
+        queryClient.refetchQueries({ queryKey: ["profit-preview", id] }),
+        queryClient.refetchQueries({ queryKey: ["price-lab", id] }),
+        queryClient.refetchQueries({ queryKey: ["price-history", id] }),
+        queryClient.refetchQueries({ queryKey: ["product-models", id] }),
+      ]);
+      toast.success("Ürün verileri tazelendi");
+    } catch {
+      toast.error("Tazelenemedi");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [id, queryClient]);
+
   if (isLoading || !product) {
     return (
       <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300">
@@ -585,6 +606,18 @@ export default function ProductDetailPage({
             </div>
           </div>
         </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 shrink-0"
+          disabled={refreshing}
+          onClick={handleRefresh}
+          title="Bu ürünün verilerini sunucudan tazele"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
+          Yenile
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
