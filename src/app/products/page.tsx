@@ -1458,6 +1458,7 @@ function MatchListingModal({
 }) {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
+  const [quickCode, setQuickCode] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   // Arama debounce: her tuşta fetch + yeni cache anahtarı oluşturma (250ms sonra bir kez).
   useEffect(() => {
@@ -1506,6 +1507,42 @@ function MatchListingModal({
     onMutate: () => onClose(), // modalı ANINDA kapat — kullanıcı server'ı beklemez
   });
 
+  // Barkod/SKU ile HIZLI eşleştir: havuzda tam eşleşeni bul → bağla. match rotası Listing.barcode'u
+  // da otomatik set eder → ürün detayına girip barkod eklemeye gerek kalmaz.
+  const quickMatch = useMutation({
+    mutationFn: async (raw: string) => {
+      const val = raw.trim();
+      if (!val) throw new Error("Önce SKU/barkod yapıştır");
+      const pool = await fetchJson<Array<{ id: string; barcode: string; externalSku: string | null; name: string }>>(
+        `/api/unmatched-listings?platform=${platform}&search=${encodeURIComponent(val)}`
+      );
+      const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+      const exact = pool.find((u) => norm(u.externalSku) === norm(val) || norm(u.barcode) === norm(val));
+      const hit = exact ?? (pool.length === 1 ? pool[0] : undefined);
+      if (!hit) {
+        throw new Error(
+          pool.length > 1
+            ? "Birden çok eşleşme var — tam SKU/barkod yapıştır"
+            : `"${val}" ${platformLabel} havuzunda yok — "Tazele"yi dene`
+        );
+      }
+      await fetchJson("/api/listings/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unmatchedListingId: hit.id, productId }),
+      });
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      return hit;
+    },
+    onSuccess: (hit) => {
+      toast.success(`Eşleştirildi + barkod girildi: ${hit.name}`);
+      onClose();
+    },
+    onError: (e: unknown) => toast.error(e instanceof Error ? e.message : "Eşleştirilemedi"),
+  });
+
   const refreshPool = useMutation({
     mutationFn: () =>
       fetchJson(`/api/${platform}/sync-products`, {
@@ -1538,6 +1575,34 @@ function MatchListingModal({
             ürününe bağlanacak {platformLabel} listing'ini seç.
           </p>
         </DialogHeader>
+
+        {/* HIZLI yol: SKU/barkod yapıştır → Enter → direkt eşleştir (barkod otomatik girilir) */}
+        <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 space-y-1.5">
+          <p className="text-[11px] font-semibold text-foreground">⚡ Barkod / SKU ile hızlı eşleştir</p>
+          <div className="flex gap-2">
+            <Input
+              value={quickCode}
+              onChange={(e) => setQuickCode(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && quickCode.trim() && !quickMatch.isPending) quickMatch.mutate(quickCode);
+              }}
+              placeholder="SKU veya barkodu yapıştır → Enter"
+              className="h-8 font-mono text-xs"
+              autoFocus
+            />
+            <Button
+              size="sm"
+              className="h-8 shrink-0"
+              disabled={quickMatch.isPending || !quickCode.trim()}
+              onClick={() => quickMatch.mutate(quickCode)}
+            >
+              {quickMatch.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Eşleştir"}
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Barkod otomatik girilir — ürün detayına girip tekrar eklemene gerek kalmaz.
+          </p>
+        </div>
 
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
