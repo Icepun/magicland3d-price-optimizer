@@ -92,14 +92,16 @@ export async function POST(req: NextRequest) {
           productId: string;
           barcode: string;
           variantId: string | null;
+          sku: string | null;
+          listingSku: string | null;
           productPrice: number;
           imageUrl: string | null;
           imageManual: number;
         }>
       >(
         `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
-                p.barcode AS barcode, l.externalId AS variantId, p.currentSalePrice AS productPrice,
-                p.imageUrl AS imageUrl, p.imageManual AS imageManual
+                p.barcode AS barcode, l.externalId AS variantId, p.sku AS sku, l.externalSku AS listingSku,
+                p.currentSalePrice AS productPrice, p.imageUrl AS imageUrl, p.imageManual AS imageManual
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'shopify'`
       );
@@ -108,8 +110,13 @@ export async function POST(req: NextRequest) {
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
         // Önce DEĞİŞMEZ variant id ile eşleştir (kullanıcı barkodu değiştirmiş olabilir),
-        // olmazsa barkoda düş. Böylece barkodu düzenlenen ürünlerin fiyat/görseli de tazelenir.
-        const f = (row.variantId ? fetchedByVariantId.get(row.variantId) : undefined) ?? fetched.get(row.barcode);
+        // olmazsa barkod → SKU'ya düş. Böylece barkodu düzenlenen VEYA barkodsuz (SKU'lu) ürünlerin de
+        // fiyat/görseli tazelenir. (Eskiden yalnız variantId+barkod → barkodsuzlar atlanıyordu.)
+        const f =
+          (row.variantId ? fetchedByVariantId.get(row.variantId) : undefined) ??
+          (row.barcode ? fetched.get(row.barcode) : undefined) ??
+          (row.sku ? fetched.get(row.sku) : undefined) ??
+          (row.listingSku ? fetched.get(row.listingSku) : undefined);
         if (!f) continue;
         // Görsel backfill/düzeltme — yalnızca elle ayarlanmamış (imageManual=0) ürünlerde,
         // ve gerçekten değişmişse (diff-write → tekrar tekrar yazma yok).

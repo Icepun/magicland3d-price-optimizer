@@ -70,6 +70,18 @@ function cleanFilename(fn: string): string {
   return base.replace(/\.(gcode|gco|g|3mf)$/i, "").replace(/_+/g, " ").trim() || base;
 }
 
+/**
+ * Dosya-adı eşleştirme anahtarı (yazıcı ↔ kayıtlı ürün eşleşmesi için NORMALİZE).
+ * Eskiden ham filename'le birebir karşılaştırılıyordu; Elegoo/Snapmaker Moonraker dosya adını
+ * farklı biçimde döndürebiliyor (klasör öneki, .gco↔.gcode, büyük/küçük harf) → eşleşme kaçıp
+ * ürün fotoğrafı çıkmıyordu. Yol + uzantı + harf normalize edilince eşleşme tutar.
+ */
+function fileMatchKey(fn: string): string {
+  const base = fn.includes("/") ? fn.slice(fn.lastIndexOf("/") + 1) : fn;
+  const noBackslash = base.includes("\\") ? base.slice(base.lastIndexOf("\\") + 1) : base;
+  return noBackslash.replace(/\.(gcode|gco|g|3mf)$/i, "").trim().toLocaleLowerCase("tr-TR");
+}
+
 function mapState(state: MoonrakerState): PrinterStatus {
   switch (state) {
     case "printing": return "printing";
@@ -187,7 +199,7 @@ export async function GET() {
 
   // Ürün eşleştirmeleri (printerConfigId::filename → productId)
   const matches = await prisma.printFileProduct.findMany();
-  const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${m.filename}`, m.productId]));
+  const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
   const pids = [...new Set(matches.map((m) => m.productId))];
   const products = pids.length
     ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
@@ -227,7 +239,7 @@ export async function GET() {
           else totalSec = Math.max(60, remaining);
           const endMs = nowMs + remaining * 1000;
           const startMs = endMs - totalSec * 1000;
-          bMatchedId = matchMap.get(`${c.id}::${bs.filename}`) ?? null;
+          bMatchedId = matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) ?? null;
           const matched = bMatchedId ? productMap.get(bMatchedId) : undefined;
           bJob = {
             productName: matched?.name || cleanFilename(bs.filename),
@@ -288,7 +300,7 @@ export async function GET() {
           layerCurrent = totalLayer > 0 ? Math.max(1, Math.min(est, totalLayer)) : Math.max(1, est);
         }
 
-        matchedId = matchMap.get(`${c.id}::${st.filename}`) ?? null;
+        matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`) ?? null;
         const matched = matchedId ? productMap.get(matchedId) : undefined;
         const thumb = meta?.thumbnailRelPath
           ? moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)

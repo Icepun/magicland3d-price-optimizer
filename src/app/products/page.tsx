@@ -785,17 +785,29 @@ export default function ProductsPage() {
     const total = platforms.length + 1; // +1: liste/panel tazeleme adımı
     let done = 0;
     let changed = 0;
+    // Her platformun sonucunu TUT — hata yutma yok (eskiden `.catch(()=>null)` ile hata gizlenip
+    // "Her şey güncel" deniyordu; kullanıcı neyin olduğunu göremiyordu).
+    const results: { p: string; ok: boolean; checked: number; changed: number; error?: string }[] = [];
     setRefreshProgress({ total, done, label: platforms.length ? label(platforms[0]) : "Yenileniyor…" });
     for (const p of platforms) {
       setRefreshProgress({ total, done, label: label(p) });
-      const res = await fetch(`/api/${p}/sync-products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "refresh-prices" }),
-      })
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-      changed += res?.changed ?? 0;
+      try {
+        const r = await fetch(`/api/${p}/sync-products`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "refresh-prices" }),
+        });
+        const body = (await r.json().catch(() => ({}))) as { changed?: number; checked?: number; error?: string };
+        if (!r.ok) {
+          results.push({ p, ok: false, checked: 0, changed: 0, error: String(body?.error || `HTTP ${r.status}`) });
+        } else {
+          const ch = Number(body?.changed) || 0;
+          results.push({ p, ok: true, checked: Number(body?.checked) || 0, changed: ch });
+          changed += ch;
+        }
+      } catch (e) {
+        results.push({ p, ok: false, checked: 0, changed: 0, error: e instanceof Error ? e.message : "ağ hatası" });
+      }
       done += 1;
       setRefreshProgress({ total, done, label: label(p) });
     }
@@ -810,8 +822,18 @@ export default function ProductsPage() {
     ]);
     done += 1;
     setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
-    toast.success(changed > 0 ? `Yenilendi · ${changed} fiyat değişti` : "Her şey güncel");
-    setTimeout(() => setRefreshProgress(null), 1000);
+    // DÜRÜST sonuç: hata varsa AÇIKÇA göster, yoksa platform-bazlı kaç fiyat değişti / kaç kontrol edildi.
+    const short = (p: string) => (p === "hepsiburada" ? "HB" : p === "trendyol" ? "Trendyol" : "Shopify");
+    const errs = results.filter((r) => !r.ok);
+    if (errs.length) {
+      toast.error(`Fiyat güncellenemedi → ${errs.map((e) => `${short(e.p)}: ${e.error}`).join(" · ")}`, { duration: 9000 });
+    } else if (changed > 0) {
+      toast.success(`Fiyatlar güncellendi → ${results.map((r) => `${short(r.p)} ${r.changed}`).join(" · ")}`);
+    } else {
+      const totalChecked = results.reduce((s, r) => s + r.checked, 0);
+      toast.success(`Fiyatlar zaten güncel · ${totalChecked} ürün kontrol edildi`);
+    }
+    setTimeout(() => setRefreshProgress(null), 1200);
   };
 
   const form = useForm<AddProductForm>({
@@ -1197,10 +1219,10 @@ export default function ProductsPage() {
               onClick={runRefreshAll}
               size="sm"
               variant="outline"
-              title="Fiyatları çek + liste/panel/siparişleri tazele (başka cihazdaki değişiklikler dahil)"
+              title="Tüm platformlardan güncel fiyatları çek + liste/panel/siparişleri tazele (başka cihazdaki değişiklikler dahil)"
             >
               <RefreshCw className="h-4 w-4 mr-2" />
-              Yenile
+              Fiyatları Güncelle &amp; Yenile
             </Button>
           )}
           <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürünü barkoduyla ekle">
