@@ -17,7 +17,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Truck } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings2, ChevronDown } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -41,6 +41,7 @@ interface CargoRule {
 }
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
+type CargoMode = "standart" | "avantajli";
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
@@ -156,7 +157,7 @@ function RuleForm({
   );
 }
 
-/** Bir platformun kargo kurallarını temiz tablo halinde gösterir. */
+/** Bir platformun kargo kurallarını ham tablo halinde gösterir (gelişmiş düzenleme). */
 function RulesTable({
   rules,
   onEdit,
@@ -170,7 +171,7 @@ function RulesTable({
 }) {
   if (rules.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
+      <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
         Bu platform için henüz kargo kuralı yok.
       </div>
     );
@@ -228,17 +229,208 @@ function RulesTable({
 }
 
 interface HbCargo {
-  mode: "standart" | "avantajli";
+  mode: CargoMode;
   applied: boolean;
   desiBrackets: { fromDesi: number; toDesi: number; cost: number }[];
   flatTiers: { minPrice: number; maxPrice: number; cost: number }[];
 }
 
+interface FlatTier { minPrice: number; maxPrice: number; cost: number }
+interface DesiBracket { fromDesi: number; toDesi: number; cost: number }
+
 function desiLabel(from: number, to: number): string {
-  if (to === 999) return `${Math.ceil(from)}+`;
+  if (to >= 999) return `${Math.ceil(from)}+`;
   if (from === 0) return `0 – ${to}`;
   const lo = Math.ceil(from);
   return lo === to ? `${to}` : `${lo} – ${to}`;
+}
+
+const priceLabel = (v: number) => (v >= 999999 ? "∞" : Math.ceil(v));
+
+/** "Kargo desteğinden yararlanıyor musun?" anahtarı — tüm platformlarda aynı dil. */
+function CargoSupportFlag({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: CargoMode;
+  onChange: (m: CargoMode) => void;
+  disabled?: boolean;
+}) {
+  const on = mode === "avantajli";
+  return (
+    <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3.5 py-3 gap-4">
+      <div className="min-w-0">
+        <p className="text-sm font-medium">Kargo desteğinden yararlanıyor musun?</p>
+        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+          Açık → avantajlı barem (sipariş tutarına göre ucuz sabit ücret). Kapalı → standart desi baremi.
+        </p>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="text-xs text-muted-foreground w-16 text-right">
+          {on ? "Avantajlı" : "Standart"}
+        </span>
+        <Switch checked={on} disabled={disabled} onCheckedChange={(v) => onChange(v ? "avantajli" : "standart")} />
+      </div>
+    </div>
+  );
+}
+
+/** Tek, ortak kargo barem görünümü: düz tutar kademeleri + desi tablosu. Üç platform da bunu kullanır. */
+function CargoBaremView({
+  provider,
+  vatNote,
+  flatTiers,
+  desiBrackets,
+  desiThreshold,
+  loading,
+}: {
+  provider: string | null;
+  vatNote?: string;
+  flatTiers: FlatTier[];
+  desiBrackets: DesiBracket[];
+  desiThreshold: number;
+  loading?: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        {[1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
+    );
+  }
+  if (flatTiers.length === 0 && desiBrackets.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
+        Bu platform için henüz kargo baremi yok. Aşağıdaki "Gelişmiş" bölümünden kural ekleyebilirsin.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <p className="text-[11px] text-muted-foreground">
+        {provider ? (
+          <>Kargo firması: <strong className="text-foreground">{provider}</strong></>
+        ) : (
+          "Kargo baremi"
+        )}
+        {vatNote ? ` · ${vatNote}` : ""}
+      </p>
+
+      {flatTiers.length > 0 && (
+        <div className="rounded-lg border overflow-hidden animate-in fade-in slide-in-from-bottom-1 duration-300">
+          <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            Sipariş tutarına göre
+          </div>
+          <table className="w-full text-sm">
+            <tbody>
+              {flatTiers.map((t) => (
+                <tr key={`${t.minPrice}-${t.maxPrice}`} className="border-t border-border/60">
+                  <td className="px-3 py-2 text-muted-foreground tabular-nums">
+                    {t.minPrice} – {priceLabel(t.maxPrice)} ₺
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold text-primary tabular-nums">
+                    {formatCurrency(t.cost)}
+                  </td>
+                </tr>
+              ))}
+              {desiThreshold > 0 && (
+                <tr className="border-t border-border/60">
+                  <td className="px-3 py-2 text-muted-foreground tabular-nums">{desiThreshold} ₺ ve üzeri</td>
+                  <td className="px-3 py-2 text-right text-xs text-muted-foreground">desi baremi (aşağıda)</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {desiBrackets.length > 0 && (
+        <div className="rounded-lg border overflow-hidden animate-in fade-in slide-in-from-bottom-1 duration-300">
+          <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {desiThreshold > 0 ? `>${desiThreshold} ₺ — Desi baremi` : "Desi baremi"}
+          </div>
+          <table className="w-full text-sm">
+            <thead className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+              <tr className="border-t border-border/40">
+                <th className="text-left font-medium px-3 py-1.5">Desi</th>
+                <th className="text-right font-medium px-3 py-1.5">Kargo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {desiBrackets.map((b) => (
+                <tr key={`${b.fromDesi}-${b.toDesi}`} className="border-t border-border/40">
+                  <td className="px-3 py-1.5 tabular-nums">{desiLabel(b.fromDesi, b.toDesi)}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold text-primary tabular-nums">
+                    {formatCurrency(b.cost)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Aktif kurallardan temiz barem türet: düz tutar kademeleri (desi-bağımsız) + desi tablosu. */
+function deriveBarem(rules: CargoRule[]): {
+  flat: FlatTier[];
+  desi: DesiBracket[];
+  desiThreshold: number;
+  provider: string | null;
+} {
+  const active = rules.filter((r) => r.isActive);
+  const flat = active
+    .filter((r) => r.maxDesi >= 999)
+    .map((r) => ({ minPrice: r.minPrice, maxPrice: r.maxPrice, cost: r.cargoCost }))
+    .sort((a, b) => a.minPrice - b.minPrice);
+  const desiRules = active.filter((r) => r.maxDesi < 999);
+  const desi = desiRules
+    .map((r) => ({ fromDesi: r.minDesi, toDesi: r.maxDesi, cost: r.cargoCost }))
+    .sort((a, b) => a.fromDesi - b.fromDesi);
+  const desiThreshold = desiRules.length > 0 ? Math.min(...desiRules.map((r) => r.minPrice)) : 0;
+  const provider = rules.find((r) => r.cargoProvider)?.cargoProvider ?? null;
+  return { flat, desi, desiThreshold, provider };
+}
+
+const isTex = (r: CargoRule) => /tex/i.test(r.cargoProvider ?? "") || /tex/i.test(r.name);
+
+/** Gelişmiş: ham kuralları düzenle (katlanır). */
+function AdvancedRules({
+  rules,
+  onAdd,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  rules: CargoRule[];
+  onAdd: () => void;
+  onEdit: (r: CargoRule) => void;
+  onDelete: (id: string) => void;
+  onToggle: (r: CargoRule, v: boolean) => void;
+}) {
+  return (
+    <details className="group rounded-lg border bg-muted/10">
+      <summary className="flex items-center gap-1.5 cursor-pointer select-none px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground list-none [&::-webkit-details-marker]:hidden">
+        <Settings2 className="h-3.5 w-3.5" />
+        Gelişmiş: kuralları düzenle
+        <span className="text-muted-foreground/60">({rules.length})</span>
+        <ChevronDown className="h-3.5 w-3.5 ml-auto transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="px-3 pb-3 space-y-3">
+        <div className="flex justify-end">
+          <Button size="sm" variant="outline" onClick={onAdd}>
+            <Plus className="h-4 w-4 mr-2" /> Kural Ekle
+          </Button>
+        </div>
+        <RulesTable rules={rules} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+      </div>
+    </details>
+  );
 }
 
 export default function CargoRulesPage() {
@@ -258,7 +450,7 @@ export default function CargoRulesPage() {
   });
 
   const applyHb = useMutation({
-    mutationFn: (mode: "standart" | "avantajli") =>
+    mutationFn: (mode: CargoMode) =>
       fetch("/api/cargo-rules/hepsiburada", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -279,6 +471,49 @@ export default function CargoRulesPage() {
     if (hb && !hb.applied && !applyHb.isPending) applyHb.mutate(hb.mode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hb?.applied]);
+
+  // ── Platform bazlı kural setleri (TEX = Trendyol; kalan platform-bazlı/eski null kurallar Shopify) ──
+  const trendyolRules = rules.filter((r) => r.platform === "trendyol" || isTex(r));
+  const shopifyRules = rules.filter((r) => r.platform === "shopify" || (!r.platform && !isTex(r)));
+  const trendyolMode: CargoMode = trendyolRules.some((r) => /avantaj/i.test(r.name) && r.isActive)
+    ? "avantajli"
+    : "standart";
+
+  // Trendyol kargo desteği: TEX düz baremlerinin isActive'ini çevirir (optimistic → anında).
+  const applyTrendyol = useMutation({
+    mutationFn: (mode: CargoMode) =>
+      fetch("/api/cargo-rules/trendyol", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      }).then((r) => r.json()),
+    onMutate: async (mode: CargoMode) => {
+      await queryClient.cancelQueries({ queryKey: ["cargo-rules"] });
+      const prev = queryClient.getQueryData<CargoRule[]>(["cargo-rules"]);
+      queryClient.setQueryData<CargoRule[]>(["cargo-rules"], (old) =>
+        Array.isArray(old)
+          ? old.map((r) => {
+              if (!isTex(r)) return r;
+              if (/avantaj/i.test(r.name)) return { ...r, isActive: mode === "avantajli" };
+              if (/standart/i.test(r.name)) return { ...r, isActive: mode === "standart" };
+              return r;
+            })
+          : old
+      );
+      return { prev };
+    },
+    onError: (_e, _m, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["cargo-rules"], ctx.prev);
+      toast.error("Mod değiştirilemedi");
+    },
+    onSuccess: (_d, mode) =>
+      toast.success(mode === "avantajli" ? "Avantajlı barem aktif" : "Standart barem aktif"),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -324,7 +559,11 @@ export default function CargoRulesPage() {
     },
   });
 
-  const rulesFor = (p: Platform) => rules.filter((r) => r.platform === p || !r.platform);
+  const onToggleRule = (r: CargoRule, v: boolean) =>
+    updateMutation.mutate({ id: r.id, data: { isActive: v } as Partial<FormData> as FormData });
+
+  const trendyolBarem = deriveBarem(trendyolRules);
+  const shopifyBarem = deriveBarem(shopifyRules);
 
   return (
     <div className="p-6 space-y-5 max-w-4xl">
@@ -342,118 +581,76 @@ export default function CargoRulesPage() {
           <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-500">Hepsiburada</TabsTrigger>
         </TabsList>
 
-        {(["shopify", "trendyol"] as const).map((p) => (
-          <TabsContent key={p} value={p} className="space-y-3 mt-4">
-            <div className="flex justify-end">
-              <Button size="sm" onClick={() => setOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" /> Kural Ekle
-              </Button>
-            </div>
-            {isLoading ? (
-              <div className="space-y-2">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : (
-              <RulesTable
-                rules={rulesFor(p)}
-                onEdit={setEditing}
-                onDelete={(id) => deleteMutation.mutate(id)}
-                onToggle={(r, v) =>
-                  updateMutation.mutate({ id: r.id, data: { isActive: v } as Partial<FormData> as FormData })
-                }
+        {/* SHOPIFY — temiz barem görünümü (flag yok) */}
+        <TabsContent value="shopify" className="space-y-4 mt-4">
+          <Card>
+            <CardContent className="pt-4 space-y-4">
+              <CargoBaremView
+                provider={shopifyBarem.provider}
+                flatTiers={shopifyBarem.flat}
+                desiBrackets={shopifyBarem.desi}
+                desiThreshold={shopifyBarem.desiThreshold}
+                loading={isLoading}
               />
-            )}
-          </TabsContent>
-        ))}
+              {!isLoading && (
+                <AdvancedRules
+                  rules={shopifyRules}
+                  onAdd={() => setOpen(true)}
+                  onEdit={setEditing}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onToggle={onToggleRule}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* TRENDYOL — temiz barem + kargo desteği flag'i (TEX) */}
+        <TabsContent value="trendyol" className="space-y-4 mt-4">
+          <Card>
+            <CardContent className="pt-4 space-y-4">
+              <CargoSupportFlag
+                mode={trendyolMode}
+                disabled={applyTrendyol.isPending || isLoading}
+                onChange={(m) => applyTrendyol.mutate(m)}
+              />
+              <CargoBaremView
+                provider={trendyolBarem.provider}
+                flatTiers={trendyolBarem.flat}
+                desiBrackets={trendyolBarem.desi}
+                desiThreshold={trendyolBarem.desiThreshold}
+                loading={isLoading}
+              />
+              {!isLoading && (
+                <AdvancedRules
+                  rules={trendyolRules}
+                  onAdd={() => setOpen(true)}
+                  onEdit={setEditing}
+                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onToggle={onToggleRule}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
 
         {/* HEPSIBURADA — HepsiJet baremi + kargo desteği flag'i */}
         <TabsContent value="hepsiburada" className="space-y-4 mt-4">
           <Card>
             <CardContent className="pt-4 space-y-4">
-              <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3.5 py-3 gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Kargo desteğinden yararlanıyor musun?</p>
-                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                    Açık → avantajlı barem (sipariş tutarına göre ucuz sabit ücret). Kapalı → standart desi baremi.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs text-muted-foreground w-16 text-right">
-                    {hb?.mode === "avantajli" ? "Avantajlı" : "Standart"}
-                  </span>
-                  <Switch
-                    checked={hb?.mode === "avantajli"}
-                    disabled={applyHb.isPending || !hb}
-                    onCheckedChange={(v) => applyHb.mutate(v ? "avantajli" : "standart")}
-                  />
-                </div>
-              </div>
-
-              <p className="text-[11px] text-muted-foreground">
-                Kargo firması: <strong className="text-foreground">HepsiJet</strong> · Fiyatlar KDV dahil (%20)
-                {applyHb.isPending && " · uygulanıyor…"}
-              </p>
-
-              {/* Avantajlı: sipariş tutarı kademeleri */}
-              {hb?.mode === "avantajli" && (
-                <div className="rounded-lg border overflow-hidden">
-                  <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    Sipariş tutarına göre
-                  </div>
-                  <table className="w-full text-sm">
-                    <tbody>
-                      {hb.flatTiers.map((t) => (
-                        <tr key={t.minPrice} className="border-t border-border/60">
-                          <td className="px-3 py-2 text-muted-foreground">
-                            {t.minPrice} – {Math.ceil(t.maxPrice)} ₺
-                          </td>
-                          <td className="px-3 py-2 text-right font-semibold text-primary tabular-nums">
-                            {formatCurrency(t.cost)}
-                          </td>
-                        </tr>
-                      ))}
-                      <tr className="border-t border-border/60">
-                        <td className="px-3 py-2 text-muted-foreground">400 ₺ ve üzeri</td>
-                        <td className="px-3 py-2 text-right text-xs text-muted-foreground">desi baremi (aşağıda)</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {/* Desi baremi (standart = her zaman; avantajlı = >400₺) */}
-              <div className="rounded-lg border overflow-hidden">
-                <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {hb?.mode === "avantajli" ? ">400 ₺ — Desi baremi" : "Desi baremi"}
-                </div>
-                <table className="w-full text-sm">
-                  <thead className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                    <tr className="border-t border-border/40">
-                      <th className="text-left font-medium px-3 py-1.5">Desi</th>
-                      <th className="text-right font-medium px-3 py-1.5">Kargo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(hb?.desiBrackets ?? []).map((b) => (
-                      <tr key={b.toDesi} className="border-t border-border/40">
-                        <td className="px-3 py-1.5 tabular-nums">{desiLabel(b.fromDesi, b.toDesi)}</td>
-                        <td className="px-3 py-1.5 text-right font-semibold text-primary tabular-nums">
-                          {formatCurrency(b.cost)}
-                        </td>
-                      </tr>
-                    ))}
-                    {!hb && (
-                      <tr>
-                        <td colSpan={2} className="px-3 py-6 text-center text-muted-foreground">
-                          <Truck className="h-4 w-4 inline mr-2 animate-pulse" /> Yükleniyor…
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <CargoSupportFlag
+                mode={hb?.mode ?? "standart"}
+                disabled={applyHb.isPending || !hb}
+                onChange={(m) => applyHb.mutate(m)}
+              />
+              <CargoBaremView
+                provider="HepsiJet"
+                vatNote={`Fiyatlar KDV dahil (%20)${applyHb.isPending ? " · uygulanıyor…" : ""}`}
+                flatTiers={hb?.mode === "avantajli" ? hb?.flatTiers ?? [] : []}
+                desiBrackets={hb?.desiBrackets ?? []}
+                desiThreshold={hb?.mode === "avantajli" ? 400 : 0}
+                loading={!hb}
+              />
             </CardContent>
           </Card>
         </TabsContent>
