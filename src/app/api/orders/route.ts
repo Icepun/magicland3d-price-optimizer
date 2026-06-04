@@ -399,7 +399,10 @@ export async function GET() {
         if (!e) return;
         e.lines = (hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, any>[]).map(hbLineRaw);
         e.customer = e.customer ?? (hbStr((d.customer ?? {}).name, d.customerName) || null);
-        if (!e.date) e.date = hbDate(d.orderDate, d.createdDate);
+        // Sipariş VERME tarihini tercih et (kargo/teslim tarihi değil) → liste + 30g penceresi hep
+        // sipariş tarihine göre. Paketten gelen tarih (ShippedDate/DeliveredDate) bununla ezilir.
+        const od = hbDate(d.orderDate, d.createdDate);
+        if (od) e.date = od;
       } catch { /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır */ }
     });
 
