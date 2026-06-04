@@ -2,14 +2,14 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, Pencil, Trash2, Truck } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -41,6 +40,8 @@ interface CargoRule {
   isActive: boolean;
 }
 
+type Platform = "shopify" | "trendyol" | "hepsiburada";
+
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
   platform: z.enum(["trendyol", "shopify", "hepsiburada"]).default("trendyol"),
@@ -54,12 +55,6 @@ const Schema = z.object({
   priority: z.coerce.number().int().default(10),
   isActive: z.boolean().default(true),
 });
-
-const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
-  trendyol: { label: "Trendyol", cls: "bg-orange-500/10 text-orange-500 border-orange-500/20" },
-  shopify: { label: "Shopify", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" },
-  hepsiburada: { label: "Hepsiburada", cls: "bg-violet-500/10 text-violet-500 border-violet-500/20" },
-};
 
 type FormData = z.infer<typeof Schema>;
 
@@ -99,7 +94,7 @@ function RuleForm({
           <Label>Platform *</Label>
           <select
             value={platform}
-            onChange={(e) => form.setValue("platform", e.target.value as "trendyol" | "shopify" | "hepsiburada")}
+            onChange={(e) => form.setValue("platform", e.target.value as Platform)}
             className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="trendyol">Trendyol</option>
@@ -149,10 +144,7 @@ function RuleForm({
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Switch
-          checked={isActive}
-          onCheckedChange={(v) => form.setValue("isActive", v)}
-        />
+        <Switch checked={isActive} onCheckedChange={(v) => form.setValue("isActive", v)} />
         <Label>Aktif</Label>
       </div>
       <DialogFooter>
@@ -164,7 +156,93 @@ function RuleForm({
   );
 }
 
+/** Bir platformun kargo kurallarını temiz tablo halinde gösterir. */
+function RulesTable({
+  rules,
+  onEdit,
+  onDelete,
+  onToggle,
+}: {
+  rules: CargoRule[];
+  onEdit: (r: CargoRule) => void;
+  onDelete: (id: string) => void;
+  onToggle: (r: CargoRule, v: boolean) => void;
+}) {
+  if (rules.length === 0) {
+    return (
+      <div className="rounded-lg border border-dashed py-10 text-center text-sm text-muted-foreground">
+        Bu platform için henüz kargo kuralı yok.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/50 text-[10px] uppercase tracking-wider text-muted-foreground">
+          <tr>
+            <th className="text-left font-medium px-3 py-2">Kural</th>
+            <th className="text-right font-medium px-3 py-2">Fiyat (₺)</th>
+            <th className="text-right font-medium px-3 py-2">Desi</th>
+            <th className="text-right font-medium px-3 py-2">Kargo</th>
+            <th className="text-center font-medium px-3 py-2 w-16">Aktif</th>
+            <th className="px-2 py-2 w-16" />
+          </tr>
+        </thead>
+        <tbody>
+          {rules.map((r) => (
+            <tr key={r.id} className={cn("border-t border-border/60", !r.isActive && "opacity-45")}>
+              <td className="px-3 py-2">
+                <div className="font-medium leading-tight">{r.name}</div>
+                {r.cargoProvider && (
+                  <div className="text-[10px] text-muted-foreground">{r.cargoProvider}</div>
+                )}
+              </td>
+              <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap">
+                {r.minPrice} – {r.maxPrice === 999999 ? "∞" : r.maxPrice}
+              </td>
+              <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap">
+                {r.minDesi} – {r.maxDesi === 999 ? "∞" : r.maxDesi}
+              </td>
+              <td className="text-right px-3 py-2 font-semibold text-primary tabular-nums whitespace-nowrap">
+                {formatCurrency(r.cargoCost)}
+              </td>
+              <td className="text-center px-3 py-2">
+                <Switch checked={r.isActive} onCheckedChange={(v) => onToggle(r, v)} />
+              </td>
+              <td className="px-2 py-2">
+                <div className="flex items-center justify-end gap-0.5">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" title="Düzenle" onClick={() => onEdit(r)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/70 hover:text-destructive" title="Sil" onClick={() => onDelete(r.id)}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface HbCargo {
+  mode: "standart" | "avantajli";
+  applied: boolean;
+  desiBrackets: { fromDesi: number; toDesi: number; cost: number }[];
+  flatTiers: { minPrice: number; maxPrice: number; cost: number }[];
+}
+
+function desiLabel(from: number, to: number): string {
+  if (to === 999) return `${Math.ceil(from)}+`;
+  if (from === 0) return `0 – ${to}`;
+  const lo = Math.ceil(from);
+  return lo === to ? `${to}` : `${lo} – ${to}`;
+}
+
 export default function CargoRulesPage() {
+  const [tab, setTab] = useState<Platform>("trendyol");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CargoRule | null>(null);
   const queryClient = useQueryClient();
@@ -173,6 +251,34 @@ export default function CargoRulesPage() {
     queryKey: ["cargo-rules"],
     queryFn: () => fetch("/api/cargo-rules").then((r) => r.json()),
   });
+
+  const { data: hb } = useQuery<HbCargo>({
+    queryKey: ["hb-cargo"],
+    queryFn: () => fetch("/api/cargo-rules/hepsiburada").then((r) => r.json()),
+  });
+
+  const applyHb = useMutation({
+    mutationFn: (mode: "standart" | "avantajli") =>
+      fetch("/api/cargo-rules/hepsiburada", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      }).then((r) => r.json()),
+    onSuccess: (_d, mode) => {
+      queryClient.invalidateQueries({ queryKey: ["hb-cargo"] });
+      queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      toast.success(mode === "avantajli" ? "Avantajlı barem uygulandı" : "Standart barem uygulandı");
+    },
+    onError: () => toast.error("Barem uygulanamadı"),
+  });
+
+  // İlk kurulumda HB baremi hiç yazılmadıysa mevcut modu otomatik uygula → HB kargosu hemen çalışsın.
+  useEffect(() => {
+    if (hb && !hb.applied && !applyHb.isPending) applyHb.mutate(hb.mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hb?.applied]);
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -218,141 +324,151 @@ export default function CargoRulesPage() {
     },
   });
 
+  const rulesFor = (p: Platform) => rules.filter((r) => r.platform === p || !r.platform);
+
   return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Kargo Kuralları</h1>
-        <Button onClick={() => setOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-2" /> Kural Ekle
-        </Button>
+    <div className="p-6 space-y-5 max-w-4xl">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Kargo Kuralları</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">
+          Her platformun kargo baremi ayrı. Kural yalnızca kendi platformunun siparişlerine uygulanır.
+        </p>
       </div>
 
-      <p className="text-sm text-muted-foreground">
-        Her platform için ayrı kargo baremi: <strong>Trendyol</strong> fiyat+desi bareminden
-        otomatik, <strong>Shopify</strong> kendi baremini manuel girersin. Kural sadece kendi
-        platformunun listing&apos;ine uygulanır.
-      </p>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Platform)}>
+        <TabsList>
+          <TabsTrigger value="shopify" className="data-[state=active]:text-emerald-500">Shopify</TabsTrigger>
+          <TabsTrigger value="trendyol" className="data-[state=active]:text-orange-500">Trendyol</TabsTrigger>
+          <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-500">Hepsiburada</TabsTrigger>
+        </TabsList>
 
-      <Card className="border-primary/20 bg-primary/5">
-        <CardContent className="pt-4 pb-3 text-xs space-y-1.5">
-          <p className="font-semibold text-foreground/90">
-            ℹ️ TEX Barem Geçişi
-          </p>
-          <p className="text-muted-foreground leading-relaxed">
-            Termin süreni 1 güne çekersen <strong>Avantajlı Barem</strong> kurallarını
-            aktif et, <strong>Standart Barem</strong>'i pasife al. 2+ gün terminde
-            tersi geçerli. Avantajlı'da kargo ücretin neredeyse yarıya düşer.
-          </p>
-        </CardContent>
-      </Card>
+        {(["shopify", "trendyol"] as const).map((p) => (
+          <TabsContent key={p} value={p} className="space-y-3 mt-4">
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => setOpen(true)}>
+                <Plus className="h-4 w-4 mr-2" /> Kural Ekle
+              </Button>
+            </div>
+            {isLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-12 w-full" />
+                ))}
+              </div>
+            ) : (
+              <RulesTable
+                rules={rulesFor(p)}
+                onEdit={setEditing}
+                onDelete={(id) => deleteMutation.mutate(id)}
+                onToggle={(r, v) =>
+                  updateMutation.mutate({ id: r.id, data: { isActive: v } as Partial<FormData> as FormData })
+                }
+              />
+            )}
+          </TabsContent>
+        ))}
 
-      {isLoading ? (
-        <div className="grid gap-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <Skeleton className="h-4 w-48" />
-                  <Skeleton className="h-6 w-20" />
+        {/* HEPSIBURADA — HepsiJet baremi + kargo desteği flag'i */}
+        <TabsContent value="hepsiburada" className="space-y-4 mt-4">
+          <Card>
+            <CardContent className="pt-4 space-y-4">
+              <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3.5 py-3 gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">Kargo desteğinden yararlanıyor musun?</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
+                    Açık → avantajlı barem (sipariş tutarına göre ucuz sabit ücret). Kapalı → standart desi baremi.
+                  </p>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-3">
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-4 w-32" />
-                  <Skeleton className="h-4 w-20" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-muted-foreground w-16 text-right">
+                    {hb?.mode === "avantajli" ? "Avantajlı" : "Standart"}
+                  </span>
+                  <Switch
+                    checked={hb?.mode === "avantajli"}
+                    disabled={applyHb.isPending || !hb}
+                    onCheckedChange={(v) => applyHb.mutate(v ? "avantajli" : "standart")}
+                  />
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      ) : rules.length === 0 ? (
-        <EmptyState
-          icon={Truck}
-          title="Henüz kargo kuralı yok"
-          description="Fiyat aralığı ve desiye göre kargo maliyetini tanımlayan kurallar ekleyin. TEX bareme uygulama ilk açılışta otomatik yüklenir."
-          action={
-            <Button onClick={() => setOpen(true)} size="sm">
-              <Plus className="h-4 w-4 mr-2" /> İlk Kuralı Ekle
-            </Button>
-          }
-        />
-      ) : (
-        <div className="grid gap-3">
-          {rules.map((rule, index) => (
-              <Card
-                key={rule.id}
-                className={cn(
-                  "animate-in fade-in slide-in-from-bottom-2 duration-500",
-                  !rule.isActive && "opacity-50"
-                )}
-                style={{ animationDelay: `${index * 40}ms`, animationFillMode: "both" }}
-              >
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                    <Badge
-                      variant="outline"
-                      className={cn("text-[10px]", PLATFORM_BADGE[rule.platform ?? "trendyol"]?.cls)}
-                    >
-                      {PLATFORM_BADGE[rule.platform ?? "trendyol"]?.label ?? "Tümü"}
-                    </Badge>
-                    {rule.name}
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-xs">Öncelik: {rule.priority}</Badge>
-                    <div className="flex items-center gap-1.5 pl-1">
-                      <Switch
-                        checked={rule.isActive}
-                        onCheckedChange={(v) =>
-                          updateMutation.mutate({
-                            id: rule.id,
-                            data: { isActive: v } as Partial<FormData> as FormData,
-                          })
-                        }
-                      />
-                      <span className="text-[10px] text-muted-foreground w-8">
-                        {rule.isActive ? "Aktif" : "Pasif"}
-                      </span>
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Düzenle" onClick={() => setEditing(rule)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Sil" onClick={() => deleteMutation.mutate(rule.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground">
+                Kargo firması: <strong className="text-foreground">HepsiJet</strong> · Fiyatlar KDV dahil (%20)
+                {applyHb.isPending && " · uygulanıyor…"}
+              </p>
+
+              {/* Avantajlı: sipariş tutarı kademeleri */}
+              {hb?.mode === "avantajli" && (
+                <div className="rounded-lg border overflow-hidden">
+                  <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                    Sipariş tutarına göre
                   </div>
+                  <table className="w-full text-sm">
+                    <tbody>
+                      {hb.flatTiers.map((t) => (
+                        <tr key={t.minPrice} className="border-t border-border/60">
+                          <td className="px-3 py-2 text-muted-foreground">
+                            {t.minPrice} – {Math.ceil(t.maxPrice)} ₺
+                          </td>
+                          <td className="px-3 py-2 text-right font-semibold text-primary tabular-nums">
+                            {formatCurrency(t.cost)}
+                          </td>
+                        </tr>
+                      ))}
+                      <tr className="border-t border-border/60">
+                        <td className="px-3 py-2 text-muted-foreground">400 ₺ ve üzeri</td>
+                        <td className="px-3 py-2 text-right text-xs text-muted-foreground">desi baremi (aşağıda)</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="flex flex-wrap gap-3 text-sm">
-                  {rule.cargoProvider && (
-                    <span><span className="text-muted-foreground">Firma:</span> {rule.cargoProvider}</span>
-                  )}
-                  <span>
-                    <span className="text-muted-foreground">Fiyat:</span>{" "}
-                    {rule.minPrice} — {rule.maxPrice === 999999 ? "∞" : rule.maxPrice} TL
-                  </span>
-                  <span>
-                    <span className="text-muted-foreground">Desi:</span>{" "}
-                    {rule.minDesi} — {rule.maxDesi === 999 ? "∞" : rule.maxDesi}
-                  </span>
-                  <span className="font-semibold text-primary">
-                    {formatCurrency(rule.cargoCost)} kargo
-                  </span>
+              )}
+
+              {/* Desi baremi (standart = her zaman; avantajlı = >400₺) */}
+              <div className="rounded-lg border overflow-hidden">
+                <div className="bg-muted/50 px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {hb?.mode === "avantajli" ? ">400 ₺ — Desi baremi" : "Desi baremi"}
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+                <table className="w-full text-sm">
+                  <thead className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                    <tr className="border-t border-border/40">
+                      <th className="text-left font-medium px-3 py-1.5">Desi</th>
+                      <th className="text-right font-medium px-3 py-1.5">Kargo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(hb?.desiBrackets ?? []).map((b) => (
+                      <tr key={b.toDesi} className="border-t border-border/40">
+                        <td className="px-3 py-1.5 tabular-nums">{desiLabel(b.fromDesi, b.toDesi)}</td>
+                        <td className="px-3 py-1.5 text-right font-semibold text-primary tabular-nums">
+                          {formatCurrency(b.cost)}
+                        </td>
+                      </tr>
+                    ))}
+                    {!hb && (
+                      <tr>
+                        <td colSpan={2} className="px-3 py-6 text-center text-muted-foreground">
+                          <Truck className="h-4 w-4 inline mr-2 animate-pulse" /> Yükleniyor…
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Kargo Kuralı Ekle</DialogTitle>
           </DialogHeader>
-          <RuleForm onSubmit={(d) => createMutation.mutate(d)} isPending={createMutation.isPending} />
+          <RuleForm
+            defaultValues={{ platform: tab === "hepsiburada" ? "trendyol" : tab }}
+            onSubmit={(d) => createMutation.mutate(d)}
+            isPending={createMutation.isPending}
+          />
         </DialogContent>
       </Dialog>
 
@@ -365,7 +481,7 @@ export default function CargoRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
-                platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada") ?? "trendyol",
+                platform: (editing.platform as Platform) ?? "trendyol",
                 cargoProvider: editing.cargoProvider ?? undefined,
                 categoryName: editing.categoryName ?? undefined,
               }}
