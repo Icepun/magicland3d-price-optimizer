@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Table,
   TableBody,
@@ -202,6 +203,8 @@ const ProductRow = memo(function ProductRow({
   onDelete,
   onToggleMadeToOrder,
   onPrint,
+  measureRef,
+  dataIndex,
 }: {
   product: Product;
   isMember: boolean;
@@ -209,6 +212,9 @@ const ProductRow = memo(function ProductRow({
   isEditingAlias: boolean;
   aliasValue: string;
   integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  /** Virtualizer: satırın gerçek yüksekliğini ölçmek için (dinamik) + flatRows indexi. */
+  measureRef?: (node: HTMLTableRowElement | null) => void;
+  dataIndex?: number;
   onToggleSelect: (id: string, checked: boolean) => void;
   onAdjustStock: (id: string, delta: number, current: number) => void;
   onAliasStart: (id: string, current: string) => void;
@@ -227,6 +233,8 @@ const ProductRow = memo(function ProductRow({
 
   return (
     <TableRow
+      ref={measureRef}
+      data-index={dataIndex}
       className={cn(
         "group hover:bg-muted/50",
         !product.isActive && "opacity-50",
@@ -956,37 +964,51 @@ export default function ProductsPage() {
     return out;
   }, [displayRows, expandedGroups]);
 
-  // Lazy/windowed render — başta 40 satır, scroll'da artar. Filtre/arama değişince
-  // ve sayfaya her girişte (component remount) sıfırlanır.
-  const [visibleCount, setVisibleCount] = useState(40);
-  const sentinelRef = useRef<HTMLTableRowElement>(null);
-
+  // ── Virtualization (sanallaştırma) ──
+  // Sayfa <main> ile scroll olur. Eski windowing DOM'u biriktiriyordu (40→368 satır, hiç düşmüyor)
+  // → ~15k düğüm → scroll/paint kasması. react-virtual ile DOM'da yalnız GÖRÜNÜR pencere + 2 boşluk
+  // satırı kalır; scroll nereye gelirse gelsin sabit ~25 satır. Satır markup'ı AYNI (görsel değişmez).
+  const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setVisibleCount(40);
-  }, [filterMode, globalFilter]);
-
+    setScrollEl(document.querySelector<HTMLElement>("main"));
+  }, []);
+  const listRef = useRef<HTMLTableSectionElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  // tbody'nin scroll konteyneri (main) içindeki üst ofseti → virtualizer satırları doğru konumlasın.
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    // TEK gözlemci — `visibleCount` deps'te DEĞİL: yoksa her +40'ta observer yeniden kurulup
-    // sentinel hâlâ margin içindeyse anında tekrar tetikleniyordu (cascade → render fırtınası).
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleCount((c) => c + 40);
-        }
-      },
-      { rootMargin: "300px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [flatRows.length]);
+    if (!scrollEl) return;
+    const measure = () => {
+      const tb = listRef.current;
+      if (!tb || !scrollEl) return;
+      setScrollMargin(
+        tb.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
+      );
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+    // selectedIds/refreshProgress üst toolbar yüksekliğini değiştirebilir → yeniden ölç.
+  }, [scrollEl, isLoading, selectedIds.size, refreshProgress]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: flatRows.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => 64,
+    overscan: 10,
+    scrollMargin,
+    getItemKey: (i) => flatRows[i]?.key ?? i,
+  });
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const paddingTop = virtualItems.length > 0 ? Math.max(0, virtualItems[0].start - scrollMargin) : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? Math.max(0, rowVirtualizer.getTotalSize() - virtualItems[virtualItems.length - 1].end)
+      : 0;
 
   // Scroll konumunu koru: başka sayfaya geçip Ürünler'e dönünce kaldığın yerden devam (en başa atmaz).
   const scrollRestoredRef = useRef(false);
   useEffect(() => {
-    const main = document.querySelector("main");
-    if (!main) return;
+    if (!scrollEl) return;
     let raf = 0;
     const onScroll = () => {
       if (raf) return;
@@ -995,38 +1017,34 @@ export default function ProductsPage() {
         try {
           sessionStorage.setItem(
             "mh-products-scroll",
-            JSON.stringify({ key: filterMode, top: main.scrollTop, visible: visibleCount })
+            JSON.stringify({ key: filterMode, top: scrollEl.scrollTop })
           );
         } catch { /* ignore */ }
       });
     };
-    main.addEventListener("scroll", onScroll, { passive: true });
+    scrollEl.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      main.removeEventListener("scroll", onScroll);
+      scrollEl.removeEventListener("scroll", onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [filterMode, visibleCount]);
+  }, [scrollEl, filterMode]);
 
   useEffect(() => {
-    if (scrollRestoredRef.current || isLoading || flatRows.length === 0) return;
+    if (scrollRestoredRef.current || isLoading || flatRows.length === 0 || !scrollEl) return;
     scrollRestoredRef.current = true;
     try {
       const raw = sessionStorage.getItem("mh-products-scroll");
       if (!raw) return;
-      const s = JSON.parse(raw) as { key: string; top: number; visible: number };
+      const s = JSON.parse(raw) as { key: string; top: number };
       if (s.key !== filterMode || !(s.top > 0)) return;
-      setVisibleCount((v) => Math.max(v, s.visible)); // önce yeterli satırı bas, sonra kaydır
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          const main = document.querySelector("main");
-          if (main) main.scrollTop = s.top;
+          if (scrollEl) scrollEl.scrollTop = s.top;
         })
       );
     } catch { /* ignore */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, flatRows.length]);
-
-  const visibleRows = flatRows.slice(0, visibleCount);
+  }, [isLoading, flatRows.length, scrollEl]);
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
@@ -1040,7 +1058,11 @@ export default function ProductsPage() {
   ];
 
   // Varyant grubu başlık satırı — genel ad + N varyant + aç/gizle. Üyeler açıkken altına serpilir.
-  const renderGroupRow = (row: Extract<DisplayRow, { kind: "group" }>) => {
+  const renderGroupRow = (
+    row: Extract<DisplayRow, { kind: "group" }>,
+    measureRef?: (node: HTMLTableRowElement | null) => void,
+    dataIndex?: number
+  ) => {
     const expanded = expandedGroups.has(row.groupId);
     const totalStock = row.members.reduce((s, m) => s + m.stock, 0);
     const prices = row.members.map((m) => m.currentSalePrice).filter((n) => n > 0);
@@ -1057,6 +1079,8 @@ export default function ProductsPage() {
     return (
       <TableRow
         key={row.key}
+        ref={measureRef}
+        data-index={dataIndex}
         onClick={() => toggleGroup(row.groupId)}
         title={expanded ? "Varyantları gizle" : "Varyantları aç"}
         className="bg-muted/25 hover:bg-muted/40 border-y border-border/60 cursor-pointer"
@@ -1256,7 +1280,7 @@ export default function ProductsPage() {
               <TableHead className="w-[80px]" />
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody ref={listRef}>
             {isLoading ? (
               <>
                 {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
@@ -1294,12 +1318,21 @@ export default function ProductsPage() {
               </TableRow>
             ) : (
               <>
-              {visibleRows.map((row) => {
-                if (row.kind === "group") return renderGroupRow(row);
+              {paddingTop > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={9} className="p-0 border-0" style={{ height: paddingTop }} />
+                </tr>
+              )}
+              {virtualItems.map((vi) => {
+                const row = flatRows[vi.index];
+                if (!row) return null;
+                if (row.kind === "group") return renderGroupRow(row, rowVirtualizer.measureElement, vi.index);
                 const product = row.product;
                 return (
                   <ProductRow
                     key={row.key}
+                    measureRef={rowVirtualizer.measureElement}
+                    dataIndex={vi.index}
                     product={product}
                     isMember={row.isMember}
                     isSelected={selectedIds.has(product.id)}
@@ -1320,12 +1353,10 @@ export default function ProductsPage() {
                   />
                 );
               })}
-              {visibleCount < flatRows.length && (
-                <TableRow ref={sentinelRef}>
-                  <TableCell colSpan={9} className="text-center py-4">
-                    <Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground/50" />
-                  </TableCell>
-                </TableRow>
+              {paddingBottom > 0 && (
+                <tr aria-hidden="true">
+                  <td colSpan={9} className="p-0 border-0" style={{ height: paddingBottom }} />
+                </tr>
               )}
               </>
             )}
