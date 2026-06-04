@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useMemo, memo } from "react";
+import { use, useState, useEffect, useMemo, memo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchProductsInCache } from "@/lib/products-cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { VariantsCard } from "@/components/products/VariantsCard";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
 import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
+import { CostEditor, type CostValues, type CostInitial } from "@/components/products/CostEditor";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera } from "lucide-react";
@@ -22,7 +23,7 @@ import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { SimulationResult } from "@/core/types";
-import { parsePackagingSettings, computePackagingCost } from "@/core/packaging";
+import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
 
 interface FilamentType {
   id: string;
@@ -138,74 +139,64 @@ export default function ProductDetailPage({
     queryFn: () => fetch("/api/settings").then((r) => r.json()),
   });
 
-  // Form state
-  const [filamentTypeId, setFilamentTypeId] = useState("");
-  const [filamentWeight, setFilamentWeight] = useState("");
-  const [printTimeHours, setPrintTimeHours] = useState("");
-  const [wasteRate, setWasteRate] = useState("");
-  const [packagingOptionId, setPackagingOptionId] = useState("");
-  const [nylonLevel, setNylonLevel] = useState<"none" | "low" | "medium" | "high">("none");
-  const [tapeUsed, setTapeUsed] = useState(false);
-  const [desiInput, setDesiInput] = useState("");
+  // Kimlik formu state (maliyet formu artık izole CostEditor'da → yazarken bu dev sayfa render olmaz)
   const [aliasInput, setAliasInput] = useState("");
   const [imageEditorOpen, setImageEditorOpen] = useState(false);
 
+  // Takma adı yalnız ürün KİMLİĞİ değişince (navigasyon/ilk yükleme) seed et — her optimistic cache
+  // güncellemesinde DEĞİL (eskiden [product]'tı → her kayıtta gereksiz churn + olası input clobber).
   useEffect(() => {
-    if (product?.cost) {
-      const c = product.cost;
-      setFilamentTypeId(c.filamentTypeId || "");
-      setFilamentWeight(c.filamentWeight ? String(c.filamentWeight) : "");
-      setPrintTimeHours(c.printTimeHours ? String(c.printTimeHours) : "");
-      setWasteRate(c.wasteRate ? String(Number(c.wasteRate) * 100) : "");
-      setPackagingOptionId(c.packagingOptionId || "");
-      setNylonLevel((c.nylonLevel as "none" | "low" | "medium" | "high") || "none");
-      setTapeUsed(Boolean(c.tapeUsed));
-    }
-  }, [product]);
+    if (product) setAliasInput(product.alias ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
 
+  // Paketleme ayarları — globalSettings değişmedikçe yeniden parse etme (her render'da JSON.parse YOK).
+  const packagingSettings = useMemo(() => parsePackagingSettings(globalSettings), [globalSettings]);
+
+  // ── İzole maliyet formu ⇄ parent köprüsü ──
+  // CostEditor tüm input state'ini LOCAL tutar; 250ms debounce'la buraya bildirir. Böylece tuşa
+  // basınca yalnız o küçük kart render olur; bu dev sayfa (3 platform kartı + grafikler) DEĞİL.
+  const [costValues, setCostValues] = useState<CostValues | null>(null);
+  const handleCostChange = useCallback((v: CostValues) => setCostValues(v), []);
+
+  // CostEditor başlangıç değerleri — yalnız ürün kimliği değişince yeniden hesaplanır (sabit prop → memo tutar).
+  const initialCost = useMemo<CostInitial>(() => {
+    const c = product?.cost;
+    return {
+      filamentTypeId: c?.filamentTypeId || "",
+      filamentWeight: c?.filamentWeight ? String(c.filamentWeight) : "",
+      printTimeHours: c?.printTimeHours ? String(c.printTimeHours) : "",
+      wasteRate: c?.wasteRate ? String(Number(c.wasteRate) * 100) : "",
+      packagingOptionId: c?.packagingOptionId || "",
+      nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
+      tapeUsed: Boolean(c?.tapeUsed),
+      desiInput: product?.desi ? String(product.desi) : "",
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
+
+  // costValues'u ürün (navigasyon/ilk yükleme) değişince seed et → önizleme ilk açılışta hazır olsun,
+  // başka varyanta geçince eski değer sızmasın. Optimistic güncellemede (id sabit) TETİKLENMEZ → clobber yok.
   useEffect(() => {
-    if (product) {
-      setDesiInput(product.desi ? String(product.desi) : "");
-      setAliasInput(product.alias ?? "");
-    }
-  }, [product]);
-
-  // Paketleme ayarları (Maliyet Ayarları'ndan)
-  const packagingSettings = parsePackagingSettings(globalSettings);
-  const packagingBreakdown = computePackagingCost(
-    { packagingOptionId: packagingOptionId || null, nylonLevel, tapeUsed },
-    packagingSettings
-  );
-  // Bant'ın "Var" seçildiğindeki maliyeti (seçimden bağımsız — label için)
-  const tapeCostPerProduct =
-    packagingSettings.tapeProductsPerRoll > 0
-      ? packagingSettings.tapePrice / packagingSettings.tapeProductsPerRoll
-      : 0;
-
-  // Anlık maliyet hesabı
-  const selectedFilament = filaments.find((f) => f.id === filamentTypeId);
-  const costPerGram = selectedFilament?.costPerGram || 0;
-  const fWeight = parseFloat(filamentWeight) || 0;
-  const pTime = parseFloat(printTimeHours) || 0;
-  const wRate = (parseFloat(wasteRate) || 0) / 100;
-  const electricityRate = parseFloat(globalSettings.costElectricityPerHour || "0");
-  const machineWearRate = parseFloat(globalSettings.costMachineWearPerHour || "0");
-  const laborRate = parseFloat(globalSettings.costLaborPerHour || "0");
-
-  const calcFilament = fWeight * costPerGram;
-  const calcElectricity = pTime * electricityRate;
-  const calcMachineWear = pTime * machineWearRate;
-  const calcLabor = pTime * laborRate;
-  // Fire sadece baskıya uygulanır, paketlemeye değil
-  const printSubtotal = calcFilament + calcElectricity + calcMachineWear + calcLabor;
-  const calcWaste = printSubtotal * wRate;
-  const calcPackaging = packagingBreakdown.total;
-  const calculatedTotalCost = printSubtotal + calcWaste + calcPackaging;
-  // Sabit ek maliyetler (kart/sticker/sakız) — her üründe
-  const fixedExtras = packagingBreakdown.card + packagingBreakdown.sticker + packagingBreakdown.sakiz;
+    if (!product) return;
+    const c = product.cost;
+    setCostValues({
+      filamentTypeId: c?.filamentTypeId || "",
+      filamentWeight: c?.filamentWeight ?? 0,
+      printTimeHours: c?.printTimeHours ?? 0,
+      wasteRate: Number(c?.wasteRate) || 0,
+      packagingOptionId: c?.packagingOptionId || "",
+      nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
+      tapeUsed: Boolean(c?.tapeUsed),
+      desi: product.desi ?? null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
 
   const saveCostMutation = useMutation({
     mutationFn: async () => {
+      const v = costValues;
+      if (!v) return null;
       // Timeout: ağ ölürse istek asılı kalmasın → başarısız say (sonra retry / rollback).
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 12_000);
@@ -215,16 +206,16 @@ export default function ProductDetailPage({
           headers: { "Content-Type": "application/json" },
           signal: ctrl.signal,
           body: JSON.stringify({
-            desi: parseFloat(desiInput) || null,
+            desi: v.desi,
             cost: {
               costMode: "detailed",
-              filamentTypeId: filamentTypeId || null,
-              filamentWeight: fWeight,
-              printTimeHours: pTime,
-              wasteRate: wRate,
-              packagingOptionId: packagingOptionId || null,
-              nylonLevel,
-              tapeUsed,
+              filamentTypeId: v.filamentTypeId || null,
+              filamentWeight: v.filamentWeight,
+              printTimeHours: v.printTimeHours,
+              wasteRate: v.wasteRate,
+              packagingOptionId: v.packagingOptionId || null,
+              nylonLevel: v.nylonLevel,
+              tapeUsed: v.tapeUsed,
             },
           }),
         });
@@ -238,23 +229,24 @@ export default function ProductDetailPage({
     retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
     // OPTIMISTIC: detay cache'ini anında güncelle → kullanıcı beklemez.
     onMutate: async () => {
+      const v = costValues;
       await queryClient.cancelQueries({ queryKey: ["product", id] });
       const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
-        old
+        old && v
           ? {
               ...old,
-              desi: parseFloat(desiInput) || null,
+              desi: v.desi,
               cost: {
                 ...(old.cost ?? {}),
                 costMode: "detailed",
-                filamentTypeId: filamentTypeId || null,
-                filamentWeight: fWeight,
-                printTimeHours: pTime,
-                wasteRate: wRate,
-                packagingOptionId: packagingOptionId || null,
-                nylonLevel,
-                tapeUsed,
+                filamentTypeId: v.filamentTypeId || null,
+                filamentWeight: v.filamentWeight,
+                printTimeHours: v.printTimeHours,
+                wasteRate: v.wasteRate,
+                packagingOptionId: v.packagingOptionId || null,
+                nylonLevel: v.nylonLevel,
+                tapeUsed: v.tapeUsed,
               } as ProductDetail["cost"],
             }
           : old
@@ -278,24 +270,27 @@ export default function ProductDetailPage({
 
   // Bu maliyeti (ve desi) aynı varyant grubundaki TÜM ürünlere uygula
   const applyCostToVariantsMutation = useMutation({
-    mutationFn: () =>
-      fetch(`/api/products/${id}/apply-cost-to-variants`, {
+    mutationFn: () => {
+      const v = costValues;
+      if (!v) return Promise.resolve(null);
+      return fetch(`/api/products/${id}/apply-cost-to-variants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          desi: parseFloat(desiInput) || null,
+          desi: v.desi,
           cost: {
             costMode: "detailed",
-            filamentTypeId: filamentTypeId || null,
-            filamentWeight: fWeight,
-            printTimeHours: pTime,
-            wasteRate: wRate,
-            packagingOptionId: packagingOptionId || null,
-            nylonLevel,
-            tapeUsed,
+            filamentTypeId: v.filamentTypeId || null,
+            filamentWeight: v.filamentWeight,
+            printTimeHours: v.printTimeHours,
+            wasteRate: v.wasteRate,
+            packagingOptionId: v.packagingOptionId || null,
+            nylonLevel: v.nylonLevel,
+            tapeUsed: v.tapeUsed,
           },
         }),
-      }).then((r) => r.json()),
+      }).then((r) => r.json());
+    },
     meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
       // Maliyet grup üyelerine uygulandı.
@@ -407,62 +402,53 @@ export default function ProductDetailPage({
   // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
   const { adjustStock } = useStockWriter();
 
-  // Real-time kâr önizlemesi — KAYDETMEDEN. Maliyet formu değişince debounce'lu
-  // olarak preview endpoint'e gider, sağ taraftaki platform kartları anında güncellenir.
-  const previewInput = useMemo(
-    () => ({
-      filamentTypeId: filamentTypeId || null,
-      filamentWeight: fWeight,
-      printTimeHours: pTime,
-      wasteRate: wRate,
-      packagingOptionId: packagingOptionId || null,
-      nylonLevel,
-      tapeUsed,
-      desi: parseFloat(desiInput) || null,
-    }),
-    [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput]
-  );
-  const [debouncedInput, setDebouncedInput] = useState(previewInput);
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedInput(previewInput), 200);
-    return () => clearTimeout(t);
-  }, [previewInput]);
-
+  // Real-time kâr önizlemesi — KAYDETMEDEN. costValues (CostEditor'dan 250ms debounce'lu) değişince
+  // preview endpoint'e gider, sağ taraftaki platform kartları güncellenir.
   const { data: preview } = useQuery<ProfitPreview>({
-    queryKey: ["profit-preview", id, debouncedInput],
+    queryKey: ["profit-preview", id, costValues],
     queryFn: () =>
       fetch(`/api/products/${id}/profit-preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(debouncedInput),
+        body: JSON.stringify({
+          filamentTypeId: costValues?.filamentTypeId || null,
+          filamentWeight: costValues?.filamentWeight ?? 0,
+          printTimeHours: costValues?.printTimeHours ?? 0,
+          wasteRate: costValues?.wasteRate ?? 0,
+          packagingOptionId: costValues?.packagingOptionId || null,
+          nylonLevel: costValues?.nylonLevel ?? "none",
+          tapeUsed: costValues?.tapeUsed ?? false,
+          desi: costValues?.desi ?? null,
+        }),
       }).then((r) => r.json()),
-    enabled: Boolean(product),
+    enabled: Boolean(product && costValues),
     placeholderData: (prev) => prev, // değişim sırasında eski sonucu koru (flicker yok)
-    // Maliyet girdisi (debouncedInput) queryKey'de → değer DEĞİŞİNCE zaten yeni POST olur. Aynı girdi
-    // için tekrar tekrar POST atma: staleTime ver + her mount'ta "always" refetch'i kaldır (sayfayı her
-    // açışta/değişiklikte gereksiz preview isteği → sunucu kasması azalır).
     staleTime: 60_000,
   });
 
-  // Maliyet OTOMATİK kaydedilir (debounce 800ms) — "Kaydet" butonu yok, çıkınca kayıp olmaz. Optimistic.
+  // Maliyet OTOMATİK kaydedilir (costValues değişince 800ms sonra) — optimistic, "Kaydet" butonu yok.
   // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).
   useEffect(() => {
-    if (!product) return;
+    if (!product || !costValues) return;
     const c = product.cost;
     const unchanged =
-      (c?.filamentTypeId || "") === (filamentTypeId || "") &&
-      (c?.filamentWeight ?? 0) === fWeight &&
-      (c?.printTimeHours ?? 0) === pTime &&
-      (Number(c?.wasteRate) || 0) === wRate &&
-      (c?.packagingOptionId || "") === (packagingOptionId || "") &&
-      ((c?.nylonLevel as string) || "none") === nylonLevel &&
-      Boolean(c?.tapeUsed) === tapeUsed &&
-      (product.desi ?? null) === (parseFloat(desiInput) || null);
+      (c?.filamentTypeId || "") === (costValues.filamentTypeId || "") &&
+      (c?.filamentWeight ?? 0) === costValues.filamentWeight &&
+      (c?.printTimeHours ?? 0) === costValues.printTimeHours &&
+      (Number(c?.wasteRate) || 0) === costValues.wasteRate &&
+      (c?.packagingOptionId || "") === (costValues.packagingOptionId || "") &&
+      ((c?.nylonLevel as string) || "none") === costValues.nylonLevel &&
+      Boolean(c?.tapeUsed) === costValues.tapeUsed &&
+      (product.desi ?? null) === costValues.desi;
     if (unchanged || saveCostMutation.isPending) return;
     const t = setTimeout(() => saveCostMutation.mutate(), 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput, product]);
+  }, [costValues, product]);
+
+  // CostEditor'a STABİL onApply ver (memo bozulmasın) — mutate referansı zaten sabit.
+  const applyMutate = applyCostToVariantsMutation.mutate;
+  const handleApplyToVariants = useCallback(() => applyMutate(), [applyMutate]);
 
   if (isLoading || !product) {
     return (
@@ -602,212 +588,20 @@ export default function ProductDetailPage({
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Sol: Maliyet formu */}
+        {/* Sol: Maliyet formu (izole — yazarken sadece bu kart render olur) */}
         <div className="space-y-4 lg:col-span-1">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Üretim Maliyeti</CardTitle>
-              <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
-                Filament + elektrik + paketleme. Kargo, komisyon ve KDV her platform için
-                otomatik hesaplanır.
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-3">
-                <p className="text-xs font-semibold text-primary">3D BASKI</p>
-                <div>
-                  <Label className="text-xs">Filament Türü</Label>
-                  <select
-                    value={filamentTypeId}
-                    onChange={(e) => setFilamentTypeId(e.target.value)}
-                    className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Seçin...</option>
-                    {filaments.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} ({formatCurrency(f.costPerGram)}/g)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Ağırlık (g)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={filamentWeight}
-                      onChange={(e) => setFilamentWeight(e.target.value)}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Süre (saat)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.1"
-                      value={printTimeHours}
-                      onChange={(e) => setPrintTimeHours(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-xs">Fire (%)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.1"
-                    value={wasteRate}
-                    onChange={(e) => setWasteRate(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs font-semibold text-primary">PAKETLEME</p>
-                  <Link
-                    href="/cost-templates"
-                    className="text-[10px] text-muted-foreground hover:text-primary underline underline-offset-2"
-                  >
-                    Fiyatları düzenle
-                  </Link>
-                </div>
-                <div>
-                  <Label className="text-xs">Poşet / Koli</Label>
-                  <select
-                    value={packagingOptionId}
-                    onChange={(e) => setPackagingOptionId(e.target.value)}
-                    className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Yok</option>
-                    {packagingSettings.options.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.name} ({formatCurrency(o.price)})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Naylon</Label>
-                    <select
-                      value={nylonLevel}
-                      onChange={(e) => setNylonLevel(e.target.value as "none" | "low" | "medium" | "high")}
-                      className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    >
-                      <option value="none">Yok</option>
-                      <option value="low">Az ({packagingSettings.nylonLowGrams}g)</option>
-                      <option value="medium">Orta ({packagingSettings.nylonMediumGrams}g)</option>
-                      <option value="high">Çok ({packagingSettings.nylonHighGrams}g)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <Label className="text-xs">Bant</Label>
-                    <select
-                      value={tapeUsed ? "yes" : "no"}
-                      onChange={(e) => setTapeUsed(e.target.value === "yes")}
-                      className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    >
-                      <option value="no">Yok</option>
-                      <option value="yes">Var ({formatCurrency(tapeCostPerProduct)})</option>
-                    </select>
-                  </div>
-                </div>
-                {fixedExtras > 0 && (
-                  <p className="text-[10px] text-muted-foreground">
-                    + Sabit ek (Kart/Sticker/Sakız): {formatCurrency(fixedExtras)} — her ürüne otomatik
-                  </p>
-                )}
-              </div>
-
-              <Separator />
-
-              <div className="space-y-2">
-                <p className="text-xs font-semibold text-primary">KARGO</p>
-                <div>
-                  <Label className="text-xs">Desi</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={desiInput}
-                    onChange={(e) => setDesiInput(e.target.value)}
-                    placeholder="örn. 2"
-                  />
-                  <p className="text-[10px] text-muted-foreground mt-1">
-                    Trendyol kargosu desi + barem'e göre otomatik hesaplanır. Shopify kargosu
-                    Kargo Kuralları&apos;ndaki Shopify baremine göre.
-                  </p>
-                </div>
-              </div>
-
-              <Separator />
-
-              <div className="space-y-1 text-xs text-muted-foreground tabular-nums">
-                <div className="flex justify-between">
-                  <span>Malzeme</span>
-                  <span>{formatCurrency(calcFilament)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Elektrik</span>
-                  <span>{formatCurrency(calcElectricity)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Aşınma</span>
-                  <span>{formatCurrency(calcMachineWear)}</span>
-                </div>
-                {calcLabor > 0 && (
-                  <div className="flex justify-between">
-                    <span>İşçilik</span>
-                    <span>{formatCurrency(calcLabor)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span>Paketleme</span>
-                  <span>{formatCurrency(calcPackaging)}</span>
-                </div>
-                {calcWaste > 0 && (
-                  <div className="flex justify-between text-amber-500">
-                    <span>Fire</span>
-                    <span>+{formatCurrency(calcWaste)}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-between items-baseline pt-1">
-                <span className="text-xs font-semibold uppercase tracking-wider">
-                  Üretim Maliyeti
-                </span>
-                <span className="text-lg font-bold tabular-nums">
-                  {formatCurrency(calculatedTotalCost)}
-                </span>
-              </div>
-
-              <p className="text-center text-[11px] text-muted-foreground pt-0.5 h-4">
-                {saveCostMutation.isPending ? "Kaydediliyor…" : "✓ Değişiklikler otomatik kaydedilir"}
-              </p>
-
-              {(product.variantGroup?.products?.length ?? 0) > 1 && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => applyCostToVariantsMutation.mutate()}
-                  disabled={applyCostToVariantsMutation.isPending}
-                  title="Aynı varyant grubundaki tüm ürünlere bu maliyeti (ve desi) uygular"
-                >
-                  {applyCostToVariantsMutation.isPending
-                    ? "Uygulanıyor..."
-                    : `Bu maliyeti tüm varyantlara uygula (${product.variantGroup?.products?.length})`}
-                </Button>
-              )}
-            </CardContent>
-          </Card>
+          <CostEditor
+            key={id}
+            initial={initialCost}
+            filaments={filaments}
+            packagingSettings={packagingSettings}
+            globalSettings={globalSettings}
+            savePending={saveCostMutation.isPending}
+            variantCount={product.variantGroup?.products?.length ?? 0}
+            applyPending={applyCostToVariantsMutation.isPending}
+            onApply={handleApplyToVariants}
+            onChange={handleCostChange}
+          />
         </div>
 
         {/* Sağ: 3 Platform Yan Yana */}
