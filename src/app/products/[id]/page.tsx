@@ -432,6 +432,26 @@ export default function ProductDetailPage({
     staleTime: 60_000,
   });
 
+  // Maliyet OTOMATİK kaydedilir (debounce 800ms) — "Kaydet" butonu yok, çıkınca kayıp olmaz. Optimistic.
+  // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).
+  useEffect(() => {
+    if (!product) return;
+    const c = product.cost;
+    const unchanged =
+      (c?.filamentTypeId || "") === (filamentTypeId || "") &&
+      (c?.filamentWeight ?? 0) === fWeight &&
+      (c?.printTimeHours ?? 0) === pTime &&
+      (Number(c?.wasteRate) || 0) === wRate &&
+      (c?.packagingOptionId || "") === (packagingOptionId || "") &&
+      ((c?.nylonLevel as string) || "none") === nylonLevel &&
+      Boolean(c?.tapeUsed) === tapeUsed &&
+      (product.desi ?? null) === (parseFloat(desiInput) || null);
+    if (unchanged || saveCostMutation.isPending) return;
+    const t = setTimeout(() => saveCostMutation.mutate(), 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput, product]);
+
   if (isLoading || !product) {
     return (
       <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300">
@@ -756,14 +776,9 @@ export default function ProductDetailPage({
                 </span>
               </div>
 
-              <Button
-                size="sm"
-                className="w-full"
-                onClick={() => saveCostMutation.mutate()}
-                disabled={saveCostMutation.isPending}
-              >
-                {saveCostMutation.isPending ? "Kaydediliyor..." : "Kaydet ve Uygula"}
-              </Button>
+              <p className="text-center text-[11px] text-muted-foreground pt-0.5 h-4">
+                {saveCostMutation.isPending ? "Kaydediliyor…" : "✓ Değişiklikler otomatik kaydedilir"}
+              </p>
 
               {(product.variantGroup?.products?.length ?? 0) > 1 && (
                 <Button

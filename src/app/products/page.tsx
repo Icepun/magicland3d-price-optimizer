@@ -988,6 +988,50 @@ export default function ProductsPage() {
     return () => io.disconnect();
   }, [flatRows.length]);
 
+  // Scroll konumunu koru: başka sayfaya geçip Ürünler'e dönünce kaldığın yerden devam (en başa atmaz).
+  const scrollRestoredRef = useRef(false);
+  useEffect(() => {
+    const main = document.querySelector("main");
+    if (!main) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        try {
+          sessionStorage.setItem(
+            "mh-products-scroll",
+            JSON.stringify({ key: filterMode, top: main.scrollTop, visible: visibleCount })
+          );
+        } catch { /* ignore */ }
+      });
+    };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      main.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [filterMode, visibleCount]);
+
+  useEffect(() => {
+    if (scrollRestoredRef.current || isLoading || flatRows.length === 0) return;
+    scrollRestoredRef.current = true;
+    try {
+      const raw = sessionStorage.getItem("mh-products-scroll");
+      if (!raw) return;
+      const s = JSON.parse(raw) as { key: string; top: number; visible: number };
+      if (s.key !== filterMode || !(s.top > 0)) return;
+      setVisibleCount((v) => Math.max(v, s.visible)); // önce yeterli satırı bas, sonra kaydır
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const main = document.querySelector("main");
+          if (main) main.scrollTop = s.top;
+        })
+      );
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading, flatRows.length]);
+
   const visibleRows = flatRows.slice(0, visibleCount);
 
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
