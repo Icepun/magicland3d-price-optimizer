@@ -25,6 +25,7 @@ export interface ListingRow {
   cargoCost: number | null;
   externalId: string | null;
   externalSku: string | null;
+  barcode: string | null; // platform-bazlı listing barkodu (Trendyol/HB) — sipariş eşleştirmede masaüstü byKey ile birebir
 }
 
 export interface ProductDetail {
@@ -82,7 +83,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
     },
     {
       sql: `SELECT id, platform, salePrice, stock, commissionRate, commissionFixed,
-                   cargoCost, externalId
+                   cargoCost, externalId, externalSku, barcode
               FROM Listing WHERE productId = ? AND isActive = 1`,
       args: [id],
     },

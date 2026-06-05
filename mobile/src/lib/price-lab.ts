@@ -63,9 +63,9 @@ export function computePriceLab(
       expenseRules: filterRulesByPlatform(rules.expense, listing.platform),
       vatRate,
       ...resolveListingCommissionOverride(listing, settings),
-      cargoCostOverride:
-        listing.cargoCost ??
-        (listing.platform === "shopify" && salePrice < 150 ? 0 : undefined),
+      // Masaüstü price-lab route ile birebir: listing kargosu ya da otomatik (150₺-altı Shopify
+      // özel kuralı YOK; o kural products route'a özgü, price-lab'da iki tarafta da uygulanmaz).
+      cargoCostOverride: listing.cargoCost ?? undefined,
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: filamentMatCost,
     });

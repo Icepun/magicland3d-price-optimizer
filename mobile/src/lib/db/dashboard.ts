@@ -28,7 +28,7 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
     },
     {
       sql: `SELECT id, productId, platform, salePrice, stock, commissionRate,
-                   commissionFixed, cargoCost, externalId, externalSku
+                   commissionFixed, cargoCost, externalId, externalSku, barcode
               FROM Listing WHERE isActive = 1`,
     },
   ]);

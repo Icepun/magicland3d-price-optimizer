@@ -58,7 +58,7 @@ export default function OrderDetailScreen() {
       : null;
   const margin =
     profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
-  const pm = products ? buildProductMap(products) : new Map();
+  const pm = buildProductMap(products ?? []);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -107,7 +107,7 @@ export default function OrderDetailScreen() {
         {/* Satırlar */}
         <Text style={styles.sectionLabel}>ÜRÜNLER ({order.items.length})</Text>
         {order.items.map((line, i) => {
-          const p = matchLine(line.matchKeys, pm);
+          const p = matchLine(line.matchKeys, pm.byKey);
           return (
             <View key={i} style={styles.lineRow}>
               {p?.imageUrl ? (

@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
@@ -35,6 +35,9 @@ export default function ReportsScreen() {
     if (!orders || !products || !rules || !settings) return { total, profit, count, byPlat };
     const pm = buildProductMap(products);
     for (const o of orders.orders) {
+      // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez
+      // (orders/route.ts: statusKind==="cancelled" → continue; Panel index.tsx de aynısını yapıyor).
+      if (isCancelledOrder(o)) continue;
       const op = computeOrderProfit(o, pm, rules, settings);
       total += op.revenue;
       count++;

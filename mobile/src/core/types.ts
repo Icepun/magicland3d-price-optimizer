@@ -107,8 +107,9 @@ export interface SimulationInput {
   cargoCostOverride?: number;
   /**
    * KDV indirimine tabi ÜRÜN maliyeti payı (TL, birim) — şu an = filament malzeme maliyeti.
-   * Komisyon/kargo/gider zaten KDV dahil sayılır; bu alan filament malzemesinin KDV'li kısmını da
-   * iade hesabına katar. Verilmezse 0. KDV mükellefi için bu girdilerin içindeki KDV indirilebilir.
+   * Komisyon/kargo/gider zaten KDV dahil sayılır; bu alan malzeme tarafının (filament) KDV'li
+   * kısmını da iade hesabına katar. Verilmezse 0 (malzeme iadesi yok; komisyon/kargo/gider iadesi
+   * yine uygulanır). KDV mükellefi için bu girdilerin içindeki KDV indirilebilir.
    */
   vatableProductCost?: number;
   /**
@@ -136,7 +137,10 @@ export interface SimulationResult {
   fixedExpenses: number;
   variableExpenses: number;
   totalCost: number;
-  /** İndirilecek KDV iadesi (TL): komisyon + kargo + gider + filament KDV'sinin indirilebilen kısmı. netProfit'e dahildir. */
+  /**
+   * İndirilecek KDV iadesi (TL): komisyon + kargo + gider + filament malzemesinin İÇİNDEKİ,
+   * devlete ödenecek (hesaplanan) KDV'den düşülebilen KDV. netProfit'e ARTI olarak dahildir.
+   */
   inputVatCredit: number;
   netProfit: number;
   profitMargin: number;

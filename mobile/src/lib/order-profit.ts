@@ -1,9 +1,6 @@
 import { simulatePrice } from "@core/pricing-engine";
 import { resolveProductCost } from "@core/product-cost";
-import {
-  withProductCommissionRule,
-  resolveListingCommissionOverride,
-} from "@core/product-commission";
+import { withProductCommissionRule } from "@core/product-commission";
 import {
   filterCargoRulesByPlatform,
   filterRulesByPlatform,
@@ -20,11 +17,23 @@ export interface MatchedProduct {
   detail: ProductDetail;
 }
 
-/** Çok-anahtarlı ürün haritası: Product.barcode/sku + Listing.externalId/externalSku → ürün. */
-export function buildProductMap(products: ProductDetail[]): Map<string, ProductDetail> {
-  const m = new Map<string, ProductDetail>();
+/** Türkçe-duyarlı ad normalizasyonu (masaüstü orders route normName ile birebir). */
+const normName = (s: string | null | undefined) =>
+  (s ?? "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+
+export interface ProductMap {
+  byKey: Map<string, ProductDetail>;
+  /** Shopify ad-eşleştirme (Shopify barkod tutmaz): normalize ad → ürün; aynı ad çoklu ürün → null (belirsiz). */
+  byName: Map<string, ProductDetail | null>;
+}
+
+/** Çok-anahtarlı ürün haritası: Product.barcode/sku + Listing.externalId/externalSku → ürün,
+ *  + Shopify için ada göre eşleştirme (masaüstü orders route ile birebir). */
+export function buildProductMap(products: ProductDetail[]): ProductMap {
+  const byKey = new Map<string, ProductDetail>();
+  const byName = new Map<string, ProductDetail | null>();
   const add = (k: string | null | undefined, p: ProductDetail) => {
-    if (k && !m.has(k)) m.set(k, p);
+    if (k && !byKey.has(k)) byKey.set(k, p);
   };
   for (const p of products) {
     add(p.barcode, p);
@@ -32,18 +41,21 @@ export function buildProductMap(products: ProductDetail[]): Map<string, ProductD
     for (const l of p.listings) {
       add(l.externalId, p);
       add(l.externalSku, p);
+      add(l.barcode, p); // platform-bazlı listing barkodu (Trendyol/HB barkodu) — masaüstü byKey ile birebir
     }
+    const nk = normName(p.name);
+    if (nk) byName.set(nk, byName.has(nk) ? null : p);
   }
-  return m;
+  return { byKey, byName };
 }
 
 /** Bir sipariş satırını aday anahtarlarıyla ürüne eşle. */
 function matchLine(
   keys: string[] | undefined,
-  productMap: Map<string, ProductDetail>
+  byKey: Map<string, ProductDetail>
 ): ProductDetail | undefined {
   for (const k of keys ?? []) {
-    const p = productMap.get(k);
+    const p = byKey.get(k);
     if (p) return p;
   }
   return undefined;
@@ -62,7 +74,7 @@ export interface OrderProfit {
 
 export function computeOrderProfit(
   order: UnifiedOrder,
-  productMap: Map<string, ProductDetail>,
+  pm: ProductMap,
   rules: Rules,
   settings: Record<string, string>
 ): OrderProfit {
@@ -78,7 +90,12 @@ export function computeOrderProfit(
 
   for (const line of order.items) {
     totalQty += line.quantity;
-    const p = matchLine(line.matchKeys, productMap);
+    let p = matchLine(line.matchKeys, pm.byKey);
+    // Shopify: anahtar tutmazsa ürün ADIYLA eşleştir (Shopify barkod tutmaz) — masaüstü orders route ile birebir.
+    if (!p && order.platform === "shopify") {
+      const named = pm.byName.get(normName(line.name));
+      if (named) p = named;
+    }
     if (p && !image) image = p.imageUrl;
     if (!p) {
       unknown = true;
@@ -106,11 +123,8 @@ export function computeOrderProfit(
       cargoRules: filterCargoRulesByPlatform(rules.cargo, order.platform),
       expenseRules: filterRulesByPlatform(rules.expense, order.platform),
       vatRate,
-      ...(listing
-        ? resolveListingCommissionOverride(listing, settings)
-        : order.platform === "shopify"
-          ? { commissionRateOverride: Number(settings.shopifyCommissionRate ?? 3.2) / 100 }
-          : {}),
+      // Komisyon SADECE withProductCommissionRule ile (masaüstü orders route lineProfitNoCargo ile birebir).
+      // (Listing override / Shopify 3.2% override KALDIRILDI → orders ekranı masaüstüyle aynı kâr.)
       cargoCostOverride: 0,
       vatableProductCost: resolved.filamentCost,
     });
@@ -140,7 +154,9 @@ export function computeOrderProfit(
   return {
     revenue: order.total,
     profit: matched === 0 ? null : profit,
-    partial: unknown,
+    // Masaüstü orders route ile birebir: profitPartial = anyProfit && anyUnmatched.
+    // (Hiç eşleşme yoksa "kısmi" değil "bilinmeyen" → profit null + partial false; ürün gerçekten yok.)
+    partial: matched > 0 && unknown,
     image: distinctCount === 1 ? image : null,
     distinctCount,
     totalQty,
