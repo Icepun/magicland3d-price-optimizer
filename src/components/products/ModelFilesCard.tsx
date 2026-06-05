@@ -86,10 +86,10 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   });
 
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["product-models", productId] }); // bu ürün → hemen tazele
-    // Paylaşımlı yükleme/silme DİĞER varyantların dosya listesini de değiştirdi. refetchOnMount:false
-    // olduğundan "bayat işaretlemek" yetmiyordu (o varyanta gir-çık etsen bile dosyalar görünmüyordu) →
-    // o varyantların cache'ini SİL ki bir sonraki ziyarette taze çekilsin (maliyet fix'iyle aynı mantık).
+    // ANA ürünü çağıran OPTIMISTIC günceller (yükleme/silmede cache'i elle yamalar) → bu ürün için
+    // refetch YOK. Eski invalidate, DB'ye yazdıktan HEMEN SONRA okuma (read-after-write) tetikliyor;
+    // libSQL bunun için yerel kopyayı buluta senkronlamayı bekleyip ana süreci ~1-2sn DONDURUYORDU.
+    // Burada sadece DİĞER varyantların cache'i silinir (sonraki ziyarette taze) + Modeller listesi.
     for (const m of variantGroup?.products ?? []) {
       if (m.id !== productId) qc.removeQueries({ queryKey: ["product-models", m.id] });
     }
@@ -162,7 +162,14 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
 
   const del = useMutation({
     mutationFn: (fileId: string) => fetch(`/api/models/${fileId}`, { method: "DELETE" }).then((r) => r.json()),
-    onSuccess: () => { onChanged(); toast.success("Parça silindi"); },
+    // OPTIMISTIC: satırı cache'ten çıkar → refetch YOK (yazma-sonrası-okuma donması yok).
+    onSuccess: (_data, fileId) => {
+      qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
+        Array.isArray(old) ? old.filter((f) => f.id !== fileId) : old
+      );
+      onChanged();
+      toast.success("Parça silindi");
+    },
     onError: () => toast.error("Silinemedi"),
   });
 
@@ -189,11 +196,13 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
   const handleFiles = async (fileList: FileList) => {
     const list = Array.from(fileList);
     let ok = 0;
+    const created: ModelFile[] = [];
     for (const f of list) {
       setUploadingName(f.name);
       setProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
       try {
-        await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
+        const row = await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
+        if (row && typeof row === "object") created.push(row as ModelFile);
         ok++;
       } catch (e) {
         toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
@@ -201,6 +210,12 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
     }
     setProg(null);
     setUploadingName("");
+    // OPTIMISTIC: oluşturulan satırları cache'e ekle → bu ürün için refetch YOK (donma yok).
+    if (created.length) {
+      qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
+        Array.isArray(old) ? [...old, ...created] : created
+      );
+    }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
     if (ok > 0) toast.success(`${printer.name}: ${ok} parça yüklendi${applyToVariants ? " · tüm varyantlara" : ""}`);

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
@@ -195,7 +195,32 @@ type CommissionRules = Parameters<typeof simulatePrice>[0]["commissionRules"];
 type CargoRules = Parameters<typeof simulatePrice>[0]["cargoRules"];
 type ExpenseRules = Parameters<typeof simulatePrice>[0]["expenseRules"];
 
-export async function GET() {
+// ── Sunucu önbelleği (stale-while-revalidate) ──────────────────────────────────────────────
+// Siparişler 3 pazaryerinden CANLI çekiliyor (1-3sn). İlk yüklemeden SONRA her açış önbellekten
+// ANINDA döner; 60sn'den eskiyse arka planda tazelenir (eski veri anında gösterilir → sayfa beklemez).
+// "Yenile" (?fresh=1) senkron canlı çeker. Süreç-içi bellek (Electron ana süreci tek instance).
+let _ordersCache: { at: number; body: Record<string, unknown> } | null = null;
+let _ordersRefreshing = false;
+const ORDERS_SOFT_MS = 60_000;
+
+export async function GET(req: NextRequest) {
+  const fresh = new URL(req.url).searchParams.get("fresh") === "1";
+  if (!fresh && _ordersCache) {
+    if (Date.now() - _ordersCache.at > ORDERS_SOFT_MS && !_ordersRefreshing) {
+      _ordersRefreshing = true;
+      void computeOrdersBody()
+        .then((b) => { _ordersCache = { at: Date.now(), body: b }; })
+        .catch(() => {})
+        .finally(() => { _ordersRefreshing = false; });
+    }
+    return NextResponse.json(_ordersCache.body);
+  }
+  const body = await computeOrdersBody();
+  _ordersCache = { at: Date.now(), body };
+  return NextResponse.json(body);
+}
+
+async function computeOrdersBody(): Promise<Record<string, unknown>> {
   await ensureRuntimeSchema();
 
   // Gün başına sabitlenmiş cutoff — mobil (mobile/src/lib/api/window.ts orderWindowCutoff) ile
@@ -700,11 +725,11 @@ export async function GET() {
     orderCount: sShopify.orderCount + sTrendyol.orderCount + sHepsiburada.orderCount,
   };
 
-  return NextResponse.json({
+  return {
     orders,
     summary: { days: WINDOW_DAYS, shopify: sShopify, trendyol: sTrendyol, hepsiburada: sHepsiburada, total },
     shopify,
     trendyol,
     hepsiburada,
-  });
+  };
 }

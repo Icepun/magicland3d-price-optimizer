@@ -69,6 +69,7 @@ export async function createModelRows(input: CreateModelRowsInput) {
   const storedPath = input.storedPath ?? "";
   const r2Key = input.r2Key ?? null;
 
+  // Hedef ürünler (kendisi / "tüm varyantlara uygula" ise grup üyeleri) — TÜM okumalar yazmadan ÖNCE.
   let targetIds: string[] = [productId];
   if (applyToVariants) {
     const self = await prisma.product.findUnique({
@@ -84,27 +85,28 @@ export async function createModelRows(input: CreateModelRowsInput) {
     }
   }
 
-  let mine: Awaited<ReturnType<typeof prisma.productModelFile.create>> | null = null;
-  for (const targetId of targetIds) {
-    const sortOrder = await prisma.productModelFile.count({
-      where: { productId: targetId, printerConfigId },
+  // sortOrder için her hedefin mevcut parça sayısı — TEK sorgu. (Eski döngü-içi count her yinelemede
+  // bir önceki create'ten SONRA okuma yapıyordu → bulut replica senkron beklemesi → donma.)
+  const counts = await prisma.productModelFile.groupBy({
+    by: ["productId"],
+    where: { productId: { in: targetIds }, printerConfigId },
+    _count: { _all: true },
+  });
+  const countMap = new Map(counts.map((c) => [c.productId, c._count._all]));
+  const common = { printerConfigId, label, originalName, storedPath, r2Key, fileType, sizeBytes, gramaj, estPrintMin };
+
+  // ANA ürün: create → id'li satırı döndürür. İstemci bunu cache'e ekler → yükleme sonrası refetch
+  // GEREKMEZ (yazma-sonrası-okuma blokajı/donma yok).
+  const mine = await prisma.productModelFile.create({
+    data: { ...common, productId, sortOrder: countMap.get(productId) ?? 0 },
+  });
+
+  // VARYANTLAR: tek createMany (eskiden N ayrı bulut yazması, her biri ~1sn → artık tek yazma).
+  const siblings = targetIds.filter((t) => t !== productId);
+  if (siblings.length) {
+    await prisma.productModelFile.createMany({
+      data: siblings.map((t) => ({ ...common, productId: t, sortOrder: countMap.get(t) ?? 0 })),
     });
-    const row = await prisma.productModelFile.create({
-      data: {
-        productId: targetId,
-        printerConfigId,
-        label,
-        originalName,
-        storedPath,
-        r2Key,
-        fileType,
-        sizeBytes,
-        gramaj,
-        estPrintMin,
-        sortOrder,
-      },
-    });
-    if (targetId === productId) mine = row;
   }
   return mine;
 }

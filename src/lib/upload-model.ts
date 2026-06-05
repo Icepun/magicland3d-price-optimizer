@@ -91,7 +91,7 @@ export async function uploadProductModel(opts: {
   file: File;
   applyToVariants?: boolean;
   onProgress?: (p: UploadProgress) => void;
-}): Promise<void> {
+}): Promise<unknown> {
   const { productId, printerConfigId, file, applyToVariants, onProgress } = opts;
   const pre = await presign(file.name);
 
@@ -109,7 +109,8 @@ export async function uploadProductModel(opts: {
       }),
     });
     if (!r.ok) throw new Error(errFromText(await r.text(), "Kayıt oluşturulamadı"));
-    return;
+    // Oluşturulan satır (ana ürün) → çağıran cache'e optimistic ekler (refetch yok → donma yok).
+    return r.json().catch(() => null);
   }
 
   // Yerel fallback (R2 kapalı): eski multipart yükleme.
@@ -119,6 +120,7 @@ export async function uploadProductModel(opts: {
   if (applyToVariants) fd.append("applyToVariants", "true");
   const res = await xhrSend("POST", `/api/products/${productId}/models`, fd, onProgress);
   if (res.status < 200 || res.status >= 300) throw new Error(errFromText(res.text, "Yüklenemedi"));
+  try { return JSON.parse(res.text); } catch { return null; }
 }
 
 /** Özel baskı (ürünsüz) dosyası yükle — meta (gramaj/süre/önizleme/renk) döner. */

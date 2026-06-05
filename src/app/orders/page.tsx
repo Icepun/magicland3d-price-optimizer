@@ -120,9 +120,14 @@ function fmtDate(iso: string | null) {
 }
 
 export default function OrdersPage() {
+  const forceFresh = useRef(false); // "Yenile" → sunucu önbelleğini atla (?fresh=1), canlı çek.
   const { data, isLoading, isFetching, refetch, error } = useQuery<OrdersResponse>({
     queryKey: ["orders"],
-    queryFn: ({ signal }) => fetch("/api/orders", { signal }).then((r) => r.json()),
+    queryFn: ({ signal }) => {
+      const url = forceFresh.current ? "/api/orders?fresh=1" : "/api/orders";
+      forceFresh.current = false;
+      return fetch(url, { signal }).then((r) => r.json());
+    },
     // 5dk taze: sekmeye dönüşte 3 pazaryeri API'sini tekrar çağırma (anında cache). Tazelemek için "Yenile".
     staleTime: 5 * 60_000,
     refetchOnMount: true,
@@ -210,7 +215,7 @@ export default function OrdersPage() {
             Son {summary?.days ?? 30} günde Shopify ve Trendyol&apos;dan gelen siparişler — canlı.
           </p>
         </div>
-        <Button variant="outline" size="sm" disabled={isFetching} onClick={() => refetch()} className="gap-2 shrink-0">
+        <Button variant="outline" size="sm" disabled={isFetching} onClick={() => { forceFresh.current = true; refetch(); }} className="gap-2 shrink-0">
           <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
           Yenile
         </Button>
