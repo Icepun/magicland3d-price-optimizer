@@ -1,11 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
+import { router } from "expo-router";
+import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
-import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
+import {
+  getPrinterSnapshots,
+  getRecentCommands,
+  sendPrintCommand,
+  type PrintAction,
+  type PrinterSnapshot,
+} from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
 import { ML, radius } from "@/theme/colors";
 
@@ -34,7 +42,15 @@ const STATUS: Record<string, { label: string; color: string }> = {
   offline: { label: "Çevrimdışı", color: ML.textFaint },
 };
 
+const ACTION_LABEL: Record<PrintAction, string> = {
+  start: "Başlat",
+  pause: "Duraklat",
+  resume: "Devam",
+  cancel: "İptal",
+};
+
 export default function PrintersScreen() {
+  const qc = useQueryClient();
   const { data: snapshots = [], isLoading } = useQuery({
     queryKey: ["printer-snapshots"],
     queryFn: getPrinterSnapshots,
@@ -63,6 +79,46 @@ export default function PrintersScreen() {
   const ageMs = lastUpdate > 0 ? Math.max(0, now - lastUpdate) : 0;
   const stale = lastUpdate > 0 && ageMs > 90_000;
 
+  // Gönderilen kontrol komutunun (duraklat/devam/iptal) durumu — pending → done/error.
+  const [sent, setSent] = useState<{ id: string; label: string } | null>(null);
+  const { data: cmds = [] } = useQuery({
+    queryKey: ["recent-commands"],
+    queryFn: getRecentCommands,
+    refetchInterval: sent ? 3000 : false,
+    enabled: !!sent,
+  });
+  const sentCmd = sent ? cmds.find((c) => c.id === sent.id) : null;
+  useEffect(() => {
+    if (sentCmd && (sentCmd.status === "done" || sentCmd.status === "error")) {
+      const t = setTimeout(() => setSent(null), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [sentCmd]);
+
+  const runCommand = (s: PrinterSnapshot, action: PrintAction) => {
+    const send = async () => {
+      try {
+        const id = await sendPrintCommand(s.printerConfigId, action);
+        setSent({ id, label: `${s.name}: ${ACTION_LABEL[action]}` });
+        qc.invalidateQueries({ queryKey: ["recent-commands"] });
+      } catch {
+        Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
+      }
+    };
+    if (action === "cancel") {
+      Alert.alert(
+        "Baskıyı iptal et",
+        `${s.name} üzerindeki baskı iptal edilsin mi? Bu işlem geri alınamaz.`,
+        [
+          { text: "Vazgeç", style: "cancel" },
+          { text: "İptal et", style: "destructive", onPress: send },
+        ]
+      );
+    } else {
+      send();
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScreenHeader title="Yazıcılar" />
@@ -71,6 +127,16 @@ export default function PrintersScreen() {
         <Chip text={`${online} çevrimiçi`} color={ML.green} />
         <Chip text={`${printing} yazdırıyor`} color={ML.accent} />
       </View>
+
+      <Pressable
+        onPress={() => router.push("/custom-prints" as never)}
+        style={({ pressed }) => [styles.archiveLink, pressed && { backgroundColor: ML.cardElevated }]}
+      >
+        <SymbolView name="tray.full.fill" tintColor={ML.accent} style={{ width: 17, height: 17 }} />
+        <Text style={styles.archiveText}>Özel Baskılar Arşivi</Text>
+        <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 13, height: 13 }} />
+      </Pressable>
+
       {snapshots.length > 0 ? (
         <View style={styles.liveBar}>
           <View style={[styles.liveDot, { backgroundColor: stale ? ML.orange : ML.green }]} />
@@ -78,6 +144,30 @@ export default function PrintersScreen() {
             {stale
               ? `Canlı değil · ${fmtAge(ageMs)} güncellendi — masaüstü açık mı?`
               : `Canlı · ${fmtAge(ageMs)} güncellendi`}
+          </Text>
+        </View>
+      ) : null}
+
+      {sent ? (
+        <View
+          style={[
+            styles.cmdBanner,
+            sentCmd?.status === "done" && { borderColor: ML.green + "66" },
+            sentCmd?.status === "error" && { borderColor: ML.red + "66" },
+          ]}
+        >
+          <Text
+            style={[
+              styles.cmdText,
+              sentCmd?.status === "done" && { color: ML.green },
+              sentCmd?.status === "error" && { color: ML.red },
+            ]}
+          >
+            {sentCmd?.status === "done"
+              ? `✓ ${sent.label} uygulandı`
+              : sentCmd?.status === "error"
+                ? `✕ ${sentCmd.error ?? "Komut başarısız"}`
+                : `⏳ ${sent.label} gönderildi — masaüstü uyguluyor…`}
           </Text>
         </View>
       ) : null}
@@ -92,7 +182,7 @@ export default function PrintersScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.list}>
           {snapshots.map((s) => (
-            <PrinterCard key={s.printerConfigId} s={s} />
+            <PrinterCard key={s.printerConfigId} s={s} stale={stale} onCommand={(a) => runCommand(s, a)} />
           ))}
           <View style={{ height: 24 }} />
         </ScrollView>
@@ -101,11 +191,21 @@ export default function PrintersScreen() {
   );
 }
 
-function PrinterCard({ s }: { s: PrinterSnapshot }) {
+function PrinterCard({
+  s,
+  stale,
+  onCommand,
+}: {
+  s: PrinterSnapshot;
+  stale: boolean;
+  onCommand: (a: PrintAction) => void;
+}) {
   const accent = brandColor(s.brand);
   const info = STATUS[s.status] ?? STATUS.idle;
   const offline = !s.online || s.status === "offline";
   const pct = Math.round((s.progress || 0) * 100);
+  const active = s.status === "printing" || s.status === "paused";
+  const showControls = active && !stale && s.online;
 
   return (
     <View style={[styles.card, { borderColor: accent + "55" }]}>
@@ -145,7 +245,44 @@ function PrinterCard({ s }: { s: PrinterSnapshot }) {
           </View>
         </View>
       )}
+
+      {showControls ? (
+        <View style={styles.controls}>
+          {s.status === "printing" ? (
+            <CtrlBtn label="Duraklat" icon="pause.fill" color={ML.orange} onPress={() => onCommand("pause")} />
+          ) : (
+            <CtrlBtn label="Devam" icon="play.fill" color={ML.green} onPress={() => onCommand("resume")} />
+          )}
+          <CtrlBtn label="İptal" icon="stop.fill" color={ML.red} onPress={() => onCommand("cancel")} />
+        </View>
+      ) : null}
     </View>
+  );
+}
+
+function CtrlBtn({
+  label,
+  icon,
+  color,
+  onPress,
+}: {
+  label: string;
+  icon: SymbolViewProps["name"];
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.ctrlBtn,
+        { borderColor: color + "55" },
+        pressed && { backgroundColor: color + "1A" },
+      ]}
+    >
+      <SymbolView name={icon} tintColor={color} style={{ width: 13, height: 13 }} />
+      <Text style={[styles.ctrlText, { color }]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -173,9 +310,33 @@ const styles = StyleSheet.create({
   chip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: ML.card, borderRadius: 999, borderWidth: 1, borderColor: ML.border, paddingHorizontal: 12, paddingVertical: 6 },
   chipDot: { width: 7, height: 7, borderRadius: 4 },
   chipText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
+  archiveLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    backgroundColor: ML.card,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  archiveText: { color: ML.text, fontSize: 14, fontWeight: "700", flex: 1 },
   liveBar: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 16, paddingBottom: 10 },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
   liveText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
+  cmdBanner: {
+    marginHorizontal: 16,
+    marginBottom: 10,
+    padding: 10,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.border,
+    backgroundColor: ML.card,
+  },
+  cmdText: { color: ML.textDim, fontSize: 12.5, fontWeight: "600" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 8 },
   emptyTitle: { color: ML.text, fontSize: 16, fontWeight: "700" },
   emptyDesc: { color: ML.textDim, fontSize: 13, textAlign: "center", lineHeight: 19 },
@@ -195,4 +356,16 @@ const styles = StyleSheet.create({
   barTrack: { height: 8, borderRadius: 4, backgroundColor: ML.cardElevated, overflow: "hidden" },
   barFill: { height: "100%", borderRadius: 4 },
   pct: { fontSize: 14, fontWeight: "800" },
+  controls: { flexDirection: "row", gap: 8, paddingTop: 2 },
+  ctrlBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingVertical: 9,
+  },
+  ctrlText: { fontSize: 13, fontWeight: "700" },
 });

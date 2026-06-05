@@ -43,9 +43,16 @@ export default function MoreScreen() {
     {
       icon: "printer.fill",
       title: "Yazıcılar",
-      subtitle: "Canlı baskı durumu",
+      subtitle: "Canlı baskı durumu · duraklat/iptal",
       href: "/printers",
       tint: ML.orange,
+    },
+    {
+      icon: "tray.full.fill",
+      title: "Özel Baskılar",
+      subtitle: "Yüklenen baskı dosyaları · tekrar bas",
+      href: "/custom-prints",
+      tint: ML.accent,
     },
     {
       icon: "list.bullet.clipboard.fill",
