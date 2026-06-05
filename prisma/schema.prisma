@@ -437,9 +437,9 @@ model PrintCommand {
  */
 model Notification {
   id             String    @id
-  /** order-stock | order-made | (gelecekte: printer-done vb.) */
+  /** order-stock | order-made | printer-done | printer-error */
   type           String
-  /** critical | warning */
+  /** critical | warning | success */
   severity       String
   title          String
   body           String
@@ -448,4 +448,16 @@ model Notification {
   acknowledgedAt DateTime?
 
   @@index([acknowledgedAt])
+}
+
+/**
+ * Expo push token'ları — mobil uygulama açılışta kendi token'ını yazar; masaüstü relay'i baskı
+ * bitince bu token'lara push gönderir (telefon kapalıyken de bildirim düşer). Turso senkronlar.
+ */
+model PushToken {
+  token     String   @id
+  /** ios | android */
+  platform  String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

@@ -1,7 +1,7 @@
 import { query } from "@/lib/turso";
 
 export type AlertType = "stock" | "filament" | "print";
-export type Severity = "critical" | "warning";
+export type Severity = "critical" | "warning" | "success";
 
 export interface AppAlert {
   id: string;
@@ -73,7 +73,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
     alerts.push({
       id: `print-${pr.name}`,
       type: "print",
-      severity: err ? "critical" : "warning",
+      severity: err ? "critical" : "success", // baskı tamamlandı → YEŞİL
       title: err ? "Baskı hatası" : "Baskı tamamlandı",
       body: pr.productName ? `${pr.name} — ${pr.productName}` : pr.name,
       productId: null,
@@ -84,8 +84,9 @@ export async function getNotifications(): Promise<NotificationsResult> {
     a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1
   );
   const critical = alerts.filter((a) => a.severity === "critical").length;
+  const success = alerts.filter((a) => a.severity === "success").length;
   return {
     alerts,
-    counts: { total: alerts.length, critical, warning: alerts.length - critical },
+    counts: { total: alerts.length, critical, warning: alerts.length - critical - success },
   };
 }

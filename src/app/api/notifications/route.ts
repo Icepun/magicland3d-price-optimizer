@@ -85,16 +85,6 @@ export async function GET() {
           body: `${pr.name}${job}${reason}`,
           href: "/printers",
         });
-      } else if (pr.status === "finished") {
-        // Baskı tamamlandı → YEŞİL
-        alerts.push({
-          id: `printer-${pr.printerConfigId}-done`,
-          type: "printer",
-          severity: "success",
-          title: "Baskı tamamlandı",
-          body: `${pr.name}${job}`,
-          href: "/printers",
-        });
       } else if (pr.status === "paused" && pr.online) {
         alerts.push({
           id: `printer-${pr.printerConfigId}-paused`,
@@ -107,12 +97,15 @@ export async function GET() {
       }
     }
 
-    // Kalıcı sipariş bildirimleri (stoğu biten / sipariş-üzerine ürüne sipariş)
+    // Kalıcı olay-anı bildirimleri (sipariş + baskı-bitti). Severity KORUNUR (success/critical/warning),
+    // tip bildirim tipinden türetilir (printer-* → "printer", diğeri → "order").
     for (const n of stored) {
+      const sev: AlertSeverity =
+        n.severity === "critical" ? "critical" : n.severity === "success" ? "success" : "warning";
       alerts.push({
         id: n.id,
-        type: "order",
-        severity: n.severity === "critical" ? "critical" : "warning",
+        type: n.type?.startsWith("printer") ? "printer" : "order",
+        severity: sev,
         title: n.title,
         body: n.body,
         href: n.href,

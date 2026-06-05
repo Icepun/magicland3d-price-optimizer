@@ -12,9 +12,10 @@ let schemaReady: Promise<void> | null = null;
 // v21: Notification tablosu (0.19.30) — olay-anı bildirimleri (stoğu biten/sipariş-üzerine ürüne sipariş).
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // v25: ProductModelFile.r2Key — model dosyaları Cloudflare R2'de (çok-cihaz baskı, yerel disk boşaltma).
+// v26: PushToken tablosu — baskı-bitti mobil push (Expo) bildirimleri.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "25";
+const CURRENT_SCHEMA_VERSION = "26";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -619,6 +620,16 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "Notification_acknowledgedAt_idx" ON "Notification"("acknowledgedAt")`
     );
+
+    // v26: Expo push token'ları (mobil yazar, masaüstü relay'i baskı bitince push gönderir)
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PushToken" (
+        "token" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL DEFAULT '',
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();

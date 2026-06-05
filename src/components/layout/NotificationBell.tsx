@@ -60,11 +60,14 @@ export function NotificationBell() {
       .catch(() => {/* ignore */});
   }
 
-  // Yeni kritik uyarılar için masaüstü (Electron) bildirimi — bir kez
+  // Masaüstü (Electron) OS bildirimi — bir kez. KRİTİK (hata/stok) VE BAŞARI (baskı bitti) için atar;
+  // success bildirimleri benzersiz id'li (printer-done:…:zaman) → her tamamlanma için bir kez.
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     const notified = readSet(NOTIFIED_KEY);
-    const fresh = alerts.filter((a) => a.severity === "critical" && !notified.has(a.id));
+    const fresh = alerts.filter(
+      (a) => (a.severity === "critical" || a.severity === "success") && !notified.has(a.id)
+    );
     if (fresh.length === 0) return;
     const fire = () =>
       fresh.forEach((a) => {

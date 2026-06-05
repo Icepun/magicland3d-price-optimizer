@@ -62,8 +62,9 @@ export default function NotificationsScreen() {
 
 function AlertRow({ alert }: { alert: AppAlert }) {
   const crit = alert.severity === "critical";
-  const color = crit ? ML.red : ML.orange;
-  const soft = crit ? ML.redSoft : ML.orangeSoft;
+  const ok = alert.severity === "success";
+  const color = crit ? ML.red : ok ? ML.green : ML.orange; // başarı (baskı bitti) → YEŞİL
+  const soft = crit ? ML.redSoft : ok ? ML.greenSoft : ML.orangeSoft;
   const icon =
     alert.type === "stock"
       ? "shippingbox.fill"

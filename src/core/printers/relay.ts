@@ -16,12 +16,14 @@ import {
   moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
 } from "./moonraker";
 import { getBambuStatus, bambuControl, mapBambuState } from "./bambu";
+import { pushToAllDevices } from "@/lib/push-notify";
 
 const TICK_MS = 10_000;
 let started = false;
 let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
 let tickCount = 0; // her 6. tick'te (~60sn) replica pull — sync() sorguları kısa süre bloke ettiği için sıklığı düşük tut (60sn = periyodik takılma yarıya iner; telefon komutları yine ≤60sn'de görülür)
 const lastKey = new Map<string, string>();
+const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
 
 export function startPrinterRelay() {
   if (started) return;
@@ -134,6 +136,30 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
   }
 }
 
+/** Baskı tamamlandı → kalıcı Notification (masaüstü zili + OS bildirimi) + mobil push (telefona düşer). */
+async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
+  const job = snap.productName ? ` — ${snap.productName}` : "";
+  const title = "Baskı tamamlandı 🎉";
+  const body = `${c.name}${job}`;
+  // 1) Kalıcı bildirim — /api/notifications okur; masaüstü zili gösterir + OS bildirimi atar. Benzersiz
+  //    id (zaman damgalı) → her tamamlanma için bir kez (statik id'li eski uyarı tekrar atmıyordu).
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES (?,?,?,?,?,?)`,
+      `printer-done:${c.id}:${Date.now()}`,
+      "printer-done",
+      "success",
+      title,
+      body,
+      "/printers"
+    );
+  } catch {
+    /* Notification tablosu yoksa sessiz geç */
+  }
+  // 2) Mobil push — telefon kapalıyken de bildirim düşer.
+  await pushToAllDevices(title, body).catch(() => {});
+}
+
 async function tick(): Promise<void> {
   // UYKU/UYANMA KORUMASI: Mac uyurken/uyanırken DB ağ-op'larını (snapshot yazma + sync) ATLA.
   // main.js powerMonitor bu globalThis flag'ini set eder. Aksi halde libSQL embedded-replica'nın
@@ -167,6 +193,13 @@ async function tick(): Promise<void> {
       let snap: SnapFields | null = null;
       try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
       if (!snap) return;
+      // BASKI BİTTİ geçişi (… → finished) → bir kez bildirim + mobil push. İlk gözlemde sessizce
+      // tohumla: uygulama kapalıyken biten eski bir baskı yüzünden açılışta sahte bildirim atma.
+      const prevStatus = lastStatus.get(c.id);
+      lastStatus.set(c.id, snap.status);
+      if (prevStatus !== undefined && prevStatus !== "finished" && snap.status === "finished") {
+        void notifyPrintComplete(c, snap).catch(() => {});
+      }
       const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec, snap.statusMessage].join("|");
       if (lastKey.get(c.id) === key) return;
       lastKey.set(c.id, key);
