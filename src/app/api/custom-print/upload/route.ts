@@ -7,6 +7,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { readModelColors, readModelMeta } from "@/core/printers/model-colors";
+import { resolveModelFileLocal } from "@/lib/model-files";
 
 export const dynamic = "force-dynamic";
 
@@ -15,61 +16,100 @@ const ALLOWED = ["gcode", "gco", "g", "3mf"];
 const CUSTOM_PID = "__custom__";
 
 /**
- * Özel baskı: ürüne bağlı OLMAYAN bir gcode/3mf yükle (özel sipariş vb.). Dosya kaydedilir,
- * meta (süre/gramaj/önizleme) + renkler okunur, ProductModelFile olarak (sentinel productId)
+ * Özel baskı: ürüne bağlı OLMAYAN bir gcode/3mf (özel sipariş vb.). R2 açıksa dosya tarayıcıdan
+ * R2'ye yüklenir, burada JSON confirm gelir (r2Key); değilse multipart yerel yükleme. Her iki halde
+ * meta (süre/gramaj/önizleme) + renkler dosyadan okunur → ProductModelFile (sentinel productId)
  * oluşturulur → mevcut /api/models/[id]/{colors,print} akışı aynen kullanılır.
  */
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
-    const form = await req.formData();
-    const file = form.get("file");
-    const printerConfigId = String(form.get("printerConfigId") || "");
+    const ct = req.headers.get("content-type") || "";
 
-    if (!(file instanceof File)) return NextResponse.json({ error: "Dosya gerekli" }, { status: 400 });
-    if (!printerConfigId) return NextResponse.json({ error: "Yazıcı seçilmedi" }, { status: 400 });
+    let r2Key: string | null = null;
+    let storedPath = "";
+    let originalName = "";
+    let printerConfigId = "";
+    let sizeBytes = 0;
+    let fileType = "gcode";
+    let readPath = "";
+    let cleanup: () => void = () => {};
 
-    const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
-    if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
-
-    const ext = (file.name.split(".").pop() || "gcode").toLowerCase();
-    if (!ALLOWED.includes(ext)) {
-      return NextResponse.json({ error: `Desteklenmeyen tür: .${ext} (gcode / 3mf)` }, { status: 400 });
+    if (ct.includes("application/json")) {
+      // ── R2 CONFIRM ──
+      const b = (await req.json()) as {
+        r2Key?: string;
+        originalName?: string;
+        printerConfigId?: string;
+        sizeBytes?: number;
+      };
+      r2Key = String(b.r2Key || "");
+      originalName = String(b.originalName || "");
+      printerConfigId = String(b.printerConfigId || "");
+      sizeBytes = Number(b.sizeBytes) || 0;
+      if (!r2Key) return NextResponse.json({ error: "r2Key gerekli" }, { status: 400 });
+      if (!printerConfigId) return NextResponse.json({ error: "Yazıcı seçilmedi" }, { status: 400 });
+      const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
+      if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
+      fileType = (originalName.split(".").pop() || "gcode").toLowerCase();
+      if (!ALLOWED.includes(fileType)) {
+        return NextResponse.json({ error: `Desteklenmeyen tür: .${fileType} (gcode / 3mf)` }, { status: 400 });
+      }
+      const local = await resolveModelFileLocal({ r2Key, storedPath: "", fileType });
+      readPath = local.path;
+      cleanup = local.cleanup;
+    } else {
+      // ── YEREL (R2 kapalı / fallback) ──
+      const form = await req.formData();
+      const file = form.get("file");
+      printerConfigId = String(form.get("printerConfigId") || "");
+      if (!(file instanceof File)) return NextResponse.json({ error: "Dosya gerekli" }, { status: 400 });
+      if (!printerConfigId) return NextResponse.json({ error: "Yazıcı seçilmedi" }, { status: 400 });
+      const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
+      if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
+      fileType = (file.name.split(".").pop() || "gcode").toLowerCase();
+      if (!ALLOWED.includes(fileType)) {
+        return NextResponse.json({ error: `Desteklenmeyen tür: .${fileType} (gcode / 3mf)` }, { status: 400 });
+      }
+      const buf = Buffer.from(await file.arrayBuffer());
+      storedPath = path.join(getModelsDir(), `${crypto.randomUUID()}.${fileType}`);
+      fs.writeFileSync(storedPath, buf);
+      readPath = storedPath;
+      originalName = file.name;
+      sizeBytes = buf.length;
     }
 
-    const buf = Buffer.from(await file.arrayBuffer());
-    const dir = getModelsDir();
-    const storedPath = path.join(dir, `${crypto.randomUUID()}.${ext}`);
-    fs.writeFileSync(storedPath, buf);
-
-    const meta = readModelMeta(storedPath);
-    const colors = readModelColors(storedPath);
-
-    const saved = await prisma.productModelFile.create({
-      data: {
-        productId: CUSTOM_PID,
-        printerConfigId,
-        label: null,
-        originalName: file.name,
-        storedPath,
-        fileType: ext,
-        sizeBytes: buf.length,
-        gramaj: meta.grams,
+    try {
+      const meta = readModelMeta(readPath);
+      const colors = readModelColors(readPath);
+      const saved = await prisma.productModelFile.create({
+        data: {
+          productId: CUSTOM_PID,
+          printerConfigId,
+          label: null,
+          originalName,
+          storedPath,
+          r2Key,
+          fileType,
+          sizeBytes,
+          gramaj: meta.grams,
+          estPrintMin: meta.estPrintMin,
+          sortOrder: 0,
+        },
+      });
+      return NextResponse.json({
+        fileId: saved.id,
+        originalName,
+        fileKind: colors.fileKind,
+        sizeBytes,
+        grams: meta.grams,
         estPrintMin: meta.estPrintMin,
-        sortOrder: 0,
-      },
-    });
-
-    return NextResponse.json({
-      fileId: saved.id,
-      originalName: file.name,
-      fileKind: colors.fileKind,
-      sizeBytes: buf.length,
-      grams: meta.grams,
-      estPrintMin: meta.estPrintMin,
-      thumbnail: meta.thumbnail,
-      colorCount: colors.colors.length,
-    });
+        thumbnail: meta.thumbnail,
+        colorCount: colors.colors.length,
+      });
+    } finally {
+      cleanup();
+    }
   } catch (error) {
     return jsonError(error);
   }

@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
+import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
 import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
@@ -1044,6 +1045,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
   const qc = useQueryClient();
   const [picked, setPicked] = useState<{ id: string; name: string; brand: string } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProg, setUploadProg] = useState<UploadProgress | null>(null);
   const [file, setFile] = useState<CustomUpload | null>(null);
   const [slotMode, setSlotMode] = useState(false);
   const [printing, setPrinting] = useState(false);
@@ -1057,18 +1059,15 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
   const upload = async (f: File) => {
     if (!picked) return;
     setUploading(true);
+    setUploadProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
     try {
-      const fd = new FormData();
-      fd.append("file", f);
-      fd.append("printerConfigId", picked.id);
-      const res = await fetch("/api/custom-print/upload", { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data as { error?: string }).error || "Yüklenemedi");
-      setFile(data as CustomUpload);
+      const data = await uploadCustomModel({ printerConfigId: picked.id, file: f, onProgress: setUploadProg });
+      setFile(data as unknown as CustomUpload);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
       setUploading(false);
+      setUploadProg(null);
     }
   };
 
@@ -1176,11 +1175,28 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
             <input ref={fileRef} type="file" accept=".gcode,.gco,.g,.3mf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
             <button
               onClick={() => fileRef.current?.click()} disabled={uploading}
-              className="w-full rounded-xl border-2 border-dashed py-10 flex flex-col items-center gap-2 hover:border-primary/40 hover:bg-primary/[0.03] transition-colors disabled:opacity-60"
+              className="w-full rounded-xl border-2 border-dashed py-10 px-6 flex flex-col items-center gap-2 hover:border-primary/40 hover:bg-primary/[0.03] transition-colors disabled:opacity-60"
             >
               {uploading ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <FileBox className="h-6 w-6 text-muted-foreground/50" />}
-              <span className="text-sm font-medium">{uploading ? "Yükleniyor…" : "gcode / 3mf seç"}</span>
-              <span className="text-[11px] text-muted-foreground">{isBambu ? "Bambu çok renkli için dilimlenmiş .3mf" : "dosyayı seçmek için tıkla"}</span>
+              {uploadProg ? (
+                <div className="w-full max-w-xs space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground tabular-nums">
+                    <span>{(uploadProg.loaded / 1048576).toFixed(1)} / {(uploadProg.total / 1048576).toFixed(1)} MB</span>
+                    <span className="font-semibold text-foreground">{uploadProg.total > 0 ? Math.min(100, Math.round((uploadProg.loaded / uploadProg.total) * 100)) : 0}%</span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div className="h-full rounded-full bg-primary transition-[width] duration-200" style={{ width: `${Math.max(3, uploadProg.total > 0 ? Math.round((uploadProg.loaded / uploadProg.total) * 100) : 0)}%` }} />
+                  </div>
+                  <div className="text-[10px] text-muted-foreground/80 tabular-nums">
+                    {uploadProg.bytesPerSec > 0 ? `${(uploadProg.bytesPerSec / 1048576).toFixed(1)} MB/sn` : "başlıyor…"}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <span className="text-sm font-medium">gcode / 3mf seç</span>
+                  <span className="text-[11px] text-muted-foreground">{isBambu ? "Bambu çok renkli için dilimlenmiş .3mf" : "dosyayı seçmek için tıkla"}</span>
+                </>
+              )}
             </button>
           </div>
         ) : (

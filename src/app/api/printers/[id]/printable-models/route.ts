@@ -43,8 +43,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         originalName: f.originalName,
         sizeBytes: f.sizeBytes,
         gramaj: f.gramaj,
-        // Aynı fiziksel dosya (varyantlar arası paylaşılan) → aynı storedPath → aynı shareKey.
-        shareKey: path.basename(f.storedPath),
+        // Aynı fiziksel dosya (varyantlar arası paylaşılan) → aynı referans → aynı shareKey.
+        // R2'de storedPath boş; r2Key paylaşılan anahtardır.
+        shareKey: f.r2Key || path.basename(f.storedPath),
       })),
     });
   } catch (error) {

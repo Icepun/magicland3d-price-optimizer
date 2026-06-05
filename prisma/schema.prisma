@@ -360,8 +360,10 @@ model ProductModelFile {
   label           String?
   /** Kullanıcının orijinal dosya adı (yazıcıya bu adla yüklenir). */
   originalName    String
-  /** Diskteki tam yol (userData/models/...). */
+  /** Diskteki tam yol (userData/models/...). R2'ye yüklenen dosyalarda boş ("") — r2Key kullanılır. */
   storedPath      String
+  /** Cloudflare R2 nesne anahtarı (örn. "models/uuid.gcode"). Doluysa dosya BULUTTA → tüm cihazlardan erişilir. Null = eski yerel dosya. */
+  r2Key           String?
   /** "gcode" | "gco" | "3mf" */
   fileType        String
   sizeBytes       Int      @default(0)

@@ -1,0 +1,91 @@
+import {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  HeadBucketCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import crypto from "node:crypto";
+import { prisma } from "./prisma";
+
+/**
+ * Cloudflare R2 (S3 uyumlu) nesne deposu — model dosyalarını buluta koyar.
+ *
+ * NEDEN: dosyalar şimdiye dek yalnız yükleyen makinenin diskinde duruyordu → başka cihazdan
+ * (Mac) baskı başlatılamıyordu ve her şey kişisel diski şişiriyordu. R2'de duran dosya, Turso'da
+ * senkronlanan r2Key sayesinde TÜM cihazlardan erişilir; egress ücretsiz → baskıda tekrar tekrar
+ * çekmek bedava.
+ *
+ * Kimlik: kullanıcı Ayarlar'dan girer (AppSetting). Tarayıcı dosyayı imzalı URL ile DOĞRUDAN
+ * R2'ye yükler (creds tarayıcıya gitmez, main process'ten geçmez → pencere donmaz).
+ */
+
+export interface R2Config {
+  accountId: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
+const KEYS = ["r2AccountId", "r2Bucket", "r2AccessKeyId", "r2SecretKey"] as const;
+
+/** Ayarlardan R2 yapılandırmasını oku. Hepsi dolu değilse null (R2 kapalı → yerel diske düş). */
+export async function getR2Config(): Promise<R2Config | null> {
+  const rows = await prisma.appSetting.findMany({ where: { key: { in: KEYS as unknown as string[] } } });
+  const m: Record<string, string> = {};
+  for (const r of rows) m[r.key] = (r.value ?? "").trim();
+  const accountId = m.r2AccountId;
+  const bucket = m.r2Bucket;
+  const accessKeyId = m.r2AccessKeyId;
+  const secretAccessKey = m.r2SecretKey;
+  if (!accountId || !bucket || !accessKeyId || !secretAccessKey) return null;
+  return { accountId, bucket, accessKeyId, secretAccessKey };
+}
+
+function client(cfg: R2Config): S3Client {
+  return new S3Client({
+    region: "auto",
+    endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
+    // R2 wildcard sertifikası tek alt-etiket kapsar → bucket'ı subdomain yapan virtual-host
+    // stili tarayıcıda sertifika uyuşmazlığı verir. Path-style ZORUNLU.
+    forcePathStyle: true,
+    // Yeni AWS SDK'lar PUT'a otomatik x-amz-checksum-* başlığı ekler; bu başlık imzaya girer ama
+    // tarayıcı göndermez → imza uyuşmazlığı. "WHEN_REQUIRED" bunu kapatır (presigned tarayıcı PUT şart).
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
+    credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+  });
+}
+
+/** Yeni bir model dosyası için benzersiz R2 anahtarı (örn. "models/uuid.gcode"). */
+export function makeModelKey(originalName: string): string {
+  const ext = (originalName.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `models/${crypto.randomUUID()}.${ext || "bin"}`;
+}
+
+/** Tarayıcının DOĞRUDAN R2'ye PUT edebileceği imzalı URL (1 saat geçerli). */
+export async function presignPutUrl(key: string, cfg: R2Config): Promise<string> {
+  // ContentType İMZALANMAZ → tarayıcı herhangi bir Content-Type (veya hiç) gönderebilir, imza bozulmaz.
+  return getSignedUrl(client(cfg), new PutObjectCommand({ Bucket: cfg.bucket, Key: key }), {
+    expiresIn: 3600,
+  });
+}
+
+/** R2'den nesne baytlarını çek (baskı anında, sunucu tarafı). */
+export async function getObjectBytes(key: string, cfg: R2Config): Promise<Buffer> {
+  const res = await client(cfg).send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
+  if (!res.Body) throw new Error("R2: boş yanıt");
+  const bytes = await res.Body.transformToByteArray();
+  return Buffer.from(bytes);
+}
+
+/** R2'den nesneyi sil (son referans gidince). */
+export async function deleteObject(key: string, cfg: R2Config): Promise<void> {
+  await client(cfg).send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key }));
+}
+
+/** Kimlik/bucket doğru mu? (Ayarlar'daki "Bağlantıyı test et" — sunucu tarafı creds kontrolü.) */
+export async function headBucket(cfg: R2Config): Promise<void> {
+  await client(cfg).send(new HeadBucketCommand({ Bucket: cfg.bucket }));
+}

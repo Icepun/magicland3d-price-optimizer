@@ -11,9 +11,10 @@ let schemaReady: Promise<void> | null = null;
 // v19: Product.alias + Listing.barcode (0.19.15/0.19.16). v20: Product.madeToOrder (0.19.21).
 // v21: Notification tablosu (0.19.30) — olay-anı bildirimleri (stoğu biten/sipariş-üzerine ürüne sipariş).
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
+// v25: ProductModelFile.r2Key — model dosyaları Cloudflare R2'de (çok-cihaz baskı, yerel disk boşaltma).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "24";
+const CURRENT_SCHEMA_VERSION = "25";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -556,6 +557,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "ProductModelFile_productId_printerConfigId_key"`);
     await ensureColumn("ProductModelFile", "label", "TEXT");
     await ensureColumn("ProductModelFile", "sortOrder", "INTEGER NOT NULL DEFAULT 0");
+    await ensureColumn("ProductModelFile", "r2Key", "TEXT"); // v25: Cloudflare R2 nesne anahtarı
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

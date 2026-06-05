@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
@@ -18,27 +19,15 @@ function fmtSize(b: number) {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
-/** XHR ile yükle — gerçek upload progress için (fetch progress vermiyor). */
-function uploadPart(productId: string, printerConfigId: string, file: File, onProgress: (p: number) => void, applyToVariants = false): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("printerConfigId", printerConfigId);
-    if (applyToVariants) fd.append("applyToVariants", "true");
-    xhr.open("POST", `/api/products/${productId}/models`);
-    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else {
-        let msg = `HTTP ${xhr.status}`;
-        try { const b = JSON.parse(xhr.responseText); if (b.error) msg = b.error; } catch { /* ignore */ }
-        reject(new Error(msg));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Ağ hatası"));
-    xhr.send(fd);
-  });
+function pct(p: UploadProgress) {
+  return p.total > 0 ? Math.min(100, Math.round((p.loaded / p.total) * 100)) : 0;
+}
+function fmtEta(p: UploadProgress) {
+  if (p.bytesPerSec <= 0) return "—";
+  const rem = (p.total - p.loaded) / p.bytesPerSec;
+  if (rem < 1.5) return "bitiyor…";
+  if (rem < 60) return `~${Math.ceil(rem)} sn`;
+  return `~${Math.floor(rem / 60)} dk ${Math.ceil(rem % 60)} sn`;
 }
 
 // memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
@@ -164,7 +153,7 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
 function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }: { printer: PrinterCfg; parts: ModelFile[]; productId: string; applyToVariants: boolean; onChanged: () => void }) {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [progress, setProgress] = useState<number | null>(null);
+  const [prog, setProg] = useState<UploadProgress | null>(null);
   const [uploadingName, setUploadingName] = useState("");
 
   const del = useMutation({
@@ -198,15 +187,15 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
     let ok = 0;
     for (const f of list) {
       setUploadingName(f.name);
-      setProgress(0);
+      setProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
       try {
-        await uploadPart(productId, printer.id, f, (p) => setProgress(p), applyToVariants);
+        await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
         ok++;
       } catch (e) {
         toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
       }
     }
-    setProgress(null);
+    setProg(null);
     setUploadingName("");
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
@@ -222,21 +211,25 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
         <p className="text-sm font-medium flex-1 truncate">{printer.name}</p>
         {parts.length > 0 && <Badge variant="secondary" className="tabular-nums text-[10px]">{parts.length} parça</Badge>}
         <input ref={inputRef} type="file" accept=".gcode,.gco,.g,.3mf" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) handleFiles(e.target.files); }} />
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0" disabled={progress !== null} onClick={() => inputRef.current?.click()}>
-          {progress !== null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Parça Ekle
+        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0" disabled={prog !== null} onClick={() => inputRef.current?.click()}>
+          {prog !== null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Parça Ekle
         </Button>
       </div>
 
-      {progress !== null && (
-        <div className="px-3 py-2 space-y-1 animate-in fade-in">
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span className="truncate">{uploadingName}</span>
-            <span className="tabular-nums font-medium">{Math.round(progress * 100)}%</span>
+      {prog !== null && (
+        <div className="px-3 py-2 space-y-1.5 animate-in fade-in">
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
+            <span className="truncate flex-1">{uploadingName}</span>
+            <span className="tabular-nums font-semibold text-foreground shrink-0">{pct(prog)}%</span>
           </div>
           <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
-            <div className="h-full rounded-full bg-primary relative overflow-hidden transition-[width] duration-200" style={{ width: `${Math.max(4, Math.round(progress * 100))}%` }}>
+            <div className="h-full rounded-full bg-primary relative overflow-hidden transition-[width] duration-200" style={{ width: `${Math.max(3, pct(prog))}%` }}>
               <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent)", animation: "printer-shimmer 1.2s linear infinite" }} />
             </div>
+          </div>
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground/80 tabular-nums">
+            <span>{fmtSize(prog.loaded)} / {fmtSize(prog.total)}</span>
+            <span>{prog.bytesPerSec > 0 ? `${fmtSize(prog.bytesPerSec)}/sn · ${fmtEta(prog)}` : "başlıyor…"}</span>
           </div>
         </div>
       )}

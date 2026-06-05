@@ -14,6 +14,7 @@ import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet } from "lu
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
+import { R2StorageCard } from "@/components/settings/R2StorageCard";
 
 const Schema = z.object({
   vatRate: z.coerce.number().min(0).max(100).default(20),
@@ -99,6 +100,8 @@ export default function SettingsPage() {
       </Card>
 
       <TursoSyncCard />
+
+      <R2StorageCard />
 
       <DataManagementCard />
 
