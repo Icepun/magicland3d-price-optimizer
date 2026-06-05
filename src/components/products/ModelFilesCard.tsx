@@ -86,9 +86,13 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   });
 
   const refresh = () => {
-    qc.invalidateQueries({ queryKey: ["product-models", productId] });
-    // Paylaşımlı yükleme diğer varyantların listesini de değiştirir → hepsini bayat işaretle.
-    qc.invalidateQueries({ queryKey: ["product-models"], refetchType: "none" });
+    qc.invalidateQueries({ queryKey: ["product-models", productId] }); // bu ürün → hemen tazele
+    // Paylaşımlı yükleme/silme DİĞER varyantların dosya listesini de değiştirdi. refetchOnMount:false
+    // olduğundan "bayat işaretlemek" yetmiyordu (o varyanta gir-çık etsen bile dosyalar görünmüyordu) →
+    // o varyantların cache'ini SİL ki bir sonraki ziyarette taze çekilsin (maliyet fix'iyle aynı mantık).
+    for (const m of variantGroup?.products ?? []) {
+      if (m.id !== productId) qc.removeQueries({ queryKey: ["product-models", m.id] });
+    }
     qc.invalidateQueries({ queryKey: ["models"] });
   };
 
