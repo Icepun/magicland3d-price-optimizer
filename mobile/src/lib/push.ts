@@ -1,62 +1,23 @@
-import { Platform } from "react-native";
-import { execute } from "@/lib/turso";
-
 /**
- * Push bildirimleri (baskı bitti). Masaüstü relay'i baskı tamamlanınca, mobilin buraya yazdığı
- * Expo push token'larına bildirim gönderir → telefon KAPALIYKEN de düşer.
+ * Push bildirimleri — OTA GÜVENLİ NO-OP.
  *
- * ÖNEMLİ (OTA güvenliği): expo-notifications & expo-device NATIVE modüllerdir. Mevcut yüklü binary
- * onları İÇERMİYORSA (app.json'a "expo-notifications" plugin'i eklenip YENİ bir EAS native build
- * alınana dek içermez), bu modülleri ÜST SEVİYEDE import etmek `requireNativeModule` ile AÇILIŞTA
- * ÇÖKERTİR. Bu yüzden importlar registerForPush İÇİNDE DİNAMİK + try/catch ile yapılır → native modül
- * yoksa sessizce atlanır, uygulama yine açılır (sadece-JS OTA güvenli). Uzak push ancak
- * expo-notifications içeren native build'de fiilen çalışır (Expo Go'da çalışmaz, SDK 53+).
+ * NEDEN NO-OP: expo-notifications & expo-device NATIVE modüllerdir. Sahadaki yüklü iOS binary'si
+ * bunları İÇERMİYOR (son native EAS build expo-notifications package.json'a eklenmeden önce, commit
+ * 49ed542'te alındı; app.json plugins'inde de "expo-notifications" YOK). Bu modüllere herhangi bir
+ * şekilde (üst-seviye VEYA dinamik `import()`) DOKUNMAK, Metro'nun onları JS bundle'a koymasına ve
+ * native modül yokken `requireNativeModule`/`requireNativeViewManager` ile açılışta ÇÖKMESİNE yol açar.
+ *
+ * Bu dosya KASITLI olarak SIFIR expo-import içerir → Metro `expo-notifications`/`expo-device`'ı
+ * bundle'a HİÇ koymaz → native modülü olmayan binary'de açılış çökmesi GARANTİ önlenir (sadece-JS OTA).
+ *
+ * GERÇEK PUSH'U GERİ AÇMAK İÇİN (gelecekte):
+ *   1. app.json "plugins" dizisine "expo-notifications" ekle.
+ *   2. expo-notifications + expo-device paketleri kuruluyken YENİ bir native EAS build al ve dağıt.
+ *   3. Bu dosyadaki gerçek registerForPush implementasyonunu git geçmişinden (bafe1a4 öncesi
+ *      defensive sürüm: dinamik import + try/catch) geri getir — AMA ancak yeni binary yayıldıktan sonra.
  */
 
-const EXPO_PROJECT_ID = "94ecc654-9a9e-41b2-974f-a9d3aa090696";
-
-/** İzin iste + Expo push token al + PushToken tablosuna yaz. Tamamen defensive (native yok/izin yok/hata → sessiz). */
+/** No-op. Native push modülü olmayan binary'de açılış çökmesini önlemek için kasıtlı boş. */
 export async function registerForPush(): Promise<void> {
-  try {
-    // Dinamik import: native modül binary'de yoksa burada throw → catch yutar (üst seviyede DEĞİL).
-    const Device = await import("expo-device");
-    if (!Device.isDevice) return; // emülatör → uzak push yok
-
-    const Notifications = await import("expo-notifications");
-
-    // Önplanda bildirim geldiğinde göster (SDK 56 davranış şekli).
-    Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
-        shouldSetBadge: false,
-      }),
-    });
-
-    if (Platform.OS === "android") {
-      await Notifications.setNotificationChannelAsync("default", {
-        name: "Baskı bildirimleri",
-        importance: Notifications.AndroidImportance.HIGH,
-        sound: "default",
-      });
-    }
-
-    const existing = await Notifications.getPermissionsAsync();
-    let granted = existing.granted;
-    if (!granted) granted = (await Notifications.requestPermissionsAsync()).granted;
-    if (!granted) return;
-
-    const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId: EXPO_PROJECT_ID });
-    const token = tokenResp?.data;
-    if (!token) return;
-
-    await execute(
-      `INSERT INTO PushToken (token, platform, updatedAt) VALUES (?, ?, ?)
-       ON CONFLICT(token) DO UPDATE SET platform = excluded.platform, updatedAt = excluded.updatedAt`,
-      [token, Platform.OS, new Date().toISOString()]
-    );
-  } catch {
-    /* push kurulamadı (native modül yok / izin yok / hata) → sessiz; uygulama yine çalışır */
-  }
+  // İntentionally empty — see file header. Hiçbir expo native modülüne dokunmaz.
 }
