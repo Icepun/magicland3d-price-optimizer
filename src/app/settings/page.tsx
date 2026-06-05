@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
+import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
 
 const Schema = z.object({
   vatRate: z.coerce.number().min(0).max(100).default(20),
@@ -61,6 +62,8 @@ export default function SettingsPage() {
   return (
     <div className="p-6 space-y-6 max-w-xl">
       <h1 className="text-2xl font-bold">Ayarlar</h1>
+
+      <ImageMobileFixCard />
 
       <Card>
         <CardHeader>

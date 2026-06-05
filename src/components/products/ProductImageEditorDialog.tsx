@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { fileToResizedDataUrl } from "@/lib/image-resize";
 
 /**
  * Ürün/varyant görselini elle ayarla: bilgisayardan yükle YA DA URL yapıştır.
@@ -35,13 +36,21 @@ export function ProductImageEditorDialog({
   async function uploadFile(file: File) {
     setBusy("upload");
     try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch(`/api/products/${productId}/image`, { method: "POST", body: fd });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Yüklenemedi");
-      onChanged(data.imageUrl as string);
-      toast.success("Görsel güncellendi 🎉");
+      if (file.size > 25 * 1024 * 1024) throw new Error("Görsel 25 MB'tan büyük olamaz");
+      // Görseli küçültüp DATA URL olarak DB'ye yaz (yerel dosya + "/api/images" URL'i YOK) →
+      // mobil dahil TÜM cihazlar görür. Eskiden yerel dosyaya kaydedilince yalnız bu PC'de açılıyordu.
+      const dataUrl = await fileToResizedDataUrl(file);
+      const res = await fetch(`/api/products/${productId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl: dataUrl, imageManual: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Yüklenemedi");
+      }
+      onChanged(dataUrl);
+      toast.success("Görsel güncellendi 🎉 — tüm cihazlarda görünür");
       onClose();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Yüklenemedi");

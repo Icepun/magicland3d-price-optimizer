@@ -7,6 +7,7 @@ import {
 import {
   filterCargoRulesByPlatform,
   filterRulesByPlatform,
+  findCargoRule,
 } from "@core/cargo-calculator";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
@@ -71,6 +72,9 @@ export function computeOrderProfit(
   let unknown = false;
   let totalQty = 0;
   let image: string | null = null;
+  // Kargo, gönderiye BİR KEZ (sipariş düzeyinde) düşülür → satır döngüsünde toplam desi + kategori biriktir.
+  let totalDesi = 0;
+  let cargoCategory = "";
 
   for (const line of order.items) {
     totalQty += line.quantity;
@@ -90,6 +94,8 @@ export function computeOrderProfit(
       continue;
     }
     const listing = p.listings.find((l) => l.platform === order.platform);
+    // Satır kârı — KARGOSUZ (cargoCostOverride: 0). Kargo aşağıda gönderiye bir kez düşülür.
+    // (Eski HATA: her satıra kargo uygulanıyordu → çok ürünlü siparişte kâr olduğundan DÜŞÜK görünüyordu.)
     const sim = simulatePrice({
       salePrice: line.unitPrice || listing?.salePrice || p.currentSalePrice,
       productCost: resolved.productionCost,
@@ -105,10 +111,23 @@ export function computeOrderProfit(
         : order.platform === "shopify"
           ? { commissionRateOverride: Number(settings.shopifyCommissionRate ?? 3.2) / 100 }
           : {}),
-      cargoCostOverride: listing?.cargoCost ?? undefined,
+      cargoCostOverride: 0,
     });
     profit += sim.netProfit * line.quantity;
+    totalDesi += (p.desi ?? 1) * line.quantity;
+    if (!cargoCategory) cargoCategory = p.categoryName;
     matched++;
+  }
+
+  // KARGO: tüm gönderiye BİR KEZ — toplam desiye göre (masaüstüyle birebir aynı mantık).
+  if (matched > 0) {
+    const cargoRule = findCargoRule(
+      filterCargoRulesByPlatform(rules.cargo, order.platform),
+      order.total,
+      cargoCategory,
+      totalDesi || 1
+    );
+    if (cargoRule) profit -= cargoRule.cargoCost;
   }
 
   const distinctCount = order.items.length;
