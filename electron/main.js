@@ -529,34 +529,61 @@ async function createWindow() {
     logStartup("[renderer] did-fail-load:", code, desc, validatedURL);
   });
 
-  // ── Uyku/uyanma DONMA koruması ──────────────────────────────────────────────
+  // ── Uyku/uyanma DONMA koruması (dark-wake YARIŞINA dayanıklı) ───────────────
   // Sorun: Mac uyurken/uyanırken libSQL embedded-replica'nın ağ op'ları (relay'in snapshot
   // yazması + sync()) ölü bağlantıda asılıp ana event-loop'u DONDURUYOR (native çağrı, timeout YOK).
-  // Çözüm: uykuda DB ağ-op'larını duraklat (relay tick'i globalThis.__MLHUB_DB_PAUSED__ okur);
-  // uyanınca renderer'ı erken tazele + ağ tam gelene kadar grace bekleyip relay'i sürdür.
+  // ÖNEMLİ (Mac'e özgü): macOS uykudayken periyodik "dark wake" (Power Nap) yapar → resume sonra
+  // hemen suspend gelir. Eski sabit-süreli grace timer sonraki suspend ile iptal edilmediği için
+  // UYKU SIRASINDA flag'i false yapıp relay'i çalıştırıyor → ölü ağda donma. (Windows dark-wake
+  // yapmaz → sorun yalnızca Mac'te.) ÇÖZÜM: her power olayı "gen" sayacını artırır → eski timer'lar
+  // gen değişince kendini iptal eder; resume'da relay SADECE Turso gerçekten erişilince sürdürülür.
   if (!globalThis.__MLHUB_POWER_HOOKED__) {
     globalThis.__MLHUB_POWER_HOOKED__ = true;
-    let resumeTimer = null;
+    globalThis.__MLHUB_DB_PAUSED__ = false;
+    let powerGen = 0;
+
+    // Turso bulut erişilebilir mi? libsql:// → https://, 2.5sn timeout. (Local modda hep true.)
+    const tursoReachable = async () => {
+      const u = process.env.TURSO_DATABASE_URL;
+      if (!u) return true;
+      const httpUrl = u.replace(/^libsql:\/\//i, "https://").replace(/^wss?:\/\//i, "https://");
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 2500);
+      try { await fetch(httpUrl, { method: "GET", signal: ctrl.signal, cache: "no-store" }); return true; }
+      catch { return false; }
+      finally { clearTimeout(t); }
+    };
+
     powerMonitor.on("suspend", () => {
+      powerGen++; // bekleyen TÜM resume timer'larını geçersiz kıl (dark-wake yarışı engellenir)
       globalThis.__MLHUB_DB_PAUSED__ = true;
-      logStartup("[power] suspend → DB ağ-op'ları duraklatıldı (relay durdu)");
+      logStartup("[power] suspend → DB duraklatıldı (gen " + powerGen + ")");
     });
+
     powerMonitor.on("resume", () => {
-      logStartup("[power] resume → grace başladı (relay duraklı)");
-      if (resumeTimer) clearTimeout(resumeTimer);
-      // Renderer'ı erken tazele — API okumaları yerel replica'dan gelir (ağ beklemez) → donmuş UI hızlı kurtulur.
+      const myGen = ++powerGen;
+      logStartup("[power] resume → ağ kontrolü (gen " + myGen + ")");
+      // Renderer'ı erken tazele (yerel okuma → ağ beklemez) — donmuş UI hızlı kurtulur.
       setTimeout(() => {
+        if (myGen !== powerGen) return; // araya yeni power olayı girdi → iptal
         const w = BrowserWindow.getAllWindows()[0];
-        if (w && !w.isDestroyed()) {
-          w.webContents.reload();
-          logStartup("[power] renderer tazelendi");
+        if (w && !w.isDestroyed()) { w.webContents.reload(); logStartup("[power] renderer tazelendi"); }
+      }, 1500);
+      // Relay'i SADECE Turso erişilince sürdür (max 45sn fail-safe). Araya suspend/resume girerse iptal.
+      const startedAt = Date.now();
+      const tryResume = async () => {
+        if (myGen !== powerGen) return; // dark-wake/yeni olay → bu grace geçersiz, flag duraklı kalır
+        let ok = false;
+        try { ok = await tursoReachable(); } catch { ok = false; }
+        if (myGen !== powerGen) return; // fetch sırasında power olayı olduysa iptal
+        if (ok || Date.now() - startedAt > 45000) {
+          globalThis.__MLHUB_DB_PAUSED__ = false;
+          logStartup("[power] ağ geldi → DB/relay devam (gen " + myGen + ")");
+        } else {
+          setTimeout(tryResume, 3000);
         }
-      }, 1200);
-      // Ağ tam gelene kadar relay duraklı kalsın → uyanış sonrası ilk tick ölü bağlantıda asılmasın.
-      resumeTimer = setTimeout(() => {
-        globalThis.__MLHUB_DB_PAUSED__ = false;
-        logStartup("[power] grace bitti → DB/relay devam");
-      }, 8000);
+      };
+      setTimeout(tryResume, 3000); // ilk denemeden önce min 3sn
     });
   }
 
