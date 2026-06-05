@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
+import { thumbUrl } from "@/lib/image";
 import {
   ClipboardList,
   RefreshCw,
@@ -401,7 +402,7 @@ function Thumb({ src, size = "h-12 w-12" }: { src: string | null; size?: string 
     <div className={cn("relative shrink-0 rounded-lg overflow-hidden border bg-muted flex items-center justify-center", size)}>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt="" className="max-w-full max-h-full object-contain" loading="lazy" />
+        <img src={thumbUrl(src) ?? undefined} alt="" className="max-w-full max-h-full object-contain" loading="lazy" />
       ) : (
         <Package className="h-5 w-5 text-muted-foreground/50" />
       )}

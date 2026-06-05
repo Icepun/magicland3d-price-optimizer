@@ -340,8 +340,10 @@ function SpoolModal({ spool, onClose }: { spool: Spool | null; onClose: () => vo
 function ConsumeModal({ spool, onClose }: { spool: Spool; onClose: () => void }) {
   const qc = useQueryClient();
   const { data: products } = useQuery<ProductLite[]>({
-    queryKey: ["products", "lite-for-consume"],
+    // Aktif ürünler (~442KB) — Ürünler/Üretim/Raporlar ile AYNI key → tek fetch, sayfalar arası paylaşılır.
+    queryKey: ["products", "active"],
     queryFn: () => fetch("/api/products?filter=active").then((r) => r.json()),
+    staleTime: 60_000,
   });
 
   const [productId, setProductId] = useState("");

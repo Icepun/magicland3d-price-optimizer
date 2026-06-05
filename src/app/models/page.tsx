@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { thumbUrl } from "@/lib/image";
 import { toast } from "sonner";
 import {
   SlotStep, PrintProgress, runPrintStream,
@@ -98,7 +99,7 @@ export default function ModelsPage() {
             >
               <CardContent className="p-3 flex items-center gap-3">
                 <div className="h-12 w-12 shrink-0 rounded-lg border bg-muted flex items-center justify-center overflow-hidden">
-                  {p.imageUrl ? <img src={p.imageUrl} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-5 w-5 text-muted-foreground/40" />}
+                  {p.imageUrl ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-5 w-5 text-muted-foreground/40" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <Link href={`/products/${p.productId}`} className="font-medium text-sm hover:underline truncate block" title={p.name}>{p.name}</Link>

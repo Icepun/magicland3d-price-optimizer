@@ -136,7 +136,9 @@ function parseStatus(status: any): MoonrakerStatus {
 
 async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus | null> {
   try {
-    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 2500);
+    // LAN yazıcısı sağlıklıysa <500ms yanıt verir; 1500ms bol marj. Daha uzun timeout, ÇEVRİMDIŞI
+    // yazıcıda boş yere ana-süreci meşgul ediyordu (relay + panel her tick'te yokluyor).
+    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 1500);
     if (!res.ok) return null;
     const status = unwrap(await res.json())?.status;
     if (!status) return null;
@@ -152,15 +154,22 @@ export async function fetchMoonrakerStatus(host: string, port: number): Promise<
     currentLayer: null, totalLayer: null, zHeight: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
   };
   const cached = portCache.get(host);
-  const order = cached != null
-    ? [cached, ...candidatePorts(port).filter((p) => p !== cached)]
-    : candidatePorts(port);
-  for (const p of order) {
-    const st = await tryStatusAt(host, p);
-    if (st) {
-      portCache.set(host, p);
-      return st;
-    }
+  // Bilinen çalışan port varsa SADECE onu dene — cihazın Moonraker portu sabittir (Elegoo 80, U1 7125).
+  // Başarısızsa yazıcı ÇEVRİMDIŞIDIR; tüm adayları yeniden taramak (3×timeout = ~4.5sn) ana-süreci
+  // boşuna kilitliyordu. Artık çevrimdışı yazıcı tek timeout'ta (~1.5sn) çözülür. Port gerçekten
+  // değişmişse "Bağlantıyı Test Et" (testMoonraker) yeniden keşfedip önbelleği günceller.
+  if (cached != null) {
+    const st = await tryStatusAt(host, cached);
+    return st ?? offline;
+  }
+  // İlk keşif (port bilinmiyor): adayları PARALEL yokla — çevrimdışıysa sıralı 3×timeout yerine 1×.
+  const results = await Promise.all(
+    candidatePorts(port).map(async (p) => ({ p, st: await tryStatusAt(host, p) }))
+  );
+  const hit = results.find((r) => r.st);
+  if (hit && hit.st) {
+    portCache.set(host, hit.p);
+    return hit.st;
   }
   return offline;
 }

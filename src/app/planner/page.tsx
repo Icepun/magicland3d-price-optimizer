@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { cn } from "@/lib/utils";
+import { thumbUrl } from "@/lib/image";
 
 interface ProductRow {
   id: string;
@@ -25,7 +26,8 @@ interface ProductRow {
 
 export default function PlannerPage() {
   const { data, isLoading } = useQuery<ProductRow[]>({
-    queryKey: ["products", "planner"],
+    // Aktif ürünler (~442KB) — Ürünler/Raporlar/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
+    queryKey: ["products", "active"],
     queryFn: () => fetch("/api/products?filter=active").then((r) => r.json()),
     staleTime: 60_000,
   });
@@ -133,7 +135,7 @@ export default function PlannerPage() {
                 <CardContent className="p-3 flex items-center gap-3">
                   <div className="h-12 w-12 shrink-0 rounded-lg border bg-muted flex items-center justify-center overflow-hidden">
                     {p.imageUrl ? (
-                      <img src={p.imageUrl} alt="" className="max-w-full max-h-full object-contain" loading="lazy" />
+                      <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" loading="lazy" />
                     ) : (
                       <Package className="h-5 w-5 text-muted-foreground/40" />
                     )}

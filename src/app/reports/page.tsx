@@ -42,7 +42,8 @@ export default function ReportsPage() {
     staleTime: 5 * 60_000,
   });
   const { data: products, isLoading: productsLoading } = useQuery<ProductRow[]>({
-    queryKey: ["products", "reports"],
+    // Aktif ürünler (~442KB) — Ürünler/Üretim/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
+    queryKey: ["products", "active"],
     queryFn: () => fetch("/api/products?filter=active").then((r) => r.json()),
     staleTime: 60_000,
   });
