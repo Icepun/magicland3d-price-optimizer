@@ -1,6 +1,3 @@
-import * as Notifications from "expo-notifications";
-import * as Device from "expo-device";
-import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { execute } from "@/lib/turso";
 
@@ -8,27 +5,34 @@ import { execute } from "@/lib/turso";
  * Push bildirimleri (baskı bitti). Masaüstü relay'i baskı tamamlanınca, mobilin buraya yazdığı
  * Expo push token'larına bildirim gönderir → telefon KAPALIYKEN de düşer.
  *
- * NOT: Uzak push Expo Go'da çalışmaz (SDK 53+); dev-client veya standalone (EAS) build gerekir.
+ * ÖNEMLİ (OTA güvenliği): expo-notifications & expo-device NATIVE modüllerdir. Mevcut yüklü binary
+ * onları İÇERMİYORSA (app.json'a "expo-notifications" plugin'i eklenip YENİ bir EAS native build
+ * alınana dek içermez), bu modülleri ÜST SEVİYEDE import etmek `requireNativeModule` ile AÇILIŞTA
+ * ÇÖKERTİR. Bu yüzden importlar registerForPush İÇİNDE DİNAMİK + try/catch ile yapılır → native modül
+ * yoksa sessizce atlanır, uygulama yine açılır (sadece-JS OTA güvenli). Uzak push ancak
+ * expo-notifications içeren native build'de fiilen çalışır (Expo Go'da çalışmaz, SDK 53+).
  */
 
-// Önplanda bildirim geldiğinde göster (SDK 56 davranış şekli).
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+const EXPO_PROJECT_ID = "94ecc654-9a9e-41b2-974f-a9d3aa090696";
 
-const EXPO_PROJECT_ID =
-  (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId ??
-  "94ecc654-9a9e-41b2-974f-a9d3aa090696";
-
-/** İzin iste + Expo push token al + PushToken tablosuna yaz. Tamamen defensive (hata → sessiz). */
+/** İzin iste + Expo push token al + PushToken tablosuna yaz. Tamamen defensive (native yok/izin yok/hata → sessiz). */
 export async function registerForPush(): Promise<void> {
   try {
-    if (!Device.isDevice) return; // emülatörde uzak push yok
+    // Dinamik import: native modül binary'de yoksa burada throw → catch yutar (üst seviyede DEĞİL).
+    const Device = await import("expo-device");
+    if (!Device.isDevice) return; // emülatör → uzak push yok
+
+    const Notifications = await import("expo-notifications");
+
+    // Önplanda bildirim geldiğinde göster (SDK 56 davranış şekli).
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
 
     if (Platform.OS === "android") {
       await Notifications.setNotificationChannelAsync("default", {
@@ -53,6 +57,6 @@ export async function registerForPush(): Promise<void> {
       [token, Platform.OS, new Date().toISOString()]
     );
   } catch {
-    /* push kurulamadı → sessiz; uygulama yine çalışır */
+    /* push kurulamadı (native modül yok / izin yok / hata) → sessiz; uygulama yine çalışır */
   }
 }
