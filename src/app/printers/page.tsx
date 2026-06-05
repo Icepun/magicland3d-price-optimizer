@@ -7,7 +7,7 @@ import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
-  Upload, FileBox, Weight, ChevronLeft, ChevronRight,
+  Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -24,6 +24,7 @@ import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
+import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 
 type PrinterStatus = "printing" | "finished" | "idle" | "paused" | "error";
 
@@ -137,6 +138,7 @@ export default function PrintersPage() {
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
   const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
   const simulated = data?.simulated ?? false;
@@ -184,6 +186,9 @@ export default function PrintersPage() {
           </Button>
           <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className="gap-2" disabled={simulated || printers.length === 0}>
             <Upload className="h-4 w-4" /> Özel Baskı
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setLibraryOpen(true)} className="gap-2">
+            <FolderOpen className="h-4 w-4" /> Özel Baskılar
           </Button>
           <Button size="sm" onClick={() => setManageOpen(true)} className="gap-2">
             <Settings2 className="h-4 w-4" /> Yönet
@@ -252,6 +257,7 @@ export default function PrintersPage() {
         <StartModal target={startTarget} onClose={() => setStartTarget(null)} />
       )}
       {customOpen && <CustomPrintModal printers={printers} onClose={() => setCustomOpen(false)} />}
+      {libraryOpen && <CustomPrintLibrary printers={printers} onClose={() => setLibraryOpen(false)} />}
 
       <Dialog open={!!cancelTarget} onOpenChange={(o) => !o && setCancelTarget(null)}>
         <DialogContent>
