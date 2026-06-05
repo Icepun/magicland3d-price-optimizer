@@ -436,15 +436,29 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
         .map((e) => (
           <BreakdownRow key={e.id} label={e.name} value={e.amount} />
         ))}
+      {r.inputVatCredit > 0 ? (
+        <BreakdownRow label="KDV İadesi" value={r.inputVatCredit} positive />
+      ) : null}
     </MotiView>
   );
 }
 
-function BreakdownRow({ label, value }: { label: string; value: number }) {
+function BreakdownRow({
+  label,
+  value,
+  positive,
+}: {
+  label: string;
+  value: number;
+  positive?: boolean;
+}) {
   return (
     <View style={styles.breakRow}>
       <Text style={styles.breakLabel}>{label}</Text>
-      <Text style={styles.breakValue}>−{formatCurrency(value)}</Text>
+      <Text style={[styles.breakValue, positive ? { color: ML.green, fontWeight: "700" } : null]}>
+        {positive ? "+" : "−"}
+        {formatCurrency(value)}
+      </Text>
     </View>
   );
 }

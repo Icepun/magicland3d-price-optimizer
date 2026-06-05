@@ -1,27 +1,11 @@
 "use client";
 
 import { memo } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { FlaskConical, Target, Tag, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
-
-interface TargetRow { margin: number; price: number | null }
-interface PlatformTarget {
-  platform: string;
-  currentPrice: number;
-  currentMargin: number;
-  rows: TargetRow[];
-}
-interface CampaignRow { discount: number; effectivePrice: number; profit: number; margin: number }
-interface PriceLab {
-  hasCost: boolean;
-  productCost?: number;
-  packagingCost?: number;
-  targets?: PlatformTarget[];
-  campaign?: { currentPrice: number; rows: CampaignRow[] } | null;
-}
+import type { PriceLab } from "@/lib/client-pricing";
 
 const PLATFORM = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
@@ -32,14 +16,11 @@ function platformInfo(p: string) {
   return PLATFORM[p as keyof typeof PLATFORM] ?? { label: p, color: "oklch(0.62 0.20 278)" };
 }
 
-// memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
+// İSTEMCİDE hesaplanır (parent → computeClientPricing) ve `data` prop'uyla gelir → sunucuya istek YOK.
+// memo: parent her render olduğunda değil, yalnız `data` referansı değişince yeniden çizilir.
 export const PriceLabCard = memo(PriceLabCardImpl);
-function PriceLabCardImpl({ productId }: { productId: string }) {
-  const { data, isLoading } = useQuery<PriceLab>({
-    queryKey: ["price-lab", productId],
-    queryFn: () => fetch(`/api/products/${productId}/price-lab`).then((r) => r.json()),
-    staleTime: 30_000,
-  });
+function PriceLabCardImpl({ data }: { data: PriceLab | undefined }) {
+  const isLoading = data === undefined; // kurallar/maliyet henüz hazır değil → iskelet
 
   return (
     <Card

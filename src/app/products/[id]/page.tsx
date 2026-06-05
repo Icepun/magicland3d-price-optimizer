@@ -22,8 +22,9 @@ import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, Refresh
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
-import type { SimulationResult } from "@/core/types";
+import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
+import { computeClientPricing, type ProfitPreview } from "@/lib/client-pricing";
 
 interface FilamentType {
   id: string;
@@ -56,6 +57,7 @@ interface ProductDetail {
   alias: string | null;
   categoryName: string;
   currentSalePrice: number;
+  commissionRate: number | null;
   stock: number;
   madeToOrder: boolean;
   desi: number | null;
@@ -97,19 +99,6 @@ interface ProductDetail {
   } | null;
 }
 
-interface ProfitPreview {
-  productionCost: number;
-  packagingCost: number;
-  totalCost: number;
-  hasCost: boolean;
-  platforms: Array<{
-    platform: string;
-    listingId: string;
-    salePrice: number;
-    result: SimulationResult | null;
-  }>;
-}
-
 const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
@@ -137,6 +126,26 @@ export default function ProductDetailPage({
   const { data: globalSettings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetch("/api/settings").then((r) => r.json()),
+  });
+
+  // Kâr kuralları — bir kez çekilip uygulama genelinde cache'lenir (staleTime uzun, nadir değişir).
+  // Maliyet önizlemesi + Fiyat Lab BUNLARLA İSTEMCİDE hesaplanır → maliyet değişince Electron ana
+  // sürecine otomatik okuma gitmez (eskiden her değişimde profit-preview, her kayıtta price-lab
+  // ana süreçte koşup pencereyi donduruyordu).
+  const { data: commissionRules } = useQuery<CommissionRuleInput[]>({
+    queryKey: ["commission-rules"],
+    queryFn: () => fetch("/api/commission-rules").then((r) => r.json()),
+    staleTime: 5 * 60_000,
+  });
+  const { data: cargoRules } = useQuery<CargoRuleInput[]>({
+    queryKey: ["cargo-rules"],
+    queryFn: () => fetch("/api/cargo-rules").then((r) => r.json()),
+    staleTime: 5 * 60_000,
+  });
+  const { data: expenseRules } = useQuery<ExpenseRuleInput[]>({
+    queryKey: ["expense-rules"],
+    queryFn: () => fetch("/api/expense-rules").then((r) => r.json()),
+    staleTime: 5 * 60_000,
   });
 
   // Kimlik formu state (maliyet formu artık izole CostEditor'da → yazarken bu dev sayfa render olmaz)
@@ -260,10 +269,8 @@ export default function ProductDetailPage({
     },
     onSuccess: () => {
       toast.success("Maliyet kaydedildi");
-      // Maliyet değişti → SADECE gerekeni fetch'le: Fiyat Lab'i tazele (maliyete bağlı) +
-      // listede YALNIZ bu ürünü güncelle. Tüm 368 ürün DEĞİL → minimum okuma, donma yok.
-      // Detay + canlı önizleme zaten form'dan günceldir (ekstra okuma yok).
-      queryClient.invalidateQueries({ queryKey: ["price-lab", id] });
+      // Önizleme + Fiyat Lab zaten İSTEMCİDE (optimistic cost'tan) günceldir → ekstra okuma YOK.
+      // Listede yalnız bu ürünü tazele (tüm 368 değil → minimum okuma, donma yok).
       patchProductsInCache(queryClient, [id]);
     },
   });
@@ -402,29 +409,23 @@ export default function ProductDetailPage({
   // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
   const { adjustStock } = useStockWriter();
 
-  // Real-time kâr önizlemesi — KAYDETMEDEN. costValues (CostEditor'dan 250ms debounce'lu) değişince
-  // preview endpoint'e gider, sağ taraftaki platform kartları güncellenir.
-  const { data: preview } = useQuery<ProfitPreview>({
-    queryKey: ["profit-preview", id, costValues],
-    queryFn: () =>
-      fetch(`/api/products/${id}/profit-preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filamentTypeId: costValues?.filamentTypeId || null,
-          filamentWeight: costValues?.filamentWeight ?? 0,
-          printTimeHours: costValues?.printTimeHours ?? 0,
-          wasteRate: costValues?.wasteRate ?? 0,
-          packagingOptionId: costValues?.packagingOptionId || null,
-          nylonLevel: costValues?.nylonLevel ?? "none",
-          tapeUsed: costValues?.tapeUsed ?? false,
-          desi: costValues?.desi ?? null,
-        }),
-      }).then((r) => r.json()),
-    enabled: Boolean(product && costValues),
-    placeholderData: (prev) => prev, // değişim sırasında eski sonucu koru (flicker yok)
-    staleTime: 60_000,
-  });
+  // Real-time kâr önizlemesi + Fiyat Lab — KAYDETMEDEN, İSTEMCİDE hesaplanır (ana sürece okuma YOK
+  // → donma yok). costValues (CostEditor'dan 250ms debounce'lu), ürün veya kurallar değişince anında
+  // yeniden hesaplanır. Sunucu profit-preview/price-lab route'larıyla BİREBİR aynı @/core mantığı.
+  const pricing = useMemo(() => {
+    if (!product || !costValues || !commissionRules || !cargoRules || !expenseRules) return null;
+    return computeClientPricing({
+      product,
+      cost: costValues,
+      filaments,
+      settings: globalSettings,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+    });
+  }, [product, costValues, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
+  const preview: ProfitPreview | undefined = pricing?.preview;
+  const priceLab = pricing?.priceLab;
 
   // Maliyet OTOMATİK kaydedilir (costValues değişince 800ms sonra) — optimistic, "Kaydet" butonu yok.
   // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).
@@ -458,8 +459,11 @@ export default function ProductDetailPage({
     try {
       await Promise.all([
         queryClient.refetchQueries({ queryKey: ["product", id] }),
-        queryClient.refetchQueries({ queryKey: ["profit-preview", id] }),
-        queryClient.refetchQueries({ queryKey: ["price-lab", id] }),
+        // Kurallar/ayarlar da tazelensin → önizleme + Fiyat Lab (istemcide) güncel kurallarla yeniden hesaplanır.
+        queryClient.refetchQueries({ queryKey: ["commission-rules"] }),
+        queryClient.refetchQueries({ queryKey: ["cargo-rules"] }),
+        queryClient.refetchQueries({ queryKey: ["expense-rules"] }),
+        queryClient.refetchQueries({ queryKey: ["app-settings"] }),
         queryClient.refetchQueries({ queryKey: ["price-history", id] }),
         queryClient.refetchQueries({ queryKey: ["product-models", id] }),
       ]);
@@ -675,7 +679,7 @@ export default function ProductDetailPage({
 
       <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
 
-      <PriceLabCard productId={product.id} />
+      <PriceLabCard data={priceLab} />
 
       <PriceHistoryCard productId={product.id} />
 
@@ -1151,6 +1155,15 @@ function PlatformProfitCardImpl({
                         <span>−{formatCurrency(exp.amount)}</span>
                       </div>
                     ))}
+                  {result.inputVatCredit > 0 && (
+                    <div
+                      className="flex justify-between text-green-600 dark:text-green-500 font-medium pt-0.5"
+                      title="Komisyon, kargo, platform ve filament faturalarındaki indirilebilen KDV"
+                    >
+                      <span>KDV İadesi</span>
+                      <span>+{formatCurrency(result.inputVatCredit)}</span>
+                    </div>
+                  )}
                 </div>
               </>
             ) : (

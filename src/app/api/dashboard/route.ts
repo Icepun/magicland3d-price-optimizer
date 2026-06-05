@@ -147,6 +147,7 @@ export async function GET() {
         vatRate,
         ...resolveListingCommissionOverride(listing, settingsMap),
         cargoCostOverride: listing.cargoCost ?? undefined,
+        vatableProductCost: resolved.filamentCost,
       });
 
       platformStats[platform].totalProfit += sim.netProfit;

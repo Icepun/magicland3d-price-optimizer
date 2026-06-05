@@ -60,6 +60,7 @@ export function computeProductProfit(
   );
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
+  const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
   const vatRate = Number(settings.vatRate ?? 0);
 
   const productRules = withProductCommissionRule(detail, rules.commission);
@@ -82,6 +83,7 @@ export function computeProductProfit(
         (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
       // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden (masaüstüyle birebir).
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+      vatableProductCost: filamentMatCost,
     });
     return {
       listingId: listing.id,

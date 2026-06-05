@@ -25,6 +25,8 @@ export interface ResolvedCost {
   productionCost: number;
   packagingCost: number;
   totalCost: number;
+  /** Üretim maliyeti içindeki filament malzeme payı (KDV iadesi hesabı için). manual/template → 0. */
+  filamentCost: number;
 }
 
 export function resolveProductCost(
@@ -58,10 +60,11 @@ export function resolveProductCost(
       productionCost: calc.productionCost,
       packagingCost: calc.packagingCost,
       totalCost: calc.totalCost,
+      filamentCost: calc.filamentCost,
     };
   }
 
   // manual / template
   const total = cost.totalCost ?? cost.manualCost ?? 0;
-  return { productionCost: total, packagingCost: 0, totalCost: total };
+  return { productionCost: total, packagingCost: 0, totalCost: total, filamentCost: 0 };
 }

@@ -39,6 +39,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
   const productCost = resolved.productionCost;
   const packagingCost = resolved.packagingCost;
+  const filamentMatCost = resolved.filamentCost; // KDV iadesine giren malzeme payı
 
   type CR = Parameters<typeof simulatePrice>[0]["commissionRules"];
   type KR = Parameters<typeof simulatePrice>[0]["cargoRules"];
@@ -66,6 +67,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         ? resolveListingCommissionOverride({ platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }, settingsMap)
         : resolveListingCommissionOverride({ platform, commissionRate: null, commissionFixed: null }, settingsMap)),
       cargoCostOverride: listing?.cargoCost ?? undefined,
+      vatableProductCost: filamentMatCost,
     });
   }
 

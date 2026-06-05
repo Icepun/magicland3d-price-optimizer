@@ -137,7 +137,45 @@ describe("pricing engine", () => {
     expect(result.commissionCost).toBeCloseTo(26, 5);
     // Total: 80 + 10 + 26 + 20 + 5 + 240*0.03 = 148.2
     expect(result.totalCost).toBeCloseTo(148.2, 5);
-    expect(result.netProfit).toBeCloseTo(51.8, 5);
+    // İndirilecek KDV iadesi: (komisyon 26 + kargo 20 + sabit 5 + değişken 7.2) × 20/120 = 9.7
+    expect(result.inputVatCredit).toBeCloseTo(9.7, 5);
+    // Net kâr: gelir(exVat 200) − totalCost 148.2 + KDV iadesi 9.7 = 61.5
+    expect(result.netProfit).toBeCloseTo(61.5, 5);
+  });
+
+  it("vatableProductCost (filament) indirilecek KDV iadesine katılır", () => {
+    const result = simulatePrice({
+      salePrice: 240,
+      productCost: 80,
+      packagingCost: 10,
+      categoryName: "Gamepad Stand",
+      desi: 1,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      vatRate: 20,
+      vatableProductCost: 60, // 80 üretim maliyetinin 60'ı filament (KDV'li alınmış)
+    });
+    // base = komisyon 26 + kargo 20 + sabit 5 + değişken 7.2 + filament 60 = 118.2 → ×20/120 = 19.7
+    expect(result.inputVatCredit).toBeCloseTo(19.7, 5);
+    // Net kâr: 200 − 148.2 + 19.7 = 71.5
+    expect(result.netProfit).toBeCloseTo(71.5, 5);
+  });
+
+  it("vatRate=0 iken KDV iadesi 0 (geriye dönük uyumluluk)", () => {
+    const result = simulatePrice({
+      salePrice: 200,
+      productCost: 80,
+      packagingCost: 10,
+      categoryName: "Gamepad Stand",
+      desi: 1,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      vatableProductCost: 50,
+    });
+    expect(result.inputVatCredit).toBe(0);
+    expect(result.netProfit).toBe(57); // eski davranış korunur
   });
 
   it("discountBuffer kampanya indirimi sonrası gerçek kâr verir", () => {

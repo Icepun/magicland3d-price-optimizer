@@ -121,6 +121,7 @@ export async function POST(
         (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
       // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden.
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+      vatableProductCost: resolved?.filamentCost ?? 0,
     });
 
     return {

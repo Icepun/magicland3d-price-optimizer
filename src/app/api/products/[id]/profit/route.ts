@@ -65,6 +65,7 @@ export async function GET(
     cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
     expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
     vatRate,
+    vatableProductCost: resolved.filamentCost,
   });
 
   return NextResponse.json({ result, missingCost: false });

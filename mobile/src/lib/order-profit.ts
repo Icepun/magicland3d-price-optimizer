@@ -112,6 +112,7 @@ export function computeOrderProfit(
           ? { commissionRateOverride: Number(settings.shopifyCommissionRate ?? 3.2) / 100 }
           : {}),
       cargoCostOverride: 0,
+      vatableProductCost: resolved.filamentCost,
     });
     profit += sim.netProfit * line.quantity;
     totalDesi += (p.desi ?? 1) * line.quantity;
@@ -127,7 +128,12 @@ export function computeOrderProfit(
       cargoCategory,
       totalDesi || 1
     );
-    if (cargoRule) profit -= cargoRule.cargoCost;
+    if (cargoRule) {
+      // Kargoyu düş + içindeki indirilebilir KDV'yi iade et (kâr, KDV'siz kargoyu görür) —
+      // satır kârı zaten komisyon/gider/filament KDV iadesini içeriyor; kargo gönderiye bir kez burada.
+      profit -= cargoRule.cargoCost;
+      profit += cargoRule.cargoCost * (vatRate > 0 ? vatRate / (100 + vatRate) : 0);
+    }
   }
 
   const distinctCount = order.items.length;

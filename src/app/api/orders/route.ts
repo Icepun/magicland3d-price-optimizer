@@ -183,6 +183,7 @@ interface Matched {
   imageUrl: string | null;
   productionCost: number;
   packagingCost: number;
+  filamentCost: number; // KDV iadesine giren malzeme payı
   categoryName: string;
   desi: number | null;
   commissionRate: number | null;
@@ -494,6 +495,7 @@ export async function GET() {
         imageUrl: p.imageUrl,
         productionCost: resolved?.productionCost ?? 0,
         packagingCost: resolved?.packagingCost ?? 0,
+        filamentCost: resolved?.filamentCost ?? 0,
         categoryName: p.categoryName,
         desi: p.desi,
         commissionRate: p.commissionRate,
@@ -534,6 +536,7 @@ export async function GET() {
       expenseRules: filterRulesByPlatform(expenseRules, platform),
       vatRate,
       cargoCostOverride: 0,
+      vatableProductCost: m.filamentCost,
     });
     return sim.netProfit * qty;
   }
@@ -629,7 +632,12 @@ export async function GET() {
         cargoCategory,
         totalDesi || 1
       );
-      if (cargoRule) orderProfit -= cargoRule.cargoCost;
+      if (cargoRule) {
+        // Kargo bedelini düş + içindeki indirilebilir KDV'yi iade et (kâr, KDV'siz kargoyu görür) —
+        // satır kârı zaten komisyon/gider/filament KDV iadesini içeriyor; kargo gönderiye bir kez burada.
+        orderProfit -= cargoRule.cargoCost;
+        orderProfit += cargoRule.cargoCost * (vatRate > 0 ? vatRate / (100 + vatRate) : 0);
+      }
     }
 
     orders.push({

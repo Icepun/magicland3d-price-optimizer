@@ -138,6 +138,7 @@ export async function GET(req: NextRequest) {
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;
+    const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
 
     // Her listing için ayrı kâr hesabı (platform-specific override'lar dahil)
     const platformSummaries: PlatformSummary[] = product.listings
@@ -178,6 +179,7 @@ export async function GET(req: NextRequest) {
             (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
           // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden (fiyattan otomatik).
           minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+          vatableProductCost: filamentMatCost,
         });
 
         // Trendyol/Hepsiburada'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi)
@@ -212,6 +214,7 @@ export async function GET(req: NextRequest) {
         cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
         expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
         vatRate,
+        vatableProductCost: filamentMatCost,
       });
       currentNetProfit = sim.netProfit;
       currentProfitMargin = sim.profitMargin;

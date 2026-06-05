@@ -78,6 +78,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     commissionRateOverride,
     commissionFixedOverride,
     cargoCostOverride,
+    vatableProductCost = 0,
     minOrderQty,
   } = input;
 
@@ -140,11 +141,18 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   const oPackaging = packagingCost * qty;
   const oCommission = commissionCost * qty;
   const oVariable = variableExpenses * qty;
+  const oFilament = (vatableProductCost || 0) * qty; // KDV'li malzeme payı (per-unit × qty)
   const orderRevenueExVat = salePriceExVat * qty;
   const totalCost = oProduct + oPackaging + oCommission + cargoCost + fixedExpenses + oVariable;
 
-  // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler
-  const netProfit = orderRevenueExVat - totalCost;
+  // İNDİRİLECEK KDV İADESİ: komisyon + kargo + gider + filament malzemesinin İÇİNDEKİ KDV,
+  // devlete ödenecek (hesaplanan) KDV'den düşülür → kâra ARTI yansır (KDV mükellefi). vatRate=0 → 0.
+  const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  const inputVatCredit =
+    (oCommission + cargoCost + fixedExpenses + oVariable + oFilament) * vatFactor;
+
+  // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler + indirilecek KDV iadesi
+  const netProfit = orderRevenueExVat - totalCost + inputVatCredit;
   const profitMargin = orderRevenueExVat > 0 ? netProfit / orderRevenueExVat : 0;
 
   return {
@@ -161,6 +169,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     fixedExpenses,
     variableExpenses: oVariable,
     totalCost,
+    inputVatCredit,
     netProfit,
     profitMargin,
     minOrderQty: qty,

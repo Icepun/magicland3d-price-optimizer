@@ -45,6 +45,7 @@ export function computePriceLab(
   );
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
+  const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
   if (productCost <= 0) return { hasCost: false, targets: [], campaign: null };
 
   const vatRate = Number(settings.vatRate ?? 0);
@@ -66,6 +67,7 @@ export function computePriceLab(
         listing.cargoCost ??
         (listing.platform === "shopify" && salePrice < 150 ? 0 : undefined),
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
+      vatableProductCost: filamentMatCost,
     });
 
   // Marj fiyata göre monoton artar → ikili arama

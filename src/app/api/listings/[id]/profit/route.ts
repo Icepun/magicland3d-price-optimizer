@@ -76,6 +76,7 @@ export async function GET(
     vatRate,
     ...resolveListingCommissionOverride(listing, settingsMap),
     cargoCostOverride: listing.cargoCost ?? undefined,
+    vatableProductCost: resolved.filamentCost,
   });
 
   return NextResponse.json({ listing, result, missingCost: false });
