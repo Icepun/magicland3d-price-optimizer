@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useMemo, memo, useCallback } from "react";
+import { use, useState, useEffect, useMemo, memo, useCallback, useDeferredValue } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchProductsInCache } from "@/lib/products-cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +24,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
-import { computeClientPricing, type ProfitPreview } from "@/lib/client-pricing";
+import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/lib/client-pricing";
 
 interface FilamentType {
   id: string;
@@ -412,9 +412,10 @@ export default function ProductDetailPage({
   // Real-time kâr önizlemesi + Fiyat Lab — KAYDETMEDEN, İSTEMCİDE hesaplanır (ana sürece okuma YOK
   // → donma yok). costValues (CostEditor'dan 250ms debounce'lu), ürün veya kurallar değişince anında
   // yeniden hesaplanır. Sunucu profit-preview/price-lab route'larıyla BİREBİR aynı @/core mantığı.
-  const pricing = useMemo(() => {
-    if (!product || !costValues || !commissionRules || !cargoRules || !expenseRules) return null;
-    return computeClientPricing({
+  // ÖNİZLEME — UCUZ (~0.4ms): her maliyet değişiminde CANLI hesaplanır → platform kartları anında.
+  const preview: ProfitPreview | undefined = useMemo(() => {
+    if (!product || !costValues || !commissionRules || !cargoRules || !expenseRules) return undefined;
+    return computeProfitPreview({
       product,
       cost: costValues,
       filaments,
@@ -424,8 +425,23 @@ export default function ProductDetailPage({
       expenseRules,
     });
   }, [product, costValues, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
-  const preview: ProfitPreview | undefined = pricing?.preview;
-  const priceLab = pricing?.priceLab;
+
+  // FİYAT LAB — PAHALI (~36ms, hedef-marj ikili araması): ERTELENMİŞ maliyetle hesaplanır. Böylece
+  // poşet/naylon dropdown'larına tıklamak/yazı yazmak bu hesabı BEKLEMEZ (donma yok); kullanıcı
+  // durunca lab boşta yetişir. (useDeferredValue: ara değerleri atlar, düşük öncelikte çalışır.)
+  const deferredCost = useDeferredValue(costValues);
+  const priceLab = useMemo(() => {
+    if (!product || !deferredCost || !commissionRules || !cargoRules || !expenseRules) return undefined;
+    return computePriceLab({
+      product,
+      cost: deferredCost,
+      filaments,
+      settings: globalSettings,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+    });
+  }, [product, deferredCost, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
 
   // Maliyet OTOMATİK kaydedilir (costValues değişince 800ms sonra) — optimistic, "Kaydet" butonu yok.
   // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).

@@ -15,21 +15,18 @@ import type {
 /**
  * İSTEMCİ-TARAFI kâr hesabı (ürün detay sayfası canlı önizleme + Fiyat Lab).
  *
- * NEDEN: Bu uygulamada Next.js sunucusu Electron ANA sürecinde çalışır (pencereyi süren
- * süreçle AYNI). Maliyet inputu her değişince `/api/.../profit-preview` ve (kaydetten sonra)
- * `/api/.../price-lab` çağrılıyordu; her biri ana süreçte 6+ libSQL sorgusu + (price-lab)
- * ~530 simülasyon yapıyordu → ana sürecin olay döngüsü kilitlenip pencere donuyordu
- * ("maliyette değer değiştirince 1-2 sn donma").
+ * NEDEN: Next.js sunucusu Electron ANA sürecinde çalışır; maliyet her değişimde sunucuya gitmek
+ * pencereyi donduruyordu. Aynı saf `@/core` fonksiyonlarıyla hesabı BURADA (tarayıcıda) yaparız.
  *
- * ÇÖZÜM: Aynı saf `@/core` fonksiyonlarıyla hesabı BURADA (tarayıcıda) yap. Kurallar bir kez
- * çekilip cache'lenir; maliyet değişince ana sürece HİÇBİR otomatik okuma gitmez (yalnız
- * gerçek kayıt PATCH'i kalır). simulatePrice mikro-saniyelik olduğundan tarayıcı da donmaz.
- *
- * Sunucu route'larıyla (profit-preview + price-lab) BİREBİR aynı mantık → sonuç farkı YOK.
+ * PERF: Önizleme UCUZ (platform başına 1 simülasyon) → her değişimde çalışır. Fiyat Lab PAHALI
+ * (hedef-marj ikili araması) → ayrı `computePriceLab` ile ertelenebilir. Kurallar platform başına
+ * BİR KEZ süzülür (eskiden her simülasyonda yeniden süzülüyordu → 45 kurallı veride ~68ms).
  */
 
 const MARGINS = [20, 30, 40, 50];
 const DISCOUNTS = [10, 15, 20, 25, 30];
+// İkili arama adım sayısı. 24 adım → [0.5, 100000] aralığında ~0.006₺ hassasiyet (fazlasıyla yeter).
+const SEARCH_STEPS = 24;
 
 export interface PricingListing {
   id: string;
@@ -110,15 +107,30 @@ export interface ClientPricingInput {
   expenseRules: ExpenseRuleInput[];
 }
 
-export function computeClientPricing(input: ClientPricingInput): {
-  preview: ProfitPreview;
-  priceLab: PriceLab;
-} {
+/** Hem önizleme hem Fiyat Lab'ın paylaştığı çözülmüş taban — kurallar platform başına TEK kez süzülür. */
+interface PricingBase {
+  product: PricingProduct;
+  settings: Record<string, string | undefined>;
+  vatRate: number;
+  productCost: number;
+  packagingCost: number;
+  totalCost: number;
+  hasCost: boolean;
+  filamentMatCost: number;
+  activeListings: PricingListing[];
+  productRules: CommissionRuleInput[];
+  desi: number;
+  /** Platform → o platforma süzülmüş kargo/gider kuralları (yeniden-süzme yok). */
+  cargoByPlatform: Record<string, CargoRuleInput[]>;
+  expenseByPlatform: Record<string, ExpenseRuleInput[]>;
+}
+
+function buildBase(input: ClientPricingInput): PricingBase {
   const { product, cost, filaments, settings } = input;
   const vatRate = Number(settings.vatRate ?? 0);
 
-  // Sunucu route'ları kuralları `where: { isActive: true }` ile çeker; liste endpoint'i
-  // ise HEPSİNİ döner → birebir parite için BURADA süz.
+  // Sunucu route'ları kuralları isActive:true ile çeker; liste endpoint'i hepsini döner → birebir
+  // parite için BURADA süz (bir kez).
   const commissionRules = (input.commissionRules ?? []).filter((r) => r.isActive);
   const cargoRules = (input.cargoRules ?? []).filter((r) => r.isActive);
   const expenseRules = (input.expenseRules ?? []).filter((r) => r.isActive);
@@ -143,145 +155,171 @@ export function computeClientPricing(input: ClientPricingInput): {
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
   const totalCost = resolved?.totalCost ?? 0;
-  const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
-  const hasCost = totalCost > 0;
+  const filamentMatCost = resolved?.filamentCost ?? 0;
 
   const activeListings = product.listings.filter((l) => l.isActive);
   const productRules = withProductCommissionRule(product, commissionRules);
   const desi = cost.desi ?? product.desi ?? 1;
 
-  // ── Canlı önizleme (profit-preview route ile birebir) ──
-  const platforms = activeListings.map((listing) => {
-    if (!hasCost) {
-      return {
-        platform: listing.platform,
-        listingId: listing.id,
-        salePrice: listing.salePrice,
-        result: null,
-      };
+  // Platform başına BİR KEZ süz (önizleme + tüm ikili-arama adımları bunu paylaşır).
+  const cargoByPlatform: Record<string, CargoRuleInput[]> = {};
+  const expenseByPlatform: Record<string, ExpenseRuleInput[]> = {};
+  const platforms = new Set<string>(["shopify", ...activeListings.map((l) => l.platform)]);
+  for (const pf of platforms) {
+    cargoByPlatform[pf] = filterCargoRulesByPlatform(cargoRules, pf);
+    expenseByPlatform[pf] = filterRulesByPlatform(expenseRules, pf);
+  }
+
+  return {
+    product,
+    settings,
+    vatRate,
+    productCost,
+    packagingCost,
+    totalCost,
+    hasCost: totalCost > 0,
+    filamentMatCost,
+    activeListings,
+    productRules,
+    desi,
+    cargoByPlatform,
+    expenseByPlatform,
+  };
+}
+
+function previewFromBase(b: PricingBase): ProfitPreview {
+  const platforms = b.activeListings.map((listing) => {
+    if (!b.hasCost) {
+      return { platform: listing.platform, listingId: listing.id, salePrice: listing.salePrice, result: null };
     }
     const result = simulatePrice({
       salePrice: listing.salePrice,
-      productCost,
-      packagingCost,
-      categoryName: product.categoryName,
-      desi,
-      commissionRules: productRules,
-      cargoRules: filterCargoRulesByPlatform(cargoRules, listing.platform),
-      expenseRules: filterRulesByPlatform(expenseRules, listing.platform),
-      vatRate,
-      ...resolveListingCommissionOverride(listing, settings),
+      productCost: b.productCost,
+      packagingCost: b.packagingCost,
+      categoryName: b.product.categoryName,
+      desi: b.desi,
+      commissionRules: b.productRules,
+      cargoRules: b.cargoByPlatform[listing.platform] ?? [],
+      expenseRules: b.expenseByPlatform[listing.platform] ?? [],
+      vatRate: b.vatRate,
+      ...resolveListingCommissionOverride(listing, b.settings),
       // Shopify sepet min 150₺ → <150₺ üründe kargo paylaşılır → katma (0).
       cargoCostOverride:
         listing.cargoCost ??
         (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
-      vatableProductCost: filamentMatCost,
+      vatableProductCost: b.filamentMatCost,
     });
-    return {
-      platform: listing.platform,
-      listingId: listing.id,
-      salePrice: listing.salePrice,
-      result,
-    };
+    return { platform: listing.platform, listingId: listing.id, salePrice: listing.salePrice, result };
   });
-  const preview: ProfitPreview = {
-    productionCost: productCost,
-    packagingCost,
-    totalCost,
-    hasCost,
+  return {
+    productionCost: b.productCost,
+    packagingCost: b.packagingCost,
+    totalCost: b.totalCost,
+    hasCost: b.hasCost,
     platforms,
   };
+}
 
-  // ── Fiyat Lab (price-lab route ile birebir) ──
-  let priceLab: PriceLab;
-  if (!hasCost) {
-    priceLab = { hasCost: false };
-  } else {
-    const simFor = (
-      platform: string,
-      listing: PricingListing | null,
-      salePrice: number,
-      discountBuffer = 0
-    ) =>
-      simulatePrice({
-        salePrice,
-        productCost,
-        packagingCost,
-        categoryName: product.categoryName,
-        desi,
-        commissionRules: productRules,
-        cargoRules: filterCargoRulesByPlatform(cargoRules, platform),
-        expenseRules: filterRulesByPlatform(expenseRules, platform),
-        vatRate,
-        discountBuffer,
-        ...resolveListingCommissionOverride(
-          listing
-            ? {
-                platform,
-                commissionRate: listing.commissionRate,
-                commissionFixed: listing.commissionFixed,
-              }
-            : { platform, commissionRate: null, commissionFixed: null },
-          settings
-        ),
-        cargoCostOverride: listing?.cargoCost ?? undefined,
-        vatableProductCost: filamentMatCost,
-      });
+function priceLabFromBase(b: PricingBase): PriceLab {
+  if (!b.hasCost) return { hasCost: false };
 
-    // Hedef marj → fiyat (ikili arama; marj fiyatla artar)
-    const priceForMargin = (
-      platform: string,
-      listing: PricingListing | null,
-      targetMargin: number
-    ): number | null => {
-      const margAt = (p: number) => simFor(platform, listing, p).profitMargin;
-      let hi = 100000;
-      if (margAt(hi) < targetMargin) return null; // hiçbir fiyatta ulaşılamıyor
-      let lo = 0.5;
-      for (let i = 0; i < 44; i++) {
-        const mid = (lo + hi) / 2;
-        if (margAt(mid) >= targetMargin) hi = mid;
-        else lo = mid;
-      }
-      return hi;
-    };
-
-    const platformNames = activeListings.map((l) => l.platform);
-    const targetPlatforms = platformNames.length > 0 ? platformNames : ["shopify"];
-    const targets = targetPlatforms.map((platform) => {
-      const listing = activeListings.find((l) => l.platform === platform) ?? null;
-      const currentPrice = listing?.salePrice ?? product.currentSalePrice;
-      return {
-        platform,
-        currentPrice,
-        currentMargin: simFor(platform, listing, currentPrice).profitMargin,
-        rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100) })),
-      };
+  const simFor = (
+    platform: string,
+    listing: PricingListing | null,
+    salePrice: number,
+    discountBuffer = 0
+  ) =>
+    simulatePrice({
+      salePrice,
+      productCost: b.productCost,
+      packagingCost: b.packagingCost,
+      categoryName: b.product.categoryName,
+      desi: b.desi,
+      commissionRules: b.productRules,
+      cargoRules: b.cargoByPlatform[platform] ?? [],
+      expenseRules: b.expenseByPlatform[platform] ?? [],
+      vatRate: b.vatRate,
+      discountBuffer,
+      ...resolveListingCommissionOverride(
+        listing
+          ? { platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }
+          : { platform, commissionRate: null, commissionFixed: null },
+        b.settings
+      ),
+      cargoCostOverride: listing?.cargoCost ?? undefined,
+      vatableProductCost: b.filamentMatCost,
     });
 
-    const shopifyListing = activeListings.find((l) => l.platform === "shopify") ?? null;
-    const shopifyPrice =
-      shopifyListing?.salePrice ??
-      (platformNames.includes("shopify") ? product.currentSalePrice : null);
-    const campaign =
-      shopifyPrice != null
-        ? {
-            currentPrice: shopifyPrice,
-            rows: DISCOUNTS.map((d) => {
-              const sim = simFor("shopify", shopifyListing, shopifyPrice, d);
-              return {
-                discount: d,
-                effectivePrice: shopifyPrice * (1 - d / 100),
-                profit: sim.netProfit,
-                margin: sim.profitMargin,
-              };
-            }),
-          }
-        : null;
+  // Hedef marj → fiyat (ikili arama; marj fiyatla artar)
+  const priceForMargin = (
+    platform: string,
+    listing: PricingListing | null,
+    targetMargin: number
+  ): number | null => {
+    const margAt = (p: number) => simFor(platform, listing, p).profitMargin;
+    let hi = 100000;
+    if (margAt(hi) < targetMargin) return null; // hiçbir fiyatta ulaşılamıyor
+    let lo = 0.5;
+    for (let i = 0; i < SEARCH_STEPS; i++) {
+      const mid = (lo + hi) / 2;
+      if (margAt(mid) >= targetMargin) hi = mid;
+      else lo = mid;
+    }
+    return hi;
+  };
 
-    priceLab = { hasCost: true, productCost, packagingCost, targets, campaign };
-  }
+  const platformNames = b.activeListings.map((l) => l.platform);
+  const targetPlatforms = platformNames.length > 0 ? platformNames : ["shopify"];
+  const targets = targetPlatforms.map((platform) => {
+    const listing = b.activeListings.find((l) => l.platform === platform) ?? null;
+    const currentPrice = listing?.salePrice ?? b.product.currentSalePrice;
+    return {
+      platform,
+      currentPrice,
+      currentMargin: simFor(platform, listing, currentPrice).profitMargin,
+      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100) })),
+    };
+  });
 
-  return { preview, priceLab };
+  const shopifyListing = b.activeListings.find((l) => l.platform === "shopify") ?? null;
+  const shopifyPrice =
+    shopifyListing?.salePrice ??
+    (platformNames.includes("shopify") ? b.product.currentSalePrice : null);
+  const campaign =
+    shopifyPrice != null
+      ? {
+          currentPrice: shopifyPrice,
+          rows: DISCOUNTS.map((d) => {
+            const sim = simFor("shopify", shopifyListing, shopifyPrice, d);
+            return {
+              discount: d,
+              effectivePrice: shopifyPrice * (1 - d / 100),
+              profit: sim.netProfit,
+              margin: sim.profitMargin,
+            };
+          }),
+        }
+      : null;
+
+  return { hasCost: true, productCost: b.productCost, packagingCost: b.packagingCost, targets, campaign };
+}
+
+/** Yalnız önizleme (UCUZ — her maliyet değişiminde çalıştırılabilir). */
+export function computeProfitPreview(input: ClientPricingInput): ProfitPreview {
+  return previewFromBase(buildBase(input));
+}
+
+/** Yalnız Fiyat Lab (PAHALI — ertelenebilir / debounce'lanabilir). */
+export function computePriceLab(input: ClientPricingInput): PriceLab {
+  return priceLabFromBase(buildBase(input));
+}
+
+/** İkisi birden (taban tek kez çözülür). */
+export function computeClientPricing(input: ClientPricingInput): {
+  preview: ProfitPreview;
+  priceLab: PriceLab;
+} {
+  const base = buildBase(input);
+  return { preview: previewFromBase(base), priceLab: priceLabFromBase(base) };
 }
