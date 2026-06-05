@@ -161,14 +161,17 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
   const [uploadingName, setUploadingName] = useState("");
 
   const del = useMutation({
-    mutationFn: (fileId: string) => fetch(`/api/models/${fileId}`, { method: "DELETE" }).then((r) => r.json()),
-    // OPTIMISTIC: satırı cache'ten çıkar → refetch YOK (yazma-sonrası-okuma donması yok).
+    // "Tüm varyantlara uygula" açıksa ?allVariants=1 → sunucu dosyayı TÜM varyantlardan siler.
+    mutationFn: (fileId: string) =>
+      fetch(`/api/models/${fileId}${applyToVariants ? "?allVariants=1" : ""}`, { method: "DELETE" }).then((r) => r.json()),
+    // OPTIMISTIC: satırı cache'ten çıkar → refetch YOK (yazma-sonrası-okuma donması yok). Diğer
+    // varyantların listesi onChanged (removeQueries) ile sonraki ziyarette tazelenir.
     onSuccess: (_data, fileId) => {
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? old.filter((f) => f.id !== fileId) : old
       );
       onChanged();
-      toast.success("Parça silindi");
+      toast.success(applyToVariants ? "Parça tüm varyantlardan silindi" : "Parça silindi");
     },
     onError: () => toast.error("Silinemedi"),
   });

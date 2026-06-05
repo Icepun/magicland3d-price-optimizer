@@ -13,9 +13,10 @@ let schemaReady: Promise<void> | null = null;
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // v25: ProductModelFile.r2Key — model dosyaları Cloudflare R2'de (çok-cihaz baskı, yerel disk boşaltma).
 // v26: PushToken tablosu — baskı-bitti mobil push (Expo) bildirimleri.
+// v27: cleanupLocalModelFiles — kullanıcı R2'ye geçti → eski YEREL (r2Key'siz) model satırlarını bir kez temizle.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "26";
+const CURRENT_SCHEMA_VERSION = "27";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -125,6 +126,34 @@ async function cleanupPdfCommissionRules() {
   await prisma.appSetting.upsert({
     where: { key: cleanupKey },
     create: { key: cleanupKey, value: new Date().toISOString() },
+    update: { value: new Date().toISOString() },
+  });
+}
+
+/**
+ * v27 cleanup: kullanıcı model dosyalarını buluta (R2) taşıdı → eski YEREL satırları (r2Key yok) bir kez
+ * temizle; R2 satırlarına (r2Key dolu) DOKUNMA. Disk dosyalarını da best-effort sil (yer aç). Satırlar
+ * Turso'da paylaşık → bir cihazda silinince tüm cihazlardan gider (AppSetting flag tekrarı önler).
+ */
+async function cleanupLocalModelFiles() {
+  if (!(await tableExists("ProductModelFile"))) return;
+
+  const flag = "cleanupLocalModelFilesAt";
+  const existing = await prisma.appSetting.findUnique({ where: { key: flag } });
+  if (existing) return;
+
+  const localWhere = { OR: [{ r2Key: null }, { r2Key: "" }] };
+  // Silmeden ÖNCE disk yollarını topla (benzersiz; paylaşık dosya birden çok satırda olabilir).
+  const locals = await prisma.productModelFile.findMany({ where: localWhere, select: { storedPath: true } });
+  await prisma.productModelFile.deleteMany({ where: localWhere });
+  const paths = new Set(locals.map((l) => l.storedPath).filter((p): p is string => !!p));
+  for (const p of paths) {
+    try { fs.unlinkSync(p); } catch { /* yoksa/erişilemezse boşver */ }
+  }
+
+  await prisma.appSetting.upsert({
+    where: { key: flag },
+    create: { key: flag, value: new Date().toISOString() },
     update: { value: new Date().toISOString() },
   });
 }
@@ -634,6 +663,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
     await migrateParentVariantsToGroups();
+    await cleanupLocalModelFiles();
 
     // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner
     await prisma.$executeRawUnsafe(

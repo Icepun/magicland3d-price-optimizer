@@ -24,16 +24,27 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
+    // ?allVariants=1 → "Tüm varyantlara uygula" AÇIKKEN silme: aynı dosyayı (ortak r2Key/storedPath)
+    // paylaşan TÜM varyant satırlarını sil (kullanıcı kutucuk seçiliyken hepsinden gitsin bekliyor).
+    const allVariants = new URL(req.url).searchParams.get("allVariants") === "1";
     const mf = await prisma.productModelFile.findUnique({ where: { id } });
-    await prisma.productModelFile.delete({ where: { id } });
-    // Dosyayı YALNIZCA son referans gidince sil. "Tüm varyantlara uygula" ile aynı dosya
-    // (r2Key veya storedPath) birden çok satırda paylaşılıyor olabilir → bir varyantın satırını
-    // silmek ortak dosyayı silmemeli (diğer varyantlar hâlâ basabilmeli).
-    if (mf?.r2Key) {
+    if (!mf) return NextResponse.json({ ok: true });
+
+    if (allVariants && mf.r2Key) {
+      await prisma.productModelFile.deleteMany({ where: { r2Key: mf.r2Key } });
+    } else if (allVariants && mf.storedPath) {
+      // storedPath="" R2 satırlarının ortak değeri → onunla deleteMany YAPMA (yalnız gerçek yerel yol).
+      await prisma.productModelFile.deleteMany({ where: { storedPath: mf.storedPath } });
+    } else {
+      await prisma.productModelFile.delete({ where: { id } });
+    }
+
+    // Dosyayı (R2 objesi / disk) YALNIZCA hiç referans kalmayınca sil.
+    if (mf.r2Key) {
       const stillUsed = await prisma.productModelFile.count({ where: { r2Key: mf.r2Key } });
       if (stillUsed === 0) {
         const cfg = await getR2Config();
@@ -41,7 +52,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
           try { await deleteObject(mf.r2Key, cfg); } catch { /* R2 silme kritik değil */ }
         }
       }
-    } else if (mf?.storedPath) {
+    } else if (mf.storedPath) {
       const stillUsed = await prisma.productModelFile.count({ where: { storedPath: mf.storedPath } });
       if (stillUsed === 0) {
         try { fs.unlinkSync(mf.storedPath); } catch { /* yoksa boşver */ }
