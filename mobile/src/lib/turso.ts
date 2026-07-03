@@ -73,14 +73,26 @@ async function pipeline(stmts: Stmt[]): Promise<ExecuteResult[]> {
   }));
   requests.push({ type: "close" }); // Hrana v2: stmt'siz geçerli kapatma isteği
 
-  const res = await fetch(`${URL}/v2/pipeline`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ requests }),
-  });
+  // 12sn timeout: zayıf hücresel ağda takılan istek iOS varsayılanıyla ~60sn askıda kalıyordu
+  // (pull-to-refresh spinner'ı kilitleniyordu). react-query retry:1 kısa denemeyle telafi eder.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12_000);
+  let res: Response;
+  try {
+    res = await fetch(`${URL}/v2/pipeline`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ requests }),
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    throw ctrl.signal.aborted ? new Error("Turso zaman aşımı (12sn) — bağlantıyı kontrol et") : e;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     throw new Error(`Turso HTTP ${res.status}: ${await res.text().catch(() => "")}`);

@@ -19,12 +19,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
 import { thumbUrl } from "@/lib/image";
 import { getPriceHistory, setProductStock, setProductAlias, type PriceChange } from "@/lib/db/products";
-import {
-  getCommissionRules,
-  getCargoRules,
-  getExpenseRules,
-  getSettingsMap,
-} from "@/lib/db/rules";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
 import { computePriceLab } from "@/lib/price-lab";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
@@ -40,14 +35,8 @@ export default function ProductDetailScreen() {
     queryFn: () => getProductDetail(id),
   });
 
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
 
   const { data: settings } = useQuery({
     queryKey: ["settings"],

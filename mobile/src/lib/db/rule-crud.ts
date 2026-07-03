@@ -1,4 +1,4 @@
-import { execute, query } from "@/lib/turso";
+import { batch, execute, query } from "@/lib/turso";
 
 function newId(): string {
   return (
@@ -72,6 +72,17 @@ export async function updateSetting(key: string, value: string): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     [key, value]
   );
+}
+
+/** Birden çok AppSetting'i TEK round-trip'te yaz (batch) — ayarlar ekranı 6 alanı
+ *  eskiden 6 ardışık upsert ile kaydediyordu (~300-1200ms + yarıda kalma riski). */
+export async function updateSettings(entries: Record<string, string>): Promise<void> {
+  const stmts = Object.entries(entries).map(([key, value]) => ({
+    sql: `INSERT INTO AppSetting (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    args: [key, value],
+  }));
+  if (stmts.length > 0) await batch(stmts);
 }
 
 // ===================== KOMİSYON KURALLARI =====================

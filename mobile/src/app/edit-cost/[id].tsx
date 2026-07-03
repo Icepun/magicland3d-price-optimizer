@@ -17,7 +17,7 @@ import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
-import { getFilamentTypes, saveProductCost, setProductDesi, type CostInput } from "@/lib/db/cost-save";
+import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
@@ -165,22 +165,18 @@ export default function EditCostScreen() {
         };
 
   const save = useMutation({
-    mutationFn: async () => {
-      const input = buildInput();
-      await saveProductCost(id, input);
-      await setProductDesi(id, parseFloat(desi) || null);
-      // "Tüm varyantlara uygula" açıksa aynı maliyeti grubun diğer üyelerine de yaz (desi hariç → fiziksel boyut varyanta özel).
-      if (applyAll && variantGroup) {
-        for (const m of variantGroup.members) {
-          if (m.id !== id) await saveProductCost(m.id, input);
-        }
-      }
-    },
+    // TEK batch round-trip: maliyet + desi + varyant kopyaları (eski hali 2..(2+N) ardışık çağrıydı;
+    // 700ms auto-save ile birleşince her yazma molası ~300ms-1.2sn tutuyordu).
+    mutationFn: () =>
+      saveProductCostBatch(
+        id,
+        buildInput(),
+        parseFloat(desi) || null,
+        // "Tüm varyantlara uygula" açıksa aynı maliyeti grubun diğer üyelerine de yaz (desi hariç → fiziksel boyut varyanta özel).
+        applyAll && variantGroup ? variantGroup.members.map((m) => m.id) : []
+      ),
     onSuccess: () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      qc.invalidateQueries({ queryKey: ["product"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
       setStatus("saved");
     },
   });
@@ -193,8 +189,17 @@ export default function EditCostScreen() {
       save.mutate(undefined, { onSuccess: () => { baselineRef.current = formKey; } });
     }, 700);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formKey, product]);
+  }, [formKey, product, save.mutate]);
+
+  // Ağır listeleri EKRANDAN ÇIKARKEN bir kez tazele (eski hali: her 700ms auto-save'de
+  // 424 ürünlük dashboard-data yeniden çekiliyordu — yazma molası başına boş yere).
+  useEffect(() => {
+    return () => {
+      qc.invalidateQueries({ queryKey: ["product"] });
+      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
+      qc.invalidateQueries({ queryKey: ["match-products"] });
+    };
+  }, [qc]);
 
   // Çıkışta bekleyen değişikliği hemen kaydet (debounce dolmadan geri basılırsa kaybolmasın).
   const handleBack = () => {

@@ -1,4 +1,5 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
+import { fetchT } from "@/lib/api/http";
 import { orderWindowCutoff } from "@/lib/api/window";
 
 const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
@@ -11,7 +12,7 @@ let cached: { token: string; exp: number } | null = null;
 /** client_credentials OAuth → admin token (read_orders'lı). 24sa cache. */
 async function getAdminToken(): Promise<string> {
   if (cached && cached.exp > Date.now()) return cached.token;
-  const res = await fetch(`https://${SHOP}/admin/oauth/access_token`, {
+  const res = await fetchT(`https://${SHOP}/admin/oauth/access_token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -81,7 +82,7 @@ export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
   const token = await getAdminToken();
   // Masaüstü ShopifyClient.listOrders ile birebir: created_at:>=<ISO> filtresi (sinceDays=30).
   const sinceQuery = `created_at:>=${new Date(orderWindowCutoff()).toISOString()}`;
-  const res = await fetch(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
+  const res = await fetchT(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
     method: "POST",
     headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
     body: JSON.stringify({ query: ORDERS_QUERY, variables: { first: limit, query: sinceQuery } }),

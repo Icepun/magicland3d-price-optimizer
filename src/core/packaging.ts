@@ -64,8 +64,25 @@ function num(value: unknown, fallback = 0): number {
 
 /**
  * AppSetting key-value map'inden paketleme ayarlarını parse eder.
+ *
+ * MEMO: settings nesnesi kimliği değişmedikçe aynı sonuç döner. resolveProductCost her ürün için
+ * bunu çağırır → 400+ ürünlük toplu kâr hesabında JSON.parse ürün başına tekrarlanıyordu
+ * (mobilde tek geçişte 400+ parse). Aynı settings referansı = tek parse.
  */
+let memoSettings: Record<string, string | undefined> | null = null;
+let memoResult: PackagingSettings | null = null;
+
 export function parsePackagingSettings(
+  settings: Record<string, string | undefined>
+): PackagingSettings {
+  if (memoSettings === settings && memoResult) return memoResult;
+  const result = parsePackagingSettingsUncached(settings);
+  memoSettings = settings;
+  memoResult = result;
+  return result;
+}
+
+function parsePackagingSettingsUncached(
   settings: Record<string, string | undefined>
 ): PackagingSettings {
   let options: PackagingOption[] = DEFAULT_PACKAGING_OPTIONS;

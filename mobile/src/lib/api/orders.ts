@@ -29,6 +29,11 @@ export interface OrdersResult {
   errors: string[];
 }
 
+/** ["orders"] sorgusunun ortak tazelik süresi — TÜM ekranlar aynı değeri kullanır.
+ *  (Eskiden Raporlar 60sn, diğerleri 5dk idi → Raporlar'a her geçiş tam platform
+ *  boru hattını beklenmedik şekilde tetikliyordu.) */
+export const ORDERS_STALE_MS = 60_000;
+
 /** Shopify + Trendyol + Hepsiburada siparişlerini paralel çek, birleştir, tarihe göre sırala. */
 export async function getAllOrders(): Promise<OrdersResult> {
   const [sh, ty, hb] = await Promise.allSettled([

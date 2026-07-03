@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
 import { getSettingsMap } from "@/lib/db/rules";
-import { updateSetting } from "@/lib/db/rule-crud";
+import { updateSettings } from "@/lib/db/rule-crud";
 import { ML } from "@/theme/colors";
 
 const FIELDS: { key: string; label: string; fallback: string }[] = [
@@ -32,16 +32,12 @@ export default function SettingsEditScreen() {
   }, [settings]);
 
   const save = useMutation({
-    mutationFn: async () => {
-      for (const f of FIELDS) {
-        await updateSetting(f.key, vals[f.key] ?? f.fallback);
-      }
-    },
+    // Tek batch round-trip (eski hali 6 ardışık upsert ~300-1200ms + yarıda kalma riskiydi).
+    mutationFn: () =>
+      updateSettings(Object.fromEntries(FIELDS.map((f) => [f.key, vals[f.key] ?? f.fallback]))),
     onSuccess: () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       qc.invalidateQueries({ queryKey: ["settings"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-      qc.invalidateQueries({ queryKey: ["product"] });
       router.back();
     },
   });

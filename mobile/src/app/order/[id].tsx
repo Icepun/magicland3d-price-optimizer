@@ -8,8 +8,8 @@ import { ScreenHeader } from "@/components/form";
 import { thumbUrl } from "@/lib/image";
 import { statusInfo, type OrdersResult, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
-import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
-import { buildProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
+import { getProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORM_LABEL } from "@/lib/platforms";
@@ -30,14 +30,8 @@ export default function OrderDetailScreen() {
 
   // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   if (!order) {
@@ -54,7 +48,7 @@ export default function OrderDetailScreen() {
   const accent = ML[order.platform];
   const st = statusInfo(order);
   // Tek harita: hem kâr hesabı hem satır eşleştirme aynı pm'i kullanır (çifte inşa + çelişki yok).
-  const pm = buildProductMap(products ?? []);
+  const pm = getProductMap(products ?? []);
   const profit =
     products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
   const margin =

@@ -1,4 +1,4 @@
-import { computeProductProfit, type Rules } from "@/lib/profit";
+import { computeProductProfitMemo, type Rules } from "@/lib/profit";
 import type { ProductDetail } from "@/lib/db/product-detail";
 import { PLATFORMS, type Platform } from "@/lib/platforms";
 
@@ -36,7 +36,7 @@ export function computeDashboard(
 
   for (const p of products) {
     if (p.stock <= 0 && !p.madeToOrder) outOfStock++;
-    const profit = computeProductProfit(p, rules, settings);
+    const profit = computeProductProfitMemo(p, rules, settings);
     if (!profit.hasCost) {
       missingCost++;
       continue;

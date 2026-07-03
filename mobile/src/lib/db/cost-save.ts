@@ -1,4 +1,4 @@
-import { execute, query } from "@/lib/turso";
+import { batch, execute, query } from "@/lib/turso";
 
 export interface FilamentType {
   id: string;
@@ -76,5 +76,54 @@ export async function setProductDesi(productId: string, desi: number | null): Pr
     desi,
     new Date().toISOString(),
     productId,
+  ]);
+}
+
+/** Maliyet + desi + (opsiyonel) varyant kopyalarını TEK round-trip'te yaz.
+ *  edit-cost otomatik kaydetmesi eskiden 2..(2+N) ARDIŞIK çağrı yapıyordu
+ *  (5 üyeli grupta her form değişikliği ~6 round-trip). */
+export async function saveProductCostBatch(
+  productId: string,
+  c: CostInput,
+  desi: number | null,
+  alsoProductIds: string[] = []
+): Promise<void> {
+  const now = new Date().toISOString();
+  const mode = c.mode ?? "detailed";
+  const upsert = (pid: string) => ({
+    sql: `INSERT INTO ProductCost
+            (id, productId, costMode, manualCost, filamentTypeId, filamentWeight, printTimeHours,
+             wasteRate, packagingOptionId, nylonLevel, tapeUsed, updatedAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(productId) DO UPDATE SET
+            costMode      = excluded.costMode,
+            manualCost    = excluded.manualCost,
+            filamentTypeId = excluded.filamentTypeId,
+            filamentWeight = excluded.filamentWeight,
+            printTimeHours = excluded.printTimeHours,
+            wasteRate      = excluded.wasteRate,
+            packagingOptionId = excluded.packagingOptionId,
+            nylonLevel     = excluded.nylonLevel,
+            tapeUsed       = excluded.tapeUsed,
+            updatedAt      = excluded.updatedAt`,
+    args: [
+      newId(),
+      pid,
+      mode,
+      c.manualCost ?? null,
+      c.filamentTypeId,
+      c.filamentWeight,
+      c.printTimeHours,
+      c.wasteRate,
+      c.packagingOptionId,
+      c.nylonLevel,
+      c.tapeUsed ? 1 : 0,
+      now,
+    ],
+  });
+  await batch([
+    upsert(productId),
+    { sql: `UPDATE Product SET desi = ?, updatedAt = ? WHERE id = ?`, args: [desi, now, productId] },
+    ...alsoProductIds.filter((pid) => pid !== productId).map(upsert),
   ]);
 }

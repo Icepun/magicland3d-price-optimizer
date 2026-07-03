@@ -20,7 +20,6 @@ export default function CargoRulesScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["cargo-rules-all"] });
       qc.invalidateQueries({ queryKey: ["rules"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
     },
   });
 

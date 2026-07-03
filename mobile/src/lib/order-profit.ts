@@ -27,6 +27,19 @@ export interface ProductMap {
   byName: Map<string, ProductDetail | null>;
 }
 
+/** Ürün dizisi kimliğine göre harita önbelleği: aynı react-query dizi referansı için harita BİR KEZ
+ *  kurulur (Panel + Siparişler + Raporlar + detay aynı ["match-products"] dizisini paylaşır —
+ *  eskiden her ekran 424 ürün × ~5 Map insert'i ayrı ayrı tekrarlıyordu). */
+const pmCache = new WeakMap<ProductDetail[], ProductMap>();
+export function getProductMap(products: ProductDetail[]): ProductMap {
+  let pm = pmCache.get(products);
+  if (!pm) {
+    pm = buildProductMap(products);
+    pmCache.set(products, pm);
+  }
+  return pm;
+}
+
 /** Çok-anahtarlı ürün haritası: Product.barcode/sku + Listing.externalId/externalSku → ürün,
  *  + Shopify için ada göre eşleştirme (masaüstü orders route ile birebir). */
 export function buildProductMap(products: ProductDetail[]): ProductMap {

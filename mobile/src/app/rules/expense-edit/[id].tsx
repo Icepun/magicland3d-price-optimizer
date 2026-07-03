@@ -89,8 +89,6 @@ export default function ExpenseEditScreen() {
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["expense-rules-all"] });
     qc.invalidateQueries({ queryKey: ["rules"] });
-    qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-    qc.invalidateQueries({ queryKey: ["product"] });
   }
 
   return (

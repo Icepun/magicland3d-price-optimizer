@@ -52,8 +52,6 @@ export default function CargoEditScreen() {
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["cargo-rules-all"] });
     qc.invalidateQueries({ queryKey: ["rules"] });
-    qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-    qc.invalidateQueries({ queryKey: ["product"] });
   }
 
   const save = useMutation({

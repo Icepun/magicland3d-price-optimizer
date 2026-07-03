@@ -49,6 +49,28 @@ export interface Rules {
 }
 
 /**
+ * Ürün-nesnesi kimliğine göre kâr önbelleği. Kural/ayar referansı da aynıysa yeniden hesaplamaz.
+ * Optimistic güncellemeler (stok +/-) dizide YALNIZ değişen ürünün referansını yeniler →
+ * 420/421 ürün önbellekten gelir; eskiden tek dokunuş tüm sekmelerde ~1300+ simulatePrice
+ * zincirini tetikliyordu. Ekranlar (ürünler/panel/raporlar) bu memo'yu kullanır.
+ */
+const profitCache = new WeakMap<
+  ProductDetail,
+  { rules: Rules; settings: Record<string, string>; value: ProductProfit }
+>();
+export function computeProductProfitMemo(
+  detail: ProductDetail,
+  rules: Rules,
+  settings: Record<string, string>
+): ProductProfit {
+  const hit = profitCache.get(detail);
+  if (hit && hit.rules === rules && hit.settings === settings) return hit.value;
+  const value = computeProductProfit(detail, rules, settings);
+  profitCache.set(detail, { rules, settings, value });
+  return value;
+}
+
+/**
  * Bir ürünün her platform listing'i için kâr hesabı — masaüstü /api/products ve
  * /api/products/[id]/profit ile BİREBİR aynı (@core paylaşımı). Tek kaynak.
  */

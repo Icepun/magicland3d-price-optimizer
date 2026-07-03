@@ -3,26 +3,20 @@ import { useMemo } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
-import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
-import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
-import { computeProductProfit } from "@/lib/profit";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
+import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
+import { computeProductProfitMemo } from "@/lib/profit";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function ReportsScreen() {
-  const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: 60_000 });
+  const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
   const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   // Sipariş eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
   const { data: matchProducts } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
@@ -35,7 +29,7 @@ export default function ReportsScreen() {
     let profit = 0;
     let count = 0;
     if (!orders || !matchProducts || !rules || !settings) return { total, profit, count, byPlat };
-    const pm = buildProductMap(matchProducts);
+    const pm = getProductMap(matchProducts);
     for (const o of orders.orders) {
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez
       // (orders/route.ts: statusKind==="cancelled" → continue; Panel index.tsx de aynısını yapıyor).
@@ -94,7 +88,7 @@ export default function ReportsScreen() {
     // (Eski: listing kârlarının ortalaması → iki cihazda farklı sıralama/listeler üretiyordu.)
     const rows = products
       .map((p) => {
-        const pr = computeProductProfit(p, rules, settings);
+        const pr = computeProductProfitMemo(p, rules, settings);
         if (!pr.hasCost || pr.currentNetProfit == null) return null;
         return { id: p.id, name: p.name, profit: pr.currentNetProfit };
       })

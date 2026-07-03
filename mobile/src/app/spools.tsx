@@ -3,6 +3,7 @@ import { SymbolView } from "expo-symbols";
 import { MotiView } from "moti";
 import { useEffect, useState } from "react";
 import {
+  Alert,
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
@@ -273,13 +274,17 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | n
       if (editing) await updateSpool(target.id, payload);
       else await createSpool(payload);
       onDone();
+    } catch {
+      Alert.alert("Hata", "Makara kaydedilemedi (bağlantıyı kontrol et).");
     } finally { setBusy(false); }
   }
 
   async function remove() {
     if (!editing) return;
     setBusy(true);
-    try { await deleteSpool(target.id); onDone(); } finally { setBusy(false); }
+    try { await deleteSpool(target.id); onDone(); }
+    catch { Alert.alert("Hata", "Makara silinemedi (bağlantıyı kontrol et).");
+    } finally { setBusy(false); }
   }
 
   return (

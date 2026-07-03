@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { MotiView } from "moti";
 import { useMemo } from "react";
@@ -14,34 +14,29 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
-import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
-import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
-import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
+import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function DashboardScreen() {
-  const { data: products, isLoading, refetch: refetchProducts } = useQuery({
+  const { data: products, isLoading, isError, error, refetch: refetchProducts } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { data: ordersData, refetch: refetchOrders } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
+    staleTime: ORDERS_STALE_MS,
   });
   const { data: notif } = useQuery({
     queryKey: ["notifications"],
@@ -53,8 +48,16 @@ export default function DashboardScreen() {
     () => (products && rules && settings ? computeDashboard(products, rules, settings) : null),
     [products, rules, settings]
   );
+  const qc = useQueryClient();
   const { refreshing, onRefresh } = useManualRefresh(() =>
-    Promise.all([refetchProducts(), refetchOrders()])
+    Promise.all([
+      refetchProducts(),
+      refetchOrders(),
+      // Masaüstünde değişen kural/ayarlar da pull ile gelsin (batch → 1-2 round-trip).
+      qc.invalidateQueries({ queryKey: ["rules"] }),
+      qc.invalidateQueries({ queryKey: ["settings"] }),
+      qc.invalidateQueries({ queryKey: ["match-products"] }),
+    ])
   );
 
   // Sipariş eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
@@ -65,7 +68,7 @@ export default function DashboardScreen() {
 
   const rev = useMemo(() => {
     if (!ordersData || !matchProducts || !rules || !settings) return null;
-    const pm = buildProductMap(matchProducts);
+    const pm = getProductMap(matchProducts);
     const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
       PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
     );
@@ -112,7 +115,15 @@ export default function DashboardScreen() {
         </Pressable>
       </View>
 
-      {isLoading || !summary ? (
+      {isError ? (
+        <View style={styles.center}>
+          <Text style={styles.errorTitle}>Bağlanılamadı</Text>
+          <Text style={styles.subtitle}>{(error as Error)?.message}</Text>
+          <Pressable onPress={() => refetchProducts()} style={styles.retryBtn}>
+            <Text style={styles.retryText}>Tekrar dene</Text>
+          </Pressable>
+        </View>
+      ) : isLoading || !summary ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>
@@ -284,7 +295,17 @@ const styles = StyleSheet.create({
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 12, paddingBottom: 24 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24 },
+  errorTitle: { color: ML.text, fontSize: 17, fontWeight: "700" },
+  retryBtn: {
+    marginTop: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ML.accent + "77",
+  },
+  retryText: { color: ML.accent, fontSize: 14, fontWeight: "700" },
   revCard: {
     backgroundColor: ML.card,
     borderRadius: radius.lg,

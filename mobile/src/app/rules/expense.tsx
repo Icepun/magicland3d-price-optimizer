@@ -47,8 +47,6 @@ export default function ExpenseRulesScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["expense-rules-all"] });
       qc.invalidateQueries({ queryKey: ["rules"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-      qc.invalidateQueries({ queryKey: ["product"] });
     },
   });
 

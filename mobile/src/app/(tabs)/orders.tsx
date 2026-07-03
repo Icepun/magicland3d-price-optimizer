@@ -14,11 +14,11 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders, isCancelledOrder, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
-import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
-import { buildProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
+import { getProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
@@ -35,25 +35,20 @@ export default function OrdersScreen() {
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
+    staleTime: ORDERS_STALE_MS,
   });
   const { refreshing, onRefresh } = useManualRefresh(refetch);
   // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir) —
   // gizlenen/pasifleşen ürünün eski siparişi kârsız düşmesin.
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   const profitOf = useMemo(() => {
     const map = new Map<string, OrderProfit>();
     if (!data || !products || !rules || !settings) return map;
-    const pm = buildProductMap(products);
+    const pm = getProductMap(products);
     for (const o of data.orders) map.set(o.id, computeOrderProfit(o, pm, rules, settings));
     return map;
   }, [data, products, rules, settings]);

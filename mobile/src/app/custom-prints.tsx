@@ -36,10 +36,10 @@ function fmtDate(iso: string): string {
 
 export default function CustomPrintsScreen() {
   const qc = useQueryClient();
+  // Arşiv nadiren değişir → sürekli poll yok; ekran her mount'ta zaten taze çeker.
   const { data: items = [], isLoading } = useQuery({
     queryKey: ["custom-prints"],
     queryFn: getCustomPrints,
-    refetchInterval: 15000,
   });
   const { data: snaps = [] } = useQuery({
     queryKey: ["printer-snapshots"],

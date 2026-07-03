@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
 import { MotiView } from "moti";
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -17,8 +17,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getDashboardData } from "@/lib/db/dashboard";
-import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
-import { computeProductProfit } from "@/lib/profit";
+import { getRules, getSettingsMap } from "@/lib/db/rules";
+import { computeProductProfitMemo } from "@/lib/profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
@@ -75,6 +75,9 @@ type Row =
 export default function ProductsScreen() {
   const params = useLocalSearchParams<{ filter?: string }>();
   const [search, setSearch] = useState("");
+  // Arama TUŞA ANINDA yazılır; filtre + liste diff'i ertelenmiş değerle düşük öncelikte koşar
+  // (React 19 useDeferredValue) → hızlı yazarken input takılmaz.
+  const deferredSearch = useDeferredValue(search);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggleGroup = (id: string) =>
@@ -95,21 +98,15 @@ export default function ProductsScreen() {
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
-  const { data: rules } = useQuery({
-    queryKey: ["rules"],
-    queryFn: async () => ({
-      commission: await getCommissionRules(),
-      cargo: await getCargoRules(),
-      expense: await getExpenseRules(),
-    }),
-  });
+  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { refreshing, onRefresh } = useManualRefresh(refetch);
 
   const items = useMemo<ListItem[]>(() => {
     if (!products || !rules || !settings) return [];
     return products.map((p) => {
-      const profit = computeProductProfit(p, rules, settings);
+      const profit = computeProductProfitMemo(p, rules, settings);
       return {
         id: p.id,
         name: p.name,
@@ -140,14 +137,14 @@ export default function ProductsScreen() {
     if (filter === "out-of-stock") list = list.filter((i) => i.stock <= 0 && !i.madeToOrder);
     else if (filter === "loss") list = list.filter((i) => i.anyLoss);
     else if (filter === "no-cost") list = list.filter((i) => !i.hasCost);
-    const q = foldTr(search.trim());
+    const q = foldTr(deferredSearch.trim());
     if (q) {
       // Çok-kelimeli, sırasız: her kelime herhangi bir alanda (ad/takma ad/sku/barkod/kategori/varyant) geçmeli.
       const tokens = q.split(/\s+/).filter(Boolean);
       list = list.filter((i) => tokens.every((t) => i.search.includes(t)));
     }
     return list;
-  }, [items, filter, search]);
+  }, [items, filter, deferredSearch]);
 
   // Varyant kardeşlerini tek "grup" satırına topla (tıklayınca açılır) — masaüstündeki gibi.
   const rows = useMemo<Row[]>(() => {
@@ -244,7 +241,9 @@ export default function ProductsScreen() {
               );
             // Giriş animasyonu yalnızca ilk ekrandaki öğelerde — derin kaydırmada her
             // satırda Reanimated mount animasyonu çalışıp kasmaya yol açmasın.
-            if (index >= 8) return content;
+            // Arama/filtre AKTİFKEN hiç animasyon yok: her tuşta değişen sonuç kümesi üst
+            // satırları remount edip animasyonu yeniden oynatıyordu (yazma jank'i).
+            if (index >= 8 || search.trim() !== "" || filter !== "all") return content;
             return (
               <MotiView
                 from={{ opacity: 0, translateY: 10 }}

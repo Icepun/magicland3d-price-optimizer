@@ -1,4 +1,4 @@
-import { query, execute } from "@/lib/turso";
+import { batch, execute, query } from "@/lib/turso";
 
 export interface Spool {
   id: string;
@@ -36,30 +36,30 @@ function genId(): string {
   return "m" + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
 }
 
-/** Makaradan gram düş (0 altına inmez) + FilamentUsage kaydı. Masaüstü consume route ile aynı. */
+/** Makaradan gram düş (0 altına inmez) + FilamentUsage kaydı. Masaüstü consume route ile aynı.
+ *  TEK batch round-trip + SQL-içi MAX(0, …) → atomik azaltma (eski hali 3 ardışık round-trip'ti
+ *  ve read-modify-write masaüstüyle yarış koşulu içeriyordu). */
 export async function consumeSpool(
   id: string,
   grams: number,
   opts?: { productId?: string | null; productName?: string | null; note?: string | null }
 ): Promise<number> {
-  const rows = await query<{ remainingGrams: number }>(
-    `SELECT remainingGrams FROM FilamentSpool WHERE id = ?`,
-    [id]
-  );
-  if (!rows.length) throw new Error("Makara bulunamadı");
-  const newRemaining = Math.max(0, rows[0].remainingGrams - grams);
   const now = new Date().toISOString();
-  await execute(`UPDATE FilamentSpool SET remainingGrams = ?, updatedAt = ? WHERE id = ?`, [
-    newRemaining,
-    now,
-    id,
+  const [, , after] = await batch([
+    {
+      sql: `UPDATE FilamentSpool SET remainingGrams = MAX(0, remainingGrams - ?), updatedAt = ? WHERE id = ?`,
+      args: [grams, now, id],
+    },
+    {
+      sql: `INSERT INTO FilamentUsage (id, spoolId, productId, productName, grams, note, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [genId(), id, opts?.productId ?? null, opts?.productName ?? null, grams, opts?.note ?? null, now],
+    },
+    { sql: `SELECT remainingGrams FROM FilamentSpool WHERE id = ?`, args: [id] },
   ]);
-  await execute(
-    `INSERT INTO FilamentUsage (id, spoolId, productId, productName, grams, note, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [genId(), id, opts?.productId ?? null, opts?.productName ?? null, grams, opts?.note ?? null, now]
-  );
-  return newRemaining;
+  const row = after.rows[0] as unknown as { remainingGrams: number } | undefined;
+  if (!row) throw new Error("Makara bulunamadı");
+  return row.remainingGrams;
 }
 
 export interface SpoolInput {
@@ -96,15 +96,9 @@ export async function deleteSpool(id: string): Promise<void> {
   await execute(`DELETE FROM FilamentSpool WHERE id = ?`, [id]);
 }
 
-/** Makarayı dolu işaretle (remainingGrams = totalGrams). */
+/** Makarayı dolu işaretle (remainingGrams = totalGrams) — tek SQL, tek round-trip. */
 export async function markSpoolFull(id: string): Promise<void> {
-  const rows = await query<{ totalGrams: number }>(
-    `SELECT totalGrams FROM FilamentSpool WHERE id = ?`,
-    [id]
-  );
-  if (!rows.length) return;
-  await execute(`UPDATE FilamentSpool SET remainingGrams = ?, updatedAt = ? WHERE id = ?`, [
-    rows[0].totalGrams,
+  await execute(`UPDATE FilamentSpool SET remainingGrams = totalGrams, updatedAt = ? WHERE id = ?`, [
     new Date().toISOString(),
     id,
   ]);

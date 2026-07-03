@@ -1,4 +1,5 @@
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
+import { fetchT } from "@/lib/api/http";
 import { orderWindowCutoff } from "@/lib/api/window";
 
 /**
@@ -125,7 +126,7 @@ function headers(): Record<string, string> {
 }
 
 async function hbRequest(path: string): Promise<unknown> {
-  const res = await fetch(`${omsHost()}${path}`, { headers: headers() });
+  const res = await fetchT(`${omsHost()}${path}`, { headers: headers() });
   const text = await res.text();
   let body: unknown = {};
   if (text.trim()) {
@@ -173,6 +174,12 @@ function getOrderDetail(orderNumber: string): Promise<unknown> {
 /* ── Birleştirme (masaüstü route.ts HB bloğunun birebir portu) ──────────────── */
 
 type HbAgg = { status: string; date: number | null; customer: string | null; lines: OrderItem[] | null };
+
+/** Sipariş detayı önbelleği (oturum boyu, modül seviyesi). Kalemler/tutar/müşteri/sipariş-tarihi
+ *  sipariş verildikten sonra DEĞİŞMEZ → her ["orders"] yenilemesinde aynı ~50-80 detay çağrısını
+ *  tekrarlamak boşunaydı (yenileme 3-8sn). İlk yenilemeden sonra yalnız YENİ siparişler çekilir. */
+const detailCache = new Map<string, { lines: OrderItem[]; customer: string | null; date: number | null }>();
+const DETAIL_CACHE_MAX = 600;
 
 export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
   // Kimlik bilgisi eksikse sessizce boş (trendyol.ts/shopify.ts gibi).
@@ -253,9 +260,21 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
   // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz çağrı olmasın).
   for (const [on, e] of [...agg]) if (e.date != null && e.date < cutoff) agg.delete(on);
 
-  // c) Tutarı olmayan (özetten gelen) siparişlerin detayını PARALEL çek (concurrency 8, cap 250).
-  const needDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on).slice(0, 250);
-  await mapLimit(needDetail, 8, async (on) => {
+  // c) Tutarı olmayan (özetten gelen) siparişlerin detayı: önce ÖNBELLEK, kalanlar PARALEL
+  //    (concurrency 8, cap 250). Detay verisi değişmez → oturum boyunca bir kez çekilir.
+  const needDetail: string[] = [];
+  for (const [on, e] of agg) {
+    if (e.lines !== null) continue;
+    const cached = detailCache.get(on);
+    if (cached) {
+      e.lines = cached.lines;
+      e.customer = e.customer ?? cached.customer;
+      if (cached.date != null) e.date = cached.date;
+    } else {
+      needDetail.push(on);
+    }
+  }
+  await mapLimit(needDetail.slice(0, 250), 8, async (on) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const d = (await getOrderDetail(on)) as Record<string, any>;
@@ -270,8 +289,16 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
       // göre (masaüstü v0.19.58). Paketten gelen ShippedDate/DeliveredDate bununla ezilir.
       const od = hbDateMs(d.orderDate, d.createdDate);
       if (od != null) e.date = od;
+      // Başarılı detayı önbelleğe koy (kalem varsa) — kapasite aşımında en eskiyi düş.
+      if (e.lines.length > 0) {
+        if (detailCache.size >= DETAIL_CACHE_MAX) {
+          const first = detailCache.keys().next().value;
+          if (first != null) detailCache.delete(first);
+        }
+        detailCache.set(on, { lines: e.lines, customer: e.customer, date: od ?? null });
+      }
     } catch {
-      /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır */
+      /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır; önbelleğe girmez */
     }
   });
 

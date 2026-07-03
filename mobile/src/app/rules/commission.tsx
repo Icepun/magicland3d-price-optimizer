@@ -16,7 +16,6 @@ export default function CommissionRulesScreen() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["commission-rules-all"] });
       qc.invalidateQueries({ queryKey: ["rules"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
     },
   });
 

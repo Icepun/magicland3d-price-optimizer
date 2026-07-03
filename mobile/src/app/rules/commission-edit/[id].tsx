@@ -41,8 +41,6 @@ export default function CommissionEditScreen() {
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["commission-rules-all"] });
     qc.invalidateQueries({ queryKey: ["rules"] });
-    qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-    qc.invalidateQueries({ queryKey: ["product"] });
   }
 
   const save = useMutation({
