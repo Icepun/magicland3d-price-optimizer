@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
-import { MotiView } from "moti";
+import { FlashList } from "@shopify/flash-list";
 import { useEffect, useState } from "react";
 import {
   Alert,
@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { FadeInView } from "@/components/fade-in";
 import { ScreenHeader } from "@/components/form";
 import {
   consumeSpool,
@@ -103,11 +104,10 @@ export default function SpoolsScreen() {
           <ActivityIndicator color={ML.accent} size="large" />
         </View>
       ) : (
-        <FlatList
+        <FlashList
           data={data ?? []}
           keyExtractor={(s) => s.id}
           numColumns={2}
-          columnWrapperStyle={{ gap: 10 }}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />}
           ListHeaderComponent={
@@ -118,19 +118,14 @@ export default function SpoolsScreen() {
             ) : null
           }
           renderItem={({ item, index }) => (
-            <MotiView
-              from={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ type: "timing", duration: 240, delay: Math.min(index, 10) * 22 }}
-              style={{ flex: 1 }}
-            >
+            <FadeInView index={index} style={{ flex: 1, margin: 5 }}>
               <SpoolCard
                 spool={item}
                 onConsume={() => setConsumeTarget(item)}
                 onRefill={() => refill.mutate(item.id)}
                 onEdit={() => setFormTarget(item)}
               />
-            </MotiView>
+            </FadeInView>
           )}
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>
@@ -387,7 +382,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   dim: { color: ML.textDim, fontSize: 14 },
-  list: { padding: 16, gap: 10, paddingBottom: 90 },
+  list: { paddingHorizontal: 11, paddingTop: 11, paddingBottom: 90 },
   alertBox: { backgroundColor: ML.orangeSoft, borderRadius: radius.md, borderWidth: 1, borderColor: ML.orange, padding: 12, marginBottom: 10 },
   alertText: { color: ML.orange, fontSize: 13, fontWeight: "600" },
   card: { flex: 1, backgroundColor: ML.card, borderRadius: radius.lg, borderWidth: 1, borderColor: ML.borderSoft, overflow: "hidden" },

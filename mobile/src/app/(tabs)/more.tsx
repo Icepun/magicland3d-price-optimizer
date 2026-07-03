@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
-import { MotiView } from "moti";
+import { FadeInView } from "@/components/fade-in";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -78,12 +78,7 @@ export default function MoreScreen() {
       </View>
       <ScrollView contentContainerStyle={styles.list}>
         {items.map((it, i) => (
-          <MotiView
-            key={it.href}
-            from={{ opacity: 0, translateY: 10 }}
-            animate={{ opacity: 1, translateY: 0 }}
-            transition={{ type: "timing", duration: 240, delay: i * 30 }}
-          >
+          <FadeInView key={it.href} index={i} step={30}>
             <Pressable
               onPress={() => router.push(it.href as never)}
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: ML.cardElevated }]}
@@ -102,7 +97,7 @@ export default function MoreScreen() {
               ) : null}
               <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 14, height: 14 }} />
             </Pressable>
-          </MotiView>
+          </FadeInView>
         ))}
       </ScrollView>
     </SafeAreaView>

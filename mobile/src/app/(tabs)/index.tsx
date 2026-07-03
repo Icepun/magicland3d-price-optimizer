@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { MotiView } from "moti";
+import { FadeInView } from "@/components/fade-in";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
@@ -204,12 +204,7 @@ export default function DashboardScreen() {
 function PlatformRow({ p }: { p: PlatformSummary }) {
   const accent = ML[p.platform];
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 12 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: "timing", duration: 360, delay: 120 }}
-      style={styles.platformCard}
-    >
+    <FadeInView duration={360} baseDelay={120} style={styles.platformCard}>
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
@@ -231,7 +226,7 @@ function PlatformRow({ p }: { p: PlatformSummary }) {
           </Text>
         </View>
       </View>
-    </MotiView>
+    </FadeInView>
   );
 }
 
@@ -250,12 +245,7 @@ function Stat({
 }) {
   const color = { accent: ML.accent, green: ML.green, red: ML.red, orange: ML.orange }[tone];
   return (
-    <MotiView
-      from={{ opacity: 0, scale: 0.94 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ type: "timing", duration: 320 }}
-      style={[wide && styles.statWide, !wide && styles.statHalf]}
-    >
+    <FadeInView duration={320} style={[wide && styles.statWide, !wide && styles.statHalf]}>
       <Pressable
         onPress={onPress}
         style={({ pressed }) => [styles.stat, pressed && onPress ? { opacity: 0.7 } : null]}
@@ -264,7 +254,7 @@ function Stat({
         <Text style={[styles.statValue, { color }]}>{value}</Text>
         {onPress ? <Text style={styles.statChevron}>›</Text> : null}
       </Pressable>
-    </MotiView>
+    </FadeInView>
   );
 }
 

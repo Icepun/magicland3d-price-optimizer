@@ -1,11 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import { MotiView } from "moti";
+import { FlashList } from "@shopify/flash-list";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -21,6 +20,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfitMemo } from "@/lib/profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency } from "@/lib/format";
+import { FadeInView } from "@/components/fade-in";
 import { ML, radius } from "@/theme/colors";
 import type { Platform } from "@/lib/platforms";
 import { thumbUrl } from "@/lib/image";
@@ -71,6 +71,8 @@ type Row =
   | { kind: "product"; item: ListItem }
   | { kind: "member"; item: ListItem }
   | { kind: "group"; id: string; name: string; members: ListItem[] };
+
+const RowGap = () => <View style={{ height: 10 }} />;
 
 export default function ProductsScreen() {
   const params = useLocalSearchParams<{ filter?: string }>();
@@ -226,7 +228,7 @@ export default function ProductsScreen() {
           <Text style={styles.dim}>{(error as Error)?.message}</Text>
         </View>
       ) : (
-        <FlatList
+        <FlashList
           data={rows}
           keyExtractor={(r) =>
             r.kind === "group" ? "g-" + r.id : (r.kind === "member" ? "m-" : "p-") + r.item.id
@@ -245,13 +247,9 @@ export default function ProductsScreen() {
             // satırları remount edip animasyonu yeniden oynatıyordu (yazma jank'i).
             if (index >= 8 || search.trim() !== "" || filter !== "all") return content;
             return (
-              <MotiView
-                from={{ opacity: 0, translateY: 10 }}
-                animate={{ opacity: 1, translateY: 0 }}
-                transition={{ type: "timing", duration: 200, delay: index * 18 }}
-              >
+              <FadeInView index={index} duration={200} step={18}>
                 {content}
-              </MotiView>
+              </FadeInView>
             );
           }}
           refreshControl={
@@ -260,11 +258,8 @@ export default function ProductsScreen() {
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sonuç yok</Text>
           }
-          initialNumToRender={10}
-          maxToRenderPerBatch={8}
-          windowSize={7}
-          updateCellsBatchingPeriod={50}
-          removeClippedSubviews
+          getItemType={(r) => r.kind}
+          ItemSeparatorComponent={RowGap}
         />
       )}
     </SafeAreaView>
@@ -397,7 +392,7 @@ const styles = StyleSheet.create({
   },
   chipOn: { backgroundColor: ML.accent, borderColor: ML.accent },
   chipText: { color: ML.textDim, fontSize: 13 },
-  list: { paddingHorizontal: 20, paddingBottom: 24, gap: 10 },
+  list: { paddingHorizontal: 20, paddingBottom: 24 },
   card: {
     flexDirection: "row",
     alignItems: "center",

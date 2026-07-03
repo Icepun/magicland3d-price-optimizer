@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
@@ -20,6 +21,8 @@ interface PlanItem {
   printQty: number;
   filament: number;
 }
+
+const RowGap = () => <View style={{ height: 8 }} />;
 
 export default function PlannerScreen() {
   const qc = useQueryClient();
@@ -95,7 +98,7 @@ export default function PlannerScreen() {
           <Text style={styles.dim}>Üretim gerekmiyor — tüm stoklar hedefin üstünde</Text>
         </View>
       ) : (
-        <FlatList
+        <FlashList
           data={plan}
           keyExtractor={(p) => p.id}
           contentContainerStyle={styles.list}
@@ -106,6 +109,7 @@ export default function PlannerScreen() {
               <Summary value={`${(totalFilament / 1000).toFixed(2)} kg`} label="filament" />
             </View>
           }
+          ItemSeparatorComponent={RowGap}
           renderItem={({ item }) => (
             <Pressable
               onPress={() => router.push(`/product/${item.id}`)}
@@ -179,7 +183,7 @@ const styles = StyleSheet.create({
   stepBtn: { width: 44, height: 40, alignItems: "center", justifyContent: "center" },
   stepBtnText: { color: ML.accent, fontSize: 24, fontWeight: "700" },
   stepValue: { color: ML.text, fontSize: 18, fontWeight: "800", minWidth: 40, textAlign: "center" },
-  list: { padding: 16, gap: 8, paddingBottom: 24 },
+  list: { padding: 16, paddingBottom: 24 },
   summary: {
     flexDirection: "row",
     backgroundColor: ML.card,

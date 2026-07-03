@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { MotiView } from "moti";
+import { FadeInView } from "@/components/fade-in";
 import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -380,12 +380,7 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
   const loss = r.netProfit < 0;
   const accent = ML[p.platform];
   return (
-    <MotiView
-      from={{ opacity: 0, translateY: 16 }}
-      animate={{ opacity: 1, translateY: 0 }}
-      transition={{ type: "timing", duration: 340, delay: 80 + index * 90 }}
-      style={styles.section}
-    >
+    <FadeInView duration={340} baseDelay={80} step={90} index={index} style={styles.section}>
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
@@ -428,7 +423,7 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
       {r.inputVatCredit > 0 ? (
         <BreakdownRow label="KDV İadesi" value={r.inputVatCredit} positive />
       ) : null}
-    </MotiView>
+    </FadeInView>
   );
 }
 

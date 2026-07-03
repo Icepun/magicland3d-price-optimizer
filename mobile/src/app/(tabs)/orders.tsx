@@ -1,11 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { MotiView } from "moti";
+import { FlashList } from "@shopify/flash-list";
 import { useMemo } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -21,6 +20,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatDate } from "@/lib/format";
+import { FadeInView } from "@/components/fade-in";
 import { ML, radius } from "@/theme/colors";
 
 const TONE: Record<StatusTone, string> = {
@@ -30,6 +30,8 @@ const TONE: Record<StatusTone, string> = {
   red: ML.red,
   dim: ML.textDim,
 };
+
+const RowGap = () => <View style={{ height: 10 }} />;
 
 export default function OrdersScreen() {
   const { data, isLoading, refetch } = useQuery({
@@ -79,7 +81,7 @@ export default function OrdersScreen() {
           <Text style={styles.dim}>Shopify + Trendyol + Hepsiburada çekiliyor…</Text>
         </View>
       ) : (
-        <FlatList
+        <FlashList
           data={data?.orders ?? []}
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
@@ -102,30 +104,22 @@ export default function OrdersScreen() {
             // Giriş animasyonu yalnızca ilk ekrandaki öğelerde — derin kaydırmada kasmasın.
             if (index >= 10) return card;
             return (
-              <MotiView
-                from={{ opacity: 0, translateY: 12 }}
-                animate={{ opacity: 1, translateY: 0 }}
-                transition={{ type: "timing", duration: 240, delay: index * 22 }}
-              >
+              <FadeInView index={index}>
                 {card}
-              </MotiView>
+              </FadeInView>
             );
           }}
           ListEmptyComponent={
             <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sipariş yok</Text>
           }
-          initialNumToRender={10}
-          maxToRenderPerBatch={8}
-          windowSize={7}
-          updateCellsBatchingPeriod={50}
-          removeClippedSubviews
+          ItemSeparatorComponent={RowGap}
         />
       )}
     </SafeAreaView>
   );
 }
 
-function PhotoBox({ profit, accent }: { profit?: OrderProfit; accent: string }) {
+function PhotoBox({ profit, accent, orderId }: { profit?: OrderProfit; accent: string; orderId: string }) {
   if (profit && profit.distinctCount > 1) {
     return (
       <View style={[styles.photo, styles.countBox]}>
@@ -138,7 +132,7 @@ function PhotoBox({ profit, accent }: { profit?: OrderProfit; accent: string }) 
   return (
     <View>
       {profit?.image ? (
-        <Image source={{ uri: thumbUrl(profit.image, 160)! }} style={styles.photo} contentFit="cover" transition={150} />
+        <Image source={{ uri: thumbUrl(profit.image, 160)! }} style={styles.photo} contentFit="cover" transition={150} recyclingKey={orderId} />
       ) : (
         <View style={[styles.photo, styles.photoEmpty]}>
           <View style={[styles.platDotBig, { backgroundColor: accent }]} />
@@ -162,7 +156,7 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
       onPress={() => router.push(`/order/${order.id}`)}
       style={({ pressed }) => [styles.card, pressed && { backgroundColor: ML.cardElevated }]}
     >
-      <PhotoBox profit={profit} accent={accent} />
+      <PhotoBox profit={profit} accent={accent} orderId={order.id} />
 
       <View style={styles.body}>
         <View style={styles.bodyTop}>
@@ -202,7 +196,7 @@ const styles = StyleSheet.create({
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   dim: { color: ML.textDim, fontSize: 14 },
-  list: { padding: 16, paddingBottom: 24, gap: 10 },
+  list: { padding: 16, paddingBottom: 24 },
   errBox: {
     backgroundColor: ML.redSoft,
     borderRadius: radius.md,

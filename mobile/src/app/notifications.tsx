@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { MotiView } from "moti";
+import { FadeInView } from "@/components/fade-in";
 import {
   ActivityIndicator,
   FlatList,
@@ -79,13 +79,9 @@ export default function NotificationsScreen() {
             <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={ML.accent} />
           }
           renderItem={({ item, index }) => (
-            <MotiView
-              from={{ opacity: 0, translateY: 10 }}
-              animate={{ opacity: 1, translateY: 0 }}
-              transition={{ type: "timing", duration: 240, delay: Math.min(index, 10) * 22 }}
-            >
+            <FadeInView index={index}>
               <AlertRow alert={item} onAck={item.persistent ? () => ack.mutate(item.id) : null} />
-            </MotiView>
+            </FadeInView>
           )}
           ListEmptyComponent={
             <View style={styles.center}>
