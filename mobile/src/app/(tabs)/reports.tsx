@@ -4,7 +4,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-nat
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
-import { getDashboardData } from "@/lib/db/dashboard";
+import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { computeProductProfit } from "@/lib/profit";
@@ -24,6 +24,8 @@ export default function ReportsScreen() {
     }),
   });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  // Sipariş eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
+  const { data: matchProducts } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
 
   const rev = useMemo(() => {
     const byPlat: Record<string, { rev: number; profit: number }> = Object.fromEntries(
@@ -32,8 +34,8 @@ export default function ReportsScreen() {
     let total = 0;
     let profit = 0;
     let count = 0;
-    if (!orders || !products || !rules || !settings) return { total, profit, count, byPlat };
-    const pm = buildProductMap(products);
+    if (!orders || !matchProducts || !rules || !settings) return { total, profit, count, byPlat };
+    const pm = buildProductMap(matchProducts);
     for (const o of orders.orders) {
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez
       // (orders/route.ts: statusKind==="cancelled" → continue; Panel index.tsx de aynısını yapıyor).
@@ -49,7 +51,7 @@ export default function ReportsScreen() {
       }
     }
     return { total, profit, count, byPlat };
-  }, [orders, products, rules, settings]);
+  }, [orders, matchProducts, rules, settings]);
 
   const topSellers = useMemo(() => {
     if (!orders) return [];
@@ -68,6 +70,8 @@ export default function ReportsScreen() {
     const sums = new Array(BUCKETS).fill(0) as number[];
     if (orders) {
       for (const o of orders.orders) {
+        // Aynı ekranın Ciro kartıyla tutarlı: iptal/iade trend'e de girmez; tarihsizler atlanır.
+        if (o.date == null || isCancelledOrder(o)) continue;
         if (o.date < start || o.date > now) continue;
         const idx = Math.min(BUCKETS - 1, Math.floor((o.date - start) / SPAN));
         sums[idx] += o.total;
@@ -86,12 +90,13 @@ export default function ReportsScreen() {
 
   const profitability = useMemo(() => {
     if (!products || !rules || !settings) return { top: [], loss: [] };
+    // Masaüstü reports/page.tsx ile BİREBİR metrik: currentNetProfit (currentSalePrice simülasyonu).
+    // (Eski: listing kârlarının ortalaması → iki cihazda farklı sıralama/listeler üretiyordu.)
     const rows = products
       .map((p) => {
         const pr = computeProductProfit(p, rules, settings);
-        if (!pr.hasCost || pr.platforms.length === 0) return null;
-        const avg = pr.platforms.reduce((s, pl) => s + pl.result.netProfit, 0) / pr.platforms.length;
-        return { id: p.id, name: p.name, profit: avg };
+        if (!pr.hasCost || pr.currentNetProfit == null) return null;
+        return { id: p.id, name: p.name, profit: pr.currentNetProfit };
       })
       .filter((x): x is { id: string; name: string; profit: number } => !!x);
     return {

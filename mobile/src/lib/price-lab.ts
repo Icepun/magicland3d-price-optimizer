@@ -43,15 +43,20 @@ export function computePriceLab(
     settings,
     detail.cost?.costPerGram ?? 0
   );
-  const productCost = resolved?.productionCost ?? 0;
-  const packagingCost = resolved?.packagingCost ?? 0;
-  const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
-  if (productCost <= 0) return { hasCost: false, targets: [], campaign: null };
+  // Masaüstü price-lab route:37 ile birebir kapı: totalCost (yalnız paketleme maliyeti girilmiş
+  // ürün de hesaplanır; eski productCost>0 kapısı onu yanlışlıkla "maliyet yok" sayıyordu).
+  if (!resolved || resolved.totalCost <= 0) return { hasCost: false, targets: [], campaign: null };
+  const productCost = resolved.productionCost;
+  const packagingCost = resolved.packagingCost;
+  const filamentMatCost = resolved.filamentCost; // KDV iadesine giren malzeme payı
 
   const vatRate = Number(settings.vatRate ?? 0);
   const productRules = withProductCommissionRule(detail, rules.commission);
 
-  const simFor = (listing: ListingRow, salePrice: number) =>
+  // Listing olmayan platformda masaüstü null-listing ile simüle eder (route:66-68) — aynı şekil.
+  type LabListing = Pick<ListingRow, "platform" | "commissionRate" | "commissionFixed" | "cargoCost">;
+
+  const simFor = (listing: LabListing, salePrice: number) =>
     simulatePrice({
       salePrice,
       productCost,
@@ -66,12 +71,13 @@ export function computePriceLab(
       // Masaüstü price-lab route ile birebir: listing kargosu ya da otomatik (150₺-altı Shopify
       // özel kuralı YOK; o kural products route'a özgü, price-lab'da iki tarafta da uygulanmaz).
       cargoCostOverride: listing.cargoCost ?? undefined,
+      // Trendyol min sipariş adedi — karar: iki tarafta da uygulanır (masaüstü route'a da eklendi).
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: filamentMatCost,
     });
 
   // Marj fiyata göre monoton artar → ikili arama
-  function priceForMargin(listing: ListingRow, targetPct: number): number | null {
+  function priceForMargin(listing: LabListing, targetPct: number): number | null {
     const tm = targetPct / 100;
     let lo = 0.5;
     let hi = 100000;
@@ -84,11 +90,23 @@ export function computePriceLab(
     return hi;
   }
 
-  const targets: PriceLabTarget[] = detail.listings.map((listing) => {
-    const cur = simFor(listing, listing.salePrice);
+  // Masaüstü route:88-100 ile birebir: hiç listing yoksa Shopify hedefi currentSalePrice ile gösterilir.
+  const listingPlatforms = detail.listings.map((l) => l.platform);
+  const targetPlatforms: Platform[] = listingPlatforms.length > 0 ? listingPlatforms : ["shopify"];
+
+  const targets: PriceLabTarget[] = targetPlatforms.map((platform) => {
+    const real = detail.listings.find((l) => l.platform === platform) ?? null;
+    const listing: LabListing = real ?? {
+      platform,
+      commissionRate: null,
+      commissionFixed: null,
+      cargoCost: null,
+    };
+    const currentPrice = real?.salePrice ?? detail.currentSalePrice;
+    const cur = simFor(listing, currentPrice);
     return {
-      platform: listing.platform,
-      currentPrice: listing.salePrice,
+      platform,
+      currentPrice,
       currentMargin: cur.profitMargin,
       rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(listing, m) })),
     };

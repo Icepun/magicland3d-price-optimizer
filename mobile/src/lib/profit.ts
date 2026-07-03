@@ -36,6 +36,10 @@ export interface ProductProfit {
   totalCost: number;
   hasCost: boolean;
   platforms: PlatformProfit[];
+  /** Masaüstü /api/products "current" kârı ile birebir: ürünün kendi currentSalePrice'ı,
+   *  platform FİLTRESİZ kural setleri, override/minQty YOK. Raporlar "En kârlı / Zarar edenler"
+   *  bu metriği kullanır (masaüstü reports/page.tsx ile aynı sıralama). */
+  currentNetProfit: number | null;
 }
 
 export interface Rules {
@@ -98,11 +102,30 @@ export function computeProductProfit(
     };
   });
 
+  // "Current" kâr — masaüstü /api/products route.ts:204-221 ile birebir (listing'den bağımsız).
+  let currentNetProfit: number | null = null;
+  if (productCost > 0) {
+    const sim = simulatePrice({
+      salePrice: detail.currentSalePrice,
+      productCost,
+      packagingCost,
+      categoryName: detail.categoryName,
+      desi: detail.desi ?? 1,
+      commissionRules: productRules,
+      cargoRules: rules.cargo,
+      expenseRules: rules.expense,
+      vatRate,
+      vatableProductCost: filamentMatCost,
+    });
+    currentNetProfit = sim.netProfit;
+  }
+
   return {
     productionCost: productCost,
     packagingCost,
     totalCost: resolved?.totalCost ?? 0,
     hasCost: productCost > 0,
     platforms,
+    currentNetProfit,
   };
 }

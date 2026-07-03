@@ -64,11 +64,14 @@ async function pipeline(stmts: Stmt[]): Promise<ExecuteResult[]> {
     );
   }
 
-  const requests = stmts.map((s) => ({
+  type PipelineRequest =
+    | { type: "execute"; stmt: { sql: string; args: ReturnType<typeof encode>[] } }
+    | { type: "close" };
+  const requests: PipelineRequest[] = stmts.map((s) => ({
     type: "execute" as const,
     stmt: { sql: s.sql, args: (s.args ?? []).map(encode) },
   }));
-  requests.push({ type: "close" as any });
+  requests.push({ type: "close" }); // Hrana v2: stmt'siz geçerli kapatma isteği
 
   const res = await fetch(`${URL}/v2/pipeline`, {
     method: "POST",

@@ -62,6 +62,21 @@ function matchLine(
 }
 export { matchLine };
 
+/** Satır eşleştirme (anahtar + Shopify ad-fallback) — computeOrderProfit ile AYNI mantık.
+ *  Sipariş detay ekranı da bunu kullansın ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. */
+export function matchOrderLine(
+  line: { matchKeys?: string[]; name: string },
+  platform: UnifiedOrder["platform"],
+  pm: ProductMap
+): ProductDetail | undefined {
+  let p = matchLine(line.matchKeys, pm.byKey);
+  if (!p && platform === "shopify") {
+    const named = pm.byName.get(normName(line.name));
+    if (named) p = named;
+  }
+  return p;
+}
+
 export interface OrderProfit {
   revenue: number;
   profit: number | null; // null = hiç eşleşme/maliyet yok
@@ -90,12 +105,7 @@ export function computeOrderProfit(
 
   for (const line of order.items) {
     totalQty += line.quantity;
-    let p = matchLine(line.matchKeys, pm.byKey);
-    // Shopify: anahtar tutmazsa ürün ADIYLA eşleştir (Shopify barkod tutmaz) — masaüstü orders route ile birebir.
-    if (!p && order.platform === "shopify") {
-      const named = pm.byName.get(normName(line.name));
-      if (named) p = named;
-    }
+    const p = matchOrderLine(line, order.platform, pm);
     if (p && !image) image = p.imageUrl;
     if (!p) {
       unknown = true;
@@ -106,15 +116,17 @@ export function computeOrderProfit(
       settings,
       p.cost?.costPerGram ?? 0
     );
-    if (!resolved || resolved.productionCost <= 0) {
+    // Masaüstü lineProfitNoCargo gate'i ile BİREBİR: (a) maliyet = üretim+paketleme toplamı,
+    // (b) 0₺ satır (hediye/%100 kupon/fiyatsız) kâra GİRMEZ → satır "eşleşmedi" gibi kısmi sayılır.
+    // (Eski HATA: 0₺ satır liste fiyatına düşüyordu → kâr olduğundan YÜKSEK ve "kesin" görünüyordu.)
+    if (!resolved || resolved.productionCost + resolved.packagingCost <= 0 || !(line.unitPrice > 0)) {
       unknown = true;
       continue;
     }
-    const listing = p.listings.find((l) => l.platform === order.platform);
     // Satır kârı — KARGOSUZ (cargoCostOverride: 0). Kargo aşağıda gönderiye bir kez düşülür.
     // (Eski HATA: her satıra kargo uygulanıyordu → çok ürünlü siparişte kâr olduğundan DÜŞÜK görünüyordu.)
     const sim = simulatePrice({
-      salePrice: line.unitPrice || listing?.salePrice || p.currentSalePrice,
+      salePrice: line.unitPrice,
       productCost: resolved.productionCost,
       packagingCost: resolved.packagingCost,
       categoryName: p.categoryName,

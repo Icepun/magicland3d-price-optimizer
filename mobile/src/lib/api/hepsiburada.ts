@@ -92,7 +92,8 @@ function hbLineRaw(li: Record<string, any>): OrderItem {
     name: hbStr(li.productName, li.name, li.title, li.barcode, li.merchantSku) || "Ürün",
     quantity: qty,
     unitPrice: unit,
-    matchKeys: [li.merchantSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter(
+    // Masaüstü route.ts:151 ile birebir anahtar listesi (hbSku dahil).
+    matchKeys: [li.merchantSku, li.hbSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter(
       (k): k is string => typeof k === "string" && !!k
     ),
   };
@@ -282,7 +283,8 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
       id: `hb-${on}`,
       platform: "hepsiburada",
       orderNumber: on,
-      date: e.date ?? Date.now(),
+      // Masaüstüyle birebir: tarih bilinmiyorsa null (bugünmüş gibi EN ÜSTE koymak trend/sıralamayı bozuyordu).
+      date: e.date ?? null,
       status: e.status, // ham etiket: Open/Packaged/Shipped/Delivered/UnDelivered → statusInfo() çevirir
       customer: e.customer,
       total: lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0),

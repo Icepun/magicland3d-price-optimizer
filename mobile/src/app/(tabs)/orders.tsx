@@ -16,7 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getAllOrders, isCancelledOrder, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
-import { getDashboardData } from "@/lib/db/dashboard";
+import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { buildProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
@@ -37,7 +37,9 @@ export default function OrdersScreen() {
     queryFn: getAllOrders,
   });
   const { refreshing, onRefresh } = useManualRefresh(refetch);
-  const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
+  // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir) —
+  // gizlenen/pasifleşen ürünün eski siparişi kârsız düşmesin.
+  const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
   const { data: rules } = useQuery({
     queryKey: ["rules"],
     queryFn: async () => ({

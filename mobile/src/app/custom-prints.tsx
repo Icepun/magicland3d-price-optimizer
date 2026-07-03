@@ -12,6 +12,7 @@ import {
   sendPrintCommand,
   type CustomPrint,
 } from "@/lib/db/printers";
+import { getSettingsMap } from "@/lib/db/rules";
 import { ML, radius } from "@/theme/colors";
 
 function fmtSize(bytes: number): string {
@@ -46,6 +47,10 @@ export default function CustomPrintsScreen() {
     refetchInterval: 4000,
   });
   const snapById = useMemo(() => new Map(snaps.map((s) => [s.printerConfigId, s])), [snaps]);
+  // relayCaps: masaüstü relay'in yetenek bildirimi (AppSetting). "r2start" yoksa relay BULUT (R2)
+  // dosyayı indiremez (yalnız yerel disk okur) → bulut dosyada "Bas" hata üretirdi; kapıyla engelle.
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const relayCaps = settings?.printRelayCaps ?? "";
 
   // Relay tazeliği — masaüstü ~10sn'de bir snapshot yazar; 90sn+ eskiyse komutlar uygulanmaz.
   const [now, setNow] = useState(() => Date.now());
@@ -64,20 +69,25 @@ export default function CustomPrintsScreen() {
   const relayStale = lastUpdate === 0 || now - lastUpdate > 90_000;
 
   // Gönderilen "tekrar bas" komutunun durumu (pending → done/error) — getRecentCommands ile izlenir.
-  const [sent, setSent] = useState<{ id: string; name: string } | null>(null);
+  // 90 sn içinde uygulanmazsa (masaüstü kapalı) zaman aşımı mesajına düşer + yoklama durur.
+  const [sent, setSent] = useState<{ id: string; name: string; at: number } | null>(null);
+  const cmdTimedOut = !!sent && now - sent.at > 90_000;
   const { data: cmds = [] } = useQuery({
     queryKey: ["recent-commands"],
     queryFn: getRecentCommands,
-    refetchInterval: sent ? 3000 : false,
-    enabled: !!sent,
+    refetchInterval: sent && !cmdTimedOut ? 3000 : false,
+    enabled: !!sent && !cmdTimedOut,
   });
   const sentCmd = sent ? cmds.find((c) => c.id === sent.id) : null;
+  const cmdSettled = sentCmd?.status === "done" || sentCmd?.status === "error";
   useEffect(() => {
-    if (sentCmd && (sentCmd.status === "done" || sentCmd.status === "error")) {
-      const t = setTimeout(() => setSent(null), 6000);
+    if (cmdSettled || cmdTimedOut) {
+      const t = setTimeout(() => setSent(null), cmdTimedOut ? 12_000 : 6000);
       return () => clearTimeout(t);
     }
-  }, [sentCmd]);
+  }, [cmdSettled, cmdTimedOut]);
+  // Çift gönderim kilidi: bir komut beklerken yenisi gönderilmesin (iki "start" = ikinci deneme hatası).
+  const cmdBusy = !!sent && !cmdSettled && !cmdTimedOut;
 
   const doReprint = (it: CustomPrint) => {
     Alert.alert(
@@ -90,7 +100,7 @@ export default function CustomPrintsScreen() {
           onPress: async () => {
             try {
               const id = await sendPrintCommand(it.printerConfigId, "start", it.id);
-              setSent({ id, name: it.originalName });
+              setSent({ id, name: it.originalName, at: Date.now() });
               qc.invalidateQueries({ queryKey: ["recent-commands"] });
             } catch {
               Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
@@ -117,14 +127,16 @@ export default function CustomPrintsScreen() {
             style={[
               styles.bannerText,
               sentCmd?.status === "done" && { color: ML.green },
-              sentCmd?.status === "error" && { color: ML.red },
+              (sentCmd?.status === "error" || cmdTimedOut) && { color: ML.red },
             ]}
           >
             {sentCmd?.status === "done"
               ? `✓ Baskı başladı: ${sent.name}`
               : sentCmd?.status === "error"
                 ? `✕ ${sentCmd.error ?? "Başlatılamadı"}`
-                : "⏳ Komut gönderildi — masaüstü uyguluyor…"}
+                : cmdTimedOut
+                  ? "⚠ Uygulanmadı — masaüstü kapalı görünüyor. Komut masaüstü açılınca işlenir ya da zaman aşımına düşer."
+                  : "⏳ Komut gönderildi — masaüstü uyguluyor…"}
           </Text>
         </View>
       ) : relayStale && items.length > 0 ? (
@@ -155,14 +167,18 @@ export default function CustomPrintsScreen() {
             const snap = snapById.get(it.printerConfigId);
             const printerGone = !it.printerName || !it.printerEnabled;
             const isBambu = it.printerType === "bambu";
+            const cloudUnsupported = !!it.isCloud && !relayCaps.includes("r2start");
             const online = !!snap?.online && !relayStale;
             const busy = snap?.status === "printing" || snap?.status === "paused";
             let reason = "";
             if (printerGone) reason = "Yazıcı yok";
             else if (isBambu) reason = "Bambu: masaüstünden";
+            // Relay R2 indirmeyi bilmiyorsa bulut dosyada "Bas" kesin hata üretir → kapı.
+            else if (cloudUnsupported) reason = "Masaüstünü güncelle";
             else if (relayStale) reason = "Masaüstü kapalı";
             else if (!online) reason = "Çevrimdışı";
             else if (busy) reason = "Meşgul";
+            else if (cmdBusy) reason = "Komut sürüyor…";
             const canPrint = !reason;
             const meta = [
               fmtSize(it.sizeBytes),

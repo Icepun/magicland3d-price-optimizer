@@ -7,9 +7,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { ScreenHeader } from "@/components/form";
 import { thumbUrl } from "@/lib/image";
 import { statusInfo, type OrdersResult, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
-import { getDashboardData } from "@/lib/db/dashboard";
+import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
-import { buildProductMap, computeOrderProfit, matchLine } from "@/lib/order-profit";
+import { buildProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORM_LABEL } from "@/lib/platforms";
@@ -28,7 +28,8 @@ export default function OrderDetailScreen() {
   const cached = qc.getQueryData<OrdersResult>(["orders"]);
   const order = cached?.orders.find((o) => o.id === id);
 
-  const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
+  // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
+  const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
   const { data: rules } = useQuery({
     queryKey: ["rules"],
     queryFn: async () => ({
@@ -52,13 +53,12 @@ export default function OrderDetailScreen() {
 
   const accent = ML[order.platform];
   const st = statusInfo(order);
+  // Tek harita: hem kâr hesabı hem satır eşleştirme aynı pm'i kullanır (çifte inşa + çelişki yok).
+  const pm = buildProductMap(products ?? []);
   const profit =
-    products && rules && settings
-      ? computeOrderProfit(order, buildProductMap(products), rules, settings)
-      : null;
+    products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
   const margin =
     profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
-  const pm = buildProductMap(products ?? []);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -107,7 +107,8 @@ export default function OrderDetailScreen() {
         {/* Satırlar */}
         <Text style={styles.sectionLabel}>ÜRÜNLER ({order.items.length})</Text>
         {order.items.map((line, i) => {
-          const p = matchLine(line.matchKeys, pm.byKey);
+          // Kâr kutusuyla AYNI eşleştirme (anahtar + Shopify ad-fallback) — çelişkili "eşleşmedi" bitti.
+          const p = matchOrderLine(line, order.platform, pm);
           return (
             <View key={i} style={styles.lineRow}>
               {p?.imageUrl ? (

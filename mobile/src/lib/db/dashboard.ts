@@ -7,10 +7,25 @@ interface ProductCostFlat extends ProductCostRow {
 }
 
 /**
- * Dashboard için TÜM aktif ürünleri + maliyet + listing'leri TOPLU çeker (4 sorgu).
+ * Dashboard için TÜM aktif ürünleri + maliyet + listing'leri TOPLU çeker (2 statement, 1 round-trip).
  * Per-ürün getProductDetail çağırmak yerine bulk — 421 ürün için tek round-trip seti.
  */
 export async function getDashboardData(): Promise<ProductDetail[]> {
+  // UI listeleri: yalnız görünür ürünler + aktif listingler.
+  return fetchProductSet("WHERE p.isActive = 1 AND p.hidden = 0", "WHERE isActive = 1");
+}
+
+/**
+ * Sipariş EŞLEŞTİRME haritası için ürünler — masaüstü orders route ile birebir: görünürlük
+ * filtresi YOK (gizli/pasif ürün + pasif listing dahil; route.ts:490-501 filtresiz tarar).
+ * Gerekçe: satılmış bir ürünü sonradan gizlemek/pasifleştirmek eski siparişleri "eşleşmedi"ye
+ * düşürüp kâr toplamını masaüstünden saptırıyordu. UI listeleri bu seti GÖSTERMEZ.
+ */
+export async function getOrderMatchProducts(): Promise<ProductDetail[]> {
+  return fetchProductSet("", "");
+}
+
+async function fetchProductSet(productWhere: string, listingWhere: string): Promise<ProductDetail[]> {
   const [prodRes, listRes] = await batch([
     {
       sql: `SELECT p.id, p.name, p.alias, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
@@ -24,12 +39,12 @@ export async function getDashboardData(): Promise<ProductDetail[]> {
               LEFT JOIN ProductCost pc ON pc.productId = p.id
               LEFT JOIN FilamentType ft ON ft.id = pc.filamentTypeId
               LEFT JOIN VariantGroup vg ON vg.id = p.variantGroupId
-             WHERE p.isActive = 1 AND p.hidden = 0`,
+             ${productWhere}`,
     },
     {
       sql: `SELECT id, productId, platform, salePrice, stock, commissionRate,
                    commissionFixed, cargoCost, externalId, externalSku, barcode
-              FROM Listing WHERE isActive = 1`,
+              FROM Listing ${listingWhere}`,
     },
   ]);
 

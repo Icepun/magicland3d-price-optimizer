@@ -16,7 +16,7 @@ import { SymbolView } from "expo-symbols";
 
 import { getAllOrders, isCancelledOrder } from "@/lib/api/orders";
 import { getNotifications } from "@/lib/db/notifications";
-import { getDashboardData } from "@/lib/db/dashboard";
+import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getCargoRules, getCommissionRules, getExpenseRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { buildProductMap, computeOrderProfit } from "@/lib/order-profit";
@@ -57,9 +57,15 @@ export default function DashboardScreen() {
     Promise.all([refetchProducts(), refetchOrders()])
   );
 
+  // Sipariş eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
+  const { data: matchProducts } = useQuery({
+    queryKey: ["match-products"],
+    queryFn: getOrderMatchProducts,
+  });
+
   const rev = useMemo(() => {
-    if (!ordersData || !products || !rules || !settings) return null;
-    const pm = buildProductMap(products);
+    if (!ordersData || !matchProducts || !rules || !settings) return null;
+    const pm = buildProductMap(matchProducts);
     const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
       PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
     );
@@ -80,7 +86,7 @@ export default function DashboardScreen() {
       count++;
     }
     return { total, profit, byPlat, count };
-  }, [ordersData, products, rules, settings]);
+  }, [ordersData, matchProducts, rules, settings]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>

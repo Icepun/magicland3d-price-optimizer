@@ -80,26 +80,32 @@ export default function PrintersScreen() {
   const stale = lastUpdate > 0 && ageMs > 90_000;
 
   // Gönderilen kontrol komutunun (duraklat/devam/iptal) durumu — pending → done/error.
-  const [sent, setSent] = useState<{ id: string; label: string } | null>(null);
+  // 90 sn içinde uygulanmazsa (masaüstü kapalı) zaman aşımı mesajına düşer + yoklama durur.
+  const [sent, setSent] = useState<{ id: string; label: string; at: number } | null>(null);
+  const cmdTimedOut = !!sent && now - sent.at > 90_000;
   const { data: cmds = [] } = useQuery({
     queryKey: ["recent-commands"],
     queryFn: getRecentCommands,
-    refetchInterval: sent ? 3000 : false,
-    enabled: !!sent,
+    refetchInterval: sent && !cmdTimedOut ? 3000 : false,
+    enabled: !!sent && !cmdTimedOut,
   });
   const sentCmd = sent ? cmds.find((c) => c.id === sent.id) : null;
+  const cmdSettled = sentCmd?.status === "done" || sentCmd?.status === "error";
   useEffect(() => {
-    if (sentCmd && (sentCmd.status === "done" || sentCmd.status === "error")) {
-      const t = setTimeout(() => setSent(null), 6000);
+    if (cmdSettled || cmdTimedOut) {
+      const t = setTimeout(() => setSent(null), cmdTimedOut ? 12_000 : 6000);
       return () => clearTimeout(t);
     }
-  }, [sentCmd]);
+  }, [cmdSettled, cmdTimedOut]);
+  // Çift gönderim kilidi: komut beklerken butonlar pasif (iki kez "İptal"/"Duraklat" gönderilmesin).
+  const cmdBusy = !!sent && !cmdSettled && !cmdTimedOut;
 
   const runCommand = (s: PrinterSnapshot, action: PrintAction) => {
+    if (cmdBusy) return;
     const send = async () => {
       try {
         const id = await sendPrintCommand(s.printerConfigId, action);
-        setSent({ id, label: `${s.name}: ${ACTION_LABEL[action]}` });
+        setSent({ id, label: `${s.name}: ${ACTION_LABEL[action]}`, at: Date.now() });
         qc.invalidateQueries({ queryKey: ["recent-commands"] });
       } catch {
         Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
@@ -160,14 +166,16 @@ export default function PrintersScreen() {
             style={[
               styles.cmdText,
               sentCmd?.status === "done" && { color: ML.green },
-              sentCmd?.status === "error" && { color: ML.red },
+              (sentCmd?.status === "error" || cmdTimedOut) && { color: ML.red },
             ]}
           >
             {sentCmd?.status === "done"
               ? `✓ ${sent.label} uygulandı`
               : sentCmd?.status === "error"
                 ? `✕ ${sentCmd.error ?? "Komut başarısız"}`
-                : `⏳ ${sent.label} gönderildi — masaüstü uyguluyor…`}
+                : cmdTimedOut
+                  ? `⚠ ${sent.label} uygulanmadı — masaüstü kapalı görünüyor.`
+                  : `⏳ ${sent.label} gönderildi — masaüstü uyguluyor…`}
           </Text>
         </View>
       ) : null}
@@ -182,7 +190,13 @@ export default function PrintersScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.list}>
           {snapshots.map((s) => (
-            <PrinterCard key={s.printerConfigId} s={s} stale={stale} onCommand={(a) => runCommand(s, a)} />
+            <PrinterCard
+              key={s.printerConfigId}
+              s={s}
+              stale={stale}
+              disabled={cmdBusy}
+              onCommand={(a) => runCommand(s, a)}
+            />
           ))}
           <View style={{ height: 24 }} />
         </ScrollView>
@@ -194,10 +208,12 @@ export default function PrintersScreen() {
 function PrinterCard({
   s,
   stale,
+  disabled,
   onCommand,
 }: {
   s: PrinterSnapshot;
   stale: boolean;
+  disabled: boolean;
   onCommand: (a: PrintAction) => void;
 }) {
   const accent = brandColor(s.brand);
@@ -247,13 +263,13 @@ function PrinterCard({
       )}
 
       {showControls ? (
-        <View style={styles.controls}>
+        <View style={[styles.controls, disabled && { opacity: 0.45 }]}>
           {s.status === "printing" ? (
-            <CtrlBtn label="Duraklat" icon="pause.fill" color={ML.orange} onPress={() => onCommand("pause")} />
+            <CtrlBtn label="Duraklat" icon="pause.fill" color={ML.orange} disabled={disabled} onPress={() => onCommand("pause")} />
           ) : (
-            <CtrlBtn label="Devam" icon="play.fill" color={ML.green} onPress={() => onCommand("resume")} />
+            <CtrlBtn label="Devam" icon="play.fill" color={ML.green} disabled={disabled} onPress={() => onCommand("resume")} />
           )}
-          <CtrlBtn label="İptal" icon="stop.fill" color={ML.red} onPress={() => onCommand("cancel")} />
+          <CtrlBtn label="İptal" icon="stop.fill" color={ML.red} disabled={disabled} onPress={() => onCommand("cancel")} />
         </View>
       ) : null}
     </View>
@@ -264,20 +280,23 @@ function CtrlBtn({
   label,
   icon,
   color,
+  disabled,
   onPress,
 }: {
   label: string;
   icon: SymbolViewProps["name"];
   color: string;
+  disabled?: boolean;
   onPress: () => void;
 }) {
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       style={({ pressed }) => [
         styles.ctrlBtn,
         { borderColor: color + "55" },
-        pressed && { backgroundColor: color + "1A" },
+        pressed && !disabled && { backgroundColor: color + "1A" },
       ]}
     >
       <SymbolView name={icon} tintColor={color} style={{ width: 13, height: 13 }} />

@@ -16,7 +16,8 @@ export interface UnifiedOrder {
   id: string;
   platform: Platform;
   orderNumber: string;
-  date: number;
+  /** Sipariş VERME tarihi (epoch ms). Masaüstüyle birebir: bilinmiyorsa null → listede en alta. */
+  date: number | null;
   status: string;
   customer: string | null;
   total: number;
@@ -53,7 +54,8 @@ export async function getAllOrders(): Promise<OrdersResult> {
   const cutoff = orderWindowCutoff();
   const recent = orders.filter((o) => !o.date || o.date >= cutoff);
 
-  recent.sort((a, b) => b.date - a.date);
+  // Tarihsiz (null) siparişler masaüstüyle aynı şekilde EN ALTA düşer.
+  recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   return { orders: recent, errors };
 }
 

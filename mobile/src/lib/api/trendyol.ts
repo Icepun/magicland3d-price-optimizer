@@ -24,21 +24,22 @@ function base64(str: string): string {
 }
 
 interface TyOrder {
-  orderNumber: string;
-  orderDate: number;
+  /** Paket (shipmentPackage) id'si — aynı orderNumber bölününce her paket ayrı id alır. */
+  id?: number | string;
+  orderNumber?: string;
+  orderDate?: number;
   status: string;
   customerFirstName?: string;
   customerLastName?: string;
-  totalPrice: number;
+  totalPrice?: number;
+  grossAmount?: number;
   lines?: {
-    productName: string;
-    quantity: number;
+    productName?: string;
+    quantity?: number;
     barcode?: string;
     sku?: string;
-    stockCode?: string;
     merchantSku?: string;
     price?: number;
-    amount?: number;
   }[];
 }
 
@@ -69,22 +70,27 @@ export async function getTrendyolOrders(): Promise<UnifiedOrder[]> {
       const json = (await res.json()) as { content?: TyOrder[] };
       const content = json.content ?? [];
       for (const [i, o] of content.entries()) {
-        const key = String(o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`);
+        // Masaüstü route.ts:318 ile birebir: PAKET id'siyle tekilleştir (orderNumber DEĞİL).
+        // Bölünmüş siparişte (UnPacked/kısmi iptal) aynı orderNumber'ın iki paketi iki kayıttır;
+        // orderNumber-bazlı tekilleştirme ikinci paketi DÜŞÜRÜYORDU → ciro/kâr masaüstünden sapıyordu.
+        const key = String(o.id ?? o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`);
         if (seen.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
         seen.add(key);
         orders.push({
-          id: `ty-${o.orderNumber}`,
+          id: `ty-${o.id ?? o.orderNumber ?? key}`,
           platform: "trendyol" as const,
-          orderNumber: o.orderNumber,
-          date: o.orderDate,
+          orderNumber: String(o.orderNumber ?? o.id ?? "—"),
+          date: o.orderDate ?? null,
           status: o.status,
           customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
-          total: o.totalPrice,
+          // Masaüstüyle birebir savunmalı alanlar (totalPrice gelmezse NaN ciroya bulaşmasın).
+          total: Number(o.totalPrice ?? o.grossAmount ?? 0),
           items: (o.lines ?? []).map((l) => ({
-            name: l.productName,
-            quantity: l.quantity,
-            unitPrice: Number(l.price ?? l.amount ?? 0),
-            matchKeys: [l.barcode, l.sku, l.stockCode, l.merchantSku].filter(
+            name: l.productName ?? l.barcode ?? "Ürün",
+            quantity: Number(l.quantity ?? 1),
+            unitPrice: Number(l.price ?? 0),
+            // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele) — masaüstü route.ts:338.
+            matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
               (k): k is string => !!k && k !== "merchantSku"
             ),
           })),
