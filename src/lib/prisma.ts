@@ -27,14 +27,35 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
   #syncing = false;
   /** Bulut erişim kontrolü için syncUrl'in HTTPS karşılığı. */
   #syncHttpUrl: string | null = null;
+  /** "Sync sürüyor" işaret dosyası — kendi kendini iyileştirme için (aşağıya bak). */
+  #markerPath: string | null = null;
 
   createClient(config: LibsqlConfig): LibsqlClient {
     const syncUrl = (config as { syncUrl?: string }).syncUrl;
     if (syncUrl) {
-      // super.createClient'tan ÖNCE bak: replica dosyası zaten var mıydı?
-      // Varsa = önceki oturumun verisi yerelde mevcut → açılışta beklemeden göster.
       const url = String((config as { url?: string }).url || "");
       const filePath = url.startsWith("file:") ? url.slice("file:".length) : url;
+      // KENDİ KENDİNİ İYİLEŞTİRME (Mac aylık donma döngüsünün kalıcı fix'i):
+      // Native sync başlamadan işaret dosyası yazılır, sync SAĞLIKLA dönünce silinir.
+      // Açılışta işaret hâlâ duruyorsa = önceki oturum sync ORTASINDA donup zorla
+      // kapatılmış → replica dosyası büyük olasılıkla bozuk durumda; bozuk replica'da
+      // native sync SONSUZA DEK takılıp (kanıt: sample → index.node → __psynch_cvwait)
+      // tüm SQL'i ve Electron ana thread'ini donduruyordu. Çare: replica'yı SİL →
+      // taze tam senkron (~15-20sn, bir kereye mahsus) → döngü kırılır.
+      if (filePath) {
+        this.#markerPath = `${filePath}.sync-in-progress`;
+        try {
+          if (fs.existsSync(this.#markerPath)) {
+            console.warn("[prisma] Önceki oturum sync ortasında kesilmiş — replica sıfırlanıyor (taze senkron).");
+            for (const suffix of ["", "-wal", "-shm", "-info"]) {
+              try { fs.rmSync(`${filePath}${suffix}`, { force: true }); } catch { /* yoksa geç */ }
+            }
+            try { fs.rmSync(this.#markerPath, { force: true }); } catch { /* yoksa geç */ }
+          }
+        } catch { /* iyileştirme başarısızsa normal akış dener */ }
+      }
+      // super.createClient'tan ÖNCE bak: replica dosyası zaten var mıydı?
+      // Varsa = önceki oturumun verisi yerelde mevcut → açılışta beklemeden göster.
       try {
         this.#replicaPreexisting = filePath ? fs.existsSync(filePath) : false;
       } catch {
@@ -46,6 +67,15 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
     // Sadece gerçek replica (syncUrl'li file) client'ını yakala; :memory: shadow değil.
     if (syncUrl) this.#replicaClient = client;
     return client;
+  }
+
+  /** Native sync'i işaret dosyasıyla sar: başlarken yaz, SAĞLIKLA bitince sil.
+   *  Süreç sync ortasında ölür/donarsa işaret kalır → bir sonraki açılış replica'yı tazeler. */
+  #trackedSync(client: LibsqlClient): Promise<unknown> {
+    try { if (this.#markerPath) fs.writeFileSync(this.#markerPath, String(Date.now())); } catch { /* izleme yazılamadıysa sync yine denenir */ }
+    return client.sync().finally(() => {
+      try { if (this.#markerPath) fs.rmSync(this.#markerPath, { force: true }); } catch { /* silinemezse sonraki açılış tazeler (zararsız) */ }
+    });
   }
 
   /**
@@ -77,7 +107,7 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
       try {
         if (await this.#cloudReachable()) {
           await Promise.race([
-            this.#replicaClient.sync(),
+            this.#trackedSync(this.#replicaClient),
             new Promise((r) => setTimeout(r, 6000)),
           ]);
         }
@@ -97,8 +127,7 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
     if (!(await this.#cloudReachable())) return; // ağ yok → bloke eden native sync'i çağırma
     this.#syncing = true;
     const client = this.#replicaClient;
-    const done = client
-      .sync()
+    const done = this.#trackedSync(client)
       .catch((e) => console.error("[prisma] sync:", e instanceof Error ? e.message : e))
       .finally(() => { this.#syncing = false; });
     // Çağıran en fazla 9sn bekler; native sync arka planda devam edebilir (guard onu korur).

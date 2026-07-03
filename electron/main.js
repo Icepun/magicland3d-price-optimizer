@@ -428,6 +428,78 @@ function cryptoRandomHex() {
   return require("node:crypto").randomBytes(32).toString("hex");
 }
 
+/**
+ * BOZUK REPLICA KENDİNİ İYİLEŞTİRME — "Mac'te açılıştan ~3sn sonra sonsuz donma"nın kalıcı fix'i.
+ *
+ * Kök neden (sample kanıtlı): turso-replica.db bozuk duruma düşünce (donma sırasında zorla
+ * kapatma vb.) libsql'in native sync/YAZMA çağrısı ana thread'de SONSUZA DEK bekliyor
+ * (index.node → __psynch_cvwait) → Electron ana süreci = UI + Node aynı thread → her şey donar.
+ * Okumalar çalıştığı için basit SELECT yoklaması yetmez; süreç-içi timeout da işlemez (loop bloke).
+ *
+ * Çözüm: sunucu başlamadan önce replica'nın KOPYASI feda edilebilir bir alt süreçte yoklanır
+ * (SELECT + sync + yazma). 20 sn'de sağlık raporu gelmezse ya da libsql hatası dönerse (çıkış 42)
+ * replica silinir → Prisma taze tam senkronla açar (~10-20 sn, bir kerelik). Yoklamanın kendi
+ * arızası (modül yüklenemedi vb.) fail-open'dır: replica'ya dokunulmaz, normal akış denenir.
+ */
+async function ensureReplicaHealthy() {
+  const replicaPath = process.env.TURSO_REPLICA_PATH;
+  if (!replicaPath || !process.env.TURSO_DATABASE_URL) return;
+  if (!fs.existsSync(replicaPath)) return; // ilk kurulum — yoklanacak dosya yok
+
+  const os = require("node:os");
+  const { utilityProcess } = require("electron");
+  let tmpDir = null;
+  try {
+    // Yoklama KOPYA üzerinde: gerçek dosyaya ikinci sync client dokundurmak Prisma'yla
+    // "wal_index" çakışması yaratabiliyor. Bozuk durum kopyada da aynen takılıyor (doğrulandı).
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-replica-probe-"));
+    const probeDb = path.join(tmpDir, "replica.db");
+    fs.copyFileSync(replicaPath, probeDb);
+    for (const suffix of ["-wal", "-shm", "-info"]) {
+      try {
+        if (fs.existsSync(`${replicaPath}${suffix}`)) fs.copyFileSync(`${replicaPath}${suffix}`, `${probeDb}${suffix}`);
+      } catch { /* eksik yan dosya sorun değil */ }
+    }
+
+    logStartup("replica sağlık yoklaması başlıyor (alt süreç, 20sn sınır)");
+    const healthy = await new Promise((resolve) => {
+      let child;
+      try {
+        child = utilityProcess.fork(path.join(__dirname, "replica-probe.js"), [probeDb], { stdio: "ignore" });
+      } catch (e) {
+        logStartup("replica yoklaması kurulamadı (fail-open):", e && e.message);
+        resolve(true);
+        return;
+      }
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch { /* zaten ölü olabilir */ }
+        resolve(false); // zaman aşımı = native takılma = sağlıksız
+      }, 20_000);
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve(true); // sağlıklı
+        else if (code === 42) resolve(false); // libsql hatası = replica sorunlu
+        else resolve(true); // yoklamanın kendi arızası → fail-open (her açılışta boşa sıfırlama olmasın)
+      });
+    });
+
+    if (!healthy) {
+      logStartup("replica SAĞLIKSIZ (takıldı/hata) → sıfırlanıyor; taze tam senkron yapılacak");
+      for (const suffix of ["", "-wal", "-shm", "-info"]) {
+        try { fs.rmSync(`${replicaPath}${suffix}`, { force: true }); } catch { /* silinemezse normal akış dener */ }
+      }
+    } else {
+      logStartup("replica sağlıklı ✓");
+    }
+  } catch (e) {
+    logStartup("replica yoklaması hata (fail-open):", e && e.message);
+  } finally {
+    if (tmpDir) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* tmp temizliği kritik değil */ }
+    }
+  }
+}
+
 async function findAvailablePort(preferredPort) {
   for (let candidate = preferredPort; candidate < preferredPort + 50; candidate += 1) {
     const available = await new Promise((resolve) => {
@@ -454,6 +526,8 @@ async function startNextServer() {
   ensurePrismaEngine();
   logStartup("startNextServer: ensuring credential key");
   ensureCredentialKey();
+  logStartup("startNextServer: replica health check");
+  await ensureReplicaHealthy();
   logStartup("startNextServer: finding port");
   const port = await findAvailablePort(defaultPort);
   logStartup("startNextServer: port =", port);
