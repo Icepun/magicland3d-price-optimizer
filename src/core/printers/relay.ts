@@ -11,6 +11,7 @@
 import fs from "node:fs";
 import { prisma, syncTursoReplica } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { resolveModelFileLocal } from "@/lib/model-files";
 import {
   fetchMoonrakerStatus, fetchMoonrakerMeta, moonrakerThumbUrl,
   moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
@@ -19,10 +20,20 @@ import { getBambuStatus, bambuControl, mapBambuState } from "./bambu";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const TICK_MS = 10_000;
+/** Heartbeat aralığı: snapshot İÇERİK değişmese de updatedAt en geç bu aralıkla tazelenir.
+ *  (Eski davranış yalnız değişince yazıyordu → boşta/duraklamış yazıcıda updatedAt yaşlanıyor,
+ *  mobil 90sn'de yanlış "masaüstü kapalı" alarmı verip kontrolleri/tekrar-bas'ı kilitliyordu.) */
+const HEARTBEAT_MS = 30_000;
+/** Bu süreden eski pending komutlar UYGULANMAZ → zaman aşımı. (Masaüstü kapalıyken gönderilen
+ *  "start"ın saatler sonra kimse beklemiyorken baskı başlatması / bayat "cancel"ın yeni baskıyı
+ *  öldürmesi güvenlik riskiydi.) */
+const COMMAND_TTL_MS = 10 * 60_000;
 let started = false;
+let capsWritten = false; // relay yetenek bildirimi (AppSetting) bir kez yazılır
 let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
 let tickCount = 0; // her 6. tick'te (~60sn) replica pull — sync() sorguları kısa süre bloke ettiği için sıklığı düşük tut (60sn = periyodik takılma yarıya iner; telefon komutları yine ≤60sn'de görülür)
 const lastKey = new Map<string, string>();
+const lastWriteAt = new Map<string, number>(); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
 const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
 
 export function startPrinterRelay() {
@@ -114,9 +125,16 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
     if (c.type !== "moonraker") throw new Error("Bambu'da uzaktan baskı başlatma henüz desteklenmiyor");
     const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
-    if (!fs.existsSync(mf.storedPath)) throw new Error("Dosya bu cihazda yok");
-    const buf = fs.readFileSync(mf.storedPath);
-    await moonrakerUploadAndPrint(c.host, c.port, buf, mf.originalName);
+    // Masaüstü print rotasıyla AYNI çözümleme: R2'deki (bulut) dosya indirilir, yerel dosya
+    // diskten okunur. (Eski hali yalnız storedPath'e bakıyordu → telefondan bulut dosyaya
+    // "Tekrar bas" %100 "Dosya bu cihazda yok" hatası veriyordu.)
+    const local = await resolveModelFileLocal(mf);
+    try {
+      const buf = fs.readFileSync(local.path);
+      await moonrakerUploadAndPrint(c.host, c.port, buf, mf.originalName);
+    } finally {
+      local.cleanup();
+    }
     try {
       await prisma.printFileProduct.upsert({
         where: { printerConfigId_filename: { printerConfigId: c.id, filename: mf.originalName } },
@@ -169,6 +187,18 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     await ensureRuntimeSchema();
+    // Yetenek bildirimi (bir kez): mobil, bulut (R2) dosyaya "Tekrar bas" kapısını
+    // printRelayCaps içinde "r2start" görünce açar (eski relay'de buton kilitli kalır).
+    if (!capsWritten) {
+      try {
+        await prisma.appSetting.upsert({
+          where: { key: "printRelayCaps" },
+          create: { key: "printRelayCaps", value: "r2start,heartbeat,cmdttl" },
+          update: { value: "r2start,heartbeat,cmdttl" },
+        });
+        capsWritten = true;
+      } catch { /* sonraki tick dener */ }
+    }
     // Replica pull'u HER tick'te değil ~60sn'de bir (sync() SQL sorgularını kısa süre bloke
     // ediyor — sıklığı düşürünce blokaj seyrekleşir). Yazmalar (snapshot upsert) zaten anında
     // buluta gider, sync gerektirmez. syncNow ayrıca erişim-kontrollü + guard'lı.
@@ -201,7 +231,14 @@ async function tick(): Promise<void> {
         void notifyPrintComplete(c, snap).catch(() => {});
       }
       const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, snap.etaSec, snap.statusMessage].join("|");
-      if (lastKey.get(c.id) === key) return;
+      // HEARTBEAT: içerik değişmese de updatedAt en geç 30sn'de bir tazelenir. Telefon
+      // "masaüstü açık mı?" tespitini updatedAt yaşından yapıyor; salt-değişince-yaz davranışı
+      // boşta/duraklamış yazıcıda (değerler sabit) yanlış "Canlı değil" alarmı + kontrol/tekrar-bas
+      // kilidi üretiyordu.
+      const nowMs = Date.now();
+      const unchanged = lastKey.get(c.id) === key;
+      const fresh = nowMs - (lastWriteAt.get(c.id) ?? 0) < HEARTBEAT_MS;
+      if (unchanged && fresh) return;
       lastKey.set(c.id, key);
       try {
         await prisma.printerSnapshot.upsert({
@@ -209,16 +246,27 @@ async function tick(): Promise<void> {
           create: { printerConfigId: c.id, ...snap },
           update: snap,
         });
+        lastWriteAt.set(c.id, nowMs);
       } catch { /* yazılamadıysa sonraki tick dener */ }
     }));
 
     // 2) Bekleyen komutlar (sıralı — komut sırası korunmalı)
-    let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null }[] = [];
+    let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null; createdAt: Date }[] = [];
     try {
       pending = await prisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
     } catch { return; }
 
     for (const cmd of pending) {
+      // TTL: masaüstü KAPALIYKEN gönderilip birikmiş bayat komutlar uygulanmaz — bayat "start"
+      // kimse beklemiyorken baskı başlatır, bayat "cancel" masaüstünden yeni açılan baskıyı
+      // öldürebilirdi. Telefon 90sn'de zaten "uygulanmadı" uyarısı gösteriyor.
+      if (Date.now() - new Date(cmd.createdAt).getTime() > COMMAND_TTL_MS) {
+        await prisma.printCommand.update({
+          where: { id: cmd.id },
+          data: { status: "error", error: "Zaman aşımı — masaüstü kapalıyken gönderildi, güvenlik için uygulanmadı", processedAt: new Date() },
+        }).catch(() => {});
+        continue;
+      }
       try {
         const c = configs.find((x) => x.id === cmd.printerConfigId)
           ?? ((await prisma.printerConfig.findUnique({ where: { id: cmd.printerConfigId } })) as Cfg | null);

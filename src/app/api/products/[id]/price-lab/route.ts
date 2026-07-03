@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice } from "@/core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { resolveProductCost } from "@/core/product-cost";
@@ -67,6 +67,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         ? resolveListingCommissionOverride({ platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }, settingsMap)
         : resolveListingCommissionOverride({ platform, commissionRate: null, commissionFixed: null }, settingsMap)),
       cargoCostOverride: listing?.cargoCost ?? undefined,
+      // Trendyol min sipariş adedi — karar: Fiyat Lab da uygular (mobil price-lab.ts ile birebir;
+      // Ürünler sayfası zaten uyguluyordu → üç yüzey aynı).
+      minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: filamentMatCost,
     });
   }

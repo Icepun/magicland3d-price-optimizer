@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice } from "@/core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { resolveProductCost } from "@/core/product-cost";
@@ -146,7 +146,14 @@ export async function GET() {
         ),
         vatRate,
         ...resolveListingCommissionOverride(listing, settingsMap),
-        cargoCostOverride: listing.cargoCost ?? undefined,
+        // ÜRÜNLER sayfası matematiğiyle BİREBİR (karar): Panel eskiden bu iki kuralı uygulamıyordu
+        // → aynı listing Panel'de farklı, Ürünler sayfasında/mobilde farklı kâr gösteriyordu.
+        // Shopify sepet min 150₺ → <150₺ ürün tek başına satılamaz, kargo paylaşılır → 0.
+        cargoCostOverride:
+          listing.cargoCost ??
+          (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
+        // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden.
+        minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
         vatableProductCost: resolved.filamentCost,
       });
 
@@ -171,8 +178,9 @@ export async function GET() {
     }
   }
 
-  // Ortalama marjları hesapla
-  for (const platform of ["shopify", "trendyol"] as Platform[]) {
+  // Ortalama marjları hesapla — HB dahil (eskiden atlanıyordu → masaüstü HB marjı hep 0,
+  // mobil hesaplıyordu; iki cihaz farklı değer gösteriyordu).
+  for (const platform of ["shopify", "trendyol", "hepsiburada"] as Platform[]) {
     const m = platformMarginSums[platform];
     platformStats[platform].averageMargin = m.count > 0 ? m.sum / m.count : 0;
   }

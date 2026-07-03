@@ -167,12 +167,15 @@ function shopifyStatus(
   cancelled: boolean
 ): { kind: OrderStatusKind; label: string } {
   if (cancelled) return { kind: "cancelled", label: "İptal" };
+  // İADE önceliği FULFILLMENT'tan ÖNCE (karar, mobil ile hizalı): gönderilmiş ama iade edilmiş
+  // sipariş ciro/kâra GİRMEZ — para geri döndü. (Eski sıra FULFILLED+REFUNDED'ı "Gönderildi"
+  // sayıp ciroya katıyordu; mobil hariç tutuyordu → iki cihaz farklı toplam gösteriyordu.)
+  const fin = (financial || "").toUpperCase();
+  if (fin === "REFUNDED" || fin === "PARTIALLY_REFUNDED") return { kind: "cancelled", label: "İade" };
   const f = (fulfillment || "").toUpperCase();
   if (f === "FULFILLED") return { kind: "shipped", label: "Gönderildi" };
   if (f === "PARTIALLY_FULFILLED") return { kind: "processing", label: "Kısmi Gönderim" };
   if (f === "IN_PROGRESS" || f === "SCHEDULED") return { kind: "processing", label: "Hazırlanıyor" };
-  const fin = (financial || "").toUpperCase();
-  if (fin === "REFUNDED" || fin === "PARTIALLY_REFUNDED") return { kind: "cancelled", label: "İade" };
   if (fin === "PENDING" || fin === "AUTHORIZED") return { kind: "pending", label: "Ödeme Bekliyor" };
   return { kind: "pending", label: "Hazırlanmadı" };
 }

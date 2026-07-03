@@ -12,5 +12,11 @@ export function thumbUrl(url: string | null | undefined, px = 100): string | nul
   if (/(?:cdn|[\w.-]*\.cdn)\.shopify\.com/i.test(url)) {
     return `${url}${url.includes("?") ? "&" : "?"}width=${px}`;
   }
+  // Trendyol CDN: host'tan hemen sonra `mnresize/{w}/{h}/` yol öneki (mobil src/lib/image.ts ile
+  // aynı; curl ile doğrulandı: 189KB → 2.6KB, ~72x küçülme).
+  const ty = url.match(/^(https?:\/\/cdn\.dsmcdn\.com)\/(?!mnresize\/)(.+)$/i);
+  if (ty) {
+    return `${ty[1]}/mnresize/${px}/${px}/${ty[2]}`;
+  }
   return url;
 }
