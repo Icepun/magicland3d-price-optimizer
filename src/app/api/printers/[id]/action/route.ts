@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { moonrakerControl, moonrakerStart } from "@/core/printers/moonraker";
+import { moonrakerControl, moonrakerStartExisting } from "@/core/printers/moonraker";
 import { bambuControl } from "@/core/printers/bambu";
 
 const Schema = z.object({
@@ -37,7 +37,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (action === "start") {
       if (!filename) return NextResponse.json({ error: "Dosya seçilmedi" }, { status: 400 });
-      await moonrakerStart(cfg.host, cfg.port, filename);
+      // Marka-doğru başlatma: Snapmaker U1 native WITH_PARAMETERS akışına girmezse sahte
+      // "filament runout" (id=523) verir — düz moonrakerStart bu yüzden yeterli değil.
+      await moonrakerStartExisting(cfg.host, cfg.port, filename, cfg.brand);
     } else {
       await moonrakerControl(cfg.host, cfg.port, action);
     }

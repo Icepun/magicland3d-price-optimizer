@@ -10,6 +10,7 @@ import { getR2Config, getObjectBytes } from "@/lib/r2";
 import { moonrakerUploadAndPrint } from "@/core/printers/moonraker";
 import { bambuUploadAndPrint, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
 import { readModelColors, is3mfSliced, readBambuPrintMeta } from "@/core/printers/model-colors";
+import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,13 @@ export const dynamic = "force-dynamic";
  * Doğrulama hataları (dilimlenmemiş dosya, hatalı renk eşleştirme) akış başlamadan JSON 4xx döner.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  // R2 dosyası için yazılan geçici dosya — TÜM çıkış yollarında (erken 4xx, hata, akış sonu)
+  // silinmeli. Eski hali yalnız akış finally'sinde siliyordu → doğrulama 4xx'lerinde temp birikirdi.
+  let tmpToClean: string | null = null;
+  const bail = (resp: NextResponse) => {
+    if (tmpToClean) { try { fs.unlinkSync(tmpToClean); } catch { /* temizlik kritik değil */ } tmpToClean = null; }
+    return resp;
+  };
   try {
     await ensureRuntimeSchema();
     const { id } = await params; // modelFileId
@@ -42,7 +50,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // için geçici dosyaya yaz); değilse yerel diskten. buf belleğe alınır, geçici dosya akış bitince silinir.
     let buf: Buffer;
     let validatePath: string;
-    let tmpToClean: string | null = null;
     if (mf.r2Key) {
       const cfg = await getR2Config();
       if (!cfg) {
@@ -69,10 +76,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // ── ÖN DOĞRULAMA (akış öncesi 4xx) ──────────────────────────────────────────
     // 1) Dosya dilimlenmiş mi? (STL/OBJ/ham 3MF → baskı başlatma)
     if (printer.type === "bambu" && !is3mfSliced(validatePath)) {
-      return NextResponse.json(
+      return bail(NextResponse.json(
         { error: "Bu dosya dilimlenmemiş (STL/OBJ veya ham 3MF). Bambu Studio/Orca ile dilimleyip .3mf (veya .gcode) yükleyin." },
         { status: 400 }
-      );
+      ));
     }
     // 1b) Bambu ÇOK RENKLİ baskı: ham .gcode AMS eşleme tablosunu TAŞIMAZ → LAN modunda
     //     yazıcı "AMS mapping table alınamadı" ile reddeder (kriptik print_error, ör. 83902467).
@@ -80,13 +87,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (printer.type === "bambu") {
       const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
       if (isRawGcode && readModelColors(validatePath).colors.length > 1) {
-        return NextResponse.json(
+        return bail(NextResponse.json(
           {
             error:
               "Bambu çok renkli baskı için ham .gcode yetmiyor — AMS eşleme tablosunu taşımadığı için yazıcı reddediyor. Bambu Studio'da plakayı dilimle → sağ üstteki oka tıkla → \"Dilimlenmiş plaka dosyasını dışa aktar\" ile aldığın .3mf dosyasını yükle.",
           },
           { status: 400 }
-        );
+        ));
       }
     }
     // 2) AMS renk eşleştirmesi tutarlı mı? (her renk dolu bir slota; eksik/boş slot → başlatma)
@@ -96,7 +103,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         for (const c of colors) {
           const slot = amsMapping[c.index];
           if (slot == null || slot < 0) {
-            return NextResponse.json({ error: "Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı." }, { status: 400 });
+            return bail(NextResponse.json({ error: "Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı." }, { status: 400 }));
           }
         }
         // Boş slot seçilmiş mi? (slot okunabiliyorsa)
@@ -106,7 +113,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             for (const c of colors) {
               const phys = slots.find((s) => s.slot === amsMapping[c.index]);
               if (phys && phys.empty) {
-                return NextResponse.json({ error: `AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.` }, { status: 400 });
+                return bail(NextResponse.json({ error: `AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.` }, { status: 400 }));
               }
             }
           }
@@ -115,6 +122,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     }
 
     const isBambu = printer.type === "bambu";
+
+    // YAZICI-BAŞINA KİLİT: aynı yazıcıya eşzamanlı ikinci başlatma (çift tık / telefon relay
+    // komutu / ikinci pencere) ikisi de boşta-kontrolünü geçebilir → çift upload/start yarışı.
+    // Kilit tüm akış boyunca (upload + start + doğrulama) tutulur, finally'de bırakılır.
+    if (!tryAcquirePrintLock(printer.id)) {
+      return bail(NextResponse.json({ error: "Bu yazıcıda şu an bir baskı başlatılıyor — bitmesini bekle." }, { status: 409 }));
+    }
 
     const enc = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({
@@ -186,8 +200,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         } catch (e) {
           send({ stage: "error", message: e instanceof Error ? e.message : String(e) });
         } finally {
-          controller.close();
-          if (tmpToClean) { try { fs.unlinkSync(tmpToClean); } catch { /* geçici dosya temizliği kritik değil */ } }
+          // Sıra ÖNEMLİ: önce temizlik + kilit, EN SON close. Eski halde guard'sız close(),
+          // istemci akışı kapatmışsa fırlatıyor ve temp silme satırını atlıyordu (sızıntı).
+          if (tmpToClean) { try { fs.unlinkSync(tmpToClean); } catch { /* geçici dosya temizliği kritik değil */ } tmpToClean = null; }
+          releasePrintLock(printer.id);
+          try { controller.close(); } catch { /* akış zaten kapalı (istemci ayrıldı) */ }
         }
       },
     });
@@ -196,6 +213,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform" },
     });
   } catch (error) {
-    return jsonError(error);
+    return bail(jsonError(error));
   }
 }

@@ -212,6 +212,17 @@ export async function moonrakerControl(host: string, port: number, action: "paus
   if (!res.ok) throw new Error(`Yazıcı komutu başarısız (HTTP ${res.status})`);
 }
 
+/** Baskı başlatmadan önce yazıcının BOŞTA olduğunu doğrula (meşgulse net hata). Eski akış bu
+ *  kontrol olmadan upload(print=true) gönderiyordu → Moonraker dosyayı alır ama BASMAZ,
+ *  print_started:false döner ve kullanıcı sahte "Başlatıldı 🎉" görürdü. */
+async function assertMoonrakerIdle(host: string, port: number): Promise<void> {
+  const st = await fetchMoonrakerStatus(host, port);
+  if (!st.online) throw new Error("Yazıcıya ulaşılamadı — açık ve ağda mı?");
+  if (st.state === "printing" || st.state === "paused") {
+    throw new Error("Yazıcı şu an meşgul — önce mevcut baskıyı bitir veya iptal et.");
+  }
+}
+
 export async function moonrakerStart(host: string, port: number, filename: string): Promise<void> {
   const res = await mfetch(
     `${moonrakerBase(host, port)}/printer/print/start?filename=${encodeURIComponent(filename)}`,
@@ -219,6 +230,23 @@ export async function moonrakerStart(host: string, port: number, filename: strin
     8000
   );
   if (!res.ok) throw new Error(`Baskı başlatılamadı (HTTP ${res.status})`);
+}
+
+/**
+ * Yazıcıda ZATEN duran bir dosyayı başlat — marka-doğru yol.
+ * Snapmaker U1: düz /printer/print/start `print_task_config`'i DOLDURMAZ → filament_type=='NONE'
+ * → sahte runout (id=523 code=39), nozzle ısınmaz. Metadata yazıcıdan okunur ve
+ * SDCARD_PRINT_FILE_WITH_PARAMETERS ile native başlatılır (uploadAndPrint'teki akışın aynısı).
+ * Diğer Moonraker (Elegoo): düz start yeterli. Her iki yol da önce boşta-kontrolü yapar.
+ */
+export async function moonrakerStartExisting(host: string, port: number, filename: string, brand?: string): Promise<void> {
+  await assertMoonrakerIdle(host, port);
+  if ((brand || "").toLowerCase() === "snapmaker") {
+    const meta = await moonrakerRawMeta(host, port, filename);
+    await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta));
+    return;
+  }
+  await moonrakerStart(host, port, filename);
 }
 
 /**
@@ -354,6 +382,9 @@ export async function moonrakerUploadAndPrint(
   opts: { headMapping?: number[]; prefs?: MoonrakerPrefs; brand?: string } = {}
 ): Promise<void> {
   const isSnapmaker = (opts.brand || "").toLowerCase() === "snapmaker";
+  // Yüklemeden ÖNCE boşta-kontrolü — meşgul yazıcıya upload etmek boşa bant genişliği + Elegoo'da
+  // (print=true) sessizce basmayan sahte-başarı üretiyordu.
+  await assertMoonrakerIdle(host, port);
   let body = fileBuf;
   const isGcode = /\.(gcode|gco|g)$/i.test(filename);
   if (isGcode && opts.headMapping && opts.headMapping.length) {
@@ -374,7 +405,16 @@ export async function moonrakerUploadAndPrint(
     const t = await res.text().catch(() => "");
     throw new Error(`Yükleme başarısız (HTTP ${res.status}) ${t.slice(0, 140)}`.trim());
   }
-  if (!isSnapmaker) return; // Elegoo: print=true zaten başlattı.
+  if (!isSnapmaker) {
+    // Elegoo (print=true): Moonraker dosyayı alıp BASMAMIŞ olabilir (meşgul/hazır değil) —
+    // yanıt HTTP 2xx gelir ama print_started:false taşır. Eskiden hiç okunmuyordu → sahte
+    // "Başlatıldı 🎉". Açıkça false ise hata fırlat (alan yoksa eski davranış korunur).
+    const j = unwrap(await res.json().catch(() => null));
+    if (j && j.print_started === false) {
+      throw new Error("Yazıcı dosyayı aldı ama baskıyı başlatmadı — ekranından hazır olduğunu kontrol et.");
+    }
+    return;
+  }
 
   // Snapmaker: native start_print_advanced replikası → print_task_config dolar, sahte runout önlenir.
   const meta = await moonrakerRawMeta(host, port, filename);

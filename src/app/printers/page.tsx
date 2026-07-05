@@ -332,6 +332,10 @@ function PrinterCard({
   const { job, status, accent, online } = printer;
   const isReal = printer.type !== "sim";
 
+  const isFinished = status === "finished";
+  const isPrinting = status === "printing";
+  const isPaused = status === "paused";
+
   // Gerçek snapshot değerleri (zaman-interpolasyonu DEĞİL). remainingSec endsAt'a
   // sabitlenmiş canlı geri sayım; progress/layer doğrudan yazıcıdan gelir.
   let progress = 0, remainingSec = 0, endMs = 0;
@@ -339,15 +343,16 @@ function PrinterCard({
   if (job) {
     endMs = new Date(job.endsAt).getTime();
     progress = clamp(job.progress, 0, 1);
-    remainingSec = now > 0 ? Math.max(0, (endMs - now) / 1000) : 0;
+    // DURAKLATILMIŞTA canlı sayım YOK: printDuration donar ama endsAt her poll'da ileri kayar →
+    // canlı sayım iner, poll'da geri zıplar (testere-dişi) ve tek başına paused'dayken tik hiç
+    // çalışmadığından "0sn kaldı · 1970 saati" görünüyordu. Snapshot remainingSec statik gösterilir.
+    // now=0 (ilk kare, tik henüz kurulmadı) durumunda da snapshot'a düş → sahte "Tamamlanıyor…" flaşı yok.
+    remainingSec = isPaused || now <= 0 ? Math.max(0, job.remainingSec) : Math.max(0, (endMs - now) / 1000);
     layerCurrent = job.layerCurrent;
-    if (status === "finished") { progress = 1; remainingSec = 0; }
+    if (isFinished) { progress = 1; remainingSec = 0; }
   }
   const pct = Math.round(progress * 100);
-  const finishingNow = status === "printing" && remainingSec <= 0.5;
-  const isFinished = status === "finished";
-  const isPrinting = status === "printing";
-  const isPaused = status === "paused";
+  const finishingNow = isPrinting && remainingSec <= 0.5;
   const offline = isReal && !online;
   const isError = status === "error";
 
@@ -486,8 +491,9 @@ function PrinterCard({
               </span>
               <span className="text-muted-foreground inline-flex items-center gap-1">
                 {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
-                  : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
-                    : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now)}</>)}
+                  : isPaused ? (<><Pause className="h-3.5 w-3.5 text-amber-500" /> Duraklatıldı · {fmtRemaining(remainingSec)} kaldı</>)
+                    : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
+                      : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now || Date.now())}</>)}
               </span>
             </div>
           </div>
@@ -1176,7 +1182,9 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
           <div className="space-y-3">
             <div className="rounded-lg border bg-muted/30 px-3 py-2 text-xs flex items-center gap-2">
               <Printer className="h-3.5 w-3.5 text-primary" /> {picked.name}
-              <button onClick={() => setPicked(null)} className="ml-auto text-primary hover:underline">değiştir</button>
+              {/* Yükleme sürerken yazıcı DEĞİŞTİRİLEMEZ: dosya seçilen yazıcıya bağlı kaydediliyor —
+                  ortada değiştirmek "ekranda B, baskı A'ya" tutarsızlığı yaratıyordu. */}
+              <button onClick={() => setPicked(null)} disabled={uploading} className="ml-auto text-primary hover:underline disabled:opacity-40 disabled:no-underline">değiştir</button>
             </div>
             <input ref={fileRef} type="file" accept=".gcode,.gco,.g,.3mf" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
             <button

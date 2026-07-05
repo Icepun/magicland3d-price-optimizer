@@ -2,13 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { FileBox, Trash2, Play, Cloud, HardDrive, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  SlotStep, runPrintStream,
+  SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
 
@@ -60,42 +60,49 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
   const qc = useQueryClient();
   const { data: items = [], isLoading } = useQuery<CustomPrintRow[]>({
     queryKey: ["custom-prints"],
-    queryFn: () => fetch("/api/custom-print").then((r) => r.json()),
+    // r.ok + dizi kontrolü: sunucu hata JSON'u ({error}) dönerse items.map ile modal çökmesin.
+    queryFn: async () => {
+      const r = await fetch("/api/custom-print");
+      if (!r.ok) throw new Error("Liste alınamadı");
+      const j = await r.json();
+      return Array.isArray(j) ? (j as CustomPrintRow[]) : [];
+    },
   });
 
   const [reprint, setReprint] = useState<{ row: CustomPrintRow; printer: LivePrinter } | null>(null);
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState<PrintProg | null>(null);
+  const [confirmDel, setConfirmDel] = useState<CustomPrintRow | null>(null);
 
   const liveById = useMemo(() => new Map(printers.map((p) => [p.id, p])), [printers]);
 
   const del = useMutation({
-    mutationFn: (fileId: string) => fetch(`/api/models/${fileId}`, { method: "DELETE" }).then((r) => r.json()),
+    // r.ok kontrolü ŞART: eski hali hata yanıtında da "silindi" deyip satırı düşürüyordu
+    // (bir sonraki açılışta geri geliyordu — sahte başarı).
+    mutationFn: async (fileId: string) => {
+      const r = await fetch(`/api/models/${fileId}`, { method: "DELETE" });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || "Silinemedi");
+      }
+      return r.json();
+    },
     // OPTIMISTIC: listeden çıkar → refetch yok. Sunucu R2 objesini/disk dosyasını da temizler.
     onSuccess: (_d, fileId) => {
       qc.setQueryData<CustomPrintRow[]>(["custom-prints"], (old) =>
         Array.isArray(old) ? old.filter((f) => f.id !== fileId) : old,
       );
+      setConfirmDel(null);
       toast.success("Özel baskı silindi");
     },
-    onError: () => toast.error("Silinemedi"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Silinemedi"),
   });
 
-  const startReprint = (row: CustomPrintRow) => {
-    const live = liveById.get(row.printerConfigId);
-    if (!live) { toast.error("Bu dosyanın yazıcısı artık yok"); return; }
-    if (!live.online) { toast.error(`${live.name} çevrimdışı`); return; }
-    if (live.status === "printing" || live.status === "paused") { toast.error(`${live.name} şu an meşgul`); return; }
-    setProgress(null);
-    setReprint({ row, printer: live });
-  };
-
-  const runPrint = async (opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
-    if (!reprint) return;
+  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
-      await runPrintStream(reprint.row.id, opts, setProgress);
+      await runPrintStream(fileId, opts, setProgress);
       toast.success("Baskı başlatıldı 🎉");
       setReprint(null);
       onClose();
@@ -105,6 +112,22 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
       setProgress(null);
     } finally {
       setPrinting(false);
+    }
+  };
+
+  const startReprint = (row: CustomPrintRow) => {
+    const live = liveById.get(row.printerConfigId);
+    if (!live) { toast.error("Bu dosyanın yazıcısı artık yok"); return; }
+    if (!live.online) { toast.error(`${live.name} çevrimdışı`); return; }
+    if (live.status === "printing" || live.status === "paused") { toast.error(`${live.name} şu an meşgul`); return; }
+    setProgress(null);
+    // Renk eşleme (SlotStep) SADECE çok renkli makinelerde (Bambu AMS / Snapmaker kafalar).
+    // Elegoo tek ekstruder: SlotStep'te slot 2 seçmek gcode'da GERÇEK T0→T1 remap'i yapar →
+    // olmayan kafaya komut → bozuk baskı. Diğer akışlarla (StartModal) da tutarlı: direkt bas.
+    if (live.brand === "bambu" || live.brand === "snapmaker") {
+      setReprint({ row, printer: live });
+    } else {
+      void runPrint(row.id, {});
     }
   };
 
@@ -125,13 +148,13 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
         progress={progress}
         onBack={() => { setReprint(null); setProgress(null); }}
         onClose={onClose}
-        onConfirm={runPrint}
+        onConfirm={(opts) => runPrint(reprint.row.id, opts)}
       />
     );
   }
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
+    <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
       <DialogContent className="max-w-xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -183,7 +206,7 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                   </div>
                   <Button
                     size="sm" variant="outline" className="h-8 gap-1 text-xs shrink-0"
-                    disabled={!canPrint}
+                    disabled={!canPrint || printing}
                     title={!live ? "Yazıcı yok" : !live.online ? "Çevrimdışı" : busy ? "Meşgul" : "Tekrar bas"}
                     onClick={() => startReprint(it)}
                   >
@@ -192,9 +215,9 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                   <Button
                     size="icon" variant="ghost"
                     className="h-8 w-8 shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-                    disabled={del.isPending}
+                    disabled={del.isPending || printing}
                     title="Sil"
-                    onClick={() => del.mutate(it.id)}
+                    onClick={() => setConfirmDel(it)}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -203,7 +226,31 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
             })}
           </div>
         )}
+
+        {/* Tek renkli (Elegoo) direkt baskı — SlotStep yok, ilerleme burada gösterilir. */}
+        {printing && !reprint && progress && <PrintProgress p={progress} />}
       </DialogContent>
+
+      {/* Silme onayı — kalıcı işlem (bulut/disk dosyası da gider); tek tık yanlışlıkla silmesin. */}
+      <Dialog open={!!confirmDel} onOpenChange={(o) => !o && !del.isPending && setConfirmDel(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Trash2 className="h-4 w-4 text-destructive" /> Özel baskıyı sil
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1 break-all">
+              <span className="font-medium text-foreground">{confirmDel?.originalName}</span> kalıcı olarak silinecek
+              {confirmDel?.isCloud ? " (buluttaki dosya dahil)" : ""}. Bu işlem geri alınamaz.
+            </p>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={del.isPending} onClick={() => setConfirmDel(null)}>Vazgeç</Button>
+            <Button variant="destructive" size="sm" disabled={del.isPending} onClick={() => confirmDel && del.mutate(confirmDel.id)}>
+              {del.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

@@ -8,6 +8,7 @@ import {
   type MoonrakerState,
 } from "@/core/printers/moonraker";
 import { getBambuStatus, mapBambuState } from "@/core/printers/bambu";
+import { fileMatchKey } from "@/core/printers/file-match";
 
 export const dynamic = "force-dynamic";
 
@@ -70,17 +71,7 @@ function cleanFilename(fn: string): string {
   return base.replace(/\.(gcode|gco|g|3mf)$/i, "").replace(/_+/g, " ").trim() || base;
 }
 
-/**
- * Dosya-adı eşleştirme anahtarı (yazıcı ↔ kayıtlı ürün eşleşmesi için NORMALİZE).
- * Eskiden ham filename'le birebir karşılaştırılıyordu; Elegoo/Snapmaker Moonraker dosya adını
- * farklı biçimde döndürebiliyor (klasör öneki, .gco↔.gcode, büyük/küçük harf) → eşleşme kaçıp
- * ürün fotoğrafı çıkmıyordu. Yol + uzantı + harf normalize edilince eşleşme tutar.
- */
-function fileMatchKey(fn: string): string {
-  const base = fn.includes("/") ? fn.slice(fn.lastIndexOf("/") + 1) : fn;
-  const noBackslash = base.includes("\\") ? base.slice(base.lastIndexOf("\\") + 1) : base;
-  return noBackslash.replace(/\.(gcode|gco|g|3mf)$/i, "").trim().toLocaleLowerCase("tr-TR");
-}
+// fileMatchKey artık paylaşılan modülde (@/core/printers/file-match) — relay ile AYNI normalize.
 
 function mapState(state: MoonrakerState): PrinterStatus {
   switch (state) {

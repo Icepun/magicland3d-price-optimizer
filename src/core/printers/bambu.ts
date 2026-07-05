@@ -53,12 +53,34 @@ interface Conn {
 }
 
 const conns = new Map<string, Conn>();
-const connKey = (host: string, serial: string) => `${host}|${serial}`;
+// accessCode anahtarın PARÇASI: kod değişince eski bağlantı (bayat şifreyle sonsuz reconnect
+// deneyen) kapatılıp yenisi kurulur. Eski davranış: yanlış/eski kod uygulama yeniden
+// başlatılana dek geçerli kalıyordu.
+const connKey = (host: string, serial: string, accessCode: string) => `${host}|${serial}|${accessCode}`;
+
+/** Bir yazıcının MQTT bağlantısını kapat + havuzdan düş (config silme/düzenleme sonrası zombie
+ *  reconnect kalmasın). host/serial eşleşen TÜM anahtarlar (eski access code'lular dahil) düşer. */
+export function dropBambuConns(host: string, serial: string): void {
+  const prefix = `${host}|${serial}|`;
+  for (const [k, c] of conns) {
+    if (k.startsWith(prefix)) {
+      try { c.client.end(true); } catch { /* kapanışta hata önemsiz */ }
+      conns.delete(k);
+    }
+  }
+}
 
 function ensureConn(host: string, accessCode: string, serial: string): Conn {
-  const k = connKey(host, serial);
+  const k = connKey(host, serial, accessCode);
   const existing = conns.get(k);
   if (existing) return existing;
+  // Aynı yazıcı için FARKLI access code'lu eski bağlantı varsa kapat (kod güncellendi).
+  for (const [ok, oc] of conns) {
+    if (ok.startsWith(`${host}|${serial}|`) && ok !== k) {
+      try { oc.client.end(true); } catch { /* kapanışta hata önemsiz */ }
+      conns.delete(ok);
+    }
+  }
 
   const client = mqtt.connect(`mqtts://${host}:8883`, {
     username: "bblp",
@@ -90,6 +112,19 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
     try {
       const msg = JSON.parse(payload.toString());
       if (msg?.print && typeof msg.print === "object") {
+        // YENİ İŞ BAŞLADI (subtask_name değişti) → önceki işin bayat alanlarını temizle.
+        // Artımlı merge yüzünden eski işin percent/layer/remaining değerleri yeni dosya adıyla
+        // birlikte bir-iki poll boyunca raporlanabiliyordu; baskı sırasında bu alanlar ~1sn'de
+        // bir yeniden gelir, kısa boşluk zararsız.
+        const newTask = typeof msg.print.subtask_name === "string" ? msg.print.subtask_name : null;
+        const oldTask = typeof conn.print.subtask_name === "string" ? conn.print.subtask_name : null;
+        if (newTask && oldTask && newTask !== oldTask) {
+          delete conn.print.mc_percent;
+          delete conn.print.mc_remaining_time;
+          delete conn.print.layer_num;
+          delete conn.print.total_layer_num;
+          delete conn.print.print_error;
+        }
         // Bambu artımlı (yalnızca değişen alanlar) gönderir → birleştir. Aynı anahtarlar üzerine
         // yazılır (sınırsız büyümez); ams/hms gibi diziler referansla değişir.
         Object.assign(conn.print, msg.print);
@@ -110,15 +145,22 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const conn = ensureConn(host, accessCode, serial);
 
   // İlk bağlantıda ilk "report" gelene kadar kısa bekle (en fazla ~2.2sn).
+  // Bağlantı hatası (yanlış kod / kapalı yazıcı) gelirse beklemeyi ERKEN kes —
+  // çevrimdışı yazıcı her sorguda 2.2sn yakmasın.
   if (!conn.hasData) {
     const deadline = Date.now() + 2200;
     while (Date.now() < deadline && !conn.hasData) {
+      if (conn.lastError) break;
       await new Promise((r) => setTimeout(r, 150));
     }
   }
 
   const p = conn.print;
-  const hasData = conn.hasData;
+  // ONLINE = bağlantı CANLI + veri gelmiş. Eski hali yalnız hasData'ya bakıyordu → fişi çekilen
+  // yazıcı sonsuza dek "yazdırıyor %45" görünüyor, relay hiç offline'a geçirmiyordu (yeniden
+  // bağlanınca da sahte "baskı bitti" bildirimi riski). MQTT keepalive (30sn) kopuşu ≤~45sn'de
+  // yakalar → connected=false → dürüst çevrimdışı.
+  const hasData = conn.connected && conn.hasData;
   if (!hasData) {
     return {
       online: false, gcodeState: null, percent: 0, remainingSec: null,

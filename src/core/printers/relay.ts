@@ -17,6 +17,8 @@ import {
   moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
 } from "./moonraker";
 import { getBambuStatus, bambuControl, mapBambuState } from "./bambu";
+import { fileMatchKey } from "./file-match";
+import { tryAcquirePrintLock, releasePrintLock } from "./print-lock";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const TICK_MS = 10_000;
@@ -76,7 +78,7 @@ async function buildSnapshot(
     const bs = await getBambuStatus(c.host, c.accessCode, c.serial);
     if (!bs.online) return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
     const status = mapBambuState(bs.gcodeState);
-    const matchedId = bs.filename ? matchMap.get(`${c.id}::${bs.filename}`) : undefined;
+    const matchedId = bs.filename ? matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) : undefined;
     const matched = matchedId ? productMap.get(matchedId) : undefined;
     const statusMessage =
       status === "error" ? `Baskı hatayla durdu${bs.printError ? ` (kod: ${bs.printError})` : ""}` : null;
@@ -98,7 +100,7 @@ async function buildSnapshot(
   let productImage: string | null = null;
   let etaSec: number | null = null;
   if (st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete")) {
-    const matchedId = matchMap.get(`${c.id}::${st.filename}`);
+    const matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`);
     const matched = matchedId ? productMap.get(matchedId) : undefined;
     productName = matched?.name ?? st.filename;
     if (matched?.imageUrl) productImage = matched.imageUrl;
@@ -128,12 +130,22 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
     // Masaüstü print rotasıyla AYNI çözümleme: R2'deki (bulut) dosya indirilir, yerel dosya
     // diskten okunur. (Eski hali yalnız storedPath'e bakıyordu → telefondan bulut dosyaya
     // "Tekrar bas" %100 "Dosya bu cihazda yok" hatası veriyordu.)
-    const local = await resolveModelFileLocal(mf);
+    // KİLİT: masaüstü print rotasıyla AYNI yazıcı-başına kilit — telefon + masaüstü aynı anda
+    // başlatırsa ikincisi net "meşgul" hatası alır (çift upload/start yarışı yok).
+    if (!tryAcquirePrintLock(c.id)) throw new Error("Yazıcıda şu an başka bir baskı başlatılıyor");
     try {
-      const buf = fs.readFileSync(local.path);
-      await moonrakerUploadAndPrint(c.host, c.port, buf, mf.originalName);
+      const local = await resolveModelFileLocal(mf);
+      try {
+        const buf = fs.readFileSync(local.path);
+        // brand ŞART: Snapmaker U1 native WITH_PARAMETERS akışına girmezse print_task_config boş
+        // kalır → sahte "filament runout" (id=523), nozzle ısınmaz. (Eski çağrı brand'siz →
+        // telefondan U1'e her "Tekrar bas" bu hataya çakılıyordu.)
+        await moonrakerUploadAndPrint(c.host, c.port, buf, mf.originalName, { brand: c.brand });
+      } finally {
+        local.cleanup();
+      }
     } finally {
-      local.cleanup();
+      releasePrintLock(c.id);
     }
     try {
       await prisma.printFileProduct.upsert({
@@ -204,12 +216,15 @@ async function tick(): Promise<void> {
     // buluta gider, sync gerektirmez. syncNow ayrıca erişim-kontrollü + guard'lı.
     if (tickCount++ % 6 === 0) await syncTursoReplica().catch(() => {});
 
+    // TÜM yazıcılar devre dışıyken de devam et — komut kuyruğu yine işlenmeli (yoksa pending
+    // komutlar ne uygulanır ne TTL ile düşer; sonsuza dek "bekliyor" kalırdı).
     const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
-    if (configs.length === 0) return;
 
-    // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için)
-    const matches = await prisma.printFileProduct.findMany();
-    const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${m.filename}`, m.productId]));
+    // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için). Anahtar NORMALİZE (fileMatchKey):
+    // print rotası eşleştirmeyi uzantısız kaydediyor, yazıcı ham adla raporluyor — ham anahtarla
+    // eşleşme kaçıyor, telefonda ürün adı/görseli yerine dosya adı görünüyordu.
+    const matches = configs.length ? await prisma.printFileProduct.findMany() : [];
+    const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
     const pids = [...new Set(matches.map((m) => m.productId))];
     const products = pids.length
       ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
@@ -269,8 +284,10 @@ async function tick(): Promise<void> {
       }
       try {
         const c = configs.find((x) => x.id === cmd.printerConfigId)
-          ?? ((await prisma.printerConfig.findUnique({ where: { id: cmd.printerConfigId } })) as Cfg | null);
+          ?? ((await prisma.printerConfig.findUnique({ where: { id: cmd.printerConfigId } })) as (Cfg & { enabled?: boolean }) | null);
         if (!c) throw new Error("Yazıcı bulunamadı");
+        // configs yalnız etkinleri içerir; fallback'ten gelen kayıt devre dışı olabilir → uygulama.
+        if ((c as { enabled?: boolean }).enabled === false) throw new Error("Yazıcı devre dışı");
         await executeCommand(c, cmd);
         await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
       } catch (e) {
