@@ -50,6 +50,9 @@ export interface PanelPrinter {
   status: PrinterStatus;
   online: boolean;
   note: string | null;
+  /** Hata/duraklatma NEDENİ (Moonraker print_stats.message / Bambu hata kodu) — kartta gösterilir.
+      Mobil snapshot'ta zaten vardı; masaüstü paneli bunu düşürüyordu. */
+  statusMessage: string | null;
   /** Çalışan baskının ham gcode dosya adı (eşleştirme + kontrol için). */
   currentFilename: string | null;
   matchedProductId: string | null;
@@ -152,7 +155,7 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
 
     const common = {
       id: c.id, name: c.name, brand: c.brand, model: c.model, accent: c.accent,
-      type: "sim" as const, online: true, note: null,
+      type: "sim" as const, online: true, note: null, statusMessage: null,
       currentFilename: null, matchedProductId: null,
     };
 
@@ -206,7 +209,7 @@ export async function GET() {
       const base: PanelPrinter = {
         id: c.id, name: c.name, brand: c.brand, model: c.model || "",
         accent, type: (c.type === "bambu" ? "bambu" : "moonraker"),
-        status: "idle", online: false, note: null,
+        status: "idle", online: false, note: null, statusMessage: null,
         currentFilename: null, matchedProductId: null,
         temps: { nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0 }, job: null,
       };
@@ -242,14 +245,20 @@ export async function GET() {
             remainingSec: remaining,
             layerCurrent: bs.layerNum,
             layerTotal: bs.totalLayerNum ?? 0,
-            filamentType: "PLA",
-            filamentColor: "#9ca3af",
+            // Gerçek AMS verisi okunmuyorsa UYDURMA "PLA" gösterme — boş bırak, UI çipi gizler.
+            filamentType: "",
+            filamentColor: "",
           };
         }
         return {
           ...base,
           online: true,
           status: bStatus,
+          // Hata nedeni kartta görünsün (mobilde vardı, masaüstünde yoktu).
+          statusMessage:
+            bStatus === "error"
+              ? `Baskı hatayla durdu${bs.printError ? ` (kod 0x${(bs.printError >>> 0).toString(16).toUpperCase()})` : ""}`
+              : null,
           currentFilename: bs.filename,
           matchedProductId: bMatchedId,
           temps: { nozzle: bs.nozzle, nozzleTarget: bs.nozzleTarget, bed: bs.bed, bedTarget: bs.bedTarget },
@@ -269,12 +278,19 @@ export async function GET() {
 
       if (hasJob && st.filename) {
         const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename);
-        // Kalan süre: slicer tahmini (varsa) ya da printDuration/progress'ten.
+        // ETA STABİLİZASYONU: süre/ilerleme ekstrapolasyonu %1'de gürültüyü 100× büyütüp geri
+        // sayımı her poll'da zıplatıyordu. Erken evrede (%<5) dilimleyici tahmini, %5-15 arası
+        // harman, %15 sonrası gerçek hız.
+        const extrapolated = st.progress >= 0.01 && st.printDurationSec > 0 ? st.printDurationSec / st.progress : null;
+        const slicerEst = meta?.estimatedTimeSec && meta.estimatedTimeSec > 0 ? meta.estimatedTimeSec : null;
         let estTotalSec: number;
-        if (st.progress >= 0.01 && st.printDurationSec > 0) {
-          estTotalSec = st.printDurationSec / st.progress;
-        } else if (meta?.estimatedTimeSec) {
-          estTotalSec = meta.estimatedTimeSec;
+        if (extrapolated != null && (st.progress >= 0.15 || !slicerEst)) {
+          estTotalSec = extrapolated;
+        } else if (slicerEst && extrapolated != null && st.progress >= 0.05) {
+          const w = (st.progress - 0.05) / 0.10; // %5→0 … %15→1
+          estTotalSec = slicerEst * (1 - w) + extrapolated * w;
+        } else if (slicerEst) {
+          estTotalSec = slicerEst;
         } else {
           estTotalSec = Math.max(st.printDurationSec, 60);
         }
@@ -306,8 +322,9 @@ export async function GET() {
           remainingSec,
           layerCurrent,
           layerTotal: totalLayer,
-          filamentType: meta?.filamentType || "PLA",
-          filamentColor: "#9ca3af",
+          // Bilinmiyorsa boş — UI uydurma "PLA" çipi göstermesin.
+          filamentType: meta?.filamentType || "",
+          filamentColor: "",
         };
       }
 
@@ -315,6 +332,8 @@ export async function GET() {
         ...base,
         online: true,
         status,
+        // Duraklatma/hata NEDENİ (örn. "Filament runout") kartta görünsün.
+        statusMessage: status === "error" || status === "paused" ? st.message : null,
         currentFilename: st.filename,
         matchedProductId: matchedId,
         temps: { nozzle: st.nozzle, nozzleTarget: st.nozzleTarget, bed: st.bed, bedTarget: st.bedTarget },

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Layers, Loader2, AlertTriangle, Minus, Plus, ArrowRight, Check, Play } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -173,7 +174,10 @@ export function SlotStep({
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slots: next }),
       });
       qcSlots.invalidateQueries({ queryKey: ["printer-slots", printerId] });
-    } catch { /* sessiz */ }
+    } catch {
+      // Sessiz yutuluyordu — seçim bir sonraki poll'da görsel olarak geri dönünce kafa karıştırıyordu.
+      toast.error("Slot rengi kaydedilemedi");
+    }
   };
 
   const fileColors = useMemo(() => colorsQ.data?.colors ?? [], [colorsQ.data]);
@@ -328,8 +332,7 @@ export function SlotStep({
               <div className="rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2 text-[11px] text-destructive flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 <span>
-                  <strong>Çok renkli baskıda ham .gcode çalışmaz</strong> — Bambu, AMS eşleme tablosunu taşımadığı için yazıcı reddeder.
-                  Bambu Studio&apos;da plakayı dilimle → <strong>&quot;Dilimlenmiş plaka dosyasını dışa aktar&quot;</strong> ile aldığın <strong>.3mf</strong>&apos;i yükle.
+                  Çok renkli baskı için dosyayı Bambu Studio&apos;dan <strong>.3mf</strong> olarak dışa aktarıp yükle.
                 </span>
               </div>
             ) : rawGcodeBambu ? (

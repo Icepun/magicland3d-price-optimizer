@@ -192,14 +192,24 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   };
 }
 
-export function bambuControl(host: string, accessCode: string, serial: string, action: "pause" | "resume" | "cancel"): void {
-  const conn = ensureConn(host, accessCode, serial);
-  const command = action === "cancel" ? "stop" : action;
-  conn.client.publish(
-    `device/${serial}/request`,
-    JSON.stringify({ print: { sequence_id: "0", command, param: "" } }),
-    { qos: 1 }
-  );
+export function bambuControl(host: string, accessCode: string, serial: string, action: "pause" | "resume" | "cancel"): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const conn = ensureConn(host, accessCode, serial);
+    // BAĞLI DEĞİLKEN reddet: mqtt.js QoS-1 publish'i kuyruğa alır → çevrimdışıyken basılan
+    // "duraklat" saatler sonra yeniden bağlanınca uygulanabilirdi (bayat komut tehlikesi).
+    // Ayrıca eski fire-and-forget hali hatayı hiç bildirmiyordu (kullanıcı "ok" sanıyordu).
+    if (!conn.connected) {
+      reject(new Error("Yazıcı bağlı değil — komut gönderilemedi"));
+      return;
+    }
+    const command = action === "cancel" ? "stop" : action;
+    conn.client.publish(
+      `device/${serial}/request`,
+      JSON.stringify({ print: { sequence_id: "0", command, param: "" } }),
+      { qos: 1 },
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
 }
 
 export interface BambuSlot { slot: number; color: string; type: string; remain: number | null; empty: boolean }

@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatCurrency } from "@/lib/utils";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
 import {
@@ -50,6 +51,8 @@ interface PanelPrinter {
   status: PrinterStatus;
   online: boolean;
   note: string | null;
+  /** Hata/duraklatma NEDENİ (Moonraker mesajı / Bambu hata kodu) — kartta gösterilir. */
+  statusMessage?: string | null;
   currentFilename: string | null;
   matchedProductId: string | null;
   temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number };
@@ -96,7 +99,21 @@ function fmtClock(ms: number, nowMs: number): string {
   const d2 = new Date(ms);
   if (dayDiff <= 0) return `${hh}:${mm}`;
   if (dayDiff === 1) return `yarın ${hh}:${mm}`;
-  return `${d2.getDate()}.${d2.getMonth() + 1} ${hh}:${mm}`;
+  // "5.7 14:30" kriptikti → "5 Tem 14:30"
+  return `${d2.toLocaleDateString("tr-TR", { day: "numeric", month: "short" })} ${hh}:${mm}`;
+}
+
+/** prefers-reduced-motion — sürekli animasyonlar (konfeti/şimmer/akan şerit) buna saygılı. */
+function usePrefersReducedMotion(): boolean {
+  const [reduce, setReduce] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduce(mq.matches);
+    const on = (e: MediaQueryListEvent) => setReduce(e.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  return reduce;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -154,13 +171,51 @@ export default function PrintersPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: v.action, filename: v.filename }),
       }),
+    // OPTIMISTIC: kart durumu ANINDA yansır (eskiden 5sn poll'a kadar "Yazdırıyor" kalıyordu);
+    // hata olursa eski durum geri gelir + zaten sonraki poll gerçeği getirir.
+    onMutate: async (v) => {
+      await qc.cancelQueries({ queryKey: ["printers"] });
+      const prev = qc.getQueryData<PrintersResponse>(["printers"]);
+      if (v.action === "pause" || v.action === "resume" || v.action === "cancel") {
+        qc.setQueryData<PrintersResponse>(["printers"], (old) =>
+          old
+            ? {
+                ...old,
+                printers: old.printers.map((p) =>
+                  p.id === v.id
+                    ? {
+                        ...p,
+                        status: (v.action === "pause" ? "paused" : v.action === "resume" ? "printing" : "idle") as PrinterStatus,
+                        ...(v.action === "cancel" ? { job: null } : {}),
+                      }
+                    : p
+                ),
+              }
+            : old
+        );
+      }
+      return { prev };
+    },
     onSuccess: (_d, v) => {
       const label = { pause: "Duraklatıldı", resume: "Devam ettirildi", cancel: "İptal edildi", start: "Baskı başlatıldı" }[v.action];
       toast.success(label);
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 600);
     },
-    onError: (e: Error) => toast.error(e.message),
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["printers"], ctx.prev);
+      toast.error(e.message);
+    },
   });
+
+  // Bağlantı KOPARSA son bilinen işi göster (eskiden kart tüm iş bilgisini kaybediyordu —
+  // baskı yazıcıda çoğunlukla devam eder, kısa ağ kesintisi işi "yok" göstermemeli).
+  const lastJobs = useRef(new Map<string, PrinterJob>());
+  useEffect(() => {
+    for (const p of data?.printers ?? []) {
+      if (p.online && p.job && (p.status === "printing" || p.status === "paused")) lastJobs.current.set(p.id, p.job);
+      else if (p.online && (p.status === "idle" || p.status === "finished")) lastJobs.current.delete(p.id);
+    }
+  }, [data]);
 
   return (
     <div className="p-6 space-y-5 max-w-5xl">
@@ -243,7 +298,8 @@ export default function PrintersPage() {
               printer={p}
               now={now}
               index={i}
-              busy={action.isPending}
+              busy={action.isPending && action.variables?.id === p.id}
+              lastKnownJob={!p.online ? lastJobs.current.get(p.id) : undefined}
               onPause={() => action.mutate({ id: p.id, action: "pause" })}
               onResume={() => action.mutate({ id: p.id, action: "resume" })}
               onCancel={() => setCancelTarget({ id: p.id, name: p.name })}
@@ -336,17 +392,19 @@ const PrinterCard = memo(PrinterCardInner, (a, b) =>
   a.printer === b.printer &&
   a.busy === b.busy &&
   a.index === b.index &&
+  a.lastKnownJob === b.lastKnownJob &&
   (!a.printer.job || a.now === b.now)
 );
 
 function PrinterCardInner({
-  printer, now, index, busy, onPause, onResume, onCancel, onStart, onMatch,
+  printer, now, index, busy, lastKnownJob, onPause, onResume, onCancel, onStart, onMatch,
 }: {
-  printer: PanelPrinter; now: number; index: number; busy: boolean;
+  printer: PanelPrinter; now: number; index: number; busy: boolean; lastKnownJob?: PrinterJob;
   onPause: () => void; onResume: () => void; onCancel: () => void; onStart: () => void; onMatch: () => void;
 }) {
   const { job, status, accent, online } = printer;
   const isReal = printer.type !== "sim";
+  const reduceMotion = usePrefersReducedMotion();
 
   const isFinished = status === "finished";
   const isPrinting = status === "printing";
@@ -369,6 +427,13 @@ function PrinterCardInner({
   }
   const pct = Math.round(progress * 100);
   const finishingNow = isPrinting && remainingSec <= 0.5;
+  // Isınma evresi: hedef var ama sıcaklık henüz uzak → "yazdırıyor ama %0 ve soğuk" kafa karışıklığını
+  // "ısınıyor" rozetiyle açıkla.
+  const heating =
+    !isFinished && online &&
+    ((printer.temps.nozzleTarget > 0 && printer.temps.nozzle < printer.temps.nozzleTarget - 3) ||
+      (printer.temps.bedTarget > 0 && printer.temps.bed < printer.temps.bedTarget - 2));
+  const elapsedSec = job && isPrinting ? Math.max(0, ((now || Date.now()) - new Date(job.startedAt).getTime()) / 1000) : 0;
   const offline = isReal && !online;
   const isError = status === "error";
 
@@ -379,7 +444,7 @@ function PrinterCardInner({
   return (
     <Card
       className={cn(
-        "relative overflow-hidden animate-in fade-in slide-in-from-bottom-3 duration-500",
+        "relative overflow-hidden motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 duration-500",
         offline && "opacity-70",
         isError && "border-destructive/55 ring-1 ring-destructive/35 shadow-[0_10px_34px_-10px] shadow-destructive/40"
       )}
@@ -391,11 +456,14 @@ function PrinterCardInner({
     >
       {isPrinting && online && (
         <div className="absolute inset-x-0 top-0 h-[2px] overflow-hidden">
-          <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />
+          {reduceMotion
+            ? <div className="h-full w-full" style={{ background: accent }} />
+            : <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />}
         </div>
       )}
       {isError && <div className="absolute inset-x-0 top-0 h-[3px] bg-destructive" />}
-      {isFinished && online && <Confetti accent={accent} />}
+      {/* Konfeti yalnız YENİ biten baskıda (≤5dk) — eskiden finished kaldıkça saatlerce yağıyordu. */}
+      {isFinished && online && !reduceMotion && endMs > 0 && Date.now() - endMs < 5 * 60_000 && <Confetti accent={accent} />}
 
       <CardContent className="p-4 space-y-3.5">
         {/* Acil: baskı durdu / yazıcı hatası */}
@@ -404,8 +472,9 @@ function PrinterCardInner({
             <AlertTriangle className="h-4 w-4 text-destructive shrink-0 motion-safe:animate-pulse" />
             <div className="min-w-0">
               <p className="text-xs font-bold text-destructive leading-tight">Baskı durdu — yazıcıda sorun var</p>
+              {/* NEDEN göster: yazıcının bildirdiği mesaj → yoksa iş/dosya adı (eski hali hep "kontrol et"ti). */}
               <p className="text-[11px] text-destructive/80 truncate">
-                {job?.productName ? `${job.productName} · ` : ""}kontrol et
+                {printer.statusMessage || job?.productName || printer.currentFilename || "Yazıcı ekranını kontrol et"}
               </p>
             </div>
           </div>
@@ -448,6 +517,12 @@ function PrinterCardInner({
             <div className="flex-1 text-sm text-muted-foreground">
               <p className="font-medium text-foreground/70">Bağlantı yok</p>
               <p className="text-xs mt-0.5">{printer.note ?? "Yazıcıya ulaşılamadı."}</p>
+              {/* Kısa ağ kesintisinde iş bilgisi kaybolmasın — baskı yazıcıda genelde sürüyor. */}
+              {lastKnownJob && (
+                <p className="text-[11px] mt-1.5 text-muted-foreground/80 truncate">
+                  Son bilinen: <span className="font-medium text-foreground/70">{lastKnownJob.productName}</span> · %{Math.round(clamp(lastKnownJob.progress, 0, 1) * 100)}
+                </p>
+              )}
             </div>
           </div>
         ) : job ? (
@@ -456,19 +531,33 @@ function PrinterCardInner({
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
-                {job.layerTotal > 0 && layerCurrent != null && (
+                {job.layerTotal > 0 && layerCurrent != null && layerCurrent > 0 && (
                   <span className="inline-flex items-center gap-1"><Layers className="h-3.5 w-3.5" /> {layerCurrent}/{job.layerTotal}</span>
                 )}
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-2.5 w-2.5 rounded-full border border-black/10" style={{ background: job.filamentColor }} />
-                  {job.filamentType}
-                </span>
+                {/* Filament çipi yalnız GERÇEK veri varsa (Bambu'da uydurma "PLA" gösteriliyordu). */}
+                {job.filamentType && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-full border border-black/10" style={{ background: job.filamentColor || "#9ca3af" }} />
+                    {job.filamentType}
+                  </span>
+                )}
+                {isPrinting && elapsedSec > 0 && (
+                  <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {fmtRemaining(elapsedSec)} geçti</span>
+                )}
               </div>
               <div className="flex items-center gap-3 text-[11px] tabular-nums">
-                <span className="inline-flex items-center gap-1" style={{ color: nozzle > 60 ? "oklch(0.65 0.2 35)" : undefined }}>
+                {/* Nozzle rengi hedefe göre (eski `>60` soğuma sırasında da turuncu yakıyordu). */}
+                <span className="inline-flex items-center gap-1" style={{ color: printer.temps.nozzleTarget > 0 ? "oklch(0.65 0.2 35)" : undefined }}>
                   <Flame className="h-3.5 w-3.5" /> {nozzle}°<span className="text-muted-foreground/60">/ {printer.temps.nozzleTarget || "—"}</span>
                 </span>
-                <span className="inline-flex items-center gap-1 text-muted-foreground">Tabla {bed}°</span>
+                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                  Tabla {bed}°{printer.temps.bedTarget > 0 ? <span className="text-muted-foreground/60">/ {printer.temps.bedTarget}</span> : null}
+                </span>
+                {heating && (
+                  <span className="inline-flex items-center gap-1 text-amber-500 font-medium">
+                    <Flame className="h-3 w-3 motion-safe:animate-pulse" /> ısınıyor
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -498,12 +587,12 @@ function PrinterCardInner({
                     : `linear-gradient(90deg, ${alpha(accent, 70)}, ${accent})`,
                 }}
               >
-                {isPrinting && <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)", animation: "printer-shimmer 1.6s linear infinite" }} />}
+                {isPrinting && !reduceMotion && <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)", animation: "printer-shimmer 1.6s linear infinite" }} />}
               </div>
             </div>
             <div className="flex items-center justify-between text-xs tabular-nums">
               <span className="font-bold text-sm" style={{ color: isFinished ? "oklch(0.72 0.18 145)" : accent }}>
-                {isFinished ? "Tamamlandı 🎉" : `%${pct}`}
+                {isFinished ? "Tamamlandı 🎉" : <>%<AnimatedNumber value={pct} durationMs={800} /></>}
               </span>
               <span className="text-muted-foreground inline-flex items-center gap-1">
                 {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
@@ -554,7 +643,13 @@ function PrinterCardInner({
 }
 
 function PrintInImage({ image, productName, progress, accent, printing }: { image: string | null; productName: string; progress: number; accent: string; printing: boolean }) {
-  const pct = Math.round(progress * 100);
+  // Mount'ta 0'dan gerçek değere AKSIN (eskiden direkt pct'de beliriyordu — snap).
+  const [revealed, setRevealed] = useState(false);
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setRevealed(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  const pct = revealed ? Math.round(progress * 100) : 0;
   return (
     <div className="relative h-28 w-28 shrink-0 rounded-xl overflow-hidden border bg-muted/40">
       {image ? (
@@ -590,6 +685,7 @@ function ManageModal({ onClose }: { onClose: () => void }) {
     queryFn: () => fetchJson<PrinterConfig[]>("/api/printers/config"),
   });
   const [editing, setEditing] = useState<PrinterConfig | "new" | null>(null);
+  const [confirmDel, setConfirmDel] = useState<PrinterConfig | null>(null);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["printer-configs"] });
@@ -598,7 +694,7 @@ function ManageModal({ onClose }: { onClose: () => void }) {
 
   const del = useMutation({
     mutationFn: (id: string) => fetchJson(`/api/printers/config/${id}`, { method: "DELETE" }),
-    onSuccess: () => { refresh(); toast.success("Yazıcı silindi"); },
+    onSuccess: () => { refresh(); setConfirmDel(null); toast.success("Yazıcı silindi"); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -637,7 +733,8 @@ function ManageModal({ onClose }: { onClose: () => void }) {
                     <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(c)} title="Düzenle">
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/70 hover:text-destructive" disabled={del.isPending} onClick={() => del.mutate(c.id)} title="Sil">
+                    {/* Tek tık kalıcı silme yerine onay — eşleştirme geçmişi de birlikte gidiyor. */}
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/70 hover:text-destructive" disabled={del.isPending} onClick={() => setConfirmDel(c)} title="Sil">
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -650,6 +747,26 @@ function ManageModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
       </DialogContent>
+
+      {/* Yazıcı silme onayı */}
+      <Dialog open={!!confirmDel} onOpenChange={(o) => !o && !del.isPending && setConfirmDel(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Trash2 className="h-4 w-4 text-destructive" /> Yazıcıyı sil
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              <span className="font-medium text-foreground">{confirmDel?.name}</span> ve ürün eşleştirme geçmişi silinecek. Bu işlem geri alınamaz.
+            </p>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={del.isPending} onClick={() => setConfirmDel(null)}>Vazgeç</Button>
+            <Button variant="destructive" size="sm" disabled={del.isPending} onClick={() => confirmDel && del.mutate(confirmDel.id)}>
+              {del.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
@@ -782,7 +899,7 @@ interface PickProduct { id: string; name: string; imageUrl: string | null; curre
 
 function MatchModal({ target, onClose }: { target: { id: string; filename: string }; onClose: () => void }) {
   const qc = useQueryClient();
-  const { data } = useQuery<PickProduct[]>({
+  const { data, isLoading: productsLoading } = useQuery<PickProduct[]>({
     queryKey: ["products", "printer-match"],
     queryFn: () => fetchJson<PickProduct[]>("/api/products?filter=all"),
   });
@@ -821,7 +938,9 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
           <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ürün ara…" className="pl-8 h-9" autoFocus />
         </div>
         <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-0.5 min-h-[120px]">
-          {list.length === 0 ? (
+          {productsLoading ? (
+            <div className="py-8 text-center"><Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground" /></div>
+          ) : list.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-6">Ürün bulunamadı.</p>
           ) : (
             list.map((p) => (
@@ -972,7 +1091,10 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
   const openNode = nodes.find((n) => n.key === openKey) ?? null;
   const openMember = openNode?.kind === "group" ? openNode.members.find((m) => m.productId === openVariant) ?? null : null;
-  const pickFile = (m: PrintableModel) => (multiColor ? setPicked(m) : runPrint(m.fileId));
+  // Tek renkli (Elegoo): dosyaya tıklamak DOĞRUDAN basıyordu — yanlış tık = istenmeyen baskı.
+  // 1 satırlık onay adımı eklendi (çok renklilerde SlotStep zaten doğal onay).
+  const [confirmFile, setConfirmFile] = useState<PrintableModel | null>(null);
+  const pickFile = (m: PrintableModel) => (multiColor ? setPicked(m) : setConfirmFile(m));
 
   if (picked) {
     return (
@@ -1055,6 +1177,28 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
         </div>
         {progress && <PrintProgress p={progress} />}
       </DialogContent>
+
+      {/* Tek renkli baskı onayı (Elegoo) */}
+      <Dialog open={!!confirmFile} onOpenChange={(o) => !o && !printing && setConfirmFile(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Play className="h-4 w-4 text-primary" /> Baskıyı başlat?
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1 break-all">
+              <span className="font-medium text-foreground">{confirmFile?.label || confirmFile?.originalName}</span>
+              {" — "}{target.name} üzerinde basılacak.
+            </p>
+          </DialogHeader>
+          {progress && <PrintProgress p={progress} />}
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={printing} onClick={() => setConfirmFile(null)}>Vazgeç</Button>
+            <Button size="sm" disabled={printing} onClick={() => confirmFile && runPrint(confirmFile.fileId)}>
+              {printing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Bas
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }
@@ -1147,10 +1291,11 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
               <p className="text-xs text-muted-foreground text-center py-6">Bağlı yazıcı yok.</p>
             ) : (
               printable.map((p) => {
+                // Çevrimdışı yazıcı SEÇİLEMEZ — eskiden yükleme başarılı olup baskı sonda patlıyordu.
                 const busy = p.status === "printing" || p.status === "paused";
                 return (
                   <button
-                    key={p.id} disabled={busy}
+                    key={p.id} disabled={busy || !p.online}
                     onClick={() => setPicked({ id: p.id, name: p.name, brand: p.brand })}
                     className="w-full flex items-center gap-2.5 p-2 rounded-lg border hover:bg-muted text-left disabled:opacity-50"
                   >
@@ -1189,7 +1334,9 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
                     <div className="h-full rounded-full bg-primary transition-[width] duration-200" style={{ width: `${Math.max(3, uploadProg.total > 0 ? Math.round((uploadProg.loaded / uploadProg.total) * 100) : 0)}%` }} />
                   </div>
                   <div className="text-[10px] text-muted-foreground/80 tabular-nums">
-                    {uploadProg.bytesPerSec > 0 ? `${(uploadProg.bytesPerSec / 1048576).toFixed(1)} MB/sn` : "başlıyor…"}
+                    {uploadProg.total > 0 && uploadProg.loaded >= uploadProg.total
+                      ? "dosya işleniyor…" // PUT bitti, sunucu gramaj/renk/önizleme çıkarıyor — bayat hız yerine dürüst durum
+                      : uploadProg.bytesPerSec > 0 ? `${(uploadProg.bytesPerSec / 1048576).toFixed(1)} MB/sn` : "başlıyor…"}
                   </div>
                 </div>
               ) : (

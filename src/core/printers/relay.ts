@@ -109,14 +109,20 @@ async function buildSnapshot(
     const matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`);
     const matched = matchedId ? productMap.get(matchedId) : undefined;
     productName = matched?.name ?? st.filename;
+    const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename); // dosya başına önbellekli — ucuz
     if (matched?.imageUrl) productImage = matched.imageUrl;
-    else {
-      const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename);
-      if (meta?.thumbnailRelPath) productImage = moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
-    }
-    if (st.progress > 0.01 && st.printDurationSec > 0) {
-      etaSec = Math.max(0, Math.round(st.printDurationSec / st.progress - st.printDurationSec));
-    }
+    else if (meta?.thumbnailRelPath) productImage = moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
+    // ETA STABİLİZASYONU (panel ile AYNI harman): erken evrede dilimleyici tahmini,
+    // %5-15 harman, sonrası gerçek hız — telefondaki kalan süre de zıplamaz.
+    const extrapolated = st.progress >= 0.01 && st.printDurationSec > 0 ? st.printDurationSec / st.progress : null;
+    const slicerEst = meta?.estimatedTimeSec && meta.estimatedTimeSec > 0 ? meta.estimatedTimeSec : null;
+    let estTotal: number | null = null;
+    if (extrapolated != null && (st.progress >= 0.15 || !slicerEst)) estTotal = extrapolated;
+    else if (slicerEst && extrapolated != null && st.progress >= 0.05) {
+      const w = (st.progress - 0.05) / 0.10;
+      estTotal = slicerEst * (1 - w) + extrapolated * w;
+    } else if (slicerEst) estTotal = slicerEst;
+    if (estTotal != null) etaSec = Math.max(0, Math.round(estTotal - st.printDurationSec));
   }
   return {
     name: baseName, brand: c.brand, status, online: true,
@@ -168,7 +174,8 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
   const action = cmd.action as "pause" | "resume" | "cancel";
   if (c.type === "bambu") {
     if (!c.accessCode || !c.serial) throw new Error("Bambu access code/seri no eksik");
-    bambuControl(c.host, c.accessCode, c.serial, action);
+    // await ŞART: hata (bağlı değil / publish reddi) komuta yazılsın — telefon dürüst sonuç görsün.
+    await bambuControl(c.host, c.accessCode, c.serial, action);
   } else {
     await moonrakerControl(c.host, c.port, action);
   }

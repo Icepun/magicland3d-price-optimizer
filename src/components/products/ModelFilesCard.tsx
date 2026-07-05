@@ -251,7 +251,11 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
           </div>
           <div className="flex items-center justify-between text-[10px] text-muted-foreground/80 tabular-nums">
             <span>{fmtSize(prog.loaded)} / {fmtSize(prog.total)}</span>
-            <span>{prog.bytesPerSec > 0 ? `${fmtSize(prog.bytesPerSec)}/sn · ${fmtEta(prog)}` : "başlıyor…"}</span>
+            <span>
+              {prog.total > 0 && prog.loaded >= prog.total
+                ? "dosya işleniyor…" // PUT bitti, kayıt oluşturuluyor — bayat hız yerine dürüst durum
+                : prog.bytesPerSec > 0 ? `${fmtSize(prog.bytesPerSec)}/sn · ${fmtEta(prog)}` : "başlıyor…"}
+            </span>
           </div>
         </div>
       )}

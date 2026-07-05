@@ -27,7 +27,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (action === "start") {
         return NextResponse.json({ error: "Bambu'da uygulamadan baskı başlatma henüz desteklenmiyor" }, { status: 400 });
       }
-      bambuControl(cfg.host, cfg.accessCode, cfg.serial, action);
+      // await ŞART: eski fire-and-forget hali her zaman {ok:true} dönüyordu — çevrimdışı yazıcıya
+      // basılan "duraklat" sessizce kayboluyordu (kullanıcı başarılı sanıyordu).
+      await bambuControl(cfg.host, cfg.accessCode, cfg.serial, action);
       return NextResponse.json({ ok: true });
     }
 
