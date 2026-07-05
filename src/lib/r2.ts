@@ -80,6 +80,30 @@ export async function getObjectBytes(key: string, cfg: R2Config): Promise<Buffer
   return Buffer.from(bytes);
 }
 
+/** R2'den nesneyi GERÇEK yüzde ilerlemesiyle çek — baskı akışındaki "buluttan indiriliyor"
+ *  aşaması için (eskiden indirme akış başlamadan yapılıyordu → kullanıcı ölü ekran görüyordu). */
+export async function getObjectBytesWithProgress(
+  key: string,
+  cfg: R2Config,
+  onPct?: (pct: number) => void,
+): Promise<Buffer> {
+  const res = await client(cfg).send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
+  if (!res.Body) throw new Error("R2: boş yanıt");
+  const total = Number(res.ContentLength) || 0;
+  const chunks: Buffer[] = [];
+  let got = 0;
+  let lastPct = -1;
+  for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
+    chunks.push(Buffer.from(chunk));
+    got += chunk.length;
+    if (total > 0 && onPct) {
+      const pct = Math.min(100, Math.floor((got / total) * 100));
+      if (pct !== lastPct) { lastPct = pct; onPct(pct); }
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
 /** R2'den nesneyi sil (son referans gidince). */
 export async function deleteObject(key: string, cfg: R2Config): Promise<void> {
   await client(cfg).send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key }));

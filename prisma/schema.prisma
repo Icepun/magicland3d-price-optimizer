@@ -371,6 +371,14 @@ model ProductModelFile {
   gramaj          Float?
   /** Tahmini baskı süresi (dakika, opsiyonel). */
   estPrintMin     Int?
+  /** Dosyadan okunan filament renkleri (JSON: {colors,source,fileKind}) — yüklemede/ilk açılışta
+      BİR KEZ parse edilip saklanır; SlotStep her açılışta dosyayı (R2'den indirip) yeniden
+      açmasın, baskı başlatma senkron unzip ile ana süreci dondurmasın. */
+  colorsJson      String?
+  /** Dosya dilimlenmiş mi (3mf için) — baskı öncesi kontrolün kalıcı sonucu. */
+  sliced          Boolean?
+  /** Bambu plaka meta (JSON: {plateParam,filamentCount}) — ilk baskıda parse edilip saklanır. */
+  plateJson       String?
   /** Parça sıralaması (aynı ürün+yazıcı içinde). */
   sortOrder       Int      @default(0)
   createdAt       DateTime @default(now())

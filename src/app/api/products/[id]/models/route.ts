@@ -7,6 +7,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { createModelRows } from "@/lib/model-files";
+import { readModelColors, is3mfSliced } from "@/core/printers/model-colors";
 
 export const dynamic = "force-dynamic";
 
@@ -89,7 +90,15 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const buf = Buffer.from(await file.arrayBuffer());
     const dir = getModelsDir();
     const storedPath = path.join(dir, `${crypto.randomUUID()}.${ext}`);
-    fs.writeFileSync(storedPath, buf);
+    await fs.promises.writeFile(storedPath, buf); // sync yazma büyük dosyada ana süreci donduruyordu
+
+    // Meta'yı YÜKLEMEDE bir kez parse et + sakla → renk-eşleme/baskı dosyayı yeniden açmaz.
+    let colorsJson: string | null = null;
+    let sliced: boolean | null = null;
+    try {
+      colorsJson = JSON.stringify(readModelColors(storedPath));
+      sliced = ext === "3mf" ? is3mfSliced(storedPath) : true;
+    } catch { /* parse edilemezse eski (lazy) yol devrede kalır */ }
 
     const mine = await createModelRows({
       productId: id,
@@ -102,6 +111,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       gramaj: gramajRaw != null && String(gramajRaw).trim() !== "" ? Number(gramajRaw) : null,
       estPrintMin: estRaw != null && String(estRaw).trim() !== "" ? Math.round(Number(estRaw)) : null,
       storedPath,
+      colorsJson,
+      sliced,
     });
     return NextResponse.json(mine, { status: 201 });
   } catch (error) {

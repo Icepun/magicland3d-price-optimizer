@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
-import { readModelColors, readModelMeta } from "@/core/printers/model-colors";
+import { readModelColors, readModelMeta, is3mfSliced } from "@/core/printers/model-colors";
 import { resolveModelFileLocal } from "@/lib/model-files";
 
 export const dynamic = "force-dynamic";
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
       }
       const buf = Buffer.from(await file.arrayBuffer());
       storedPath = path.join(getModelsDir(), `${crypto.randomUUID()}.${fileType}`);
-      fs.writeFileSync(storedPath, buf);
+      await fs.promises.writeFile(storedPath, buf); // sync yazma büyük dosyada ana süreci donduruyordu
       readPath = storedPath;
       originalName = file.name;
       sizeBytes = buf.length;
@@ -82,6 +82,10 @@ export async function POST(req: NextRequest) {
     try {
       const meta = readModelMeta(readPath);
       const colors = readModelColors(readPath);
+      // Meta yüklemede zaten parse ediliyordu ama SAKLANMIYORDU → renk-eşleme/baskı dosyayı
+      // (R2'den indirip) yeniden açıyordu. Artık bir kez parse edilir, kalıcı olur.
+      let sliced: boolean | null = null;
+      try { sliced = fileType === "3mf" ? is3mfSliced(readPath) : true; } catch { /* lazy yol devrede */ }
       const saved = await prisma.productModelFile.create({
         data: {
           productId: CUSTOM_PID,
@@ -94,6 +98,8 @@ export async function POST(req: NextRequest) {
           sizeBytes,
           gramaj: meta.grams,
           estPrintMin: meta.estPrintMin,
+          colorsJson: JSON.stringify(colors),
+          sliced,
           sortOrder: 0,
         },
       });

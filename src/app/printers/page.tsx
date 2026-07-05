@@ -133,6 +133,7 @@ export default function PrintersPage() {
     return () => clearInterval(t);
   }, [anyPrinting]);
 
+  const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
   const [manageOpen, setManageOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
@@ -180,8 +181,10 @@ export default function PrintersPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" disabled={isFetching} onClick={() => refetch()} className="gap-2">
-            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+          {/* Yalnız ELLE yenilemede döner/kilitler — eski isFetching her 5sn'lik arka-plan
+              poll'unda butonu yanıp söndürüyordu. */}
+          <Button variant="outline" size="sm" disabled={manualRefresh} onClick={() => { setManualRefresh(true); refetch().finally(() => setManualRefresh(false)); }} className="gap-2">
+            <RefreshCw className={cn("h-4 w-4", manualRefresh && "animate-spin")} />
             Yenile
           </Button>
           <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className="gap-2" disabled={simulated || printers.length === 0}>
@@ -200,7 +203,7 @@ export default function PrintersPage() {
         <div className="flex flex-wrap gap-2 text-xs">
           <SummaryChip icon={Printer} label={`${printers.length} yazıcı`} />
           {!simulated && <SummaryChip icon={Power} label={`${onlineCount} çevrimiçi`} />}
-          <SummaryChip icon={Loader2} label={`${printingCount} yazdırıyor`} spin accent />
+          <SummaryChip icon={Loader2} label={`${printingCount} yazdırıyor`} spin={printingCount > 0} accent />
           <SummaryChip icon={Power} label={`${idleCount} hazır`} muted />
         </div>
       )}
@@ -323,7 +326,20 @@ const Confetti = memo(function Confetti({ accent }: { accent: string }) {
   );
 });
 
-function PrinterCard({
+/**
+ * Kart memo'su: 5sn poll'da React Query yapısal paylaşımı değişmeyen yazıcı objesinin REFERANSINI
+ * korur → içerik aynıysa kart hiç render olmaz (eskiden her poll TÜM grid'i yeniden çiziyordu).
+ * Handler kimlikleri karşılaştırma DIŞI (her render'da taze arrow ama davranışları sabit);
+ * `now` yalnız aktif işi olan kartta önemli — boştaki kartlar saniyelik tikten etkilenmez.
+ */
+const PrinterCard = memo(PrinterCardInner, (a, b) =>
+  a.printer === b.printer &&
+  a.busy === b.busy &&
+  a.index === b.index &&
+  (!a.printer.job || a.now === b.now)
+);
+
+function PrinterCardInner({
   printer, now, index, busy, onPause, onResume, onCancel, onStart, onMatch,
 }: {
   printer: PanelPrinter; now: number; index: number; busy: boolean;
@@ -1083,42 +1099,13 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     }
   };
 
-  // NDJSON akışlı baskı (StartModal ile aynı mantık).
+  // NDJSON akışlı baskı — PAYLAŞILAN runPrintStream (eski kopya kod "download" gibi yeni
+  // aşamaları tanımıyordu; tek kaynak = tutarlı ilerleme her akışta).
   const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
-      const res = await fetch(`/api/models/${fileId}/print`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms, prefs: opts.prefs }),
-      });
-      if (!res.ok || !res.body) {
-        const j = await res.json().catch(() => ({} as { error?: string }));
-        throw new Error(j.error || `HTTP ${res.status}`);
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = ""; let errMsg: string | null = null; let ok = false;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let ev: { stage: string; pct?: number | null; message?: string };
-          try { ev = JSON.parse(line); } catch { continue; }
-          if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
-          else if (ev.stage === "done") ok = true;
-          else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") setProgress({ stage: ev.stage, pct: null });
-          else setProgress({ stage: "upload", pct: ev.pct ?? null });
-        }
-      }
-      if (errMsg) throw new Error(errMsg);
-      if (!ok) throw new Error("Baskı tamamlanmadı (akış beklenmedik kapandı)");
-      setProgress({ stage: "done", pct: 100 });
+      await runPrintStream(fileId, opts, setProgress);
       toast.success("Baskı başlatıldı 🎉");
       onClose();
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 
 const Schema = z.object({
   filename: z.string().min(1, "Dosya adı gerekli"),
@@ -18,6 +19,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (!productId) {
       await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id, filename } });
+      invalidatePrintFileMatches(); // panel değişikliği 30sn TTL beklemeden görsün
       return NextResponse.json({ ok: true, cleared: true });
     }
 
@@ -26,6 +28,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       create: { printerConfigId: id, filename, productId },
       update: { productId },
     });
+    invalidatePrintFileMatches(); // panel yeni eşleşmeyi 30sn TTL beklemeden görsün
     return NextResponse.json(saved);
   } catch (error) {
     return jsonError(error);

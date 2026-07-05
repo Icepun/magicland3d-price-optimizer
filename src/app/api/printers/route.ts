@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import {
-  fetchMoonrakerStatus,
-  fetchMoonrakerMeta,
-  moonrakerThumbUrl,
-  type MoonrakerState,
-} from "@/core/printers/moonraker";
-import { getBambuStatus, mapBambuState } from "@/core/printers/bambu";
+import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
+import { mapBambuState } from "@/core/printers/bambu";
 import { fileMatchKey } from "@/core/printers/file-match";
+// Canlı yoklama yerine PAYLAŞILAN önbellek: relay ile tek yoklayıcı, çevrimdışı yazıcıya backoff
+// (30sn'de bir dene, arada anında dön) → çevrimdışı yazıcı her 5sn'lik paneli 1.5-2.2sn geciktirmez.
+import {
+  getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached, getPrintFileMatches,
+} from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -188,8 +188,9 @@ export async function GET() {
     return NextResponse.json({ printers: buildSim(pool), simulated: true, configured: false });
   }
 
-  // Ürün eşleştirmeleri (printerConfigId::filename → productId)
-  const matches = await prisma.printFileProduct.findMany();
+  // Ürün eşleştirmeleri (printerConfigId::filename → productId) — 30sn TTL önbellek
+  // (eskiden her 5sn'de sınırsız findMany; tablo baskı geçmişiyle büyüyor).
+  const matches = await getPrintFileMatches();
   const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
   const pids = [...new Set(matches.map((m) => m.productId))];
   const products = pids.length
@@ -214,7 +215,7 @@ export async function GET() {
         if (!c.accessCode || !c.serial) {
           return { ...base, note: "Access code + seri no gerekli (Yönet → düzenle)" };
         }
-        const bs = await getBambuStatus(c.host, c.accessCode, c.serial);
+        const bs = await getBambuStatusCached(c.host, c.accessCode, c.serial);
         if (!bs.online) {
           return { ...base, note: `Çevrimdışı — ${c.host} (LAN + Developer Mode açık mı?)` };
         }
@@ -256,7 +257,7 @@ export async function GET() {
         };
       }
 
-      const st = await fetchMoonrakerStatus(c.host, c.port);
+      const st = await getMoonrakerStatusCached(c.host, c.port);
       if (!st.online) {
         return { ...base, online: false, note: `Çevrimdışı — ${c.host} ulaşılamadı` };
       }
@@ -267,7 +268,7 @@ export async function GET() {
       let matchedId: string | null = null;
 
       if (hasJob && st.filename) {
-        const meta = await fetchMoonrakerMeta(c.host, c.port, st.filename);
+        const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename);
         // Kalan süre: slicer tahmini (varsa) ya da printDuration/progress'ten.
         let estTotalSec: number;
         if (st.progress >= 0.01 && st.printDurationSec > 0) {

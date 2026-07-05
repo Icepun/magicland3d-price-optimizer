@@ -14,9 +14,11 @@ let schemaReady: Promise<void> | null = null;
 // v25: ProductModelFile.r2Key — model dosyaları Cloudflare R2'de (çok-cihaz baskı, yerel disk boşaltma).
 // v26: PushToken tablosu — baskı-bitti mobil push (Expo) bildirimleri.
 // v27: cleanupLocalModelFiles — kullanıcı R2'ye geçti → eski YEREL (r2Key'siz) model satırlarını bir kez temizle.
+// v28: ProductModelFile.colorsJson/sliced/plateJson — dosya meta bir kez parse edilip saklanır
+//      (SlotStep'te R2 indirme + baskıda 3× senkron unzip donması biter).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "27";
+const CURRENT_SCHEMA_VERSION = "28";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -588,6 +590,10 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("ProductModelFile", "label", "TEXT");
     await ensureColumn("ProductModelFile", "sortOrder", "INTEGER NOT NULL DEFAULT 0");
     await ensureColumn("ProductModelFile", "r2Key", "TEXT"); // v25: Cloudflare R2 nesne anahtarı
+    // v28: dosya metası bir kez parse edilip saklanır (SlotStep R2 indirmesi + baskıda senkron unzip biter)
+    await ensureColumn("ProductModelFile", "colorsJson", "TEXT");
+    await ensureColumn("ProductModelFile", "sliced", "BOOLEAN");
+    await ensureColumn("ProductModelFile", "plateJson", "TEXT");
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

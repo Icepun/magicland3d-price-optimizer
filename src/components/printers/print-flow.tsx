@@ -31,7 +31,7 @@ export interface PrintableModel {
   shareKey?: string;
 }
 export interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
-export type PrintProg = { stage: "status" | "upload" | "start" | "confirm" | "done"; pct: number | null };
+export type PrintProg = { stage: "download" | "status" | "upload" | "start" | "confirm" | "done"; pct: number | null };
 export type PrintPrefs = { timelapse: boolean; bedLeveling: boolean; flowCali: boolean };
 interface FileColor { index: number; hex: string; type: string; grams: number | null }
 interface ColorInfo { colors: FileColor[]; source: string; fileKind: "gcode" | "3mf" | "other"; originalName?: string; missing?: boolean }
@@ -82,6 +82,7 @@ export async function runPrintStream(
       if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
       else if (ev.stage === "done") ok = true;
       else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") onProgress({ stage: ev.stage, pct: null });
+      else if (ev.stage === "download") onProgress({ stage: "download", pct: ev.pct ?? null }); // R2 → sunucu (gerçek %)
       else onProgress({ stage: "upload", pct: ev.pct ?? null });
     }
   }
@@ -92,12 +93,13 @@ export async function runPrintStream(
 
 export function PrintProgress({ p }: { p: PrintProg }) {
   const label =
-    p.stage === "status" ? "Yazıcı kontrol ediliyor…"
-      : p.stage === "start" ? "Baskı komutu gönderiliyor…"
-        : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
-          : p.stage === "done" ? "Başlatıldı 🎉"
-            : "Yazıcıya yükleniyor…";
-  const showPct = p.stage === "upload" && p.pct != null;
+    p.stage === "download" ? "Buluttan indiriliyor…"
+      : p.stage === "status" ? "Yazıcı kontrol ediliyor…"
+        : p.stage === "start" ? "Baskı komutu gönderiliyor…"
+          : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
+            : p.stage === "done" ? "Başlatıldı 🎉"
+              : "Yazıcıya yükleniyor…";
+  const showPct = (p.stage === "upload" || p.stage === "download") && p.pct != null;
   return (
     <div className="space-y-1.5 rounded-lg border bg-muted/30 p-2.5">
       <div className="flex items-center justify-between text-[11px]">
