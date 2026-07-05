@@ -8,6 +8,7 @@ import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { readModelColors, readModelMeta, is3mfSliced } from "@/core/printers/model-colors";
 import { resolveModelFileLocal } from "@/lib/model-files";
+import { getR2Config, isValidModelKey, headObjectSize } from "@/lib/r2";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,14 @@ export async function POST(req: NextRequest) {
       sizeBytes = Number(b.sizeBytes) || 0;
       if (!r2Key) return NextResponse.json({ error: "r2Key gerekli" }, { status: 400 });
       if (!printerConfigId) return NextResponse.json({ error: "Yazıcı seçilmedi" }, { status: 400 });
+      // CONFIRM DOĞRULAMASI: key şekli + nesnenin R2'de gerçekten var olduğu (gerçek boyutla).
+      if (!isValidModelKey(r2Key)) return NextResponse.json({ error: "Geçersiz dosya anahtarı" }, { status: 400 });
+      const r2cfgCheck = await getR2Config();
+      if (r2cfgCheck) {
+        const realSize = await headObjectSize(r2Key, r2cfgCheck);
+        if (realSize == null) return NextResponse.json({ error: "Dosya buluta ulaşmamış — yüklemeyi tekrar dene" }, { status: 400 });
+        sizeBytes = realSize;
+      }
       const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
       if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
       fileType = (originalName.split(".").pop() || "gcode").toLowerCase();

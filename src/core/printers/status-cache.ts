@@ -11,7 +11,7 @@
  *      (şüpheli işaretlenir); ikinci ardışık başarısızlık gerçek çevrimdışı sayılır (kart titremez).
  */
 import {
-  fetchMoonrakerStatus, fetchMoonrakerMeta,
+  fetchMoonrakerStatus, fetchMoonrakerMeta, moonrakerThumbUrl,
   type MoonrakerStatus, type MoonrakerMeta,
 } from "./moonraker";
 import { getBambuStatus, type BambuStatus } from "./bambu";
@@ -78,6 +78,38 @@ export async function getMoonrakerMetaCached(host: string, port: number, filenam
     metaCache.set(k, m);
   }
   return m; // null önbelleklenmez (metadata taraması gecikmiş olabilir → sonra tekrar dene)
+}
+
+// ── Moonraker thumbnail → data-URL (mobil snapshot için) ────────────────────────────────────
+// Snapshot'a yazıcının LAN IP'sine işaret eden URL yazılıyordu → telefon LAN dışındayken görsel
+// KIRIK. Küçük thumbnail bir kez indirilip data-URL olarak gömülür (dosya başına önbellekli).
+const thumbCache = new Map<string, string>();
+
+export async function getMoonrakerThumbDataUrl(
+  host: string, port: number, filename: string, relPath: string,
+): Promise<string | null> {
+  const k = `${host}|${filename}`;
+  const hit = thumbCache.get(k);
+  if (hit) return hit;
+  try {
+    const url = moonrakerThumbUrl(host, port, filename, relPath);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    try {
+      const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
+      if (!res.ok) return null;
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > 300_000) return null; // dev görseli Turso satırına gömme
+      const dataUrl = `data:image/png;base64,${buf.toString("base64")}`;
+      if (thumbCache.size > 100) thumbCache.clear();
+      thumbCache.set(k, dataUrl);
+      return dataUrl;
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    return null;
+  }
 }
 
 // ── PrintFileProduct eşleştirmeleri — 30sn TTL (panelde her 5sn sınırsız findMany yerine) ─────

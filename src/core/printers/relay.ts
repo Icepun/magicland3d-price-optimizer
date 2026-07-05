@@ -22,8 +22,9 @@ import { tryAcquirePrintLock, releasePrintLock } from "./print-lock";
 // yoklanmıyor; çevrimdışına backoff + tek-kaçak histerezisi de buradan gelir.
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached,
-  getPrintFileMatches, invalidatePrintFileMatches,
+  getMoonrakerThumbDataUrl, getPrintFileMatches, invalidatePrintFileMatches,
 } from "./status-cache";
+import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const TICK_MS = 10_000;
@@ -111,7 +112,12 @@ async function buildSnapshot(
     productName = matched?.name ?? st.filename;
     const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename); // dosya başına önbellekli — ucuz
     if (matched?.imageUrl) productImage = matched.imageUrl;
-    else if (meta?.thumbnailRelPath) productImage = moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
+    else if (meta?.thumbnailRelPath) {
+      // Data-URL göm: LAN-IP URL'i telefonda (LAN dışı) kırık görsel oluyordu.
+      productImage =
+        (await getMoonrakerThumbDataUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)) ??
+        moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
+    }
     // ETA STABİLİZASYONU (panel ile AYNI harman): erken evrede dilimleyici tahmini,
     // %5-15 harman, sonrası gerçek hız — telefondaki kalan süre de zıplamaz.
     const extrapolated = st.progress >= 0.01 && st.printDurationSec > 0 ? st.printDurationSec / st.progress : null;
@@ -225,6 +231,8 @@ async function tick(): Promise<void> {
         });
         capsWritten = true;
       } catch { /* sonraki tick dener */ }
+      // Depo hademesi — oturumda bir kez, arka planda (temp artıkları + R2 orphan'ları).
+      void runStorageJanitor().catch(() => {});
     }
     // Replica pull'u HER tick'te değil ~60sn'de bir (sync() SQL sorgularını kısa süre bloke
     // ediyor — sıklığı düşürünce blokaj seyrekleşir). Yazmalar (snapshot upsert) zaten anında

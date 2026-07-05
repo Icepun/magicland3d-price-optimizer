@@ -4,6 +4,8 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   HeadBucketCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "node:crypto";
@@ -112,4 +114,35 @@ export async function deleteObject(key: string, cfg: R2Config): Promise<void> {
 /** Kimlik/bucket doğru mu? (Ayarlar'daki "Bağlantıyı test et" — sunucu tarafı creds kontrolü.) */
 export async function headBucket(cfg: R2Config): Promise<void> {
   await client(cfg).send(new HeadBucketCommand({ Bucket: cfg.bucket }));
+}
+
+/** Uygulamanın ürettiği anahtar şekli mi? (confirm doğrulaması — keyfi/yabancı key kabul edilmez.) */
+export function isValidModelKey(key: string): boolean {
+  return /^models\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{1,8}$/i.test(key);
+}
+
+/** Nesne gerçekten var mı + boyutu ne? (confirm'de PUT'un başarıyla indiğini doğrular.) */
+export async function headObjectSize(key: string, cfg: R2Config): Promise<number | null> {
+  try {
+    const res = await client(cfg).send(new HeadObjectCommand({ Bucket: cfg.bucket, Key: key }));
+    return Number(res.ContentLength) || 0;
+  } catch {
+    return null; // yok / erişilemedi
+  }
+}
+
+/** "models/" önekindeki nesneleri listele (orphan süpürücü için). */
+export async function listModelObjects(cfg: R2Config): Promise<{ key: string; lastModified: Date | null; size: number }[]> {
+  const out: { key: string; lastModified: Date | null; size: number }[] = [];
+  let token: string | undefined;
+  do {
+    const res = await client(cfg).send(
+      new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: "models/", ContinuationToken: token, MaxKeys: 1000 })
+    );
+    for (const o of res.Contents ?? []) {
+      if (o.Key) out.push({ key: o.Key, lastModified: o.LastModified ?? null, size: Number(o.Size) || 0 });
+    }
+    token = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (token && out.length < 20_000);
+  return out;
 }

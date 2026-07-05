@@ -7,6 +7,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { createModelRows } from "@/lib/model-files";
+import { getR2Config, isValidModelKey, headObjectSize } from "@/lib/r2";
 import { readModelColors, is3mfSliced } from "@/core/printers/model-colors";
 
 export const dynamic = "force-dynamic";
@@ -54,13 +55,21 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!ALLOWED.includes(ext)) {
         return NextResponse.json({ error: `Desteklenmeyen tür: .${ext} (gcode / 3mf)` }, { status: 400 });
       }
+      // CONFIRM DOĞRULAMASI: key bizim ürettiğimiz şekilde mi + nesne GERÇEKTEN R2'de mi?
+      // Eskiden keyfi bir key kabul edilip hayalet satır oluşabiliyor (baskı anında 502) ve
+      // sizeBytes istemci beyanına kalıyordu.
+      if (!isValidModelKey(r2Key)) return NextResponse.json({ error: "Geçersiz dosya anahtarı" }, { status: 400 });
+      const r2cfg = await getR2Config();
+      if (!r2cfg) return NextResponse.json({ error: "Bulut depolama ayarlı değil" }, { status: 400 });
+      const realSize = await headObjectSize(r2Key, r2cfg);
+      if (realSize == null) return NextResponse.json({ error: "Dosya buluta ulaşmamış — yüklemeyi tekrar dene" }, { status: 400 });
       const mine = await createModelRows({
         productId: id,
         applyToVariants: b.applyToVariants === true,
         printerConfigId,
         originalName,
         fileType: ext,
-        sizeBytes: Number(b.sizeBytes) || 0,
+        sizeBytes: realSize, // istemci beyanı değil, R2'nin doğruladığı gerçek boyut
         label: b.label != null && String(b.label).trim() !== "" ? String(b.label).trim() : null,
         gramaj: b.gramaj != null ? Number(b.gramaj) : null,
         estPrintMin: b.estPrintMin != null ? Math.round(Number(b.estPrintMin)) : null,

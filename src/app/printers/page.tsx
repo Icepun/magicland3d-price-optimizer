@@ -649,12 +649,16 @@ function PrintInImage({ image, productName, progress, accent, printing }: { imag
     const raf = requestAnimationFrame(() => setRevealed(true));
     return () => cancelAnimationFrame(raf);
   }, []);
+  // Görsel yüklenemezse (yazıcı-IP thumbnail'i, yazıcı araya çevrimdışı düştü) kırık-görsel
+  // ikonu yerine kutu placeholder'ına düş.
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => setImgFailed(false), [image]);
   const pct = revealed ? Math.round(progress * 100) : 0;
   return (
     <div className="relative h-28 w-28 shrink-0 rounded-xl overflow-hidden border bg-muted/40">
-      {image ? (
+      {image && !imgFailed ? (
         <>
-          <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25 grayscale" />
+          <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25 grayscale" onError={() => setImgFailed(true)} />
           <img src={image} alt={productName} className="absolute inset-0 h-full w-full object-cover transition-[clip-path] duration-1000 ease-linear" style={{ clipPath: `inset(${100 - pct}% 0 0 0)` }} />
         </>
       ) : (

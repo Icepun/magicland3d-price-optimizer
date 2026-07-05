@@ -64,10 +64,14 @@ export function parseGcodeText(text: string): ModelColor[] {
   const typeRaw = headerValue(text, "filament_type");
   const types = typeRaw ? splitList(typeRaw) : [];
 
+  // [g] varsa GRAM olarak gösterilir; [mm]/[cm3] YALNIZ "kullanılmış mı" filtresi içindir —
+  // eski hali mm/cm³ değerini grams alanına koyup UI'da "3241.7g" gösterebiliyordu.
+  const usedG = headerValue(text, "filament used \\[g\\]");
   const usedRaw =
-    headerValue(text, "filament used \\[g\\]") ||
+    usedG ||
     headerValue(text, "filament used \\[mm\\]") ||
     headerValue(text, "filament used \\[cm3\\]");
+  const isGrams = !!usedG;
   const used = usedRaw ? splitList(usedRaw).map((x) => parseFloat(x.replace(/[^0-9.\-]/g, ""))) : [];
   const haveUsed = used.length > 0;
 
@@ -76,7 +80,7 @@ export function parseGcodeText(text: string): ModelColor[] {
     if (!hex) return;
     const g = haveUsed ? (Number.isFinite(used[i]) ? used[i] : 0) : null;
     if (haveUsed && (g ?? 0) <= 0) return; // dilimde tanımlı ama basılmayan filamenti atla
-    out.push({ index: i, hex, type: types[i] || "", grams: g != null ? Math.round(g * 10) / 10 : null });
+    out.push({ index: i, hex, type: types[i] || "", grams: isGrams && g != null ? Math.round(g * 10) / 10 : null });
   });
   // Hiçbiri "used" filtresini geçemediyse (ör. tek renk, used=0 yazılmış) → ham listeyi döndür
   if (out.length === 0 && hexes.some(Boolean)) {
