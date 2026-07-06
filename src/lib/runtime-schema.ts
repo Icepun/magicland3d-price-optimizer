@@ -16,9 +16,10 @@ let schemaReady: Promise<void> | null = null;
 // v27: cleanupLocalModelFiles — kullanıcı R2'ye geçti → eski YEREL (r2Key'siz) model satırlarını bir kez temizle.
 // v28: ProductModelFile.colorsJson/sliced/plateJson — dosya meta bir kez parse edilip saklanır
 //      (SlotStep'te R2 indirme + baskıda 3× senkron unzip donması biter).
+// v29: ProductModelFile.thumbnail — dilimleyici önizleme görseli (Özel Baskılar arşivinde küçük görsel).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "28";
+const CURRENT_SCHEMA_VERSION = "29";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -594,6 +595,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("ProductModelFile", "colorsJson", "TEXT");
     await ensureColumn("ProductModelFile", "sliced", "BOOLEAN");
     await ensureColumn("ProductModelFile", "plateJson", "TEXT");
+    // v29: dilimleyici önizleme görseli (Özel Baskılar arşivi)
+    await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

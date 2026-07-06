@@ -9,7 +9,7 @@ import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
 import { moonrakerUploadAndPrint } from "@/core/printers/moonraker";
 import { bambuUploadAndPrint, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
-import { readModelColors, is3mfSliced, readBambuPrintMeta } from "@/core/printers/model-colors";
+import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 
@@ -182,6 +182,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, { headMapping: amsMapping, prefs, brand: printer.brand });
           }
 
+          // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa,
+          // dilimleyici thumbnail'ını da çıkar → eski (v29 öncesi) dosyalar ilk baskıda görsel kazanır.
+          if (!mf.thumbnail && parsePath) {
+            try {
+              const t = readModelMeta(parsePath).thumbnail;
+              if (t) persist.thumbnail = t;
+            } catch { /* önizleme çıkarılamadı — kritik değil */ }
+          }
           // İlk baskıda parse edilen meta kalıcılaşsın (fire-and-forget; baskıyı yavaşlatmaz).
           if (Object.keys(persist).length) {
             void prisma.productModelFile.update({ where: { id: mf.id }, data: persist }).catch(() => {});

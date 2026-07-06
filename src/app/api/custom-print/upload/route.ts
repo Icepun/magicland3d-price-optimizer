@@ -109,6 +109,7 @@ export async function POST(req: NextRequest) {
           estPrintMin: meta.estPrintMin,
           colorsJson: JSON.stringify(colors),
           sliced,
+          thumbnail: meta.thumbnail ?? null, // arşivde küçük görsel — zaten çıkarılıyordu, artık saklanıyor
           sortOrder: 0,
         },
       });

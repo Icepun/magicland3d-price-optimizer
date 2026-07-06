@@ -379,6 +379,9 @@ model ProductModelFile {
   sliced          Boolean?
   /** Bambu plaka meta (JSON: {plateParam,filamentCount}) — ilk baskıda parse edilip saklanır. */
   plateJson       String?
+  /** Dilimleyicinin gcode/3mf'e gömdüğü önizleme görseli (data URL) — arşiv/listelerde küçük
+      görsel için. Yüklemede çıkarılır; eski dosyalar ilk baskıda dolar (backfill). */
+  thumbnail       String?
   /** Parça sıralaması (aynı ürün+yazıcı içinde). */
   sortOrder       Int      @default(0)
   createdAt       DateTime @default(now())

@@ -10,8 +10,9 @@ const CUSTOM_PID = "__custom__";
 
 /**
  * Yüklenmiş özel baskıları (ürüne bağlı olmayan ad-hoc gcode/3mf) listeler — Yazıcılar sayfasındaki
- * "Özel Baskılar" arşiv ekranı için. Her dosyaya ait yazıcı bilgisini (ad/marka) iliştirir + buluta mı
- * (R2) yoksa yerele mi yüklendiğini işaretler → kullanıcı görüp tekrar basabilir / temizleyebilir.
+ * "Özel Baskılar" arşiv ekranı için. Her dosyaya yazıcı bilgisi + önizleme görseli (varsa) iliştirir,
+ * ayrıca DEPOLAMA ÖZETİ döndürür: özel baskıların toplamı + TÜM model dosyalarının bulut kullanımı
+ * (kullanıcı R2'de ne kadar yer tuttuğunu görebilsin).
  */
 export async function GET() {
   try {
@@ -30,8 +31,17 @@ export async function GET() {
       : [];
     const pmap = new Map(printers.map((p) => [p.id, p]));
 
-    return NextResponse.json(
-      files.map((f) => ({
+    // Depolama özeti — sizeBytes v0.19.93'ten beri R2 HeadObject doğrulamalı (gerçek boyut).
+    const customCloudBytes = files.reduce((s, f) => s + (f.r2Key ? f.sizeBytes : 0), 0);
+    const customLocalBytes = files.reduce((s, f) => s + (!f.r2Key ? f.sizeBytes : 0), 0);
+    const cloudAll = await prisma.productModelFile.aggregate({
+      where: { r2Key: { not: null } },
+      _sum: { sizeBytes: true },
+      _count: { _all: true },
+    });
+
+    return NextResponse.json({
+      items: files.map((f) => ({
         id: f.id,
         printerConfigId: f.printerConfigId,
         originalName: f.originalName,
@@ -40,10 +50,19 @@ export async function GET() {
         gramaj: f.gramaj,
         estPrintMin: f.estPrintMin,
         isCloud: !!f.r2Key,
+        thumbnail: f.thumbnail ?? null,
         createdAt: f.createdAt,
         printer: pmap.get(f.printerConfigId) ?? null,
       })),
-    );
+      summary: {
+        count: files.length,
+        customCloudBytes,
+        customLocalBytes,
+        /** TÜM model dosyalarının (ürün + özel) buluttaki toplamı. */
+        cloudTotalBytes: cloudAll._sum.sizeBytes ?? 0,
+        cloudTotalCount: cloudAll._count._all,
+      },
+    });
   } catch (error) {
     return jsonError(error);
   }
