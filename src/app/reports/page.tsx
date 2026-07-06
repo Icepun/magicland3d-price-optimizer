@@ -1,25 +1,41 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Cell } from "recharts";
-import { BarChart3, TrendingUp, TrendingDown, ShoppingCart, Trophy } from "lucide-react";
+import { BarChart3, TrendingUp, TrendingDown, ShoppingCart, Trophy, Package } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlatformLogo } from "@/components/PlatformLogo";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { thumbUrl } from "@/lib/image";
 
 interface SummaryBucket { revenue: number; profit: number; orderCount: number }
 interface OrdersResp {
-  orders: { platform: "shopify" | "trendyol" | "hepsiburada"; items: { name: string; quantity: number }[]; total: number }[];
+  orders: { platform: "shopify" | "trendyol" | "hepsiburada"; items: { name: string; quantity: number; image?: string | null }[]; total: number }[];
   summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; hepsiburada: SummaryBucket; total: SummaryBucket };
 }
 interface ProductRow {
   id: string;
   name: string;
+  imageUrl: string | null;
   currentNetProfit: number | null;
   currentProfitMargin: number | null;
   hasCost: boolean;
+}
+
+/** Liste satırlarındaki küçük ürün görseli — tanımayı kolaylaştırır; görsel yoksa kutu ikonu. */
+function MiniThumb({ src, size = "h-6 w-6" }: { src: string | null | undefined; size?: string }) {
+  return (
+    <span className={cn("inline-flex items-center justify-center rounded-md border bg-muted/40 overflow-hidden shrink-0", size)}>
+      {src ? (
+        <img src={thumbUrl(src) ?? undefined} alt="" loading="lazy" className="h-full w-full object-cover" />
+      ) : (
+        <Package className="h-3 w-3 text-muted-foreground/40" />
+      )}
+    </span>
+  );
 }
 
 const SHOPIFY = "oklch(0.60 0.16 152)";
@@ -53,9 +69,14 @@ export default function ReportsPage() {
   const productList = useMemo(() => (Array.isArray(products) ? products : []), [products]);
 
   const topSellers = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const o of orders) for (const it of o.items) m.set(it.name, (m.get(it.name) ?? 0) + it.quantity);
-    return [...m.entries()].map(([name, qty]) => ({ name, qty })).sort((a, b) => b.qty - a.qty).slice(0, 8);
+    const m = new Map<string, { qty: number; image: string | null }>();
+    for (const o of orders)
+      for (const it of o.items) {
+        const cur = m.get(it.name);
+        if (cur) { cur.qty += it.quantity; if (!cur.image && it.image) cur.image = it.image; }
+        else m.set(it.name, { qty: it.quantity, image: it.image ?? null });
+      }
+    return [...m.entries()].map(([name, v]) => ({ name, qty: v.qty, image: v.image })).sort((a, b) => b.qty - a.qty).slice(0, 8);
   }, [orders]);
   const topSellerMax = topSellers[0]?.qty ?? 1;
 
@@ -167,12 +188,11 @@ export default function ReportsPage() {
                   <div className="space-y-2">
                     {topSellers.map((s, i) => (
                       <div key={s.name} className="space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="truncate flex-1 min-w-0">
-                            <span className="text-muted-foreground tabular-nums mr-1.5">{i + 1}.</span>
-                            {s.name}
-                          </span>
-                          <span className="font-semibold tabular-nums ml-2">{s.qty} adet</span>
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="text-muted-foreground tabular-nums w-4 shrink-0">{i + 1}.</span>
+                          <MiniThumb src={s.image} />
+                          <span className="truncate flex-1 min-w-0">{s.name}</span>
+                          <span className="font-semibold tabular-nums ml-2 shrink-0">{s.qty} adet</span>
                         </div>
                         <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                           <div className="h-full rounded-full bg-primary" style={{ width: `${(s.qty / topSellerMax) * 100}%` }} />
@@ -198,9 +218,10 @@ export default function ReportsPage() {
                     <p className="text-xs text-muted-foreground">Maliyetli ürün yok.</p>
                   ) : (
                     profitLeaders.map((p) => (
-                      <div key={p.id} className="flex items-center justify-between text-xs py-0.5">
+                      <div key={p.id} className="flex items-center gap-2 text-xs py-0.5">
+                        <MiniThumb src={p.imageUrl} />
                         <span className="truncate flex-1 min-w-0">{p.name}</span>
-                        <span className="tabular-nums font-medium text-green-600 dark:text-green-500 ml-2">
+                        <span className="tabular-nums font-medium text-green-600 dark:text-green-500 ml-2 shrink-0">
                           {formatCurrency(p.currentNetProfit ?? 0)}
                           <span className="text-muted-foreground font-normal ml-1">({formatPercent(p.currentProfitMargin ?? 0)})</span>
                         </span>
@@ -214,9 +235,10 @@ export default function ReportsPage() {
                       <TrendingDown className="h-3.5 w-3.5 text-destructive" /> Zarar edenler
                     </p>
                     {lossMakers.map((p) => (
-                      <div key={p.id} className="flex items-center justify-between text-xs py-0.5">
+                      <div key={p.id} className="flex items-center gap-2 text-xs py-0.5">
+                        <MiniThumb src={p.imageUrl} />
                         <span className="truncate flex-1 min-w-0">{p.name}</span>
-                        <span className="tabular-nums font-medium text-destructive ml-2">{formatCurrency(p.currentNetProfit ?? 0)}</span>
+                        <span className="tabular-nums font-medium text-destructive ml-2 shrink-0">{formatCurrency(p.currentNetProfit ?? 0)}</span>
                       </div>
                     ))}
                   </div>

@@ -250,38 +250,60 @@ export async function moonrakerStartExisting(host: string, port: number, filenam
 }
 
 /**
- * Snapmaker U1 (tool-changer) gcode'unda tool/kafa + CFS kanal atamasını yeniden eşle.
- * toolMap[dilimleyici_filament_index] = fiziksel kafa (0-tabanlı). U1'de kafa i ↔ CFS kanalı i SABİT,
- * bu yüzden hem kafa hem besleme kanalı AYNI eşlemeyle değiştirilir — yoksa kafa değişir ama filament
- * eski kanaldan beslenir → seçilen kafa boş kalır → "filament anomaly / runout".
- * Değiştirilen satırlar:
- *   - `T<n>` tek başına (aktif kafa seçimi) + `M104/M109/M108 ... T<n>` (kafa sıcaklığı)
- *   - `USE_CHANNEL CHANNEL=<n>` (CFS besleme kanalı) — Snapmaker filament yükleme makrosu
- * G-hareketleri / `M106 P..` fan / yorumlar DOKUNULMAZ. Identity (i→i) ise metin aynen döner.
- * NOT: gcode başka bir kanal/extruder komutu kullanıyorsa (örn. M620/SM_ EXTRUDER=) buraya eklenecek —
- * gerçek U1 gcode'u görülünce doğrulanır.
+ * Snapmaker U1 (tool-changer) gcode'unda tool/kafa atamasını yeniden eşle.
+ * toolMap[dilimleyici_filament_index] = fiziksel kafa (0-tabanlı). U1'de besleme kanalı kafaya
+ * SABİT bağlıdır (firmware config) — gcode'da kanal komutu yoktur; kafa doğru eşlenirse kanal da doğrudur.
+ *
+ * GERÇEK U1 profili (Orca fdm_U1) doğrulandı — eski regex'lerin KAÇIRDIĞI iki kritik satır tipi:
+ *   1) `T1; pick the tool` — kafa seçimi SATIR SONU YORUMLU gelir; eski `^T\d+$` deseni bunu
+ *      yakalamıyordu → M109 remap'lenip fiziksel kafa seçimi ORİJİNAL kalıyor, baskı yanlış
+ *      kafadan/kanaldan yürüyordu ("4. slottan çek dedim, 2'den çekti" bug'ı).
+ *   2) `PRINT_START TOOL_TEMP=.. T0_TEMP=.. T1_TEMP=.. TOOL=<n>` — makro, kafa hazırlığını bu
+ *      parametrelerle yapar; TOOL değeri ve T<n>_TEMP anahtarları da eşlenmeli.
+ * G-hareketleri / fan / düz yorum satırları DOKUNULMAZ. Identity (i→i) ise metin aynen döner.
  */
 export function remapMoonrakerTools(text: string, toolMap: Record<number, number>): string {
   const keys = Object.keys(toolMap).map(Number);
   if (!keys.length || keys.every((k) => toolMap[k] === k)) return text; // identity → değişiklik yok
-  return text.split("\n").map((line) => {
+  const mapT = (m: string, d: string) => {
+    const n = Number(d);
+    return n in toolMap ? `T${toolMap[n]}` : m;
+  };
+  let tSelect = 0, mTemp = 0, printStart = 0; // tanılama sayaçları
+  const out = text.split("\n").map((line) => {
     const t = line.trimStart();
-    // Tool seç / sıcaklık → T token'ını eşle
-    if (/^T\d+\s*$/.test(t) || /^M(?:104|109|108)\b/.test(t)) {
-      return line.replace(/\bT(\d+)\b/g, (m, d) => {
-        const n = Number(d);
-        return n in toolMap ? `T${toolMap[n]}` : m;
-      });
+    // 1) Kafa seçimi: satır `T<n>` ile başlıyorsa (sonu boşluk/;yorum/satır-sonu) İLK token eşlenir.
+    if (/^T\d+(?=[\s;]|$)/.test(t)) {
+      tSelect++;
+      return line.replace(/\bT(\d+)\b/, mapT); // yalnız baştaki token (yorumdaki metne dokunma)
     }
-    // CFS besleme kanalı → CHANNEL=n eşle (kafa ile aynı eşleme; head i ↔ channel i)
-    if (/^USE_CHANNEL\b/i.test(t)) {
-      return line.replace(/\bCHANNEL\s*=\s*(\d+)/i, (m, d) => {
-        const n = Number(d);
-        return n in toolMap ? `CHANNEL=${toolMap[n]}` : m;
-      });
+    // 2) Sıcaklık komutları: M104/M109/M108 ... T<n>
+    if (/^M(?:104|109|108)\b/.test(t)) {
+      mTemp++;
+      return line.replace(/\bT(\d+)\b/g, mapT);
+    }
+    // 3) PRINT_START makrosu: TOOL=<n> değeri + T<n>_TEMP= anahtar adları eşlenir.
+    if (/^PRINT_START\b/i.test(t)) {
+      printStart++;
+      return line
+        .replace(/\bTOOL\s*=\s*(\d+)\b/i, (m, d) => {
+          const n = Number(d);
+          return n in toolMap ? `TOOL=${toolMap[n]}` : m;
+        })
+        .replace(/\bT(\d+)_TEMP\s*=/gi, (m, d) => {
+          const n = Number(d);
+          return n in toolMap ? `T${toolMap[n]}_TEMP=` : m;
+        });
     }
     return line;
   }).join("\n");
+  // Tanılama: eşleme istendi ama hiçbir kafa-seçim/başlangıç satırı bulunamadıysa bir daha
+  // aynı hatayı KANITSIZ aramayalım — log'a düşür (kullanıcıya değil).
+  console.log(`[moonraker] tool remap ${JSON.stringify(toolMap)} → T-seçim:${tSelect} M10x:${mTemp} PRINT_START:${printStart}`);
+  if (tSelect === 0 && printStart === 0) {
+    console.warn("[moonraker] UYARI: remap istendi ama gcode'da kafa-seçim satırı bulunamadı — dosya farklı bir başlangıç makrosu kullanıyor olabilir");
+  }
+  return out;
 }
 
 export interface MoonrakerPrefs { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean }
@@ -332,9 +354,25 @@ const SM_META_FIELDS = [
   "filament_type", "filament_flow_ratio", "filament_diameter", "filament_max_vol_speed",
   "filament_used_g", "filament_used_mm",
 ];
+/** Kafa-başına (per-tool) indeksli metadata alanları — kafa remap'inde permüte edilmeli. */
+const SM_PER_TOOL_FIELDS = new Set([
+  "nozzle_diameter_list", "nozzle_temp", "filament_type", "filament_flow_ratio",
+  "filament_diameter", "filament_max_vol_speed", "filament_used_g", "filament_used_mm",
+]);
 function pyRepr(v: unknown): string {
   if (Array.isArray(v)) return "[" + v.map((x) => (typeof x === "string" ? `'${x}'` : String(x))).join(", ") + "]";
   return String(v);
+}
+/** Diziyi kafa eşlemesine göre permüte et: fiziksel kafa toolMap[i], orijinal i'nin verisini alır.
+ *  (Firmware bu dizileri FİZİKSEL kafa indeksiyle okur — remap'li baskıda permütesiz gönderilirse
+ *  yanlış kafaya yanlış filament tipi/sıcaklık gider → sahte anomaly/runout riskleri.) */
+function permutePerTool<T>(arr: T[], toolMap: Record<number, number>): T[] {
+  const out = [...arr];
+  for (const [fromS, to] of Object.entries(toolMap)) {
+    const from = Number(fromS);
+    if (from >= 0 && from < arr.length && to >= 0 && to < arr.length) out[to] = arr[from];
+  }
+  return out;
 }
 
 /**
@@ -346,20 +384,32 @@ function pyRepr(v: unknown): string {
  * Calibration tercihleri DEFAULT 0/OFF — native preference (gcode'a dokunmadan; `flow_calibrate==0` makroyu
  * zararsızca erken döndürür, priming'i BOZMAZ).
  */
-function buildSnapmakerStartScript(filename: string, meta: Record<string, unknown>, prefs?: MoonrakerPrefs): string {
+function buildSnapmakerStartScript(
+  filename: string,
+  meta: Record<string, unknown>,
+  prefs?: MoonrakerPrefs,
+  toolMap?: Record<number, number>,
+): string {
   const esc = filename.replace(/"/g, '\\"');
+  const hasMap = !!toolMap && Object.keys(toolMap).length > 0;
   let s = `SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME="${esc}"`;
   s += ` BED_LEVEL="${prefs?.bedLeveling ? 1 : 0}" FLOW_CALIBRATE="${prefs?.flowCali ? 1 : 0}" TIME_LAPSE_CAMERA="${prefs?.timelapse ? 1 : 0}"`;
   for (const field of SM_META_FIELDS) {
     let out: string | null = null;
     if (field === "filament_used_g") {
-      const w = (meta as any).filament_weight;
+      let w = (meta as any).filament_weight;
+      if (Array.isArray(w) && hasMap) w = permutePerTool(w, toolMap!);
       if (w != null) out = pyRepr(w);
     } else if (field === "filament_type") {
       const ft = (meta as any).filament_type;
-      if (ft != null) out = "[" + String(ft).split(";").map((it) => `'${it || "NONE"}'`).join(", ") + "]";
+      if (ft != null) {
+        let parts = String(ft).split(";");
+        if (hasMap) parts = permutePerTool(parts, toolMap!); // kafa remap'iyle hizala
+        out = "[" + parts.map((it) => `'${it || "NONE"}'`).join(", ") + "]";
+      }
     } else {
-      const v = (meta as any)[field];
+      let v = (meta as any)[field];
+      if (Array.isArray(v) && hasMap && SM_PER_TOOL_FIELDS.has(field)) v = permutePerTool(v, toolMap!);
       if (v != null && v !== "") out = pyRepr(v);
     }
     if (out != null) s += ` ${field.toUpperCase()}="${out}"`;
@@ -387,11 +437,14 @@ export async function moonrakerUploadAndPrint(
   await assertMoonrakerIdle(host, port);
   let body = fileBuf;
   const isGcode = /\.(gcode|gco|g)$/i.test(filename);
+  // Kafa eşlemesi (identity değilse): gcode remap + (Snapmaker'da) metadata permütasyonu için ORTAK.
+  let activeToolMap: Record<number, number> | undefined;
   if (isGcode && opts.headMapping && opts.headMapping.length) {
     const toolMap: Record<number, number> = {};
     opts.headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) toolMap[idx] = head; });
     const keys = Object.keys(toolMap).map(Number);
     if (keys.length && !keys.every((k) => toolMap[k] === k)) {
+      activeToolMap = toolMap;
       body = Buffer.from(remapMoonrakerTools(fileBuf.toString("latin1"), toolMap), "latin1");
     }
   }
@@ -422,7 +475,8 @@ export async function moonrakerUploadAndPrint(
     const ft = filamentTypeFromGcode(body);
     if (ft) (meta as any).filament_type = ft;
   }
-  await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, opts.prefs));
+  // toolMap geçilir → metadata dizileri (filament_type/nozzle_temp/…) fiziksel kafalara hizalanır.
+  await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, opts.prefs, activeToolMap));
 }
 
 export async function moonrakerFiles(host: string, port: number): Promise<MoonrakerFile[]> {

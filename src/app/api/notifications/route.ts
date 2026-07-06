@@ -18,6 +18,9 @@ export interface AppAlert {
   title: string;
   body: string;
   href: string;
+  /** Kalıcı bildirimlerde oluşturulma zamanı (ISO) — istemci ESKİ birikmişleri OS bildirimi
+      olarak PATLATMASIN diye yaş sınırında kullanılır (anlık stok/filament uyarılarında yok). */
+  createdAt?: string;
 }
 
 export async function GET() {
@@ -109,6 +112,7 @@ export async function GET() {
         title: n.title,
         body: n.body,
         href: n.href,
+        createdAt: n.createdAt instanceof Date ? n.createdAt.toISOString() : String(n.createdAt ?? ""),
       });
     }
   } catch {

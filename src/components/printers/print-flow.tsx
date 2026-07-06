@@ -218,6 +218,11 @@ export function SlotStep({
   const setOne = (i: number, slot: number) => setAssign((prev) => { const n = [...prev]; n[i] = slot; return n; });
   const setCount = (n: number) => setManualCount(Math.max(1, Math.min(4, n)));
 
+  // Atamalar dolmadan başlatma (eski `?? 0` sessizce kafa/slot 1'e düşüyordu); tool-changer'da
+  // (Snapmaker) iki rengi AYNI kafaya atamak her zaman yanlış → engelle.
+  const assignReady = assign.length === printColors.length && assign.every((v) => v != null);
+  const dupHeads = !!isSnapmaker && printColors.length > 1 && assignReady && new Set(assign).size !== assign.length;
+
   const start = () => {
     // ams_mapping: dilimleyici filament index'ine göre yerleştir, boşlukları -1 ile doldur
     const maxIdx = printColors.reduce((m, c) => Math.max(m, c.index), 0);
@@ -381,11 +386,18 @@ export function SlotStep({
           </div>
         )}
 
+        {dupHeads && (
+          <p className="text-[11px] text-destructive flex items-start gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+            İki renk aynı kafaya atanamaz — her renge farklı bir kafa seç.
+          </p>
+        )}
+
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>
-          <Button disabled={printing || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
+          <Button disabled={printing || !assignReady || dupHeads || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
             {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>
         </DialogFooter>

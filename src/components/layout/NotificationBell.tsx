@@ -13,6 +13,8 @@ interface AppAlert {
   title: string;
   body: string;
   href: string;
+  /** Kalıcı bildirimlerde oluşturulma zamanı (ISO) — OS bildirimi yaş sınırı için. */
+  createdAt?: string;
 }
 
 const DISMISS_KEY = "mh-dismissed-alerts";
@@ -65,20 +67,36 @@ export function NotificationBell() {
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) return;
     const notified = readSet(NOTIFIED_KEY);
+    // YAŞ SINIRI: 6 saatten eski kalıcı bildirimler OS bildirimi olarak PATLAMAZ (zilde + rozette
+    // yine görünürler). Eskiden uygulama açılınca günlerce birikmişler tek seferde toast oluyordu.
+    const MAX_OS_AGE_MS = 6 * 60 * 60_000;
+    const now = Date.now();
+    const isFreshEnough = (a: AppAlert) =>
+      !a.createdAt || now - new Date(a.createdAt).getTime() < MAX_OS_AGE_MS;
     const fresh = alerts.filter(
       (a) => (a.severity === "critical" || a.severity === "success") && !notified.has(a.id)
     );
     if (fresh.length === 0) return;
-    const fire = () =>
-      fresh.forEach((a) => {
+    const toToast = fresh.filter(isFreshEnough);
+    const fire = () => {
+      // PATLAMA KORUMASI: 4'ten fazla yeni bildirim birikmişse tek özet toast (hepsi zilde durur).
+      if (toToast.length > 4) {
         try {
-          new Notification(`Magicland 3D Hub — ${a.title}`, { body: a.body });
-        } catch {
-          /* ignore */
-        }
-      });
-    if (Notification.permission === "granted") fire();
-    else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && fire());
+          new Notification("Magicland 3D Hub", { body: `${toToast.length} yeni bildirim — zile göz at` });
+        } catch { /* ignore */ }
+      } else {
+        toToast.forEach((a) => {
+          try {
+            new Notification(`Magicland 3D Hub — ${a.title}`, { body: a.body });
+          } catch { /* ignore */ }
+        });
+      }
+    };
+    if (toToast.length > 0) {
+      if (Notification.permission === "granted") fire();
+      else if (Notification.permission !== "denied") Notification.requestPermission().then((p) => p === "granted" && fire());
+    }
+    // Yaş sınırına takılanlar da "bildirildi" sayılır → sonraki poll'da tekrar değerlendirilmez.
     fresh.forEach((a) => notified.add(a.id));
     writeSet(NOTIFIED_KEY, notified);
   }, [alerts]);

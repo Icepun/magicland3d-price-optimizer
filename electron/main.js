@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
-const { app, BrowserWindow, ipcMain, shell, powerMonitor } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, powerMonitor, Tray, Menu } = require("electron");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -13,6 +13,11 @@ const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${defaultPo
 
 let server;
 let isQuittingForUpdate = false;
+// Tepsi (tray) modu: pencere X'i uygulamayı KAPATMAZ, arka plana alır — relay + sipariş izleyici
+// çalışmaya devam eder → bildirimler uygulama "kapalıyken" de zamanında düşer.
+let tray = null;
+let trayBalloonShown = false; // "arka planda çalışıyor" bilgisi oturumda bir kez
+let quitRequested = false; // tepsiden "Çık" → gerçek kapanış niyeti
 let updateState = {
   status: "idle",
   message: app.isPackaged
@@ -133,6 +138,11 @@ let isShuttingDown = false;
 async function gracefulShutdown(reason) {
   if (isShuttingDown) return;
   isShuttingDown = true;
+
+  // TEMİZ-KAPANIŞ bayrağı: bir sonraki açılışta replica sağlık yoklaması ATLANIR (yoklama
+  // yalnız şüpheli durumlar — çökme/donma sonrası — için; her açılışta 2-6sn yakıyordu).
+  try { fs.writeFileSync(path.join(app.getPath("userData"), ".clean-exit"), String(Date.now())); } catch { /* ignore */ }
+  try { tray?.destroy(); } catch { /* ignore */ }
 
   // Window'ları sert kapat (close listener'larını bypass et)
   for (const win of BrowserWindow.getAllWindows()) {
@@ -446,6 +456,19 @@ async function ensureReplicaHealthy() {
   if (!replicaPath || !process.env.TURSO_DATABASE_URL) return;
   if (!fs.existsSync(replicaPath)) return; // ilk kurulum — yoklanacak dosya yok
 
+  // KAPI (v0.19.95): yoklama yalnız ŞÜPHE varken çalışır — önceki oturum TEMİZ kapanmadıysa
+  // (çökme/donma/güç kesintisi). Temiz kapanış sonrası açılışta kopya+fork+ağ senkronundan
+  // oluşan 2-6sn'lik maliyet atlanır (açılış yavaşlığının en büyük kalemiydi). Bayrak her
+  // açılışta TÜKETİLİR: bu oturum çökerse bayrak yazılmaz → sonraki açılış yoklar.
+  const cleanFlag = path.join(app.getPath("userData"), ".clean-exit");
+  const wasClean = fs.existsSync(cleanFlag);
+  try { fs.rmSync(cleanFlag, { force: true }); } catch { /* ignore */ }
+  if (wasClean) {
+    logStartup("replica yoklaması atlandı (önceki oturum temiz kapandı)");
+    return;
+  }
+  logStartup("önceki oturum temiz kapanmamış → replica yoklanacak");
+
   const os = require("node:os");
   const { utilityProcess } = require("electron");
   let tmpDir = null;
@@ -531,6 +554,8 @@ async function startNextServer() {
   logStartup("startNextServer: finding port");
   const port = await findAvailablePort(defaultPort);
   logStartup("startNextServer: port =", port);
+  // Sunucu içi periyodik işler (sipariş izleyici) kendi API'sini bu porttan çağırır.
+  process.env.MLHUB_PORT = String(port);
 
   logStartup("startNextServer: creating Next.js instance");
   const nextApp = next({
@@ -560,6 +585,15 @@ async function createWindow() {
   const url = await startNextServer();
   logStartup("createWindow: URL =", url);
 
+  // ISINDIRMA: pencere yüklenirken kritik rotaları arka planda tetikle → route + Prisma planı
+  // sıcakken istemci sorguları anında döner (boş iskelet süresi kısalır). Non-blocking.
+  if (!isDev) {
+    try {
+      void fetch(`${url}/api/dashboard`, { cache: "no-store" }).catch(() => {});
+      void fetch(`${url}/api/notifications`, { cache: "no-store" }).catch(() => {});
+    } catch { /* fetch yoksa/eski runtime — önemsiz */ }
+  }
+
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -569,12 +603,38 @@ async function createWindow() {
     icon: path.join(__dirname, "..", "build", "icon.ico"),
     backgroundColor: "#1B1E2A",
     autoHideMenuBar: true,
+    // BOŞ pencere gösterme: içerik ilk boyamaya hazır olunca görün (aşağıda ready-to-show).
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  win.once("ready-to-show", () => { try { win.show(); } catch { /* ignore */ } });
+  // Fail-safe: her ne olursa olsun 15sn'de pencere görünür (ready-to-show gelmezse bile).
+  setTimeout(() => {
+    try { if (!win.isDestroyed() && !win.isVisible()) win.show(); } catch { /* ignore */ }
+  }, 15000);
+
+  // TEPSİ MODU: X'e basmak uygulamayı KAPATMAZ — arka plana alır (bildirimler zamanında düşsün
+  // diye relay + sipariş izleyici yaşamaya devam eder). Gerçek kapanış: tepsi menüsü "Çık",
+  // güncelleme kurulumu veya gracefulShutdown (o yol close listener'larını zaten bypass eder).
+  win.on("close", (e) => {
+    if (isShuttingDown || isQuittingForUpdate || quitRequested) return;
+    e.preventDefault();
+    try { win.hide(); } catch { /* ignore */ }
+    if (tray && !trayBalloonShown) {
+      trayBalloonShown = true;
+      try {
+        tray.displayBalloon?.({
+          title: "Magicland 3D Hub",
+          content: "Arka planda çalışmaya devam ediyor — bildirimler gelmeye devam eder. Kapatmak için tepsi simgesine sağ tıkla.",
+        });
+      } catch { /* balon desteklenmiyorsa sessiz */ }
+    }
   });
 
   win.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
@@ -732,6 +792,34 @@ app.whenReady().then(async () => {
     logStartup("setupAutoUpdater done");
     await createWindow();
     logStartup("createWindow done ✓");
+    // Tepsi simgesi — pencere gizliyken uygulamaya dönüş + gerçek çıkış buradan.
+    try {
+      tray = new Tray(path.join(__dirname, "..", "build", "icon.ico"));
+      tray.setToolTip("Magicland 3D Hub");
+      tray.setContextMenu(Menu.buildFromTemplate([
+        {
+          label: "Aç",
+          click: () => {
+            const w = BrowserWindow.getAllWindows()[0];
+            if (w && !w.isDestroyed()) { w.show(); if (w.isMinimized()) w.restore(); w.focus(); }
+            else void createWindow();
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Çık",
+          click: () => { quitRequested = true; gracefulShutdown("tray-quit"); },
+        },
+      ]));
+      tray.on("click", () => {
+        const w = BrowserWindow.getAllWindows()[0];
+        if (w && !w.isDestroyed()) { w.show(); if (w.isMinimized()) w.restore(); w.focus(); }
+        else void createWindow();
+      });
+      logStartup("tray hazır ✓");
+    } catch (trayErr) {
+      logStartup("tray kurulamadı (önemsiz):", String(trayErr));
+    }
   } catch (e) {
     logStartup("FATAL during startup:", e);
     // Hata olursa basit bir error window aç

@@ -15,6 +15,7 @@ import { simulatePrice } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
 import { withProductCommissionRule } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { pushToAllDevices } from "@/lib/push-notify";
 
 const WINDOW_DAYS = 30;
 
@@ -688,18 +689,32 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     });
   }
 
-  // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ /
-  // BOZMAZ). id tekilleştirme anahtarı; SQLite "INSERT OR IGNORE" ile aynı satır bir
-  // kez yazılır (Prisma createMany SQLite'ta skipDuplicates desteklemiyor). Tek round-trip.
+  // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ / BOZMAZ).
+  // ÖNCE hangileri GERÇEKTEN yeni tespit edilir → yalnız yeniler eklenir ve KRİTİK olanlar
+  // (stoğu biten ürüne sipariş) telefona da push'lanır. Eski INSERT OR IGNORE tek başına
+  // "yeni mi?" bilgisini vermiyordu → mobil push hiç yoktu ve tekrar-push riski olurdu.
   if (notifs.length > 0) {
-    const placeholders = notifs.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-    const params = notifs.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href]);
-    void prisma
-      .$executeRawUnsafe(
-        `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
-        ...params
-      )
-      .catch(() => {/* tablo yoksa/yazma hatası → sessiz geç */});
+    void (async () => {
+      try {
+        const existing = await prisma.notification.findMany({
+          where: { id: { in: notifs.map((n) => n.id) } },
+          select: { id: true },
+        });
+        const known = new Set(existing.map((e) => e.id));
+        const fresh = notifs.filter((n) => !known.has(n.id));
+        if (fresh.length === 0) return;
+        const placeholders = fresh.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+        const params = fresh.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href]);
+        await prisma.$executeRawUnsafe(
+          `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
+          ...params
+        );
+        // Kritik iş olayı telefona da düşsün (baskı-bitti gibi) — yalnız İLK kez görülenler.
+        for (const n of fresh.filter((f) => f.severity === "critical")) {
+          await pushToAllDevices(n.title, n.body).catch(() => {});
+        }
+      } catch { /* tablo yoksa/yazma hatası → sessiz geç */ }
+    })();
   }
 
   // En yeni üstte

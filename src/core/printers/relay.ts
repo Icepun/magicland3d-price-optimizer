@@ -220,9 +220,10 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     await ensureRuntimeSchema();
-    // Yetenek bildirimi (bir kez): mobil, bulut (R2) dosyaya "Tekrar bas" kapısını
-    // printRelayCaps içinde "r2start" görünce açar (eski relay'de buton kilitli kalır).
-    if (!capsWritten) {
+    tickCount++;
+    // İlk-tick yan işleri (caps yazımı + depo hademesi) 3. tick'e (~t+25sn) ertelendi:
+    // açılışın ilk saniyelerinde bulut yazması/R2 listelemesi ilk ekran sorgularıyla yarışmasın.
+    if (!capsWritten && tickCount >= 3) {
       try {
         await prisma.appSetting.upsert({
           where: { key: "printRelayCaps" },
@@ -235,9 +236,11 @@ async function tick(): Promise<void> {
       void runStorageJanitor().catch(() => {});
     }
     // Replica pull'u HER tick'te değil ~60sn'de bir (sync() SQL sorgularını kısa süre bloke
-    // ediyor — sıklığı düşürünce blokaj seyrekleşir). Yazmalar (snapshot upsert) zaten anında
-    // buluta gider, sync gerektirmez. syncNow ayrıca erişim-kontrollü + guard'lı.
-    if (tickCount++ % 6 === 0) await syncTursoReplica().catch(() => {});
+    // ediyor). KRİTİK: İLK tick'te (t+5sn) ASLA — eski `tickCount++ % 6` ilk tick'te de sync
+    // çalıştırıyordu ve tüm SQL'i tam açılış sorgularının (dashboard/orders/notifications)
+    // ortasında bloke ediyordu → splash 7sn'de boş kapanıyor, "açıldı ama yüklenmiyor" oluyordu.
+    // İlk sync artık ~t+65sn (tick 6); telefon komutları yine ≤60sn'de görülür.
+    if (tickCount % 6 === 0) await syncTursoReplica().catch(() => {});
 
     // TÜM yazıcılar devre dışıyken de devam et — komut kuyruğu yine işlenmeli (yoksa pending
     // komutlar ne uygulanır ne TTL ile düşer; sonsuza dek "bekliyor" kalırdı).
