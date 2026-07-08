@@ -177,9 +177,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             });
             matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
           } else {
-            send({ stage: "upload", pct: null }); // Moonraker: belirsiz (fetch byte takibi yok)
-            // Snapmaker: kafa seçimi (amsMapping) + baskı tercihleri → gcode tool remap / makro aç-kapa.
-            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, { headMapping: amsMapping, prefs, brand: printer.brand });
+            // Snapmaker: kafa seçimi native MAP_TABLE ile; Elegoo: atomik print=true.
+            // Yükleme artık GERÇEK yüzde raporlar (elle akıtılan multipart — eski belirsiz bar bitti).
+            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, {
+              headMapping: amsMapping, prefs, brand: printer.brand,
+              onProgress: (pct) => send({ stage: "upload", pct }),
+            });
           }
 
           // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa,
@@ -206,8 +209,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           } catch { /* eşleştirme kaydı kritik değil */ }
 
           // İZLE: yazıcı gerçekten baskıya geçti mi? (Bambu — komut kabul/ret doğrulaması)
+          let confirmed = !isBambu; // Moonraker: upload+start senkron zaten doğrulandı
           if (isBambu) {
-            const deadline = Date.now() + 15000;
+            const deadline = Date.now() + 25000;
             while (Date.now() < deadline) {
               await new Promise((r) => setTimeout(r, 1600));
               const s = await getBambuStatus(printer.host, printer.accessCode!, printer.serial!);
@@ -221,12 +225,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                 printerErrored = true; break;
               }
               const ms = mapBambuState(s.gcodeState);
-              if (ms === "printing") break; // PREPARE/RUNNING/SLICING → başladı
+              if (ms === "printing") { confirmed = true; break; } // PREPARE/RUNNING/SLICING → başladı
               if (ms === "error") {
                 send({ stage: "error", message: "Yazıcı baskıyı reddetti (FAILED). HMS kodunu kontrol edin." });
                 printerErrored = true; break;
               }
               send({ stage: "confirm" }); // hâlâ hazırlanıyor → akışı canlı tut
+            }
+            // DÜRÜSTLÜK: doğrulanamadıysa "Başlatıldı" DEME — eski hali zaman aşımında done'a
+            // düşüyordu; komut hiç ulaşmamışsa kullanıcı sahte başarı görüyordu.
+            if (!printerErrored && !confirmed) {
+              send({ stage: "error", message: "Yazıcı 25 saniyede baskıya geçmedi — ekranını kontrol et; komut ulaşmamış olabilir, tekrar dene." });
+              printerErrored = true;
             }
           }
 

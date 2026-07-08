@@ -17,6 +17,9 @@
  * bazında önbelleğe alınır (sonraki isteklerde doğrudan kullanılır).
  */
 
+import http from "node:http";
+import crypto from "node:crypto";
+
 export type MoonrakerState =
   | "standby"
   | "printing"
@@ -98,6 +101,26 @@ function cleanFilamentType(s: unknown): string | null {
   return uniq.length ? uniq.join(" · ") : null;
 }
 
+/** U1'in yapılandırılmış hata objesini (print_stats.exception: {id, code, message}) kullanıcı
+ *  diline çevir — "neden durdu" artık tahmin değil (firmware exception_manager kodları). */
+function exceptionText(exc: any): string | null {
+  if (!exc || typeof exc !== "object") return null;
+  const id = Number(exc.id);
+  const code = Number(exc.code);
+  const known =
+    id === 523 && code === 0 ? "Filament bitti" :
+    id === 523 && code === 38 ? "Filament dolandı / sıkıştı" :
+    id === 523 && code === 39 ? "Slotun filament tipi tanımsız — yazıcı ekranından filamenti düzenle" :
+    id === 531 && code === 14 ? "Nozzle çapı dosyayla uyuşmuyor" :
+    id === 531 && code === 10 ? "Baskı dosyası okunamadı" :
+    id === 525 ? "Filament besleme sorunu" :
+    id === 526 ? "Tabla sorunu" :
+    null;
+  const raw = typeof exc.message === "string" && exc.message.trim() ? exc.message.trim() : null;
+  if (known) return raw && !known.includes(raw) ? `${known}` : known;
+  return raw;
+}
+
 function parseStatus(status: any): MoonrakerStatus {
   const ps = status.print_stats ?? {};
   const vs = status.virtual_sdcard ?? {};
@@ -120,7 +143,11 @@ function parseStatus(status: any): MoonrakerStatus {
   return {
     online: true,
     state: (ps.state as MoonrakerState) || "standby",
-    message: typeof ps.message === "string" && ps.message.trim() ? ps.message.trim() : null,
+    // Neden: düz mesaj yoksa U1'in yapılandırılmış exception'ından üret (filament bitti/dolandı/
+    // slot tanımsız/nozzle uyumsuz — panelde ve telefonda net görünür).
+    message:
+      (typeof ps.message === "string" && ps.message.trim() ? ps.message.trim() : null) ??
+      exceptionText(ps.exception),
     filename: ps.filename || null,
     progress,
     printDurationSec: typeof ps.print_duration === "number" ? ps.print_duration : 0,
@@ -239,11 +266,13 @@ export async function moonrakerStart(host: string, port: number, filename: strin
  * SDCARD_PRINT_FILE_WITH_PARAMETERS ile native başlatılır (uploadAndPrint'teki akışın aynısı).
  * Diğer Moonraker (Elegoo): düz start yeterli. Her iki yol da önce boşta-kontrolü yapar.
  */
-export async function moonrakerStartExisting(host: string, port: number, filename: string, brand?: string): Promise<void> {
+export async function moonrakerStartExisting(host: string, port: number, filename: string, brand?: string, prefs?: MoonrakerPrefs): Promise<void> {
   await assertMoonrakerIdle(host, port);
   if ((brand || "").toLowerCase() === "snapmaker") {
     const meta = await moonrakerRawMeta(host, port, filename);
-    await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta));
+    // prefs geçirilir (eskiden hep 0'a zorlanıyordu); MAP_TABLE identity olarak her başlatmada
+    // gönderilir → boştayken set edilmiş bayat eşleme tablosu bu baskıyı etkileyemez.
+    await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, prefs));
     return;
   }
   await moonrakerStart(host, port, filename);
@@ -310,9 +339,11 @@ export interface MoonrakerPrefs { timelapse?: boolean; bedLeveling?: boolean; fl
 
 /** POST /printer/gcode/script — keyfi komut (Snapmaker gelişmiş başlatma için). */
 async function moonrakerGcodeScript(host: string, port: number, script: string): Promise<void> {
+  // Script GÖVDEDE (JSON) gönderilir — MAP_TABLE + metadata ile büyüyen komut, query-string'in
+  // header sınırlarına takılmasın.
   const res = await mfetch(
-    `${moonrakerBase(host, port)}/printer/gcode/script?script=${encodeURIComponent(script)}`,
-    { method: "POST" },
+    `${moonrakerBase(host, port)}/printer/gcode/script`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ script }) },
     30000
   );
   if (!res.ok) {
@@ -354,25 +385,9 @@ const SM_META_FIELDS = [
   "filament_type", "filament_flow_ratio", "filament_diameter", "filament_max_vol_speed",
   "filament_used_g", "filament_used_mm",
 ];
-/** Kafa-başına (per-tool) indeksli metadata alanları — kafa remap'inde permüte edilmeli. */
-const SM_PER_TOOL_FIELDS = new Set([
-  "nozzle_diameter_list", "nozzle_temp", "filament_type", "filament_flow_ratio",
-  "filament_diameter", "filament_max_vol_speed", "filament_used_g", "filament_used_mm",
-]);
 function pyRepr(v: unknown): string {
   if (Array.isArray(v)) return "[" + v.map((x) => (typeof x === "string" ? `'${x}'` : String(x))).join(", ") + "]";
   return String(v);
-}
-/** Diziyi kafa eşlemesine göre permüte et: fiziksel kafa toolMap[i], orijinal i'nin verisini alır.
- *  (Firmware bu dizileri FİZİKSEL kafa indeksiyle okur — remap'li baskıda permütesiz gönderilirse
- *  yanlış kafaya yanlış filament tipi/sıcaklık gider → sahte anomaly/runout riskleri.) */
-function permutePerTool<T>(arr: T[], toolMap: Record<number, number>): T[] {
-  const out = [...arr];
-  for (const [fromS, to] of Object.entries(toolMap)) {
-    const from = Number(fromS);
-    if (from >= 0 && from < arr.length && to >= 0 && to < arr.length) out[to] = arr[from];
-  }
-  return out;
 }
 
 /**
@@ -391,25 +406,27 @@ function buildSnapmakerStartScript(
   toolMap?: Record<number, number>,
 ): string {
   const esc = filename.replace(/"/g, '\\"');
-  const hasMap = !!toolMap && Object.keys(toolMap).length > 0;
   let s = `SDCARD_PRINT_FILE_WITH_PARAMETERS FILENAME="${esc}"`;
   s += ` BED_LEVEL="${prefs?.bedLeveling ? 1 : 0}" FLOW_CALIBRATE="${prefs?.flowCali ? 1 : 0}" TIME_LAPSE_CAMERA="${prefs?.timelapse ? 1 : 0}"`;
+  // KAFA EŞLEME — firmware'in NATIVE canlı tablosu (u1-klipper print_task_config MAP_TABLE,
+  // [mantıksal, fiziksel] çiftleri). Metin-remap'ten üstün: T<n>, M104/M109 T<n>,
+  // SM_PRINT_START_LINE INDEX= ve ısıtma/besleme kapıları dahil HER ŞEY tutarlı eşlenir;
+  // metadata dizileri MANTIKSAL indeksli kalır (permütasyon gerekmez). Identity olsa bile HER
+  // baskıda gönderilir → boştayken ekrandan set edilmiş bayat tablo etkisiz (çifte-remap imkânsız).
+  const pairs = [0, 1, 2, 3].map((i) => `[${i}, ${toolMap && i in toolMap ? toolMap[i] : i}]`).join(", ");
+  s += ` MAP_TABLE="[${pairs}]"`;
   for (const field of SM_META_FIELDS) {
     let out: string | null = null;
     if (field === "filament_used_g") {
-      let w = (meta as any).filament_weight;
-      if (Array.isArray(w) && hasMap) w = permutePerTool(w, toolMap!);
+      const w = (meta as any).filament_weight;
       if (w != null) out = pyRepr(w);
     } else if (field === "filament_type") {
       const ft = (meta as any).filament_type;
       if (ft != null) {
-        let parts = String(ft).split(";");
-        if (hasMap) parts = permutePerTool(parts, toolMap!); // kafa remap'iyle hizala
-        out = "[" + parts.map((it) => `'${it || "NONE"}'`).join(", ") + "]";
+        out = "[" + String(ft).split(";").map((it) => `'${it || "NONE"}'`).join(", ") + "]";
       }
     } else {
-      let v = (meta as any)[field];
-      if (Array.isArray(v) && hasMap && SM_PER_TOOL_FIELDS.has(field)) v = permutePerTool(v, toolMap!);
+      const v = (meta as any)[field];
       if (v != null && v !== "") out = pyRepr(v);
     }
     if (out != null) s += ` ${field.toUpperCase()}="${out}"`;
@@ -424,12 +441,98 @@ function buildSnapmakerStartScript(
  *  - **Diğer Moonraker (Elegoo)** → upload(`print=true`) (atomik; bu makro Elegoo'da yok).
  *  Dosya byte-for-byte gider; SADECE gerçek (identity olmayan) kafa remap'inde gcode'a dokunulur.
  */
+/**
+ * Moonraker'a GERÇEK yüzde ilerlemeli yükleme — multipart gövde ELLE akıtılır (fetch(FormData)
+ * byte takibi vermiyor; Moonraker'da sunucu-taraflı upload progress da yok, ama gövdeyi akış
+ * halinde parse eder → istemci tarafında yazılan bayt ≈ gerçek ilerleme). U1 `checksum` (SHA256)
+ * alanını doğrular (bozuk aktarım = HTTP 422); Elegoo'nun eski Moonraker'ı alanı yok sayar.
+ * Zaman aşımı dosya boyutuyla ölçeklenir (eski sabit 180sn büyük dosyada yetmeyebiliyordu).
+ */
+function moonrakerUploadStream(
+  host: string,
+  port: number,
+  fileBuf: Buffer,
+  filename: string,
+  print: boolean,
+  onProgress?: (pct: number) => void,
+): Promise<unknown> {
+  const p = portCache.get(host) ?? port ?? 7125;
+  const boundary = `----mlhub${crypto.randomUUID().replace(/-/g, "")}`;
+  const safeName = filename.replace(/"/g, "");
+  const checksum = crypto.createHash("sha256").update(fileBuf).digest("hex");
+  const field = (name: string, value: string) =>
+    `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`;
+  const head = Buffer.from(
+    field("root", "gcodes") +
+      field("print", print ? "true" : "false") +
+      field("checksum", checksum) +
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${safeName}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+    "utf8"
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+  const timeoutMs = Math.max(180_000, Math.ceil(fileBuf.length / (200 * 1024)) * 1000); // ≥180sn, ~200KB/sn tabanı
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host,
+        port: p,
+        path: "/server/files/upload",
+        method: "POST",
+        headers: {
+          "Content-Type": `multipart/form-data; boundary=${boundary}`,
+          "Content-Length": head.length + fileBuf.length + tail.length,
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (c) => { data += c; });
+        res.on("end", () => {
+          const code = res.statusCode ?? 0;
+          if (code >= 200 && code < 300) {
+            try { resolve(unwrap(JSON.parse(data))); } catch { resolve(null); }
+          } else if (code === 413) {
+            reject(new Error("Yazıcıda yer yok — eski baskı dosyalarını silip tekrar dene."));
+          } else if (code === 422) {
+            reject(new Error("Dosya aktarımda bozuldu (bütünlük doğrulaması) — tekrar dene."));
+          } else {
+            reject(new Error(`Yükleme başarısız (HTTP ${code}) ${data.slice(0, 140)}`.trim()));
+          }
+        });
+      }
+    );
+    req.setTimeout(timeoutMs, () => req.destroy(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor")));
+    req.on("error", (e) => reject(new Error(`Yükleme hatası: ${e.message}`)));
+
+    req.write(head);
+    const CHUNK = 256 * 1024;
+    let off = 0;
+    let lastPct = -1;
+    const writeNext = () => {
+      while (off < fileBuf.length) {
+        const end = Math.min(off + CHUNK, fileBuf.length);
+        const ok = req.write(fileBuf.subarray(off, end));
+        off = end;
+        if (onProgress) {
+          // 99 tavanı: son dilimden sonra sunucu metadata taraması yapar — %100'ü yanıt gelince
+          // çağıran katman (done aşaması) söyler, bar "bitti ama bitmedi" yalanı söylemez.
+          const pct = Math.min(99, Math.floor((off / fileBuf.length) * 100));
+          if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
+        }
+        if (!ok) { req.once("drain", writeNext); return; }
+      }
+      req.end(tail);
+    };
+    writeNext();
+  });
+}
+
 export async function moonrakerUploadAndPrint(
   host: string,
   port: number,
   fileBuf: Buffer,
   filename: string,
-  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs; brand?: string } = {}
+  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs; brand?: string; onProgress?: (pct: number) => void } = {}
 ): Promise<void> {
   const isSnapmaker = (opts.brand || "").toLowerCase() === "snapmaker";
   // Yüklemeden ÖNCE boşta-kontrolü — meşgul yazıcıya upload etmek boşa bant genişliği + Elegoo'da
@@ -437,7 +540,6 @@ export async function moonrakerUploadAndPrint(
   await assertMoonrakerIdle(host, port);
   let body = fileBuf;
   const isGcode = /\.(gcode|gco|g)$/i.test(filename);
-  // Kafa eşlemesi (identity değilse): gcode remap + (Snapmaker'da) metadata permütasyonu için ORTAK.
   let activeToolMap: Record<number, number> | undefined;
   if (isGcode && opts.headMapping && opts.headMapping.length) {
     const toolMap: Record<number, number> = {};
@@ -445,25 +547,21 @@ export async function moonrakerUploadAndPrint(
     const keys = Object.keys(toolMap).map(Number);
     if (keys.length && !keys.every((k) => toolMap[k] === k)) {
       activeToolMap = toolMap;
-      body = Buffer.from(remapMoonrakerTools(fileBuf.toString("latin1"), toolMap), "latin1");
+      // Snapmaker: eşleme NATIVE MAP_TABLE ile yapılır (aşağıda) — dosyaya DOKUNULMAZ
+      // (byte-for-byte ilkesi geri geldi; firmware her komutu kendi canlı tablosunda eşler).
+      // Diğer Moonraker tool-changer'lar için metin-remap yedek olarak kalır.
+      if (!isSnapmaker) {
+        body = Buffer.from(remapMoonrakerTools(fileBuf.toString("latin1"), toolMap), "latin1");
+      }
     }
   }
-  // Upload — Snapmaker: print=false (başlatma ayrı, parametreli); diğer: print=true (atomik).
-  const fd = new FormData();
-  fd.append("root", "gcodes");
-  fd.append("print", isSnapmaker ? "false" : "true");
-  fd.append("file", new Blob([new Uint8Array(body)]), filename);
-  const res = await mfetch(`${moonrakerBase(host, port)}/server/files/upload`, { method: "POST", body: fd }, 180000);
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Yükleme başarısız (HTTP ${res.status}) ${t.slice(0, 140)}`.trim());
-  }
+  // Upload — GERÇEK yüzde ilerlemeli akış. Snapmaker: print=false (başlatma ayrı, parametreli);
+  // diğer: print=true (atomik).
+  const uploadResp = await moonrakerUploadStream(host, port, body, filename, !isSnapmaker, opts.onProgress);
   if (!isSnapmaker) {
     // Elegoo (print=true): Moonraker dosyayı alıp BASMAMIŞ olabilir (meşgul/hazır değil) —
-    // yanıt HTTP 2xx gelir ama print_started:false taşır. Eskiden hiç okunmuyordu → sahte
-    // "Başlatıldı 🎉". Açıkça false ise hata fırlat (alan yoksa eski davranış korunur).
-    const j = unwrap(await res.json().catch(() => null));
-    if (j && j.print_started === false) {
+    // yanıt HTTP 2xx gelir ama print_started:false taşır. Açıkça false ise hata fırlat.
+    if (uploadResp && (uploadResp as { print_started?: boolean }).print_started === false) {
       throw new Error("Yazıcı dosyayı aldı ama baskıyı başlatmadı — ekranından hazır olduğunu kontrol et.");
     }
     return;

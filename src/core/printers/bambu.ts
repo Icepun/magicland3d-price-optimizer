@@ -50,6 +50,9 @@ interface Conn {
   connected: boolean;
   lastError: string | null;
   hasData: boolean; // ilk "report" geldi mi (Object.keys taraması yerine ucuz bayrak)
+  lastMessageAt: number; // son report zamanı — veri-bayatlığı bekçisi (çok-istemci açlığı) için
+  disconnectedAt: number; // son kopma zamanı — kısa reconnect bloklarında "çevrimdışı" titremesin
+  lastPushallAt: number; // pushall istek sıklığı sınırı (A1 donanımı sık pushall sevmez)
 }
 
 const conns = new Map<string, Conn>();
@@ -90,9 +93,15 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
     connectTimeout: 8000,
     keepalive: 30,
     clientId: `mg3d_${Math.random().toString(16).slice(2, 10)}`,
+    // Bağlantı yokken publish KUYRUĞA ALINMAZ (hayalet-komut koruması): varsayılan true,
+    // kopukken yayınlanan komutu bellekte tutup yeniden bağlanınca gönderiyordu.
+    queueQoSZero: false,
   });
 
-  const conn: Conn = { client, print: {}, connected: false, lastError: null, hasData: false };
+  const conn: Conn = {
+    client, print: {}, connected: false, lastError: null, hasData: false,
+    lastMessageAt: 0, disconnectedAt: 0, lastPushallAt: 0,
+  };
   conns.set(k, conn);
 
   const reportTopic = `device/${serial}/report`;
@@ -101,13 +110,27 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
   client.on("connect", () => {
     conn.connected = true;
     conn.lastError = null;
+    // HAYALET-KOMUT SİGORTASI: bağlantı anında bekleyen (kuyruklanmış) publish varsa TEMİZLE —
+    // hiçbir komut gecikmeli teslim edilmemeli (2023 Bambu bulut kesintisindeki dünya çapında
+    // hayalet baskılar bu sınıftandı). queueQoSZero:false + QoS 0 zaten engelliyor; bu son perde.
+    try {
+      const q = (client as unknown as { queue?: unknown[] }).queue;
+      if (Array.isArray(q) && q.length > 0) {
+        console.warn(`[bambu] bağlantıda ${q.length} bekleyen mesaj TEMİZLENDİ (gecikmeli teslim engellendi)`);
+        q.length = 0;
+      }
+    } catch { /* iç yapı değişmişse sessiz geç */ }
     client.subscribe(reportTopic, { qos: 0 });
+    conn.lastPushallAt = Date.now();
     client.publish(
       requestTopic,
       JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
       { qos: 0 }
     );
   });
+  // Her yeniden bağlanma DENEMESİNDE eski hatayı temizle — bayat lastError, sağlıklı reconnect
+  // sürerken ilk-veri beklemesini kalıcı kısa devre yapıp yazıcıyı sürekli "çevrimdışı" gösteriyordu.
+  client.on("reconnect", () => { conn.lastError = null; });
   client.on("message", (_topic, payload) => {
     try {
       const msg = JSON.parse(payload.toString());
@@ -129,14 +152,15 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
         // yazılır (sınırsız büyümez); ams/hms gibi diziler referansla değişir.
         Object.assign(conn.print, msg.print);
         conn.hasData = true;
+        conn.lastMessageAt = Date.now();
       }
     } catch {
       /* JSON olmayan mesajları yok say */
     }
   });
   client.on("error", (err: Error) => { conn.lastError = err?.message || "mqtt hata"; });
-  client.on("close", () => { conn.connected = false; });
-  client.on("offline", () => { conn.connected = false; });
+  client.on("close", () => { conn.connected = false; conn.disconnectedAt = Date.now(); });
+  client.on("offline", () => { conn.connected = false; conn.disconnectedAt = Date.now(); });
 
   return conn;
 }
@@ -156,11 +180,35 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   }
 
   const p = conn.print;
-  // ONLINE = bağlantı CANLI + veri gelmiş. Eski hali yalnız hasData'ya bakıyordu → fişi çekilen
-  // yazıcı sonsuza dek "yazdırıyor %45" görünüyor, relay hiç offline'a geçirmiyordu (yeniden
-  // bağlanınca da sahte "baskı bitti" bildirimi riski). MQTT keepalive (30sn) kopuşu ≤~45sn'de
-  // yakalar → connected=false → dürüst çevrimdışı.
-  const hasData = conn.connected && conn.hasData;
+  const now = Date.now();
+
+  // VERİ-BAYATLIĞI BEKÇİSİ (Bambu firmware "SON istemci kazanır": Studio/Handy bağlanırsa biz
+  // bağlı kalırız ama rapor almayı KESERİZ — BambuStudio#2404). Bağlıyız ama uzun süredir rapor
+  // yoksa: önce nazikçe pushall iste (≥5dk arayla — A1 sık pushall sevmez), hâlâ sessizse
+  // bağlantıyı yenile (yeniden bağlanan son istemci oluruz → veri geri gelir).
+  if (conn.connected && conn.hasData && conn.lastMessageAt > 0) {
+    const stale = now - conn.lastMessageAt;
+    if (stale > 6 * 60_000) {
+      try { conn.client.end(true); } catch { /* ignore */ }
+      conns.delete(connKey(host, serial, accessCode)); // sonraki sorgu taze bağlantı kurar
+    } else if (stale > 2 * 60_000 && now - conn.lastPushallAt > 5 * 60_000) {
+      conn.lastPushallAt = now;
+      try {
+        conn.client.publish(
+          `device/${serial}/request`,
+          JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
+          { qos: 0 }
+        );
+      } catch { /* ignore */ }
+    }
+  }
+
+  // ONLINE (debounce'lu): veri gelmiş VE (bağlı YA DA kopalı ≤15sn — reconnect penceresi).
+  // Eski hali `connected` anlık false olunca hemen "çevrimdışı" diyordu; mqtt.js her yeniden
+  // bağlanma denemesinde close/offline yayar → 5-10sn'lik ağ dalgalanması 30sn'lik önbellek
+  // backoff'uyla birleşip kartı uzun uzun "Bağlantı yok"ta tutuyordu (pybambu deseni: kısa
+  // kopuşta son bilinen durumla devam, kalıcı kopuşta dürüst çevrimdışı).
+  const hasData = conn.hasData && (conn.connected || now - conn.disconnectedAt < 15_000);
   if (!hasData) {
     return {
       online: false, gcodeState: null, percent: 0, remainingSec: null,
@@ -203,10 +251,13 @@ export function bambuControl(host: string, accessCode: string, serial: string, a
       return;
     }
     const command = action === "cancel" ? "stop" : action;
+    // QoS 0 (hayalet-komut koruması): QoS 1'de ACK kaybolan duraklat/devam saatler sonra
+    // yeniden bağlanınca TEKRAR gönderilirdi (bayat resume = kendi kendine baskı sürdürme).
+    // Teslim doğrulaması kullanıcı tarafında: durum 5sn poll'da değişmezse tekrar basar.
     conn.client.publish(
       `device/${serial}/request`,
       JSON.stringify({ print: { sequence_id: "0", command, param: "" } }),
-      { qos: 1 },
+      { qos: 0 },
       (err) => (err ? reject(err) : resolve())
     );
   });
@@ -453,7 +504,27 @@ export async function bambuUploadAndPrint(
   try {
     console.error("[bambu-print] payload:", JSON.stringify((payload as any).print));
   } catch { /* log atla */ }
-  conn.client.publish(`device/${serial}/request`, JSON.stringify(payload), { qos: 1 });
+  // 🔴 HAYALET BASKI FIX: baskı-başlat ASLA QoS 1 olamaz. QoS 1'de ACK (PUBACK) kaybolursa
+  // mqtt.js mesajı bellekte tutar ve HER yeniden bağlanışta TEKRAR GÖNDERİR (DUP) → uyku/uyanma
+  // veya ağ dalgalanması sonrası "son dosya kendi kendine baştan basılıyor" (sahada yaşandı;
+  // tray modu uygulamayı günlerce canlı tutunca her reconnect'te tekrarlıyordu). QoS 0 = protokol
+  // seviyesinde YENİDEN İLETİM YOK; teslim doğrulaması zaten print route'un 15sn'lik durum-izleme
+  // döngüsünde (yazıcı gerçekten "printing"e geçti mi). FTP upload dakikalar sürebildiği için
+  // preflight'tan sonra bağlantı düşmüş olabilir → yayınlamadan önce YENİDEN kontrol + callback bekle.
+  if (!conn.connected) {
+    throw new Error("Yazıcı bağlantısı koptu (yükleme sırasında) — baskı komutu gönderilmedi, tekrar dene.");
+  }
+  // Durum da TAZE kontrol edilir: ilk boşta-kontrolü FTP yüklemesinden ÖNCEYDİ (dakikalar geçmiş
+  // olabilir); bu arada başka bir istemci baskı başlattıysa üstüne komut gönderme.
+  const liveState = mapBambuState(typeof conn.print.gcode_state === "string" ? conn.print.gcode_state : null);
+  if (liveState === "printing" || liveState === "paused") {
+    throw new Error("Yazıcı bu sırada başka bir baskıya başladı — komut gönderilmedi.");
+  }
+  await new Promise<void>((resolve, reject) => {
+    conn.client.publish(`device/${serial}/request`, JSON.stringify(payload), { qos: 0 }, (err) =>
+      err ? reject(new Error(`Baskı komutu gönderilemedi: ${err.message}`)) : resolve()
+    );
+  });
   // A1/P1 seyrek (delta) raporlar → durum geçişini görebilmek için tam durum iste.
   conn.client.publish(`device/${serial}/request`, JSON.stringify({ pushing: { sequence_id: "0", command: "pushall" } }), { qos: 0 });
 

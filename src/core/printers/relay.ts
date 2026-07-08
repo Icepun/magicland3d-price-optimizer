@@ -34,8 +34,13 @@ const TICK_MS = 10_000;
 const HEARTBEAT_MS = 30_000;
 /** Bu süreden eski pending komutlar UYGULANMAZ → zaman aşımı. (Masaüstü kapalıyken gönderilen
  *  "start"ın saatler sonra kimse beklemiyorken baskı başlatması / bayat "cancel"ın yeni baskıyı
- *  öldürmesi güvenlik riskiydi.) */
+ *  öldürmesi güvenlik riskiydi.) Baskı BAŞLATAN/SÜRDÜREN komutlar (start/resume) daha da kısa:
+ *  kimse 3 dakikadan uzun süredir beklemiyorsa o baskı artık istenmiyordur. */
 const COMMAND_TTL_MS = 10 * 60_000;
+const START_TTL_MS = 3 * 60_000;
+/** Bu oturumda ZATEN yürütülen komutlar — durum-yazması (done/error) buluta gidemese bile aynı
+ *  komut bir sonraki tick'te YENİDEN yürütülmez (çift baskı başlatma koruması). */
+const processedCmdIds = new Set<string>();
 let started = false;
 let capsWritten = false; // relay yetenek bildirimi (AppSetting) bir kez yazılır
 let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
@@ -44,6 +49,9 @@ let tickCount = 0; // her 6. tick'te (~60sn) replica pull — sync() sorguları 
 const lastKey = new Map<string, string>();
 const lastWriteAt = new Map<string, number>(); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
 const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
+// Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
+// snapshot'lar arasında uzantılı/uzantısız değişince sahte ikinci "finished" geçişi görülebiliyor).
+const lastDoneNotify = new Map<string, { key: string; at: number }>();
 
 export function startPrinterRelay() {
   if (started) return;
@@ -268,8 +276,16 @@ async function tick(): Promise<void> {
       // tohumla: uygulama kapalıyken biten eski bir baskı yüzünden açılışta sahte bildirim atma.
       const prevStatus = lastStatus.get(c.id);
       lastStatus.set(c.id, snap.status);
-      if (prevStatus !== undefined && prevStatus !== "finished" && snap.status === "finished") {
-        void notifyPrintComplete(c, snap).catch(() => {});
+      // YALNIZ gerçek baskı bitişinde bildir: printing/paused → finished. Eski koşul
+      // (≠finished → finished) offline→online dalgalanmasında da tetikleniyordu — FINISH durumu
+      // yazıcıda GÜNLERCE kalır, her flap "Baskı tamamlandı"yı yeniden yakıyordu (sahada 4 mükerrer).
+      if ((prevStatus === "printing" || prevStatus === "paused") && snap.status === "finished") {
+        const doneKey = fileMatchKey(snap.productName || snap.currentFilename || "");
+        const prevDone = lastDoneNotify.get(c.id);
+        if (!(prevDone && prevDone.key === doneKey && Date.now() - prevDone.at < 30 * 60_000)) {
+          lastDoneNotify.set(c.id, { key: doneKey, at: Date.now() });
+          void notifyPrintComplete(c, snap).catch(() => {});
+        }
       }
       // etaSec 30sn KOVASI: saniye hassasiyetinde her tick "değişti" sayılıp baskı boyunca
       // 10sn'de bir Turso bulut yazması üretiyordu; 30sn kovası yazmaları ~1/3'e indirir
@@ -317,10 +333,17 @@ async function processPendingCommands(configs: Cfg[]): Promise<void> {
   } catch { return; }
 
   for (const cmd of pending) {
+    // Bu oturumda zaten yürütüldüyse ATLA — done/error yazması buluta gidememiş olabilir;
+    // yeniden yürütmek çift baskı demek. (Yazma sonraki tick'lerde tekrar denenir.)
+    if (processedCmdIds.has(cmd.id)) {
+      await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } }).catch(() => {});
+      continue;
+    }
     // TTL: masaüstü KAPALIYKEN gönderilip birikmiş bayat komutlar uygulanmaz — bayat "start"
     // kimse beklemiyorken baskı başlatır, bayat "cancel" masaüstünden yeni açılan baskıyı
     // öldürebilirdi. Telefon 90sn'de zaten "uygulanmadı" uyarısı gösteriyor.
-    if (Date.now() - new Date(cmd.createdAt).getTime() > COMMAND_TTL_MS) {
+    const ttl = cmd.action === "start" || cmd.action === "resume" ? START_TTL_MS : COMMAND_TTL_MS;
+    if (Date.now() - new Date(cmd.createdAt).getTime() > ttl) {
       await prisma.printCommand.update({
         where: { id: cmd.id },
         data: { status: "error", error: "Zaman aşımı — masaüstü kapalıyken gönderildi, güvenlik için uygulanmadı", processedAt: new Date() },
@@ -333,9 +356,11 @@ async function processPendingCommands(configs: Cfg[]): Promise<void> {
       if (!c) throw new Error("Yazıcı bulunamadı");
       // configs yalnız etkinleri içerir; fallback'ten gelen kayıt devre dışı olabilir → uygulama.
       if ((c as { enabled?: boolean }).enabled === false) throw new Error("Yazıcı devre dışı");
+      processedCmdIds.add(cmd.id); // yürütmeden HEMEN önce işaretle — yazma hatasında bile tekrar yok
       await executeCommand(c, cmd);
       await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
     } catch (e) {
+      processedCmdIds.add(cmd.id);
       await prisma.printCommand.update({
         where: { id: cmd.id },
         data: { status: "error", error: e instanceof Error ? e.message : "hata", processedAt: new Date() },
