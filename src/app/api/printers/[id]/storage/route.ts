@@ -7,9 +7,15 @@ import { bambuStorageList, bambuDeleteFiles, getBambuStatus, mapBambuState } fro
 
 export const dynamic = "force-dynamic";
 
-/** Yol/uzantı at, küçült — basılan dosyayı silme listesiyle birebir kıyaslamak için. */
+/** Basılan dosyayı silme listesindeki adla TOLERANSLI kıyasla: yol, içerik-hash eki (-<10hex>),
+ *  dilimleyici plate eki (_plate_N), bilinen uzantı(lar) atılır. Bambu /cache'te dosyalar
+ *  "Ad_plate_1.gcode" gibi işlenmiş adla durur; basılan işin subtask_name'i eksiz "Ad"dır. */
 function norm(s: string): string {
-  return s.replace(/^.*[/\\]/, "").replace(/\.[^.]+$/, "").toLowerCase().trim();
+  let x = s.replace(/^.*[/\\]/, "").toLowerCase().trim();
+  x = x.replace(/-[0-9a-f]{10}(?=(\.(gcode|gco|g|3mf))*$)/i, ""); // içerik-hash eki
+  x = x.replace(/(\.(gcode|gco|g|3mf))+$/i, "");                   // uzantı(lar)
+  x = x.replace(/_plate_\d+$/i, "");                               // dilimleyici plate eki
+  return x.trim();
 }
 
 /**

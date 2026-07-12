@@ -24,10 +24,11 @@ import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
 import { vizKeyForModel, getSprites } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive, ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
 import {
-  SlotStep, PrintProgress, runPrintStream,
-  type PrintableModel, type PrintProg, type PrintPrefs,
+  SlotStep,
+  type PrintableModel, type PrintPrefs,
 } from "@/components/printers/print-flow";
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
+import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
 
 type PrinterStatus = "printing" | "finished" | "idle" | "paused" | "error";
 
@@ -450,6 +451,10 @@ function PrinterCardInner({
   const live = useLiveBuildModel(printer.id, printer.currentFilename, printingNow);
   const buildFrames = live.frames;
 
+  // ARKA PLAN BASKI: bu yazıcıya başlatılan yükleme/başlatma akışı (modal kapansa da sürer) →
+  // kartta ilerleme/hata göster (kullanıcı ekranda kilitlenmez).
+  const activePrint = useActivePrint(printer.id);
+
   return (
     <Card
       className={cn(
@@ -475,6 +480,9 @@ function PrinterCardInner({
       {isFinished && online && !reduceMotion && endMs > 0 && Date.now() - endMs < 5 * 60_000 && <Confetti accent={accent} />}
 
       <CardContent className="p-4 space-y-3.5">
+        {/* ARKA PLAN BASKI ilerlemesi/hatası — modal kapansa da kullanıcı süreci burada görür */}
+        {activePrint && <ActivePrintBanner ap={activePrint} accent={accent} />}
+
         {/* Acil: baskı durdu / yazıcı hatası */}
         {isError && (
           <div className="flex items-center gap-2.5 rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2">
@@ -656,6 +664,63 @@ function PrinterCardInner({
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Arka plan baskı: kartta yükleme/başlatma ilerlemesi + hata ──────────────
+/** ["active-print", printerId] cache slot'unu REAKTİF oku (fetch YOK; startBackgroundPrint besler). */
+function useActivePrint(printerId: string): ActivePrint | null {
+  const { data } = useQuery<ActivePrint | null>({
+    queryKey: activePrintKey(printerId),
+    queryFn: () => null, // asla çağrılmaz (enabled:false); yalnız setQueryData ile güncellenir
+    enabled: false,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  return data ?? null;
+}
+
+const AP_STAGE_LABEL: Record<string, string> = {
+  download: "Buluttan indiriliyor",
+  status: "Hazırlanıyor",
+  upload: "Yazıcıya yükleniyor",
+  start: "Başlatılıyor",
+  confirm: "Yazıcı onaylıyor",
+};
+
+function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) {
+  const isErr = ap.stage === "error";
+  const pct = typeof ap.pct === "number" ? Math.max(0, Math.min(100, Math.round(ap.pct))) : null;
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-3 py-2 space-y-1.5 motion-safe:animate-in motion-safe:fade-in",
+        isErr ? "border-destructive/45 bg-destructive/10" : "border-primary/30 bg-primary/[0.06]"
+      )}
+    >
+      <div className="flex items-center gap-2 text-xs">
+        {isErr ? <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
+          : <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" style={{ color: accent }} />}
+        <span className={cn("font-semibold truncate", isErr && "text-destructive")}>{ap.label}</span>
+        <span className="ml-auto tabular-nums shrink-0" style={{ color: isErr ? undefined : accent }}>
+          {isErr ? "başlatılamadı" : pct != null ? `${pct}%` : (AP_STAGE_LABEL[ap.stage] ?? "…")}
+        </span>
+      </div>
+      {isErr ? (
+        <p className="text-[11px] text-destructive/80 leading-snug">{ap.message || "Bir hata oluştu — tekrar dene."}</p>
+      ) : (
+        <>
+          <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            {pct != null ? (
+              <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${pct}%`, background: accent }} />
+            ) : (
+              <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: accent, animation: "indeterminate-bar 1.6s ease-in-out infinite" }} />
+            )}
+          </div>
+          <p className="text-[10px] text-muted-foreground">{AP_STAGE_LABEL[ap.stage] ?? "İşleniyor"}… · bu arada başka işine bakabilirsin</p>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1363,26 +1428,16 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   });
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<PrintableModel | null>(null);
-  const [printing, setPrinting] = useState(false);
-  const [progress, setProgress] = useState<PrintProg | null>(null);
+  const printing = false; // baskı artık ARKA PLANDA (modal kilitlenmez) → modal-içi "printing" durumu yok
   // Gezinme: liste → (grup) → (varyant) → dosya
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [openVariant, setOpenVariant] = useState<string | null>(null);
 
-  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
-    setPrinting(true);
-    setProgress({ stage: "upload", pct: 0 });
-    try {
-      await runPrintStream(fileId, opts, setProgress);
-      toast.success("Baskı başlatıldı 🎉");
-      onClose();
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-    } catch (e) {
-      toast.error((e as Error).message);
-      setProgress(null);
-    } finally {
-      setPrinting(false);
-    }
+  // Baskıyı ARKA PLANDA başlat + modalı KAPAT → ilerleme kartta görünür, hata pop-up (toast).
+  // Kullanıcı bu ekranda kilitlenmez, hızlıca başka işine döner.
+  const runPrint = (fileId: string, label: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+    startBackgroundPrint(qc, { printerId: target.id, fileId, label, printOpts: opts });
+    onClose();
   };
 
   const nodes = useMemo(() => buildPickNodes(data?.models ?? []), [data]);
@@ -1400,8 +1455,8 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
   if (picked) {
     return (
-      <SlotStep printerId={target.id} model={picked} isBambu={isBambu} isSnapmaker={target.brand === "snapmaker"} printing={printing} progress={progress}
-        onBack={() => setPicked(null)} onClose={onClose} onConfirm={(opts) => runPrint(picked.fileId, opts)} />
+      <SlotStep printerId={target.id} model={picked} isBambu={isBambu} isSnapmaker={target.brand === "snapmaker"} printing={false} progress={null}
+        onBack={() => setPicked(null)} onClose={onClose} onConfirm={(opts) => runPrint(picked.fileId, picked.productName, opts)} />
     );
   }
 
@@ -1477,11 +1532,10 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
             ))
           )}
         </div>
-        {progress && <PrintProgress p={progress} />}
       </DialogContent>
 
       {/* Tek renkli baskı onayı (Elegoo) */}
-      <Dialog open={!!confirmFile} onOpenChange={(o) => !o && !printing && setConfirmFile(null)}>
+      <Dialog open={!!confirmFile} onOpenChange={(o) => !o && setConfirmFile(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
@@ -1489,14 +1543,13 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
             </DialogTitle>
             <p className="text-xs text-muted-foreground mt-1 break-all">
               <span className="font-medium text-foreground">{confirmFile?.label || confirmFile?.originalName}</span>
-              {" — "}{target.name} üzerinde basılacak.
+              {" — "}{target.name} üzerinde basılacak. Arka planda yüklenir; ilerlemeyi kartta görürsün.
             </p>
           </DialogHeader>
-          {progress && <PrintProgress p={progress} />}
           <DialogFooter>
-            <Button variant="ghost" size="sm" disabled={printing} onClick={() => setConfirmFile(null)}>Vazgeç</Button>
-            <Button size="sm" disabled={printing} onClick={() => confirmFile && runPrint(confirmFile.fileId)}>
-              {printing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Bas
+            <Button variant="ghost" size="sm" onClick={() => setConfirmFile(null)}>Vazgeç</Button>
+            <Button size="sm" onClick={() => { if (confirmFile) runPrint(confirmFile.fileId, confirmFile.productName); }}>
+              <Play className="h-3.5 w-3.5" /> Bas
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1522,8 +1575,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
   const [uploadProg, setUploadProg] = useState<UploadProgress | null>(null);
   const [file, setFile] = useState<CustomUpload | null>(null);
   const [slotMode, setSlotMode] = useState(false);
-  const [printing, setPrinting] = useState(false);
-  const [progress, setProgress] = useState<PrintProg | null>(null);
+  const printing = false; // baskı ARKA PLANDA → modal-içi printing durumu yok (ilerleme kartta)
   const fileRef = useRef<HTMLInputElement>(null);
 
   const printable = useMemo(() => printers.filter((p) => p.type !== "sim"), [printers]);
@@ -1547,22 +1599,12 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     }
   };
 
-  // NDJSON akışlı baskı — PAYLAŞILAN runPrintStream (eski kopya kod "download" gibi yeni
-  // aşamaları tanımıyordu; tek kaynak = tutarlı ilerleme her akışta).
-  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
-    setPrinting(true);
-    setProgress({ stage: "upload", pct: 0 });
-    try {
-      await runPrintStream(fileId, opts, setProgress);
-      toast.success("Baskı başlatıldı 🎉");
-      onClose();
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-    } catch (e) {
-      toast.error((e as Error).message);
-      setProgress(null);
-    } finally {
-      setPrinting(false);
-    }
+  // Baskıyı ARKA PLANDA başlat + modalı kapat → ilerleme kartta, hata pop-up. (Dosya YÜKLEME adımı
+  // hâlâ modalda/senkron — kullanıcı dosyayı seçerken bekler; asıl "başlatma" arka plana alınır.)
+  const runPrint = (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+    if (!picked) return;
+    startBackgroundPrint(qc, { printerId: picked.id, fileId, label: file?.originalName || "Özel baskı", printOpts: opts });
+    onClose();
   };
 
   // Renk eşleme adımı (Bambu/Snapmaker) — mevcut SlotStep'i yeniden kullan.
@@ -1573,7 +1615,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     };
     return (
       <SlotStep
-        printerId={picked.id} model={model} isBambu={isBambu} isSnapmaker={picked.brand === "snapmaker"} printing={printing} progress={progress}
+        printerId={picked.id} model={model} isBambu={isBambu} isSnapmaker={picked.brand === "snapmaker"} printing={false} progress={null}
         onBack={() => setSlotMode(false)} onClose={onClose} onConfirm={(opts) => runPrint(file.fileId, opts)}
       />
     );
@@ -1667,14 +1709,13 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
                 <p className="text-[10px] text-muted-foreground/70 inline-flex items-center gap-1"><Printer className="h-3 w-3" /> {picked.name}</p>
               </div>
             </div>
-            {progress && <PrintProgress p={progress} />}
             <DialogFooter className="gap-2">
-              <Button variant="ghost" onClick={() => { setFile(null); setProgress(null); }} disabled={printing}>Geri</Button>
+              <Button variant="ghost" onClick={() => setFile(null)}>Geri</Button>
               {multiColor ? (
-                <Button onClick={() => setSlotMode(true)} disabled={printing} className="gap-1.5"><Layers className="h-4 w-4" /> Renk ayarına geç</Button>
+                <Button onClick={() => setSlotMode(true)} className="gap-1.5"><Layers className="h-4 w-4" /> Renk ayarına geç</Button>
               ) : (
-                <Button onClick={() => runPrint(file.fileId)} disabled={printing} className="gap-1.5">
-                  {printing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Bas
+                <Button onClick={() => runPrint(file.fileId)} className="gap-1.5">
+                  <Play className="h-4 w-4" /> Bas
                 </Button>
               )}
             </DialogFooter>

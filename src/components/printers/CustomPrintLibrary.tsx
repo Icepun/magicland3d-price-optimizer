@@ -17,9 +17,10 @@ const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewe
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
-  SlotStep, PrintProgress, runPrintStream,
-  type PrintableModel, type PrintProg, type PrintPrefs,
+  SlotStep,
+  type PrintableModel, type PrintPrefs,
 } from "@/components/printers/print-flow";
+import { startBackgroundPrint } from "@/lib/print-jobs";
 
 /** Yazıcılar sayfasının canlı yazıcı listesinden (PanelPrinter) gereken alanlar. */
 export interface LivePrinter {
@@ -142,25 +143,14 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
 
   // ── Baskı akışı ───────────────────────────────────────────────────────────
   const [reprint, setReprint] = useState<{ row: CustomPrintRow; printer: LivePrinter } | null>(null);
-  const [printing, setPrinting] = useState(false);
-  const [progress, setProgress] = useState<PrintProg | null>(null);
+  const printing = false; // baskı ARKA PLANDA (modal kilitlenmez) → ilerleme yazıcı kartında
   const liveById = useMemo(() => new Map(printers.map((p) => [p.id, p])), [printers]);
 
-  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
-    setPrinting(true);
-    setProgress({ stage: "upload", pct: 0 });
-    try {
-      await runPrintStream(fileId, opts, setProgress);
-      toast.success("Baskı başlatıldı 🎉");
-      setReprint(null);
-      onClose();
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
-    } catch (e) {
-      toast.error((e as Error).message);
-      setProgress(null);
-    } finally {
-      setPrinting(false);
-    }
+  // ARKA PLANDA başlat + arşivi kapat → ilerleme kartta, hata pop-up. Kullanıcı beklemez.
+  const runPrint = (fileId: string, printerId: string, label: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
+    startBackgroundPrint(qc, { printerId, fileId, label, printOpts: opts });
+    setReprint(null);
+    onClose();
   };
 
   const startReprint = (row: CustomPrintRow) => {
@@ -168,11 +158,10 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
     if (!live) { toast.error("Bu dosyanın yazıcısı artık yok"); return; }
     if (!live.online) { toast.error(`${live.name} çevrimdışı`); return; }
     if (live.status === "printing" || live.status === "paused") { toast.error(`${live.name} şu an meşgul`); return; }
-    setProgress(null);
     // Renk eşleme (SlotStep) SADECE çok renkli makinelerde. Elegoo tek ekstruder: SlotStep'te
     // slot seçimi gerçek gcode remap'i yapar → direkt bas.
     if (live.brand === "bambu" || live.brand === "snapmaker") setReprint({ row, printer: live });
-    else void runPrint(row.id, {});
+    else runPrint(row.id, live.id, row.originalName, {});
   };
 
   // ── Silme (tekli + toplu — aynı onay diyaloğu) ────────────────────────────
@@ -235,11 +224,11 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
         model={model}
         isBambu={reprint.printer.brand === "bambu"}
         isSnapmaker={reprint.printer.brand === "snapmaker"}
-        printing={printing}
-        progress={progress}
-        onBack={() => { setReprint(null); setProgress(null); }}
+        printing={false}
+        progress={null}
+        onBack={() => setReprint(null)}
         onClose={onClose}
-        onConfirm={(opts) => runPrint(reprint.row.id, opts)}
+        onConfirm={(opts) => runPrint(reprint.row.id, reprint.printer.id, reprint.row.originalName, opts)}
       />
     );
   }
@@ -434,8 +423,6 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
           </div>
         )}
 
-        {/* Tek renkli (Elegoo) direkt baskı — SlotStep yok, ilerleme burada gösterilir. */}
-        {printing && !reprint && progress && <PrintProgress p={progress} />}
       </DialogContent>
 
       {viewer3d && (

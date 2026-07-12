@@ -581,36 +581,48 @@ export async function bambuRemoteFileSize(
 
 export interface BambuStorageFile { name: string; size: number; modified: number | null }
 
-/** Yazıcı depolamasındaki dosyalar (FTP kökü = dahili eMMC). Klasörler atlanır. */
+// A1 kullanıcı baskı dosyalarını /cache'te tutar (kök dizinde YALNIZ klasörler var: logger,
+// recorder, cache, model, image, ipcam, timelapse...). Canlı FTP tanılamasıyla doğrulandı:
+// kökte LIST → 8 klasör (hepsi elenir → "0 dosya" bug'ı); /cache'te → gerçek baskı dosyaları.
+const BAMBU_FILES_DIR = "cache";
+
+const LS_LINE = /^([-dl])[\w.+-]{9,}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]{4,5})\s+(.+?)\r?$/;
+
+/** Yazıcı depolamasındaki baskı dosyaları. Asıl konum /cache; kök de taranır (uygulamanın
+ *  STOR ettiği artıklar orada olabilir). Ad çakışırsa /cache kazanır. Klasörler atlanır. */
 export async function bambuStorageList(host: string, accessCode: string): Promise<BambuStorageFile[]> {
   return bambuFtpQuery(host, accessCode, async ({ cmd, nextReply, openData, readDataToEnd }) => {
-    const d = await openData();
-    const r150 = await cmd("LIST");
-    if (r150.code >= 400) throw new Error(`LIST reddedildi (${r150.code})`);
-    const text = await readDataToEnd(d);
-    await nextReply(); // 226
-    const files: BambuStorageFile[] = [];
-    for (const line of text.split("\n")) {
-      // vsftpd biçimi: "-rw-r--r--    1 ftp  ftp   1234567 Jul 08 10:15 dosya.3mf"
-      const m = line.match(/^([-dl])[\w-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]{4,5})\s+(.+?)\r?$/);
-      if (!m || m[1] !== "-") continue; // yalnız normal dosyalar (klasör/link atla)
-      const name = m[4].trim();
-      if (!name || name === "." || name === "..") continue;
-      files.push({ name, size: Number(m[2]) || 0, modified: null });
+    const seen = new Map<string, BambuStorageFile>();
+    for (const dir of [BAMBU_FILES_DIR, "/"]) { // önce /cache (öncelik) sonra kök
+      try {
+        const d = await openData();
+        const r150 = await cmd(`LIST ${dir}`); // AÇIK yol — bare LIST bazı ftpd'lerde farklı davranır
+        if (r150.code >= 400) continue;
+        const text = await readDataToEnd(d);
+        await nextReply(); // 226
+        for (const line of text.split("\n")) {
+          const m = LS_LINE.exec(line);
+          if (!m || m[1] !== "-") continue; // yalnız normal dosyalar (klasör/link atla)
+          const name = m[4].trim();
+          if (!name || name === "." || name === ".." || seen.has(name)) continue;
+          seen.set(name, { name, size: Number(m[2]) || 0, modified: null });
+        }
+      } catch { /* dizin yok/erişilemedi → atla */ }
     }
-    files.sort((a, b) => b.size - a.size);
-    return files;
+    return [...seen.values()].sort((a, b) => b.size - a.size);
   });
 }
 
-/** Yazıcı depolamasından dosya sil (yalnız kontrol kanalı — DELE). Silinen sayısını döndürür. */
+/** Yazıcı depolamasından dosya sil (yalnız kontrol kanalı — DELE). Önce /cache, olmazsa kök
+ *  denenir (dosya iki yerden birinde). Silinen sayısını döndürür. */
 export async function bambuDeleteFiles(host: string, accessCode: string, names: string[]): Promise<number> {
   if (!names.length) return 0;
   return bambuFtpQuery(host, accessCode, async ({ cmd }) => {
     let ok = 0;
     for (const n of names) {
-      if (!n || n.includes("/") || n.includes("\\") || n.startsWith(".")) continue; // yalnız kökteki düz dosyalar
-      const r = await cmd(`DELE ${n}`);
+      if (!n || n.includes("/") || n.includes("\\") || n.startsWith(".")) continue; // yalnız düz dosya adları
+      let r = await cmd(`DELE ${BAMBU_FILES_DIR}/${n}`); // önce /cache
+      if (r.code >= 400) r = await cmd(`DELE ${n}`);     // yoksa kök
       if (r.code < 400) ok++;
     }
     return ok;
