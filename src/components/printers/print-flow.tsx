@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Layers, Loader2, AlertTriangle, Minus, Plus, ArrowRight, Check, Play } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 /**
@@ -149,9 +148,14 @@ export function SlotStep({
   onBack: () => void; onClose: () => void;
   onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => void;
 }) {
+  // Slotlar HER AÇILIŞTA makineden taze okunur + ekran açıkken 5sn'de bir yenilenir —
+  // makinede filament/renk değiştirirsen buradaki çipler de canlı güncellenir.
   const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
     queryKey: ["printer-slots", printerId],
     queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
+    staleTime: 0,
+    refetchOnMount: "always",
+    refetchInterval: 5000,
   });
   const colorsQ = useQuery<ColorInfo>({
     queryKey: ["model-colors", model.fileId],
@@ -164,21 +168,6 @@ export function SlotStep({
   const pickSlots: PrinterSlot[] = slots.length
     ? slots
     : [0, 1, 2, 3].map((n) => ({ slot: n, color: "#9ca3af", type: "", empty: false }));
-
-  // Elle slot rengi kaydet (yazıcı 3. parti filamenti renk okuyamaz → kullanıcı bir kez ayarlar, kalır).
-  const qcSlots = useQueryClient();
-  const saveSlotColor = async (slot: number, color: string) => {
-    const next = (slots.length ? slots : pickSlots).map((s) => ({ slot: s.slot, color: s.slot === slot ? color : s.color, type: s.type }));
-    try {
-      await fetchJson(`/api/printers/${printerId}/slots`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slots: next }),
-      });
-      qcSlots.invalidateQueries({ queryKey: ["printer-slots", printerId] });
-    } catch {
-      // Sessiz yutuluyordu — seçim bir sonraki poll'da görsel olarak geri dönünce kafa karıştırıyordu.
-      toast.error("Slot rengi kaydedilemedi");
-    }
-  };
 
   const fileColors = useMemo(() => colorsQ.data?.colors ?? [], [colorsQ.data]);
   const usingFile = fileColors.length > 0;
@@ -250,19 +239,14 @@ export function SlotStep({
           <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
             {slots.length > 0 ? (
               <div>
-                <p className="text-[11px] text-muted-foreground mb-1.5">Yazıcıdaki slotlar — rengi ayarlamak için noktaya dokun</p>
+                <p className="text-[11px] text-muted-foreground mb-1.5">
+                  Yazıcıdaki slotlar (canlı) — rengi değiştirmek için yazıcı ekranını kullan
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {slots.map((s) => (
                     <span key={s.slot} className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
                       <span className="font-bold tabular-nums">{s.slot + 1}</span>
-                      <label className="relative h-4 w-4 rounded-full border border-black/20 cursor-pointer shrink-0" style={{ background: s.color }} title="Rengi ayarla">
-                        <input
-                          type="color"
-                          value={/^#[0-9a-fA-F]{6}$/.test(s.color) ? s.color : "#9ca3af"}
-                          onChange={(e) => saveSlotColor(s.slot, e.target.value)}
-                          className="absolute inset-0 opacity-0 cursor-pointer"
-                        />
-                      </label>
+                      <span className="h-4 w-4 rounded-full border border-black/20 shrink-0" style={{ background: s.color }} />
                       {s.empty ? "boş" : s.type || "—"}
                     </span>
                   ))}

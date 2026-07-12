@@ -273,6 +273,24 @@ function hexFromBambu(c?: unknown): string {
 /** AMS slotları (numara + renk + materyal) — baskı öncesi yüklü filamentleri göstermek için. */
 export async function getBambuAmsSlots(host: string, accessCode: string, serial: string): Promise<BambuSlot[]> {
   const conn = ensureConn(host, accessCode, serial);
+  // TAZELİK: renk-eşleme ekranı her açıldığında makinedeki GÜNCEL AMS renkleri görünmeli.
+  // Bağlıysak ve son tam-durum eskiyse pushall iste (≤60sn'de bir — A1 sık pushall sevmez;
+  // aradaki filament değişiklikleri zaten delta raporla anında düşer) ve taze raporu kısaca bekle.
+  if (conn.connected && conn.hasData && Date.now() - conn.lastPushallAt > 60_000) {
+    conn.lastPushallAt = Date.now();
+    const askedAt = Date.now();
+    try {
+      conn.client.publish(
+        `device/${serial}/request`,
+        JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
+        { qos: 0 }
+      );
+    } catch { /* istek gitmezse eldeki veriyle devam */ }
+    const freshDeadline = Date.now() + 1200;
+    while (Date.now() < freshDeadline && conn.lastMessageAt < askedAt) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
   if (!conn.print?.ams) {
     const deadline = Date.now() + 2500;
     while (Date.now() < deadline && !conn.print?.ams) {
