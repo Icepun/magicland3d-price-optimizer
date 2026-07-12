@@ -442,6 +442,17 @@ export default function CargoRulesPage() {
   const [editing, setEditing] = useState<CargoRule | null>(null);
   const queryClient = useQueryClient();
 
+  // Kargo değişimi kâr/marj hesabını etkiler → fiyatlamaya bağlı TÜM sorguları tazele.
+  // ÖNEMLİ: Ürünler sayfası staleTime:Infinity + refetchOnMount:false kullanıyor → yalnız
+  // invalidate onu tazelemez (bu yüzden eskiden ancak yeniden başlatınca düzeliyordu). removeQueries
+  // önbelleği SİLER → sayfaya girince taze çeker. Orders sunucu önbeleği ayrıca route'ta düşürüldü.
+  const bustPricingQueries = () => {
+    queryClient.removeQueries({ queryKey: ["products"] });     // Ürünler (Infinity + refetchOnMount:false)
+    queryClient.invalidateQueries({ queryKey: ["orders"] });   // Siparişler + Raporlar (["orders"] paylaşır)
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] }); // Panel
+    queryClient.invalidateQueries({ queryKey: ["price-changes"] });
+  };
+
   const { data: rules = [], isLoading } = useQuery<CargoRule[]>({
     queryKey: ["cargo-rules"],
     queryFn: () => fetch("/api/cargo-rules").then((r) => r.json()),
@@ -462,8 +473,7 @@ export default function CargoRulesPage() {
     onSuccess: (_d, mode) => {
       queryClient.invalidateQueries({ queryKey: ["hb-cargo"] });
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      bustPricingQueries();
       toast.success(mode === "avantajli" ? "Avantajlı barem uygulandı" : "Standart barem uygulandı");
     },
     onError: () => toast.error("Barem uygulanamadı"),
@@ -513,8 +523,7 @@ export default function CargoRulesPage() {
       toast.success(mode === "avantajli" ? "Avantajlı barem aktif" : "Standart barem aktif"),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      bustPricingQueries();
     },
   });
 
@@ -527,8 +536,7 @@ export default function CargoRulesPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      bustPricingQueries();
       toast.success("Kural eklendi");
       setOpen(false);
     },
@@ -544,8 +552,7 @@ export default function CargoRulesPage() {
       }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      bustPricingQueries();
       toast.success("Kural güncellendi");
       setEditing(null);
     },
@@ -556,8 +563,7 @@ export default function CargoRulesPage() {
       fetch(`/api/cargo-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      bustPricingQueries();
       toast.success("Kural silindi");
     },
   });

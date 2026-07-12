@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 /**
  * Trendyol (TEX) kargo desteği modu — mevcut TEX kurallarının isActive bayrağını çevirir.
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
       create: { key: KEY, value: mode },
       update: { value: mode },
     });
+    invalidateOrdersCache(); // kargo değişti → sipariş kârı bir sonraki istekte YENİ baremle hesaplansın
     return NextResponse.json({ ok: true, mode });
   } catch (error) {
     return NextResponse.json(

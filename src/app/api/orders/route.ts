@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { getOrdersCache, setOrdersCache, isOrdersRefreshing, setOrdersRefreshing } from "@/lib/orders-cache";
 import {
   ShopifyClient,
   ShopifyAdminTokenMissingError,
@@ -202,25 +203,25 @@ type ExpenseRules = Parameters<typeof simulatePrice>[0]["expenseRules"];
 // ── Sunucu önbelleği (stale-while-revalidate) ──────────────────────────────────────────────
 // Siparişler 3 pazaryerinden CANLI çekiliyor (1-3sn). İlk yüklemeden SONRA her açış önbellekten
 // ANINDA döner; 60sn'den eskiyse arka planda tazelenir (eski veri anında gösterilir → sayfa beklemez).
-// "Yenile" (?fresh=1) senkron canlı çeker. Süreç-içi bellek (Electron ana süreci tek instance).
-let _ordersCache: { at: number; body: Record<string, unknown> } | null = null;
-let _ordersRefreshing = false;
+// "Yenile" (?fresh=1) senkron canlı çeker. Önbellek PAYLAŞILAN modülde (lib/orders-cache) — kargo/
+// komisyon/gider değişince invalidateOrdersCache() ile düşürülür → kâr anında güncellenir.
 const ORDERS_SOFT_MS = 60_000;
 
 export async function GET(req: NextRequest) {
   const fresh = new URL(req.url).searchParams.get("fresh") === "1";
-  if (!fresh && _ordersCache) {
-    if (Date.now() - _ordersCache.at > ORDERS_SOFT_MS && !_ordersRefreshing) {
-      _ordersRefreshing = true;
+  const cached = getOrdersCache();
+  if (!fresh && cached) {
+    if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
+      setOrdersRefreshing(true);
       void computeOrdersBody()
-        .then((b) => { _ordersCache = { at: Date.now(), body: b }; })
+        .then((b) => { setOrdersCache(b); })
         .catch(() => {})
-        .finally(() => { _ordersRefreshing = false; });
+        .finally(() => { setOrdersRefreshing(false); });
     }
-    return NextResponse.json(_ordersCache.body);
+    return NextResponse.json(cached.body);
   }
   const body = await computeOrdersBody();
-  _ordersCache = { at: Date.now(), body };
+  setOrdersCache(body);
   return NextResponse.json(body);
 }
 

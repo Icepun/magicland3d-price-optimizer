@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 import {
   buildHepsiburadaCargoRules,
   HEPSIJET_DESI_BRACKETS,
@@ -50,6 +51,7 @@ export async function POST(req: NextRequest) {
       create: { key: KEY, value: mode },
       update: { value: mode },
     });
+    invalidateOrdersCache(); // kargo değişti → sipariş kârı bir sonraki istekte YENİ baremle hesaplansın
     return NextResponse.json({ ok: true, mode, count: rules.length });
   } catch (error) {
     return NextResponse.json(
