@@ -89,6 +89,12 @@ export async function runPrintStream(
   if (errMsg) throw new Error(errMsg);
   if (!ok) throw new Error("Baskı tamamlanmadı (akış beklenmedik kapandı)");
   onProgress({ stage: "done", pct: 100 });
+  // Baskı başladı → arka planda görselleştirme varlıkları (inşa kareleri, md5 anahtarıyla) —
+  // yazıcı kartındaki "canlı dolan model" bu baskıda ve sonrakilerde hazır olsun. Dinamik import:
+  // three.js ancak burada (arka planda) yüklenir; baskı akışının kendisini asla etkilemez.
+  void import("@/lib/gcode-viz/viz-pipeline")
+    .then((m) => m.ensureVizAssetsAfterPrint(fileId))
+    .catch(() => { /* görselleştirme opsiyonel */ });
 }
 
 export function PrintProgress({ p }: { p: PrintProg }) {

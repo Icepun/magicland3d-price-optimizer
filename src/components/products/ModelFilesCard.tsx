@@ -1,8 +1,14 @@
 "use client";
 
 import { memo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers } from "lucide-react";
+import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box } from "lucide-react";
+import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
+import { ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
+
+// three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
+const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +19,7 @@ import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
-interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number }
+interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; thumbnail?: string | null }
 
 function fmtSize(b: number) {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
@@ -159,6 +165,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
   const inputRef = useRef<HTMLInputElement>(null);
   const [prog, setProg] = useState<UploadProgress | null>(null);
   const [uploadingName, setUploadingName] = useState("");
+  const [viewer, setViewer] = useState<ModelFile | null>(null);
 
   const del = useMutation({
     // "Tüm varyantlara uygula" açıksa ?allVariants=1 → sunucu dosyayı TÜM varyantlardan siler.
@@ -218,6 +225,10 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? [...old, ...created] : created
       );
+      // Arka planda görselleştirme varlıkları: önizleme görseli (yoksa) + inşa kareleri.
+      for (const row of created) {
+        if (row?.id) ensureVizAssets({ fileId: row.id, cacheKey: vizKeyForModel(row), thumbnailMissing: !row.thumbnail });
+      }
     }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
@@ -281,6 +292,16 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 />
                 <p className="text-[10px] text-muted-foreground/70 truncate px-1">{part.originalName} · {fmtSize(part.sizeBytes)}</p>
               </div>
+              <Button
+                size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
+                title="3D önizleme — katman katman izle"
+                onClick={() => {
+                  ensureVizAssets({ fileId: part.id, cacheKey: vizKeyForModel(part), thumbnailMissing: !part.thumbnail });
+                  setViewer(part);
+                }}
+              >
+                <Box className="h-3.5 w-3.5" />
+              </Button>
               <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0" disabled={del.isPending} onClick={() => del.mutate(part.id)} title="Parçayı sil">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -288,6 +309,15 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
           ))
         )}
       </div>
+
+      {viewer && (
+        <GcodeViewerDialog
+          fileId={viewer.id}
+          cacheKey={vizKeyForModel(viewer)}
+          name={viewer.label || viewer.originalName}
+          onClose={() => setViewer(null)}
+        />
+      )}
     </div>
   );
 }

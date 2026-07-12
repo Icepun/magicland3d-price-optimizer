@@ -21,6 +21,7 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
+import { vizKeyFromFilename, getSprites } from "@/lib/gcode-viz/viz-cache";
 import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
@@ -441,6 +442,11 @@ function PrinterCardInner({
   const bed = printer.temps.bed;
   const sm = STATUS_META[status];
 
+  // CANLI DOLAN MODEL: bu cihazdan başlatılan baskının inşa kareleri (IndexedDB) varsa,
+  // ürün görseli yerine model gerçek katman ilerlemesine göre DOLARAK gösterilir.
+  const vizKey = (isPrinting || isPaused) && online ? vizKeyFromFilename(printer.currentFilename) : null;
+  const buildFrames = useBuildFrames(vizKey);
+
   return (
     <Card
       className={cn(
@@ -527,7 +533,11 @@ function PrinterCardInner({
           </div>
         ) : job ? (
           <div className="flex gap-3.5">
-            <PrintInImage image={job.productImage} productName={job.productName} progress={progress} accent={accent} printing={isPrinting} />
+            {buildFrames?.length ? (
+              <LiveBuildImage frames={buildFrames} progress={progress} accent={accent} />
+            ) : (
+              <PrintInImage image={job.productImage} productName={job.productName} progress={progress} accent={accent} printing={isPrinting} />
+            )}
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
@@ -642,6 +652,52 @@ function PrinterCardInner({
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} />}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Canlı dolan model: baskı kartında modelin katman katman inşası ──────────
+/** IndexedDB'deki inşa karelerini object-URL'lere aç (unmount'ta serbest bırakır). */
+function useBuildFrames(vizKey: string | null): string[] | null {
+  const [urls, setUrls] = useState<string[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    let created: string[] = [];
+    setUrls(null);
+    if (!vizKey) return;
+    getSprites(vizKey)
+      .then((set) => {
+        if (!alive || !set || !set.frames.length) return;
+        created = set.frames.map((b) => URL.createObjectURL(b));
+        setUrls(created);
+      })
+      .catch(() => { /* önbellek yok — ürün görseline düşülür */ });
+    return () => {
+      alive = false;
+      created.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [vizKey]);
+  return urls;
+}
+
+function LiveBuildImage({ frames, progress, accent }: { frames: string[]; progress: number; accent: string }) {
+  const idx = Math.max(0, Math.min(frames.length - 1, Math.floor(clamp(progress, 0, 1) * frames.length)));
+  return (
+    <div
+      className="relative h-28 w-28 shrink-0 rounded-xl border overflow-hidden bg-[radial-gradient(ellipse_at_center,rgba(90,110,180,0.10),transparent_72%)]"
+      style={{ borderColor: alpha(accent, 30) }}
+      title="Model, gerçek baskı ilerlemesine göre doluyor"
+    >
+      {/* key=idx → kare değişince yumuşak fade (remount) */}
+      <img
+        key={idx}
+        src={frames[idx]}
+        alt=""
+        className="absolute inset-0 h-full w-full object-contain motion-safe:animate-in motion-safe:fade-in duration-300"
+      />
+      <span className="absolute bottom-1 right-1 rounded bg-background/85 border px-1 py-px text-[9px] font-bold tabular-nums" style={{ color: accent }}>
+        3D
+      </span>
+    </div>
   );
 }
 

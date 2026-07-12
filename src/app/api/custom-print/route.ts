@@ -51,6 +51,7 @@ export async function GET() {
         estPrintMin: f.estPrintMin,
         isCloud: !!f.r2Key,
         thumbnail: f.thumbnail ?? null,
+        contentMd5: f.contentMd5 ?? null,
         createdAt: f.createdAt,
         printer: pmap.get(f.printerConfigId) ?? null,
       })),

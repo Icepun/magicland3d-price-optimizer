@@ -12,6 +12,22 @@ const PatchSchema = z.object({
   estPrintMin: z.coerce.number().int().min(0).nullable().optional(),
 });
 
+/** Tek model kaydı (görselleştirme boru hattı taze contentMd5/thumbnail okur). */
+export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await ensureRuntimeSchema();
+    const { id } = await params;
+    const mf = await prisma.productModelFile.findUnique({
+      where: { id },
+      select: { id: true, originalName: true, sizeBytes: true, contentMd5: true, thumbnail: true, fileType: true, printerConfigId: true },
+    });
+    if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
+    return NextResponse.json(mf);
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();

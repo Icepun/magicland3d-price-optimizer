@@ -1,14 +1,20 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   FileBox, Trash2, Play, Cloud, HardDrive, Loader2, Search, Check,
-  ArrowDownWideNarrow, Clock3,
+  ArrowDownWideNarrow, Clock3, Box,
 } from "lucide-react";
+import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
+import { ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
+
+// three.js yalnız izleyici açılınca yüklensin.
+const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -36,6 +42,7 @@ interface CustomPrintRow {
   estPrintMin: number | null;
   isCloud: boolean;
   thumbnail: string | null;
+  contentMd5: string | null;
   createdAt: string;
   printer: { id: string; name: string; brand: string; accent: string } | null;
 }
@@ -171,6 +178,7 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
 
   // ── Silme (tekli + toplu — aynı onay diyaloğu) ────────────────────────────
   const [confirmDel, setConfirmDel] = useState<{ rows: CustomPrintRow[] } | null>(null);
+  const [viewer3d, setViewer3d] = useState<CustomPrintRow | null>(null);
   const del = useMutation({
     mutationFn: async (rows: CustomPrintRow[]) => {
       const r = await fetch("/api/custom-print/bulk-delete", {
@@ -398,6 +406,16 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                     </div>
                   </div>
                   <Button
+                    size="icon" variant="ghost" className="h-8 w-8 shrink-0 text-muted-foreground hover:text-primary"
+                    title="3D önizleme — katman katman izle"
+                    onClick={() => {
+                      ensureVizAssets({ fileId: it.id, cacheKey: vizKeyForModel(it), thumbnailMissing: !it.thumbnail });
+                      setViewer3d(it);
+                    }}
+                  >
+                    <Box className="h-4 w-4" />
+                  </Button>
+                  <Button
                     size="sm" variant="outline" className="h-8 gap-1 text-xs shrink-0"
                     disabled={!canPrint || printing}
                     title={!live ? "Yazıcı yok" : !live.online ? "Çevrimdışı" : busy ? "Meşgul" : "Tekrar bas"}
@@ -423,6 +441,15 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
         {/* Tek renkli (Elegoo) direkt baskı — SlotStep yok, ilerleme burada gösterilir. */}
         {printing && !reprint && progress && <PrintProgress p={progress} />}
       </DialogContent>
+
+      {viewer3d && (
+        <GcodeViewerDialog
+          fileId={viewer3d.id}
+          cacheKey={vizKeyForModel(viewer3d)}
+          name={viewer3d.originalName}
+          onClose={() => setViewer3d(null)}
+        />
+      )}
 
       {/* Silme onayı — tekli/toplu ortak; kalıcı işlem (bulut/disk dosyaları da gider). */}
       <Dialog open={!!confirmDel} onOpenChange={(o) => !o && !del.isPending && setConfirmDel(null)}>
