@@ -52,7 +52,8 @@ function parseInWorker(fileId: string): Promise<ParsedGcode> {
   });
 }
 
-const assetsDone = new Set<string>(); // oturum içinde aynı iş bir kez
+const assetsOk = new Set<string>();      // başarıyla üretildi → bir daha üretme
+const assetsRunning = new Set<string>(); // şu an üretiliyor → eşzamanlı ÇİFT üretimi engelle
 
 // ── Arka plan üretimi KİBAR olmalı: yükleme/gezinme akıcı kalsın ─────────────
 // Aksi halde (v0.19.99) yükleme biter bitmez 27MB parse + 36 WebGL render renderer'ı kilitliyordu.
@@ -106,38 +107,39 @@ export function ensureVizAssetsAfterPrint(fileId: string): void {
 export function ensureVizAssets(opts: { fileId: string; cacheKey: string; thumbnailMissing: boolean }): void {
   const { fileId, cacheKey, thumbnailMissing } = opts;
   const jobKey = `${cacheKey}|${thumbnailMissing ? 1 : 0}`;
-  if (assetsDone.has(jobKey)) return;
-  assetsDone.add(jobKey);
-  chain = chain.then(() => runAssetJob(fileId, cacheKey, thumbnailMissing)).catch(() => {});
+  if (assetsOk.has(jobKey) || assetsRunning.has(jobKey)) return; // bitti ya da sürüyor → tekrar başlatma
+  assetsRunning.add(jobKey);
+  chain = chain
+    .then(() => runAssetJob(fileId, cacheKey, thumbnailMissing))
+    .then((ok) => { assetsRunning.delete(jobKey); if (ok) assetsOk.add(jobKey); })
+    .catch(() => { assetsRunning.delete(jobKey); /* hata → tekrar denenebilir */ });
 }
 
-async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: boolean): Promise<void> {
-  try {
-    const haveSprites = await getSprites(cacheKey);
-    if (haveSprites && !thumbnailMissing) return;
+async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: boolean): Promise<boolean> {
+  const haveSprites = await getSprites(cacheKey);
+  if (haveSprites && !thumbnailMissing) return true;
+  await waitUploadsIdle();
+  await idle();
+  const g = await loadGeometry(cacheKey, fileId); // parse Web Worker'da (ana thread donmaz)
+  if (!g.totalSegments) return false;
+  if (thumbnailMissing) {
     await waitUploadsIdle();
     await idle();
-    const g = await loadGeometry(cacheKey, fileId); // parse Web Worker'da (ana thread donmaz)
-    if (!g.totalSegments) return;
-    if (thumbnailMissing) {
-      await waitUploadsIdle();
-      await idle();
-      const dataUrl = renderThumbnail(g, 512);
-      if (dataUrl && dataUrl.length < 900_000) {
-        await fetch(`/api/models/${fileId}/preview`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ thumbnail: dataUrl }),
-        }).catch(() => {});
-      }
+    const dataUrl = renderThumbnail(g, 512);
+    if (dataUrl && dataUrl.length < 900_000) {
+      await fetch(`/api/models/${fileId}/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thumbnail: dataUrl }),
+      }).catch(() => {});
     }
-    if (!haveSprites) {
-      await waitUploadsIdle();
-      await idle();
-      const frames = await renderBuildFrames(g, 24, 240, idle); // her kareden sonra boşta bekle
-      if (frames.length) await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
-    }
-  } catch {
-    /* arka plan üretimi — sessiz */
   }
+  if (!haveSprites) {
+    await waitUploadsIdle();
+    await idle();
+    const frames = await renderBuildFrames(g, 24, 240, idle); // her kareden sonra boşta bekle
+    if (!frames.length) return false;
+    await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
+  }
+  return true;
 }

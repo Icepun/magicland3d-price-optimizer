@@ -21,8 +21,8 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
-import { vizKeyFromFilename, getSprites } from "@/lib/gcode-viz/viz-cache";
-import { setUploadsActive } from "@/lib/gcode-viz/viz-pipeline";
+import { vizKeyForModel, getSprites } from "@/lib/gcode-viz/viz-cache";
+import { setUploadsActive, ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
 import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
@@ -443,10 +443,12 @@ function PrinterCardInner({
   const bed = printer.temps.bed;
   const sm = STATUS_META[status];
 
-  // CANLI DOLAN MODEL: bu cihazdan başlatılan baskının inşa kareleri (IndexedDB) varsa,
-  // ürün görseli yerine model gerçek katman ilerlemesine göre DOLARAK gösterilir.
-  const vizKey = (isPrinting || isPaused) && online ? vizKeyFromFilename(printer.currentFilename) : null;
-  const buildFrames = useBuildFrames(vizKey);
+  // CANLI DOLAN MODEL (çekme modeli): süren baskı hangi modele aitse (dosya adından çözülür,
+  // yeniden yükleme GEREKMEZ), inşa kareleri o modelin kalıcı kimliğiyle aranır; yoksa arka planda
+  // KİBARCA üretilir (bir sonraki poll'da görünür). Var olan modellerde ve süren baskılarda çalışır.
+  const printingNow = (isPrinting || isPaused) && online;
+  const live = useLiveBuildModel(printer.id, printer.currentFilename, printingNow);
+  const buildFrames = live.frames;
 
   return (
     <Card
@@ -537,7 +539,8 @@ function PrinterCardInner({
             {buildFrames?.length ? (
               <LiveBuildImage frames={buildFrames} progress={progress} accent={accent} />
             ) : (
-              <PrintInImage image={job.productImage} productName={job.productName} progress={progress} accent={accent} printing={isPrinting} />
+              // Kareler hazır değilse: model statik önizlemesi (varsa) → yoksa ürün görseli.
+              <PrintInImage image={live.thumbnail || job.productImage} productName={job.productName} progress={progress} accent={accent} printing={isPrinting} />
             )}
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
@@ -657,27 +660,64 @@ function PrinterCardInner({
 }
 
 // ── Canlı dolan model: baskı kartında modelin katman katman inşası ──────────
-/** IndexedDB'deki inşa karelerini object-URL'lere aç (unmount'ta serbest bırakır). */
-function useBuildFrames(vizKey: string | null): string[] | null {
+interface PrintModelInfo { id: string; contentMd5: string | null; sizeBytes: number | null; thumbnail?: string | null }
+
+/**
+ * Süren baskının modelini çöz → inşa karelerini kalıcı kimlikle bul; yoksa arka planda üret.
+ * Yeniden yükleme gerekmez; var olan modellerde ve halihazırda süren baskılarda da çalışır.
+ * Kareler oluşana dek null döner (kart mevcut ürün görseline düşer).
+ */
+function useLiveBuildModel(printerId: string, filename: string | null, printing: boolean): { frames: string[] | null; thumbnail: string | null } {
+  // 1) Baskı → model kaydı (dosya adından, hash-eki/uzantı toleranslı). Uzun cache: aynı iş boyu sabit.
+  const modelQ = useQuery<{ model: PrintModelInfo | null }>({
+    queryKey: ["print-model", printerId, filename],
+    queryFn: () => fetch(`/api/printers/${printerId}/print-model?filename=${encodeURIComponent(filename || "")}`).then((r) => r.json()),
+    enabled: printing && !!filename,
+    staleTime: 10 * 60_000,
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+  const model = modelQ.data?.model ?? null;
+  const vizKey = model ? vizKeyForModel(model) : null;
+
   const [urls, setUrls] = useState<string[] | null>(null);
   useEffect(() => {
     let alive = true;
     let created: string[] = [];
     setUrls(null);
-    if (!vizKey) return;
-    getSprites(vizKey)
-      .then((set) => {
-        if (!alive || !set || !set.frames.length) return;
-        created = set.frames.map((b) => URL.createObjectURL(b));
-        setUrls(created);
-      })
-      .catch(() => { /* önbellek yok — ürün görseline düşülür */ });
+    if (!vizKey || !model) return;
+
+    const show = (set: { frames: Blob[] }) => {
+      if (!alive) return;
+      created = set.frames.map((b) => URL.createObjectURL(b));
+      setUrls(created);
+    };
+    const load = async () => {
+      const set = await getSprites(vizKey).catch(() => null);
+      if (set && set.frames.length) { show(set); return; }
+      // Kareler yok → arka planda KİBARCA üret (seri + boşta + yüklemede bekler), sonra yokla.
+      ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail });
+      // Üretim bitene dek periyodik bak (baskı uzun sürer; ~5sn'de bir, en çok ~2dk).
+      let tries = 0;
+      const iv = setInterval(async () => {
+        if (!alive || tries++ > 24) { clearInterval(iv); return; }
+        const s = await getSprites(vizKey).catch(() => null);
+        if (s && s.frames.length) { clearInterval(iv); show(s); return; }
+        ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail }); // takıldıysa yeniden dene (iç dedupe)
+      }, 5000);
+      // temizlikte durdur
+      cleanup.push(() => clearInterval(iv));
+    };
+    const cleanup: (() => void)[] = [];
+    void load();
     return () => {
       alive = false;
+      cleanup.forEach((fn) => fn());
       created.forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [vizKey]);
-  return urls;
+  }, [vizKey, model]);
+
+  return { frames: urls, thumbnail: model?.thumbnail ?? null };
 }
 
 function LiveBuildImage({ frames, progress, accent }: { frames: string[]; progress: number; accent: string }) {
