@@ -213,7 +213,7 @@ export async function fetchMoonrakerMeta(host: string, port: number, filename: s
     if (!r) return null;
     const thumbs = Array.isArray(r.thumbnails) ? [...r.thumbnails] : [];
     thumbs.sort((a: any, b: any) => (b.width * b.height) - (a.width * a.height));
-    return {
+    const meta: MoonrakerMeta = {
       estimatedTimeSec: typeof r.estimated_time === "number" ? r.estimated_time : null,
       thumbnailRelPath: thumbs[0]?.relative_path ?? null,
       filamentType: cleanFilamentType(r.filament_type),
@@ -221,9 +221,61 @@ export async function fetchMoonrakerMeta(host: string, port: number, filename: s
       layerHeight: typeof r.layer_height === "number" ? r.layer_height : null,
       firstLayerHeight: typeof r.first_layer_height === "number" ? r.first_layer_height : null,
     };
+    // FALLBACK (Elegoo Neptune canlı tanılamayla doğrulandı): bazı Moonraker sürümleri Orca
+    // gcode'unu TARAMIYOR → layer_count/layer_height BOŞ (metadata yalnız size/modified döner) →
+    // kartta katman yazmıyordu. Veri gcode'da VAR (`; total layer number: N`, `;HEIGHT:0.2`) →
+    // dosyanın baş+son kısmını Moonraker'dan çekip kendimiz parse ederiz. Sonuç meta önbelleğinde.
+    if ((meta.totalLayer == null || meta.layerHeight == null) && typeof r.size === "number" && r.size > 0) {
+      const g = await fetchGcodeLayerMeta(host, port, filename, r.size).catch(() => null);
+      if (g) {
+        meta.totalLayer = meta.totalLayer ?? g.totalLayer;
+        meta.layerHeight = meta.layerHeight ?? g.layerHeight;
+        meta.firstLayerHeight = meta.firstLayerHeight ?? g.firstLayerHeight;
+      }
+    }
+    return meta;
   } catch {
     return null;
   }
+}
+
+/** Moonraker gcode dosyasının baş+son kısmını (Range) çekip katman metasını parse et — Moonraker'ın
+ *  kendi metadata taraması başarısızsa devreye girer. Orca formatı (canlı doğrulandı):
+ *  `; total layer number: N` / `; total layers count = N`, `; layer_height = X` / `;HEIGHT:X`. */
+async function fetchGcodeLayerMeta(
+  host: string, port: number, filename: string, size: number,
+): Promise<{ totalLayer: number | null; layerHeight: number | null; firstLayerHeight: number | null }> {
+  const enc = filename.split("/").map(encodeURIComponent).join("/");
+  const url = `${moonrakerBase(host, port)}/server/files/gcodes/${enc}`;
+  const range = async (r: string): Promise<string> => {
+    const res = await mfetch(url, { headers: { Range: r } }, 5000);
+    if (res.status !== 206 && !res.ok) return "";
+    return res.text();
+  };
+  const head = await range("bytes=0-16000");
+  const tail = size > 24000 ? await range(`bytes=${size - 40000}-${size - 1}`) : "";
+  const text = `${head}\n${tail}`;
+
+  const tl = /;\s*total layer(?:s)?\s+(?:number|count)\s*[:=]\s*(\d+)/i.exec(text);
+  const totalLayer = tl ? Number(tl[1]) : null;
+
+  let layerHeight: number | null = null;
+  const lh = /;\s*layer_height\s*[:=]\s*([\d.]+)/i.exec(text);
+  if (lh) layerHeight = parseFloat(lh[1]);
+  if (!(layerHeight && layerHeight > 0)) {
+    const h = /;\s*HEIGHT\s*:\s*([\d.]+)/i.exec(text); // Orca ;HEIGHT:0.2 (katman yüksekliği)
+    if (h) layerHeight = parseFloat(h[1]);
+  }
+
+  let firstLayerHeight: number | null = null;
+  const flh = /;\s*(?:initial_layer_print_height|first_layer_height|initial_layer_height)\s*[:=]\s*([\d.]+)/i.exec(text);
+  if (flh) firstLayerHeight = parseFloat(flh[1]);
+
+  return {
+    totalLayer: totalLayer && totalLayer > 0 ? totalLayer : null,
+    layerHeight: layerHeight && layerHeight > 0 ? Math.round(layerHeight * 1000) / 1000 : null,
+    firstLayerHeight: firstLayerHeight && firstLayerHeight > 0 ? firstLayerHeight : null,
+  };
 }
 
 /** Thumbnail relative_path metadata'da gcode dosyasının klasörüne görelidir. */
