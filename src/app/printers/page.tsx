@@ -7,7 +7,7 @@ import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
-  Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen,
+  Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -637,8 +637,178 @@ function PrinterCardInner({
             </div>
           </div>
         )}
+
+        {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
+        {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} />}
       </CardContent>
     </Card>
+  );
+}
+
+// ── Yazıcı yerel depolama: ince bar + temizleme dialogu ─────────────────────
+interface PrinterStorageResp {
+  kind: "moonraker" | "bambu";
+  total: number | null;
+  free: number | null;
+  used: number | null;
+  files: { name: string; size: number; modified: number | null }[];
+}
+function fmtBytes(n: number): string {
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1).replace(".", ",")} GB`;
+  if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+function PrinterStorageStrip({ printerId, accent }: { printerId: string; accent: string }) {
+  const [open, setOpen] = useState(false);
+  const q = useQuery<PrinterStorageResp>({
+    queryKey: ["printer-storage", printerId],
+    queryFn: () => fetch(`/api/printers/${printerId}/storage`).then((r) => {
+      if (!r.ok) throw new Error("Depolama okunamadı");
+      return r.json();
+    }),
+    staleTime: 5 * 60_000, // depolama sık değişmez — sayfa başına bir okuma yeter
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+  const st = q.data;
+  const filesBytes = useMemo(() => (st?.files ?? []).reduce((s, f) => s + f.size, 0), [st]);
+  const pctUsed = st?.total && st.used != null ? Math.min(100, Math.round((st.used / st.total) * 100)) : null;
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-2 pt-2 mt-1 border-t border-border/50 text-[11px] text-muted-foreground hover:text-foreground transition-colors group"
+        title="Yazıcı depolamasını görüntüle / temizle"
+      >
+        <HardDrive className="h-3.5 w-3.5 shrink-0" />
+        {q.isLoading ? (
+          <Skeleton className="h-1.5 flex-1 rounded-full" />
+        ) : q.isError || !st ? (
+          <span className="flex-1 text-left">Depolama okunamadı</span>
+        ) : pctUsed != null ? (
+          <>
+            <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <span
+                className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-700 ease-out"
+                style={{
+                  width: `${pctUsed}%`,
+                  background: pctUsed >= 90 ? "oklch(0.63 0.2 25)" : pctUsed >= 75 ? "oklch(0.75 0.15 75)" : alpha(accent, 80),
+                }}
+              />
+            </span>
+            <span className="tabular-nums shrink-0">{fmtBytes(st.used!)} / {fmtBytes(st.total!)}</span>
+          </>
+        ) : (
+          <span className="flex-1 text-left tabular-nums">{st.files.length} dosya · {fmtBytes(filesBytes)}</span>
+        )}
+        <ChevronRight className="h-3 w-3 shrink-0 opacity-50 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
+      </button>
+      {open && <PrinterStorageDialog printerId={printerId} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClose: () => void }) {
+  const qc = useQueryClient();
+  const q = useQuery<PrinterStorageResp>({
+    queryKey: ["printer-storage", printerId],
+    queryFn: () => fetch(`/api/printers/${printerId}/storage`).then((r) => {
+      if (!r.ok) throw new Error("Depolama okunamadı");
+      return r.json();
+    }),
+    refetchOnMount: "always",
+  });
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const files = q.data?.files ?? [];
+  const selBytes = files.filter((f) => sel.has(f.name)).reduce((s, f) => s + f.size, 0);
+  const toggle = (n: string) =>
+    setSel((p) => { const x = new Set(p); if (x.has(n)) x.delete(n); else x.add(n); return x; });
+
+  const removeSel = async () => {
+    if (!sel.size || busy) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/printers/${printerId}/storage`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: [...sel] }),
+      });
+      const j = await r.json().catch(() => ({} as { deleted?: number; error?: string }));
+      if (!r.ok) throw new Error(j?.error || "Silinemedi");
+      toast.success(`${j.deleted ?? sel.size} dosya silindi`);
+      setSel(new Set());
+      qc.invalidateQueries({ queryKey: ["printer-storage", printerId] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Silinemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const st = q.data;
+  const pctUsed = st?.total && st.used != null ? Math.min(100, Math.round((st.used / st.total) * 100)) : null;
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><HardDrive className="h-4 w-4 text-primary" /> Yazıcı Depolaması</DialogTitle>
+          {pctUsed != null && st ? (
+            <div className="mt-2 space-y-1">
+              <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full transition-[width] duration-700 ease-out"
+                  style={{ width: `${pctUsed}%`, background: pctUsed >= 90 ? "oklch(0.63 0.2 25)" : "oklch(0.62 0.14 250)" }}
+                />
+              </div>
+              <p className="text-[11px] text-muted-foreground tabular-nums">
+                {fmtBytes(st.used!)} dolu{st.free != null ? ` · ${fmtBytes(st.free)} boş` : ""} · toplam {fmtBytes(st.total!)}
+              </p>
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground mt-1">Silinen dosya gerekirse sonraki baskıda otomatik yeniden yüklenir.</p>
+          )}
+        </DialogHeader>
+        {q.isLoading ? (
+          <div className="py-8 text-center"><Loader2 className="h-4 w-4 mx-auto animate-spin text-muted-foreground" /></div>
+        ) : q.isError ? (
+          <p className="text-xs text-destructive py-4">Depolama okunamadı — yazıcı çevrimiçi mi?</p>
+        ) : files.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-6 text-center">Yazıcıda dosya yok — depolama temiz ✨</p>
+        ) : (
+          <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-1">
+            <div className="flex items-center justify-between px-1 pb-1">
+              <button
+                className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setSel(sel.size === files.length ? new Set() : new Set(files.map((f) => f.name)))}
+              >
+                {sel.size === files.length ? "Seçimi kaldır" : "Tümünü seç"}
+              </button>
+              <span className="text-[11px] text-muted-foreground tabular-nums">{files.length} dosya</span>
+            </div>
+            {files.map((f) => (
+              <label
+                key={f.name}
+                className={cn(
+                  "flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs cursor-pointer transition-colors",
+                  sel.has(f.name) ? "border-destructive/40 bg-destructive/5" : "hover:bg-muted/60"
+                )}
+              >
+                <input type="checkbox" className="accent-red-500" checked={sel.has(f.name)} onChange={() => toggle(f.name)} />
+                <span className="flex-1 truncate font-mono text-[11px]" title={f.name}>{f.name}</span>
+                <span className="tabular-nums text-muted-foreground shrink-0">{fmtBytes(f.size)}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Kapat</Button>
+          <Button variant="destructive" disabled={!sel.size || busy} onClick={removeSel}>
+            {busy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1.5" />}
+            Sil ({sel.size}{sel.size ? ` · ${fmtBytes(selBytes)}` : ""})
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

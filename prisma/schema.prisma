@@ -382,6 +382,9 @@ model ProductModelFile {
   /** Dilimleyicinin gcode/3mf'e gömdüğü önizleme görseli (data URL) — arşiv/listelerde küçük
       görsel için. Yüklemede çıkarılır; eski dosyalar ilk baskıda dolar (backfill). */
   thumbnail       String?
+  /** Dosya içeriğinin MD5'i (hex) — yazıcıda "zaten var" tespiti için kimlik. Yükleme adına
+      gömülür (stem-md5ilk10.ext); ad+boyut eşleşmesi = kesin aynı içerik (isim tahmini değil). */
+  contentMd5      String?
   /** Parça sıralaması (aynı ürün+yazıcı içinde). */
   sortOrder       Int      @default(0)
   createdAt       DateTime @default(now())

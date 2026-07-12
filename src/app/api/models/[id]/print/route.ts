@@ -7,23 +7,32 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
-import { moonrakerUploadAndPrint } from "@/core/printers/moonraker";
-import { bambuUploadAndPrint, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
+import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize } from "@/core/printers/moonraker";
+import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
 
+/** Yükleme adına içerik kimliği göm: "gövde.gcode" + md5 → "gövde-a1b2c3d4e5.gcode".
+ *  Yazıcıda bu ad + AYNI bayt boyutu görülürse dosya KESİN aynı içeriktir (adı bu içerikten biz
+ *  ürettik) → indirme + yükleme atlanabilir. İsim benzerliği tahmini DEĞİLDİR. */
+function hashedUploadName(originalName: string, md5: string): string {
+  const h = md5.slice(0, 10);
+  const m = originalName.match(/^(.*?)(\.[^.]+)$/);
+  return m ? `${m[1]}-${h}${m[2]}` : `${originalName}-${h}`;
+}
+
 /**
  * Modeli yazıcıya yükle + baskıyı başlat. Yanıt = NDJSON akışı (satır satır ilerleme):
- *   {stage:"download",pct} · {stage:"status"} · {stage:"upload",pct} · {stage:"start"} ·
+ *   {stage:"download",pct} · {stage:"status"} · {stage:"upload",pct[,cached]} · {stage:"start"} ·
  *   {stage:"confirm"} · {stage:"done"} · {stage:"error",message}
  *
- * R2 indirmesi + doğrulama AKIŞ İÇİNDE koşar: eskiden ikisi de yanıt üretilmeden önce yapılıyordu →
- * büyük bulut dosyasında kullanıcı ilerlemesiz ölü ekran görüyordu. Dosya metası (renkler/dilim/
- * plaka) kalıcıysa (colorsJson/sliced/plateJson) dosya HİÇ parse edilmez (senkron unzip donması yok);
- * değilse bir kez parse edilip saklanır.
+ * YENİDEN KULLANIM: dosya daha önce bu yazıcıya (içerik-hash'li adla) yüklendiyse ve boyut
+ * birebir tutuyorsa R2 indirmesi + yükleme tamamen atlanır → saniyeler içinde başlar.
+ * R2 indirmesi + doğrulama AKIŞ İÇİNDE koşar; dosya metası (renkler/dilim/plaka) kalıcıysa
+ * dosya hiç parse edilmez.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -60,7 +69,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // YAZICI-BAŞINA KİLİT: aynı yazıcıya eşzamanlı ikinci başlatma (çift tık / telefon relay
     // komutu / ikinci pencere) ikisi de boşta-kontrolünü geçebilir → çift upload/start yarışı.
-    // Kilit tüm akış boyunca (indirme + doğrulama + upload + start) tutulur, finally'de bırakılır.
     if (!tryAcquirePrintLock(printer.id)) {
       return NextResponse.json({ error: "Bu yazıcıda şu an bir baskı başlatılıyor — bitmesini bekle." }, { status: 409 });
     }
@@ -74,128 +82,190 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         };
         let printerErrored = false;
         try {
-          // ── 1) DOSYA — R2: gerçek % ile indir; yerel: async oku (sync okuma pencereyi donduruyordu)
-          let buf: Buffer;
-          if (mf.r2Key) {
-            send({ stage: "download", pct: 0 });
-            buf = await getObjectBytesWithProgress(mf.r2Key, r2cfg!, (pct) => send({ stage: "download", pct }));
-          } else {
-            buf = await fs.promises.readFile(mf.storedPath);
-          }
-
-          // Geçici parse yolu — SADECE kalıcı meta eksikse yazılır (varsa dosya hiç açılmaz).
-          let parsePath: string | null = mf.r2Key ? null : mf.storedPath;
-          const ensureParsePath = async (): Promise<string> => {
-            if (parsePath) return parsePath;
-            const safeExt = (mf.fileType || "gcode").replace(/[^a-z0-9]/gi, "") || "gcode";
-            const tmp = path.join(os.tmpdir(), `mlprint-${crypto.randomUUID()}.${safeExt}`);
-            await fs.promises.writeFile(tmp, buf);
-            tmpToClean = tmp;
-            parsePath = tmp;
-            return tmp;
-          };
-          // İlk baskıda parse edilenler kalıcılaştırılır → sonraki baskılar dosyayı hiç açmaz.
-          const persist: Record<string, unknown> = {};
-          const getColors = async () => {
-            if (mf.colorsJson) {
-              try { return JSON.parse(mf.colorsJson) as ReturnType<typeof readModelColors>; } catch { /* dosyadan */ }
-            }
-            const info = readModelColors(await ensureParsePath());
-            persist.colorsJson = JSON.stringify(info);
-            return info;
-          };
-
+          let matchFilename = mf.originalName.replace(/\.[^.]+$/, "");
+          let reused = false;
           send({ stage: "status" });
 
-          // ── 2) DOĞRULAMA (Bambu)
-          if (isBambu) {
-            let sliced = mf.sliced;
-            if (sliced == null) {
-              sliced = is3mfSliced(await ensureParsePath());
-              persist.sliced = sliced;
-            }
-            if (!sliced) {
-              throw new Error("Bu dosya dilimlenmemiş (STL/OBJ veya ham 3MF). Bambu Studio/Orca ile dilimleyip .3mf (veya .gcode) yükleyin.");
-            }
-            // Ham .gcode AMS eşleme tablosunu TAŞIMAZ → çok renklide yazıcı reddeder (ör. 83902467).
-            const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
-            if (isRawGcode && (await getColors()).colors.length > 1) {
-              throw new Error(
-                "Bambu çok renkli baskı için ham .gcode yetmiyor — AMS eşleme tablosunu taşımadığı için yazıcı reddediyor. Bambu Studio'da plakayı dilimle → sağ üstteki oka tıkla → \"Dilimlenmiş plaka dosyasını dışa aktar\" ile aldığın .3mf dosyasını yükle."
-              );
-            }
-            // AMS renk eşleştirmesi tutarlı mı? (her renk dolu bir slota)
-            if (useAms && Array.isArray(amsMapping)) {
-              const colors = (await getColors()).colors;
-              if (colors.length) {
-                for (const c of colors) {
-                  const slot = amsMapping[c.index];
-                  if (slot == null || slot < 0) {
-                    throw new Error("Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı.");
-                  }
-                }
-                try {
-                  const slots = await getBambuAmsSlots(printer.host, printer.accessCode!, printer.serial!);
-                  if (slots.length) {
-                    for (const c of colors) {
-                      const phys = slots.find((s) => s.slot === amsMapping[c.index]);
-                      if (phys && phys.empty) {
-                        throw new Error(`AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.`);
+          // ── 0) YAZICIDA HAZIR MI? — kimlik: ada gömülü içerik-MD5 + bayt-bayt boyut eşleşmesi.
+          // Bambu'da payload metası (sliced/colors/plate) da DB'de hazır olmalı; eksikse normal yol
+          // (ilk baskı doldurur, sonrakiler atlar). Probe hatası = sessizce normal yola düş.
+          if (mf.contentMd5 && mf.sizeBytes > 0 && (!isBambu || (mf.sliced === true && mf.colorsJson && mf.plateJson))) {
+            try {
+              const upName = hashedUploadName(mf.originalName, mf.contentMd5);
+              if (isBambu) {
+                const probe = await bambuRemoteFileSize(printer.host, printer.accessCode!, upName);
+                if (probe.size != null && probe.size === mf.sizeBytes) {
+                  const colors = ((JSON.parse(mf.colorsJson!) as { colors?: { index: number }[] }).colors ?? []);
+                  const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
+                  if (!(isRawGcode && colors.length > 1)) {
+                    if (useAms && Array.isArray(amsMapping) && colors.length) {
+                      for (const c of colors) {
+                        const slot = amsMapping[c.index];
+                        if (slot == null || slot < 0) {
+                          throw new Error("Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı.");
+                        }
                       }
                     }
+                    const plate = JSON.parse(mf.plateJson!) as { plateParam: string | null; filamentCount: number };
+                    let bambuMapping = amsMapping;
+                    if (Array.isArray(bambuMapping) && plate.filamentCount > bambuMapping.length) {
+                      bambuMapping = [...bambuMapping];
+                      while (bambuMapping.length < plate.filamentCount) bambuMapping.push(-1);
+                    }
+                    send({ stage: "upload", pct: 100, cached: true }); // yazıcıda hazır — yükleme yok
+                    const r = await bambuStartExisting(printer.host, printer.accessCode!, printer.serial!, upName, {
+                      md5: mf.contentMd5, amsMapping: bambuMapping, useAms, plateParam: plate.plateParam ?? undefined, prefs,
+                    });
+                    matchFilename = r.matchName;
+                    reused = true;
                   }
-                } catch (e) {
-                  if (e instanceof Error && /AMS slot/.test(e.message)) throw e;
-                  /* slot okunamazsa boş-kontrolünü atla */
+                }
+              } else {
+                const size = await moonrakerFileSize(printer.host, printer.port, upName);
+                if (size != null && size === mf.sizeBytes) {
+                  send({ stage: "upload", pct: 100, cached: true });
+                  await moonrakerStartExisting(printer.host, printer.port, upName, printer.brand ?? undefined, prefs, amsMapping);
+                  matchFilename = upName.replace(/\.[^.]+$/, "");
+                  reused = true;
+                }
+              }
+            } catch (e) {
+              // Kullanıcıya dönmesi gereken hatalar (meşgul/eşleme) yeniden fırlar; probe/ağ hataları
+              // sessizce normal (indir+yükle) yola düşer.
+              if (e instanceof Error && /(meşgul|Renk eşleştirmesi|bağlanılamadı)/.test(e.message)) throw e;
+              reused = false;
+            }
+          }
+
+          if (!reused) {
+            // ── 1) DOSYA — R2: gerçek % ile indir; yerel: async oku
+            let buf: Buffer;
+            if (mf.r2Key) {
+              send({ stage: "download", pct: 0 });
+              buf = await getObjectBytesWithProgress(mf.r2Key, r2cfg!, (pct) => send({ stage: "download", pct }));
+            } else {
+              buf = await fs.promises.readFile(mf.storedPath);
+            }
+
+            // İçerik kimliği: yükleme adına gömülür + DB'ye yazılır → SONRAKİ baskılar indirme/yükleme atlar.
+            const fileMd5 = crypto.createHash("md5").update(buf).digest("hex");
+            const upName = hashedUploadName(mf.originalName, fileMd5);
+
+            // Geçici parse yolu — SADECE kalıcı meta eksikse yazılır (varsa dosya hiç açılmaz).
+            let parsePath: string | null = mf.r2Key ? null : mf.storedPath;
+            const ensureParsePath = async (): Promise<string> => {
+              if (parsePath) return parsePath;
+              const safeExt = (mf.fileType || "gcode").replace(/[^a-z0-9]/gi, "") || "gcode";
+              const tmp = path.join(os.tmpdir(), `mlprint-${crypto.randomUUID()}.${safeExt}`);
+              await fs.promises.writeFile(tmp, buf);
+              tmpToClean = tmp;
+              parsePath = tmp;
+              return tmp;
+            };
+            // İlk baskıda parse edilenler kalıcılaştırılır → sonraki baskılar dosyayı hiç açmaz.
+            const persist: Record<string, unknown> = {};
+            if (mf.contentMd5 !== fileMd5 || mf.sizeBytes !== buf.length) {
+              persist.contentMd5 = fileMd5;
+              persist.sizeBytes = buf.length;
+            }
+            const getColors = async () => {
+              if (mf.colorsJson) {
+                try { return JSON.parse(mf.colorsJson) as ReturnType<typeof readModelColors>; } catch { /* dosyadan */ }
+              }
+              const info = readModelColors(await ensureParsePath());
+              persist.colorsJson = JSON.stringify(info);
+              return info;
+            };
+
+            send({ stage: "status" });
+
+            // ── 2) DOĞRULAMA (Bambu)
+            if (isBambu) {
+              let sliced = mf.sliced;
+              if (sliced == null) {
+                sliced = is3mfSliced(await ensureParsePath());
+                persist.sliced = sliced;
+              }
+              if (!sliced) {
+                throw new Error("Bu dosya dilimlenmemiş (STL/OBJ veya ham 3MF). Bambu Studio/Orca ile dilimleyip .3mf (veya .gcode) yükleyin.");
+              }
+              // Ham .gcode AMS eşleme tablosunu TAŞIMAZ → çok renklide yazıcı reddeder (ör. 83902467).
+              const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
+              if (isRawGcode && (await getColors()).colors.length > 1) {
+                throw new Error(
+                  "Bambu çok renkli baskı için ham .gcode yetmiyor — AMS eşleme tablosunu taşımadığı için yazıcı reddediyor. Bambu Studio'da plakayı dilimle → sağ üstteki oka tıkla → \"Dilimlenmiş plaka dosyasını dışa aktar\" ile aldığın .3mf dosyasını yükle."
+                );
+              }
+              // AMS renk eşleştirmesi tutarlı mı? (her renk dolu bir slota)
+              if (useAms && Array.isArray(amsMapping)) {
+                const colors = (await getColors()).colors;
+                if (colors.length) {
+                  for (const c of colors) {
+                    const slot = amsMapping[c.index];
+                    if (slot == null || slot < 0) {
+                      throw new Error("Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı.");
+                    }
+                  }
+                  try {
+                    const slots = await getBambuAmsSlots(printer.host, printer.accessCode!, printer.serial!);
+                    if (slots.length) {
+                      for (const c of colors) {
+                        const phys = slots.find((s) => s.slot === amsMapping[c.index]);
+                        if (phys && phys.empty) {
+                          throw new Error(`AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.`);
+                        }
+                      }
+                    }
+                  } catch (e) {
+                    if (e instanceof Error && /AMS slot/.test(e.message)) throw e;
+                    /* slot okunamazsa boş-kontrolünü atla */
+                  }
                 }
               }
             }
-          }
 
-          send({ stage: "upload", pct: 0 });
-          let matchFilename = mf.originalName.replace(/\.[^.]+$/, "");
+            send({ stage: "upload", pct: 0 });
 
-          if (isBambu) {
-            // BambuStudio gibi: ams_mapping'i PROJE filament sayısına -1 ile DOLDUR (kullanılmayan
-            // filamentler -1) + GERÇEK plate gcode yolunu gönder. Eksik uzunluk/yanlış plate → A1 reddeder.
-            let plate: { plateParam: string | null; filamentCount: number } | null = null;
-            if (mf.plateJson) {
-              try { plate = JSON.parse(mf.plateJson); } catch { /* dosyadan */ }
+            if (isBambu) {
+              // BambuStudio gibi: ams_mapping'i PROJE filament sayısına -1 ile DOLDUR + gerçek plate yolu.
+              let plate: { plateParam: string | null; filamentCount: number } | null = null;
+              if (mf.plateJson) {
+                try { plate = JSON.parse(mf.plateJson); } catch { /* dosyadan */ }
+              }
+              if (!plate) {
+                plate = readBambuPrintMeta(await ensureParsePath());
+                persist.plateJson = JSON.stringify(plate);
+              }
+              let bambuMapping = amsMapping;
+              if (Array.isArray(bambuMapping) && plate.filamentCount > bambuMapping.length) {
+                bambuMapping = [...bambuMapping];
+                while (bambuMapping.length < plate.filamentCount) bambuMapping.push(-1);
+              }
+              const r = await bambuUploadAndPrint(printer.host, printer.accessCode!, printer.serial!, buf, upName, {
+                amsMapping: bambuMapping, useAms, plateParam: plate.plateParam ?? undefined, prefs,
+                onProgress: (pct) => send({ stage: "upload", pct }),
+              });
+              matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
+            } else {
+              // Snapmaker: kafa seçimi native MAP_TABLE ile; Elegoo: atomik print=true. Gerçek % raporlanır.
+              await moonrakerUploadAndPrint(printer.host, printer.port, buf, upName, {
+                headMapping: amsMapping, prefs, brand: printer.brand,
+                onProgress: (pct) => send({ stage: "upload", pct }),
+              });
+              matchFilename = upName.replace(/\.[^.]+$/, "");
             }
-            if (!plate) {
-              plate = readBambuPrintMeta(await ensureParsePath());
-              persist.plateJson = JSON.stringify(plate);
-            }
-            let bambuMapping = amsMapping;
-            if (Array.isArray(bambuMapping) && plate.filamentCount > bambuMapping.length) {
-              bambuMapping = [...bambuMapping];
-              while (bambuMapping.length < plate.filamentCount) bambuMapping.push(-1);
-            }
-            const r = await bambuUploadAndPrint(printer.host, printer.accessCode!, printer.serial!, buf, mf.originalName, {
-              amsMapping: bambuMapping, useAms, plateParam: plate.plateParam ?? undefined, prefs,
-              onProgress: (pct) => send({ stage: "upload", pct }),
-            });
-            matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
-          } else {
-            // Snapmaker: kafa seçimi native MAP_TABLE ile; Elegoo: atomik print=true.
-            // Yükleme artık GERÇEK yüzde raporlar (elle akıtılan multipart — eski belirsiz bar bitti).
-            await moonrakerUploadAndPrint(printer.host, printer.port, buf, mf.originalName, {
-              headMapping: amsMapping, prefs, brand: printer.brand,
-              onProgress: (pct) => send({ stage: "upload", pct }),
-            });
-          }
 
-          // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa,
-          // dilimleyici thumbnail'ını da çıkar → eski (v29 öncesi) dosyalar ilk baskıda görsel kazanır.
-          if (!mf.thumbnail && parsePath) {
-            try {
-              const t = readModelMeta(parsePath).thumbnail;
-              if (t) persist.thumbnail = t;
-            } catch { /* önizleme çıkarılamadı — kritik değil */ }
-          }
-          // İlk baskıda parse edilen meta kalıcılaşsın (fire-and-forget; baskıyı yavaşlatmaz).
-          if (Object.keys(persist).length) {
-            void prisma.productModelFile.update({ where: { id: mf.id }, data: persist }).catch(() => {});
+            // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa çıkar.
+            if (!mf.thumbnail && parsePath) {
+              try {
+                const t = readModelMeta(parsePath).thumbnail;
+                if (t) persist.thumbnail = t;
+              } catch { /* önizleme çıkarılamadı — kritik değil */ }
+            }
+            // İlk baskıda parse edilen meta kalıcılaşsın (fire-and-forget; baskıyı yavaşlatmaz).
+            if (Object.keys(persist).length) {
+              void prisma.productModelFile.update({ where: { id: mf.id }, data: persist }).catch(() => {});
+            }
           }
 
           send({ stage: "start" });
@@ -232,8 +302,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               }
               send({ stage: "confirm" }); // hâlâ hazırlanıyor → akışı canlı tut
             }
-            // DÜRÜSTLÜK: doğrulanamadıysa "Başlatıldı" DEME — eski hali zaman aşımında done'a
-            // düşüyordu; komut hiç ulaşmamışsa kullanıcı sahte başarı görüyordu.
+            // DÜRÜSTLÜK: doğrulanamadıysa "Başlatıldı" DEME.
             if (!printerErrored && !confirmed) {
               send({ stage: "error", message: "Yazıcı 25 saniyede baskıya geçmedi — ekranını kontrol et; komut ulaşmamış olabilir, tekrar dene." });
               printerErrored = true;

@@ -471,6 +471,153 @@ async function bambuFtpUpload(
 }
 
 /**
+ * SIZE/DELE/LIST için HAFİF FTP oturumu — kanıtlanmış upload istemcisine DOKUNMADAN ayrı, küçük
+ * istemci (aynı TLS 1.2 + oturum-yeniden-kullanım kuralları). SIZE ve DELE yalnız kontrol kanalı
+ * kullanır (veri bağlantısı YOK — en güvenli); LIST tek veri bağlantısı açar (ilk veri bağlantısı
+ * kontrol oturumunu yeniden kullanır — v0.19.2'de doğrulanan çalışan desen).
+ */
+async function bambuFtpQuery<T>(
+  host: string,
+  accessCode: string,
+  run: (io: {
+    cmd: (line: string, label?: string) => Promise<{ code: number; text: string }>;
+    nextReply: (timeoutMs?: number) => Promise<{ code: number; text: string }>;
+    openData: () => Promise<tls.TLSSocket>;
+    readDataToEnd: (d: tls.TLSSocket, timeoutMs?: number) => Promise<string>;
+  }) => Promise<T>
+): Promise<T> {
+  const baseTls: tls.ConnectionOptions = { rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host };
+  let ctrl: tls.TLSSocket | null = null;
+  let dataPlain: net.Socket | null = null;
+  let data: tls.TLSSocket | null = null;
+  let inbuf = "";
+  let ctrlErr: Error | null = null;
+
+  const nextReply = (timeoutMs = 15000): Promise<{ code: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = setInterval(() => {
+        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+        const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
+        if (m) {
+          clearInterval(tick);
+          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+          resolve({ code: parseInt(m[1], 10), text: m[2] });
+        } else if (Date.now() > deadline) {
+          clearInterval(tick);
+          reject(new Error("FTP yanıtı zaman aşımı"));
+        }
+      }, 40);
+    });
+
+  const cmd = async (line: string): Promise<{ code: number; text: string }> => {
+    if (!ctrl) throw new Error("kontrol soketi yok");
+    ctrl.write(line + "\r\n");
+    return nextReply();
+  };
+
+  const openData = async (): Promise<tls.TLSSocket> => {
+    const pasv = await cmd("PASV");
+    const mm = pasv.text.match(/(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})/);
+    if (!mm) throw new Error("PASV ayrıştırılamadı");
+    const dataPort = (+mm[5]) * 256 + (+mm[6]); // host YOK SAYILIR (0.0.0.0 olabilir)
+    dataPlain = net.connect(dataPort, host);
+    await onceEvt(dataPlain, "connect", 10000, "veri soketi");
+    data = tls.connect({
+      ...baseTls,
+      socket: dataPlain,
+      session: ctrl!.getSession() ?? undefined,
+      secureContext: tls.createSecureContext({ minVersion: "TLSv1.2", maxVersion: "TLSv1.2" }),
+    });
+    await onceEvt(data, "secureConnect", 10000, "veri TLS");
+    return data;
+  };
+
+  const readDataToEnd = (d: tls.TLSSocket, timeoutMs = 20000): Promise<string> =>
+    new Promise((resolve, reject) => {
+      let out = "";
+      const to = setTimeout(() => reject(new Error("veri okuma zaman aşımı")), timeoutMs);
+      d.on("data", (c: Buffer) => { out += c.toString("latin1"); });
+      d.once("close", () => { clearTimeout(to); resolve(out); });
+      d.once("error", (e: Error) => { clearTimeout(to); reject(e); });
+    });
+
+  try {
+    ctrl = tls.connect({ ...baseTls, host, port: 990 });
+    ctrl.on("error", (e: Error) => { ctrlErr = e; });
+    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+    await onceEvt(ctrl, "secureConnect", 10000, "kontrol TLS");
+    ctrl.setTimeout(0);
+    await nextReply(); // 220
+    if ((await cmd("USER bblp")).code >= 400) throw new Error("USER reddedildi");
+    if ((await cmd(`PASS ${accessCode}`)).code >= 400) throw new Error("FTP girişi reddedildi (access code?)");
+    await cmd("TYPE I");
+    const result = await run({ cmd, nextReply, openData, readDataToEnd });
+    try { ctrl.write("QUIT\r\n"); } catch { /* yoksay */ }
+    return result;
+  } finally {
+    // (cast: data/dataPlain closure içinde atanıyor — TS akış analizi burada null sanıyor)
+    try { (data as tls.TLSSocket | null)?.destroy(); } catch { /* yoksay */ }
+    try { (dataPlain as net.Socket | null)?.destroy(); } catch { /* yoksay */ }
+    try { ctrl?.destroy(); } catch { /* yoksay */ }
+  }
+}
+
+/** Yazıcıdaki dosyanın boyutu (yalnız kontrol kanalı — SIZE). Yoksa/hata → null. */
+export async function bambuRemoteFileSize(
+  host: string,
+  accessCode: string,
+  uploadName: string
+): Promise<{ remote: string; stem: string; size: number | null }> {
+  const { remote, stem } = safeRemoteName(uploadName);
+  const size = await bambuFtpQuery(host, accessCode, async ({ cmd }) => {
+    const r = await cmd(`SIZE ${remote}`);
+    if (r.code !== 213) return null;
+    const n = Number(r.text.trim());
+    return Number.isFinite(n) ? n : null;
+  }).catch(() => null);
+  return { remote, stem, size };
+}
+
+export interface BambuStorageFile { name: string; size: number; modified: number | null }
+
+/** Yazıcı depolamasındaki dosyalar (FTP kökü = dahili eMMC). Klasörler atlanır. */
+export async function bambuStorageList(host: string, accessCode: string): Promise<BambuStorageFile[]> {
+  return bambuFtpQuery(host, accessCode, async ({ cmd, nextReply, openData, readDataToEnd }) => {
+    const d = await openData();
+    const r150 = await cmd("LIST");
+    if (r150.code >= 400) throw new Error(`LIST reddedildi (${r150.code})`);
+    const text = await readDataToEnd(d);
+    await nextReply(); // 226
+    const files: BambuStorageFile[] = [];
+    for (const line of text.split("\n")) {
+      // vsftpd biçimi: "-rw-r--r--    1 ftp  ftp   1234567 Jul 08 10:15 dosya.3mf"
+      const m = line.match(/^([-dl])[\w-]{9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]{4,5})\s+(.+?)\r?$/);
+      if (!m || m[1] !== "-") continue; // yalnız normal dosyalar (klasör/link atla)
+      const name = m[4].trim();
+      if (!name || name === "." || name === "..") continue;
+      files.push({ name, size: Number(m[2]) || 0, modified: null });
+    }
+    files.sort((a, b) => b.size - a.size);
+    return files;
+  });
+}
+
+/** Yazıcı depolamasından dosya sil (yalnız kontrol kanalı — DELE). Silinen sayısını döndürür. */
+export async function bambuDeleteFiles(host: string, accessCode: string, names: string[]): Promise<number> {
+  if (!names.length) return 0;
+  return bambuFtpQuery(host, accessCode, async ({ cmd }) => {
+    let ok = 0;
+    for (const n of names) {
+      if (!n || n.includes("/") || n.includes("\\") || n.startsWith(".")) continue; // yalnız kökteki düz dosyalar
+      const r = await cmd(`DELE ${n}`);
+      if (r.code < 400) ok++;
+    }
+    return ok;
+  });
+}
+
+/**
  * Bambu'da baskı başlat: PREFLIGHT (durum/IDLE) → güvenli ad → FTPS yükle+doğrula → MQTT.
  *  .3mf → project_file (plate + ams_mapping, url ftp:///<ad>); .gcode → gcode_file (ham, /<ad>).
  * A1'de SD yok → dosya FTP kökünde (dahili eMMC), url ftp şeması. bed_leveling tek-L (firmware böyle bekliyor).
@@ -499,7 +646,21 @@ export async function bambuUploadAndPrint(
 
   const conn = ensureConn(host, accessCode, serial);
   const fileMd5 = crypto.createHash("md5").update(fileBuf).digest("hex");
-  const payload: Record<string, unknown> = isGcode
+  const payload = buildBambuStartPayload(remoteName, stem, isGcode, fileMd5, opts);
+  await publishBambuStart(conn, serial, payload);
+
+  return { matchName: stem };
+}
+
+/** Bambu baskı-başlat MQTT payload'u — upload sonrası VE yazıcıda-hazır (reuse) yolunun ORTAK üreticisi. */
+function buildBambuStartPayload(
+  remoteName: string,
+  stem: string,
+  isGcode: boolean,
+  fileMd5: string,
+  opts: { amsMapping?: number[]; useAms?: boolean; plateParam?: string; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } }
+): Record<string, unknown> {
+  return isGcode
     ? { print: { sequence_id: "0", command: "gcode_file", param: `/${remoteName}` } }
     : {
         print: {
@@ -519,21 +680,21 @@ export async function bambuUploadAndPrint(
           use_ams: opts.useAms ?? false,
         },
       };
+}
+
+/** Baskı-başlat komutunu güvenle yayınla (upload + reuse yollarının ORTAK son adımı).
+ *  🔴 HAYALET BASKI FIX: baskı-başlat ASLA QoS 1 olamaz. QoS 1'de ACK (PUBACK) kaybolursa
+ *  mqtt.js mesajı bellekte tutar ve HER yeniden bağlanışta TEKRAR GÖNDERİR (DUP) → uyku/uyanma
+ *  sonrası "son dosya kendi kendine baştan basılıyor" (sahada yaşandı). QoS 0 = protokol
+ *  seviyesinde YENİDEN İLETİM YOK; teslim doğrulaması print route'un durum-izleme döngüsünde.
+ *  FTP upload dakikalar sürebildiği için yayınlamadan önce bağlantı + meşguliyet YENİDEN kontrol edilir. */
+async function publishBambuStart(conn: Conn, serial: string, payload: Record<string, unknown>): Promise<void> {
   try {
     console.error("[bambu-print] payload:", JSON.stringify((payload as any).print));
   } catch { /* log atla */ }
-  // 🔴 HAYALET BASKI FIX: baskı-başlat ASLA QoS 1 olamaz. QoS 1'de ACK (PUBACK) kaybolursa
-  // mqtt.js mesajı bellekte tutar ve HER yeniden bağlanışta TEKRAR GÖNDERİR (DUP) → uyku/uyanma
-  // veya ağ dalgalanması sonrası "son dosya kendi kendine baştan basılıyor" (sahada yaşandı;
-  // tray modu uygulamayı günlerce canlı tutunca her reconnect'te tekrarlıyordu). QoS 0 = protokol
-  // seviyesinde YENİDEN İLETİM YOK; teslim doğrulaması zaten print route'un 15sn'lik durum-izleme
-  // döngüsünde (yazıcı gerçekten "printing"e geçti mi). FTP upload dakikalar sürebildiği için
-  // preflight'tan sonra bağlantı düşmüş olabilir → yayınlamadan önce YENİDEN kontrol + callback bekle.
   if (!conn.connected) {
-    throw new Error("Yazıcı bağlantısı koptu (yükleme sırasında) — baskı komutu gönderilmedi, tekrar dene.");
+    throw new Error("Yazıcı bağlantısı koptu — baskı komutu gönderilmedi, tekrar dene.");
   }
-  // Durum da TAZE kontrol edilir: ilk boşta-kontrolü FTP yüklemesinden ÖNCEYDİ (dakikalar geçmiş
-  // olabilir); bu arada başka bir istemci baskı başlattıysa üstüne komut gönderme.
   const liveState = mapBambuState(typeof conn.print.gcode_state === "string" ? conn.print.gcode_state : null);
   if (liveState === "printing" || liveState === "paused") {
     throw new Error("Yazıcı bu sırada başka bir baskıya başladı — komut gönderilmedi.");
@@ -545,7 +706,30 @@ export async function bambuUploadAndPrint(
   });
   // A1/P1 seyrek (delta) raporlar → durum geçişini görebilmek için tam durum iste.
   conn.client.publish(`device/${serial}/request`, JSON.stringify({ pushing: { sequence_id: "0", command: "pushall" } }), { qos: 0 });
+}
 
+/**
+ * Yazıcıda ZATEN duran (içerik-hash'li adla yüklenmiş) dosyayı indirmeden/yüklemeden başlat.
+ * Kimlik: ad içindeki MD5 + SIZE eşleşmesi route'ta doğrulandı; md5 DB'den gelir (payload için).
+ */
+export async function bambuStartExisting(
+  host: string,
+  accessCode: string,
+  serial: string,
+  uploadName: string,
+  opts: { md5: string; amsMapping?: number[]; useAms?: boolean; plateParam?: string; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } }
+): Promise<{ matchName: string }> {
+  const pre = await getBambuStatus(host, accessCode, serial);
+  if (!pre.online) throw new Error("Yazıcıya bağlanılamadı (MQTT). IP ve access code'u kontrol edin.");
+  const preState = mapBambuState(pre.gcodeState);
+  if (preState === "printing" || preState === "paused") {
+    throw new Error("Yazıcı şu an meşgul (baskı sürüyor veya duraklatılmış).");
+  }
+  const isGcode = /\.(gcode|gco|g)$/i.test(uploadName) && !/\.3mf$/i.test(uploadName);
+  const { remote, stem } = safeRemoteName(uploadName);
+  const conn = ensureConn(host, accessCode, serial);
+  const payload = buildBambuStartPayload(remote, stem, isGcode, opts.md5, opts);
+  await publishBambuStart(conn, serial, payload);
   return { matchName: stem };
 }
 

@@ -266,16 +266,82 @@ export async function moonrakerStart(host: string, port: number, filename: strin
  * SDCARD_PRINT_FILE_WITH_PARAMETERS ile native başlatılır (uploadAndPrint'teki akışın aynısı).
  * Diğer Moonraker (Elegoo): düz start yeterli. Her iki yol da önce boşta-kontrolü yapar.
  */
-export async function moonrakerStartExisting(host: string, port: number, filename: string, brand?: string, prefs?: MoonrakerPrefs): Promise<void> {
+export async function moonrakerStartExisting(host: string, port: number, filename: string, brand?: string, prefs?: MoonrakerPrefs, headMapping?: number[]): Promise<void> {
   await assertMoonrakerIdle(host, port);
   if ((brand || "").toLowerCase() === "snapmaker") {
     const meta = await moonrakerRawMeta(host, port, filename);
-    // prefs geçirilir (eskiden hep 0'a zorlanıyordu); MAP_TABLE identity olarak her başlatmada
-    // gönderilir → boştayken set edilmiş bayat eşleme tablosu bu baskıyı etkileyemez.
-    await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, prefs));
+    // prefs geçirilir (eskiden hep 0'a zorlanıyordu); MAP_TABLE her başlatmada gönderilir
+    // (identity ya da SlotStep'ten gelen kafa eşlemesi) → bayat tablo bu baskıyı etkileyemez.
+    let toolMap: Record<number, number> | undefined;
+    if (headMapping && headMapping.length) {
+      const tm: Record<number, number> = {};
+      headMapping.forEach((head, idx) => { if (typeof head === "number" && head >= 0) tm[idx] = head; });
+      if (Object.keys(tm).length) toolMap = tm;
+    }
+    await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, prefs, toolMap));
     return;
   }
   await moonrakerStart(host, port, filename);
+}
+
+/** Yazıcıdaki dosyanın boyutu (metadata üzerinden) — yoksa null. Reuse kimlik doğrulaması için. */
+export async function moonrakerFileSize(host: string, port: number, filename: string): Promise<number | null> {
+  try {
+    const res = await mfetch(
+      `${moonrakerBase(host, port)}/server/files/metadata?filename=${encodeURIComponent(filename)}`,
+      undefined, 5000
+    );
+    if (!res.ok) return null;
+    const m = unwrap(await res.json());
+    const n = Number((m as any)?.size);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface MoonrakerStorage {
+  total: number | null;
+  free: number | null;
+  used: number | null;
+  files: { name: string; size: number; modified: number | null }[];
+}
+
+/** Depolama durumu: gcodes kökü dosya listesi + disk kullanım (Moonraker directory API). */
+export async function moonrakerStorage(host: string, port: number): Promise<MoonrakerStorage> {
+  const res = await mfetch(
+    `${moonrakerBase(host, port)}/server/files/directory?path=gcodes&extended=false`,
+    undefined, 8000
+  );
+  if (!res.ok) throw new Error(`Depolama bilgisi alınamadı (HTTP ${res.status})`);
+  const j = unwrap(await res.json()) as any;
+  const du = j?.disk_usage ?? {};
+  const files = (Array.isArray(j?.files) ? j.files : [])
+    .map((f: any) => ({
+      name: String(f?.filename ?? f?.path ?? ""),
+      size: Number(f?.size) || 0,
+      modified: Number.isFinite(Number(f?.modified)) ? Number(f.modified) : null,
+    }))
+    .filter((f: { name: string }) => !!f.name)
+    .sort((a: { size: number }, b: { size: number }) => b.size - a.size);
+  const num = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  return { total: num(du.total), free: num(du.free), used: num(du.used), files };
+}
+
+/** gcodes kökünden dosya sil. Silinen sayısını döndürür (tek tek; biri hata verirse devam). */
+export async function moonrakerDeleteFiles(host: string, port: number, names: string[]): Promise<number> {
+  let ok = 0;
+  for (const n of names) {
+    if (!n || n.includes("..")) continue;
+    try {
+      const res = await mfetch(
+        `${moonrakerBase(host, port)}/server/files/gcodes/${encodeURIComponent(n)}`,
+        { method: "DELETE" }, 10000
+      );
+      if (res.ok) ok++;
+    } catch { /* sıradakine geç */ }
+  }
+  return ok;
 }
 
 /**
