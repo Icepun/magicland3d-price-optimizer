@@ -177,6 +177,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? old.filter((f) => f.id !== fileId) : old
       );
+      qc.invalidateQueries({ queryKey: ["printable-models"] }); // "Baskı Başlat" listesi de güncellensin
       onChanged();
       toast.success(applyToVariants ? "Parça tüm varyantlardan silindi" : "Parça silindi");
     },
@@ -232,6 +233,8 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? [...old, ...created] : created
       );
+      // Yazıcılar → "Baskı Başlat" ürün listesi bu yeni modeli görsün (çapraz-sayfa tazelik).
+      qc.invalidateQueries({ queryKey: ["printable-models"] });
     }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";

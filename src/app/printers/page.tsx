@@ -1356,6 +1356,10 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   const { data, isLoading, isError, error } = useQuery<{ models: PrintableModel[] }>({
     queryKey: ["printable-models", target.id],
     queryFn: () => fetchJson<{ models: PrintableModel[] }>(`/api/printers/${target.id}/printable-models`),
+    // Modal KULLANICI eylemiyle açılır → HER açılışta taze liste (global refetchOnMount:false +
+    // 5dk staleTime yüzünden az önce yüklenen model görünmüyordu). Kullanıcı en güncel modelleri görmeli.
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<PrintableModel | null>(null);
