@@ -7,7 +7,9 @@
 import type { ParsedGcode } from "./parse-gcode";
 
 const DB_NAME = "mlhub-gcode-viz";
-const DB_VER = 1;
+// v2: robust çerçeveleme (model ortalama + purge çizgisi dışlama) → eski KARELER eski framing'le
+// üretildi; upgrade'de sprites store'u temizlenir → yeni framing'le yeniden oluşur. Geometri korunur.
+const DB_VER = 2;
 const GEOM = "geom";
 const SPRITES = "sprites";
 const MAX_GEOM = 24; // LRU üst sınırları (disk şişmesin)
@@ -30,7 +32,9 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(GEOM)) db.createObjectStore(GEOM, { keyPath: "key" });
-      if (!db.objectStoreNames.contains(SPRITES)) db.createObjectStore(SPRITES, { keyPath: "key" });
+      // Sprites: render kodu (çerçeveleme) değiştiğinde eski kareler bayat → sıfırla + yeniden kur.
+      if (db.objectStoreNames.contains(SPRITES)) db.deleteObjectStore(SPRITES);
+      db.createObjectStore(SPRITES, { keyPath: "key" });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

@@ -440,6 +440,11 @@ function PrinterCardInner({
   const offline = isReal && !online;
   const isError = status === "error";
 
+  // HAZIRLIK EVRESİ: ısınma/homing/ilk-hareket sırasında yazıcı henüz malzeme sürmüyor → progress,
+  // ETA ve katman ÇÖP (süre sürekli başa atıyor, katman "284/284" gibi yanlış). Baskı GERÇEKTEN
+  // başlayana (ısındı + ilk katman/ilerleme) dek "Baskıya hazırlanıyor" göster; sayaç sonra başlasın.
+  const preparing = isPrinting && !isFinished && (heating || ((layerCurrent ?? 0) < 1 && progress <= 0.01));
+
   const nozzle = printer.temps.nozzle; // gerçek değer (5sn poll); sahte sn-bazlı titreme kaldırıldı
   const bed = printer.temps.bed;
   const sm = STATUS_META[status];
@@ -553,7 +558,8 @@ function PrinterCardInner({
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
-                {job.layerTotal > 0 && layerCurrent != null && layerCurrent > 0 && (
+                {/* Katman: yalnız GERÇEK baskıda (hazırlıkta değer çöp — "284/284" gibi). */}
+                {!preparing && job.layerTotal > 0 && layerCurrent != null && layerCurrent > 0 && (
                   <span className="inline-flex items-center gap-1"><Layers className="h-3.5 w-3.5" /> {layerCurrent}/{job.layerTotal}</span>
                 )}
                 {/* Filament çipi yalnız GERÇEK veri varsa (Bambu'da uydurma "PLA" gösteriliyordu). */}
@@ -563,7 +569,7 @@ function PrinterCardInner({
                     {job.filamentType}
                   </span>
                 )}
-                {isPrinting && elapsedSec > 0 && (
+                {!preparing && isPrinting && elapsedSec > 0 && (
                   <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {fmtRemaining(elapsedSec)} geçti</span>
                 )}
               </div>
@@ -596,32 +602,52 @@ function PrinterCardInner({
           </div>
         )}
 
-        {/* Progress */}
+        {/* Progress — HAZIRLIKTA belirsiz bar + "hazırlanıyor" (çöp %/ETA gösterme); gerçek baskıda %/ETA */}
         {job && !offline && (
           <div className="space-y-1.5">
             <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full relative overflow-hidden transition-[width] duration-1000 ease-linear"
-                style={{
-                  width: `${pct}%`,
-                  background: isFinished
-                    ? "linear-gradient(90deg, oklch(0.72 0.18 145 / 80%), oklch(0.72 0.18 145))"
-                    : `linear-gradient(90deg, ${alpha(accent, 70)}, ${accent})`,
-                }}
-              >
-                {isPrinting && !reduceMotion && <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)", animation: "printer-shimmer 1.6s linear infinite" }} />}
-              </div>
+              {preparing ? (
+                reduceMotion
+                  ? <div className="absolute inset-y-0 left-0 h-full w-1/4 rounded-full" style={{ background: alpha(accent, 60) }} />
+                  : <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: accent, animation: "indeterminate-bar 1.8s ease-in-out infinite" }} />
+              ) : (
+                <div
+                  className="h-full rounded-full relative overflow-hidden transition-[width] duration-1000 ease-linear"
+                  style={{
+                    width: `${pct}%`,
+                    background: isFinished
+                      ? "linear-gradient(90deg, oklch(0.72 0.18 145 / 80%), oklch(0.72 0.18 145))"
+                      : `linear-gradient(90deg, ${alpha(accent, 70)}, ${accent})`,
+                  }}
+                >
+                  {isPrinting && !reduceMotion && <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)", animation: "printer-shimmer 1.6s linear infinite" }} />}
+                </div>
+              )}
             </div>
             <div className="flex items-center justify-between text-xs tabular-nums">
-              <span className="font-bold text-sm" style={{ color: isFinished ? "oklch(0.72 0.18 145)" : accent }}>
-                {isFinished ? "Tamamlandı 🎉" : <>%<AnimatedNumber value={pct} durationMs={800} /></>}
-              </span>
-              <span className="text-muted-foreground inline-flex items-center gap-1">
-                {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
-                  : isPaused ? (<><Pause className="h-3.5 w-3.5 text-amber-500" /> Duraklatıldı · {fmtRemaining(remainingSec)} kaldı</>)
-                    : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
-                      : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now || Date.now())}</>)}
-              </span>
+              {preparing ? (
+                <>
+                  <span className="font-semibold text-sm inline-flex items-center gap-1.5" style={{ color: accent }}>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Baskıya hazırlanıyor…
+                  </span>
+                  <span className="text-muted-foreground inline-flex items-center gap-1">
+                    {heating ? <><Flame className="h-3.5 w-3.5 text-amber-500" /> ısınıyor</> : "yerleşiyor"}
+                    {elapsedSec > 2 ? ` · ${fmtRemaining(elapsedSec)}` : ""}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="font-bold text-sm" style={{ color: isFinished ? "oklch(0.72 0.18 145)" : accent }}>
+                    {isFinished ? "Tamamlandı 🎉" : <>%<AnimatedNumber value={pct} durationMs={800} /></>}
+                  </span>
+                  <span className="text-muted-foreground inline-flex items-center gap-1">
+                    {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
+                      : isPaused ? (<><Pause className="h-3.5 w-3.5 text-amber-500" /> Duraklatıldı · {fmtRemaining(remainingSec)} kaldı</>)
+                        : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
+                          : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now || Date.now())}</>)}
+                  </span>
+                </>
+              )}
             </div>
           </div>
         )}

@@ -17,6 +17,23 @@ const FEATURE_COLORS: Record<number, [number, number, number]> = {
 };
 const FEATURE_DEFAULT: [number, number, number] = [0.62, 0.65, 0.72];
 
+/** XY footprint'in %2-%98 yüzdeliği — purge/prime/skirt gibi uç aykırıları çerçeveden dışlar.
+ *  Örneklem (~30k) alınır → büyük modelde bile hızlı (izleyici açılışını dondurmaz). */
+function robustXYBounds(positions: Float32Array): { minX: number; maxX: number; minY: number; maxY: number } {
+  const nv = positions.length / 3; // köşe sayısı
+  if (nv === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  const step = Math.max(1, Math.floor(nv / 30000));
+  const xs: number[] = [], ys: number[] = [];
+  for (let i = 0; i < nv; i += step) {
+    xs.push(positions[i * 3]);
+    ys.push(positions[i * 3 + 1]);
+  }
+  xs.sort((a, b) => a - b);
+  ys.sort((a, b) => a - b);
+  const q = (arr: number[], p: number) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(p * (arr.length - 1))))];
+  return { minX: q(xs, 0.02), maxX: q(xs, 0.98), minY: q(ys, 0.02), maxY: q(ys, 0.98) };
+}
+
 export interface VizScene {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
@@ -48,24 +65,28 @@ export function buildVizScene(g: ParsedGcode, opts?: { background?: number | nul
   const material = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92 });
   const lines = new THREE.LineSegments(geometry, material);
 
-  // GCode Z-yukarı → three Y-yukarı; modeli merkeze taşı.
-  const { minX, maxX, minY, maxY, minZ } = g.bounds;
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  // ROBUST çerçeveleme: dilimleyici tabla-kenarı purge/prime çizgisi (tek uzun düz çizgi) tüm
+  // bounding-box'ı şişiriyor → model küçük + köşede görünüyordu. XY için %2-%98 yüzdelikle asıl
+  // gövdeyi çerçeveleriz (uç aykırılar dışlanır); Z (yükseklik) tam min/max (dikey aykırı yok).
+  const { minZ } = g.bounds;
+  const rb = robustXYBounds(g.positions);
+  const cx = (rb.minX + rb.maxX) / 2, cy = (rb.minY + rb.maxY) / 2;
   const group = new THREE.Group();
-  lines.position.set(-cx, -cy, -minZ);
+  lines.position.set(-cx, -cy, -minZ); // modeli GERÇEK merkezine göre ortala
   group.add(lines);
   group.rotation.x = -Math.PI / 2;
   scene.add(group);
 
-  // Tabla ızgarası (hafif)
-  const spanX = Math.max(10, maxX - minX), spanY = Math.max(10, maxY - minY);
-  const gridSize = Math.ceil(Math.max(spanX, spanY) * 1.35 / 10) * 10;
+  // Tabla ızgarası (hafif) — robust span'e göre (purge çizgisi ızgarayı da devleştirmesin).
+  const spanX = Math.max(10, rb.maxX - rb.minX), spanY = Math.max(10, rb.maxY - rb.minY);
+  const gridSize = Math.ceil(Math.max(spanX, spanY) * 1.4 / 10) * 10;
   const grid = new THREE.GridHelper(gridSize, Math.max(6, Math.round(gridSize / 10)), 0x475069, 0x2a3042);
   (grid.material as THREE.Material).transparent = true;
-  (grid.material as THREE.Material).opacity = 0.35;
+  (grid.material as THREE.Material).opacity = 0.3;
   scene.add(grid);
 
-  // Kamera: izometrik açıyla sığdır
+  // Kamera: izometrik açı. Faktör 0.72 (kanıtlanmış, kırpmaz); asıl iyileşme robust span'den gelir
+  // (purge çizgisi artık span'i şişirmiyor → model kadrajı doldurur + ortalanır).
   const spanZ = Math.max(5, g.bounds.maxZ - minZ);
   const radius = Math.max(spanX, spanY, spanZ) * 0.72;
   const camera = new THREE.PerspectiveCamera(38, 1, 0.5, radius * 20);
