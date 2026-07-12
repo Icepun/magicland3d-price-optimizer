@@ -5,16 +5,20 @@ import { jsonError } from "@/lib/api-error";
 
 export const dynamic = "force-dynamic";
 
-/** Yol/uzantı + içerik-hash ekini (-a1b2c3d4e5) at, küçült — yazıcının bildirdiği dosya adını
- *  model kaydının orijinal adıyla TOLERANSLI eşlemek için (eski adlar eksiz, yeniler ekli).
- *  Ek, çift uzantıda uzantıların ÖNÜNE girer (a.gcode-<md5>.3mf) → uzantı-öncesi de temizlenir. */
+const TR: Record<string, string> = { "ç": "c", "Ç": "c", "ğ": "g", "Ğ": "g", "ı": "i", "İ": "i", "ö": "o", "Ö": "o", "ş": "s", "Ş": "s", "ü": "u", "Ü": "u" };
+
+/** Yazıcının bildirdiği dosya adını model kaydının orijinal adıyla TOLERANSLI eşle. Kritik:
+ *  Bambu, adı safeRemoteName ile ASCII'ye çevirip boşluk/tireyi _ yapıyor (Standı — Siyah →
+ *  Standi_Siyah) → eski norm (yalnız küçültme) "standı"≠"standi" yüzünden Bambu'yu HİÇ eşleyemiyordu
+ *  (3D görünmüyordu). Çözüm: iki tarafı da Türkçe→ASCII çevir + harf/rakam DIŞINDA her şeyi (boşluk/
+ *  _/tire/uzantı-öncesi) sil. Önce yol/hash-eki/uzantı/plate atılır (yapısal), sonra sadeleştirilir. */
 function norm(s: string): string {
-  let x = s.replace(/^.*[/\\]/, "").toLowerCase().trim();
-  // Uzantı(lar)dan hemen önceki (veya sondaki) içerik-hash ekini at.
-  x = x.replace(/-[0-9a-f]{10}(?=(\.(gcode|gco|g|3mf))*$)/i, "");
-  // Ardışık bilinen uzantıları at (.gcode.3mf gibi çift uzantı dahil).
-  x = x.replace(/(\.(gcode|gco|g|3mf))+$/i, "");
-  return x.trim();
+  let x = s.replace(/^.*[/\\]/, "");                              // yol
+  x = x.replace(/-[0-9a-f]{10}(?=(\.(gcode|gco|g|3mf))*$)/i, ""); // içerik-hash eki
+  x = x.replace(/(\.(gcode|gco|g|3mf))+$/i, "");                  // uzantı(lar) (.gcode.3mf dahil)
+  x = x.replace(/_plate_\d+$/i, "");                             // dilimleyici plate eki
+  x = x.replace(/[çÇğĞıİöÖşŞüÜ]/g, (c) => TR[c] ?? c);           // Türkçe → ASCII (Bambu gibi)
+  return x.toLowerCase().replace(/[^a-z0-9]+/g, "");             // harf/rakam dışı her şeyi sil
 }
 
 /**
