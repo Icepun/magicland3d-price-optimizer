@@ -2,10 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { moonrakerStorage, moonrakerDeleteFiles } from "@/core/printers/moonraker";
-import { bambuStorageList, bambuDeleteFiles } from "@/core/printers/bambu";
+import { moonrakerStorage, moonrakerDeleteFiles, fetchMoonrakerStatus } from "@/core/printers/moonraker";
+import { bambuStorageList, bambuDeleteFiles, getBambuStatus, mapBambuState } from "@/core/printers/bambu";
 
 export const dynamic = "force-dynamic";
+
+/** Yol/uzantı at, küçült — basılan dosyayı silme listesiyle birebir kıyaslamak için. */
+function norm(s: string): string {
+  return s.replace(/^.*[/\\]/, "").replace(/\.[^.]+$/, "").toLowerCase().trim();
+}
 
 /**
  * Yazıcının YEREL depolaması: dosya listesi + kullanım.
@@ -47,14 +52,26 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       : [];
     if (!names.length) return NextResponse.json({ error: "Silinecek dosya seçilmedi" }, { status: 400 });
 
+    // GÜVENLİK: basılmakta olan dosya ASLA silinmez (UI atlansa/eski istemci olsa bile) — silmek
+    // baskıyı yarıda kesebilir. Aktif işi yazıcıdan sorup silme listesinden düş.
     let deleted = 0;
+    let blockedActive = false;
     if (cfg.type === "bambu") {
       if (!cfg.accessCode) return NextResponse.json({ error: "Access code eksik" }, { status: 400 });
-      deleted = await bambuDeleteFiles(cfg.host, cfg.accessCode, names);
+      const s = await getBambuStatus(cfg.host, cfg.accessCode, cfg.serial ?? "").catch(() => null);
+      const st = s ? mapBambuState(s.gcodeState) : null;
+      const active = s && (st === "printing" || st === "paused") ? norm(s.filename ?? "") : "";
+      const safe = active ? names.filter((n) => norm(n) !== active) : names;
+      blockedActive = safe.length !== names.length;
+      deleted = safe.length ? await bambuDeleteFiles(cfg.host, cfg.accessCode, safe) : 0;
     } else {
-      deleted = await moonrakerDeleteFiles(cfg.host, cfg.port, names);
+      const s = await fetchMoonrakerStatus(cfg.host, cfg.port).catch(() => null);
+      const active = s && (s.state === "printing" || s.state === "paused") ? norm(s.filename ?? "") : "";
+      const safe = active ? names.filter((n) => norm(n) !== active) : names;
+      blockedActive = safe.length !== names.length;
+      deleted = safe.length ? await moonrakerDeleteFiles(cfg.host, cfg.port, safe) : 0;
     }
-    return NextResponse.json({ ok: true, deleted });
+    return NextResponse.json({ ok: true, deleted, blockedActive });
   } catch (error) {
     return jsonError(error);
   }

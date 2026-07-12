@@ -649,7 +649,7 @@ function PrinterCardInner({
         )}
 
         {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
-        {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} />}
+        {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
     </Card>
   );
@@ -715,7 +715,7 @@ function fmtBytes(n: number): string {
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
-function PrinterStorageStrip({ printerId, accent }: { printerId: string; accent: string }) {
+function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: string; accent: string; activeFile?: string | null }) {
   const [open, setOpen] = useState(false);
   const q = useQuery<PrinterStorageResp>({
     queryKey: ["printer-storage", printerId],
@@ -753,19 +753,28 @@ function PrinterStorageStrip({ printerId, accent }: { printerId: string; accent:
                 }}
               />
             </span>
-            <span className="tabular-nums shrink-0">{fmtBytes(st.used!)} / {fmtBytes(st.total!)}</span>
+            {/* Barla TUTARLI metin = boş yer (eski "kullanılan / toplam" kullanıcının o kadar dosyası
+                varmış gibi görünüyordu; oysa doluluğun çoğu yazıcının kendi sistemi). */}
+            <span className="tabular-nums shrink-0">{st.files.length} dosya · {fmtBytes(st.free!)} boş</span>
           </>
         ) : (
           <span className="flex-1 text-left tabular-nums">{st.files.length} dosya · {fmtBytes(filesBytes)}</span>
         )}
         <ChevronRight className="h-3 w-3 shrink-0 opacity-50 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
       </button>
-      {open && <PrinterStorageDialog printerId={printerId} onClose={() => setOpen(false)} />}
+      {open && <PrinterStorageDialog printerId={printerId} activeFile={activeFile} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
-function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClose: () => void }) {
+/** Basılmakta olan dosya adını depolama listesindeki adlarla kıyaslamak için normalize
+ *  (yol/uzantı at, küçült) — birebir eşleşme, isim tahmini değil. */
+function normFileName(s: string | null | undefined): string {
+  if (!s) return "";
+  return s.replace(/^.*[/\\]/, "").replace(/\.[^.]+$/, "").toLowerCase().trim();
+}
+
+function PrinterStorageDialog({ printerId, activeFile, onClose }: { printerId: string; activeFile?: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const q = useQuery<PrinterStorageResp>({
     queryKey: ["printer-storage", printerId],
@@ -778,9 +787,14 @@ function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClo
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const files = q.data?.files ?? [];
+  const activeNorm = normFileName(activeFile);
+  const isActive = (name: string) => activeNorm !== "" && normFileName(name) === activeNorm;
+  const deletable = files.filter((f) => !isActive(f.name)); // basılan dosya silinemez
   const selBytes = files.filter((f) => sel.has(f.name)).reduce((s, f) => s + f.size, 0);
-  const toggle = (n: string) =>
+  const toggle = (n: string) => {
+    if (isActive(n)) return; // basılmakta olan dosya seçilemez
     setSel((p) => { const x = new Set(p); if (x.has(n)) x.delete(n); else x.add(n); return x; });
+  };
 
   const removeSel = async () => {
     if (!sel.size || busy) return;
@@ -789,9 +803,10 @@ function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClo
       const r = await fetch(`/api/printers/${printerId}/storage`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files: [...sel] }),
       });
-      const j = await r.json().catch(() => ({} as { deleted?: number; error?: string }));
+      const j = await r.json().catch(() => ({} as { deleted?: number; error?: string; blockedActive?: boolean }));
       if (!r.ok) throw new Error(j?.error || "Silinemedi");
-      toast.success(`${j.deleted ?? sel.size} dosya silindi`);
+      if (j.blockedActive) toast.warning(`${j.deleted ?? 0} dosya silindi · basılmakta olan dosya korundu`);
+      else toast.success(`${j.deleted ?? sel.size} dosya silindi`);
       setSel(new Set());
       qc.invalidateQueries({ queryKey: ["printer-storage", printerId] });
     } catch (e) {
@@ -802,12 +817,17 @@ function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClo
   };
 
   const st = q.data;
+  const filesBytes = files.reduce((s, f) => s + f.size, 0);
   const pctUsed = st?.total && st.used != null ? Math.min(100, Math.round((st.used / st.total) * 100)) : null;
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><HardDrive className="h-4 w-4 text-primary" /> Yazıcı Depolaması</DialogTitle>
+          {/* ÖNCE senin baskı dosyaların (silinebilen) — asıl bilgi bu. Disk doluluğu ikincil. */}
+          <p className="text-xs text-foreground/80 mt-1">
+            Baskı dosyaların: <span className="font-semibold tabular-nums">{files.length} dosya · {fmtBytes(filesBytes)}</span>
+          </p>
           {pctUsed != null && st ? (
             <div className="mt-2 space-y-1">
               <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -817,8 +837,9 @@ function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClo
                 />
               </div>
               <p className="text-[11px] text-muted-foreground tabular-nums">
-                {fmtBytes(st.used!)} dolu{st.free != null ? ` · ${fmtBytes(st.free)} boş` : ""} · toplam {fmtBytes(st.total!)}
+                Diskte {st.free != null ? `${fmtBytes(st.free)} boş` : `${fmtBytes(st.used!)} dolu`} · toplam {fmtBytes(st.total!)}
               </p>
+              <p className="text-[11px] text-muted-foreground/70">Doluluğun çoğu yazıcının kendi sistemi — silinemez.</p>
             </div>
           ) : (
             <p className="text-[11px] text-muted-foreground mt-1">Silinen dosya gerekirse sonraki baskıda otomatik yeniden yüklenir.</p>
@@ -835,25 +856,31 @@ function PrinterStorageDialog({ printerId, onClose }: { printerId: string; onClo
             <div className="flex items-center justify-between px-1 pb-1">
               <button
                 className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-                onClick={() => setSel(sel.size === files.length ? new Set() : new Set(files.map((f) => f.name)))}
+                onClick={() => setSel(sel.size === deletable.length && deletable.length > 0 ? new Set() : new Set(deletable.map((f) => f.name)))}
               >
-                {sel.size === files.length ? "Seçimi kaldır" : "Tümünü seç"}
+                {sel.size === deletable.length && deletable.length > 0 ? "Seçimi kaldır" : "Tümünü seç"}
               </button>
               <span className="text-[11px] text-muted-foreground tabular-nums">{files.length} dosya</span>
             </div>
-            {files.map((f) => (
-              <label
-                key={f.name}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs cursor-pointer transition-colors",
-                  sel.has(f.name) ? "border-destructive/40 bg-destructive/5" : "hover:bg-muted/60"
-                )}
-              >
-                <input type="checkbox" className="accent-red-500" checked={sel.has(f.name)} onChange={() => toggle(f.name)} />
-                <span className="flex-1 truncate font-mono text-[11px]" title={f.name}>{f.name}</span>
-                <span className="tabular-nums text-muted-foreground shrink-0">{fmtBytes(f.size)}</span>
-              </label>
-            ))}
+            {files.map((f) => {
+              const active = isActive(f.name);
+              return (
+                <label
+                  key={f.name}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md border px-2 py-1.5 text-xs transition-colors",
+                    active ? "opacity-60 cursor-not-allowed border-primary/30 bg-primary/5"
+                      : sel.has(f.name) ? "border-destructive/40 bg-destructive/5 cursor-pointer" : "hover:bg-muted/60 cursor-pointer"
+                  )}
+                  title={active ? "Şu an basılıyor — silinemez" : f.name}
+                >
+                  <input type="checkbox" className="accent-red-500" checked={sel.has(f.name)} disabled={active} onChange={() => toggle(f.name)} />
+                  <span className="flex-1 truncate font-mono text-[11px]">{f.name}</span>
+                  {active && <span className="text-[9px] font-semibold text-primary shrink-0 inline-flex items-center gap-0.5"><Play className="h-2.5 w-2.5" />basılıyor</span>}
+                  <span className="tabular-nums text-muted-foreground shrink-0">{fmtBytes(f.size)}</span>
+                </label>
+              );
+            })}
           </div>
         )}
         <DialogFooter>
