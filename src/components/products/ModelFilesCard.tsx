@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
-import { ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
+import { setUploadsActive } from "@/lib/gcode-viz/viz-pipeline";
 
 // three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
 const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
@@ -207,28 +207,31 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
     const list = Array.from(fileList);
     let ok = 0;
     const created: ModelFile[] = [];
-    for (const f of list) {
-      setUploadingName(f.name);
-      setProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
-      try {
-        const row = await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
-        if (row && typeof row === "object") created.push(row as ModelFile);
-        ok++;
-      } catch (e) {
-        toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
+    setUploadsActive(1); // arka plan görselleştirme üretimi bu yükleme boyunca beklesin
+    try {
+      for (const f of list) {
+        setUploadingName(f.name);
+        setProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
+        try {
+          const row = await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
+          if (row && typeof row === "object") created.push(row as ModelFile);
+          ok++;
+        } catch (e) {
+          toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
+        }
       }
+    } finally {
+      setUploadsActive(-1);
     }
     setProg(null);
     setUploadingName("");
     // OPTIMISTIC: oluşturulan satırları cache'e ekle → bu ürün için refetch YOK (donma yok).
+    // NOT: görselleştirme varlıkları burada ÜRETİLMEZ (eski hali yüklemeyi kilitliyordu) —
+    // thumbnail ilk baskıda / 3D izleyici açılınca; inşa kareleri baskı başlayınca oluşur.
     if (created.length) {
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? [...old, ...created] : created
       );
-      // Arka planda görselleştirme varlıkları: önizleme görseli (yoksa) + inşa kareleri.
-      for (const row of created) {
-        if (row?.id) ensureVizAssets({ fileId: row.id, cacheKey: vizKeyForModel(row), thumbnailMissing: !row.thumbnail });
-      }
     }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
@@ -295,10 +298,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
               <Button
                 size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
                 title="3D önizleme — katman katman izle"
-                onClick={() => {
-                  ensureVizAssets({ fileId: part.id, cacheKey: vizKeyForModel(part), thumbnailMissing: !part.thumbnail });
-                  setViewer(part);
-                }}
+                onClick={() => setViewer(part)}
               >
                 <Box className="h-3.5 w-3.5" />
               </Button>

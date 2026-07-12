@@ -54,16 +54,39 @@ function parseInWorker(fileId: string): Promise<ParsedGcode> {
 
 const assetsDone = new Set<string>(); // oturum içinde aynı iş bir kez
 
-/**
- * Arka plan varlık üretimi: (a) sunucuda thumbnail yoksa üret + kaydet → tüm listeler görsel
- * kazanır; (b) inşa karelerini üret + IDB'ye koy → yazıcı kartında canlı dolan model.
- * Tamamen arka planda; hata sessiz (görselleştirme çekirdek akışı asla bozamaz).
- */
+// ── Arka plan üretimi KİBAR olmalı: yükleme/gezinme akıcı kalsın ─────────────
+// Aksi halde (v0.19.99) yükleme biter bitmez 27MB parse + 36 WebGL render renderer'ı kilitliyordu.
+let uploadsActive = 0;
+/** Yükleme başlarken +1, biterken -1 — arka plan varlık üretimi bu sırada BEKLER (ana süreçten
+ *  27MB okuma + WebGL render yüklemeyle/dosya diyaloğuyla yarışmasın). */
+export function setUploadsActive(delta: number): void {
+  uploadsActive = Math.max(0, uploadsActive + delta);
+}
+
+/** Tarayıcı boşta kalınca çöz — ağır işi kullanıcı etkileşiminin arasına sıkıştırmaz. */
+function idle(timeout = 800): Promise<void> {
+  return new Promise((res) => {
+    const ric = (globalThis as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+    if (ric) ric(() => res(), { timeout });
+    else setTimeout(res, 60);
+  });
+}
+
+async function waitUploadsIdle(): Promise<void> {
+  while (uploadsActive > 0) await new Promise((r) => setTimeout(r, 400));
+}
+
+// Tek sıra: aynı anda EN FAZLA bir üretim işi (birden çok dosya art arda gelirse kuyruklanır,
+// paralel WebGL/parse yığılmaz). Zincir hataları yutar.
+let chain: Promise<void> = Promise.resolve();
+
 /** Baskı başlatıldıktan sonra çağrılır: taze model kaydını çekip (contentMd5 artık dolu)
- *  varlıkları MD5 anahtarıyla üretir — kartın canlı dolumu bu anahtarla eşleşir. */
+ *  varlıkları MD5 anahtarıyla üretir — kartın canlı dolumu bu anahtarla eşleşir. Arka planda,
+ *  kibar (yükleme bitince + boşta). */
 export function ensureVizAssetsAfterPrint(fileId: string): void {
   void (async () => {
     try {
+      await waitUploadsIdle();
       const res = await fetch(`/api/models/${fileId}`, { cache: "no-store" });
       if (!res.ok) return;
       const row = (await res.json()) as { id: string; contentMd5?: string | null; sizeBytes?: number; thumbnail?: string | null };
@@ -74,33 +97,47 @@ export function ensureVizAssetsAfterPrint(fileId: string): void {
   })();
 }
 
+/**
+ * Arka plan varlık üretimi (SERİ + boşta + yükleme-bekleyen): (a) thumbnail yoksa üret + kaydet;
+ * (b) inşa karelerini üret + IDB'ye koy (kartta canlı dolan model). Görselleştirme ASLA çekirdek
+ * akışı (yükleme/baskı/gezinme) etkilemez. Not: yükleme veya izleyici-açılışında ÇAĞRILMAZ —
+ * yalnız baskı başlangıcında (ensureVizAssetsAfterPrint). İzleyici geometriyi kendi yükler.
+ */
 export function ensureVizAssets(opts: { fileId: string; cacheKey: string; thumbnailMissing: boolean }): void {
   const { fileId, cacheKey, thumbnailMissing } = opts;
   const jobKey = `${cacheKey}|${thumbnailMissing ? 1 : 0}`;
   if (assetsDone.has(jobKey)) return;
   assetsDone.add(jobKey);
-  void (async () => {
-    try {
-      const haveSprites = await getSprites(cacheKey);
-      if (haveSprites && !thumbnailMissing) return;
-      const g = await loadGeometry(cacheKey, fileId);
-      if (!g.totalSegments) return;
-      if (thumbnailMissing) {
-        const dataUrl = renderThumbnail(g, 512);
-        if (dataUrl && dataUrl.length < 900_000) {
-          await fetch(`/api/models/${fileId}/preview`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ thumbnail: dataUrl }),
-          }).catch(() => {});
-        }
+  chain = chain.then(() => runAssetJob(fileId, cacheKey, thumbnailMissing)).catch(() => {});
+}
+
+async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: boolean): Promise<void> {
+  try {
+    const haveSprites = await getSprites(cacheKey);
+    if (haveSprites && !thumbnailMissing) return;
+    await waitUploadsIdle();
+    await idle();
+    const g = await loadGeometry(cacheKey, fileId); // parse Web Worker'da (ana thread donmaz)
+    if (!g.totalSegments) return;
+    if (thumbnailMissing) {
+      await waitUploadsIdle();
+      await idle();
+      const dataUrl = renderThumbnail(g, 512);
+      if (dataUrl && dataUrl.length < 900_000) {
+        await fetch(`/api/models/${fileId}/preview`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ thumbnail: dataUrl }),
+        }).catch(() => {});
       }
-      if (!haveSprites) {
-        const frames = await renderBuildFrames(g, 36, 240);
-        if (frames.length) await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
-      }
-    } catch {
-      /* arka plan üretimi — sessiz */
     }
-  })();
+    if (!haveSprites) {
+      await waitUploadsIdle();
+      await idle();
+      const frames = await renderBuildFrames(g, 24, 240, idle); // her kareden sonra boşta bekle
+      if (frames.length) await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
+    }
+  } catch {
+    /* arka plan üretimi — sessiz */
+  }
 }

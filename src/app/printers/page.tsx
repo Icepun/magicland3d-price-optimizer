@@ -22,6 +22,7 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
 import { vizKeyFromFilename, getSprites } from "@/lib/gcode-viz/viz-cache";
+import { setUploadsActive } from "@/lib/gcode-viz/viz-pipeline";
 import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
@@ -1489,12 +1490,14 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     if (!picked) return;
     setUploading(true);
     setUploadProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
+    setUploadsActive(1); // arka plan görselleştirme üretimi bu yükleme boyunca beklesin
     try {
       const data = await uploadCustomModel({ printerConfigId: picked.id, file: f, onProgress: setUploadProg });
       setFile(data as unknown as CustomUpload);
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
+      setUploadsActive(-1);
       setUploading(false);
       setUploadProg(null);
     }

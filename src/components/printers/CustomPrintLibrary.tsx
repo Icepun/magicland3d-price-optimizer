@@ -11,7 +11,6 @@ import {
   ArrowDownWideNarrow, Clock3, Box,
 } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
-import { ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
 
 // three.js yalnız izleyici açılınca yüklensin.
 const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
@@ -408,10 +407,7 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                   <Button
                     size="icon" variant="ghost" className="h-8 w-8 shrink-0 text-muted-foreground hover:text-primary"
                     title="3D önizleme — katman katman izle"
-                    onClick={() => {
-                      ensureVizAssets({ fileId: it.id, cacheKey: vizKeyForModel(it), thumbnailMissing: !it.thumbnail });
-                      setViewer3d(it);
-                    }}
+                    onClick={() => setViewer3d(it)}
                   >
                     <Box className="h-4 w-4" />
                   </Button>

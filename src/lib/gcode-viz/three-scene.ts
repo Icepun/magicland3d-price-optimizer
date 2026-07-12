@@ -87,22 +87,54 @@ export function buildVizScene(g: ParsedGcode, opts?: { background?: number | nul
   };
 }
 
-/** Offscreen tek kare (thumbnail) — PNG data URL. */
+// PAYLAŞILAN offscreen renderer — her çağrıda yeni WebGL context YARATMAK pahalıdır ve tarayıcı
+// context sayısını (~16) sınırlar; çok dosyada context tükenir. Üretim zaten SERİ (tek seferde bir
+// iş) olduğundan tek renderer güvenle yeniden kullanılır.
+let sharedRenderer: THREE.WebGLRenderer | null = null;
+let sharedCanvas: HTMLCanvasElement | null = null;
+function getSharedRenderer(size: number): THREE.WebGLRenderer | null {
+  try {
+    if (!sharedRenderer) {
+      sharedCanvas = document.createElement("canvas");
+      sharedRenderer = new THREE.WebGLRenderer({ canvas: sharedCanvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+      sharedRenderer.setClearColor(0x000000, 0);
+    }
+    sharedCanvas!.width = size; sharedCanvas!.height = size;
+    sharedRenderer.setSize(size, size, false);
+    return sharedRenderer;
+  } catch {
+    return null; // WebGL yoksa görselsiz devam
+  }
+}
+
+/** Offscreen tek kare (thumbnail) — PNG data URL. Paylaşılan renderer, sahne dispose edilir. */
 export function renderThumbnail(g: ParsedGcode, size = 512): string | null {
-  return withOffscreen(g, size, (viz, renderer) => {
+  const renderer = getSharedRenderer(size);
+  if (!renderer) return null;
+  const viz = buildVizScene(g, { background: null });
+  viz.camera.aspect = 1;
+  viz.camera.updateProjectionMatrix();
+  try {
     viz.setLayer(-1);
     renderer.render(viz.scene, viz.camera);
     return renderer.domElement.toDataURL("image/png");
-  });
+  } finally {
+    viz.dispose(); // renderer paylaşımlı — dispose ETME
+  }
 }
 
-/** İnşa kareleri: N aşamada (katman ilerledikçe) küçük WEBP kareleri — kartta canlı dolum için. */
-export async function renderBuildFrames(g: ParsedGcode, frameCount = 36, size = 240): Promise<Blob[]> {
+/** İnşa kareleri: N aşamada küçük WEBP kareleri — kartta canlı dolum için. Kareler arasında
+ *  BOŞTA bekleyip (yield) arayüzü bloke etmez; paylaşılan renderer kullanır. */
+export async function renderBuildFrames(
+  g: ParsedGcode,
+  frameCount = 24,
+  size = 240,
+  yieldFn?: () => Promise<void>,
+): Promise<Blob[]> {
+  const renderer = getSharedRenderer(size);
+  if (!renderer) return [];
+  const canvas = renderer.domElement as HTMLCanvasElement;
   const blobs: Blob[] = [];
-  const canvas = document.createElement("canvas");
-  canvas.width = size; canvas.height = size;
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-  renderer.setClearColor(0x000000, 0);
   const viz = buildVizScene(g, { background: null });
   viz.camera.aspect = 1;
   viz.camera.updateProjectionMatrix();
@@ -112,34 +144,13 @@ export async function renderBuildFrames(g: ParsedGcode, frameCount = 36, size = 
       const layerIdx = Math.min(layers - 1, Math.ceil((k / frameCount) * layers) - 1);
       viz.setLayer(layerIdx);
       renderer.render(viz.scene, viz.camera);
-      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/webp", 0.82));
+      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/webp", 0.8));
       if (!blob) return [];
       blobs.push(blob);
+      if (yieldFn) await yieldFn(); // her kareden sonra arayüze nefes aldır
     }
     return blobs;
   } finally {
     viz.dispose();
-    renderer.dispose();
-  }
-}
-
-function withOffscreen<T>(g: ParsedGcode, size: number, fn: (viz: VizScene, renderer: THREE.WebGLRenderer) => T): T | null {
-  const canvas = document.createElement("canvas");
-  canvas.width = size; canvas.height = size;
-  let renderer: THREE.WebGLRenderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-  } catch {
-    return null; // WebGL yoksa görselsiz devam
-  }
-  renderer.setClearColor(0x000000, 0);
-  const viz = buildVizScene(g, { background: null });
-  viz.camera.aspect = 1;
-  viz.camera.updateProjectionMatrix();
-  try {
-    return fn(viz, renderer);
-  } finally {
-    viz.dispose();
-    renderer.dispose();
   }
 }
