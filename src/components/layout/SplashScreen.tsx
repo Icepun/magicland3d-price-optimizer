@@ -91,8 +91,9 @@ export function SplashScreen() {
         className="relative"
         style={{ animation: "logo-float 4s ease-in-out infinite" }}
       >
+        {/* Splash arka planı HER ZAMAN koyu → açık logo varyantı (koyu M koyu zeminde kaybolmasın). */}
         <Image
-          src="/logo.png"
+          src="/logo-dark.png"
           alt="Magicland 3D"
           width={260}
           height={200}

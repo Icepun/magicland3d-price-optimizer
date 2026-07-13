@@ -63,17 +63,25 @@ export function Sidebar() {
         className="flex flex-col items-center justify-center px-4 py-5 shrink-0 relative"
         style={{ borderBottom: "1px solid var(--sidebar-border)" }}
       >
+        {/* Tema-koşullu logo: light → koyu logo (mevcut), dark → açık varyant (koyu zeminde görünsün).
+            İki görsel de render edilir, CSS `dark:` ile biri gizlenir → SSR-güvenli, flaş yok. */}
         <Image
           src="/logo.png"
           alt="Magicland 3D"
           width={120}
           height={48}
           priority
-          className="object-contain select-none"
-          style={{
-            filter:
-              "drop-shadow(0 2px 12px oklch(0.66 0.20 278 / 35%))",
-          }}
+          className="object-contain select-none block dark:hidden"
+          style={{ filter: "drop-shadow(0 2px 12px oklch(0.66 0.20 278 / 35%))" }}
+        />
+        <Image
+          src="/logo-dark.png"
+          alt="Magicland 3D"
+          width={120}
+          height={48}
+          priority
+          className="object-contain select-none hidden dark:block"
+          style={{ filter: "drop-shadow(0 2px 14px oklch(0.72 0.16 278 / 45%))" }}
         />
         <div className="mt-3 text-center">
           <p className="text-[10px] uppercase tracking-[0.30em] text-sidebar-foreground/60 font-semibold">
