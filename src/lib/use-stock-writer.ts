@@ -6,6 +6,10 @@ import { toast } from "sonner";
 import { patchProductsInCache } from "@/lib/products-cache";
 
 type ProductLike = { id: string; stock: number };
+/** Ürün detayı cache'i — varyant grubu üyelerinin stoğu BURADA da kopya durur. */
+type ProductDetailLike = ProductLike & {
+  variantGroup?: { products?: { id: string; stock: number }[] } | null;
+};
 
 /**
  * Optimistic stok yazıcı (masaüstü).
@@ -54,6 +58,20 @@ export function useStockWriter() {
       qc.setQueriesData<ProductLike[] | undefined>({ queryKey: ["products"] }, (old) =>
         Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, stock } : p)) : old
       );
+      // VARYANT LİSTELERİ: her varyantın detay cache'i, grup KARDEŞLERİNİN stoğunu da kopya tutar.
+      // Yalnız ["product", id] güncellenince diğer varyanta geçildiğinde ESKİ stok görünüyordu
+      // (ana sayfaya dönmeden düzelmiyordu). Tüm ürün detaylarındaki grup üyesini de yamala.
+      qc.setQueriesData<ProductDetailLike | undefined>({ queryKey: ["product"] }, (old) => {
+        const members = old?.variantGroup?.products;
+        if (!members?.some((p) => p.id === id)) return old;
+        return {
+          ...old!,
+          variantGroup: {
+            ...old!.variantGroup!,
+            products: members.map((p) => (p.id === id ? { ...p, stock } : p)),
+          },
+        };
+      });
     },
     [qc]
   );

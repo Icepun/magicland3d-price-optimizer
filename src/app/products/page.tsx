@@ -27,6 +27,7 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
+import { loadListState, saveListState, scrollContainer } from "@/lib/list-state";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
@@ -495,11 +496,42 @@ export default function ProductsPage() {
   } | null>(null);
   const queryClient = useQueryClient();
 
-  // URL filter parametresinden başlangıç değeri (mount sonrası, hydration safe)
+  // URL filter parametresinden başlangıç değeri (mount sonrası, hydration safe).
+  // URL'de filtre YOKSA oturumdaki son durumu (arama + filtre) geri yükle → ürün detayına girip
+  // dönünce "kaldığın yerden devam" (eskiden arama sıfırlanıyordu).
   useEffect(() => {
+    const url = new URL(window.location.href);
+    const hasUrlFilter = url.searchParams.has("filter");
     const f = readFilterFromUrl();
-    if (f !== filterMode) setFilterMode(f);
+    const saved = loadListState("products");
+    if (hasUrlFilter) {
+      if (f !== filterMode) setFilterMode(f);
+    } else if (saved.filterMode && saved.filterMode !== filterMode) {
+      setFilterMode(saved.filterMode as FilterMode);
+    }
+    if (saved.search) {
+      setGlobalFilter(saved.search);
+      setDebouncedFilter(saved.search); // filtre ANINDA uygulansın (200ms debounce'u bekleme)
+    }
+    // Kaydırma konumu — liste boyandıktan sonra geri al.
+    if (saved.scrollTop) {
+      requestAnimationFrame(() => {
+        const el = scrollContainer();
+        if (el) el.scrollTop = saved.scrollTop!;
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Durumu oturuma yaz (arama/filtre anında; kaydırma sayfadan ayrılırken).
+  useEffect(() => {
+    saveListState("products", { search: globalFilter, filterMode });
+  }, [globalFilter, filterMode]);
+  useEffect(() => {
+    return () => {
+      const el = scrollContainer();
+      if (el) saveListState("products", { scrollTop: el.scrollTop });
+    };
   }, []);
 
   const {

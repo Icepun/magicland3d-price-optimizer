@@ -336,7 +336,9 @@ function VariantsCardImpl({
                     <Pencil className="h-3.5 w-3.5" />
                   </button>
                   {!isCurrent && (
-                    <Link href={`/products/${m.id}`} className="shrink-0 p-1.5 rounded text-muted-foreground hover:text-foreground" title="Ürüne git">
+                    // replace: varyantlar arası geçiş geçmişe YIĞILMAZ → 5-6 varyant gezdikten sonra
+                    // geri tuşu tek seferde ürün listesine döner (her varyanta tek tek geri gitmez).
+                    <Link replace href={`/products/${m.id}`} className="shrink-0 p-1.5 rounded text-muted-foreground hover:text-foreground" title="Ürüne git">
                       <ArrowUpRight className="h-3.5 w-3.5" />
                     </Link>
                   )}
