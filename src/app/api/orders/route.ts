@@ -14,7 +14,7 @@ import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { simulatePrice } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
-import { withProductCommissionRule } from "@/core/product-commission";
+import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
 import { pushToAllDevices } from "@/lib/push-notify";
 
@@ -194,6 +194,9 @@ interface Matched {
   commissionRate: number | null;
   madeToOrder: boolean;
   stock: number;
+  /** Platform bazlı listing komisyon override'ı (Ürünler/Panel bunu ZATEN kullanıyor).
+   *  Taşınmazsa sipariş kârı komisyonu ₺0 sayıyordu → kâr sipariş başına şişik görünüyordu. */
+  listingCommission: Record<string, { platform: string; commissionRate: number | null; commissionFixed: number | null }>;
 }
 
 type CommissionRules = Parameters<typeof simulatePrice>[0]["commissionRules"];
@@ -487,6 +490,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
   let vatRate = 0;
+  // Shopify global komisyon oranı resolveListingCommissionOverride içinde buradan okunur → dış kapsam.
+  let settingsMap: Record<string, string | undefined> = {};
 
   if (allKeys.size > 0 || shopifyNames.size > 0) {
     const keyList = [...allKeys];
@@ -511,7 +516,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       prisma.appSetting.findMany(),
     ]);
 
-    const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+    settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
     vatRate = Number(settingsMap.vatRate ?? 0);
     commissionRules = cRules as CommissionRules;
     cargoRules = kRules as CargoRules;
@@ -519,6 +524,15 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
 
     for (const p of products) {
       const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
+      // Listing komisyon override'ı platform bazlı taşınır (Ürünler/Panel ile AYNI kaynak).
+      const listingCommission: Matched["listingCommission"] = {};
+      for (const l of p.listings) {
+        listingCommission[l.platform] = {
+          platform: l.platform,
+          commissionRate: l.commissionRate,
+          commissionFixed: l.commissionFixed,
+        };
+      }
       const m: Matched = {
         id: p.id,
         name: p.name,
@@ -531,6 +545,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         commissionRate: p.commissionRate,
         madeToOrder: p.madeToOrder,
         stock: p.stock,
+        listingCommission,
       };
       const add = (k: string | null | undefined) => {
         if (k && !byKey.has(k)) byKey.set(k, m);
@@ -552,6 +567,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   // toplam desiye göre ayrıca düşülür (her ürün/adet için tekrar tekrar değil).
   function lineProfitNoCargo(platform: "shopify" | "trendyol" | "hepsiburada", m: Matched, unitPrice: number, qty: number): number | null {
     if (m.productionCost + m.packagingCost <= 0 || unitPrice <= 0) return null;
+    // Listing komisyonu (ör. Trendyol %21) — Ürünler/Panel'in kullandığı KAYNAK. Eskiden burada
+    // geçilmediği için komisyon ₺0 sayılıyor, sipariş kârı şişik çıkıyordu (bu ürün: 95,23 vs 60,23).
+    const lst = m.listingCommission[platform] ?? { platform, commissionRate: null, commissionFixed: null };
     const sim = simulatePrice({
       salePrice: unitPrice,
       productCost: m.productionCost,
@@ -565,10 +583,14 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       cargoRules: filterCargoRulesByPlatform(cargoRules, platform),
       expenseRules: filterRulesByPlatform(expenseRules, platform),
       vatRate,
+      ...resolveListingCommissionOverride(lst, settingsMap),
       cargoCostOverride: 0,
+      // Adet motorun İÇİNDE uygulanır: birim kalemler × adet, SABİT gider bir kez. Eskiden dışarıdan
+      // `sim.netProfit * qty` yapılıyordu → sabit gider (Platform Hizmet Bedeli) her adette tekrar kesiliyordu.
+      minOrderQty: qty,
       vatableProductCost: m.filamentCost,
     });
-    return sim.netProfit * qty;
+    return sim.netProfit;
   }
 
   // Olay-anı bildirim adayları (stoğu biten / sipariş-üzerine ürüne sipariş).

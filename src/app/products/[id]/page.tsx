@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
+import { StockInput } from "@/components/products/StockInput";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
 import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
@@ -407,7 +408,7 @@ export default function ProductDetailPage({
 
   // Stok güncelleme
   // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
-  const { adjustStock } = useStockWriter();
+  const { adjustStock, setStock } = useStockWriter();
 
   // Real-time kâr önizlemesi + Fiyat Lab — KAYDETMEDEN, İSTEMCİDE hesaplanır (ana sürece okuma YOK
   // → donma yok). costValues (CostEditor'dan 250ms debounce'lu), ürün veya kurallar değişince anında
@@ -579,18 +580,12 @@ export default function ProductDetailPage({
                   >
                     <Minus className="h-3.5 w-3.5" />
                   </Button>
-                  <span
-                    className={cn(
-                      "tabular-nums font-bold text-sm min-w-[2ch] text-center",
-                      product.stock === 0
-                        ? "text-destructive"
-                        : product.stock === 1
-                          ? "text-amber-500"
-                          : "text-foreground"
-                    )}
-                  >
-                    {product.stock}
-                  </span>
+                  {/* Elle giriş: 900 → 0 gibi büyük değişiklikler için (+/- ile tek tek imkânsızdı) */}
+                  <StockInput
+                    value={product.stock}
+                    onCommit={(next) => setStock(id, next)}
+                    className="text-sm w-[5ch] py-0.5"
+                  />
                   <Button
                     variant="outline"
                     size="icon"

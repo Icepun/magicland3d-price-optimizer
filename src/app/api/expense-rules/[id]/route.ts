@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 const Schema = z.object({
   name: z.string().min(1).optional(),
@@ -21,6 +22,7 @@ export async function PATCH(
   const { id } = await params;
   const data = Schema.parse(await req.json());
   const rule = await prisma.expenseRule.update({ where: { id }, data });
+  invalidateOrdersCache();
   return NextResponse.json(rule);
 }
 
@@ -30,5 +32,6 @@ export async function DELETE(
 ) {
   const { id } = await params;
   await prisma.expenseRule.delete({ where: { id } });
+  invalidateOrdersCache();
   return NextResponse.json({ ok: true });
 }

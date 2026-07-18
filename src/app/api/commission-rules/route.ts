@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 const Schema = z.object({
   name: z.string().min(1),
@@ -26,5 +27,6 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const data = Schema.parse(body);
   const rule = await prisma.commissionRule.create({ data });
+  invalidateOrdersCache(); // komisyon/gider değişti → sipariş kârı taze hesaplansın
   return NextResponse.json(rule, { status: 201 });
 }

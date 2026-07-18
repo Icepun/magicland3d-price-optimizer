@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -48,6 +49,7 @@ export async function PATCH(
     });
   }
 
+  invalidateOrdersCache(); // listing komisyonu/fiyatı kârı etkiler → sipariş önbelleği düşsün
   return NextResponse.json(updated);
 }
 
@@ -58,5 +60,6 @@ export async function DELETE(
   await ensureRuntimeSchema();
   const { id } = await params;
   await prisma.listing.delete({ where: { id } });
+  invalidateOrdersCache();
   return NextResponse.json({ ok: true });
 }

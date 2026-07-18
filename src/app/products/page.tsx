@@ -26,6 +26,7 @@ import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { StockInput } from "@/components/products/StockInput";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
@@ -194,6 +195,7 @@ const ProductRow = memo(function ProductRow({
   integrations,
   onToggleSelect,
   onAdjustStock,
+  onSetStock,
   onAliasStart,
   onAliasChange,
   onAliasCommit,
@@ -217,6 +219,7 @@ const ProductRow = memo(function ProductRow({
   dataIndex?: number;
   onToggleSelect: (id: string, checked: boolean) => void;
   onAdjustStock: (id: string, delta: number, current: number) => void;
+  onSetStock: (id: string, stock: number) => void;
   onAliasStart: (id: string, current: string) => void;
   onAliasChange: (value: string) => void;
   onAliasCommit: () => void;
@@ -331,20 +334,13 @@ const ProductRow = memo(function ProductRow({
             >
               <Minus className="h-4 w-4" />
             </Button>
-            <span
-              className={`tabular-nums text-sm font-semibold min-w-[2ch] text-center ${
-                product.stock === 0
-                  ? "text-destructive"
-                  : product.stock === 1
-                    ? "text-amber-500"
-                    : "text-foreground"
-              }`}
-              title={
-                product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined
-              }
-            >
-              {product.stock}
-            </span>
+            {/* Elle giriş: büyük stok değişikliklerinde (+/- ile tek tek imkânsızdı) tıkla-yaz */}
+            <StockInput
+              value={product.stock}
+              onCommit={(next) => onSetStock(product.id, next)}
+              className="text-sm w-[5ch] py-0.5"
+              title={product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined}
+            />
             <Button
               variant="outline"
               size="icon"
@@ -566,7 +562,7 @@ export default function ProductsPage() {
   });
 
   // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
-  const { adjustStock } = useStockWriter();
+  const { adjustStock, setStock } = useStockWriter();
 
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) =>
@@ -1363,6 +1359,7 @@ export default function ProductsPage() {
                     integrations={integrations}
                     onToggleSelect={handleToggleSelect}
                     onAdjustStock={adjustStock}
+                    onSetStock={setStock}
                     onAliasStart={handleAliasStart}
                     onAliasChange={handleAliasChange}
                     onAliasCommit={commitAlias}
