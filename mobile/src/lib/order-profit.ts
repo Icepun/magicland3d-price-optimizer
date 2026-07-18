@@ -1,11 +1,5 @@
-import { simulatePrice } from "@core/pricing-engine";
 import { resolveProductCost } from "@core/product-cost";
-import { withProductCommissionRule } from "@core/product-commission";
-import {
-  filterCargoRulesByPlatform,
-  filterRulesByPlatform,
-  findCargoRule,
-} from "@core/cargo-calculator";
+import { computeOrderProfit as computeCore, type OrderProfitLine } from "@core/order-profit";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
 import type { Rules } from "@/lib/profit";
@@ -98,6 +92,8 @@ export interface OrderProfit {
   image: string | null;
   distinctCount: number; // farklı ürün sayısı
   totalQty: number; // toplam adet
+  /** Maliyeti bilinmeyen satırların cirosu — kâra girmedi (uyarı için). */
+  unmatchedRevenue: number;
 }
 
 export function computeOrderProfit(
@@ -106,84 +102,58 @@ export function computeOrderProfit(
   rules: Rules,
   settings: Record<string, string>
 ): OrderProfit {
-  const vatRate = Number(settings.vatRate ?? 0);
-  let profit = 0;
-  let matched = 0;
-  let unknown = false;
-  let totalQty = 0;
+  // Kâr hesabının TAMAMI @core/order-profit'te — masaüstü /api/orders ile AYNI fonksiyon.
+  // (Eski mobil kopya: listing komisyonunu uygulamıyordu + sabit gideri adet başına tekrar
+  //  kesiyordu → telefondaki kârlar masaüstünden şişik çıkıyordu.)
   let image: string | null = null;
-  // Kargo, gönderiye BİR KEZ (sipariş düzeyinde) düşülür → satır döngüsünde toplam desi + kategori biriktir.
-  let totalDesi = 0;
-  let cargoCategory = "";
-
-  for (const line of order.items) {
-    totalQty += line.quantity;
+  const lines: OrderProfitLine[] = order.items.map((line) => {
     const p = matchOrderLine(line, order.platform, pm);
     if (p && !image) image = p.imageUrl;
-    if (!p) {
-      unknown = true;
-      continue;
-    }
-    const resolved = resolveProductCost(
-      p.cost ? { ...p.cost, tapeUsed: !!p.cost.tapeUsed } : null,
-      settings,
-      p.cost?.costPerGram ?? 0
-    );
-    // Masaüstü lineProfitNoCargo gate'i ile BİREBİR: (a) maliyet = üretim+paketleme toplamı,
-    // (b) 0₺ satır (hediye/%100 kupon/fiyatsız) kâra GİRMEZ → satır "eşleşmedi" gibi kısmi sayılır.
-    // (Eski HATA: 0₺ satır liste fiyatına düşüyordu → kâr olduğundan YÜKSEK ve "kesin" görünüyordu.)
-    if (!resolved || resolved.productionCost + resolved.packagingCost <= 0 || !(line.unitPrice > 0)) {
-      unknown = true;
-      continue;
-    }
-    // Satır kârı — KARGOSUZ (cargoCostOverride: 0). Kargo aşağıda gönderiye bir kez düşülür.
-    // (Eski HATA: her satıra kargo uygulanıyordu → çok ürünlü siparişte kâr olduğundan DÜŞÜK görünüyordu.)
-    const sim = simulatePrice({
-      salePrice: line.unitPrice,
-      productCost: resolved.productionCost,
-      packagingCost: resolved.packagingCost,
-      categoryName: p.categoryName,
-      desi: p.desi ?? 1,
-      commissionRules: withProductCommissionRule(p, rules.commission),
-      cargoRules: filterCargoRulesByPlatform(rules.cargo, order.platform),
-      expenseRules: filterRulesByPlatform(rules.expense, order.platform),
-      vatRate,
-      // Komisyon SADECE withProductCommissionRule ile (masaüstü orders route lineProfitNoCargo ile birebir).
-      // (Listing override / Shopify 3.2% override KALDIRILDI → orders ekranı masaüstüyle aynı kâr.)
-      cargoCostOverride: 0,
-      vatableProductCost: resolved.filamentCost,
-    });
-    profit += sim.netProfit * line.quantity;
-    totalDesi += (p.desi ?? 1) * line.quantity;
-    if (!cargoCategory) cargoCategory = p.categoryName;
-    matched++;
-  }
+    const resolved = p
+      ? resolveProductCost(
+          p.cost ? { ...p.cost, tapeUsed: !!p.cost.tapeUsed } : null,
+          settings,
+          p.cost?.costPerGram ?? 0
+        )
+      : null;
+    return {
+      unitPrice: line.unitPrice,
+      quantity: line.quantity,
+      product:
+        p && resolved
+          ? {
+              id: p.id,
+              name: p.name,
+              categoryName: p.categoryName,
+              desi: p.desi,
+              commissionRate: p.commissionRate,
+              productionCost: resolved.productionCost,
+              packagingCost: resolved.packagingCost,
+              filamentCost: resolved.filamentCost,
+              listing: p.listings.find((l) => l.platform === order.platform) ?? null,
+            }
+          : null,
+    };
+  });
 
-  // KARGO: tüm gönderiye BİR KEZ — toplam desiye göre (masaüstüyle birebir aynı mantık).
-  if (matched > 0) {
-    const cargoRule = findCargoRule(
-      filterCargoRulesByPlatform(rules.cargo, order.platform),
-      order.total,
-      cargoCategory,
-      totalDesi || 1
-    );
-    if (cargoRule) {
-      // Kargoyu düş + içindeki indirilebilir KDV'yi iade et (kâr, KDV'siz kargoyu görür) —
-      // satır kârı zaten komisyon/gider/filament KDV iadesini içeriyor; kargo gönderiye bir kez burada.
-      profit -= cargoRule.cargoCost;
-      profit += cargoRule.cargoCost * (vatRate > 0 ? vatRate / (100 + vatRate) : 0);
-    }
-  }
+  const r = computeCore({
+    platform: order.platform,
+    orderTotal: order.total,
+    lines,
+    commissionRules: rules.commission,
+    cargoRules: rules.cargo,
+    expenseRules: rules.expense,
+    settings,
+  });
 
   const distinctCount = order.items.length;
   return {
     revenue: order.total,
-    profit: matched === 0 ? null : profit,
-    // Masaüstü orders route ile birebir: profitPartial = anyProfit && anyUnmatched.
-    // (Hiç eşleşme yoksa "kısmi" değil "bilinmeyen" → profit null + partial false; ürün gerçekten yok.)
-    partial: matched > 0 && unknown,
+    profit: r.profit,
+    partial: r.partial,
     image: distinctCount === 1 ? image : null,
     distinctCount,
-    totalQty,
+    totalQty: r.totalQty,
+    unmatchedRevenue: r.unmatchedRevenue,
   };
 }

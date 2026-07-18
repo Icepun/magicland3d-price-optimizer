@@ -12,10 +12,9 @@ import { TrendyolClient } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
-import { simulatePrice } from "@/core/pricing-engine";
 import { resolveProductCost } from "@/core/product-cost";
-import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
-import { filterCargoRulesByPlatform, filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const WINDOW_DAYS = 30;
@@ -53,6 +52,8 @@ export interface UnifiedOrder {
   image: string | null;
   profit: number | null;
   profitPartial: boolean;
+  /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
+  unmatchedCount?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
 }
@@ -69,6 +70,8 @@ interface SummaryBucket {
   revenue: number;
   profit: number;
   orderCount: number;
+  /** Kârı eksik hesaplanan sipariş sayısı (maliyet girilmemiş ürün içeren). */
+  incompleteOrders: number;
 }
 
 const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
@@ -194,14 +197,13 @@ interface Matched {
   commissionRate: number | null;
   madeToOrder: boolean;
   stock: number;
-  /** Platform bazlı listing komisyon override'ı (Ürünler/Panel bunu ZATEN kullanıyor).
-   *  Taşınmazsa sipariş kârı komisyonu ₺0 sayıyordu → kâr sipariş başına şişik görünüyordu. */
-  listingCommission: Record<string, { platform: string; commissionRate: number | null; commissionFixed: number | null }>;
+  /** Platform bazlı listing override'ları (komisyon + ELLE girilen kargo) — Ürünler/Panel ile AYNI kaynak. */
+  listingByPlatform: Record<string, { platform: string; commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null }>;
 }
 
-type CommissionRules = Parameters<typeof simulatePrice>[0]["commissionRules"];
-type CargoRules = Parameters<typeof simulatePrice>[0]["cargoRules"];
-type ExpenseRules = Parameters<typeof simulatePrice>[0]["expenseRules"];
+type CommissionRules = CommissionRuleInput[];
+type CargoRules = CargoRuleInput[];
+type ExpenseRules = ExpenseRuleInput[];
 
 // ── Sunucu önbelleği (stale-while-revalidate) ──────────────────────────────────────────────
 // Siparişler 3 pazaryerinden CANLI çekiliyor (1-3sn). İlk yüklemeden SONRA her açış önbellekten
@@ -489,7 +491,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
-  let vatRate = 0;
   // Shopify global komisyon oranı resolveListingCommissionOverride içinde buradan okunur → dış kapsam.
   let settingsMap: Record<string, string | undefined> = {};
 
@@ -517,7 +518,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     ]);
 
     settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
-    vatRate = Number(settingsMap.vatRate ?? 0);
     commissionRules = cRules as CommissionRules;
     cargoRules = kRules as CargoRules;
     expenseRules = eRules as ExpenseRules;
@@ -525,12 +525,13 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     for (const p of products) {
       const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
       // Listing komisyon override'ı platform bazlı taşınır (Ürünler/Panel ile AYNI kaynak).
-      const listingCommission: Matched["listingCommission"] = {};
+      const listingByPlatform: Matched["listingByPlatform"] = {};
       for (const l of p.listings) {
-        listingCommission[l.platform] = {
+        listingByPlatform[l.platform] = {
           platform: l.platform,
           commissionRate: l.commissionRate,
           commissionFixed: l.commissionFixed,
+          cargoCost: l.cargoCost, // elle girilen kargo — Ürünler bunu kullanıyordu, Siparişler yok sayıyordu
         };
       }
       const m: Matched = {
@@ -545,7 +546,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         commissionRate: p.commissionRate,
         madeToOrder: p.madeToOrder,
         stock: p.stock,
-        listingCommission,
+        listingByPlatform,
       };
       const add = (k: string | null | undefined) => {
         if (k && !byKey.has(k)) byKey.set(k, m);
@@ -563,35 +564,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     }
   }
 
-  // Satır kârı — KARGOSUZ (cargoCostOverride: 0). Kargo gönderiye bir kez, sipariş düzeyinde
-  // toplam desiye göre ayrıca düşülür (her ürün/adet için tekrar tekrar değil).
-  function lineProfitNoCargo(platform: "shopify" | "trendyol" | "hepsiburada", m: Matched, unitPrice: number, qty: number): number | null {
-    if (m.productionCost + m.packagingCost <= 0 || unitPrice <= 0) return null;
-    // Listing komisyonu (ör. Trendyol %21) — Ürünler/Panel'in kullandığı KAYNAK. Eskiden burada
-    // geçilmediği için komisyon ₺0 sayılıyor, sipariş kârı şişik çıkıyordu (bu ürün: 95,23 vs 60,23).
-    const lst = m.listingCommission[platform] ?? { platform, commissionRate: null, commissionFixed: null };
-    const sim = simulatePrice({
-      salePrice: unitPrice,
-      productCost: m.productionCost,
-      packagingCost: m.packagingCost,
-      categoryName: m.categoryName,
-      desi: m.desi ?? 1,
-      commissionRules: withProductCommissionRule(
-        { id: m.id, name: m.name, categoryName: m.categoryName, commissionRate: m.commissionRate },
-        commissionRules
-      ),
-      cargoRules: filterCargoRulesByPlatform(cargoRules, platform),
-      expenseRules: filterRulesByPlatform(expenseRules, platform),
-      vatRate,
-      ...resolveListingCommissionOverride(lst, settingsMap),
-      cargoCostOverride: 0,
-      // Adet motorun İÇİNDE uygulanır: birim kalemler × adet, SABİT gider bir kez. Eskiden dışarıdan
-      // `sim.netProfit * qty` yapılıyordu → sabit gider (Platform Hizmet Bedeli) her adette tekrar kesiliyordu.
-      minOrderQty: qty,
-      vatableProductCost: m.filamentCost,
-    });
-    return sim.netProfit;
-  }
+  // NOT: Sipariş kârının TAMAMI @/core/order-profit → computeOrderProfit içinde (masaüstü + mobil
+  // AYNI fonksiyon). Adet başına: ürün/paketleme/komisyon/yüzdesel gider. Siparişe BİR KEZ: kargo +
+  // SABİT gider (Platform Hizmet Bedeli — kullanıcı teyidi: sipariş başına kesiliyor).
 
   // Olay-anı bildirim adayları (stoğu biten / sipariş-üzerine ürüne sipariş).
   // Sadece AKSİYON gereken (pending/processing) + SON 7 GÜN siparişler → tekilleştirilmiş.
@@ -604,13 +579,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     const actionable =
       (r.statusKind === "pending" || r.statusKind === "processing") &&
       (!r.date || new Date(r.date).getTime() >= notifCutoff);
-    let orderProfit = 0;
-    let anyProfit = false;
-    let anyUnmatched = false;
     let thumb: string | null = null;
-
-    let totalDesi = 0;
-    let cargoCategory = "";
+    const profitLines: OrderProfitLine[] = [];
     const items: UnifiedOrderItem[] = r.lines.map((l) => {
       let m: Matched | null = null;
       for (const k of l.matchKeys) {
@@ -628,16 +598,22 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       const image = l.image || m?.imageUrl || null;
       if (image && !thumb) thumb = image;
 
+      // Kâr hesabı için satırı topla — hesabın tamamı aşağıda computeOrderProfit'te (tek çağrı).
+      profitLines.push({
+        unitPrice: l.unitPrice,
+        quantity: l.quantity,
+        product: m
+          ? {
+              id: m.id, name: m.name, categoryName: m.categoryName,
+              desi: m.desi, commissionRate: m.commissionRate,
+              productionCost: m.productionCost, packagingCost: m.packagingCost,
+              filamentCost: m.filamentCost,
+              listing: m.listingByPlatform[r.platform] ?? null,
+            }
+          : null,
+      });
+
       if (m) {
-        const p = lineProfitNoCargo(r.platform, m, l.unitPrice, l.quantity);
-        if (p !== null) {
-          orderProfit += p;
-          anyProfit = true;
-          totalDesi += (m.desi ?? 1) * l.quantity;
-          if (!cargoCategory) cargoCategory = m.categoryName;
-        } else {
-          anyUnmatched = true;
-        }
         // Bildirim: aktif siparişte sipariş-üzerine ürün → üretim hatırlatıcı (uyarı);
         // değilse stok 0/negatif → acil (sattık ama gönderemiyoruz).
         if (actionable) {
@@ -663,8 +639,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             });
           }
         }
-      } else {
-        anyUnmatched = true;
       }
       return {
         name: l.name,
@@ -675,22 +649,17 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       };
     });
 
-    // KARGO: tüm gönderiye BİR KEZ — toplam desiye göre (ürün/adet başına tekrar değil).
-    // 2 ürünlü / 2 adetli siparişte tek kargo bedeli düşülür (eski hata: her satır için ayrı).
-    if (anyProfit) {
-      const cargoRule = findCargoRule(
-        filterCargoRulesByPlatform(cargoRules, r.platform),
-        r.total,
-        cargoCategory,
-        totalDesi || 1
-      );
-      if (cargoRule) {
-        // Kargo bedelini düş + içindeki indirilebilir KDV'yi iade et (kâr, KDV'siz kargoyu görür) —
-        // satır kârı zaten komisyon/gider/filament KDV iadesini içeriyor; kargo gönderiye bir kez burada.
-        orderProfit -= cargoRule.cargoCost;
-        orderProfit += cargoRule.cargoCost * (vatRate > 0 ? vatRate / (100 + vatRate) : 0);
-      }
-    }
+    // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil aynı fonksiyon): adet başına ürün/
+    // komisyon/yüzdesel gider; siparişe BİR KEZ kargo + SABİT gider (Platform Hizmet Bedeli).
+    const pr = computeOrderProfit({
+      platform: r.platform,
+      orderTotal: r.total,
+      lines: profitLines,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      settings: settingsMap,
+    });
 
     orders.push({
       platform: r.platform,
@@ -705,8 +674,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       itemCount: items.reduce((s, it) => s + it.quantity, 0),
       items,
       image: thumb,
-      profit: anyProfit ? orderProfit : null,
-      profitPartial: anyProfit && anyUnmatched,
+      profit: pr.profit,
+      profitPartial: pr.partial,
+      unmatchedCount: pr.unmatchedLines,
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
     });
@@ -748,7 +718,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   });
 
   // Dashboard özeti (iptal/iade hariç) ──────────────────────────────────────
-  const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0 });
+  const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 });
   const sShopify = empty();
   const sTrendyol = empty();
   const sHepsiburada = empty();
@@ -759,11 +729,14 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     bucket.revenue += o.total;
     bucket.profit += o.profit ?? 0;
     bucket.orderCount += 1;
+    // Maliyeti girilmemiş ürün içeren sipariş → toplam kâr EKSİK; UI uyarı gösterir.
+    if (o.profit == null || o.profitPartial) bucket.incompleteOrders += 1;
   }
   const total: SummaryBucket = {
     revenue: sShopify.revenue + sTrendyol.revenue + sHepsiburada.revenue,
     profit: sShopify.profit + sTrendyol.profit + sHepsiburada.profit,
     orderCount: sShopify.orderCount + sTrendyol.orderCount + sHepsiburada.orderCount,
+    incompleteOrders: sShopify.incompleteOrders + sTrendyol.incompleteOrders + sHepsiburada.incompleteOrders,
   };
 
   return {

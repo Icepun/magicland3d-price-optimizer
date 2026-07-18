@@ -51,6 +51,7 @@ interface UnifiedOrder {
   image: string | null;
   profit: number | null;
   profitPartial: boolean;
+  unmatchedCount?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
 }
@@ -65,6 +66,7 @@ interface SummaryBucket {
   revenue: number;
   profit: number;
   orderCount: number;
+  incompleteOrders?: number;
 }
 interface OrdersResponse {
   orders: UnifiedOrder[];
@@ -229,7 +231,8 @@ export default function OrdersPage() {
             <SummaryStat
               label="Net kâr"
               value={<AnimatedNumber value={summary.total.profit} format={fmtMoney} />}
-              sub="tahmini (eşleşen)"
+              sub={summary.total.incompleteOrders ? `${summary.total.incompleteOrders} siparişte maliyet eksik` : "tahmini"}
+              subColor={summary.total.incompleteOrders ? "oklch(0.75 0.15 75)" : undefined}
               color={summary.total.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)"}
             />
             <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
@@ -346,6 +349,7 @@ function SummaryStat({
   label,
   value,
   sub,
+  subColor,
   color,
   platform,
   strong,
@@ -353,6 +357,8 @@ function SummaryStat({
   label: string;
   value: ReactNode;
   sub: string;
+  /** Alt metin rengi — eksik maliyet uyarısında amber. */
+  subColor?: string;
   color?: string;
   platform?: "shopify" | "trendyol" | "hepsiburada";
   strong?: boolean;
@@ -367,7 +373,9 @@ function SummaryStat({
       <div className={cn("tabular-nums mt-0.5", strong ? "text-xl font-bold" : "text-lg font-semibold")} style={c ? { color: c } : undefined}>
         {value}
       </div>
-      <div className="text-[10px] text-muted-foreground">{sub}</div>
+      <div className="text-[10px]" style={subColor ? { color: subColor } : undefined}>
+        <span className={subColor ? "font-medium" : "text-muted-foreground"}>{sub}</span>
+      </div>
     </div>
   );
 }
@@ -481,7 +489,9 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                 <TrendingUp className="h-3 w-3" />
                 {order.profit >= 0 ? "+" : ""}
                 {fmtMoney2(order.profit)}
-                {order.profitPartial && <span className="opacity-60" title="Bazı ürünler eşleşmedi — kâr kısmi">*</span>}
+                {order.profitPartial && (
+                  <span className="text-amber-500 font-bold" title={`${order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil`}>!</span>
+                )}
               </span>
             )}
             <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border", st.cls)}>
@@ -554,14 +564,14 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                   <span className="text-muted-foreground">Tahmini net kâr</span>
                   {order.profit != null ? (
                     <span className={cn("tabular-nums font-semibold", profitColor)}>
-                      {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit)}{order.profitPartial && "*"}
+                      {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit)}{order.profitPartial && <span className="text-amber-500">!</span>}
                     </span>
                   ) : (
-                    <span className="text-muted-foreground">— (maliyet eşleşmedi)</span>
+                    <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
                 {order.profitPartial && (
-                  <p className="text-[10px] text-muted-foreground/70">* Bazı ürünler ürün listesiyle eşleşmedi; kâr kısmi.</p>
+                  <p className="text-[10px] text-muted-foreground/70">{order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.</p>
                 )}
               </div>
             </div>

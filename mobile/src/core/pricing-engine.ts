@@ -7,7 +7,9 @@ import type {
   AppliedExpenseRule,
 } from "./types";
 
-function calculateExpenses(
+/** Gider eşleşme + tutar hesabı. Sipariş düzeyi SABİT gider de bunu kullanır → bant/kategori
+ *  eşleşme kuralı TEK yerde kalır, iki hesap sessizce ayrışamaz. */
+export function calculateExpenses(
   rules: ExpenseRuleInput[],
   salePrice: number,
   categoryName: string
@@ -36,6 +38,24 @@ function calculateExpenses(
   }
 
   return { fixed, variable, applied };
+}
+
+/**
+ * Gider kurallarını KAPSAMA göre ayırır (sınıflandırma calculateExpenses ile AYNI dalı kullanır):
+ *   perUnit  = satır/adet başına (percentage — ciroyla orantılı)
+ *   perOrder = siparişe BİR KEZ (fixed / per_order — ör. Platform Hizmet Bedeli)
+ * Sipariş kârında sabit giderin her satırda tekrar kesilmesini önlemek için kullanılır.
+ */
+export function splitExpenseRulesByScope<T extends { type: string }>(
+  rules: T[]
+): { perUnit: T[]; perOrder: T[] } {
+  const perUnit: T[] = [];
+  const perOrder: T[] = [];
+  for (const r of rules) {
+    if (r.type === "fixed" || r.type === "per_order") perOrder.push(r);
+    else if (r.type === "percentage") perUnit.push(r);
+  }
+  return { perUnit, perOrder };
 }
 
 /**
