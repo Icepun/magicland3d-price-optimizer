@@ -8,6 +8,29 @@ import fs from "node:fs";
 type LibsqlConfig = Parameters<PrismaLibSQL["createClient"]>[0];
 type LibsqlClient = ReturnType<PrismaLibSQL["createClient"]>;
 
+/** Replica'nın yan dosyaları (-wal/-shm/-info/-client_wal_index/… + sync marker'ı).
+ *  Dizin taranır → libsql ileride yeni uzantı eklerse o da yakalanır. */
+function listSidecars(replicaPath: string): string[] {
+  const dir = path.dirname(replicaPath);
+  const base = path.basename(replicaPath);
+  try {
+    return fs.readdirSync(dir).filter((f) => f.startsWith(base) && f !== base);
+  } catch {
+    return [];
+  }
+}
+
+/** Replica'yı GÜVENLİ SIRAYLA sil: yan dosyalar önce, ana .db EN SON.
+ *  Ana db önce silinip işlem yarıda kesilirse libsql'in onulmaz saydığı "metadata var ama
+ *  db yok" durumu kalır ve her bağlantı patlar (v0.19.112). Bu sıra o tuzağı kapatır. */
+function resetReplica(replicaPath: string): void {
+  const dir = path.dirname(replicaPath);
+  for (const f of listSidecars(replicaPath)) {
+    try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* devam */ }
+  }
+  try { fs.rmSync(replicaPath, { force: true }); } catch { /* normal akış dener */ }
+}
+
 /**
  * Embedded replica için TEK client kullanan adapter.
  *
@@ -45,12 +68,18 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
       if (filePath) {
         this.#markerPath = `${filePath}.sync-in-progress`;
         try {
-          if (fs.existsSync(this.#markerPath)) {
-            console.warn("[prisma] Önceki oturum sync ortasında kesilmiş — replica sıfırlanıyor (taze senkron).");
-            for (const suffix of ["", "-wal", "-shm", "-info"]) {
-              try { fs.rmSync(`${filePath}${suffix}`, { force: true }); } catch { /* yoksa geç */ }
-            }
-            try { fs.rmSync(this.#markerPath, { force: true }); } catch { /* yoksa geç */ }
+          // (a) Yarım kalmış sync işareti → replica şüpheli, sıfırla.
+          // (b) Ana db YOK ama yan dosya (metadata) kalmış → libsql'in ONULMAZ saydığı
+          //     "metadata file exists but db file does not" durumu; temizlenmezse HER
+          //     bağlantı patlar (v0.19.112: panel/API 500). Her iki halde de aynı çare.
+          const orphaned = !fs.existsSync(filePath) && listSidecars(filePath).length > 0;
+          if (fs.existsSync(this.#markerPath) || orphaned) {
+            console.warn(
+              orphaned
+                ? "[prisma] Yetim replica metadata (db yok) — sıfırlanıyor (taze senkron)."
+                : "[prisma] Önceki oturum sync ortasında kesilmiş — replica sıfırlanıyor (taze senkron)."
+            );
+            resetReplica(filePath);
           }
         } catch { /* iyileştirme başarısızsa normal akış dener */ }
       }

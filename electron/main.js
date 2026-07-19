@@ -438,6 +438,41 @@ function cryptoRandomHex() {
   return require("node:crypto").randomBytes(32).toString("hex");
 }
 
+/** Replica'nın yan dosyaları (-wal/-shm/-info/-client_wal_index/… + kendi marker'ımız).
+ *  Dizin taranır: liste SABİT DEĞİL → libsql ileride yeni uzantı eklerse o da yakalanır. */
+function listReplicaSidecars(replicaPath) {
+  const dir = path.dirname(replicaPath);
+  const base = path.basename(replicaPath);
+  try {
+    return fs.readdirSync(dir).filter((f) => f.startsWith(base) && f !== base);
+  } catch {
+    // Dizin okunamadı → bilinen uzantılara düş.
+    return ["-wal", "-shm", "-info", "-client_wal_index"]
+      .map((s) => base + s)
+      .filter((f) => {
+        try { return fs.existsSync(path.join(dir, f)); } catch { return false; }
+      });
+  }
+}
+
+/**
+ * Replica dosyalarını GÜVENLİ SIRAYLA siler: önce TÜM yan dosyalar, EN SON ana .db.
+ *
+ * Sıra hayati: libsql "metadata var ama db yok" durumunu ONULMAZ sayar
+ * (Sync(InvalidLocalState("metadata file exists but db file does not"))) → HER bağlantı
+ * patlar, uygulama kalıcı açılamaz. Ana db ÖNCE silinirse ve silme yarıda kesilirse
+ * (kapanma/çökme/güç) tam o duruma düşülür — v0.19.112'de yaşandı: panel "veriler
+ * yüklenemedi". Yan dosyalar önce gidip db sona kalınca, yarıda kesilme "db var, metadata
+ * yok" bırakır; libsql bunu taze senkronla kendiliğinden toparlar.
+ */
+function resetReplicaFiles(replicaPath) {
+  const dir = path.dirname(replicaPath);
+  for (const f of listReplicaSidecars(replicaPath)) {
+    try { fs.rmSync(path.join(dir, f), { force: true }); } catch { /* silinemezse devam */ }
+  }
+  try { fs.rmSync(replicaPath, { force: true }); } catch { /* silinemezse normal akış dener */ }
+}
+
 /**
  * BOZUK REPLICA KENDİNİ İYİLEŞTİRME — "Mac'te açılıştan ~3sn sonra sonsuz donma"nın kalıcı fix'i.
  *
@@ -454,7 +489,19 @@ function cryptoRandomHex() {
 async function ensureReplicaHealthy() {
   const replicaPath = process.env.TURSO_REPLICA_PATH;
   if (!replicaPath || !process.env.TURSO_DATABASE_URL) return;
-  if (!fs.existsSync(replicaPath)) return; // ilk kurulum — yoklanacak dosya yok
+
+  if (!fs.existsSync(replicaPath)) {
+    // Ana db YOK ama yan dosya kalmışsa bu "ilk kurulum" DEĞİL — yarım kalmış silme/senkron.
+    // libsql bu durumda Sync(InvalidLocalState) atıp HER bağlantıyı reddeder; temizlenmezse
+    // uygulama KALICI olarak açılamaz (v0.19.112: panel "veriler yüklenemedi", API'ler 500).
+    // Yetimleri süpür → libsql temiz sayfadan taze senkron yapar.
+    const orphans = listReplicaSidecars(replicaPath);
+    if (orphans.length > 0) {
+      logStartup("YETİM replica metadata (db yok) → temizleniyor:", orphans.join(", "));
+      resetReplicaFiles(replicaPath);
+    }
+    return; // yoklanacak db yok
+  }
 
   // KAPI (v0.19.95): yoklama yalnız ŞÜPHE varken çalışır — önceki oturum TEMİZ kapanmadıysa
   // (çökme/donma/güç kesintisi). Temiz kapanış sonrası açılışta kopya+fork+ağ senkronundan
@@ -508,9 +555,7 @@ async function ensureReplicaHealthy() {
 
     if (!healthy) {
       logStartup("replica SAĞLIKSIZ (takıldı/hata) → sıfırlanıyor; taze tam senkron yapılacak");
-      for (const suffix of ["", "-wal", "-shm", "-info"]) {
-        try { fs.rmSync(`${replicaPath}${suffix}`, { force: true }); } catch { /* silinemezse normal akış dener */ }
-      }
+      resetReplicaFiles(replicaPath); // yan dosyalar önce, ana db en son (yarıda kesilme güvenli)
     } else {
       logStartup("replica sağlıklı ✓");
     }
@@ -754,9 +799,7 @@ async function createWindow() {
     }
     if (replicaPath && !healedRecently) {
       try {
-        for (const suffix of ["", "-wal", "-shm", "-info", "-client_wal_index"]) {
-          fs.rmSync(replicaPath + suffix, { force: true });
-        }
+        resetReplicaFiles(replicaPath); // yan dosyalar önce, ana db en son (yarıda kesilme güvenli)
         fs.writeFileSync(healFlag, String(Date.now()));
         logStartup("SELF-HEAL: bozuk replica temizlendi → uygulama yeniden başlatılıyor");
         app.relaunch();
