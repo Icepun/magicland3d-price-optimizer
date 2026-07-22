@@ -139,9 +139,9 @@ async function gracefulShutdown(reason) {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
-  // TEMİZ-KAPANIŞ bayrağı: bir sonraki açılışta replica sağlık yoklaması ATLANIR (yoklama
-  // yalnız şüpheli durumlar — çökme/donma sonrası — için; her açılışta 2-6sn yakıyordu).
-  try { fs.writeFileSync(path.join(app.getPath("userData"), ".clean-exit"), String(Date.now())); } catch { /* ignore */ }
+  // Yeni DB/relay işi başlatma. Özellikle macOS updater uygulamayı kapatırken devam eden
+  // embedded-replica işi bırakmak bir sonraki açılışta native libSQL kilidine dönüşebiliyor.
+  globalThis.__MLHUB_DB_PAUSED__ = true;
   try { tray?.destroy(); } catch { /* ignore */ }
 
   // Window'ları sert kapat (close listener'larını bypass et)
@@ -158,6 +158,10 @@ async function gracefulShutdown(reason) {
   // kapatılamaz" dialogu çıkmaması için HEMEN çık. Yavaş server kapatmayı bekleme —
   // OS process ölünce socket/dosya handle'larını zaten serbest bırakır.
   if (isQuittingForUpdate) {
+    // Güncelleme yolu server/DB'nin gerçekten durmasını beklemeden sert çıkar. Bu oturumu
+    // "temiz" sayma: yeni sürüm, yalnızca buluttan yeniden üretilebilen yerel replica'yı
+    // sıfırlayıp açılacak. Asıl veri Turso primary'de kalır.
+    try { fs.rmSync(path.join(app.getPath("userData"), ".clean-exit"), { force: true }); } catch { /* ignore */ }
     try { server?.closeAllConnections?.(); } catch { /* ignore */ }
     try { app.exit(0); } catch { /* ignore */ }
     setTimeout(() => process.exit(0), 50);
@@ -169,6 +173,18 @@ async function gracefulShutdown(reason) {
     closeNextServer(),
     new Promise((resolve) => setTimeout(resolve, 1000)),
   ]);
+
+  // Bayrağı ancak server kapanış denemesi bittikten sonra yaz. Eski kod bunu fonksiyonun
+  // başında yazdığı için updater/force-exit sırasında yarım kalan replica da yanlışlıkla
+  // "temiz" kabul ediliyordu. Sync marker kaldıysa yine temiz sayma.
+  const userDataDir = app.getPath("userData");
+  const replicaPath = process.env.TURSO_REPLICA_PATH;
+  const syncStillRunning = replicaPath && fs.existsSync(`${replicaPath}.sync-in-progress`);
+  try {
+    const cleanFlag = path.join(userDataDir, ".clean-exit");
+    if (syncStillRunning) fs.rmSync(cleanFlag, { force: true });
+    else fs.writeFileSync(cleanFlag, `${Date.now()} ${reason}`, "utf8");
+  } catch { /* kapanışı log/marker hatasıyla bloke etme */ }
 
   // Zorla exit — child process / worker thread / native handle ne kalmışsa
   // event loop'u beklemeden öldür.
@@ -481,14 +497,31 @@ function resetReplicaFiles(replicaPath) {
  * (index.node → __psynch_cvwait) → Electron ana süreci = UI + Node aynı thread → her şey donar.
  * Okumalar çalıştığı için basit SELECT yoklaması yetmez; süreç-içi timeout da işlemez (loop bloke).
  *
- * Çözüm: sunucu başlamadan önce replica'nın KOPYASI feda edilebilir bir alt süreçte yoklanır
- * (SELECT + sync + yazma). 20 sn'de sağlık raporu gelmezse ya da libsql hatası dönerse (çıkış 42)
- * replica silinir → Prisma taze tam senkronla açar (~10-20 sn, bir kerelik). Yoklamanın kendi
- * arızası (modül yüklenemedi vb.) fail-open'dır: replica'ya dokunulmaz, normal akış denenir.
+ * Çözüm: sunucu başlamadan önce sürüm/kapanış damgalarını değerlendir. Sürüm değiştiyse,
+ * önceki oturum temiz kapanmadıysa veya sync yarıda kaldıysa yerel replica'yı deterministik
+ * olarak sil → Prisma Turso primary'den taze kopya oluştursun. Replica yalnız cache'tir;
+ * kullanıcı yazmaları remote primary'dedir. Kopya üzerinde yapılan eski sağlık yoklaması
+ * gerçek dosyadaki kilidi kaçırabildiği için artık şüpheli dosyaya güvenilmez.
  */
 async function ensureReplicaHealthy() {
   const replicaPath = process.env.TURSO_REPLICA_PATH;
   if (!replicaPath || !process.env.TURSO_DATABASE_URL) return;
+
+  const userDataDir = app.getPath("userData");
+  const cleanFlag = path.join(userDataDir, ".clean-exit");
+  const versionFlag = path.join(userDataDir, ".replica-app-version");
+  const syncFlag = `${replicaPath}.sync-in-progress`;
+  const currentVersion = app.getVersion();
+  let previousVersion = "";
+  try { previousVersion = fs.readFileSync(versionFlag, "utf8").trim(); } catch { /* ilk çalıştırma */ }
+  const versionChanged = previousVersion !== currentVersion;
+  const interruptedSync = fs.existsSync(syncFlag);
+  const wasClean = fs.existsSync(cleanFlag) && !interruptedSync;
+
+  // Bayrak oturum başında tüketilir. Bu oturum doğal şekilde kapanmazsa bir sonraki açılış
+  // replica'yı şüpheli kabul eder. Sürüm damgası da karar verildikten hemen sonra güncellenir.
+  try { fs.rmSync(cleanFlag, { force: true }); } catch { /* ignore */ }
+  try { fs.writeFileSync(versionFlag, currentVersion, "utf8"); } catch { /* karar yine uygulanır */ }
 
   if (!fs.existsSync(replicaPath)) {
     // Ana db YOK ama yan dosya kalmışsa bu "ilk kurulum" DEĞİL — yarım kalmış silme/senkron.
@@ -503,69 +536,22 @@ async function ensureReplicaHealthy() {
     return; // yoklanacak db yok
   }
 
-  // KAPI (v0.19.95): yoklama yalnız ŞÜPHE varken çalışır — önceki oturum TEMİZ kapanmadıysa
-  // (çökme/donma/güç kesintisi). Temiz kapanış sonrası açılışta kopya+fork+ağ senkronundan
-  // oluşan 2-6sn'lik maliyet atlanır (açılış yavaşlığının en büyük kalemiydi). Bayrak her
-  // açılışta TÜKETİLİR: bu oturum çökerse bayrak yazılmaz → sonraki açılış yoklar.
-  const cleanFlag = path.join(app.getPath("userData"), ".clean-exit");
-  const wasClean = fs.existsSync(cleanFlag);
-  try { fs.rmSync(cleanFlag, { force: true }); } catch { /* ignore */ }
-  if (wasClean) {
-    logStartup("replica yoklaması atlandı (önceki oturum temiz kapandı)");
+  // Embedded replica yalnız bir cache: okumalar yerelden, yazmalar Turso primary'ye gider.
+  // Bu nedenle sürüm değişiminde veya temiz olmayan/sync-ortasında kalan kapanışta şüpheli
+  // dosyayı test etmeye çalışmak yerine silmek hem güvenli hem deterministik. Önceki kopya-
+  // probe yaklaşımı sahada false-negative verdi: kopya "sağlıklı" dedi, gerçek dosya birkaç
+  // ms sonra Prisma/libSQL createClient içinde ana event-loop'u sonsuza dek kilitledi.
+  if (versionChanged || !wasClean || interruptedSync) {
+    const reasons = [];
+    if (versionChanged) reasons.push(`sürüm değişti (${previousVersion || "bilinmiyor"} → ${currentVersion})`);
+    if (!wasClean) reasons.push("önceki oturum temiz kapanmadı");
+    if (interruptedSync) reasons.push("yarım sync işareti var");
+    logStartup(`replica güvenli yeniden oluşturulacak: ${reasons.join(", ")}`);
+    resetReplicaFiles(replicaPath);
     return;
   }
-  logStartup("önceki oturum temiz kapanmamış → replica yoklanacak");
 
-  const os = require("node:os");
-  const { utilityProcess } = require("electron");
-  let tmpDir = null;
-  try {
-    // Yoklama KOPYA üzerinde: gerçek dosyaya ikinci sync client dokundurmak Prisma'yla
-    // "wal_index" çakışması yaratabiliyor. Bozuk durum kopyada da aynen takılıyor (doğrulandı).
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-replica-probe-"));
-    const probeDb = path.join(tmpDir, "replica.db");
-    fs.copyFileSync(replicaPath, probeDb);
-    for (const suffix of ["-wal", "-shm", "-info"]) {
-      try {
-        if (fs.existsSync(`${replicaPath}${suffix}`)) fs.copyFileSync(`${replicaPath}${suffix}`, `${probeDb}${suffix}`);
-      } catch { /* eksik yan dosya sorun değil */ }
-    }
-
-    logStartup("replica sağlık yoklaması başlıyor (alt süreç, 20sn sınır)");
-    const healthy = await new Promise((resolve) => {
-      let child;
-      try {
-        child = utilityProcess.fork(path.join(__dirname, "replica-probe.js"), [probeDb], { stdio: "ignore" });
-      } catch (e) {
-        logStartup("replica yoklaması kurulamadı (fail-open):", e && e.message);
-        resolve(true);
-        return;
-      }
-      const timer = setTimeout(() => {
-        try { child.kill(); } catch { /* zaten ölü olabilir */ }
-        resolve(false); // zaman aşımı = native takılma = sağlıksız
-      }, 20_000);
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        if (code === 0) resolve(true); // sağlıklı
-        else if (code === 42) resolve(false); // libsql hatası = replica sorunlu
-        else resolve(true); // yoklamanın kendi arızası → fail-open (her açılışta boşa sıfırlama olmasın)
-      });
-    });
-
-    if (!healthy) {
-      logStartup("replica SAĞLIKSIZ (takıldı/hata) → sıfırlanıyor; taze tam senkron yapılacak");
-      resetReplicaFiles(replicaPath); // yan dosyalar önce, ana db en son (yarıda kesilme güvenli)
-    } else {
-      logStartup("replica sağlıklı ✓");
-    }
-  } catch (e) {
-    logStartup("replica yoklaması hata (fail-open):", e && e.message);
-  } finally {
-    if (tmpDir) {
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* tmp temizliği kritik değil */ }
-    }
-  }
+  logStartup("replica korundu (aynı sürüm + önceki oturum temiz kapandı)");
 }
 
 async function findAvailablePort(preferredPort) {
