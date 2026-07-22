@@ -25,8 +25,7 @@
   "submit": {
     "production": {
       "ios": {
-        "ascAppId": "6775158602",
-        "groups": ["Magicland Ekip"]
+        "ascAppId": "6775158602"
       }
     }
   }
