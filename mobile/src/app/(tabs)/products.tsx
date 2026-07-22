@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Pressable,
@@ -33,6 +33,10 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "loss", label: "Zarar Eden" },
   { key: "no-cost", label: "Maliyetsiz" },
 ];
+
+function isFilterKey(value: string | undefined): value is FilterKey {
+  return FILTERS.some((filter) => filter.key === value);
+}
 
 /**
  * Türkçe-duyarlı arama normalizasyonu: şapka/aksan katlama + küçük harf.
@@ -80,7 +84,7 @@ export default function ProductsScreen() {
   // Arama TUŞA ANINDA yazılır; filtre + liste diff'i ertelenmiş değerle düşük öncelikte koşar
   // (React 19 useDeferredValue) → hızlı yazarken input takılmaz.
   const deferredSearch = useDeferredValue(search);
-  const [filter, setFilter] = useState<FilterKey>("all");
+  const filter: FilterKey = isFilterKey(params.filter) ? params.filter : "all";
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const toggleGroup = (id: string) =>
     setExpanded((prev) => {
@@ -89,12 +93,6 @@ export default function ProductsScreen() {
       else next.add(id);
       return next;
     });
-
-  useEffect(() => {
-    if (params.filter && FILTERS.some((f) => f.key === params.filter)) {
-      setFilter(params.filter as FilterKey);
-    }
-  }, [params.filter]);
 
   const { data: products, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["dashboard-data"],
@@ -210,7 +208,11 @@ export default function ProductsScreen() {
         {FILTERS.map((f) => {
           const on = f.key === filter;
           return (
-            <Pressable key={f.key} onPress={() => setFilter(f.key)} style={[styles.chip, on && styles.chipOn]}>
+            <Pressable
+              key={f.key}
+              onPress={() => router.setParams({ filter: f.key })}
+              style={[styles.chip, on && styles.chipOn]}
+            >
               <Text style={[styles.chipText, on && { color: "#fff", fontWeight: "700" }]}>{f.label}</Text>
             </Pressable>
           );
@@ -220,7 +222,7 @@ export default function ProductsScreen() {
       {isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
-          <Text style={styles.dim}>Turso'dan çekiliyor…</Text>
+          <Text style={styles.dim}>{"Turso'dan çekiliyor…"}</Text>
         </View>
       ) : isError ? (
         <View style={styles.center}>
@@ -275,7 +277,14 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
       style={({ pressed }) => [styles.card, member && styles.memberCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
       {item.imageUrl ? (
-        <Image source={{ uri: thumbUrl(item.imageUrl, 160)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={item.id} />
+        <Image
+          source={{ uri: thumbUrl(item.imageUrl, 160)! }}
+          alt={item.name}
+          style={styles.thumb}
+          contentFit="cover"
+          transition={150}
+          recyclingKey={item.id}
+        />
       ) : (
         <View style={[styles.thumb, styles.thumbEmpty]}>
           <Text style={styles.thumbEmptyText}>—</Text>
@@ -347,7 +356,14 @@ function GroupHeader({
       style={({ pressed }) => [styles.card, styles.groupCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
       {img ? (
-        <Image source={{ uri: thumbUrl(img, 160)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={row.id} />
+        <Image
+          source={{ uri: thumbUrl(img, 160)! }}
+          alt={row.name}
+          style={styles.thumb}
+          contentFit="cover"
+          transition={150}
+          recyclingKey={row.id}
+        />
       ) : (
         <View style={[styles.thumb, styles.thumbEmpty]}>
           <Text style={styles.thumbEmptyText}>—</Text>

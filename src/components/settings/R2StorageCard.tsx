@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,30 +32,28 @@ type TestState =
  * (HeadBucket), sonra tarayıcının gerçek bir CORS round-trip'i yapabildiğini test eder.
  */
 export function R2StorageCard() {
-  const qc = useQueryClient();
   const { data: settings } = useQuery<Record<string, string>>({
     queryKey: ["app-settings-r2"],
     queryFn: () => fetch("/api/settings").then((r) => r.json()),
   });
+  return (
+    <R2StorageForm
+      key={settings ? "loaded" : "loading"}
+      settings={settings ?? {}}
+    />
+  );
+}
 
-  const [accountId, setAccountId] = useState("");
-  const [bucket, setBucket] = useState("");
-  const [accessKeyId, setAccessKeyId] = useState("");
-  const [secret, setSecret] = useState("");
-  const [seeded, setSeeded] = useState(false);
+function R2StorageForm({ settings }: { settings: Record<string, string> }) {
+  const qc = useQueryClient();
+
+  const [accountId, setAccountId] = useState(settings.r2AccountId ?? "");
+  const [bucket, setBucket] = useState(settings.r2Bucket ?? "");
+  const [accessKeyId, setAccessKeyId] = useState(settings.r2AccessKeyId ?? "");
+  const [secret, setSecret] = useState(settings.r2SecretKey ?? "");
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [showSetup, setShowSetup] = useState(false);
-
-  useEffect(() => {
-    if (settings && !seeded) {
-      setAccountId(settings.r2AccountId ?? "");
-      setBucket(settings.r2Bucket ?? "");
-      setAccessKeyId(settings.r2AccessKeyId ?? "");
-      setSecret(settings.r2SecretKey ?? "");
-      setSeeded(true);
-    }
-  }, [settings, seeded]);
 
   const configured = !!(accountId.trim() && bucket.trim() && accessKeyId.trim() && secret.trim());
 

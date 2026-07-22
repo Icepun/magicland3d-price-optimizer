@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { getR2Config, headBucket, presignPutUrl } from "@/lib/r2";
 
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * CORS round-trip'ini yapabilmesi için minik bir imzalı PUT URL döndür. İstemci o URL'e birkaç
  * bayt PUT ederek CORS'un açık olduğunu doğrular (yoksa gerçek yüklemede patlardı).
  */
-export async function POST(_req: NextRequest) {
+export async function POST() {
   await ensureRuntimeSchema();
   const cfg = await getR2Config();
   if (!cfg) {

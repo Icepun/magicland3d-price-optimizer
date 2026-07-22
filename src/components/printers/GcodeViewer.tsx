@@ -13,18 +13,7 @@ import { cn } from "@/lib/utils";
 import type { ParsedGcode } from "@/lib/gcode-viz/parse-gcode";
 import { loadGeometry } from "@/lib/gcode-viz/viz-pipeline";
 import { buildVizScene, type VizScene } from "@/lib/gcode-viz/three-scene";
-
-function usePrefersReducedMotionLocal(): boolean {
-  const [pref, setPref] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setPref(mq.matches);
-    const on = (e: MediaQueryListEvent) => setPref(e.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  return pref;
-}
+import { usePrefersReducedMotion } from "@/lib/client-state";
 
 export function GcodeViewerDialog({
   fileId, cacheKey, name, onClose,
@@ -36,7 +25,7 @@ export function GcodeViewerDialog({
   const [error, setError] = useState<string | null>(null);
   const [layer, setLayer] = useState(-1); // -1 = tamamı
   const [playing, setPlaying] = useState(false);
-  const reduceMotion = usePrefersReducedMotionLocal();
+  const reduceMotion = usePrefersReducedMotion();
 
   const vizRef = useRef<VizScene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);

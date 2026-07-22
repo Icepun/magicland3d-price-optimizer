@@ -149,6 +149,8 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
 
   return (
     <div className="w-10 h-10 rounded-md border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+      {/* Pazaryeri CDN alan adları kullanıcıya göre değişir; URL zaten küçük thumbnail'e çevriliyor. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={thumbUrl(src, 100) ?? src}
         alt={name}
@@ -1040,6 +1042,8 @@ export default function ProductsPage() {
     // selectedIds/refreshProgress üst toolbar yüksekliğini değiştirebilir → yeniden ölç.
   }, [scrollEl, isLoading, selectedIds.size, refreshProgress]);
 
+  // TanStack Virtual callback tabanlı API döndürür; React Compiler bu bileşeni bilinçli olarak atlar.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: flatRows.length,
     getScrollElement: () => scrollEl,
@@ -1645,8 +1649,9 @@ function MarketplaceAddModal({
   const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
 
   // Windowed render: 300+ satırı tek seferde basmak modalı kasıyordu → başta 60, scroll'da artar.
-  const [visibleCount, setVisibleCount] = useState(60);
-  useEffect(() => { setVisibleCount(60); }, [debouncedSearch, platform]);
+  const windowKey = `${platform}:${debouncedSearch}`;
+  const [visibleWindow, setVisibleWindow] = useState({ key: windowKey, count: 60 });
+  const visibleCount = visibleWindow.key === windowKey ? visibleWindow.count : 60;
   const visible = unmatched.slice(0, visibleCount);
 
   return (
@@ -1710,7 +1715,10 @@ function MarketplaceAddModal({
               onScroll={(e) => {
                 const el = e.currentTarget;
                 if (el.scrollHeight - el.scrollTop - el.clientHeight < 240 && visibleCount < unmatched.length) {
-                  setVisibleCount((c) => c + 60);
+                  setVisibleWindow((current) => ({
+                    key: windowKey,
+                    count: (current.key === windowKey ? current.count : 60) + 60,
+                  }));
                 }
               }}
             >

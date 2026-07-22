@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.19.115",
+  "version": "0.19.116",
   "description": "Magicland 3D Hub — Shopify + Trendyol price and net-profit tracker (desktop)",
   "author": "Magicland 3D",
   "private": true,
@@ -13,7 +13,7 @@
     "dev": "next dev",
     "build": "prisma generate && next build --webpack",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint && npm --prefix mobile run lint",
     "test": "vitest run",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build && electron-builder",

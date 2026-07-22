@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatCurrency } from "@/lib/utils";
+import { usePrefersReducedMotion } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
@@ -79,6 +80,51 @@ interface PrinterConfig {
   serial?: string | null;
 }
 
+const EMPTY_LAST_JOBS = new Map<string, PrinterJob>();
+
+function samePrinterJob(left: PrinterJob | undefined, right: PrinterJob): boolean {
+  return !!left &&
+    left.productName === right.productName &&
+    left.productImage === right.productImage &&
+    left.startedAt === right.startedAt &&
+    left.endsAt === right.endsAt &&
+    left.progress === right.progress &&
+    left.remainingSec === right.remainingSec &&
+    left.layerCurrent === right.layerCurrent &&
+    left.layerTotal === right.layerTotal &&
+    left.filamentType === right.filamentType &&
+    left.filamentColor === right.filamentColor;
+}
+
+function createLastJobsStore() {
+  let snapshot = EMPTY_LAST_JOBS;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    update: (printers: PanelPrinter[]) => {
+      const next = new Map(snapshot);
+      let changed = false;
+      for (const printer of printers) {
+        if (printer.online && printer.job && (printer.status === "printing" || printer.status === "paused")) {
+          if (!samePrinterJob(next.get(printer.id), printer.job)) {
+            next.set(printer.id, printer.job);
+            changed = true;
+          }
+        } else if (printer.online && (printer.status === "idle" || printer.status === "finished")) {
+          changed = next.delete(printer.id) || changed;
+        }
+      }
+      if (!changed) return;
+      snapshot = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const alpha = (oklch: string, pct: number) => oklch.replace(")", ` / ${pct}%)`);
 
@@ -106,19 +152,6 @@ function fmtClock(ms: number, nowMs: number): string {
   return `${d2.toLocaleDateString("tr-TR", { day: "numeric", month: "short" })} ${hh}:${mm}`;
 }
 
-/** prefers-reduced-motion — sürekli animasyonlar (konfeti/şimmer/akan şerit) buna saygılı. */
-function usePrefersReducedMotion(): boolean {
-  const [reduce, setReduce] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduce(mq.matches);
-    const on = (e: MediaQueryListEvent) => setReduce(e.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  return reduce;
-}
-
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
@@ -130,7 +163,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function PrintersPage() {
   const qc = useQueryClient();
-  const { data, isLoading, isFetching, refetch } = useQuery<PrintersResponse>({
+  const { data, dataUpdatedAt, isLoading, refetch } = useQuery<PrintersResponse>({
     queryKey: ["printers"],
     queryFn: () => fetchJson<PrintersResponse>("/api/printers"),
     refetchInterval: 5000,
@@ -144,14 +177,13 @@ export default function PrintersPage() {
   const anyPrinting = (data?.printers ?? []).some((p) => p.status === "printing");
   const [now, setNow] = useState(0);
   useEffect(() => {
-    if (!anyPrinting) {
-      setNow(0);
-      return;
-    }
-    setNow(Date.now());
+    if (!anyPrinting) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [anyPrinting]);
+  // Yeni baskı uzun bir boşluktan sonra başlarsa önceki baskıdan kalmış saati bir kare bile
+  // kullanma; son veri zamanını alt sınır yap, 1 sn'lik sayaç oradan devam etsin.
+  const clockNow = anyPrinting ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
 
   const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
   const [manageOpen, setManageOpen] = useState(false);
@@ -212,13 +244,15 @@ export default function PrintersPage() {
 
   // Bağlantı KOPARSA son bilinen işi göster (eskiden kart tüm iş bilgisini kaybediyordu —
   // baskı yazıcıda çoğunlukla devam eder, kısa ağ kesintisi işi "yok" göstermemeli).
-  const lastJobs = useRef(new Map<string, PrinterJob>());
+  const [lastJobsStore] = useState(createLastJobsStore);
   useEffect(() => {
-    for (const p of data?.printers ?? []) {
-      if (p.online && p.job && (p.status === "printing" || p.status === "paused")) lastJobs.current.set(p.id, p.job);
-      else if (p.online && (p.status === "idle" || p.status === "finished")) lastJobs.current.delete(p.id);
-    }
-  }, [data]);
+    lastJobsStore.update(data?.printers ?? []);
+  }, [data, lastJobsStore]);
+  const lastJobs = useSyncExternalStore(
+    lastJobsStore.subscribe,
+    lastJobsStore.getSnapshot,
+    () => EMPTY_LAST_JOBS,
+  );
 
   return (
     <div className="p-6 space-y-5 max-w-5xl">
@@ -299,10 +333,10 @@ export default function PrintersPage() {
             <PrinterCard
               key={p.id}
               printer={p}
-              now={now}
+              now={clockNow}
               index={i}
               busy={action.isPending && action.variables?.id === p.id}
-              lastKnownJob={!p.online ? lastJobs.current.get(p.id) : undefined}
+              lastKnownJob={!p.online ? lastJobs.get(p.id) : undefined}
               onPause={() => action.mutate({ id: p.id, action: "pause" })}
               onResume={() => action.mutate({ id: p.id, action: "resume" })}
               onCancel={() => setCancelTarget({ id: p.id, name: p.name })}
@@ -436,7 +470,7 @@ function PrinterCardInner({
     !isFinished && online &&
     ((printer.temps.nozzleTarget > 0 && printer.temps.nozzle < printer.temps.nozzleTarget - 3) ||
       (printer.temps.bedTarget > 0 && printer.temps.bed < printer.temps.bedTarget - 2));
-  const elapsedSec = job && isPrinting ? Math.max(0, ((now || Date.now()) - new Date(job.startedAt).getTime()) / 1000) : 0;
+  const elapsedSec = job && isPrinting ? Math.max(0, (now - new Date(job.startedAt).getTime()) / 1000) : 0;
   const offline = isReal && !online;
   const isError = status === "error";
 
@@ -482,7 +516,7 @@ function PrinterCardInner({
       )}
       {isError && <div className="absolute inset-x-0 top-0 h-[3px] bg-destructive" />}
       {/* Konfeti yalnız YENİ biten baskıda (≤5dk) — eskiden finished kaldıkça saatlerce yağıyordu. */}
-      {isFinished && online && !reduceMotion && endMs > 0 && Date.now() - endMs < 5 * 60_000 && <Confetti accent={accent} />}
+      {isFinished && online && !reduceMotion && endMs > 0 && now - endMs < 5 * 60_000 && <Confetti accent={accent} />}
 
       <CardContent className="p-4 space-y-3.5">
         {/* ARKA PLAN BASKI ilerlemesi/hatası — modal kapansa da kullanıcı süreci burada görür */}
@@ -644,7 +678,7 @@ function PrinterCardInner({
                     {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
                       : isPaused ? (<><Pause className="h-3.5 w-3.5 text-amber-500" /> Duraklatıldı · {fmtRemaining(remainingSec)} kaldı</>)
                         : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
-                          : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now || Date.now())}</>)}
+                          : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now)}</>)}
                   </span>
                 </>
               )}
@@ -770,18 +804,19 @@ function useLiveBuildModel(printerId: string, filename: string | null, printing:
   });
   const model = modelQ.data?.model ?? null;
   const vizKey = model ? vizKeyForModel(model) : null;
+  const frameSourceKey = model && vizKey ? `${model.id}|${vizKey}` : null;
 
-  const [urls, setUrls] = useState<string[] | null>(null);
+  const [loadedFrames, setLoadedFrames] = useState<{ key: string; urls: string[] } | null>(null);
+  const urls = loadedFrames?.key === frameSourceKey ? loadedFrames.urls : null;
   useEffect(() => {
     let alive = true;
     let created: string[] = [];
-    setUrls(null);
-    if (!vizKey || !model) return;
+    if (!frameSourceKey || !vizKey || !model) return;
 
     const show = (set: { frames: Blob[] }) => {
       if (!alive) return;
       created = set.frames.map((b) => URL.createObjectURL(b));
-      setUrls(created);
+      setLoadedFrames({ key: frameSourceKey, urls: created });
     };
     const load = async () => {
       const set = await getSprites(vizKey).catch(() => null);
@@ -806,7 +841,10 @@ function useLiveBuildModel(printerId: string, filename: string | null, printing:
       cleanup.forEach((fn) => fn());
       created.forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [vizKey, model]);
+    // Object URL'leri yalnız model kimliği/içerik anahtarı değişince yenile. Aynı modelin query
+    // nesnesi veya thumbnail alanı tazelendiğinde URL'leri revoke edip görseli kırma.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameSourceKey]);
 
   return { frames: urls, thumbnail: model?.thumbnail ?? null };
 }
@@ -1036,14 +1074,14 @@ function PrintInImage({ image, productName, progress, accent, printing }: { imag
   }, []);
   // Görsel yüklenemezse (yazıcı-IP thumbnail'i, yazıcı araya çevrimdışı düştü) kırık-görsel
   // ikonu yerine kutu placeholder'ına düş.
-  const [imgFailed, setImgFailed] = useState(false);
-  useEffect(() => setImgFailed(false), [image]);
+  const [failedImage, setFailedImage] = useState<string | null>(null);
+  const imgFailed = failedImage === image;
   const pct = revealed ? Math.round(progress * 100) : 0;
   return (
     <div className="relative h-28 w-28 shrink-0 rounded-xl overflow-hidden border bg-muted/40">
       {image && !imgFailed ? (
         <>
-          <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25 grayscale" onError={() => setImgFailed(true)} />
+          <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25 grayscale" onError={() => setFailedImage(image)} />
           <img src={image} alt={productName} className="absolute inset-0 h-full w-full object-cover transition-[clip-path] duration-1000 ease-linear" style={{ clipPath: `inset(${100 - pct}% 0 0 0)` }} />
         </>
       ) : (

@@ -1,11 +1,48 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePathname } from "next/navigation";
 import { useIsFetching, useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { pushPerf, perfBuffer, clearPerf, formatPerfLog, type PerfEvent } from "@/lib/perf-log";
 
 const STORAGE_KEY = "mh-perf";
+const CHANGE_EVENT = "mh-perf-change";
+
+function readEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, enabled ? "1" : "0");
+  } catch {}
+  window.dispatchEvent(new Event(CHANGE_EVENT));
+}
+
+function subscribeEnabled(onChange: () => void): () => void {
+  const onKey = (e: KeyboardEvent) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) {
+      e.preventDefault();
+      writeEnabled(!readEnabled());
+    }
+  };
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === STORAGE_KEY) onChange();
+  };
+  window.addEventListener("keydown", onKey);
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(CHANGE_EVENT, onChange);
+  return () => {
+    window.removeEventListener("keydown", onKey);
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(CHANGE_EVENT, onChange);
+  };
+}
 
 function shortUrl(url: string): string {
   try {
@@ -25,36 +62,12 @@ function keyLabel(key: readonly unknown[]): string {
 
 /** Performans HUD — Ctrl+Shift+L ile aç/kapa. Kapalıyken hiçbir gözlemci kurulmaz (sıfır yük). */
 export function PerfHud() {
-  const [enabled, setEnabled] = useState(false);
-  useEffect(() => {
-    try {
-      setEnabled(localStorage.getItem(STORAGE_KEY) === "1");
-    } catch {}
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && (e.key === "L" || e.key === "l")) {
-        e.preventDefault();
-        setEnabled((v) => {
-          const next = !v;
-          try {
-            localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-          } catch {}
-          return next;
-        });
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  const enabled = useSyncExternalStore(subscribeEnabled, readEnabled, () => false);
 
   if (!enabled) return null;
   return (
     <PerfHudPanel
-      onClose={() => {
-        setEnabled(false);
-        try {
-          localStorage.setItem(STORAGE_KEY, "0");
-        } catch {}
-      }}
+      onClose={() => writeEnabled(false)}
     />
   );
 }

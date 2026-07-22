@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "dist/**",
+    // Mobil uygulama Expo'nun kendi ESLint yapılandırmasıyla ayrı çalıştırılır.
+    "mobile/**",
     "next-env.d.ts",
   ]),
 ]);

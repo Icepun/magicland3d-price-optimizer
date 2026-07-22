@@ -85,8 +85,7 @@ function hbDateMs(...vals: unknown[]): number | null {
 }
 
 /** HB sipariş/detay kalemi → mobil OrderItem (tutar + eşleştirme anahtarları). */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function hbLineRaw(li: Record<string, any>): OrderItem {
+function hbLineRaw(li: Record<string, unknown>): OrderItem {
   const qty = Math.max(1, Math.floor(hbNum(li.quantity ?? li.amount ?? 1)));
   const unit = hbNum(li.unitPrice ?? li.price) || hbNum(li.totalPrice) / qty;
   return {
@@ -190,8 +189,7 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
 
   // a) Open siparişler — /orders FLAT kalem listesi (orderNumber tekrar eder) → grupla.
   const openRes = await listOrders({ limit: 100 });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const li of hbArray(openRes, ["items", "orders", "data", "content", "result"]) as Record<string, any>[]) {
+  for (const li of hbArray(openRes, ["items", "orders", "data", "content", "result"])) {
     const on = hbStr(li.orderNumber, li.orderId, li.id);
     if (!on) continue;
     let e = agg.get(on);
@@ -208,7 +206,7 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
   }
 
   // b) Paket özetleri (paketlenmiş / kargoda / teslim / teslim-edilemedi) — OrderNumber + tarih.
-  const pkgStatuses: Array<["" | "shipped" | "delivered" | "undelivered", string]> = [
+  const pkgStatuses: ["" | "shipped" | "delivered" | "undelivered", string][] = [
     ["", "Packaged"],
     ["shipped", "Shipped"],
     ["delivered", "Delivered"],
@@ -216,13 +214,11 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
   ];
   const pkgResults = await Promise.all(
     pkgStatuses.map(async ([s]) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const items: Record<string, any>[] = [];
+      const items: Record<string, unknown>[] = [];
       for (let off = 0; off < 3000; off += 100) {
         const arr = hbArray(await listPackages(s, { offset: off, limit: 100 }), ["items", "data", "content", "result"]);
         if (!arr.length) break;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        items.push(...(arr as Record<string, any>[]));
+        items.push(...arr);
         if (arr.length < 100) break;
       }
       return items;
@@ -276,15 +272,17 @@ export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
   }
   await mapLimit(needDetail.slice(0, 250), 8, async (on) => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const d = (await getOrderDetail(on)) as Record<string, any>;
+      const d = (await getOrderDetail(on)) as Record<string, unknown>;
       const e = agg.get(on);
       if (!e) return;
       e.lines = (hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, unknown>[]).map(
         hbLineRaw
       );
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      e.customer = e.customer ?? (hbStr((d.customer ?? {}).name, d.customerName) || null);
+      const customer =
+        d.customer && typeof d.customer === "object"
+          ? (d.customer as Record<string, unknown>)
+          : null;
+      e.customer = e.customer ?? (hbStr(customer?.name, d.customerName) || null);
       // Sipariş VERME tarihini tercih et (kargo/teslim değil) → liste + 30g penceresi sipariş tarihine
       // göre (masaüstü v0.19.58). Paketten gelen ShippedDate/DeliveredDate bununla ezilir.
       const od = hbDateMs(d.orderDate, d.createdDate);

@@ -1,0 +1,65 @@
+name: Mobile TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "mobile/**"
+      - "src/core/**"
+      - ".github/workflows/mobile-testflight.yml"
+
+concurrency:
+  group: mobile-testflight
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-submit:
+    name: Build iOS and submit to TestFlight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Set up Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify native runtime isolation
+        run: >-
+          node -e "const app = require('./app.json');
+          if (app.expo?.runtimeVersion?.policy !== 'fingerprint') {
+            throw new Error('Production iOS builds must use runtimeVersion.policy=fingerprint');
+          }"
+
+      - name: Verify shared core is synchronized
+        run: npm run check-core
+
+      - name: Lint mobile app
+        run: npm run lint
+
+      - name: Type-check mobile app
+        run: npx tsc --noEmit
+
+      - name: Queue production build and TestFlight submission
+        run: npm run deploy:testflight

@@ -141,7 +141,7 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
         )}
         {printers.length === 0 ? (
           <p className="text-xs text-muted-foreground py-1.5">
-            Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>'ten yazıcı ekle; sonra her yazıcı için parça parça dosya yükle. Çok parçalı ürünlerde tüm parçaları ekleyebilirsin.
+            Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten yazıcı ekle; sonra her yazıcı için parça parça dosya yükle. Çok parçalı ürünlerde tüm parçaları ekleyebilirsin.
           </p>
         ) : (
           printers.map((p) => (

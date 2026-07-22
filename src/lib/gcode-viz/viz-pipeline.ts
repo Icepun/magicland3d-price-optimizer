@@ -9,6 +9,17 @@ import { renderThumbnail, renderBuildFrames } from "./three-scene";
 
 const inflight = new Map<string, Promise<ParsedGcode>>();
 
+type WorkerResult =
+  | { ok: false; error?: string }
+  | {
+      ok: true;
+      positions: ArrayBufferLike;
+      features: ArrayBufferLike;
+      layerRanges: ParsedGcode["layerRanges"];
+      bounds: ParsedGcode["bounds"];
+      totalSegments: number;
+    };
+
 /** Geometriyi getir: IDB önbelleği → yoksa Web Worker'da parse (arayüz donmaz) → önbelleğe. */
 export function loadGeometry(cacheKey: string, fileId: string): Promise<ParsedGcode> {
   const existing = inflight.get(cacheKey);
@@ -34,7 +45,7 @@ function parseInWorker(fileId: string): Promise<ParsedGcode> {
       return;
     }
     const to = setTimeout(() => { worker.terminate(); reject(new Error("Görselleştirme zaman aşımı")); }, 180_000);
-    worker.onmessage = (ev: MessageEvent<any>) => {
+    worker.onmessage = (ev: MessageEvent<WorkerResult>) => {
       clearTimeout(to);
       worker.terminate();
       const d = ev.data;

@@ -39,7 +39,8 @@
             "imageWidth": 76
           }
         }
-      ]
+      ],
+      "expo-image"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -53,7 +54,7 @@
     },
     "owner": "icepun",
     "runtimeVersion": {
-      "policy": "appVersion"
+      "policy": "fingerprint"
     },
     "updates": {
       "url": "https://u.expo.dev/94ecc654-9a9e-41b2-974f-a9d3aa090696"

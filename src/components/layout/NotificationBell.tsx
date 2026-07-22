@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Bell, Package, Disc3, Printer, ShoppingCart, X, Check } from "lucide-react";
@@ -42,12 +42,13 @@ export function NotificationBell() {
     refetchInterval: 60_000,
     staleTime: 30_000,
   });
-  const alerts = data?.alerts ?? [];
+  const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
 
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
-  useEffect(() => setDismissed(readSet(DISMISS_KEY)), []);
+  const [dismissed, setDismissed] = useState<Set<string>>(() =>
+    typeof window === "undefined" ? new Set() : readSet(DISMISS_KEY)
+  );
 
   // Kalıcı (sipariş) bildirimlerini sunucuda da "okundu" işaretle → cihazlar-arası.
   // Anlık (stok/filament/yazıcı) id'ler eşleşmez, zararsız. Sonra listeyi tazele.

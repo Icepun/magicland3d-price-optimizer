@@ -17,11 +17,17 @@
     },
     "production": {
       "autoIncrement": true,
+      "distribution": "store",
       "channel": "production",
       "environment": "production"
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "ascAppId": "6775158602",
+        "groups": ["Magicland Ekip"]
+      }
+    }
   }
 }

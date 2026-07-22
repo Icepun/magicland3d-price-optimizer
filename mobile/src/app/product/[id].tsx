@@ -167,7 +167,12 @@ export default function ProductDetailScreen() {
         {/* Ürün başlığı */}
         <View style={styles.titleRow}>
           {product.imageUrl ? (
-            <Image source={{ uri: thumbUrl(product.imageUrl, 200)! }} style={styles.thumb} contentFit="cover" />
+            <Image
+              source={{ uri: thumbUrl(product.imageUrl, 200)! }}
+              alt={product.name}
+              style={styles.thumb}
+              contentFit="cover"
+            />
           ) : (
             <View style={[styles.thumb, styles.thumbEmpty]} />
           )}
@@ -205,7 +210,13 @@ export default function ProductDetailScreen() {
                   ]}
                 >
                   {m.imageUrl ? (
-                    <Image source={{ uri: thumbUrl(m.imageUrl, 120)! }} style={styles.variantThumb} contentFit="cover" recyclingKey={m.id} />
+                    <Image
+                      source={{ uri: thumbUrl(m.imageUrl, 120)! }}
+                      alt={m.variantLabel || m.name}
+                      style={styles.variantThumb}
+                      contentFit="cover"
+                      recyclingKey={m.id}
+                    />
                   ) : (
                     <View style={[styles.variantThumb, styles.thumbEmpty]} />
                   )}

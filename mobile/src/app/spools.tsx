@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
 import { FlashList } from "@shopify/flash-list";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   ActivityIndicator,
-  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -143,15 +142,28 @@ export default function SpoolsScreen() {
         <SymbolView name="plus" tintColor="#fff" style={{ width: 26, height: 26 }} />
       </Pressable>
 
-      <ConsumeModal
-        spool={consumeTarget}
-        onClose={() => setConsumeTarget(null)}
-        onConsume={(grams, note) => {
-          if (consumeTarget) consumeMut.mutate({ id: consumeTarget.id, grams, note });
-          setConsumeTarget(null);
-        }}
-      />
-      <SpoolFormModal target={formTarget} onClose={() => setFormTarget(null)} onDone={() => { setFormTarget(null); invalidate(); }} />
+      {consumeTarget ? (
+        <ConsumeModal
+          key={consumeTarget.id}
+          spool={consumeTarget}
+          onClose={() => setConsumeTarget(null)}
+          onConsume={(grams, note) => {
+            consumeMut.mutate({ id: consumeTarget.id, grams, note });
+            setConsumeTarget(null);
+          }}
+        />
+      ) : null}
+      {formTarget ? (
+        <SpoolFormModal
+          key={formTarget === "new" ? "new" : formTarget.id}
+          target={formTarget}
+          onClose={() => setFormTarget(null)}
+          onDone={() => {
+            setFormTarget(null);
+            invalidate();
+          }}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -195,26 +207,24 @@ function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onCon
   );
 }
 
-function ConsumeModal({ spool, onClose, onConsume }: { spool: Spool | null; onClose: () => void; onConsume: (grams: number, note: string | null) => void }) {
+function ConsumeModal({ spool, onClose, onConsume }: { spool: Spool; onClose: () => void; onConsume: (grams: number, note: string | null) => void }) {
   const [grams, setGrams] = useState("");
   const [note, setNote] = useState("");
   const g = Number(grams.replace(",", "."));
   const valid = g > 0;
 
   function submit() {
-    if (!spool || !valid) return;
+    if (!valid) return;
     onConsume(g, note.trim() || null);
-    setGrams("");
-    setNote("");
   }
 
   return (
-    <Modal visible={!!spool} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalWrap}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modal}>
-          <Text style={styles.modalTitle}>{spool?.name} — gram düş</Text>
-          <Text style={styles.modalSub}>Kalan: {spool ? Math.round(spool.remainingGrams) : 0}g</Text>
+          <Text style={styles.modalTitle}>{spool.name} — gram düş</Text>
+          <Text style={styles.modalSub}>Kalan: {Math.round(spool.remainingGrams)}g</Text>
           <TextInput value={grams} onChangeText={setGrams} keyboardType="decimal-pad" placeholder="Kaç gram?" placeholderTextColor={ML.textFaint} style={styles.input} autoFocus />
           <TextInput value={note} onChangeText={setNote} placeholder="Not (opsiyonel)" placeholderTextColor={ML.textFaint} style={styles.input} />
           <View style={styles.modalActions}>
@@ -229,29 +239,28 @@ function ConsumeModal({ spool, onClose, onConsume }: { spool: Spool | null; onCl
   );
 }
 
-function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | null; onClose: () => void; onDone: () => void }) {
-  const editing = target !== "new" && target !== null;
-  const [name, setName] = useState("");
-  const [material, setMaterial] = useState("PLA");
-  const [brand, setBrand] = useState("");
-  const [colorHex, setColorHex] = useState(SWATCHES[0]);
-  const [total, setTotal] = useState("1000");
-  const [remaining, setRemaining] = useState("1000");
-  const [reorder, setReorder] = useState("200");
-  const [cost, setCost] = useState("");
+function SpoolFormModal({
+  target,
+  onClose,
+  onDone,
+}: {
+  target: Spool | "new";
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const initial = target === "new" ? null : target;
+  const editing = initial !== null;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [material, setMaterial] = useState(initial?.material ?? "PLA");
+  const [brand, setBrand] = useState(initial?.brand ?? "");
+  const [colorHex, setColorHex] = useState(initial?.colorHex ?? SWATCHES[0]);
+  const [total, setTotal] = useState(initial ? String(initial.totalGrams) : "1000");
+  const [remaining, setRemaining] = useState(initial ? String(initial.remainingGrams) : "1000");
+  const [reorder, setReorder] = useState(initial ? String(initial.reorderGrams) : "200");
+  const [cost, setCost] = useState(
+    initial?.spoolCost != null ? String(initial.spoolCost) : "",
+  );
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (target && target !== "new") {
-      setName(target.name); setMaterial(target.material); setBrand(target.brand ?? "");
-      setColorHex(target.colorHex); setTotal(String(target.totalGrams));
-      setRemaining(String(target.remainingGrams)); setReorder(String(target.reorderGrams));
-      setCost(target.spoolCost != null ? String(target.spoolCost) : "");
-    } else if (target === "new") {
-      setName(""); setMaterial("PLA"); setBrand(""); setColorHex(SWATCHES[0]);
-      setTotal("1000"); setRemaining("1000"); setReorder("200"); setCost("");
-    }
-  }, [target]);
 
   const num = (s: string) => Number(s.replace(",", ".")) || 0;
   const valid = name.trim().length > 0 && num(total) > 0;
@@ -266,7 +275,7 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | n
       spoolCost: cost.trim() ? num(cost) : null,
     };
     try {
-      if (editing) await updateSpool(target.id, payload);
+      if (initial) await updateSpool(initial.id, payload);
       else await createSpool(payload);
       onDone();
     } catch {
@@ -275,9 +284,9 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new" | n
   }
 
   async function remove() {
-    if (!editing) return;
+    if (!initial) return;
     setBusy(true);
-    try { await deleteSpool(target.id); onDone(); }
+    try { await deleteSpool(initial.id); onDone(); }
     catch { Alert.alert("Hata", "Makara silinemedi (bağlantıyı kontrol et).");
     } finally { setBusy(false); }
   }

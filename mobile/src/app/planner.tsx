@@ -116,7 +116,13 @@ export default function PlannerScreen() {
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: ML.cardElevated }]}
             >
               {item.imageUrl ? (
-                <Image source={{ uri: thumbUrl(item.imageUrl, 120)! }} style={styles.thumb} contentFit="cover" recyclingKey={item.id} />
+                <Image
+                  source={{ uri: thumbUrl(item.imageUrl, 120)! }}
+                  alt={item.name}
+                  style={styles.thumb}
+                  contentFit="cover"
+                  recyclingKey={item.id}
+                />
               ) : (
                 <View style={[styles.thumb, styles.thumbEmpty]} />
               )}

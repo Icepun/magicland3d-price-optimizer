@@ -189,6 +189,8 @@ export default function OrdersPage() {
     return () => window.removeEventListener("resize", measure);
   }, [scrollEl, isLoading, platform, status, filtered.length]);
 
+  // TanStack Virtual callback tabanlı API döndürür; React Compiler bu bileşeni bilinçli olarak atlar.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => scrollEl,

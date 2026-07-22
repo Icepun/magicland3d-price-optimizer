@@ -142,8 +142,8 @@ export function MatchListingModal({
   });
 
   // Windowed render: 300+ listing'i tek seferde DOM'a basmak modalı kasıyordu → başta 60, scroll'da artar.
-  const [visibleCount, setVisibleCount] = useState(60);
-  useEffect(() => { setVisibleCount(60); }, [debouncedSearch]);
+  const [visibleWindow, setVisibleWindow] = useState({ search: "", count: 60 });
+  const visibleCount = visibleWindow.search === debouncedSearch ? visibleWindow.count : 60;
   const visible = unmatched.slice(0, visibleCount);
 
   return (
@@ -212,7 +212,10 @@ export function MatchListingModal({
           onScroll={(e) => {
             const el = e.currentTarget;
             if (el.scrollHeight - el.scrollTop - el.clientHeight < 240 && visibleCount < unmatched.length) {
-              setVisibleCount((c) => c + 60);
+              setVisibleWindow((current) => ({
+                search: debouncedSearch,
+                count: (current.search === debouncedSearch ? current.count : 60) + 60,
+              }));
             }
           }}
         >

@@ -243,13 +243,12 @@ function TursoSyncCard() {
     queryFn: () => fetch("/api/turso/settings").then((r) => r.json()),
   });
 
-  const [url, setUrl] = useState("");
+  const sourceUrl = data?.url ?? "";
+  const [urlDraft, setUrlDraft] = useState({ source: "", value: "" });
+  const url = urlDraft.source === sourceUrl ? urlDraft.value : sourceUrl;
+  const setUrl = (value: string) => setUrlDraft({ source: sourceUrl, value });
   const [authToken, setAuthToken] = useState("");
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
-
-  useEffect(() => {
-    if (data) setUrl(data.url || "");
-  }, [data]);
 
   const save = useMutation({
     mutationFn: () =>

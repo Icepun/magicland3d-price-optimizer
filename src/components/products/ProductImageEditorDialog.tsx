@@ -125,7 +125,7 @@ export function ProductImageEditorDialog({
           {/* URL */}
           <div>
             <Label className="text-[11px] text-muted-foreground flex items-center gap-1">
-              <Link2 className="h-3 w-3" /> veya görsel URL'si
+              <Link2 className="h-3 w-3" /> veya görsel URL&apos;si
             </Label>
             <div className="flex gap-1.5 mt-1">
               <Input
@@ -144,7 +144,7 @@ export function ProductImageEditorDialog({
                 className="h-9 w-9 shrink-0"
                 disabled={anyBusy || !url.trim() || url.trim() === (imageUrl ?? "")}
                 onClick={() => patchImage(url.trim(), true, "url")}
-                title="URL'yi kaydet"
+                title="URL&apos;yi kaydet"
               >
                 {busy === "url" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
               </Button>
@@ -160,7 +160,7 @@ export function ProductImageEditorDialog({
               onClick={() => patchImage(null, false, "reset")}
             >
               {busy === "reset" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-              Sıfırla (Shopify'a bırak)
+              Sıfırla (Shopify&apos;a bırak)
             </Button>
           )}
         </div>

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, RefreshCw, RotateCcw, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useIsClient } from "@/lib/client-state";
 import { cn } from "@/lib/utils";
 
 type UpdaterState = NonNullable<
@@ -40,8 +41,7 @@ export function UpdateWidget() {
   // Böylece Electron'da preload `window.trendyolPriceOptimizer` enjekte etse bile
   // ilk render'da widget çizilmez → hydration mismatch (React #418, boş ekran) olmaz.
   // mounted=true olunca (sadece client'ta) widget belirir.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useIsClient();
 
   const updater = useMemo(() => {
     if (typeof window === "undefined") return undefined;

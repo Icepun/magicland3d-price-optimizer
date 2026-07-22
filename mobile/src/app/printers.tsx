@@ -237,7 +237,14 @@ function PrinterCard({
         <>
           <View style={styles.body}>
             {s.productImage ? (
-              <Image source={{ uri: thumbUrl(s.productImage, 96)! }} style={styles.thumb} contentFit="cover" transition={150} recyclingKey={s.printerConfigId} />
+              <Image
+                source={{ uri: thumbUrl(s.productImage, 96)! }}
+                alt={s.productName ?? s.currentFilename ?? "Baskı"}
+                style={styles.thumb}
+                contentFit="cover"
+                transition={150}
+                recyclingKey={s.printerConfigId}
+              />
             ) : (
               <View style={[styles.thumb, styles.thumbEmpty]} />
             )}

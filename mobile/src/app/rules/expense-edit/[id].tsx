@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -13,11 +14,13 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PrimaryButton, ScreenHeader } from "@/components/form";
 import {
   createExpenseRule,
   deleteExpenseRule,
   getAllExpenseRules,
   updateExpenseRule,
+  type ExpenseRuleFull,
   type ExpenseType,
 } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
@@ -38,29 +41,62 @@ const TYPES: { key: ExpenseType; label: string }[] = [
 export default function ExpenseEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const isNew = id === "new";
+  const rulesQuery = useQuery({
+    queryKey: ["expense-rules-all"],
+    queryFn: getAllExpenseRules,
+    enabled: !isNew,
+    refetchOnMount: "always",
+  });
+  const [dataUpdatedAtOnMount] = useState(rulesQuery.dataUpdatedAt);
+  const hasFreshData = rulesQuery.dataUpdatedAt > dataUpdatedAtOnMount;
+  const existing = isNew ? null : rulesQuery.data?.find((rule) => rule.id === id);
+
+  if (!isNew && (!hasFreshData || !existing)) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <ScreenHeader title="Gider Düzenle" />
+        <View style={styles.center}>
+          {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
+            <ActivityIndicator color={ML.accent} size="large" />
+          ) : (
+            <>
+              <Text style={styles.message}>
+                {rulesQuery.error instanceof Error
+                  ? rulesQuery.error.message
+                  : "Gider kuralı bulunamadı."}
+              </Text>
+              <PrimaryButton
+                label="Tekrar dene"
+                onPress={() => void rulesQuery.refetch()}
+                loading={rulesQuery.isFetching}
+              />
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return <ExpenseEditForm key={existing?.id ?? "new"} id={id} existing={existing ?? null} />;
+}
+
+function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFull | null }) {
+  const isNew = existing === null;
   const qc = useQueryClient();
 
-  const { data: all } = useQuery({ queryKey: ["expense-rules-all"], queryFn: getAllExpenseRules });
-  const existing = isNew ? null : all?.find((r) => r.id === id);
-
-  const [name, setName] = useState("");
-  const [platform, setPlatform] = useState<string>("all");
-  const [type, setType] = useState<ExpenseType>("fixed");
-  const [value, setValue] = useState("");
-  const [category, setCategory] = useState("");
-  const [minPrice, setMinPrice] = useState("0");
-  const [maxPrice, setMaxPrice] = useState("999999");
-
-  useEffect(() => {
-    if (!existing) return;
-    setName(existing.name);
-    setPlatform(existing.platform ?? "all");
-    setType(existing.type);
-    setValue(existing.type === "percentage" ? String(existing.value * 100) : String(existing.value));
-    setCategory(existing.categoryName ?? "");
-    setMinPrice(String(existing.minPrice));
-    setMaxPrice(String(existing.maxPrice));
-  }, [existing]);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [platform, setPlatform] = useState<string>(existing?.platform ?? "all");
+  const [type, setType] = useState<ExpenseType>(existing?.type ?? "fixed");
+  const [value, setValue] = useState(
+    existing
+      ? existing.type === "percentage"
+        ? String(existing.value * 100)
+        : String(existing.value)
+      : "",
+  );
+  const [category, setCategory] = useState(existing?.categoryName ?? "");
+  const [minPrice, setMinPrice] = useState(existing ? String(existing.minPrice) : "0");
+  const [maxPrice, setMaxPrice] = useState(existing ? String(existing.maxPrice) : "999999");
 
   const save = useMutation({
     mutationFn: async () => {
@@ -259,6 +295,8 @@ function Segmented({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
+  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
   back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   backText: { color: ML.text, fontSize: 34, marginTop: -4 },

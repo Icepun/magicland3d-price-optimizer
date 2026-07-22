@@ -2,16 +2,13 @@
 
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
 
+import { useIsClient } from "@/lib/client-state";
 import { cn } from "@/lib/utils";
 
 export function ThemeToggle({ className }: { className?: string }) {
   const { resolvedTheme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  // SSR mismatch'i önlemek için mount sonrası göster
-  useEffect(() => setMounted(true), []);
+  const mounted = useIsClient();
 
   const isDark = mounted ? resolvedTheme === "dark" : true;
 

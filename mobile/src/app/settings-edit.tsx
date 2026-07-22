@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
@@ -21,16 +21,48 @@ const FIELDS: { key: string; label: string; fallback: string; max?: number }[] =
 ];
 
 export default function SettingsEditScreen() {
-  const qc = useQueryClient();
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
-  const [vals, setVals] = useState<Record<string, string>>({});
+  const settingsQuery = useQuery({
+    queryKey: ["settings"],
+    queryFn: getSettingsMap,
+    refetchOnMount: "always",
+  });
+  const [dataUpdatedAtOnMount] = useState(settingsQuery.dataUpdatedAt);
+  const hasFreshData = settingsQuery.dataUpdatedAt > dataUpdatedAtOnMount;
 
-  useEffect(() => {
-    if (!settings) return;
-    const next: Record<string, string> = {};
-    for (const f of FIELDS) next[f.key] = settings[f.key] ?? f.fallback;
-    setVals(next);
-  }, [settings]);
+  if (!hasFreshData || !settingsQuery.data) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <ScreenHeader title="Genel Ayarlar" />
+        <View style={styles.center}>
+          {settingsQuery.isPending || settingsQuery.isFetching || !settingsQuery.isFetchedAfterMount ? (
+            <ActivityIndicator color={ML.accent} size="large" />
+          ) : (
+            <>
+              <Text style={styles.message}>
+                {settingsQuery.error instanceof Error
+                  ? settingsQuery.error.message
+                  : "Ayarlar yüklenemedi."}
+              </Text>
+              <PrimaryButton
+                label="Tekrar dene"
+                onPress={() => void settingsQuery.refetch()}
+                loading={settingsQuery.isFetching}
+              />
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return <SettingsEditForm settings={settingsQuery.data} />;
+}
+
+function SettingsEditForm({ settings }: { settings: Record<string, string> }) {
+  const qc = useQueryClient();
+  const [vals, setVals] = useState<Record<string, string>>(() =>
+    Object.fromEntries(FIELDS.map((field) => [field.key, settings[field.key] ?? field.fallback])),
+  );
 
   const save = useMutation({
     // Tek batch round-trip (eski hali 6 ardışık upsert ~300-1200ms + yarıda kalma riskiydi).
@@ -83,5 +115,7 @@ export default function SettingsEditScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
+  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 40 },
 });

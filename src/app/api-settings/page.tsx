@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store } from "lucide-react";
 
@@ -198,7 +197,7 @@ function TrendyolTab() {
         Bu buton yalnızca eşleşmiş ürünlerin fiyatlarını günceller.
       </p>
 
-      <SyncProgressCard isPending={sync.isPending} platform="Trendyol" />
+      {sync.isPending && <SyncProgressCard platform="Trendyol" />}
     </div>
   );
 }
@@ -208,21 +207,15 @@ function TrendyolTab() {
  * İşin gerçek ilerlemesi client'a akmadığı için sahte yüzde göstermiyoruz —
  * sürekli akan bir bar + geçen saniye sayacı (yanıltıcı "%X" yok).
  */
-function SyncProgressCard({ isPending, platform }: { isPending: boolean; platform: string }) {
+function SyncProgressCard({ platform }: { platform: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    if (!isPending) {
-      setElapsed(0);
-      return;
-    }
     const startedAt = Date.now();
     const timer = setInterval(() => {
       setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     }, 500);
     return () => clearInterval(timer);
-  }, [isPending]);
-
-  if (!isPending) return null;
+  }, []);
 
   return (
     <Card className="border-primary/30 bg-primary/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -488,7 +481,7 @@ function ShopifyTab() {
         <ShopifyDebugCard result={debugResult} />
       )}
 
-      <SyncProgressCard isPending={sync.isPending} platform="Shopify" />
+      {sync.isPending && <SyncProgressCard platform="Shopify" />}
     </div>
   );
 }
@@ -585,7 +578,7 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
             <ul className="list-disc list-inside space-y-0.5">
               <li>
                 <strong>401/403:</strong> Storefront token yanlış ya da rotate
-                edilmiş. Headless → Storefront API → Özel Erişim Belirteci'ni
+                edilmiş. Headless → Storefront API → Özel Erişim Belirteci&apos;ni
                 yeniden kopyala.
               </li>
               <li>
@@ -629,7 +622,7 @@ function HepsiburadaTab() {
       ? { merchantId: settings.merchantId, secretKey: "", developerUsername: settings.developerUsername, environment: settings.environment }
       : undefined,
   });
-  const environment = form.watch("environment");
+  const environment = useWatch({ control: form.control, name: "environment" });
 
   const save = useMutation({
     mutationFn: (data: HepsiburadaForm) =>
@@ -775,7 +768,7 @@ function HepsiburadaTab() {
         eşleştirilir. <strong>Fiyatları Güncelle</strong> yalnızca eşleşmiş HB listing fiyatlarını tazeler.
       </p>
 
-      <SyncProgressCard isPending={sync.isPending} platform="Hepsiburada" />
+      {sync.isPending && <SyncProgressCard platform="Hepsiburada" />}
     </div>
   );
 }

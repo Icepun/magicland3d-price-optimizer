@@ -13,7 +13,7 @@ export type HepsiburadaCargoMode = "standart" | "avantajli";
 const VAT = 1.2; // %20 KDV
 
 /** HepsiJet desi tarifesi — KDV DAHİL (ham fiyat × 1.20). Aralıklar: minDesi (dahil) → maxDesi (dahil). */
-export const HEPSIJET_DESI_BRACKETS: ReadonlyArray<{ fromDesi: number; toDesi: number; cost: number }> = [
+export const HEPSIJET_DESI_BRACKETS: readonly { fromDesi: number; toDesi: number; cost: number }[] = [
   { fromDesi: 0, toDesi: 2, cost: 94.2 }, // 78,50
   { fromDesi: 2.01, toDesi: 3, cost: 112.8 }, // 94,00
   { fromDesi: 3.01, toDesi: 4, cost: 122.21 }, // 101,84
@@ -36,7 +36,7 @@ export const HEPSIJET_DESI_BRACKETS: ReadonlyArray<{ fromDesi: number; toDesi: n
 ];
 
 /** Avantajlı barem sabit kademeleri (sipariş tutarına göre) — KDV DAHİL. */
-export const HEPSIJET_FLAT_TIERS: ReadonlyArray<{ minPrice: number; maxPrice: number; cost: number }> = [
+export const HEPSIJET_FLAT_TIERS: readonly { minPrice: number; maxPrice: number; cost: number }[] = [
   { minPrice: 0, maxPrice: 199.99, cost: 42 * VAT }, // 50,40
   { minPrice: 200, maxPrice: 399.99, cost: 72 * VAT }, // 86,40
 ];

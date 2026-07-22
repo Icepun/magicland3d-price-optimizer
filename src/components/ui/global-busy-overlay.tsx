@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useIsMutating } from "@tanstack/react-query";
 import { useBusyState } from "@/lib/busy";
+import { useIsClient } from "@/lib/client-state";
 
 /** active true olduktan `showDelay` ms sonra göster; gösterildiyse en az `minVisible` ms tut
  *  (hızlı/optimistic işlemler katmanı YANIP SÖNDÜRMEZ, gösterilince de titremez). */
@@ -43,8 +44,7 @@ export function GlobalBusyOverlay() {
   const { busy, label } = useBusyState();
   const shown = useDelayedFlag(blocking > 0 || busy, 220, 480);
 
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useIsClient();
   if (!mounted || !shown) return null;
 
   return createPortal(

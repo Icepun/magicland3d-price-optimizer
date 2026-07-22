@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -18,6 +18,7 @@ import {
   deleteCargoRule,
   getAllCargoRules,
   updateCargoRule,
+  type CargoRuleFull,
 } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
@@ -32,30 +33,57 @@ const PLATFORMS = [
 export default function CargoEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const isNew = id === "new";
+  const rulesQuery = useQuery({
+    queryKey: ["cargo-rules-all"],
+    queryFn: getAllCargoRules,
+    enabled: !isNew,
+    refetchOnMount: "always",
+  });
+  const [dataUpdatedAtOnMount] = useState(rulesQuery.dataUpdatedAt);
+  const hasFreshData = rulesQuery.dataUpdatedAt > dataUpdatedAtOnMount;
+  const existing = isNew ? null : rulesQuery.data?.find((rule) => rule.id === id);
+
+  if (!isNew && (!hasFreshData || !existing)) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <ScreenHeader title="Kargo Düzenle" />
+        <View style={styles.center}>
+          {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
+            <ActivityIndicator color={ML.accent} size="large" />
+          ) : (
+            <>
+              <Text style={styles.message}>
+                {rulesQuery.error instanceof Error
+                  ? rulesQuery.error.message
+                  : "Kargo kuralı bulunamadı."}
+              </Text>
+              <PrimaryButton
+                label="Tekrar dene"
+                onPress={() => void rulesQuery.refetch()}
+                loading={rulesQuery.isFetching}
+              />
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return <CargoEditForm key={existing?.id ?? "new"} id={id} existing={existing ?? null} />;
+}
+
+function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull | null }) {
+  const isNew = existing === null;
   const qc = useQueryClient();
-  const { data: all } = useQuery({ queryKey: ["cargo-rules-all"], queryFn: getAllCargoRules });
-  const existing = isNew ? null : all?.find((r) => r.id === id);
 
-  const [name, setName] = useState("");
-  const [platform, setPlatform] = useState("all");
-  const [minDesi, setMinDesi] = useState("0");
-  const [maxDesi, setMaxDesi] = useState("999");
-  const [minPrice, setMinPrice] = useState("0");
-  const [maxPrice, setMaxPrice] = useState("999999");
-  const [category, setCategory] = useState("");
-  const [cargoCost, setCargoCost] = useState("");
-
-  useEffect(() => {
-    if (!existing) return;
-    setName(existing.name);
-    setPlatform(existing.platform ?? "all");
-    setMinDesi(String(existing.minDesi));
-    setMaxDesi(String(existing.maxDesi));
-    setMinPrice(String(existing.minPrice));
-    setMaxPrice(String(existing.maxPrice));
-    setCategory(existing.categoryName ?? "");
-    setCargoCost(String(existing.cargoCost));
-  }, [existing]);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [platform, setPlatform] = useState(existing?.platform ?? "all");
+  const [minDesi, setMinDesi] = useState(existing ? String(existing.minDesi) : "0");
+  const [maxDesi, setMaxDesi] = useState(existing ? String(existing.maxDesi) : "999");
+  const [minPrice, setMinPrice] = useState(existing ? String(existing.minPrice) : "0");
+  const [maxPrice, setMaxPrice] = useState(existing ? String(existing.maxPrice) : "999999");
+  const [category, setCategory] = useState(existing?.categoryName ?? "");
+  const [cargoCost, setCargoCost] = useState(existing ? String(existing.cargoCost) : "");
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["cargo-rules-all"] });
@@ -181,6 +209,8 @@ export default function CargoEditScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
+  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },
   row: { flexDirection: "row", gap: 12 },
 });

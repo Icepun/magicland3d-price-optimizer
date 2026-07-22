@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { usePrefersReducedMotion } from "@/lib/client-state";
 
 /**
  * Sayıyı yumuşakça akıtır: mount'ta 0'dan değere, sonra her değişimde eski→yeni (count-up).
@@ -21,19 +22,19 @@ export function AnimatedNumber({
   const [display, setDisplay] = useState(0);
   const fromRef = useRef(0);
   const rafRef = useRef<number | null>(null);
+  const reduceMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     const from = fromRef.current;
     const to = Number.isFinite(value) ? value : 0;
     if (from === to) return;
 
-    const reduce =
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reduce || durationMs <= 0) {
+    if (reduceMotion || durationMs <= 0) {
       fromRef.current = to;
-      setDisplay(to);
-      return;
+      rafRef.current = requestAnimationFrame(() => setDisplay(to));
+      return () => {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      };
     }
 
     const start = typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -52,7 +53,7 @@ export function AnimatedNumber({
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [value, durationMs]);
+  }, [value, durationMs, reduceMotion]);
 
   return (
     <span className={className}>

@@ -184,7 +184,7 @@ export function SlotStep({
   const [manualCount, setManualCount] = useState(1);
   const [useAms, setUseAms] = useState(true);
   const [prefs, setPrefs] = useState<PrintPrefs>({ timelapse: false, bedLeveling: false, flowCali: false });
-  const [assign, setAssign] = useState<number[]>([]); // printColors sırasına paralel: seçilen slot id
+  const [savedAssign, setSavedAssign] = useState<number[]>([]); // kullanıcının elle seçtiği slotlar
 
   const printColors: FileColor[] = useMemo(
     () => (usingFile ? fileColors : Array.from({ length: manualCount }, (_, i) => ({ index: i, hex: "#9ca3af", type: "", grams: null }))),
@@ -197,20 +197,34 @@ export function SlotStep({
   //    filament hareket etmez → "Filament Anomaly / runout" hatası. Varsayılan = IDENTITY
   //    (dilimlendiği kafa). Kullanıcı isterse elle değiştirir.
   //    Bambu (AMS, flush): her renk herhangi bir slottan beslenebilir → renge göre en yakın slot.
+  const defaultAssign = printColors.map((color, index) => {
+    if (!isBambu) return color.index; // Snapmaker: dilimlendiği gibi (identity)
+    const near = usingFile && slots.length ? nearestSlotId(color.hex, slots) : null;
+    return near != null ? near : (pickSlots[index % pickSlots.length]?.slot ?? index);
+  });
+  // İlk geçerli otomatik eşlemeyi state'e sabitle. Slotlar 5sn'de bir yenilense de seçim artık
+  // kendiliğinden değişmez; yalnız renk sayısı değişirse yeni şekil için tekrar seed edilir.
   useEffect(() => {
     if (isLoading) return;
-    setAssign((prev) => {
-      if (prev.length === printColors.length && prev.every((v) => v != null)) return prev;
-      return printColors.map((c, i) => {
-        if (!isBambu) return c.index; // Snapmaker: dilimlendiği gibi (identity)
-        const near = usingFile && slots.length ? nearestSlotId(c.hex, slots) : null;
-        return near != null ? near : (pickSlots[i % pickSlots.length]?.slot ?? i);
-      });
+    const raf = requestAnimationFrame(() => {
+      setSavedAssign((current) =>
+        current.length === printColors.length && current.every((value) => value != null)
+          ? current
+          : defaultAssign
+      );
     });
+    return () => cancelAnimationFrame(raf);
+    // Slot içeriği/refetch'i kullanıcı seçimini sıfırlamamalı; yalnız form şekli değişimi tetikler.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoading, printColors.length, usingFile, slots.length]);
+  }, [isLoading, printColors.length]);
+  const savedAssignValid = savedAssign.length === printColors.length && savedAssign.every((value) => value != null);
+  const assign = !isLoading && !savedAssignValid ? defaultAssign : savedAssign;
 
-  const setOne = (i: number, slot: number) => setAssign((prev) => { const n = [...prev]; n[i] = slot; return n; });
+  const setOne = (i: number, slot: number) => setSavedAssign((current) => {
+    const next = current.length === printColors.length ? [...current] : [...assign];
+    next[i] = slot;
+    return next;
+  });
   const setCount = (n: number) => setManualCount(Math.max(1, Math.min(4, n)));
 
   // Atamalar dolmadan başlatma (eski `?? 0` sessizce kafa/slot 1'e düşüyordu); tool-changer'da

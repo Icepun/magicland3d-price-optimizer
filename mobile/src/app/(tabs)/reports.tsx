@@ -13,7 +13,11 @@ import { ML, radius } from "@/theme/colors";
 import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function ReportsScreen() {
-  const { data: orders, isLoading } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
+  const { data: orders, dataUpdatedAt: ordersUpdatedAt, isLoading } = useQuery({
+    queryKey: ["orders"],
+    queryFn: getAllOrders,
+    staleTime: ORDERS_STALE_MS,
+  });
   const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
   // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
@@ -62,7 +66,9 @@ export default function ReportsScreen() {
     const DAY = 86_400_000;
     const BUCKETS = 6;
     const SPAN = 5 * DAY;
-    const now = Date.now();
+    // React Query'nin sabit güncellenme zamanı render sırasında Date.now() çağırmadan
+    // aynı 30 günlük pencereyi verir; veri yenilenince pencere de yenilenir.
+    const now = ordersUpdatedAt;
     const start = now - BUCKETS * SPAN; // son 30 gün
     const sums = new Array(BUCKETS).fill(0) as number[];
     if (orders) {
@@ -83,7 +89,7 @@ export default function ReportsScreen() {
       const to = from + SPAN - DAY; // kovanın son günü
       return { label: `${fmtDay(from)}–${fmtDay(to)}`, rev };
     });
-  }, [orders]);
+  }, [orders, ordersUpdatedAt]);
 
   const profitability = useMemo(() => {
     if (!products || !rules || !settings) return { top: [], loss: [] };

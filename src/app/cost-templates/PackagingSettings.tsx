@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,48 +21,38 @@ function genId() {
 }
 
 export function PackagingSettings() {
-  const qc = useQueryClient();
   const { data: settings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
+  return (
+    <PackagingSettingsForm
+      key={JSON.stringify(settings)}
+      settings={settings}
+    />
+  );
+}
+
+function PackagingSettingsForm({ settings }: { settings: Record<string, string> }) {
+  const qc = useQueryClient();
+  const [initial] = useState(() => parsePackagingSettings(settings));
 
   // Paketleme seçenekleri (controlled liste)
-  const [options, setOptions] = useState<PackagingOption[]>([]);
+  const [options, setOptions] = useState<PackagingOption[]>(initial.options);
   // Naylon / Bant / Sabit ek maliyet alanları
-  const [nylonRollPrice, setNylonRollPrice] = useState("");
-  const [nylonRollGrams, setNylonRollGrams] = useState("");
-  const [nylonLowGrams, setNylonLowGrams] = useState("");
-  const [nylonMediumGrams, setNylonMediumGrams] = useState("");
-  const [nylonHighGrams, setNylonHighGrams] = useState("");
-  const [tapePrice, setTapePrice] = useState("");
-  const [tapeProductsPerRoll, setTapeProductsPerRoll] = useState("");
-  const [cardQty, setCardQty] = useState("");
-  const [cardPrice, setCardPrice] = useState("");
-  const [stickerQty, setStickerQty] = useState("");
-  const [stickerPrice, setStickerPrice] = useState("");
-  const [sakizQty, setSakizQty] = useState("");
-  const [sakizPrice, setSakizPrice] = useState("");
-
-  // Settings yüklenince state'i doldur
-  useEffect(() => {
-    const p = parsePackagingSettings(settings);
-    setOptions(p.options);
-    setNylonRollPrice(p.nylonRollPrice ? String(p.nylonRollPrice) : "");
-    setNylonRollGrams(p.nylonRollGrams ? String(p.nylonRollGrams) : "");
-    setNylonLowGrams(String(p.nylonLowGrams));
-    setNylonMediumGrams(String(p.nylonMediumGrams));
-    setNylonHighGrams(String(p.nylonHighGrams));
-    setTapePrice(p.tapePrice ? String(p.tapePrice) : "");
-    setTapeProductsPerRoll(String(p.tapeProductsPerRoll));
-    setCardQty(p.cardQty ? String(p.cardQty) : "");
-    setCardPrice(p.cardPrice ? String(p.cardPrice) : "");
-    setStickerQty(p.stickerQty ? String(p.stickerQty) : "");
-    setStickerPrice(p.stickerPrice ? String(p.stickerPrice) : "");
-    setSakizQty(p.sakizQty ? String(p.sakizQty) : "");
-    setSakizPrice(p.sakizPrice ? String(p.sakizPrice) : "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(settings)]);
+  const [nylonRollPrice, setNylonRollPrice] = useState(initial.nylonRollPrice ? String(initial.nylonRollPrice) : "");
+  const [nylonRollGrams, setNylonRollGrams] = useState(initial.nylonRollGrams ? String(initial.nylonRollGrams) : "");
+  const [nylonLowGrams, setNylonLowGrams] = useState(String(initial.nylonLowGrams));
+  const [nylonMediumGrams, setNylonMediumGrams] = useState(String(initial.nylonMediumGrams));
+  const [nylonHighGrams, setNylonHighGrams] = useState(String(initial.nylonHighGrams));
+  const [tapePrice, setTapePrice] = useState(initial.tapePrice ? String(initial.tapePrice) : "");
+  const [tapeProductsPerRoll, setTapeProductsPerRoll] = useState(String(initial.tapeProductsPerRoll));
+  const [cardQty, setCardQty] = useState(initial.cardQty ? String(initial.cardQty) : "");
+  const [cardPrice, setCardPrice] = useState(initial.cardPrice ? String(initial.cardPrice) : "");
+  const [stickerQty, setStickerQty] = useState(initial.stickerQty ? String(initial.stickerQty) : "");
+  const [stickerPrice, setStickerPrice] = useState(initial.stickerPrice ? String(initial.stickerPrice) : "");
+  const [sakizQty, setSakizQty] = useState(initial.sakizQty ? String(initial.sakizQty) : "");
+  const [sakizPrice, setSakizPrice] = useState(initial.sakizPrice ? String(initial.sakizPrice) : "");
 
   const save = useMutation({
     mutationFn: (data: Record<string, string>) =>

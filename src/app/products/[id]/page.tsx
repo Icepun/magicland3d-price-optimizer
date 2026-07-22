@@ -157,15 +157,12 @@ export default function ProductDetailPage({
   });
 
   // Kimlik formu state (maliyet formu artık izole CostEditor'da → yazarken bu dev sayfa render olmaz)
-  const [aliasInput, setAliasInput] = useState("");
+  const productKey = product?.id ?? "";
+  const aliasSource = product?.alias ?? "";
+  const [aliasDraft, setAliasDraft] = useState({ productId: "", value: "" });
+  const aliasInput = aliasDraft.productId === productKey ? aliasDraft.value : aliasSource;
+  const setAliasInput = (value: string) => setAliasDraft({ productId: productKey, value });
   const [imageEditorOpen, setImageEditorOpen] = useState(false);
-
-  // Takma adı yalnız ürün KİMLİĞİ değişince (navigasyon/ilk yükleme) seed et — her optimistic cache
-  // güncellemesinde DEĞİL (eskiden [product]'tı → her kayıtta gereksiz churn + olası input clobber).
-  useEffect(() => {
-    if (product) setAliasInput(product.alias ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.id]);
 
   // Paketleme ayarları — globalSettings değişmedikçe yeniden parse etme (her render'da JSON.parse YOK).
   const packagingSettings = useMemo(() => parsePackagingSettings(globalSettings), [globalSettings]);
@@ -173,15 +170,32 @@ export default function ProductDetailPage({
   // ── İzole maliyet formu ⇄ parent köprüsü ──
   // CostEditor tüm input state'ini LOCAL tutar; 250ms debounce'la buraya bildirir. Böylece tuşa
   // basınca yalnız o küçük kart render olur; bu dev sayfa (3 platform kartı + grafikler) DEĞİL.
-  const [costValues, setCostValues] = useState<CostValues | null>(null);
+  const seededCostValues = useMemo<CostValues | null>(() => {
+    if (!product) return null;
+    const cost = product.cost;
+    return {
+      filamentTypeId: cost?.filamentTypeId || "",
+      filamentWeight: cost?.filamentWeight ?? 0,
+      printTimeHours: cost?.printTimeHours ?? 0,
+      wasteRate: Number(cost?.wasteRate) || 0,
+      packagingOptionId: cost?.packagingOptionId || "",
+      nylonLevel: (cost?.nylonLevel as NylonLevel) || "none",
+      tapeUsed: Boolean(cost?.tapeUsed),
+      desi: product.desi ?? null,
+    };
+    // Yalnız ürün kimliği değişince seed et; aynı üründeki cache güncellemesi formu ezmemeli.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product?.id]);
+  const [costDraft, setCostDraft] = useState<{ productId: string; values: CostValues } | null>(null);
+  const costValues = costDraft?.productId === productKey ? costDraft.values : seededCostValues;
   const latestCostRef = useRef<CostValues | null>(null);
   const costRevisionRef = useRef(0);
   const attemptedCostRevisionRef = useRef(0);
   const handleCostChange = useCallback((v: CostValues) => {
     latestCostRef.current = v;
     costRevisionRef.current += 1;
-    setCostValues(v);
-  }, []);
+    setCostDraft({ productId: productKey, values: v });
+  }, [productKey]);
 
   // CostEditor başlangıç değerleri — yalnız ürün kimliği değişince yeniden hesaplanır (sabit prop → memo tutar).
   const initialCost = useMemo<CostInitial>(() => {
@@ -199,27 +213,12 @@ export default function ProductDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id]);
 
-  // costValues'u ürün (navigasyon/ilk yükleme) değişince seed et → önizleme ilk açılışta hazır olsun,
-  // başka varyanta geçince eski değer sızmasın. Optimistic güncellemede (id sabit) TETİKLENMEZ → clobber yok.
+  // Ürün değişince autosave revizyonlarını sıfırla; form değeri render sırasında ürün anahtarından türetilir.
   useEffect(() => {
-    if (!product) return;
-    const c = product.cost;
-    const seededValues: CostValues = {
-      filamentTypeId: c?.filamentTypeId || "",
-      filamentWeight: c?.filamentWeight ?? 0,
-      printTimeHours: c?.printTimeHours ?? 0,
-      wasteRate: Number(c?.wasteRate) || 0,
-      packagingOptionId: c?.packagingOptionId || "",
-      nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
-      tapeUsed: Boolean(c?.tapeUsed),
-      desi: product.desi ?? null,
-    };
-    latestCostRef.current = seededValues;
+    latestCostRef.current = seededCostValues;
     costRevisionRef.current = 0;
     attemptedCostRevisionRef.current = 0;
-    setCostValues(seededValues);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.id]);
+  }, [productKey, seededCostValues]);
 
   const saveCostMutation = useMutation({
     mutationFn: async ({ productId, values: v }: CostSaveAttempt) => {
@@ -799,20 +798,24 @@ function PlatformProfitCardImpl({
 
   const [editing, setEditing] = useState(false);
   const [matchOpen, setMatchOpen] = useState(false);
-  const [salePrice, setSalePrice] = useState(listing?.salePrice ? String(listing.salePrice) : "");
-  const [commissionRate, setCommissionRate] = useState(
-    listing?.commissionRate ? String(listing.commissionRate * 100) : ""
-  );
-  // Bu platformun sipariş-eşleşme barkodu (HB barkodu Trendyol'dan farklı → ayrı girilir, #7).
-  const [listingBarcode, setListingBarcode] = useState(listing?.barcode ?? "");
-
-  useEffect(() => {
-    if (listing) {
-      setSalePrice(String(listing.salePrice));
-      setCommissionRate(listing.commissionRate ? String(listing.commissionRate * 100) : "");
-      setListingBarcode(listing.barcode ?? "");
-    }
-  }, [listing]);
+  const listingSource = {
+    key: `${productId}:${listing?.id ?? "new"}:${listing?.salePrice ?? ""}:${listing?.commissionRate ?? ""}:${listing?.barcode ?? ""}`,
+    salePrice: listing?.salePrice ? String(listing.salePrice) : "",
+    commissionRate: listing?.commissionRate ? String(listing.commissionRate * 100) : "",
+    listingBarcode: listing?.barcode ?? "",
+  };
+  const [listingDraft, setListingDraft] = useState(listingSource);
+  const activeDraft = listingDraft.key === listingSource.key ? listingDraft : listingSource;
+  const { salePrice, commissionRate, listingBarcode } = activeDraft;
+  const updateListingDraft = (patch: Partial<Omit<typeof listingSource, "key">>) =>
+    setListingDraft((current) => ({
+      ...(current.key === listingSource.key ? current : listingSource),
+      ...patch,
+      key: listingSource.key,
+    }));
+  const setSalePrice = (value: string) => updateListingDraft({ salePrice: value });
+  const setCommissionRate = (value: string) => updateListingDraft({ commissionRate: value });
+  const setListingBarcode = (value: string) => updateListingDraft({ listingBarcode: value });
 
   // Barkod alanı pazaryeri kartlarında (Trendyol + Hepsiburada): her platformun sipariş-eşleşme
   // barkodu ayrı tutulur. Shopify ana ürün kaynağı → barkodu zaten oradan gelir, kartta gösterilmez.

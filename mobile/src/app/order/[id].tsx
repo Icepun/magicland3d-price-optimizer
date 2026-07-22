@@ -137,7 +137,12 @@ export default function OrderDetailScreen() {
           return (
             <View key={i} style={styles.lineRow}>
               {p?.imageUrl ? (
-                <Image source={{ uri: thumbUrl(p.imageUrl, 128)! }} style={styles.lineImg} contentFit="cover" />
+                <Image
+                  source={{ uri: thumbUrl(p.imageUrl, 128)! }}
+                  alt={line.name}
+                  style={styles.lineImg}
+                  contentFit="cover"
+                />
               ) : (
                 <View style={[styles.lineImg, styles.lineImgEmpty]} />
               )}

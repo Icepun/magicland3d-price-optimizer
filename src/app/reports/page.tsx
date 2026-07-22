@@ -7,7 +7,6 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Respon
 import { BarChart3, TrendingUp, TrendingDown, ShoppingCart, Trophy, Package } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PlatformLogo } from "@/components/PlatformLogo";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { thumbUrl } from "@/lib/image";
 

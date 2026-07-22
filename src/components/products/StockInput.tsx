@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,12 +23,6 @@ export function StockInput({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Dışarıdan değer değişirse (ör. +/- butonu, senkron) düzenlemede DEĞİLKEN yansıt.
-  useEffect(() => {
-    if (!editing) setDraft(String(value));
-  }, [value, editing]);
 
   const commit = () => {
     setEditing(false);
@@ -43,13 +37,12 @@ export function StockInput({
 
   return (
     <input
-      ref={inputRef}
       type="text"
       inputMode="numeric"
-      value={draft}
+      value={editing ? draft : String(value)}
       title={title ?? "Stok — tıkla ve doğrudan yaz"}
       aria-label="Stok adedi"
-      onFocus={(e) => { setEditing(true); e.currentTarget.select(); }}
+      onFocus={(e) => { setDraft(String(value)); setEditing(true); e.currentTarget.select(); }}
       onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ""))}
       onBlur={commit}
       onKeyDown={(e) => {

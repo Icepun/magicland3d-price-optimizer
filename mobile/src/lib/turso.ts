@@ -99,7 +99,7 @@ async function pipeline(stmts: Stmt[]): Promise<ExecuteResult[]> {
   }
 
   const json = (await res.json()) as {
-    results: Array<
+    results: (
       | {
           type: "ok";
           response: {
@@ -113,7 +113,7 @@ async function pipeline(stmts: Stmt[]): Promise<ExecuteResult[]> {
           };
         }
       | { type: "error"; error: { message: string } }
-    >;
+    )[];
   };
 
   const out: ExecuteResult[] = [];

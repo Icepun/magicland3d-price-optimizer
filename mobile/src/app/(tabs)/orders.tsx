@@ -132,7 +132,14 @@ function PhotoBox({ profit, accent, orderId }: { profit?: OrderProfit; accent: s
   return (
     <View>
       {profit?.image ? (
-        <Image source={{ uri: thumbUrl(profit.image, 160)! }} style={styles.photo} contentFit="cover" transition={150} recyclingKey={orderId} />
+        <Image
+          source={{ uri: thumbUrl(profit.image, 160)! }}
+          alt="Sipariş ürünü"
+          style={styles.photo}
+          contentFit="cover"
+          transition={150}
+          recyclingKey={orderId}
+        />
       ) : (
         <View style={[styles.photo, styles.photoEmpty]}>
           <View style={[styles.platDotBig, { backgroundColor: accent }]} />

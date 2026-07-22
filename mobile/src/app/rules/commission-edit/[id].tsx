@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, View } from "react-native";
+import { useState } from "react";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { DeleteButton, Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
@@ -11,6 +11,7 @@ import {
   deleteCommissionRule,
   getAllCommissionRules,
   updateCommissionRule,
+  type CommissionRuleFull,
 } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
@@ -18,26 +19,63 @@ import { ML } from "@/theme/colors";
 export default function CommissionEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const isNew = id === "new";
+  const rulesQuery = useQuery({
+    queryKey: ["commission-rules-all"],
+    queryFn: getAllCommissionRules,
+    enabled: !isNew,
+    refetchOnMount: "always",
+  });
+  const [dataUpdatedAtOnMount] = useState(rulesQuery.dataUpdatedAt);
+  const hasFreshData = rulesQuery.dataUpdatedAt > dataUpdatedAtOnMount;
+  const existing = isNew ? null : rulesQuery.data?.find((rule) => rule.id === id);
+
+  if (!isNew && (!hasFreshData || !existing)) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <ScreenHeader title="Komisyon Düzenle" />
+        <View style={styles.center}>
+          {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
+            <ActivityIndicator color={ML.accent} size="large" />
+          ) : (
+            <>
+              <Text style={styles.message}>
+                {rulesQuery.error instanceof Error
+                  ? rulesQuery.error.message
+                  : "Komisyon kuralı bulunamadı."}
+              </Text>
+              <PrimaryButton
+                label="Tekrar dene"
+                onPress={() => void rulesQuery.refetch()}
+                loading={rulesQuery.isFetching}
+              />
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return <CommissionEditForm key={existing?.id ?? "new"} id={id} existing={existing ?? null} />;
+}
+
+function CommissionEditForm({
+  id,
+  existing,
+}: {
+  id: string;
+  existing: CommissionRuleFull | null;
+}) {
+  const isNew = existing === null;
   const qc = useQueryClient();
-  const { data: all } = useQuery({ queryKey: ["commission-rules-all"], queryFn: getAllCommissionRules });
-  const existing = isNew ? null : all?.find((r) => r.id === id);
 
-  const [name, setName] = useState("");
-  const [category, setCategory] = useState("");
-  const [rate, setRate] = useState("");
-  const [fixed, setFixed] = useState("");
-  const [minP, setMinP] = useState("0");
-  const [maxP, setMaxP] = useState("999999");
-
-  useEffect(() => {
-    if (!existing) return;
-    setName(existing.name);
-    setCategory(existing.categoryName ?? "");
-    setRate(String(existing.commissionRate * 100));
-    setFixed(existing.fixedCommission ? String(existing.fixedCommission) : "");
-    setMinP(String(existing.minPrice));
-    setMaxP(String(existing.maxPrice));
-  }, [existing]);
+  const [name, setName] = useState(existing?.name ?? "");
+  const [category, setCategory] = useState(existing?.categoryName ?? "");
+  const [rate, setRate] = useState(existing ? String(existing.commissionRate * 100) : "");
+  const [fixed, setFixed] = useState(
+    existing?.fixedCommission ? String(existing.fixedCommission) : "",
+  );
+  const [minP, setMinP] = useState(existing ? String(existing.minPrice) : "0");
+  const [maxP, setMaxP] = useState(existing ? String(existing.maxPrice) : "999999");
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["commission-rules-all"] });
@@ -153,6 +191,8 @@ export default function CommissionEditScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
+  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },
   row: { flexDirection: "row", gap: 12 },
 });
