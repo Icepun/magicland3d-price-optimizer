@@ -24,6 +24,8 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { cn, formatCurrency } from "@/lib/utils";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 interface CargoRule {
   id: string;
@@ -446,30 +448,25 @@ export default function CargoRulesPage() {
   // ÖNEMLİ: Ürünler sayfası staleTime:Infinity + refetchOnMount:false kullanıyor → yalnız
   // invalidate onu tazelemez (bu yüzden eskiden ancak yeniden başlatınca düzeliyordu). removeQueries
   // önbelleği SİLER → sayfaya girince taze çeker. Orders sunucu önbeleği ayrıca route'ta düşürüldü.
-  const bustPricingQueries = () => {
-    queryClient.removeQueries({ queryKey: ["products"] });     // Ürünler (Infinity + refetchOnMount:false)
-    queryClient.invalidateQueries({ queryKey: ["orders"] });   // Siparişler + Raporlar (["orders"] paylaşır)
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] }); // Panel
-    queryClient.invalidateQueries({ queryKey: ["price-changes"] });
-  };
+  const bustPricingQueries = () => clearPricingQueryCache(queryClient);
 
   const { data: rules = [], isLoading } = useQuery<CargoRule[]>({
     queryKey: ["cargo-rules"],
-    queryFn: () => fetch("/api/cargo-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/cargo-rules"),
   });
 
   const { data: hb } = useQuery<HbCargo>({
     queryKey: ["hb-cargo"],
-    queryFn: () => fetch("/api/cargo-rules/hepsiburada").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/cargo-rules/hepsiburada"),
   });
 
   const applyHb = useMutation({
     mutationFn: (mode: CargoMode) =>
-      fetch("/api/cargo-rules/hepsiburada", {
+      fetchJson("/api/cargo-rules/hepsiburada", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: (_d, mode) => {
       queryClient.invalidateQueries({ queryKey: ["hb-cargo"] });
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
@@ -495,11 +492,11 @@ export default function CargoRulesPage() {
   // Trendyol kargo desteği: TEX düz baremlerinin isActive'ini çevirir (optimistic → anında).
   const applyTrendyol = useMutation({
     mutationFn: (mode: CargoMode) =>
-      fetch("/api/cargo-rules/trendyol", {
+      fetchJson("/api/cargo-rules/trendyol", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
-      }).then((r) => r.json()),
+      }),
     onMutate: async (mode: CargoMode) => {
       await queryClient.cancelQueries({ queryKey: ["cargo-rules"] });
       const prev = queryClient.getQueryData<CargoRule[]>(["cargo-rules"]);
@@ -529,11 +526,11 @@ export default function CargoRulesPage() {
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
-      fetch("/api/cargo-rules", {
+      fetchJson("/api/cargo-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
       bustPricingQueries();
@@ -545,11 +542,11 @@ export default function CargoRulesPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: FormData }) =>
-      fetch(`/api/cargo-rules/${id}`, {
+      fetchJson(`/api/cargo-rules/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
       bustPricingQueries();
@@ -560,7 +557,7 @@ export default function CargoRulesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/cargo-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetchJson(`/api/cargo-rules/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
       bustPricingQueries();

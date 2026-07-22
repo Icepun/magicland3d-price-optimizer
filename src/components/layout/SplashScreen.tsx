@@ -22,8 +22,10 @@ export function SplashScreen() {
   const dashFetching = useIsFetching({ queryKey: ["dashboard"] });
   const sawFetchRef = useRef(false);
   const fetchingRef = useRef(dashFetching);
-  fetchingRef.current = dashFetching;
-  if (dashFetching > 0) sawFetchRef.current = true;
+  useEffect(() => {
+    fetchingRef.current = dashFetching;
+    if (dashFetching > 0) sawFetchRef.current = true;
+  }, [dashFetching]);
 
   useEffect(() => {
     const MIN_MS = 550; // logo flaş etmesin
@@ -96,7 +98,7 @@ export function SplashScreen() {
           src="/logo-dark.png"
           alt="Magicland 3D"
           width={260}
-          height={200}
+          height={260}
           priority
           className="object-contain select-none"
           style={{ filter: "drop-shadow(0 4px 24px oklch(0.62 0.20 278 / 30%))" }}

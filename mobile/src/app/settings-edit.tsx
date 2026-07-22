@@ -2,18 +2,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
-import { ScrollView, StyleSheet, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
 import { getSettingsMap } from "@/lib/db/rules";
 import { updateSettings } from "@/lib/db/rule-crud";
+import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
 
-const FIELDS: { key: string; label: string; fallback: string }[] = [
-  { key: "vatRate", label: "KDV ORANI (%)", fallback: "20" },
-  { key: "shopifyCommissionRate", label: "SHOPIFY KOMİSYON (%)", fallback: "3.2" },
-  { key: "discountBuffer", label: "İNDİRİM PAYI (%)", fallback: "0" },
+const FIELDS: { key: string; label: string; fallback: string; max?: number }[] = [
+  { key: "vatRate", label: "KDV ORANI (%)", fallback: "20", max: 100 },
+  { key: "shopifyCommissionRate", label: "SHOPIFY KOMİSYON (%)", fallback: "3.2", max: 100 },
+  { key: "discountBuffer", label: "İNDİRİM PAYI (%)", fallback: "0", max: 100 },
   { key: "costElectricityPerHour", label: "ELEKTRİK / SAAT (₺)", fallback: "0" },
   { key: "costLaborPerHour", label: "İŞÇİLİK / SAAT (₺)", fallback: "0" },
   { key: "costMachineWearPerHour", label: "MAKİNE AŞINMA / SAAT (₺)", fallback: "0" },
@@ -33,13 +34,31 @@ export default function SettingsEditScreen() {
 
   const save = useMutation({
     // Tek batch round-trip (eski hali 6 ardışık upsert ~300-1200ms + yarıda kalma riskiydi).
-    mutationFn: () =>
-      updateSettings(Object.fromEntries(FIELDS.map((f) => [f.key, vals[f.key] ?? f.fallback]))),
+    mutationFn: () => {
+      const normalized = Object.fromEntries(
+        FIELDS.map((field) => {
+          const parsed = parseTrNumber(vals[field.key] ?? field.fallback);
+          if (parsed === null) {
+            throw new Error(`${field.label} için geçerli bir sayı girin.`);
+          }
+          if (parsed < 0 || (field.max != null && parsed > field.max)) {
+            throw new Error(
+              field.max == null
+                ? `${field.label} negatif olamaz.`
+                : `${field.label} 0 ile ${field.max} arasında olmalı.`,
+            );
+          }
+          return [field.key, String(parsed)];
+        }),
+      );
+      return updateSettings(normalized);
+    },
     onSuccess: () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       qc.invalidateQueries({ queryKey: ["settings"] });
       router.back();
     },
+    onError: (error) => Alert.alert("Kaydedilemedi", error.message),
   });
 
   return (

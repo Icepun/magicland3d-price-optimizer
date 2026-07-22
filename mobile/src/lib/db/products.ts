@@ -21,12 +21,18 @@ export async function getProducts(): Promise<ProductRow[]> {
   );
 }
 
-/** Tek ürünün stoğunu güncelle (raw SQL — updatedAt'i de elle set ediyoruz). */
-export async function setProductStock(id: string, stock: number): Promise<void> {
-  await execute(
-    `UPDATE Product SET stock = ?, updatedAt = ? WHERE id = ?`,
-    [stock, new Date().toISOString(), id]
+/** Tek ürünün stoğunu atomik olarak değiştir ve veritabanındaki son değeri döndür. */
+export async function adjustProductStock(id: string, delta: number): Promise<number> {
+  const result = await execute<{ stock: number }>(
+    `UPDATE Product
+        SET stock = MAX(0, COALESCE(stock, 0) + ?), updatedAt = ?
+      WHERE id = ?
+      RETURNING stock`,
+    [delta, new Date().toISOString(), id],
   );
+  const row = result.rows[0];
+  if (!row) throw new Error("Ürün bulunamadı.");
+  return row.stock;
 }
 
 /** Ürün takma adını güncelle (alias — mobilde düzenlenebilir kısa ad). Boş → null. */

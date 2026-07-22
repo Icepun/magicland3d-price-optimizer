@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { z } from "zod";
 
 const Schema = z.object({
@@ -19,6 +20,7 @@ export async function PATCH(
       where: { id },
       data,
     });
+    invalidateOrdersCache();
     return NextResponse.json(filament);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Hata olustu";
@@ -33,6 +35,7 @@ export async function DELETE(
   try {
     const { id } = await params;
     await prisma.filamentType.delete({ where: { id } });
+    invalidateOrdersCache();
     return NextResponse.json({ ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Hata olustu";

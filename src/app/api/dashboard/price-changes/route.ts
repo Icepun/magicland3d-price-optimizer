@@ -12,6 +12,12 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const days = Number(url.searchParams.get("days") ?? 30);
   const limit = Number(url.searchParams.get("limit") ?? 10);
+  if (!Number.isInteger(days) || days < 1 || days > 3650) {
+    return NextResponse.json({ error: "days 1-3650 arasında tam sayı olmalı" }, { status: 400 });
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    return NextResponse.json({ error: "limit 1-100 arasında tam sayı olmalı" }, { status: 400 });
+  }
 
   const since = new Date();
   since.setDate(since.getDate() - days);

@@ -20,12 +20,14 @@ import {
   updateExpenseRule,
   type ExpenseType,
 } from "@/lib/db/rule-crud";
+import { parseTrNumber } from "@/lib/number";
 import { ML, radius } from "@/theme/colors";
 
 const PLATFORMS = [
   { key: "all", label: "Tümü" },
   { key: "shopify", label: "Shopify" },
   { key: "trendyol", label: "Trendyol" },
+  { key: "hepsiburada", label: "Hepsiburada" },
 ];
 const TYPES: { key: ExpenseType; label: string }[] = [
   { key: "fixed", label: "Sabit ₺" },
@@ -46,6 +48,8 @@ export default function ExpenseEditScreen() {
   const [type, setType] = useState<ExpenseType>("fixed");
   const [value, setValue] = useState("");
   const [category, setCategory] = useState("");
+  const [minPrice, setMinPrice] = useState("0");
+  const [maxPrice, setMaxPrice] = useState("999999");
 
   useEffect(() => {
     if (!existing) return;
@@ -54,19 +58,38 @@ export default function ExpenseEditScreen() {
     setType(existing.type);
     setValue(existing.type === "percentage" ? String(existing.value * 100) : String(existing.value));
     setCategory(existing.categoryName ?? "");
+    setMinPrice(String(existing.minPrice));
+    setMaxPrice(String(existing.maxPrice));
   }, [existing]);
 
   const save = useMutation({
     mutationFn: async () => {
-      const raw = parseFloat(value) || 0;
+      const raw = parseTrNumber(value);
+      const parsedMinPrice = parseTrNumber(minPrice);
+      const parsedMaxPrice = parseTrNumber(maxPrice);
+
+      if (raw === null || parsedMinPrice === null || parsedMaxPrice === null) {
+        throw new Error("Lütfen tüm sayısal alanlara geçerli bir değer girin.");
+      }
+      if (raw < 0 || (type === "percentage" && raw > 100)) {
+        throw new Error(
+          type === "percentage"
+            ? "Yüzde değeri 0 ile 100 arasında olmalı."
+            : "Gider değeri negatif olamaz.",
+        );
+      }
+      if (parsedMinPrice < 0 || parsedMaxPrice < parsedMinPrice) {
+        throw new Error("Fiyat aralığı geçersiz.");
+      }
+
       const draft = {
         name: name.trim() || "Gider",
         platform: platform === "all" ? null : platform,
         type,
         value: type === "percentage" ? raw / 100 : raw,
         categoryName: category.trim() || null,
-        minPrice: 0,
-        maxPrice: 999999,
+        minPrice: parsedMinPrice,
+        maxPrice: parsedMaxPrice,
       };
       if (isNew) await createExpenseRule(draft);
       else await updateExpenseRule(id, draft);
@@ -76,6 +99,7 @@ export default function ExpenseEditScreen() {
       invalidate();
       router.back();
     },
+    onError: (error) => Alert.alert("Kaydedilemedi", error.message),
   });
 
   const remove = useMutation({
@@ -140,6 +164,31 @@ export default function ExpenseEditScreen() {
             style={styles.input}
           />
         </Field>
+
+        <View style={styles.priceRow}>
+          <View style={{ flex: 1 }}>
+            <Field label="MİN FİYAT (₺)">
+              <TextInput
+                value={minPrice}
+                onChangeText={setMinPrice}
+                keyboardType="decimal-pad"
+                placeholderTextColor={ML.textFaint}
+                style={styles.input}
+              />
+            </Field>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field label="MAX FİYAT (₺)">
+              <TextInput
+                value={maxPrice}
+                onChangeText={setMaxPrice}
+                keyboardType="decimal-pad"
+                placeholderTextColor={ML.textFaint}
+                style={styles.input}
+              />
+            </Field>
+          </View>
+        </View>
 
         <Pressable
           onPress={() => save.mutate()}
@@ -215,6 +264,7 @@ const styles = StyleSheet.create({
   backText: { color: ML.text, fontSize: 34, marginTop: -4 },
   headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },
+  priceRow: { flexDirection: "row", gap: 12 },
   label: { color: ML.textFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
   input: {
     backgroundColor: ML.card,

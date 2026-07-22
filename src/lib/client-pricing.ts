@@ -247,7 +247,11 @@ function priceLabFromBase(b: PricingBase): PriceLab {
           : { platform, commissionRate: null, commissionFixed: null },
         b.settings
       ),
-      cargoCostOverride: listing?.cargoCost ?? undefined,
+      // Canlı önizlemeyle aynı platform semantiği: Shopify'da 150 TL altı
+      // ürünün kargosu sepete paylaşılır; Trendyol baremi fiyat adayına göre değişir.
+      cargoCostOverride:
+        listing?.cargoCost ?? (platform === "shopify" && salePrice < 150 ? 0 : undefined),
+      minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: b.filamentMatCost,
     });
 

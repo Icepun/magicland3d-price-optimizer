@@ -5,7 +5,10 @@ import { getAllCargoRules, setCargoRuleActive } from "@/lib/db/rule-crud";
 
 function platformLabel(p: string | null): string {
   if (!p) return "Tümü";
-  return p === "shopify" ? "Shopify" : "Trendyol";
+  if (p === "shopify") return "Shopify";
+  if (p === "trendyol") return "Trendyol";
+  if (p === "hepsiburada") return "Hepsiburada";
+  return p;
 }
 
 export default function CargoRulesScreen() {

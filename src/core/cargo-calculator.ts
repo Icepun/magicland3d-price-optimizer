@@ -1,5 +1,22 @@
 import type { CargoRuleInput } from "./types";
 
+function normalizeCategory(value: string): string {
+  return value.toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+}
+
+function categoryMatches(
+  ruleCategoryName: string | null | undefined,
+  productCategoryName: string
+): boolean {
+  if (!ruleCategoryName) return true;
+
+  const ruleCategory = normalizeCategory(ruleCategoryName);
+  const productCategory = normalizeCategory(productCategoryName);
+  if (!ruleCategory) return true;
+
+  return productCategory.includes(ruleCategory);
+}
+
 /**
  * Kuralları platforma göre filtreler. platform alanı null olan kurallar tüm
  * platformlara uygulanır. Kargo + gider kuralları için ortak kullanılır.
@@ -32,24 +49,13 @@ export function findCargoRule(
     if (desi < r.minDesi || desi > r.maxDesi) return false;
     if (r.validFrom && date < r.validFrom) return false;
     if (r.validTo && date > r.validTo) return false;
+    if (!categoryMatches(r.categoryName, categoryName)) return false;
     return true;
   });
 
   const sorted = active.sort((a, b) => {
-    const aSpecific = a.categoryName
-      ? categoryName
-          .toLowerCase()
-          .includes(a.categoryName.toLowerCase())
-        ? 1
-        : 0
-      : 0;
-    const bSpecific = b.categoryName
-      ? categoryName
-          .toLowerCase()
-          .includes(b.categoryName.toLowerCase())
-        ? 1
-        : 0
-      : 0;
+    const aSpecific = a.categoryName?.trim() ? 1 : 0;
+    const bSpecific = b.categoryName?.trim() ? 1 : 0;
     if (aSpecific !== bSpecific) return bSpecific - aSpecific;
     return b.priority - a.priority;
   });

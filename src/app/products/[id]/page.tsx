@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useMemo, memo, useCallback, useDeferredValue } from "react";
+import { use, useState, useEffect, useMemo, memo, useCallback, useDeferredValue, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { patchProductsInCache } from "@/lib/products-cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
 import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/lib/client-pricing";
+import { fetchJson } from "@/lib/fetch-json";
 
 interface FilamentType {
   id: string;
@@ -100,6 +101,12 @@ interface ProductDetail {
   } | null;
 }
 
+interface CostSaveAttempt {
+  productId: string;
+  values: CostValues;
+  revision: number;
+}
+
 const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
@@ -114,19 +121,19 @@ export default function ProductDetailPage({
   const { id } = use(params);
   const queryClient = useQueryClient();
 
-  const { data: product, isLoading } = useQuery<ProductDetail>({
+  const { data: product, isLoading, isError, refetch: refetchProduct } = useQuery<ProductDetail>({
     queryKey: ["product", id],
-    queryFn: () => fetch(`/api/products/${id}`).then((r) => r.json()),
+    queryFn: () => fetchJson(`/api/products/${id}`),
   });
 
   const { data: filaments = [] } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],
-    queryFn: () => fetch("/api/filament-types").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/filament-types"),
   });
 
   const { data: globalSettings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
 
   // Kâr kuralları — bir kez çekilip uygulama genelinde cache'lenir (staleTime uzun, nadir değişir).
@@ -135,17 +142,17 @@ export default function ProductDetailPage({
   // ana süreçte koşup pencereyi donduruyordu).
   const { data: commissionRules } = useQuery<CommissionRuleInput[]>({
     queryKey: ["commission-rules"],
-    queryFn: () => fetch("/api/commission-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/commission-rules"),
     staleTime: 5 * 60_000,
   });
   const { data: cargoRules } = useQuery<CargoRuleInput[]>({
     queryKey: ["cargo-rules"],
-    queryFn: () => fetch("/api/cargo-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/cargo-rules"),
     staleTime: 5 * 60_000,
   });
   const { data: expenseRules } = useQuery<ExpenseRuleInput[]>({
     queryKey: ["expense-rules"],
-    queryFn: () => fetch("/api/expense-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/expense-rules"),
     staleTime: 5 * 60_000,
   });
 
@@ -167,7 +174,14 @@ export default function ProductDetailPage({
   // CostEditor tüm input state'ini LOCAL tutar; 250ms debounce'la buraya bildirir. Böylece tuşa
   // basınca yalnız o küçük kart render olur; bu dev sayfa (3 platform kartı + grafikler) DEĞİL.
   const [costValues, setCostValues] = useState<CostValues | null>(null);
-  const handleCostChange = useCallback((v: CostValues) => setCostValues(v), []);
+  const latestCostRef = useRef<CostValues | null>(null);
+  const costRevisionRef = useRef(0);
+  const attemptedCostRevisionRef = useRef(0);
+  const handleCostChange = useCallback((v: CostValues) => {
+    latestCostRef.current = v;
+    costRevisionRef.current += 1;
+    setCostValues(v);
+  }, []);
 
   // CostEditor başlangıç değerleri — yalnız ürün kimliği değişince yeniden hesaplanır (sabit prop → memo tutar).
   const initialCost = useMemo<CostInitial>(() => {
@@ -190,7 +204,7 @@ export default function ProductDetailPage({
   useEffect(() => {
     if (!product) return;
     const c = product.cost;
-    setCostValues({
+    const seededValues: CostValues = {
       filamentTypeId: c?.filamentTypeId || "",
       filamentWeight: c?.filamentWeight ?? 0,
       printTimeHours: c?.printTimeHours ?? 0,
@@ -199,19 +213,21 @@ export default function ProductDetailPage({
       nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
       tapeUsed: Boolean(c?.tapeUsed),
       desi: product.desi ?? null,
-    });
+    };
+    latestCostRef.current = seededValues;
+    costRevisionRef.current = 0;
+    attemptedCostRevisionRef.current = 0;
+    setCostValues(seededValues);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id]);
 
   const saveCostMutation = useMutation({
-    mutationFn: async () => {
-      const v = costValues;
-      if (!v) return null;
+    mutationFn: async ({ productId, values: v }: CostSaveAttempt) => {
       // Timeout: ağ ölürse istek asılı kalmasın → başarısız say (sonra retry / rollback).
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 12_000);
       try {
-        const r = await fetch(`/api/products/${id}`, {
+        const r = await fetch(`/api/products/${productId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           signal: ctrl.signal,
@@ -238,12 +254,11 @@ export default function ProductDetailPage({
     retry: 2, // geçici kopmada otomatik tekrar (PATCH idempotent → çift-yazma riski yok)
     retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
     // OPTIMISTIC: detay cache'ini anında güncelle → kullanıcı beklemez.
-    onMutate: async () => {
-      const v = costValues;
-      await queryClient.cancelQueries({ queryKey: ["product", id] });
-      const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
-      queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
-        old && v
+    onMutate: async ({ productId, values: v }) => {
+      await queryClient.cancelQueries({ queryKey: ["product", productId] });
+      const prev = queryClient.getQueryData<ProductDetail>(["product", productId]);
+      queryClient.setQueryData<ProductDetail | undefined>(["product", productId], (old) =>
+        old
           ? {
               ...old,
               desi: v.desi,
@@ -261,18 +276,19 @@ export default function ProductDetailPage({
             }
           : old
       );
-      return { prev };
+      return { prev, productId };
     },
     onError: (_e, _v, ctx) => {
-      // DÜRÜSTLÜK: yazma kalıcı başarısızsa UI'ı GERİ AL + net uyarı → kullanıcı yanıltılmaz.
-      if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
-      toast.error("Kaydedilemedi — bağlantını kontrol et (değişiklik geri alındı)");
+      // Sunucudaki/cache'teki kayıtlı değeri geri al. CostEditor yerel alanları korur; kullanıcı
+      // bağlantı geldikten sonra küçük bir düzenlemeyle tekrar kaydetmeyi tetikleyebilir.
+      if (ctx?.prev) queryClient.setQueryData(["product", ctx.productId], ctx.prev);
+      toast.error("Kaydedilemedi — alanlardaki değişiklikler korunuyor");
     },
-    onSuccess: () => {
+    onSuccess: (_data, { productId }) => {
       toast.success("Maliyet kaydedildi");
       // Önizleme + Fiyat Lab zaten İSTEMCİDE (optimistic cost'tan) günceldir → ekstra okuma YOK.
       // Listede yalnız bu ürünü tazele (tüm 368 değil → minimum okuma, donma yok).
-      patchProductsInCache(queryClient, [id]);
+      patchProductsInCache(queryClient, [productId]);
     },
   });
 
@@ -280,8 +296,8 @@ export default function ProductDetailPage({
   const applyCostToVariantsMutation = useMutation({
     mutationFn: () => {
       const v = costValues;
-      if (!v) return Promise.resolve(null);
-      return fetch(`/api/products/${id}/apply-cost-to-variants`, {
+      if (!v) return Promise.resolve({});
+      return fetchJson<{ count?: number }>(`/api/products/${id}/apply-cost-to-variants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -297,7 +313,7 @@ export default function ProductDetailPage({
             tapeUsed: v.tapeUsed,
           },
         }),
-      }).then((r) => r.json());
+      });
     },
     meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
@@ -458,11 +474,24 @@ export default function ProductDetailPage({
       ((c?.nylonLevel as string) || "none") === costValues.nylonLevel &&
       Boolean(c?.tapeUsed) === costValues.tapeUsed &&
       (product.desi ?? null) === costValues.desi;
-    if (unchanged || saveCostMutation.isPending) return;
-    const t = setTimeout(() => saveCostMutation.mutate(), 800);
+    const revision = costRevisionRef.current;
+    if (unchanged) {
+      attemptedCostRevisionRef.current = Math.max(attemptedCostRevisionRef.current, revision);
+      return;
+    }
+    // Devam eden istek bitince isPending değişir ve effect tekrar çalışır. Revision guard'ı,
+    // başarısız bir snapshot'ı değişiklik yokken sonsuza kadar tekrar denemeyi engeller.
+    if (revision <= attemptedCostRevisionRef.current || saveCostMutation.isPending) return;
+    const t = setTimeout(() => {
+      const values = latestCostRef.current;
+      const latestRevision = costRevisionRef.current;
+      if (!values || latestRevision <= attemptedCostRevisionRef.current || saveCostMutation.isPending) return;
+      attemptedCostRevisionRef.current = latestRevision;
+      saveCostMutation.mutate({ productId: id, values, revision: latestRevision });
+    }, 800);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [costValues, product]);
+  }, [costValues, product, saveCostMutation.isPending]);
 
   // CostEditor'a STABİL onApply ver (memo bozulmasın) — mutate referansı zaten sabit.
   const applyMutate = applyCostToVariantsMutation.mutate;
@@ -492,7 +521,7 @@ export default function ProductDetailPage({
     }
   }, [id, queryClient]);
 
-  if (isLoading || !product) {
+  if (isLoading) {
     return (
       <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300">
         <div className="flex items-center gap-4">
@@ -510,6 +539,32 @@ export default function ProductDetailPage({
             <Skeleton className="h-64" />
           </div>
         </div>
+      </div>
+    );
+  }
+
+  if (isError || !product) {
+    return (
+      <div className="p-6 max-w-xl">
+        <Card>
+          <CardContent className="py-10 text-center space-y-4">
+            <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto" />
+            <div>
+              <h1 className="font-semibold">Ürün yüklenemedi</h1>
+              <p className="text-sm text-muted-foreground mt-1">
+                Ürün bulunamadı veya bağlantı kurulamadı.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="outline" onClick={() => void refetchProduct()}>
+                Tekrar dene
+              </Button>
+              <Link href="/products" className={buttonVariants()}>
+                Ürünlere dön
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -765,7 +820,7 @@ function PlatformProfitCardImpl({
 
   const createListing = useMutation({
     mutationFn: () =>
-      fetch("/api/listings", {
+      fetchJson("/api/listings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -776,7 +831,7 @@ function PlatformProfitCardImpl({
           cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
       // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
@@ -792,7 +847,7 @@ function PlatformProfitCardImpl({
 
   const updateListing = useMutation({
     mutationFn: () =>
-      fetch(`/api/listings/${listing!.id}`, {
+      fetchJson(`/api/listings/${listing!.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -801,7 +856,7 @@ function PlatformProfitCardImpl({
           cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
       // Canlı kâr önizlemesini de tazele → yeni komisyon/fiyat/kargo ANINDA hesaba girsin
@@ -816,7 +871,7 @@ function PlatformProfitCardImpl({
   });
 
   const deleteListing = useMutation({
-    mutationFn: () => fetch(`/api/listings/${listing!.id}`, { method: "DELETE" }).then((r) => r.json()),
+    mutationFn: () => fetchJson(`/api/listings/${listing!.id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });

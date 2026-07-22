@@ -23,6 +23,8 @@ import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 interface CommissionRule {
   id: string;
@@ -131,20 +133,19 @@ export default function CommissionRulesPage() {
 
   const { data: rules = [], isLoading } = useQuery<CommissionRule[]>({
     queryKey: ["commission-rules"],
-    queryFn: () => fetch("/api/commission-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/commission-rules"),
   });
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
-      fetch("/api/commission-rules", {
+      fetchJson("/api/commission-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, commissionRate: data.commissionRate / 100 }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Kural eklendi");
       setOpen(false);
     },
@@ -153,15 +154,14 @@ export default function CommissionRulesPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: FormData }) =>
-      fetch(`/api/commission-rules/${id}`, {
+      fetchJson(`/api/commission-rules/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, commissionRate: data.commissionRate / 100 }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Kural güncellendi");
       setEditing(null);
     },
@@ -169,11 +169,10 @@ export default function CommissionRulesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/commission-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetchJson(`/api/commission-rules/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["commission-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Kural silindi");
     },
   });
@@ -351,22 +350,21 @@ function ShopifyCommissionCard() {
   const qc = useQueryClient();
   const { data: settings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
   const [value, setValue] = useState<string | null>(null);
   const current = value ?? settings.shopifyCommissionRate ?? "3.2";
 
   const save = useMutation({
     mutationFn: (rate: string) =>
-      fetch("/api/settings", {
+      fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ shopifyCommissionRate: rate }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(qc);
       toast.success("Shopify komisyonu kaydedildi — tüm Shopify listing'lerine uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),

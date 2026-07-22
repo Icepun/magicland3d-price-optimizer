@@ -267,7 +267,8 @@ export default function ProductsScreen() {
 }
 
 function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
-  const out = item.stock <= 0;
+  const madeToOrder = Boolean(item.madeToOrder);
+  const out = item.stock <= 0 && !madeToOrder;
   return (
     <Pressable
       onPress={() => router.push(`/product/${item.id}`)}
@@ -289,9 +290,14 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
           <Text style={styles.category} numberOfLines={1}>
             {item.category}
           </Text>
-          <View style={[styles.stockDot, { backgroundColor: out ? ML.red : ML.green }]} />
+          <View
+            style={[
+              styles.stockDot,
+              { backgroundColor: out ? ML.red : madeToOrder ? ML.accent : ML.green },
+            ]}
+          />
           <Text style={[styles.stockText, { color: out ? ML.red : ML.textDim }]}>
-            {out ? "Bitti" : `${item.stock} adet`}
+            {madeToOrder ? "Siparişle üretilir" : out ? "Bitti" : `${item.stock} adet`}
           </Text>
         </View>
       </View>

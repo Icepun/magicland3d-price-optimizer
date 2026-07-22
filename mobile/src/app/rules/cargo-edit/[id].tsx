@@ -19,12 +19,14 @@ import {
   getAllCargoRules,
   updateCargoRule,
 } from "@/lib/db/rule-crud";
+import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
 
 const PLATFORMS = [
   { key: "all", label: "Tümü" },
   { key: "shopify", label: "Shopify" },
   { key: "trendyol", label: "Trendyol" },
+  { key: "hepsiburada", label: "Hepsiburada" },
 ];
 
 export default function CargoEditScreen() {
@@ -38,6 +40,9 @@ export default function CargoEditScreen() {
   const [platform, setPlatform] = useState("all");
   const [minDesi, setMinDesi] = useState("0");
   const [maxDesi, setMaxDesi] = useState("999");
+  const [minPrice, setMinPrice] = useState("0");
+  const [maxPrice, setMaxPrice] = useState("999999");
+  const [category, setCategory] = useState("");
   const [cargoCost, setCargoCost] = useState("");
 
   useEffect(() => {
@@ -46,6 +51,9 @@ export default function CargoEditScreen() {
     setPlatform(existing.platform ?? "all");
     setMinDesi(String(existing.minDesi));
     setMaxDesi(String(existing.maxDesi));
+    setMinPrice(String(existing.minPrice));
+    setMaxPrice(String(existing.maxPrice));
+    setCategory(existing.categoryName ?? "");
     setCargoCost(String(existing.cargoCost));
   }, [existing]);
 
@@ -56,14 +64,40 @@ export default function CargoEditScreen() {
 
   const save = useMutation({
     mutationFn: async () => {
+      const parsedMinDesi = parseTrNumber(minDesi);
+      const parsedMaxDesi = parseTrNumber(maxDesi);
+      const parsedMinPrice = parseTrNumber(minPrice);
+      const parsedMaxPrice = parseTrNumber(maxPrice);
+      const parsedCargoCost = parseTrNumber(cargoCost);
+
+      if (
+        parsedMinDesi === null ||
+        parsedMaxDesi === null ||
+        parsedMinPrice === null ||
+        parsedMaxPrice === null ||
+        parsedCargoCost === null
+      ) {
+        throw new Error("Lütfen tüm sayısal alanlara geçerli bir değer girin.");
+      }
+      if (parsedMinDesi < 0 || parsedMaxDesi < parsedMinDesi) {
+        throw new Error("Desi aralığı geçersiz.");
+      }
+      if (parsedMinPrice < 0 || parsedMaxPrice < parsedMinPrice) {
+        throw new Error("Fiyat aralığı geçersiz.");
+      }
+      if (parsedCargoCost < 0) {
+        throw new Error("Kargo ücreti negatif olamaz.");
+      }
+
       const draft = {
         name: name.trim() || "Kargo",
         platform: platform === "all" ? null : platform,
-        minDesi: parseFloat(minDesi) || 0,
-        maxDesi: parseFloat(maxDesi) || 999,
-        minPrice: 0,
-        maxPrice: 999999,
-        cargoCost: parseFloat(cargoCost) || 0,
+        minDesi: parsedMinDesi,
+        maxDesi: parsedMaxDesi,
+        minPrice: parsedMinPrice,
+        maxPrice: parsedMaxPrice,
+        cargoCost: parsedCargoCost,
+        categoryName: category.trim() || null,
       };
       if (isNew) await createCargoRule(draft);
       else await updateCargoRule(id, draft);
@@ -73,6 +107,7 @@ export default function CargoEditScreen() {
       invalidate();
       router.back();
     },
+    onError: (error) => Alert.alert("Kaydedilemedi", error.message),
   });
 
   const remove = useMutation({
@@ -105,6 +140,21 @@ export default function CargoEditScreen() {
             </Field>
           </View>
         </View>
+        <View style={styles.row}>
+          <View style={{ flex: 1 }}>
+            <Field label="MİN FİYAT (₺)">
+              <TextField value={minPrice} onChange={setMinPrice} numeric />
+            </Field>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field label="MAX FİYAT (₺)">
+              <TextField value={maxPrice} onChange={setMaxPrice} numeric />
+            </Field>
+          </View>
+        </View>
+        <Field label="KATEGORİ (opsiyonel)">
+          <TextField value={category} onChange={setCategory} placeholder="Boş = tüm kategoriler" />
+        </Field>
         <Field label="KARGO ÜCRETİ (₺)">
           <TextField value={cargoCost} onChange={setCargoCost} placeholder="0" numeric />
         </Field>

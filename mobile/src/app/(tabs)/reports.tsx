@@ -50,7 +50,10 @@ export default function ReportsScreen() {
   const topSellers = useMemo(() => {
     if (!orders) return [];
     const m = new Map<string, number>();
-    for (const o of orders.orders) for (const it of o.items) m.set(it.name, (m.get(it.name) ?? 0) + it.quantity);
+    for (const o of orders.orders) {
+      if (isCancelledOrder(o)) continue;
+      for (const it of o.items) m.set(it.name, (m.get(it.name) ?? 0) + it.quantity);
+    }
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, qty]) => ({ name, qty }));
   }, [orders]);
 

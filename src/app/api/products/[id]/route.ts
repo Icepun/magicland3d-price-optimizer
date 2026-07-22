@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { computeFullProductCost } from "@/core/cost-calculator";
 import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { z } from "zod";
 
 const UpdateProductSchema = z.object({
@@ -232,6 +233,8 @@ export async function PATCH(
 
   // Caller'lar yanıt gövdesini kullanmıyor (optimistic cache + refetch yok) → tam ürünü
   // serileştirme; yalnızca onay dön.
+  // Ürün kimliği/maliyet/desi/stok gibi alanlar sipariş eşleştirmesini veya kâr gövdesini etkileyebilir.
+  invalidateOrdersCache();
   return NextResponse.json({ ok: true });
 }
 
@@ -257,5 +260,6 @@ export async function DELETE(
       await prisma.variantGroup.delete({ where: { id: existing.variantGroupId } }).catch(() => {});
     }
   }
+  invalidateOrdersCache();
   return NextResponse.json({ ok: true });
 }

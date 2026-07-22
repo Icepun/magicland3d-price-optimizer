@@ -6,6 +6,24 @@ import type {
 } from "@core/types";
 import type { Rules } from "@/lib/profit";
 
+function parseRuleDate(value: unknown): Date | null {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+
+  // libSQL/Prisma sürümüne göre DATETIME ISO metni veya epoch olarak gelebilir.
+  const numeric = typeof value === "number" ? value : /^\d+$/.test(String(value)) ? Number(value) : null;
+  const date = new Date(numeric == null ? String(value) : numeric < 100_000_000_000 ? numeric * 1000 : numeric);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function normalizeRuleDates<T extends CommissionRuleInput | CargoRuleInput>(row: T): T {
+  return {
+    ...row,
+    validFrom: parseRuleDate(row.validFrom as unknown),
+    validTo: parseRuleDate(row.validTo as unknown),
+  };
+}
+
 /**
  * Üç kural setini TEK round-trip'te getir (batch). Ekranlardaki ["rules"] sorgusu bunu kullanır —
  * eski hali 3 ARDIŞIK round-trip'ti (~100-400ms boşa; açılışın kritik yolunda).
@@ -30,29 +48,31 @@ export async function getRules(): Promise<Rules> {
     },
   ]);
   return {
-    commission: c.rows as unknown as CommissionRuleInput[],
-    cargo: k.rows as unknown as CargoRuleInput[],
+    commission: (c.rows as unknown as CommissionRuleInput[]).map(normalizeRuleDates),
+    cargo: (k.rows as unknown as CargoRuleInput[]).map(normalizeRuleDates),
     expense: e.rows as unknown as ExpenseRuleInput[],
   };
 }
 
 /** Aktif komisyon kuralları (öncelik sırasıyla). */
 export async function getCommissionRules(): Promise<CommissionRuleInput[]> {
-  return query<CommissionRuleInput>(
+  const rows = await query<CommissionRuleInput>(
     `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
             fixedCommission, validFrom, validTo, priority, isActive
        FROM CommissionRule WHERE isActive = 1
       ORDER BY priority DESC, name ASC`
   );
+  return rows.map(normalizeRuleDates);
 }
 
 /** Aktif kargo kuralları. */
 export async function getCargoRules(): Promise<CargoRuleInput[]> {
-  return query<CargoRuleInput>(
+  const rows = await query<CargoRuleInput>(
     `SELECT id, name, platform, cargoProvider, categoryName, minPrice, maxPrice,
             minDesi, maxDesi, cargoCost, validFrom, validTo, priority, isActive
        FROM CargoRule WHERE isActive = 1`
   );
+  return rows.map(normalizeRuleDates);
 }
 
 /** Aktif ek gider kuralları (KDV, platform bedeli vb.). */

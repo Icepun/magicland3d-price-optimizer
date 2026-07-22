@@ -69,7 +69,7 @@ export function Sidebar() {
           src="/logo.png"
           alt="Magicland 3D"
           width={120}
-          height={48}
+          height={120}
           priority
           className="object-contain select-none block dark:hidden"
           style={{ filter: "drop-shadow(0 2px 12px oklch(0.66 0.20 278 / 35%))" }}
@@ -78,7 +78,7 @@ export function Sidebar() {
           src="/logo-dark.png"
           alt="Magicland 3D"
           width={120}
-          height={48}
+          height={120}
           priority
           className="object-contain select-none hidden dark:block"
           style={{ filter: "drop-shadow(0 2px 14px oklch(0.72 0.16 278 / 45%))" }}

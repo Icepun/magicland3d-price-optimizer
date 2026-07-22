@@ -406,7 +406,10 @@ const styles = StyleSheet.create({
   fab: {
     position: "absolute", bottom: 24, right: 20, width: 56, height: 56, borderRadius: 28,
     backgroundColor: ML.accent, alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 6,
+    // RN 0.83/Expo 56 boxShadow'u native + web'de destekler; eski shadow* prop'ları
+    // Expo web/SSR sırasında deprecation uyarısı üretiyordu.
+    boxShadow: "0 4px 8px rgba(0, 0, 0, 0.3)",
+    elevation: 6,
   },
   modalWrap: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "rgba(0,0,0,0.6)" },
   modal: { backgroundColor: ML.card, borderRadius: radius.lg, borderWidth: 1, borderColor: ML.border, padding: 18, gap: 10 },

@@ -26,7 +26,10 @@ const TYPE_LABEL: Record<string, string> = {
 
 function platformLabel(p: string | null): string {
   if (!p) return "Tümü";
-  return p === "shopify" ? "Shopify" : "Trendyol";
+  if (p === "shopify") return "Shopify";
+  if (p === "trendyol") return "Trendyol";
+  if (p === "hepsiburada") return "Hepsiburada";
+  return p;
 }
 
 function valueLabel(r: ExpenseRuleFull): string {

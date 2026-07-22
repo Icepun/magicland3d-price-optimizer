@@ -573,7 +573,7 @@ export default function ProductsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/products/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetchJson(`/api/products/${id}`, { method: "DELETE" }),
     // Optimistic: ürünü listeden ANINDA çıkar (fetch YOK); hata olursa geri al.
     onMutate: async (id) => {
       await queryClient.cancelQueries({ queryKey: ["products"] });
@@ -659,11 +659,11 @@ export default function ProductsPage() {
   // Tek ürün gizle/göster (satır içi)
   const toggleHiddenMutation = useMutation({
     mutationFn: ({ id, hidden }: { id: string; hidden: boolean }) =>
-      fetch(`/api/products/${id}`, {
+      fetchJson(`/api/products/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hidden }),
-      }).then((r) => r.json()),
+      }),
     // Optimistic: ürün ANINDA mevcut listeden çıkar (gizlenince aktif görünümde, geri
     // gelince gizli görünümünde kalmamalı). UI beklemez; hata olursa geri alınır.
     onMutate: async ({ id }) => {
@@ -887,7 +887,7 @@ export default function ProductsPage() {
 
       if (data.productCost || data.packagingCost) {
         const totalCost = (Number(data.productCost) || 0) + (Number(data.packagingCost) || 0);
-        await fetch(`/api/products/${product.id}`, {
+        await fetchJson(`/api/products/${product.id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

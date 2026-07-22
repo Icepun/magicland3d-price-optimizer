@@ -13,7 +13,7 @@ let schemaReady: Promise<void> | null = null;
 // v22: Product.imageManual (0.19.31) — elle seçilen/yüklenen görseli sync (Yenile) ezmesin.
 // v25: ProductModelFile.r2Key — model dosyaları Cloudflare R2'de (çok-cihaz baskı, yerel disk boşaltma).
 // v26: PushToken tablosu — baskı-bitti mobil push (Expo) bildirimleri.
-// v27: cleanupLocalModelFiles — kullanıcı R2'ye geçti → eski YEREL (r2Key'siz) model satırlarını bir kez temizle.
+// v27: Ayrılmış sürüm. Eski otomatik yerel-model temizliği kaldırıldı; yerel fallback kayıtları korunur.
 // v28: ProductModelFile.colorsJson/sliced/plateJson — dosya meta bir kez parse edilip saklanır
 //      (SlotStep'te R2 indirme + baskıda 3× senkron unzip donması biter).
 // v29: ProductModelFile.thumbnail — dilimleyici önizleme görseli (Özel Baskılar arşivinde küçük görsel).
@@ -135,34 +135,6 @@ async function cleanupPdfCommissionRules() {
 }
 
 /**
- * v27 cleanup: kullanıcı model dosyalarını buluta (R2) taşıdı → eski YEREL satırları (r2Key yok) bir kez
- * temizle; R2 satırlarına (r2Key dolu) DOKUNMA. Disk dosyalarını da best-effort sil (yer aç). Satırlar
- * Turso'da paylaşık → bir cihazda silinince tüm cihazlardan gider (AppSetting flag tekrarı önler).
- */
-async function cleanupLocalModelFiles() {
-  if (!(await tableExists("ProductModelFile"))) return;
-
-  const flag = "cleanupLocalModelFilesAt";
-  const existing = await prisma.appSetting.findUnique({ where: { key: flag } });
-  if (existing) return;
-
-  const localWhere = { OR: [{ r2Key: null }, { r2Key: "" }] };
-  // Silmeden ÖNCE disk yollarını topla (benzersiz; paylaşık dosya birden çok satırda olabilir).
-  const locals = await prisma.productModelFile.findMany({ where: localWhere, select: { storedPath: true } });
-  await prisma.productModelFile.deleteMany({ where: localWhere });
-  const paths = new Set(locals.map((l) => l.storedPath).filter((p): p is string => !!p));
-  for (const p of paths) {
-    try { fs.unlinkSync(p); } catch { /* yoksa/erişilemezse boşver */ }
-  }
-
-  await prisma.appSetting.upsert({
-    where: { key: flag },
-    create: { key: flag, value: new Date().toISOString() },
-    update: { value: new Date().toISOString() },
-  });
-}
-
-/**
  * v0.14 migration: v0.13'teki parentProductId tabanlı varyant bağlarını VariantGroup'a taşı.
  * Her ana ürün (çocuğu olan) için bir grup oluşturulur; ana ürün + tüm çocukları o gruba bağlanır.
  * Hiçbir üye artık "ana" değil — hepsi eşit. Bir kez çalışır (AppSetting flag).
@@ -213,7 +185,9 @@ async function migrateParentVariantsToGroups() {
 }
 
 export function ensureRuntimeSchema(): Promise<void> {
-  schemaReady ??= (async () => {
+  if (schemaReady) return schemaReady;
+
+  const attempt = (async () => {
     const __t0 = Date.now();
     // FAST-PATH: şema zaten güncelse ~50 ardışık CREATE/ALTER/PRAGMA ifadesini ATLA.
     // Embedded replica'da yazma ifadeleri buluta (eu-west-1) gittiği için bu ~50 ifade
@@ -674,7 +648,6 @@ export function ensureRuntimeSchema(): Promise<void> {
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
     await migrateParentVariantsToGroups();
-    await cleanupLocalModelFiles();
 
     // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner
     await prisma.$executeRawUnsafe(
@@ -685,5 +658,11 @@ export function ensureRuntimeSchema(): Promise<void> {
     logPerf(`ensureRuntimeSchema FULL setup (${Date.now() - __t0}ms)`);
   })();
 
-  return schemaReady;
+  schemaReady = attempt;
+  // İlk deneme geçici ağ/DB hatasıyla reddedilirse aynı rejected Promise'i süreç boyunca
+  // zehirli halde tutma. Eşitlik kontrolü, daha yeni concurrent denemeyi yanlışlıkla silmez.
+  void attempt.catch(() => {
+    if (schemaReady === attempt) schemaReady = null;
+  });
+  return attempt;
 }

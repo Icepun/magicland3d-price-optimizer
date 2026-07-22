@@ -32,19 +32,19 @@ export function useStockWriter() {
   const qc = useQueryClient();
   const pending = useRef<Map<string, number>>(new Map());
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const inFlight = useRef<Set<string>>(new Set());
 
   // Unmount'ta (ör. başka sayfaya geçiş) bekleyen debounce'lu yazmaları İPTAL etme —
   // hemen gönder, yoksa "+ bastım ama kaydolmadı" veri kaybı olur. fetch bileşene bağlı
   // değil, unmount sonrası da tamamlanır.
-  const flushRef = useRef<(id: string, stock: number) => void>(() => {});
+  const flushRef = useRef<(id: string) => void>(() => {});
   useEffect(() => {
     const timersMap = timers.current;
     const pendingMap = pending.current;
     return () => {
       timersMap.forEach((tm, id) => {
         clearTimeout(tm);
-        const stock = pendingMap.get(id);
-        if (stock !== undefined) flushRef.current(id, stock);
+        if (pendingMap.has(id)) flushRef.current(id);
       });
       timersMap.clear();
     };
@@ -77,21 +77,51 @@ export function useStockWriter() {
   );
 
   const flush = useCallback(
-    async (id: string, stock: number, attempt = 0): Promise<void> => {
+    async (id: string): Promise<void> => {
+      // Aynı ürün için tek yazıcı çalışsın. Önceki istek sürerken kullanıcı stoğu yeniden
+      // değiştirirse eski retry'nin yeni değerin üstüne yazmasını bu sıra engeller.
+      if (inFlight.current.has(id)) return;
+      inFlight.current.add(id);
+      let failed = false;
       try {
-        const r = await fetch(`/api/products/${id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stock }),
-        });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        pending.current.delete(id);
-      } catch {
-        if (attempt < 2) {
-          await new Promise((res) => setTimeout(res, 400 * (attempt + 1)));
-          return flush(id, stock, attempt + 1);
+        while (pending.current.has(id)) {
+          const stock = pending.current.get(id) as number;
+          let saved = false;
+
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            // Beklerken daha yeni bir değer geldiyse eski değeri retry etme; dış döngü
+            // doğrudan en güncel değeri yazacak.
+            if (pending.current.get(id) !== stock) break;
+            try {
+              const r = await fetch(`/api/products/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ stock }),
+              });
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              saved = true;
+              break;
+            } catch {
+              if (attempt < 2) {
+                await new Promise((res) => setTimeout(res, 400 * (attempt + 1)));
+              }
+            }
+          }
+
+          // İstek sürerken değer değiştiyse, başarılı eski yazımdan sonra bile en güncel
+          // değer mutlaka son yazım olur.
+          if (pending.current.get(id) !== stock) continue;
+          pending.current.delete(id);
+          if (saved) continue;
+
+          failed = true;
+          break;
         }
-        pending.current.delete(id);
+      } finally {
+        inFlight.current.delete(id);
+      }
+
+      if (failed) {
         toast.error("Stok kaydedilemedi — bağlantı yavaş");
         // Otoritatif değeri geri çek (optimistic değeri düzelt) — SADECE bu ürün (tüm liste değil).
         qc.invalidateQueries({ queryKey: ["product", id] });
@@ -102,7 +132,9 @@ export function useStockWriter() {
   );
 
   // flushRef'i güncel flush'a bağla — unmount cleanup'ı veri kaybını önlemek için kullanır.
-  flushRef.current = flush;
+  useEffect(() => {
+    flushRef.current = flush;
+  }, [flush]);
 
   /** Stok'u MUTLAK değere ayarla (instant UI + arka planda debounce'lu yazma). */
   const setStock = useCallback(
@@ -116,7 +148,7 @@ export function useStockWriter() {
         id,
         setTimeout(() => {
           timers.current.delete(id);
-          void flush(id, stock);
+          void flush(id);
         }, 450)
       );
     },

@@ -158,6 +158,41 @@ describe("computeClientPricing", () => {
     expect(priceLab.campaign?.rows).toHaveLength(5); // 10/15/20/25/30
   });
 
+  it("Fiyat Lab mevcut marjları canlı önizlemeyle aynı platform kurallarıyla hesaplar", () => {
+    const input = baseInput({
+      cargoRules: [
+        {
+          id: "cargo",
+          name: "Kargo",
+          minPrice: 0,
+          maxPrice: 999999,
+          minDesi: 0,
+          maxDesi: 999,
+          cargoCost: 30,
+          priority: 1,
+          isActive: true,
+        },
+      ],
+    });
+    input.product.listings[0].salePrice = 120; // Shopify <150 → kargo 0
+    input.product.listings[1].salePrice = 50; // Trendyol → minOrderQty 2
+
+    const { preview, priceLab } = computeClientPricing(input);
+    for (const platform of ["shopify", "trendyol"]) {
+      const previewMargin = preview.platforms.find((p) => p.platform === platform)?.result
+        ?.profitMargin;
+      const labMargin = priceLab.targets?.find((p) => p.platform === platform)?.currentMargin;
+      expect(labMargin).toBeCloseTo(previewMargin ?? Number.NaN, 10);
+    }
+
+    expect(
+      preview.platforms.find((p) => p.platform === "shopify")?.result?.cargoCost
+    ).toBe(0);
+    expect(
+      preview.platforms.find((p) => p.platform === "trendyol")?.result?.minOrderQty
+    ).toBe(2);
+  });
+
   it("pasif komisyon kuralı hesaba katılmaz (isActive süzme)", () => {
     // Trendyol için %50'lik PASİF bir kural → uygulanmamalı; aktif kural yokken komisyon 0 kalır.
     const input = baseInput({

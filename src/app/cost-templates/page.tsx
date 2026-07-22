@@ -24,6 +24,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { formatCurrency } from "@/lib/utils";
 import { PackagingSettings } from "./PackagingSettings";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 interface FilamentType {
   id: string;
@@ -48,27 +50,26 @@ export default function CostSettingsPage() {
   // Load filament types
   const { data: filaments = [], isLoading: isFilamentsLoading } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],
-    queryFn: () => fetch("/api/filament-types").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/filament-types"),
   });
 
   // Load global app settings
   const { data: globalSettings = {}, isLoading: isSettingsLoading } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
 
   // Global settings mutation
   const saveSettingsMutation = useMutation({
     mutationFn: (data: Record<string, string>) =>
-      fetch("/api/settings", {
+      fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Genel maliyet oranları kaydedildi — tüm ürünlere uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),
@@ -77,15 +78,14 @@ export default function CostSettingsPage() {
   // Filament mutations
   const createFilamentMutation = useMutation({
     mutationFn: (data: FilamentFormData) =>
-      fetch("/api/filament-types", {
+      fetchJson("/api/filament-types", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Filament tipi eklendi");
       setFilamentOpen(false);
     },
@@ -93,15 +93,14 @@ export default function CostSettingsPage() {
 
   const updateFilamentMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: FilamentFormData }) =>
-      fetch(`/api/filament-types/${id}`, {
+      fetchJson(`/api/filament-types/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Filament tipi güncellendi");
       setEditingFilament(null);
     },
@@ -109,11 +108,10 @@ export default function CostSettingsPage() {
 
   const deleteFilamentMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/filament-types/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetchJson(`/api/filament-types/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["filament-types"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Filament tipi silindi");
     },
   });

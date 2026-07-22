@@ -13,6 +13,8 @@ import {
   parsePackagingSettings,
   type PackagingOption,
 } from "@/core/packaging";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 function genId() {
   return `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -22,10 +24,8 @@ export function PackagingSettings() {
   const qc = useQueryClient();
   const { data: settings = {} } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
-
-  const parsed = parsePackagingSettings(settings);
 
   // Paketleme seçenekleri (controlled liste)
   const [options, setOptions] = useState<PackagingOption[]>([]);
@@ -66,15 +66,14 @@ export function PackagingSettings() {
 
   const save = useMutation({
     mutationFn: (data: Record<string, string>) =>
-      fetch("/api/settings", {
+      fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
-      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(qc);
       toast.success("Paketleme ayarları kaydedildi — tüm ürünlere uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),

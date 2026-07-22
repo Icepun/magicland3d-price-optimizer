@@ -21,16 +21,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const { id } = await params;
     const input = ConsumeSchema.parse(await req.json());
 
-    const spool = await prisma.filamentSpool.findUnique({ where: { id } });
-    if (!spool) {
-      return NextResponse.json({ error: "Makara bulunamadı" }, { status: 404 });
-    }
+    const updated = await prisma.$transaction(async (tx) => {
+      // İlk ifade doğrudan relative WRITE'tır. Önce okuyup sonra absolute değer yazmak
+      // lost-update üretirdi; transaction'ı read ile başlatmak da SQLite'ta eşzamanlı
+      // yazma sırasında lock upgrade yarışına yol açabilirdi.
+      const decremented = await tx.filamentSpool.updateMany({
+        where: { id },
+        data: { remainingGrams: { decrement: input.grams } },
+      });
+      if (decremented.count === 0) return null;
 
-    const remaining = Math.max(0, spool.remainingGrams - input.grams);
+      await tx.filamentSpool.updateMany({
+        where: { id, remainingGrams: { lt: 0 } },
+        data: { remainingGrams: 0 },
+      });
+      const next = await tx.filamentSpool.findUnique({ where: { id } });
+      if (!next) {
+        // Silme endpoint'i aynı satırı arada kaldırırsa usage oluşturmadan rollback et.
+        throw new Error("Makara tüketim sırasında silindi");
+      }
 
-    const [updated] = await prisma.$transaction([
-      prisma.filamentSpool.update({ where: { id }, data: { remainingGrams: remaining } }),
-      prisma.filamentUsage.create({
+      await tx.filamentUsage.create({
         data: {
           spoolId: id,
           productId: input.productId ?? null,
@@ -38,8 +49,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           grams: input.grams,
           note: input.note ?? null,
         },
-      }),
-    ]);
+      });
+
+      return next;
+    });
+
+    if (!updated) {
+      return NextResponse.json({ error: "Makara bulunamadı" }, { status: 404 });
+    }
 
     return NextResponse.json(updated);
   } catch (error) {

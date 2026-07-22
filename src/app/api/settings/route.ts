@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 export async function GET() {
   const settings = await prisma.appSetting.findMany();
@@ -21,5 +22,6 @@ export async function POST(req: NextRequest) {
     )
   );
 
+  invalidateOrdersCache();
   return NextResponse.json({ ok: true });
 }

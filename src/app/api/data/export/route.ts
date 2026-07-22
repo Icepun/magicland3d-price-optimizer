@@ -1,52 +1,96 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import packageJson from "../../../../../package.json";
 
 /**
- * Tüm uygulama verisini tek bir JSON dosyası olarak indirir.
- * Update sırasında veri kaybı olmasın diye bu yedek alınabilir + import edilebilir.
+ * Uygulamanın taşınabilir verisini tek bir JSON dosyası olarak indirir.
+ * Fiziksel yerel model dosyaları JSON'a gömülmez; R2 kayıtlarında yalnız uzaktaki
+ * nesne anahtarı, yerel kayıtlarda ise dosya içermeyen metadata dışa aktarılır.
  */
 export async function GET() {
   await ensureRuntimeSchema();
 
   const [
+    variantGroups,
     products,
     productCosts,
     listings,
     filamentTypes,
+    filamentSpools,
+    filamentUsages,
     appSettings,
     commissionRules,
     cargoRules,
     expenseRules,
     costTemplates,
     priceHistory,
+    printerConfigs,
+    printFileProducts,
+    rawProductModelFiles,
   ] = await Promise.all([
+    prisma.variantGroup.findMany(),
     prisma.product.findMany(),
     prisma.productCost.findMany(),
     prisma.listing.findMany(),
     prisma.filamentType.findMany(),
+    prisma.filamentSpool.findMany(),
+    prisma.filamentUsage.findMany(),
     prisma.appSetting.findMany(),
     prisma.commissionRule.findMany(),
     prisma.cargoRule.findMany(),
     prisma.expenseRule.findMany(),
-    prisma.costTemplate.findMany().catch(() => []),
+    prisma.costTemplate.findMany(),
     prisma.priceHistory.findMany(),
+    prisma.printerConfig.findMany(),
+    prisma.printFileProduct.findMany(),
+    prisma.productModelFile.findMany(),
   ]);
 
+  const localModelFileCount = rawProductModelFiles.filter((file) => !file.r2Key).length;
+  const productModelFiles = rawProductModelFiles.map((file) => ({
+    ...file,
+    // Mutlak yerel yollar başka cihaza taşınabilir değildir ve kullanıcı dizinini ifşa eder.
+    storedPath: "",
+    storageKind: file.r2Key ? "r2-reference" : "local-metadata-only",
+    fileBytesIncluded: false,
+  }));
+  const warnings =
+    localModelFileCount > 0
+      ? [
+          `${localModelFileCount} yerel model kaydı yalnız metadata içerir; dosya baytları olmadan başka cihazda geri yüklenemez.`,
+        ]
+      : [];
+
   const dump = {
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
-    appVersion: "0.5.1",
+    appVersion: packageJson.version,
+    metadata: {
+      format: "magicland-portable-backup",
+      localModelFileBytesIncluded: false,
+      localModelFilePathsIncluded: false,
+      localModelFileMetadataCount: localModelFileCount,
+      r2ModelReferenceCount: rawProductModelFiles.length - localModelFileCount,
+      notes: ["Model dosyalarının fiziksel baytları taşınabilir JSON yedeğine dahil değildir."],
+      warnings,
+    },
+    variantGroups,
     products,
     productCosts,
     listings,
     filamentTypes,
+    filamentSpools,
+    filamentUsages,
     appSettings,
     commissionRules,
     cargoRules,
     expenseRules,
     costTemplates,
     priceHistory,
+    printerConfigs,
+    printFileProducts,
+    productModelFiles,
   };
 
   return new NextResponse(JSON.stringify(dump, null, 2), {

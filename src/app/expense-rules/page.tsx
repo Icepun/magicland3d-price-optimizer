@@ -30,6 +30,8 @@ import { toast } from "sonner";
 import { useForm, Controller, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 interface ExpenseRule {
   id: string;
@@ -187,12 +189,12 @@ export default function ExpenseRulesPage() {
 
   const { data: rules = [], isLoading } = useQuery<ExpenseRule[]>({
     queryKey: ["expense-rules"],
-    queryFn: () => fetch("/api/expense-rules").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/expense-rules"),
   });
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
-      fetch("/api/expense-rules", {
+      fetchJson("/api/expense-rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -200,11 +202,10 @@ export default function ExpenseRulesPage() {
           platform: data.platform === "all" ? null : data.platform,
           value: data.type === "percentage" ? data.value / 100 : data.value,
         }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Kural eklendi");
       setOpen(false);
     },
@@ -213,7 +214,7 @@ export default function ExpenseRulesPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: FormData }) =>
-      fetch(`/api/expense-rules/${id}`, {
+      fetchJson(`/api/expense-rules/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -221,11 +222,10 @@ export default function ExpenseRulesPage() {
           platform: data.platform === "all" ? null : data.platform,
           value: data.type === "percentage" ? data.value / 100 : data.value,
         }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Güncellendi");
       setEditing(null);
     },
@@ -233,11 +233,10 @@ export default function ExpenseRulesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
-      fetch(`/api/expense-rules/${id}`, { method: "DELETE" }).then((r) => r.json()),
+      fetchJson(`/api/expense-rules/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["expense-rules"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Silindi");
     },
   });

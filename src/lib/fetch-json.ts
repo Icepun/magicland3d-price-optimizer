@@ -5,7 +5,12 @@
 export async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
-    throw new Error(`${url} ${response.status}`);
+    const payload: unknown = await response.json().catch(() => null);
+    const detail =
+      payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : null;
+    throw new Error(detail || `${url} ${response.status}`);
   }
   return response.json() as Promise<T>;
 }

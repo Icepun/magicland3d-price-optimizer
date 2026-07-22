@@ -33,11 +33,18 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
+      const salePriceText = row.sale_price?.trim() ?? "";
+      const salePrice = Number(salePriceText);
+      if (!salePriceText || !Number.isFinite(salePrice) || salePrice <= 0) {
+        errors.push(`${barcode}: sale_price sonlu ve 0'dan büyük bir sayı olmalı`);
+        continue;
+      }
+
       const productData = {
         sku: row.sku || barcode,
         name,
         categoryName: row.category || "Genel",
-        currentSalePrice: row.sale_price ? parseFloat(row.sale_price) || 0 : 0,
+        currentSalePrice: salePrice,
         listPrice: row.list_price ? parseFloat(row.list_price) : undefined,
         stock: row.stock ? parseInt(row.stock) : 0,
         desi: row.desi ? parseFloat(row.desi) : undefined,

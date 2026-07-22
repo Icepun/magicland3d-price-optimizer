@@ -12,6 +12,7 @@ import {
   getAllCommissionRules,
   updateCommissionRule,
 } from "@/lib/db/rule-crud";
+import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
 
 export default function CommissionEditScreen() {
@@ -45,13 +46,36 @@ export default function CommissionEditScreen() {
 
   const save = useMutation({
     mutationFn: async () => {
+      const parsedRate = parseTrNumber(rate);
+      const parsedFixed = fixed.trim() ? parseTrNumber(fixed) : 0;
+      const parsedMinPrice = parseTrNumber(minP);
+      const parsedMaxPrice = parseTrNumber(maxP);
+
+      if (
+        parsedRate === null ||
+        parsedFixed === null ||
+        parsedMinPrice === null ||
+        parsedMaxPrice === null
+      ) {
+        throw new Error("Lütfen tüm sayısal alanlara geçerli bir değer girin.");
+      }
+      if (parsedRate < 0 || parsedRate > 100) {
+        throw new Error("Komisyon oranı 0 ile 100 arasında olmalı.");
+      }
+      if (parsedFixed < 0) {
+        throw new Error("Sabit komisyon negatif olamaz.");
+      }
+      if (parsedMinPrice < 0 || parsedMaxPrice < parsedMinPrice) {
+        throw new Error("Fiyat aralığı geçersiz.");
+      }
+
       const draft = {
         name: name.trim() || "Komisyon",
         categoryName: category.trim() || null,
-        commissionRate: (parseFloat(rate) || 0) / 100,
-        fixedCommission: parseFloat(fixed) || 0,
-        minPrice: parseFloat(minP) || 0,
-        maxPrice: parseFloat(maxP) || 999999,
+        commissionRate: parsedRate / 100,
+        fixedCommission: parsedFixed,
+        minPrice: parsedMinPrice,
+        maxPrice: parsedMaxPrice,
       };
       if (isNew) await createCommissionRule(draft);
       else await updateCommissionRule(id, draft);
@@ -61,6 +85,7 @@ export default function CommissionEditScreen() {
       invalidate();
       router.back();
     },
+    onError: (error) => Alert.alert("Kaydedilemedi", error.message),
   });
 
   const remove = useMutation({

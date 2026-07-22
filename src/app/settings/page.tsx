@@ -15,6 +15,8 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
 import { R2StorageCard } from "@/components/settings/R2StorageCard";
+import { fetchJson } from "@/lib/fetch-json";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 const Schema = z.object({
   vatRate: z.coerce.number().min(0).max(100).default(20),
@@ -27,7 +29,7 @@ export default function SettingsPage() {
 
   const { data: settings } = useQuery<Record<string, string>>({
     queryKey: ["settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
 
   const form = useForm<FormData>({
@@ -43,18 +45,15 @@ export default function SettingsPage() {
 
   const saveMutation = useMutation({
     mutationFn: (data: FormData) =>
-      fetch("/api/settings", {
+      fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ vatRate: String(data.vatRate) }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      queryClient.invalidateQueries({ queryKey: ["products"] });
-      queryClient.invalidateQueries({ queryKey: ["product-profit"] });
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] });
+      clearPricingQueryCache(queryClient);
       toast.success("Ayarlar kaydedildi — tüm ürünlere uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),
@@ -86,7 +85,7 @@ export default function SettingsPage() {
               />
               <p className="text-xs text-muted-foreground mt-1">
                 Satış fiyatları KDV <strong>dahil</strong> kabul edilir. Net kâr,
-                fiyatın <code className="text-foreground">/(1 + KDV/100)</code> ile
+                fiyatın{" "}<code className="text-foreground">/(1 + KDV/100)</code>{" "}ile
                 KDV hariç bazından hesaplanır. Türkiye&apos;de standart oran <strong>%20</strong>.
                 Sıfır girerseniz KDV uygulanmaz.
               </p>
@@ -112,12 +111,12 @@ export default function SettingsPage() {
         <CardContent className="text-sm text-muted-foreground space-y-2">
           <p className="text-foreground font-medium">Magicland 3D Hub</p>
           <p>
-            Shopify (ana ürün kaynağı) + Trendyol fiyat & kâr yönetimi. Ürün
-            maliyeti, paketleme, komisyon, kargo ve KDV&apos;den net kâr hesaplar.
+            Shopify (ana ürün kaynağı), Trendyol ve Hepsiburada fiyat & kâr yönetimi.
+            Ürün maliyeti, paketleme, komisyon, kargo ve KDV&apos;den net kâr hesaplar.
           </p>
           <p>
-            Veritabanı: Turso bulut (libSQL) — Windows ve Mac aynı veriyi paylaşır,
-            yerel kopyadan anında okur, buluta arka planda senkronlar.
+            Veritabanı yerel SQLite veya Turso bulut (libSQL) olarak çalışabilir. Turso
+            bağlıysa Windows ve Mac aynı veriyi paylaşır; bağlantı durumu yukarıdaki kartta gösterilir.
           </p>
           <p>
             Otomatik güncelleme GitHub Releases üzerinden (Windows + Mac). Ayarlar
@@ -149,10 +148,16 @@ function DataManagementCard() {
         throw new Error(result.error ?? "Import başarısız");
       }
       const s = result.stats;
-      toast.success(
-        `Veri içe aktarıldı: ${s.products} ürün, ${s.listings} listing, ${s.commissionRules + s.cargoRules + s.expenseRules} kural`
-      );
-      queryClient.invalidateQueries();
+      const summary = `Veri içe aktarıldı: ${s.products} ürün, ${s.listings} listing, ${s.commissionRules + s.cargoRules + s.expenseRules} kural`;
+      const warnings = Array.isArray(result.warnings) ? (result.warnings as string[]) : [];
+      if (warnings.length > 0) {
+        toast.warning(`${summary}. ${warnings.join(" ")}`, { duration: 10_000 });
+      } else {
+        toast.success(summary);
+      }
+      // Global refetchOnMount kapalı olduğundan eski inaktif ekran cache'lerini bırakma.
+      queryClient.removeQueries({ type: "inactive" });
+      await queryClient.invalidateQueries({ type: "active" });
     } catch (e) {
       toast.error(`İçe aktarma hatası: ${e instanceof Error ? e.message : "bilinmiyor"}`);
     } finally {
@@ -170,10 +175,11 @@ function DataManagementCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Tüm verilerini (ürünler, listings, maliyet, kurallar, fiyat geçmişi) JSON
-          olarak indir. Update ya da yeniden kurulum sırasında geri yüklemek için
-          kullanabilirsin. Otomatik günlük backup zaten alınıyor (electron tarafı),
-          bu manuel kontrol içindir.
+          Taşınabilir verilerini (ürünler, listingler, maliyetler, kurallar, fiyat geçmişi,
+          makaralar ve yazıcı ayarları) JSON olarak indir. Yerel model dosyalarının fiziksel
+          baytları dahil değildir; R2 model referansları korunur. Dosya bağlantı/API ayarlarını
+          da içerebildiği için yedeği güvenli sakla. Otomatik günlük yedek ayrıca Electron
+          tarafında alınır.
         </p>
 
         <div className="grid grid-cols-2 gap-3">
@@ -320,7 +326,7 @@ function TursoSyncCard() {
         <p className="text-[11px] text-muted-foreground leading-relaxed">
           turso.tech&apos;te ücretsiz veritabanı aç → <strong>Database URL</strong> ve
           <strong> Auth Token</strong>&apos;ı buraya gir. <u>Aynı bilgileri iki makineye de gir.</u>
-          Kaydedip <strong>Test Et</strong>, sonra uygulamayı yeniden başlat.
+          {" "}Kaydedip <strong>Test Et</strong>, sonra uygulamayı yeniden başlat.
         </p>
 
         <div>

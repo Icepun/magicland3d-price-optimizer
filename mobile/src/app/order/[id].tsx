@@ -1,12 +1,12 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
 import { thumbUrl } from "@/lib/image";
-import { statusInfo, type OrdersResult, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
+import { getAllOrders, ORDERS_STALE_MS, statusInfo, type StatusTone } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
@@ -24,9 +24,15 @@ const TONE: Record<StatusTone, string> = {
 
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const qc = useQueryClient();
-  const cached = qc.getQueryData<OrdersResult>(["orders"]);
-  const order = cached?.orders.find((o) => o.id === id);
+  const {
+    data: orders,
+    error: ordersError,
+    isLoading: ordersLoading,
+    isError: ordersFailed,
+    isRefetching,
+    refetch,
+  } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
+  const order = orders?.orders.find((o) => o.id === id);
 
   // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
@@ -34,12 +40,37 @@ export default function OrderDetailScreen() {
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
-  if (!order) {
+  if (ordersLoading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <ScreenHeader title="Sipariş" />
         <View style={styles.center}>
-          <Text style={styles.dim}>Sipariş bulunamadı (listeyi yenile).</Text>
+          <ActivityIndicator color={ML.accent} size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (ordersFailed || !order) {
+    const message = ordersFailed
+      ? ordersError instanceof Error
+        ? ordersError.message
+        : "Siparişler yüklenemedi."
+      : orders?.errors.length
+        ? `Sipariş bulunamadı. Bazı platformlar yüklenemedi:\n${orders.errors.join("\n")}`
+        : "Sipariş bulunamadı.";
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <ScreenHeader title="Sipariş" />
+        <View style={[styles.center, styles.errorState]}>
+          <Text style={styles.dim}>{message}</Text>
+          <Pressable
+            onPress={() => refetch()}
+            disabled={isRefetching}
+            style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.8 }]}
+          >
+            <Text style={styles.retryText}>{isRefetching ? "Yenileniyor…" : "Tekrar dene"}</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -131,7 +162,15 @@ export default function OrderDetailScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  dim: { color: ML.textDim, fontSize: 14 },
+  errorState: { padding: 24, gap: 14 },
+  dim: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  retryBtn: {
+    backgroundColor: ML.accent,
+    borderRadius: radius.md,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  retryText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   content: { padding: 16, gap: 10, paddingBottom: 40 },
   headRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   platDot: { width: 9, height: 9, borderRadius: 5 },

@@ -727,25 +727,37 @@ async function createWindow() {
 
     powerMonitor.on("resume", () => {
       const myGen = ++powerGen;
-      logStartup("[power] resume → ağ kontrolü (gen " + myGen + ")");
+      // Bazı işletim sistemi/uyku akışlarında suspend olayı kaçsa bile relay çevrimdışı açılmasın.
+      globalThis.__MLHUB_DB_PAUSED__ = true;
+      logStartup("[power] resume → DB duraklı, ağ kontrolü (gen " + myGen + ")");
       // Renderer'ı erken tazele (yerel okuma → ağ beklemez) — donmuş UI hızlı kurtulur.
       setTimeout(() => {
         if (myGen !== powerGen) return; // araya yeni power olayı girdi → iptal
         const w = BrowserWindow.getAllWindows()[0];
         if (w && !w.isDestroyed()) { w.webContents.reload(); logStartup("[power] renderer tazelendi"); }
       }, 1500);
-      // Relay'i SADECE Turso erişilince sürdür (max 45sn fail-safe). Araya suspend/resume girerse iptal.
+      // Relay'i SADECE Turso erişilince sürdür. Araya suspend/resume girerse iptal.
       const startedAt = Date.now();
+      let retryDelayMs = 3000;
+      let offlineLogged = false;
       const tryResume = async () => {
         if (myGen !== powerGen) return; // dark-wake/yeni olay → bu grace geçersiz, flag duraklı kalır
         let ok = false;
         try { ok = await tursoReachable(); } catch { ok = false; }
         if (myGen !== powerGen) return; // fetch sırasında power olayı olduysa iptal
-        if (ok || Date.now() - startedAt > 45000) {
+        if (ok) {
           globalThis.__MLHUB_DB_PAUSED__ = false;
           logStartup("[power] ağ geldi → DB/relay devam (gen " + myGen + ")");
         } else {
-          setTimeout(tryResume, 3000);
+          const elapsedMs = Date.now() - startedAt;
+          if (elapsedMs >= 45000) {
+            if (!offlineLogged) {
+              offlineLogged = true;
+              logStartup("[power] ağ hâlâ yok → DB/relay duraklı, kontrollü yeniden denenecek (gen " + myGen + ")");
+            }
+            retryDelayMs = Math.min(Math.max(retryDelayMs, 5000) * 2, 30000);
+          }
+          setTimeout(tryResume, retryDelayMs);
         }
       };
       setTimeout(tryResume, 3000); // ilk denemeden önce min 3sn

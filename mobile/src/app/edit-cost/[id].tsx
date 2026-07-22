@@ -1,9 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,6 +21,7 @@ import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency } from "@/lib/format";
+import { parseTrNumber } from "@/lib/number";
 import { ML, radius } from "@/theme/colors";
 
 const NYLON: { key: NylonLevel; label: string }[] = [
@@ -29,11 +31,35 @@ const NYLON: { key: NylonLevel; label: string }[] = [
   { key: "high", label: "Çok" },
 ];
 
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+interface SavePayload {
+  key: string;
+  input: CostInput;
+  desi: number | null;
+  alsoProductIds: string[];
+}
+
+type SaveWaiter = (success: boolean) => void;
+
+/** Boş maliyet alanları 0 kabul edilir; dolu fakat geçersiz alanlar null döner. */
+function costNumber(value: string): number | null {
+  return value.trim() ? parseTrNumber(value) : 0;
+}
+
 export default function EditCostScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
+  const navigation = useNavigation();
 
-  const { data: product, isLoading } = useQuery({
+  const {
+    data: product,
+    error: productError,
+    isLoading,
+    isError: productFailed,
+    isRefetching: productRefetching,
+    refetch: refetchProduct,
+  } = useQuery({
     queryKey: ["product", id],
     queryFn: () => getProductDetail(id),
   });
@@ -56,11 +82,23 @@ export default function EditCostScreen() {
   const [mode, setMode] = useState<"detailed" | "manual">("detailed");
   const [manualCost, setManualCost] = useState("");
   const [applyAll, setApplyAll] = useState(false);
-  const [status, setStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [status, setStatus] = useState<SaveStatus>("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const baselineRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  const activeSaveRef = useRef<SavePayload | null>(null);
+  const queuedSaveRef = useRef<SavePayload | null>(null);
+  const latestPayloadRef = useRef<SavePayload | null>(null);
+  const latestFormKeyRef = useRef("");
+  const latestValidationErrorRef = useRef<string | null>(null);
+  const waitersRef = useRef(new Map<string, SaveWaiter[]>());
+  const allowNextRemoveRef = useRef(false);
+  const leavingRef = useRef(false);
 
+  const seededProductIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!product) return;
+    if (!product || seededProductIdRef.current === product.id) return;
+    seededProductIdRef.current = product.id;
     const c = product.cost;
     // Yüklenen değerleri tek nesnede topla → baseline (mount/hydration auto-save'i TETİKLEMESİN;
     // yalnızca kullanıcı bir şey değiştirince kaydedilir). Key sırası `formKey` ile birebir aynı olmalı.
@@ -75,7 +113,6 @@ export default function EditCostScreen() {
       tapeUsed: !!c?.tapeUsed,
       desi: product.desi ? String(product.desi) : "",
       manualCost: c?.manualCost != null ? String(c.manualCost) : "",
-      applyAll: false,
     };
     setMode(v.mode);
     setFilamentTypeId(v.filamentTypeId);
@@ -89,6 +126,7 @@ export default function EditCostScreen() {
     setManualCost(v.manualCost);
     setApplyAll(false);
     baselineRef.current = JSON.stringify(v);
+    setSaveError(null);
     setStatus("idle");
   }, [product]);
 
@@ -103,11 +141,106 @@ export default function EditCostScreen() {
     tapeUsed,
     desi,
     manualCost,
-    applyAll,
   });
 
   const packagingOptions = settings ? parsePackagingSettings(settings).options : [];
   const costPerGram = filaments.find((f) => f.id === filamentTypeId)?.costPerGram ?? 0;
+
+  const parsedForm = useMemo(() => {
+    const parsedManualCost = costNumber(manualCost);
+    const parsedWeight = costNumber(weight);
+    const parsedTime = costNumber(time);
+    const parsedWaste = costNumber(waste);
+    const parsedDesi = desi.trim() ? parseTrNumber(desi) : null;
+
+    let error: string | null = null;
+    if (desi.trim() && parsedDesi === null) error = "Desi için geçerli bir sayı girin.";
+    else if (parsedDesi != null && parsedDesi < 0) error = "Desi negatif olamaz.";
+    else if (mode === "manual" && parsedManualCost === null)
+      error = "Maliyet için geçerli bir sayı girin.";
+    else if (mode === "manual" && parsedManualCost != null && parsedManualCost < 0)
+      error = "Maliyet negatif olamaz.";
+    else if (mode === "detailed" && parsedWeight === null)
+      error = "Ağırlık için geçerli bir sayı girin.";
+    else if (mode === "detailed" && parsedWeight != null && parsedWeight < 0)
+      error = "Ağırlık negatif olamaz.";
+    else if (mode === "detailed" && parsedTime === null)
+      error = "Süre için geçerli bir sayı girin.";
+    else if (mode === "detailed" && parsedTime != null && parsedTime < 0)
+      error = "Süre negatif olamaz.";
+    else if (mode === "detailed" && parsedWaste === null)
+      error = "Fire oranı için geçerli bir sayı girin.";
+    else if (
+      mode === "detailed" &&
+      parsedWaste != null &&
+      (parsedWaste < 0 || parsedWaste > 100)
+    )
+      error = "Fire oranı 0 ile 100 arasında olmalı.";
+
+    const input: CostInput | null = error
+      ? null
+      : mode === "manual"
+        ? {
+            mode: "manual",
+            manualCost: parsedManualCost ?? 0,
+            filamentTypeId: null,
+            filamentWeight: 0,
+            printTimeHours: 0,
+            wasteRate: 0,
+            packagingOptionId: null,
+            nylonLevel: "none",
+            tapeUsed: false,
+          }
+        : {
+            mode: "detailed",
+            filamentTypeId,
+            filamentWeight: parsedWeight ?? 0,
+            printTimeHours: parsedTime ?? 0,
+            wasteRate: (parsedWaste ?? 0) / 100,
+            packagingOptionId,
+            nylonLevel,
+            tapeUsed,
+          };
+
+    return {
+      input,
+      desi: parsedDesi,
+      error,
+      previewManualCost: Math.max(0, parsedManualCost ?? 0),
+      previewWeight: Math.max(0, parsedWeight ?? 0),
+      previewTime: Math.max(0, parsedTime ?? 0),
+      previewWaste: Math.min(100, Math.max(0, parsedWaste ?? 0)),
+    };
+  }, [
+    desi,
+    filamentTypeId,
+    manualCost,
+    mode,
+    nylonLevel,
+    packagingOptionId,
+    tapeUsed,
+    time,
+    waste,
+    weight,
+  ]);
+
+  const alsoProductIds = useMemo(
+    () => (applyAll && variantGroup ? variantGroup.members.map((member) => member.id) : []),
+    [applyAll, variantGroup],
+  );
+
+  const currentPayload = useMemo<SavePayload | null>(
+    () =>
+      parsedForm.input
+        ? {
+            key: formKey,
+            input: parsedForm.input,
+            desi: parsedForm.desi,
+            alsoProductIds,
+          }
+        : null,
+    [alsoProductIds, formKey, parsedForm],
+  );
 
   // Canlı önizleme — @core resolveProductCost ile (kaydetmeden)
   const preview = settings
@@ -115,7 +248,7 @@ export default function EditCostScreen() {
         mode === "manual"
           ? {
               costMode: "manual",
-              manualCost: parseFloat(manualCost) || 0,
+              manualCost: parsedForm.previewManualCost,
               totalCost: null,
               filamentWeight: 0,
               printTimeHours: 0,
@@ -128,9 +261,9 @@ export default function EditCostScreen() {
               costMode: "detailed",
               manualCost: null,
               totalCost: null,
-              filamentWeight: parseFloat(weight) || 0,
-              printTimeHours: parseFloat(time) || 0,
-              wasteRate: (parseFloat(waste) || 0) / 100,
+              filamentWeight: parsedForm.previewWeight,
+              printTimeHours: parsedForm.previewTime,
+              wasteRate: parsedForm.previewWaste / 100,
               packagingOptionId,
               nylonLevel,
               tapeUsed,
@@ -140,80 +273,190 @@ export default function EditCostScreen() {
       )
     : null;
 
-  const buildInput = (): CostInput =>
-    mode === "manual"
-      ? {
-          mode: "manual",
-          manualCost: parseFloat(manualCost) || 0,
-          filamentTypeId: null,
-          filamentWeight: 0,
-          printTimeHours: 0,
-          wasteRate: 0,
-          packagingOptionId: null,
-          nylonLevel: "none",
-          tapeUsed: false,
-        }
-      : {
-          mode: "detailed",
-          filamentTypeId,
-          filamentWeight: parseFloat(weight) || 0,
-          printTimeHours: parseFloat(time) || 0,
-          wasteRate: (parseFloat(waste) || 0) / 100,
-          packagingOptionId,
-          nylonLevel,
-          tapeUsed,
-        };
+  const resolveWaiters = useCallback((key: string, success: boolean) => {
+    const waiters = waitersRef.current.get(key) ?? [];
+    waitersRef.current.delete(key);
+    for (const resolve of waiters) resolve(success);
+  }, []);
 
-  const save = useMutation({
-    // TEK batch round-trip: maliyet + desi + varyant kopyaları (eski hali 2..(2+N) ardışık çağrıydı;
-    // 700ms auto-save ile birleşince her yazma molası ~300ms-1.2sn tutuyordu).
-    mutationFn: () =>
-      saveProductCostBatch(
-        id,
-        buildInput(),
-        parseFloat(desi) || null,
-        // "Tüm varyantlara uygula" açıksa aynı maliyeti grubun diğer üyelerine de yaz (desi hariç → fiziksel boyut varyanta özel).
-        applyAll && variantGroup ? variantGroup.members.map((m) => m.id) : []
-      ),
-    onSuccess: () => {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setStatus("saved");
+  const drainSaveQueue = useCallback(async () => {
+    if (activeSaveRef.current) return;
+
+    while (queuedSaveRef.current) {
+      const payload = queuedSaveRef.current;
+      queuedSaveRef.current = null;
+      activeSaveRef.current = payload;
+      if (mountedRef.current) {
+        setStatus("saving");
+        setSaveError(null);
+      }
+
+      try {
+        // Tek batch round-trip: maliyet + desi + seçildiyse varyant kopyaları.
+        await saveProductCostBatch(
+          id,
+          payload.input,
+          payload.desi,
+          payload.alsoProductIds,
+        );
+        baselineRef.current = payload.key;
+        resolveWaiters(payload.key, true);
+        if (
+          mountedRef.current &&
+          !queuedSaveRef.current &&
+          latestFormKeyRef.current === payload.key
+        ) {
+          setStatus("saved");
+          setSaveError(null);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Maliyet kaydedilemedi.";
+        resolveWaiters(payload.key, false);
+        if (mountedRef.current) {
+          setStatus("error");
+          setSaveError(message);
+        }
+      } finally {
+        activeSaveRef.current = null;
+      }
+    }
+  }, [id, resolveWaiters]);
+
+  const enqueueSave = useCallback(
+    (payload: SavePayload) => {
+      const active = activeSaveRef.current;
+      const queued = queuedSaveRef.current;
+      if (baselineRef.current === payload.key && !active && !queued) {
+        resolveWaiters(payload.key, true);
+        return;
+      }
+      if (active?.key === payload.key && !queued) return;
+      if (queued && queued.key !== payload.key) resolveWaiters(queued.key, false);
+      queuedSaveRef.current = payload;
+      if (mountedRef.current) {
+        setStatus("saving");
+        setSaveError(null);
+      }
+      void drainSaveQueue();
     },
-  });
+    [drainSaveQueue, resolveWaiters],
+  );
+
+  const saveAndWait = useCallback(
+    (payload: SavePayload) => {
+      const active = activeSaveRef.current;
+      const queued = queuedSaveRef.current;
+      if (baselineRef.current === payload.key && !active && !queued) {
+        return Promise.resolve(true);
+      }
+      return new Promise<boolean>((resolve) => {
+        const waiters = waitersRef.current.get(payload.key) ?? [];
+        waiters.push(resolve);
+        waitersRef.current.set(payload.key, waiters);
+        enqueueSave(payload);
+      });
+    },
+    [enqueueSave],
+  );
+
+  useEffect(() => {
+    latestFormKeyRef.current = formKey;
+    latestPayloadRef.current = currentPayload;
+    latestValidationErrorRef.current = parsedForm.error;
+  }, [currentPayload, formKey, parsedForm.error]);
 
   // Otomatik kaydet — form baseline'dan farklıysa 700ms debounce ile kaydet (Kaydet butonu yok).
   useEffect(() => {
-    if (!product || baselineRef.current == null || formKey === baselineRef.current) return;
-    setStatus("saving");
-    const t = setTimeout(() => {
-      save.mutate(undefined, { onSuccess: () => { baselineRef.current = formKey; } });
+    if (!product || baselineRef.current == null) return;
+    const activeKey = activeSaveRef.current?.key;
+    const queuedKey = queuedSaveRef.current?.key;
+    const formIsSettled = formKey === baselineRef.current && !activeKey && !queuedKey;
+    const statusTimer = setTimeout(() => {
+      if (!mountedRef.current) return;
+      setSaveError(null);
+      setStatus(formIsSettled ? "idle" : parsedForm.error ? "error" : "saving");
+    }, 0);
+    if (formIsSettled || parsedForm.error) return () => clearTimeout(statusTimer);
+
+    const saveTimer = setTimeout(() => {
+      const payload = latestPayloadRef.current;
+      if (payload && payload.key === formKey) enqueueSave(payload);
     }, 700);
-    return () => clearTimeout(t);
-  }, [formKey, product, save.mutate]);
+    return () => {
+      clearTimeout(statusTimer);
+      clearTimeout(saveTimer);
+    };
+  }, [enqueueSave, formKey, parsedForm.error, product]);
+
+  // Header, Android geri tuşu ve iOS geri hareketi: son geçerli yazma bitmeden ekrandan çıkma.
+  useEffect(() => {
+    return navigation.addListener("beforeRemove", (event) => {
+      if (allowNextRemoveRef.current) {
+        allowNextRemoveRef.current = false;
+        return;
+      }
+
+      // Yükleme/hata ekranındaki boş form gerçek ürün verisi değildir. Baseline aynı ürün için
+      // kurulmadan geri çıkışı engellemek varsayılan sıfırları maliyet olarak yazabilirdi.
+      if (seededProductIdRef.current !== id || baselineRef.current == null) return;
+
+      const formIsSettled =
+        baselineRef.current === latestFormKeyRef.current &&
+        !activeSaveRef.current &&
+        !queuedSaveRef.current;
+      if (formIsSettled) return;
+
+      event.preventDefault();
+      if (leavingRef.current) return;
+
+      const payload = latestPayloadRef.current;
+      if (!payload) {
+        Alert.alert(
+          "Değişiklik kaydedilemedi",
+          latestValidationErrorRef.current ?? "Lütfen geçersiz alanları düzeltin.",
+        );
+        return;
+      }
+
+      leavingRef.current = true;
+      void saveAndWait(payload).then((success) => {
+        if (!success) {
+          leavingRef.current = false;
+          Alert.alert("Değişiklik kaydedilemedi", "Bağlantıyı kontrol edip tekrar deneyin.");
+          return;
+        }
+        allowNextRemoveRef.current = true;
+        navigation.dispatch(event.data.action);
+      });
+    });
+  }, [id, navigation, saveAndWait]);
 
   // Ağır listeleri EKRANDAN ÇIKARKEN bir kez tazele (eski hali: her 700ms auto-save'de
   // 424 ürünlük dashboard-data yeniden çekiliyordu — yazma molası başına boş yere).
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      qc.invalidateQueries({ queryKey: ["product"] });
-      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
-      qc.invalidateQueries({ queryKey: ["match-products"] });
+      mountedRef.current = false;
+      const payload = latestPayloadRef.current;
+      if (
+        seededProductIdRef.current === id &&
+        baselineRef.current != null &&
+        payload &&
+        (baselineRef.current !== payload.key || activeSaveRef.current || queuedSaveRef.current)
+      ) {
+        enqueueSave(payload);
+      }
+      void qc.invalidateQueries({ queryKey: ["product"] });
+      void qc.invalidateQueries({ queryKey: ["dashboard-data"] });
+      void qc.invalidateQueries({ queryKey: ["match-products"] });
     };
-  }, [qc]);
+  }, [enqueueSave, id, qc]);
 
-  // Çıkışta bekleyen değişikliği hemen kaydet (debounce dolmadan geri basılırsa kaybolmasın).
-  const handleBack = () => {
-    if (baselineRef.current != null && formKey !== baselineRef.current) {
-      baselineRef.current = formKey;
-      save.mutate();
-    }
-    router.back();
-  };
-
-  if (isLoading || !product) {
+  if (isLoading) {
     return (
       <SafeAreaView style={styles.safe}>
-        <Header onBack={handleBack} />
+        <Header />
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>
@@ -221,9 +464,31 @@ export default function EditCostScreen() {
     );
   }
 
+  if (productFailed || !product) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <Header />
+        <View style={[styles.center, styles.errorBox]}>
+          <Text style={styles.errorText}>
+            {productError instanceof Error ? productError.message : "Ürün yüklenemedi."}
+          </Text>
+          <Pressable
+            onPress={() => void refetchProduct()}
+            disabled={productRefetching}
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryButtonText}>
+              {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
+            </Text>
+          </Pressable>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Header onBack={handleBack} />
+      <Header />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.productName} numberOfLines={1}>
           {product.name}
@@ -332,6 +597,17 @@ export default function EditCostScreen() {
             </>
           ) : status === "saved" ? (
             <Text style={[styles.statusText, { color: ML.green }]}>✓ Otomatik kaydedildi</Text>
+          ) : status === "error" ? (
+            <>
+              <Text style={styles.statusError}>
+                ⚠ {saveError ?? parsedForm.error ?? "Kaydetme başarısız."}
+              </Text>
+              {saveError && currentPayload ? (
+                <Pressable onPress={() => enqueueSave(currentPayload)} hitSlop={8}>
+                  <Text style={styles.statusRetry}>Tekrar dene</Text>
+                </Pressable>
+              ) : null}
+            </>
           ) : (
             <Text style={styles.statusText}>Değişiklikler otomatik kaydedilir</Text>
           )}
@@ -457,6 +733,15 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
   content: { padding: 16, gap: 8, paddingBottom: 60 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  errorBox: { padding: 24, gap: 14 },
+  errorText: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  retryButton: {
+    backgroundColor: ML.accent,
+    borderRadius: radius.md,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  retryButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   productName: { color: ML.textDim, fontSize: 15, marginBottom: 4 },
   preview: {
     flexDirection: "row",
@@ -529,6 +814,16 @@ const styles = StyleSheet.create({
   checkboxOn: { backgroundColor: ML.accent, borderColor: ML.accent },
   checkboxTick: { color: "#fff", fontSize: 15, fontWeight: "900" },
   applyAllText: { color: ML.text, fontSize: 14, fontWeight: "600", flex: 1 },
-  statusRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 16, height: 22 },
+  statusRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 16,
+    minHeight: 22,
+  },
   statusText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
+  statusError: { color: ML.red, fontSize: 13, fontWeight: "600", textAlign: "center" },
+  statusRetry: { color: ML.accent, fontSize: 13, fontWeight: "800" },
 });

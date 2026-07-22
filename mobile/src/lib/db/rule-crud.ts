@@ -157,6 +157,7 @@ export interface CargoRuleFull {
 export interface CargoDraft {
   name: string;
   platform: string | null;
+  categoryName: string | null;
   minDesi: number;
   maxDesi: number;
   minPrice: number;
@@ -173,16 +174,16 @@ export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
 
 export async function createCargoRule(d: CargoDraft): Promise<void> {
   await execute(
-    `INSERT INTO CargoRule (id, name, platform, minPrice, maxPrice, minDesi, maxDesi, cargoCost, priority, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
-    [newId(), d.name, d.platform, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost]
+    `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, priority, isActive)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
+    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost]
   );
 }
 
 export async function updateCargoRule(id: string, d: CargoDraft): Promise<void> {
   await execute(
-    `UPDATE CargoRule SET name=?, platform=?, minPrice=?, maxPrice=?, minDesi=?, maxDesi=?, cargoCost=? WHERE id=?`,
-    [d.name, d.platform, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, id]
+    `UPDATE CargoRule SET name=?, platform=?, categoryName=?, minPrice=?, maxPrice=?, minDesi=?, maxDesi=?, cargoCost=? WHERE id=?`,
+    [d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, id]
   );
 }
 

@@ -9,15 +9,27 @@
  */
 let cache: { at: number; body: Record<string, unknown> } | null = null;
 let refreshing = false;
+let generation = 0;
 
 export function getOrdersCache(): { at: number; body: Record<string, unknown> } | null {
   return cache;
 }
-export function setOrdersCache(body: Record<string, unknown>): void {
+/** Devam eden hesap cache'e yazmadan önce bu nesli yakalar. */
+export function getOrdersCacheGeneration(): number {
+  return generation;
+}
+/**
+ * Yalnız hesap başladığından beri invalidation olmadıysa sonucu yayınla.
+ * Böylece eski bir background refresh, düşürülen cache'i sonradan geri dolduramaz.
+ */
+export function setOrdersCache(body: Record<string, unknown>, expectedGeneration: number): boolean {
+  if (expectedGeneration !== generation) return false;
   cache = { at: Date.now(), body };
+  return true;
 }
 /** Fiyatlama girdisi değişti → önbeleği düş, sonraki /api/orders yeni kurallarla hesaplasın. */
 export function invalidateOrdersCache(): void {
+  generation += 1;
   cache = null;
 }
 export function isOrdersRefreshing(): boolean {

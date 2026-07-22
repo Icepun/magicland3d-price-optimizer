@@ -18,7 +18,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
 import { thumbUrl } from "@/lib/image";
-import { getPriceHistory, setProductStock, setProductAlias, type PriceChange } from "@/lib/db/products";
+import { adjustProductStock, getPriceHistory, setProductAlias, type PriceChange } from "@/lib/db/products";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
 import { computePriceLab } from "@/lib/price-lab";
@@ -30,7 +30,14 @@ export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
 
-  const { data: product, isLoading } = useQuery({
+  const {
+    data: product,
+    error: productError,
+    isLoading,
+    isError: productFailed,
+    isRefetching: productRefetching,
+    refetch: refetchProduct,
+  } = useQuery({
     queryKey: ["product", id],
     queryFn: () => getProductDetail(id),
   });
@@ -56,19 +63,38 @@ export default function ProductDetailScreen() {
 
   // Optimistic: UI anında değişir, DB yazımı arka planda; hata olursa geri al.
   const stockMutation = useMutation({
-    mutationFn: (newStock: number) => setProductStock(id, newStock),
-    onMutate: async (newStock: number) => {
+    mutationFn: (delta: number) => adjustProductStock(id, delta),
+    onMutate: async (delta: number) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await qc.cancelQueries({ queryKey: ["product", id] });
-      const prev = qc.getQueryData<ProductDetail>(["product", id]);
-      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock: newStock } : o));
-      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
-        o ? o.map((p) => (p.id === id ? { ...p, stock: newStock } : p)) : o
+      await Promise.all([
+        qc.cancelQueries({ queryKey: ["product", id] }),
+        qc.cancelQueries({ queryKey: ["dashboard-data"] }),
+      ]);
+      const prevProduct = qc.getQueryData<ProductDetail>(["product", id]);
+      const prevDashboard = qc.getQueryData<ProductDetail[]>(["dashboard-data"]);
+      const optimisticStock = Math.max(0, (prevProduct?.stock ?? 0) + delta);
+      qc.setQueryData<ProductDetail>(["product", id], (o) =>
+        o ? { ...o, stock: optimisticStock } : o,
       );
-      return { prev };
+      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
+        o ? o.map((p) => (p.id === id ? { ...p, stock: optimisticStock } : p)) : o,
+      );
+      return { prevProduct, prevDashboard };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(["product", id], ctx.prev);
+      if (ctx?.prevProduct) qc.setQueryData(["product", id], ctx.prevProduct);
+      if (ctx?.prevDashboard) qc.setQueryData(["dashboard-data"], ctx.prevDashboard);
+    },
+    onSuccess: (stock) => {
+      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock } : o));
+      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
+        o ? o.map((p) => (p.id === id ? { ...p, stock } : p)) : o,
+      );
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["product", id] });
+      qc.invalidateQueries({ queryKey: ["dashboard-data"] });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
 
@@ -99,12 +125,34 @@ export default function ProductDetailScreen() {
     [product, rules, settings]
   );
 
-  if (isLoading || !product) {
+  if (isLoading) {
     return (
       <SafeAreaView style={styles.safe}>
         <Header title="" />
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (productFailed || !product) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <Header title="Ürün" />
+        <View style={[styles.center, styles.errorBox]}>
+          <Text style={styles.errorText}>
+            {productError instanceof Error ? productError.message : "Ürün yüklenemedi."}
+          </Text>
+          <Pressable
+            onPress={() => void refetchProduct()}
+            disabled={productRefetching}
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryButtonText}>
+              {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
+            </Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
@@ -188,14 +236,18 @@ export default function ProductDetailScreen() {
           <View style={styles.stockRow}>
             <StockButton
               label="−"
-              onPress={() => stockMutation.mutate(Math.max(0, stock - 1))}
-              disabled={stock <= 0}
+              onPress={() => stockMutation.mutate(-1)}
+              disabled={stock <= 0 || stockMutation.isPending}
             />
             <View style={styles.stockValue}>
               <Text style={styles.stockNumber}>{stock}</Text>
               <Text style={styles.stockUnit}>adet</Text>
             </View>
-            <StockButton label="+" onPress={() => stockMutation.mutate(stock + 1)} />
+            <StockButton
+              label="+"
+              onPress={() => stockMutation.mutate(1)}
+              disabled={stockMutation.isPending}
+            />
           </View>
         </View>
 
@@ -509,6 +561,15 @@ const styles = StyleSheet.create({
   headerTitle: { flex: 1, color: ML.textDim, fontSize: 15, textAlign: "center" },
   content: { padding: 16, gap: 14, paddingBottom: 48 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  errorBox: { padding: 24, gap: 14 },
+  errorText: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  retryButton: {
+    backgroundColor: ML.accent,
+    borderRadius: radius.md,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  retryButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
   titleRow: { flexDirection: "row", gap: 14, alignItems: "center" },
   thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: ML.card },
   thumbEmpty: { borderWidth: 1, borderColor: ML.border },

@@ -2,7 +2,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { getOrdersCache, setOrdersCache, isOrdersRefreshing, setOrdersRefreshing } from "@/lib/orders-cache";
+import {
+  getOrdersCache,
+  getOrdersCacheGeneration,
+  setOrdersCache,
+  isOrdersRefreshing,
+  setOrdersRefreshing,
+} from "@/lib/orders-cache";
 import {
   ShopifyClient,
   ShopifyAdminTokenMissingError,
@@ -217,16 +223,18 @@ export async function GET(req: NextRequest) {
   const cached = getOrdersCache();
   if (!fresh && cached) {
     if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
+      const generation = getOrdersCacheGeneration();
       setOrdersRefreshing(true);
       void computeOrdersBody()
-        .then((b) => { setOrdersCache(b); })
+        .then((b) => { setOrdersCache(b, generation); })
         .catch(() => {})
         .finally(() => { setOrdersRefreshing(false); });
     }
     return NextResponse.json(cached.body);
   }
+  const generation = getOrdersCacheGeneration();
   const body = await computeOrdersBody();
-  setOrdersCache(body);
+  setOrdersCache(body, generation);
   return NextResponse.json(body);
 }
 
