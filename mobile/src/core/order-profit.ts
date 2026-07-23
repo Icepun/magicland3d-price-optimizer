@@ -88,15 +88,19 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   for (const line of lines) {
     totalQty += line.quantity;
     const p = line.product;
-    if (!p || p.productionCost + p.packagingCost <= 0 || !(line.unitPrice > 0)) {
+    // Promosyon/hediye satırının satış fiyatı 0 olabilir; ürün eşleşmişse üretim ve paketleme
+    // maliyeti yine vardır ve kârdan düşülmelidir. Geçersiz/negatif fiyatı da güvenli tarafta
+    // kalarak 0 gelir kabul et; "maliyet eksik" yalnız ürün veya maliyet gerçekten yokken denir.
+    const unitPrice = Number.isFinite(line.unitPrice) ? Math.max(0, line.unitPrice) : 0;
+    if (!p || p.productionCost + p.packagingCost <= 0) {
       unmatchedLines++;
       unmatchedQty += line.quantity;
-      unmatchedRevenue += Math.max(0, line.unitPrice) * line.quantity;
+      unmatchedRevenue += unitPrice * line.quantity;
       continue;
     }
     const lst = p.listing ?? { platform, commissionRate: null, commissionFixed: null, cargoCost: null };
     const sim = simulatePrice({
-      salePrice: line.unitPrice,
+      salePrice: unitPrice,
       productCost: p.productionCost,
       packagingCost: p.packagingCost,
       categoryName: p.categoryName,

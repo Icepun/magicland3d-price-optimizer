@@ -118,6 +118,31 @@ describe("sipariş kârı — kapsam kuralları", () => {
     expect(r.matchedLines).toBe(0);
   });
 
+  it("T6b · ücretsiz promosyon satırı eşleşmişse maliyeti kârdan düşülür", () => {
+    const paidOnly = run(
+      [{ unitPrice: P, quantity: 2, product: prod("a") }],
+      { expense: [], total: P * 2 }
+    );
+    const withFreeItem = run(
+      [
+        { unitPrice: P, quantity: 2, product: prod("a") },
+        { unitPrice: 0, quantity: 1, product: prod("a") },
+      ],
+      { expense: [], total: P * 2 }
+    );
+
+    expect(withFreeItem.partial).toBe(false);
+    expect(withFreeItem.matchedLines).toBe(2);
+    expect(withFreeItem.unmatchedLines).toBe(0);
+    expect(withFreeItem.unmatchedQty).toBe(0);
+    // Ücretsiz ürün: 0 gelir, fakat ürün + paketleme maliyeti ve filament KDV iadesi hesaba girer.
+    const freeItemNetCost =
+      BASE.productionCost +
+      BASE.packagingCost -
+      BASE.filamentCost * (SETTINGS.vatRate === "20" ? 1 / 6 : 0);
+    expect(withFreeItem.profit).toBeCloseTo(paidOnly.profit! - freeItemNetCost, 6);
+  });
+
   it("T7 · tek ürünlü siparişte ELLE girilen listing kargosu kazanır", () => {
     const r = run(
       [{ unitPrice: P, quantity: 1, product: prod("a", { listing: { platform: "trendyol", commissionRate: 0.21, commissionFixed: null, cargoCost: 20 } }) }],

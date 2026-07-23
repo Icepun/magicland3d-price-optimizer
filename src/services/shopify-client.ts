@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { ShopifyCredentials } from "./shopify-settings";
 
 /**
@@ -361,12 +362,27 @@ export class ShopifyClient {
     return `https://${this.credentials.shopDomain}/admin/api/${this.credentials.apiVersion}/graphql.json`;
   }
 
+  /**
+   * Secret değişince önceki token'ın tekrar kullanılmaması için secret'ın kendisini değil
+   * tek yönlü özetini cache anahtarına dahil et.
+   */
+  private adminTokenCacheKey() {
+    const { shopDomain, clientId, clientSecret } = this.credentials;
+    const secretFingerprint = crypto
+      .createHash("sha256")
+      .update(clientSecret ?? "")
+      .digest("hex");
+    return `${shopDomain.toLowerCase()}:${clientId ?? ""}:${secretFingerprint}`;
+  }
+
   /** Client credentials grant → 24 saatlik Admin API erişim token'ı (önbellekli). */
-  private async getAdminToken(): Promise<string> {
+  private async getAdminToken(forceRefresh = false): Promise<string> {
     const { clientId, clientSecret, shopDomain } = this.credentials;
     if (!clientId || !clientSecret) throw new ShopifyAdminTokenMissingError();
 
-    const cacheKey = `${shopDomain}:${clientId}`;
+    const cacheKey = this.adminTokenCacheKey();
+    if (forceRefresh) adminTokenCache.delete(cacheKey);
+
     const cached = adminTokenCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
 
@@ -398,7 +414,7 @@ export class ShopifyClient {
       );
     }
 
-    let json: { access_token?: string; expires_in?: number };
+    let json: { access_token?: string; expires_in?: number; scope?: string };
     try {
       json = JSON.parse(text);
     } catch {
@@ -407,6 +423,23 @@ export class ShopifyClient {
     if (!json.access_token) {
       throw new Error("Shopify access_token dönmedi — Client ID / Secret doğru mu?");
     }
+
+    const grantedScopes = new Set(
+      (json.scope ?? "")
+        .split(",")
+        .map((scope) => scope.trim())
+        .filter(Boolean)
+    );
+    if (
+      grantedScopes.size > 0 &&
+      !grantedScopes.has("read_orders") &&
+      !grantedScopes.has("write_orders")
+    ) {
+      throw new Error(
+        "Shopify token üretildi fakat 'read_orders' kapsamı verilmedi. Dev Dashboard'da read_orders içeren uygulama sürümünü yayınla ve uygulamayı mağazaya yeniden kur/güncelle."
+      );
+    }
+
     adminTokenCache.set(cacheKey, {
       token: json.access_token,
       expiresAt: Date.now() + (json.expires_in ?? 86399) * 1000,
@@ -415,23 +448,30 @@ export class ShopifyClient {
   }
 
   private async adminGraphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    const token = await this.getAdminToken();
+    const request = (token: string) =>
+      fetch(this.adminEndpoint(), {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": token,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ query, variables: variables ?? {} }),
+      });
 
-    const res = await fetch(this.adminEndpoint(), {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ query, variables: variables ?? {} }),
-    });
+    let res = await request(await this.getAdminToken());
+
+    // Token, 24 saatlik süresi dolmadan da secret rotasyonu / uygulamayı yeniden kurma /
+    // kapsam güncelleme nedeniyle geçersizleşebilir. Cache'i atıp yalnızca bir kez yeni token'la dene.
+    if (res.status === 401 || res.status === 403) {
+      res = await request(await this.getAdminToken(true));
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       if (res.status === 401 || res.status === 403) {
         throw new Error(
-          "Shopify Admin token reddedildi (401/403). Token doğru mu ve uygulamanın 'read_orders' izni açık mı?"
+          `Shopify yeni token'ı da reddetti (${res.status}). Uygulamanın aktif sürümünde 'read_orders' kapsamının bulunduğunu ve bu sürümün mağazaya kurulu olduğunu kontrol et.${body ? ` — ${body.slice(0, 200)}` : ""}`
         );
       }
       throw new Error(
