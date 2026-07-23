@@ -25,6 +25,7 @@ export async function GET() {
     expenseRules,
     actualExpenses,
     orderFinanceSnapshots,
+    manualOrders,
     costTemplates,
     priceHistory,
     printerConfigs,
@@ -43,7 +44,12 @@ export async function GET() {
     prisma.cargoRule.findMany(),
     prisma.expenseRule.findMany(),
     prisma.actualExpense.findMany(),
-    prisma.orderFinanceSnapshot.findMany(),
+    // Manual orders are their own captured finance source. Exporting a second
+    // "manual" platform snapshot would make older backups easy to double-count.
+    prisma.orderFinanceSnapshot.findMany({
+      where: { platform: { not: "manual" } },
+    }),
+    prisma.manualOrder.findMany(),
     prisma.costTemplate.findMany(),
     prisma.priceHistory.findMany(),
     prisma.printerConfig.findMany(),
@@ -92,6 +98,7 @@ export async function GET() {
     expenseRules,
     actualExpenses,
     orderFinanceSnapshots,
+    manualOrders,
     costTemplates,
     priceHistory,
     printerConfigs,

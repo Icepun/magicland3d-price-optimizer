@@ -1,5 +1,5 @@
 import { batch, execute, query } from "@/lib/turso";
-import { ensureFinanceSchema } from "@/lib/db/schema";
+import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 
 const ISTANBUL_TZ = "Europe/Istanbul";
 
@@ -67,6 +67,10 @@ interface SnapshotRow {
 interface ExpenseRow {
   paidAt: string | number;
   amountKurus: number;
+}
+
+interface ManualFinanceRow extends SnapshotRow {
+  syncedAt: string | number;
 }
 
 function genId(prefix: string): string {
@@ -170,6 +174,7 @@ export async function syncOrderFinanceSnapshots(
   if (snapshots.length === 0) return;
   const now = new Date().toISOString();
   const statements = snapshots
+    .filter((snapshot) => snapshot.platform !== "manual")
     .filter((snapshot) => Number.isFinite(asDate(snapshot.orderedAt).getTime()))
     .map((snapshot) => ({
       sql: `INSERT INTO "OrderFinanceSnapshot"
@@ -295,12 +300,19 @@ export async function getMonthlyFinanceSummary(
   monthCount = 12,
   now = new Date()
 ): Promise<MonthlyFinanceSummary> {
-  await ensureFinanceSchema();
-  const [snapshots, expenses] = await Promise.all([
+  await Promise.all([ensureFinanceSchema(), ensureManualOrderSchema()]);
+  const [snapshots, manualOrders, expenses] = await Promise.all([
     query<SnapshotRow>(
       `SELECT "orderedAt", "revenueKurus", "profitKurus", "profitPartial",
               "statusKind", "currency", "syncedAt"
          FROM "OrderFinanceSnapshot"
+        WHERE "platform" <> 'manual'
+        ORDER BY "orderedAt" ASC`
+    ),
+    query<ManualFinanceRow>(
+      `SELECT "orderedAt", "revenueKurus", "profitKurus", "profitPartial",
+              "statusKind", "currency", "updatedAt" AS "syncedAt"
+         FROM "ManualOrder"
         ORDER BY "orderedAt" ASC`
     ),
     query<ExpenseRow>(
@@ -330,7 +342,8 @@ export async function getMonthlyFinanceSummary(
     ])
   );
 
-  for (const snapshot of snapshots) {
+  const financeOrders: SnapshotRow[] = [...snapshots, ...manualOrders];
+  for (const snapshot of financeOrders) {
     if (snapshot.statusKind === "cancelled") continue;
     const bucket = byMonth.get(monthKey(snapshot.orderedAt) ?? "");
     if (!bucket) continue;
@@ -357,9 +370,13 @@ export async function getMonthlyFinanceSummary(
   });
   return {
     periods,
-    historyStartedAt: isoOrNull(snapshots[0]?.orderedAt),
+    historyStartedAt:
+      financeOrders.reduce<string | null>((earliest, snapshot) => {
+        const iso = isoOrNull(snapshot.orderedAt);
+        return !iso || (earliest && earliest <= iso) ? earliest : iso;
+      }, null),
     lastSyncedAt:
-      snapshots.reduce<string | null>((latest, snapshot) => {
+      financeOrders.reduce<string | null>((latest, snapshot) => {
         const iso = isoOrNull(snapshot.syncedAt);
         return !iso || (latest && latest >= iso) ? latest : iso;
       }, null),

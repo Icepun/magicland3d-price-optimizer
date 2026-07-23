@@ -15,11 +15,31 @@ export function PlatformLogo({
   className,
   style,
 }: {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
   className?: string;
   style?: CSSProperties;
 }) {
   const [imgFailed, setImgFailed] = useState(false);
+
+  if (platform === "manual") {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className={className}
+        style={style}
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M6 3h9l3 3v15H6z" />
+        <path d="M15 3v4h4" />
+        <path d="M9 11h6M9 15h6M9 19h3" />
+      </svg>
+    );
+  }
 
   if (!imgFailed) {
     return (

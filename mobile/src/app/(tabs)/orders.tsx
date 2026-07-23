@@ -65,20 +65,28 @@ export default function OrdersScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Siparişler</Text>
-        <Text style={styles.subtitle}>
-          {counts
-            ? counts.cancelled > 0
-              ? `${counts.active} sipariş · ${counts.cancelled} iptal · son 30`
-              : `${counts.active} sipariş · son 30`
-            : "yükleniyor…"}
-        </Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Siparişler</Text>
+          <Text style={styles.subtitle}>
+            {counts
+              ? counts.cancelled > 0
+                ? `${counts.active} sipariş · ${counts.cancelled} iptal · son 30`
+                : `${counts.active} sipariş · son 30`
+              : "yükleniyor…"}
+          </Text>
+        </View>
+        <Pressable
+          onPress={() => router.push("/manual-order/new")}
+          style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
+        >
+          <Text style={styles.addButtonText}>+ Ekle</Text>
+        </Pressable>
       </View>
 
       {isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
-          <Text style={styles.dim}>Shopify + Trendyol + Hepsiburada çekiliyor…</Text>
+          <Text style={styles.dim}>Siparişler getiriliyor…</Text>
         </View>
       ) : (
         <FlashList
@@ -171,6 +179,11 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
           <Text style={styles.orderNo} numberOfLines={1}>
             {order.orderNumber}
           </Text>
+          {order.isManual ? (
+            <View style={styles.manualBadge}>
+              <Text style={styles.manualBadgeText}>Manuel</Text>
+            </View>
+          ) : null}
         </View>
         <Text style={styles.meta} numberOfLines={1}>
           {order.customer ?? "—"} · {formatDate(order.date)}
@@ -199,9 +212,25 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
+  addButton: {
+    backgroundColor: ML.accentSoft,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.accent + "66",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  addButtonText: { color: ML.accent, fontSize: 14, fontWeight: "800" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   dim: { color: ML.textDim, fontSize: 14 },
   list: { padding: 16, paddingBottom: 24 },
@@ -250,6 +279,13 @@ const styles = StyleSheet.create({
   bodyTop: { flexDirection: "row", alignItems: "center", gap: 7 },
   platDot: { width: 7, height: 7, borderRadius: 4 },
   orderNo: { color: ML.text, fontSize: 15, fontWeight: "700", flex: 1 },
+  manualBadge: {
+    backgroundColor: ML.manual + "22",
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  manualBadgeText: { color: ML.manual, fontSize: 10, fontWeight: "800" },
   meta: { color: ML.textDim, fontSize: 12 },
   item: { color: ML.textFaint, fontSize: 12 },
   right: { alignItems: "flex-end", gap: 4 },

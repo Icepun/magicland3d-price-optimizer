@@ -23,7 +23,7 @@ import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
-import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
+import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function DashboardScreen() {
   const { data: products, isLoading, isError, error, refetch: refetchProducts } = useQuery({
@@ -70,7 +70,7 @@ export default function DashboardScreen() {
     if (!ordersData || !matchProducts || !rules || !settings) return null;
     const pm = getProductMap(matchProducts);
     const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
-      PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
+      ORDER_PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
     );
     let total = 0;
     let profit = 0;
@@ -96,7 +96,7 @@ export default function DashboardScreen() {
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Panel</Text>
-          <Text style={styles.subtitle}>Shopify + Trendyol + Hepsiburada</Text>
+          <Text style={styles.subtitle}>Pazaryerleri + manuel satışlar</Text>
         </View>
         <Pressable onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
           <SymbolView name="bell.fill" tintColor={ML.textDim} style={{ width: 24, height: 24 }} />
@@ -150,11 +150,11 @@ export default function DashboardScreen() {
               </View>
             </View>
             <View style={styles.revSplit}>
-              {PLATFORMS.map((plat) => (
+              {ORDER_PLATFORMS.map((plat) => (
                 <View key={plat} style={styles.revPlat}>
                   <View style={[styles.dot, { backgroundColor: ML[plat] }]} />
                   <Text style={styles.revPlatText}>
-                    {PLATFORM_LABEL[plat]} {rev ? formatCurrency(rev.byPlat[plat].rev) : "…"}
+                    {ORDER_PLATFORM_LABEL[plat]} {rev ? formatCurrency(rev.byPlat[plat].rev) : "…"}
                     <Text style={styles.revPlatN}>{rev ? `  ${rev.byPlat[plat].n}` : ""}</Text>
                   </Text>
                 </View>
@@ -208,7 +208,7 @@ function PlatformRow({ p }: { p: PlatformSummary }) {
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
-          {PLATFORM_LABEL[p.platform]}
+          {ORDER_PLATFORM_LABEL[p.platform]}
         </Text>
         <Text style={styles.listingCount}>{p.listingCount} listing</Text>
       </View>

@@ -40,7 +40,7 @@ interface SummaryBucket {
 
 interface OrdersResp {
   orders: {
-    platform: "shopify" | "trendyol" | "hepsiburada";
+    platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
     statusKind: string;
     items: { name: string; quantity: number; image?: string | null }[];
     total: number;
@@ -50,6 +50,7 @@ interface OrdersResp {
     shopify: SummaryBucket;
     trendyol: SummaryBucket;
     hepsiburada: SummaryBucket;
+    manual?: SummaryBucket;
     total: SummaryBucket;
   };
   financeHistory?: {
@@ -143,6 +144,7 @@ function MiniThumb({
 const SHOPIFY = "oklch(0.60 0.16 152)";
 const TRENDYOL = "oklch(0.72 0.17 60)";
 const HEPSIBURADA = "oklch(0.66 0.19 38)";
+const MANUAL = "oklch(0.64 0.19 285)";
 const PRIMARY = "oklch(0.62 0.20 278)";
 const PROFIT = "oklch(0.68 0.17 145)";
 const LOSS = "oklch(0.63 0.22 25)";
@@ -276,6 +278,12 @@ export default function ReportsPage() {
               Ciro: Math.round(summary.hepsiburada.revenue),
               Kâr: Math.round(summary.hepsiburada.profit),
               color: HEPSIBURADA,
+            },
+            {
+              platform: "Manuel",
+              Ciro: Math.round(summary.manual?.revenue ?? 0),
+              Kâr: Math.round(summary.manual?.profit ?? 0),
+              color: MANUAL,
             },
           ]
         : [],

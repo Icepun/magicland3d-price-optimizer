@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { validateManualOrderCapturedFinance } from "@/lib/manual-orders";
 
 const id = z.string().trim().min(1);
 const finite = z.number().finite();
@@ -206,6 +207,49 @@ const OrderFinanceSnapshotSchema = z.object({
   calculationVersion: integer.positive().optional(),
 });
 
+const ManualOrderSchema = z
+  .object({
+    id,
+    orderNumber: z.string().trim().min(1).max(80),
+    mode: z.enum(["catalog", "freeform"]),
+    orderedAt: z.coerce.date(),
+    statusKind: z.enum([
+      "pending",
+      "processing",
+      "shipped",
+      "delivered",
+      "cancelled",
+    ]),
+    customerName: z.string().max(160).nullable().optional(),
+    currency: z.literal("TRY"),
+    revenueKurus: integer.nonnegative().max(2_147_483_647),
+    netRevenueKurus: integer.nonnegative().max(2_147_483_647),
+    totalCostKurus: integer.nonnegative().max(2_147_483_647),
+    inputVatCreditKurus: integer.nonnegative().max(2_147_483_647),
+    profitKurus: sqliteInt.nullable(),
+    profitPartial: z.boolean(),
+    itemsJson: z.string().min(1).max(5_000_000),
+    breakdownJson: z.string().min(1).max(5_000_000),
+    calculationVersion: integer.positive(),
+    note: z.string().max(1_000).nullable().optional(),
+    createdAt: optionalDate,
+    updatedAt: optionalDate,
+  })
+  .superRefine((order, ctx) => {
+    try {
+      validateManualOrderCapturedFinance(order);
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Manuel sipariş hesap kaydı geçersiz.",
+        path: ["breakdownJson"],
+      });
+    }
+  });
+
 const CostTemplateSchema = z.object({
   id,
   name: z.string(),
@@ -302,6 +346,7 @@ const ImportSchema = z.object({
   expenseRules: z.array(ExpenseRuleSchema).optional(),
   actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
+  manualOrders: z.array(ManualOrderSchema).optional().default([]),
   costTemplates: z.array(CostTemplateSchema).optional(),
   priceHistory: z.array(PriceHistorySchema).optional(),
   printerConfigs: z.array(PrinterConfigSchema).optional(),
@@ -322,10 +367,18 @@ export async function POST(req: NextRequest) {
     await ensureRuntimeSchema();
     const data = ImportSchema.parse(await req.json());
     const localModelFiles = (data.productModelFiles ?? []).filter((file) => !file.r2Key);
+    const legacyManualSnapshots = data.orderFinanceSnapshots.filter(
+      (snapshot) => snapshot.platform === "manual"
+    );
     const warnings = [...new Set(data.metadata?.warnings ?? [])];
     if (localModelFiles.length > 0) {
       warnings.push(
         `${localModelFiles.length} yerel model kaydı geri yüklenmedi: JSON yedeği fiziksel dosya baytlarını içermez.`
+      );
+    }
+    if (legacyManualSnapshots.length > 0) {
+      warnings.push(
+        `${legacyManualSnapshots.length} eski manuel finans kopyası geri yüklenmedi; manuel siparişin kendi hesap kaydı kullanıldı.`
       );
     }
 
@@ -345,6 +398,8 @@ export async function POST(req: NextRequest) {
           expenseRules: 0,
           actualExpenses: 0,
           orderFinanceSnapshots: 0,
+          orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
+          manualOrders: 0,
           costTemplates: 0,
           priceHistory: 0,
           printerConfigs: 0,
@@ -474,6 +529,7 @@ export async function POST(req: NextRequest) {
         }
 
         for (const snapshot of data.orderFinanceSnapshots) {
+          if (snapshot.platform === "manual") continue;
           const fields = {
             orderNumber: snapshot.orderNumber,
             orderedAt: snapshot.orderedAt,
@@ -501,6 +557,35 @@ export async function POST(req: NextRequest) {
             update: fields,
           });
           result.orderFinanceSnapshots++;
+        }
+
+        for (const order of data.manualOrders) {
+          const fields = {
+            orderNumber: order.orderNumber,
+            mode: order.mode,
+            orderedAt: order.orderedAt,
+            statusKind: order.statusKind,
+            customerName: order.customerName ?? null,
+            currency: order.currency,
+            revenueKurus: order.revenueKurus,
+            netRevenueKurus: order.netRevenueKurus,
+            totalCostKurus: order.totalCostKurus,
+            inputVatCreditKurus: order.inputVatCreditKurus,
+            profitKurus: order.profitKurus,
+            profitPartial: order.profitPartial,
+            itemsJson: order.itemsJson,
+            breakdownJson: order.breakdownJson,
+            calculationVersion: order.calculationVersion,
+            note: order.note ?? null,
+            ...(order.createdAt ? { createdAt: order.createdAt } : {}),
+            ...(order.updatedAt ? { updatedAt: order.updatedAt } : {}),
+          };
+          await tx.manualOrder.upsert({
+            where: { id: order.id },
+            create: { id: order.id, ...fields },
+            update: fields,
+          });
+          result.manualOrders++;
         }
 
         for (const group of data.variantGroups ?? []) {

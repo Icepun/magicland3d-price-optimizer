@@ -19,9 +19,11 @@ let schemaReady: Promise<void> | null = null;
 // v29: ProductModelFile.thumbnail — dilimleyici önizleme görseli (Özel Baskılar arşivinde küçük görsel).
 // v30: ProductModelFile.contentMd5 — içerik kimliği; yazıcıda "zaten var" tespiti (indirme/yükleme atlama).
 // v31: CargoRule.vatIncluded — KDV hariç kargo tarifelerinde çift KDV düşümünü önler.
+// v32: ActualExpense + OrderFinanceSnapshot — gerçek giderler ve kalıcı aylık finans geçmişi.
+// v33: ManualOrder — ürünlü/serbest manuel sipariş ve versioned hesap snapshot'ı.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "32";
+const CURRENT_SCHEMA_VERSION = "33";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -370,6 +372,43 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_statusKind_orderedAt_idx"
        ON "OrderFinanceSnapshot"("statusKind", "orderedAt")`
+    );
+    // v33: Manuel sipariş, kalem + hesap snapshot'ıyla tek atomik satırdır.
+    // OrderFinanceSnapshot'a kopyalanmaz; aylık finans iki kaynağı çift saymadan birleştirir.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ManualOrder" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "orderNumber" TEXT NOT NULL,
+        "mode" TEXT NOT NULL,
+        "orderedAt" DATETIME NOT NULL,
+        "statusKind" TEXT NOT NULL DEFAULT 'processing',
+        "customerName" TEXT,
+        "currency" TEXT NOT NULL DEFAULT 'TRY',
+        "revenueKurus" INTEGER NOT NULL,
+        "netRevenueKurus" INTEGER NOT NULL,
+        "totalCostKurus" INTEGER NOT NULL,
+        "inputVatCreditKurus" INTEGER NOT NULL,
+        "profitKurus" INTEGER,
+        "profitPartial" BOOLEAN NOT NULL DEFAULT false,
+        "itemsJson" TEXT NOT NULL,
+        "breakdownJson" TEXT NOT NULL,
+        "calculationVersion" INTEGER NOT NULL DEFAULT 1,
+        "note" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ManualOrder_orderNumber_key"
+       ON "ManualOrder"("orderNumber")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "ManualOrder_orderedAt_idx"
+       ON "ManualOrder"("orderedAt")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "ManualOrder_statusKind_orderedAt_idx"
+       ON "ManualOrder"("statusKind", "orderedAt")`
     );
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "CostTemplate" (

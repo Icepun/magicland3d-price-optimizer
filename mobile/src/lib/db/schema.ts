@@ -2,6 +2,7 @@ import { execute, query } from "@/lib/turso";
 
 let cargoVatSchemaPromise: Promise<void> | null = null;
 let financeSchemaPromise: Promise<void> | null = null;
+let manualOrderSchemaPromise: Promise<void> | null = null;
 
 /**
  * Mobil uygulama masaüstü açılmadan önce güncellenebilir. Bu yüzden kargo KDV kolonunu
@@ -97,4 +98,51 @@ export function ensureFinanceSchema(): Promise<void> {
     });
   }
   return financeSchemaPromise;
+}
+
+/**
+ * Manuel siparişler mobil ve masaüstünde aynı Turso tablosunu kullanır. Kalemler ve hesap
+ * dökümü sürümlü JSON olarak tek satırda tutulduğu için telefondaki create/update atomiktir.
+ */
+export function ensureManualOrderSchema(): Promise<void> {
+  if (!manualOrderSchemaPromise) {
+    manualOrderSchemaPromise = (async () => {
+      await execute(
+        `CREATE TABLE IF NOT EXISTS "ManualOrder" (
+          "id" TEXT NOT NULL PRIMARY KEY,
+          "orderNumber" TEXT NOT NULL,
+          "mode" TEXT NOT NULL,
+          "orderedAt" DATETIME NOT NULL,
+          "statusKind" TEXT NOT NULL,
+          "customerName" TEXT,
+          "currency" TEXT NOT NULL DEFAULT 'TRY',
+          "revenueKurus" INTEGER NOT NULL,
+          "netRevenueKurus" INTEGER NOT NULL,
+          "totalCostKurus" INTEGER NOT NULL,
+          "inputVatCreditKurus" INTEGER NOT NULL,
+          "profitKurus" INTEGER,
+          "profitPartial" BOOLEAN NOT NULL DEFAULT 0,
+          "itemsJson" TEXT NOT NULL,
+          "breakdownJson" TEXT NOT NULL,
+          "calculationVersion" INTEGER NOT NULL DEFAULT 1,
+          "note" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" DATETIME NOT NULL,
+          CONSTRAINT "ManualOrder_orderNumber_key" UNIQUE ("orderNumber")
+        )`
+      );
+      await execute(
+        `CREATE INDEX IF NOT EXISTS "ManualOrder_orderedAt_idx"
+           ON "ManualOrder"("orderedAt")`
+      );
+      await execute(
+        `CREATE INDEX IF NOT EXISTS "ManualOrder_statusKind_orderedAt_idx"
+           ON "ManualOrder"("statusKind", "orderedAt")`
+      );
+    })().catch((error) => {
+      manualOrderSchemaPromise = null;
+      throw error;
+    });
+  }
+  return manualOrderSchemaPromise;
 }

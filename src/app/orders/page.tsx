@@ -1,11 +1,12 @@
 "use client";
 
 import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { thumbUrl } from "@/lib/image";
+import { fetchJson } from "@/lib/fetch-json";
 import {
   ClipboardList,
   RefreshCw,
@@ -18,16 +19,25 @@ import {
   Package,
   KeyRound,
   TrendingUp,
+  Pencil,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PlatformLogo } from "@/components/PlatformLogo";
+import {
+  ManualOrderDialog,
+  type ManualOrderEditTarget,
+} from "@/components/orders/ManualOrderDialog";
 import { cn } from "@/lib/utils";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
+type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "manual";
 
 interface UnifiedOrderItem {
   name: string;
@@ -37,7 +47,7 @@ interface UnifiedOrderItem {
   madeToOrder?: boolean;
 }
 interface UnifiedOrder {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: OrderPlatform;
   id: string;
   orderNumber: string;
   date: string | null;
@@ -57,6 +67,9 @@ interface UnifiedOrder {
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  isManual?: boolean;
+  manualOrderId?: string | null;
+  editHref?: string | null;
 }
 interface PlatformStatus {
   ok: boolean;
@@ -82,6 +95,7 @@ interface OrdersResponse {
     shopify: SummaryBucket;
     trendyol: SummaryBucket;
     hepsiburada: SummaryBucket;
+    manual?: SummaryBucket;
     total: SummaryBucket;
     quality?: SummaryQuality;
   };
@@ -100,6 +114,7 @@ const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
   hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
+  manual: { label: "Manuel", color: "oklch(0.64 0.19 285)" },
 } as const;
 
 const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: string }> = {
@@ -142,6 +157,7 @@ function fmtDate(iso: string | null) {
 }
 
 export default function OrdersPage() {
+  const queryClient = useQueryClient();
   const forceFresh = useRef(false); // "Yenile" → sunucu önbelleğini atla (?fresh=1), canlı çek.
   const { data, isLoading, isFetching, refetch, error } = useQuery<OrdersResponse>({
     queryKey: ["orders"],
@@ -156,9 +172,12 @@ export default function OrdersPage() {
     refetchOnWindowFocus: false,
   });
 
-  const [platform, setPlatform] = useState<"all" | "shopify" | "trendyol" | "hepsiburada">("all");
+  const [platform, setPlatform] = useState<"all" | OrderPlatform>("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
   const [search, setSearch] = useState("");
+  const [manualCreateOpen, setManualCreateOpen] = useState(false);
+  const [editingManual, setEditingManual] =
+    useState<ManualOrderEditTarget | null>(null);
   // Arama debounce: kutu anında yazılır (search), filtre 200ms sonra (debouncedSearch).
   const [debouncedSearch, setDebouncedSearch] = useState("");
   useEffect(() => {
@@ -168,6 +187,44 @@ export default function OrdersPage() {
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
   const summary = data?.summary;
+  const manualSummary = useMemo<SummaryBucket>(() => {
+    if (summary?.manual) return summary.manual;
+    return orders.reduce<SummaryBucket>(
+      (bucket, order) => {
+        if (order.platform !== "manual" || order.statusKind === "cancelled") {
+          return bucket;
+        }
+        bucket.revenue += order.total;
+        bucket.profit += order.profit ?? 0;
+        bucket.orderCount += 1;
+        if (order.profit == null || order.profitPartial) {
+          bucket.incompleteOrders = (bucket.incompleteOrders ?? 0) + 1;
+        }
+        return bucket;
+      },
+      { revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 }
+    );
+  }, [orders, summary?.manual]);
+
+  const deleteManualMutation = useMutation({
+    mutationFn: (order: UnifiedOrder) => {
+      const id = order.manualOrderId || order.id;
+      return fetchJson(order.editHref || `/api/manual-orders/${id}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-monthly"] }),
+      ]);
+      toast.success("Manuel sipariş silindi");
+    },
+    onError: (error) =>
+      toast.error(
+        error instanceof Error ? error.message : "Manuel sipariş silinemedi"
+      ),
+  });
 
   const statusCounts = useMemo(() => {
     const c: Record<string, number> = {};
@@ -236,19 +293,29 @@ export default function OrdersPage() {
             <ClipboardList className="h-6 w-6 text-primary" /> Siparişler
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Son {summary?.days ?? 30} günde Shopify ve Trendyol&apos;dan gelen siparişler — canlı.
+            Son {summary?.days ?? 30} gündeki platform ve manuel siparişlerin — tek yerde.
           </p>
         </div>
-        <Button variant="outline" size="sm" disabled={isFetching} onClick={() => { forceFresh.current = true; refetch(); }} className="gap-2 shrink-0">
-          <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
-          Yenile
-        </Button>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+          <Button
+            size="sm"
+            className="gap-2"
+            onClick={() => setManualCreateOpen(true)}
+          >
+            <Plus className="h-4 w-4" />
+            Manuel Sipariş
+          </Button>
+          <Button variant="outline" size="sm" disabled={isFetching} onClick={() => { forceFresh.current = true; refetch(); }} className="gap-2">
+            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
+            Yenile
+          </Button>
+        </div>
       </div>
 
       {/* 30 günlük özet şeridi */}
       {summary && summary.total.orderCount > 0 && (
         <Card className="overflow-hidden">
-          <CardContent className="py-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <CardContent className="grid grid-cols-2 gap-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
             <SummaryStat label={`${summary.total.orderCount} sipariş`} value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />} sub="Toplam ciro" strong />
             <SummaryStat
               label="Sipariş kârı"
@@ -260,6 +327,7 @@ export default function OrdersPage() {
             <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
             <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
             <SummaryStat label="Hepsiburada" value={<AnimatedNumber value={summary.hepsiburada.revenue} format={fmtMoney} />} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
+            <SummaryStat label="Manuel" value={<AnimatedNumber value={manualSummary.revenue} format={fmtMoney} />} sub={`${manualSummary.orderCount} sipariş`} platform="manual" />
           </CardContent>
         </Card>
       )}
@@ -333,7 +401,7 @@ export default function OrdersPage() {
       {/* Kontroller */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
-          {(["all", "shopify", "trendyol", "hepsiburada"] as const).map((p) => (
+          {(["all", "shopify", "trendyol", "hepsiburada", "manual"] as const).map((p) => (
             <button
               key={p}
               onClick={() => setPlatform(p)}
@@ -378,7 +446,7 @@ export default function OrdersPage() {
           title={orders.length === 0 ? "Son 30 günde sipariş yok" : "Filtreyle eşleşen sipariş yok"}
           description={
             orders.length === 0
-              ? "Platformlardan canlı sipariş gelince burada listelenir. API bilgilerinin Entegrasyonlar'da tanımlı olduğundan emin ol."
+              ? "Platformlardan sipariş gelince veya manuel sipariş ekleyince burada listelenir."
               : "Filtre veya aramayı değiştirip tekrar dene."
           }
         />
@@ -395,13 +463,55 @@ export default function OrdersPage() {
                 ref={rowVirtualizer.measureElement}
                 className="pb-2"
               >
-                <OrderRow order={o} />
+                <OrderRow
+                  order={o}
+                  deleting={
+                    deleteManualMutation.isPending &&
+                    deleteManualMutation.variables?.id === o.id
+                  }
+                  onEdit={() =>
+                    setEditingManual({
+                      id: o.id,
+                      manualOrderId: o.manualOrderId,
+                      editHref: o.editHref,
+                      orderNumber: o.orderNumber,
+                      date: o.date,
+                      customer: o.customer,
+                      statusKind:
+                        o.statusKind === "other"
+                          ? "processing"
+                          : o.statusKind,
+                      total: o.total,
+                      items: o.items,
+                    })
+                  }
+                  onDelete={() => {
+                    if (
+                      window.confirm(
+                        `"${o.orderNumber}" manuel siparişini silmek istiyor musun? Bu işlem geri alınamaz.`
+                      )
+                    ) {
+                      deleteManualMutation.mutate(o);
+                    }
+                  }}
+                />
               </div>
             );
           })}
           {padBottom > 0 && <div style={{ height: padBottom }} />}
         </div>
       )}
+
+      <ManualOrderDialog
+        open={manualCreateOpen || editingManual !== null}
+        editing={editingManual}
+        onOpenChange={(open) => {
+          if (!open) {
+            setManualCreateOpen(false);
+            setEditingManual(null);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -421,7 +531,7 @@ function SummaryStat({
   /** Alt metin rengi — eksik maliyet uyarısında amber. */
   subColor?: string;
   color?: string;
-  platform?: "shopify" | "trendyol" | "hepsiburada";
+  platform?: OrderPlatform;
   strong?: boolean;
 }) {
   const c = platform ? PLATFORM_INFO[platform].color : color;
@@ -484,7 +594,17 @@ function Thumb({ src, size = "h-12 w-12" }: { src: string | null; size?: string 
   );
 }
 
-const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
+const OrderRow = memo(function OrderRow({
+  order,
+  onEdit,
+  onDelete,
+  deleting,
+}: {
+  order: UnifiedOrder;
+  onEdit: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const info = PLATFORM_INFO[order.platform];
   const st = STATUS_STYLE[order.statusKind];
@@ -678,6 +798,39 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
               </div>
             </div>
           </div>
+          {(order.isManual || order.platform === "manual") && (
+            <div className="mt-3 flex items-center justify-end gap-2 border-t border-border/50 pt-3">
+              <span className="mr-auto text-[10px] text-muted-foreground">
+                Bu kayıt elle eklendi.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5"
+                disabled={deleting}
+                onClick={onEdit}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+                Düzenle
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={deleting}
+                onClick={onDelete}
+              >
+                {deleting ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                Sil
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </Card>

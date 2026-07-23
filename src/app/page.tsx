@@ -20,6 +20,7 @@ import Link from "next/link";
 import { PlatformLogo } from "@/components/PlatformLogo";
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
+type OrderPlatform = Platform | "manual";
 
 interface PlatformStats {
   platform: Platform;
@@ -61,6 +62,11 @@ const PLATFORM_INFO: Record<Platform, { label: string; color: string }> = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
   trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
   hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
+};
+
+const ORDER_PLATFORM_INFO: Record<OrderPlatform, { label: string; color: string }> = {
+  ...PLATFORM_INFO,
+  manual: { label: "Manuel", color: "#A78BFA" },
 };
 
 const PROBLEM_LABELS: Record<
@@ -271,6 +277,7 @@ interface OrdersSummary {
   shopify: OrdersSummaryBucket;
   trendyol: OrdersSummaryBucket;
   hepsiburada: OrdersSummaryBucket;
+  manual: OrdersSummaryBucket;
   total: OrdersSummaryBucket;
 }
 
@@ -310,10 +317,11 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
   if (!s) return null;
 
   const profitPos = s.total.profit >= 0;
-  const rows: { platform: Platform; bucket: OrdersSummaryBucket }[] = [
+  const rows: { platform: OrderPlatform; bucket: OrdersSummaryBucket }[] = [
     { platform: "shopify", bucket: s.shopify },
     { platform: "trendyol", bucket: s.trendyol },
     { platform: "hepsiburada", bucket: s.hepsiburada },
+    { platform: "manual", bucket: s.manual },
   ];
 
   return (
@@ -337,7 +345,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-6">
             {/* Toplam ciro */}
             <div>
               <p className="text-[11px] text-muted-foreground">Toplam ciro</p>
@@ -360,13 +368,21 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
               <p className="text-[11px] text-muted-foreground mt-0.5">tahmini</p>
             </div>
 
-            {/* Shopify + Trendyol kırılımı */}
+            {/* Platform kırılımı */}
             {rows.map(({ platform, bucket }) => {
-              const info = PLATFORM_INFO[platform];
+              const info = ORDER_PLATFORM_INFO[platform];
               return (
                 <div key={platform} className="sm:border-l sm:border-border/50 sm:pl-4">
                   <p className="text-[11px] flex items-center gap-1.5">
-                    <PlatformLogo platform={platform} className="h-3 w-3" style={{ color: info.color }} />
+                    {platform === "manual" ? (
+                      <ClipboardList className="h-3 w-3" style={{ color: info.color }} />
+                    ) : (
+                      <PlatformLogo
+                        platform={platform}
+                        className="h-3 w-3"
+                        style={{ color: info.color }}
+                      />
+                    )}
                     <span style={{ color: info.color }} className="font-medium">
                       {info.label}
                     </span>

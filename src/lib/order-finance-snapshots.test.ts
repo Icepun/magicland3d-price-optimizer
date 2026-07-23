@@ -17,6 +17,10 @@ describe("finance snapshot order ids", () => {
     expect(canonicalFinanceOrderId("hepsiburada", "hb-99")).toBe("hb-99");
   });
 
+  it("manual kimliğini kanonikleştirmeden bırakır", () => {
+    expect(canonicalFinanceOrderId("manual", "manual-42")).toBe("manual-42");
+  });
+
   it("tam yakalanmış kârı maliyet değişince korur, gelir/iade değişince yeniler", () => {
     const captured = {
       revenueKurus: 10_000,

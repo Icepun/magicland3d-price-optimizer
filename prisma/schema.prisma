@@ -325,6 +325,35 @@ model OrderFinanceSnapshot {
   @@index([statusKind, orderedAt])
 }
 
+/**
+ * Katalog ürünleriyle veya serbest kalemlerle oluşturulan kalıcı manuel sipariş.
+ * Kalem ve hesap girdileri versioned JSON snapshot olarak aynı satırda tutulur.
+ */
+model ManualOrder {
+  id                  String   @id @default(cuid())
+  orderNumber         String   @unique
+  mode                String
+  orderedAt           DateTime
+  statusKind          String   @default("processing")
+  customerName        String?
+  currency            String   @default("TRY")
+  revenueKurus        Int
+  netRevenueKurus     Int
+  totalCostKurus      Int
+  inputVatCreditKurus Int
+  profitKurus         Int?
+  profitPartial       Boolean  @default(false)
+  itemsJson           String
+  breakdownJson       String
+  calculationVersion  Int      @default(1)
+  note                String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([orderedAt])
+  @@index([statusKind, orderedAt])
+}
+
 model PriceHistory {
   id           String   @id @default(cuid())
   productId    String

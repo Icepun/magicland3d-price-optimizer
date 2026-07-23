@@ -89,4 +89,33 @@ describe("monthly finance", () => {
       orderCount: 1,
     });
   });
+
+  it("manuel siparişi kendi kaynağından bir kez sayıp manual snapshot kopyasını dışlar", () => {
+    const duplicate = {
+      orderedAt: new Date("2026-07-05T10:00:00.000Z"),
+      revenueKurus: 20_000,
+      profitKurus: 5_000,
+      profitPartial: false,
+      statusKind: "delivered",
+      currency: "TRY",
+    };
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now: new Date("2026-07-20T12:00:00.000Z"),
+      snapshots: [{ ...duplicate, platform: "manual" }],
+      manualOrders: [duplicate],
+      expenses: [],
+    });
+
+    expect(months[0]).toMatchObject({
+      revenue: 200,
+      orderProfit: 50,
+      orderCount: 1,
+    });
+    expect(months[0].byPlatform.manual).toEqual({
+      revenue: 200,
+      orderProfit: 50,
+      orderCount: 1,
+    });
+  });
 });

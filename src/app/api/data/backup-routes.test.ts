@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { NextRequest } from "next/server";
 import packageJson from "../../../../package.json";
+import {
+  calculateManualOrder,
+  type ManualOrderCalculationInput,
+} from "@/core/manual-order";
+import { tlToKurus } from "@/lib/monthly-finance";
 
 const tempDir = mkdtempSync(path.join(tmpdir(), "magicland-backup-test-"));
 process.env.DATABASE_URL = `file:${path.join(tempDir, "test.db")}`;
@@ -52,6 +57,46 @@ describe("portable backup routes", () => {
       ],
     });
     expect(initial.status).toBe(200);
+
+    // Mobil v1 satırları `kind` yazmaz. Backend parser'ı mode/productId üzerinden
+    // okuyabilmeli ve versioned hesap zarfını aynen round-trip etmelidir.
+    const manualDraft: ManualOrderCalculationInput = {
+      saleTotal: 600,
+      vatRate: 20,
+      mode: "freeform",
+      items: [
+        {
+          id: "manual-line-1",
+          productId: null,
+          name: "Özel baskı",
+          imageUrl: null,
+          quantity: 1,
+          costKnown: true,
+          productionCost: 0,
+          packagingCost: 0,
+          filamentCost: 0,
+          packagingComponents: null,
+          manualUnitCost: 120,
+          manualCostHasVatInvoice: true,
+        },
+      ],
+      includeProductCost: true,
+      includePackaging: false,
+      commission: { amount: 0, hasVatInvoice: false },
+      cargo: { amount: 30, hasVatInvoice: false },
+      expenseRules: [],
+      customExpenses: [],
+    };
+    const manualBreakdown = calculateManualOrder(manualDraft);
+    const manualItemsJson = JSON.stringify({
+      version: 1,
+      items: manualDraft.items,
+    });
+    const manualBreakdownJson = JSON.stringify({
+      version: 1,
+      draft: manualDraft,
+      breakdown: manualBreakdown,
+    });
 
     const response = await postBackup({
       version: 2,
@@ -180,6 +225,30 @@ describe("portable backup routes", () => {
           calculationVersion: 1,
         },
       ],
+      manualOrders: [
+        {
+          id: "manual-order-1",
+          orderNumber: "M-TEST-1",
+          mode: "freeform",
+          orderedAt: "2026-07-09T10:00:00.000Z",
+          statusKind: "processing",
+          customerName: "Manuel müşteri",
+          currency: "TRY",
+          revenueKurus: tlToKurus(manualBreakdown.grossRevenue),
+          netRevenueKurus: tlToKurus(manualBreakdown.netRevenue),
+          totalCostKurus: tlToKurus(manualBreakdown.totalCost),
+          inputVatCreditKurus: tlToKurus(manualBreakdown.inputVatCredit),
+          profitKurus:
+            manualBreakdown.netProfit == null
+              ? null
+              : tlToKurus(manualBreakdown.netProfit),
+          profitPartial: manualBreakdown.profitPartial,
+          itemsJson: manualItemsJson,
+          breakdownJson: manualBreakdownJson,
+          calculationVersion: 1,
+          note: "Mobil uyum testi",
+        },
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -189,6 +258,7 @@ describe("portable backup routes", () => {
     expect(result.stats.productModelFilesSkipped).toBe(1);
     expect(result.stats.actualExpenses).toBe(1);
     expect(result.stats.orderFinanceSnapshots).toBe(1);
+    expect(result.stats.manualOrders).toBe(1);
     expect(result.warnings).toHaveLength(1);
 
     const product = await db.product.findUniqueOrThrow({
@@ -226,6 +296,32 @@ describe("portable backup routes", () => {
       storedPath: "",
       r2Key: "models/custom-order.3mf",
     });
+    expect(
+      await db.manualOrder.findUniqueOrThrow({ where: { id: "manual-order-1" } })
+    ).toMatchObject({
+      orderNumber: "M-TEST-1",
+      revenueKurus: 60_000,
+      profitPartial: false,
+      itemsJson: manualItemsJson,
+      breakdownJson: manualBreakdownJson,
+    });
+    await db.orderFinanceSnapshot.create({
+      data: {
+        id: "legacy-manual-snapshot",
+        platform: "manual",
+        externalOrderId: "manual-order-1",
+        orderNumber: "M-TEST-1",
+        orderedAt: new Date("2026-07-09T10:00:00.000Z"),
+        revenueKurus: 60_000,
+        profitKurus:
+          manualBreakdown.netProfit == null
+            ? null
+            : tlToKurus(manualBreakdown.netProfit),
+        profitPartial: false,
+        statusKind: "processing",
+        currency: "TRY",
+      },
+    });
 
     const exported = await exportBackup();
     expect(exported.status).toBe(200);
@@ -245,6 +341,20 @@ describe("portable backup routes", () => {
         externalOrderId: "sh-1003",
         revenueKurus: 34_498,
         profitKurus: 7_333,
+      }),
+    ]);
+    expect(
+      backup.orderFinanceSnapshots.find(
+        (snapshot: { platform: string }) => snapshot.platform === "manual"
+      )
+    ).toBeUndefined();
+    expect(backup.manualOrders).toEqual([
+      expect.objectContaining({
+        id: "manual-order-1",
+        orderNumber: "M-TEST-1",
+        revenueKurus: 60_000,
+        itemsJson: manualItemsJson,
+        breakdownJson: manualBreakdownJson,
       }),
     ]);
     expect(
@@ -289,6 +399,75 @@ describe("portable backup routes", () => {
     expect(response.status).toBe(400);
     expect(await db.product.count()).toBe(before);
     expect(await db.product.findUnique({ where: { barcode: "rollback-barcode" } })).toBeNull();
+  });
+
+  it("tahrif edilmiş manuel sipariş hesabını içeri almadan önce reddeder", async () => {
+    const before = await db.product.count();
+    const draft: ManualOrderCalculationInput = {
+      saleTotal: 120,
+      vatRate: 20,
+      mode: "freeform",
+      items: [
+        {
+          id: "tampered-line",
+          productId: null,
+          name: "Serbest kalem",
+          imageUrl: null,
+          quantity: 1,
+          costKnown: true,
+          productionCost: 0,
+          packagingCost: 0,
+          filamentCost: 0,
+          manualUnitCost: 20,
+        },
+      ],
+      includeProductCost: true,
+      includePackaging: false,
+      commission: { amount: 0, hasVatInvoice: false },
+      cargo: { amount: 0, hasVatInvoice: false },
+      expenseRules: [],
+      customExpenses: [],
+    };
+    const breakdown = calculateManualOrder(draft);
+    const response = await postBackup({
+      version: 2,
+      products: [
+        {
+          id: "must-not-import",
+          barcode: "manual-rollback",
+          currentSalePrice: 100,
+        },
+      ],
+      manualOrders: [
+        {
+          id: "tampered-order",
+          orderNumber: "M-TAMPERED",
+          mode: "freeform",
+          orderedAt: "2026-07-09T10:00:00.000Z",
+          statusKind: "processing",
+          currency: "TRY",
+          revenueKurus: 12_001,
+          netRevenueKurus: tlToKurus(breakdown.netRevenue),
+          totalCostKurus: tlToKurus(breakdown.totalCost),
+          inputVatCreditKurus: tlToKurus(breakdown.inputVatCredit),
+          profitKurus:
+            breakdown.netProfit == null ? null : tlToKurus(breakdown.netProfit),
+          profitPartial: breakdown.profitPartial,
+          itemsJson: JSON.stringify({ version: 1, items: draft.items }),
+          breakdownJson: JSON.stringify({ version: 1, draft, breakdown }),
+          calculationVersion: 1,
+        },
+      ],
+    });
+
+    expect(response.status).toBe(400);
+    expect(await db.product.count()).toBe(before);
+    expect(
+      await db.product.findUnique({ where: { barcode: "manual-rollback" } })
+    ).toBeNull();
+    expect(
+      await db.manualOrder.findUnique({ where: { id: "tampered-order" } })
+    ).toBeNull();
   });
 
   it("eşzamanlı makara tüketimlerini lost-update olmadan atomik uygular", async () => {

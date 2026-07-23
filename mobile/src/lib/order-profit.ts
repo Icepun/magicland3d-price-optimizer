@@ -16,6 +16,7 @@ const normName = (s: string | null | undefined) =>
   (s ?? "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
 
 export interface ProductMap {
+  byId: Map<string, ProductDetail>;
   byKey: Map<string, ProductDetail>;
   /** Shopify ad-eşleştirme (Shopify barkod tutmaz): normalize ad → ürün; aynı ad çoklu ürün → null (belirsiz). */
   byName: Map<string, ProductDetail | null>;
@@ -37,12 +38,14 @@ export function getProductMap(products: ProductDetail[]): ProductMap {
 /** Çok-anahtarlı ürün haritası: Product.barcode/sku + Listing.externalId/externalSku → ürün,
  *  + Shopify için ada göre eşleştirme (masaüstü orders route ile birebir). */
 export function buildProductMap(products: ProductDetail[]): ProductMap {
+  const byId = new Map<string, ProductDetail>();
   const byKey = new Map<string, ProductDetail>();
   const byName = new Map<string, ProductDetail | null>();
   const add = (k: string | null | undefined, p: ProductDetail) => {
     if (k && !byKey.has(k)) byKey.set(k, p);
   };
   for (const p of products) {
+    byId.set(p.id, p);
     add(p.barcode, p);
     add(p.sku, p);
     for (const l of p.listings) {
@@ -53,7 +56,7 @@ export function buildProductMap(products: ProductDetail[]): ProductMap {
     const nk = normName(p.name);
     if (nk) byName.set(nk, byName.has(nk) ? null : p);
   }
-  return { byKey, byName };
+  return { byId, byKey, byName };
 }
 
 /** Bir sipariş satırını aday anahtarlarıyla ürüne eşle. */
@@ -72,11 +75,12 @@ export { matchLine };
 /** Satır eşleştirme (anahtar + Shopify ad-fallback) — computeOrderProfit ile AYNI mantık.
  *  Sipariş detay ekranı da bunu kullansın ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. */
 export function matchOrderLine(
-  line: { matchKeys?: string[]; name: string },
+  line: { productId?: string | null; matchKeys?: string[]; name: string },
   platform: UnifiedOrder["platform"],
   pm: ProductMap
 ): ProductDetail | undefined {
-  let p = matchLine(line.matchKeys, pm.byKey);
+  let p = line.productId ? pm.byId.get(line.productId) : undefined;
+  if (!p) p = matchLine(line.matchKeys, pm.byKey);
   if (!p && platform === "shopify") {
     const named = pm.byName.get(normName(line.name));
     if (named) p = named;
@@ -105,6 +109,24 @@ export function computeOrderProfit(
   rules: Rules,
   settings: Record<string, string>
 ): OrderProfit {
+  if (order.isManual) {
+    const totalQty = order.items.reduce((sum, line) => sum + line.quantity, 0);
+    const onlyLine = order.items.length === 1 ? order.items[0] : null;
+    const matched = onlyLine ? matchOrderLine(onlyLine, order.platform, pm) : undefined;
+    return {
+      revenue: order.total,
+      profit: order.profit ?? null,
+      partial: Boolean(order.profitPartial),
+      image: onlyLine?.image ?? matched?.imageUrl ?? null,
+      distinctCount: order.items.length,
+      totalQty,
+      unmatchedRevenue: order.profit == null ? order.total : 0,
+      missingDesiCount: 0,
+      desiEstimated: false,
+      orderRevenueAdjustment: 0,
+    };
+  }
+
   // Kâr hesabının TAMAMI @core/order-profit'te — masaüstü /api/orders ile AYNI fonksiyon.
   // (Eski mobil kopya: listing komisyonunu uygulamıyordu + sabit gideri adet başına tekrar
   //  kesiyordu → telefondaki kârlar masaüstünden şişik çıkıyordu.)

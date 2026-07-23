@@ -24,6 +24,11 @@ import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/co
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
 import { persistOrderFinanceSnapshots } from "@/lib/order-finance-snapshots";
+import {
+  parseManualOrderBreakdown,
+  parseManualOrderItems,
+} from "@/lib/manual-orders";
+import { kurusToTl } from "@/lib/monthly-finance";
 
 const WINDOW_DAYS = 30;
 // Aylık geçmişte geç gelen iptal/iade durumlarını yakalamak için görünür listenin
@@ -50,7 +55,7 @@ export interface UnifiedOrderItem {
 }
 
 export interface UnifiedOrder {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
   id: string;
   orderNumber: string;
   date: string | null;
@@ -72,6 +77,9 @@ export interface UnifiedOrder {
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  isManual?: boolean;
+  manualOrderId?: string;
+  editHref?: string;
 }
 
 interface PlatformStatus {
@@ -269,6 +277,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const historyCutoff =
     (Math.floor(Date.now() / 86_400_000) - HISTORY_SYNC_DAYS) * 86_400_000;
   const orders: UnifiedOrder[] = [];
+  const manualOrdersPromise = prisma.manualOrder.findMany({
+    where: { orderedAt: { gte: new Date(historyCutoff) } },
+    orderBy: { orderedAt: "desc" },
+  });
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
   let hepsiburada: PlatformStatus = { ok: false, count: 0 };
@@ -740,6 +752,69 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     });
   }
 
+  // Manuel siparişler kendi kalıcı finans snapshot'larını aynı ManualOrder satırında taşır.
+  // Platform siparişlerinin canlı hesap hattına veya OrderFinanceSnapshot'a sokulmazlar.
+  const manualOrders = await manualOrdersPromise;
+  for (const manual of manualOrders) {
+    try {
+      const storedItems = parseManualOrderItems(manual.itemsJson).items;
+      const storedBreakdown = parseManualOrderBreakdown(
+        manual.breakdownJson
+      ).breakdown;
+      const items: UnifiedOrderItem[] = storedItems.map((item) => ({
+        name: item.name,
+        quantity: item.quantity,
+        image: item.imageUrl,
+        productId: item.productId,
+        madeToOrder: false,
+      }));
+      const image =
+        storedItems.length === 1 ? storedItems[0]?.imageUrl ?? null : null;
+      orders.push({
+        platform: "manual",
+        id: manual.id,
+        orderNumber: manual.orderNumber,
+        date: manual.orderedAt.toISOString(),
+        statusKind: manual.statusKind as OrderStatusKind,
+        statusLabel:
+          manual.statusKind === "pending"
+            ? "Bekliyor"
+            : manual.statusKind === "processing"
+              ? "Hazırlanıyor"
+              : manual.statusKind === "shipped"
+                ? "Gönderildi"
+                : manual.statusKind === "delivered"
+                  ? "Teslim Edildi"
+                  : "İptal",
+        total: kurusToTl(manual.revenueKurus),
+        currency: manual.currency,
+        customer: manual.customerName,
+        itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
+        items,
+        image,
+        profit:
+          manual.profitKurus == null
+            ? null
+            : kurusToTl(manual.profitKurus),
+        profitPartial: manual.profitPartial,
+        unmatchedCount: storedBreakdown.missingCostItems,
+        missingDesiCount: 0,
+        desiEstimated: false,
+        orderRevenueAdjustment: 0,
+        trackingNumber: null,
+        cargoProvider: null,
+        isManual: true,
+        manualOrderId: manual.id,
+        editHref: `/api/manual-orders/${manual.id}`,
+      });
+    } catch (error) {
+      console.error(
+        `[manual-order] ${manual.id} okunamadı:`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
   // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ / BOZMAZ).
   // ÖNCE hangileri GERÇEKTEN yeni tespit edilir → yalnız yeniler eklenir ve KRİTİK olanlar
   // (stoğu biten ürüne sipariş) telefona da push'lanır. Eski INSERT OR IGNORE tek başına
@@ -788,7 +863,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     await persistOrderFinanceSnapshots(orders);
     financeHistory = {
       ok: true,
-      syncedOrders: orders.filter((order) => Boolean(order.date)).length,
+      syncedOrders: orders.filter(
+        (order) => order.platform !== "manual" && Boolean(order.date)
+      ).length,
       syncDays: HISTORY_SYNC_DAYS,
     };
   } catch (error) {
@@ -813,6 +890,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const sShopify = empty();
   const sTrendyol = empty();
   const sHepsiburada = empty();
+  const sManual = empty();
   const unsupportedCurrencies = new Map<string, number>();
   for (const o of visibleOrders) {
     if (o.statusKind === "cancelled") continue;
@@ -824,7 +902,13 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       continue;
     }
     const bucket =
-      o.platform === "shopify" ? sShopify : o.platform === "trendyol" ? sTrendyol : sHepsiburada;
+      o.platform === "shopify"
+        ? sShopify
+        : o.platform === "trendyol"
+          ? sTrendyol
+          : o.platform === "hepsiburada"
+            ? sHepsiburada
+            : sManual;
     bucket.revenue += o.total;
     bucket.profit += o.profit ?? 0;
     bucket.orderCount += 1;
@@ -832,10 +916,26 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     if (o.profit == null || o.profitPartial) bucket.incompleteOrders += 1;
   }
   const total: SummaryBucket = {
-    revenue: sShopify.revenue + sTrendyol.revenue + sHepsiburada.revenue,
-    profit: sShopify.profit + sTrendyol.profit + sHepsiburada.profit,
-    orderCount: sShopify.orderCount + sTrendyol.orderCount + sHepsiburada.orderCount,
-    incompleteOrders: sShopify.incompleteOrders + sTrendyol.incompleteOrders + sHepsiburada.incompleteOrders,
+    revenue:
+      sShopify.revenue +
+      sTrendyol.revenue +
+      sHepsiburada.revenue +
+      sManual.revenue,
+    profit:
+      sShopify.profit +
+      sTrendyol.profit +
+      sHepsiburada.profit +
+      sManual.profit,
+    orderCount:
+      sShopify.orderCount +
+      sTrendyol.orderCount +
+      sHepsiburada.orderCount +
+      sManual.orderCount,
+    incompleteOrders:
+      sShopify.incompleteOrders +
+      sTrendyol.incompleteOrders +
+      sHepsiburada.incompleteOrders +
+      sManual.incompleteOrders,
   };
   const quality: SummaryQuality = {
     unsupportedCurrencyOrders: [...unsupportedCurrencies.values()].reduce(
@@ -854,6 +954,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       shopify: sShopify,
       trendyol: sTrendyol,
       hepsiburada: sHepsiburada,
+      manual: sManual,
       total,
       quality,
     },

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -12,7 +12,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
-import { PLATFORM_LABEL } from "@/lib/platforms";
+import { ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 
 const TONE: Record<StatusTone, string> = {
   green: ML.green,
@@ -93,7 +93,7 @@ export default function OrderDetailScreen() {
         <View style={styles.headRow}>
           <View style={[styles.platDot, { backgroundColor: accent }]} />
           <Text style={[styles.platName, { color: accent }]}>
-            {PLATFORM_LABEL[order.platform]}
+            {ORDER_PLATFORM_LABEL[order.platform]}
           </Text>
           <View style={[styles.statusBadge, { backgroundColor: TONE[st.tone] + "22" }]}>
             <Text style={[styles.statusText, { color: TONE[st.tone] }]}>{st.label}</Text>
@@ -102,6 +102,14 @@ export default function OrderDetailScreen() {
         <Text style={styles.sub}>
           {order.customer ?? "—"} · {formatDate(order.date)}
         </Text>
+        {order.isManual && order.editHref ? (
+          <Pressable
+            onPress={() => router.push(order.editHref as never)}
+            style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.75 }]}
+          >
+            <Text style={styles.editButtonText}>Manuel siparişi düzenle</Text>
+          </Pressable>
+        ) : null}
 
         {/* Kâr/ciro */}
         <View style={styles.kpiCard}>
@@ -148,11 +156,12 @@ export default function OrderDetailScreen() {
         {order.items.map((line, i) => {
           // Kâr kutusuyla AYNI eşleştirme (anahtar + Shopify ad-fallback) — çelişkili "eşleşmedi" bitti.
           const p = matchOrderLine(line, order.platform, pm);
+          const lineImage = line.image ?? p?.imageUrl ?? null;
           return (
             <View key={i} style={styles.lineRow}>
-              {p?.imageUrl ? (
+              {lineImage ? (
                 <Image
-                  source={{ uri: thumbUrl(p.imageUrl, 128)! }}
+                  source={{ uri: thumbUrl(lineImage, 128)! }}
                   alt={line.name}
                   style={styles.lineImg}
                   contentFit="cover"
@@ -165,11 +174,17 @@ export default function OrderDetailScreen() {
                   {line.name}
                 </Text>
                 <Text style={styles.lineMeta}>
-                  {line.quantity} × {formatCurrency(line.unitPrice)}
-                  {p ? "" : "  · eşleşmedi"}
+                  {order.isManual
+                    ? `${line.quantity} adet`
+                    : `${line.quantity} × ${formatCurrency(line.unitPrice)}`}
+                  {p || order.isManual ? "" : "  · eşleşmedi"}
                 </Text>
               </View>
-              <Text style={styles.lineTotal}>{formatCurrency(line.unitPrice * line.quantity)}</Text>
+              {!order.isManual ? (
+                <Text style={styles.lineTotal}>
+                  {formatCurrency(line.unitPrice * line.quantity)}
+                </Text>
+              ) : null}
             </View>
           );
         })}
@@ -197,6 +212,16 @@ const styles = StyleSheet.create({
   statusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
   statusText: { fontSize: 12, fontWeight: "700" },
   sub: { color: ML.textDim, fontSize: 14 },
+  editButton: {
+    alignSelf: "flex-start",
+    backgroundColor: ML.manual + "22",
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.manual + "66",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  editButtonText: { color: ML.manual, fontSize: 13, fontWeight: "700" },
   kpiCard: {
     flexDirection: "row",
     backgroundColor: ML.card,

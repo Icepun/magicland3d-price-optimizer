@@ -55,6 +55,9 @@ export async function persistOrderFinanceSnapshots(
   orders: FinanceSnapshotOrder[]
 ): Promise<void> {
   const valid = orders.flatMap((order) => {
+    // Manuel siparişin captured finansı ManualOrder satırındadır. Buraya da yazılırsa
+    // aylık finans aynı satışı iki kez sayar ve mobilde atomik olmayan çift yazım doğar.
+    if (order.platform === "manual") return [];
     if (!order.date) return [];
     const orderedAt = new Date(order.date);
     if (!Number.isFinite(orderedAt.getTime())) return [];

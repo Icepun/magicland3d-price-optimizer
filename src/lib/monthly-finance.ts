@@ -28,6 +28,15 @@ type SnapshotInput = {
   currency: string;
 };
 
+type ManualOrderFinanceInput = {
+  orderedAt: Date;
+  revenueKurus: number;
+  profitKurus: number | null;
+  profitPartial: boolean;
+  statusKind: string;
+  currency: string;
+};
+
 type ExpenseInput = {
   paidAt: Date;
   amountKurus: number;
@@ -118,12 +127,14 @@ export function recentMonthKeys(
 
 export function aggregateMonthlyFinance({
   snapshots,
+  manualOrders = [],
   expenses,
   monthCount,
   now = new Date(),
   timeZone = FINANCE_TIME_ZONE,
 }: {
   snapshots: SnapshotInput[];
+  manualOrders?: ManualOrderFinanceInput[];
   expenses: ExpenseInput[];
   monthCount: number;
   now?: Date;
@@ -149,22 +160,23 @@ export function aggregateMonthlyFinance({
           shopify: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
           trendyol: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
           hepsiburada: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
+          manual: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
         },
       },
     ])
   );
 
-  for (const snapshot of snapshots) {
+  const addOrder = (snapshot: SnapshotInput) => {
     const bucket = months.get(monthKey(snapshot.orderedAt, timeZone));
-    if (!bucket) continue;
+    if (!bucket) return;
     if (snapshot.statusKind === "cancelled") {
       bucket.excludedOrders++;
-      continue;
+      return;
     }
     if ((snapshot.currency || "TRY").trim().toUpperCase() !== "TRY") {
       bucket.excludedOrders++;
       bucket.unsupportedCurrencyOrders++;
-      continue;
+      return;
     }
 
     bucket.revenueKurus += snapshot.revenueKurus;
@@ -187,6 +199,16 @@ export function aggregateMonthlyFinance({
     platform.revenueKurus += snapshot.revenueKurus;
     platform.orderProfitKurus += snapshot.profitKurus ?? 0;
     platform.orderCount++;
+  };
+
+  for (const snapshot of snapshots) {
+    // ManualOrder kendi kalıcı finans kaynağıdır; eski/yanlışlıkla üretilmiş manual
+    // snapshot satırı varsa bile burada ikinci kez sayılmaz.
+    if (snapshot.platform === "manual") continue;
+    addOrder(snapshot);
+  }
+  for (const order of manualOrders) {
+    addOrder({ ...order, platform: "manual" });
   }
 
   for (const expense of expenses) {

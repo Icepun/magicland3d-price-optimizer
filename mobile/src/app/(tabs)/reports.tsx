@@ -15,7 +15,7 @@ import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { computeProductProfitMemo } from "@/lib/profit";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
-import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
+import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 import {
   getMonthlyFinanceSummary,
   syncOrderFinanceSnapshots,
@@ -43,7 +43,7 @@ export default function ReportsScreen() {
 
   const rev = useMemo(() => {
     const byPlat: Record<string, { rev: number; profit: number }> = Object.fromEntries(
-      PLATFORMS.map((p) => [p, { rev: 0, profit: 0 }])
+      ORDER_PLATFORMS.map((p) => [p, { rev: 0, profit: 0 }])
     );
     let total = 0;
     let profit = 0;
@@ -68,7 +68,7 @@ export default function ReportsScreen() {
     const visibleCutoff = orderWindowCutoff();
     for (const o of orders.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
-      if (o.date != null) {
+      if (o.date != null && o.platform !== "manual") {
         snapshots.push({
           platform: o.platform,
           externalOrderId: o.id,
@@ -209,7 +209,7 @@ export default function ReportsScreen() {
   }
 
   const avgBasket = rev.count > 0 ? rev.total / rev.count : 0;
-  const maxBar = Math.max(...PLATFORMS.map((p) => rev.byPlat[p].rev), 1);
+  const maxBar = Math.max(...ORDER_PLATFORMS.map((p) => rev.byPlat[p].rev), 1);
   const maxQty = topSellers[0]?.qty ?? 1;
   const maxTrend = Math.max(...trend.map((t) => t.rev), 1);
   const trendHasData = trend.some((t) => t.rev > 0);
@@ -236,7 +236,7 @@ export default function ReportsScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Raporlar</Text>
-        <Text style={styles.subtitle}>Son 30 gün — 3 platform</Text>
+        <Text style={styles.subtitle}>Son 30 gün — tüm satışlar</Text>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {/* Stat kartları */}
@@ -323,10 +323,10 @@ export default function ReportsScreen() {
         {/* Platform karşılaştırma */}
         <Text style={styles.sectionLabel}>PLATFORM</Text>
         <View style={styles.card}>
-          {PLATFORMS.map((plat) => (
+          {ORDER_PLATFORMS.map((plat) => (
             <PlatformBar
               key={plat}
-              name={PLATFORM_LABEL[plat]}
+              name={ORDER_PLATFORM_LABEL[plat]}
               color={ML[plat]}
               rev={rev.byPlat[plat].rev}
               profit={rev.byPlat[plat].profit}

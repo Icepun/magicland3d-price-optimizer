@@ -24,6 +24,7 @@ export const ML = {
   shopify: "#4FBF67",
   trendyol: "#F27A1A",
   hepsiburada: "#FF6000",
+  manual: "#A78BFA",
 } as const;
 
 export const radius = { sm: 10, md: 14, lg: 20, xl: 28 } as const;

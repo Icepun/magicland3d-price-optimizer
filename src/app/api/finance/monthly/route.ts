@@ -13,9 +13,21 @@ export async function GET(req: NextRequest) {
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
 
-  const [snapshots, expenses] = await Promise.all([
+  const [snapshots, manualOrders, expenses] = await Promise.all([
     prisma.orderFinanceSnapshot.findMany({
+      where: { platform: { not: "manual" } },
       orderBy: { orderedAt: "asc" },
+    }),
+    prisma.manualOrder.findMany({
+      orderBy: { orderedAt: "asc" },
+      select: {
+        orderedAt: true,
+        revenueKurus: true,
+        profitKurus: true,
+        profitPartial: true,
+        statusKind: true,
+        currency: true,
+      },
     }),
     prisma.actualExpense.findMany({
       orderBy: { paidAt: "asc" },
@@ -24,6 +36,7 @@ export async function GET(req: NextRequest) {
 
   const months = aggregateMonthlyFinance({
     snapshots,
+    manualOrders,
     expenses,
     monthCount,
     timeZone: FINANCE_TIME_ZONE,
@@ -72,7 +85,11 @@ export async function GET(req: NextRequest) {
       currency: "TRY",
       timeZone: FINANCE_TIME_ZONE,
       generatedAt: new Date().toISOString(),
-      dataFrom: snapshots[0]?.orderedAt.toISOString() ?? null,
+      dataFrom:
+        [...snapshots, ...manualOrders]
+          .map((row) => row.orderedAt)
+          .sort((a, b) => a.getTime() - b.getTime())[0]
+          ?.toISOString() ?? null,
       lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
       totals,
       months,
