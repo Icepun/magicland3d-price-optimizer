@@ -21,6 +21,7 @@ import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
+import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const WINDOW_DAYS = 30;
@@ -60,6 +61,10 @@ export interface UnifiedOrder {
   profitPartial: boolean;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
+  /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
+  missingDesiCount?: number;
+  desiEstimated?: boolean;
+  orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
 }
@@ -197,6 +202,7 @@ interface Matched {
   imageUrl: string | null;
   productionCost: number;
   packagingCost: number;
+  packagingComponents: PackagingBreakdown["components"] | null;
   filamentCost: number; // KDV iadesine giren malzeme payı
   categoryName: string;
   desi: number | null;
@@ -504,7 +510,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
 
   if (allKeys.size > 0 || shopifyNames.size > 0) {
     const keyList = [...allKeys];
-    const nameList = [...shopifyNames];
+    const normalizedShopifyNames = new Set([...shopifyNames].map(normName));
+    // SQLite/Prisma `name IN (...)` ham büyük-küçük harf ve boşluk farklarını kaçırıyordu.
+    // Önce yalnız id+ad tarayıp Türkçe-normalize eşleşen küçük id listesini çıkar.
+    const nameMatchedIds =
+      normalizedShopifyNames.size > 0
+        ? (
+            await prisma.product.findMany({
+              select: { id: true, name: true },
+            })
+          )
+            .filter((product) => normalizedShopifyNames.has(normName(product.name)))
+            .map((product) => product.id)
+        : [];
     const [products, cRules, kRules, eRules, settings] = await Promise.all([
       prisma.product.findMany({
         where: {
@@ -514,7 +532,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             { listings: { some: { externalId: { in: keyList } } } },
             { listings: { some: { externalSku: { in: keyList } } } },
             { listings: { some: { barcode: { in: keyList } } } },
-            { name: { in: nameList } },
+            { id: { in: nameMatchedIds } },
           ],
         },
         include: { cost: { include: { filamentType: { select: { costPerGram: true } } } }, listings: true },
@@ -548,6 +566,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         imageUrl: p.imageUrl,
         productionCost: resolved?.productionCost ?? 0,
         packagingCost: resolved?.packagingCost ?? 0,
+        packagingComponents: resolved?.packagingBreakdown?.components ?? null,
         filamentCost: resolved?.filamentCost ?? 0,
         categoryName: p.categoryName,
         desi: p.desi,
@@ -615,6 +634,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
               id: m.id, name: m.name, categoryName: m.categoryName,
               desi: m.desi, commissionRate: m.commissionRate,
               productionCost: m.productionCost, packagingCost: m.packagingCost,
+              packagingComponents: m.packagingComponents,
               filamentCost: m.filamentCost,
               listing: m.listingByPlatform[r.platform] ?? null,
             }
@@ -685,6 +705,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       profit: pr.profit,
       profitPartial: pr.partial,
       unmatchedCount: pr.unmatchedLines,
+      missingDesiCount: pr.missingDesiLines,
+      desiEstimated: pr.desiEstimated,
+      orderRevenueAdjustment: pr.orderRevenueAdjustment,
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
     });

@@ -29,9 +29,28 @@ export interface PackagingSettings {
   stickerPrice: number;
   sakizQty: number;
   sakizPrice: number;
+  scopes: PackagingScopes;
 }
 
 export type NylonLevel = "none" | "low" | "medium" | "high";
+export type PackagingScope = "per_unit" | "per_order" | "per_shipment";
+export type PackagingComponentKey =
+  | "option"
+  | "nylon"
+  | "tape"
+  | "card"
+  | "sticker"
+  | "sakiz";
+export type PackagingScopes = Record<PackagingComponentKey, PackagingScope>;
+
+export const DEFAULT_PACKAGING_SCOPES: PackagingScopes = {
+  option: "per_shipment",
+  nylon: "per_shipment",
+  tape: "per_shipment",
+  card: "per_order",
+  sticker: "per_order",
+  sakiz: "per_order",
+};
 
 export interface PackagingSelection {
   packagingOptionId?: string | null;
@@ -46,6 +65,14 @@ export interface PackagingBreakdown {
   card: number;
   sticker: number;
   sakiz: number;
+  perUnit: number;
+  perOrder: number;
+  perShipment: number;
+  components: {
+    key: PackagingComponentKey;
+    scope: PackagingScope;
+    cost: number;
+  }[];
   total: number;
 }
 
@@ -99,6 +126,25 @@ function parsePackagingSettingsUncached(
     }
   }
 
+  let scopes = DEFAULT_PACKAGING_SCOPES;
+  if (settings.packagingScopes) {
+    try {
+      const parsed = JSON.parse(settings.packagingScopes) as Partial<PackagingScopes>;
+      const valid = (value: unknown): value is PackagingScope =>
+        value === "per_unit" || value === "per_order" || value === "per_shipment";
+      scopes = {
+        option: valid(parsed.option) ? parsed.option : DEFAULT_PACKAGING_SCOPES.option,
+        nylon: valid(parsed.nylon) ? parsed.nylon : DEFAULT_PACKAGING_SCOPES.nylon,
+        tape: valid(parsed.tape) ? parsed.tape : DEFAULT_PACKAGING_SCOPES.tape,
+        card: valid(parsed.card) ? parsed.card : DEFAULT_PACKAGING_SCOPES.card,
+        sticker: valid(parsed.sticker) ? parsed.sticker : DEFAULT_PACKAGING_SCOPES.sticker,
+        sakiz: valid(parsed.sakiz) ? parsed.sakiz : DEFAULT_PACKAGING_SCOPES.sakiz,
+      };
+    } catch {
+      /* bozuk JSON → varsayılan kapsamlar */
+    }
+  }
+
   return {
     options,
     nylonRollPrice: num(settings.nylonRollPrice),
@@ -114,6 +160,7 @@ function parsePackagingSettingsUncached(
     stickerPrice: num(settings.stickerPrice),
     sakizQty: num(settings.sakizQty),
     sakizPrice: num(settings.sakizPrice),
+    scopes,
   };
 }
 
@@ -159,6 +206,31 @@ export function computePackagingCost(
   const sticker = perUnit(s.stickerPrice, s.stickerQty);
   const sakiz = perUnit(s.sakizPrice, s.sakizQty);
 
-  const total = poset + nylon + tape + card + sticker + sakiz;
-  return { poset, nylon, tape, card, sticker, sakiz, total };
+  const components: PackagingBreakdown["components"] = [
+    { key: "option", scope: s.scopes.option, cost: poset },
+    { key: "nylon", scope: s.scopes.nylon, cost: nylon },
+    { key: "tape", scope: s.scopes.tape, cost: tape },
+    { key: "card", scope: s.scopes.card, cost: card },
+    { key: "sticker", scope: s.scopes.sticker, cost: sticker },
+    { key: "sakiz", scope: s.scopes.sakiz, cost: sakiz },
+  ];
+  const sumScope = (scope: PackagingScope) =>
+    components.reduce((sum, item) => sum + (item.scope === scope ? item.cost : 0), 0);
+  const perUnitTotal = sumScope("per_unit");
+  const perOrderTotal = sumScope("per_order");
+  const perShipmentTotal = sumScope("per_shipment");
+  const total = perUnitTotal + perOrderTotal + perShipmentTotal;
+  return {
+    poset,
+    nylon,
+    tape,
+    card,
+    sticker,
+    sakiz,
+    perUnit: perUnitTotal,
+    perOrder: perOrderTotal,
+    perShipment: perShipmentTotal,
+    components,
+    total,
+  };
 }

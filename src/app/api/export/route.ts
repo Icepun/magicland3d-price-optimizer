@@ -1,20 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolveProductCost } from "@/core/product-cost";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 export async function GET(req: NextRequest) {
+  await ensureRuntimeSchema();
   const { searchParams } = new URL(req.url);
   const type = searchParams.get("type") ?? "products";
 
   if (type === "products") {
-    const products = await prisma.product.findMany({
-      include: { cost: true },
-      orderBy: { name: "asc" },
-    });
+    const [products, settings] = await Promise.all([
+      prisma.product.findMany({
+        include: { cost: { include: { filamentType: true } } },
+        orderBy: { name: "asc" },
+      }),
+      prisma.appSetting.findMany(),
+    ]);
+    const settingsMap = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
 
     const header =
       "barcode,sku,name,category,sale_price,stock,desi,product_cost,packaging_cost";
-    const rows = products.map((p) =>
-      [
+    const rows = products.map((p) => {
+      const resolved = resolveProductCost(
+        p.cost,
+        settingsMap,
+        p.cost?.filamentType?.costPerGram ?? 0
+      );
+      return [
         p.barcode,
         p.sku,
         `"${p.name.replace(/"/g, '""')}"`,
@@ -22,10 +34,10 @@ export async function GET(req: NextRequest) {
         p.currentSalePrice.toFixed(2),
         p.stock,
         p.desi ?? "",
-        p.cost?.totalCost?.toFixed(2) ?? p.cost?.manualCost?.toFixed(2) ?? "",
-        p.cost?.packagingCost?.toFixed(2) ?? "",
-      ].join(",")
-    );
+        resolved?.productionCost.toFixed(2) ?? "",
+        resolved?.packagingCost.toFixed(2) ?? "",
+      ].join(",");
+    });
 
     const csv = [header, ...rows].join("\n");
     return new NextResponse(csv, {

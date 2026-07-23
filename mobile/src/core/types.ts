@@ -36,6 +36,8 @@ export interface CargoRuleInput {
   minDesi: number;
   maxDesi: number;
   cargoCost: number;
+  /** true/undefined = cargoCost KDV dahil; false = KDV hariç tarife tutarı. */
+  vatIncluded?: boolean;
   priority: number;
   validFrom?: Date | null;
   validTo?: Date | null;
@@ -73,6 +75,10 @@ export interface SimulationInput {
   salePrice: number;
   productCost: number;
   packagingCost: number;
+  /** Paketleme kapsamları verilirse packagingCost yalnız tek ürün toplamı olarak kalır. */
+  packagingUnitCost?: number;
+  packagingOrderCost?: number;
+  packagingShipmentCost?: number;
   categoryName: string;
   desi?: number;
   commissionRules: CommissionRuleInput[];
@@ -114,8 +120,8 @@ export interface SimulationInput {
   vatableProductCost?: number;
   /**
    * Minimum sipariş adedi (Trendyol bareni gibi). Default 1.
-   * >1 ise SİPARİŞ = N adet kabul edilir: gelir + ürün/paketleme/komisyon/değişken gider × N,
-   * KARGO tek kez (birleşik desi = desi×N), sabit gider tek kez. netProfit = N-adetlik sipariş kârı.
+   * >1 ise SİPARİŞ = N adet kabul edilir: gelir + ürün/adet-paketleme/komisyon/değişken gider × N,
+   * sipariş/gönderi paketlemesi, KARGO ve sabit gider tek kez. netProfit = N-adetlik sipariş kârı.
    */
   minOrderQty?: number;
 }

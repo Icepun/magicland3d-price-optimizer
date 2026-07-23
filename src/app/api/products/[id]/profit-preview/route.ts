@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
-import { resolveProductCost } from "@/core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
@@ -102,6 +102,7 @@ export async function POST(
       salePrice: listing.salePrice,
       productCost,
       packagingCost,
+      ...packagingScopeInput(resolved),
       categoryName: product.categoryName,
       desi: cost.desi ?? product.desi ?? 1,
       commissionRules: productRules,

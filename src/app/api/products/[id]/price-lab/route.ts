@@ -3,7 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
-import { resolveProductCost } from "@/core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import {
+  collectRulePriceBreakpoints,
+  findMinimumPriceForMargin,
+} from "@/core/price-target";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
@@ -56,6 +60,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       salePrice,
       productCost,
       packagingCost,
+      ...packagingScopeInput(resolved),
       categoryName: product!.categoryName,
       desi: product!.desi ?? 1,
       commissionRules: productRules,
@@ -66,7 +71,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       ...(listing
         ? resolveListingCommissionOverride({ platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }, settingsMap)
         : resolveListingCommissionOverride({ platform, commissionRate: null, commissionFixed: null }, settingsMap)),
-      cargoCostOverride: listing?.cargoCost ?? undefined,
+      cargoCostOverride:
+        listing?.cargoCost ??
+        (platform === "shopify" &&
+        salePrice * (1 - discountBuffer / 100) < 150
+          ? 0
+          : undefined),
       // Trendyol min sipariş adedi — karar: Fiyat Lab da uygular (mobil price-lab.ts ile birebir;
       // Ürünler sayfası zaten uyguluyordu → üç yüzey aynı).
       minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
@@ -74,18 +84,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   }
 
-  // Hedef marj → fiyat (platform başına; ikili arama, marj fiyatla artar)
+  // Hedef marj → fiyat; kargo/min-adet sıçramalarında her sabit aralığı ayrı ara.
   function priceForMargin(platform: string, listing: Parameters<typeof simFor>[1], targetMargin: number): number | null {
-    const margAt = (p: number) => simFor(platform, listing, p).profitMargin;
-    let hi = 100000;
-    if (margAt(hi) < targetMargin) return null; // hiçbir fiyatta ulaşılamıyor
-    let lo = 0.5;
-    for (let i = 0; i < 44; i++) {
-      const mid = (lo + hi) / 2;
-      if (margAt(mid) >= targetMargin) hi = mid;
-      else lo = mid;
-    }
-    return hi;
+    const platformCargo = filterCargoRulesByPlatform(cargoRules as KR, platform);
+    const platformExpense = filterRulesByPlatform(expenseRules as ER, platform);
+    const breakpoints = collectRulePriceBreakpoints(
+      productRules,
+      platformCargo,
+      platformExpense
+    );
+    if (platform === "trendyol") breakpoints.push(25, 35, 50, 75);
+    if (platform === "shopify") breakpoints.push(150);
+    return findMinimumPriceForMargin({
+      marginAt: (price) => simFor(platform, listing, price).profitMargin,
+      targetMargin,
+      breakpoints,
+    });
   }
 
   const platforms = product.listings.map((l) => l.platform);

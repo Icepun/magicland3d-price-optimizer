@@ -19,7 +19,13 @@ export default function SettingsScreen() {
     { label: "KDV oranı", value: `%${settings?.vatRate ?? "—"}` },
     { label: "Shopify komisyon", value: `%${settings?.shopifyCommissionRate ?? "3.2"}` },
     { label: "İndirim payı", value: `%${settings?.discountBuffer ?? "0"}` },
-    { label: "Elektrik / saat", value: `₺${settings?.costElectricityPerHour ?? "0"}` },
+    {
+      label: "Elektrik / saat",
+      value:
+        settings?.costElectricityIncluded === "true"
+          ? `₺${settings?.costElectricityPerHour ?? "0"} · dahil`
+          : "Dahil değil",
+    },
     { label: "İşçilik / saat", value: `₺${settings?.costLaborPerHour ?? "0"}` },
   ];
 

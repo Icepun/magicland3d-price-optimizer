@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 const id = z.string().trim().min(1);
 const finite = z.number().finite();
@@ -158,6 +159,7 @@ const CargoRuleSchema = z.object({
   minDesi: finite.optional(),
   maxDesi: finite.optional(),
   cargoCost: finite,
+  vatIncluded: z.boolean().optional(),
   validFrom: nullableDate,
   validTo: nullableDate,
   priority: integer.optional(),
@@ -383,6 +385,12 @@ export async function POST(req: NextRequest) {
             minDesi: rule.minDesi ?? 0,
             maxDesi: rule.maxDesi ?? 999,
             cargoCost: rule.cargoCost,
+            vatIncluded:
+              rule.vatIncluded ??
+              !(
+                rule.cargoProvider?.toUpperCase().includes("TEX") ||
+                rule.name.toUpperCase().includes("TEX")
+              ),
             validFrom: rule.validFrom ?? null,
             validTo: rule.validTo ?? null,
             priority: rule.priority ?? 10,
@@ -782,6 +790,7 @@ export async function POST(req: NextRequest) {
       },
       { timeout: 120_000 }
     );
+    invalidateOrdersCache();
 
     return NextResponse.json({
       ok: warnings.length === 0,

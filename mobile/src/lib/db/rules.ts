@@ -5,6 +5,7 @@ import type {
   ExpenseRuleInput,
 } from "@core/types";
 import type { Rules } from "@/lib/profit";
+import { ensureCargoVatSchema } from "@/lib/db/schema";
 
 function parseRuleDate(value: unknown): Date | null {
   if (value == null || value === "") return null;
@@ -21,6 +22,9 @@ function normalizeRuleDates<T extends CommissionRuleInput | CargoRuleInput>(row:
     ...row,
     validFrom: parseRuleDate(row.validFrom as unknown),
     validTo: parseRuleDate(row.validTo as unknown),
+    ...("cargoCost" in row
+      ? { vatIncluded: row.vatIncluded == null ? true : Number(row.vatIncluded) !== 0 }
+      : {}),
   };
 }
 
@@ -29,6 +33,7 @@ function normalizeRuleDates<T extends CommissionRuleInput | CargoRuleInput>(row:
  * eski hali 3 ARDIŞIK round-trip'ti (~100-400ms boşa; açılışın kritik yolunda).
  */
 export async function getRules(): Promise<Rules> {
+  await ensureCargoVatSchema();
   const [c, k, e] = await batch([
     {
       sql: `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
@@ -38,7 +43,7 @@ export async function getRules(): Promise<Rules> {
     },
     {
       sql: `SELECT id, name, platform, cargoProvider, categoryName, minPrice, maxPrice,
-                   minDesi, maxDesi, cargoCost, validFrom, validTo, priority, isActive
+                   minDesi, maxDesi, cargoCost, vatIncluded, validFrom, validTo, priority, isActive
               FROM CargoRule WHERE isActive = 1`,
     },
     {
@@ -67,9 +72,10 @@ export async function getCommissionRules(): Promise<CommissionRuleInput[]> {
 
 /** Aktif kargo kuralları. */
 export async function getCargoRules(): Promise<CargoRuleInput[]> {
+  await ensureCargoVatSchema();
   const rows = await query<CargoRuleInput>(
     `SELECT id, name, platform, cargoProvider, categoryName, minPrice, maxPrice,
-            minDesi, maxDesi, cargoCost, validFrom, validTo, priority, isActive
+            minDesi, maxDesi, cargoCost, vatIncluded, validFrom, validTo, priority, isActive
        FROM CargoRule WHERE isActive = 1`
   );
   return rows.map(normalizeRuleDates);

@@ -84,7 +84,10 @@ function CostEditorImpl({
   const fWeight = parseFloat(filamentWeight) || 0;
   const pTime = parseFloat(printTimeHours) || 0;
   const wRate = (parseFloat(wasteRate) || 0) / 100;
-  const electricityRate = parseFloat(globalSettings.costElectricityPerHour || "0");
+  const electricityRate =
+    globalSettings.costElectricityIncluded === "true"
+      ? parseFloat(globalSettings.costElectricityPerHour || "0")
+      : 0;
   const machineWearRate = parseFloat(globalSettings.costMachineWearPerHour || "0");
   const laborRate = parseFloat(globalSettings.costLaborPerHour || "0");
 
@@ -242,7 +245,7 @@ function CostEditorImpl({
           </div>
           {fixedExtras > 0 && (
             <p className="text-[10px] text-muted-foreground">
-              + Sabit ek (Kart/Sticker/Sakız): {formatCurrency(fixedExtras)} — her ürüne otomatik
+              + Kart/Sticker/Sakız birim toplamı: {formatCurrency(fixedExtras)} — seçilen kapsama göre
             </p>
           )}
         </div>

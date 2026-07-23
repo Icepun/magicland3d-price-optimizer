@@ -189,6 +189,7 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
           <Text style={[styles.profit, { color: profit.profit < 0 ? ML.red : ML.green }]}>
             {profit.partial ? "~" : ""}
             {formatCurrency(profit.profit)}
+            {profit.desiEstimated ? " ◆" : ""}
           </Text>
         ) : null}
       </View>

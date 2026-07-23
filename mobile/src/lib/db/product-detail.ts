@@ -5,6 +5,7 @@ export interface ProductCostRow {
   costMode: string;
   manualCost: number | null;
   totalCost: number | null;
+  packagingCost: number | null;
   filamentTypeId: string | null;
   filamentWeight: number | null;
   printTimeHours: number | null;
@@ -72,7 +73,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
       args: [id],
     },
     {
-      sql: `SELECT pc.costMode, pc.manualCost, pc.totalCost, pc.filamentTypeId,
+      sql: `SELECT pc.costMode, pc.manualCost, pc.totalCost, pc.packagingCost, pc.filamentTypeId,
                    pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
                    COALESCE(ft.costPerGram, 0) AS costPerGram

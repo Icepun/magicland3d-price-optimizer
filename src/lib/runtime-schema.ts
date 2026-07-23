@@ -18,9 +18,10 @@ let schemaReady: Promise<void> | null = null;
 //      (SlotStep'te R2 indirme + baskıda 3× senkron unzip donması biter).
 // v29: ProductModelFile.thumbnail — dilimleyici önizleme görseli (Özel Baskılar arşivinde küçük görsel).
 // v30: ProductModelFile.contentMd5 — içerik kimliği; yazıcıda "zaten var" tespiti (indirme/yükleme atlama).
+// v31: CargoRule.vatIncluded — KDV hariç kargo tarifelerinde çift KDV düşümünü önler.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "30";
+const CURRENT_SCHEMA_VERSION = "31";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -304,6 +305,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "minDesi" REAL NOT NULL DEFAULT 0,
         "maxDesi" REAL NOT NULL DEFAULT 999,
         "cargoCost" REAL NOT NULL,
+        "vatIncluded" BOOLEAN NOT NULL DEFAULT true,
         "validFrom" DATETIME,
         "validTo" DATETIME,
         "priority" INTEGER NOT NULL DEFAULT 10,
@@ -423,11 +425,17 @@ export function ensureRuntimeSchema(): Promise<void> {
 
     // CargoRule platform alanı (Trendyol/Shopify ayrı baremi)
     await ensureColumn("CargoRule", "platform", "TEXT");
+    await ensureColumn("CargoRule", "vatIncluded", "BOOLEAN NOT NULL DEFAULT true");
     // Eski kurallar (platform yok) Trendyol baremiydi — Shopify'a bulaşmasın diye
     // platform'u 'trendyol' olarak işaretle. platform dolu olanlar etkilenmez.
     if (await tableExists("CargoRule")) {
       await prisma.$executeRawUnsafe(
         `UPDATE "CargoRule" SET "platform" = 'trendyol' WHERE "platform" IS NULL`
+      );
+      await prisma.$executeRawUnsafe(
+        `UPDATE "CargoRule"
+            SET "vatIncluded" = false
+          WHERE ("cargoProvider" LIKE '%TEX%' OR "name" LIKE '%TEX%')`
       );
     }
 

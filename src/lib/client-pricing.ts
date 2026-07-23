@@ -4,7 +4,11 @@ import {
   resolveListingCommissionOverride,
 } from "../core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "../core/cargo-calculator";
-import { resolveProductCost } from "../core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "../core/product-cost";
+import {
+  collectRulePriceBreakpoints,
+  findMinimumPriceForMargin,
+} from "../core/price-target";
 import type {
   SimulationResult,
   CommissionRuleInput,
@@ -26,7 +30,6 @@ import type {
 const MARGINS = [20, 30, 40, 50];
 const DISCOUNTS = [10, 15, 20, 25, 30];
 // İkili arama adım sayısı. 24 adım → [0.5, 100000] aralığında ~0.006₺ hassasiyet (fazlasıyla yeter).
-const SEARCH_STEPS = 24;
 
 export interface PricingListing {
   id: string;
@@ -114,6 +117,7 @@ interface PricingBase {
   vatRate: number;
   productCost: number;
   packagingCost: number;
+  packagingScope: ReturnType<typeof packagingScopeInput>;
   totalCost: number;
   hasCost: boolean;
   filamentMatCost: number;
@@ -176,6 +180,7 @@ function buildBase(input: ClientPricingInput): PricingBase {
     vatRate,
     productCost,
     packagingCost,
+    packagingScope: packagingScopeInput(resolved),
     totalCost,
     hasCost: totalCost > 0,
     filamentMatCost,
@@ -196,6 +201,7 @@ function previewFromBase(b: PricingBase): ProfitPreview {
       salePrice: listing.salePrice,
       productCost: b.productCost,
       packagingCost: b.packagingCost,
+      ...b.packagingScope,
       categoryName: b.product.categoryName,
       desi: b.desi,
       commissionRules: b.productRules,
@@ -234,6 +240,7 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       salePrice,
       productCost: b.productCost,
       packagingCost: b.packagingCost,
+      ...b.packagingScope,
       categoryName: b.product.categoryName,
       desi: b.desi,
       commissionRules: b.productRules,
@@ -250,27 +257,33 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       // Canlı önizlemeyle aynı platform semantiği: Shopify'da 150 TL altı
       // ürünün kargosu sepete paylaşılır; Trendyol baremi fiyat adayına göre değişir.
       cargoCostOverride:
-        listing?.cargoCost ?? (platform === "shopify" && salePrice < 150 ? 0 : undefined),
+        listing?.cargoCost ??
+        (platform === "shopify" &&
+        salePrice * (1 - discountBuffer / 100) < 150
+          ? 0
+          : undefined),
       minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: b.filamentMatCost,
     });
 
-  // Hedef marj → fiyat (ikili arama; marj fiyatla artar)
+  // Hedef marj → fiyat. Kargo/min-adet eşiklerinde marj aşağı sıçrayabilir; aralık bazlı ara.
   const priceForMargin = (
     platform: string,
     listing: PricingListing | null,
     targetMargin: number
   ): number | null => {
-    const margAt = (p: number) => simFor(platform, listing, p).profitMargin;
-    let hi = 100000;
-    if (margAt(hi) < targetMargin) return null; // hiçbir fiyatta ulaşılamıyor
-    let lo = 0.5;
-    for (let i = 0; i < SEARCH_STEPS; i++) {
-      const mid = (lo + hi) / 2;
-      if (margAt(mid) >= targetMargin) hi = mid;
-      else lo = mid;
-    }
-    return hi;
+    const breakpoints = collectRulePriceBreakpoints(
+      b.productRules,
+      b.cargoByPlatform[platform] ?? [],
+      b.expenseByPlatform[platform] ?? []
+    );
+    if (platform === "trendyol") breakpoints.push(25, 35, 50, 75);
+    if (platform === "shopify") breakpoints.push(150);
+    return findMinimumPriceForMargin({
+      marginAt: (price) => simFor(platform, listing, price).profitMargin,
+      targetMargin,
+      breakpoints,
+    });
   };
 
   const platformNames = b.activeListings.map((l) => l.platform);

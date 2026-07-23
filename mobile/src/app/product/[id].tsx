@@ -289,7 +289,7 @@ export default function ProductDetailScreen() {
         <Text style={[styles.sectionLabel, { marginTop: 8, marginLeft: 4 }]}>
           PLATFORM KÂR / ZARAR
         </Text>
-        {profit && profit.platforms.length > 0 ? (
+        {profit?.hasCost && profit.platforms.length > 0 ? (
           profit.platforms.map((p, i) => <PlatformCard key={p.listingId} p={p} index={i} />)
         ) : (
           <View style={styles.section}>
@@ -449,6 +449,11 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
         <Text style={[styles.platformName, { color: accent }]}>
           {PLATFORM_LABEL[p.platform]}
         </Text>
+        {p.minOrderQty > 1 ? (
+          <Text style={{ color: ML.orange, fontSize: 11, fontWeight: "700" }}>
+            ×{p.minOrderQty} sipariş
+          </Text>
+        ) : null}
         <Text style={styles.salePrice}>{formatCurrency(p.salePrice)}</Text>
       </View>
 

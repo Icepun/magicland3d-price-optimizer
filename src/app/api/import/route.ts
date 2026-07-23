@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 interface ProductRow extends Record<string, string | undefined> {
   barcode?: string;
@@ -53,6 +54,7 @@ export async function POST(req: NextRequest) {
 
       const costData = row.product_cost
         ? {
+            costMode: "manual" as const,
             manualCost: parseFloat(row.product_cost) || 0,
             packagingCost: row.packaging_cost ? parseFloat(row.packaging_cost) : 0,
             totalCost:
@@ -95,6 +97,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (created.length > 0 || updated.length > 0) invalidateOrdersCache();
     return NextResponse.json({ created: created.length, updated: updated.length, errors });
   }
 

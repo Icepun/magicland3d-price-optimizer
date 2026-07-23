@@ -52,6 +52,9 @@ interface UnifiedOrder {
   profit: number | null;
   profitPartial: boolean;
   unmatchedCount?: number;
+  missingDesiCount?: number;
+  desiEstimated?: boolean;
+  orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
 }
@@ -494,6 +497,18 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                 {order.profitPartial && (
                   <span className="text-amber-500 font-bold" title={`${order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil`}>!</span>
                 )}
+                {order.desiEstimated && (
+                  <span
+                    className="text-amber-500 font-bold"
+                    title={
+                      (order.missingDesiCount ?? 0) > 0
+                        ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı`
+                        : "Eşleşmeyen ürünlerin desisi, eşleşen ürünlerin ortalamasıyla tahmin edildi"
+                    }
+                  >
+                    ◆
+                  </span>
+                )}
               </span>
             )}
             <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border", st.cls)}>
@@ -563,7 +578,7 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                   <span className="tabular-nums font-medium">{fmtMoney2(order.total, order.currency)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Tahmini net kâr</span>
+                  <span className="text-muted-foreground">Net kâr</span>
                   {order.profit != null ? (
                     <span className={cn("tabular-nums font-semibold", profitColor)}>
                       {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit)}{order.profitPartial && <span className="text-amber-500">!</span>}
@@ -572,8 +587,24 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
+                {Math.abs(order.orderRevenueAdjustment ?? 0) >= 0.01 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Kargo geliri / sipariş indirimi</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {(order.orderRevenueAdjustment ?? 0) >= 0 ? "+" : ""}
+                      {fmtMoney2(order.orderRevenueAdjustment ?? 0)}
+                    </span>
+                  </div>
+                )}
                 {order.profitPartial && (
                   <p className="text-[10px] text-muted-foreground/70">{order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.</p>
+                )}
+                {order.desiEstimated && (
+                  <p className="text-[10px] text-amber-500/90">
+                    {(order.missingDesiCount ?? 0) > 0
+                      ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı.`
+                      : "Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi."}
+                  </p>
                 )}
               </div>
             </div>

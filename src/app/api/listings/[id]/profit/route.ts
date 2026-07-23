@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice } from "@/core/pricing-engine";
+import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
-import { resolveProductCost } from "@/core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
@@ -59,6 +59,7 @@ export async function GET(
     salePrice: listing.salePrice,
     productCost,
     packagingCost,
+    ...packagingScopeInput(resolved),
     categoryName: product.categoryName,
     desi: product.desi ?? 1,
     commissionRules: withProductCommissionRule(
@@ -75,7 +76,11 @@ export async function GET(
     ),
     vatRate,
     ...resolveListingCommissionOverride(listing, settingsMap),
-    cargoCostOverride: listing.cargoCost ?? undefined,
+    cargoCostOverride:
+      listing.cargoCost ??
+      (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
+    minOrderQty:
+      listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
     vatableProductCost: resolved.filamentCost,
   });
 

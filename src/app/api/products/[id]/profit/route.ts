@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { withProductCommissionRule } from "@/core/product-commission";
-import { resolveProductCost } from "@/core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
@@ -56,6 +56,7 @@ export async function GET(
     salePrice: product.currentSalePrice,
     productCost,
     packagingCost,
+    ...packagingScopeInput(resolved),
     categoryName: product.categoryName,
     desi: product.desi ?? 1,
     commissionRules: withProductCommissionRule(

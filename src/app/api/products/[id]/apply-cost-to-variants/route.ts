@@ -40,7 +40,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (cost.costMode === "detailed") {
       const appSettings = await prisma.appSetting.findMany();
       const settings = Object.fromEntries(appSettings.map((s) => [s.key, s.value]));
-      const electricityCostPerHour = parseFloat(settings.costElectricityPerHour || "0");
+      const electricityCostPerHour =
+        settings.costElectricityIncluded === "true"
+          ? parseFloat(settings.costElectricityPerHour || "0")
+          : 0;
       const machineWearCostPerHour = parseFloat(settings.costMachineWearPerHour || "0");
       const laborCostPerHour = parseFloat(settings.costLaborPerHour || "0");
 

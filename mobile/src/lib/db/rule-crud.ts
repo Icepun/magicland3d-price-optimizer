@@ -1,4 +1,5 @@
 import { batch, execute, query } from "@/lib/turso";
+import { ensureCargoVatSchema } from "@/lib/db/schema";
 
 function newId(): string {
   return (
@@ -150,6 +151,7 @@ export interface CargoRuleFull {
   minDesi: number;
   maxDesi: number;
   cargoCost: number;
+  vatIncluded: number;
   priority: number;
   isActive: number;
 }
@@ -163,34 +165,40 @@ export interface CargoDraft {
   minPrice: number;
   maxPrice: number;
   cargoCost: number;
+  vatIncluded: boolean;
 }
 
 export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
+  await ensureCargoVatSchema();
   return query<CargoRuleFull>(
-    `SELECT id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, priority, isActive
+    `SELECT id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, priority, isActive
        FROM CargoRule ORDER BY platform, minDesi ASC`
   );
 }
 
 export async function createCargoRule(d: CargoDraft): Promise<void> {
+  await ensureCargoVatSchema();
   await execute(
-    `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, priority, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
-    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost]
+    `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, priority, isActive)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
+    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0]
   );
 }
 
 export async function updateCargoRule(id: string, d: CargoDraft): Promise<void> {
+  await ensureCargoVatSchema();
   await execute(
-    `UPDATE CargoRule SET name=?, platform=?, categoryName=?, minPrice=?, maxPrice=?, minDesi=?, maxDesi=?, cargoCost=? WHERE id=?`,
-    [d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, id]
+    `UPDATE CargoRule SET name=?, platform=?, categoryName=?, minPrice=?, maxPrice=?, minDesi=?, maxDesi=?, cargoCost=?, vatIncluded=? WHERE id=?`,
+    [d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0, id]
   );
 }
 
 export async function deleteCargoRule(id: string): Promise<void> {
+  await ensureCargoVatSchema();
   await execute(`DELETE FROM CargoRule WHERE id=?`, [id]);
 }
 
 export async function setCargoRuleActive(id: string, active: boolean): Promise<void> {
+  await ensureCargoVatSchema();
   await execute(`UPDATE CargoRule SET isActive=? WHERE id=?`, [active ? 1 : 0, id]);
 }

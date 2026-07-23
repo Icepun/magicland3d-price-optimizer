@@ -84,6 +84,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
   const [maxPrice, setMaxPrice] = useState(existing ? String(existing.maxPrice) : "999999");
   const [category, setCategory] = useState(existing?.categoryName ?? "");
   const [cargoCost, setCargoCost] = useState(existing ? String(existing.cargoCost) : "");
+  const [vatBasis, setVatBasis] = useState(existing?.vatIncluded === 0 ? "excluded" : "included");
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["cargo-rules-all"] });
@@ -125,6 +126,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
         minPrice: parsedMinPrice,
         maxPrice: parsedMaxPrice,
         cargoCost: parsedCargoCost,
+        vatIncluded: vatBasis === "included",
         categoryName: category.trim() || null,
       };
       if (isNew) await createCargoRule(draft);
@@ -185,6 +187,16 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
         </Field>
         <Field label="KARGO ÜCRETİ (₺)">
           <TextField value={cargoCost} onChange={setCargoCost} placeholder="0" numeric />
+        </Field>
+        <Field label="KDV DURUMU">
+          <Segmented
+            items={[
+              { key: "included", label: "KDV dahil" },
+              { key: "excluded", label: "KDV hariç" },
+            ]}
+            selected={vatBasis}
+            onSelect={setVatBasis}
+          />
         </Field>
 
         <PrimaryButton

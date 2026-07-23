@@ -52,6 +52,7 @@ export async function saveProductCost(productId: string, c: CostInput): Promise<
        packagingOptionId = excluded.packagingOptionId,
        nylonLevel     = excluded.nylonLevel,
        tapeUsed       = excluded.tapeUsed,
+       totalCost      = NULL,
        updatedAt      = excluded.updatedAt`,
     [
       newId(),
@@ -105,6 +106,7 @@ export async function saveProductCostBatch(
             packagingOptionId = excluded.packagingOptionId,
             nylonLevel     = excluded.nylonLevel,
             tapeUsed       = excluded.tapeUsed,
+            totalCost      = NULL,
             updatedAt      = excluded.updatedAt`,
     args: [
       newId(),

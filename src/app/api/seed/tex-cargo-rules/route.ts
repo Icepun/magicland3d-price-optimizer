@@ -1,50 +1,60 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 const SEED_KEY = "texCargoSeed.v1";
 
 const baremRules = [
   {
     name: "TEX • Avantajlı Barem • 0-200 TL",
+    platform: "trendyol",
     cargoProvider: "TEX",
     minPrice: 0,
     maxPrice: 199.99,
     minDesi: 0,
     maxDesi: 999,
     cargoCost: 34.16,
+    vatIncluded: false,
     priority: 30,
     isActive: false,
   },
   {
     name: "TEX • Avantajlı Barem • 200-350 TL",
+    platform: "trendyol",
     cargoProvider: "TEX",
     minPrice: 200,
     maxPrice: 349.99,
     minDesi: 0,
     maxDesi: 999,
     cargoCost: 65.83,
+    vatIncluded: false,
     priority: 30,
     isActive: false,
   },
   {
     name: "TEX • Standart Barem • 0-200 TL",
+    platform: "trendyol",
     cargoProvider: "TEX",
     minPrice: 0,
     maxPrice: 199.99,
     minDesi: 0,
     maxDesi: 999,
     cargoCost: 64.58,
+    vatIncluded: false,
     priority: 20,
     isActive: true,
   },
   {
     name: "TEX • Standart Barem • 200-350 TL",
+    platform: "trendyol",
     cargoProvider: "TEX",
     minPrice: 200,
     maxPrice: 349.99,
     minDesi: 0,
     maxDesi: 999,
     cargoCost: 72.91,
+    vatIncluded: false,
     priority: 20,
     isActive: true,
   },
@@ -71,12 +81,14 @@ const desiPriceMap = [
 
 const desiRules = desiPriceMap.map(({ fromDesi, toDesi, cost }) => ({
   name: `TEX • 350+ TL • ${Math.ceil(fromDesi)}-${toDesi} desi`,
+  platform: "trendyol" as const,
   cargoProvider: "TEX",
   minPrice: 350,
   maxPrice: 999999,
   minDesi: fromDesi,
   maxDesi: toDesi,
   cargoCost: cost,
+  vatIncluded: false,
   priority: 10,
   isActive: true,
 }));
@@ -89,6 +101,7 @@ const allRules = [...baremRules, ...desiRules];
  * - force yoksa: AppSetting flag'iyle bir kez çalışır (idempotent)
  */
 export async function POST(req: Request) {
+  await ensureRuntimeSchema();
   const url = new URL(req.url);
   const force = url.searchParams.get("force") === "true";
 
@@ -117,6 +130,7 @@ export async function POST(req: Request) {
     update: { value: "done" },
     create: { key: SEED_KEY, value: "done" },
   });
+  invalidateOrdersCache();
 
   return NextResponse.json({
     seeded: true,

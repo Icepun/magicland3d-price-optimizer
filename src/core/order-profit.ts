@@ -1,7 +1,16 @@
-import { simulatePrice, calculateExpenses, splitExpenseRulesByScope } from "./pricing-engine";
+import {
+  simulatePrice,
+  calculateExpenses,
+  splitExpenseRulesByScope,
+  resolveVatableCost,
+} from "./pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "./product-commission";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "./types";
+import type {
+  PackagingComponentKey,
+  PackagingScope,
+} from "./packaging";
 
 /**
  * SİPARİŞ KÂRI — masaüstü (/api/orders) ve mobil için TEK kaynak.
@@ -29,6 +38,11 @@ export interface OrderProfitProduct {
   commissionRate: number | null;
   productionCost: number;
   packagingCost: number;
+  packagingComponents?: {
+    key: PackagingComponentKey;
+    scope: PackagingScope;
+    cost: number;
+  }[] | null;
   filamentCost: number;
   /** Siparişin platformundaki listing (yoksa null) — komisyon + elle girilen kargo kaynağı. */
   listing: OrderProfitListing | null;
@@ -62,6 +76,12 @@ export interface OrderProfitResult {
   /** Maliyeti bilinmeyen satırların cirosu — kâra GİRMEDİ (UI uyarısı için). */
   unmatchedRevenue: number;
   totalQty: number;
+  missingDesiLines: number;
+  missingDesiQty: number;
+  desiEstimated: boolean;
+  /** Sipariş toplamı ile ürün satırları toplamı arasındaki kargo geliri / sipariş indirimi (brüt). */
+  orderRevenueAdjustment: number;
+  orderRevenueAdjustmentNet: number;
 }
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
@@ -81,9 +101,18 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let unmatchedQty = 0;
   let unmatchedRevenue = 0;
   let totalQty = 0;
+  let lineRevenueGross = 0;
+  let matchedRevenueGross = 0;
+  let commissionRateRevenue = 0;
+  let missingDesiLines = 0;
+  let missingDesiQty = 0;
   let totalDesi = 0;
-  let cargoCategory = "";
   let soloCargo: number | null = null;
+  const matchedCategories = new Set<string>();
+  const sharedPackaging = new Map<
+    string,
+    { scope: "per_order" | "per_shipment"; cost: number }
+  >();
 
   for (const line of lines) {
     totalQty += line.quantity;
@@ -92,40 +121,87 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     // maliyeti yine vardır ve kârdan düşülmelidir. Geçersiz/negatif fiyatı da güvenli tarafta
     // kalarak 0 gelir kabul et; "maliyet eksik" yalnız ürün veya maliyet gerçekten yokken denir.
     const unitPrice = Number.isFinite(line.unitPrice) ? Math.max(0, line.unitPrice) : 0;
+    const lineGross = unitPrice * line.quantity;
+    lineRevenueGross += lineGross;
     if (!p || p.productionCost + p.packagingCost <= 0) {
       unmatchedLines++;
       unmatchedQty += line.quantity;
-      unmatchedRevenue += unitPrice * line.quantity;
+      unmatchedRevenue += lineGross;
       continue;
     }
+    const lineDesi = p.desi != null && p.desi > 0 ? p.desi : 1;
+    if (!(p.desi != null && p.desi > 0)) {
+      missingDesiLines++;
+      missingDesiQty += line.quantity;
+    }
     const lst = p.listing ?? { platform, commissionRate: null, commissionFixed: null, cargoCost: null };
+    matchedCategories.add(p.categoryName);
+    const scopedPackaging = p.packagingComponents?.length
+      ? p.packagingComponents
+      : null;
+    const unitPackaging = scopedPackaging
+      ? scopedPackaging.reduce(
+          (sum, component) =>
+            sum + (component.scope === "per_unit" ? component.cost : 0),
+          0
+        )
+      : p.packagingCost;
+    for (const component of scopedPackaging ?? []) {
+      if (component.scope === "per_unit") continue;
+      const current = sharedPackaging.get(component.key);
+      if (!current || component.cost > current.cost) {
+        sharedPackaging.set(component.key, {
+          scope: component.scope,
+          cost: component.cost,
+        });
+      }
+    }
+    const commissionOverride = resolveListingCommissionOverride(lst, settings);
     const sim = simulatePrice({
       salePrice: unitPrice,
       productCost: p.productionCost,
-      packagingCost: p.packagingCost,
+      packagingCost: unitPackaging,
       categoryName: p.categoryName,
-      desi: p.desi ?? 1,
+      desi: lineDesi,
       commissionRules: withProductCommissionRule(p, commissionRules),
       cargoRules: platCargo,
       expenseRules: perUnit, // YALNIZ yüzdesel — sabit gider siparişe bir kez
       vatRate,
-      ...resolveListingCommissionOverride(lst, settings),
+      ...commissionOverride,
       cargoCostOverride: 0, // kargo sipariş düzeyinde
       minOrderQty: line.quantity, // adet motorun İÇİNDE (dıştan × qty YOK)
       vatableProductCost: p.filamentCost,
     });
     profit += sim.netProfit;
+    matchedRevenueGross += lineGross;
+    commissionRateRevenue +=
+      lineGross *
+      (commissionOverride.commissionRateOverride ??
+        sim.appliedCommissionRule?.commissionRate ??
+        0);
     matchedQty += line.quantity;
-    totalDesi += (p.desi ?? 1) * line.quantity;
+    totalDesi += lineDesi * line.quantity;
     if (matchedLines === 0) {
-      cargoCategory = p.categoryName;
       soloCargo = lst.cargoCost;
     }
     matchedLines++;
   }
 
   if (matchedLines === 0) {
-    return { profit: null, partial: false, matchedLines: 0, unmatchedLines, unmatchedQty, unmatchedRevenue, totalQty };
+    return {
+      profit: null,
+      partial: false,
+      matchedLines: 0,
+      unmatchedLines,
+      unmatchedQty,
+      unmatchedRevenue,
+      totalQty,
+      missingDesiLines,
+      missingDesiQty,
+      desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
+      orderRevenueAdjustment: 0,
+      orderRevenueAdjustmentNet: 0,
+    };
   }
 
   // Maliyeti bilinmeyen adetler de KUTUDA — desilerini yok saymak kargo baremini olduğundan ucuz
@@ -134,19 +210,98 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     totalDesi += Math.ceil((totalDesi / matchedQty) * unmatchedQty);
   }
 
+  // Shopify gibi platformlarda müşteri tarafından ödenen kargo, satır fiyatlarına değil sipariş
+  // toplamına girer. Tersine sipariş-geneli indirim de satır toplamını aşağı çekebilir. Farkı KDV
+  // hariç gelire bir kez ekle/çıkar; yüzde komisyonu da aynı fark üzerinde düzelt.
+  const orderRevenueAdjustment = Number.isFinite(orderTotal)
+    ? orderTotal - lineRevenueGross
+    : 0;
+  const vatMultiplier = 1 + (vatRate > 0 ? vatRate / 100 : 0);
+  const adjustmentRevenueExVat = orderRevenueAdjustment / vatMultiplier;
+  const adjustmentCommissionRate =
+    matchedRevenueGross > 0 ? commissionRateRevenue / matchedRevenueGross : 0;
+  const adjustmentCommission = orderRevenueAdjustment * adjustmentCommissionRate;
+  const orderRevenueAdjustmentNet =
+    adjustmentRevenueExVat -
+    adjustmentCommission +
+    adjustmentCommission * vatFactor;
+  profit += orderRevenueAdjustmentNet;
+
   // SABİT GİDER — siparişe BİR KEZ (kargoyla simetrik: aynı taban, aynı KDV formülü).
-  const { fixed: orderFixed } = calculateExpenses(perOrder, orderTotal, cargoCategory);
+  const categories = [...matchedCategories];
+  const orderFixed = Math.max(
+    0,
+    ...categories.map(
+      (categoryName) => calculateExpenses(perOrder, orderTotal, categoryName).fixed
+    )
+  );
   profit -= orderFixed;
   profit += orderFixed * vatFactor;
 
+  // Kart/sticker gibi sipariş ve kutu/bant gibi gönderi kalemleri, aynı bileşen için
+  // siparişte yalnız bir kez uygulanır. Farklı ürün seçimlerinde pahalı olan kazanır.
+  const sharedPackagingCost = [...sharedPackaging.values()].reduce(
+    (sum, component) => sum + component.cost,
+    0
+  );
+  profit -= sharedPackagingCost;
+  profit += sharedPackagingCost * vatFactor;
+
   // KARGO — siparişe BİR KEZ. Tek ürünlü ve eksiksiz siparişte listing'e ELLE girilen bedel kazanır
   // (Ürünler ekranı da onu kullanıyor → iki ekran aynı rakamı gösterir).
-  const cargoCost =
-    matchedLines === 1 && unmatchedLines === 0 && soloCargo != null
-      ? soloCargo
-      : (findCargoRule(platCargo, orderTotal, cargoCategory, totalDesi || 1)?.cargoCost ?? 0);
-  profit -= cargoCost;
-  profit += cargoCost * vatFactor;
+  const canUseSoloCargo =
+    matchedLines === 1 &&
+    matchedQty === 1 &&
+    unmatchedLines === 0 &&
+    soloCargo != null;
+  const appliedCargoRule = canUseSoloCargo
+    ? null
+    : categories
+        .map((categoryName) =>
+          findCargoRule(platCargo, orderTotal, categoryName, totalDesi || 1)
+        )
+        .filter((rule): rule is CargoRuleInput => rule != null)
+        .reduce<CargoRuleInput | null>((selected, rule) => {
+          if (!selected) return rule;
+          const selectedCost = resolveVatableCost(
+            selected.cargoCost,
+            selected.vatIncluded !== false,
+            vatRate
+          );
+          const ruleCost = resolveVatableCost(
+            rule.cargoCost,
+            rule.vatIncluded !== false,
+            vatRate
+          );
+          return ruleCost.gross - ruleCost.inputVat >
+            selectedCost.gross - selectedCost.inputVat
+            ? rule
+            : selected;
+        }, null);
+  const rawCargoCost =
+    canUseSoloCargo
+      ? (soloCargo ?? 0)
+      : (appliedCargoRule?.cargoCost ?? 0);
+  const cargo = resolveVatableCost(
+    rawCargoCost,
+    appliedCargoRule?.vatIncluded !== false,
+    vatRate
+  );
+  profit -= cargo.gross;
+  profit += cargo.inputVat;
 
-  return { profit, partial: unmatchedLines > 0, matchedLines, unmatchedLines, unmatchedQty, unmatchedRevenue, totalQty };
+  return {
+    profit,
+    partial: unmatchedLines > 0,
+    matchedLines,
+    unmatchedLines,
+    unmatchedQty,
+    unmatchedRevenue,
+    totalQty,
+    missingDesiLines,
+    missingDesiQty,
+    desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
+    orderRevenueAdjustment,
+    orderRevenueAdjustmentNet,
+  };
 }

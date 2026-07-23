@@ -266,6 +266,8 @@ model CargoRule {
   minDesi       Float     @default(0)
   maxDesi       Float     @default(999)
   cargoCost     Float
+  /** cargoCost KDV dahil mi? false ise hesap motoru faturadaki KDV'yi ekleyip iade olarak ayırır. */
+  vatIncluded   Boolean   @default(true)
   validFrom     DateTime?
   validTo       DateTime?
   priority      Int       @default(10)

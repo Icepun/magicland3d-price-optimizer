@@ -126,6 +126,8 @@ export default function CostSettingsPage() {
     const formData = new FormData(e.currentTarget);
     const data = {
       costElectricityPerHour: formData.get("costElectricityPerHour") as string,
+      costElectricityIncluded:
+        formData.get("costElectricityIncluded") === "true" ? "true" : "false",
       costMachineWearPerHour: formData.get("costMachineWearPerHour") as string,
       costLaborPerHour: formData.get("costLaborPerHour") as string,
     };
@@ -283,6 +285,21 @@ export default function CostSettingsPage() {
                     defaultValue={globalSettings.costElectricityPerHour || "0.00"}
                   />
                 </div>
+                <label className="flex items-start gap-2 rounded-md border p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    name="costElectricityIncluded"
+                    value="true"
+                    defaultChecked={globalSettings.costElectricityIncluded === "true"}
+                    className="mt-0.5 h-4 w-4 accent-primary"
+                  />
+                  <span>
+                    <span className="font-medium">Elektriği net kârdan düş</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">
+                      Kapalıysa saatlik değer kayıtlı kalır fakat maliyete eklenmez.
+                    </span>
+                  </span>
+                </label>
                 <div className="space-y-1">
                   <Label htmlFor="costMachineWearPerHour">Makine Aşınması (TL/saat)</Label>
                   <Input

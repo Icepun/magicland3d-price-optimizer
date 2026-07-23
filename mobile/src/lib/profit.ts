@@ -1,5 +1,5 @@
 import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
-import { resolveProductCost } from "@core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
@@ -36,9 +36,7 @@ export interface ProductProfit {
   totalCost: number;
   hasCost: boolean;
   platforms: PlatformProfit[];
-  /** Masaüstü /api/products "current" kârı ile birebir: ürünün kendi currentSalePrice'ı,
-   *  platform FİLTRESİZ kural setleri, override/minQty YOK. Raporlar "En kârlı / Zarar edenler"
-   *  bu metriği kullanır (masaüstü reports/page.tsx ile aynı sıralama). */
+  /** Raporlar için kaynak platformun (yoksa ilk gerçek listing'in) net kârı. */
   currentNetProfit: number | null;
 }
 
@@ -87,6 +85,7 @@ export function computeProductProfit(
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
   const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
+  const hasCost = (resolved?.totalCost ?? 0) > 0;
   const vatRate = Number(settings.vatRate ?? 0);
 
   const productRules = withProductCommissionRule(detail, rules.commission);
@@ -96,6 +95,7 @@ export function computeProductProfit(
       salePrice: listing.salePrice,
       productCost,
       packagingCost,
+      ...packagingScopeInput(resolved),
       categoryName: detail.categoryName,
       desi: detail.desi ?? 1,
       commissionRules: productRules,
@@ -124,29 +124,65 @@ export function computeProductProfit(
     };
   });
 
-  // "Current" kâr — masaüstü /api/products route.ts:204-221 ile birebir (listing'den bağımsız).
+  // Rapor metriği tek bir gerçek platform sonucundan gelir; platform kuralları karışmaz.
   let currentNetProfit: number | null = null;
-  if (productCost > 0) {
-    const sim = simulatePrice({
-      salePrice: detail.currentSalePrice,
-      productCost,
-      packagingCost,
-      categoryName: detail.categoryName,
-      desi: detail.desi ?? 1,
-      commissionRules: productRules,
-      cargoRules: rules.cargo,
-      expenseRules: rules.expense,
-      vatRate,
-      vatableProductCost: filamentMatCost,
-    });
-    currentNetProfit = sim.netProfit;
+  if (hasCost) {
+    const preferredPlatforms = [
+      detail.source,
+      "shopify",
+      "trendyol",
+      "hepsiburada",
+    ];
+    const primary = preferredPlatforms
+      .map((platform) => platforms.find((summary) => summary.platform === platform))
+      .find(Boolean);
+    if (primary) {
+      currentNetProfit = primary.result.netProfit;
+    } else {
+      const fallbackPlatform: Platform =
+        detail.source === "trendyol" ||
+        detail.source === "hepsiburada" ||
+        detail.source === "shopify"
+          ? detail.source
+          : "shopify";
+      const sim = simulatePrice({
+        salePrice: detail.currentSalePrice,
+        productCost,
+        packagingCost,
+        ...packagingScopeInput(resolved),
+        categoryName: detail.categoryName,
+        desi: detail.desi ?? 1,
+        commissionRules: productRules,
+        cargoRules: filterCargoRulesByPlatform(rules.cargo, fallbackPlatform),
+        expenseRules: filterRulesByPlatform(rules.expense, fallbackPlatform),
+        vatRate,
+        ...resolveListingCommissionOverride(
+          {
+            platform: fallbackPlatform,
+            commissionRate: null,
+            commissionFixed: null,
+          },
+          settings
+        ),
+        cargoCostOverride:
+          fallbackPlatform === "shopify" && detail.currentSalePrice < 150
+            ? 0
+            : undefined,
+        minOrderQty:
+          fallbackPlatform === "trendyol"
+            ? trendyolMinQty(detail.currentSalePrice)
+            : 1,
+        vatableProductCost: filamentMatCost,
+      });
+      currentNetProfit = sim.netProfit;
+    }
   }
 
   return {
     productionCost: productCost,
     packagingCost,
     totalCost: resolved?.totalCost ?? 0,
-    hasCost: productCost > 0,
+    hasCost,
     platforms,
     currentNetProfit,
   };

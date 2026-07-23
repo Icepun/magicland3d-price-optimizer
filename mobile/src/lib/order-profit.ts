@@ -94,6 +94,9 @@ export interface OrderProfit {
   totalQty: number; // toplam adet
   /** Maliyeti bilinmeyen satırların cirosu — kâra girmedi (uyarı için). */
   unmatchedRevenue: number;
+  missingDesiCount: number;
+  desiEstimated: boolean;
+  orderRevenueAdjustment: number;
 }
 
 export function computeOrderProfit(
@@ -129,6 +132,7 @@ export function computeOrderProfit(
               commissionRate: p.commissionRate,
               productionCost: resolved.productionCost,
               packagingCost: resolved.packagingCost,
+              packagingComponents: resolved.packagingBreakdown?.components ?? null,
               filamentCost: resolved.filamentCost,
               listing: p.listings.find((l) => l.platform === order.platform) ?? null,
             }
@@ -155,5 +159,8 @@ export function computeOrderProfit(
     distinctCount,
     totalQty: r.totalQty,
     unmatchedRevenue: r.unmatchedRevenue,
+    missingDesiCount: r.missingDesiLines,
+    desiEstimated: r.desiEstimated,
+    orderRevenueAdjustment: r.orderRevenueAdjustment,
   };
 }

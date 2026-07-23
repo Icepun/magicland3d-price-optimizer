@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
@@ -60,6 +60,9 @@ export default function SettingsEditScreen() {
 
 function SettingsEditForm({ settings }: { settings: Record<string, string> }) {
   const qc = useQueryClient();
+  const [electricityIncluded, setElectricityIncluded] = useState(
+    settings.costElectricityIncluded === "true"
+  );
   const [vals, setVals] = useState<Record<string, string>>(() =>
     Object.fromEntries(FIELDS.map((field) => [field.key, settings[field.key] ?? field.fallback])),
   );
@@ -83,7 +86,10 @@ function SettingsEditForm({ settings }: { settings: Record<string, string> }) {
           return [field.key, String(parsed)];
         }),
       );
-      return updateSettings(normalized);
+      return updateSettings({
+        ...normalized,
+        costElectricityIncluded: electricityIncluded ? "true" : "false",
+      });
     },
     onSuccess: () => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -106,6 +112,19 @@ function SettingsEditForm({ settings }: { settings: Record<string, string> }) {
             />
           </Field>
         ))}
+        <View style={styles.toggleRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.toggleTitle}>ELEKTRİĞİ NET KÂRDAN DÜŞ</Text>
+            <Text style={styles.toggleNote}>
+              Kapalıysa saatlik değer saklanır fakat ürün maliyetine eklenmez.
+            </Text>
+          </View>
+          <Switch
+            value={electricityIncluded}
+            onValueChange={setElectricityIncluded}
+            trackColor={{ false: ML.border, true: ML.accent }}
+          />
+        </View>
         <PrimaryButton label="Kaydet" onPress={() => save.mutate()} loading={save.isPending} />
         <View style={{ height: 20 }} />
       </ScrollView>
@@ -118,4 +137,16 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
   message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 40 },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    backgroundColor: ML.card,
+  },
+  toggleTitle: { color: ML.text, fontSize: 12, fontWeight: "700" },
+  toggleNote: { color: ML.textDim, fontSize: 12, marginTop: 4, lineHeight: 17 },
 });

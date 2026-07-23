@@ -51,6 +51,7 @@ export interface HepsiburadaCargoRuleSeed {
   minDesi: number;
   maxDesi: number;
   cargoCost: number;
+  vatIncluded: true;
   priority: number;
   isActive: boolean;
 }
@@ -63,6 +64,7 @@ export function buildHepsiburadaCargoRules(mode: HepsiburadaCargoMode): Hepsibur
     platform: "hepsiburada" as const,
     cargoProvider: "HepsiJet" as const,
     categoryName: null,
+    vatIncluded: true as const,
     isActive: true,
   };
 

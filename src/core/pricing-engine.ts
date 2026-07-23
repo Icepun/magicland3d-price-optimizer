@@ -72,6 +72,30 @@ export function trendyolMinQty(price: number): number {
 }
 
 /**
+ * KDV dahil/hariç kaydedilmiş bir gideri faturadaki brüt tutara ve indirilecek KDV'ye çevirir.
+ * KDV hariç tutarı doğrudan maliyetten düşüp bir de içinden KDV ayırmak aynı KDV'yi iki kez
+ * kazanç yazardı. Bu yardımcı iki gösterim için de net etkinin aynı kalmasını sağlar.
+ */
+export function resolveVatableCost(
+  amount: number,
+  vatIncluded: boolean,
+  vatRate: number
+): { gross: number; inputVat: number } {
+  const safeAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  if (vatRate <= 0) return { gross: safeAmount, inputVat: 0 };
+
+  if (vatIncluded) {
+    return {
+      gross: safeAmount,
+      inputVat: safeAmount * (vatRate / (100 + vatRate)),
+    };
+  }
+
+  const inputVat = safeAmount * (vatRate / 100);
+  return { gross: safeAmount + inputVat, inputVat };
+}
+
+/**
  * Tek bir listing için "şu an ne kadar kâr ediyor" hesabı.
  *
  * - salePrice = Trendyol/HB/Shopify'da listelenen fiyat (KDV dahil)
@@ -87,6 +111,9 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     salePrice,
     productCost,
     packagingCost,
+    packagingUnitCost,
+    packagingOrderCost,
+    packagingShipmentCost,
     categoryName,
     desi = 1,
     commissionRules,
@@ -104,6 +131,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
 
   // Min sipariş adedi (Trendyol bareni). >1 ise hesap N adetlik SİPARİŞ üzerinden yapılır.
   const qty = Math.max(1, Math.round(minOrderQty || 1));
+  const normalizedDesi = Number.isFinite(desi) && desi > 0 ? desi : 1;
 
   // Etkili fiyat (kampanya indirimi sonrası).
   const discountMultiplier = 1 - (discountBuffer || 0) / 100;
@@ -134,6 +162,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
 
   // Kargo — önce override, sonra rules
   let cargoCost = 0;
+  let cargoVatIncluded = true;
   let appliedCargoRule;
   if (cargoCostOverride !== undefined) {
     cargoCost = cargoCostOverride;
@@ -142,11 +171,14 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
       cargoRules,
       effectiveSalePrice,
       categoryName,
-      desi * qty, // N adetlik sipariş tek pakette → birleşik desiyle barem
+      normalizedDesi * qty, // N adetlik sipariş tek pakette → birleşik desiyle barem
       simulationDate
     );
     cargoCost = appliedCargoRule ? appliedCargoRule.cargoCost : 0;
+    cargoVatIncluded = appliedCargoRule?.vatIncluded !== false;
   }
+  const cargoAmounts = resolveVatableCost(cargoCost, cargoVatIncluded, vatRate);
+  cargoCost = cargoAmounts.gross;
 
   // Sabit ve değişken giderler (gider kuralları)
   const {
@@ -158,7 +190,15 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   // SİPARİŞ bazlı toplam: per-unit kalemler (ürün/paketleme/komisyon/değişken gider) × qty;
   // KARGO ve sabit gider TEK kez (N ürün tek pakette gider). qty=1 → davranış aynı.
   const oProduct = productCost * qty;
-  const oPackaging = packagingCost * qty;
+  const hasPackagingScopes =
+    packagingUnitCost !== undefined ||
+    packagingOrderCost !== undefined ||
+    packagingShipmentCost !== undefined;
+  const oPackaging = hasPackagingScopes
+    ? (packagingUnitCost ?? 0) * qty +
+      (packagingOrderCost ?? 0) +
+      (packagingShipmentCost ?? 0)
+    : packagingCost * qty;
   const oCommission = commissionCost * qty;
   const oVariable = variableExpenses * qty;
   const oFilament = (vatableProductCost || 0) * qty; // KDV'li malzeme payı (per-unit × qty)
@@ -169,7 +209,8 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   // devlete ödenecek (hesaplanan) KDV'den düşülür → kâra ARTI yansır (KDV mükellefi). vatRate=0 → 0.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
   const inputVatCredit =
-    (oCommission + cargoCost + fixedExpenses + oVariable + oFilament) * vatFactor;
+    (oPackaging + oCommission + fixedExpenses + oVariable + oFilament) * vatFactor +
+    cargoAmounts.inputVat;
 
   // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler + indirilecek KDV iadesi
   const netProfit = orderRevenueExVat - totalCost + inputVatCredit;

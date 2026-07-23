@@ -12,6 +12,8 @@ import { formatCurrency } from "@/lib/utils";
 import {
   parsePackagingSettings,
   type PackagingOption,
+  type PackagingComponentKey,
+  type PackagingScope,
 } from "@/core/packaging";
 import { fetchJson } from "@/lib/fetch-json";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
@@ -53,6 +55,7 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
   const [stickerPrice, setStickerPrice] = useState(initial.stickerPrice ? String(initial.stickerPrice) : "");
   const [sakizQty, setSakizQty] = useState(initial.sakizQty ? String(initial.sakizQty) : "");
   const [sakizPrice, setSakizPrice] = useState(initial.sakizPrice ? String(initial.sakizPrice) : "");
+  const [scopes, setScopes] = useState(initial.scopes);
 
   const save = useMutation({
     mutationFn: (data: Record<string, string>) =>
@@ -89,8 +92,12 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
       stickerPrice: stickerPrice || "0",
       sakizQty: sakizQty || "0",
       sakizPrice: sakizPrice || "0",
+      packagingScopes: JSON.stringify(scopes),
     });
   };
+
+  const setScope = (key: PackagingComponentKey, scope: PackagingScope) =>
+    setScopes((current) => ({ ...current, [key]: scope }));
 
   const nylonPerGram =
     Number(nylonRollGrams) > 0 ? Number(nylonRollPrice) / Number(nylonRollGrams) : 0;
@@ -282,6 +289,47 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
         </CardContent>
       </Card>
 
+      {/* Hesaplama kapsamları */}
+      <Card className="lg:col-span-2">
+        <CardHeader>
+          <CardTitle className="text-lg">Paketleme Hesaplama Kapsamı</CardTitle>
+          <CardDescription>
+            Çok adetli siparişlerde hangi kalemin her üründe, siparişte bir kez veya
+            gönderide bir kez uygulanacağını seç.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {([
+            ["option", "Poşet / Kutu"],
+            ["nylon", "Naylon"],
+            ["tape", "Bant"],
+            ["card", "Kart"],
+            ["sticker", "Sticker"],
+            ["sakiz", "Sakız"],
+          ] as Array<[PackagingComponentKey, string]>).map(([key, label]) => (
+            <div key={key} className="space-y-1 rounded-lg border bg-muted/20 p-3">
+              <Label className="text-xs">{label}</Label>
+              <select
+                value={scopes[key]}
+                onChange={(event) => setScope(key, event.target.value as PackagingScope)}
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              >
+                <option value="per_unit">Ürün başına</option>
+                <option value="per_order">Sipariş başına</option>
+                <option value="per_shipment">Gönderi başına</option>
+              </select>
+            </div>
+          ))}
+          <Button
+            className="sm:col-span-2 lg:col-span-3"
+            onClick={saveNumeric}
+            disabled={save.isPending}
+          >
+            {save.isPending ? "Kaydediliyor..." : "Paketleme Kapsamlarını Kaydet"}
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* Sabit Ek Maliyetler */}
       <Card className="lg:col-span-2">
         <CardHeader>
@@ -289,8 +337,8 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
             <StickyNote className="h-5 w-5 text-primary" /> Sabit Ek Maliyetler (Kart / Sticker / Sakız)
           </CardTitle>
           <CardDescription>
-            Her üründe otomatik kullanılır. &quot;Kaç adet aldın / kaç TL ödedin&quot; gir, adet
-            başı maliyet hesaplanıp her ürüne eklenir.
+            &quot;Kaç adet aldın / kaç TL ödedin&quot; gir; birim maliyet hesaplanır ve yukarıdaki
+            seçtiğin kapsama göre siparişe uygulanır.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -331,7 +379,7 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
             ))}
           </div>
           <div className="flex items-center justify-between rounded-lg bg-primary/5 border border-primary/20 px-4 py-2.5">
-            <span className="text-sm font-medium">Her ürüne eklenen sabit ek maliyet</span>
+            <span className="text-sm font-medium">Kart / sticker / sakız birim maliyeti toplamı</span>
             <span className="text-lg font-bold tabular-nums text-primary">{formatCurrency(fixedTotal)}</span>
           </div>
           <Button className="w-full" onClick={saveNumeric} disabled={save.isPending}>

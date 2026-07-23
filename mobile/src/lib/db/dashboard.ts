@@ -31,7 +31,7 @@ async function fetchProductSet(productWhere: string, listingWhere: string): Prom
       sql: `SELECT p.id, p.name, p.alias, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
                    p.stock, p.desi, p.imageUrl, p.source, p.madeToOrder, p.commissionRate,
                    p.variantGroupId, p.variantLabel, vg.name AS variantGroupName,
-                   pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost,
+                   pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost, pc.packagingCost,
                    pc.filamentTypeId, pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
                    COALESCE(ft.costPerGram, 0) AS costPerGram
@@ -77,6 +77,7 @@ async function fetchProductSet(productWhere: string, listingWhere: string): Prom
           costMode: p.costMode,
           manualCost: p.manualCost,
           totalCost: p.totalCost,
+          packagingCost: p.packagingCost,
           filamentTypeId: p.filamentTypeId,
           filamentWeight: p.filamentWeight,
           printTimeHours: p.printTimeHours,

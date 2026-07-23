@@ -128,6 +128,20 @@ export default function OrderDetailScreen() {
         {profit?.partial ? (
           <Text style={styles.note}>~ bazı ürünler eşleşmedi, kâr kısmi.</Text>
         ) : null}
+        {profit?.desiEstimated ? (
+          <Text style={styles.note}>
+            {profit.missingDesiCount > 0
+              ? `◆ ${profit.missingDesiCount} ürünün desisi eksik; kargo 1 desiyle hesaplandı.`
+              : "◆ Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi."}
+          </Text>
+        ) : null}
+        {profit && Math.abs(profit.orderRevenueAdjustment) >= 0.01 ? (
+          <Text style={styles.note}>
+            Kargo geliri / sipariş indirimi:{" "}
+            {profit.orderRevenueAdjustment >= 0 ? "+" : ""}
+            {formatCurrency(profit.orderRevenueAdjustment)}
+          </Text>
+        ) : null}
 
         {/* Satırlar */}
         <Text style={styles.sectionLabel}>ÜRÜNLER ({order.items.length})</Text>

@@ -99,6 +99,7 @@ interface Product {
   currentNetProfit: number | null;
   currentProfitMargin: number | null;
   hasCost: boolean;
+  missingDesi: boolean;
   platforms: Array<{
     platform: "shopify" | "trendyol" | "hepsiburada";
     listingId: string;
@@ -133,7 +134,7 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
-type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "hidden" | "most-profitable";
+type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "missing-desi" | "hidden" | "most-profitable";
 
 
 function ProductImage({ src, name }: { src: string | null; name: string }) {
@@ -176,6 +177,7 @@ function readFilterFromUrl(): FilterMode {
     f === "all" ||
     f === "negative-profit" ||
     f === "missing-cost" ||
+    f === "missing-desi" ||
     f === "hidden" ||
     f === "most-profitable"
   ) {
@@ -310,6 +312,11 @@ const ProductRow = memo(function ProductRow({
           <span className="opacity-60">·</span>
           <span className="truncate">{product.categoryName}</span>
         </div>
+        {product.missingDesi && (
+          <span className="inline-flex mt-1 text-[10px] font-medium text-amber-500">
+            Desi eksik · kargo 1 desi
+          </span>
+        )}
         {isMember && product.variantLabel && (
           <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
             <Layers className="h-3 w-3" /> {product.variantLabel}
@@ -1105,6 +1112,7 @@ export default function ProductsPage() {
     { value: "most-profitable", label: "En Kârlı" },
     { value: "negative-profit", label: "Zarar Eden" },
     { value: "missing-cost", label: "Maliyet Eksik" },
+    { value: "missing-desi", label: "Desi Eksik" },
     { value: "out-of-stock", label: "Stoğu Bitenler" },
     { value: "inactive", label: "İnaktif" },
     { value: "hidden", label: "Gizlenenler" },

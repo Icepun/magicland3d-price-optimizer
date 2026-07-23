@@ -38,6 +38,7 @@ interface CargoRule {
   minDesi: number;
   maxDesi: number;
   cargoCost: number;
+  vatIncluded: boolean;
   priority: number;
   isActive: boolean;
 }
@@ -55,6 +56,7 @@ const Schema = z.object({
   minDesi: z.coerce.number().min(0).default(0),
   maxDesi: z.coerce.number().min(0).default(999),
   cargoCost: z.coerce.number().min(0),
+  vatIncluded: z.boolean().default(true),
   priority: z.coerce.number().int().default(10),
   isActive: z.boolean().default(true),
 });
@@ -78,12 +80,14 @@ function RuleForm({
       maxPrice: 999999,
       minDesi: 0,
       maxDesi: 999,
+      vatIncluded: true,
       priority: 10,
       isActive: true,
       ...defaultValues,
     },
   });
   const isActive = useWatch({ control: form.control, name: "isActive" });
+  const vatIncluded = useWatch({ control: form.control, name: "vatIncluded" });
   const platform = useWatch({ control: form.control, name: "platform" });
 
   return (
@@ -150,6 +154,18 @@ function RuleForm({
         <Switch checked={isActive} onCheckedChange={(v) => form.setValue("isActive", v)} />
         <Label>Aktif</Label>
       </div>
+      <div className="flex items-center justify-between rounded-md border px-3 py-2">
+        <div>
+          <Label>Kargo tutarı KDV dahil</Label>
+          <p className="text-[11px] text-muted-foreground">
+            Kapalıysa KDV faturaya eklenir ve KDV İadesi'nde ayrılır.
+          </p>
+        </div>
+        <Switch
+          checked={vatIncluded}
+          onCheckedChange={(v) => form.setValue("vatIncluded", v)}
+        />
+      </div>
       <DialogFooter>
         <Button type="submit" disabled={isPending}>
           {isPending ? "Kaydediliyor..." : "Kaydet"}
@@ -207,7 +223,10 @@ function RulesTable({
                 {r.minDesi} – {r.maxDesi === 999 ? "∞" : r.maxDesi}
               </td>
               <td className="text-right px-3 py-2 font-semibold text-primary tabular-nums whitespace-nowrap">
-                {formatCurrency(r.cargoCost)}
+                <div>{formatCurrency(r.cargoCost)}</div>
+                <div className="text-[9px] font-normal text-muted-foreground">
+                  {r.vatIncluded ? "KDV dahil" : "KDV hariç"}
+                </div>
               </td>
               <td className="text-center px-3 py-2">
                 <Switch checked={r.isActive} onCheckedChange={(v) => onToggle(r, v)} />
@@ -572,6 +591,13 @@ export default function CargoRulesPage() {
   const shopifyBarem = deriveBarem(shopifyRules);
   const hepsiburadaRules = rules.filter((r) => r.platform === "hepsiburada");
   const hepsiburadaBarem = deriveBarem(hepsiburadaRules);
+  const vatNote = (platformRules: CargoRule[]) => {
+    const active = platformRules.filter((rule) => rule.isActive);
+    if (active.length === 0) return undefined;
+    if (active.every((rule) => rule.vatIncluded)) return "Fiyatlar KDV dahil";
+    if (active.every((rule) => !rule.vatIncluded)) return "Fiyatlar KDV hariç";
+    return "KDV durumu kurala göre";
+  };
 
   return (
     <div className="p-6 space-y-5 max-w-4xl">
@@ -595,6 +621,7 @@ export default function CargoRulesPage() {
             <CardContent className="pt-4 space-y-4">
               <CargoBaremView
                 provider={shopifyBarem.provider}
+                vatNote={vatNote(shopifyRules)}
                 flatTiers={shopifyBarem.flat}
                 desiBrackets={shopifyBarem.desi}
                 desiThreshold={shopifyBarem.desiThreshold}
@@ -624,6 +651,7 @@ export default function CargoRulesPage() {
               />
               <CargoBaremView
                 provider={trendyolBarem.provider}
+                vatNote={vatNote(trendyolRules)}
                 flatTiers={trendyolBarem.flat}
                 desiBrackets={trendyolBarem.desi}
                 desiThreshold={trendyolBarem.desiThreshold}

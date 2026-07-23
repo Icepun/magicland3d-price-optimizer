@@ -62,8 +62,9 @@ interface ListItem {
   stock: number;
   madeToOrder: number;
   hasCost: boolean;
+  missingDesi: boolean;
   anyLoss: boolean;
-  platforms: { platform: Platform; netProfit: number | null }[];
+  platforms: { platform: Platform; netProfit: number | null; minOrderQty: number }[];
   variantGroupId: string | null;
   variantGroupName: string | null;
   variantLabel: string | null;
@@ -115,10 +116,12 @@ export default function ProductsScreen() {
         stock: p.stock,
         madeToOrder: p.madeToOrder,
         hasCost: profit.hasCost,
+        missingDesi: p.desi == null || p.desi <= 0,
         anyLoss: profit.platforms.some((pl) => pl.result.netProfit < 0),
         platforms: profit.platforms.map((pl) => ({
           platform: pl.platform,
           netProfit: profit.hasCost ? pl.result.netProfit : null,
+          minOrderQty: pl.minOrderQty,
         })),
         variantGroupId: p.variantGroupId,
         variantGroupName: p.variantGroupName ?? null,
@@ -308,6 +311,9 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
           <Text style={[styles.stockText, { color: out ? ML.red : ML.textDim }]}>
             {madeToOrder ? "Siparişle üretilir" : out ? "Bitti" : `${item.stock} adet`}
           </Text>
+          {item.missingDesi ? (
+            <Text style={{ color: ML.orange, fontSize: 10 }}> · Desi eksik</Text>
+          ) : null}
         </View>
       </View>
 
@@ -327,7 +333,9 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
                   { color: (pl.netProfit ?? 0) < 0 ? ML.red : ML.green },
                 ]}
               >
-                {pl.netProfit == null ? "—" : formatCurrency(pl.netProfit)}
+                {pl.netProfit == null
+                  ? "—"
+                  : `${formatCurrency(pl.netProfit)}${pl.minOrderQty > 1 ? ` ×${pl.minOrderQty}` : ""}`}
               </Text>
             </View>
           ))

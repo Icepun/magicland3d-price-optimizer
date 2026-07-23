@@ -1,5 +1,9 @@
 import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
-import { resolveProductCost } from "@core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
+import {
+  collectRulePriceBreakpoints,
+  findMinimumPriceForMargin,
+} from "@core/price-target";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
@@ -56,38 +60,50 @@ export function computePriceLab(
   // Listing olmayan platformda masaüstü null-listing ile simüle eder (route:66-68) — aynı şekil.
   type LabListing = Pick<ListingRow, "platform" | "commissionRate" | "commissionFixed" | "cargoCost">;
 
-  const simFor = (listing: LabListing, salePrice: number) =>
+  const simFor = (listing: LabListing, salePrice: number, discountBuffer = 0) =>
     simulatePrice({
       salePrice,
       productCost,
       packagingCost,
+      ...packagingScopeInput(resolved),
       categoryName: detail.categoryName,
       desi: detail.desi ?? 1,
       commissionRules: productRules,
       cargoRules: filterCargoRulesByPlatform(rules.cargo, listing.platform),
       expenseRules: filterRulesByPlatform(rules.expense, listing.platform),
       vatRate,
+      discountBuffer,
       ...resolveListingCommissionOverride(listing, settings),
-      // Masaüstü price-lab route ile birebir: listing kargosu ya da otomatik (150₺-altı Shopify
-      // özel kuralı YOK; o kural products route'a özgü, price-lab'da iki tarafta da uygulanmaz).
-      cargoCostOverride: listing.cargoCost ?? undefined,
+      // Masaüstü price-lab route ile birebir: listing kargosu varsa onu kullanır; yoksa
+      // Shopify'ın 150 TL altı ücretsiz kargo varsayımını kampanya sonrası etkin fiyata uygular.
+      cargoCostOverride:
+        listing.cargoCost ??
+        (listing.platform === "shopify" &&
+        salePrice * (1 - discountBuffer / 100) < 150
+          ? 0
+          : undefined),
       // Trendyol min sipariş adedi — karar: iki tarafta da uygulanır (masaüstü route'a da eklendi).
       minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
       vatableProductCost: filamentMatCost,
     });
 
-  // Marj fiyata göre monoton artar → ikili arama
+  // Kargo/min-adet eşiklerinde marj aşağı sıçrayabilir; her sabit aralığı ayrı ara.
   function priceForMargin(listing: LabListing, targetPct: number): number | null {
     const tm = targetPct / 100;
-    let lo = 0.5;
-    let hi = 100000;
-    if (simFor(listing, hi).profitMargin < tm) return null; // 100k TL'de bile ulaşılamıyor
-    for (let i = 0; i < 44; i++) {
-      const mid = (lo + hi) / 2;
-      if (simFor(listing, mid).profitMargin >= tm) hi = mid;
-      else lo = mid;
-    }
-    return hi;
+    const platformCargo = filterCargoRulesByPlatform(rules.cargo, listing.platform);
+    const platformExpense = filterRulesByPlatform(rules.expense, listing.platform);
+    const breakpoints = collectRulePriceBreakpoints(
+      productRules,
+      platformCargo,
+      platformExpense
+    );
+    if (listing.platform === "trendyol") breakpoints.push(25, 35, 50, 75);
+    if (listing.platform === "shopify") breakpoints.push(150);
+    return findMinimumPriceForMargin({
+      marginAt: (price) => simFor(listing, price).profitMargin,
+      targetMargin: tm,
+      breakpoints,
+    });
   }
 
   // Masaüstü route:88-100 ile birebir: hiç listing yoksa Shopify hedefi currentSalePrice ile gösterilir.
@@ -118,7 +134,7 @@ export function computePriceLab(
     campaign = {
       rows: DISCOUNTS.map((d) => {
         const eff = shopify.salePrice * (1 - d / 100);
-        const r = simFor(shopify, eff);
+        const r = simFor(shopify, shopify.salePrice, d);
         return { discount: d, effectivePrice: eff, profit: r.netProfit, margin: r.profitMargin };
       }),
     };

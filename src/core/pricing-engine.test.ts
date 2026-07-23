@@ -137,10 +137,32 @@ describe("pricing engine", () => {
     expect(result.commissionCost).toBeCloseTo(26, 5);
     // Total: 80 + 10 + 26 + 20 + 5 + 240*0.03 = 148.2
     expect(result.totalCost).toBeCloseTo(148.2, 5);
-    // İndirilecek KDV iadesi: (komisyon 26 + kargo 20 + sabit 5 + değişken 7.2) × 20/120 = 9.7
-    expect(result.inputVatCredit).toBeCloseTo(9.7, 5);
-    // Net kâr: gelir(exVat 200) − totalCost 148.2 + KDV iadesi 9.7 = 61.5
-    expect(result.netProfit).toBeCloseTo(61.5, 5);
+    // İndirilecek KDV: paketleme 10 + komisyon 26 + kargo 20 + sabit 5 + değişken 7.2.
+    expect(result.inputVatCredit).toBeCloseTo(11.3666667, 5);
+    expect(result.netProfit).toBeCloseTo(63.1666667, 5);
+  });
+
+  it("KDV hariç kargo tarifesini brüte çevirir, KDV'yi yalnız bir kez iade eder", () => {
+    const result = simulatePrice({
+      salePrice: 240,
+      productCost: 0,
+      packagingCost: 0,
+      categoryName: "Dekor",
+      commissionRules: [],
+      cargoRules: [
+        {
+          ...cargoRules[0],
+          cargoCost: 100,
+          vatIncluded: false,
+        },
+      ],
+      expenseRules: [],
+      vatRate: 20,
+    });
+
+    expect(result.cargoCost).toBeCloseTo(120, 5);
+    expect(result.inputVatCredit).toBeCloseTo(20, 5);
+    expect(result.netProfit).toBeCloseTo(100, 5);
   });
 
   it("vatableProductCost (filament) indirilecek KDV iadesine katılır", () => {
@@ -156,10 +178,9 @@ describe("pricing engine", () => {
       vatRate: 20,
       vatableProductCost: 60, // 80 üretim maliyetinin 60'ı filament (KDV'li alınmış)
     });
-    // base = komisyon 26 + kargo 20 + sabit 5 + değişken 7.2 + filament 60 = 118.2 → ×20/120 = 19.7
-    expect(result.inputVatCredit).toBeCloseTo(19.7, 5);
-    // Net kâr: 200 − 148.2 + 19.7 = 71.5
-    expect(result.netProfit).toBeCloseTo(71.5, 5);
+    // base = paketleme 10 + komisyon 26 + kargo 20 + sabit 5 + değişken 7.2 + filament 60.
+    expect(result.inputVatCredit).toBeCloseTo(21.3666667, 5);
+    expect(result.netProfit).toBeCloseTo(73.1666667, 5);
   });
 
   it("vatRate=0 iken KDV iadesi 0 (geriye dönük uyumluluk)", () => {
@@ -260,5 +281,52 @@ describe("pricing engine", () => {
     // totalCost = 30 + 6 + 21 + 20 + 5 + 4.5 = 86.5 ; gelir 150 → kâr 63.5
     expect(result.totalCost).toBeCloseTo(86.5, 5);
     expect(result.netProfit).toBeCloseTo(63.5, 5);
+  });
+
+  it("paketleme kapsamlarında yalnız ürün başına kalemi adetle çarpar", () => {
+    const result = simulatePrice({
+      salePrice: 100,
+      productCost: 10,
+      packagingCost: 10,
+      packagingUnitCost: 3,
+      packagingOrderCost: 2,
+      packagingShipmentCost: 5,
+      categoryName: "Dekor",
+      commissionRules: [],
+      cargoRules: [],
+      expenseRules: [],
+      minOrderQty: 3,
+    });
+
+    expect(result.productCost).toBe(30);
+    expect(result.packagingCost).toBe(16);
+    expect(result.netProfit).toBe(254);
+  });
+
+  it("desi 0 ise kargo hesabında güvenli 1 desi kullanır", () => {
+    const result = simulatePrice({
+      salePrice: 100,
+      productCost: 10,
+      packagingCost: 0,
+      categoryName: "Dekor",
+      desi: 0,
+      commissionRules: [],
+      cargoRules: [
+        {
+          id: "one-desi",
+          name: "1 desi",
+          minPrice: 0,
+          maxPrice: 999999,
+          minDesi: 1,
+          maxDesi: 1,
+          cargoCost: 20,
+          priority: 1,
+          isActive: true,
+        },
+      ],
+      expenseRules: [],
+    });
+
+    expect(result.cargoCost).toBe(20);
   });
 });

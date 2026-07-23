@@ -46,8 +46,8 @@ function lineProfit(opts: { withCommission: boolean; qty: number }) {
 }
 
 describe("sipariş kârı — listing komisyonu", () => {
-  it("komisyon GEÇİLİRSE satır kârı ~88,70 olur (kargosuz)", () => {
-    expect(lineProfit({ withCommission: true, qty: 1 })).toBeCloseTo(88.695, 2);
+  it("komisyon geçilirse paketleme KDV'si dahil doğru satır kârını verir", () => {
+    expect(lineProfit({ withCommission: true, qty: 1 })).toBeCloseTo(90.4701, 2);
   });
 
   it("komisyon geçilmezse ~34,998 FAZLA çıkar (eski hatanın imzası)", () => {
@@ -59,7 +59,7 @@ describe("sipariş kârı — listing komisyonu", () => {
   it("sipariş kargosu düşülünce Ürünler ekranıyla AYNI: ₺60,23", () => {
     const cargoWithVatCredit = -34.16 + 34.16 * (20 / 120); // kargo + KDV iadesi payı
     const net = lineProfit({ withCommission: true, qty: 1 }) + cargoWithVatCredit;
-    expect(net).toBeCloseTo(60.228, 2);
+    expect(net).toBeCloseTo(62.0034, 2);
   });
 
   it("SABİT gider adet başına TEKRARLANMAZ (2 adet ≠ tek adetin 2 katı)", () => {

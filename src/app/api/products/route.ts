@@ -4,7 +4,7 @@ import { findCommissionRule } from "@/core/commission-calculator";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
-import { resolveProductCost } from "@/core/product-cost";
+import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
@@ -22,7 +22,7 @@ const CreateProductSchema = z.object({
 });
 
 interface PlatformSummary {
-  platform: "shopify" | "trendyol";
+  platform: "shopify" | "trendyol" | "hepsiburada";
   listingId: string;
   salePrice: number;
   stock: number;
@@ -65,7 +65,11 @@ export async function GET(req: NextRequest) {
       where.stock = 0;
     } else if (filter === "inactive") {
       where.isActive = false;
-    } else if (filter === "negative-profit" || filter === "missing-cost") {
+    } else if (
+      filter === "negative-profit" ||
+      filter === "missing-cost" ||
+      filter === "missing-desi"
+    ) {
       where.isActive = true;
     }
   }
@@ -138,13 +142,14 @@ export async function GET(req: NextRequest) {
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;
+    const hasCost = (resolved?.totalCost ?? 0) > 0;
     const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
 
     // Her listing için ayrı kâr hesabı (platform-specific override'lar dahil)
     const platformSummaries: PlatformSummary[] = product.listings
       .filter((l) => !platformFilter || l.platform === platformFilter)
       .map((listing) => {
-        if (productCost <= 0) {
+        if (!hasCost) {
           return {
             platform: listing.platform as PlatformSummary["platform"],
             listingId: listing.id,
@@ -160,6 +165,7 @@ export async function GET(req: NextRequest) {
           salePrice: listing.salePrice,
           productCost,
           packagingCost,
+          ...packagingScopeInput(resolved),
           categoryName: product.categoryName,
           desi: product.desi ?? 1,
           commissionRules: productRules,
@@ -200,24 +206,72 @@ export async function GET(req: NextRequest) {
         };
       });
 
-    // Ana ürünün "current" kar/zararı: ürünün kendi currentSalePrice'ı kullanılır (no listing varsa)
+    // Rapor metriği tek bir gerçek platform sonucundan gelir; platform kurallarını birbirine
+    // karıştırmak TEX kargosunu Shopify ürününe uygulayabiliyordu.
     let currentNetProfit: number | null = null;
     let currentProfitMargin: number | null = null;
-    if (productCost > 0) {
-      const sim = simulatePrice({
-        salePrice: product.currentSalePrice,
-        productCost,
-        packagingCost,
-        categoryName: product.categoryName,
-        desi: product.desi ?? 1,
-        commissionRules: productRules,
-        cargoRules: cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
-        expenseRules: expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
-        vatRate,
-        vatableProductCost: filamentMatCost,
-      });
-      currentNetProfit = sim.netProfit;
-      currentProfitMargin = sim.profitMargin;
+    if (hasCost) {
+      const preferredPlatforms = [
+        product.source,
+        "shopify",
+        "trendyol",
+        "hepsiburada",
+      ];
+      const primary = preferredPlatforms
+        .map((platform) => platformSummaries.find((summary) => summary.platform === platform))
+        .find((summary) => summary?.netProfit != null);
+      if (primary) {
+        currentNetProfit = primary.netProfit;
+        currentProfitMargin = primary.profitMargin;
+      } else {
+        const fallbackPlatform =
+          platformFilter === "trendyol" ||
+          platformFilter === "hepsiburada" ||
+          platformFilter === "shopify"
+            ? platformFilter
+            : product.source === "trendyol" ||
+                product.source === "hepsiburada" ||
+                product.source === "shopify"
+              ? product.source
+              : "shopify";
+        const sim = simulatePrice({
+          salePrice: product.currentSalePrice,
+          productCost,
+          packagingCost,
+          ...packagingScopeInput(resolved),
+          categoryName: product.categoryName,
+          desi: product.desi ?? 1,
+          commissionRules: productRules,
+          cargoRules: filterCargoRulesByPlatform(
+            cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
+            fallbackPlatform
+          ),
+          expenseRules: filterRulesByPlatform(
+            expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
+            fallbackPlatform
+          ),
+          vatRate,
+          ...resolveListingCommissionOverride(
+            {
+              platform: fallbackPlatform,
+              commissionRate: null,
+              commissionFixed: null,
+            },
+            settingsMap
+          ),
+          cargoCostOverride:
+            fallbackPlatform === "shopify" && product.currentSalePrice < 150
+              ? 0
+              : undefined,
+          minOrderQty:
+            fallbackPlatform === "trendyol"
+              ? trendyolMinQty(product.currentSalePrice)
+              : 1,
+          vatableProductCost: filamentMatCost,
+        });
+        currentNetProfit = sim.netProfit;
+        currentProfitMargin = sim.profitMargin;
+      }
     }
 
     // Payload kırpma (694KB→~yarısı): liste + planner yalnızca aşağıdaki alanları kullanıyor.
@@ -254,7 +308,8 @@ export async function GET(req: NextRequest) {
         : null,
       currentNetProfit,
       currentProfitMargin,
-      hasCost: productCost > 0,
+      hasCost,
+      missingDesi: product.desi == null || product.desi <= 0,
       resolvedTotalCost: resolved?.totalCost ?? null,
       platforms: platformSummaries,
     };
@@ -272,6 +327,8 @@ export async function GET(req: NextRequest) {
       });
     } else if (filter === "missing-cost") {
       filtered = filtered.filter((p) => !p.hasCost);
+    } else if (filter === "missing-desi") {
+      filtered = filtered.filter((p) => p.missingDesi);
     } else if (filter === "out-of-stock") {
       // Local stok bazında; "sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
       filtered = filtered.filter((p) => p.stock === 0 && !p.madeToOrder);
