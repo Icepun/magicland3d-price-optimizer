@@ -6,6 +6,7 @@ const EMPTY_ORDERS_RESPONSE = {
   data: {
     orders: {
       edges: [],
+      pageInfo: { hasNextPage: false, endCursor: null },
     },
   },
 };
@@ -36,7 +37,6 @@ describe("ShopifyClient Admin API token yenileme", () => {
   it("cache'teki token 401 alınca yeni token üretip sipariş isteğini bir kez tekrarlar", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
-      // İlk çağrı: token üret ve cache'le.
       .mockResolvedValueOnce(
         jsonResponse({
           access_token: "old-token",
@@ -44,11 +44,10 @@ describe("ShopifyClient Admin API token yenileme", () => {
           expires_in: 86399,
         })
       )
-      // İlk sipariş sorgusu başarılı.
       .mockResolvedValueOnce(jsonResponse(EMPTY_ORDERS_RESPONSE))
-      // İkinci sipariş sorgusunda cache'teki token artık geçersiz.
-      .mockResolvedValueOnce(jsonResponse({ errors: "Invalid API key or access token" }, 401))
-      // Otomatik olarak yeni token üret.
+      .mockResolvedValueOnce(
+        jsonResponse({ errors: "Invalid API key or access token" }, 401)
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           access_token: "fresh-token",
@@ -56,7 +55,6 @@ describe("ShopifyClient Admin API token yenileme", () => {
           expires_in: 86399,
         })
       )
-      // Aynı sipariş sorgusunu yeni token'la tekrar et.
       .mockResolvedValueOnce(jsonResponse(EMPTY_ORDERS_RESPONSE));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -100,7 +98,9 @@ describe("ShopifyClient Admin API token yenileme", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
     const secondTokenRequestBody = fetchMock.mock.calls[2][1]?.body;
     expect(secondTokenRequestBody).toBeInstanceOf(URLSearchParams);
-    expect((secondTokenRequestBody as URLSearchParams).get("client_secret")).toBe("new-secret");
+    expect((secondTokenRequestBody as URLSearchParams).get("client_secret")).toBe(
+      "new-secret"
+    );
   });
 
   it("üretilen token'da sipariş kapsamı yoksa açıklayıcı hata verir", async () => {
@@ -115,7 +115,70 @@ describe("ShopifyClient Admin API token yenileme", () => {
 
     const client = new ShopifyClient(credentials({ clientId: "missing-scope-client" }));
 
-    await expect(client.listOrders()).rejects.toThrow(/read_orders.*yayınla.*yeniden kur/i);
+    await expect(client.listOrders()).rejects.toThrow(
+      /read_orders.*yayınla.*yeniden kur/i
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+function orderNode(id: string, amount: string, linesTruncated = false) {
+  return {
+    id: `gid://shopify/Order/${id}`,
+    name: `#${id}`,
+    createdAt: "2026-07-20T10:00:00.000Z",
+    cancelledAt: null,
+    displayFinancialStatus: "PARTIALLY_REFUNDED",
+    displayFulfillmentStatus: "FULFILLED",
+    currentTotalPriceSet: { shopMoney: { amount, currencyCode: "TRY" } },
+    customer: null,
+    lineItems: {
+      edges: [],
+      pageInfo: { hasNextPage: linesTruncated },
+    },
+    fulfillments: [],
+  };
+}
+
+describe("ShopifyClient orders", () => {
+  it("cursor sayfalarını tüketip iade sonrası güncel toplamı ve satır sınırını taşır", async () => {
+    const client = new ShopifyClient({
+      shopDomain: "example.myshopify.com",
+      apiVersion: "2026-07",
+      storefrontAccessToken: "test",
+      clientId: "client",
+      clientSecret: "secret",
+    });
+    const adminGraphql = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: {
+          orders: {
+            edges: [{ node: orderNode("1", "80.00", true) }],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          orders: {
+            edges: [{ node: orderNode("2", "120.00") }],
+            pageInfo: { hasNextPage: false, endCursor: "cursor-2" },
+          },
+        },
+      });
+    Object.defineProperty(client, "adminGraphql", { value: adminGraphql });
+
+    const orders = await client.listOrders({ limit: 100, sinceDays: 30 });
+
+    expect(adminGraphql).toHaveBeenCalledTimes(2);
+    expect(adminGraphql.mock.calls[1]?.[1]).toMatchObject({ cursor: "cursor-1" });
+    expect(orders).toHaveLength(2);
+    expect(orders[0]).toMatchObject({
+      totalAmount: 80,
+      currency: "TRY",
+      linesTruncated: true,
+      financialStatus: "PARTIALLY_REFUNDED",
+    });
   });
 });

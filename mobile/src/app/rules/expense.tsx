@@ -19,7 +19,7 @@ import {
 import { ML, radius } from "@/theme/colors";
 
 const TYPE_LABEL: Record<string, string> = {
-  fixed: "Sabit (TL)",
+  fixed: "Sipariş Başına (TL)",
   percentage: "Yüzdesel (%)",
   per_order: "Sipariş Başına (TL)",
 };
@@ -59,7 +59,7 @@ export default function ExpenseRulesScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Text style={styles.backText}>‹</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>Ek Gider Kuralları</Text>
+        <Text style={styles.headerTitle}>Sipariş Gider Kuralları</Text>
         <Pressable onPress={() => router.push("/rules/expense-edit/new")} hitSlop={12}>
           <Text style={styles.add}>+ Ekle</Text>
         </Pressable>
@@ -72,7 +72,8 @@ export default function ExpenseRulesScreen() {
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.note}>
-            Komisyon ve kargo dışındaki giderler (KDV, platform bedeli, kampanya vb.).
+            Her siparişin kâr hesabına otomatik giren platform bedeli ve yüzdesel giderler.
+            Ödediğin genel giderleri Gider Ödemeleri ekranına kaydet.
           </Text>
           {(rules ?? []).map((r) => (
             <Pressable

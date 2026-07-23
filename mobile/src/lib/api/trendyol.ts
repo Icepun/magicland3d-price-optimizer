@@ -1,6 +1,5 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
-import { orderWindowCutoff } from "@/lib/api/window";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -50,12 +49,13 @@ interface TyOrder {
  * eksik çekerdi (kâr yanlış). Çözüm: 14 GÜNLÜK pencerelerle (Trendyol startDate/endDate aralık
  * limiti ≤2 hafta) tara + her pencerede sayfala; id'ye göre tekilleştir.
  */
-export async function getTrendyolOrders(): Promise<UnifiedOrder[]> {
+export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[]> {
   if (!SELLER || !KEY || !SECRET) return [];
   const token = base64(`${KEY}:${SECRET}`);
   const ua = `${SELLER} - ${INTEGRATOR.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30) || "SelfIntegration"}`;
 
-  const cutoff = orderWindowCutoff();
+  const safeDays = Math.max(1, Math.min(60, Math.trunc(historyDays)));
+  const cutoff = (Math.floor(Date.now() / 86_400_000) - safeDays) * 86_400_000;
   const CHUNK = 14 * 86_400_000;
   const seen = new Set<string>();
   const orders: UnifiedOrder[] = [];

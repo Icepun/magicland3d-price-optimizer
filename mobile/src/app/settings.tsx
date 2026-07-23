@@ -9,7 +9,7 @@ import { ML, radius } from "@/theme/colors";
 const NAV: { label: string; href: Href; ready: boolean }[] = [
   { label: "Komisyon Kuralları", href: "/rules/commission", ready: true },
   { label: "Kargo Kuralları", href: "/rules/cargo", ready: true },
-  { label: "Ek Gider Kuralları", href: "/rules/expense", ready: true },
+  { label: "Sipariş Gider Kuralları", href: "/rules/expense", ready: true },
 ];
 
 export default function SettingsScreen() {
@@ -46,6 +46,20 @@ export default function SettingsScreen() {
             <View style={[styles.dot, { backgroundColor: ML.green }]} />
             <Text style={styles.statusText}>Turso bağlı</Text>
           </View>
+        </View>
+
+        <Text style={styles.sectionLabel}>FİNANS</Text>
+        <View style={styles.card}>
+          <Pressable
+            onPress={() => router.push("/expenses")}
+            style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
+          >
+            <View>
+              <Text style={styles.rowLabel}>Gider Ödemeleri</Text>
+              <Text style={styles.rowHint}>Ödediğin genel giderler</Text>
+            </View>
+            <Text style={[styles.rowValue, { color: ML.accent }]}>›</Text>
+          </Pressable>
         </View>
 
         <Text style={styles.sectionLabel}>KURALLAR</Text>
@@ -110,6 +124,7 @@ const styles = StyleSheet.create({
   },
   rowBorder: { borderBottomWidth: 1, borderBottomColor: ML.borderSoft },
   rowLabel: { color: ML.textDim, fontSize: 15 },
+  rowHint: { color: ML.textFaint, fontSize: 11, marginTop: 3 },
   rowValue: { color: ML.text, fontSize: 15, fontWeight: "700" },
   statusRow: { gap: 10 },
   dot: { width: 9, height: 9, borderRadius: 5 },

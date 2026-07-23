@@ -154,7 +154,7 @@ export function computeOrderProfit(
   return {
     revenue: order.total,
     profit: r.profit,
-    partial: r.partial,
+    partial: r.partial || !!order.financialPartial,
     image: distinctCount === 1 ? image : null,
     distinctCount,
     totalQty: r.totalQty,

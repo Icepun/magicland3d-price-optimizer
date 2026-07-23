@@ -61,6 +61,8 @@ export interface ShopifyOrder {
   currency: string;
   customerName: string | null;
   lines: ShopifyOrderLine[];
+  /** Admin GraphQL lineItems(first: 20) sınırına takıldıysa kâr hesabı eksik olabilir. */
+  linesTruncated: boolean;
   trackingNumber: string | null;
   cargoProvider: string | null;
 }
@@ -122,7 +124,7 @@ interface AdminOrdersResponse {
           cancelledAt: string | null;
           displayFinancialStatus: string | null;
           displayFulfillmentStatus: string | null;
-          totalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
+          currentTotalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
           customer: { firstName: string | null; lastName: string | null } | null;
           lineItems: {
             edges: Array<{
@@ -135,10 +137,12 @@ interface AdminOrdersResponse {
                 discountedUnitPriceSet: { shopMoney: { amount: string } } | null;
               };
             }>;
+            pageInfo: { hasNextPage: boolean };
           };
           fulfillments: Array<{ trackingInfo: Array<{ number: string | null; company: string | null }> }>;
         };
       }>;
+      pageInfo: { hasNextPage: boolean; endCursor: string | null };
     };
   };
   errors?: Array<{ message: string }>;
@@ -197,8 +201,8 @@ const SHOP_QUERY = `
 `;
 
 const ORDERS_QUERY = `
-  query GetOrders($first: Int!, $query: String) {
-    orders(first: $first, sortKey: CREATED_AT, reverse: true, query: $query) {
+  query GetOrders($first: Int!, $query: String, $cursor: String) {
+    orders(first: $first, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {
       edges {
         node {
           id
@@ -207,7 +211,7 @@ const ORDERS_QUERY = `
           cancelledAt
           displayFinancialStatus
           displayFulfillmentStatus
-          totalPriceSet { shopMoney { amount currencyCode } }
+          currentTotalPriceSet { shopMoney { amount currencyCode } }
           customer { firstName lastName }
           lineItems(first: 20) {
             edges {
@@ -220,10 +224,12 @@ const ORDERS_QUERY = `
                 discountedUnitPriceSet { shopMoney { amount } }
               }
             }
+            pageInfo { hasNextPage }
           }
           fulfillments(first: 1) { trackingInfo { number company } }
         }
       }
+      pageInfo { hasNextPage endCursor }
     }
   }
 `;
@@ -494,16 +500,35 @@ export class ShopifyClient {
 
   /** Son siparişler (Admin API, read_orders gerekir). sinceDays verilirse created_at ile filtreler. */
   async listOrders(opts: { limit?: number; sinceDays?: number } = {}): Promise<ShopifyOrder[]> {
-    const limit = opts.limit ?? 100;
+    const pageSize = Math.max(1, Math.min(250, opts.limit ?? 100));
     const query =
       opts.sinceDays && opts.sinceDays > 0
         ? `created_at:>=${new Date(Date.now() - opts.sinceDays * 86_400_000).toISOString()}`
         : null;
-    const response = await this.adminGraphql<AdminOrdersResponse>(ORDERS_QUERY, {
-      first: limit,
-      query,
-    });
-    const edges = response.data?.orders?.edges ?? [];
+    const edges: NonNullable<
+      NonNullable<AdminOrdersResponse["data"]>["orders"]
+    >["edges"] = [];
+    let cursor: string | null = null;
+    // 30 günlük sorguyu cursor ile tamamen tüket. 20 sayfalık güvenlik tavanı yanlış
+    // pageInfo yüzünden sonsuz döngüyü engeller.
+    for (let page = 0; page < 20; page++) {
+      const response: AdminOrdersResponse = await this.adminGraphql<AdminOrdersResponse>(
+        ORDERS_QUERY,
+        { first: pageSize, query, cursor }
+      );
+      const orders = response.data?.orders;
+      edges.push(...(orders?.edges ?? []));
+      if (!orders?.pageInfo.hasNextPage || !orders.pageInfo.endCursor) break;
+      if (orders.pageInfo.endCursor === cursor) {
+        throw new Error("Shopify sipariş sayfalaması ilerlemedi; eksik ciro göstermemek için işlem durduruldu.");
+      }
+      if (page === 19) {
+        throw new Error(
+          `Shopify sipariş sayısı ${pageSize * 20} güvenlik sınırını aştı; eksik ciro gösterilmedi.`
+        );
+      }
+      cursor = orders.pageInfo.endCursor;
+    }
     return edges.map(({ node }) => {
       const tracking = node.fulfillments?.[0]?.trackingInfo?.[0];
       const customerName = node.customer
@@ -516,8 +541,8 @@ export class ShopifyClient {
         cancelledAt: node.cancelledAt,
         financialStatus: node.displayFinancialStatus,
         fulfillmentStatus: node.displayFulfillmentStatus,
-        totalAmount: Number(node.totalPriceSet?.shopMoney?.amount ?? 0),
-        currency: node.totalPriceSet?.shopMoney?.currencyCode ?? "TRY",
+        totalAmount: Number(node.currentTotalPriceSet?.shopMoney?.amount ?? 0),
+        currency: node.currentTotalPriceSet?.shopMoney?.currencyCode ?? "TRY",
         customerName,
         lines: node.lineItems.edges.map((e) => ({
           title: e.node.title,
@@ -529,6 +554,7 @@ export class ShopifyClient {
           variantSku: e.node.variant?.sku ?? null,
           image: e.node.image?.url ?? null,
         })),
+        linesTruncated: node.lineItems.pageInfo.hasNextPage,
         trackingNumber: tracking?.number ?? null,
         cargoProvider: tracking?.company ?? null,
       };

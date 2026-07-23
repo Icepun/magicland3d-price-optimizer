@@ -21,7 +21,7 @@ let schemaReady: Promise<void> | null = null;
 // v31: CargoRule.vatIncluded — KDV hariç kargo tarifelerinde çift KDV düşümünü önler.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "31";
+const CURRENT_SCHEMA_VERSION = "32";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -326,6 +326,51 @@ export function ensureRuntimeSchema(): Promise<void> {
         "isActive" BOOLEAN NOT NULL DEFAULT true
       )
     `);
+    // v32: Sipariş kurallarından bağımsız gerçek gider ödemeleri ve kalıcı sipariş finans geçmişi.
+    // Para alanları kayan nokta hatalarını önlemek için INTEGER kuruş olarak saklanır.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "ActualExpense" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "category" TEXT,
+        "amountKurus" INTEGER NOT NULL,
+        "paidAt" DATETIME NOT NULL,
+        "note" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "ActualExpense_paidAt_idx" ON "ActualExpense"("paidAt")`
+    );
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "OrderFinanceSnapshot" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalOrderId" TEXT NOT NULL,
+        "orderNumber" TEXT NOT NULL,
+        "orderedAt" DATETIME NOT NULL,
+        "revenueKurus" INTEGER NOT NULL,
+        "profitKurus" INTEGER,
+        "profitPartial" BOOLEAN NOT NULL DEFAULT false,
+        "statusKind" TEXT NOT NULL,
+        "currency" TEXT NOT NULL DEFAULT 'TRY',
+        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "calculationVersion" INTEGER NOT NULL DEFAULT 1
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "OrderFinanceSnapshot_platform_externalOrderId_key"
+       ON "OrderFinanceSnapshot"("platform", "externalOrderId")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_orderedAt_idx"
+       ON "OrderFinanceSnapshot"("orderedAt")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_statusKind_orderedAt_idx"
+       ON "OrderFinanceSnapshot"("statusKind", "orderedAt")`
+    );
     await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "CostTemplate" (
         "id" TEXT NOT NULL PRIMARY KEY,

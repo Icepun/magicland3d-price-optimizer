@@ -21,7 +21,10 @@ export interface UnifiedOrder {
   status: string;
   customer: string | null;
   total: number;
+  currency?: string;
   items: OrderItem[];
+  /** Kısmi iade veya API satır limiti gibi nedenle kâr sonucu yaklaşık/eksik olabilir. */
+  financialPartial?: boolean;
 }
 
 export interface OrdersResult {
@@ -34,12 +37,11 @@ export interface OrdersResult {
  *  boru hattını beklenmedik şekilde tetikliyordu.) */
 export const ORDERS_STALE_MS = 60_000;
 
-/** Shopify + Trendyol + Hepsiburada siparişlerini paralel çek, birleştir, tarihe göre sırala. */
-export async function getAllOrders(): Promise<OrdersResult> {
+async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   const [sh, ty, hb] = await Promise.allSettled([
-    getShopifyOrders(),
-    getTrendyolOrders(),
-    getHepsiburadaOrders(),
+    getShopifyOrders(100, historyDays),
+    getTrendyolOrders(historyDays),
+    getHepsiburadaOrders(historyDays),
   ]);
   const orders: UnifiedOrder[] = [];
   const errors: string[] = [];
@@ -56,12 +58,28 @@ export async function getAllOrders(): Promise<OrdersResult> {
   // yakında durumu değişen (ör. Teslim Edildi) siparişler de gelir. "Son 30 gün" = son 30 günde
   // VERİLEN sipariş → orderDate'e göre kırp. cutoff gün başına sabit (iki platform aynı sayıyı
   // göstersin diye). Tarihsizleri tut (HB/Shopify zaten pencere içinde).
-  const cutoff = orderWindowCutoff();
+  const cutoff =
+    historyDays === 30
+      ? orderWindowCutoff()
+      : (Math.floor(Date.now() / 86_400_000) - historyDays) * 86_400_000;
   const recent = orders.filter((o) => !o.date || o.date >= cutoff);
 
   // Tarihsiz (null) siparişler masaüstüyle aynı şekilde EN ALTA düşer.
   recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   return { orders: recent, errors };
+}
+
+/** Görünür panel/sipariş listesi için son 30 günü getirir. */
+export function getAllOrders(): Promise<OrdersResult> {
+  return getOrdersForDays(30);
+}
+
+/**
+ * Finans snapshot'ı için erişilebilen son 60 günü getirir.
+ * Rapor ekranı kullanıcıya gösterdiği üst metrikleri ayrıca 30 güne kırpar.
+ */
+export function getFinanceHistoryOrders(): Promise<OrdersResult> {
+  return getOrdersForDays(60);
 }
 
 export type StatusTone = "green" | "orange" | "accent" | "red" | "dim";

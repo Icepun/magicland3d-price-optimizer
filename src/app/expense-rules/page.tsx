@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -61,7 +62,7 @@ const Schema = z.object({
 type FormData = z.infer<typeof Schema>;
 
 const TYPE_LABELS: Record<string, string> = {
-  fixed: "Sabit (TL)",
+  fixed: "Sipariş Başına (TL)",
   percentage: "Yüzdesel (%)",
   per_order: "Sipariş Başına (TL)",
 };
@@ -85,7 +86,7 @@ function RuleForm({
     resolver: zodResolver(Schema),
     defaultValues: {
       platform: "all",
-      type: "fixed",
+      type: "per_order",
       minPrice: 0,
       maxPrice: 999999,
       priority: 10,
@@ -131,7 +132,6 @@ function RuleForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="fixed">Sabit (TL)</SelectItem>
                   <SelectItem value="percentage">Yüzdesel (%)</SelectItem>
                   <SelectItem value="per_order">Sipariş Başına (TL)</SelectItem>
                 </SelectContent>
@@ -243,16 +243,22 @@ export default function ExpenseRulesPage() {
 
   return (
     <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Ek Gider Kuralları</h1>
-        <Button onClick={() => setOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-2" /> Gider Ekle
-        </Button>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Satış Gider Kuralları</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Sipariş hesaplarında otomatik uygulanan platform ve kampanya giderleri.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href="/expenses" className={buttonVariants({ variant: "outline", size: "sm" })}>
+            Gider Ödemeleri
+          </Link>
+          <Button onClick={() => setOpen(true)} size="sm">
+            <Plus className="h-4 w-4 mr-2" /> Kural Ekle
+          </Button>
+        </div>
       </div>
-
-      <p className="text-sm text-muted-foreground">
-        Komisyon ve kargo dışındaki platform bedeli, kampanya maliyeti vb. giderleri tanımlayın.
-      </p>
 
       {isLoading ? (
         <div className="grid gap-3">
@@ -273,8 +279,8 @@ export default function ExpenseRulesPage() {
       ) : rules.length === 0 ? (
         <EmptyState
           icon={Receipt}
-          title="Henüz ek gider kuralı yok"
-          description="Komisyon ve kargo dışındaki platform bedeli, kampanya maliyeti vb. giderleri tanımlayın. Sabit, yüzdesel ya da sipariş başına olabilir."
+          title="Henüz satış gider kuralı yok"
+          description="Komisyon ve kargo dışındaki platform bedeli, kampanya maliyeti vb. giderleri sipariş başına veya yüzdesel olarak tanımlayın."
           action={
             <Button onClick={() => setOpen(true)} size="sm">
               <Plus className="h-4 w-4 mr-2" /> İlk Kuralı Ekle
@@ -348,7 +354,7 @@ export default function ExpenseRulesPage() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Ek Gider Kuralı Ekle</DialogTitle>
+            <DialogTitle>Satış Gider Kuralı Ekle</DialogTitle>
           </DialogHeader>
           <RuleForm
             onSubmit={(d) => createMutation.mutate(d)}
@@ -367,7 +373,7 @@ export default function ExpenseRulesPage() {
               defaultValues={{
                 ...editing,
                 platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada") ?? "all",
-                type: editing.type as "fixed" | "percentage" | "per_order",
+                type: editing.type === "fixed" ? "per_order" : editing.type as "percentage" | "per_order",
                 value: editing.type === "percentage" ? editing.value * 100 : editing.value,
                 categoryName: editing.categoryName ?? undefined,
               }}

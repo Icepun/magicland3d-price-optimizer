@@ -71,12 +71,29 @@ interface SummaryBucket {
   orderCount: number;
   incompleteOrders?: number;
 }
+interface SummaryQuality {
+  unsupportedCurrencyOrders: number;
+  unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
+}
 interface OrdersResponse {
   orders: UnifiedOrder[];
-  summary: { days: number; shopify: SummaryBucket; trendyol: SummaryBucket; hepsiburada: SummaryBucket; total: SummaryBucket };
+  summary: {
+    days: number;
+    shopify: SummaryBucket;
+    trendyol: SummaryBucket;
+    hepsiburada: SummaryBucket;
+    total: SummaryBucket;
+    quality?: SummaryQuality;
+  };
   shopify: PlatformStatus;
   trendyol: PlatformStatus;
   hepsiburada: PlatformStatus;
+  financeHistory?: {
+    ok: boolean;
+    syncedOrders: number;
+    syncDays: number;
+    error?: string;
+  };
 }
 
 const PLATFORM_INFO = {
@@ -234,7 +251,7 @@ export default function OrdersPage() {
           <CardContent className="py-3 grid grid-cols-2 sm:grid-cols-5 gap-3">
             <SummaryStat label={`${summary.total.orderCount} sipariş`} value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />} sub="Toplam ciro" strong />
             <SummaryStat
-              label="Net kâr"
+              label="Sipariş kârı"
               value={<AnimatedNumber value={summary.total.profit} format={fmtMoney} />}
               sub={summary.total.incompleteOrders ? `${summary.total.incompleteOrders} siparişte maliyet eksik` : "tahmini"}
               subColor={summary.total.incompleteOrders ? "oklch(0.75 0.15 75)" : undefined}
@@ -243,6 +260,29 @@ export default function OrdersPage() {
             <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
             <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
             <SummaryStat label="Hepsiburada" value={<AnimatedNumber value={summary.hepsiburada.revenue} format={fmtMoney} />} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
+          </CardContent>
+        </Card>
+      )}
+
+      {(summary?.quality?.unsupportedCurrencyOrders ?? 0) > 0 && (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardContent className="py-3 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                TRY dışındaki siparişler TL toplamına eklenmedi
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {summary?.quality?.unsupportedCurrencyOrders} sipariş döviz kuru dönüşümü
+                olmadığı için üstteki ciro ve kâr toplamlarının dışında tutuldu
+                {summary?.quality?.unsupportedCurrencies?.length
+                  ? `: ${summary.quality.unsupportedCurrencies
+                      .map(({ currency, orderCount }) => `${currency} (${orderCount})`)
+                      .join(", ")}.`
+                  : "."}{" "}
+                Sipariş tutarları aşağıda kendi para birimiyle gösteriliyor.
+              </p>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -272,6 +312,22 @@ export default function OrdersPage() {
       )}
       {data?.hepsiburada && !data.hepsiburada.ok && !data.hepsiburada.notConfigured && (
         <PlatformError platform="Hepsiburada" message={data.hepsiburada.error} />
+      )}
+      {data?.financeHistory && !data.financeHistory.ok && (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardContent className="py-3 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                Finans geçmişi kaydedilemedi
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Siparişler listelendi ama aylık grafik bu yenilemeyi kaydetmedi. Yeniden
+                dene; sürerse hata: {data.financeHistory.error ?? "bilinmiyor"}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Kontroller */}
@@ -434,6 +490,8 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
   const st = STATUS_STYLE[order.statusKind];
   const firstItem = order.items[0];
   const extraItems = order.items.length - 1;
+  const orderCurrency = order.currency.trim().toUpperCase() || "TRY";
+  const isTryOrder = orderCurrency === "TRY";
   const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-600 dark:text-green-500" : "text-destructive";
 
   return (
@@ -489,11 +547,18 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
           {/* Tutar + kâr + durum */}
           <div className="flex flex-col items-end gap-1 shrink-0">
             <span className="font-bold text-sm tabular-nums">{fmtMoney2(order.total, order.currency)}</span>
-            {order.profit != null && (
+            {!isTryOrder ? (
+              <span
+                className="text-[10px] font-medium text-amber-600 dark:text-amber-400"
+                title={`${orderCurrency} için döviz kuru dönüşümü tanımlı değil; TL net kâr hesaplanmadı.`}
+              >
+                Kâr: kur dönüşümü yok
+              </span>
+            ) : order.profit != null ? (
               <span className={cn("text-[11px] font-semibold tabular-nums flex items-center gap-0.5", profitColor)}>
                 <TrendingUp className="h-3 w-3" />
                 {order.profit >= 0 ? "+" : ""}
-                {fmtMoney2(order.profit)}
+                {fmtMoney2(order.profit, orderCurrency)}
                 {order.profitPartial && (
                   <span className="text-amber-500 font-bold" title={`${order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil`}>!</span>
                 )}
@@ -510,7 +575,7 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                   </span>
                 )}
               </span>
-            )}
+            ) : null}
             <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border", st.cls)}>
               <span className={cn("h-1.5 w-1.5 rounded-full", st.dot)} />
               {order.statusLabel}
@@ -579,9 +644,13 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Net kâr</span>
-                  {order.profit != null ? (
+                  {!isTryOrder ? (
+                    <span className="text-amber-600 dark:text-amber-400">
+                      — {orderCurrency} için kur dönüşümü yok
+                    </span>
+                  ) : order.profit != null ? (
                     <span className={cn("tabular-nums font-semibold", profitColor)}>
-                      {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit)}{order.profitPartial && <span className="text-amber-500">!</span>}
+                      {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit, orderCurrency)}{order.profitPartial && <span className="text-amber-500">!</span>}
                     </span>
                   ) : (
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
@@ -592,7 +661,7 @@ const OrderRow = memo(function OrderRow({ order }: { order: UnifiedOrder }) {
                     <span className="text-muted-foreground">Kargo geliri / sipariş indirimi</span>
                     <span className="tabular-nums text-muted-foreground">
                       {(order.orderRevenueAdjustment ?? 0) >= 0 ? "+" : ""}
-                      {fmtMoney2(order.orderRevenueAdjustment ?? 0)}
+                      {fmtMoney2(order.orderRevenueAdjustment ?? 0, orderCurrency)}
                     </span>
                   </div>
                 )}

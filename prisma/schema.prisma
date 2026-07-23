@@ -288,6 +288,43 @@ model ExpenseRule {
   isActive     Boolean @default(true)
 }
 
+/** Gerçekten ödenmiş genel gider. Sipariş fiyat hesabına girmez; ödeme ayının rapor net kârından düşer. */
+model ActualExpense {
+  id          String   @id @default(cuid())
+  name        String
+  category    String?
+  amountKurus Int
+  paidAt      DateTime
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([paidAt])
+}
+
+/**
+ * Platformlardan canlı çekilen siparişlerin kalıcı finans özeti.
+ * İlk kurulum son 60 günü doldurur; sonraki senkronlarla aylık geçmiş birikir.
+ */
+model OrderFinanceSnapshot {
+  id                 String   @id @default(cuid())
+  platform           String
+  externalOrderId    String
+  orderNumber        String
+  orderedAt          DateTime
+  revenueKurus       Int
+  profitKurus        Int?
+  profitPartial      Boolean  @default(false)
+  statusKind         String
+  currency           String   @default("TRY")
+  syncedAt           DateTime @updatedAt
+  calculationVersion Int      @default(1)
+
+  @@unique([platform, externalOrderId])
+  @@index([orderedAt])
+  @@index([statusKind, orderedAt])
+}
+
 model PriceHistory {
   id           String   @id @default(cuid())
   productId    String

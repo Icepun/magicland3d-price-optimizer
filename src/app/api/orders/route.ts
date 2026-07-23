@@ -23,8 +23,13 @@ import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
+import { persistOrderFinanceSnapshots } from "@/lib/order-finance-snapshots";
 
 const WINDOW_DAYS = 30;
+// Aylık geçmişte geç gelen iptal/iade durumlarını yakalamak için görünür listenin
+// arkasında daha geniş bir pencereyi yeniden hesaplarız. Shopify'ın standart
+// read_orders erişimi son 60 günle sınırlı olduğundan güvenli ortak sınır 60 gündür.
+const HISTORY_SYNC_DAYS = 60;
 
 export type OrderStatusKind =
   | "pending"
@@ -83,6 +88,16 @@ interface SummaryBucket {
   orderCount: number;
   /** Kârı eksik hesaplanan sipariş sayısı (maliyet girilmemiş ürün içeren). */
   incompleteOrders: number;
+}
+
+interface SummaryQuality {
+  /** Döviz kuru dönüşümü olmadığı için TRY ciro/kâr toplamlarına katılmayan siparişler. */
+  unsupportedCurrencyOrders: number;
+  unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
+}
+
+function normalizedCurrency(currency: string | null | undefined): string {
+  return currency?.trim().toUpperCase() || "TRY";
 }
 
 const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
@@ -183,11 +198,11 @@ function shopifyStatus(
   cancelled: boolean
 ): { kind: OrderStatusKind; label: string } {
   if (cancelled) return { kind: "cancelled", label: "İptal" };
-  // İADE önceliği FULFILLMENT'tan ÖNCE (karar, mobil ile hizalı): gönderilmiş ama iade edilmiş
-  // sipariş ciro/kâra GİRMEZ — para geri döndü. (Eski sıra FULFILLED+REFUNDED'ı "Gönderildi"
-  // sayıp ciroya katıyordu; mobil hariç tutuyordu → iki cihaz farklı toplam gösteriyordu.)
+  // Tam iade fulfillment'tan önce değerlendirilir ve ciro/kâra girmez. Kısmi iade ise
+  // currentTotalPriceSet ile kalan geliri kullanır; satır/restock ayrıntısı eksik olduğundan
+  // aşağıda kârı "kısmi" işaretlenir.
   const fin = (financial || "").toUpperCase();
-  if (fin === "REFUNDED" || fin === "PARTIALLY_REFUNDED") return { kind: "cancelled", label: "İade" };
+  if (fin === "REFUNDED") return { kind: "cancelled", label: "İade" };
   const f = (fulfillment || "").toUpperCase();
   if (f === "FULFILLED") return { kind: "shipped", label: "Gönderildi" };
   if (f === "PARTIALLY_FULFILLED") return { kind: "processing", label: "Kısmi Gönderim" };
@@ -251,6 +266,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   // BİREBİR aynı formül. İki uygulama da aynı UTC günü boyunca aynı değeri üretir → sipariş
   // sayısı/ciro/kâr ne zaman yenilenirse yenilensin eşleşir (kayan saniye sınırı yok).
   const cutoff = (Math.floor(Date.now() / 86_400_000) - WINDOW_DAYS) * 86_400_000;
+  const historyCutoff =
+    (Math.floor(Date.now() / 86_400_000) - HISTORY_SYNC_DAYS) * 86_400_000;
   const orders: UnifiedOrder[] = [];
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
@@ -271,6 +288,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     lines: RawLine[];
     trackingNumber: string | null;
     cargoProvider: string | null;
+    /** Kısmi iade veya API satır sınırı nedeniyle hesaplanan kâr kesin değildir. */
+    forceProfitPartial?: boolean;
   };
   const raws: Raw[] = [];
 
@@ -280,9 +299,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
    (async () => {
    try {
     const client = new ShopifyClient(await getShopifyCredentials());
-    // +1 gün: gün-başı cutoff'tan biraz daha geniş çek (superset); aşağıdaki `recent` filtresi
-    // (cutoff = gün başı) tam kırpar → mobil ile aynı pencere. Shopify created_at = orderDate.
-    const list = await client.listOrders({ sinceDays: WINDOW_DAYS + 1, limit: 100 });
+    // +1 gün: gün-başı historyCutoff'tan biraz daha geniş çek (superset); aşağıdaki
+    // historyRows filtresi tam kırpar. Shopify created_at = orderDate.
+    const list = await client.listOrders({ sinceDays: HISTORY_SYNC_DAYS + 1, limit: 100 });
     for (const o of list) {
       const st = shopifyStatus(o.fulfillmentStatus, o.financialStatus, Boolean(o.cancelledAt));
       raws.push({
@@ -311,6 +330,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         })),
         trackingNumber: o.trackingNumber,
         cargoProvider: o.cargoProvider,
+        forceProfitPartial:
+          o.linesTruncated ||
+          (o.financialStatus || "").toUpperCase() === "PARTIALLY_REFUNDED",
       });
     }
     shopify = { ok: true, count: list.length };
@@ -333,8 +355,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     const CHUNK = 14 * 86_400_000;
     const seenTy = new Set<string>();
     let tyCount = 0;
-    for (let chunkEnd = Date.now(); chunkEnd > cutoff; chunkEnd -= CHUNK) {
-      const chunkStart = Math.max(cutoff, chunkEnd - CHUNK);
+    for (let chunkEnd = Date.now(); chunkEnd > historyCutoff; chunkEnd -= CHUNK) {
+      const chunkStart = Math.max(historyCutoff, chunkEnd - CHUNK);
       for (let pageNo = 0; pageNo < 50; pageNo++) {
         const page = await client.listOrders({ page: pageNo, size: 100, startDate: chunkStart, endDate: chunkEnd });
         const content = page.content ?? [];
@@ -438,7 +460,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     }
 
     // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz detay çağrısı olmasın).
-    for (const [on, e] of [...agg]) if (e.date && new Date(e.date).getTime() < cutoff) agg.delete(on);
+    for (const [on, e] of [...agg]) {
+      if (e.date && new Date(e.date).getTime() < historyCutoff) agg.delete(on);
+    }
 
     // c) Tutarı olmayan (özetten gelen) siparişlerin kalem/tutar detayını PARALEL çek (concurrency 8, cap 250).
     const needDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on).slice(0, 250);
@@ -483,13 +507,16 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
    })(),
   ]);
 
-  // Son 30 güne filtrele (tarihsiz olanları da tut)
-  const recent = raws.filter((r) => !r.date || new Date(r.date).getTime() >= cutoff);
+  // Finans geçmişi için son 60 günü yeniden değerlendir (tarihsiz olanları da tut).
+  // Kullanıcıya dönen liste/özet aşağıda yine son 30 güne kırpılır.
+  const historyRows = raws.filter(
+    (r) => !r.date || new Date(r.date).getTime() >= historyCutoff
+  );
 
   // Sipariş satırlarını ÜRÜNLERİMİZLE eşleştir → görsel + maliyet + kâr ──────────
   const allKeys = new Set<string>();
   const shopifyNames = new Set<string>(); // Shopify barkod tutmaz → ada göre eşleştirme
-  for (const r of recent) {
+  for (const r of historyRows) {
     for (const l of r.lines) {
       for (const k of l.matchKeys) allKeys.add(k);
       if (r.platform === "shopify" && l.name) shopifyNames.add(l.name);
@@ -602,7 +629,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const notifs: { id: string; type: string; severity: string; title: string; body: string; href: string }[] = [];
 
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
-  for (const r of recent) {
+  for (const r of historyRows) {
     const actionable =
       (r.statusKind === "pending" || r.statusKind === "processing") &&
       (!r.date || new Date(r.date).getTime() >= notifCutoff);
@@ -703,7 +730,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       items,
       image: thumb,
       profit: pr.profit,
-      profitPartial: pr.partial,
+      profitPartial: pr.partial || Boolean(r.forceProfitPartial),
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
@@ -748,13 +775,54 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     return tb - ta;
   });
 
+  // Canlı 30 günlük pencereyi kalıcı finans geçmişine işle. Bu kayıtlar sonraki aylarda
+  // platform API'sinin penceresinden çıksa da raporların geçmişini korur. Finans geçmişi
+  // yazılamazsa sipariş ekranını bozmayız; sonraki senkron yeniden dener.
+  let financeHistory: {
+    ok: boolean;
+    syncedOrders: number;
+    syncDays: number;
+    error?: string;
+  };
+  try {
+    await persistOrderFinanceSnapshots(orders);
+    financeHistory = {
+      ok: true,
+      syncedOrders: orders.filter((order) => Boolean(order.date)).length,
+      syncDays: HISTORY_SYNC_DAYS,
+    };
+  } catch (error) {
+    console.error("[finance-snapshot] Sipariş finans geçmişi yazılamadı:", error);
+    financeHistory = {
+      ok: false,
+      syncedOrders: 0,
+      syncDays: HISTORY_SYNC_DAYS,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Sipariş finans geçmişi kaydedilemedi.",
+    };
+  }
+
+  const visibleOrders = orders.filter(
+    (order) => !order.date || new Date(order.date).getTime() >= cutoff
+  );
+
   // Dashboard özeti (iptal/iade hariç) ──────────────────────────────────────
   const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 });
   const sShopify = empty();
   const sTrendyol = empty();
   const sHepsiburada = empty();
-  for (const o of orders) {
+  const unsupportedCurrencies = new Map<string, number>();
+  for (const o of visibleOrders) {
     if (o.statusKind === "cancelled") continue;
+    const currency = normalizedCurrency(o.currency);
+    // Farklı para birimlerini kur dönüşümü olmadan TL toplamına eklemek yanlış sonuç üretir.
+    // Sipariş listede kendi para birimiyle kalır; yalnızca 30 günlük TL özeti dışında tutulur.
+    if (currency !== "TRY") {
+      unsupportedCurrencies.set(currency, (unsupportedCurrencies.get(currency) ?? 0) + 1);
+      continue;
+    }
     const bucket =
       o.platform === "shopify" ? sShopify : o.platform === "trendyol" ? sTrendyol : sHepsiburada;
     bucket.revenue += o.total;
@@ -769,12 +837,29 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     orderCount: sShopify.orderCount + sTrendyol.orderCount + sHepsiburada.orderCount,
     incompleteOrders: sShopify.incompleteOrders + sTrendyol.incompleteOrders + sHepsiburada.incompleteOrders,
   };
+  const quality: SummaryQuality = {
+    unsupportedCurrencyOrders: [...unsupportedCurrencies.values()].reduce(
+      (sum, count) => sum + count,
+      0
+    ),
+    unsupportedCurrencies: [...unsupportedCurrencies.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, orderCount]) => ({ currency, orderCount })),
+  };
 
   return {
-    orders,
-    summary: { days: WINDOW_DAYS, shopify: sShopify, trendyol: sTrendyol, hepsiburada: sHepsiburada, total },
+    orders: visibleOrders,
+    summary: {
+      days: WINDOW_DAYS,
+      shopify: sShopify,
+      trendyol: sTrendyol,
+      hepsiburada: sHepsiburada,
+      total,
+      quality,
+    },
     shopify,
     trendyol,
     hepsiburada,
+    financeHistory,
   };
 }

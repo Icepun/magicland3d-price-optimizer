@@ -1,6 +1,5 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
-import { orderWindowCutoff } from "@/lib/api/window";
 
 const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
 const VER = process.env.EXPO_PUBLIC_SHOPIFY_API_VERSION || "2024-10";
@@ -27,13 +26,16 @@ async function getAdminToken(): Promise<string> {
   return json.access_token;
 }
 
-const ORDERS_QUERY = `query($first:Int!,$query:String){
-  orders(first:$first, sortKey:CREATED_AT, reverse:true, query:$query){
+const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
+  orders(first:$first, after:$after, sortKey:CREATED_AT, reverse:true, query:$query){
+    pageInfo{ hasNextPage endCursor }
     edges{ node{
       id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt
-      totalPriceSet{ shopMoney{ amount } }
+      currentTotalPriceSet{ shopMoney{ amount currencyCode } }
       customer{ firstName lastName }
-      lineItems(first:20){ edges{ node{
+      lineItems(first:20){
+        pageInfo{ hasNextPage }
+        edges{ node{
         title quantity sku
         variant{ id barcode sku }
         discountedUnitPriceSet{ shopMoney{ amount } }
@@ -50,9 +52,12 @@ interface ShEdge {
     displayFulfillmentStatus: string;
     displayFinancialStatus?: string;
     cancelledAt?: string | null;
-    totalPriceSet?: { shopMoney?: { amount?: string } };
+    currentTotalPriceSet?: {
+      shopMoney?: { amount?: string; currencyCode?: string };
+    };
     customer?: { firstName?: string; lastName?: string };
     lineItems: {
+      pageInfo?: { hasNextPage?: boolean };
       edges: {
         node: {
           title: string;
@@ -73,26 +78,60 @@ interface ShEdge {
 function shopifyStatusKey(node: ShEdge["node"]): string {
   if (node.cancelledAt) return "CANCELLED";
   const fin = node.displayFinancialStatus;
-  if (fin === "REFUNDED" || fin === "PARTIALLY_REFUNDED") return "REFUNDED";
+  if (fin === "REFUNDED") return "REFUNDED";
   return node.displayFulfillmentStatus;
 }
 
-export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
+export async function getShopifyOrders(
+  limit = 100,
+  historyDays = 30
+): Promise<UnifiedOrder[]> {
   if (!SHOP || !CID || !CSECRET) return [];
   const token = await getAdminToken();
-  // Masaüstü ShopifyClient.listOrders ile birebir: created_at:>=<ISO> filtresi (sinceDays=30).
-  const sinceQuery = `created_at:>=${new Date(orderWindowCutoff()).toISOString()}`;
-  const res = await fetchT(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
-    method: "POST",
-    headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-    body: JSON.stringify({ query: ORDERS_QUERY, variables: { first: limit, query: sinceQuery } }),
-  });
-  const json = (await res.json()) as {
-    data?: { orders?: { edges: ShEdge[] } };
-    errors?: { message: string }[];
-  };
-  if (json.errors?.length) throw new Error(json.errors[0].message);
-  return (json.data?.orders?.edges ?? []).map(({ node }) => ({
+  // Rapor görünümü 30 gün, kalıcı finans geçmişi ilk dolumda 60 gün ister.
+  // UTC gün başına sabitleme masaüstü orders route ile birebirdir.
+  const safeDays = Math.max(1, Math.min(60, Math.trunc(historyDays)));
+  const cutoff = (Math.floor(Date.now() / 86_400_000) - safeDays) * 86_400_000;
+  const sinceQuery = `created_at:>=${new Date(cutoff).toISOString()}`;
+  const allEdges: ShEdge[] = [];
+  let after: string | null = null;
+  let hasNextPage = true;
+  // Shopify Admin GraphQL en fazla 250 kayıt/sayfa kabul eder. Güvenlik sınırı,
+  // bozuk bir cursor yanıtında mobilin sonsuz döngüye girmesini önler.
+  const pageSize = Math.max(1, Math.min(250, limit));
+  for (let page = 0; page < 20 && hasNextPage; page++) {
+    const res = await fetchT(`https://${SHOP}/admin/api/${VER}/graphql.json`, {
+      method: "POST",
+      headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: ORDERS_QUERY,
+        variables: { first: pageSize, after, query: sinceQuery },
+      }),
+    });
+    const json = (await res.json()) as {
+      data?: {
+        orders?: {
+          edges: ShEdge[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        };
+      };
+      errors?: { message: string }[];
+    };
+    if (json.errors?.length) throw new Error(json.errors[0].message);
+    const connection = json.data?.orders;
+    allEdges.push(...(connection?.edges ?? []));
+    hasNextPage = !!connection?.pageInfo?.hasNextPage;
+    const nextCursor = connection?.pageInfo?.endCursor ?? null;
+    if (hasNextPage && (!nextCursor || nextCursor === after)) {
+      throw new Error("Shopify sipariş sayfalaması ilerlemedi.");
+    }
+    after = nextCursor;
+  }
+  if (hasNextPage) {
+    throw new Error("Shopify sipariş sayfalaması güvenlik sınırına ulaştı.");
+  }
+
+  return allEdges.map(({ node }) => ({
     id: `sh-${node.id.split("/").pop() ?? node.name}`,
     platform: "shopify" as const,
     orderNumber: node.name,
@@ -100,7 +139,11 @@ export async function getShopifyOrders(limit = 100): Promise<UnifiedOrder[]> {
     status: shopifyStatusKey(node),
     customer:
       [node.customer?.firstName, node.customer?.lastName].filter(Boolean).join(" ") || null,
-    total: Number(node.totalPriceSet?.shopMoney?.amount ?? 0),
+    total: Number(node.currentTotalPriceSet?.shopMoney?.amount ?? 0),
+    currency: node.currentTotalPriceSet?.shopMoney?.currencyCode ?? "TRY",
+    financialPartial:
+      node.displayFinancialStatus === "PARTIALLY_REFUNDED" ||
+      !!node.lineItems.pageInfo?.hasNextPage,
     items: node.lineItems.edges.map((e) => {
       const variantId = e.node.variant?.id?.split("/").pop() ?? null;
       const keys = [

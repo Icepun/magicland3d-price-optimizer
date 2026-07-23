@@ -36,7 +36,7 @@ const navItems = [
   { href: "/planner",          label: "Üretim",             icon: Factory },
   { href: "/commission-rules", label: "Komisyonlar",        icon: Percent },
   { href: "/cargo-rules",      label: "Kargo",              icon: Truck },
-  { href: "/expense-rules",    label: "Ek Giderler",        icon: Receipt },
+  { href: "/expenses",         label: "Gider Ödemeleri",    icon: Receipt },
   { href: "/api-settings",     label: "Entegrasyonlar",     icon: Settings2 },
   { href: "/settings",         label: "Ayarlar",            icon: Settings },
 ];

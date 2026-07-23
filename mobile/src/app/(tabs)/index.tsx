@@ -143,7 +143,7 @@ export default function DashboardScreen() {
                 <Text style={styles.revCiro}>{rev ? formatCurrency(rev.total) : "…"}</Text>
               </View>
               <View style={{ alignItems: "flex-end" }}>
-                <Text style={styles.revCiroLabel}>Kâr</Text>
+                <Text style={styles.revCiroLabel}>Sipariş kârı</Text>
                 <Text style={[styles.revProfit, { color: (rev?.profit ?? 0) < 0 ? ML.red : ML.green }]}>
                   {rev ? formatCurrency(rev.profit) : "…"}
                 </Text>

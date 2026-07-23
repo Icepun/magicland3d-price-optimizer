@@ -347,9 +347,9 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
               <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{s.total.orderCount} sipariş</p>
             </div>
 
-            {/* Net kâr */}
+            {/* Sipariş kârı — genel gider ödemeleri aylık raporda ayrıca düşülür. */}
             <div className="sm:border-l sm:border-border/50 sm:pl-4">
-              <p className="text-[11px] text-muted-foreground">Net kâr</p>
+              <p className="text-[11px] text-muted-foreground">Sipariş kârı</p>
               <p
                 className="text-2xl font-bold tabular-nums leading-tight"
                 style={{ color: profitPos ? ACCENTS.green : ACCENTS.red }}

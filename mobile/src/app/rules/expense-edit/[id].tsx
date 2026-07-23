@@ -33,9 +33,8 @@ const PLATFORMS = [
   { key: "hepsiburada", label: "Hepsiburada" },
 ];
 const TYPES: { key: ExpenseType; label: string }[] = [
-  { key: "fixed", label: "Sabit ₺" },
   { key: "percentage", label: "Yüzde %" },
-  { key: "per_order", label: "Sipariş ₺" },
+  { key: "per_order", label: "Sipariş başına ₺" },
 ];
 
 export default function ExpenseEditScreen() {
@@ -86,7 +85,9 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
 
   const [name, setName] = useState(existing?.name ?? "");
   const [platform, setPlatform] = useState<string>(existing?.platform ?? "all");
-  const [type, setType] = useState<ExpenseType>(existing?.type ?? "fixed");
+  const [type, setType] = useState<ExpenseType>(
+    existing?.type === "fixed" ? "per_order" : (existing?.type ?? "per_order")
+  );
   const [value, setValue] = useState(
     existing
       ? existing.type === "percentage"

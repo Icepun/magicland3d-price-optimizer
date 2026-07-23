@@ -1,6 +1,5 @@
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
-import { orderWindowCutoff } from "@/lib/api/window";
 
 /**
  * Hepsiburada siparişleri (mobil) — masaüstü src/app/api/orders/route.ts HB bloğunun
@@ -180,11 +179,12 @@ type HbAgg = { status: string; date: number | null; customer: string | null; lin
 const detailCache = new Map<string, { lines: OrderItem[]; customer: string | null; date: number | null }>();
 const DETAIL_CACHE_MAX = 600;
 
-export async function getHepsiburadaOrders(): Promise<UnifiedOrder[]> {
+export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrder[]> {
   // Kimlik bilgisi eksikse sessizce boş (trendyol.ts/shopify.ts gibi).
   if (!MERCHANT_ID || !SECRET_KEY || !DEV_USERNAME) return [];
 
-  const cutoff = orderWindowCutoff();
+  const safeDays = Math.max(1, Math.min(60, Math.trunc(historyDays)));
+  const cutoff = (Math.floor(Date.now() / 86_400_000) - safeDays) * 86_400_000;
   const agg = new Map<string, HbAgg>();
 
   // a) Open siparişler — /orders FLAT kalem listesi (orderNumber tekrar eder) → grupla.

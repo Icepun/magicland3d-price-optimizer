@@ -1,9 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
+import {
+  getFinanceHistoryOrders,
+  isCancelledOrder,
+  ORDERS_STALE_MS,
+} from "@/lib/api/orders";
+import { orderWindowCutoff } from "@/lib/api/window";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
@@ -11,11 +16,17 @@ import { computeProductProfitMemo } from "@/lib/profit";
 import { formatCurrency } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORMS, PLATFORM_LABEL } from "@/lib/platforms";
+import {
+  getMonthlyFinanceSummary,
+  syncOrderFinanceSnapshots,
+} from "@/lib/db/finance";
 
 export default function ReportsScreen() {
+  const qc = useQueryClient();
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const { data: orders, dataUpdatedAt: ordersUpdatedAt, isLoading } = useQuery({
-    queryKey: ["orders"],
-    queryFn: getAllOrders,
+    queryKey: ["orders-finance-history", 60],
+    queryFn: getFinanceHistoryOrders,
     staleTime: ORDERS_STALE_MS,
   });
   const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
@@ -24,6 +35,11 @@ export default function ReportsScreen() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   // Sipariş eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
   const { data: matchProducts } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
+  const monthlyQuery = useQuery({
+    queryKey: ["monthly-finance", 12],
+    queryFn: () => getMonthlyFinanceSummary(12),
+    staleTime: 30_000,
+  });
 
   const rev = useMemo(() => {
     const byPlat: Record<string, { rev: number; profit: number }> = Object.fromEntries(
@@ -32,13 +48,49 @@ export default function ReportsScreen() {
     let total = 0;
     let profit = 0;
     let count = 0;
-    if (!orders || !matchProducts || !rules || !settings) return { total, profit, count, byPlat };
+    let unknownProfitOrders = 0;
+    let partialProfitOrders = 0;
+    let unsupportedCurrencyOrders = 0;
+    const snapshots: Parameters<typeof syncOrderFinanceSnapshots>[0] = [];
+    if (!orders || !matchProducts || !rules || !settings) {
+      return {
+        total,
+        profit,
+        count,
+        byPlat,
+        unknownProfitOrders,
+        partialProfitOrders,
+        unsupportedCurrencyOrders,
+        snapshots,
+      };
+    }
     const pm = getProductMap(matchProducts);
+    const visibleCutoff = orderWindowCutoff();
     for (const o of orders.orders) {
+      const op = computeOrderProfit(o, pm, rules, settings);
+      if (o.date != null) {
+        snapshots.push({
+          platform: o.platform,
+          externalOrderId: o.id,
+          orderNumber: o.orderNumber,
+          orderedAt: o.date,
+          revenue: op.revenue,
+          profit: op.profit,
+          profitPartial: op.partial,
+          statusKind: isCancelledOrder(o) ? "cancelled" : "active",
+          currency: o.currency ?? "TRY",
+        });
+      }
+      // Finans geçmişi 60 gün çekilir; kullanıcıya gösterilen üst kartlar yine son 30 gündür.
+      if (o.date != null && o.date < visibleCutoff) continue;
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez
       // (orders/route.ts: statusKind==="cancelled" → continue; Panel index.tsx de aynısını yapıyor).
       if (isCancelledOrder(o)) continue;
-      const op = computeOrderProfit(o, pm, rules, settings);
+      // Döviz çevrimi yapılmadan farklı para birimlerini TL toplamına eklemek yanlış sonuç verir.
+      if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") {
+        unsupportedCurrencyOrders++;
+        continue;
+      }
       total += op.revenue;
       count++;
       const b = byPlat[o.platform];
@@ -46,15 +98,49 @@ export default function ReportsScreen() {
       if (op.profit != null) {
         profit += op.profit;
         if (b) b.profit += op.profit;
-      }
+      } else unknownProfitOrders++;
+      if (op.partial) partialProfitOrders++;
     }
-    return { total, profit, count, byPlat };
+    return {
+      total,
+      profit,
+      count,
+      byPlat,
+      unknownProfitOrders,
+      partialProfitOrders,
+      unsupportedCurrencyOrders,
+      snapshots,
+    };
   }, [orders, matchProducts, rules, settings]);
+
+  useEffect(() => {
+    if (rev.snapshots.length === 0) return;
+    let active = true;
+    void syncOrderFinanceSnapshots(rev.snapshots)
+      .then(() => {
+        if (active) {
+          setSnapshotError(null);
+          void qc.invalidateQueries({ queryKey: ["monthly-finance"] });
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setSnapshotError(
+            error instanceof Error ? error.message : "Finans geçmişi güncellenemedi."
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [qc, rev.snapshots]);
 
   const topSellers = useMemo(() => {
     if (!orders) return [];
     const m = new Map<string, number>();
+    const cutoff = orderWindowCutoff();
     for (const o of orders.orders) {
+      if (o.date != null && o.date < cutoff) continue;
       if (isCancelledOrder(o)) continue;
       for (const it of o.items) m.set(it.name, (m.get(it.name) ?? 0) + it.quantity);
     }
@@ -74,7 +160,11 @@ export default function ReportsScreen() {
     if (orders) {
       for (const o of orders.orders) {
         // Aynı ekranın Ciro kartıyla tutarlı: iptal/iade trend'e de girmez; tarihsizler atlanır.
-        if (o.date == null || isCancelledOrder(o)) continue;
+        if (
+          o.date == null ||
+          isCancelledOrder(o) ||
+          (o.currency ?? "TRY").trim().toUpperCase() !== "TRY"
+        ) continue;
         if (o.date < start || o.date > now) continue;
         const idx = Math.min(BUCKETS - 1, Math.floor((o.date - start) / SPAN));
         sums[idx] += o.total;
@@ -123,6 +213,24 @@ export default function ReportsScreen() {
   const maxQty = topSellers[0]?.qty ?? 1;
   const maxTrend = Math.max(...trend.map((t) => t.rev), 1);
   const trendHasData = trend.some((t) => t.rev > 0);
+  const monthly = monthlyQuery.data?.periods ?? [];
+  const currentMonth = monthly.at(-1);
+  const maxMonthlyRevenue = Math.max(...monthly.map((period) => period.revenueKurus), 1);
+  const maxMonthlyProfit = Math.max(
+    ...monthly.map((period) => Math.abs(period.netProfitKurus)),
+    1
+  );
+  const monthlyHasData = monthly.some(
+    (period) => period.revenueKurus !== 0 || period.expensesKurus !== 0
+  );
+  const monthlyIncomplete = monthly.reduce(
+    (sum, period) => sum + period.incompleteOrders,
+    0
+  );
+  const unsupportedCurrencyOrders = monthly.reduce(
+    (sum, period) => sum + period.unsupportedCurrencyOrders,
+    0
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -134,9 +242,82 @@ export default function ReportsScreen() {
         {/* Stat kartları */}
         <View style={styles.statGrid}>
           <Stat label="Ciro" value={formatCurrency(rev.total)} tone="accent" />
-          <Stat label="Net kâr" value={formatCurrency(rev.profit)} tone={rev.profit < 0 ? "red" : "green"} />
+          <Stat label="Sipariş kârı" value={formatCurrency(rev.profit)} tone={rev.profit < 0 ? "red" : "green"} />
           <Stat label="Sipariş" value={String(rev.count)} tone="text" />
           <Stat label="Ort. sepet" value={formatCurrency(avgBasket)} tone="text" />
+        </View>
+        {rev.unsupportedCurrencyOrders > 0 ? (
+          <Text style={styles.warningText}>
+            {rev.unsupportedCurrencyOrders} sipariş TRY olmadığı için son 30 günlük
+            ciro, sipariş kârı ve platform toplamlarına katılmadı.
+          </Text>
+        ) : null}
+
+        <Text style={styles.sectionLabel}>AYLIK CİRO VE NET KÂR</Text>
+        <View style={styles.card}>
+          {monthlyQuery.isLoading ? (
+            <ActivityIndicator color={ML.accent} />
+          ) : monthlyQuery.error ? (
+            <Text style={styles.warningText}>
+              {monthlyQuery.error instanceof Error
+                ? monthlyQuery.error.message
+                : "Aylık finans özeti yüklenemedi."}
+            </Text>
+          ) : !monthlyHasData ? (
+            <Text style={styles.chartNote}>
+              Siparişler yüklendikçe aylık finans geçmişi burada birikecek.
+            </Text>
+          ) : (
+            monthly.map((period) => (
+              <MonthlyRow
+                key={period.month}
+                label={period.label}
+                revenue={period.revenueKurus / 100}
+                netProfit={period.netProfitKurus / 100}
+                revenuePct={(period.revenueKurus / maxMonthlyRevenue) * 100}
+                profitPct={(Math.abs(period.netProfitKurus) / maxMonthlyProfit) * 50}
+              />
+            ))
+          )}
+          {currentMonth && (currentMonth.revenueKurus !== 0 || currentMonth.expensesKurus !== 0) ? (
+            <View style={styles.monthSummary}>
+              <Text style={styles.monthSummaryText}>
+                Bu ay gider {formatCurrency(currentMonth.expensesKurus / 100)}
+              </Text>
+              <Text
+                style={[
+                  styles.monthSummaryProfit,
+                  { color: currentMonth.netProfitKurus < 0 ? ML.red : ML.green },
+                ]}
+              >
+                Net {formatCurrency(currentMonth.netProfitKurus / 100)}
+              </Text>
+            </View>
+          ) : null}
+          {monthlyQuery.data?.historyStartedAt ? (
+            <Text style={styles.chartNote}>
+              Geçmiş,{" "}
+              {new Date(monthlyQuery.data.historyStartedAt).toLocaleDateString("tr-TR", {
+                month: "long",
+                year: "numeric",
+                timeZone: "Europe/Istanbul",
+              })}{" "}
+              siparişlerinden itibaren birikiyor. Sipariş kârı ilk tam hesaplandığında
+              saklanır; maliyeti eksik kayıt tamamlanınca güncellenir.
+            </Text>
+          ) : null}
+          {monthlyIncomplete > 0 ? (
+            <Text style={styles.warningText}>
+              {monthlyIncomplete} siparişin maliyeti eksik veya kârı kısmi/yaklaşık.
+            </Text>
+          ) : null}
+          {unsupportedCurrencyOrders > 0 ? (
+            <Text style={styles.warningText}>
+              {unsupportedCurrencyOrders} sipariş TRY olmadığı için aylık toplama
+              katılmadı.
+            </Text>
+          ) : null}
+          {snapshotError ? <Text style={styles.warningText}>{snapshotError}</Text> : null}
         </View>
 
         {/* Platform karşılaştırma */}
@@ -247,6 +428,72 @@ function PlatformBar({ name, color, rev, profit, pct }: { name: string; color: s
   );
 }
 
+function MonthlyRow({
+  label,
+  revenue,
+  netProfit,
+  revenuePct,
+  profitPct,
+}: {
+  label: string;
+  revenue: number;
+  netProfit: number;
+  revenuePct: number;
+  profitPct: number;
+}) {
+  const negative = netProfit < 0;
+  return (
+    <View style={styles.monthRow}>
+      <Text style={styles.monthLabel}>{label}</Text>
+      <View style={styles.monthCharts}>
+        <View style={styles.monthMetricRow}>
+          <Text style={styles.metricKey}>C</Text>
+          <View style={styles.monthRevenueTrack}>
+            <View
+              style={[
+                styles.monthRevenueFill,
+                { width: `${Math.max(revenue === 0 ? 0 : 2, revenuePct)}%` },
+              ]}
+            />
+          </View>
+          <Text style={styles.monthValue}>{formatCurrency(revenue)}</Text>
+        </View>
+        <View style={styles.monthMetricRow}>
+          <Text style={styles.metricKey}>N</Text>
+          <View style={styles.monthProfitTrack}>
+            <View style={styles.monthProfitHalf}>
+              {negative ? (
+                <View
+                  style={[
+                    styles.monthProfitFill,
+                    styles.monthProfitNegative,
+                    { width: `${profitPct * 2}%` },
+                  ]}
+                />
+              ) : null}
+            </View>
+            <View style={styles.zeroLine} />
+            <View style={styles.monthProfitHalf}>
+              {!negative && netProfit !== 0 ? (
+                <View
+                  style={[
+                    styles.monthProfitFill,
+                    styles.monthProfitPositive,
+                    { width: `${profitPct * 2}%` },
+                  ]}
+                />
+              ) : null}
+            </View>
+          </View>
+          <Text style={[styles.monthValue, { color: negative ? ML.red : ML.green }]}>
+            {formatCurrency(netProfit)}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function ProfitRow({ name, profit }: { name: string; profit: number }) {
   return (
     <View style={styles.profitRow}>
@@ -313,6 +560,68 @@ const styles = StyleSheet.create({
   trendLabel: { color: ML.textDim, fontSize: 12, width: 78, fontVariant: ["tabular-nums"] },
   trendBar: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   trendVal: { color: ML.text, fontSize: 13, fontWeight: "700", width: 72, textAlign: "right", fontVariant: ["tabular-nums"] },
+  monthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: ML.borderSoft,
+    paddingBottom: 9,
+  },
+  monthLabel: {
+    color: ML.textDim,
+    fontSize: 11,
+    width: 48,
+    textTransform: "capitalize",
+  },
+  monthCharts: { flex: 1, gap: 5 },
+  monthMetricRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  metricKey: { color: ML.textFaint, fontSize: 9, fontWeight: "800", width: 10 },
+  monthRevenueTrack: {
+    flex: 1,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: ML.cardElevated,
+    overflow: "hidden",
+  },
+  monthRevenueFill: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
+  monthProfitTrack: {
+    flex: 1,
+    height: 7,
+    flexDirection: "row",
+    backgroundColor: ML.cardElevated,
+    overflow: "hidden",
+  },
+  monthProfitHalf: { width: "50%", height: "100%", flexDirection: "row" },
+  zeroLine: { width: 1, height: "100%", backgroundColor: ML.textFaint },
+  monthProfitFill: { height: "100%" },
+  monthProfitNegative: { backgroundColor: ML.red, marginLeft: "auto" },
+  monthProfitPositive: { backgroundColor: ML.green },
+  monthValue: {
+    color: ML.text,
+    fontSize: 10,
+    fontWeight: "700",
+    width: 76,
+    textAlign: "right",
+    fontVariant: ["tabular-nums"],
+  },
+  monthSummary: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 2,
+  },
+  monthSummaryText: { color: ML.textDim, fontSize: 12 },
+  monthSummaryProfit: { fontSize: 13, fontWeight: "800" },
+  chartNote: { color: ML.textFaint, fontSize: 11, lineHeight: 16 },
+  warningText: {
+    color: ML.orange,
+    fontSize: 11,
+    lineHeight: 16,
+    backgroundColor: ML.orangeSoft,
+    borderRadius: radius.sm,
+    padding: 9,
+  },
   profitRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 },
   profitName: { color: ML.textDim, fontSize: 13, flex: 1 },
   profitVal: { fontSize: 14, fontWeight: "700", fontVariant: ["tabular-nums"] },

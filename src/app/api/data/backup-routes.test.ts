@@ -156,6 +156,30 @@ describe("portable backup routes", () => {
           fileType: "3mf",
         },
       ],
+      actualExpenses: [
+        {
+          id: "expense-1",
+          name: "Muhasebe ödemesi",
+          category: "Ofis",
+          amountKurus: 12_345,
+          paidAt: "2026-07-10T09:00:00.000Z",
+        },
+      ],
+      orderFinanceSnapshots: [
+        {
+          id: "finance-1",
+          platform: "shopify",
+          externalOrderId: "sh-1003",
+          orderNumber: "#1003",
+          orderedAt: "2026-07-08T10:00:00.000Z",
+          revenueKurus: 34_498,
+          profitKurus: 7_333,
+          profitPartial: true,
+          statusKind: "processing",
+          currency: "TRY",
+          calculationVersion: 1,
+        },
+      ],
     });
 
     expect(response.status).toBe(200);
@@ -163,6 +187,8 @@ describe("portable backup routes", () => {
     expect(result.complete).toBe(false);
     expect(result.stats.productModelFiles).toBe(2);
     expect(result.stats.productModelFilesSkipped).toBe(1);
+    expect(result.stats.actualExpenses).toBe(1);
+    expect(result.stats.orderFinanceSnapshots).toBe(1);
     expect(result.warnings).toHaveLength(1);
 
     const product = await db.product.findUniqueOrThrow({
@@ -211,6 +237,16 @@ describe("portable backup routes", () => {
     expect(backup.filamentUsages).toHaveLength(1);
     expect(backup.printerConfigs).toHaveLength(1);
     expect(backup.printFileProducts).toHaveLength(1);
+    expect(backup.actualExpenses).toEqual([
+      expect.objectContaining({ id: "expense-1", amountKurus: 12_345 }),
+    ]);
+    expect(backup.orderFinanceSnapshots).toEqual([
+      expect.objectContaining({
+        externalOrderId: "sh-1003",
+        revenueKurus: 34_498,
+        profitKurus: 7_333,
+      }),
+    ]);
     expect(
       backup.productModelFiles.find((file: { id: string }) => file.id === "model-r2")
     ).toMatchObject({

@@ -7,6 +7,7 @@ import { invalidateOrdersCache } from "@/lib/orders-cache";
 const id = z.string().trim().min(1);
 const finite = z.number().finite();
 const integer = finite.int();
+const sqliteInt = integer.min(-2_147_483_648).max(2_147_483_647);
 const nullableString = z.string().nullable().optional();
 const optionalDate = z.coerce.date().optional();
 const nullableDate = z.coerce.date().nullable().optional();
@@ -179,6 +180,32 @@ const ExpenseRuleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
+const ActualExpenseSchema = z.object({
+  id,
+  name: z.string().trim().min(1),
+  category: nullableString,
+  amountKurus: integer.positive().max(2_147_483_647),
+  paidAt: z.coerce.date(),
+  note: nullableString,
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
+});
+
+const OrderFinanceSnapshotSchema = z.object({
+  id,
+  platform: id,
+  externalOrderId: id,
+  orderNumber: z.string(),
+  orderedAt: z.coerce.date(),
+  revenueKurus: integer.nonnegative().max(2_147_483_647),
+  profitKurus: sqliteInt.nullable().optional(),
+  profitPartial: z.boolean().optional(),
+  statusKind: z.string(),
+  currency: z.string().optional(),
+  syncedAt: optionalDate,
+  calculationVersion: integer.positive().optional(),
+});
+
 const CostTemplateSchema = z.object({
   id,
   name: z.string(),
@@ -273,6 +300,8 @@ const ImportSchema = z.object({
   commissionRules: z.array(CommissionRuleSchema).optional(),
   cargoRules: z.array(CargoRuleSchema).optional(),
   expenseRules: z.array(ExpenseRuleSchema).optional(),
+  actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
+  orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
   costTemplates: z.array(CostTemplateSchema).optional(),
   priceHistory: z.array(PriceHistorySchema).optional(),
   printerConfigs: z.array(PrinterConfigSchema).optional(),
@@ -314,6 +343,8 @@ export async function POST(req: NextRequest) {
           commissionRules: 0,
           cargoRules: 0,
           expenseRules: 0,
+          actualExpenses: 0,
+          orderFinanceSnapshots: 0,
           costTemplates: 0,
           priceHistory: 0,
           printerConfigs: 0,
@@ -422,6 +453,54 @@ export async function POST(req: NextRequest) {
             update: fields,
           });
           result.expenseRules++;
+        }
+
+        for (const expense of data.actualExpenses) {
+          const fields = {
+            name: expense.name,
+            category: expense.category ?? null,
+            amountKurus: expense.amountKurus,
+            paidAt: expense.paidAt,
+            note: expense.note ?? null,
+            ...(expense.createdAt ? { createdAt: expense.createdAt } : {}),
+            ...(expense.updatedAt ? { updatedAt: expense.updatedAt } : {}),
+          };
+          await tx.actualExpense.upsert({
+            where: { id: expense.id },
+            create: { id: expense.id, ...fields },
+            update: fields,
+          });
+          result.actualExpenses++;
+        }
+
+        for (const snapshot of data.orderFinanceSnapshots) {
+          const fields = {
+            orderNumber: snapshot.orderNumber,
+            orderedAt: snapshot.orderedAt,
+            revenueKurus: snapshot.revenueKurus,
+            profitKurus: snapshot.profitKurus ?? null,
+            profitPartial: snapshot.profitPartial ?? false,
+            statusKind: snapshot.statusKind,
+            currency: snapshot.currency ?? "TRY",
+            ...(snapshot.syncedAt ? { syncedAt: snapshot.syncedAt } : {}),
+            calculationVersion: snapshot.calculationVersion ?? 1,
+          };
+          await tx.orderFinanceSnapshot.upsert({
+            where: {
+              platform_externalOrderId: {
+                platform: snapshot.platform,
+                externalOrderId: snapshot.externalOrderId,
+              },
+            },
+            create: {
+              id: snapshot.id,
+              platform: snapshot.platform,
+              externalOrderId: snapshot.externalOrderId,
+              ...fields,
+            },
+            update: fields,
+          });
+          result.orderFinanceSnapshots++;
         }
 
         for (const group of data.variantGroups ?? []) {
