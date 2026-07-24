@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
 import {
   calculateManualOrder,
@@ -705,7 +705,7 @@ function financialFields(
 
 export async function createManualOrder(input: ManualOrderInput) {
   const resolved = await resolveManualOrderInput(input);
-  return prisma.manualOrder.create({
+  return remotePrisma.manualOrder.create({
     data: {
       orderNumber:
         optionalValue(input.orderNumber) ?? generateOrderNumber(input.orderedAt),
@@ -715,7 +715,7 @@ export async function createManualOrder(input: ManualOrderInput) {
 }
 
 export async function updateManualOrder(id: string, input: ManualOrderInput) {
-  const existing = await prisma.manualOrder.findUnique({ where: { id } });
+  const existing = await remotePrisma.manualOrder.findUnique({ where: { id } });
   if (!existing) {
     throw Object.assign(new Error("Manuel sipariş bulunamadı."), {
       code: "P2025",
@@ -732,14 +732,14 @@ export async function updateManualOrder(id: string, input: ManualOrderInput) {
     note: optionalValue(input.note),
   };
   if (inputFinancialSignature(input) === storedFinancialSignature(existing)) {
-    return prisma.manualOrder.update({
+    return remotePrisma.manualOrder.update({
       where: { id },
       data: common,
     });
   }
 
   const resolved = await resolveManualOrderInput(input, existing);
-  return prisma.manualOrder.update({
+  return remotePrisma.manualOrder.update({
     where: { id },
     data: {
       ...common,

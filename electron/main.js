@@ -159,8 +159,7 @@ async function gracefulShutdown(reason) {
   // OS process ölünce socket/dosya handle'larını zaten serbest bırakır.
   if (isQuittingForUpdate) {
     // Güncelleme yolu server/DB'nin gerçekten durmasını beklemeden sert çıkar. Bu oturumu
-    // "temiz" sayma: yeni sürüm, yalnızca buluttan yeniden üretilebilen yerel replica'yı
-    // sıfırlayıp açılacak. Asıl veri Turso primary'de kalır.
+    // "temiz" sayma; yeni sürüm aktif sync marker'ı yoksa hızlı yerel replica'yı korur.
     try { fs.rmSync(path.join(app.getPath("userData"), ".clean-exit"), { force: true }); } catch { /* ignore */ }
     try { server?.closeAllConnections?.(); } catch { /* ignore */ }
     try { app.exit(0); } catch { /* ignore */ }
@@ -426,11 +425,13 @@ function ensureCredentialKey() {
   if (!process.env.HEPSIBURADA_SETTINGS_FILE) {
     process.env.HEPSIBURADA_SETTINGS_FILE = `${slashedUserData}/hepsiburada-settings.json`;
   }
+  if (!process.env.MLHUB_ORDERS_CACHE_FILE) {
+    process.env.MLHUB_ORDERS_CACHE_FILE = `${slashedUserData}/orders-cache.json`;
+  }
 
   // Turso (bulut DB) ayar dosyası + bağlantı env'leri.
-  // turso-settings.json varsa ve url doluysa → Prisma uzak HTTP bağlantısını kullanır.
-  // Embedded replica'nın native sync() çağrısı tüm SQL'i 30+ saniye bloke edebildiği için
-  // masaüstünde varsayılan yol artık doğrudan, asenkron ağ bağlantısıdır.
+  // Kullanıcı ekranları yerel replica'dan anında okunur. Telefon/yazıcı relay'i için
+  // ayrıca doğrudan uzak client açılır; yerel replica üzerinde periyodik sync çalışmaz.
   const tursoSettingsPath = `${slashedUserData}/turso-settings.json`;
   if (!process.env.TURSO_SETTINGS_FILE) {
     process.env.TURSO_SETTINGS_FILE = tursoSettingsPath;
@@ -441,11 +442,9 @@ function ensureCredentialKey() {
     if (turso && turso.url) {
       process.env.TURSO_DATABASE_URL = turso.url;
       if (turso.authToken) process.env.TURSO_AUTH_TOKEN = turso.authToken;
-      // Eski replica dosyaları kullanıcı verisi olarak korunur fakat bu oturumda açılmaz.
-      // TURSO_USE_EMBEDDED_REPLICA yalnızca kontrollü geliştirici deneyi için opt-in'dir.
-      delete process.env.TURSO_REPLICA_PATH;
-      delete process.env.TURSO_USE_EMBEDDED_REPLICA;
-      logStartup("Turso bulut DB aktif (uzak HTTP, bloke etmeyen mod):", turso.url);
+      process.env.TURSO_REPLICA_PATH = `${slashedUserData}/turso-replica.db`;
+      delete process.env.TURSO_DISABLE_EMBEDDED_REPLICA;
+      logStartup("Turso bulut DB aktif (yerel hızlı okuma + ayrı uzak relay):", turso.url);
     }
   } catch {
     // dosya yok → local SQLite (mevcut davranış)
@@ -499,11 +498,10 @@ function resetReplicaFiles(replicaPath) {
  * (index.node → __psynch_cvwait) → Electron ana süreci = UI + Node aynı thread → her şey donar.
  * Okumalar çalıştığı için basit SELECT yoklaması yetmez; süreç-içi timeout da işlemez (loop bloke).
  *
- * Çözüm: sunucu başlamadan önce sürüm/kapanış damgalarını değerlendir. Sürüm değiştiyse,
- * önceki oturum temiz kapanmadıysa veya sync yarıda kaldıysa yerel replica'yı deterministik
- * olarak sil → Prisma Turso primary'den taze kopya oluştursun. Replica yalnız cache'tir;
- * kullanıcı yazmaları remote primary'dedir. Kopya üzerinde yapılan eski sağlık yoklaması
- * gerçek dosyadaki kilidi kaçırabildiği için artık şüpheli dosyaya güvenilmez.
+ * Artık normal oturumda native sync() çağrılmadığı için sürüm değişimi veya sert kapanış
+ * tek başına replica'yı şüpheli yapmaz. Dosyayı her güncellemede silmek, sonraki açılışta
+ * 6+ MB tam senkron başlatıp uygulamayı yeniden yavaşlatıyordu. Yalnız gerçekten yarım
+ * kalmış bir ilk senkron işareti ya da ana DB'siz yetim metadata varsa sıfırla.
  */
 async function ensureReplicaHealthy() {
   const replicaPath = process.env.TURSO_REPLICA_PATH;
@@ -538,22 +536,22 @@ async function ensureReplicaHealthy() {
     return; // yoklanacak db yok
   }
 
-  // Embedded replica yalnız bir cache: okumalar yerelden, yazmalar Turso primary'ye gider.
-  // Bu nedenle sürüm değişiminde veya temiz olmayan/sync-ortasında kalan kapanışta şüpheli
-  // dosyayı test etmeye çalışmak yerine silmek hem güvenli hem deterministik. Önceki kopya-
-  // probe yaklaşımı sahada false-negative verdi: kopya "sağlıklı" dedi, gerçek dosya birkaç
-  // ms sonra Prisma/libSQL createClient içinde ana event-loop'u sonsuza dek kilitledi.
-  if (versionChanged || !wasClean || interruptedSync) {
-    const reasons = [];
-    if (versionChanged) reasons.push(`sürüm değişti (${previousVersion || "bilinmiyor"} → ${currentVersion})`);
-    if (!wasClean) reasons.push("önceki oturum temiz kapanmadı");
-    if (interruptedSync) reasons.push("yarım sync işareti var");
-    logStartup(`replica güvenli yeniden oluşturulacak: ${reasons.join(", ")}`);
+  // Yarım kalan tek native işlem ilk kurulum senkronudur; marker varsa dosyayı korumak
+  // libSQL InvalidLocalState/kilit döngüsüne sokabilir. Bu dar durumda yeniden oluştur.
+  if (interruptedSync) {
+    logStartup("replica güvenli yeniden oluşturulacak: yarım ilk senkron işareti var");
     resetReplicaFiles(replicaPath);
     return;
   }
 
-  logStartup("replica korundu (aynı sürüm + önceki oturum temiz kapandı)");
+  const notes = [];
+  if (versionChanged) notes.push(`sürüm ${previousVersion || "bilinmiyor"} → ${currentVersion}`);
+  if (!wasClean) notes.push("önceki oturum sert kapandı");
+  logStartup(
+    notes.length
+      ? `replica korundu (${notes.join(", ")}; aktif sync yok)`
+      : "replica korundu (yerel hızlı okuma)"
+  );
 }
 
 async function findAvailablePort(preferredPort) {
@@ -697,13 +695,13 @@ async function createWindow() {
   });
 
   // ── Uyku/uyanma DONMA koruması (dark-wake YARIŞINA dayanıklı) ───────────────
-  // Sorun: Mac uyurken/uyanırken libSQL embedded-replica'nın ağ op'ları (relay'in snapshot
-  // yazması + sync()) ölü bağlantıda asılıp ana event-loop'u DONDURUYOR (native çağrı, timeout YOK).
+  // Geçmiş sorun: Mac uyurken/uyanırken libSQL embedded-replica'nın native sync() çağrısı
+  // ölü bağlantıda asılıp ana event-loop'u DONDURUYORDU (native çağrı, timeout yok).
   // ÖNEMLİ (Mac'e özgü): macOS uykudayken periyodik "dark wake" (Power Nap) yapar → resume sonra
   // hemen suspend gelir. Eski sabit-süreli grace timer sonraki suspend ile iptal edilmediği için
-  // UYKU SIRASINDA flag'i false yapıp relay'i çalıştırıyor → ölü ağda donma. (Windows dark-wake
-  // yapmaz → sorun yalnızca Mac'te.) ÇÖZÜM: her power olayı "gen" sayacını artırır → eski timer'lar
-  // gen değişince kendini iptal eder; resume'da relay SADECE Turso gerçekten erişilince sürdürülür.
+  // UYKU SIRASINDA flag'i false yapıp ağ işlerini çalıştırıyordu. (Windows dark-wake yapmaz.)
+  // Native sync artık tamamen kaldırıldı; bu koruma yine de relay'in uzak ağ isteklerinin uyku
+  // geçişlerinde gereksiz yere birikmesini önler. Her power olayı "gen" sayacını artırır.
   if (!globalThis.__MLHUB_POWER_HOOKED__) {
     globalThis.__MLHUB_POWER_HOOKED__ = true;
     globalThis.__MLHUB_DB_PAUSED__ = false;

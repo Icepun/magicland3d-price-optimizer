@@ -22,8 +22,8 @@ export async function register() {
     }
   }
 
-  // DB warmup: ilk kullanıcı isteğinin soğuk Prisma + uzak HTTP bağlantı gecikmesini
-  // açılışta absorbe et. Non-blocking — ağ hatası kullanıcıyı kilitlemez.
+  // DB warmup: ilk kullanıcı isteğinin soğuk Prisma + yerel replica bağlantı maliyetini
+  // açılışta absorbe et. Non-blocking — kullanıcı arayüzünün açılışını kilitlemez.
   void (async () => {
     try {
       const { ensureRuntimeSchema } = await import("./lib/runtime-schema");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
   aggregateMonthlyFinance,
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
       where: { platform: { not: "manual" } },
       orderBy: { orderedAt: "asc" },
     }),
-    prisma.manualOrder.findMany({
+    remotePrisma.manualOrder.findMany({
       orderBy: { orderedAt: "asc" },
       select: {
         orderedAt: true,
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
         currency: true,
       },
     }),
-    prisma.actualExpense.findMany({
+    remotePrisma.actualExpense.findMany({
       orderBy: { paidAt: "asc" },
     }),
   ]);

@@ -14,8 +14,8 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
           queries: {
             // Navigasyonda gereksiz refetch'i kes: ekranlar arası geçiş cache'ten ANINDA gelir
             // (yeniden fetch+parse+render yok). Kendi değişikliklerin mutation invalidate ile
-            // zaten yansır; çok-cihaz verisi doğrudan ortak Turso veritabanından okunur.
-            // Manuel yenile / refetchInterval'lı query'ler (printer, bildirim) çalışmaya devam eder.
+            // zaten yansır; ağır ekranlar yerel Turso replica'sından anında okunur.
+            // Mobil/yazıcı işleri ayrı uzak client'ta, refetchInterval'lı sorgular çalışmaya devam eder.
             staleTime: 5 * 60_000, // 5 dk taze say
             // 10 dk: kullanılmayan (observer'sız) sorgular bu sürede toplanır. 30dk idi →
             // çok sayıda 368-ürünlük büyük payload heap'te birikip 15-20dk'da GC baskısı +

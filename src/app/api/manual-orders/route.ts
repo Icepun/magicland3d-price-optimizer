@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import {
@@ -11,7 +11,7 @@ import {
 
 export async function GET() {
   await ensureRuntimeSchema();
-  const orders = await prisma.manualOrder.findMany({
+  const orders = await remotePrisma.manualOrder.findMany({
     orderBy: [{ orderedAt: "desc" }, { createdAt: "desc" }],
   });
   return NextResponse.json(orders.map(manualOrderDetailResponse), {

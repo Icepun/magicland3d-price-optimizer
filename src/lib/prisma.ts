@@ -39,15 +39,14 @@ function resetReplica(replicaPath: string): void {
  * "Can not sync a database without a wal_index" hatası veriyordu (iki sync client
  * tek dosyada çakışıyor). Embedded replica TEK client ister.
  *
- * Çözüm: ön-senkron client'ı kaldırıldı. İlk veri çekimini Prisma'nın kendi client'ı
- * yapıyor — connect()'te bir kez `sync()`. Sonrası syncInterval ile periyodik.
+ * Çözüm: ön-senkron client'ı kaldırıldı. Yalnız replica dosyası hiç yoksa Prisma'nın
+ * kendi client'ı connect() sırasında bir kez doldurur. Mevcut replica'da ve normal
+ * uygulama oturumunda native sync() hiçbir zaman çağrılmaz.
  */
 class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
   #replicaClient: LibsqlClient | null = null;
   /** Replica dosyası bu açılıştan ÖNCE var mıydı? (yoksa = ilk kurulum) */
   #replicaPreexisting = false;
-  /** Aynı anda iki native sync olmasın (üst üste = veri bozulma riski + sorgu blokajı uzar). */
-  #syncing = false;
   /** Bulut erişim kontrolü için syncUrl'in HTTPS karşılığı. */
   #syncHttpUrl: string | null = null;
   /** "Sync sürüyor" işaret dosyası — kendi kendini iyileştirme için (aşağıya bak). */
@@ -128,39 +127,19 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
 
   async connect() {
     const adapter = await super.connect();
-    // İlk kurulumda (yerelde HİÇ veri yok) bir kez senkronla — ama açılışı kilitleme:
-    // erişim varsa + en fazla 6sn. MEVCUT kurulumda connect'te SENKRON YOK; çünkü sync()
-    // sorguları bloke ediyor → ilk sorgu/açılış donardı. Tazeleme relay'in periyodik
-    // (erişim-kontrollü) syncNow'ı ile arka planda gelir.
+    // İlk kurulumda (yerelde HİÇ veri yok) bir kez senkronla. Tamamlanmadan sorgu
+    // başlatmayarak yarım ilk-sync ile UI sorgularının üst üste binmesini engelle.
+    // MEVCUT kurulumda connect'te ve oturum boyunca SENKRON YOK.
     if (this.#replicaClient && !this.#replicaPreexisting) {
       try {
         if (await this.#cloudReachable()) {
-          await Promise.race([
-            this.#trackedSync(this.#replicaClient),
-            new Promise((r) => setTimeout(r, 6000)),
-          ]);
+          await this.#trackedSync(this.#replicaClient);
         }
       } catch {
-        /* ilk sync başarısızsa boş yerelle aç; relay sonra doldurur */
+        /* ilk sync başarısızsa API'ler anlaşılır DB hatası verir; sonraki açılış tekrar dener */
       }
     }
     return adapter;
-  }
-
-  /**
-   * Relay: yerel replica'yı buluttan tazele. Re-entrancy guard + erişim kontrolü + sınırlı bekleme.
-   * Native sync bitene dek guard AÇIK kalır (timeout'ta sıfırlanmaz) → üst üste native sync olmaz.
-   */
-  async syncNow(): Promise<void> {
-    if (!this.#replicaClient || this.#syncing) return;
-    if (!(await this.#cloudReachable())) return; // ağ yok → bloke eden native sync'i çağırma
-    this.#syncing = true;
-    const client = this.#replicaClient;
-    const done = this.#trackedSync(client)
-      .catch((e) => console.error("[prisma] sync:", e instanceof Error ? e.message : e))
-      .finally(() => { this.#syncing = false; });
-    // Çağıran en fazla 9sn bekler; native sync arka planda devam edebilir (guard onu korur).
-    await Promise.race([done, new Promise((r) => setTimeout(r, 9000))]);
   }
 }
 
@@ -175,8 +154,13 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
  */
 const tursoUrl = process.env.TURSO_DATABASE_URL?.trim();
 const tursoToken = process.env.TURSO_AUTH_TOKEN?.trim();
+const replicaPathFromEnv = process.env.TURSO_REPLICA_PATH?.trim();
 const useEmbeddedReplica =
-  process.env.TURSO_USE_EMBEDDED_REPLICA?.trim() === "1";
+  Boolean(replicaPathFromEnv) &&
+  process.env.TURSO_DISABLE_EMBEDDED_REPLICA?.trim() !== "1";
+const remoteTursoUrl = tursoUrl
+  ?.replace(/^libsql:\/\//i, "https://")
+  .replace(/^wss?:\/\//i, "https://");
 
 // Local mod: relative DATABASE_URL'i mutlak yola çevir (eski mantık)
 if (!tursoUrl) {
@@ -192,39 +176,35 @@ if (!tursoUrl) {
   }
 }
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
-
-/** Turso modunda relay'in zorla-senkron için kullanacağı adapter referansı. */
-let _tursoAdapter: EmbeddedReplicaPrismaLibSQL | null = null;
+const globalForPrisma = globalThis as unknown as {
+  prisma?: PrismaClient;
+  remotePrisma?: PrismaClient;
+};
 
 function createPrisma(): PrismaClient {
   const log = process.env.NODE_ENV === "development" ? ["error", "warn"] as const : ["error"] as const;
 
   if (tursoUrl) {
-    // Varsayılan masaüstü yolu: doğrudan uzak HTTP.
+    // Paketli masaüstü yolu: embedded replica'dan YEREL ve anında okuma.
     //
-    // Sahada ölçülen kök neden: embedded replica client.sync(), aynı dosyadaki BÜTÜN
-    // sorguları bloke ediyor. 0.19.123'te 2-5ms'lik /api/settings isteği periyodik
-    // sync sırasında 7.5sn → 15sn timeout → 6sn olarak ölçüldü; toplam kilit 30sn'yi
-    // geçti. Promise timeout'u native çağrıyı durduramadığı için güvenli çözüm,
-    // kullanıcı istekleriyle aynı süreçte replica sync çalıştırmamaktır.
+    // 0.19.124'te tüm sorguları uzak HTTP'ye çevirmek kilidi kaldırdı fakat çok
+    // sorgulu ürün/model ekranlarını 8-10 saniyeye çıkardı. Doğru ayrım:
+    //   - UI ve masaüstü işleri: yerel replica (milisaniyeler)
+    //   - telefon relay'i gibi uzaktan taze olması gereken işler: remotePrisma
     //
-    // Uzak istemci tamamen asenkrondur; tüm cihazlar aynı güncel veriyi görür ve
-    // yerel SQLite/replica kilidi yoktur. Embedded yol yalnızca açık opt-in ile kalır.
+    // KRİTİK: bu client'ta otomatik/periyodik sync YOK. Native sync() aynı dosyadaki
+    // SQL'i bloke ettiği için arka plandan asla çağrılmaz.
     if (!useEmbeddedReplica) {
-      const remoteUrl = tursoUrl
-        .replace(/^libsql:\/\//i, "https://")
-        .replace(/^wss?:\/\//i, "https://");
       const adapter = new PrismaLibSQL({
-        url: remoteUrl,
+        url: remoteTursoUrl!,
         authToken: tursoToken || undefined,
       });
       return new PrismaClient({ adapter, log: [...log] });
     }
 
-    // Kontrollü geliştirici opt-in'i: embedded replica.
+    // Paketli uygulamanın varsayılan hızlı yolu: embedded replica.
     const replicaPath =
-      process.env.TURSO_REPLICA_PATH?.trim() ||
+      replicaPathFromEnv ||
       path.join(process.cwd(), "prisma", "turso-replica.db").replace(/\\/g, "/");
     // Not: readYourWrites native libsql'de zaten varsayılan true (kendi yazdığını
     // anında okur); @libsql/client Config tipinde olmadığı için burada geçilmiyor.
@@ -234,10 +214,9 @@ function createPrisma(): PrismaClient {
       syncUrl: tursoUrl,
       authToken: tursoToken || undefined,
       // syncInterval KALDIRILDI: native otomatik periyodik sync, ağ değişince/kopunca askıda kalıp
-      // SQL sorgularını bloke ediyordu (libSQL bilinen kısıt #979) → uygulama donuyordu. Tazeleme
-      // artık SADECE relay'in erişim-kontrollü + guard'lı syncNow'ı ile (donma riski yok).
+      // SQL sorgularını bloke ediyordu (libSQL bilinen kısıt #979) → uygulama donuyordu.
+      // Telefon relay'i ayrı remotePrisma kullandığı için bu replica oturum içinde sync edilmez.
     });
-    _tursoAdapter = adapter; // relay zorla-senkron için
     return new PrismaClient({ adapter, log: [...log] });
   }
 
@@ -250,7 +229,24 @@ export const prisma = globalForPrisma.prisma ?? createPrisma();
 // Aynı bağlantı tüm isteklerde yeniden kullanılsın
 globalForPrisma.prisma = prisma;
 
-/** Relay: yerel Turso replica'yı zorla senkronla (Turso modu değilse no-op). */
-export async function syncTursoReplica(): Promise<void> {
-  if (_tursoAdapter) await _tursoAdapter.syncNow();
+/**
+ * Telefon/yazıcı relay'i ve mobilde düzenlenebilen küçük tablolar için doğrudan
+ * Turso bağlantısı. Yerel replica dosyasını kullanmadığından UI sorgularını
+ * kilitleyemez. Turso yoksa aynı yerel Prisma client'ına düşer.
+ */
+function createRemotePrisma(): PrismaClient {
+  if (!tursoUrl || !remoteTursoUrl) return prisma;
+  const log =
+    process.env.NODE_ENV === "development"
+      ? (["error", "warn"] as const)
+      : (["error"] as const);
+  const adapter = new PrismaLibSQL({
+    url: remoteTursoUrl,
+    authToken: tursoToken || undefined,
+  });
+  return new PrismaClient({ adapter, log: [...log] });
 }
+
+export const remotePrisma =
+  globalForPrisma.remotePrisma ?? createRemotePrisma();
+globalForPrisma.remotePrisma = remotePrisma;

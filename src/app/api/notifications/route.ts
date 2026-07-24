@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
@@ -40,11 +40,11 @@ export async function GET() {
         select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
       }),
       // Yazıcı durumları (relay yazar): hata = baskı durdu → acil; duraklatıldı = uyarı.
-      prisma.printerSnapshot.findMany({
+      remotePrisma.printerSnapshot.findMany({
         select: { printerConfigId: true, name: true, status: true, statusMessage: true, online: true, productName: true },
       }).catch(() => []),
       // Kalıcı olay-anı bildirimleri (sipariş kaynaklı) — okunmamış olanlar.
-      prisma.notification.findMany({
+      remotePrisma.notification.findMany({
         where: { acknowledgedAt: null },
         orderBy: { createdAt: "desc" },
         take: 100,
@@ -140,7 +140,7 @@ export async function POST(req: Request) {
     const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === "string") : [];
     if (ids.length > 0) {
       await ensureRuntimeSchema();
-      await prisma.notification.updateMany({
+      await remotePrisma.notification.updateMany({
         where: { id: { in: ids } },
         data: { acknowledgedAt: new Date() },
       });

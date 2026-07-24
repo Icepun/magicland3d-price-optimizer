@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { tlToKurus } from "@/lib/monthly-finance";
 import {
@@ -22,7 +22,7 @@ export async function PATCH(
     await ensureRuntimeSchema();
     const { id } = await params;
     const data = UpdateActualExpenseInput.parse(await req.json());
-    const expense = await prisma.actualExpense.update({
+    const expense = await remotePrisma.actualExpense.update({
       where: { id },
       data: {
         ...(data.name !== undefined ? { name: data.name } : {}),
@@ -57,7 +57,7 @@ export async function DELETE(
   await ensureRuntimeSchema();
   const { id } = await params;
   try {
-    await prisma.actualExpense.delete({ where: { id } });
+    await remotePrisma.actualExpense.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (

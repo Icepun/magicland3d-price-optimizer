@@ -1,4 +1,4 @@
-import { prisma } from "./prisma";
+import { remotePrisma } from "./prisma";
 
 /**
  * Sipariş izleyici — sunucu tarafında periyodik çalışır (relay gibi):
@@ -44,12 +44,12 @@ async function tick(): Promise<void> {
       lastPruneAt = Date.now();
       const now = Date.now();
       // 1) Okunmuşlar 30 gün sonra silinir.
-      await prisma.notification.deleteMany({
+      await remotePrisma.notification.deleteMany({
         where: { acknowledgedAt: { not: null, lt: new Date(now - 30 * 86_400_000) } },
       }).catch(() => {});
       // 2) 7 günden eski sipariş bildirimleri otomatik okundu (aday penceresiyle aynı — sipariş
       //    çoktan kargolandı; sonsuza dek kırmızı rozet üretmesin).
-      await prisma.notification.updateMany({
+      await remotePrisma.notification.updateMany({
         where: {
           type: { in: ["order-stock", "order-made"] },
           acknowledgedAt: null,

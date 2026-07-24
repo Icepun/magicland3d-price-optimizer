@@ -3,16 +3,16 @@
  *   1) Her yazıcının canlı durumunu PrinterSnapshot'a yazar (değiştiyse) → telefon okur.
  *   2) Bekleyen PrintCommand'leri LAN'da yazıcıya uygular → sonucu yazar.
  *
- * Prisma masaüstünde doğrudan uzak HTTP kullandığı için telefon komutları anında görünür.
- * Burada embedded-replica sync ÇALIŞTIRILMAZ: native sync tüm API sorgularını 30+ saniye
- * kilitleyerek uygulamayı kullanılamaz hale getiriyordu.
+ * Kullanıcı ekranları yerel replica'dan hızlı okunur; telefonla paylaşılan snapshot ve
+ * komut tabloları ayrı remotePrisma client'ıyla doğrudan buluta gider. Burada replica
+ * sync ÇALIŞTIRILMAZ: native sync tüm API sorgularını 30+ saniye kilitliyordu.
  *
  * instrumentation.ts (Next sunucu açılışı) tarafından bir kez başlatılır.
  * Yalnızca Turso modunda anlamlıdır; Turso yoksa snapshot/komut tabloları yine çalışır
  * ama uzaktan erişim olmaz (sorun değil).
  */
 import fs from "node:fs";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
@@ -236,7 +236,7 @@ async function tick(): Promise<void> {
     // açılışın ilk saniyelerinde bulut yazması/R2 listelemesi ilk ekran sorgularıyla yarışmasın.
     if (!capsWritten && tickCount >= 3) {
       try {
-        await prisma.appSetting.upsert({
+        await remotePrisma.appSetting.upsert({
           where: { key: "printRelayCaps" },
           create: { key: "printRelayCaps", value: "r2start,heartbeat,cmdttl" },
           update: { value: "r2start,heartbeat,cmdttl" },
@@ -298,7 +298,7 @@ async function tick(): Promise<void> {
       if (unchanged && fresh) return;
       lastKey.set(c.id, key);
       try {
-        await prisma.printerSnapshot.upsert({
+        await remotePrisma.printerSnapshot.upsert({
           where: { printerConfigId: c.id },
           create: { printerConfigId: c.id, ...snap },
           update: snap,
@@ -325,14 +325,14 @@ async function tick(): Promise<void> {
 async function processPendingCommands(configs: Cfg[]): Promise<void> {
   let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null; createdAt: Date }[] = [];
   try {
-    pending = await prisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
+    pending = await remotePrisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
   } catch { return; }
 
   for (const cmd of pending) {
     // Bu oturumda zaten yürütüldüyse ATLA — done/error yazması buluta gidememiş olabilir;
     // yeniden yürütmek çift baskı demek. (Yazma sonraki tick'lerde tekrar denenir.)
     if (processedCmdIds.has(cmd.id)) {
-      await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } }).catch(() => {});
+      await remotePrisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } }).catch(() => {});
       continue;
     }
     // TTL: masaüstü KAPALIYKEN gönderilip birikmiş bayat komutlar uygulanmaz — bayat "start"
@@ -340,7 +340,7 @@ async function processPendingCommands(configs: Cfg[]): Promise<void> {
     // öldürebilirdi. Telefon 90sn'de zaten "uygulanmadı" uyarısı gösteriyor.
     const ttl = cmd.action === "start" || cmd.action === "resume" ? START_TTL_MS : COMMAND_TTL_MS;
     if (Date.now() - new Date(cmd.createdAt).getTime() > ttl) {
-      await prisma.printCommand.update({
+      await remotePrisma.printCommand.update({
         where: { id: cmd.id },
         data: { status: "error", error: "Zaman aşımı — masaüstü kapalıyken gönderildi, güvenlik için uygulanmadı", processedAt: new Date() },
       }).catch(() => {});
@@ -354,10 +354,10 @@ async function processPendingCommands(configs: Cfg[]): Promise<void> {
       if ((c as { enabled?: boolean }).enabled === false) throw new Error("Yazıcı devre dışı");
       processedCmdIds.add(cmd.id); // yürütmeden HEMEN önce işaretle — yazma hatasında bile tekrar yok
       await executeCommand(c, cmd);
-      await prisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
+      await remotePrisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
     } catch (e) {
       processedCmdIds.add(cmd.id);
-      await prisma.printCommand.update({
+      await remotePrisma.printCommand.update({
         where: { id: cmd.id },
         data: { status: "error", error: e instanceof Error ? e.message : "hata", processedAt: new Date() },
       }).catch(() => {});

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import packageJson from "../../../../../package.json";
 
@@ -43,13 +43,13 @@ export async function GET() {
     prisma.commissionRule.findMany(),
     prisma.cargoRule.findMany(),
     prisma.expenseRule.findMany(),
-    prisma.actualExpense.findMany(),
+    remotePrisma.actualExpense.findMany(),
     // Manual orders are their own captured finance source. Exporting a second
     // "manual" platform snapshot would make older backups easy to double-count.
     prisma.orderFinanceSnapshot.findMany({
       where: { platform: { not: "manual" } },
     }),
-    prisma.manualOrder.findMany(),
+    remotePrisma.manualOrder.findMany(),
     prisma.costTemplate.findMany(),
     prisma.priceHistory.findMany(),
     prisma.printerConfig.findMany(),

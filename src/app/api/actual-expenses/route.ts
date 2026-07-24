@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { tlToKurus } from "@/lib/monthly-finance";
 import {
@@ -11,7 +11,7 @@ import {
 
 export async function GET() {
   await ensureRuntimeSchema();
-  const expenses = await prisma.actualExpense.findMany({
+  const expenses = await remotePrisma.actualExpense.findMany({
     orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
   });
   return NextResponse.json(expenses.map(actualExpenseResponse), {
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
     const data = ActualExpenseInput.parse(await req.json());
-    const expense = await prisma.actualExpense.create({
+    const expense = await remotePrisma.actualExpense.create({
       data: {
         name: data.name,
         category: optionalExpenseText(data.category),

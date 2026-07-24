@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
   getOrdersCache,
@@ -277,7 +277,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const historyCutoff =
     (Math.floor(Date.now() / 86_400_000) - HISTORY_SYNC_DAYS) * 86_400_000;
   const orders: UnifiedOrder[] = [];
-  const manualOrdersPromise = prisma.manualOrder.findMany({
+  const manualOrdersPromise = remotePrisma.manualOrder.findMany({
     where: { orderedAt: { gte: new Date(historyCutoff) } },
     orderBy: { orderedAt: "desc" },
   });

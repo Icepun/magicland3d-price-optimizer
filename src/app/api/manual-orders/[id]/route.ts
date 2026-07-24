@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import {
@@ -24,7 +24,7 @@ export async function GET(
 ) {
   await ensureRuntimeSchema();
   const { id } = await params;
-  const order = await prisma.manualOrder.findUnique({ where: { id } });
+  const order = await remotePrisma.manualOrder.findUnique({ where: { id } });
   if (!order) {
     return NextResponse.json(
       { error: "Manuel sipariş bulunamadı." },
@@ -80,7 +80,7 @@ export async function DELETE(
   await ensureRuntimeSchema();
   const { id } = await params;
   try {
-    await prisma.manualOrder.delete({ where: { id } });
+    await remotePrisma.manualOrder.delete({ where: { id } });
     invalidateOrdersCache();
     return NextResponse.json({ ok: true });
   } catch (error) {
