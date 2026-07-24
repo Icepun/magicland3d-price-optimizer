@@ -175,6 +175,8 @@ class EmbeddedReplicaPrismaLibSQL extends PrismaLibSQL {
  */
 const tursoUrl = process.env.TURSO_DATABASE_URL?.trim();
 const tursoToken = process.env.TURSO_AUTH_TOKEN?.trim();
+const useEmbeddedReplica =
+  process.env.TURSO_USE_EMBEDDED_REPLICA?.trim() === "1";
 
 // Local mod: relative DATABASE_URL'i mutlak yola çevir (eski mantık)
 if (!tursoUrl) {
@@ -199,10 +201,28 @@ function createPrisma(): PrismaClient {
   const log = process.env.NODE_ENV === "development" ? ["error", "warn"] as const : ["error"] as const;
 
   if (tursoUrl) {
-    // Bulut DB — libSQL adapter, EMBEDDED REPLICA modu.
-    // Yerel kopya dosyası birincil: okumalar yerelden (anında), yazmalar buluta
-    // yazılır, syncInterval ile diğer cihazın değişiklikleri arka planda çekilir.
-    // (Eski "url: tursoUrl" uzak-only mod her sorguyu eu-west-1'e gönderiyordu → 3-4sn.)
+    // Varsayılan masaüstü yolu: doğrudan uzak HTTP.
+    //
+    // Sahada ölçülen kök neden: embedded replica client.sync(), aynı dosyadaki BÜTÜN
+    // sorguları bloke ediyor. 0.19.123'te 2-5ms'lik /api/settings isteği periyodik
+    // sync sırasında 7.5sn → 15sn timeout → 6sn olarak ölçüldü; toplam kilit 30sn'yi
+    // geçti. Promise timeout'u native çağrıyı durduramadığı için güvenli çözüm,
+    // kullanıcı istekleriyle aynı süreçte replica sync çalıştırmamaktır.
+    //
+    // Uzak istemci tamamen asenkrondur; tüm cihazlar aynı güncel veriyi görür ve
+    // yerel SQLite/replica kilidi yoktur. Embedded yol yalnızca açık opt-in ile kalır.
+    if (!useEmbeddedReplica) {
+      const remoteUrl = tursoUrl
+        .replace(/^libsql:\/\//i, "https://")
+        .replace(/^wss?:\/\//i, "https://");
+      const adapter = new PrismaLibSQL({
+        url: remoteUrl,
+        authToken: tursoToken || undefined,
+      });
+      return new PrismaClient({ adapter, log: [...log] });
+    }
+
+    // Kontrollü geliştirici opt-in'i: embedded replica.
     const replicaPath =
       process.env.TURSO_REPLICA_PATH?.trim() ||
       path.join(process.cwd(), "prisma", "turso-replica.db").replace(/\\/g, "/");

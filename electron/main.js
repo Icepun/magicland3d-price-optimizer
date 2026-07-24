@@ -428,8 +428,9 @@ function ensureCredentialKey() {
   }
 
   // Turso (bulut DB) ayar dosyası + bağlantı env'leri.
-  // turso-settings.json varsa ve url doluysa → prisma Turso'ya bağlanır (çok cihaz
-  // senkron). Yoksa local SQLite'a düşer (mevcut davranış).
+  // turso-settings.json varsa ve url doluysa → Prisma uzak HTTP bağlantısını kullanır.
+  // Embedded replica'nın native sync() çağrısı tüm SQL'i 30+ saniye bloke edebildiği için
+  // masaüstünde varsayılan yol artık doğrudan, asenkron ağ bağlantısıdır.
   const tursoSettingsPath = `${slashedUserData}/turso-settings.json`;
   if (!process.env.TURSO_SETTINGS_FILE) {
     process.env.TURSO_SETTINGS_FILE = tursoSettingsPath;
@@ -440,10 +441,11 @@ function ensureCredentialKey() {
     if (turso && turso.url) {
       process.env.TURSO_DATABASE_URL = turso.url;
       if (turso.authToken) process.env.TURSO_AUTH_TOKEN = turso.authToken;
-      // Embedded replica: yerel kopya dosyası. Okumalar buradan (anında), yazmalar
-      // buluta yazılır + periyodik senkronla diğer cihazın değişiklikleri çekilir.
-      process.env.TURSO_REPLICA_PATH = `${slashedUserData}/turso-replica.db`;
-      logStartup("Turso bulut DB aktif (embedded replica):", turso.url);
+      // Eski replica dosyaları kullanıcı verisi olarak korunur fakat bu oturumda açılmaz.
+      // TURSO_USE_EMBEDDED_REPLICA yalnızca kontrollü geliştirici deneyi için opt-in'dir.
+      delete process.env.TURSO_REPLICA_PATH;
+      delete process.env.TURSO_USE_EMBEDDED_REPLICA;
+      logStartup("Turso bulut DB aktif (uzak HTTP, bloke etmeyen mod):", turso.url);
     }
   } catch {
     // dosya yok → local SQLite (mevcut davranış)

@@ -1,15 +1,18 @@
 /**
  * Telefon relay'i — masaüstü (LAN'da) tarafında periyodik çalışır:
- *   1) Yerel Turso replica'yı zorla senkronlar (telefonun yazdığı komutları çabuk görür).
- *   2) Her yazıcının canlı durumunu PrinterSnapshot'a yazar (değiştiyse) → telefon okur.
- *   3) Bekleyen PrintCommand'leri LAN'da yazıcıya uygular → sonucu yazar.
+ *   1) Her yazıcının canlı durumunu PrinterSnapshot'a yazar (değiştiyse) → telefon okur.
+ *   2) Bekleyen PrintCommand'leri LAN'da yazıcıya uygular → sonucu yazar.
+ *
+ * Prisma masaüstünde doğrudan uzak HTTP kullandığı için telefon komutları anında görünür.
+ * Burada embedded-replica sync ÇALIŞTIRILMAZ: native sync tüm API sorgularını 30+ saniye
+ * kilitleyerek uygulamayı kullanılamaz hale getiriyordu.
  *
  * instrumentation.ts (Next sunucu açılışı) tarafından bir kez başlatılır.
  * Yalnızca Turso modunda anlamlıdır; Turso yoksa snapshot/komut tabloları yine çalışır
  * ama uzaktan erişim olmaz (sorun değil).
  */
 import fs from "node:fs";
-import { prisma, syncTursoReplica } from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
@@ -45,7 +48,7 @@ let started = false;
 let capsWritten = false; // relay yetenek bildirimi (AppSetting) bir kez yazılır
 let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
 let commandsRunning = false; // komut koşucusu guard'ı — tick'ten ayrık, tek koşucu
-let tickCount = 0; // her 6. tick'te (~60sn) replica pull — sync() sorguları kısa süre bloke ettiği için sıklığı düşük tut (60sn = periyodik takılma yarıya iner; telefon komutları yine ≤60sn'de görülür)
+let tickCount = 0; // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
 const lastKey = new Map<string, string>();
 const lastWriteAt = new Map<string, number>(); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
 const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
@@ -243,13 +246,6 @@ async function tick(): Promise<void> {
       // Depo hademesi — oturumda bir kez, arka planda (temp artıkları + R2 orphan'ları).
       void runStorageJanitor().catch(() => {});
     }
-    // Replica pull'u HER tick'te değil ~60sn'de bir (sync() SQL sorgularını kısa süre bloke
-    // ediyor). KRİTİK: İLK tick'te (t+5sn) ASLA — eski `tickCount++ % 6` ilk tick'te de sync
-    // çalıştırıyordu ve tüm SQL'i tam açılış sorgularının (dashboard/orders/notifications)
-    // ortasında bloke ediyordu → splash 7sn'de boş kapanıyor, "açıldı ama yüklenmiyor" oluyordu.
-    // İlk sync artık ~t+65sn (tick 6); telefon komutları yine ≤60sn'de görülür.
-    if (tickCount % 6 === 0) await syncTursoReplica().catch(() => {});
-
     // TÜM yazıcılar devre dışıyken de devam et — komut kuyruğu yine işlenmeli (yoksa pending
     // komutlar ne uygulanır ne TTL ile düşer; sonsuza dek "bekliyor" kalırdı).
     const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
