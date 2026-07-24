@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
   const data = await swr(
-    `finance-monthly:v1:${monthCount}`,
+    `finance-monthly:v2:${monthCount}`,
     60_000,
     () => computeMonthlyFinance(monthCount)
   );
@@ -25,7 +25,8 @@ export async function GET(req: NextRequest) {
 async function computeMonthlyFinance(monthCount: number) {
   await ensureRuntimeSchema();
 
-  const [snapshots, manualOrders, expenses] = await Promise.all([
+  const [snapshots, manualOrders, expenses, actualCommissionSummary] =
+    await Promise.all([
     prisma.orderFinanceSnapshot.findMany({
       where: { platform: { not: "manual" } },
       orderBy: { orderedAt: "asc" },
@@ -43,6 +44,11 @@ async function computeMonthlyFinance(monthCount: number) {
     }),
     remotePrisma.actualExpense.findMany({
       orderBy: { paidAt: "asc" },
+    }),
+    prisma.platformOrderFinancial.aggregate({
+      where: { platform: "trendyol" },
+      _count: { _all: true },
+      _max: { syncedAt: true },
     }),
   ]);
 
@@ -102,6 +108,9 @@ async function computeMonthlyFinance(monthCount: number) {
         .sort((a, b) => a.getTime() - b.getTime())[0]
         ?.toISOString() ?? null,
     lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
+    actualCommissionOrders: actualCommissionSummary._count._all,
+    lastActualCommissionSyncAt:
+      actualCommissionSummary._max.syncedAt?.toISOString() ?? null,
     totals,
     months,
     quality,

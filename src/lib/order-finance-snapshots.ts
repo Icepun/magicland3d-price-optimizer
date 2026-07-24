@@ -12,6 +12,9 @@ export interface FinanceSnapshotOrder {
   total: number;
   profit: number | null;
   profitPartial: boolean;
+  profitSource?: "calculated" | "platform" | "manual";
+  estimatedCommission?: number;
+  actualCommission?: number | null;
   statusKind: string;
   currency: string;
 }
@@ -28,11 +31,15 @@ export function shouldReplaceCapturedProfit(
     revenueKurus: number;
     profitKurus: number | null;
     profitPartial: boolean;
+    profitSource?: string;
+    actualCommissionKurus?: number | null;
   } | null,
   incoming: {
     revenueKurus: number;
     profitKurus: number | null;
     profitPartial: boolean;
+    profitSource?: string;
+    actualCommissionKurus?: number | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -40,6 +47,15 @@ export function shouldReplaceCapturedProfit(
   // daha sonra tamamlanırsa yeni değeri kabul ederiz.
   if (!existing || existing.revenueKurus !== incoming.revenueKurus) return true;
   if (existing.profitKurus == null && incoming.profitKurus != null) return true;
+  // Platformun gerçek komisyonu sonradan oluşur (genelde teslimden sonra). Bu bilgi
+  // hesaplanan değerden daha güçlüdür ve tutar değişirse geçmiş snapshot da yenilenmelidir.
+  if (
+    incoming.profitSource === "platform" &&
+    (existing.profitSource !== "platform" ||
+      existing.actualCommissionKurus !== incoming.actualCommissionKurus)
+  ) {
+    return true;
+  }
   return (
     existing.profitPartial &&
     !incoming.profitPartial &&
@@ -82,6 +98,9 @@ export async function persistOrderFinanceSnapshots(
         profitKurus: true,
         profitPartial: true,
         calculationVersion: true,
+        profitSource: true,
+        actualCommissionKurus: true,
+        estimatedCommissionKurus: true,
       },
     });
     const existingByKey = new Map(
@@ -99,6 +118,15 @@ export async function persistOrderFinanceSnapshots(
           revenueKurus: tlToKurus(order.total),
           profitKurus: order.profit == null ? null : tlToKurus(order.profit),
           profitPartial: order.profitPartial,
+          profitSource: order.profitSource ?? "calculated",
+          estimatedCommissionKurus:
+            order.estimatedCommission == null
+              ? null
+              : tlToKurus(order.estimatedCommission),
+          actualCommissionKurus:
+            order.actualCommission == null
+              ? null
+              : tlToKurus(order.actualCommission),
         };
         const replaceProfit = shouldReplaceCapturedProfit(existing, incoming);
         const data = {
@@ -111,6 +139,17 @@ export async function persistOrderFinanceSnapshots(
           profitPartial: replaceProfit
             ? incoming.profitPartial
             : existing?.profitPartial ?? incoming.profitPartial,
+          profitSource: replaceProfit
+            ? incoming.profitSource
+            : existing?.profitSource ?? incoming.profitSource,
+          estimatedCommissionKurus: replaceProfit
+            ? incoming.estimatedCommissionKurus
+            : existing?.estimatedCommissionKurus ??
+              incoming.estimatedCommissionKurus,
+          actualCommissionKurus: replaceProfit
+            ? incoming.actualCommissionKurus
+            : existing?.actualCommissionKurus ??
+              incoming.actualCommissionKurus,
           statusKind: order.statusKind,
           currency: order.currency || "TRY",
           syncedAt,

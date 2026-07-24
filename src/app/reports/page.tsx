@@ -2,7 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart,
   Bar,
@@ -21,16 +21,19 @@ import {
   CalendarRange,
   Package,
   Receipt,
+  RefreshCw,
   ShoppingCart,
   TrendingDown,
   TrendingUp,
   Trophy,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
+import { toast } from "sonner";
 
 interface SummaryBucket {
   revenue: number;
@@ -108,9 +111,19 @@ interface FinanceResponse {
   generatedAt: string;
   dataFrom: string | null;
   lastOrderSyncAt: string | null;
+  actualCommissionOrders: number;
+  lastActualCommissionSyncAt: string | null;
   totals: FinanceTotals;
   months: FinanceBucket[];
   quality: FinanceQuality;
+}
+
+interface TrendyolCommissionSyncResponse {
+  fetchedTransactions: number;
+  storedOrders: number;
+  skippedTransactions: number;
+  days: number;
+  syncedAt: string;
 }
 
 function MiniThumb({
@@ -182,6 +195,7 @@ function formatHistoryDate(value: string) {
 }
 
 export default function ReportsPage() {
+  const queryClient = useQueryClient();
   const ordersQuery = useQuery<OrdersResp>({
     queryKey: ["orders"],
     queryFn: () => fetchJson<OrdersResp>("/api/orders", { cache: "no-store" }),
@@ -202,6 +216,29 @@ export default function ReportsPage() {
     enabled: ordersQuery.isSuccess && !ordersQuery.isFetching,
     staleTime: 0,
     refetchOnMount: "always",
+  });
+  const trendyolCommissionSync = useMutation({
+    mutationFn: () =>
+      fetchJson<TrendyolCommissionSyncResponse>(
+        "/api/finance/trendyol-commissions?days=60",
+        { method: "POST" }
+      ),
+    onSuccess: async (result) => {
+      toast.success(
+        result.storedOrders > 0
+          ? `${result.storedOrders} Trendyol siparişinin gerçek komisyonu alındı.`
+          : "Yeni Trendyol komisyon kaydı bulunamadı."
+      );
+      await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Trendyol komisyonları alınamadı."
+      );
+    },
   });
 
   const summary = ordersQuery.data?.summary;
@@ -307,13 +344,40 @@ export default function ReportsPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-6xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <BarChart3 className="h-6 w-6 text-primary" /> Raporlar
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Aylık ciro, net kâr ve satış performansının tek görünümü.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <BarChart3 className="h-6 w-6 text-primary" /> Raporlar
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Aylık ciro, net kâr ve satış performansının tek görünümü.
+          </p>
+          {financeQuery.data && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {financeQuery.data.actualCommissionOrders > 0
+                ? `${financeQuery.data.actualCommissionOrders} Trendyol sipariş/paket kaydında gerçek komisyon hazır.`
+                : "Trendyol komisyonları henüz platformdan alınmadı."}
+            </p>
+          )}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-2 self-start"
+          disabled={trendyolCommissionSync.isPending}
+          onClick={() => trendyolCommissionSync.mutate()}
+        >
+          <RefreshCw
+            className={cn(
+              "h-4 w-4",
+              trendyolCommissionSync.isPending && "animate-spin"
+            )}
+          />
+          {trendyolCommissionSync.isPending
+            ? "Komisyonlar alınıyor..."
+            : "Trendyol Komisyonlarını Güncelle"}
+        </Button>
       </div>
 
       {loading ? (

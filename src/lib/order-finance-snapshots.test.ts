@@ -26,6 +26,8 @@ describe("finance snapshot order ids", () => {
       revenueKurus: 10_000,
       profitKurus: 2_500,
       profitPartial: false,
+      profitSource: "calculated",
+      actualCommissionKurus: null,
     };
     expect(
       shouldReplaceCapturedProfit(captured, {
@@ -55,6 +57,33 @@ describe("finance snapshot order ids", () => {
         { revenueKurus: 10_000, profitKurus: 1_500, profitPartial: true },
         { revenueKurus: 10_000, profitKurus: 2_000, profitPartial: false }
       )
+    ).toBe(true);
+  });
+
+  it("platform komisyonu gelince yakalanan kârı yükseltir ve değişiklikleri izler", () => {
+    const calculated = {
+      revenueKurus: 10_000,
+      profitKurus: 2_500,
+      profitPartial: false,
+      profitSource: "calculated",
+      actualCommissionKurus: null,
+    };
+    const platform = {
+      revenueKurus: 10_000,
+      profitKurus: 2_650,
+      profitPartial: false,
+      profitSource: "platform",
+      actualCommissionKurus: 1_800,
+    };
+
+    expect(shouldReplaceCapturedProfit(calculated, platform)).toBe(true);
+    expect(shouldReplaceCapturedProfit(platform, platform)).toBe(false);
+    expect(
+      shouldReplaceCapturedProfit(platform, {
+        ...platform,
+        profitKurus: 2_600,
+        actualCommissionKurus: 1_850,
+      })
     ).toBe(true);
   });
 });

@@ -20,6 +20,7 @@ import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import { applyActualCommissionToProfit } from "@/core/platform-financials";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
@@ -69,6 +70,9 @@ export interface UnifiedOrder {
   image: string | null;
   profit: number | null;
   profitPartial: boolean;
+  profitSource: "calculated" | "platform" | "manual";
+  estimatedCommission: number;
+  actualCommission: number | null;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
@@ -544,6 +548,22 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
+  type PlatformFinancial = {
+    externalOrderId: string;
+    orderNumber: string;
+    grossRevenueKurus: number;
+    commissionKurus: number;
+  };
+  const financialByExternalId = new Map<string, PlatformFinancial>();
+  const financialByOrderNumber = new Map<string, PlatformFinancial[]>();
+  const trendyolOrderNumberCounts = new Map<string, number>();
+  for (const row of historyRows) {
+    if (row.platform !== "trendyol") continue;
+    trendyolOrderNumberCounts.set(
+      row.orderNumber,
+      (trendyolOrderNumberCounts.get(row.orderNumber) ?? 0) + 1
+    );
+  }
   // Shopify global komisyon oranı resolveListingCommissionOverride içinde buradan okunur → dış kapsam.
   let settingsMap: Record<string, string | undefined> = {};
 
@@ -562,7 +582,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             .filter((product) => normalizedShopifyNames.has(normName(product.name)))
             .map((product) => product.id)
         : [];
-    const [products, cRules, kRules, eRules, settings] = await Promise.all([
+    const trendyolRows = historyRows.filter((row) => row.platform === "trendyol");
+    const [products, cRules, kRules, eRules, settings, platformFinancials] =
+      await Promise.all([
       prisma.product.findMany({
         where: {
           OR: [
@@ -580,12 +602,33 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       prisma.cargoRule.findMany({ where: { isActive: true } }),
       prisma.expenseRule.findMany({ where: { isActive: true } }),
       prisma.appSetting.findMany(),
+      prisma.platformOrderFinancial.findMany({
+        where: {
+          platform: "trendyol",
+          OR: [
+            { externalOrderId: { in: trendyolRows.map((row) => row.id) } },
+            { orderNumber: { in: trendyolRows.map((row) => row.orderNumber) } },
+          ],
+        },
+        select: {
+          externalOrderId: true,
+          orderNumber: true,
+          grossRevenueKurus: true,
+          commissionKurus: true,
+        },
+      }),
     ]);
 
     settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
     commissionRules = cRules as CommissionRules;
     cargoRules = kRules as CargoRules;
     expenseRules = eRules as ExpenseRules;
+    for (const financial of platformFinancials) {
+      financialByExternalId.set(financial.externalOrderId, financial);
+      const rows = financialByOrderNumber.get(financial.orderNumber) ?? [];
+      rows.push(financial);
+      financialByOrderNumber.set(financial.orderNumber, rows);
+    }
 
     for (const p of products) {
       const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
@@ -727,6 +770,40 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       expenseRules,
       settings: settingsMap,
     });
+    const profitPartial = pr.partial || Boolean(r.forceProfitPartial);
+    let platformFinancial =
+      r.platform === "trendyol"
+        ? financialByExternalId.get(r.id) ?? null
+        : null;
+    // Eski/eksik settlement kayıtlarında shipmentPackageId gelmeyebilir. Aynı sipariş
+    // numarası hem sipariş listesinde hem finans tablosunda TEKİLSE güvenli fallback yap.
+    if (
+      !platformFinancial &&
+      r.platform === "trendyol" &&
+      trendyolOrderNumberCounts.get(r.orderNumber) === 1
+    ) {
+      const candidates = financialByOrderNumber.get(r.orderNumber) ?? [];
+      if (candidates.length === 1) platformFinancial = candidates[0];
+    }
+    const actualCommission =
+      platformFinancial == null
+        ? null
+        : kurusToTl(platformFinancial.commissionKurus);
+    const actualProfit =
+      platformFinancial == null || r.statusKind === "cancelled"
+        ? {
+            profit: pr.profit,
+            applied: false,
+          }
+        : applyActualCommissionToProfit({
+            profit: pr.profit,
+            profitPartial,
+            orderRevenue: r.total,
+            estimatedCommission: pr.estimatedCommission,
+            actualCommission: kurusToTl(platformFinancial.commissionKurus),
+            settlementRevenue: kurusToTl(platformFinancial.grossRevenueKurus),
+            vatRate: Number(settingsMap.vatRate ?? 0),
+          });
 
     orders.push({
       platform: r.platform,
@@ -741,8 +818,11 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       itemCount: items.reduce((s, it) => s + it.quantity, 0),
       items,
       image: thumb,
-      profit: pr.profit,
-      profitPartial: pr.partial || Boolean(r.forceProfitPartial),
+      profit: actualProfit.profit,
+      profitPartial,
+      profitSource: actualProfit.applied ? "platform" : "calculated",
+      estimatedCommission: pr.estimatedCommission,
+      actualCommission: actualProfit.applied ? actualCommission : null,
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
@@ -797,6 +877,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             ? null
             : kurusToTl(manual.profitKurus),
         profitPartial: manual.profitPartial,
+        profitSource: "manual",
+        estimatedCommission: storedBreakdown.commissionCost,
+        actualCommission: null,
         unmatchedCount: storedBreakdown.missingCostItems,
         missingDesiCount: 0,
         desiEstimated: false,

@@ -25,6 +25,7 @@ export async function GET() {
     expenseRules,
     actualExpenses,
     orderFinanceSnapshots,
+    platformOrderFinancials,
     manualOrders,
     costTemplates,
     priceHistory,
@@ -49,6 +50,7 @@ export async function GET() {
     prisma.orderFinanceSnapshot.findMany({
       where: { platform: { not: "manual" } },
     }),
+    prisma.platformOrderFinancial.findMany(),
     remotePrisma.manualOrder.findMany(),
     prisma.costTemplate.findMany(),
     prisma.priceHistory.findMany(),
@@ -73,7 +75,7 @@ export async function GET() {
       : [];
 
   const dump = {
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     appVersion: packageJson.version,
     metadata: {
@@ -98,6 +100,7 @@ export async function GET() {
     expenseRules,
     actualExpenses,
     orderFinanceSnapshots,
+    platformOrderFinancials,
     manualOrders,
     costTemplates,
     priceHistory,

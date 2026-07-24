@@ -50,11 +50,17 @@ export interface TrendyolBatchResponse {
 }
 
 export interface TrendyolSettlementItem {
+  id?: string | number;
   barcode?: string;
   transactionDate?: number;
   orderDate?: number;
   commissionRate?: number;
   commissionAmount?: number;
+  sellerRevenue?: number;
+  credit?: number;
+  debt?: number;
+  orderNumber?: string | number;
+  shipmentPackageId?: string | number;
   transactionType?: string;
   [key: string]: unknown;
 }
@@ -193,14 +199,30 @@ export class TrendyolClient {
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      cache: "no-store",
-      headers: {
-        ...this.headers(),
-        ...(init?.headers ?? {}),
-      },
-    });
+    const timeoutSignal = AbortSignal.timeout(20_000);
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeoutSignal])
+      : timeoutSignal;
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        signal,
+        cache: "no-store",
+        headers: {
+          ...this.headers(),
+          ...(init?.headers ?? {}),
+        },
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        throw new TrendyolApiError(
+          408,
+          "Trendyol API isteği 20 saniye içinde yanıt vermedi."
+        );
+      }
+      throw error;
+    }
 
     const text = await response.text();
     const body = this.parseBody(text);

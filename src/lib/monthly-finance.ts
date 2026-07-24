@@ -1,5 +1,5 @@
 export const FINANCE_TIME_ZONE = "Europe/Istanbul";
-export const FINANCE_CALCULATION_VERSION = 1;
+export const FINANCE_CALCULATION_VERSION = 2;
 
 export function tlToKurus(value: number): number {
   if (!Number.isFinite(value)) throw new Error("Geçersiz para tutarı");

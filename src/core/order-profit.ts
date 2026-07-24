@@ -68,6 +68,8 @@ export interface OrderProfitInput {
 export interface OrderProfitResult {
   /** null = hiçbir satırın maliyeti bilinmiyor → kâr gösterilmemeli. */
   profit: number | null;
+  /** Kural/listing üzerinden siparişe düşülen brüt komisyon. */
+  estimatedCommission: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
   matchedLines: number;
@@ -104,6 +106,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let lineRevenueGross = 0;
   let matchedRevenueGross = 0;
   let commissionRateRevenue = 0;
+  let estimatedCommission = 0;
   let missingDesiLines = 0;
   let missingDesiQty = 0;
   let totalDesi = 0;
@@ -173,6 +176,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       vatableProductCost: p.filamentCost,
     });
     profit += sim.netProfit;
+    estimatedCommission += sim.commissionCost;
     matchedRevenueGross += lineGross;
     commissionRateRevenue +=
       lineGross *
@@ -190,6 +194,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   if (matchedLines === 0) {
     return {
       profit: null,
+      estimatedCommission: 0,
       partial: false,
       matchedLines: 0,
       unmatchedLines,
@@ -221,6 +226,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const adjustmentCommissionRate =
     matchedRevenueGross > 0 ? commissionRateRevenue / matchedRevenueGross : 0;
   const adjustmentCommission = orderRevenueAdjustment * adjustmentCommissionRate;
+  estimatedCommission += adjustmentCommission;
   const orderRevenueAdjustmentNet =
     adjustmentRevenueExVat -
     adjustmentCommission +
@@ -292,6 +298,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
 
   return {
     profit,
+    estimatedCommission,
     partial: unmatchedLines > 0,
     matchedLines,
     unmatchedLines,

@@ -205,6 +205,22 @@ const OrderFinanceSnapshotSchema = z.object({
   currency: z.string().optional(),
   syncedAt: optionalDate,
   calculationVersion: integer.positive().optional(),
+  profitSource: z.enum(["calculated", "platform"]).optional(),
+  estimatedCommissionKurus: sqliteInt.nullable().optional(),
+  actualCommissionKurus: sqliteInt.nullable().optional(),
+});
+
+const PlatformOrderFinancialSchema = z.object({
+  id,
+  platform: id,
+  externalOrderId: id,
+  orderNumber: z.string(),
+  grossRevenueKurus: integer.nonnegative().max(2_147_483_647),
+  commissionKurus: integer.nonnegative().max(2_147_483_647),
+  sellerRevenueKurus: integer.nonnegative().max(2_147_483_647),
+  transactionCount: integer.nonnegative().optional(),
+  sourceUpdatedAt: optionalDate,
+  syncedAt: optionalDate,
 });
 
 const ManualOrderSchema = z
@@ -346,6 +362,10 @@ const ImportSchema = z.object({
   expenseRules: z.array(ExpenseRuleSchema).optional(),
   actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
+  platformOrderFinancials: z
+    .array(PlatformOrderFinancialSchema)
+    .optional()
+    .default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
   costTemplates: z.array(CostTemplateSchema).optional(),
   priceHistory: z.array(PriceHistorySchema).optional(),
@@ -399,6 +419,7 @@ export async function POST(req: NextRequest) {
           actualExpenses: 0,
           orderFinanceSnapshots: 0,
           orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
+          platformOrderFinancials: 0,
           manualOrders: 0,
           costTemplates: 0,
           priceHistory: 0,
@@ -540,6 +561,10 @@ export async function POST(req: NextRequest) {
             currency: snapshot.currency ?? "TRY",
             ...(snapshot.syncedAt ? { syncedAt: snapshot.syncedAt } : {}),
             calculationVersion: snapshot.calculationVersion ?? 1,
+            profitSource: snapshot.profitSource ?? "calculated",
+            estimatedCommissionKurus:
+              snapshot.estimatedCommissionKurus ?? null,
+            actualCommissionKurus: snapshot.actualCommissionKurus ?? null,
           };
           await tx.orderFinanceSnapshot.upsert({
             where: {
@@ -557,6 +582,34 @@ export async function POST(req: NextRequest) {
             update: fields,
           });
           result.orderFinanceSnapshots++;
+        }
+
+        for (const financial of data.platformOrderFinancials) {
+          const fields = {
+            orderNumber: financial.orderNumber,
+            grossRevenueKurus: financial.grossRevenueKurus,
+            commissionKurus: financial.commissionKurus,
+            sellerRevenueKurus: financial.sellerRevenueKurus,
+            transactionCount: financial.transactionCount ?? 0,
+            sourceUpdatedAt: financial.sourceUpdatedAt ?? null,
+            ...(financial.syncedAt ? { syncedAt: financial.syncedAt } : {}),
+          };
+          await tx.platformOrderFinancial.upsert({
+            where: {
+              platform_externalOrderId: {
+                platform: financial.platform,
+                externalOrderId: financial.externalOrderId,
+              },
+            },
+            create: {
+              id: financial.id,
+              platform: financial.platform,
+              externalOrderId: financial.externalOrderId,
+              ...fields,
+            },
+            update: fields,
+          });
+          result.platformOrderFinancials++;
         }
 
         for (const order of data.manualOrders) {

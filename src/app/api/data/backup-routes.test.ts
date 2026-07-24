@@ -222,7 +222,24 @@ describe("portable backup routes", () => {
           profitPartial: true,
           statusKind: "processing",
           currency: "TRY",
-          calculationVersion: 1,
+          calculationVersion: 2,
+          profitSource: "platform",
+          estimatedCommissionKurus: 7_000,
+          actualCommissionKurus: 6_500,
+        },
+      ],
+      platformOrderFinancials: [
+        {
+          id: "pof-1",
+          platform: "trendyol",
+          externalOrderId: "ty-77",
+          orderNumber: "1003",
+          grossRevenueKurus: 34_498,
+          commissionKurus: 6_500,
+          sellerRevenueKurus: 27_998,
+          transactionCount: 2,
+          sourceUpdatedAt: "2026-07-10T10:00:00.000Z",
+          syncedAt: "2026-07-10T11:00:00.000Z",
         },
       ],
       manualOrders: [
@@ -258,6 +275,7 @@ describe("portable backup routes", () => {
     expect(result.stats.productModelFilesSkipped).toBe(1);
     expect(result.stats.actualExpenses).toBe(1);
     expect(result.stats.orderFinanceSnapshots).toBe(1);
+    expect(result.stats.platformOrderFinancials).toBe(1);
     expect(result.stats.manualOrders).toBe(1);
     expect(result.warnings).toHaveLength(1);
 
@@ -305,6 +323,15 @@ describe("portable backup routes", () => {
       itemsJson: manualItemsJson,
       breakdownJson: manualBreakdownJson,
     });
+    expect(
+      await db.platformOrderFinancial.findUniqueOrThrow({
+        where: { id: "pof-1" },
+      })
+    ).toMatchObject({
+      externalOrderId: "ty-77",
+      commissionKurus: 6_500,
+      transactionCount: 2,
+    });
     await db.orderFinanceSnapshot.create({
       data: {
         id: "legacy-manual-snapshot",
@@ -326,7 +353,7 @@ describe("portable backup routes", () => {
     const exported = await exportBackup();
     expect(exported.status).toBe(200);
     const backup = await exported.json();
-    expect(backup.version).toBe(2);
+    expect(backup.version).toBe(3);
     expect(backup.appVersion).toBe(packageJson.version);
     expect(backup.priceHistory).toHaveLength(1);
     expect(backup.filamentSpools).toHaveLength(1);
@@ -341,6 +368,16 @@ describe("portable backup routes", () => {
         externalOrderId: "sh-1003",
         revenueKurus: 34_498,
         profitKurus: 7_333,
+        profitSource: "platform",
+        estimatedCommissionKurus: 7_000,
+        actualCommissionKurus: 6_500,
+      }),
+    ]);
+    expect(backup.platformOrderFinancials).toEqual([
+      expect.objectContaining({
+        id: "pof-1",
+        externalOrderId: "ty-77",
+        commissionKurus: 6_500,
       }),
     ]);
     expect(

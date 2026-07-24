@@ -319,10 +319,34 @@ model OrderFinanceSnapshot {
   currency           String   @default("TRY")
   syncedAt           DateTime @updatedAt
   calculationVersion Int      @default(1)
+  profitSource       String   @default("calculated")
+  estimatedCommissionKurus Int?
+  actualCommissionKurus    Int?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])
   @@index([statusKind, orderedAt])
+}
+
+/**
+ * Pazaryeri cari hareketlerinden alınan gerçekleşmiş sipariş finansı.
+ * Sipariş listesi harici API çağrısı yapmadan bu yerel tabloyu kullanır.
+ */
+model PlatformOrderFinancial {
+  id                   String   @id @default(cuid())
+  platform             String
+  externalOrderId      String
+  orderNumber          String
+  grossRevenueKurus    Int
+  commissionKurus      Int
+  sellerRevenueKurus   Int
+  transactionCount     Int      @default(0)
+  sourceUpdatedAt      DateTime?
+  syncedAt             DateTime @updatedAt
+
+  @@unique([platform, externalOrderId])
+  @@index([platform, orderNumber])
+  @@index([platform, syncedAt])
 }
 
 /**
