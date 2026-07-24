@@ -322,6 +322,8 @@ model OrderFinanceSnapshot {
   profitSource       String   @default("calculated")
   estimatedCommissionKurus Int?
   actualCommissionKurus    Int?
+  estimatedCargoKurus      Int?
+  actualCargoKurus         Int?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])
@@ -345,6 +347,27 @@ model PlatformOrderFinancial {
   syncedAt             DateTime @updatedAt
 
   @@unique([platform, externalOrderId])
+  @@index([platform, orderNumber])
+  @@index([platform, syncedAt])
+}
+
+/**
+ * Trendyol kargo faturalarının sipariş bazında eşleştirilen kalemleri.
+ * Farklı aylarda oluşan gönderi ve iade kargoları ayrı tutulup birlikte toplanır.
+ */
+model PlatformOrderCargoItem {
+  id                  String   @id
+  platform            String
+  invoiceSerialNumber String
+  parcelUniqueId      String
+  orderNumber         String
+  shipmentType        String
+  amountKurus         Int
+  desi                Float?
+  sourceUpdatedAt     DateTime?
+  syncedAt            DateTime @updatedAt
+
+  @@unique([platform, invoiceSerialNumber, parcelUniqueId, shipmentType])
   @@index([platform, orderNumber])
   @@index([platform, syncedAt])
 }

@@ -61,9 +61,6 @@ interface UnifiedOrder {
   image: string | null;
   profit: number | null;
   profitPartial: boolean;
-  profitSource?: "calculated" | "platform" | "manual";
-  estimatedCommission?: number;
-  actualCommission?: number | null;
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -779,33 +776,6 @@ const OrderRow = memo(function OrderRow({
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
-                {order.platform === "trendyol" &&
-                  (order.actualCommission != null ||
-                    (order.estimatedCommission ?? 0) > 0) && (
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className="text-muted-foreground">
-                        Komisyon{" "}
-                        {order.profitSource === "platform"
-                          ? "· Trendyol'dan"
-                          : "· hesaplanan"}
-                      </span>
-                      <span
-                        className={cn(
-                          "tabular-nums",
-                          order.profitSource === "platform"
-                            ? "text-green-600 dark:text-green-500"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        {fmtMoney2(
-                          order.actualCommission ??
-                            order.estimatedCommission ??
-                            0,
-                          orderCurrency
-                        )}
-                      </span>
-                    </div>
-                  )}
                 {Math.abs(order.orderRevenueAdjustment ?? 0) >= 0.01 && (
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">Kargo geliri / sipariş indirimi</span>

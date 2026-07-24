@@ -22,9 +22,10 @@ let schemaReady: Promise<void> | null = null;
 // v32: ActualExpense + OrderFinanceSnapshot — gerçek giderler ve kalıcı aylık finans geçmişi.
 // v33: ManualOrder — ürünlü/serbest manuel sipariş ve versioned hesap snapshot'ı.
 // v34: PlatformOrderFinancial + snapshot komisyon kaynağı — Trendyol gerçek komisyonu.
+// v35: PlatformOrderCargoItem + snapshot kargo alanları — Trendyol gerçek kargo faturası.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "34";
+const CURRENT_SCHEMA_VERSION = "35";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -362,7 +363,9 @@ export function ensureRuntimeSchema(): Promise<void> {
         "calculationVersion" INTEGER NOT NULL DEFAULT 1,
         "profitSource" TEXT NOT NULL DEFAULT 'calculated',
         "estimatedCommissionKurus" INTEGER,
-        "actualCommissionKurus" INTEGER
+        "actualCommissionKurus" INTEGER,
+        "estimatedCargoKurus" INTEGER,
+        "actualCargoKurus" INTEGER
       )
     `);
     await prisma.$executeRawUnsafe(
@@ -384,6 +387,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     );
     await ensureColumn("OrderFinanceSnapshot", "estimatedCommissionKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "actualCommissionKurus", "INTEGER");
+    await ensureColumn("OrderFinanceSnapshot", "estimatedCargoKurus", "INTEGER");
+    await ensureColumn("OrderFinanceSnapshot", "actualCargoKurus", "INTEGER");
     // v34: Pazaryeri finans hareketi ana sipariş hattından ayrı senkronlanır. Böylece
     // Siparişler ekranı hiçbir zaman settlement API'sini beklemez.
     await prisma.$executeRawUnsafe(`
@@ -411,6 +416,34 @@ export function ensureRuntimeSchema(): Promise<void> {
     await prisma.$executeRawUnsafe(
       `CREATE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_syncedAt_idx"
        ON "PlatformOrderFinancial"("platform", "syncedAt")`
+    );
+    // v35: Kargo faturası kalemleri fatura bazında saklanır. Aynı siparişe daha sonra
+    // iade kargosu gelirse eski gönderi bedelini ezmeden birlikte hesaplanır.
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "PlatformOrderCargoItem" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "invoiceSerialNumber" TEXT NOT NULL,
+        "parcelUniqueId" TEXT NOT NULL,
+        "orderNumber" TEXT NOT NULL,
+        "shipmentType" TEXT NOT NULL,
+        "amountKurus" INTEGER NOT NULL,
+        "desi" REAL,
+        "sourceUpdatedAt" DATETIME,
+        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "PlatformOrderCargoItem_platform_invoiceSerialNumber_parcelUniqueId_shipmentType_key"
+       ON "PlatformOrderCargoItem"("platform", "invoiceSerialNumber", "parcelUniqueId", "shipmentType")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "PlatformOrderCargoItem_platform_orderNumber_idx"
+       ON "PlatformOrderCargoItem"("platform", "orderNumber")`
+    );
+    await prisma.$executeRawUnsafe(
+      `CREATE INDEX IF NOT EXISTS "PlatformOrderCargoItem_platform_syncedAt_idx"
+       ON "PlatformOrderCargoItem"("platform", "syncedAt")`
     );
     // v33: Manuel sipariş, kalem + hesap snapshot'ıyla tek atomik satırdır.
     // OrderFinanceSnapshot'a kopyalanmaz; aylık finans iki kaynağı çift saymadan birleştirir.

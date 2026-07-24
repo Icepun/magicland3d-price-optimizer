@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { aggregateTrendyolSaleSettlements } from "./trendyol-finance";
+import {
+  aggregateTrendyolSaleSettlements,
+  isTrendyolCargoInvoice,
+  normalizeTrendyolCargoInvoiceItems,
+} from "./trendyol-finance";
 
 describe("Trendyol satış finans hareketleri", () => {
   it("aynı paket içindeki ürün satırlarını sipariş komisyonunda toplar", () => {
@@ -57,5 +61,76 @@ describe("Trendyol satış finans hareketleri", () => {
 
     expect(result.aggregates).toHaveLength(0);
     expect(result.skippedTransactions).toBe(1);
+  });
+});
+
+describe("Trendyol kargo faturaları", () => {
+  it("cari ekstreden Türkçe ve İngilizce kargo faturalarını ayırır", () => {
+    expect(
+      isTrendyolCargoInvoice({
+        transactionType: "Kargo Faturası",
+        description: "Trendyol lojistik",
+      })
+    ).toBe(true);
+    expect(
+      isTrendyolCargoInvoice({
+        transactionType: "DeductionInvoices",
+        description: "Cargo Invoice",
+      })
+    ).toBe(true);
+    expect(
+      isTrendyolCargoInvoice({
+        transactionType: "Hizmet Faturası",
+        description: "Platform hizmet bedeli",
+      })
+    ).toBe(false);
+  });
+
+  it("gönderi ve iade kalemlerini aynı sipariş için ayrı saklar", () => {
+    const result = normalizeTrendyolCargoInvoiceItems(
+      "INV-1",
+      [
+        {
+          shipmentPackageType: "Gönderi Kargo Bedeli",
+          parcelUniqueId: 101,
+          orderNumber: "1003",
+          amount: 34.24,
+          desi: 1,
+        },
+        {
+          shipmentPackageType: "İade Kargo Bedeli",
+          parcelUniqueId: 102,
+          orderNumber: "1003",
+          amount: 40,
+          desi: 2,
+        },
+      ],
+      new Date("2026-07-01T10:00:00.000Z")
+    );
+
+    expect(result.skippedItems).toBe(0);
+    expect(result.records).toEqual([
+      expect.objectContaining({
+        orderNumber: "1003",
+        shipmentType: "dispatch",
+        amount: 34.24,
+      }),
+      expect.objectContaining({
+        orderNumber: "1003",
+        shipmentType: "return",
+        amount: 40,
+      }),
+    ]);
+  });
+
+  it("sipariş, parsel veya tutarı eksik kalemi atlar", () => {
+    const result = normalizeTrendyolCargoInvoiceItems(
+      "INV-2",
+      [{ orderNumber: "1004", amount: 30 }],
+      null
+    );
+
+    expect(result.records).toHaveLength(0);
+    expect(result.skippedItems).toBe(1);
   });
 });

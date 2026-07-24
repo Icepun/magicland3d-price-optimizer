@@ -15,6 +15,18 @@ export interface ActualCommissionProfitResult {
   revenueTolerance: number;
 }
 
+export interface ActualCargoProfitInput {
+  profit: number | null;
+  profitPartial: boolean;
+  estimatedCargoNet: number;
+  actualCargoNet: number;
+}
+
+export interface ActualCargoProfitResult {
+  profit: number | null;
+  applied: boolean;
+}
+
 /**
  * Kuraldan hesaplanan komisyonu, pazaryerinin sipariş/paket finans hareketindeki
  * gerçek komisyonuyla değiştirir.
@@ -65,5 +77,28 @@ export function applyActualCommissionToProfit(
     applied: true,
     revenueDifference,
     revenueTolerance,
+  };
+}
+
+/**
+ * Kâr motorundaki tahmini net kargo maliyetini faturadaki gerçek net tutarla
+ * değiştirir. Çağıran taraf sipariş numarasının tekil eşleştiğini doğrular.
+ */
+export function applyActualCargoToProfit(
+  input: ActualCargoProfitInput
+): ActualCargoProfitResult {
+  const validMoney =
+    Number.isFinite(input.estimatedCargoNet) &&
+    Number.isFinite(input.actualCargoNet) &&
+    input.estimatedCargoNet >= 0 &&
+    input.actualCargoNet >= 0;
+
+  if (input.profit == null || input.profitPartial || !validMoney) {
+    return { profit: input.profit, applied: false };
+  }
+
+  return {
+    profit: input.profit + input.estimatedCargoNet - input.actualCargoNet,
+    applied: true,
   };
 }

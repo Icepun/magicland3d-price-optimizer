@@ -73,6 +73,42 @@ export interface TrendyolSettlementPage {
   content?: TrendyolSettlementItem[];
 }
 
+export interface TrendyolOtherFinancialItem {
+  id?: string | number;
+  transactionDate?: number;
+  transactionType?: string;
+  transactionSubType?: string;
+  description?: string;
+  debt?: number;
+  credit?: number;
+  [key: string]: unknown;
+}
+
+export interface TrendyolOtherFinancialPage {
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+  content?: TrendyolOtherFinancialItem[];
+}
+
+export interface TrendyolCargoInvoiceItem {
+  shipmentPackageType?: string;
+  parcelUniqueId?: string | number;
+  orderNumber?: string | number;
+  amount?: number;
+  desi?: number;
+  [key: string]: unknown;
+}
+
+export interface TrendyolCargoInvoicePage {
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+  content?: TrendyolCargoInvoiceItem[];
+}
+
 export interface TrendyolOrderLine {
   productName?: string;
   barcode?: string;
@@ -299,6 +335,46 @@ export class TrendyolClient {
 
     return this.request<TrendyolSettlementPage>(
       `/integration/finance/che/sellers/${this.credentials.sellerId}/settlements?${searchParams.toString()}`
+    );
+  }
+
+  async listOtherFinancials(params: {
+    startDate: number;
+    endDate: number;
+    page?: number;
+    size?: number;
+    transactionType?: string;
+    transactionSubType?: string;
+  }): Promise<TrendyolOtherFinancialPage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("startDate", String(params.startDate));
+    searchParams.set("endDate", String(params.endDate));
+    searchParams.set(
+      "transactionType",
+      params.transactionType ?? "DeductionInvoices"
+    );
+    searchParams.set("supplierId", this.credentials.sellerId);
+    searchParams.set("page", String(params.page ?? 0));
+    searchParams.set("size", String(params.size ?? 1000));
+    if (params.transactionSubType) {
+      searchParams.set("transactionSubType", params.transactionSubType);
+    }
+
+    return this.request<TrendyolOtherFinancialPage>(
+      `/integration/finance/che/sellers/${this.credentials.sellerId}/otherfinancials?${searchParams.toString()}`
+    );
+  }
+
+  async listCargoInvoiceItems(
+    invoiceSerialNumber: string,
+    params: { page?: number; size?: number } = {}
+  ): Promise<TrendyolCargoInvoicePage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("page", String(params.page ?? 0));
+    searchParams.set("size", String(params.size ?? 500));
+
+    return this.request<TrendyolCargoInvoicePage>(
+      `/integration/finance/che/sellers/${this.credentials.sellerId}/cargo-invoice/${encodeURIComponent(invoiceSerialNumber)}/items?${searchParams.toString()}`
     );
   }
 
