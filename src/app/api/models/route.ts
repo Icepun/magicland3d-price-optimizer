@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { swr } from "@/lib/route-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,11 @@ interface LibRow {
 
 /** Baskı Kütüphanesi: dosyası olan ürünler + yazıcı listesi (kapsama rozetleri için). */
 export async function GET() {
+  const data = await swr("models:v1", 2 * 60_000, computeModels);
+  return NextResponse.json(data);
+}
+
+async function computeModels() {
   await ensureRuntimeSchema();
   const [files, printers] = await Promise.all([
     prisma.productModelFile.findMany({
@@ -57,5 +63,5 @@ export async function GET() {
     });
   }
 
-  return NextResponse.json({ products: [...map.values()], printers });
+  return { products: [...map.values()], printers };
 }

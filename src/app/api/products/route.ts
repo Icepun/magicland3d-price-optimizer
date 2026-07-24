@@ -6,6 +6,7 @@ import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { swr } from "@/lib/route-cache";
 import { z } from "zod";
 
 const CreateProductSchema = z.object({
@@ -33,9 +34,26 @@ interface PlatformSummary {
 }
 
 export async function GET(req: NextRequest) {
+  const url = new URL(req.url);
+  const cacheable =
+    !url.searchParams.has("ids") &&
+    !url.searchParams.has("search") &&
+    !url.searchParams.has("lite");
+
+  const data = cacheable
+    ? await swr(
+        `products:v1:${url.searchParams.toString()}`,
+        2 * 60_000,
+        () => computeProducts(req.url)
+      )
+    : await computeProducts(req.url);
+  return NextResponse.json(data);
+}
+
+async function computeProducts(urlString: string) {
   await ensureRuntimeSchema();
 
-  const { searchParams } = new URL(req.url);
+  const { searchParams } = new URL(urlString);
   const filter = searchParams.get("filter") ?? "active";
   const search = searchParams.get("search");
   const platformFilter = searchParams.get("platform"); // shopify | trendyol
@@ -98,7 +116,7 @@ export async function GET(req: NextRequest) {
       },
       orderBy: { name: "asc" },
     });
-    return NextResponse.json(lite);
+    return lite;
   }
 
   const [products, commissionRules, cargoRules, expenseRules, settings] =
@@ -341,7 +359,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return NextResponse.json(filtered);
+  return filtered;
 }
 
 export async function POST(req: NextRequest) {

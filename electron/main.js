@@ -71,11 +71,8 @@ logStartup("version:", app.getVersion(), "packaged:", app.isPackaged);
 logStartup("platform:", process.platform, "node:", process.version);
 
 // ── Tek-instance kilidi ──────────────────────────────────────────────────────
-// İkinci bir instance açılırsa AYNI embedded replica dosyasını açar; libSQL tek-client
-// ister → replica WAL bozulur → native açılış Node event loop'unu kilitler → server
-// hiçbir isteğe (statik dahil) cevap veremez → uygulama "açılmaz". (Bu, sahada yaşanan
-// boş-ekran/açılmama sorununun kök nedeniydi.) İkinci instance hemen çıkar; mevcut
-// pencere öne getirilir.
+// Aynı userData/ayar/cache dosyalarına iki masaüstü sürecinin eşzamanlı yazmasını önle.
+// İkinci instance hemen çıkar; mevcut pencere öne getirilir.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   logStartup("İkinci instance tespit edildi — çıkılıyor (single-instance lock)");
@@ -428,10 +425,14 @@ function ensureCredentialKey() {
   if (!process.env.MLHUB_ORDERS_CACHE_FILE) {
     process.env.MLHUB_ORDERS_CACHE_FILE = `${slashedUserData}/orders-cache.json`;
   }
+  if (!process.env.MLHUB_ROUTE_CACHE_DIR) {
+    process.env.MLHUB_ROUTE_CACHE_DIR = `${slashedUserData}/route-cache`;
+  }
 
   // Turso (bulut DB) ayar dosyası + bağlantı env'leri.
-  // Kullanıcı ekranları yerel replica'dan anında okunur. Telefon/yazıcı relay'i için
-  // ayrıca doğrudan uzak client açılır; yerel replica üzerinde periyodik sync çalışmaz.
+  // Native embedded replica gerçek paket içinde SQL'i/ana Electron event-loop'unu tekrar
+  // kilitleyebildi (0.19.125). Bu nedenle paketli uygulama onu HİÇ açmaz: bütün bulut I/O
+  // asenkron HTTP'dir; ağır ekranlar kalıcı SWR disk önbelleğinden anında gösterilir.
   const tursoSettingsPath = `${slashedUserData}/turso-settings.json`;
   if (!process.env.TURSO_SETTINGS_FILE) {
     process.env.TURSO_SETTINGS_FILE = tursoSettingsPath;
@@ -442,9 +443,9 @@ function ensureCredentialKey() {
     if (turso && turso.url) {
       process.env.TURSO_DATABASE_URL = turso.url;
       if (turso.authToken) process.env.TURSO_AUTH_TOKEN = turso.authToken;
-      process.env.TURSO_REPLICA_PATH = `${slashedUserData}/turso-replica.db`;
-      delete process.env.TURSO_DISABLE_EMBEDDED_REPLICA;
-      logStartup("Turso bulut DB aktif (yerel hızlı okuma + ayrı uzak relay):", turso.url);
+      delete process.env.TURSO_REPLICA_PATH;
+      process.env.TURSO_DISABLE_EMBEDDED_REPLICA = "1";
+      logStartup("Turso bulut DB aktif (uzak HTTP + kalıcı SWR disk cache):", turso.url);
     }
   } catch {
     // dosya yok → local SQLite (mevcut davranış)

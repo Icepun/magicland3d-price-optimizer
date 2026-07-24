@@ -5,13 +5,25 @@ import {
   aggregateMonthlyFinance,
   FINANCE_TIME_ZONE,
 } from "@/lib/monthly-finance";
+import { swr } from "@/lib/route-cache";
 
 export async function GET(req: NextRequest) {
-  await ensureRuntimeSchema();
   const requested = Number(req.nextUrl.searchParams.get("months") ?? 12);
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
+  const data = await swr(
+    `finance-monthly:v1:${monthCount}`,
+    60_000,
+    () => computeMonthlyFinance(monthCount)
+  );
+  return NextResponse.json(data, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+async function computeMonthlyFinance(monthCount: number) {
+  await ensureRuntimeSchema();
 
   const [snapshots, manualOrders, expenses] = await Promise.all([
     prisma.orderFinanceSnapshot.findMany({
@@ -80,21 +92,18 @@ export async function GET(req: NextRequest) {
     null
   );
 
-  return NextResponse.json(
-    {
-      currency: "TRY",
-      timeZone: FINANCE_TIME_ZONE,
-      generatedAt: new Date().toISOString(),
-      dataFrom:
-        [...snapshots, ...manualOrders]
-          .map((row) => row.orderedAt)
-          .sort((a, b) => a.getTime() - b.getTime())[0]
-          ?.toISOString() ?? null,
-      lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
-      totals,
-      months,
-      quality,
-    },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  return {
+    currency: "TRY",
+    timeZone: FINANCE_TIME_ZONE,
+    generatedAt: new Date().toISOString(),
+    dataFrom:
+      [...snapshots, ...manualOrders]
+        .map((row) => row.orderedAt)
+        .sort((a, b) => a.getTime() - b.getTime())[0]
+        ?.toISOString() ?? null,
+    lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
+    totals,
+    months,
+    quality,
+  };
 }
