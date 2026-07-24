@@ -5,6 +5,7 @@ import { withProductCommissionRule, resolveListingCommissionOverride } from "@/c
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { swr } from "@/lib/route-cache";
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
 
@@ -17,7 +18,18 @@ interface PlatformStats {
   thinMarginCount: number;
 }
 
+/**
+ * Panel verisini SWR önbelleğiyle sun: kullanıcı uygulamayı açtığında (açılışta ısıtılır) veya
+ * panele döndüğünde ANINDA gelir; veri arka planda tazelenir. Uzak-HTTP'de panel ~2sn'lik ağ
+ * gidiş-dönüşüydü — artık kullanıcı bunu beklemiyor. (Toplam/özet veri; ~20sn bayatlık kabul
+ * edilebilir ve arka planda kendini tazeler.)
+ */
 export async function GET() {
+  const data = await swr("dashboard:v1", 20_000, computeDashboard);
+  return NextResponse.json(data);
+}
+
+async function computeDashboard() {
   await ensureRuntimeSchema();
 
   const [products, commissionRules, cargoRules, expenseRules, settings] =
@@ -192,7 +204,7 @@ export async function GET() {
   // Stok 0 olanlar önce, sonra 1 olanlar
   lowStockProducts.sort((a, b) => a.stock - b.stock);
 
-  return NextResponse.json({
+  return {
     totalProducts,
     inStockCount,
     outOfStockCount,
@@ -203,5 +215,5 @@ export async function GET() {
     grandTotalProfit,
     platforms: Object.values(platformStats),
     problemProducts: problemProducts.slice(0, 30),
-  });
+  };
 }
