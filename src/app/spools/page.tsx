@@ -57,6 +57,9 @@ export default function SpoolsPage() {
   const { data, isLoading } = useQuery<Spool[]>({
     queryKey: ["spools"],
     queryFn: () => fetch("/api/spools").then((r) => r.json()),
+    // Makaralar nadir değişir + mutasyonlar (ekle/düzenle/tüket) ["spools"]'u invalidate ediyor
+    // → her ziyarette yeniden çekme, sekmeye dönünce anında gel.
+    staleTime: 10 * 60_000,
   });
   const spools = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 

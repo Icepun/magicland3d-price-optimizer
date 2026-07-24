@@ -43,7 +43,285 @@ function logPerf(msg: string) {
   }
 }
 
+/** İşaretçi YALNIZ paketli uygulamada güvenilir: orada userData ayar dosyası vardır ve DB
+ *  kalıcıdır. Test/dev'de ayar dosyası YOKSA işaretçi devre dışı → her zaman uzak kontrol +
+ *  migrate. (Test DB'si koşular arası sıfırlanır; kalıcı bir işaretçi migration'ı yanlışlıkla
+ *  atlatıp "tablo yok" hatalarına yol açardı.) */
+function markerEnabled(): boolean {
+  return Boolean(process.env.TURSO_SETTINGS_FILE || process.env.SHOPIFY_SETTINGS_FILE);
+}
+
+/** Ayar dizinindeki yerel şema işaretçisi. Bu cihazın kurulu sürümü hangi şemayı kurduğunu tutar. */
+function schemaMarkerPath(): string {
+  const settingsFile =
+    process.env.TURSO_SETTINGS_FILE || process.env.SHOPIFY_SETTINGS_FILE;
+  const dir = settingsFile ? path.dirname(settingsFile) : process.cwd();
+  return path.join(dir, ".schema-version");
+}
+
+/** DB kimliği parmak izi — kullanıcı başka bir (boş) Turso'ya geçerse işaretçi EŞLEŞMESİN
+ *  ve yeni DB migrate edilsin (aksi halde "aynı sürüm" sanılıp migration atlanırdı). */
+function dbFingerprint(): string {
+  const u =
+    process.env.TURSO_DATABASE_URL?.trim() || process.env.DATABASE_URL?.trim() || "local";
+  let h = 0;
+  for (let i = 0; i < u.length; i++) h = (Math.imul(h, 31) + u.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/** İşaretçinin beklenen içeriği: şema sürümü + DB parmak izi. */
+function expectedSchemaMarker(): string {
+  return `${CURRENT_SCHEMA_VERSION}:${dbFingerprint()}`;
+}
+
+/** Yerel işaretçiyi oku (ağ YOK). Devre dışıysa (test/dev) veya yoksa null. */
+function readLocalSchemaMarker(): string | null {
+  if (!markerEnabled()) return null;
+  try {
+    return fs.readFileSync(schemaMarkerPath(), "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function writeLocalSchemaMarker(): void {
+  if (!markerEnabled()) return;
+  try {
+    fs.writeFileSync(schemaMarkerPath(), expectedSchemaMarker(), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Uzak schemaVersion damgasını oku. Tablo yoksa (yeni DB) null → tam kuruluma geç. */
+async function readRemoteSchemaVersion(): Promise<string | null> {
+  try {
+    const rows = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
+      `SELECT value FROM AppSetting WHERE key = 'schemaVersion' LIMIT 1`
+    );
+    return rows?.[0]?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Migration kilidi ─────────────────────────────────────────────────────
+// Next her rota bundle'ında modül örneği tekrar yüklenebildiğinden modül-içi
+// `schemaReady` guard'ı bundle'lar (ve cihazlar) arası eşzamanlı kurulumu
+// engellemez. AppSetting'te bir kilit satırı ile tam kurulumu SERİLEŞTİR:
+// aynı anda yalnızca bir kurulum çalışır, diğerleri bekleyip fast-path'e düşer.
+const SCHEMA_LOCK_KEY = "schemaMigrationLock";
+const SCHEMA_LOCK_STALE_MS = 180_000; // 3 dk — en yavaş gözlenen kurulum (~68sn) üstünde güvenli pay
+const SCHEMA_LOCK_HOLDER = `${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+
+/** Kilidi al. Yoksa/bayatsa alır ve true döner; başkası taze tutuyorsa false. */
+async function acquireSchemaLock(): Promise<boolean> {
+  try {
+    const staleCutoff = new Date(Date.now() - SCHEMA_LOCK_STALE_MS).toISOString();
+    const value = JSON.stringify({
+      holder: SCHEMA_LOCK_HOLDER,
+      at: new Date().toISOString(),
+    });
+    // Kilit yoksa ekle; varsa yalnızca BAYATSA devral (json_extract ISO string karşılaştırması).
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO AppSetting (key, value) VALUES ('${SCHEMA_LOCK_KEY}', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value
+       WHERE json_extract(AppSetting.value, '$.at') < ?`,
+      value,
+      staleCutoff
+    );
+    const rows = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
+      `SELECT value FROM AppSetting WHERE key = '${SCHEMA_LOCK_KEY}' LIMIT 1`
+    );
+    let held: string | null = null;
+    try {
+      held = rows?.[0]?.value ? JSON.parse(rows[0].value)?.holder : null;
+    } catch {
+      held = null;
+    }
+    return held === SCHEMA_LOCK_HOLDER;
+  } catch {
+    // AppSetting yok (yepyeni DB) → eşzamanlı kilitli kurulum olamaz; devam et.
+    return true;
+  }
+}
+
+/** Kilidi yalnızca biz tutuyorsak bırak. */
+async function releaseSchemaLock(): Promise<void> {
+  try {
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM AppSetting WHERE key = '${SCHEMA_LOCK_KEY}'
+       AND json_extract(value, '$.holder') = ?`,
+      SCHEMA_LOCK_HOLDER
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Başka kurulumun damgayı yazmasını bekle. Süre dolarsa false → çağıran devralır. */
+async function waitForSchemaVersion(
+  target: string,
+  timeoutMs = 200_000
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if ((await readRemoteSchemaVersion()) === target) return true;
+    await new Promise((r) => setTimeout(r, 750));
+  }
+  return false;
+}
+
+// ── DDL batch + şema snapshot ────────────────────────────────────────────
+// Uzak-HTTP modunda her CREATE/ALTER/PRAGMA ayrı round-trip'ti (~100 CREATE +
+// ~40 ensureColumn okuması → 30-68sn). Çözüm: (1) baştaki TEK introspection ile
+// tüm tablo/kolonları snapshot'la (okuma round-trip'lerini keser), (2) CREATE/ALTER
+// ifadelerini tamponla, bağımlılık checkpoint'lerinde TEK atomik libSQL batch ile
+// gönder (yazma round-trip'lerini keser). Herhangi bir aşama başarısızsa buffer modu
+// KAPANIR ve orijinal sıralı yol (prisma, canlı okuma) güvenle kullanılır.
+let _bufferMode = false;
+let _ddlBuf: string[] = [];
+const _schemaTables = new Set<string>(); // var olan + bu turda oluşturulan tablolar (küçük harf)
+const _schemaColumns = new Map<string, Set<string>>(); // tablo → kolonlar (küçük harf; CREATE + introspection)
+
+type MiniBatchClient = {
+  batch: (
+    stmts: unknown[],
+    mode?: string
+  ) => Promise<Array<{ rows: Array<Record<string, unknown>> }>>;
+};
+let _batchClient: MiniBatchClient | null = null;
+let _batchClientTried = false;
+
+/** Uzak primary'ye doğrudan libSQL client (atomik batch). Yalnız uzak-HTTP modunda
+ *  güvenli: embedded replica modunda ayrı client'ın yazdığını Prisma'nın yerel
+ *  replica'sı görmez → o modda null → sequential fallback. */
+async function getBatchClient(): Promise<MiniBatchClient | null> {
+  if (_batchClientTried) return _batchClient;
+  _batchClientTried = true;
+  // Operasyonel güvenlik valfi: batch alanda beklenmedik davranırsa env ile kapatılır
+  // → tampon sequential (prisma) gönderilir (yavaş ama kanıtlı).
+  if (process.env.MLHUB_SCHEMA_NO_BATCH === "1") {
+    _batchClient = null;
+    return null;
+  }
+  try {
+    const usingReplica =
+      Boolean(process.env.TURSO_REPLICA_PATH?.trim()) &&
+      process.env.TURSO_DISABLE_EMBEDDED_REPLICA?.trim() !== "1";
+    const url = process.env.TURSO_DATABASE_URL?.trim();
+    if (usingReplica || !url) {
+      _batchClient = null;
+      return null;
+    }
+    const remoteUrl = url
+      .replace(/^libsql:\/\//i, "https://")
+      .replace(/^wss?:\/\//i, "https://");
+    const mod = await import("@libsql/client");
+    _batchClient = mod.createClient({
+      url: remoteUrl,
+      authToken: process.env.TURSO_AUTH_TOKEN?.trim() || undefined,
+    }) as unknown as MiniBatchClient;
+  } catch {
+    _batchClient = null;
+  }
+  return _batchClient;
+}
+
+/** Baştaki tek introspection: tüm tablo + kolonları snapshot'la. Başarısızsa false
+ *  (→ buffer modu açılmaz, orijinal canlı yol çalışır). */
+async function loadSchemaSnapshot(): Promise<boolean> {
+  _schemaTables.clear();
+  _schemaColumns.clear();
+  _ddlBuf = [];
+  try {
+    const tbls = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+      `SELECT name FROM sqlite_master WHERE type = 'table'`
+    );
+    const client = await getBatchClient();
+    if (client && tbls.length > 0) {
+      const res = await client.batch(
+        tbls.map((t) => `PRAGMA table_info("${t.name}")`),
+        "read"
+      );
+      tbls.forEach((t, i) => {
+        const lc = t.name.toLowerCase();
+        _schemaTables.add(lc);
+        const cols = new Set<string>();
+        for (const row of res[i]?.rows ?? []) cols.add(String(row.name).toLowerCase());
+        _schemaColumns.set(lc, cols);
+      });
+    } else {
+      // Batch client yok → PRAGMA'ları sırayla oku (yine snapshot'la, yazmaları batch'le).
+      for (const t of tbls) {
+        const lc = t.name.toLowerCase();
+        _schemaTables.add(lc);
+        const cols = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+          `PRAGMA table_info("${t.name}")`
+        );
+        _schemaColumns.set(lc, new Set(cols.map((c) => c.name.toLowerCase())));
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Tamponu TEK atomik batch ile gönder; başarısızsa sequential (prisma) fallback. */
+async function flushSchemaBuffer(): Promise<void> {
+  if (_ddlBuf.length === 0) return;
+  const stmts = _ddlBuf;
+  _ddlBuf = [];
+  const client = await getBatchClient();
+  if (client) {
+    try {
+      await client.batch(stmts, "write"); // atomik: hata → rollback → fallback temiz
+      return;
+    } catch (e) {
+      logPerf(`schema batch fallback (${String(e).slice(0, 100)})`);
+    }
+  }
+  for (const st of stmts) {
+    try {
+      await prisma.$executeRawUnsafe(st);
+    } catch (e) {
+      // IF NOT EXISTS CREATE'ler idempotent; zaten eklenmiş kolon ALTER'ı "duplicate
+      // column" verebilir — yalnız onu tolere et, gerçek hatayı yükselt.
+      if (!/duplicate column|already exists/i.test(String(e))) throw e;
+    }
+  }
+}
+
+/** CREATE/ALTER tamponla (buffer modu). Buffer kapalıysa anında çalıştır (orijinal). */
+async function bufDDL(sql: string): Promise<void> {
+  if (!_bufferMode) {
+    await prisma.$executeRawUnsafe(sql);
+    return;
+  }
+  const s = sql.trim();
+  _ddlBuf.push(s);
+  const m = /^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?(\w+)/i.exec(s);
+  if (m) {
+    const lc = m[1].toLowerCase();
+    // GERÇEKTEN yeni tablo (introspection'da yok). CREATE'in TANIMLADIĞI kolonları snapshot'a
+    // ekle → ensureColumn bunları ATLAR (zaten var), ama CREATE'de OLMAYAN sonraki-sürüm
+    // kolonlarını (madeToOrder/variantGroupId gibi) EKLER. Aksi halde fresh DB'de o kolonlar
+    // hiç oluşmaz ve onlara index/sorgu patlar. Var olan tabloda CREATE ... IF NOT EXISTS
+    // no-op'tur → snapshot introspection'dan gelen gerçek kolonlarda kalmalı (dokunma).
+    if (!_schemaTables.has(lc)) {
+      _schemaTables.add(lc);
+      const cols = new Set<string>();
+      const colRe = /"(\w+)"\s+(?:TEXT|INTEGER|REAL|BOOLEAN|DATETIME|BLOB|NUMERIC)/gi;
+      let cm: RegExpExecArray | null;
+      while ((cm = colRe.exec(s)) !== null) cols.add(cm[1].toLowerCase());
+      _schemaColumns.set(lc, cols);
+    }
+  }
+}
+
 async function tableExists(tableName: string) {
+  if (_bufferMode) return _schemaTables.has(tableName.toLowerCase());
   const tables = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
     tableName
@@ -52,6 +330,19 @@ async function tableExists(tableName: string) {
 }
 
 async function ensureColumn(tableName: string, columnName: string, definition: string) {
+  if (_bufferMode) {
+    const t = tableName.toLowerCase();
+    const c = columnName.toLowerCase();
+    if (!_schemaTables.has(t)) return; // tablo yok (orijinal: tableExists false → return)
+    const cols = _schemaColumns.get(t);
+    // Kolon zaten varsa (CREATE'de tanımlı VEYA introspection'da mevcut) ATLA; yoksa ALTER'la
+    // ekle. Bu, hem var olan tabloya eksik kolon ekler hem fresh tabloda CREATE'de olmayan
+    // sonraki-sürüm kolonlarını ekler.
+    if (cols && cols.has(c)) return;
+    _ddlBuf.push(`ALTER TABLE "${tableName}" ADD COLUMN "${columnName}" ${definition}`);
+    cols?.add(c); // snapshot'ı güncelle (sonraki ensureColumn/index kontrolleri için)
+    return;
+  }
   if (!(await tableExists(tableName))) return;
 
   const columns = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
@@ -195,23 +486,44 @@ export function ensureRuntimeSchema(): Promise<void> {
 
   const attempt = (async () => {
     const __t0 = Date.now();
-    // FAST-PATH: şema zaten güncelse ~50 ardışık CREATE/ALTER/PRAGMA ifadesini ATLA.
-    // Embedded replica'da yazma ifadeleri buluta (eu-west-1) gittiği için bu ~50 ifade
-    // açılışta 10-15 sn'lik gecikmeye yol açıyordu. Tek bir okuma ile (yerel replica,
-    // anında) güncel olup olmadığını kontrol et; güncelse hepsini atla.
-    try {
-      const rows = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
-        `SELECT value FROM AppSetting WHERE key = 'schemaVersion' LIMIT 1`
-      );
-      if (rows?.[0]?.value === CURRENT_SCHEMA_VERSION) {
-        logPerf(`ensureRuntimeSchema FAST-PATH (${Date.now() - __t0}ms)`);
-        return;
-      }
-    } catch {
-      /* AppSetting tablosu yok → ilk kurulum, tam şema kurulumuna devam et */
+    // FAST-PATH #1 — YEREL İŞARETÇİ (ağ YOK): replica kapalı olduğundan her şema
+    // kontrolü uzak HTTP round-trip'iydi (32 rota → açılışta birikmiş gecikme). Bu
+    // cihaz zaten CURRENT sürüme migrate ettiyse yerel dosyadan anında dön.
+    if (readLocalSchemaMarker() === expectedSchemaMarker()) {
+      logPerf(`ensureRuntimeSchema FAST-PATH local (${Date.now() - __t0}ms)`);
+      return;
+    }
+    // FAST-PATH #2 — UZAK DAMGA: işaretçi yok/eski (yeni kurulum veya güncelleme
+    // sonrası) ama DB'yi başka bir cihaz/bundle zaten migrate etmiş olabilir. Bir
+    // okumayla doğrula; güncelse işaretçiyi yaz (sonraki kontroller ağa gitmez).
+    if ((await readRemoteSchemaVersion()) === CURRENT_SCHEMA_VERSION) {
+      writeLocalSchemaMarker();
+      logPerf(`ensureRuntimeSchema FAST-PATH remote (${Date.now() - __t0}ms)`);
+      return;
     }
 
-    await prisma.$executeRawUnsafe(`
+    // Gerçek migration gerekiyor → KİLİT al (bundle'lar/cihazlar arası serileştir).
+    const gotLock = await acquireSchemaLock();
+    if (!gotLock) {
+      logPerf("ensureRuntimeSchema WAIT (başka kurulum sürüyor)");
+      if (await waitForSchemaVersion(CURRENT_SCHEMA_VERSION)) {
+        writeLocalSchemaMarker();
+        logPerf(`ensureRuntimeSchema FAST-PATH after-wait (${Date.now() - __t0}ms)`);
+        return;
+      }
+      // Süre doldu → kilit bu noktada bayat sayılır, devralıp kendimiz kuralım.
+      // (Migration IF NOT EXISTS ile idempotent; en kötü ihtimalle bir kez daha çalışır.)
+      await acquireSchemaLock();
+    }
+
+    // Buffer modu: baştaki tek introspection başarılıysa CREATE/ALTER tamponlanır ve
+    // atomik batch'lerle gönderilir (30-68sn → ~2sn). Başarısızsa kapalı kalır →
+    // aşağıdaki tüm ifadeler orijinal sıralı yolla (prisma) çalışır. Env valfi ile
+    // tamamen kapatılabilir (orijinal ifade-ifade yol).
+    _bufferMode =
+      process.env.MLHUB_SCHEMA_NO_BUFFER === "1" ? false : await loadSchemaSnapshot();
+
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "Product" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "barcode" TEXT NOT NULL,
@@ -231,10 +543,10 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE UNIQUE INDEX IF NOT EXISTS "Product_barcode_key" ON "Product"("barcode")
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ProductCost" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "productId" TEXT NOT NULL,
@@ -260,12 +572,12 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE UNIQUE INDEX IF NOT EXISTS "ProductCost_productId_key" ON "ProductCost"("productId")
     `);
 
     // FilamentType table
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "FilamentType" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -274,7 +586,7 @@ export function ensureRuntimeSchema(): Promise<void> {
       )
     `);
 
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "AppSetting" (
         "key" TEXT NOT NULL PRIMARY KEY,
         "value" TEXT NOT NULL
@@ -283,7 +595,7 @@ export function ensureRuntimeSchema(): Promise<void> {
 
     // Kural / şablon / fiyat geçmişi tabloları — eskiden sadece bundled dev.db'de
     // vardı; boş Turso (bulut) DB'de de kurulabilmeleri için burada da yaratılır.
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "CommissionRule" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -298,7 +610,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "isActive" BOOLEAN NOT NULL DEFAULT true
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "CargoRule" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -317,7 +629,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "isActive" BOOLEAN NOT NULL DEFAULT true
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ExpenseRule" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -333,7 +645,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
     // v32: Sipariş kurallarından bağımsız gerçek gider ödemeleri ve kalıcı sipariş finans geçmişi.
     // Para alanları kayan nokta hatalarını önlemek için INTEGER kuruş olarak saklanır.
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ActualExpense" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -345,10 +657,10 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ActualExpense_paidAt_idx" ON "ActualExpense"("paidAt")`
     );
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "OrderFinanceSnapshot" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "platform" TEXT NOT NULL,
@@ -367,15 +679,15 @@ export function ensureRuntimeSchema(): Promise<void> {
         "actualCommissionKurus" INTEGER
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "OrderFinanceSnapshot_platform_externalOrderId_key"
        ON "OrderFinanceSnapshot"("platform", "externalOrderId")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_orderedAt_idx"
        ON "OrderFinanceSnapshot"("orderedAt")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_statusKind_orderedAt_idx"
        ON "OrderFinanceSnapshot"("statusKind", "orderedAt")`
     );
@@ -388,7 +700,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("OrderFinanceSnapshot", "actualCommissionKurus", "INTEGER");
     // v34: Pazaryeri finans hareketi ana sipariş hattından ayrı senkronlanır. Böylece
     // Siparişler ekranı hiçbir zaman settlement API'sini beklemez.
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PlatformOrderFinancial" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "platform" TEXT NOT NULL,
@@ -402,21 +714,21 @@ export function ensureRuntimeSchema(): Promise<void> {
         "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_externalOrderId_key"
        ON "PlatformOrderFinancial"("platform", "externalOrderId")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_orderNumber_idx"
        ON "PlatformOrderFinancial"("platform", "orderNumber")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_syncedAt_idx"
        ON "PlatformOrderFinancial"("platform", "syncedAt")`
     );
     // v33: Manuel sipariş, kalem + hesap snapshot'ıyla tek atomik satırdır.
     // OrderFinanceSnapshot'a kopyalanmaz; aylık finans iki kaynağı çift saymadan birleştirir.
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ManualOrder" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "orderNumber" TEXT NOT NULL,
@@ -439,19 +751,19 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "ManualOrder_orderNumber_key"
        ON "ManualOrder"("orderNumber")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ManualOrder_orderedAt_idx"
        ON "ManualOrder"("orderedAt")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ManualOrder_statusKind_orderedAt_idx"
        ON "ManualOrder"("statusKind", "orderedAt")`
     );
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "CostTemplate" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -465,7 +777,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "isActive" BOOLEAN NOT NULL DEFAULT true
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PriceHistory" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "productId" TEXT NOT NULL,
@@ -478,7 +790,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
 
     // Filament makara envanteri + kullanım kaydı (v0.12)
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "FilamentSpool" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -496,7 +808,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "FilamentUsage" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "spoolId" TEXT NOT NULL,
@@ -507,12 +819,12 @@ export function ensureRuntimeSchema(): Promise<void> {
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE INDEX IF NOT EXISTS "FilamentUsage_spoolId_idx" ON "FilamentUsage"("spoolId")
     `);
 
     // Varyant grubu — aynı ürünün renk/boy seçeneklerini tek genel başlık altında toplar (v0.14)
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "VariantGroup" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -542,7 +854,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("Product", "madeToOrder", "BOOLEAN NOT NULL DEFAULT false");
     await ensureColumn("Product", "imageManual", "BOOLEAN NOT NULL DEFAULT false");
     await ensureColumn("Product", "variantGroupId", "TEXT");
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "Product_variantGroupId_idx" ON "Product"("variantGroupId")`
     );
     // Varyant grubu model paylaşımı (v0.19.62): açıksa yüklenen dosya tüm varyantlara fan-out edilir.
@@ -553,6 +865,9 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("CargoRule", "vatIncluded", "BOOLEAN NOT NULL DEFAULT true");
     // Eski kurallar (platform yok) Trendyol baremiydi — Shopify'a bulaşmasın diye
     // platform'u 'trendyol' olarak işaretle. platform dolu olanlar etkilenmez.
+    // CHECKPOINT: canlı UPDATE, tamponlanan CargoRule.platform/vatIncluded ALTER'larına
+    // bağımlı → önce tamponu boşalt (kolonlar primary'de var olsun).
+    await flushSchemaBuffer();
     if (await tableExists("CargoRule")) {
       await prisma.$executeRawUnsafe(
         `UPDATE "CargoRule" SET "platform" = 'trendyol' WHERE "platform" IS NULL`
@@ -584,7 +899,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     await ensureColumn("ProductCost", "tapeUsed", "BOOLEAN");
 
     // Listing tablosu — 3 platform için ayrı satış kaydı
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "Listing" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "productId" TEXT NOT NULL,
@@ -605,19 +920,19 @@ export function ensureRuntimeSchema(): Promise<void> {
         FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE UNIQUE INDEX IF NOT EXISTS "Listing_productId_platform_key" ON "Listing"("productId", "platform")
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE INDEX IF NOT EXISTS "Listing_platform_isActive_idx" ON "Listing"("platform", "isActive")
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE INDEX IF NOT EXISTS "Listing_externalId_idx" ON "Listing"("externalId")
     `);
     await ensureColumn("Listing", "barcode", "TEXT");
 
     // UnmatchedListing — Shopify ana ürününe bağlanmamış Trendyol/HB ürünleri
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "UnmatchedListing" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "platform" TEXT NOT NULL,
@@ -633,15 +948,15 @@ export function ensureRuntimeSchema(): Promise<void> {
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE UNIQUE INDEX IF NOT EXISTS "UnmatchedListing_platform_externalId_key" ON "UnmatchedListing"("platform", "externalId")
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE INDEX IF NOT EXISTS "UnmatchedListing_platform_barcode_idx" ON "UnmatchedListing"("platform", "barcode")
     `);
 
     // 3D yazıcı bağlantıları (v0.15) — Moonraker (Elegoo/Snapmaker) + Bambu
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrinterConfig" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -659,7 +974,7 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrintFileProduct" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "printerConfigId" TEXT NOT NULL,
@@ -669,15 +984,15 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "PrintFileProduct_printerConfigId_filename_key" ON "PrintFileProduct"("printerConfigId", "filename")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "PrintFileProduct_productId_idx" ON "PrintFileProduct"("productId")`
     );
 
     // Ürün baskı modelleri (v0.16) — ürün+yazıcı başına dilimlenmiş dosyalar (v0.17: çoklu parça)
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ProductModelFile" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "productId" TEXT NOT NULL,
@@ -706,15 +1021,15 @@ export function ensureRuntimeSchema(): Promise<void> {
     // v29: dilimleyici önizleme görseli (Özel Baskılar arşivi)
     await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
     await ensureColumn("ProductModelFile", "contentMd5", "TEXT"); // v30: içerik kimliği (reuse)
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_printerConfigId_idx" ON "ProductModelFile"("printerConfigId")`
     );
 
     // Telefon relay'i (v0.17) — yazıcı durum snapshot'ı + uzaktan komut kuyruğu
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrinterSnapshot" (
         "printerConfigId" TEXT NOT NULL PRIMARY KEY,
         "name" TEXT NOT NULL,
@@ -733,7 +1048,7 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
     // v23: baskı bitti/hata bildirimi için hata-nedeni kolonu (mevcut kurulumlara)
     await ensureColumn("PrinterSnapshot", "statusMessage", "TEXT");
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrintCommand" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "printerConfigId" TEXT NOT NULL,
@@ -746,13 +1061,13 @@ export function ensureRuntimeSchema(): Promise<void> {
         "processedAt" DATETIME
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "PrintCommand_status_idx" ON "PrintCommand"("status")`
     );
 
     // Kalıcı bildirimler (v21) — olay-anı uyarıları (stoğu biten/sipariş-üzerine ürüne sipariş).
     // id = tekilleştirme anahtarı (createMany skipDuplicates ile tekrar yazılmaz).
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "Notification" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "type" TEXT NOT NULL,
@@ -764,12 +1079,12 @@ export function ensureRuntimeSchema(): Promise<void> {
         "acknowledgedAt" DATETIME
       )
     `);
-    await prisma.$executeRawUnsafe(
+    await bufDDL(
       `CREATE INDEX IF NOT EXISTS "Notification_acknowledgedAt_idx" ON "Notification"("acknowledgedAt")`
     );
 
     // v26: Expo push token'ları (mobil yazar, masaüstü relay'i baskı bitince push gönderir)
-    await prisma.$executeRawUnsafe(`
+    await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PushToken" (
         "token" TEXT NOT NULL PRIMARY KEY,
         "platform" TEXT NOT NULL DEFAULT '',
@@ -777,6 +1092,11 @@ export function ensureRuntimeSchema(): Promise<void> {
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+
+    // CHECKPOINT: kalan tampon (CargoRule sonrası CREATE/ALTER'lar) primary'ye yazılsın,
+    // sonra buffer modunu KAPAT → guarded migration'lar + sürüm damgası canlı prisma ile.
+    await flushSchemaBuffer();
+    _bufferMode = false;
 
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
@@ -788,6 +1108,10 @@ export function ensureRuntimeSchema(): Promise<void> {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       CURRENT_SCHEMA_VERSION
     );
+    // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.
+    writeLocalSchemaMarker();
+    // Kilidi bırak (biz tuttuysak). Hata olursa kilit bayatlayıp devralınır.
+    await releaseSchemaLock();
     logPerf(`ensureRuntimeSchema FULL setup (${Date.now() - __t0}ms)`);
   })();
 
@@ -796,6 +1120,8 @@ export function ensureRuntimeSchema(): Promise<void> {
   // zehirli halde tutma. Eşitlik kontrolü, daha yeni concurrent denemeyi yanlışlıkla silmez.
   void attempt.catch(() => {
     if (schemaReady === attempt) schemaReady = null;
+    // Kurulum yarıda hata verdiyse kilidi bırak (yalnızca bizim tuttuğumuz silinir).
+    void releaseSchemaLock();
   });
   return attempt;
 }

@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
-import { setUploadsActive } from "@/lib/gcode-viz/viz-pipeline";
+import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 
 // three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
 const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
@@ -201,7 +201,12 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
       if (ctx?.prev) qc.setQueryData(["product-models", productId], ctx.prev);
       toast.error("Kaydedilemedi (geri alındı)");
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["models"], refetchType: "none" }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["models"], refetchType: "none" });
+      // Etiket/gramaj değişimi "Baskı Başlat" seçicisinde de görünsün (çapraz-sayfa tazelik).
+      // Bu invalidate olmadan seçici staleTime'ı düşürülürse düzenlenen değer bayat kalırdı.
+      qc.invalidateQueries({ queryKey: ["printable-models"] });
+    },
   });
 
   const handleFiles = async (fileList: FileList) => {

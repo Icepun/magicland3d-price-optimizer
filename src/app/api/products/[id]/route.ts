@@ -4,6 +4,7 @@ import { computeFullProductCost } from "@/core/cost-calculator";
 import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
 import { z } from "zod";
 
 const UpdateProductSchema = z.object({
@@ -236,8 +237,12 @@ export async function PATCH(
 
   // Caller'lar yanıt gövdesini kullanmıyor (optimistic cache + refetch yok) → tam ürünü
   // serileştirme; yalnızca onay dön.
-  // Ürün kimliği/maliyet/desi/stok gibi alanlar sipariş eşleştirmesini veya kâr gövdesini etkileyebilir.
-  invalidateOrdersCache();
+  // Yalnız sipariş kârını/eşleşmesini etkileyen alanlar (maliyet/barkod/kategori/desi/ad)
+  // değişince pahalı orders önbelleğini düş. Görsel/takma ad/stok/varyant/gizli gibi alanlar
+  // kâr gövdesine girmediğinden önbelleği KORUR.
+  if (productPatchAffectsProfit({ ...productData, cost })) {
+    invalidateOrdersCache();
+  }
   return NextResponse.json({ ok: true });
 }
 

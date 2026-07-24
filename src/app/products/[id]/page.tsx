@@ -129,6 +129,8 @@ export default function ProductDetailPage({
   const { data: filaments = [] } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],
     queryFn: () => fetchJson("/api/filament-types"),
+    // Filament türleri nadir değişir → uzun taze; ekleme/düzenleme mutasyonları invalidate eder.
+    staleTime: 10 * 60_000,
   });
 
   const { data: globalSettings = {} } = useQuery<Record<string, string>>({

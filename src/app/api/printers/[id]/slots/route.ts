@@ -4,6 +4,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { fetchMoonrakerSlots, fetchMoonrakerSlotDebug } from "@/core/printers/moonraker";
 import { getBambuAmsSlots } from "@/core/printers/bambu";
+import { getBambuStatusCached, getMoonrakerStatusCached } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,30 @@ function padSlots(read: Slot[], ensure: number): Slot[] {
   return out;
 }
 
+/** Son-bilinen slotlar (yazıcı çevrimdışıyken gösterilir). CANLI başarılı okumada yazılır. */
+async function readSlotSnapshot(id: string): Promise<Slot[] | null> {
+  try {
+    const row = await prisma.appSetting.findUnique({ where: { key: `slotSnapshot:${id}` } });
+    if (!row?.value) return null;
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? (parsed as Slot[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSlotSnapshot(id: string, slots: Slot[]): void {
+  if (!slots.length) return; // boş okumayı snapshot'a yazma (son iyi renkleri koru)
+  const value = JSON.stringify(slots);
+  void prisma.appSetting
+    .upsert({
+      where: { key: `slotSnapshot:${id}` },
+      create: { key: `slotSnapshot:${id}`, value },
+      update: { value },
+    })
+    .catch(() => {});
+}
+
 /** Yazıcının yüklü slotları — HER ZAMAN CANLI okunur (Bambu AMS / Snapmaker CFS).
  *  Elle renk ayarlama kaldırıldı: uygulamada bir kez ayarlanan renk, makinede sonradan yapılan
  *  değişiklikleri kalıcı gölgeliyordu ("güncel renkleri göremiyorum" bug'ının kök nedeni).
@@ -31,14 +56,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const cfg = await prisma.printerConfig.findUnique({ where: { id } });
     if (!cfg) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
 
-    // Eski elle-ayar kayıtlarını sil (bir kez gerçekleşir, sonrası no-op) — bayat gölge kalmasın.
-    void prisma.appSetting.deleteMany({ where: { key: `slotColors:${id}` } }).catch(() => {});
-
     if (cfg.type === "bambu") {
       if (!cfg.accessCode || !cfg.serial) {
         return NextResponse.json({ type: "bambu", slots: [] });
       }
+      // Çevrimdışıysa canlı MQTT beklemesi yapma → son-bilinen renkleri anında göster.
+      const st = await getBambuStatusCached(cfg.host, cfg.accessCode, cfg.serial);
+      if (!st.online) {
+        const snap = await readSlotSnapshot(id);
+        return NextResponse.json({ type: "bambu", slots: snap ?? [], fromSnapshot: true });
+      }
       const read = await getBambuAmsSlots(cfg.host, cfg.accessCode, cfg.serial);
+      writeSlotSnapshot(id, read);
       return NextResponse.json({ type: "bambu", slots: read });
     }
 
@@ -48,7 +77,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       const read = await fetchMoonrakerSlots(cfg.host, cfg.port);
       return NextResponse.json({ type: "moonraker", slots: padSlots(read, 4), debug });
     }
+    // Çevrimdışıysa 14sn'lik fallback zincirine hiç girme → son-bilinen slotları anında dön.
+    const mst = await getMoonrakerStatusCached(cfg.host, cfg.port);
+    if (!mst.online) {
+      const snap = await readSlotSnapshot(id);
+      return NextResponse.json({ type: "moonraker", slots: padSlots(snap ?? [], 4), fromSnapshot: true });
+    }
     const read = await fetchMoonrakerSlots(cfg.host, cfg.port);
+    writeSlotSnapshot(id, read);
     return NextResponse.json({ type: "moonraker", slots: padSlots(read, 4) });
   } catch (error) {
     return jsonError(error);

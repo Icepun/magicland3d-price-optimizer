@@ -23,7 +23,9 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
 import { vizKeyForModel, getSprites } from "@/lib/gcode-viz/viz-cache";
-import { setUploadsActive, ensureVizAssets } from "@/lib/gcode-viz/viz-pipeline";
+import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
+// Görselleştirme boru hattı three (~539KB) çeker → DİNAMİK yükle (Yazıcılar initial bundle'ında değil).
+const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
 import {
   SlotStep,
   type PrintableModel, type PrintPrefs,
@@ -822,14 +824,14 @@ function useLiveBuildModel(printerId: string, filename: string | null, printing:
       const set = await getSprites(vizKey).catch(() => null);
       if (set && set.frames.length) { show(set); return; }
       // Kareler yok → arka planda KİBARCA üret (seri + boşta + yüklemede bekler), sonra yokla.
-      ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail });
+      void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {});
       // Üretim bitene dek periyodik bak (baskı uzun sürer; ~5sn'de bir, en çok ~2dk).
       let tries = 0;
       const iv = setInterval(async () => {
         if (!alive || tries++ > 24) { clearInterval(iv); return; }
         const s = await getSprites(vizKey).catch(() => null);
         if (s && s.frames.length) { clearInterval(iv); show(s); return; }
-        ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail }); // takıldıysa yeniden dene (iç dedupe)
+        void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {}); // takıldıysa yeniden dene (iç dedupe)
       }, 5000);
       // temizlikte durdur
       cleanup.push(() => clearInterval(iv));
@@ -1485,10 +1487,13 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   const { data, isLoading, isError, error } = useQuery<{ models: PrintableModel[] }>({
     queryKey: ["printable-models", target.id],
     queryFn: () => fetchJson<{ models: PrintableModel[] }>(`/api/printers/${target.id}/printable-models`),
-    // Modal KULLANICI eylemiyle açılır → HER açılışta taze liste (global refetchOnMount:false +
-    // 5dk staleTime yüzünden az önce yüklenen model görünmüyordu). Kullanıcı en güncel modelleri görmeli.
-    staleTime: 0,
-    refetchOnMount: "always",
+    // Model ekle/sil/düzenle yolları bu anahtarı invalidate ediyor (ModelFilesCard) → 10dk taze:
+    // değişiklik yoksa modal yeniden açılışta ANINDA (ağ yok); değişince invalidate onu bayat
+    // yapar → refetchOnMount:true ile mount'ta bir kez tazelenir (yeni/düzenlenen model görünür).
+    // (Eski staleTime:0 + refetchOnMount:'always' HER açılışta ağ+parse gecikmesi ekliyordu.)
+    // NOT: global refetchOnMount:false; burada AÇIKÇA true — yoksa invalidate sonrası tazelenmezdi.
+    staleTime: 10 * 60_000,
+    refetchOnMount: true,
   });
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<PrintableModel | null>(null);

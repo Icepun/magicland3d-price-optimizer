@@ -6,6 +6,8 @@
 import type { ParsedGcode } from "./parse-gcode";
 import { getGeom, putGeom, getSprites, putSprites } from "./viz-cache";
 import { renderThumbnail, renderBuildFrames } from "./three-scene";
+// Yükleme sayacı three İÇERMEYEN ayrı modülde (tek kaynak) — bkz. viz-uploads.ts.
+import { waitUploadsIdle } from "./viz-uploads";
 
 const inflight = new Map<string, Promise<ParsedGcode>>();
 
@@ -68,12 +70,8 @@ const assetsRunning = new Set<string>(); // şu an üretiliyor → eşzamanlı �
 
 // ── Arka plan üretimi KİBAR olmalı: yükleme/gezinme akıcı kalsın ─────────────
 // Aksi halde (v0.19.99) yükleme biter bitmez 27MB parse + 36 WebGL render renderer'ı kilitliyordu.
-let uploadsActive = 0;
-/** Yükleme başlarken +1, biterken -1 — arka plan varlık üretimi bu sırada BEKLER (ana süreçten
- *  27MB okuma + WebGL render yüklemeyle/dosya diyaloğuyla yarışmasın). */
-export function setUploadsActive(delta: number): void {
-  uploadsActive = Math.max(0, uploadsActive + delta);
-}
+// Yükleme sayacı (setUploadsActive/waitUploadsIdle) three İÇERMEYEN viz-uploads modülünde tutulur
+// ki sayacı kullanan sayfalar three grafiğini initial bundle'a çekmesin.
 
 /** Tarayıcı boşta kalınca çöz — ağır işi kullanıcı etkileşiminin arasına sıkıştırmaz. */
 function idle(timeout = 800): Promise<void> {
@@ -82,10 +80,6 @@ function idle(timeout = 800): Promise<void> {
     if (ric) ric(() => res(), { timeout });
     else setTimeout(res, 60);
   });
-}
-
-async function waitUploadsIdle(): Promise<void> {
-  while (uploadsActive > 0) await new Promise((r) => setTimeout(r, 400));
 }
 
 // Tek sıra: aynı anda EN FAZLA bir üretim işi (birden çok dosya art arda gelirse kuyruklanır,

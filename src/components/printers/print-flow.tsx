@@ -156,16 +156,23 @@ export function SlotStep({
 }) {
   // Slotlar HER AÇILIŞTA makineden taze okunur + ekran açıkken 5sn'de bir yenilenir —
   // makinede filament/renk değiştirirsen buradaki çipler de canlı güncellenir.
-  const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; error?: string }>({
+  const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; fromSnapshot?: boolean; error?: string }>({
     queryKey: ["printer-slots", printerId],
     queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
     staleTime: 0,
     refetchOnMount: "always",
-    refetchInterval: 5000,
+    // Çevrimiçi: 5sn canlı yenileme (makinede renk değişince çipler güncellenir).
+    // Çevrimdışı (snapshot yanıtı): yazıcıyı boşuna hızlı yoklama — 30sn'de bir dene ki
+    // fişi geri takınca dialog açıkken kendiliğinden toparlansın (kurtarma kaçağı yok).
+    refetchInterval: (q) => (q.state.data?.fromSnapshot ? 30_000 : 5000),
   });
   const colorsQ = useQuery<ColorInfo>({
     queryKey: ["model-colors", model.fileId],
     queryFn: () => fetchJson(`/api/models/${model.fileId}/colors`),
+    // Dosya renk analizi fileId başına DEĞİŞMEZ → süresiz taze + uzun süre bellekte tut
+    // (aynı modeli tekrar açınca renk analizi yeniden çekilmez/parse edilmez).
+    staleTime: Infinity,
+    gcTime: 24 * 60 * 60_000,
   });
   const isLoading = slotsQ.isLoading || colorsQ.isLoading;
 

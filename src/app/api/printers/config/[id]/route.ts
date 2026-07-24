@@ -44,8 +44,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     await ensureRuntimeSchema();
     const { id } = await params;
     const cfg = await prisma.printerConfig.findUnique({ where: { id } });
-    // İlişkili ürün eşleştirmelerini de temizle
+    // İlişkili ürün eşleştirmelerini + son-bilinen slot snapshot'ını da temizle (yetim satır kalmasın)
     await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id } });
+    await prisma.appSetting.deleteMany({ where: { key: `slotSnapshot:${id}` } });
     await prisma.printerConfig.delete({ where: { id } });
     // Silinen Bambu'nun MQTT bağlantısı zombie reconnect yapmasın.
     if (cfg?.type === "bambu" && cfg.serial) dropBambuConns(cfg.host, cfg.serial);

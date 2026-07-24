@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { settingsBodyAffectsProfit } from "@/lib/pricing-inputs";
 import { bustCache, swr } from "@/lib/route-cache";
 
 export async function GET() {
@@ -28,7 +29,12 @@ export async function POST(req: NextRequest) {
     )
   );
 
-  invalidateOrdersCache();
+  // Yalnız kâr girdisi (vat/komisyon/maliyet/paketleme) değişince pahalı orders
+  // önbelleğini düş. Planner hedef stok / R2 ayarları / UI tercihleri gibi finans-dışı
+  // anahtarlar önbelleği KORUR → Siparişler sekmesi gereksiz yere 1-3sn yeniden çekmez.
+  if (settingsBodyAffectsProfit(body)) {
+    invalidateOrdersCache();
+  }
   bustCache("settings:");
   return NextResponse.json({ ok: true });
 }

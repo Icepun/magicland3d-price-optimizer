@@ -803,7 +803,7 @@ function parsePrintTaskConfig(ptc: any): MoonrakerSlot[] | null {
 export async function fetchMoonrakerSlots(host: string, port: number): Promise<MoonrakerSlot[]> {
   // 1) print_task_config — kafa başına renk + tip + doluluk (asıl kaynak).
   try {
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?print_task_config`, undefined, 5000);
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?print_task_config`, undefined, 1500);
     if (res.ok) {
       const ptc = unwrap(await res.json())?.status?.print_task_config;
       const parsed = parsePrintTaskConfig(ptc);
@@ -818,7 +818,7 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<M
       "filament_motion_sensor e2_filament", "filament_motion_sensor e3_filament",
     ];
     const q = objs.map((o) => encodeURIComponent(o)).join("&");
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 5000);
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 1500);
     if (res.ok) {
       const status = unwrap(await res.json())?.status ?? {};
       const fd = status.filament_detect;
@@ -835,7 +835,7 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<M
   // 2) Keşif: CFS/filament ile ilgili objeleri bul (firmware sürümüne göre ad değişebilir:
   //    filament_detect, cfs, box, feeder, mmu, tray...). Geniş filtre + iki strateji.
   try {
-    const listRes = await mfetch(`${moonrakerBase(host, port)}/printer/objects/list`, undefined, 4000);
+    const listRes = await mfetch(`${moonrakerBase(host, port)}/printer/objects/list`, undefined, 1200);
     if (!listRes.ok) return [];
     const objs: string[] = unwrap(await listRes.json())?.objects ?? [];
     const cand = objs
@@ -843,7 +843,7 @@ export async function fetchMoonrakerSlots(host: string, port: number): Promise<M
       .slice(0, 24);
     if (!cand.length) return [];
     const q = cand.map((o) => encodeURIComponent(o)).join("&");
-    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 4000);
+    const res = await mfetch(`${moonrakerBase(host, port)}/printer/objects/query?${q}`, undefined, 1200);
     if (!res.ok) return [];
     const status = unwrap(await res.json())?.status ?? {};
     // Strateji A: CFS-tarzı .info[] dizisi taşıyan bir obje varsa onu parse et (filament_detect şeması).
