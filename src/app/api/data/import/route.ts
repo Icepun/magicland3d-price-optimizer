@@ -208,8 +208,6 @@ const OrderFinanceSnapshotSchema = z.object({
   profitSource: z.enum(["calculated", "platform"]).optional(),
   estimatedCommissionKurus: sqliteInt.nullable().optional(),
   actualCommissionKurus: sqliteInt.nullable().optional(),
-  estimatedCargoKurus: sqliteInt.nullable().optional(),
-  actualCargoKurus: sqliteInt.nullable().optional(),
 });
 
 const PlatformOrderFinancialSchema = z.object({
@@ -221,19 +219,6 @@ const PlatformOrderFinancialSchema = z.object({
   commissionKurus: integer.nonnegative().max(2_147_483_647),
   sellerRevenueKurus: integer.nonnegative().max(2_147_483_647),
   transactionCount: integer.nonnegative().optional(),
-  sourceUpdatedAt: optionalDate,
-  syncedAt: optionalDate,
-});
-
-const PlatformOrderCargoItemSchema = z.object({
-  id,
-  platform: id,
-  invoiceSerialNumber: id,
-  parcelUniqueId: id,
-  orderNumber: z.string(),
-  shipmentType: z.enum(["dispatch", "return"]),
-  amountKurus: integer.nonnegative().max(2_147_483_647),
-  desi: z.number().finite().nonnegative().nullable().optional(),
   sourceUpdatedAt: optionalDate,
   syncedAt: optionalDate,
 });
@@ -381,10 +366,6 @@ const ImportSchema = z.object({
     .array(PlatformOrderFinancialSchema)
     .optional()
     .default([]),
-  platformOrderCargoItems: z
-    .array(PlatformOrderCargoItemSchema)
-    .optional()
-    .default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
   costTemplates: z.array(CostTemplateSchema).optional(),
   priceHistory: z.array(PriceHistorySchema).optional(),
@@ -439,7 +420,6 @@ export async function POST(req: NextRequest) {
           orderFinanceSnapshots: 0,
           orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
           platformOrderFinancials: 0,
-          platformOrderCargoItems: 0,
           manualOrders: 0,
           costTemplates: 0,
           priceHistory: 0,
@@ -585,8 +565,6 @@ export async function POST(req: NextRequest) {
             estimatedCommissionKurus:
               snapshot.estimatedCommissionKurus ?? null,
             actualCommissionKurus: snapshot.actualCommissionKurus ?? null,
-            estimatedCargoKurus: snapshot.estimatedCargoKurus ?? null,
-            actualCargoKurus: snapshot.actualCargoKurus ?? null,
           };
           await tx.orderFinanceSnapshot.upsert({
             where: {
@@ -632,36 +610,6 @@ export async function POST(req: NextRequest) {
             update: fields,
           });
           result.platformOrderFinancials++;
-        }
-
-        for (const cargoItem of data.platformOrderCargoItems) {
-          const fields = {
-            orderNumber: cargoItem.orderNumber,
-            amountKurus: cargoItem.amountKurus,
-            desi: cargoItem.desi ?? null,
-            sourceUpdatedAt: cargoItem.sourceUpdatedAt ?? null,
-            ...(cargoItem.syncedAt ? { syncedAt: cargoItem.syncedAt } : {}),
-          };
-          await tx.platformOrderCargoItem.upsert({
-            where: {
-              platform_invoiceSerialNumber_parcelUniqueId_shipmentType: {
-                platform: cargoItem.platform,
-                invoiceSerialNumber: cargoItem.invoiceSerialNumber,
-                parcelUniqueId: cargoItem.parcelUniqueId,
-                shipmentType: cargoItem.shipmentType,
-              },
-            },
-            create: {
-              id: cargoItem.id,
-              platform: cargoItem.platform,
-              invoiceSerialNumber: cargoItem.invoiceSerialNumber,
-              parcelUniqueId: cargoItem.parcelUniqueId,
-              shipmentType: cargoItem.shipmentType,
-              ...fields,
-            },
-            update: fields,
-          });
-          result.platformOrderCargoItems++;
         }
 
         for (const order of data.manualOrders) {

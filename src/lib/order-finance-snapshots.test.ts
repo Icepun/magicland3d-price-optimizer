@@ -28,7 +28,6 @@ describe("finance snapshot order ids", () => {
       profitPartial: false,
       profitSource: "calculated",
       actualCommissionKurus: null,
-      actualCargoKurus: null,
     };
     expect(
       shouldReplaceCapturedProfit(captured, {
@@ -75,7 +74,6 @@ describe("finance snapshot order ids", () => {
       profitPartial: false,
       profitSource: "platform",
       actualCommissionKurus: 1_800,
-      actualCargoKurus: null,
     };
 
     expect(shouldReplaceCapturedProfit(calculated, platform)).toBe(true);
@@ -85,13 +83,6 @@ describe("finance snapshot order ids", () => {
         ...platform,
         profitKurus: 2_600,
         actualCommissionKurus: 1_850,
-      })
-    ).toBe(true);
-    expect(
-      shouldReplaceCapturedProfit(platform, {
-        ...platform,
-        profitKurus: 2_300,
-        actualCargoKurus: 3_500,
       })
     ).toBe(true);
   });

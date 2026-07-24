@@ -20,10 +20,7 @@ import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
-import {
-  applyActualCargoToProfit,
-  applyActualCommissionToProfit,
-} from "@/core/platform-financials";
+import { applyActualCommissionToProfit } from "@/core/platform-financials";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
@@ -76,8 +73,6 @@ export interface UnifiedOrder {
   profitSource: "calculated" | "platform" | "manual";
   estimatedCommission: number;
   actualCommission: number | null;
-  estimatedCargo: number;
-  actualCargo: number | null;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
@@ -561,7 +556,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   };
   const financialByExternalId = new Map<string, PlatformFinancial>();
   const financialByOrderNumber = new Map<string, PlatformFinancial[]>();
-  const cargoCostByOrderNumber = new Map<string, number>();
   const trendyolOrderNumberCounts = new Map<string, number>();
   for (const row of historyRows) {
     if (row.platform !== "trendyol") continue;
@@ -589,15 +583,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             .map((product) => product.id)
         : [];
     const trendyolRows = historyRows.filter((row) => row.platform === "trendyol");
-    const [
-      products,
-      cRules,
-      kRules,
-      eRules,
-      settings,
-      platformFinancials,
-      platformCargoItems,
-    ] =
+    const [products, cRules, kRules, eRules, settings, platformFinancials] =
       await Promise.all([
       prisma.product.findMany({
         where: {
@@ -631,18 +617,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           commissionKurus: true,
         },
       }),
-      prisma.platformOrderCargoItem.findMany({
-        where: {
-          platform: "trendyol",
-          orderNumber: {
-            in: trendyolRows.map((row) => row.orderNumber),
-          },
-        },
-        select: {
-          orderNumber: true,
-          amountKurus: true,
-        },
-      }),
     ]);
 
     settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
@@ -654,13 +628,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       const rows = financialByOrderNumber.get(financial.orderNumber) ?? [];
       rows.push(financial);
       financialByOrderNumber.set(financial.orderNumber, rows);
-    }
-    for (const cargoItem of platformCargoItems) {
-      cargoCostByOrderNumber.set(
-        cargoItem.orderNumber,
-        (cargoCostByOrderNumber.get(cargoItem.orderNumber) ?? 0) +
-          cargoItem.amountKurus
-      );
     }
 
     for (const p of products) {
@@ -837,25 +804,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             settlementRevenue: kurusToTl(platformFinancial.grossRevenueKurus),
             vatRate: Number(settingsMap.vatRate ?? 0),
           });
-    const actualCargoKurus =
-      r.platform === "trendyol" &&
-      trendyolOrderNumberCounts.get(r.orderNumber) === 1
-        ? cargoCostByOrderNumber.get(r.orderNumber) ?? null
-        : null;
-    const actualCargo =
-      actualCargoKurus == null ? null : kurusToTl(actualCargoKurus);
-    const cargoAdjustedProfit =
-      actualCargo == null || r.statusKind === "cancelled"
-        ? {
-            profit: actualProfit.profit,
-            applied: false,
-          }
-        : applyActualCargoToProfit({
-            profit: actualProfit.profit,
-            profitPartial,
-            estimatedCargoNet: pr.estimatedCargoNet,
-            actualCargoNet: actualCargo,
-          });
 
     orders.push({
       platform: r.platform,
@@ -870,16 +818,11 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       itemCount: items.reduce((s, it) => s + it.quantity, 0),
       items,
       image: thumb,
-      profit: cargoAdjustedProfit.profit,
+      profit: actualProfit.profit,
       profitPartial,
-      profitSource:
-        actualProfit.applied || cargoAdjustedProfit.applied
-          ? "platform"
-          : "calculated",
+      profitSource: actualProfit.applied ? "platform" : "calculated",
       estimatedCommission: pr.estimatedCommission,
       actualCommission: actualProfit.applied ? actualCommission : null,
-      estimatedCargo: pr.estimatedCargoNet,
-      actualCargo: cargoAdjustedProfit.applied ? actualCargo : null,
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
@@ -937,8 +880,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         profitSource: "manual",
         estimatedCommission: storedBreakdown.commissionCost,
         actualCommission: null,
-        estimatedCargo: storedBreakdown.cargoCost,
-        actualCargo: null,
         unmatchedCount: storedBreakdown.missingCostItems,
         missingDesiCount: 0,
         desiEstimated: false,

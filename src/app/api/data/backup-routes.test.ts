@@ -222,12 +222,10 @@ describe("portable backup routes", () => {
           profitPartial: true,
           statusKind: "processing",
           currency: "TRY",
-          calculationVersion: 3,
+          calculationVersion: 2,
           profitSource: "platform",
           estimatedCommissionKurus: 7_000,
           actualCommissionKurus: 6_500,
-          estimatedCargoKurus: 3_000,
-          actualCargoKurus: 3_424,
         },
       ],
       platformOrderFinancials: [
@@ -242,20 +240,6 @@ describe("portable backup routes", () => {
           transactionCount: 2,
           sourceUpdatedAt: "2026-07-10T10:00:00.000Z",
           syncedAt: "2026-07-10T11:00:00.000Z",
-        },
-      ],
-      platformOrderCargoItems: [
-        {
-          id: "poci-1",
-          platform: "trendyol",
-          invoiceSerialNumber: "INV-1",
-          parcelUniqueId: "PARCEL-1",
-          orderNumber: "1003",
-          shipmentType: "dispatch",
-          amountKurus: 3_424,
-          desi: 1,
-          sourceUpdatedAt: "2026-07-11T10:00:00.000Z",
-          syncedAt: "2026-07-11T11:00:00.000Z",
         },
       ],
       manualOrders: [
@@ -292,7 +276,6 @@ describe("portable backup routes", () => {
     expect(result.stats.actualExpenses).toBe(1);
     expect(result.stats.orderFinanceSnapshots).toBe(1);
     expect(result.stats.platformOrderFinancials).toBe(1);
-    expect(result.stats.platformOrderCargoItems).toBe(1);
     expect(result.stats.manualOrders).toBe(1);
     expect(result.warnings).toHaveLength(1);
 
@@ -349,15 +332,6 @@ describe("portable backup routes", () => {
       commissionKurus: 6_500,
       transactionCount: 2,
     });
-    expect(
-      await db.platformOrderCargoItem.findUniqueOrThrow({
-        where: { id: "poci-1" },
-      })
-    ).toMatchObject({
-      invoiceSerialNumber: "INV-1",
-      orderNumber: "1003",
-      amountKurus: 3_424,
-    });
     await db.orderFinanceSnapshot.create({
       data: {
         id: "legacy-manual-snapshot",
@@ -379,7 +353,7 @@ describe("portable backup routes", () => {
     const exported = await exportBackup();
     expect(exported.status).toBe(200);
     const backup = await exported.json();
-    expect(backup.version).toBe(4);
+    expect(backup.version).toBe(3);
     expect(backup.appVersion).toBe(packageJson.version);
     expect(backup.priceHistory).toHaveLength(1);
     expect(backup.filamentSpools).toHaveLength(1);
@@ -397,8 +371,6 @@ describe("portable backup routes", () => {
         profitSource: "platform",
         estimatedCommissionKurus: 7_000,
         actualCommissionKurus: 6_500,
-        estimatedCargoKurus: 3_000,
-        actualCargoKurus: 3_424,
       }),
     ]);
     expect(backup.platformOrderFinancials).toEqual([
@@ -406,13 +378,6 @@ describe("portable backup routes", () => {
         id: "pof-1",
         externalOrderId: "ty-77",
         commissionKurus: 6_500,
-      }),
-    ]);
-    expect(backup.platformOrderCargoItems).toEqual([
-      expect.objectContaining({
-        id: "poci-1",
-        invoiceSerialNumber: "INV-1",
-        amountKurus: 3_424,
       }),
     ]);
     expect(

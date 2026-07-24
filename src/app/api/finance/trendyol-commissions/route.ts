@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { bustCache } from "@/lib/route-cache";
-import { syncTrendyolActualCosts } from "@/lib/trendyol-finance";
+import { syncTrendyolActualCommissions } from "@/lib/trendyol-finance";
 
 let activeSync: Promise<Awaited<
-  ReturnType<typeof syncTrendyolActualCosts>
+  ReturnType<typeof syncTrendyolActualCommissions>
 >> | null = null;
 
 export async function POST(req: NextRequest) {
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
       : 60;
 
     if (!activeSync) {
-      activeSync = syncTrendyolActualCosts(days).finally(() => {
+      activeSync = syncTrendyolActualCommissions(days).finally(() => {
         activeSync = null;
       });
     }
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     const message =
       error instanceof Error
         ? error.message
-        : "Trendyol maliyetleri alınamadı.";
+        : "Trendyol komisyonları alınamadı.";
     return NextResponse.json({ error: message }, { status: 502 });
   }
 }

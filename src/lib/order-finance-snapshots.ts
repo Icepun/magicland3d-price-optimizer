@@ -15,8 +15,6 @@ export interface FinanceSnapshotOrder {
   profitSource?: "calculated" | "platform" | "manual";
   estimatedCommission?: number;
   actualCommission?: number | null;
-  estimatedCargo?: number;
-  actualCargo?: number | null;
   statusKind: string;
   currency: string;
 }
@@ -35,7 +33,6 @@ export function shouldReplaceCapturedProfit(
     profitPartial: boolean;
     profitSource?: string;
     actualCommissionKurus?: number | null;
-    actualCargoKurus?: number | null;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -43,7 +40,6 @@ export function shouldReplaceCapturedProfit(
     profitPartial: boolean;
     profitSource?: string;
     actualCommissionKurus?: number | null;
-    actualCargoKurus?: number | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -56,8 +52,7 @@ export function shouldReplaceCapturedProfit(
   if (
     incoming.profitSource === "platform" &&
     (existing.profitSource !== "platform" ||
-      existing.actualCommissionKurus !== incoming.actualCommissionKurus ||
-      existing.actualCargoKurus !== incoming.actualCargoKurus)
+      existing.actualCommissionKurus !== incoming.actualCommissionKurus)
   ) {
     return true;
   }
@@ -106,8 +101,6 @@ export async function persistOrderFinanceSnapshots(
         profitSource: true,
         actualCommissionKurus: true,
         estimatedCommissionKurus: true,
-        actualCargoKurus: true,
-        estimatedCargoKurus: true,
       },
     });
     const existingByKey = new Map(
@@ -134,12 +127,6 @@ export async function persistOrderFinanceSnapshots(
             order.actualCommission == null
               ? null
               : tlToKurus(order.actualCommission),
-          estimatedCargoKurus:
-            order.estimatedCargo == null
-              ? null
-              : tlToKurus(order.estimatedCargo),
-          actualCargoKurus:
-            order.actualCargo == null ? null : tlToKurus(order.actualCargo),
         };
         const replaceProfit = shouldReplaceCapturedProfit(existing, incoming);
         const data = {
@@ -163,12 +150,6 @@ export async function persistOrderFinanceSnapshots(
             ? incoming.actualCommissionKurus
             : existing?.actualCommissionKurus ??
               incoming.actualCommissionKurus,
-          estimatedCargoKurus: replaceProfit
-            ? incoming.estimatedCargoKurus
-            : existing?.estimatedCargoKurus ?? incoming.estimatedCargoKurus,
-          actualCargoKurus: replaceProfit
-            ? incoming.actualCargoKurus
-            : existing?.actualCargoKurus ?? incoming.actualCargoKurus,
           statusKind: order.statusKind,
           currency: order.currency || "TRY",
           syncedAt,

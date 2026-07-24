@@ -113,23 +113,15 @@ interface FinanceResponse {
   lastOrderSyncAt: string | null;
   actualCommissionOrders: number;
   lastActualCommissionSyncAt: string | null;
-  actualCargoOrders: number;
-  lastActualCargoSyncAt: string | null;
   totals: FinanceTotals;
   months: FinanceBucket[];
   quality: FinanceQuality;
 }
 
-interface TrendyolCostSyncResponse {
+interface TrendyolCommissionSyncResponse {
   fetchedTransactions: number;
   storedOrders: number;
   skippedTransactions: number;
-  cargoInvoiceRecords: number;
-  cargoInvoices: number;
-  cargoItems: number;
-  cargoOrders: number;
-  skippedCargoInvoices: number;
-  skippedCargoItems: number;
   days: number;
   syncedAt: string;
 }
@@ -225,17 +217,17 @@ export default function ReportsPage() {
     staleTime: 0,
     refetchOnMount: "always",
   });
-  const trendyolCostSync = useMutation({
+  const trendyolCommissionSync = useMutation({
     mutationFn: () =>
-      fetchJson<TrendyolCostSyncResponse>(
+      fetchJson<TrendyolCommissionSyncResponse>(
         "/api/finance/trendyol-commissions?days=60",
         { method: "POST" }
       ),
     onSuccess: async (result) => {
       toast.success(
-        result.storedOrders > 0 || result.cargoOrders > 0
-          ? `${result.storedOrders} siparişin komisyonu, ${result.cargoOrders} siparişin kargosu güncellendi.`
-          : "Yeni Trendyol maliyet kaydı bulunamadı."
+        result.storedOrders > 0
+          ? `${result.storedOrders} Trendyol siparişinin gerçek komisyonu alındı.`
+          : "Yeni Trendyol komisyon kaydı bulunamadı."
       );
       await queryClient.invalidateQueries({ queryKey: ["orders"] });
       await queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
@@ -244,7 +236,7 @@ export default function ReportsPage() {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Trendyol maliyetleri alınamadı."
+          : "Trendyol komisyonları alınamadı."
       );
     },
   });
@@ -362,9 +354,9 @@ export default function ReportsPage() {
           </p>
           {financeQuery.data && (
             <p className="text-xs text-muted-foreground mt-1">
-              Gerçek Trendyol verisi:{" "}
-              {financeQuery.data.actualCommissionOrders} siparişte komisyon,{" "}
-              {financeQuery.data.actualCargoOrders} siparişte kargo.
+              {financeQuery.data.actualCommissionOrders > 0
+                ? `${financeQuery.data.actualCommissionOrders} Trendyol sipariş/paket kaydında gerçek komisyon hazır.`
+                : "Trendyol komisyonları henüz platformdan alınmadı."}
             </p>
           )}
         </div>
@@ -373,18 +365,18 @@ export default function ReportsPage() {
           variant="outline"
           size="sm"
           className="gap-2 self-start"
-          disabled={trendyolCostSync.isPending}
-          onClick={() => trendyolCostSync.mutate()}
+          disabled={trendyolCommissionSync.isPending}
+          onClick={() => trendyolCommissionSync.mutate()}
         >
           <RefreshCw
             className={cn(
               "h-4 w-4",
-              trendyolCostSync.isPending && "animate-spin"
+              trendyolCommissionSync.isPending && "animate-spin"
             )}
           />
-          {trendyolCostSync.isPending
-            ? "Maliyetler alınıyor..."
-            : "Trendyol Maliyetlerini Güncelle"}
+          {trendyolCommissionSync.isPending
+            ? "Komisyonlar alınıyor..."
+            : "Trendyol Komisyonlarını Güncelle"}
         </Button>
       </div>
 

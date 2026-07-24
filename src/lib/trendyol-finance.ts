@@ -2,10 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { tlToKurus } from "@/lib/monthly-finance";
 import {
-  TrendyolApiError,
   TrendyolClient,
-  type TrendyolCargoInvoiceItem,
-  type TrendyolOtherFinancialItem,
   type TrendyolSettlementItem,
 } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
@@ -24,26 +21,10 @@ export interface TrendyolCommissionAggregate {
   sourceUpdatedAt: Date | null;
 }
 
-export interface TrendyolCargoInvoiceRecord {
-  invoiceSerialNumber: string;
-  parcelUniqueId: string;
-  orderNumber: string;
-  shipmentType: "dispatch" | "return";
-  amount: number;
-  desi: number | null;
-  sourceUpdatedAt: Date | null;
-}
-
-export interface TrendyolCostSyncResult {
+export interface TrendyolCommissionSyncResult {
   fetchedTransactions: number;
   storedOrders: number;
   skippedTransactions: number;
-  cargoInvoiceRecords: number;
-  cargoInvoices: number;
-  cargoItems: number;
-  cargoOrders: number;
-  skippedCargoInvoices: number;
-  skippedCargoItems: number;
   days: number;
   syncedAt: string;
 }
@@ -57,68 +38,6 @@ function cleanId(value: unknown): string | null {
   if (typeof value !== "string" && typeof value !== "number") return null;
   const text = String(value).trim();
   return text ? text : null;
-}
-
-function normalizeText(value: unknown): string {
-  return String(value ?? "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "");
-}
-
-export function isTrendyolCargoInvoice(
-  item: TrendyolOtherFinancialItem
-): boolean {
-  const text = normalizeText(
-    `${item.transactionType ?? ""} ${item.transactionSubType ?? ""} ${item.description ?? ""}`
-  );
-  return (
-    (text.includes("kargo") && text.includes("fatura")) ||
-    (text.includes("cargo") && text.includes("invoice"))
-  );
-}
-
-export function normalizeTrendyolCargoInvoiceItems(
-  invoiceSerialNumber: string,
-  items: TrendyolCargoInvoiceItem[],
-  sourceUpdatedAt: Date | null
-): {
-  records: TrendyolCargoInvoiceRecord[];
-  skippedItems: number;
-} {
-  const records = new Map<string, TrendyolCargoInvoiceRecord>();
-  let skippedItems = 0;
-
-  for (const item of items) {
-    const parcelUniqueId = cleanId(item.parcelUniqueId);
-    const orderNumber = cleanId(item.orderNumber);
-    const amount = finiteNumber(item.amount);
-    const shipmentText = normalizeText(item.shipmentPackageType);
-    if (!parcelUniqueId || !orderNumber || amount == null || amount < 0) {
-      skippedItems++;
-      continue;
-    }
-
-    const shipmentType =
-      shipmentText.includes("iade") || shipmentText.includes("return")
-        ? "return"
-        : "dispatch";
-    const desiValue = finiteNumber(item.desi);
-    const record: TrendyolCargoInvoiceRecord = {
-      invoiceSerialNumber,
-      parcelUniqueId,
-      orderNumber,
-      shipmentType,
-      // Kargo faturasındaki kalem tutarı KDV hariç net maliyettir. KDV ayrıca
-      // indirilecek KDV olduğundan kâra etki eden tutar doğrudan bu değerdir.
-      amount,
-      desi: desiValue != null && desiValue >= 0 ? desiValue : null,
-      sourceUpdatedAt,
-    };
-    records.set(`${parcelUniqueId}:${shipmentType}`, record);
-  }
-
-  return { records: [...records.values()], skippedItems };
 }
 
 export function aggregateTrendyolSaleSettlements(
@@ -230,78 +149,16 @@ async function fetchSaleSettlements(
   return items;
 }
 
-async function fetchDeductionInvoices(
-  client: TrendyolClient,
-  startDate: number,
-  endDate: number
-): Promise<TrendyolOtherFinancialItem[]> {
-  const items: TrendyolOtherFinancialItem[] = [];
-
-  for (
-    let windowStart = startDate;
-    windowStart <= endDate;
-    windowStart += MAX_WINDOW_MS
-  ) {
-    const windowEnd = Math.min(endDate, windowStart + MAX_WINDOW_MS - 1);
-    for (let pageNo = 0; pageNo < 100; pageNo++) {
-      const page = await client.listOtherFinancials({
-        startDate: windowStart,
-        endDate: windowEnd,
-        page: pageNo,
-        size: PAGE_SIZE,
-        transactionType: "DeductionInvoices",
-      });
-      const content = page.content ?? [];
-      items.push(...content);
-      const totalPages = Number(page.totalPages);
-      if (
-        content.length < PAGE_SIZE ||
-        (Number.isFinite(totalPages) && pageNo + 1 >= totalPages)
-      ) {
-        break;
-      }
-    }
-  }
-
-  return items;
-}
-
-async function fetchCargoInvoiceItems(
-  client: TrendyolClient,
-  invoiceSerialNumber: string
-): Promise<TrendyolCargoInvoiceItem[]> {
-  const items: TrendyolCargoInvoiceItem[] = [];
-  for (let pageNo = 0; pageNo < 100; pageNo++) {
-    const page = await client.listCargoInvoiceItems(invoiceSerialNumber, {
-      page: pageNo,
-      size: 500,
-    });
-    const content = page.content ?? [];
-    items.push(...content);
-    const totalPages = Number(page.totalPages);
-    if (
-      content.length < 500 ||
-      (Number.isFinite(totalPages) && pageNo + 1 >= totalPages)
-    ) {
-      break;
-    }
-  }
-  return items;
-}
-
-export async function syncTrendyolActualCosts(
+export async function syncTrendyolActualCommissions(
   requestedDays = 60
-): Promise<TrendyolCostSyncResult> {
+): Promise<TrendyolCommissionSyncResult> {
   const days = Math.max(1, Math.min(180, Math.trunc(requestedDays)));
   await ensureRuntimeSchema();
 
   const client = new TrendyolClient(await getTrendyolCredentials());
   const endDate = Date.now();
   const startDate = endDate - days * DAY_MS;
-  const [fetched, deductionInvoices] = await Promise.all([
-    fetchSaleSettlements(client, startDate, endDate),
-    fetchDeductionInvoices(client, startDate, endDate),
-  ]);
+  const fetched = await fetchSaleSettlements(client, startDate, endDate);
 
   // Pencere sınırında aynı finans hareketi dönerse iki kez saymayalım.
   const seen = new Set<string>();
@@ -363,102 +220,10 @@ export async function syncTrendyolActualCosts(
     );
   }
 
-  const cargoInvoiceFinancials = deductionInvoices.filter(isTrendyolCargoInvoice);
-  const cargoInvoiceSerials = new Set<string>();
-  const cargoRecords: TrendyolCargoInvoiceRecord[] = [];
-  let cargoInvoices = 0;
-  let skippedCargoInvoices = 0;
-  let skippedCargoItems = 0;
-
-  for (const financial of cargoInvoiceFinancials) {
-    const invoiceSerialNumber = cleanId(financial.id);
-    if (!invoiceSerialNumber || cargoInvoiceSerials.has(invoiceSerialNumber)) {
-      if (!invoiceSerialNumber) skippedCargoInvoices++;
-      continue;
-    }
-    cargoInvoiceSerials.add(invoiceSerialNumber);
-
-    const transactionDate = finiteNumber(financial.transactionDate);
-    const sourceUpdatedAt =
-      transactionDate == null ? null : new Date(transactionDate);
-    try {
-      const items = await fetchCargoInvoiceItems(client, invoiceSerialNumber);
-      const normalized = normalizeTrendyolCargoInvoiceItems(
-        invoiceSerialNumber,
-        items,
-        sourceUpdatedAt &&
-          Number.isFinite(sourceUpdatedAt.getTime())
-          ? sourceUpdatedAt
-          : null
-      );
-      skippedCargoItems += normalized.skippedItems;
-      if (normalized.records.length === 0) {
-        skippedCargoInvoices++;
-        continue;
-      }
-      cargoInvoices++;
-      cargoRecords.push(...normalized.records);
-    } catch (error) {
-      // Cari ekstre kaydı oluşup detay henüz hazır değilse bir sonraki manuel
-      // senkron deneyecek. Yetki/ağ hatalarını ise kullanıcıya göster.
-      if (
-        error instanceof TrendyolApiError &&
-        (error.status === 400 || error.status === 404)
-      ) {
-        skippedCargoInvoices++;
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  for (let offset = 0; offset < cargoRecords.length; offset += 50) {
-    const chunk = cargoRecords.slice(offset, offset + 50);
-    await prisma.$transaction(
-      chunk.map((row) =>
-        prisma.platformOrderCargoItem.upsert({
-          where: {
-            platform_invoiceSerialNumber_parcelUniqueId_shipmentType: {
-              platform: "trendyol",
-              invoiceSerialNumber: row.invoiceSerialNumber,
-              parcelUniqueId: row.parcelUniqueId,
-              shipmentType: row.shipmentType,
-            },
-          },
-          create: {
-            id: `poci:trendyol:${row.invoiceSerialNumber}:${row.parcelUniqueId}:${row.shipmentType}`,
-            platform: "trendyol",
-            invoiceSerialNumber: row.invoiceSerialNumber,
-            parcelUniqueId: row.parcelUniqueId,
-            orderNumber: row.orderNumber,
-            shipmentType: row.shipmentType,
-            amountKurus: tlToKurus(row.amount),
-            desi: row.desi,
-            sourceUpdatedAt: row.sourceUpdatedAt,
-            syncedAt,
-          },
-          update: {
-            orderNumber: row.orderNumber,
-            amountKurus: tlToKurus(row.amount),
-            desi: row.desi,
-            sourceUpdatedAt: row.sourceUpdatedAt,
-            syncedAt,
-          },
-        })
-      )
-    );
-  }
-
   return {
     fetchedTransactions: unique.length,
     storedOrders: aggregates.length,
     skippedTransactions,
-    cargoInvoiceRecords: cargoInvoiceFinancials.length,
-    cargoInvoices,
-    cargoItems: cargoRecords.length,
-    cargoOrders: new Set(cargoRecords.map((row) => row.orderNumber)).size,
-    skippedCargoInvoices,
-    skippedCargoItems,
     days,
     syncedAt: syncedAt.toISOString(),
   };

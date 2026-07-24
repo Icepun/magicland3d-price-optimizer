@@ -70,8 +70,6 @@ export interface OrderProfitResult {
   profit: number | null;
   /** Kural/listing üzerinden siparişe düşülen brüt komisyon. */
   estimatedCommission: number;
-  /** KDV iadesi düşüldükten sonra kâra etki eden tahmini kargo maliyeti. */
-  estimatedCargoNet: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
   matchedLines: number;
@@ -197,7 +195,6 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     return {
       profit: null,
       estimatedCommission: 0,
-      estimatedCargoNet: 0,
       partial: false,
       matchedLines: 0,
       unmatchedLines,
@@ -302,7 +299,6 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   return {
     profit,
     estimatedCommission,
-    estimatedCargoNet: cargo.gross - cargo.inputVat,
     partial: unmatchedLines > 0,
     matchedLines,
     unmatchedLines,
