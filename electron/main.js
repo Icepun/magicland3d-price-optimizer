@@ -642,6 +642,11 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // Pencere tepsiye alınınca (X → win.hide()) Chromium arka plan zamanlayıcılarını
+      // kısıyordu: bildirim zilinin 60sn'lik yoklaması durup bildirimler ancak pencereyi
+      // tekrar açınca çıkıyordu ("sadece sayfayı açınca bildirim geliyor"). Kapatınca
+      // uygulama tepside çalışmaya devam ettiği için bu kısma İSTENMİYOR.
+      backgroundThrottling: false,
     },
   });
 

@@ -138,6 +138,30 @@ describe("resolveOrderProfit — gerçek komisyon düzeltmesi", () => {
     expect(r.profitPartial).toBe(true);
   });
 
+  it("desi = 0 GEÇERLİ değerdir: uyarı üretmez ve kârı değiştirmez", () => {
+    const withDesi1 = resolveOrderProfit(input());
+    const withDesi0 = resolveOrderProfit(
+      input({
+        lines: [{ ...input().lines[0], product: { ...input().lines[0].product!, desi: 0 } }],
+      })
+    );
+    // Çok küçük ürünler için desi bilerek 0 girilir → "desi eksik" uyarısı ÇIKMAMALI.
+    expect(withDesi0.missingDesiLines).toBe(0);
+    expect(withDesi0.desiEstimated).toBe(false);
+    // Kargo baremleri 0'dan başladığı için 0 ile 1 aynı barime düşer → kâr aynı kalır.
+    expect(withDesi0.profit).toBeCloseTo(withDesi1.profit!, 6);
+  });
+
+  it("desi HİÇ girilmemişse (null) uyarı verir", () => {
+    const r = resolveOrderProfit(
+      input({
+        lines: [{ ...input().lines[0], product: { ...input().lines[0].product!, desi: null } }],
+      })
+    );
+    expect(r.missingDesiLines).toBe(1);
+    expect(r.desiEstimated).toBe(true);
+  });
+
   it("MOBİL PARİTE: aynı girdi + aynı settlement → aynı kâr, kaynak ve komisyon", () => {
     // Mobil ve masaüstü artık AYNI fonksiyonu aynı seçeneklerle çağırıyor. Farklı bir sonuç
     // çıkması ancak sarmalayıcılardan biri girdiyi eksik geçirirse mümkün — bu testin amacı

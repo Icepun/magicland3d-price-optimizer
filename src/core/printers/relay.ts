@@ -55,6 +55,8 @@ const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yaka
 // Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
 // snapshot'lar arasında uzantılı/uzantısız değişince sahte ikinci "finished" geçişi görülebiliyor).
 const lastDoneNotify = new Map<string, { key: string; at: number }>();
+/** Hata/duraklama bildirimi için aynı mükerrer-koruma (yazıcı → son bildirilen durum+dosya). */
+const lastFaultNotify = new Map<string, { key: string; at: number }>();
 
 export function startPrinterRelay() {
   if (started) return;
@@ -222,6 +224,30 @@ async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
   await pushToAllDevices(title, body).catch(() => {});
 }
 
+/** Baskı hatayla durdu / duraklatıldı → kalıcı Notification (KRİTİK) + mobil push.
+ *  Kritik severity: masaüstü zili bunu OS bildirimi olarak da atar. */
+async function notifyPrintFault(c: Cfg, snap: SnapFields): Promise<void> {
+  const job = snap.productName ? ` — ${snap.productName}` : "";
+  const isError = snap.status === "error";
+  const title = isError ? "Baskı hatayla durdu ⚠️" : "Baskı duraklatıldı ⏸";
+  // statusMessage yazıcıdan gelen nedeni taşır (hata kodu vb.); yoksa yazıcı adıyla yetin.
+  const body = `${c.name}${job}${snap.statusMessage ? ` · ${snap.statusMessage}` : ""}`;
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES (?,?,?,?,?,?)`,
+      `printer-fault:${c.id}:${Date.now()}`,
+      isError ? "printer-error" : "printer-paused",
+      "critical",
+      title,
+      body,
+      "/printers"
+    );
+  } catch {
+    /* Notification tablosu yoksa sessiz geç */
+  }
+  await pushToAllDevices(title, body).catch(() => {});
+}
+
 async function tick(): Promise<void> {
   // UYKU/UYANMA KORUMASI: Mac uyurken/uyanırken DB ağ-op'larını (snapshot yazma + sync) ATLA.
   // main.js powerMonitor bu globalThis flag'ini set eder. Aksi halde libSQL embedded-replica'nın
@@ -281,6 +307,17 @@ async function tick(): Promise<void> {
         if (!(prevDone && prevDone.key === doneKey && Date.now() - prevDone.at < 30 * 60_000)) {
           lastDoneNotify.set(c.id, { key: doneKey, at: Date.now() });
           void notifyPrintComplete(c, snap).catch(() => {});
+        }
+      }
+      // BASKI DURDU/HATA geçişi (printing → error|paused) → bildirim + push. Eskiden yalnız
+      // "bitti" bildiriliyordu; hatayla duran baskı saatlerce fark edilmiyordu (filament boşa gider).
+      // Aynı "bir kez bildir" ve "flap koruması" mantığı: yalnız PRINTING'den geçişte tetiklenir.
+      if (prevStatus === "printing" && (snap.status === "error" || snap.status === "paused")) {
+        const key = `${snap.status}:${fileMatchKey(snap.productName || snap.currentFilename || "")}`;
+        const prev = lastFaultNotify.get(c.id);
+        if (!(prev && prev.key === key && Date.now() - prev.at < 30 * 60_000)) {
+          lastFaultNotify.set(c.id, { key, at: Date.now() });
+          void notifyPrintFault(c, snap).catch(() => {});
         }
       }
       // etaSec 30sn KOVASI: saniye hassasiyetinde her tick "değişti" sayılıp baskı boyunca

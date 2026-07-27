@@ -5,7 +5,7 @@ import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Factory, Package, Disc3, AlertTriangle, CheckCircle2, Printer } from "lucide-react";
+import { Factory, Package, Disc3, AlertTriangle, CheckCircle2, Printer, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,21 @@ export default function PlannerPage() {
   const savedTarget = Math.max(1, Number(settings?.plannerTargetStock) || 5);
   const [override, setOverride] = useState<number | null>(null);
   const target = override ?? savedTarget;
+
+  // Yenile: stok/maliyet başka bir cihazda veya senkronla değişmiş olabilir → listeyi tazele.
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["products"] }),
+        qc.invalidateQueries({ queryKey: ["settings"] }),
+      ]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   // Baskı modalı — Ürünler sayfasındakiyle AYNI akış (yazıcı seçimi + Snapmaker/Bambu renk + başlat).
   const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
   const saveTarget = useMutation({
@@ -83,19 +98,32 @@ export default function PlannerPage() {
             <span className="font-medium text-foreground">Bas</span> ile o ürünü doğrudan bir yazıcıya gönder.
           </p>
         </div>
-        <div className="shrink-0">
-          <Label className="text-[11px] text-muted-foreground">Hedef stok</Label>
-          <Input
-            type="number"
-            min="1"
-            value={target}
-            onChange={(e) => {
-              const v = Math.max(1, Number(e.target.value) || 1);
-              setOverride(v);
-              saveTarget.mutate(v);
-            }}
-            className="h-9 w-20"
-          />
+        <div className="shrink-0 flex items-end gap-2">
+          <div>
+            <Label className="text-[11px] text-muted-foreground">Hedef stok</Label>
+            <Input
+              type="number"
+              min="1"
+              value={target}
+              onChange={(e) => {
+                const v = Math.max(1, Number(e.target.value) || 1);
+                setOverride(v);
+                saveTarget.mutate(v);
+              }}
+              className="h-9 w-20"
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-9"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            title="Stok ve maliyetleri yeniden çek"
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-1.5", refreshing && "animate-spin")} />
+            {refreshing ? "Yenileniyor…" : "Yenile"}
+          </Button>
         </div>
       </div>
 

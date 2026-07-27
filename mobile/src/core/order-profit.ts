@@ -133,8 +133,11 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       unmatchedRevenue += lineGross;
       continue;
     }
-    const lineDesi = p.desi != null && p.desi > 0 ? p.desi : 1;
-    if (!(p.desi != null && p.desi > 0)) {
+    // desi = 0 GEÇERLİ bir değerdir (çok küçük ürünler için bilerek girilir) → "girilmemiş"
+    // sayılmaz, uyarı üretmez. Yalnız desi HİÇ girilmemişse (null) uyarılır ve 1 varsayılır.
+    // Kâr etkisi yok: kargo baremlerinin tamamı 0'dan başlıyor, yani 0 ile 1 aynı barime düşer.
+    const lineDesi = p.desi != null && p.desi >= 0 ? p.desi : 1;
+    if (p.desi == null) {
       missingDesiLines++;
       missingDesiQty += line.quantity;
     }
