@@ -1,23 +1,70 @@
+import * as Notifications from "expo-notifications";
+import * as Device from "expo-device";
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+import { execute } from "@/lib/turso";
+
 /**
- * Push bildirimleri — OTA GÜVENLİ NO-OP.
+ * Push bildirimleri (baskı bitti / hatayla durdu / sipariş uyarıları).
  *
- * NEDEN NO-OP: expo-notifications & expo-device NATIVE modüllerdir. Sahadaki yüklü iOS binary'si
- * bunları İÇERMİYOR; paketler ve "expo-notifications" config plugin'i de projede kurulu değil.
- * Bu modüllere herhangi bir
- * şekilde (üst-seviye VEYA dinamik `import()`) DOKUNMAK, Metro'nun onları JS bundle'a koymasına ve
- * native modül yokken `requireNativeModule`/`requireNativeViewManager` ile açılışta ÇÖKMESİNE yol açar.
+ * Masaüstü relay'i + sipariş izleyicisi, mobilin buraya yazdığı Expo push token'larına bildirim
+ * gönderir (masaüstü: src/lib/push-notify.ts → PushToken tablosu) → telefon KAPALIYKEN de düşer.
  *
- * Bu dosya KASITLI olarak SIFIR expo-import içerir → Metro `expo-notifications`/`expo-device`'ı
- * bundle'a HİÇ koymaz → native modülü olmayan binary'de açılış çökmesi GARANTİ önlenir (sadece-JS OTA).
+ * ⚠️ NATIVE MODÜL UYARISI — bu dosya geçmişte bir kez açılış çökmesine yol açtı, tekrarlamasın:
+ * expo-notifications ve expo-device NATIVE modüllerdir. Bu dosyayı içeren JS, native modülü
+ * OLMAYAN bir binary'de çalışırsa `requireNativeModule` ile AÇILIŞTA ÇÖKER. Bu yüzden:
+ *   1. Paketler kurulu + app.json "plugins" içinde "expo-notifications" OLMALI (ikisi de yapıldı).
+ *   2. Bu sürüm YALNIZ yeni bir NATIVE EAS build ile dağıtılmalı — salt-JS OTA YETMEZ.
  *
- * GERÇEK PUSH'U GERİ AÇMAK İÇİN (gelecekte):
- *   1. expo-notifications + expo-device paketlerini kur.
- *   2. app.json "plugins" dizisine "expo-notifications" ekleyip YENİ bir native EAS build dağıt.
- *   3. Bu dosyadaki gerçek registerForPush implementasyonunu git geçmişinden (bafe1a4 öncesi
- *      defensive sürüm: dinamik import + try/catch) geri getir — AMA ancak yeni binary yayıldıktan sonra.
+ * KORUMA: app.json'da `runtimeVersion.policy = "fingerprint"`. Native bağımlılık eklemek parmak
+ * izini DEĞİŞTİRİR → bu JS eski binary'lere OTA ile ASLA düşmez. BU POLİTİKAYI KALDIRMA.
+ *
+ * NOT: Uzak push Expo Go'da çalışmaz (SDK 53+); dev-client veya standalone (EAS) build gerekir.
  */
 
-/** No-op. Native push modülü olmayan binary'de açılış çökmesini önlemek için kasıtlı boş. */
+// Önplanda bildirim geldiğinde de göster (SDK 56 davranış şekli).
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+const EXPO_PROJECT_ID =
+  (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId ??
+  "94ecc654-9a9e-41b2-974f-a9d3aa090696";
+
+/** İzin iste + Expo push token al + PushToken tablosuna yaz. Tamamen defensive (hata → sessiz). */
 export async function registerForPush(): Promise<void> {
-  // İntentionally empty — see file header. Hiçbir expo native modülüne dokunmaz.
+  try {
+    if (!Device.isDevice) return; // emülatörde uzak push yok
+
+    if (Platform.OS === "android") {
+      await Notifications.setNotificationChannelAsync("default", {
+        name: "Baskı bildirimleri",
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: "default",
+      });
+    }
+
+    const existing = await Notifications.getPermissionsAsync();
+    let granted = existing.granted;
+    if (!granted) granted = (await Notifications.requestPermissionsAsync()).granted;
+    if (!granted) return;
+
+    const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId: EXPO_PROJECT_ID });
+    const token = tokenResp?.data;
+    if (!token) return;
+
+    // Masaüstü bu tabloyu okuyup push gönderir. Aynı cihaz tekrar açılınca ON CONFLICT ile tazelenir.
+    await execute(
+      `INSERT INTO PushToken (token, platform, updatedAt) VALUES (?, ?, ?)
+       ON CONFLICT(token) DO UPDATE SET platform = excluded.platform, updatedAt = excluded.updatedAt`,
+      [token, Platform.OS, new Date().toISOString()]
+    );
+  } catch {
+    /* push kurulamadı → sessiz; uygulama yine çalışır */
+  }
 }
