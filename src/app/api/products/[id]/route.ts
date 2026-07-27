@@ -4,6 +4,7 @@ import { computeFullProductCost } from "@/core/cost-calculator";
 import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustCache } from "@/lib/route-cache";
 import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
 import { z } from "zod";
 
@@ -243,6 +244,8 @@ export async function PATCH(
   if (productPatchAffectsProfit({ ...productData, cost })) {
     invalidateOrdersCache();
   }
+  // Ürün adı değişti → Shopify ad-eşleştirmesinin ad indeksi bayatlamasın.
+  if (productData.name !== undefined) bustCache("order-name-index:");
   return NextResponse.json({ ok: true });
 }
 
@@ -269,5 +272,6 @@ export async function DELETE(
     }
   }
   invalidateOrdersCache();
+  bustCache("order-name-index:"); // silinen ürün ad indeksinde kalmasın
   return NextResponse.json({ ok: true });
 }

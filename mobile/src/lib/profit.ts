@@ -44,6 +44,14 @@ export interface Rules {
   commission: CommissionRuleInput[];
   cargo: CargoRuleInput[];
   expense: ExpenseRuleInput[];
+  /**
+   * Trendyol settlement kayıtları (gerçek komisyon) — dış sipariş kimliğine göre.
+   * Masaüstü bunu kâra uyguluyordu, mobil uygulamıyordu → aynı sipariş iki cihazda farklı
+   * kâr gösteriyordu. Artık iki taraf da çekirdekteki resolveOrderProfit'i besliyor.
+   */
+  financialByExternalId?: Map<string, { actualCommission: number; settlementRevenue: number }>;
+  /** Aynı sipariş numarası TEKİLSE güvenli fallback (settlement'ta shipmentPackageId yoksa). */
+  financialByOrderNumber?: Map<string, { actualCommission: number; settlementRevenue: number }[]>;
 }
 
 /**

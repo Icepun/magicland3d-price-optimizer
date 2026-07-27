@@ -19,12 +19,12 @@ import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
-import { computeOrderProfit, type OrderProfitLine } from "@/core/order-profit";
-import { applyActualCommissionToProfit } from "@/core/platform-financials";
+import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
 import { persistOrderFinanceSnapshots } from "@/lib/order-finance-snapshots";
+import { swr } from "@/lib/route-cache";
 import {
   parseManualOrderBreakdown,
   parseManualOrderItems,
@@ -251,6 +251,20 @@ type ExpenseRules = ExpenseRuleInput[];
 // komisyon/gider değişince invalidateOrdersCache() ile düşürülür → kâr anında güncellenir.
 const ORDERS_SOFT_MS = 60_000;
 
+// EŞZAMANLI HESAP TEKİLLEŞTİRME: Panel, Siparişler, Raporlar ve order-watch aynı anda
+// tetiklenebiliyordu → 3 pazaryeri çekimi + kâr hesabı KAÇ çağrı varsa o kadar kez koşuyordu
+// (uzak-HTTP'de her biri onlarca ardışık sorgu). Devam eden bir hesap varsa hepsi ONU paylaşır.
+let inflightOrdersCompute: Promise<Record<string, unknown>> | null = null;
+
+function computeOrdersBodyShared(): Promise<Record<string, unknown>> {
+  if (inflightOrdersCompute) return inflightOrdersCompute;
+  const attempt = computeOrdersBody().finally(() => {
+    if (inflightOrdersCompute === attempt) inflightOrdersCompute = null;
+  });
+  inflightOrdersCompute = attempt;
+  return attempt;
+}
+
 export async function GET(req: NextRequest) {
   const fresh = new URL(req.url).searchParams.get("fresh") === "1";
   const cached = getOrdersCache();
@@ -258,7 +272,7 @@ export async function GET(req: NextRequest) {
     if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
       const generation = getOrdersCacheGeneration();
       setOrdersRefreshing(true);
-      void computeOrdersBody()
+      void computeOrdersBodyShared()
         .then((b) => { setOrdersCache(b, generation); })
         .catch(() => {})
         .finally(() => { setOrdersRefreshing(false); });
@@ -266,7 +280,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(cached.body);
   }
   const generation = getOrdersCacheGeneration();
-  const body = await computeOrdersBody();
+  const body = await computeOrdersBodyShared();
   setOrdersCache(body, generation);
   return NextResponse.json(body);
 }
@@ -572,12 +586,15 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     const normalizedShopifyNames = new Set([...shopifyNames].map(normName));
     // SQLite/Prisma `name IN (...)` ham büyük-küçük harf ve boşluk farklarını kaçırıyordu.
     // Önce yalnız id+ad tarayıp Türkçe-normalize eşleşen küçük id listesini çıkar.
+    // Ad indeksi: Shopify ad-eşleştirmesi için tüm ürünlerin id+adı gerekiyor. Bu tarama her
+    // sipariş hesabında (arka plan tazelemeleri dahil) tekrarlanıyordu. Ürün adları nadir
+    // değişir → kısa ömürlü SWR + ürün PATCH'inde bust (bkz. products/[id] route).
     const nameMatchedIds =
       normalizedShopifyNames.size > 0
         ? (
-            await prisma.product.findMany({
-              select: { id: true, name: true },
-            })
+            await swr("order-name-index:v1", 5 * 60_000, () =>
+              prisma.product.findMany({ select: { id: true, name: true } })
+            )
           )
             .filter((product) => normalizedShopifyNames.has(normName(product.name)))
             .map((product) => product.id)
@@ -761,16 +778,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
 
     // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil aynı fonksiyon): adet başına ürün/
     // komisyon/yüzdesel gider; siparişe BİR KEZ kargo + SABİT gider (Platform Hizmet Bedeli).
-    const pr = computeOrderProfit({
-      platform: r.platform,
-      orderTotal: r.total,
-      lines: profitLines,
-      commissionRules,
-      cargoRules,
-      expenseRules,
-      settings: settingsMap,
-    });
-    const profitPartial = pr.partial || Boolean(r.forceProfitPartial);
     let platformFinancial =
       r.platform === "trendyol"
         ? financialByExternalId.get(r.id) ?? null
@@ -785,25 +792,30 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       const candidates = financialByOrderNumber.get(r.orderNumber) ?? [];
       if (candidates.length === 1) platformFinancial = candidates[0];
     }
-    const actualCommission =
-      platformFinancial == null
-        ? null
-        : kurusToTl(platformFinancial.commissionKurus);
-    const actualProfit =
-      platformFinancial == null || r.statusKind === "cancelled"
-        ? {
-            profit: pr.profit,
-            applied: false,
-          }
-        : applyActualCommissionToProfit({
-            profit: pr.profit,
-            profitPartial,
-            orderRevenue: r.total,
-            estimatedCommission: pr.estimatedCommission,
-            actualCommission: kurusToTl(platformFinancial.commissionKurus),
-            settlementRevenue: kurusToTl(platformFinancial.grossRevenueKurus),
-            vatRate: Number(settingsMap.vatRate ?? 0),
-          });
+    // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil AYNI fonksiyon) — kural-tabanlı kâr
+    // + Trendyol gerçek komisyonu düzeltmesi tek yerde.
+    const pr = resolveOrderProfit(
+      {
+        platform: r.platform,
+        orderTotal: r.total,
+        lines: profitLines,
+        commissionRules,
+        cargoRules,
+        expenseRules,
+        settings: settingsMap,
+      },
+      {
+        forceProfitPartial: Boolean(r.forceProfitPartial),
+        statusKind: r.statusKind,
+        financial: platformFinancial
+          ? {
+              actualCommission: kurusToTl(platformFinancial.commissionKurus),
+              settlementRevenue: kurusToTl(platformFinancial.grossRevenueKurus),
+            }
+          : null,
+      }
+    );
+    const profitPartial = pr.profitPartial;
 
     orders.push({
       platform: r.platform,
@@ -818,11 +830,11 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       itemCount: items.reduce((s, it) => s + it.quantity, 0),
       items,
       image: thumb,
-      profit: actualProfit.profit,
+      profit: pr.profit,
       profitPartial,
-      profitSource: actualProfit.applied ? "platform" : "calculated",
+      profitSource: pr.profitSource,
       estimatedCommission: pr.estimatedCommission,
-      actualCommission: actualProfit.applied ? actualCommission : null,
+      actualCommission: pr.actualCommission,
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,

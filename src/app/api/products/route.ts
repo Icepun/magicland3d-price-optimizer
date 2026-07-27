@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { findCommissionRule } from "@/core/commission-calculator";
@@ -367,5 +368,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const data = CreateProductSchema.parse(body);
   const product = await prisma.product.create({ data });
+  // Yeni ürün listelerde ve sipariş eşleşmesinde ANINDA görünmeli.
+  bustProductCaches();
   return NextResponse.json(product, { status: 201 });
 }

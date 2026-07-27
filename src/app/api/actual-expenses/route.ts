@@ -1,3 +1,4 @@
+import { bustFinanceCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -32,6 +33,9 @@ export async function POST(req: NextRequest) {
         note: optionalExpenseText(data.note),
       },
     });
+    // Gerçek gider aylık net kâra girer → finans geçmişi önbelleği tazelensin
+    // (bu olmadan gider eklendikten sonra aylık rapor 1 dakika değişmiyordu).
+    bustFinanceCaches();
     return NextResponse.json(actualExpenseResponse(expense), { status: 201 });
   } catch (error) {
     const response = actualExpenseValidationError(error);

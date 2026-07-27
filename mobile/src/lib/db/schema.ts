@@ -5,6 +5,38 @@ let financeSchemaPromise: Promise<void> | null = null;
 let manualOrderSchemaPromise: Promise<void> | null = null;
 
 /**
+ * OrderFinanceSnapshot'ın gerçek-komisyon kolonları. Tablo eski bir sürümde bu kolonlar olmadan
+ * oluşturulmuş olabilir (mobilin kendi CREATE'i ya da eski masaüstü şeması) → tek tek ekle.
+ * ⚠️ CREATE TABLE ifadesindeki kolon listesi bunları içerse bile bu adım GEREKLİ: CREATE yalnız
+ * tablo hiç yoksa çalışır, mevcut tabloya kolon eklemez (Faz 1'de masaüstünde de bu tuzağa düştük).
+ */
+async function ensureSnapshotCommissionColumns(): Promise<void> {
+  const wanted: [string, string][] = [
+    ["profitSource", `TEXT NOT NULL DEFAULT 'calculated'`],
+    ["estimatedCommissionKurus", "INTEGER"],
+    ["actualCommissionKurus", "INTEGER"],
+  ];
+  const columns = await query<{ name: string }>(
+    `PRAGMA table_info("OrderFinanceSnapshot")`
+  );
+  const have = new Set(columns.map((c) => c.name));
+  for (const [name, definition] of wanted) {
+    if (have.has(name)) continue;
+    try {
+      await execute(
+        `ALTER TABLE "OrderFinanceSnapshot" ADD COLUMN "${name}" ${definition}`
+      );
+    } catch (error) {
+      // İki cihaz aynı anda güncellerse ikinci ALTER "duplicate column" dönebilir.
+      const refreshed = await query<{ name: string }>(
+        `PRAGMA table_info("OrderFinanceSnapshot")`
+      );
+      if (!refreshed.some((c) => c.name === name)) throw error;
+    }
+  }
+}
+
+/**
  * Mobil uygulama masaüstü açılmadan önce güncellenebilir. Bu yüzden kargo KDV kolonunu
  * ilk kargo sorgusundan önce Turso'da da güvenle hazırlarız.
  */
@@ -80,10 +112,17 @@ export function ensureFinanceSchema(): Promise<void> {
           "currency" TEXT NOT NULL DEFAULT 'TRY',
           "syncedAt" DATETIME NOT NULL,
           "calculationVersion" INTEGER NOT NULL DEFAULT 1,
+          "profitSource" TEXT NOT NULL DEFAULT 'calculated',
+          "estimatedCommissionKurus" INTEGER,
+          "actualCommissionKurus" INTEGER,
           CONSTRAINT "OrderFinanceSnapshot_platform_externalOrderId_key"
             UNIQUE ("platform", "externalOrderId")
         )`
       );
+      // Yukarıdaki CREATE yalnız tablo YOKSA çalışır. Tablo daha eski bir sürümde (bu üç kolon
+      // olmadan) oluşturulmuşsa kolonları ayrıca ekle — yoksa snapshot yazımı "no such column"
+      // ile patlar. Masaüstündeki runtime-schema ensureColumn'un mobil karşılığı.
+      await ensureSnapshotCommissionColumns();
       await execute(
         `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_orderedAt_idx"
            ON "OrderFinanceSnapshot"("orderedAt")`

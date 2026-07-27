@@ -826,28 +826,32 @@ export default function ProductsPage() {
     // "Her şey güncel" deniyordu; kullanıcı neyin olduğunu göremiyordu).
     const results: { p: string; ok: boolean; checked: number; changed: number; error?: string }[] = [];
     setRefreshProgress({ total, done, label: platforms.length ? label(platforms[0]) : "Yenileniyor…" });
-    for (const p of platforms) {
-      setRefreshProgress({ total, done, label: label(p) });
-      try {
-        const r = await fetch(`/api/${p}/sync-products`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ mode: "refresh-prices" }),
-        });
-        const body = (await r.json().catch(() => ({}))) as { changed?: number; checked?: number; error?: string };
-        if (!r.ok) {
-          results.push({ p, ok: false, checked: 0, changed: 0, error: String(body?.error || `HTTP ${r.status}`) });
-        } else {
-          const ch = Number(body?.changed) || 0;
-          results.push({ p, ok: true, checked: Number(body?.checked) || 0, changed: ch });
-          changed += ch;
+    // Platformlar PARALEL yenilenir: süre artık en yavaş platform kadar, üçünün TOPLAMI değil.
+    // (Her platform kendi pazaryeri API'sini bekliyor; sırayla çalıştırmak bu beklemeleri topluyordu.)
+    // İlerleme çubuğu determinate kalır: her platform bittikçe sayaç artar.
+    await Promise.all(
+      platforms.map(async (p) => {
+        try {
+          const r = await fetch(`/api/${p}/sync-products`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: "refresh-prices" }),
+          });
+          const body = (await r.json().catch(() => ({}))) as { changed?: number; checked?: number; error?: string };
+          if (!r.ok) {
+            results.push({ p, ok: false, checked: 0, changed: 0, error: String(body?.error || `HTTP ${r.status}`) });
+          } else {
+            const ch = Number(body?.changed) || 0;
+            results.push({ p, ok: true, checked: Number(body?.checked) || 0, changed: ch });
+            changed += ch;
+          }
+        } catch (e) {
+          results.push({ p, ok: false, checked: 0, changed: 0, error: e instanceof Error ? e.message : "ağ hatası" });
         }
-      } catch (e) {
-        results.push({ p, ok: false, checked: 0, changed: 0, error: e instanceof Error ? e.message : "ağ hatası" });
-      }
-      done += 1;
-      setRefreshProgress({ total, done, label: label(p) });
-    }
+        done += 1;
+        setRefreshProgress({ total, done, label: label(p) });
+      })
+    );
     // Son adım: DB + cache tazele (kullanıcı tetikledi → bu refetch İSTENİYOR; cross-device dahil).
     setRefreshProgress({ total, done, label: "Liste & panel güncelleniyor…" });
     await Promise.all([

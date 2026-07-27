@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -209,6 +210,9 @@ export async function POST(req: NextRequest) {
     }
 
     await stampSync();
+    // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
+    // (Bu olmadan "Yenile" bitiyor ama liste 2 dakika ESKİ fiyatı gösteriyordu.)
+    bustProductCaches();
     return NextResponse.json({ mode, totalProducts: shopifyProducts.length, totalVariants, ...result });
   } catch (error) {
     return jsonError(error);

@@ -1,3 +1,5 @@
+import { batchWrite } from "@/lib/libsql-batch";
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -132,46 +134,64 @@ export async function POST(req: NextRequest) {
 
       let linked = 0;
       let unmatched = 0;
+      // Yazmaları TOPLA, sonra tek batch'te gönder. Eskiden her satır ayrı round-trip'ti:
+      // eşleşmeyen havuz (~225 Trendyol kaydı) her senkronda tek tek yeniden yazılıyordu
+      // → ~96ms × 225 ≈ 22sn ve bu süre boyunca uygulamanın tamamı DB kilidinde bekliyordu.
+      const writes: { sql: string; args: unknown[] }[] = [];
+      const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+      const UNMATCHED_SQL = `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
+             VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT(platform, externalId) DO UPDATE SET
+               externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
+               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock,
+               imageUrl=excluded.imageUrl, lastSeenAt=CURRENT_TIMESTAMP`;
+
       for (const [barcode, f] of fetched) {
         const productId = barcodeToProductId.get(barcode);
         if (productId) {
           if (!listedSet.has(productId)) {
-            await prisma.$executeRawUnsafe(
-              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-              `listing_${productId}_trendyol`,
-              productId,
-              f.trendyolId,
-              f.sku,
-              barcode,
-              f.price,
-              f.listPrice,
-              f.stock,
-              f.isActive ? 1 : 0
-            );
+            writes.push({
+              sql: LISTING_SQL,
+              args: [
+                `listing_${productId}_trendyol`,
+                productId,
+                f.trendyolId,
+                f.sku,
+                barcode,
+                f.price,
+                f.listPrice,
+                f.stock,
+                f.isActive ? 1 : 0,
+              ],
+            });
             listedSet.add(productId);
             linked++;
           }
           // zaten listing varsa add-new dokunmaz (fiyat = refresh-prices'in işi)
         } else {
-          await prisma.$executeRawUnsafe(
-            `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
-             VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-             ON CONFLICT(platform, externalId) DO UPDATE SET
-               externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
-               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock,
-               imageUrl=excluded.imageUrl, lastSeenAt=CURRENT_TIMESTAMP`,
-            `unmatched_trendyol_${f.trendyolId || barcode}`,
-            f.trendyolId,
-            f.sku,
-            barcode,
-            f.name,
-            f.categoryName,
-            f.price,
-            f.stock,
-            f.imageUrl
-          );
+          writes.push({
+            sql: UNMATCHED_SQL,
+            args: [
+              `unmatched_trendyol_${f.trendyolId || barcode}`,
+              f.trendyolId,
+              f.sku,
+              barcode,
+              f.name,
+              f.categoryName,
+              f.price,
+              f.stock,
+              f.imageUrl,
+            ],
+          });
           unmatched++;
+        }
+      }
+
+      // Tek istekte gönder; mod uygun değilse (embedded replica) sıralı yola düş.
+      if (!(await batchWrite(writes))) {
+        for (const w of writes) {
+          await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
         }
       }
 
@@ -205,6 +225,8 @@ export async function POST(req: NextRequest) {
       update: { value: new Date().toISOString() },
     });
 
+    // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
+    bustProductCaches();
     return NextResponse.json({ mode: input.mode, totalElements, ...result });
   } catch (error) {
     return jsonError(error);

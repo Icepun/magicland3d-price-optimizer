@@ -1,3 +1,4 @@
+import { bustProductViewCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
@@ -56,6 +57,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const imageUrl = `/api/images/${filename}`;
     await prisma.product.update({ where: { id }, data: { imageUrl, imageManual: true } });
+    // Görsel kâra girmez → yalnız görünüm önbellekleri (pahalı sipariş önbelleği korunur).
+    bustProductViewCaches();
     return NextResponse.json({ imageUrl });
   } catch (error) {
     return jsonError(error);

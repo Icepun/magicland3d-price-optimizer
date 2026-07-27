@@ -1,9 +1,9 @@
 import { resolveProductCost } from "@core/product-cost";
-import { computeOrderProfit as computeCore, type OrderProfitLine } from "@core/order-profit";
+import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
 import type { Rules } from "@/lib/profit";
-import type { UnifiedOrder } from "@/lib/api/orders";
+import { isCancelledOrder, type UnifiedOrder } from "@/lib/api/orders";
 
 export interface MatchedProduct {
   imageUrl: string | null;
@@ -92,6 +92,12 @@ export interface OrderProfit {
   revenue: number;
   profit: number | null; // null = hiç eşleşme/maliyet yok
   partial: boolean; // bazı satırlar eşleşmedi
+  /** "platform" = Trendyol GERÇEK komisyonuyla düzeltildi (masaüstüyle aynı kaynak). */
+  profitSource: "calculated" | "platform";
+  /** Uygulanan gerçek komisyon; uygulanmadıysa null. */
+  actualCommission: number | null;
+  /** Kuraldan hesaplanan brüt komisyon (snapshot yazımı için). */
+  estimatedCommission: number;
   /** kapak görseli: tek farklı ürün varsa onun fotosu */
   image: string | null;
   distinctCount: number; // farklı ürün sayısı
@@ -117,6 +123,10 @@ export function computeOrderProfit(
       revenue: order.total,
       profit: order.profit ?? null,
       partial: Boolean(order.profitPartial),
+      // Manuel siparişin kârı ManualOrder satırında saklıdır; pazaryeri komisyonu yok.
+      profitSource: "calculated",
+      actualCommission: null,
+      estimatedCommission: 0,
       image: onlyLine?.image ?? matched?.imageUrl ?? null,
       distinctCount: order.items.length,
       totalQty,
@@ -162,21 +172,43 @@ export function computeOrderProfit(
     };
   });
 
-  const r = computeCore({
-    platform: order.platform,
-    orderTotal: order.total,
-    lines,
-    commissionRules: rules.commission,
-    cargoRules: rules.cargo,
-    expenseRules: rules.expense,
-    settings,
-  });
+  // Trendyol GERÇEK komisyonu (settlement) — masaüstüyle AYNI iki anahtar: önce dış sipariş
+  // kimliği, olmazsa sipariş numarası TEKİLSE fallback. Yoksa kural-tabanlı kâr aynen kalır.
+  let financial =
+    order.platform === "trendyol"
+      ? rules.financialByExternalId?.get(order.id) ?? null
+      : null;
+  if (!financial && order.platform === "trendyol") {
+    const candidates = rules.financialByOrderNumber?.get(order.orderNumber) ?? [];
+    if (candidates.length === 1) financial = candidates[0];
+  }
+
+  const r = resolveOrderProfit(
+    {
+      platform: order.platform,
+      orderTotal: order.total,
+      lines,
+      commissionRules: rules.commission,
+      cargoRules: rules.cargo,
+      expenseRules: rules.expense,
+      settings,
+    },
+    {
+      forceProfitPartial: !!order.financialPartial,
+      // İptal siparişe gerçek komisyon uygulanmaz (masaüstü statusKind==='cancelled' ile aynı).
+      statusKind: isCancelledOrder(order) ? "cancelled" : undefined,
+      financial,
+    }
+  );
 
   const distinctCount = order.items.length;
   return {
     revenue: order.total,
     profit: r.profit,
-    partial: r.partial || !!order.financialPartial,
+    partial: r.profitPartial,
+    profitSource: r.profitSource,
+    actualCommission: r.actualCommission,
+    estimatedCommission: r.estimatedCommission,
     image: distinctCount === 1 ? image : null,
     distinctCount,
     totalQty: r.totalQty,

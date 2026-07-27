@@ -1,4 +1,6 @@
+import { batchWrite } from "@/lib/libsql-batch";
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -155,29 +157,42 @@ export async function POST(req: NextRequest) {
 
       let linked = 0;
       let unmatched = 0;
+      // Yazmaları TOPLA → tek batch. Eskiden eşleşmeyen havuz (~258 HB kaydı) her senkronda
+      // tek tek yeniden yazılıyordu: ~96ms × 258 ≈ 25sn, üstelik global DB kilidini tutarak.
+      const writes: { sql: string; args: unknown[] }[] = [];
+      const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, NULL, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+      const UNMATCHED_SQL = `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
+             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             ON CONFLICT(platform, externalId) DO UPDATE SET
+               externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
+               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock, lastSeenAt=CURRENT_TIMESTAMP`;
+
       for (const f of fetched.values()) {
         // HB barkodu VEYA merchantSku ürünün barcode/sku'suyla tutarsa otomatik bağla; tutmazsa havuz.
         const productId = keyToProductId.get(f.hbBarcode) || keyToProductId.get(f.merchantSku);
         if (productId) {
           if (!listedSet.has(productId)) {
-            await prisma.$executeRawUnsafe(
-              `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, NULL, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-              `listing_${productId}_hepsiburada`, productId, f.hbSku, f.merchantSku, f.hbBarcode, f.price, f.stock
-            );
+            writes.push({
+              sql: LISTING_SQL,
+              args: [`listing_${productId}_hepsiburada`, productId, f.hbSku, f.merchantSku, f.hbBarcode, f.price, f.stock],
+            });
             listedSet.add(productId);
             linked++;
           }
         } else {
-          await prisma.$executeRawUnsafe(
-            `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
-             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-             ON CONFLICT(platform, externalId) DO UPDATE SET
-               externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
-               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock, lastSeenAt=CURRENT_TIMESTAMP`,
-            `unmatched_hepsiburada_${f.hbSku || f.merchantSku}`, f.hbSku, f.merchantSku, f.hbBarcode, f.name, f.categoryName, f.price, f.stock
-          );
+          writes.push({
+            sql: UNMATCHED_SQL,
+            args: [`unmatched_hepsiburada_${f.hbSku || f.merchantSku}`, f.hbSku, f.merchantSku, f.hbBarcode, f.name, f.categoryName, f.price, f.stock],
+          });
           unmatched++;
+        }
+      }
+
+      // Tek istekte gönder; mod uygun değilse (embedded replica) sıralı yola düş.
+      if (!(await batchWrite(writes))) {
+        for (const w of writes) {
+          await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
         }
       }
 
@@ -206,6 +221,8 @@ export async function POST(req: NextRequest) {
       update: { value: new Date().toISOString() },
     });
 
+    // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
+    bustProductCaches();
     return NextResponse.json({ mode: input.mode, fetched: fetched.size, catalog: catalog.size, ...result });
   } catch (error) {
     return jsonError(error);

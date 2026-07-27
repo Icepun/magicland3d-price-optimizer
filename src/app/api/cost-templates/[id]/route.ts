@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
@@ -21,6 +22,7 @@ export async function PATCH(
   const { id } = await params;
   const data = Schema.parse(await req.json());
   const template = await prisma.costTemplate.update({ where: { id }, data });
+  bustProductCaches(); // şablon maliyeti → ürün maliyeti → kâr
   return NextResponse.json(template);
 }
 
@@ -30,5 +32,6 @@ export async function DELETE(
 ) {
   const { id } = await params;
   await prisma.costTemplate.delete({ where: { id } });
+  bustProductCaches();
   return NextResponse.json({ ok: true });
 }

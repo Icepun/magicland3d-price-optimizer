@@ -1,5 +1,6 @@
 import { batch, execute, query } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
+import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
 
 const ISTANBUL_TZ = "Europe/Istanbul";
 
@@ -13,6 +14,10 @@ export interface OrderFinanceSnapshotInput {
   profitPartial: boolean;
   statusKind: string;
   currency?: string;
+  /** "platform" = Trendyol GERÇEK komisyonuyla düzeltilmiş kâr (masaüstüyle aynı anlam). */
+  profitSource?: "calculated" | "platform";
+  estimatedCommission?: number;
+  actualCommission?: number | null;
 }
 
 export interface ActualExpense {
@@ -166,6 +171,26 @@ function isoOrNull(value: string | number | undefined): string | null {
   return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
+/**
+ * "Yakalanmış kârın üzerine yaz" koşulu — masaüstündeki shouldReplaceCapturedProfit
+ * (src/lib/order-finance-snapshots.ts) ile BİREBİR aynı 4 madde:
+ *   1) gelir değişti (iade / sipariş düzenleme)
+ *   2) kâr ilk kez hesaplanabildi (NULL → değer)
+ *   3) platform GERÇEK komisyonu geldi ya da tutarı değişti  ← mobilde EKSİKTİ
+ *   4) kısmi hesap tamamlandı
+ * Değiştirirken masaüstü karşılığını da güncelle; parite testi ikisini karşılaştırır.
+ */
+const REPLACE_PROFIT_SQL = `
+  "OrderFinanceSnapshot"."revenueKurus" <> excluded."revenueKurus"
+  OR ("OrderFinanceSnapshot"."profitKurus" IS NULL AND excluded."profitKurus" IS NOT NULL)
+  OR (excluded."profitSource" = 'platform'
+      AND (COALESCE("OrderFinanceSnapshot"."profitSource", 'calculated') <> 'platform'
+           OR "OrderFinanceSnapshot"."actualCommissionKurus" IS NOT excluded."actualCommissionKurus"))
+  OR ("OrderFinanceSnapshot"."profitPartial" = 1
+      AND excluded."profitPartial" = 0
+      AND excluded."profitKurus" IS NOT NULL)
+`;
+
 /** Erişilebilen platform verisini kuruş cinsinden kalıcı finans geçmişine işler. */
 export async function syncOrderFinanceSnapshots(
   snapshots: OrderFinanceSnapshotInput[]
@@ -177,44 +202,31 @@ export async function syncOrderFinanceSnapshots(
     .filter((snapshot) => snapshot.platform !== "manual")
     .filter((snapshot) => Number.isFinite(asDate(snapshot.orderedAt).getTime()))
     .map((snapshot) => ({
+      // DEĞİŞTİRME KOŞULU masaüstündeki shouldReplaceCapturedProfit ile BİREBİR olmalı
+      // (src/lib/order-finance-snapshots.ts). Eskiden mobilde "platform kaynaklı kâr" maddesi
+      // YOKTU ve profitSource/komisyon kolonlarına hiç yazılmıyordu → mobil, masaüstünün gerçek
+      // komisyonlu kârını sessizce tahminî değerle ezebiliyordu. Tek yerde tanımlı REPLACE ifadesi:
       sql: `INSERT INTO "OrderFinanceSnapshot"
               ("id", "platform", "externalOrderId", "orderNumber", "orderedAt",
                "revenueKurus", "profitKurus", "profitPartial", "statusKind",
-               "currency", "syncedAt", "calculationVersion")
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+               "currency", "syncedAt", "calculationVersion",
+               "profitSource", "estimatedCommissionKurus", "actualCommissionKurus")
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
               "orderNumber" = excluded."orderNumber",
               "orderedAt" = excluded."orderedAt",
-              "profitKurus" = CASE
-                WHEN "OrderFinanceSnapshot"."revenueKurus" <> excluded."revenueKurus"
-                  OR ("OrderFinanceSnapshot"."profitKurus" IS NULL
-                      AND excluded."profitKurus" IS NOT NULL)
-                  OR ("OrderFinanceSnapshot"."profitPartial" = 1
-                      AND excluded."profitPartial" = 0
-                      AND excluded."profitKurus" IS NOT NULL)
-                THEN excluded."profitKurus"
-                ELSE "OrderFinanceSnapshot"."profitKurus"
-              END,
-              "profitPartial" = CASE
-                WHEN "OrderFinanceSnapshot"."revenueKurus" <> excluded."revenueKurus"
-                  OR ("OrderFinanceSnapshot"."profitKurus" IS NULL
-                      AND excluded."profitKurus" IS NOT NULL)
-                  OR ("OrderFinanceSnapshot"."profitPartial" = 1
-                      AND excluded."profitPartial" = 0
-                      AND excluded."profitKurus" IS NOT NULL)
-                THEN excluded."profitPartial"
-                ELSE "OrderFinanceSnapshot"."profitPartial"
-              END,
-              "calculationVersion" = CASE
-                WHEN "OrderFinanceSnapshot"."revenueKurus" <> excluded."revenueKurus"
-                  OR ("OrderFinanceSnapshot"."profitKurus" IS NULL
-                      AND excluded."profitKurus" IS NOT NULL)
-                  OR ("OrderFinanceSnapshot"."profitPartial" = 1
-                      AND excluded."profitPartial" = 0
-                      AND excluded."profitKurus" IS NOT NULL)
-                THEN excluded."calculationVersion"
-                ELSE "OrderFinanceSnapshot"."calculationVersion"
-              END,
+              "profitKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."profitKurus" ELSE "OrderFinanceSnapshot"."profitKurus" END,
+              "profitPartial" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."profitPartial" ELSE "OrderFinanceSnapshot"."profitPartial" END,
+              "calculationVersion" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."calculationVersion" ELSE "OrderFinanceSnapshot"."calculationVersion" END,
+              "profitSource" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."profitSource" ELSE "OrderFinanceSnapshot"."profitSource" END,
+              "estimatedCommissionKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."estimatedCommissionKurus" ELSE "OrderFinanceSnapshot"."estimatedCommissionKurus" END,
+              "actualCommissionKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+                THEN excluded."actualCommissionKurus" ELSE "OrderFinanceSnapshot"."actualCommissionKurus" END,
               "revenueKurus" = excluded."revenueKurus",
               "statusKind" = excluded."statusKind",
               "currency" = excluded."currency",
@@ -231,6 +243,10 @@ export async function syncOrderFinanceSnapshots(
         snapshot.statusKind,
         snapshot.currency ?? "TRY",
         now,
+        FINANCE_CALCULATION_VERSION,
+        snapshot.profitSource ?? "calculated",
+        snapshot.estimatedCommission == null ? null : tlToKurus(snapshot.estimatedCommission),
+        snapshot.actualCommission == null ? null : tlToKurus(snapshot.actualCommission),
       ],
     }));
   for (let offset = 0; offset < statements.length; offset += 50) {

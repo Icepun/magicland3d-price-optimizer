@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -28,7 +29,7 @@ export default function PlannerPage() {
   const { data, isLoading } = useQuery<ProductRow[]>({
     // Aktif ürünler (~442KB) — Ürünler/Raporlar/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
     queryKey: ["products", "active"],
-    queryFn: () => fetch("/api/products?filter=active").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/products?filter=active"),
     staleTime: 60_000,
   });
   const products = useMemo(() => (Array.isArray(data) ? data : []), [data]);
@@ -37,7 +38,7 @@ export default function PlannerPage() {
   const qc = useQueryClient();
   const { data: settings } = useQuery<Record<string, string>>({
     queryKey: ["settings"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
     staleTime: 60_000,
   });
   const savedTarget = Math.max(1, Number(settings?.plannerTargetStock) || 5);

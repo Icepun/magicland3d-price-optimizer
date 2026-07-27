@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -27,6 +28,8 @@ export async function POST(req: NextRequest) {
         await prisma.variantGroup.delete({ where: { id: gid } }).catch(() => {});
       }
     }
+    // Silinen ürünler sipariş eşleşmesinden ve listelerden düşmeli (tekil DELETE zaten düşürüyordu).
+    bustProductCaches();
     return NextResponse.json({ deleted: result.count });
   } catch (error) {
     return NextResponse.json(

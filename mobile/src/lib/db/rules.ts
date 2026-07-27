@@ -34,7 +34,7 @@ function normalizeRuleDates<T extends CommissionRuleInput | CargoRuleInput>(row:
  */
 export async function getRules(): Promise<Rules> {
   await ensureCargoVatSchema();
-  const [c, k, e] = await batch([
+  const [c, k, e, f] = await batch([
     {
       sql: `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
                    fixedCommission, validFrom, validTo, priority, isActive
@@ -51,11 +51,45 @@ export async function getRules(): Promise<Rules> {
                    priority, isActive
               FROM ExpenseRule WHERE isActive = 1`,
     },
+    {
+      // Trendyol GERÇEK komisyonu (settlement). Aynı batch'te → ekstra round-trip YOK.
+      sql: `SELECT externalOrderId, orderNumber, commissionKurus, grossRevenueKurus
+              FROM PlatformOrderFinancial WHERE platform = 'trendyol'`,
+    },
   ]);
+
+  // Settlement haritaları — masaüstü /api/orders ile aynı iki anahtar (kimlik + tekil sipariş no).
+  const financialByExternalId = new Map<
+    string,
+    { actualCommission: number; settlementRevenue: number }
+  >();
+  const financialByOrderNumber = new Map<
+    string,
+    { actualCommission: number; settlementRevenue: number }[]
+  >();
+  type FinancialRow = {
+    externalOrderId: string;
+    orderNumber: string;
+    commissionKurus: number;
+    grossRevenueKurus: number;
+  };
+  for (const row of (f?.rows ?? []) as unknown as FinancialRow[]) {
+    const entry = {
+      actualCommission: Number(row.commissionKurus) / 100,
+      settlementRevenue: Number(row.grossRevenueKurus) / 100,
+    };
+    financialByExternalId.set(String(row.externalOrderId), entry);
+    const list = financialByOrderNumber.get(String(row.orderNumber));
+    if (list) list.push(entry);
+    else financialByOrderNumber.set(String(row.orderNumber), [entry]);
+  }
+
   return {
     commission: (c.rows as unknown as CommissionRuleInput[]).map(normalizeRuleDates),
     cargo: (k.rows as unknown as CargoRuleInput[]).map(normalizeRuleDates),
     expense: e.rows as unknown as ExpenseRuleInput[],
+    financialByExternalId,
+    financialByOrderNumber,
   };
 }
 

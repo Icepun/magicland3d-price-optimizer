@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -56,7 +57,7 @@ export default function SpoolsPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery<Spool[]>({
     queryKey: ["spools"],
-    queryFn: () => fetch("/api/spools").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/spools"),
     // Makaralar nadir değişir + mutasyonlar (ekle/düzenle/tüket) ["spools"]'u invalidate ediyor
     // → her ziyarette yeniden çekme, sekmeye dönünce anında gel.
     staleTime: 10 * 60_000,
@@ -345,7 +346,7 @@ function ConsumeModal({ spool, onClose }: { spool: Spool; onClose: () => void })
   const { data: products } = useQuery<ProductLite[]>({
     // Aktif ürünler (~442KB) — Ürünler/Üretim/Raporlar ile AYNI key → tek fetch, sayfalar arası paylaşılır.
     queryKey: ["products", "active"],
-    queryFn: () => fetch("/api/products?filter=active").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/products?filter=active"),
     staleTime: 60_000,
   });
 

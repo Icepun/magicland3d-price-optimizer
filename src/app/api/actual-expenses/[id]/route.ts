@@ -1,3 +1,4 @@
+import { bustFinanceCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -34,6 +35,7 @@ export async function PATCH(
         ...(data.note !== undefined ? { note: optionalExpenseText(data.note) } : {}),
       },
     });
+    bustFinanceCaches(); // gider aylık net kâra girer
     return NextResponse.json(actualExpenseResponse(expense));
   } catch (error) {
     const response = actualExpenseValidationError(error);
@@ -58,6 +60,7 @@ export async function DELETE(
   const { id } = await params;
   try {
     await remotePrisma.actualExpense.delete({ where: { id } });
+    bustFinanceCaches(); // gider silindi → aylık net kâr değişti
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (

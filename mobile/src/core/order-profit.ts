@@ -5,6 +5,7 @@ import {
   resolveVatableCost,
 } from "./pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "./product-commission";
+import { applyActualCommissionToProfit } from "./platform-financials";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "./types";
 import type {
@@ -310,5 +311,74 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
     orderRevenueAdjustment,
     orderRevenueAdjustmentNet,
+  };
+}
+
+/** Pazaryerinin settlement kaydı (TL) — Trendyol gerçek komisyonu. */
+export interface OrderProfitFinancial {
+  /** Gerçek (kesilen) komisyon. */
+  actualCommission: number;
+  /** Settlement'taki brüt ciro — sipariş cirosuyla uyuşmazsa uygulanmaz. */
+  settlementRevenue: number;
+}
+
+export interface ResolveOrderProfitOptions {
+  /** Platforma özel kısmi işareti (Shopify: satır kırpıldı / kısmi iade). Çekirdek bunu türetemez. */
+  forceProfitPartial?: boolean;
+  /** İptal siparişe gerçek komisyon UYGULANMAZ. */
+  statusKind?: string;
+  /** Settlement kaydı yoksa null. */
+  financial?: OrderProfitFinancial | null;
+}
+
+export interface ResolvedOrderProfit extends OrderProfitResult {
+  /** partial || forceProfitPartial — snapshot ve UI bunu kullanır. */
+  profitPartial: boolean;
+  /** "platform" = kâr gerçek komisyonla düzeltildi. */
+  profitSource: "calculated" | "platform";
+  /** Uygulanan gerçek komisyon; uygulanmadıysa null. */
+  actualCommission: number | null;
+}
+
+/**
+ * SİPARİŞ KÂRI (TAM) — masaüstü ve mobilin ORTAK giriş noktası.
+ *
+ * computeOrderProfit yalnız kural-tabanlı kârı verir. Gerçek hayatta Trendyol teslimden sonra
+ * GERÇEK komisyonu bildirir (PlatformOrderFinancial) ve kâr ona göre düzeltilmelidir. Bu düzeltme
+ * masaüstünde /api/orders içinde yapılıyordu; mobil aynı adımı hiç yapmadığından iki cihaz aynı
+ * sipariş için FARKLI kâr gösteriyordu. Artık iki taraf da bu fonksiyonu çağırır.
+ *
+ * ⚠️ forceProfitPartial ve statusKind çekirdeğin göremediği platform bilgileridir; computeOrderProfit
+ * içine gömülemezler (kısmi/iptal siparişe yanlış komisyon uygulanır). Bu yüzden ayrı seçenekler.
+ */
+export function resolveOrderProfit(
+  input: OrderProfitInput,
+  options: ResolveOrderProfitOptions = {}
+): ResolvedOrderProfit {
+  const base = computeOrderProfit(input);
+  const profitPartial = base.partial || Boolean(options.forceProfitPartial);
+  const financial = options.financial ?? null;
+
+  // Settlement yok veya sipariş iptal → kural-tabanlı kâr aynen kalır.
+  if (financial == null || options.statusKind === "cancelled") {
+    return { ...base, profitPartial, profitSource: "calculated", actualCommission: null };
+  }
+
+  const applied = applyActualCommissionToProfit({
+    profit: base.profit,
+    profitPartial,
+    orderRevenue: input.orderTotal,
+    estimatedCommission: base.estimatedCommission,
+    actualCommission: financial.actualCommission,
+    settlementRevenue: financial.settlementRevenue,
+    vatRate: Number(input.settings.vatRate ?? 0),
+  });
+
+  return {
+    ...base,
+    profit: applied.profit,
+    profitPartial,
+    profitSource: applied.applied ? "platform" : "calculated",
+    actualCommission: applied.applied ? financial.actualCommission : null,
   };
 }

@@ -1,3 +1,4 @@
+import { bustProductViewCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -20,6 +21,8 @@ export async function POST(req: NextRequest) {
       where: { id: { in: ids } },
       data: { hidden },
     });
+    // Gizle/göster ürün listelerini etkiler; kâr gövdesine girmez → yalnız görünüm önbellekleri.
+    bustProductViewCaches();
     return NextResponse.json({ updated: result.count });
   } catch (error) {
     return jsonError(error);

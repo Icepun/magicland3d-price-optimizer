@@ -1,3 +1,4 @@
+import { bustFinanceCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -46,6 +47,7 @@ export async function PATCH(
     const input = ManualOrderInputSchema.parse(await req.json());
     const order = await updateManualOrder(id, input);
     invalidateOrdersCache();
+    bustFinanceCaches(); // manuel sipariş aylık net kâra girer
     return NextResponse.json(manualOrderDetailResponse(order));
   } catch (error) {
     const message = manualOrderValidationMessage(error);
@@ -82,6 +84,7 @@ export async function DELETE(
   try {
     await remotePrisma.manualOrder.delete({ where: { id } });
     invalidateOrdersCache();
+    bustFinanceCaches(); // manuel sipariş aylık net kâra girer
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (isNotFound(error)) {

@@ -1,3 +1,4 @@
+import { bustFinanceCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -25,6 +26,7 @@ export async function POST(req: NextRequest) {
     const input = ManualOrderInputSchema.parse(await req.json());
     const order = await createManualOrder(input);
     invalidateOrdersCache();
+    bustFinanceCaches(); // manuel sipariş aylık net kâra girer
     return NextResponse.json(manualOrderDetailResponse(order), { status: 201 });
   } catch (error) {
     const message = manualOrderValidationMessage(error);

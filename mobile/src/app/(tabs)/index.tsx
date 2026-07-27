@@ -78,6 +78,9 @@ export default function DashboardScreen() {
     for (const o of ordersData.orders) {
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
       if (isCancelledOrder(o)) continue;
+      // Döviz çevrimi yapılmadan farklı para birimlerini TL toplamına eklemek yanlış sonuç verir
+      // (masaüstü ve Raporlar sekmesi de bu siparişleri hariç tutuyor — üçü artık aynı).
+      if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
       const op = computeOrderProfit(o, pm, rules, settings);
       total += op.revenue;
       const b = byPlat[o.platform];

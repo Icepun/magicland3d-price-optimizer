@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
@@ -24,5 +25,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const data = Schema.parse(await req.json());
   const template = await prisma.costTemplate.create({ data });
+  // Maliyet şablonu ürün maliyetini → kârı etkiler.
+  bustProductCaches();
   return NextResponse.json(template, { status: 201 });
 }

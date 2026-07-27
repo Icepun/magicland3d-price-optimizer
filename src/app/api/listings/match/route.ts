@@ -1,3 +1,4 @@
+import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
@@ -91,6 +92,9 @@ export async function POST(req: NextRequest) {
       unmatchedListingId
     );
 
+    // Eşleştirme sipariş-ürün bağını değiştirir → kâr gövdesi ve ürün listeleri yeniden hesaplanmalı.
+    // (Bu olmadan yeni eşleştirilen ürünün kârı önbellekte "eşleşmedi" olarak kalıyordu.)
+    bustProductCaches();
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

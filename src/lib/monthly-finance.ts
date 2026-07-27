@@ -1,5 +1,6 @@
 export const FINANCE_TIME_ZONE = "Europe/Istanbul";
-export const FINANCE_CALCULATION_VERSION = 2;
+// Tek kaynak çekirdekte — mobil de aynı sabiti kullanır (sürüm damgası sürüklenmesin).
+export { FINANCE_CALCULATION_VERSION } from "@/core/finance-version";
 
 export function tlToKurus(value: number): number {
   if (!Number.isFinite(value)) throw new Error("Geçersiz para tutarı");

@@ -79,6 +79,10 @@ export default function ReportsScreen() {
           profitPartial: op.partial,
           statusKind: isCancelledOrder(o) ? "cancelled" : "active",
           currency: o.currency ?? "TRY",
+          // Gerçek komisyon bilgisini de yaz — masaüstünün "platform kaynaklı" kârı korunur.
+          profitSource: op.profitSource,
+          estimatedCommission: op.estimatedCommission,
+          actualCommission: op.actualCommission,
         });
       }
       // Finans geçmişi 60 gün çekilir; kullanıcıya gösterilen üst kartlar yine son 30 gündür.

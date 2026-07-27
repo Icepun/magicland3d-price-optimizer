@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -29,7 +30,7 @@ function fmtSize(b: number) {
 export default function ModelsPage() {
   const { data, isLoading } = useQuery<{ products: LibProduct[]; printers: LibPrinter[] }>({
     queryKey: ["models"],
-    queryFn: () => fetch("/api/models").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/models"),
     staleTime: 0,
   });
   const [q, setQ] = useState("");
