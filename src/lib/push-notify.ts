@@ -1,4 +1,6 @@
-import { prisma } from "./prisma";
+// Arka plan işi: AYRI client (ayrı adapter = ayrı mutex) → push gönderimi UI sorgularının
+// kuyruğunu meşgul etmez. Relay de aynı deseni kullanıyor (src/core/printers/relay.ts).
+import { remotePrisma as prisma } from "./prisma";
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 

@@ -27,6 +27,8 @@ export interface ListingRow {
   externalId: string | null;
   externalSku: string | null;
   barcode: string | null; // platform-bazlı listing barkodu (Trendyol/HB) — sipariş eşleştirmede masaüstü byKey ile birebir
+  /** SQLite 0/1. UI listeleri yalnız aktif listing'i hesaba katar; sipariş eşleştirmesi HEPSİNİ kullanır. */
+  isActive?: number | boolean | null;
 }
 
 export interface ProductDetail {

@@ -107,17 +107,24 @@ function manualOrderToUnified(order: ManualOrder): UnifiedOrder {
   };
 }
 
-/** Görünür panel/sipariş listesi için son 30 günü getirir. */
+/**
+ * TÜM ekranların ortak sipariş kaynağı — 60 gün (üst küme).
+ *
+ * Eskiden Panel/Siparişler 30 günlük, Raporlar 60 günlük AYRI sorgu kullanıyordu; ikisi de
+ * Shopify+Trendyol+HB boru hattını SIFIRDAN çalıştırıyordu (toplam 90 günlük çekim) ve
+ * Raporlar sekmesine geçmek tüm senkronu yeniden tetikliyordu. Üstelik iki sekme dakikalar
+ * arayla alınmış FARKLI anlık görüntülerden hesapladığı için geçici olarak farklı ciro/kâr
+ * gösterebiliyordu. Masaüstü deseni: bir kez 60 gün çek, göstermeden önce 30'a kırp.
+ * (Trendyol'un 14 günlük pencereleri zaten paralel çekiliyor → 60 gün duvar-saati olarak ~bedava.)
+ */
 export function getAllOrders(): Promise<OrdersResult> {
-  return getOrdersForDays(30);
+  return getOrdersForDays(60);
 }
 
-/**
- * Finans snapshot'ı için erişilebilen son 60 günü getirir.
- * Rapor ekranı kullanıcıya gösterdiği üst metrikleri ayrıca 30 güne kırpar.
- */
-export function getFinanceHistoryOrders(): Promise<OrdersResult> {
-  return getOrdersForDays(60);
+/** Kullanıcıya gösterilen 30 günlük pencereye kırp (tarihi bilinmeyen sipariş DAHİL kalır). */
+export function visibleOrders(orders: UnifiedOrder[]): UnifiedOrder[] {
+  const cutoff = orderWindowCutoff();
+  return orders.filter((o) => o.date == null || o.date >= cutoff);
 }
 
 export type StatusTone = "green" | "orange" | "accent" | "red" | "dim";

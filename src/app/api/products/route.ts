@@ -126,7 +126,12 @@ async function computeProducts(urlString: string) {
         where,
         include: {
           cost: { include: { filamentType: { select: { costPerGram: true } } } },
-          listings: true,
+          // Yalnız AKTİF listing'ler: satışı durmuş (pasif) bir listing için kâr/marj
+          // hesaplanmaz. Panel (dashboard route) ve mobil zaten böyle davranıyordu; Ürünler
+          // ekranı tek istisnaydı → aynı ürün iki yüzeyde farklı kâr gösteriyordu.
+          // NOT: sipariş kârı hattı (api/orders) listing'leri FİLTRELEMEZ — eski bir sipariş,
+          // ürün sonradan pasifleşse de "eşleşmedi"ye düşmemeli.
+          listings: { where: { isActive: true } },
           variantGroup: { select: { id: true, name: true } },
         },
         orderBy: { updatedAt: "desc" },

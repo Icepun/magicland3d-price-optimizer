@@ -4,7 +4,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-nat
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
-  getFinanceHistoryOrders,
+  getAllOrders,
   isCancelledOrder,
   ORDERS_STALE_MS,
 } from "@/lib/api/orders";
@@ -25,8 +25,10 @@ export default function ReportsScreen() {
   const qc = useQueryClient();
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const { data: orders, dataUpdatedAt: ordersUpdatedAt, isLoading } = useQuery({
-    queryKey: ["orders-finance-history", 60],
-    queryFn: getFinanceHistoryOrders,
+    // Panel/Siparişler ile AYNI sorgu (60 gün) — Raporlar'a geçmek artık tüm pazaryeri
+    // boru hattını yeniden tetiklemiyor ve iki sekme aynı anlık görüntüden hesaplıyor.
+    queryKey: ["orders"],
+    queryFn: getAllOrders,
     staleTime: ORDERS_STALE_MS,
   });
   const { data: products } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });

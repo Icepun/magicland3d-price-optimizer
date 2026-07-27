@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
 import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -75,7 +75,8 @@ export default function DashboardScreen() {
     let total = 0;
     let profit = 0;
     let count = 0;
-    for (const o of ordersData.orders) {
+    // Kaynak sorgu 60 gün (Raporlar ile paylaşılıyor) → Panel'in gösterdiği 30 güne kırp.
+    for (const o of visibleOrders(ordersData.orders)) {
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
       if (isCancelledOrder(o)) continue;
       // Döviz çevrimi yapılmadan farklı para birimlerini TL toplamına eklemek yanlış sonuç verir

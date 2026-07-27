@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -47,20 +47,23 @@ export default function OrdersScreen() {
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
+  // Kaynak sorgu 60 gün (Raporlar ile paylaşılıyor) → bu ekran son 30 günü gösterir.
+  const shown = useMemo(() => (data ? visibleOrders(data.orders) : []), [data]);
+
   const profitOf = useMemo(() => {
     const map = new Map<string, OrderProfit>();
-    if (!data || !products || !rules || !settings) return map;
+    if (!products || !rules || !settings) return map;
     const pm = getProductMap(products);
-    for (const o of data.orders) map.set(o.id, computeOrderProfit(o, pm, rules, settings));
+    for (const o of shown) map.set(o.id, computeOrderProfit(o, pm, rules, settings));
     return map;
-  }, [data, products, rules, settings]);
+  }, [shown, products, rules, settings]);
 
   // Başlık sayısı masaüstü özetiyle aynı: iptal/iade hariç "aktif" sipariş. Liste yine hepsini gösterir.
   const counts = useMemo(() => {
     if (!data) return null;
-    const active = data.orders.filter((o) => !isCancelledOrder(o)).length;
-    return { active, cancelled: data.orders.length - active };
-  }, [data]);
+    const active = shown.filter((o) => !isCancelledOrder(o)).length;
+    return { active, cancelled: shown.length - active };
+  }, [data, shown]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -90,7 +93,7 @@ export default function OrdersScreen() {
         </View>
       ) : (
         <FlashList
-          data={data?.orders ?? []}
+          data={shown}
           keyExtractor={(o) => o.id}
           contentContainerStyle={styles.list}
           refreshControl={
