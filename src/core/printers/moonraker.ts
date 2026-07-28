@@ -924,3 +924,63 @@ export async function testMoonraker(host: string, port: number): Promise<{ ok: b
   }
   return { ok: false, error: lastErr || "bağlanılamadı" };
 }
+
+// ── Timelapse videoları ──────────────────────────────────────────────────
+// Snapmaker U1'de standart `moonraker-timelapse` bileşeni KURULU DEĞİL (canlı /server/info ile
+// doğrulandı) — Snapmaker kendi timelapse'ini yazıyor ve videoyu `timelapse` kökü yerine
+// `camera` köküne (/oem/printer_data/camera) koyuyor. Fluidd/Mainsail yalnız `gcodes`u
+// gösterdiği için orada görünmüyor. Yine de her iki kökü de deniyoruz (firmware değişebilir).
+const TIMELAPSE_ROOTS = ["camera", "timelapse"] as const;
+const VIDEO_RE = /\.(mp4|avi|mov|mkv|webm)$/i;
+
+export interface MoonrakerTimelapse {
+  name: string;
+  size: number;
+  modified: number | null;
+  /** Doğrudan indirilebilir/oynatılabilir URL (Moonraker Range destekler → video seek çalışır). */
+  url: string;
+  /** Aynı adlı kapak görseli varsa (U1 video ile birlikte .jpg yazıyor). */
+  thumbUrl: string | null;
+}
+
+/** Yazıcıdaki timelapse videoları (+ varsa kapak görseli). Kök yoksa boş dizi döner. */
+export async function moonrakerTimelapseList(
+  host: string,
+  port: number
+): Promise<MoonrakerTimelapse[]> {
+  const base = moonrakerBase(host, port);
+  const out: MoonrakerTimelapse[] = [];
+  for (const root of TIMELAPSE_ROOTS) {
+    let rows: { path: string; size: number; modified: number | null }[] = [];
+    try {
+      const res = await mfetch(`${base}/server/files/list?root=${root}`, undefined, 8000);
+      if (!res.ok) continue; // kök kayıtlı değil (400) → sonrakini dene
+      const j = unwrap(await res.json()) as any;
+      rows = (Array.isArray(j) ? j : []).map((f: any) => ({
+        path: String(f?.path ?? ""),
+        size: Number(f?.size) || 0,
+        modified: Number.isFinite(Number(f?.modified)) ? Number(f.modified) : null,
+      }));
+    } catch {
+      continue; // yazıcı çevrimdışı/erişilemez
+    }
+    const images = new Set(
+      rows.filter((r) => /\.(jpg|jpeg|png)$/i.test(r.path)).map((r) => r.path.replace(/\.[^.]+$/, ""))
+    );
+    for (const r of rows) {
+      if (!r.path || !VIDEO_RE.test(r.path)) continue;
+      const stem = r.path.replace(/\.[^.]+$/, "");
+      out.push({
+        name: r.path,
+        size: r.size,
+        modified: r.modified,
+        url: `${base}/server/files/${root}/${encodeURIComponent(r.path)}`,
+        thumbUrl: images.has(stem)
+          ? `${base}/server/files/${root}/${encodeURIComponent(`${stem}.jpg`)}`
+          : null,
+      });
+    }
+  }
+  // En yeni önce (modified yoksa en sona).
+  return out.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
+}

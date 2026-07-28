@@ -762,3 +762,146 @@ export function mapBambuState(state: string | null): "printing" | "finished" | "
       return "idle"; // IDLE, vb.
   }
 }
+
+// ── Timelapse videoları ──────────────────────────────────────────────────
+// Bambu timelapse'i FTP kökündeki `timelapse` klasörüne yazar (canlı FTPS LIST ile doğrulandı:
+// 3 video + `thumbnail` alt klasörü). NOT: `ipcam` klasörü SÜREKLİ kamera kaydıdır (onlarca GB
+// olabilir) — timelapse DEĞİL, bilerek dışarıda bırakıldı.
+// Format .avi: tarayıcı <video> ile OYNATAMAZ → arayüzde yalnız indirme sunulur.
+const BAMBU_TIMELAPSE_DIR = "timelapse";
+const BAMBU_VIDEO_RE = /\.(avi|mp4|mov|mkv)$/i;
+
+export interface BambuTimelapse {
+  name: string;
+  size: number;
+  /** LIST'ten gelen ham tarih metni ("Feb 10 21:51") — yıl içermeyebilir. */
+  modifiedText: string | null;
+}
+
+/** Yazıcıdaki timelapse videoları (yalnız /timelapse; klasörler ve kamera kayıtları hariç). */
+export async function bambuTimelapseList(
+  host: string,
+  accessCode: string
+): Promise<BambuTimelapse[]> {
+  return bambuFtpQuery(host, accessCode, async ({ cmd, nextReply, openData, readDataToEnd }) => {
+    const out: BambuTimelapse[] = [];
+    try {
+      const d = await openData();
+      const r = await cmd(`LIST ${BAMBU_TIMELAPSE_DIR}`);
+      if (r.code >= 400) return out;
+      const text = await readDataToEnd(d);
+      await nextReply(); // 226
+      for (const line of text.split("\n")) {
+        const m = LS_LINE.exec(line);
+        if (!m || m[1] !== "-") continue; // klasörleri (thumbnail) atla
+        const name = m[4].trim();
+        if (!name || !BAMBU_VIDEO_RE.test(name)) continue;
+        out.push({ name, size: Number(m[2]) || 0, modifiedText: m[3] ?? null });
+      }
+    } catch {
+      /* klasör yok / erişilemedi → boş liste */
+    }
+    // Ad zaman damgası içeriyor (video_2026-02-10_18-33-42.avi) → ada göre tersten = en yeni önce.
+    return out.sort((a, b) => b.name.localeCompare(a.name));
+  });
+}
+
+/**
+ * Timelapse videosunu AKIŞ olarak indir (FTPS RETR → web ReadableStream).
+ *
+ * Neden akış: Bambu'nun FTP'si yavaş (ÖLÇÜLDÜ: 4.5MB ≈ 34sn) ve videolar 55MB'ı bulabiliyor.
+ * Tüm dosyayı belleğe alıp öyle göndermek (a) ana süreçte onlarca MB tutuyor, (b) tarayıcı
+ * transferi ancak bittiğinde görüyor → ilerleme çubuğu 0'da donup sona 100'e sıçrıyordu.
+ * Akışla byte'lar geldikçe iletilir; kullanıcı GERÇEK yüzdeyi görür.
+ *
+ * Soket ömrü: bambuFtpQuery callback dönünce soketleri kapattığı için burada BAĞIMSIZ bir
+ * bağlantı kurulur; akış bitince, hata olunca veya iptal edilince temizlenir.
+ */
+export async function bambuStreamTimelapse(
+  host: string,
+  accessCode: string,
+  name: string
+): Promise<{ stream: ReadableStream<Uint8Array>; size: number | null }> {
+  if (!name || name.includes("/") || name.includes("\\") || name.startsWith(".")) {
+    throw new Error("Geçersiz dosya adı");
+  }
+  const baseTls: tls.ConnectionOptions = {
+    rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host,
+  };
+  let inbuf = "";
+  let ctrlErr: Error | null = null;
+  const ctrl = tls.connect({ ...baseTls, host, port: 990 });
+  ctrl.on("error", (e: Error) => { ctrlErr = e; });
+  ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+
+  const nextReply = (timeoutMs = 15000): Promise<{ code: number; text: string }> =>
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const tick = setInterval(() => {
+        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+        const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
+        if (m) {
+          clearInterval(tick);
+          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+          resolve({ code: parseInt(m[1], 10), text: m[2] });
+        } else if (Date.now() > deadline) { clearInterval(tick); reject(new Error("FTP yanıtı zaman aşımı")); }
+      }, 40);
+    });
+  const cmd = async (line: string) => { ctrl.write(line + "\r\n"); return nextReply(); };
+
+  let dataPlain: net.Socket | null = null;
+  let data: tls.TLSSocket | null = null;
+  const cleanup = () => {
+    try { data?.destroy(); } catch { /* yoksay */ }
+    try { dataPlain?.destroy(); } catch { /* yoksay */ }
+    try { ctrl.write("QUIT\r\n"); } catch { /* yoksay */ }
+    try { ctrl.destroy(); } catch { /* yoksay */ }
+  };
+
+  try {
+    await onceEvt(ctrl, "secureConnect", 10000, "kontrol TLS");
+    ctrl.setTimeout(0);
+    await nextReply(); // 220
+    if ((await cmd("USER bblp")).code >= 400) throw new Error("USER reddedildi");
+    if ((await cmd(`PASS ${accessCode}`)).code >= 400) throw new Error("FTP girişi reddedildi (access code?)");
+    await cmd("TYPE I");
+
+    // Boyut (Content-Length → tarayıcı gerçek yüzde gösterir). Desteklenmezse null.
+    let size: number | null = null;
+    const sz = await cmd(`SIZE ${BAMBU_TIMELAPSE_DIR}/${name}`);
+    if (sz.code < 400) {
+      const n = parseInt(sz.text.trim(), 10);
+      if (Number.isFinite(n) && n > 0) size = n;
+    }
+
+    const pasv = await cmd("PASV");
+    const mm = pasv.text.match(/(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3}),(\d{1,3})/);
+    if (!mm) throw new Error("PASV ayrıştırılamadı");
+    dataPlain = net.connect((+mm[5]) * 256 + (+mm[6]), host);
+    await onceEvt(dataPlain, "connect", 10000, "veri soketi");
+    data = tls.connect({
+      ...baseTls, socket: dataPlain, session: ctrl.getSession() ?? undefined,
+      secureContext: tls.createSecureContext({ minVersion: "TLSv1.2", maxVersion: "TLSv1.2" }),
+    });
+    await onceEvt(data, "secureConnect", 10000, "veri TLS");
+
+    const r = await cmd(`RETR ${BAMBU_TIMELAPSE_DIR}/${name}`);
+    if (r.code >= 400) throw new Error(`Video okunamadı (FTP ${r.code})`);
+
+    const sock = data;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        sock.on("data", (c: Buffer) => {
+          try { controller.enqueue(new Uint8Array(c)); } catch { /* kapanmış */ }
+        });
+        sock.once("close", () => { try { controller.close(); } catch { /* zaten kapalı */ } cleanup(); });
+        sock.once("error", (e: Error) => { try { controller.error(e); } catch { /* yoksay */ } cleanup(); });
+      },
+      cancel() { cleanup(); }, // kullanıcı indirmeyi iptal etti → soketleri bırak
+    });
+    return { stream, size };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}

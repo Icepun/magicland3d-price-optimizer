@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { TimelapseStrip } from "@/components/printers/TimelapseGallery";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -934,6 +935,8 @@ function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: str
         )}
         <ChevronRight className="h-3 w-3 shrink-0 opacity-50 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all" />
       </button>
+      {/* Timelapse şeridi — videosu olmayan yazıcıda kendini gizler (kartı kalabalıklaştırmaz). */}
+      <TimelapseStrip printerId={printerId} accent={accent} />
       {open && <PrinterStorageDialog printerId={printerId} activeFile={activeFile} onClose={() => setOpen(false)} />}
     </>
   );
