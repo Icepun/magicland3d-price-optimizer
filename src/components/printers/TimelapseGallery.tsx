@@ -9,7 +9,7 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Film, Download, Play, X, Loader2 } from "lucide-react";
+import { Film, Download, Play, X, Loader2, Maximize2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -138,18 +138,20 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
 }
 
 function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: number; onPlay: () => void }) {
+  const [zoom, setZoom] = useState(false);
   return (
     <div
       className="rounded-lg border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500"
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       <button
-        onClick={item.playable ? onPlay : undefined}
-        disabled={!item.playable}
+        onClick={item.playable ? onPlay : item.thumbUrl ? () => setZoom(true) : undefined}
+        disabled={!item.playable && !item.thumbUrl}
         className={cn(
           "relative block w-full h-28 bg-muted overflow-hidden group",
-          item.playable && "cursor-pointer"
+          (item.playable || item.thumbUrl) && "cursor-pointer"
         )}
+        title={item.playable ? "Oynat" : item.thumbUrl ? "Kapağı büyüt" : undefined}
       >
         {item.thumbUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -159,12 +161,26 @@ function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: nu
             <Film className="h-8 w-8 text-muted-foreground/30" />
           </div>
         )}
-        {item.playable && (
+        {item.playable ? (
           <span className="absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity">
             <Play className="h-8 w-8 text-white drop-shadow" />
           </span>
-        )}
+        ) : item.thumbUrl ? (
+          // Bambu .avi oynatılamaz → kapak büyütülebilir (ne olduğunu indirmeden görmek için).
+          <span className="absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity">
+            <Maximize2 className="h-6 w-6 text-white drop-shadow" />
+          </span>
+        ) : null}
       </button>
+      {zoom && item.thumbUrl && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 animate-in fade-in duration-200"
+          onClick={() => setZoom(false)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={item.thumbUrl} alt={item.name} className="max-w-[90vw] max-h-[85vh] rounded-lg shadow-2xl" />
+        </div>
+      )}
       <div className="p-2.5 space-y-1.5">
         <div className="text-xs font-medium line-clamp-1" title={item.name}>{item.name}</div>
         <div className="flex items-center justify-between gap-2">

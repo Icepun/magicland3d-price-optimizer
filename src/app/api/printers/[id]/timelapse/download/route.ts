@@ -37,12 +37,22 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       );
     }
 
-    const { stream, size } = await bambuStreamTimelapse(cfg.host, cfg.accessCode, name);
-    const headers: Record<string, string> = {
-      "Content-Type": "video/x-msvideo",
-      "Content-Disposition": `attachment; filename="${name.replace(/"/g, "")}"`,
-      "Cache-Control": "no-store",
-    };
+    // ?kind=thumb → videonun kapak görseli (~100KB, hızlı). Kullanıcı 50MB'lık videoyu
+    // indirmeden ne olduğunu görür.
+    const thumb = req.nextUrl.searchParams.get("kind") === "thumb";
+    const { stream, size } = await bambuStreamTimelapse(
+      cfg.host,
+      cfg.accessCode,
+      name,
+      thumb ? "thumb" : "video"
+    );
+    const headers: Record<string, string> = thumb
+      ? { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=3600" }
+      : {
+          "Content-Type": "video/x-msvideo",
+          "Content-Disposition": `attachment; filename="${name.replace(/"/g, "")}"`,
+          "Cache-Control": "no-store",
+        };
     // Boyut biliniyorsa ver → tarayıcı/arayüz GERÇEK yüzde gösterir (yoksa belirsiz ilerleme).
     if (size != null) headers["Content-Length"] = String(size);
     return new NextResponse(stream, { headers });

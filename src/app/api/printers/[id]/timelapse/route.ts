@@ -46,9 +46,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         // Ad zaman damgası taşıyor: video_2026-02-10_18-33-42.avi → güvenilir tarih kaynağı
         // (FTP LIST tarihi yıl içermiyor).
         modified: parseNameTimestamp(r.name),
-        playable: false, // .avi — tarayıcı oynatamaz
+        playable: false, // .avi — tarayıcı AVI konteynerini oynatamaz (codec MJPG, ses yok)
         url: `/api/printers/${id}/timelapse/download?name=${encodeURIComponent(r.name)}`,
-        thumbUrl: null,
+        // Bambu her videonun yanına /timelapse/thumbnail/<ad>.jpg yazıyor → indirmeden önizleme.
+        thumbUrl: `/api/printers/${id}/timelapse/download?kind=thumb&name=${encodeURIComponent(r.name)}`,
       }));
       return NextResponse.json({ items, offline: false });
     }

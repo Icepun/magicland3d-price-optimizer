@@ -820,11 +820,19 @@ export async function bambuTimelapseList(
 export async function bambuStreamTimelapse(
   host: string,
   accessCode: string,
-  name: string
+  name: string,
+  /** "video" = /timelapse/<ad> · "thumb" = /timelapse/thumbnail/<ad>.jpg (kapak, ~100KB). */
+  kind: "video" | "thumb" = "video"
 ): Promise<{ stream: ReadableStream<Uint8Array>; size: number | null }> {
   if (!name || name.includes("/") || name.includes("\\") || name.startsWith(".")) {
     throw new Error("Geçersiz dosya adı");
   }
+  // Kapak, videoyla AYNI adı taşır (uzantı .jpg) ve `thumbnail` alt klasöründedir — canlı FTPS
+  // listesiyle doğrulandı. Kapak sayesinde kullanıcı 50MB'lık videoyu indirmeden ne olduğunu görür.
+  const remotePath =
+    kind === "thumb"
+      ? `${BAMBU_TIMELAPSE_DIR}/thumbnail/${name.replace(/\.[^.]+$/, "")}.jpg`
+      : `${BAMBU_TIMELAPSE_DIR}/${name}`;
   const baseTls: tls.ConnectionOptions = {
     rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host,
   };
@@ -868,7 +876,7 @@ export async function bambuStreamTimelapse(
 
     // Boyut (Content-Length → tarayıcı gerçek yüzde gösterir). Desteklenmezse null.
     let size: number | null = null;
-    const sz = await cmd(`SIZE ${BAMBU_TIMELAPSE_DIR}/${name}`);
+    const sz = await cmd(`SIZE ${remotePath}`);
     if (sz.code < 400) {
       const n = parseInt(sz.text.trim(), 10);
       if (Number.isFinite(n) && n > 0) size = n;
@@ -885,7 +893,7 @@ export async function bambuStreamTimelapse(
     });
     await onceEvt(data, "secureConnect", 10000, "veri TLS");
 
-    const r = await cmd(`RETR ${BAMBU_TIMELAPSE_DIR}/${name}`);
+    const r = await cmd(`RETR ${remotePath}`);
     if (r.code >= 400) throw new Error(`Video okunamadı (FTP ${r.code})`);
 
     const sock = data;
