@@ -186,7 +186,12 @@ export async function fetchMoonrakerStatus(host: string, port: number): Promise<
   // boşuna kilitliyordu. Artık çevrimdışı yazıcı tek timeout'ta (~1.5sn) çözülür. Port gerçekten
   // değişmişse "Bağlantıyı Test Et" (testMoonraker) yeniden keşfedip önbelleği günceller.
   if (cached != null) {
-    const st = await tryStatusAt(host, cached);
+    // TEK DENEME YETMEZ: portu ZATEN biliyoruz, yani yazıcı daha önce cevap vermişti. Tek bir
+    // düşen/geciken yanıt (kablosuz parazit, yazıcı baskı sırasında meşgul, ana süreç kısa süre
+    // bloke) kartı "Bağlantı yok"a düşürüyordu — üstelik status-cache çevrimdışıyı 30sn
+    // önbelleklediği için hata 30 saniye ekranda kalıyordu. İkinci bir deneme bu sınıf sahte
+    // çevrimdışıyı ucuza eler (gerçekten kapalı yazıcıda maliyet 30sn'de bir ~1.5sn fazladan).
+    const st = (await tryStatusAt(host, cached)) ?? (await tryStatusAt(host, cached));
     return st ?? offline;
   }
   // İlk keşif (port bilinmiyor): adayları PARALEL yokla — çevrimdışıysa sıralı 3×timeout yerine 1×.

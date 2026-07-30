@@ -52,6 +52,7 @@ interface Conn {
   hasData: boolean; // ilk "report" geldi mi (Object.keys taraması yerine ucuz bayrak)
   lastMessageAt: number; // son report zamanı — veri-bayatlığı bekçisi (çok-istemci açlığı) için
   disconnectedAt: number; // son kopma zamanı — kısa reconnect bloklarında "çevrimdışı" titremesin
+  connectedAt: number; // son BAŞARILI bağlanma zamanı — "bağlandı ama hiç veri gelmedi" bekçisi için
   lastPushallAt: number; // pushall istek sıklığı sınırı (A1 donanımı sık pushall sevmez)
 }
 
@@ -100,7 +101,7 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
 
   const conn: Conn = {
     client, print: {}, connected: false, lastError: null, hasData: false,
-    lastMessageAt: 0, disconnectedAt: 0, lastPushallAt: 0,
+    lastMessageAt: 0, disconnectedAt: 0, connectedAt: 0, lastPushallAt: 0,
   };
   conns.set(k, conn);
 
@@ -109,6 +110,7 @@ function ensureConn(host: string, accessCode: string, serial: string): Conn {
 
   client.on("connect", () => {
     conn.connected = true;
+    conn.connectedAt = Date.now();
     conn.lastError = null;
     // HAYALET-KOMUT SİGORTASI: bağlantı anında bekleyen (kuyruklanmış) publish varsa TEMİZLE —
     // hiçbir komut gecikmeli teslim edilmemeli (2023 Bambu bulut kesintisindeki dünya çapında
@@ -172,6 +174,35 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   // Bağlantı hatası (yanlış kod / kapalı yazıcı) gelirse beklemeyi ERKEN kes —
   // çevrimdışı yazıcı her sorguda 2.2sn yakmasın.
   if (!conn.hasData) {
+    // ⚠️ KURTARMA (kök neden düzeltmesi): pushall QoS 0 ile "ateşle-unut" gönderiliyor ve
+    // ESKİDEN yalnız bağlantı anında BİR KEZ atılıyordu. O tek paket kaybolursa (kablosuz,
+    // yazıcı meşgul, firmware'in "son istemci kazanır" davranışı) yazıcı kendiliğinden rapor
+    // göndermediği sürece hasData HİÇ true olmuyordu. Aşağıdaki bayatlık bekçisi de
+    // `hasData` ŞARTINA bağlı olduğu için hiç çalışmıyor → kart SÜRESİZ "Bağlantı yok"ta
+    // kalıyordu; uygulamayı kapatıp açmak yalnızca YENİ pushall tuttuğunda düzeltiyordu
+    // ("bazen düzeliyor bazen düzelmiyor" şikâyetinin birebir sebebi).
+    // Çözüm: bağlıyken ve hâlâ veri yokken pushall'ı TEKRARLA (≥4sn arayla — A1 sık pushall
+    // sevmez; panel 5sn'de bir yokladığı için pratikte her yoklamada bir deneme olur).
+    if (conn.connected && Date.now() - conn.lastPushallAt > 4_000) {
+      conn.lastPushallAt = Date.now();
+      try {
+        conn.client.publish(
+          `device/${serial}/request`,
+          JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
+          { qos: 0 } // QoS 0 KALSIN: QoS 1'in yeniden teslimi v0.19.96'daki hayalet-baskıya yol açmıştı
+        );
+      } catch { /* yayın başarısızsa sonraki yoklama tekrar dener */ }
+    }
+    // İKİNCİ PERDE: bağlıyız, defalarca pushall istedik ama 45sn'dir HİÇ rapor yok → büyük
+    // olasılıkla Bambu Studio/Handy bağlandı ve firmware "son istemci kazanır" ile bizi susturdu
+    // (BambuStudio#2404). Çare, hasData=true dalında zaten kullanılan yöntem: bağlantıyı düşür,
+    // sonraki sorgu taze kurar → YENİDEN son istemci biz oluruz ve veri geri gelir.
+    if (conn.connected && conn.connectedAt > 0 && Date.now() - conn.connectedAt > 45_000) {
+      try { conn.client.end(true); } catch { /* ignore */ }
+      conns.delete(connKey(host, serial, accessCode));
+      // Bu sorgu çevrimdışı döner (aşağıdaki hasData kontrolü zaten false); SONRAKİ sorgu
+      // taze bağlantı kurup pushall'ı yeniden ister.
+    }
     const deadline = Date.now() + 2200;
     while (Date.now() < deadline && !conn.hasData) {
       if (conn.lastError) break;
