@@ -45,6 +45,8 @@ interface UnifiedOrderItem {
   image: string | null;
   productId?: string | null;
   madeToOrder?: boolean;
+  /** Bu satır kâra girmedi (ürün eşleşmedi ya da maliyeti girilmemiş). */
+  costMissing?: boolean;
 }
 interface UnifiedOrder {
   platform: OrderPlatform;
@@ -175,6 +177,8 @@ export default function OrdersPage() {
   const [platform, setPlatform] = useState<"all" | OrderPlatform>("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
   const [search, setSearch] = useState("");
+  /** Özet karttaki "N siparişte maliyet eksik" uyarısına tıklayınca yalnız o siparişler listelenir. */
+  const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [manualCreateOpen, setManualCreateOpen] = useState(false);
   const [editingManual, setEditingManual] =
     useState<ManualOrderEditTarget | null>(null);
@@ -237,13 +241,32 @@ export default function OrdersPage() {
     return orders.filter((o) => {
       if (platform !== "all" && o.platform !== platform) return false;
       if (status !== "all" && o.statusKind !== status) return false;
+      // "Maliyeti eksik" filtresi — özet karttaki uyarıya tıklayınca açılır. Kâr hesaplanamayan
+      // (null) VEYA bazı satırları kâra girmeyen (partial) siparişler; ikisi de özet kartındaki
+      // incompleteOrders sayımıyla AYNI koşul (orders route: profit == null || profitPartial).
+      if (onlyIncomplete && !(o.profit == null || o.profitPartial)) return false;
       if (q) {
         const hay = `${o.orderNumber} ${o.customer ?? ""} ${o.items.map((i) => i.name).join(" ")}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
-  }, [orders, platform, status, debouncedSearch]);
+  }, [orders, platform, status, debouncedSearch, onlyIncomplete]);
+
+  // ── Sayfalama ──────────────────────────────────────────────────────────────
+  // Liste sanallaştırılmış olsa da satırlar açılıp kapandıkça yükseklikleri değişiyor ve
+  // TanStack Virtual TÜM satırları yeniden ölçüyor; sipariş sayısı büyüdükçe bu iş artıyor.
+  // Sayfalama o işi sabit bir üst sınırda tutar (ve uzun listede gezinmeyi kolaylaştırır).
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  // Filtre/arama değişince başa dön (aksi halde boş sayfada kalınabilir).
+  useEffect(() => { setPage(0); }, [platform, status, debouncedSearch, onlyIncomplete, pageSize]);
+  const safePage = Math.min(page, pageCount - 1);
+  const pageItems = useMemo(
+    () => filtered.slice(safePage * pageSize, safePage * pageSize + pageSize),
+    [filtered, safePage, pageSize]
+  );
 
   // ── Virtualization (Ürünler'le aynı kanıtlanmış desen) — uzun sipariş listesinde DOM birikmesin. ──
   const [scrollEl, setScrollEl] = useState<HTMLElement | null>(null);
@@ -264,18 +287,20 @@ export default function OrdersPage() {
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [scrollEl, isLoading, platform, status, filtered.length]);
+    // safePage/pageSize + onlyIncomplete de bağımlı: sayfa değişince liste içeriği, filtre bandı
+    // açılıp kapanınca da listenin ÜSTTEN ofseti değişiyor → scrollMargin yeniden ölçülmeli.
+  }, [scrollEl, isLoading, platform, status, filtered.length, safePage, pageSize, onlyIncomplete]);
 
   // TanStack Virtual callback tabanlı API döndürür; React Compiler bu bileşeni bilinçli olarak atlar.
   // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
-    count: filtered.length,
+    count: pageItems.length,
     getScrollElement: () => scrollEl,
     estimateSize: () => 84,
     overscan: 8,
     scrollMargin,
     getItemKey: (i) => {
-      const o = filtered[i];
+      const o = pageItems[i];
       return o ? `${o.platform}-${o.id}` : i;
     },
   });
@@ -323,6 +348,17 @@ export default function OrdersPage() {
               sub={summary.total.incompleteOrders ? `${summary.total.incompleteOrders} siparişte maliyet eksik` : "tahmini"}
               subColor={summary.total.incompleteOrders ? "oklch(0.75 0.15 75)" : undefined}
               color={summary.total.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)"}
+              // Uyarıya tıkla → yalnız maliyeti eksik siparişler listelenir (tekrar tıkla → kaldır).
+              onSubClick={
+                summary.total.incompleteOrders
+                  ? () => {
+                      setOnlyIncomplete((v) => !v);
+                      setPlatform("all");
+                      setStatus("all");
+                    }
+                  : undefined
+              }
+              subActive={onlyIncomplete}
             />
             <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
             <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
@@ -423,6 +459,20 @@ export default function OrdersPage() {
         </div>
       </div>
 
+      {/* "Maliyet eksik" filtresi açıkken kullanıcı NEDEN az sipariş gördüğünü bilsin. */}
+      {onlyIncomplete && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs animate-in fade-in slide-in-from-top-1 duration-200">
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+          <span className="flex-1">
+            Yalnız <strong>maliyeti eksik</strong> siparişler gösteriliyor. Bir siparişi açıp
+            işaretli ürüne tıkla, maliyetini gir.
+          </span>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setOnlyIncomplete(false)}>
+            Filtreyi kaldır
+          </Button>
+        </div>
+      )}
+
       {/* Durum filtreleri */}
       <div className="flex flex-wrap gap-1.5">
         <StatusChip active={status === "all"} onClick={() => setStatus("all")} label="Hepsi" count={orders.length} />
@@ -454,7 +504,7 @@ export default function OrdersPage() {
         <div ref={listRef}>
           {padTop > 0 && <div style={{ height: padTop }} />}
           {vItems.map((vi) => {
-            const o = filtered[vi.index];
+            const o = pageItems[vi.index];
             if (!o) return null;
             return (
               <div
@@ -502,6 +552,48 @@ export default function OrdersPage() {
         </div>
       )}
 
+      {/* Sayfalama — tek sayfaya sığıyorsa gösterilmez (gereksiz kalabalık yapmasın). */}
+      {filtered.length > pageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {safePage * pageSize + 1}–{Math.min(filtered.length, (safePage + 1) * pageSize)} / {filtered.length} sipariş
+          </span>
+          <div className="flex items-center gap-2">
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              className="h-8 rounded-md border bg-background px-2 text-xs"
+              title="Sayfa başına sipariş"
+            >
+              {[25, 50, 100, 200].map((n) => (
+                <option key={n} value={n}>{n} / sayfa</option>
+              ))}
+            </select>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
+              disabled={safePage === 0}
+              onClick={() => { setPage(safePage - 1); scrollEl?.scrollTo({ top: 0, behavior: "smooth" }); }}
+            >
+              Önceki
+            </Button>
+            <span className="text-xs tabular-nums text-muted-foreground px-1">
+              {safePage + 1} / {pageCount}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => { setPage(safePage + 1); scrollEl?.scrollTo({ top: 0, behavior: "smooth" }); }}
+            >
+              Sonraki
+            </Button>
+          </div>
+        </div>
+      )}
+
       <ManualOrderDialog
         open={manualCreateOpen || editingManual !== null}
         editing={editingManual}
@@ -524,6 +616,8 @@ function SummaryStat({
   color,
   platform,
   strong,
+  onSubClick,
+  subActive,
 }: {
   label: string;
   value: ReactNode;
@@ -533,6 +627,10 @@ function SummaryStat({
   color?: string;
   platform?: OrderPlatform;
   strong?: boolean;
+  /** Verilirse alt metin tıklanabilir olur (ör. "maliyet eksik" → o siparişleri filtrele). */
+  onSubClick?: () => void;
+  /** Filtre şu an açık mı (alt metin vurgulanır). */
+  subActive?: boolean;
 }) {
   const c = platform ? PLATFORM_INFO[platform].color : color;
   return (
@@ -545,7 +643,21 @@ function SummaryStat({
         {value}
       </div>
       <div className="text-[10px]" style={subColor ? { color: subColor } : undefined}>
-        <span className={subColor ? "font-medium" : "text-muted-foreground"}>{sub}</span>
+        {onSubClick ? (
+          <button
+            onClick={onSubClick}
+            className={cn(
+              "inline-flex items-center gap-1 font-medium underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80",
+              subActive && "no-underline rounded px-1 -mx-1 bg-current/15"
+            )}
+            title={subActive ? "Filtreyi kaldır" : "Bu siparişleri göster"}
+          >
+            {sub}
+            <ArrowUpRight className="h-2.5 w-2.5" />
+          </button>
+        ) : (
+          <span className={subColor ? "font-medium" : "text-muted-foreground"}>{sub}</span>
+        )}
       </div>
     </div>
   );
@@ -721,6 +833,12 @@ const OrderRow = memo(function OrderRow({
                         {it.name}
                         {it.madeToOrder && (
                           <span className="ml-1.5 text-[9px] text-amber-500">· sipariş üzerine</span>
+                        )}
+                        {/* Kâra girmeyen satır: ürünü işaretle → kullanıcı hangisini düzelteceğini görür. */}
+                        {it.costMissing && (
+                          <span className="ml-1.5 text-[9px] font-medium text-amber-500">
+                            {it.productId ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
+                          </span>
                         )}
                       </span>
                       {it.productId && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}

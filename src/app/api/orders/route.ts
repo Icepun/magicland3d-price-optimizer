@@ -53,6 +53,13 @@ export interface UnifiedOrderItem {
   productId?: string | null;
   /** Bu ürün "sipariş üzerine üretilir" mi (bildirim/etiket için). */
   madeToOrder?: boolean;
+  /**
+   * Bu satır kâra GİRMEDİ: ürün hiç eşleşmedi VEYA eşleşti ama maliyeti girilmemiş.
+   * Koşul çekirdekle BİREBİR (order-profit.ts: !p || productionCost + packagingCost <= 0) —
+   * "N siparişte maliyet eksik" uyarısının satır bazındaki karşılığı. productId varsa
+   * kullanıcı doğrudan o ürünün maliyet ekranına gidebilir.
+   */
+  costMissing?: boolean;
 }
 
 export interface UnifiedOrder {
@@ -773,6 +780,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         image,
         productId: m?.id ?? null,
         madeToOrder: m?.madeToOrder ?? false,
+        // Çekirdekteki "kâra girmez" koşulunun aynısı (order-profit.ts:130).
+        costMissing: !m || m.productionCost + m.packagingCost <= 0,
       };
     });
 
