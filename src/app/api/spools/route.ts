@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { SpoolInputSchema, buildSpoolFields } from "@/lib/filament-spool-input";
+import { watchFilamentGroup } from "@/lib/filament-settings";
 
 export async function GET() {
   try {
@@ -17,37 +18,14 @@ export async function GET() {
   }
 }
 
-const CreateSchema = z.object({
-  name: z.string().min(1),
-  material: z.string().default("PLA"),
-  colorName: z.string().optional(),
-  colorHex: z.string().default("#9ca3af"),
-  brand: z.string().optional(),
-  totalGrams: z.coerce.number().positive().default(1000),
-  remainingGrams: z.coerce.number().min(0).optional(),
-  spoolCost: z.coerce.number().min(0).optional(),
-  reorderGrams: z.coerce.number().min(0).default(200),
-  vendorUrl: z.string().optional(),
-});
-
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
-    const input = CreateSchema.parse(await req.json());
-    const spool = await prisma.filamentSpool.create({
-      data: {
-        name: input.name.trim(),
-        material: input.material,
-        colorName: input.colorName?.trim() || null,
-        colorHex: input.colorHex,
-        brand: input.brand?.trim() || null,
-        totalGrams: input.totalGrams,
-        remainingGrams: input.remainingGrams ?? input.totalGrams,
-        spoolCost: input.spoolCost ?? null,
-        reorderGrams: input.reorderGrams,
-        vendorUrl: input.vendorUrl?.trim() || null,
-      },
-    });
+    const input = SpoolInputSchema.parse(await req.json());
+    const { fields, groupKey, label } = buildSpoolFields(input);
+    const spool = await prisma.filamentSpool.create({ data: fields });
+    // Grubu kalıcı izlemeye al → son makara silinse bile "bitti" uyarısı çıkabilsin.
+    await watchFilamentGroup(groupKey, label);
     return NextResponse.json(spool, { status: 201 });
   } catch (error) {
     return jsonError(error);

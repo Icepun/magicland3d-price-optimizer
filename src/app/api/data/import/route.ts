@@ -116,6 +116,9 @@ const FilamentSpoolSchema = z.object({
   spoolCost: finite.nullable().optional(),
   reorderGrams: finite.optional(),
   vendorUrl: nullableString,
+  // v37: envanter gruplaması + kapalı/açık durumu. Opsiyonel → eski (v3) yedekler aynen yüklenir.
+  colorKey: nullableString,
+  openedAt: optionalDate.nullable(),
   isActive: z.boolean().optional(),
   createdAt: optionalDate,
   updatedAt: optionalDate,
@@ -692,6 +695,9 @@ export async function POST(req: NextRequest) {
             spoolCost: spool.spoolCost ?? null,
             reorderGrams: spool.reorderGrams ?? 200,
             vendorUrl: spool.vendorUrl ?? null,
+            // v37: zod'a eklemek YETMEZ — burada da yazılmazsa geri yüklemede SESSİZCE kaybolur.
+            colorKey: spool.colorKey ?? null,
+            openedAt: spool.openedAt ?? null,
             isActive: spool.isActive ?? true,
             ...(spool.createdAt ? { createdAt: spool.createdAt } : {}),
             ...(spool.updatedAt ? { updatedAt: spool.updatedAt } : {}),

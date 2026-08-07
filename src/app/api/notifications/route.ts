@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { buildFilamentAlerts, groupSpools } from "@/core/filament-groups";
+import { loadFilamentSettings } from "@/lib/filament-settings";
 
 /**
  * Bildirim altyapısı — şu an aksiyon gerektiren uyarıları hesaplar (kalıcı tablo yok;
@@ -37,7 +39,11 @@ export async function GET() {
       }),
       prisma.filamentSpool.findMany({
         where: { isActive: true },
-        select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
+        select: {
+          id: true, name: true, material: true, brand: true,
+          colorName: true, colorHex: true, colorKey: true,
+          totalGrams: true, remainingGrams: true, openedAt: true,
+        },
       }),
       // Yazıcı durumları (relay yazar): hata = baskı durdu → acil; duraklatıldı = uyarı.
       remotePrisma.printerSnapshot.findMany({
@@ -63,16 +69,14 @@ export async function GET() {
       });
     }
 
-    for (const s of spools.filter((x) => x.remainingGrams <= x.reorderGrams)) {
-      const empty = s.remainingGrams <= 0;
-      alerts.push({
-        id: `spool-${s.id}`,
-        type: "filament",
-        severity: empty ? "critical" : "warning",
-        title: empty ? "Filament bitti" : "Filament azaldı",
-        body: `${s.name} — ${Math.round(s.remainingGrams)} g kaldı`,
-        href: "/spools",
-      });
+    // FİLAMENT — v37: gram eşiği DEĞİL, grup (tür ailesi + renk tonu) başına KAPALI MAKARA SAYISI.
+    // Kendi try/catch'inde: bu blok patlarsa stok + yazıcı + sipariş uyarıları da sessizce yok
+    // olurdu (dış catch her şeyi yutuyor) — kullanıcı bildirimlerinin kaybolduğunu fark etmezdi.
+    try {
+      const filamentSettings = await loadFilamentSettings();
+      alerts.push(...buildFilamentAlerts(groupSpools(spools), filamentSettings));
+    } catch (filamentError) {
+      console.error("[notifications] filament uyarıları üretilemedi:", filamentError);
     }
 
     for (const pr of printers) {

@@ -68,3 +68,4 @@ scripts/*.local.sh
 # yerel açılış/şema yardımcı çıktıları (userData'da; dev'de repo köküne düşebilir)
 perf.log
 .schema-version
+.devdata/

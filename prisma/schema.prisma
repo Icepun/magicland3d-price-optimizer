@@ -201,13 +201,22 @@ model FilamentSpool {
   totalGrams     Float    @default(1000)
   remainingGrams Float    @default(1000)
   spoolCost      Float?
+  /** ⚠️ v37'den beri KULLANILMIYOR: uyarı artık gram değil KAPALI MAKARA SAYISI eşiğine bakıyor
+      (bkz. src/core/filament-groups.ts). Kolon eski telefon sürümü hâlâ yazdığı için duruyor. */
   reorderGrams   Float    @default(200)
   vendorUrl      String?
+  /** v37: normalize renk anahtarı ("koyu-yesil"). Envanter gruplamasının kalıcı çapası.
+      Boşsa colorName/colorHex'ten türetilir → eski kayıtlar için toplu dönüştürme gerekmez. */
+  colorKey       String?
+  /** v37: makara ne zaman açıldı. NULL = KAPALI (açılmamış) makara. */
+  openedAt       DateTime?
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   usages FilamentUsage[]
+
+  @@index([material, colorKey])
 }
 
 /** Bir makaradan filament düşüm kaydı (baskı / manuel). */

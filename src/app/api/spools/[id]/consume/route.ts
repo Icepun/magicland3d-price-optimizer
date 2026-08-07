@@ -35,6 +35,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         where: { id, remainingGrams: { lt: 0 } },
         data: { remainingGrams: 0 },
       });
+      // v37: makaradan gram düşüldüyse artık AÇIKTIR. Yalnız henüz damgalanmamışsa yaz
+      // (updateMany + where openedAt:null → ilk tüketimin tarihi korunur, sıra bozulmaz).
+      await tx.filamentSpool.updateMany({
+        where: { id, openedAt: null },
+        data: { openedAt: new Date() },
+      });
       const next = await tx.filamentSpool.findUnique({ where: { id } });
       if (!next) {
         // Silme endpoint'i aynı satırı arada kaldırırsa usage oluşturmadan rollback et.
