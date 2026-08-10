@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { batchWrite } from "@/lib/libsql-batch";
 import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -6,6 +8,7 @@ import { ShopifyClient, type ShopifyProductVariant } from "@/services/shopify-cl
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
 
 /**
  * Shopify ürün senkronu — 3 mod:
@@ -15,6 +18,11 @@ import { jsonError } from "@/lib/api-error";
  *
  * Turso embedded replica'da okuma bedava (yerel), yazma pahalı (eu-west-1). Bu yüzden
  * her iki mod da bol okuyup yalnızca gerekeni yazar — eski "her variant'ı upsert" yok.
+ *
+ * YAZMA BİÇİMİ: toplanan ifadeler TEK batch'te gönderilir (Trendyol/Hepsiburada ile aynı desen).
+ * Eskiden her satır ayrı round-trip'ti: uzak-HTTP modunda ifade başına ~96ms ve bu süre boyunca
+ * süreçteki HER sorgu aynı mutex'te bekliyordu → ilk kurulumda birkaç yüz ürün = dakikalarca
+ * tam kilit. batchWrite() uygun olmayan modda (embedded replica) false döner → sıralı yola düşeriz.
  */
 const Schema = z.object({
   mode: z.enum(["full", "add-new", "refresh-prices"]).default("full"),
@@ -27,6 +35,8 @@ function identifierFor(variant: ShopifyProductVariant): string {
 }
 
 interface FetchedVariant {
+  /** Ürün eşleştirme anahtarı: barkod → yoksa stok kodu → yoksa varyant kimliği. */
+  identifier: string;
   price: number;
   sku: string;
   stock: number;
@@ -37,6 +47,17 @@ interface FetchedVariant {
   archived: boolean;
 }
 
+type Write = { sql: string; args: unknown[] };
+
+/** Toplanan ifadeleri tek istekte gönder; mod uygun değilse (embedded replica) sıralı yola düş. */
+async function flushWrites(writes: Write[]): Promise<void> {
+  if (writes.length === 0) return;
+  if (await batchWrite(writes)) return;
+  for (const w of writes) {
+    await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
+  }
+}
+
 async function stampSync() {
   await prisma.appSetting.upsert({
     where: { key: "shopifyLastSyncAt" },
@@ -44,6 +65,14 @@ async function stampSync() {
     update: { value: new Date().toISOString() },
   });
 }
+
+const PRODUCT_SQL = `INSERT INTO Product (id, barcode, sku, name, categoryName, currentSalePrice, stock, imageUrl, isActive, source, createdAt, updatedAt)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'shopify', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+   VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+const LISTING_PRICE_SQL = `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
+const PRODUCT_PRICE_SQL = `UPDATE Product SET currentSalePrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
+const PRODUCT_IMAGE_SQL = `UPDATE Product SET imageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,13 +82,11 @@ export async function POST(req: NextRequest) {
     const client = new ShopifyClient(credentials);
     const shopifyProducts = await client.listAllProducts();
 
-    // Çekilen variant'ları düzleştir. İKİ harita:
-    //  - fetched: identifier (barcode/sku/variant-fallback) → ilk kurulumdaki eşleştirme
-    //  - fetchedByVariantId: Shopify variant id → DEĞİŞMEZ anahtar. Kullanıcı ürün barkodunu
-    //    (Trendyol/sipariş eşleştirmesi için) elle değiştirince barkod-eşleşmesi kaçar; bu yüzden
-    //    fiyat/görsel tazelemesi Listing.externalId (=variant id) ile yapılır → barkoddan bağımsız.
+    // Çekilen variant'ları düzleştir.
+    //  - fetched: identifier (barcode/sku/variant-fallback) → YENİ ürün eklemenin anahtarı
+    //  - all:     eşleştirme indeksleri bunun üzerinden kurulur
     const fetched = new Map<string, FetchedVariant>();
-    const fetchedByVariantId = new Map<string, FetchedVariant>();
+    const all: FetchedVariant[] = [];
     let totalVariants = 0;
     for (const product of shopifyProducts) {
       for (const variant of product.variants ?? []) {
@@ -69,6 +96,7 @@ export async function POST(req: NextRequest) {
           variant.title && variant.title !== "Default Title" ? ` — ${variant.title}` : ""
         }`;
         const data: FetchedVariant = {
+          identifier: id,
           price: Number(variant.price) || 0,
           sku: variant.sku || id,
           stock: variant.inventory_quantity ?? 0,
@@ -79,7 +107,7 @@ export async function POST(req: NextRequest) {
           variantId: String(variant.id),
           archived: product.status === "archived",
         };
-        fetchedByVariantId.set(data.variantId, data);
+        all.push(data);
         if (!fetched.has(id)) fetched.set(id, data); // aynı identifier'da ilk gelen kazanır
       }
     }
@@ -95,6 +123,7 @@ export async function POST(req: NextRequest) {
           variantId: string | null;
           sku: string | null;
           listingSku: string | null;
+          listingBarcode: string | null;
           productPrice: number;
           imageUrl: string | null;
           imageManual: number;
@@ -102,31 +131,38 @@ export async function POST(req: NextRequest) {
       >(
         `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
                 p.barcode AS barcode, l.externalId AS variantId, p.sku AS sku, l.externalSku AS listingSku,
+                l.barcode AS listingBarcode,
                 p.currentSalePrice AS productPrice, p.imageUrl AS imageUrl, p.imageManual AS imageManual
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'shopify'`
       );
+      // Belirsiz anahtarlar (aynı SKU'yu paylaşan varyantlar) indeksten DÜŞER — kör eşleşme
+      // yanlış varyantın fiyatını yazardı. Bkz. lib/listing-index.
+      const byVariantId = uniqueIndex(all, (f) => f.variantId);
+      const byIdentifier = uniqueIndex(all, (f) => f.identifier);
+      const bySku = uniqueIndex(all, (f) => f.sku);
+
       let changed = 0;
       let imagesFixed = 0;
+      const writes: Write[] = [];
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
-        // Önce DEĞİŞMEZ variant id ile eşleştir (kullanıcı barkodu değiştirmiş olabilir),
-        // olmazsa barkod → SKU'ya düş. Böylece barkodu düzenlenen VEYA barkodsuz (SKU'lu) ürünlerin de
-        // fiyat/görseli tazelenir. (Eskiden yalnız variantId+barkod → barkodsuzlar atlanıyordu.)
-        const f =
-          (row.variantId ? fetchedByVariantId.get(row.variantId) : undefined) ??
-          (row.barcode ? fetched.get(row.barcode) : undefined) ??
-          (row.sku ? fetched.get(row.sku) : undefined) ??
-          (row.listingSku ? fetched.get(row.listingSku) : undefined);
+        // Güven sırası: Shopify varyant kimliği > ilan barkodu > ürün barkodu > ilan stok kodu > ürün stok kodu.
+        // Kullanıcı ürün barkodunu (sipariş eşleştirmesi için) elle değiştirmiş olabilir; bu yüzden
+        // önce DEĞİŞMEZ varyant kimliği denenir, barkodsuz (yalnız SKU'lu) ürünler de eşleşsin diye
+        // SKU indeksine düşülür.
+        const f = matchByPriority<FetchedVariant>([
+          [row.variantId, byVariantId],
+          [row.listingBarcode, byIdentifier],
+          [row.barcode, byIdentifier],
+          [row.listingSku, bySku],
+          [row.sku, bySku],
+        ]);
         if (!f) continue;
         // Görsel backfill/düzeltme — yalnızca elle ayarlanmamış (imageManual=0) ürünlerde,
         // ve gerçekten değişmişse (diff-write → tekrar tekrar yazma yok).
         if (!row.imageManual && f.imageUrl && f.imageUrl !== row.imageUrl) {
-          await prisma.$executeRawUnsafe(
-            `UPDATE Product SET imageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
-            f.imageUrl,
-            row.productId
-          );
+          writes.push({ sql: PRODUCT_IMAGE_SQL, args: [f.imageUrl, row.productId] });
           imagesFixed++;
         }
         const listingChanged = Math.abs(f.price - row.listingPrice) > 0.001;
@@ -139,21 +175,15 @@ export async function POST(req: NextRequest) {
             newPrice: f.price,
             changeSource: "shopify_sync",
           });
-          await prisma.$executeRawUnsafe(
-            `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
-            f.price,
-            row.listingId
-          );
+          writes.push({ sql: LISTING_PRICE_SQL, args: [f.price, row.listingId] });
         }
         if (productChanged) {
-          await prisma.$executeRawUnsafe(
-            `UPDATE Product SET currentSalePrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
-            f.price,
-            row.productId
-          );
+          writes.push({ sql: PRODUCT_PRICE_SQL, args: [f.price, row.productId] });
         }
         changed++;
       }
+
+      await flushWrites(writes);
       // Fiyat geçmişi — yalnızca değişenler, tek round-trip (Turso yazma maliyeti).
       if (history.length) await prisma.priceHistory.createMany({ data: history });
       return { checked: rows.length, changed, imagesFixed };
@@ -166,34 +196,35 @@ export async function POST(req: NextRequest) {
       );
       const existingSet = new Set(existing.map((r) => r.barcode));
       let added = 0;
+      // Ürün + ilan ifadeleri ARDIŞIK ve ÇİFT hâlinde toplanır: batch 500'lük dilimlere bölünürken
+      // (çift sayı) bir ürünün ilanı asla ayrı dilime düşmez.
+      const writes: Write[] = [];
       for (const [id, f] of fetched) {
         if (existingSet.has(id)) continue;
-        const newProduct = await prisma.product.create({
-          data: {
-            barcode: id,
-            sku: f.sku,
-            name: f.name,
-            categoryName: f.categoryName,
-            currentSalePrice: f.price,
-            stock: f.stock,
-            imageUrl: f.imageUrl,
-            isActive: !f.archived,
-            source: "shopify",
-          },
+        const productId = `shp_${randomUUID().replace(/-/g, "")}`;
+        writes.push({
+          sql: PRODUCT_SQL,
+          args: [
+            productId,
+            id,
+            f.sku,
+            f.name,
+            f.categoryName,
+            f.price,
+            f.stock,
+            f.imageUrl,
+            f.archived ? 0 : 1,
+          ],
         });
-        await prisma.$executeRawUnsafe(
-          `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-           VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          `listing_${newProduct.id}_shopify`,
-          newProduct.id,
-          f.variantId,
-          f.sku,
-          f.price,
-          f.stock
-        );
+        writes.push({
+          sql: LISTING_SQL,
+          args: [`listing_${productId}_shopify`, productId, f.variantId, f.sku, f.price, f.stock],
+        });
         existingSet.add(id);
         added++;
       }
+
+      await flushWrites(writes);
       return { added };
     }
 

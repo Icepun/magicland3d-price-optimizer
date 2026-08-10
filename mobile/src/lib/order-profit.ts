@@ -166,6 +166,7 @@ export function computeOrderProfit(
               packagingCost: resolved.packagingCost,
               packagingComponents: resolved.packagingBreakdown?.components ?? null,
               filamentCost: resolved.filamentCost,
+              productionCostKnown: resolved.productionCostKnown,
               listing: p.listings.find((l) => l.platform === order.platform) ?? null,
             }
           : null,

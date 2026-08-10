@@ -81,7 +81,7 @@ export async function POST(
 
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
-  const hasCost = (resolved?.totalCost ?? 0) > 0;
+  const hasCost = resolved?.productionCostKnown ?? false;
 
   const productRules = withProductCommissionRule(
     product,

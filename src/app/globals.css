@@ -277,22 +277,39 @@
 /* =============================================
    TABLE — Daha okunabilir, modern stil
    ============================================= */
+/* Renkler TEMAYA GÖRE ayrışır. Eskiden koyu tema için yazılmış beyaz-alfa değerler
+   koşulsuz uygulanıyordu: açık temada kenarlık ve başlık zemini beyaz üstüne beyaz
+   (görünmez), başlık yazısı ise okunamayacak kadar açık gri kalıyordu. */
 [data-slot="table-container"] {
   border-radius: var(--radius-md);
   background: var(--card);
-  border: 1px solid oklch(1 0 0 / 8%);
+  border: 1px solid var(--border);
 }
 table thead th,
 [data-slot="table-head"] {
-  background: oklch(1 0 0 / 2.5%);
   font-size: 0.72rem;
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+}
+.dark [data-slot="table-container"] {
+  border-color: oklch(1 0 0 / 8%);
+}
+.dark table thead th,
+.dark [data-slot="table-head"] {
+  background: oklch(1 0 0 / 2.5%);
   color: oklch(0.72 0.012 265);
+}
+:root:not(.dark) table thead th,
+:root:not(.dark) [data-slot="table-head"] {
+  background: oklch(0.20 0.020 265 / 3.5%);
+  color: oklch(0.42 0.020 265); /* beyaz zeminde ~7:1 — eskiden ~2,6:1 idi */
 }
 [data-slot="table-row"]:hover {
   background: oklch(0.66 0.20 278 / 5%);
+}
+:root:not(.dark) [data-slot="table-row"]:hover {
+  background: oklch(0.55 0.22 278 / 6%);
 }
 
 /* =============================================
@@ -327,4 +344,54 @@ table thead th,
 .tabular-nums {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+/* =============================================
+   HAREKET TERCİHİ (prefers-reduced-motion)
+
+   Hareket azaltma yalnız JS tarafında dinleniyordu (sayı animasyonu, konfeti,
+   parıltı). CSS ile sürülen animasyonların HİÇBİRİ tercihi görmüyordu: açılış
+   ekranı, kenar çubuğu giriş animasyonu, süzülen logo, akan ilerleme barları
+   sistem ayarına rağmen çalışmaya devam ediyordu.
+
+   Süreleri sıfırlamak yerine ~1ms'e çekiyoruz: animasyonun BİTTİĞİ varsayımına
+   dayanan kodlar (animationend, animation-fill-mode: forwards ile son karede
+   kalan öğeler) çalışmaya devam etsin, ama hareket görünmesin. Tamamen kapatmak
+   bu öğeleri opacity:0'da dondurup ekranı boş bırakırdı.
+   ============================================= */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* İSTİSNA — yükleniyor göstergeleri. Bunlar dekorasyon değil, "çalışıyor"
+     bilgisinin tek kaynağı; 1ms'e çekilirse deli gibi titrer, kapatılırsa
+     kullanıcı ekranın donduğunu sanır. Küçük ve yerinde döndükleri için hareket
+     hassasiyeti açısından da sorunlu değiller → normal hızlarında bırakılıyorlar.
+     (.sınıf seçicisi * seçicisinden daha spesifik olduğu için üsttekini ezer.) */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .animate-pulse {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* Buna karşılık tamamen dekoratif olan sürekli hareketler dursun. */
+  .animate-\[logo-float_6s_ease-in-out_infinite\],
+  [style*="logo-float"],
+  [style*="logo-glow-pulse"],
+  [style*="splash-shimmer"],
+  [style*="printer-shimmer"],
+  [style*="confetti-fall"] {
+    animation: none !important;
+  }
 }

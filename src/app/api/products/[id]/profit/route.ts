@@ -45,7 +45,7 @@ export async function GET(
     product.cost?.filamentType?.costPerGram ?? 0
   );
 
-  if (!resolved || resolved.totalCost <= 0) {
+  if (!resolved || !resolved.productionCostKnown) {
     return NextResponse.json({ result: null, missingCost: true });
   }
 

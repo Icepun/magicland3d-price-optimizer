@@ -5,7 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { computeFullProductCost } from "@/core/cost-calculator";
 import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProfitInputCaches } from "@/lib/cache-busting";
 
 export const dynamic = "force-dynamic";
 
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
 
-    invalidateOrdersCache();
+    bustProfitInputCaches();
     return NextResponse.json({ ok: true, count: members.length });
   } catch (error) {
     return jsonError(error);

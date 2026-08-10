@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProfitInputCaches } from "@/lib/cache-busting";
 
 const Schema = z.object({
   name: z.string().min(1).optional(),
@@ -21,7 +21,7 @@ export async function PATCH(
   const { id } = await params;
   const data = Schema.parse(await req.json());
   const rule = await prisma.commissionRule.update({ where: { id }, data });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
   return NextResponse.json(rule);
 }
 
@@ -31,6 +31,6 @@ export async function DELETE(
 ) {
   const { id } = await params;
   await prisma.commissionRule.delete({ where: { id } });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
   return NextResponse.json({ ok: true });
 }

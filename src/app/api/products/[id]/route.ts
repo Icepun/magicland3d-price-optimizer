@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { computeFullProductCost } from "@/core/cost-calculator";
 import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches } from "@/lib/cache-busting";
 import { bustCache } from "@/lib/route-cache";
+import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
 import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
 import { z } from "zod";
 
@@ -242,7 +243,11 @@ export async function PATCH(
   // değişince pahalı orders önbelleğini düş. Görsel/takma ad/stok/varyant/gizli gibi alanlar
   // kâr gövdesine girmediğinden önbelleği KORUR.
   if (productPatchAffectsProfit({ ...productData, cost })) {
-    invalidateOrdersCache();
+    bustProfitInputCaches();
+  } else {
+    // Kâra girmeyen alanlar (stok, gizli, takma ad, görsel) yine de listede ve Panel
+    // sayaçlarında görünüyor → o iki gövde tazelenmeli, pahalı sipariş gövdesi KORUNUR.
+    bustProductViewCaches();
   }
   // Ürün adı değişti → Shopify ad-eşleştirmesinin ad indeksi bayatlamasın.
   if (productData.name !== undefined) bustCache("order-name-index:");
@@ -261,7 +266,15 @@ export async function DELETE(
     where: { id },
     select: { variantGroupId: true },
   });
-  await prisma.product.delete({ where: { id } });
+  // Ürün satırı zaten yoksa (yarıda kalmış bir silme tekrar deneniyorsa) hata verme —
+  // asıl önemli olan bağlı satırların temizlenmesi, o yüzden aşağısı yine çalışsın.
+  await prisma.product.delete({ where: { id } }).catch((e: unknown) => {
+    if ((e as { code?: string })?.code === "P2025") return null;
+    throw e;
+  });
+  // Bulut tablolarında silme zinciri yok → bağlı satırları açıkça temizle, yoksa yedek
+  // geri yüklemesi yetim satırlar yüzünden hataya düşüyor.
+  await cleanupProductOrphans([id]);
 
   if (existing?.variantGroupId) {
     const remaining = await prisma.product.count({
@@ -271,7 +284,6 @@ export async function DELETE(
       await prisma.variantGroup.delete({ where: { id: existing.variantGroupId } }).catch(() => {});
     }
   }
-  invalidateOrdersCache();
-  bustCache("order-name-index:"); // silinen ürün ad indeksinde kalmasın
+  bustProductCaches(); // silinen ürün listeden, Panel sayaçlarından ve ad indeksinden düşsün
   return NextResponse.json({ ok: true });
 }

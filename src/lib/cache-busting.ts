@@ -27,6 +27,25 @@ export function bustProductCaches(): void {
   invalidateOrdersCache(); // fiyat + eşleşme değişimi kâr gövdesini etkiler
 }
 
+/**
+ * KÂR GİRDİSİ değişti: komisyon / kargo / gider kuralı, KDV oranı, filament ₺/g, listing fiyatı
+ * veya komisyon override'ı.
+ *
+ * SORUN (denetimde bulundu): bu rotalar yalnız invalidateOrdersCache() çağırıyordu. Oysa ürün
+ * maliyeti ve kârı bu girdilerden HESAPLANIYOR → products:/dashboard: gövdeleri de eski kuralla
+ * hesaplanmış kârı taşıyor. Üstelik bu gövdeler DİSKE yazıldığı için uygulamayı kapatıp açmak
+ * bile düzeltmiyordu: kullanıcı komisyonu değiştiriyor, Ürün Detayı yeni rakamı gösteriyor ama
+ * liste ve Panel eskisinde kalıyordu.
+ *
+ * order-name-index BİLEREK düşürülmüyor: ürün adları değişmedi, o indeks pahalı ve gereksiz yere
+ * yeniden kurulmamalı (bkz. dosya başlığındaki "dar ve amaca özel" kuralı).
+ */
+export function bustProfitInputCaches(): void {
+  bustCache("products:");
+  bustCache("dashboard:");
+  invalidateOrdersCache();
+}
+
 /** Yalnız ürün GÖRÜNÜMLERİ değişti (kâr/eşleşme etkilenmiyor) — ör. görsel, sıralama. */
 export function bustProductViewCaches(): void {
   bustCache("products:");

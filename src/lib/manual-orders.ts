@@ -578,7 +578,8 @@ async function resolveManualOrderInput(
         settingsMap,
         product.cost?.filamentType?.costPerGram ?? 0
       );
-      const costKnown = product.cost != null;
+      // Maliyet satırının VAR OLMASI yetmez — üretim payı girilmemişse maliyet bilinmiyor demektir.
+      const costKnown = resolved?.productionCostKnown ?? false;
       return {
         kind: "catalog",
         id: lineId(item.id),
@@ -860,7 +861,7 @@ export async function getManualOrderOptions() {
         filamentCost: resolved?.filamentCost ?? 0,
         packagingComponents:
           resolved?.packagingBreakdown?.components ?? null,
-        costKnown: product.cost != null,
+        costKnown: resolved?.productionCostKnown ?? false,
       };
     }),
     expenseRules,

@@ -1,6 +1,7 @@
 /**
- * Next sunucu açılışında BİR KEZ çalışır (Node runtime). Telefon relay'ini başlatır:
- * masaüstü LAN'da yazıcı durumlarını Turso'ya yazar + telefondan gelen komutları uygular.
+ * Next sunucu açılışında BİR KEZ çalışır (Node runtime). Arka plan işlerini başlatır:
+ * telefon relay'i (yazıcı durumları + telefondan gelen komutlar), sipariş izleyici ve
+ * günlük otomatik yedek.
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
@@ -19,6 +20,15 @@ export async function register() {
       startOrderWatch();
     } catch (e) {
       console.error("[instrumentation] sipariş izleyici başlatılamadı:", e);
+    }
+
+    // Günlük otomatik yedek: bulut verisinden taşınabilir JSON üretip kullanıcı klasörüne yazar.
+    // Açılışta hemen çalışmaz; gecikmeli başlar ve günde bir kez yeter.
+    try {
+      const { startBackupJob } = await import("./lib/backup-job");
+      startBackupJob();
+    } catch (e) {
+      console.error("[instrumentation] günlük yedek başlatılamadı:", e);
     }
   }
 

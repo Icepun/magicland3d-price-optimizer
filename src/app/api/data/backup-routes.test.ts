@@ -29,6 +29,33 @@ async function postBackup(payload: unknown) {
   return importBackup(request);
 }
 
+type StreamEvent = {
+  stage: string;
+  label?: string;
+  done?: number;
+  total?: number;
+  pct?: number;
+  message?: string;
+  stats?: Record<string, number>;
+  warnings?: string[];
+};
+
+/** NDJSON ilerleme akışını satır satır okur (print-flow'daki runPrintStream ile aynı desen). */
+async function postBackupStream(payload: unknown): Promise<StreamEvent[]> {
+  const request = new Request("http://localhost/api/data/import?stream=1", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }) as NextRequest;
+  const response = await importBackup(request);
+  expect(response.status).toBe(200);
+  const text = await response.text();
+  return text
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as StreamEvent);
+}
+
 beforeAll(async () => {
   ({ POST: importBackup } = await import("./import/route"));
   ({ GET: exportBackup } = await import("./export/route"));
@@ -412,14 +439,13 @@ describe("portable backup routes", () => {
     expect(backup.metadata.localModelFileBytesIncluded).toBe(false);
   });
 
-  it("geçersiz bir ilişkiyi sessiz atlamak yerine tüm transaction'ı geri alır", async () => {
-    const before = await db.product.count();
+  it("ürünü silinmiş satırları atlar ama yedeğin geri kalanını geri yükler", async () => {
     const response = await postBackup({
       version: 2,
       products: [
         {
-          id: "will-roll-back",
-          barcode: "rollback-barcode",
+          id: "survives-import",
+          barcode: "orphan-neighbour",
           currentSalePrice: 100,
         },
       ],
@@ -431,11 +457,124 @@ describe("portable backup routes", () => {
           salePrice: 100,
         },
       ],
+      productCosts: [
+        { id: "bad-cost", productId: "missing-product", manualCost: 10 },
+      ],
+      priceHistory: [
+        {
+          id: "bad-history",
+          productId: "missing-product",
+          oldPrice: 10,
+          newPrice: 20,
+          changeSource: "test",
+          changedAt: "2026-07-22T10:00:00.000Z",
+        },
+      ],
+      filamentUsages: [
+        { id: "bad-usage", spoolId: "missing-spool", grams: 5 },
+      ],
+      productModelFiles: [
+        {
+          id: "bad-model",
+          productId: "missing-product",
+          printerConfigId: "missing-printer",
+          originalName: "orphan.3mf",
+          r2Key: "models/orphan.3mf",
+          fileType: "3mf",
+        },
+      ],
     });
 
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    // Yedeğin sağlam kısmı yazıldı; yetim satırlar sessizce değil, SAYILARAK atlandı.
+    expect(result.stats.products).toBe(1);
+    expect(result.stats.skipped).toBe(5);
+    expect(result.warnings.some((w: string) => w.includes("5 kayıt atlandı"))).toBe(true);
+    expect(
+      await db.product.findUniqueOrThrow({ where: { barcode: "orphan-neighbour" } })
+    ).toMatchObject({ id: "survives-import" });
+    expect(await db.listing.findUnique({ where: { id: "bad-listing" } })).toBeNull();
+    expect(await db.productCost.findUnique({ where: { id: "bad-cost" } })).toBeNull();
+    expect(await db.priceHistory.findUnique({ where: { id: "bad-history" } })).toBeNull();
+    expect(await db.filamentUsage.findUnique({ where: { id: "bad-usage" } })).toBeNull();
+    expect(await db.productModelFile.findUnique({ where: { id: "bad-model" } })).toBeNull();
+  });
+
+  it("aynı yedeği ikinci kez almak satırları kopyalamaz", async () => {
+    const payload = {
+      version: 3,
+      products: [
+        {
+          id: "idempotent-product",
+          barcode: "idempotent-barcode",
+          name: "Tekrar",
+          currentSalePrice: 150,
+        },
+      ],
+      listings: [
+        {
+          id: "idempotent-listing",
+          productId: "idempotent-product",
+          platform: "trendyol",
+          salePrice: 150,
+        },
+      ],
+      priceHistory: [
+        {
+          id: "idempotent-history",
+          productId: "idempotent-product",
+          oldPrice: 100,
+          newPrice: 150,
+          changeSource: "test",
+          changedAt: "2026-07-22T10:00:00.000Z",
+        },
+      ],
+    };
+
+    expect((await postBackup(payload)).status).toBe(200);
+    const second = await postBackup(payload);
+    expect(second.status).toBe(200);
+    expect((await second.json()).stats.skipped).toBe(0);
+
+    expect(await db.product.count({ where: { barcode: "idempotent-barcode" } })).toBe(1);
+    expect(
+      await db.listing.count({ where: { platform: "trendyol", barcode: null } })
+    ).toBeGreaterThanOrEqual(1);
+    expect(await db.priceHistory.count({ where: { id: "idempotent-history" } })).toBe(1);
+  });
+
+  it("çok satırlı yedeği gruplar hâlinde yazar ve ilerlemeyi aşama aşama bildirir", async () => {
+    const products = Array.from({ length: 620 }, (_, index) => ({
+      id: `bulk-${index}`,
+      barcode: `bulk-barcode-${index}`,
+      name: `Toplu ürün ${index}`,
+      currentSalePrice: 10 + index,
+    }));
+
+    const events = await postBackupStream({ version: 3, products });
+
+    const steps = events.filter((event) => event.stage === "step");
+    const finished = events.find((event) => event.stage === "done");
+    expect(steps.length).toBeGreaterThan(1);
+    // 500'lük gruplar → tek seferde değil, en az iki ara ilerleme raporlanmalı.
+    expect(steps.filter((step) => step.label === "Ürünler").length).toBeGreaterThanOrEqual(3);
+    expect(steps.every((step) => (step.pct ?? -1) >= 0 && (step.pct ?? 101) <= 100)).toBe(true);
+    expect(steps[steps.length - 1]).toMatchObject({ done: 620, total: 620, pct: 100 });
+    expect(finished?.stats?.products).toBe(620);
+    expect(finished?.stats?.skipped).toBe(0);
+    expect(await db.product.count({ where: { id: { startsWith: "bulk-" } } })).toBe(620);
+  });
+
+  it("bozuk yedekte akış açmadan anlaşılır hata döner", async () => {
+    const request = new Request("http://localhost/api/data/import?stream=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 3, products: [{ id: "", barcode: "" }] }),
+    }) as NextRequest;
+    const response = await importBackup(request);
     expect(response.status).toBe(400);
-    expect(await db.product.count()).toBe(before);
-    expect(await db.product.findUnique({ where: { barcode: "rollback-barcode" } })).toBeNull();
+    expect((await response.json()).error).toContain("Yedek biçimi geçersiz");
   });
 
   it("tahrif edilmiş manuel sipariş hesabını içeri almadan önce reddeder", async () => {

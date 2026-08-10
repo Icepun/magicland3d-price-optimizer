@@ -118,7 +118,7 @@ async function computeDashboard() {
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;
 
-    if (!resolved || resolved.totalCost <= 0) {
+    if (!resolved || !resolved.productionCostKnown) {
       missingCost++;
       problemProducts.push({
         id: product.id,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProfitInputCaches } from "@/lib/cache-busting";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 const Schema = z.object({
@@ -27,7 +27,7 @@ export async function PATCH(
   const { id } = await params;
   const data = Schema.parse(await req.json());
   const rule = await prisma.cargoRule.update({ where: { id }, data });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
   return NextResponse.json(rule);
 }
 
@@ -38,6 +38,6 @@ export async function DELETE(
   await ensureRuntimeSchema();
   const { id } = await params;
   await prisma.cargoRule.delete({ where: { id } });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
   return NextResponse.json({ ok: true });
 }

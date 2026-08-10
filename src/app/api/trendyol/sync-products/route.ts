@@ -7,6 +7,7 @@ import { TrendyolClient, type TrendyolProduct } from "@/services/trendyol-client
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { jsonError } from "@/lib/api-error";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
 
 /**
  * Trendyol ürün senkronu — 3 mod (Shopify ana ürün kaynağı, Trendyol eşleşen listing):
@@ -89,17 +90,37 @@ export async function POST(req: NextRequest) {
 
     // ── refresh-prices: yalnızca değişen fiyatı yaz ──────────────────────────
     async function refreshPrices() {
+      // Eşleştirme ürünün DEĞİL ilanın anahtarlarıyla yapılır: elle eşleştirilmiş ilanlarda
+      // Product.barcode (Shopify) ile Listing.barcode (Trendyol) zaten farklıdır ve ürün
+      // barkoduna bakan eski sorgu bu ilanların fiyatını hiç güncellemiyordu.
       const rows = await prisma.$queryRawUnsafe<
-        Array<{ listingId: string; salePrice: number; productId: string; barcode: string }>
+        Array<{
+          listingId: string;
+          salePrice: number;
+          productId: string;
+          externalId: string | null;
+          listingBarcode: string | null;
+          externalSku: string | null;
+          productBarcode: string | null;
+        }>
       >(
-        `SELECT l.id AS listingId, l.salePrice AS salePrice, p.id AS productId, p.barcode AS barcode
+        `SELECT l.id AS listingId, l.salePrice AS salePrice, l.productId AS productId,
+                l.externalId AS externalId, l.barcode AS listingBarcode, l.externalSku AS externalSku,
+                p.barcode AS productBarcode
          FROM Listing l JOIN Product p ON l.productId = p.id
          WHERE l.platform = 'trendyol'`
       );
+      const byExternalId = uniqueIndex(fetched.values(), (f) => f.trendyolId);
+      const bySku = uniqueIndex(fetched.values(), (f) => f.sku);
       let changed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
       for (const row of rows) {
-        const f = fetched.get(row.barcode);
+        const f = matchByPriority<FetchedTrendyol>([
+          [row.externalId, byExternalId],
+          [row.listingBarcode, fetched],
+          [row.externalSku, bySku],
+          [row.productBarcode, fetched], // eski satırlar: ilan barkodu yazılmadan önce eklenmişler
+        ]);
         if (!f) continue;
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({

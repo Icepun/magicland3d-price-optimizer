@@ -1145,7 +1145,7 @@ function PlatformProfitCardImpl({
             {missingCost ? (
               <div className="flex items-start gap-2 text-xs text-amber-500">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                <span>Maliyet eksik — net kâr hesaplanamaz</span>
+                <span>Üretim maliyeti girilmedi — net kâr hesaplanamaz</span>
               </div>
             ) : result ? (
               <>

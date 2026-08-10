@@ -541,33 +541,47 @@ function ShopifyStorefrontGuide() {
 
 function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
   const allOk = result.steps.every((s) => s.status === "ok");
+  const okCount = result.steps.filter((s) => s.status === "ok").length;
   return (
     <Card className={allOk ? "border-green-500/40 bg-green-500/5" : "border-amber-500/40 bg-amber-500/5"}>
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm">Token + API Test Sonucu</CardTitle>
+        <CardTitle className="text-sm">
+          {allOk ? "Bağlantı çalışıyor" : "Bağlantı kurulamadı"}
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-xs">
+        <p className="text-muted-foreground tabular-nums">
+          {okCount} / {result.steps.length} adım tamam
+        </p>
         {result.steps.map((step, i) => (
-          <div key={i} className="space-y-1">
-            <div className="flex items-center justify-between">
-              <span className="font-semibold">
-                {step.status === "ok" ? "✓" : "✗"} {step.name}
+          <div
+            key={i}
+            className="space-y-1 animate-in fade-in slide-in-from-left-1 duration-300"
+            style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
+          >
+            <span className="font-semibold flex items-center gap-1.5">
+              <span className={step.status === "ok" ? "text-emerald-500" : "text-amber-500"}>
+                {step.status === "ok" ? "✓" : "✗"}
               </span>
-              {step.responseStatus && (
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  HTTP {step.responseStatus}
-                </span>
-              )}
-            </div>
+              {step.name}
+            </span>
             <p className={step.status === "ok" ? "text-muted-foreground" : "text-amber-500"}>
               {step.detail}
             </p>
-            {step.responseBody !== undefined && (
-              <pre className="text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
-                {typeof step.responseBody === "string"
-                  ? step.responseBody
-                  : JSON.stringify(step.responseBody, null, 2)}
-              </pre>
+            {/* Ham yanıt ARTIK GİZLİ. Eskiden durum kodu ve JSON gövdesi doğrudan ekrana
+                dökülüyordu — kullanıcıya hitap etmiyor. Sorun ayıklamak gerektiğinde açılıyor. */}
+            {step.responseBody !== undefined && step.status !== "ok" && (
+              <details className="group">
+                <summary className="cursor-pointer select-none text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors">
+                  Teknik ayrıntı
+                </summary>
+                <pre className="mt-1 text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all">
+                  {step.responseStatus ? `HTTP ${step.responseStatus}\n` : ""}
+                  {typeof step.responseBody === "string"
+                    ? step.responseBody
+                    : JSON.stringify(step.responseBody, null, 2)}
+                </pre>
+              </details>
             )}
           </div>
         ))}

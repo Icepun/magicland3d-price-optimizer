@@ -88,6 +88,11 @@ export interface UnifiedOrder {
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  /**
+   * Siparişin kalem/tutar bilgisi platformdan alınamadı. Listede görünür ama ciro/kâr
+   * toplamlarına ve finans geçmişine GİRMEZ — yoksa ₺0'lık sahte bir sipariş gibi sayılır.
+   */
+  dataIncomplete?: boolean;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;
@@ -99,6 +104,11 @@ interface PlatformStatus {
   needsAdminToken?: boolean;
   notConfigured?: boolean;
   error?: string;
+  /**
+   * Bu platformdan gelen ama bilgisi eksik kalan sipariş sayısı (detayı alınamadı ya da
+   * tek seferde çekilebilecek sınırı aştı). 0/undefined = veri tam.
+   */
+  incompleteCount?: number;
 }
 
 interface SummaryBucket {
@@ -113,6 +123,8 @@ interface SummaryQuality {
   /** Döviz kuru dönüşümü olmadığı için TRY ciro/kâr toplamlarına katılmayan siparişler. */
   unsupportedCurrencyOrders: number;
   unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
+  /** Kalem/tutar bilgisi alınamadığı için ciro/kâr toplamlarına katılmayan siparişler. */
+  incompleteDataOrders: number;
 }
 
 function normalizedCurrency(currency: string | null | undefined): string {
@@ -238,6 +250,8 @@ interface Matched {
   packagingCost: number;
   packagingComponents: PackagingBreakdown["components"] | null;
   filamentCost: number; // KDV iadesine giren malzeme payı
+  /** Üretim maliyeti gerçekten girilmiş mi — paketleme tutarı bunu maskeleyemez. */
+  productionCostKnown: boolean;
   categoryName: string;
   desi: number | null;
   commissionRate: number | null;
@@ -255,7 +269,9 @@ type ExpenseRules = ExpenseRuleInput[];
 // Siparişler 3 pazaryerinden CANLI çekiliyor (1-3sn). İlk yüklemeden SONRA her açış önbellekten
 // ANINDA döner; 60sn'den eskiyse arka planda tazelenir (eski veri anında gösterilir → sayfa beklemez).
 // "Yenile" (?fresh=1) senkron canlı çeker. Önbellek PAYLAŞILAN modülde (lib/orders-cache) — kargo/
-// komisyon/gider değişince invalidateOrdersCache() ile düşürülür → kâr anında güncellenir.
+// komisyon/gider değişince bustProfitInputCaches() ile düşürülür (lib/cache-busting). O yardımcı
+// products:/dashboard: gövdelerini de düşürür; yalnız burayı düşürmek YETMEZ, çünkü Ürünler ve
+// Panel kârı kendi SWR gövdelerinden okur ve o gövdeler diske de yazılır.
 const ORDERS_SOFT_MS = 60_000;
 
 // EŞZAMANLI HESAP TEKİLLEŞTİRME: Panel, Siparişler, Raporlar ve order-watch aynı anda
@@ -327,13 +343,25 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     cargoProvider: string | null;
     /** Kısmi iade veya API satır sınırı nedeniyle hesaplanan kâr kesin değildir. */
     forceProfitPartial?: boolean;
+    /** Kalem/tutar bilgisi hiç alınamadı → ciro/kâr toplamlarına ve finans geçmişine girmez. */
+    dataIncomplete?: boolean;
   };
   const raws: Raw[] = [];
+  /** Yerel tamponu ana listeye aktar (spread yerine döngü: binlerce satırda argüman sınırı yok). */
+  const commitRaws = (rows: Raw[]) => {
+    for (const row of rows) raws.push(row);
+  };
 
   // Üç platformu PARALEL çek — toplam gecikme = en yavaş tek platform (sıralı toplam DEĞİL).
-  // Bloklar bağımsız: her biri kendi raws'ını push'lar + kendi durum değişkenini atar (yarış yok).
+  // Bloklar bağımsız: her biri kendi durum değişkenini atar (yarış yok).
+  //
+  // 🔴 YARIM ÇEKİM = SESSİZ YANLIŞ VERİ: satırlar eskiden döngünün İÇİNDE ortak listeye
+  // ekleniyordu. Ortada bir hata olursa platform kartı "alınamadı" derken özette o platformun
+  // EKSİK cirosu duruyor, kullanıcı da onu tam sanıyordu. Artık her platform önce kendi yerel
+  // tamponunu doldurur; yalnızca çekim SORUNSUZ bittiğinde tampon ortak listeye aktarılır.
   await Promise.all([
    (async () => {
+   const buffer: Raw[] = [];
    try {
     const client = new ShopifyClient(await getShopifyCredentials());
     // +1 gün: gün-başı historyCutoff'tan biraz daha geniş çek (superset); aşağıdaki
@@ -341,7 +369,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     const list = await client.listOrders({ sinceDays: HISTORY_SYNC_DAYS + 1, limit: 100 });
     for (const o of list) {
       const st = shopifyStatus(o.fulfillmentStatus, o.financialStatus, Boolean(o.cancelledAt));
-      raws.push({
+      buffer.push({
         platform: "shopify",
         id: o.id || `shopify-${o.name}`,
         orderNumber: o.name,
@@ -372,7 +400,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           (o.financialStatus || "").toUpperCase() === "PARTIALLY_REFUNDED",
       });
     }
-    shopify = { ok: true, count: list.length };
+    commitRaws(buffer);
+    shopify = { ok: true, count: buffer.length };
   } catch (e) {
     if (e instanceof ShopifyAdminTokenMissingError) {
       shopify = { ok: false, count: 0, needsAdminToken: true };
@@ -383,6 +412,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   }
    })(),
    (async () => {
+   const buffer: Raw[] = [];
    try {
     const client = new TrendyolClient(await getTrendyolCredentials());
     // Trendyol /orders (shipmentPackages): statü filtresi YOK → TÜM statüler (oluşturuldu/kargoda/
@@ -391,7 +421,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     // aralık limiti ≤2 hafta) tara + her pencerede sayfala. (Route ayrıca orderDate'e göre 30 güne kırpar.)
     const CHUNK = 14 * 86_400_000;
     const seenTy = new Set<string>();
-    let tyCount = 0;
     for (let chunkEnd = Date.now(); chunkEnd > historyCutoff; chunkEnd -= CHUNK) {
       const chunkStart = Math.max(historyCutoff, chunkEnd - CHUNK);
       for (let pageNo = 0; pageNo < 50; pageNo++) {
@@ -402,7 +431,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
           seenTy.add(key);
           const st = trendyolStatus(o.status);
-          raws.push({
+          buffer.push({
             platform: "trendyol",
             id: `ty-${o.id ?? o.orderNumber ?? key}`,
             orderNumber: String(o.orderNumber ?? o.id ?? "—"),
@@ -425,28 +454,40 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
             cargoProvider: o.cargoProviderName ?? null,
           });
-          tyCount++;
         }
         if (content.length < 100) break; // son sayfa
       }
     }
-    trendyol = { ok: true, count: tyCount };
+    // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
+    commitRaws(buffer);
+    trendyol = { ok: true, count: buffer.length };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Trendyol siparişleri alınamadı";
     trendyol = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
   }
    })(),
    (async () => {
+   const buffer: Raw[] = [];
    try {
     const client = new HepsiburadaClient(await getHepsiburadaCredentials());
     // HB siparişleri TEK uçta gelmez: /orders sadece "Open" (paketlenecek) verir; kargoda/teslim
     // siparişler /packages/.../{shipped|delivered|undelivered} ÖZETLERİNDE (tutar YOK) → detay ayrı çekilir.
     type HbAgg = { status: string; date: string | null; customer: string | null; lines: RawLine[] | null };
     const agg = new Map<string, HbAgg>();
+    /** Bu turda görülen (sipariş no ↔ paket no) çiftleri — eski paket-anahtarlı satırları temizlemek için. */
+    const hbPackageKeyPairs: { orderNo: string; packageNo: string }[] = [];
 
     // a) Open siparişler — /orders FLAT kalem listesi (orderNumber tekrar eder) → orderNumber'a göre grupla.
-    const openRes = await client.listOrders({ limit: 100 });
-    for (const li of hbArray(openRes, ["items", "orders", "data", "content", "result"]) as Record<string, any>[]) {
+    // Bu uç KALEM döndürür, sipariş değil: tek sayfa 100 kalemle sınırlıydı ve 100'den fazlası
+    // sessizce düşüyordu. Paket uçlarıyla AYNI sayfalama deseni (offset/limit, boş sayfada dur, üst sınır).
+    const openItems: Record<string, any>[] = [];
+    for (let off = 0; off < 3000; off += 100) {
+      const arr = hbArray(await client.listOrders({ offset: off, limit: 100 }), ["items", "orders", "data", "content", "result"]);
+      if (!arr.length) break;
+      openItems.push(...(arr as Record<string, any>[]));
+      if (arr.length < 100) break;
+    }
+    for (const li of openItems) {
       const on = hbStr(li.orderNumber, li.orderId, li.id);
       if (!on) continue;
       let e = agg.get(on);
@@ -474,14 +515,23 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     );
     for (const [idx, pkgs] of pkgResults.entries()) {
       const [statusCode, label] = pkgStatuses[idx];
-      // Statüsüz /packages ucu = paketlenecek/gönderime-hazır/kargoda (status "Open" vb.). Bu uç
-      // OrderNumber YERİNE packageNumber/id kullanır VE kalem+tutarı `items` içinde TAM verir →
-      // ayrı bir status'a göre değil, doğrudan tam sipariş olarak işlenir (detay fetch GEREKMEZ).
+      // Statüsüz /packages ucu = paketlenecek/gönderime-hazır (status "Open" vb.). Bu uç kalem +
+      // tutarı `items` içinde TAM verir → detay fetch GEREKMEZ, doğrudan tam sipariş işlenir.
+      //
+      // 🔴 ÇİFT SAYIM: burada anahtar olarak ÖNCE packageNumber alınıyordu, kargoya verilen
+      // siparişlerde ise OrderNumber. Aynı sipariş paketlenirken bir, kargoya verilince başka bir
+      // kimlikle kaydediliyor ve OrderFinanceSnapshot'ta İKİ satır oluşuyordu (ciro, kâr ve sipariş
+      // sayısı iki kez). Artık iki uçta da GERÇEK sipariş numarası kazanıyor; paket numarası yalnız
+      // sipariş numarası hiç gelmediğinde ve sadece iç kimlik olarak kullanılıyor.
       const isFullOrder = statusCode === "";
       for (const p of pkgs) {
         if (isFullOrder) {
-          const key = hbStr(p.packageNumber, p.id, p.OrderNumber, p.orderNumber);
+          const orderNo = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+          const packageNo = hbStr(p.packageNumber, p.id);
+          const key = orderNo || packageNo;
           if (!key || agg.has(key)) continue;
+          // Eski kayıtta paket numarasıyla yazılmış kalıntı satır varsa temizlenebilsin.
+          if (orderNo && packageNo && orderNo !== packageNo) hbPackageKeyPairs.push({ orderNo, packageNo });
           agg.set(key, {
             status: hbStr(p.status) || label,
             date: hbDate(p.orderDate, p.CreatedDate, p.PackageReadyDate),
@@ -501,9 +551,13 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       if (e.date && new Date(e.date).getTime() < historyCutoff) agg.delete(on);
     }
 
-    // c) Tutarı olmayan (özetten gelen) siparişlerin kalem/tutar detayını PARALEL çek (concurrency 8, cap 250).
-    const needDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on).slice(0, 250);
-    await mapLimit(needDetail, 8, async (on) => {
+    // c) Tutarı olmayan (özetten gelen) siparişlerin kalem/tutar detayını PARALEL çek (concurrency 8).
+    //    Üst sınır 250'ydi ve fazlası SESSİZCE kalemsiz kalıyordu → ₺0 ciroyla özete giriyordu.
+    //    Sınır yükseltildi; yine de dışarıda kalan ya da detayı alınamayan sipariş aşağıda
+    //    "bilgisi eksik" işaretlenir, özete girmez ve sayısı platform durumuna taşınır.
+    const HB_DETAIL_CAP = 1000;
+    const missingDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on);
+    await mapLimit(missingDetail.slice(0, HB_DETAIL_CAP), 8, async (on) => {
       try {
         const d = (await client.getOrderDetail(on)) as Record<string, any>;
         const e = agg.get(on);
@@ -514,14 +568,20 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         // sipariş tarihine göre. Paketten gelen tarih (ShippedDate/DeliveredDate) bununla ezilir.
         const od = hbDate(d.orderDate, d.createdDate);
         if (od) e.date = od;
-      } catch { /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır */ }
+      } catch { /* detay alınamadı → aşağıda "bilgisi eksik" işaretlenir */ }
     });
 
-    // d) Birleşik raws.
+    // d) Birleşik satırlar (henüz ortak listeye değil — çekim sorunsuz bitmeden aktarmıyoruz).
+    let hbIncomplete = 0;
     for (const [on, e] of agg) {
       const st = hbStatus(e.status);
       const lines = e.lines ?? [];
-      raws.push({
+      // Kalemi hiç gelmediyse tutar da yok: bu sipariş ₺0 gibi görünür ve ciroyu düşük,
+      // sipariş sayısını yüksek gösterir. İşaretlenir (listede kalır, özete/finans geçmişine girmez).
+      // Boş kalem listesi de aynı sonucu doğurur — gerçek bir siparişin sıfır kalemi olmaz.
+      const dataIncomplete = lines.length === 0;
+      if (dataIncomplete) hbIncomplete++;
+      buffer.push({
         platform: "hepsiburada",
         id: `hb-${on}`,
         orderNumber: on,
@@ -534,9 +594,29 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         lines,
         trackingNumber: null,
         cargoProvider: null,
+        dataIncomplete,
       });
     }
-    hepsiburada = { ok: true, count: agg.size };
+    // e) Anahtar değişiminden kalan kalıntı satırları temizle. Eskiden aynı sipariş paketlenirken
+    //    paket numarasıyla, kargoya verilince sipariş numarasıyla kaydediliyordu → finans geçmişinde
+    //    İKİ satır. Paket↔sipariş eşleşmesini SADECE gerçek veriden bildiğimiz için silme kesin:
+    //    tahmin yok, yalnız bu turda ikisini birden gördüğümüz siparişler temizlenir.
+    //    (Görünür pencerenin dışında kalan daha eski çiftler bu yolla eşleştirilemez.)
+    const staleIds = hbPackageKeyPairs.map((p) => `hb-${p.packageNo}`);
+    if (staleIds.length) {
+      for (let i = 0; i < staleIds.length; i += 200) {
+        await prisma.orderFinanceSnapshot
+          .deleteMany({
+            where: { platform: "hepsiburada", externalOrderId: { in: staleIds.slice(i, i + 200) } },
+          })
+          .catch(() => {
+            /* temizlik siparişleri getirmeyi ASLA bozmamalı */
+          });
+      }
+    }
+    // f) Çekim sorunsuz bitti → ancak şimdi ortak listeye aktar ve durumu yaz.
+    commitRaws(buffer);
+    hepsiburada = { ok: true, count: buffer.length, incompleteCount: hbIncomplete };
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı";
     hepsiburada = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
@@ -674,6 +754,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         packagingCost: resolved?.packagingCost ?? 0,
         packagingComponents: resolved?.packagingBreakdown?.components ?? null,
         filamentCost: resolved?.filamentCost ?? 0,
+        productionCostKnown: resolved?.productionCostKnown ?? false,
         categoryName: p.categoryName,
         desi: p.desi,
         commissionRate: p.commissionRate,
@@ -742,6 +823,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
               productionCost: m.productionCost, packagingCost: m.packagingCost,
               packagingComponents: m.packagingComponents,
               filamentCost: m.filamentCost,
+              productionCostKnown: m.productionCostKnown,
               listing: m.listingByPlatform[r.platform] ?? null,
             }
           : null,
@@ -780,8 +862,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         image,
         productId: m?.id ?? null,
         madeToOrder: m?.madeToOrder ?? false,
-        // Çekirdekteki "kâra girmez" koşulunun aynısı (order-profit.ts:130).
-        costMissing: !m || m.productionCost + m.packagingCost <= 0,
+        // Çekirdekteki "kâra girmez" koşulunun aynısı (order-profit.ts).
+        costMissing: !m || !m.productionCostKnown,
       };
     });
 
@@ -850,6 +932,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       orderRevenueAdjustment: pr.orderRevenueAdjustment,
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
+      dataIncomplete: r.dataIncomplete,
     });
   }
 
@@ -963,11 +1046,15 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     syncDays: number;
     error?: string;
   };
+  // Bilgisi eksik gelen sipariş finans geçmişine YAZILMAZ: ₺0 ciro/kâr olarak kaydedilirse
+  // sonraki aylarda düzeltilemeyen sahte bir satır kalır. Bir önceki turda doğru yazılmış
+  // kayıt varsa olduğu gibi korunur; bilgi tamamlandığında normal akışta güncellenir.
+  const persistableOrders = orders.filter((order) => !order.dataIncomplete);
   try {
-    await persistOrderFinanceSnapshots(orders);
+    await persistOrderFinanceSnapshots(persistableOrders);
     financeHistory = {
       ok: true,
-      syncedOrders: orders.filter(
+      syncedOrders: persistableOrders.filter(
         (order) => order.platform !== "manual" && Boolean(order.date)
       ).length,
       syncDays: HISTORY_SYNC_DAYS,
@@ -996,8 +1083,15 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const sHepsiburada = empty();
   const sManual = empty();
   const unsupportedCurrencies = new Map<string, number>();
+  let incompleteDataOrders = 0;
   for (const o of visibleOrders) {
     if (o.statusKind === "cancelled") continue;
+    // Kalem/tutar bilgisi alınamamış sipariş toplamlara ₺0 ekler ve ciroyu olduğundan düşük,
+    // sipariş sayısını olduğundan yüksek gösterir. Listede kalır, özet dışında tutulur.
+    if (o.dataIncomplete) {
+      incompleteDataOrders += 1;
+      continue;
+    }
     const currency = normalizedCurrency(o.currency);
     // Farklı para birimlerini kur dönüşümü olmadan TL toplamına eklemek yanlış sonuç üretir.
     // Sipariş listede kendi para birimiyle kalır; yalnızca 30 günlük TL özeti dışında tutulur.
@@ -1049,6 +1143,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     unsupportedCurrencies: [...unsupportedCurrencies.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([currency, orderCount]) => ({ currency, orderCount })),
+    incompleteDataOrders,
   };
 
   return {

@@ -17,6 +17,7 @@ const BASE: Omit<OrderProfitProduct, "id" | "name"> = {
   productionCost: 23.265,
   packagingCost: 10.65,
   filamentCost: 11.65,
+  productionCostKnown: true,
   listing: { platform: "trendyol", commissionRate: 0.21, commissionFixed: null, cargoCost: null },
 };
 const prod = (id: string, over: Partial<OrderProfitProduct> = {}): OrderProfitProduct =>

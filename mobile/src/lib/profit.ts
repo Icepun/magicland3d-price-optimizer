@@ -93,7 +93,7 @@ export function computeProductProfit(
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
   const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
-  const hasCost = (resolved?.totalCost ?? 0) > 0;
+  const hasCost = resolved?.productionCostKnown ?? false;
   const vatRate = Number(settings.vatRate ?? 0);
 
   const productRules = withProductCommissionRule(detail, rules.commission);

@@ -129,6 +129,13 @@ const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: s
 };
 const STATUS_ORDER: OrderStatusKind[] = ["pending", "processing", "shipped", "delivered", "cancelled"];
 
+/** Yenileme sırasında beklenen kaynaklar — kurulu olmayan pazaryeri gösterilmez. */
+const SOURCE_CHIPS = [
+  { key: "shopify", label: "Shopify" },
+  { key: "trendyol", label: "Trendyol" },
+  { key: "hepsiburada", label: "Hepsiburada" },
+] as const;
+
 // Formatter'ları MODÜL seviyesinde bir kez kur (her hücrede yeni Intl nesnesi pahalı → satır başına ×N).
 const _fmtTRY0 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const _fmtTRY2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -230,17 +237,16 @@ export default function OrdersPage() {
       ),
   });
 
-  const statusCounts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const o of orders) c[o.statusKind] = (c[o.statusKind] ?? 0) + 1;
-    return c;
-  }, [orders]);
-
-  const filtered = useMemo(() => {
+  /**
+   * Durum DIŞINDAKİ tüm filtreler uygulanmış ara liste.
+   * Durum çiplerindeki sayılar BUNDAN hesaplanır — eskiden ham `orders` üzerinden sayılıyordu,
+   * yani platform/arama/eksik filtresi açıkken çip "Bekleyen 7" derken tıklayınca 2 sipariş
+   * geliyordu. Sayı artık her zaman tıklandığında görülecek satır sayısı.
+   */
+  const beforeStatus = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
     return orders.filter((o) => {
       if (platform !== "all" && o.platform !== platform) return false;
-      if (status !== "all" && o.statusKind !== status) return false;
       // "Maliyeti eksik" filtresi — özet karttaki uyarıya tıklayınca açılır. Kâr hesaplanamayan
       // (null) VEYA bazı satırları kâra girmeyen (partial) siparişler; ikisi de özet kartındaki
       // incompleteOrders sayımıyla AYNI koşul (orders route: profit == null || profitPartial).
@@ -251,7 +257,18 @@ export default function OrdersPage() {
       }
       return true;
     });
-  }, [orders, platform, status, debouncedSearch, onlyIncomplete]);
+  }, [orders, platform, debouncedSearch, onlyIncomplete]);
+
+  const statusCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    for (const o of beforeStatus) c[o.statusKind] = (c[o.statusKind] ?? 0) + 1;
+    return c;
+  }, [beforeStatus]);
+
+  const filtered = useMemo(
+    () => (status === "all" ? beforeStatus : beforeStatus.filter((o) => o.statusKind === status)),
+    [beforeStatus, status]
+  );
 
   // ── Sayfalama ──────────────────────────────────────────────────────────────
   // Liste sanallaştırılmış olsa da satırlar açılıp kapandıkça yükseklikleri değişiyor ve
@@ -336,6 +353,45 @@ export default function OrdersPage() {
           </Button>
         </div>
       </div>
+
+      {/* Çekim sırasında ne olduğunu göster — "Yenile" üç pazaryerinden CANLI çekiyor ve
+          10-20 saniye sürebiliyor. Eskiden tek geri bildirim dönen ikondu; kullanıcı
+          hiçbir şey olmuyor sanıp tekrar basıyordu. Sunucu aşama bildirmediği için sahte
+          yüzde UYDURMUYORUZ — hangi kaynakların beklendiğini dürüstçe yazıyoruz. */}
+      {isFetching && (
+        <div className="animate-in fade-in slide-in-from-top-1 duration-300 overflow-hidden rounded-lg border border-border/60 bg-muted/25">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
+            <span className="flex items-center gap-2 text-xs font-medium">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+              </span>
+              Siparişler alınıyor
+            </span>
+            <span className="flex flex-wrap items-center gap-1.5">
+              {SOURCE_CHIPS.filter(
+                (c) => !data || !data[c.key] || !data[c.key]?.notConfigured
+              ).map((c, i) => (
+                <span
+                  key={c.key}
+                  className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-[11px] text-muted-foreground animate-in fade-in duration-300"
+                  style={{ animationDelay: `${i * 90}ms`, animationFillMode: "both" }}
+                >
+                  <PlatformLogo platform={c.key} className="h-2.5 w-2.5" />
+                  {c.label}
+                </span>
+              ))}
+            </span>
+          </div>
+          {/* İnce akan çizgi — süre bilinmiyor, ama iş sürüyor. */}
+          <div className="relative h-0.5 w-full overflow-hidden bg-border/40">
+            <div
+              className="absolute inset-y-0 w-1/3 bg-primary/70"
+              style={{ animation: "indeterminate-bar 1.25s ease-in-out infinite" }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* 30 günlük özet şeridi */}
       {summary && summary.total.orderCount > 0 && (

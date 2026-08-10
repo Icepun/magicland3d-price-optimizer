@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { batchWrite } from "@/lib/libsql-batch";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustCache } from "@/lib/route-cache";
 import { validateManualOrderCapturedFinance } from "@/lib/manual-orders";
+
+export const dynamic = "force-dynamic";
 
 const id = z.string().trim().min(1);
 const finite = z.number().finite();
@@ -374,657 +379,1072 @@ const ImportSchema = z.object({
   productModelFiles: z.array(ProductModelFileSchema).optional(),
 });
 
-class BackupReferenceError extends Error {}
+type ImportPayload = z.infer<typeof ImportSchema>;
+
 const CUSTOM_PRINT_PRODUCT_ID = "__custom__";
+/** Migration kilidi yedekten geri gelirse açılış migration'ını 3 dakika bloklar → asla yazma. */
+const SKIPPED_SETTING_KEYS = new Set(["schemaMigrationLock"]);
+/** Tek libSQL isteğine konacak ifade sayısı (batch içinde de 500'lük dilim var). */
+const CHUNK = 500;
+
+type Stmt = { sql: string; args: unknown[] };
+type Row = Record<string, unknown>;
+
+/** SQLite bağlaması: Prisma tarih alanlarını epoch-ms INTEGER, boolean'ları 0/1 tutar. */
+function toArg(value: unknown): unknown {
+  if (value === undefined || value === null) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return value;
+}
+
+/** Doğal anahtara göre ekle-veya-güncelle. Tekrar çalıştırılabilir (batch geri alınırsa sıralı yol aynı ifadeyi yeniden koşar). */
+function upsert(table: string, conflict: string[], insert: Row, update: Row): Stmt {
+  const insertCols = Object.keys(insert);
+  const updateCols = Object.keys(update);
+  const sql =
+    `INSERT INTO "${table}" (${insertCols.map((c) => `"${c}"`).join(", ")}) ` +
+    `VALUES (${insertCols.map(() => "?").join(", ")}) ` +
+    `ON CONFLICT(${conflict.map((c) => `"${c}"`).join(", ")}) DO ` +
+    (updateCols.length
+      ? `UPDATE SET ${updateCols.map((c) => `"${c}" = ?`).join(", ")}`
+      : "NOTHING");
+  return {
+    sql,
+    args: [
+      ...insertCols.map((c) => toArg(insert[c])),
+      ...updateCols.map((c) => toArg(update[c])),
+    ],
+  };
+}
+
+function updateById(table: string, keyColumn: string, keyValue: string, fields: Row): Stmt {
+  const cols = Object.keys(fields);
+  return {
+    sql: `UPDATE "${table}" SET ${cols.map((c) => `"${c}" = ?`).join(", ")} WHERE "${keyColumn}" = ?`,
+    args: [...cols.map((c) => toArg(fields[c])), keyValue],
+  };
+}
+
+/** Yalnız tanımlı alanları hedefe kopyala (yedekte olmayan alan mevcut değeri EZMESİN). */
+function putDefined(target: Row, source: Row, keys: string[]): Row {
+  for (const key of keys) {
+    if (source[key] !== undefined) target[key] = source[key];
+  }
+  return target;
+}
+
+interface ImportStats {
+  variantGroups: number;
+  products: number;
+  productCosts: number;
+  listings: number;
+  filamentTypes: number;
+  filamentSpools: number;
+  filamentUsages: number;
+  appSettings: number;
+  commissionRules: number;
+  cargoRules: number;
+  expenseRules: number;
+  actualExpenses: number;
+  orderFinanceSnapshots: number;
+  orderFinanceSnapshotsSkipped: number;
+  platformOrderFinancials: number;
+  manualOrders: number;
+  costTemplates: number;
+  priceHistory: number;
+  printerConfigs: number;
+  printFileProducts: number;
+  productModelFiles: number;
+  productModelFilesSkipped: number;
+  /** Karşılığı bulunamadığı için geri yüklenmeyen satır sayısı. */
+  skipped: number;
+}
+
+type StatKey = keyof ImportStats;
+type Job = { label: string; statKey: StatKey | null; stmts: Stmt[] };
+type Emit = (event: Record<string, unknown>) => void;
+
+/** Tek sütunluk kimlik listesini oku (tabloyu bellekte haritalamak için — satır başına sorgu YOK). */
+async function readRows<T extends Row>(sql: string): Promise<T[]> {
+  return (await prisma.$queryRawUnsafe<T[]>(sql)) ?? [];
+}
 
 /**
- * Daha önce export edilmiş JSON'u tek transaction içinde geri yükler.
- * Mevcut veri silinmez; doğal benzersiz anahtarlarla birleştirilir. Bir satır
- * doğrulanamaz veya yazılamazsa transaction tamamen geri alınır.
+ * Yedeği geri yükler. Tek dev transaction YOK: tablolar bağımlılık sırasına göre işlenir,
+ * yazımlar 500'lük gruplar hâlinde tek libSQL isteğine toplanır (uzak modda her ifade ~96ms
+ * ve tüm uygulama boyunca sıralı olduğundan satır-satır yazım dakikalar sürüp zaman aşımına
+ * düşüyordu). Referansı bulunamayan satır hata vermez; atlanır ve sayılır.
+ */
+async function runImport(data: ImportPayload, emit: Emit) {
+  const localModelFiles = (data.productModelFiles ?? []).filter((file) => !file.r2Key);
+  const legacyManualSnapshots = data.orderFinanceSnapshots.filter(
+    (snapshot) => snapshot.platform === "manual"
+  );
+  const warnings = [...new Set(data.metadata?.warnings ?? [])];
+  if (localModelFiles.length > 0) {
+    warnings.push(
+      `${localModelFiles.length} yerel model kaydı geri yüklenmedi: JSON yedeği fiziksel dosya baytlarını içermez.`
+    );
+  }
+  if (legacyManualSnapshots.length > 0) {
+    warnings.push(
+      `${legacyManualSnapshots.length} eski manuel finans kopyası geri yüklenmedi; manuel siparişin kendi hesap kaydı kullanıldı.`
+    );
+  }
+
+  const stats: ImportStats = {
+    variantGroups: 0,
+    products: 0,
+    productCosts: 0,
+    listings: 0,
+    filamentTypes: 0,
+    filamentSpools: 0,
+    filamentUsages: 0,
+    appSettings: 0,
+    commissionRules: 0,
+    cargoRules: 0,
+    expenseRules: 0,
+    actualExpenses: 0,
+    orderFinanceSnapshots: 0,
+    orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
+    platformOrderFinancials: 0,
+    manualOrders: 0,
+    costTemplates: 0,
+    priceHistory: 0,
+    printerConfigs: 0,
+    printFileProducts: 0,
+    productModelFiles: 0,
+    productModelFilesSkipped: localModelFiles.length,
+    skipped: 0,
+  };
+  /** Eski bağlantısı kurulamadığı için bağsız geri yüklenen satırlar. */
+  let droppedLinks = 0;
+  const stamp = new Date();
+
+  // ── Eşleme haritaları: gereken her anahtar TEK sorguyla okunur ────────────
+  const products = data.products ?? [];
+  const variantGroups = data.variantGroups ?? [];
+  const printerConfigs = data.printerConfigs ?? [];
+  const filamentSpools = data.filamentSpools ?? [];
+  const productCosts = data.productCosts ?? [];
+  const listings = data.listings ?? [];
+  const priceHistory = data.priceHistory ?? [];
+  const filamentUsages = data.filamentUsages ?? [];
+  const printFileProducts = data.printFileProducts ?? [];
+  const modelFiles = (data.productModelFiles ?? []).filter((file) => file.r2Key);
+  const needsProductMap =
+    products.length > 0 ||
+    productCosts.length > 0 ||
+    listings.length > 0 ||
+    priceHistory.length > 0 ||
+    filamentUsages.length > 0 ||
+    printFileProducts.length > 0 ||
+    modelFiles.length > 0;
+
+  const barcodeToProductId = new Map<string, string>();
+  const productIds = new Set<string>();
+  if (needsProductMap) {
+    for (const row of await readRows<{ id: string; barcode: string }>(
+      `SELECT id, barcode FROM Product`
+    )) {
+      barcodeToProductId.set(row.barcode, row.id);
+      productIds.add(row.id);
+    }
+  }
+  const printerIds = new Set<string>();
+  if (printerConfigs.length || printFileProducts.length || modelFiles.length) {
+    for (const row of await readRows<{ id: string }>(`SELECT id FROM PrinterConfig`)) {
+      printerIds.add(row.id);
+    }
+  }
+  const spoolIds = new Set<string>();
+  if (filamentSpools.length || filamentUsages.length) {
+    for (const row of await readRows<{ id: string }>(`SELECT id FROM FilamentSpool`)) {
+      spoolIds.add(row.id);
+    }
+  }
+  const variantGroupIds = new Set<string>();
+  if (variantGroups.length || products.length) {
+    for (const row of await readRows<{ id: string }>(`SELECT id FROM VariantGroup`)) {
+      variantGroupIds.add(row.id);
+    }
+  }
+
+  // Yedekteki satırlar da bu turda yazılacağı için haritalara şimdiden eklenir.
+  for (const group of variantGroups) variantGroupIds.add(group.id);
+  for (const printer of printerConfigs) printerIds.add(printer.id);
+  for (const spool of filamentSpools) spoolIds.add(spool.id);
+
+  /** Yedekteki ürün kimliğini hedef veritabanındaki kimliğe çevirir (yoksa null → satır atlanır). */
+  const productIdMap = new Map<string, string>();
+  const resolveProduct = (sourceId: string): string | null =>
+    productIdMap.get(sourceId) ?? (productIds.has(sourceId) ? sourceId : null);
+
+  // ── Bağımsız tablolar ─────────────────────────────────────────────────────
+  const jobs: Job[] = [];
+
+  jobs.push({
+    label: "Ayarlar",
+    statKey: "appSettings",
+    stmts: (data.appSettings ?? [])
+      .filter((setting) => !SKIPPED_SETTING_KEYS.has(setting.key))
+      .map((setting) =>
+        upsert(
+          "AppSetting",
+          ["key"],
+          { key: setting.key, value: setting.value },
+          { value: setting.value }
+        )
+      ),
+  });
+  stats.appSettings = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Maliyet ayarları",
+    statKey: "filamentTypes",
+    stmts: (data.filamentTypes ?? []).map((f) => {
+      const fields = { name: f.name, costPerGram: f.costPerGram, isActive: f.isActive ?? true };
+      return upsert("FilamentType", ["id"], { id: f.id, ...fields }, fields);
+    }),
+  });
+  stats.filamentTypes = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Maliyet ayarları",
+    statKey: "costTemplates",
+    stmts: (data.costTemplates ?? []).map((template) => {
+      const fields = {
+        name: template.name,
+        materialCostPerGram: template.materialCostPerGram ?? 0,
+        electricityCostPerHour: template.electricityCostPerHour ?? 0,
+        machineWearCostPerHour: template.machineWearCostPerHour ?? 0,
+        defaultPackagingCost: template.defaultPackagingCost ?? 0,
+        defaultLaborCost: template.defaultLaborCost ?? 0,
+        defaultOtherCost: template.defaultOtherCost ?? 0,
+        defaultWasteRate: template.defaultWasteRate ?? 0,
+        isActive: template.isActive ?? true,
+      };
+      return upsert("CostTemplate", ["id"], { id: template.id, ...fields }, fields);
+    }),
+  });
+  stats.costTemplates = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Kurallar",
+    statKey: "commissionRules",
+    stmts: (data.commissionRules ?? []).map((rule) => {
+      const fields = {
+        name: rule.name,
+        categoryName: rule.categoryName ?? null,
+        minPrice: rule.minPrice ?? 0,
+        maxPrice: rule.maxPrice ?? 999_999,
+        commissionRate: rule.commissionRate,
+        fixedCommission: rule.fixedCommission ?? 0,
+        validFrom: rule.validFrom ?? null,
+        validTo: rule.validTo ?? null,
+        priority: rule.priority ?? 10,
+        isActive: rule.isActive ?? true,
+      };
+      return upsert("CommissionRule", ["id"], { id: rule.id, ...fields }, fields);
+    }),
+  });
+  stats.commissionRules = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Kurallar",
+    statKey: "cargoRules",
+    stmts: (data.cargoRules ?? []).map((rule) => {
+      const fields = {
+        name: rule.name,
+        platform: rule.platform ?? null,
+        cargoProvider: rule.cargoProvider ?? null,
+        categoryName: rule.categoryName ?? null,
+        minPrice: rule.minPrice ?? 0,
+        maxPrice: rule.maxPrice ?? 999_999,
+        minDesi: rule.minDesi ?? 0,
+        maxDesi: rule.maxDesi ?? 999,
+        cargoCost: rule.cargoCost,
+        vatIncluded:
+          rule.vatIncluded ??
+          !(
+            rule.cargoProvider?.toUpperCase().includes("TEX") ||
+            rule.name.toUpperCase().includes("TEX")
+          ),
+        validFrom: rule.validFrom ?? null,
+        validTo: rule.validTo ?? null,
+        priority: rule.priority ?? 10,
+        isActive: rule.isActive ?? true,
+      };
+      return upsert("CargoRule", ["id"], { id: rule.id, ...fields }, fields);
+    }),
+  });
+  stats.cargoRules = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Kurallar",
+    statKey: "expenseRules",
+    stmts: (data.expenseRules ?? []).map((rule) => {
+      const fields = {
+        name: rule.name,
+        platform: rule.platform ?? null,
+        type: rule.type,
+        value: rule.value,
+        categoryName: rule.categoryName ?? null,
+        minPrice: rule.minPrice ?? 0,
+        maxPrice: rule.maxPrice ?? 999_999,
+        priority: rule.priority ?? 10,
+        isActive: rule.isActive ?? true,
+      };
+      return upsert("ExpenseRule", ["id"], { id: rule.id, ...fields }, fields);
+    }),
+  });
+  stats.expenseRules = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Giderler",
+    statKey: "actualExpenses",
+    stmts: data.actualExpenses.map((expense) => {
+      const fields: Row = {
+        name: expense.name,
+        category: expense.category ?? null,
+        amountKurus: expense.amountKurus,
+        paidAt: expense.paidAt,
+        note: expense.note ?? null,
+      };
+      const update = putDefined({ ...fields }, expense, ["createdAt"]);
+      update.updatedAt = expense.updatedAt ?? stamp;
+      return upsert(
+        "ActualExpense",
+        ["id"],
+        {
+          id: expense.id,
+          ...fields,
+          createdAt: expense.createdAt ?? stamp,
+          updatedAt: expense.updatedAt ?? stamp,
+        },
+        update
+      );
+    }),
+  });
+  stats.actualExpenses = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Yazıcılar",
+    statKey: "printerConfigs",
+    stmts: printerConfigs.map((printer) => {
+      const fields: Row = {
+        name: printer.name,
+        brand: printer.brand,
+        model: printer.model ?? null,
+        type: printer.type ?? "moonraker",
+        host: printer.host,
+        port: printer.port ?? 7125,
+        accent: printer.accent ?? null,
+        accessCode: printer.accessCode ?? null,
+        serial: printer.serial ?? null,
+        enabled: printer.enabled ?? true,
+        sortOrder: printer.sortOrder ?? 0,
+      };
+      const update = putDefined({ ...fields }, printer, ["createdAt"]);
+      update.updatedAt = printer.updatedAt ?? stamp;
+      return upsert(
+        "PrinterConfig",
+        ["id"],
+        {
+          id: printer.id,
+          ...fields,
+          createdAt: printer.createdAt ?? stamp,
+          updatedAt: printer.updatedAt ?? stamp,
+        },
+        update
+      );
+    }),
+  });
+  stats.printerConfigs = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Filament makaraları",
+    statKey: "filamentSpools",
+    stmts: filamentSpools.map((spool) => {
+      const fields: Row = {
+        name: spool.name,
+        material: spool.material ?? "PLA",
+        colorName: spool.colorName ?? null,
+        colorHex: spool.colorHex ?? "#9ca3af",
+        brand: spool.brand ?? null,
+        totalGrams: spool.totalGrams ?? 1000,
+        remainingGrams: spool.remainingGrams ?? 1000,
+        spoolCost: spool.spoolCost ?? null,
+        reorderGrams: spool.reorderGrams ?? 200,
+        vendorUrl: spool.vendorUrl ?? null,
+        isActive: spool.isActive ?? true,
+      };
+      const update = putDefined({ ...fields }, spool, ["createdAt"]);
+      update.updatedAt = spool.updatedAt ?? stamp;
+      return upsert(
+        "FilamentSpool",
+        ["id"],
+        {
+          id: spool.id,
+          ...fields,
+          createdAt: spool.createdAt ?? stamp,
+          updatedAt: spool.updatedAt ?? stamp,
+        },
+        update
+      );
+    }),
+  });
+  stats.filamentSpools = jobs[jobs.length - 1].stmts.length;
+
+  // ── Siparişler (ürüne bağlı değil) ────────────────────────────────────────
+  const snapshots = data.orderFinanceSnapshots.filter(
+    (snapshot) => snapshot.platform !== "manual"
+  );
+  const snapshotIdByKey = new Map<string, string>();
+  if (snapshots.length) {
+    for (const row of await readRows<{ id: string; platform: string; externalOrderId: string }>(
+      `SELECT id, platform, externalOrderId FROM OrderFinanceSnapshot`
+    )) {
+      snapshotIdByKey.set(`${row.platform}\u0000${row.externalOrderId}`, row.id);
+    }
+  }
+  jobs.push({
+    label: "Siparişler",
+    statKey: "orderFinanceSnapshots",
+    stmts: snapshots.map((snapshot) => {
+      const fields: Row = {
+        orderNumber: snapshot.orderNumber,
+        orderedAt: snapshot.orderedAt,
+        revenueKurus: snapshot.revenueKurus,
+        profitKurus: snapshot.profitKurus ?? null,
+        profitPartial: snapshot.profitPartial ?? false,
+        statusKind: snapshot.statusKind,
+        currency: snapshot.currency ?? "TRY",
+        syncedAt: snapshot.syncedAt ?? stamp,
+        calculationVersion: snapshot.calculationVersion ?? 1,
+        profitSource: snapshot.profitSource ?? "calculated",
+        estimatedCommissionKurus: snapshot.estimatedCommissionKurus ?? null,
+        actualCommissionKurus: snapshot.actualCommissionKurus ?? null,
+      };
+      const existingId = snapshotIdByKey.get(
+        `${snapshot.platform}\u0000${snapshot.externalOrderId}`
+      );
+      if (existingId) return updateById("OrderFinanceSnapshot", "id", existingId, fields);
+      return upsert(
+        "OrderFinanceSnapshot",
+        ["platform", "externalOrderId"],
+        {
+          id: snapshot.id,
+          platform: snapshot.platform,
+          externalOrderId: snapshot.externalOrderId,
+          ...fields,
+        },
+        fields
+      );
+    }),
+  });
+  stats.orderFinanceSnapshots = jobs[jobs.length - 1].stmts.length;
+
+  const financialIdByKey = new Map<string, string>();
+  if (data.platformOrderFinancials.length) {
+    for (const row of await readRows<{ id: string; platform: string; externalOrderId: string }>(
+      `SELECT id, platform, externalOrderId FROM PlatformOrderFinancial`
+    )) {
+      financialIdByKey.set(`${row.platform}\u0000${row.externalOrderId}`, row.id);
+    }
+  }
+  jobs.push({
+    label: "Siparişler",
+    statKey: "platformOrderFinancials",
+    stmts: data.platformOrderFinancials.map((financial) => {
+      const fields: Row = {
+        orderNumber: financial.orderNumber,
+        grossRevenueKurus: financial.grossRevenueKurus,
+        commissionKurus: financial.commissionKurus,
+        sellerRevenueKurus: financial.sellerRevenueKurus,
+        transactionCount: financial.transactionCount ?? 0,
+        sourceUpdatedAt: financial.sourceUpdatedAt ?? null,
+        syncedAt: financial.syncedAt ?? stamp,
+      };
+      const existingId = financialIdByKey.get(
+        `${financial.platform}\u0000${financial.externalOrderId}`
+      );
+      if (existingId) return updateById("PlatformOrderFinancial", "id", existingId, fields);
+      return upsert(
+        "PlatformOrderFinancial",
+        ["platform", "externalOrderId"],
+        {
+          id: financial.id,
+          platform: financial.platform,
+          externalOrderId: financial.externalOrderId,
+          ...fields,
+        },
+        fields
+      );
+    }),
+  });
+  stats.platformOrderFinancials = jobs[jobs.length - 1].stmts.length;
+
+  const manualOrderIds = new Set<string>();
+  const manualOrderIdByNumber = new Map<string, string>();
+  if (data.manualOrders.length) {
+    for (const row of await readRows<{ id: string; orderNumber: string }>(
+      `SELECT id, orderNumber FROM ManualOrder`
+    )) {
+      manualOrderIds.add(row.id);
+      manualOrderIdByNumber.set(row.orderNumber, row.id);
+    }
+  }
+  jobs.push({
+    label: "Siparişler",
+    statKey: "manualOrders",
+    stmts: data.manualOrders.map((order) => {
+      const fields: Row = {
+        orderNumber: order.orderNumber,
+        mode: order.mode,
+        orderedAt: order.orderedAt,
+        statusKind: order.statusKind,
+        customerName: order.customerName ?? null,
+        currency: order.currency,
+        revenueKurus: order.revenueKurus,
+        netRevenueKurus: order.netRevenueKurus,
+        totalCostKurus: order.totalCostKurus,
+        inputVatCreditKurus: order.inputVatCreditKurus,
+        profitKurus: order.profitKurus,
+        profitPartial: order.profitPartial,
+        itemsJson: order.itemsJson,
+        breakdownJson: order.breakdownJson,
+        calculationVersion: order.calculationVersion,
+        note: order.note ?? null,
+      };
+      const update = putDefined({ ...fields }, order, ["createdAt"]);
+      update.updatedAt = order.updatedAt ?? stamp;
+      const existingId = manualOrderIds.has(order.id)
+        ? order.id
+        : manualOrderIdByNumber.get(order.orderNumber);
+      if (existingId) return updateById("ManualOrder", "id", existingId, update);
+      manualOrderIds.add(order.id);
+      manualOrderIdByNumber.set(order.orderNumber, order.id);
+      return upsert(
+        "ManualOrder",
+        ["orderNumber"],
+        {
+          id: order.id,
+          ...fields,
+          createdAt: order.createdAt ?? stamp,
+          updatedAt: order.updatedAt ?? stamp,
+        },
+        update
+      );
+    }),
+  });
+  stats.manualOrders = jobs[jobs.length - 1].stmts.length;
+
+  // ── Varyant grupları → Ürünler ────────────────────────────────────────────
+  jobs.push({
+    label: "Varyant grupları",
+    statKey: "variantGroups",
+    stmts: variantGroups.map((group) => {
+      const fields: Row = { name: group.name, shareModels: group.shareModels ?? false };
+      const update = putDefined({ ...fields }, group, ["createdAt"]);
+      update.updatedAt = group.updatedAt ?? stamp;
+      return upsert(
+        "VariantGroup",
+        ["id"],
+        {
+          id: group.id,
+          ...fields,
+          createdAt: group.createdAt ?? stamp,
+          updatedAt: group.updatedAt ?? stamp,
+        },
+        update
+      );
+    }),
+  });
+  stats.variantGroups = jobs[jobs.length - 1].stmts.length;
+
+  const productStmts: Stmt[] = [];
+  for (const product of products) {
+    // Grubu bulunmayan ürün ARTIK hata değil: ürün korunur, yalnız grup bağı boş kalır.
+    let variantGroupId = product.variantGroupId ?? null;
+    if (variantGroupId && !variantGroupIds.has(variantGroupId)) {
+      variantGroupId = null;
+      droppedLinks++;
+    }
+
+    const common: Row = {
+      sku: product.sku ?? product.barcode,
+      name: product.name ?? product.barcode,
+      categoryName: product.categoryName ?? "Imported",
+      currentSalePrice: product.currentSalePrice,
+    };
+    const update = putDefined({ ...common }, product, [
+      "alias",
+      "listPrice",
+      "stock",
+      "desi",
+      "weight",
+      "imageUrl",
+      "imageManual",
+      "isActive",
+      "hidden",
+      "madeToOrder",
+      "source",
+      "trendyolId",
+      "productMainId",
+      "variantLabel",
+      "commissionRate",
+      "commissionSource",
+      "commissionUpdatedAt",
+    ]);
+    if (product.variantGroupId !== undefined) update.variantGroupId = variantGroupId;
+    update.updatedAt = product.updatedAt ?? stamp;
+
+    const existingId = barcodeToProductId.get(product.barcode);
+    if (existingId) {
+      productIdMap.set(product.id, existingId);
+      productStmts.push(updateById("Product", "id", existingId, update));
+      continue;
+    }
+    // Kimlik başka bir barkodda kullanılıyorsa yeni kimlik üret (ürün kaybolmasın).
+    const newId = productIds.has(product.id) ? `imp_${randomUUID()}` : product.id;
+    productStmts.push(
+      upsert(
+        "Product",
+        ["barcode"],
+        {
+          id: newId,
+          barcode: product.barcode,
+          sku: product.sku ?? product.barcode,
+          name: product.name ?? product.barcode,
+          alias: product.alias ?? null,
+          categoryName: product.categoryName ?? "Imported",
+          currentSalePrice: product.currentSalePrice,
+          listPrice: product.listPrice ?? null,
+          stock: product.stock ?? 0,
+          desi: product.desi ?? null,
+          weight: product.weight ?? null,
+          imageUrl: product.imageUrl ?? null,
+          imageManual: product.imageManual ?? false,
+          isActive: product.isActive ?? true,
+          hidden: product.hidden ?? false,
+          madeToOrder: product.madeToOrder ?? false,
+          source: product.source ?? "imported",
+          trendyolId: product.trendyolId ?? null,
+          productMainId: product.productMainId ?? null,
+          variantGroupId,
+          variantLabel: product.variantLabel ?? null,
+          commissionRate: product.commissionRate ?? null,
+          commissionSource: product.commissionSource ?? null,
+          commissionUpdatedAt: product.commissionUpdatedAt ?? null,
+          createdAt: product.createdAt ?? stamp,
+          updatedAt: product.updatedAt ?? stamp,
+        },
+        update
+      )
+    );
+    productIdMap.set(product.id, newId);
+    productIds.add(newId);
+    barcodeToProductId.set(product.barcode, newId);
+  }
+  jobs.push({ label: "Ürünler", statKey: "products", stmts: productStmts });
+  stats.products = productStmts.length;
+
+  // ── Ürüne bağlı tablolar ──────────────────────────────────────────────────
+  const costIdByProduct = new Map<string, string>();
+  if (productCosts.length) {
+    for (const row of await readRows<{ id: string; productId: string }>(
+      `SELECT id, productId FROM ProductCost`
+    )) {
+      costIdByProduct.set(row.productId, row.id);
+    }
+  }
+  const costStmts: Stmt[] = [];
+  for (const cost of productCosts) {
+    const productId = resolveProduct(cost.productId);
+    if (!productId) {
+      stats.skipped++;
+      continue;
+    }
+    const fields: Row = {
+      costMode: cost.costMode ?? "manual",
+      templateId: cost.templateId ?? null,
+      filamentTypeId: cost.filamentTypeId ?? null,
+      filamentWeight: cost.filamentWeight ?? null,
+      printTimeHours: cost.printTimeHours ?? null,
+      wasteRate: cost.wasteRate ?? null,
+      packagingPoset: cost.packagingPoset ?? null,
+      packagingNaylon: cost.packagingNaylon ?? null,
+      packagingBant: cost.packagingBant ?? null,
+      packagingKart: cost.packagingKart ?? null,
+      packagingOptionId: cost.packagingOptionId ?? null,
+      nylonLevel: cost.nylonLevel ?? null,
+      tapeUsed: cost.tapeUsed ?? null,
+      manualCost: cost.manualCost ?? null,
+      materialWeight: cost.materialWeight ?? null,
+      materialCost: cost.materialCost ?? null,
+      electricityCost: cost.electricityCost ?? null,
+      machineWearCost: cost.machineWearCost ?? null,
+      laborCost: cost.laborCost ?? null,
+      packagingCost: cost.packagingCost ?? null,
+      otherCost: cost.otherCost ?? null,
+      totalCost: cost.totalCost ?? null,
+      updatedAt: cost.updatedAt ?? stamp,
+    };
+    const existingId = costIdByProduct.get(productId);
+    if (existingId) {
+      costStmts.push(updateById("ProductCost", "id", existingId, fields));
+    } else {
+      costIdByProduct.set(productId, cost.id);
+      costStmts.push(
+        upsert("ProductCost", ["productId"], { id: cost.id, productId, ...fields }, fields)
+      );
+    }
+  }
+  jobs.push({ label: "Maliyetler", statKey: "productCosts", stmts: costStmts });
+  stats.productCosts = costStmts.length;
+
+  const listingIdByKey = new Map<string, string>();
+  if (listings.length) {
+    for (const row of await readRows<{ id: string; productId: string; platform: string }>(
+      `SELECT id, productId, platform FROM Listing`
+    )) {
+      listingIdByKey.set(`${row.productId}\u0000${row.platform}`, row.id);
+    }
+  }
+  const listingStmts: Stmt[] = [];
+  for (const listing of listings) {
+    const productId = resolveProduct(listing.productId);
+    if (!productId) {
+      stats.skipped++;
+      continue;
+    }
+    const fields: Row = {
+      externalId: listing.externalId ?? null,
+      externalSku: listing.externalSku ?? null,
+      barcode: listing.barcode ?? null,
+      salePrice: listing.salePrice,
+      listPrice: listing.listPrice ?? null,
+      stock: listing.stock ?? 0,
+      commissionRate: listing.commissionRate ?? null,
+      commissionFixed: listing.commissionFixed ?? null,
+      cargoCost: listing.cargoCost ?? null,
+      isActive: listing.isActive ?? true,
+      lastSyncedAt: listing.lastSyncedAt ?? null,
+    };
+    const update = putDefined({ ...fields }, listing, ["createdAt"]);
+    update.updatedAt = listing.updatedAt ?? stamp;
+    const key = `${productId}\u0000${listing.platform}`;
+    const existingId = listingIdByKey.get(key);
+    if (existingId) {
+      listingStmts.push(updateById("Listing", "id", existingId, update));
+    } else {
+      listingIdByKey.set(key, listing.id);
+      listingStmts.push(
+        upsert(
+          "Listing",
+          ["productId", "platform"],
+          {
+            id: listing.id,
+            productId,
+            platform: listing.platform,
+            ...fields,
+            createdAt: listing.createdAt ?? stamp,
+            updatedAt: listing.updatedAt ?? stamp,
+          },
+          update
+        )
+      );
+    }
+  }
+  jobs.push({ label: "Platform kayıtları", statKey: "listings", stmts: listingStmts });
+  stats.listings = listingStmts.length;
+
+  const historyStmts: Stmt[] = [];
+  for (const history of priceHistory) {
+    const productId = resolveProduct(history.productId);
+    if (!productId) {
+      stats.skipped++;
+      continue;
+    }
+    const fields: Row = {
+      productId,
+      oldPrice: history.oldPrice,
+      newPrice: history.newPrice,
+      changeSource: history.changeSource,
+      changedAt: history.changedAt,
+      note: history.note ?? null,
+    };
+    historyStmts.push(upsert("PriceHistory", ["id"], { id: history.id, ...fields }, fields));
+  }
+  jobs.push({ label: "Fiyat geçmişi", statKey: "priceHistory", stmts: historyStmts });
+  stats.priceHistory = historyStmts.length;
+
+  const modelStmts: Stmt[] = [];
+  for (const file of modelFiles) {
+    if (!printerIds.has(file.printerConfigId)) {
+      stats.skipped++;
+      continue;
+    }
+    // Özel baskılar gerçek bir ürüne bağlı değildir; uygulama genelinde bu sentinel ile saklanır.
+    const productId =
+      file.productId === CUSTOM_PRINT_PRODUCT_ID
+        ? CUSTOM_PRINT_PRODUCT_ID
+        : resolveProduct(file.productId);
+    if (!productId) {
+      stats.skipped++;
+      continue;
+    }
+    const fields: Row = {
+      productId,
+      printerConfigId: file.printerConfigId,
+      label: file.label ?? null,
+      originalName: file.originalName,
+      storedPath: "",
+      r2Key: file.r2Key ?? null,
+      fileType: file.fileType,
+      sizeBytes: file.sizeBytes ?? 0,
+      gramaj: file.gramaj ?? null,
+      estPrintMin: file.estPrintMin ?? null,
+      colorsJson: file.colorsJson ?? null,
+      sliced: file.sliced ?? null,
+      plateJson: file.plateJson ?? null,
+      thumbnail: file.thumbnail ?? null,
+      contentMd5: file.contentMd5 ?? null,
+      sortOrder: file.sortOrder ?? 0,
+    };
+    const update = putDefined({ ...fields }, file, ["createdAt"]);
+    update.updatedAt = file.updatedAt ?? stamp;
+    modelStmts.push(
+      upsert(
+        "ProductModelFile",
+        ["id"],
+        {
+          id: file.id,
+          ...fields,
+          createdAt: file.createdAt ?? stamp,
+          updatedAt: file.updatedAt ?? stamp,
+        },
+        update
+      )
+    );
+  }
+  jobs.push({ label: "Baskı dosyaları", statKey: "productModelFiles", stmts: modelStmts });
+  stats.productModelFiles = modelStmts.length;
+
+  const mappingIdByKey = new Map<string, string>();
+  if (printFileProducts.length) {
+    for (const row of await readRows<{ id: string; printerConfigId: string; filename: string }>(
+      `SELECT id, printerConfigId, filename FROM PrintFileProduct`
+    )) {
+      mappingIdByKey.set(`${row.printerConfigId}\u0000${row.filename}`, row.id);
+    }
+  }
+  const mappingStmts: Stmt[] = [];
+  for (const mapping of printFileProducts) {
+    const productId = resolveProduct(mapping.productId);
+    if (!productId || !printerIds.has(mapping.printerConfigId)) {
+      stats.skipped++;
+      continue;
+    }
+    const fields: Row = { productId };
+    const update = putDefined({ ...fields }, mapping, ["createdAt"]);
+    update.updatedAt = mapping.updatedAt ?? stamp;
+    const key = `${mapping.printerConfigId}\u0000${mapping.filename}`;
+    const existingId = mappingIdByKey.get(key);
+    if (existingId) {
+      mappingStmts.push(updateById("PrintFileProduct", "id", existingId, update));
+    } else {
+      mappingIdByKey.set(key, mapping.id);
+      mappingStmts.push(
+        upsert(
+          "PrintFileProduct",
+          ["printerConfigId", "filename"],
+          {
+            id: mapping.id,
+            printerConfigId: mapping.printerConfigId,
+            filename: mapping.filename,
+            ...fields,
+            createdAt: mapping.createdAt ?? stamp,
+            updatedAt: mapping.updatedAt ?? stamp,
+          },
+          update
+        )
+      );
+    }
+  }
+  jobs.push({ label: "Baskı dosyaları", statKey: "printFileProducts", stmts: mappingStmts });
+  stats.printFileProducts = mappingStmts.length;
+
+  const usageStmts: Stmt[] = [];
+  for (const usage of filamentUsages) {
+    if (!spoolIds.has(usage.spoolId)) {
+      stats.skipped++;
+      continue;
+    }
+    let productId: string | null = null;
+    if (usage.productId) {
+      productId = resolveProduct(usage.productId);
+      // Ürün silinmişse kullanım kaydı yine korunur (gram düşümü geçmişi kaybolmasın).
+      if (!productId) droppedLinks++;
+    }
+    const fields: Row = {
+      spoolId: usage.spoolId,
+      productId,
+      productName: usage.productName ?? null,
+      grams: usage.grams,
+      note: usage.note ?? null,
+    };
+    const update = putDefined({ ...fields }, usage, ["createdAt"]);
+    usageStmts.push(
+      upsert(
+        "FilamentUsage",
+        ["id"],
+        { id: usage.id, ...fields, createdAt: usage.createdAt ?? stamp },
+        update
+      )
+    );
+  }
+  jobs.push({ label: "Filament kullanımları", statKey: "filamentUsages", stmts: usageStmts });
+  stats.filamentUsages = usageStmts.length;
+
+  // ── Yazım: 500'lük gruplar, tek istek; başarısızsa satır satır güvenli yol ─
+  const total = jobs.reduce((sum, job) => sum + job.stmts.length, 0);
+  let done = 0;
+  const report = (label: string) =>
+    emit({
+      stage: "step",
+      label,
+      done,
+      total,
+      pct: total === 0 ? 100 : Math.min(100, Math.round((done / total) * 100)),
+    });
+
+  report("Hazırlanıyor");
+  for (const job of jobs) {
+    if (job.stmts.length === 0) continue;
+    report(job.label);
+    for (let offset = 0; offset < job.stmts.length; offset += CHUNK) {
+      const chunk = job.stmts.slice(offset, offset + CHUNK);
+      if (!(await batchWrite(chunk))) {
+        // Toplu yazım bu modda kapalı (yerel/replica) veya grup geri alındı → satır satır.
+        for (const statement of chunk) {
+          try {
+            await prisma.$executeRawUnsafe(statement.sql, ...(statement.args as never[]));
+          } catch {
+            // Tek bir bozuk satır tüm geri yüklemeyi çökertmesin.
+            stats.skipped++;
+            if (job.statKey) stats[job.statKey]--;
+          }
+        }
+      }
+      done += chunk.length;
+      report(job.label);
+    }
+  }
+
+  if (stats.skipped > 0) {
+    warnings.push(
+      `${stats.skipped} kayıt atlandı: bağlı olduğu ürün, yazıcı veya makara artık yok.`
+    );
+  }
+  if (droppedLinks > 0) {
+    warnings.push(`${droppedLinks} kayıt eski bağlantısı olmadan geri yüklendi.`);
+  }
+
+  // Yedekten geri yükleme HER TABLOYU değiştirir → tüm önbellek katmanları (bellek + disk) gitsin.
+  bustCache();
+  invalidateOrdersCache();
+
+  return {
+    ok: warnings.length === 0,
+    complete: warnings.length === 0,
+    stats,
+    warnings,
+  };
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof z.ZodError) {
+    return `Yedek biçimi geçersiz: ${error.issues
+      .slice(0, 5)
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ")}`;
+  }
+  return error instanceof Error ? error.message : "Import başarısız";
+}
+
+/**
+ * Yedeği geri yükler.
+ *  - Normal çağrı → tek JSON yanıt (eski davranış birebir korunur).
+ *  - `?stream=1` veya `Accept: application/x-ndjson` → NDJSON ilerleme akışı:
+ *      {stage:"step",label,done,total,pct} · {stage:"done",stats,warnings} · {stage:"error",message}
  */
 export async function POST(req: NextRequest) {
+  let data: ImportPayload;
   try {
     await ensureRuntimeSchema();
-    const data = ImportSchema.parse(await req.json());
-    const localModelFiles = (data.productModelFiles ?? []).filter((file) => !file.r2Key);
-    const legacyManualSnapshots = data.orderFinanceSnapshots.filter(
-      (snapshot) => snapshot.platform === "manual"
-    );
-    const warnings = [...new Set(data.metadata?.warnings ?? [])];
-    if (localModelFiles.length > 0) {
-      warnings.push(
-        `${localModelFiles.length} yerel model kaydı geri yüklenmedi: JSON yedeği fiziksel dosya baytlarını içermez.`
-      );
-    }
-    if (legacyManualSnapshots.length > 0) {
-      warnings.push(
-        `${legacyManualSnapshots.length} eski manuel finans kopyası geri yüklenmedi; manuel siparişin kendi hesap kaydı kullanıldı.`
-      );
-    }
-
-    const stats = await prisma.$transaction(
-      async (tx) => {
-        const result = {
-          variantGroups: 0,
-          products: 0,
-          productCosts: 0,
-          listings: 0,
-          filamentTypes: 0,
-          filamentSpools: 0,
-          filamentUsages: 0,
-          appSettings: 0,
-          commissionRules: 0,
-          cargoRules: 0,
-          expenseRules: 0,
-          actualExpenses: 0,
-          orderFinanceSnapshots: 0,
-          orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
-          platformOrderFinancials: 0,
-          manualOrders: 0,
-          costTemplates: 0,
-          priceHistory: 0,
-          printerConfigs: 0,
-          printFileProducts: 0,
-          productModelFiles: 0,
-          productModelFilesSkipped: localModelFiles.length,
-        };
-        const productIdMap = new Map<string, string>();
-
-        for (const f of data.filamentTypes ?? []) {
-          const fields = { name: f.name, costPerGram: f.costPerGram, isActive: f.isActive ?? true };
-          await tx.filamentType.upsert({
-            where: { id: f.id },
-            create: { id: f.id, ...fields },
-            update: fields,
-          });
-          result.filamentTypes++;
-        }
-
-        for (const template of data.costTemplates ?? []) {
-          const fields = {
-            name: template.name,
-            materialCostPerGram: template.materialCostPerGram ?? 0,
-            electricityCostPerHour: template.electricityCostPerHour ?? 0,
-            machineWearCostPerHour: template.machineWearCostPerHour ?? 0,
-            defaultPackagingCost: template.defaultPackagingCost ?? 0,
-            defaultLaborCost: template.defaultLaborCost ?? 0,
-            defaultOtherCost: template.defaultOtherCost ?? 0,
-            defaultWasteRate: template.defaultWasteRate ?? 0,
-            isActive: template.isActive ?? true,
-          };
-          await tx.costTemplate.upsert({
-            where: { id: template.id },
-            create: { id: template.id, ...fields },
-            update: fields,
-          });
-          result.costTemplates++;
-        }
-
-        for (const rule of data.commissionRules ?? []) {
-          const fields = {
-            name: rule.name,
-            categoryName: rule.categoryName ?? null,
-            minPrice: rule.minPrice ?? 0,
-            maxPrice: rule.maxPrice ?? 999_999,
-            commissionRate: rule.commissionRate,
-            fixedCommission: rule.fixedCommission ?? 0,
-            validFrom: rule.validFrom ?? null,
-            validTo: rule.validTo ?? null,
-            priority: rule.priority ?? 10,
-            isActive: rule.isActive ?? true,
-          };
-          await tx.commissionRule.upsert({
-            where: { id: rule.id },
-            create: { id: rule.id, ...fields },
-            update: fields,
-          });
-          result.commissionRules++;
-        }
-
-        for (const rule of data.cargoRules ?? []) {
-          const fields = {
-            name: rule.name,
-            platform: rule.platform ?? null,
-            cargoProvider: rule.cargoProvider ?? null,
-            categoryName: rule.categoryName ?? null,
-            minPrice: rule.minPrice ?? 0,
-            maxPrice: rule.maxPrice ?? 999_999,
-            minDesi: rule.minDesi ?? 0,
-            maxDesi: rule.maxDesi ?? 999,
-            cargoCost: rule.cargoCost,
-            vatIncluded:
-              rule.vatIncluded ??
-              !(
-                rule.cargoProvider?.toUpperCase().includes("TEX") ||
-                rule.name.toUpperCase().includes("TEX")
-              ),
-            validFrom: rule.validFrom ?? null,
-            validTo: rule.validTo ?? null,
-            priority: rule.priority ?? 10,
-            isActive: rule.isActive ?? true,
-          };
-          await tx.cargoRule.upsert({
-            where: { id: rule.id },
-            create: { id: rule.id, ...fields },
-            update: fields,
-          });
-          result.cargoRules++;
-        }
-
-        for (const rule of data.expenseRules ?? []) {
-          const fields = {
-            name: rule.name,
-            platform: rule.platform ?? null,
-            type: rule.type,
-            value: rule.value,
-            categoryName: rule.categoryName ?? null,
-            minPrice: rule.minPrice ?? 0,
-            maxPrice: rule.maxPrice ?? 999_999,
-            priority: rule.priority ?? 10,
-            isActive: rule.isActive ?? true,
-          };
-          await tx.expenseRule.upsert({
-            where: { id: rule.id },
-            create: { id: rule.id, ...fields },
-            update: fields,
-          });
-          result.expenseRules++;
-        }
-
-        for (const expense of data.actualExpenses) {
-          const fields = {
-            name: expense.name,
-            category: expense.category ?? null,
-            amountKurus: expense.amountKurus,
-            paidAt: expense.paidAt,
-            note: expense.note ?? null,
-            ...(expense.createdAt ? { createdAt: expense.createdAt } : {}),
-            ...(expense.updatedAt ? { updatedAt: expense.updatedAt } : {}),
-          };
-          await tx.actualExpense.upsert({
-            where: { id: expense.id },
-            create: { id: expense.id, ...fields },
-            update: fields,
-          });
-          result.actualExpenses++;
-        }
-
-        for (const snapshot of data.orderFinanceSnapshots) {
-          if (snapshot.platform === "manual") continue;
-          const fields = {
-            orderNumber: snapshot.orderNumber,
-            orderedAt: snapshot.orderedAt,
-            revenueKurus: snapshot.revenueKurus,
-            profitKurus: snapshot.profitKurus ?? null,
-            profitPartial: snapshot.profitPartial ?? false,
-            statusKind: snapshot.statusKind,
-            currency: snapshot.currency ?? "TRY",
-            ...(snapshot.syncedAt ? { syncedAt: snapshot.syncedAt } : {}),
-            calculationVersion: snapshot.calculationVersion ?? 1,
-            profitSource: snapshot.profitSource ?? "calculated",
-            estimatedCommissionKurus:
-              snapshot.estimatedCommissionKurus ?? null,
-            actualCommissionKurus: snapshot.actualCommissionKurus ?? null,
-          };
-          await tx.orderFinanceSnapshot.upsert({
-            where: {
-              platform_externalOrderId: {
-                platform: snapshot.platform,
-                externalOrderId: snapshot.externalOrderId,
-              },
-            },
-            create: {
-              id: snapshot.id,
-              platform: snapshot.platform,
-              externalOrderId: snapshot.externalOrderId,
-              ...fields,
-            },
-            update: fields,
-          });
-          result.orderFinanceSnapshots++;
-        }
-
-        for (const financial of data.platformOrderFinancials) {
-          const fields = {
-            orderNumber: financial.orderNumber,
-            grossRevenueKurus: financial.grossRevenueKurus,
-            commissionKurus: financial.commissionKurus,
-            sellerRevenueKurus: financial.sellerRevenueKurus,
-            transactionCount: financial.transactionCount ?? 0,
-            sourceUpdatedAt: financial.sourceUpdatedAt ?? null,
-            ...(financial.syncedAt ? { syncedAt: financial.syncedAt } : {}),
-          };
-          await tx.platformOrderFinancial.upsert({
-            where: {
-              platform_externalOrderId: {
-                platform: financial.platform,
-                externalOrderId: financial.externalOrderId,
-              },
-            },
-            create: {
-              id: financial.id,
-              platform: financial.platform,
-              externalOrderId: financial.externalOrderId,
-              ...fields,
-            },
-            update: fields,
-          });
-          result.platformOrderFinancials++;
-        }
-
-        for (const order of data.manualOrders) {
-          const fields = {
-            orderNumber: order.orderNumber,
-            mode: order.mode,
-            orderedAt: order.orderedAt,
-            statusKind: order.statusKind,
-            customerName: order.customerName ?? null,
-            currency: order.currency,
-            revenueKurus: order.revenueKurus,
-            netRevenueKurus: order.netRevenueKurus,
-            totalCostKurus: order.totalCostKurus,
-            inputVatCreditKurus: order.inputVatCreditKurus,
-            profitKurus: order.profitKurus,
-            profitPartial: order.profitPartial,
-            itemsJson: order.itemsJson,
-            breakdownJson: order.breakdownJson,
-            calculationVersion: order.calculationVersion,
-            note: order.note ?? null,
-            ...(order.createdAt ? { createdAt: order.createdAt } : {}),
-            ...(order.updatedAt ? { updatedAt: order.updatedAt } : {}),
-          };
-          await tx.manualOrder.upsert({
-            where: { id: order.id },
-            create: { id: order.id, ...fields },
-            update: fields,
-          });
-          result.manualOrders++;
-        }
-
-        for (const group of data.variantGroups ?? []) {
-          const fields = {
-            name: group.name,
-            shareModels: group.shareModels ?? false,
-            ...(group.createdAt ? { createdAt: group.createdAt } : {}),
-            ...(group.updatedAt ? { updatedAt: group.updatedAt } : {}),
-          };
-          await tx.variantGroup.upsert({
-            where: { id: group.id },
-            create: { id: group.id, ...fields },
-            update: fields,
-          });
-          result.variantGroups++;
-        }
-
-        for (const printer of data.printerConfigs ?? []) {
-          const fields = {
-            name: printer.name,
-            brand: printer.brand,
-            model: printer.model ?? null,
-            type: printer.type ?? "moonraker",
-            host: printer.host,
-            port: printer.port ?? 7125,
-            accent: printer.accent ?? null,
-            accessCode: printer.accessCode ?? null,
-            serial: printer.serial ?? null,
-            enabled: printer.enabled ?? true,
-            sortOrder: printer.sortOrder ?? 0,
-            ...(printer.createdAt ? { createdAt: printer.createdAt } : {}),
-            ...(printer.updatedAt ? { updatedAt: printer.updatedAt } : {}),
-          };
-          await tx.printerConfig.upsert({
-            where: { id: printer.id },
-            create: { id: printer.id, ...fields },
-            update: fields,
-          });
-          result.printerConfigs++;
-        }
-
-        for (const spool of data.filamentSpools ?? []) {
-          const fields = {
-            name: spool.name,
-            material: spool.material ?? "PLA",
-            colorName: spool.colorName ?? null,
-            colorHex: spool.colorHex ?? "#9ca3af",
-            brand: spool.brand ?? null,
-            totalGrams: spool.totalGrams ?? 1000,
-            remainingGrams: spool.remainingGrams ?? 1000,
-            spoolCost: spool.spoolCost ?? null,
-            reorderGrams: spool.reorderGrams ?? 200,
-            vendorUrl: spool.vendorUrl ?? null,
-            isActive: spool.isActive ?? true,
-            ...(spool.createdAt ? { createdAt: spool.createdAt } : {}),
-            ...(spool.updatedAt ? { updatedAt: spool.updatedAt } : {}),
-          };
-          await tx.filamentSpool.upsert({
-            where: { id: spool.id },
-            create: { id: spool.id, ...fields },
-            update: fields,
-          });
-          result.filamentSpools++;
-        }
-
-        for (const product of data.products ?? []) {
-          if (product.variantGroupId) {
-            const group = await tx.variantGroup.findUnique({
-              where: { id: product.variantGroupId },
-              select: { id: true },
-            });
-            if (!group) {
-              throw new BackupReferenceError(
-                `Ürün ${product.barcode}: varyant grubu ${product.variantGroupId} yedekte veya hedef veritabanında yok.`
-              );
-            }
-          }
-
-          const createFields = {
-            barcode: product.barcode,
-            sku: product.sku ?? product.barcode,
-            name: product.name ?? product.barcode,
-            alias: product.alias ?? null,
-            categoryName: product.categoryName ?? "Imported",
-            currentSalePrice: product.currentSalePrice,
-            listPrice: product.listPrice ?? null,
-            stock: product.stock ?? 0,
-            desi: product.desi ?? null,
-            weight: product.weight ?? null,
-            imageUrl: product.imageUrl ?? null,
-            imageManual: product.imageManual ?? false,
-            isActive: product.isActive ?? true,
-            hidden: product.hidden ?? false,
-            madeToOrder: product.madeToOrder ?? false,
-            source: product.source ?? "imported",
-            trendyolId: product.trendyolId ?? null,
-            productMainId: product.productMainId ?? null,
-            variantGroupId: product.variantGroupId ?? null,
-            variantLabel: product.variantLabel ?? null,
-            commissionRate: product.commissionRate ?? null,
-            commissionSource: product.commissionSource ?? null,
-            commissionUpdatedAt: product.commissionUpdatedAt ?? null,
-            ...(product.createdAt ? { createdAt: product.createdAt } : {}),
-            ...(product.updatedAt ? { updatedAt: product.updatedAt } : {}),
-          };
-          const updateFields = {
-            sku: product.sku ?? product.barcode,
-            name: product.name ?? product.barcode,
-            categoryName: product.categoryName ?? "Imported",
-            currentSalePrice: product.currentSalePrice,
-            ...(product.alias !== undefined ? { alias: product.alias } : {}),
-            ...(product.listPrice !== undefined ? { listPrice: product.listPrice } : {}),
-            ...(product.stock !== undefined ? { stock: product.stock } : {}),
-            ...(product.desi !== undefined ? { desi: product.desi } : {}),
-            ...(product.weight !== undefined ? { weight: product.weight } : {}),
-            ...(product.imageUrl !== undefined ? { imageUrl: product.imageUrl } : {}),
-            ...(product.imageManual !== undefined ? { imageManual: product.imageManual } : {}),
-            ...(product.isActive !== undefined ? { isActive: product.isActive } : {}),
-            ...(product.hidden !== undefined ? { hidden: product.hidden } : {}),
-            ...(product.madeToOrder !== undefined ? { madeToOrder: product.madeToOrder } : {}),
-            ...(product.source !== undefined ? { source: product.source } : {}),
-            ...(product.trendyolId !== undefined ? { trendyolId: product.trendyolId } : {}),
-            ...(product.productMainId !== undefined
-              ? { productMainId: product.productMainId }
-              : {}),
-            ...(product.variantGroupId !== undefined
-              ? { variantGroupId: product.variantGroupId }
-              : {}),
-            ...(product.variantLabel !== undefined ? { variantLabel: product.variantLabel } : {}),
-            ...(product.commissionRate !== undefined
-              ? { commissionRate: product.commissionRate }
-              : {}),
-            ...(product.commissionSource !== undefined
-              ? { commissionSource: product.commissionSource }
-              : {}),
-            ...(product.commissionUpdatedAt !== undefined
-              ? { commissionUpdatedAt: product.commissionUpdatedAt }
-              : {}),
-            ...(product.updatedAt ? { updatedAt: product.updatedAt } : {}),
-          };
-
-          const existingByBarcode = await tx.product.findUnique({
-            where: { barcode: product.barcode },
-            select: { id: true },
-          });
-          let restored;
-          if (existingByBarcode) {
-            restored = await tx.product.update({
-              where: { id: existingByBarcode.id },
-              data: updateFields,
-              select: { id: true },
-            });
-          } else {
-            const idCollision = await tx.product.findUnique({
-              where: { id: product.id },
-              select: { id: true },
-            });
-            restored = await tx.product.create({
-              data: idCollision ? createFields : { id: product.id, ...createFields },
-              select: { id: true },
-            });
-          }
-          productIdMap.set(product.id, restored.id);
-          result.products++;
-        }
-
-        const resolveProductId = async (sourceId: string, context: string): Promise<string> => {
-          const mapped = productIdMap.get(sourceId);
-          if (mapped) return mapped;
-          const existing = await tx.product.findUnique({
-            where: { id: sourceId },
-            select: { id: true },
-          });
-          if (existing) return existing.id;
-          throw new BackupReferenceError(`${context}: ürün ${sourceId} bulunamadı.`);
-        };
-        const requirePrinter = async (printerId: string, context: string) => {
-          const existing = await tx.printerConfig.findUnique({
-            where: { id: printerId },
-            select: { id: true },
-          });
-          if (!existing) {
-            throw new BackupReferenceError(`${context}: yazıcı ${printerId} bulunamadı.`);
-          }
-        };
-
-        for (const cost of data.productCosts ?? []) {
-          const productId = await resolveProductId(cost.productId, `Maliyet ${cost.id}`);
-          const fields = {
-            costMode: cost.costMode ?? "manual",
-            templateId: cost.templateId ?? null,
-            filamentTypeId: cost.filamentTypeId ?? null,
-            filamentWeight: cost.filamentWeight ?? null,
-            printTimeHours: cost.printTimeHours ?? null,
-            wasteRate: cost.wasteRate ?? null,
-            packagingPoset: cost.packagingPoset ?? null,
-            packagingNaylon: cost.packagingNaylon ?? null,
-            packagingBant: cost.packagingBant ?? null,
-            packagingKart: cost.packagingKart ?? null,
-            packagingOptionId: cost.packagingOptionId ?? null,
-            nylonLevel: cost.nylonLevel ?? null,
-            tapeUsed: cost.tapeUsed ?? null,
-            manualCost: cost.manualCost ?? null,
-            materialWeight: cost.materialWeight ?? null,
-            materialCost: cost.materialCost ?? null,
-            electricityCost: cost.electricityCost ?? null,
-            machineWearCost: cost.machineWearCost ?? null,
-            laborCost: cost.laborCost ?? null,
-            packagingCost: cost.packagingCost ?? null,
-            otherCost: cost.otherCost ?? null,
-            totalCost: cost.totalCost ?? null,
-            ...(cost.updatedAt ? { updatedAt: cost.updatedAt } : {}),
-          };
-          await tx.productCost.upsert({
-            where: { productId },
-            create: { id: cost.id, productId, ...fields },
-            update: fields,
-          });
-          result.productCosts++;
-        }
-
-        for (const listing of data.listings ?? []) {
-          const productId = await resolveProductId(listing.productId, `Listing ${listing.id}`);
-          const fields = {
-            externalId: listing.externalId ?? null,
-            externalSku: listing.externalSku ?? null,
-            barcode: listing.barcode ?? null,
-            salePrice: listing.salePrice,
-            listPrice: listing.listPrice ?? null,
-            stock: listing.stock ?? 0,
-            commissionRate: listing.commissionRate ?? null,
-            commissionFixed: listing.commissionFixed ?? null,
-            cargoCost: listing.cargoCost ?? null,
-            isActive: listing.isActive ?? true,
-            lastSyncedAt: listing.lastSyncedAt ?? null,
-            ...(listing.createdAt ? { createdAt: listing.createdAt } : {}),
-            ...(listing.updatedAt ? { updatedAt: listing.updatedAt } : {}),
-          };
-          await tx.listing.upsert({
-            where: { productId_platform: { productId, platform: listing.platform } },
-            create: { id: listing.id, productId, platform: listing.platform, ...fields },
-            update: fields,
-          });
-          result.listings++;
-        }
-
-        for (const history of data.priceHistory ?? []) {
-          const productId = await resolveProductId(history.productId, `Fiyat geçmişi ${history.id}`);
-          const fields = {
-            productId,
-            oldPrice: history.oldPrice,
-            newPrice: history.newPrice,
-            changeSource: history.changeSource,
-            changedAt: history.changedAt,
-            note: history.note ?? null,
-          };
-          await tx.priceHistory.upsert({
-            where: { id: history.id },
-            create: { id: history.id, ...fields },
-            update: fields,
-          });
-          result.priceHistory++;
-        }
-
-        for (const usage of data.filamentUsages ?? []) {
-          const spool = await tx.filamentSpool.findUnique({
-            where: { id: usage.spoolId },
-            select: { id: true },
-          });
-          if (!spool) {
-            throw new BackupReferenceError(
-              `Filament kullanımı ${usage.id}: makara ${usage.spoolId} bulunamadı.`
-            );
-          }
-          const productId = usage.productId
-            ? await resolveProductId(usage.productId, `Filament kullanımı ${usage.id}`)
-            : null;
-          const fields = {
-            spoolId: spool.id,
-            productId,
-            productName: usage.productName ?? null,
-            grams: usage.grams,
-            note: usage.note ?? null,
-            ...(usage.createdAt ? { createdAt: usage.createdAt } : {}),
-          };
-          await tx.filamentUsage.upsert({
-            where: { id: usage.id },
-            create: { id: usage.id, ...fields },
-            update: fields,
-          });
-          result.filamentUsages++;
-        }
-
-        for (const mapping of data.printFileProducts ?? []) {
-          await requirePrinter(mapping.printerConfigId, `Dosya eşlemesi ${mapping.id}`);
-          const productId = await resolveProductId(mapping.productId, `Dosya eşlemesi ${mapping.id}`);
-          const fields = {
-            productId,
-            ...(mapping.createdAt ? { createdAt: mapping.createdAt } : {}),
-            ...(mapping.updatedAt ? { updatedAt: mapping.updatedAt } : {}),
-          };
-          await tx.printFileProduct.upsert({
-            where: {
-              printerConfigId_filename: {
-                printerConfigId: mapping.printerConfigId,
-                filename: mapping.filename,
-              },
-            },
-            create: {
-              id: mapping.id,
-              printerConfigId: mapping.printerConfigId,
-              filename: mapping.filename,
-              ...fields,
-            },
-            update: fields,
-          });
-          result.printFileProducts++;
-        }
-
-        for (const file of (data.productModelFiles ?? []).filter((item) => item.r2Key)) {
-          await requirePrinter(file.printerConfigId, `Model dosyası ${file.id}`);
-          // Özel baskılar gerçek bir Product satırına bağlı değildir; uygulama genelinde bu
-          // sentinel ile saklanır. Normal model dosyalarında barkod birleşiminden doğan ID map'i sürer.
-          const productId =
-            file.productId === CUSTOM_PRINT_PRODUCT_ID
-              ? CUSTOM_PRINT_PRODUCT_ID
-              : await resolveProductId(file.productId, `Model dosyası ${file.id}`);
-          const fields = {
-            productId,
-            printerConfigId: file.printerConfigId,
-            label: file.label ?? null,
-            originalName: file.originalName,
-            storedPath: "",
-            r2Key: file.r2Key ?? null,
-            fileType: file.fileType,
-            sizeBytes: file.sizeBytes ?? 0,
-            gramaj: file.gramaj ?? null,
-            estPrintMin: file.estPrintMin ?? null,
-            colorsJson: file.colorsJson ?? null,
-            sliced: file.sliced ?? null,
-            plateJson: file.plateJson ?? null,
-            thumbnail: file.thumbnail ?? null,
-            contentMd5: file.contentMd5 ?? null,
-            sortOrder: file.sortOrder ?? 0,
-            ...(file.createdAt ? { createdAt: file.createdAt } : {}),
-            ...(file.updatedAt ? { updatedAt: file.updatedAt } : {}),
-          };
-          await tx.productModelFile.upsert({
-            where: { id: file.id },
-            create: { id: file.id, ...fields },
-            update: fields,
-          });
-          result.productModelFiles++;
-        }
-
-        for (const setting of data.appSettings ?? []) {
-          await tx.appSetting.upsert({
-            where: { key: setting.key },
-            create: setting,
-            update: { value: setting.value },
-          });
-          result.appSettings++;
-        }
-
-        return result;
-      },
-      { timeout: 120_000 }
-    );
-    invalidateOrdersCache();
-
-    return NextResponse.json({
-      ok: warnings.length === 0,
-      complete: warnings.length === 0,
-      stats,
-      warnings,
-    });
+    data = ImportSchema.parse(await req.json());
   } catch (error) {
-    const message =
-      error instanceof z.ZodError
-        ? `Yedek biçimi geçersiz: ${error.issues
-            .slice(0, 5)
-            .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-            .join("; ")}`
-        : error instanceof Error
-          ? error.message
-          : "Import başarısız";
-    return NextResponse.json({ ok: false, complete: false, error: message }, { status: 400 });
+    // Doğrulama akıştan ÖNCE yapılır → bozuk yedek hâlâ net bir hata yanıtı döner.
+    return NextResponse.json(
+      { ok: false, complete: false, error: errorMessage(error) },
+      { status: 400 }
+    );
   }
+
+  // NOT: nextUrl yerine standart URL — testler düz Request gönderiyor.
+  let streamParam: string | null = null;
+  try {
+    streamParam = new URL(req.url).searchParams.get("stream");
+  } catch {
+    streamParam = null;
+  }
+  const wantsStream =
+    streamParam === "1" ||
+    (req.headers.get("accept") ?? "").includes("application/x-ndjson");
+
+  if (!wantsStream) {
+    try {
+      return NextResponse.json(await runImport(data, () => {}));
+    } catch (error) {
+      return NextResponse.json(
+        { ok: false, complete: false, error: errorMessage(error) },
+        { status: 400 }
+      );
+    }
+  }
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send: Emit = (event) => {
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(event) + "\n"));
+        } catch {
+          /* akış kapandı */
+        }
+      };
+      try {
+        const result = await runImport(data, send);
+        send({ stage: "done", ...result });
+      } catch (error) {
+        send({ stage: "error", message: errorMessage(error) });
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* akış zaten kapalı (istemci ayrıldı) */
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+    },
+  });
 }

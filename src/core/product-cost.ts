@@ -34,6 +34,15 @@ export interface ResolvedCost {
   filamentCost: number;
   /** Çok adetli siparişlerde kapsamı doğru uygulamak için bileşen dökümü. */
   packagingBreakdown: PackagingBreakdown | null;
+  /**
+   * "Bu ürünün ÜRETİM maliyeti gerçekten girilmiş mi?"
+   *
+   * ⚠️ `totalCost > 0` bu soruyu YANITLAMAZ: paketleme ayarlarındaki kart/sticker/sakız her ürüne
+   * koşulsuz eklenir (packaging.ts), dolayısıyla `totalCost` fiilen HİÇBİR zaman 0 olmaz. Filament
+   * gramajı/süresi hiç girilmemiş bir ürün bu yüzden "maliyeti tam" sayılıp şişik kâr gösteriyordu.
+   * Maliyet bilinirliğine bakan HER yeni kod yolu totalCost'a değil BUNA bakmalı.
+   */
+  productionCostKnown: boolean;
 }
 
 /** simulatePrice çağrılarında paketleme kapsamlarını tek biçimde taşır. */
@@ -103,6 +112,8 @@ export function resolveProductCost(
       totalCost: calc.totalCost,
       filamentCost: calc.filamentCost,
       packagingBreakdown: packaging,
+      // Paketleme HARİÇ üretim payı: filament gramajı/süresi girilmemişse 0 kalır → bilinmiyor.
+      productionCostKnown: calc.productionCost > 0,
     };
   }
 
@@ -123,9 +134,11 @@ export function resolveProductCost(
       totalCost: manual + cachedPackaging,
       filamentCost: 0,
       packagingBreakdown: manualPackagingBreakdown(cachedPackaging, settings),
+      productionCostKnown: manual > 0,
     };
   }
 
+  // Ayrıştırılmamış tek tutar: paketleme ayrı değil, girilen rakamın kendisi ürünün maliyeti.
   const total = cachedTotal ?? cost.manualCost ?? 0;
   return {
     productionCost: total,
@@ -133,5 +146,6 @@ export function resolveProductCost(
     totalCost: total,
     filamentCost: 0,
     packagingBreakdown: null,
+    productionCostKnown: total > 0,
   };
 }

@@ -38,7 +38,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const vatRate = Number(settingsMap.vatRate ?? 0);
 
   const resolved = resolveProductCost(product.cost, settingsMap, product.cost?.filamentType?.costPerGram ?? 0);
-  if (!resolved || resolved.totalCost <= 0) {
+  if (!resolved || !resolved.productionCostKnown) {
     return NextResponse.json({ hasCost: false });
   }
   const productCost = resolved.productionCost;

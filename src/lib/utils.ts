@@ -5,15 +5,9 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number): string {
-  return new Intl.NumberFormat("tr-TR", {
-    style: "currency",
-    currency: "TRY",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value);
-}
-
-export function formatPercent(value: number): string {
-  return `%${(value * 100).toFixed(1)}`;
-}
+/**
+ * Biçimlendirme artık TEK kaynakta: `@/lib/format`.
+ * Bu iki dış aktarım geriye dönük uyumluluk için duruyor (yaklaşık 50 içe aktarma yeri var);
+ * YENİ kodda doğrudan `@/lib/format` kullan — orada tutar/yüzde/tarih/bağıl zaman hepsi var.
+ */
+export { formatCurrency, formatPercent } from "./format";

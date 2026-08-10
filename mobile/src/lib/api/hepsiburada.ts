@@ -226,13 +226,18 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
   );
   for (const [idx, pkgs] of pkgResults.entries()) {
     const [statusCode, label] = pkgStatuses[idx];
-    // Statüsüz /packages ucu (paketlenecek/gönderime-hazır/kargoda) TAM sipariş verir: kalem+tutar
-    // `items` içinde gelir → packageNumber/id anahtarıyla DOĞRUDAN işlenir (detay fetch GEREKMEZ).
-    // (Masaüstü v0.19.56: önceden sadece teslim edilenler görünüyordu.)
+    // Statüsüz /packages ucu (paketlenecek/gönderime-hazır) TAM sipariş verir: kalem+tutar
+    // `items` içinde gelir → DOĞRUDAN işlenir (detay fetch GEREKMEZ).
+    //
+    // 🔴 ÇİFT SAYIM (masaüstüyle AYNI düzeltme — api/orders/route.ts): anahtar olarak önce
+    // packageNumber alınıyordu, kargoya verilen siparişlerde ise OrderNumber. Aynı sipariş iki
+    // ayrı kimlikle kaydedilip finans geçmişinde iki kez sayılıyordu. Artık iki uçta da GERÇEK
+    // sipariş numarası kazanır; paket numarası yalnız sipariş numarası hiç gelmediğinde kullanılır.
     const isFullOrder = statusCode === "";
     for (const p of pkgs) {
       if (isFullOrder) {
-        const key = hbStr(p.packageNumber, p.id, p.OrderNumber, p.orderNumber);
+        const orderNo = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+        const key = orderNo || hbStr(p.packageNumber, p.id);
         if (!key || agg.has(key)) continue;
         agg.set(key, {
           status: hbStr(p.status) || label,

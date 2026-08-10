@@ -30,7 +30,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatCompactCurrency, formatCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
 import { toast } from "sonner";
@@ -162,25 +164,8 @@ const PRIMARY = "oklch(0.62 0.20 278)";
 const PROFIT = "oklch(0.68 0.17 145)";
 const LOSS = "oklch(0.63 0.22 25)";
 
-function fmtK(value: number) {
-  try {
-    return new Intl.NumberFormat("tr-TR", {
-      style: "currency",
-      currency: "TRY",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    }).format(value);
-  } catch {
-    return `₺${Math.round(value)}`;
-  }
-}
-
-function compactMoney(value: number) {
-  const absolute = Math.abs(value);
-  if (absolute >= 1_000_000) return `₺${(value / 1_000_000).toFixed(1)}m`;
-  if (absolute >= 1_000) return `₺${Math.round(value / 1_000)}b`;
-  return `₺${Math.round(value)}`;
-}
+/** Özet kartları: kuruş göstermeye gerek yok, ondalıksız daha okunaklı. */
+const fmtK = (value: number) => formatCurrency(value, { decimals: 0 });
 
 function formatHistoryDate(value: string) {
   const date = new Date(value);
@@ -444,32 +429,41 @@ export default function ReportsPage() {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat
               label="Ciro (bu ay)"
-              value={currentMonth ? fmtK(currentMonth.revenue) : "—"}
+              value={currentMonth ? currentMonth.revenue : null}
+              format={fmtK}
               color={PRIMARY}
               icon={ShoppingCart}
+              delay={0}
             />
             <Stat
               label="Net kâr (bu ay)"
-              value={currentMonth ? fmtK(currentMonth.netProfit) : "—"}
+              value={currentMonth ? currentMonth.netProfit : null}
+              format={fmtK}
               color={
                 currentMonth && currentMonth.netProfit < 0
                   ? LOSS
                   : PROFIT
               }
               icon={currentMonth && currentMonth.netProfit < 0 ? TrendingDown : TrendingUp}
+              delay={70}
             />
             <Stat
               label="Gider ödemesi (bu ay)"
-              value={currentMonth ? fmtK(currentMonth.expenses) : "—"}
+              value={currentMonth ? currentMonth.expenses : null}
+              format={fmtK}
               color="oklch(0.70 0.16 60)"
               icon={Receipt}
+              delay={140}
             />
             <Stat
               label="Sipariş (bu ay)"
-              value={String(currentMonth?.orderCount ?? 0)}
+              value={currentMonth?.orderCount ?? 0}
+              format={(n) => formatNumber(Math.round(n))}
               color={PRIMARY}
               icon={Trophy}
+              delay={210}
             />
+
           </div>
 
           {incompleteCount > 0 && (
@@ -539,7 +533,7 @@ export default function ReportsPage() {
                         tickLine={false}
                         axisLine={false}
                         width={58}
-                        tickFormatter={(value) => compactMoney(Number(value))}
+                        tickFormatter={(value) => formatCompactCurrency(Number(value))}
                       />
                       <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
                       <RTooltip
@@ -631,7 +625,7 @@ export default function ReportsPage() {
                         tickLine={false}
                         axisLine={false}
                         width={56}
-                        tickFormatter={(value) => compactMoney(Number(value))}
+                        tickFormatter={(value) => formatCompactCurrency(Number(value))}
                       />
                       <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
                       <RTooltip
@@ -757,26 +751,42 @@ export default function ReportsPage() {
   );
 }
 
+/**
+ * Özet kartı. Rakam SNAP ETMEZ, akar (AnimatedNumber) — kartlar da sırayla belirir.
+ * Veri henüz yokken `value` null verilir ve animasyon yerine "—" gösterilir; 0'dan 0'a
+ * anlamsız bir sayaç dönmesin.
+ */
 function Stat({
   label,
   value,
+  format,
   color,
   icon: Icon,
+  delay = 0,
 }: {
   label: string;
-  value: string;
+  value: number | null;
+  format: (n: number) => string;
   color: string;
   icon: React.ElementType;
+  delay?: number;
 }) {
   return (
-    <Card className="overflow-hidden" style={{ borderTop: `2px solid ${color}` }}>
+    <Card
+      className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 transition-transform hover:-translate-y-0.5"
+      style={{
+        borderTop: `2px solid ${color}`,
+        animationDelay: `${delay}ms`,
+        animationFillMode: "both",
+      }}
+    >
       <CardContent className="p-3.5">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">{label}</span>
           <Icon className="h-4 w-4 shrink-0" style={{ color }} />
         </div>
         <div className="text-xl font-bold tabular-nums mt-1" style={{ color }}>
-          {value}
+          {value === null ? "—" : <AnimatedNumber value={value} format={format} />}
         </div>
       </CardContent>
     </Card>

@@ -15,7 +15,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatCurrency, formatPercent, cn } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatCurrency, formatPercent } from "@/lib/format";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -282,20 +283,22 @@ interface OrdersSummary {
   total: OrdersSummaryBucket;
 }
 
-function fmtTL(n: number) {
-  try {
-    return new Intl.NumberFormat("tr-TR", {
-      style: "currency",
-      currency: "TRY",
-      maximumFractionDigits: 0,
-    }).format(n);
-  } catch {
-    return `₺${Math.round(n)}`;
-  }
+const fmtTL = (n: number) => formatCurrency(n, { decimals: 0 });
+
+/** Bir pazaryerinden veri alınamadıysa yanıtta o platformun durumu ok:false gelir. */
+interface PlatformFetchStatus {
+  ok: boolean;
+  notConfigured?: boolean;
+  incompleteCount?: number;
 }
 
 function OrdersSummaryCard({ delay }: { delay: number }) {
-  const { data, isLoading } = useQuery<{ summary?: OrdersSummary }>({
+  const { data, isLoading } = useQuery<{
+    summary?: OrdersSummary;
+    shopify?: PlatformFetchStatus;
+    trendyol?: PlatformFetchStatus;
+    hepsiburada?: PlatformFetchStatus;
+  }>({
     queryKey: ["orders"],
     queryFn: ({ signal }) => fetchJson("/api/orders", { signal }),
     // Panele girince son-30-gün siparişlerini arkadan tazele (bayatsa); cache anında görünür,
@@ -318,12 +321,19 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
   if (!s) return null;
 
   const profitPos = s.total.profit >= 0;
-  const rows: { platform: OrderPlatform; bucket: OrdersSummaryBucket }[] = [
-    { platform: "shopify", bucket: s.shopify },
-    { platform: "trendyol", bucket: s.trendyol },
-    { platform: "hepsiburada", bucket: s.hepsiburada },
-    { platform: "manual", bucket: s.manual },
+  // Kurulmamış platform "hata" değildir; yalnız kurulu olup ALINAMAYAN veri uyarı üretir.
+  const failed = (st?: PlatformFetchStatus) => !!st && !st.ok && !st.notConfigured;
+  const rows: {
+    platform: OrderPlatform;
+    bucket: OrdersSummaryBucket;
+    unavailable: boolean;
+  }[] = [
+    { platform: "shopify", bucket: s.shopify, unavailable: failed(data?.shopify) },
+    { platform: "trendyol", bucket: s.trendyol, unavailable: failed(data?.trendyol) },
+    { platform: "hepsiburada", bucket: s.hepsiburada, unavailable: failed(data?.hepsiburada) },
+    { platform: "manual", bucket: s.manual, unavailable: false },
   ];
+  const anyUnavailable = rows.some((r) => r.unavailable);
 
   return (
     <Link href="/orders" className="group block">
@@ -349,9 +359,19 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-6">
             {/* Toplam ciro */}
             <div>
-              <p className="text-[11px] text-muted-foreground">Toplam ciro</p>
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                Toplam ciro
+                {anyUnavailable && (
+                  <span
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium"
+                    style={{ color: ACCENTS.amber, backgroundColor: "oklch(0.75 0.18 75 / 14%)" }}
+                  >
+                    eksik veri
+                  </span>
+                )}
+              </p>
               <p className="text-2xl font-bold tabular-nums leading-tight" style={{ color: ACCENTS.primary }}>
-                {fmtTL(s.total.revenue)}
+                <AnimatedNumber value={s.total.revenue} format={fmtTL} />
               </p>
               <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{s.total.orderCount} sipariş</p>
             </div>
@@ -364,13 +384,13 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
                 style={{ color: profitPos ? ACCENTS.green : ACCENTS.red }}
               >
                 {profitPos ? "+" : ""}
-                {fmtTL(s.total.profit)}
+                <AnimatedNumber value={s.total.profit} format={fmtTL} />
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">tahmini</p>
             </div>
 
             {/* Platform kırılımı */}
-            {rows.map(({ platform, bucket }) => {
+            {rows.map(({ platform, bucket, unavailable }) => {
               const info = ORDER_PLATFORM_INFO[platform];
               return (
                 <div key={platform} className="sm:border-l sm:border-border/50 sm:pl-4">
@@ -388,8 +408,26 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
                       {info.label}
                     </span>
                   </p>
-                  <p className="text-xl font-bold tabular-nums leading-tight mt-0.5">{fmtTL(bucket.revenue)}</p>
-                  <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">{bucket.orderCount} sipariş</p>
+                  {/* Veri alınamadıysa "₺0" YAZMA — sıfır satış ile alınamayan veri aynı şey değil. */}
+                  {unavailable ? (
+                    <>
+                      <p className="text-xl font-bold tabular-nums leading-tight mt-0.5 text-muted-foreground/60">
+                        —
+                      </p>
+                      <p className="text-[11px] mt-0.5" style={{ color: ACCENTS.amber }}>
+                        Veri alınamadı
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xl font-bold tabular-nums leading-tight mt-0.5">
+                        <AnimatedNumber value={bucket.revenue} format={fmtTL} />
+                      </p>
+                      <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
+                        {bucket.orderCount} sipariş
+                      </p>
+                    </>
+                  )}
                 </div>
               );
             })}

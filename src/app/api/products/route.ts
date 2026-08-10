@@ -166,7 +166,9 @@ async function computeProducts(urlString: string) {
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;
-    const hasCost = (resolved?.totalCost ?? 0) > 0;
+    // Paketleme her ürüne otomatik eklendiği için totalCost asla 0 olmuyor → bilinirlik
+    // kararı ÜRETİM payına bakmalı (bkz. product-cost.ts productionCostKnown).
+    const hasCost = resolved?.productionCostKnown ?? false;
     const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
 
     // Her listing için ayrı kâr hesabı (platform-specific override'lar dahil)

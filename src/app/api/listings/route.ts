@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProfitInputCaches } from "@/lib/cache-busting";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -51,11 +51,11 @@ export async function POST(req: NextRequest) {
       where: { id: existing.id },
       data,
     });
-    invalidateOrdersCache(); // listing komisyonu/fiyatı kârı etkiler → sipariş önbelleği düşsün
+    bustProfitInputCaches(); // listing komisyonu/fiyatı kârı etkiler → sipariş önbelleği düşsün
     return NextResponse.json(updated);
   }
 
   const created = await prisma.listing.create({ data });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
   return NextResponse.json(created, { status: 201 });
 }

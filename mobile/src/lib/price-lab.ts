@@ -47,9 +47,10 @@ export function computePriceLab(
     settings,
     detail.cost?.costPerGram ?? 0
   );
-  // Masaüstü price-lab route:37 ile birebir kapı: totalCost (yalnız paketleme maliyeti girilmiş
-  // ürün de hesaplanır; eski productCost>0 kapısı onu yanlışlıkla "maliyet yok" sayıyordu).
-  if (!resolved || resolved.totalCost <= 0) return { hasCost: false, targets: [], campaign: null };
+  // Masaüstü price-lab rotasıyla birebir kapı. totalCost KULLANILAMAZ: paketleme her ürüne
+  // otomatik eklendiği için hiçbir zaman 0 olmaz ve üretim maliyeti girilmemiş ürün "maliyeti
+  // tam" sayılırdı (bkz. @core/product-cost productionCostKnown).
+  if (!resolved || !resolved.productionCostKnown) return { hasCost: false, targets: [], campaign: null };
   const productCost = resolved.productionCost;
   const packagingCost = resolved.packagingCost;
   const filamentMatCost = resolved.filamentCost; // KDV iadesine giren malzeme payı

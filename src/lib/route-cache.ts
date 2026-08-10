@@ -23,6 +23,8 @@ const inflight = new Map<string, Promise<unknown>>();
 const diskChecked = new Set<string>();
 const DISK_FORMAT = 1;
 const MAX_DISK_AGE_MS = 30 * 24 * 60 * 60_000;
+/** Anahtarı okumak için dosyanın başından okunan bayt — anahtar ilk ~100 baytta, gövde MB'larca olabilir. */
+const HEAD_BYTES = 4096;
 
 function cacheDir(): string | null {
   return process.env.MLHUB_ROUTE_CACHE_DIR?.trim() || null;
@@ -118,6 +120,59 @@ export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<
   return runAndStore(key, compute);
 }
 
+/**
+ * Diskteki önbellek dosyalarından ön eke uyanların yollarını döndürür.
+ *
+ * NEDEN GEREKLİ: dosya adı anahtarın sha256'sı olduğu için ön ekten dosya adı türetilemez;
+ * anahtarı dosyanın İÇİNDEN okumak şart. Ön ekli temizlik yalnız bellekteki anahtarları
+ * gezseydi, o oturumda hiç açılmamış bir ekranın (ör. Gizli / Zarar Eden sekmeleri) disk
+ * kopyası hayatta kalır ve bir sonraki açılışta ESKİ kuralla hesaplanmış kâr geri dönerdi.
+ * Tam gövdeyi ayrıştırmıyoruz — anahtar dosyanın ilk baytlarında, gövde ise çok büyük olabilir.
+ */
+function diskFilesWithPrefix(prefix: string): string[] {
+  const dir = cacheDir();
+  if (!dir) return [];
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const matches: string[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const file = path.join(dir, name);
+    let head: string;
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(file, "r");
+      const buf = Buffer.alloc(HEAD_BYTES);
+      const read = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
+      head = buf.toString("utf8", 0, read);
+    } catch {
+      continue;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          /* zaten kapalı */
+        }
+      }
+    }
+    const found = /"key"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(head);
+    if (!found) continue;
+    let key: string;
+    try {
+      key = JSON.parse(`"${found[1]}"`) as string;
+    } catch {
+      continue;
+    }
+    if (key.startsWith(prefix)) matches.push(file);
+  }
+  return matches;
+}
+
 /** Verilen ön ekle başlayan tüm anahtarları temizle (argümansız: hepsi). Yazma sonrası tazelik için. */
 export function bustCache(prefix?: string): void {
   if (!prefix) {
@@ -144,5 +199,10 @@ export function bustCache(prefix?: string): void {
         try { fs.rmSync(file, { force: true }); } catch { /* sonraki GET canlı hesaplar */ }
       }
     }
+  }
+  // Bellekte olmayan (bu oturumda hiç okunmamış) disk kopyaları da gitmeli — yoksa uygulama
+  // yeniden başlayınca eski gövde geri yüklenir ve değişiklik "uygulanmamış" görünür.
+  for (const file of diskFilesWithPrefix(prefix)) {
+    try { fs.rmSync(file, { force: true }); } catch { /* sonraki GET canlı hesaplar */ }
   }
 }

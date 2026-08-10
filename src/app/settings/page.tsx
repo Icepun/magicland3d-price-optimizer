@@ -15,6 +15,8 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
 import { R2StorageCard } from "@/components/settings/R2StorageCard";
+import { BackupCard } from "@/components/settings/BackupCard";
+import { PhoneNotificationsCard } from "@/components/settings/PhoneNotificationsCard";
 import { fetchJson } from "@/lib/fetch-json";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
@@ -102,7 +104,11 @@ export default function SettingsPage() {
 
       <R2StorageCard />
 
+      <BackupCard />
+
       <DataManagementCard />
+
+      <PhoneNotificationsCard />
 
       <Card>
         <CardHeader>
@@ -175,11 +181,8 @@ function DataManagementCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground leading-relaxed">
-          Taşınabilir verilerini (ürünler, listingler, maliyetler, kurallar, fiyat geçmişi,
-          makaralar ve yazıcı ayarları) JSON olarak indir. Yerel model dosyalarının fiziksel
-          baytları dahil değildir; R2 model referansları korunur. Dosya bağlantı/API ayarlarını
-          da içerebildiği için yedeği güvenli sakla. Otomatik günlük yedek ayrıca Electron
-          tarafında alınır.
+          Ürünlerini, maliyetlerini, kurallarını ve sipariş geçmişini tek dosyaya indirir.
+          Baskı dosyalarının kendisi dahil değildir. Bağlantı şifreleri dosyaya yazılmaz.
         </p>
 
         <div className="grid grid-cols-2 gap-3">

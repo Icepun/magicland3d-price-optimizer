@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bustProfitInputCaches } from "@/lib/cache-busting";
 
 const SEED_KEY = "texCargoSeed.v1";
 
@@ -130,7 +130,7 @@ export async function POST(req: Request) {
     update: { value: "done" },
     create: { key: SEED_KEY, value: "done" },
   });
-  invalidateOrdersCache();
+  bustProfitInputCaches();
 
   return NextResponse.json({
     seeded: true,

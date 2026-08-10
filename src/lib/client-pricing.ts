@@ -182,7 +182,8 @@ function buildBase(input: ClientPricingInput): PricingBase {
     packagingCost,
     packagingScope: packagingScopeInput(resolved),
     totalCost,
-    hasCost: totalCost > 0,
+    // Paketleme her üründe otomatik eklendiği için totalCost bilinirliği ölçmez (product-cost.ts).
+    hasCost: resolved?.productionCostKnown ?? false,
     filamentMatCost,
     activeListings,
     productRules,

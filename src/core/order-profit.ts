@@ -45,6 +45,11 @@ export interface OrderProfitProduct {
     cost: number;
   }[] | null;
   filamentCost: number;
+  /**
+   * Üretim maliyeti gerçekten girilmiş mi (resolveProductCost.productionCostKnown).
+   * Paketleme her üründe otomatik eklendiği için "maliyet var mı" kararı tutara BAKAMAZ.
+   */
+  productionCostKnown: boolean;
   /** Siparişin platformundaki listing (yoksa null) — komisyon + elle girilen kargo kaynağı. */
   listing: OrderProfitListing | null;
 }
@@ -127,7 +132,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     const unitPrice = Number.isFinite(line.unitPrice) ? Math.max(0, line.unitPrice) : 0;
     const lineGross = unitPrice * line.quantity;
     lineRevenueGross += lineGross;
-    if (!p || p.productionCost + p.packagingCost <= 0) {
+    // "Maliyet eksik" kararı ÜRETİM payına bakar: paketleme her üründe otomatik eklendiği için
+    // tutarların toplamı hiçbir zaman 0 olmuyor ve maliyeti girilmemiş satır kâra dahil oluyordu.
+    if (!p || !p.productionCostKnown) {
       unmatchedLines++;
       unmatchedQty += line.quantity;
       unmatchedRevenue += lineGross;

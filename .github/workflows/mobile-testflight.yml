@@ -21,7 +21,9 @@ jobs:
   build-and-submit:
     name: Build iOS and submit to TestFlight
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Derleme artık BEKLENİYOR (--no-wait kaldırıldı): iOS derlemesi kuyrukla birlikte
+    # 20 dakikayı rahat aşar, bu yüzden süre yükseltildi.
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: mobile
@@ -61,5 +63,18 @@ jobs:
       - name: Type-check mobile app
         run: npx tsc --noEmit
 
-      - name: Queue production build and TestFlight submission
+      # --no-wait kaldırıldı: derleme/gönderim BEKLENİR. EAS'te derleme düşerse bu adım
+      # kırmızı olur — eskiden kuyruğa atıp çıkıyordu ve düşen derlemede bile CI yeşildi.
+      - name: Build production iOS and submit to TestFlight
         run: npm run deploy:testflight
+
+      # Sonucu iş özetinde görünür kıl — hangi derlemenin gittiği tek bakışta belli olsun.
+      - name: Show build result
+        if: always()
+        run: |
+          {
+            echo "### Mobil derleme sonucu: ${{ job.status }}"
+            echo '```json'
+            eas build:list --platform ios --limit 1 --non-interactive --json 2>&1 || echo 'Derleme listesi alinamadi.'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

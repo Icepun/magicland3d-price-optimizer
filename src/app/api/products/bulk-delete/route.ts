@@ -2,6 +2,7 @@ import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
 import { z } from "zod";
 
 const Schema = z.object({
@@ -20,6 +21,10 @@ export async function POST(req: NextRequest) {
     const groupIds = [...new Set(affected.map((p) => p.variantGroupId!).filter(Boolean))];
 
     const result = await prisma.product.deleteMany({ where: { id: { in: ids } } });
+
+    // Bulut tablolarında silme zinciri yok → bağlı satırları açıkça temizle, yoksa yedek
+    // geri yüklemesi yetim satırlar yüzünden hataya düşüyor.
+    await cleanupProductOrphans(ids);
 
     // Boş kalan grupları sil
     for (const gid of groupIds) {

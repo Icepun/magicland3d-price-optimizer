@@ -47,6 +47,7 @@ function input(overrides: Partial<OrderProfitInput> = {}): OrderProfitInput {
           commissionRate: null,
           productionCost: 60,
           packagingCost: 5,
+          productionCostKnown: true,
           packagingComponents: null,
           filamentCost: 20,
           listing: null,

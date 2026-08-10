@@ -8,7 +8,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AppQueryProvider } from "@/lib/query";
 import { UpdateGate } from "@/components/UpdateGate";
 import { getDashboardData } from "@/lib/db/dashboard";
-import { registerForPush } from "@/lib/push";
+import { startPushRegistration } from "@/lib/push";
 import { ML } from "@/theme/colors";
 
 // Splash'i BİZ kapatana kadar açık tut (expo otomatik gizleyip boş ekran flaşı yaratmasın) + yumuşak fade.
@@ -44,10 +44,9 @@ function SplashGate() {
 }
 
 export default function RootLayout() {
-  // Push token'ı kaydet (baskı bitti bildirimleri için) — bir kez, açılışta. Defensive (hata → sessiz).
-  useEffect(() => {
-    void registerForPush();
-  }, []);
+  // Push kaydı: açılışta bir kez DEĞİL — uygulama her öne geldiğinde de denenir. İlk açılışta ağ
+  // yoksa veya izin sonradan verilirse tek deneme sessizce kayboluyordu, bildirim hiç gelmiyordu.
+  useEffect(() => startPushRegistration(), []);
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: ML.bg }}>
       <AppQueryProvider>
