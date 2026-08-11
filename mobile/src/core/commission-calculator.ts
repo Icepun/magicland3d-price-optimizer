@@ -1,22 +1,5 @@
 import type { CommissionRuleInput } from "./types";
-
-function normalizeCategory(value: string) {
-  return value.toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
-}
-
-function categoryMatchScore(ruleCategoryName: string | null | undefined, productCategoryName: string) {
-  if (!ruleCategoryName) return 0;
-
-  const ruleCategory = normalizeCategory(ruleCategoryName);
-  const productCategory = normalizeCategory(productCategoryName);
-
-  if (!ruleCategory || !productCategory) return 0;
-  if (productCategory === ruleCategory) return 10_000 + ruleCategory.length;
-  if (productCategory.includes(ruleCategory)) return 1_000 + ruleCategory.length;
-  if (ruleCategory.includes(productCategory)) return 500 + productCategory.length;
-
-  return 0;
-}
+import { categoryMatchScore } from "./category";
 
 export function findCommissionRule(
   rules: CommissionRuleInput[],

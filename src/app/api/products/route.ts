@@ -1,4 +1,5 @@
 import { bustProductCaches } from "@/lib/cache-busting";
+import { vatRateOf } from "@/core/vat";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { findCommissionRule } from "@/core/commission-calculator";
@@ -31,6 +32,8 @@ interface PlatformSummary {
   netProfit: number | null;
   profitMargin: number | null;
   commissionMissing: boolean;
+  /** Hiçbir kargo bareni eşleşmedi ve elle kargo da girilmemiş → kargo ₺0 sayıldı. */
+  cargoMissing: boolean;
   minOrderQty?: number;
 }
 
@@ -148,7 +151,7 @@ async function computeProducts(urlString: string) {
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
-  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const vatRate = vatRateOf(settingsMap);
 
   const productsWithProfit = products.map((product) => {
     const productRules = withProductCommissionRule(product, commissionRules);
@@ -184,6 +187,7 @@ async function computeProducts(urlString: string) {
             netProfit: null,
             profitMargin: null,
             commissionMissing: false,
+            cargoMissing: false,
           };
         }
 
@@ -220,6 +224,14 @@ async function computeProducts(urlString: string) {
           listing.commissionRate == null &&
           !sim.appliedCommissionRule;
 
+        // Kargo kaynağı yoksa uyar. Komisyonda bu uyarı VARDI, kargoda YOKTU: hiçbir barem
+        // eşleşmediğinde kargo sessizce ₺0 sayılıyor ve kâr 100₺'ye kadar şişik görünüyordu.
+        // Shopify'da 150₺ altı kargonun 0 olması BİLİNÇLİ bir kural — o durum uyarı değildir.
+        const cargoMissing =
+          listing.cargoCost == null &&
+          !(listing.platform === "shopify" && listing.salePrice < 150) &&
+          !sim.appliedCargoRule;
+
         return {
           platform: listing.platform as PlatformSummary["platform"],
           listingId: listing.id,
@@ -228,6 +240,7 @@ async function computeProducts(urlString: string) {
           netProfit: sim.netProfit,
           profitMargin: sim.profitMargin,
           commissionMissing,
+          cargoMissing,
           minOrderQty: sim.minOrderQty, // Trendyol >1 → liste "×N" rozeti gösterir
         };
       });

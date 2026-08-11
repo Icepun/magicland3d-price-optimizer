@@ -4,6 +4,7 @@ import {
   splitExpenseRulesByScope,
   resolveVatableCost,
 } from "./pricing-engine";
+import { vatRateOf } from "./vat";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "./product-commission";
 import { applyActualCommissionToProfit } from "./platform-financials";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
@@ -94,7 +95,7 @@ export interface OrderProfitResult {
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const { platform, orderTotal, lines, commissionRules, cargoRules, expenseRules, settings } = input;
-  const vatRate = Number(settings.vatRate ?? 0);
+  const vatRate = vatRateOf(settings);
   // Bir maliyetin içindeki KDV payı (indirilecek KDV) — kargo/gider için aynı formül.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
 
@@ -381,7 +382,7 @@ export function resolveOrderProfit(
     estimatedCommission: base.estimatedCommission,
     actualCommission: financial.actualCommission,
     settlementRevenue: financial.settlementRevenue,
-    vatRate: Number(input.settings.vatRate ?? 0),
+    vatRate: vatRateOf(input.settings),
   });
 
   return {

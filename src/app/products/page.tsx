@@ -108,6 +108,7 @@ interface Product {
     netProfit: number | null;
     profitMargin: number | null;
     commissionMissing: boolean;
+    cargoMissing?: boolean;
     minOrderQty?: number;
   }>;
   variantLabel?: string | null;
@@ -409,6 +410,12 @@ const ProductRow = memo(function ProductRow({
             {p.commissionMissing && (
               <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> Komisyon gir!
+              </div>
+            )}
+            {/* Kargo bareni eşleşmediyse kâr olduğundan yüksek görünür — sessiz kalmasın. */}
+            {p.cargoMissing && (
+              <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Kargo tanımlı değil
               </div>
             )}
             {p.netProfit !== null ? (

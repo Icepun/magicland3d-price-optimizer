@@ -1,4 +1,5 @@
 import { findCommissionRule, calculateCommission } from "./commission-calculator";
+import { categoryMatches } from "./category";
 import { findCargoRule } from "./cargo-calculator";
 import type {
   SimulationInput,
@@ -17,7 +18,10 @@ export function calculateExpenses(
   const applicable = rules.filter((r) => {
     if (!r.isActive) return false;
     if (salePrice < r.minPrice || salePrice > r.maxPrice) return false;
-    if (r.categoryName && !categoryName.toLowerCase().includes(r.categoryName.toLowerCase())) return false;
+    // Kategori eşleşmesi ortak kaynaktan (core/category). Burada düz toLowerCase()
+    // kullanılıyordu: Türkçe'nin büyük I'sı "i"ye dönüştüğü için "Işıklı Dekor"
+    // kategorisinde komisyon/kargo kuralı uygulanıp GİDER kuralı sessizce atlanıyordu.
+    if (!categoryMatches(r.categoryName, categoryName)) return false;
     return true;
   });
 

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
@@ -50,7 +51,7 @@ async function computeDashboard() {
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
-  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const vatRate = vatRateOf(settingsMap);
 
   const totalProducts = products.length;
   let missingCost = 0;

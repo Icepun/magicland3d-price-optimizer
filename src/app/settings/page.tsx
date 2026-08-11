@@ -10,7 +10,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet } from "lucide-react";
+import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
@@ -18,6 +18,7 @@ import { R2StorageCard } from "@/components/settings/R2StorageCard";
 import { BackupCard } from "@/components/settings/BackupCard";
 import { PhoneNotificationsCard } from "@/components/settings/PhoneNotificationsCard";
 import { fetchJson } from "@/lib/fetch-json";
+import { DEFAULT_VAT_RATE, resolveVatRate } from "@/core/vat";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
 const Schema = z.object({
@@ -39,11 +40,14 @@ export default function SettingsPage() {
     defaultValues: { vatRate: 20 },
   });
 
+  // Kayıtlı oran okunamıyorsa hesap varsayılana düşer; kullanıcı bunu BİLMELİ.
+  const vat = resolveVatRate(settings);
+
   useEffect(() => {
     if (settings) {
-      form.reset({ vatRate: Number(settings.vatRate ?? 20) });
+      form.reset({ vatRate: vat.rate });
     }
-  }, [settings, form]);
+  }, [settings, form, vat.rate]);
 
   const saveMutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -58,7 +62,7 @@ export default function SettingsPage() {
       clearPricingQueryCache(queryClient);
       toast.success("Ayarlar kaydedildi — tüm ürünlere uygulandı");
     },
-    onError: () => toast.error("Kaydedilemedi"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Kaydedilemedi"),
   });
 
   return (
@@ -85,11 +89,16 @@ export default function SettingsPage() {
                 max="100"
                 {...form.register("vatRate")}
               />
+              {settings && vat.invalid && (
+                <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-600 dark:text-amber-400 animate-in fade-in slide-in-from-bottom-1 duration-400">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                  KDV oranı okunamadı, geçici olarak %{DEFAULT_VAT_RATE} kullanılıyor. Doğru
+                  oranı girip kaydet.
+                </p>
+              )}
               <p className="text-xs text-muted-foreground mt-1">
-                Satış fiyatları KDV <strong>dahil</strong> kabul edilir. Net kâr,
-                fiyatın{" "}<code className="text-foreground">/(1 + KDV/100)</code>{" "}ile
-                KDV hariç bazından hesaplanır. Türkiye&apos;de standart oran <strong>%20</strong>.
-                Sıfır girerseniz KDV uygulanmaz.
+                Satış fiyatları KDV dahil kabul edilir; net kâr KDV hariç tutardan hesaplanır.
+                Türkiye&apos;de standart oran %20. Sıfır girersen KDV uygulanmaz.
               </p>
             </div>
 
@@ -265,7 +274,7 @@ function TursoSyncCard() {
       setAuthToken("");
       toast.success("Turso bilgileri kaydedildi. Test edip uygulamayı yeniden başlat.");
     },
-    onError: () => toast.error("Kaydedilemedi"),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Kaydedilemedi"),
   });
 
   const test = useMutation({

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { vatRateOf } from "@/core/vat";
 import { z } from "zod";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
@@ -544,7 +545,7 @@ async function resolveManualOrderInput(
   // Financial edits may change amounts, but must not silently reprice the
   // original sale when the global VAT setting has changed since creation.
   const vatRate =
-    existingDraft?.vatRate ?? Number(settingsMap.vatRate ?? 0);
+    existingDraft?.vatRate ?? vatRateOf(settingsMap);
   if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
     throw new ManualOrderValidationError("Global KDV oranı geçersiz.");
   }
@@ -838,7 +839,7 @@ export async function getManualOrderOptions() {
   const settingsMap = Object.fromEntries(
     settings.map((setting) => [setting.key, setting.value])
   );
-  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const vatRate = vatRateOf(settingsMap);
 
   return {
     vatRate: Number.isFinite(vatRate) ? vatRate : 0,

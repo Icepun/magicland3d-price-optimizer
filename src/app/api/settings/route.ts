@@ -19,6 +19,18 @@ async function computeSettings() {
 export async function POST(req: NextRequest) {
   const body = await req.json() as Record<string, string>;
 
+  // KDV oranı TÜM kâr hesabına giriyor: bozuk bir değer sessizce kaydedilirse hesap
+  // varsayılana düşer ve rakamlar aylarca yanlış kalabilir. Kaynakta reddet.
+  if (body.vatRate !== undefined) {
+    const rate = Number(body.vatRate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      return NextResponse.json(
+        { error: "KDV oranı 0 ile 100 arasında bir sayı olmalı." },
+        { status: 400 }
+      );
+    }
+  }
+
   await Promise.all(
     Object.entries(body).map(([key, value]) =>
       prisma.appSetting.upsert({

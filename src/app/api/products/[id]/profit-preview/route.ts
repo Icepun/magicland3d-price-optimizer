@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
@@ -53,7 +54,7 @@ export async function POST(
   ]);
 
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
-  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const vatRate = vatRateOf(settingsMap);
 
   // Filament gram fiyatı — gönderilen filamentTypeId'den
   let filamentCostPerGram = 0;

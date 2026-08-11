@@ -73,6 +73,12 @@ const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, e
 const LISTING_PRICE_SQL = `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
 const PRODUCT_PRICE_SQL = `UPDATE Product SET currentSalePrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
 const PRODUCT_IMAGE_SQL = `UPDATE Product SET imageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
+/**
+ * Yalnız İLAN stoğu. Ürünün GERÇEK stoğu uygulamada elle tutuluyor ve buradan ASLA ezilmez.
+ * Bu değerin tek amacı "sitede stok bitmiş mi?" uyarısını besleyebilmek — mağaza sayfası
+ * satışa kapanmışsa kullanıcı bunu fark etmeden öğrensin.
+ */
+const LISTING_STOCK_SQL = `UPDATE Listing SET stock = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
 
 export async function POST(req: NextRequest) {
   try {
@@ -118,6 +124,7 @@ export async function POST(req: NextRequest) {
         Array<{
           listingId: string;
           listingPrice: number;
+          listingStock: number;
           productId: string;
           barcode: string;
           variantId: string | null;
@@ -129,7 +136,7 @@ export async function POST(req: NextRequest) {
           imageManual: number;
         }>
       >(
-        `SELECT l.id AS listingId, l.salePrice AS listingPrice, p.id AS productId,
+        `SELECT l.id AS listingId, l.salePrice AS listingPrice, l.stock AS listingStock, p.id AS productId,
                 p.barcode AS barcode, l.externalId AS variantId, p.sku AS sku, l.externalSku AS listingSku,
                 l.barcode AS listingBarcode,
                 p.currentSalePrice AS productPrice, p.imageUrl AS imageUrl, p.imageManual AS imageManual
@@ -164,6 +171,10 @@ export async function POST(req: NextRequest) {
         if (!row.imageManual && f.imageUrl && f.imageUrl !== row.imageUrl) {
           writes.push({ sql: PRODUCT_IMAGE_SQL, args: [f.imageUrl, row.productId] });
           imagesFixed++;
+        }
+        // Site stoğu değiştiyse ilan stoğunu tazele (yalnız DEĞİŞMİŞSE — gereksiz yazma yok).
+        if (f.stock !== row.listingStock) {
+          writes.push({ sql: LISTING_STOCK_SQL, args: [f.stock, row.listingId] });
         }
         const listingChanged = Math.abs(f.price - row.listingPrice) > 0.001;
         const productChanged = Math.abs(f.price - row.productPrice) > 0.001;

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { withProductCommissionRule } from "@/core/product-commission";
@@ -36,7 +37,7 @@ export async function GET(
   const settingsMap = Object.fromEntries(
     settings.map((s: { key: string; value: string }) => [s.key, s.value])
   );
-  const vatRate = Number(settingsMap.vatRate ?? 0);
+  const vatRate = vatRateOf(settingsMap);
 
   // Maliyeti güncel ayarlardan yeniden hesapla (zam otomatik yansır)
   const resolved = resolveProductCost(

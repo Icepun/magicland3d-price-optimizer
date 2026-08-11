@@ -29,12 +29,27 @@ export async function GET() {
   try {
     await ensureRuntimeSchema();
 
-    const [lowStock, spools, printers, stored] = await Promise.all([
+    const [lowStock, siteOutOfStock, spools, printers, stored] = await Promise.all([
       prisma.product.findMany({
         where: { isActive: true, hidden: false, stock: { lte: 1 } },
         select: { id: true, name: true, stock: true },
         take: 50,
       }),
+      // Mağaza sayfası satışa kapanmış ürünler. İlan stokları normalde yüksek tutulduğu için
+      // 0'a düşmesi "farkında olmadan tükendi" demektir — uygulamadaki gerçek stoktan bağımsız
+      // olarak haber verilir. Sipariş üzerine üretilenler hariç (onlarda stok tutulmuyor).
+      prisma.listing
+        .findMany({
+          where: {
+            platform: "shopify",
+            isActive: true,
+            stock: { lte: 0 },
+            product: { isActive: true, hidden: false, madeToOrder: false },
+          },
+          select: { id: true, product: { select: { id: true, name: true } } },
+          take: 50,
+        })
+        .catch(() => []),
       prisma.filamentSpool.findMany({
         where: { isActive: true },
         select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
@@ -60,6 +75,18 @@ export async function GET() {
         title: empty ? "Stok bitti" : "Stok kritik",
         body: `${p.name} — ${p.stock} adet`,
         href: `/products/${p.id}`,
+      });
+    }
+
+    for (const l of siteOutOfStock) {
+      if (!l.product) continue;
+      alerts.push({
+        id: `site-stock-${l.product.id}`,
+        type: "stock",
+        severity: "warning",
+        title: "Sitede stok bitti",
+        body: `${l.product.name} — mağaza sayfası satışa kapandı`,
+        href: `/products/${l.product.id}`,
       });
     }
 

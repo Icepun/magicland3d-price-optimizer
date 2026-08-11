@@ -1,4 +1,5 @@
 import { simulatePrice, trendyolMinQty } from "../core/pricing-engine";
+import { vatRateOf } from "../core/vat";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
@@ -131,7 +132,7 @@ interface PricingBase {
 
 function buildBase(input: ClientPricingInput): PricingBase {
   const { product, cost, filaments, settings } = input;
-  const vatRate = Number(settings.vatRate ?? 0);
+  const vatRate = vatRateOf(settings);
 
   // Sunucu route'ları kuralları isActive:true ile çeker; liste endpoint'i hepsini döner → birebir
   // parite için BURADA süz (bir kez).

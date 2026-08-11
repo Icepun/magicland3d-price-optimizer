@@ -1,21 +1,5 @@
 import type { CargoRuleInput } from "./types";
-
-function normalizeCategory(value: string): string {
-  return value.toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
-}
-
-function categoryMatches(
-  ruleCategoryName: string | null | undefined,
-  productCategoryName: string
-): boolean {
-  if (!ruleCategoryName) return true;
-
-  const ruleCategory = normalizeCategory(ruleCategoryName);
-  const productCategory = normalizeCategory(productCategoryName);
-  if (!ruleCategory) return true;
-
-  return productCategory.includes(ruleCategory);
-}
+import { categoryMatches } from "./category";
 
 /**
  * Kuralları platforma göre filtreler. platform alanı null olan kurallar tüm

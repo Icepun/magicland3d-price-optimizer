@@ -120,6 +120,7 @@ describe("Shopify senkronu — fiyat tazeleme", () => {
   const row = (over: Record<string, unknown> = {}) => ({
     listingId: "l1",
     listingPrice: 100,
+    listingStock: 0,
     productId: "p1",
     barcode: "B1",
     variantId: "11",
@@ -130,6 +131,36 @@ describe("Shopify senkronu — fiyat tazeleme", () => {
     imageUrl: "urun.jpg",
     imageManual: 0,
     ...over,
+  });
+
+  it("site stoğu değişince YALNIZ ilan stoğunu tazeler, fiyat geçmişi yazmaz", async () => {
+    queryRawUnsafe.mockResolvedValue([row({ listingStock: 5 })]);
+    listAllProducts.mockResolvedValue([
+      shopifyProduct("Kupa", [
+        { id: 11, price: "100", barcode: "B1", sku: "S1", inventory_quantity: 0 },
+      ]),
+    ]);
+
+    await call("refresh-prices");
+    const stmts = batchedStatements();
+    expect(stmts).toHaveLength(1);
+    expect(stmts[0].sql).toContain("UPDATE Listing SET stock");
+    expect(stmts[0].args).toEqual([0, "l1"]);
+    // Ürünün GERÇEK stoğu uygulamada elle tutuluyor — senkron ona dokunmamalı.
+    expect(stmts.some((x) => /UPDATE Product SET .*stock/i.test(x.sql))).toBe(false);
+    expect(createMany).not.toHaveBeenCalled();
+  });
+
+  it("site stoğu aynıysa stok yazması üretmez", async () => {
+    queryRawUnsafe.mockResolvedValue([row({ listingStock: 7 })]);
+    listAllProducts.mockResolvedValue([
+      shopifyProduct("Kupa", [
+        { id: 11, price: "100", barcode: "B1", sku: "S1", inventory_quantity: 7 },
+      ]),
+    ]);
+
+    await call("refresh-prices");
+    expect(batchedStatements()).toHaveLength(0);
   });
 
   it("fiyat değişmediyse hiç yazma üretmez (fiyat geçmişi de kirlenmez)", async () => {
