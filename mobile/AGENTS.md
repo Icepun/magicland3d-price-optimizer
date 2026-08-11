@@ -19,3 +19,26 @@ içinde koşturur → orada kök `node_modules` yoktur → `npx tsc --noEmit` "C
 
 Mobil kodu test edeceksen testi KÖKTE aç ve göreli yolla içe aktar —
 örnek: `src/lib/mobile-format.test.ts`.
+
+# iOS derlemesi: sağlama profili PUSH yetkisini içermeli
+
+`expo-notifications` eklentisi iOS hedefine `aps-environment` yetkisini (entitlement) ekler.
+Apple tarafındaki sağlama profili (provisioning profile) bu yetkiyi içermiyorsa Xcode adımı
+şu hatayla düşer:
+
+    Provisioning profile "…" doesn't include the Push Notifications capability.
+    Provisioning profile "…" doesn't include the aps-environment entitlement.
+
+Profil EAS sunucusunda önbelleklenir ve CI `--non-interactive` koştuğu için **kendini
+onaramaz** — Apple'a giriş gerekir. Düzeltme YEREL ve ETKİLEŞİMLİ yapılır:
+
+    cd mobile
+    eas credentials --platform ios     # production → tüm kimlikleri yeniden kur
+
+EAS Apple'a bağlanıp App ID'de Push Notifications yetkisini açar ve profili yeniden üretir.
+Sonrasında CI işi yeniden çalıştırılır.
+
+⚠️ Tarihsel tuzak: 28 Tem 2026'da push açıldı ama profil 31 May 2026 tarihliydi. O sırada
+iş akışı `--no-wait` ile kuyruğa atıp çıktığı için **EAS derlemesi düşse bile CI yeşildi**;
+hata ancak `--no-wait` kaldırılınca (10 Ağu 2026) görünür oldu. CI'nin yeşil olması, iOS
+derlemesinin gerçekten başarılı olduğu anlamına GELMİYORDU.
