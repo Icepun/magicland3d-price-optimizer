@@ -121,6 +121,9 @@ const FilamentSpoolSchema = z.object({
   spoolCost: finite.nullable().optional(),
   reorderGrams: finite.optional(),
   vendorUrl: nullableString,
+  // v37: envanter gruplaması + kapalı/açık durumu. Opsiyonel → eski (v3) yedekler aynen yüklenir.
+  colorKey: nullableString,
+  openedAt: optionalDate.nullable(),
   isActive: z.boolean().optional(),
   createdAt: optionalDate,
   updatedAt: optionalDate,
@@ -810,6 +813,11 @@ async function runImport(data: ImportPayload, emit: Emit) {
         spoolCost: spool.spoolCost ?? null,
         reorderGrams: spool.reorderGrams ?? 200,
         vendorUrl: spool.vendorUrl ?? null,
+        // v37: zod'a eklemek YETMEZ — burada da yazılmazsa geri yüklemede SESSİZCE kaybolur.
+        // `fields` hem INSERT hem UPDATE'e gittiği için iki yol da kapsanır; `openedAt` bir Date
+        // olduğundan `toArg()` onu epoch-ms'e çevirir (createdAt/updatedAt ile aynı yol).
+        colorKey: spool.colorKey ?? null,
+        openedAt: spool.openedAt ?? null,
         isActive: spool.isActive ?? true,
       };
       const update = putDefined({ ...fields }, spool, ["createdAt"]);

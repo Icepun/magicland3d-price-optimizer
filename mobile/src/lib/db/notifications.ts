@@ -1,3 +1,9 @@
+import {
+  buildFilamentAlerts,
+  groupSpools,
+  parseThreshold,
+  type SpoolLike,
+} from "@/core/filament-groups";
 import { batch, execute } from "@/lib/turso";
 
 export type AlertType = "stock" | "filament" | "print" | "order";
@@ -34,13 +40,14 @@ function parseDbDate(s: string | null | undefined): number | null {
  * Bildirimler = KALICI tablo + anlık hesaplananlar (masaüstü /api/notifications ile aynı model):
  * - Kalıcı `Notification` (relay + orders route yazar: baskı bitti/hata, stoğu bitene sipariş,
  *   sipariş-üzerine üretim) → acknowledgedAt IS NULL olanlar; "okundu" iki cihazda da düşer.
- * - Anlık: stok ≤ 1, filament ≤ reorderGrams, yazıcı ERROR/PAUSED canlı durumu (kayan snapshot).
+ * - Anlık: stok ≤ 1, filament grubu (tür + renk) için kapalı makara sayısı eşiğin altında,
+ *   yazıcı ERROR/PAUSED canlı durumu (kayan snapshot).
  *   NOT: "finished" artık canlı üretilmez — kalıcı printer-done kaydı taşır (eski davranış uyarıyı
  *   bir sonraki baskıya kadar kapatılamaz şekilde tekrarlıyordu).
  * Tamamı TEK round-trip (batch 4 sorgu).
  */
 export async function getNotifications(): Promise<NotificationsResult> {
-  const [persistentRes, stockRes, spoolRes, printRes] = await batch([
+  const [persistentRes, stockRes, spoolRes, filamentSettingsRes, printRes] = await batch([
     {
       sql: `SELECT id, type, severity, title, body, href, createdAt
               FROM Notification
@@ -53,9 +60,15 @@ export async function getNotifications(): Promise<NotificationsResult> {
              ORDER BY stock ASC LIMIT 50`,
     },
     {
-      sql: `SELECT id, name, remainingGrams, reorderGrams FROM FilamentSpool
-             WHERE isActive = 1 AND remainingGrams <= reorderGrams
-             ORDER BY remainingGrams ASC`,
+      // v37: gram eşiği filtresi KALDIRILDI — uyarı artık grup (tür ailesi + renk tonu) başına
+      // KAPALI MAKARA SAYISINA bakıyor; bu yüzden tüm aktif makaralar gerekiyor.
+      sql: `SELECT id, name, material, brand, colorName, colorHex, colorKey,
+                   totalGrams, remainingGrams, openedAt
+              FROM FilamentSpool WHERE isActive = 1`,
+    },
+    {
+      // Eşik + izlenen/susturulan gruplar (masaüstüyle AYNI anahtarlar).
+      sql: `SELECT key, value FROM AppSetting WHERE key LIKE 'filament%'`,
     },
     {
       sql: `SELECT printerConfigId, name, status, statusMessage, productName
@@ -63,7 +76,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
     },
   ]).catch(
     () =>
-      [{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }] as {
+      [{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }] as {
         rows: Record<string, unknown>[];
       }[]
   );
@@ -111,24 +124,48 @@ export async function getNotifications(): Promise<NotificationsResult> {
     });
   }
 
-  // 3) Anlık: filament
-  for (const s of spoolRes.rows as unknown as {
-    id: string;
-    name: string;
-    remainingGrams: number;
-    reorderGrams: number;
-  }[]) {
-    const crit = s.remainingGrams <= 0;
-    alerts.push({
-      id: `spool-${s.id}`,
-      type: "filament",
-      severity: crit ? "critical" : "warning",
-      title: crit ? "Filament bitti" : "Filament azaldı",
-      body: `${s.name} — ${Math.round(s.remainingGrams)}g kaldı`,
-      productId: null,
-      persistent: false,
-      createdAt: null,
+  // 3) Anlık: filament — v37 GRUP bazlı (masaüstüyle AYNI ortak fonksiyon → birebir aynı metin
+  //    ve sayı; `npm run check-core` iki kopyanın ayrışmasını CI'da durdurur).
+  try {
+    const settings: Record<string, string> = {};
+    for (const row of filamentSettingsRes.rows as unknown as { key: string; value: string }[]) {
+      settings[row.key] = row.value;
+    }
+    const groupThresholds: Record<string, number> = {};
+    const watchedGroups: { key: string; label?: string }[] = [];
+    const mutedGroups: string[] = [];
+    for (const [k, v] of Object.entries(settings)) {
+      if (k.startsWith("filamentThreshold:")) {
+        const n = Number(v);
+        if (isFinite(n) && n >= 0) groupThresholds[k.slice("filamentThreshold:".length)] = Math.floor(n);
+      } else if (k.startsWith("filamentWatch:")) {
+        watchedGroups.push({ key: k.slice("filamentWatch:".length), label: v || undefined });
+      } else if (k.startsWith("filamentMute:") && v !== "0") {
+        mutedGroups.push(k.slice("filamentMute:".length));
+      }
+    }
+    const spools = spoolRes.rows as unknown as SpoolLike[];
+    const filamentAlerts = buildFilamentAlerts(groupSpools(spools), {
+      threshold: parseThreshold(settings["filamentLowSpoolCount"]),
+      groupThresholds,
+      watchedGroups,
+      mutedGroups,
     });
+    for (const a of filamentAlerts) {
+      alerts.push({
+        id: a.id,
+        type: "filament",
+        severity: a.severity,
+        title: a.title,
+        body: a.body,
+        productId: null,
+        persistent: false,
+        createdAt: null,
+      });
+    }
+  } catch (e) {
+    // Filament bloğu patlarsa stok/yazıcı/sipariş uyarıları kaybolmasın.
+    console.warn("[notifications] filament uyarıları üretilemedi:", e);
   }
 
   // 4) Anlık: yazıcı CANLI sorun durumu (error/paused) — id yazıcı config id'siyle (ad çakışmaz).

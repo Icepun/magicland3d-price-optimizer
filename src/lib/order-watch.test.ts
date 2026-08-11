@@ -174,9 +174,23 @@ describe("buildInventoryNotifications", () => {
       { id: "p2", name: "Kartal", stock: 1 },
     ],
     siteOutOfStock: [{ productId: "p3", name: "Lamba" }],
-    spools: [
-      { id: "s1", name: "Siyah PLA", remainingGrams: 0 },
-      { id: "s2", name: "Beyaz PLA", remainingGrams: 120 },
+    // Filament uyarıları ZİLLE AYNI çekirdekten (buildFilamentAlerts) hazır gelir — burada
+    // eşik yeniden hesaplanmaz. Kimlik düzeni `filament-<grup>`; eski `spool-<makara>` DEĞİL.
+    filament: [
+      {
+        id: "filament-pla__siyah",
+        severity: "critical" as const,
+        title: "Filament bitti",
+        body: "Siyah PLA — hiç makara kalmadı",
+        href: "/spools?g=pla__siyah",
+      },
+      {
+        id: "filament-pla__beyaz",
+        severity: "warning" as const,
+        title: "Filament azaldı",
+        body: "Beyaz PLA — 1 kapalı makara kaldı",
+        href: "/spools?g=pla__beyaz",
+      },
     ],
     readTypes: INVENTORY_TYPES,
   };
@@ -188,8 +202,10 @@ describe("buildInventoryNotifications", () => {
     expect(byId["stock-p1"].severity).toBe("critical");
     expect(byId["stock-p2"].severity).toBe("warning");
     expect(byId["site-stock-p3"].severity).toBe("warning");
-    expect(byId["spool-s1"].severity).toBe("critical");
-    expect(byId["spool-s2"].severity).toBe("warning");
+    expect(byId["filament-pla__siyah"].severity).toBe("critical");
+    expect(byId["filament-pla__beyaz"].severity).toBe("warning");
+    // Terk edilmiş gram modelinin kimlikleri ARTIK ÜRETİLMEZ.
+    expect(rows.some((r) => r.id.startsWith("spool-"))).toBe(false);
   });
 
   it("kimlikler zildeki anlık uyarı kimlikleriyle aynı kalıbı kullanır", () => {
@@ -197,14 +213,26 @@ describe("buildInventoryNotifications", () => {
       "stock-p1",
       "stock-p2",
       "site-stock-p3",
-      "spool-s1",
-      "spool-s2",
+      "filament-pla__siyah",
+      "filament-pla__beyaz",
     ]);
+  });
+
+  /** Kimlik düzeni değiştiği için sahadaki eski `spool-…` satırları ancak bu tip temizlik
+   *  listesinde kalırsa silinebilir; çıkarılsaydı zilde çelişkili bir uyarı asılı kalırdı. */
+  it("eski gram modelinin tipi temizlik listesinde kalır", () => {
+    expect(INVENTORY_TYPES).toContain("spool");
+    expect(INVENTORY_TYPES).toContain("filament");
   });
 
   it("eşik altında hiçbir şey yoksa bildirim üretmez", () => {
     expect(
-      buildInventoryNotifications({ lowStock: [], siteOutOfStock: [], spools: [], readTypes: INVENTORY_TYPES })
+      buildInventoryNotifications({
+        lowStock: [],
+        siteOutOfStock: [],
+        filament: [],
+        readTypes: INVENTORY_TYPES,
+      })
     ).toEqual([]);
   });
 });

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { bustProfitInputCaches } from "@/lib/cache-busting";
+import { bustProfitInputCaches, bustInventoryAlertCaches } from "@/lib/cache-busting";
 import { settingsBodyAffectsProfit } from "@/lib/pricing-inputs";
+import { FILAMENT_SETTING_PREFIX } from "@/lib/filament-settings";
 import { bustCache, swr } from "@/lib/route-cache";
 
 export async function GET() {
@@ -46,6 +47,11 @@ export async function POST(req: NextRequest) {
   // anahtarlar önbelleği KORUR → Siparişler sekmesi gereksiz yere 1-3sn yeniden çekmez.
   if (settingsBodyAffectsProfit(body)) {
     bustProfitInputCaches();
+  }
+  // Filament eşiği / grup susturma bu uçtan yazılıyor ama uyarıyı zil 90 saniyelik önbellekten
+  // okuyor: kullanıcı az önce susturduğu uyarıyı görmeye devam ederdi.
+  if (Object.keys(body).some((key) => key.startsWith(FILAMENT_SETTING_PREFIX))) {
+    bustInventoryAlertCaches();
   }
   bustCache("settings:");
   return NextResponse.json({ ok: true });

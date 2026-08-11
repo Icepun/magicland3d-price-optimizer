@@ -1,3 +1,4 @@
+import { slugifyTr } from "@/core/filament-groups";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
 import { FlashList } from "@shopify/flash-list";
@@ -254,6 +255,10 @@ function SpoolFormModal({
   const [material, setMaterial] = useState(initial?.material ?? "PLA");
   const [brand, setBrand] = useState(initial?.brand ?? "");
   const [colorHex, setColorHex] = useState(initial?.colorHex ?? SWATCHES[0]);
+  // v37: renk ADI envanter gruplamasının ekseni. Eskiden form bunu hiç tutmuyor ve kaydederken
+  // colorName: null gönderiyordu → masaüstünde girilen renk adı HER telefon düzenlemesinde
+  // siliniyordu (sessiz veri kaybı).
+  const [colorName, setColorName] = useState(initial?.colorName ?? "");
   const [total, setTotal] = useState(initial ? String(initial.totalGrams) : "1000");
   const [remaining, setRemaining] = useState(initial ? String(initial.remainingGrams) : "1000");
   const [reorder, setReorder] = useState(initial ? String(initial.reorderGrams) : "200");
@@ -269,7 +274,8 @@ function SpoolFormModal({
     if (!valid) return;
     setBusy(true);
     const payload: SpoolInput = {
-      name: name.trim(), material, colorName: null, colorHex,
+      name: name.trim(), material, colorName: colorName.trim() || null, colorHex,
+      colorKey: colorName.trim() ? slugifyTr(colorName.trim()) : (initial?.colorKey ?? null),
       brand: brand.trim() || null, totalGrams: num(total),
       remainingGrams: num(remaining || total), reorderGrams: num(reorder),
       spoolCost: cost.trim() ? num(cost) : null,
@@ -340,6 +346,15 @@ function SpoolFormModal({
                   />
                 ))}
               </View>
+            </Field>
+            <Field label="Renk adı (gruplama için)">
+              <TextInput
+                style={styles.input}
+                value={colorName}
+                onChangeText={setColorName}
+                placeholder="Siyah, Yeşil, Koyu Yeşil…"
+                placeholderTextColor={ML.textFaint}
+              />
             </Field>
             <Field label="Marka (opsiyonel)">
               <TextInput value={brand} onChangeText={setBrand} placeholder="ör. eSUN" placeholderTextColor={ML.textFaint} style={styles.input} />

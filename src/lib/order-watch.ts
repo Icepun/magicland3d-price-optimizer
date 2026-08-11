@@ -2,6 +2,8 @@ import { prisma, remotePrisma } from "./prisma";
 import { matchByPriority, uniqueIndex } from "./listing-index";
 import { pushToAllDevices } from "./push-notify";
 import { ensureRuntimeSchema } from "./runtime-schema";
+import { buildFilamentAlerts, groupSpools, type SpoolLike } from "@/core/filament-groups";
+import { loadFilamentSettings } from "@/lib/filament-settings";
 import { ShopifyClient } from "@/services/shopify-client";
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { TrendyolClient } from "@/services/trendyol-client";
@@ -125,7 +127,12 @@ export interface ScanProduct extends ScanKeys {
 export interface ScanInventory {
   lowStock: Array<{ id: string; name: string; stock: number }>;
   siteOutOfStock: Array<{ productId: string; name: string }>;
-  spools: Array<{ id: string; name: string; remainingGrams: number }>;
+  /**
+   * Filament uyarıları — ZİLLE AYNI ÇEKİRDEKTEN (`buildFilamentAlerts`) gelir.
+   * Burada eşik yeniden hesaplanmaz; iki uç aynı kimlikleri üretmezse zil aynı filamenti
+   * iki ayrı uyarı olarak gösterir (bkz. buildInventoryNotifications başlığı).
+   */
+  filament: Array<{ id: string; severity: "critical" | "warning"; title: string; body: string; href: string }>;
   /** Bu turda gerçekten okunabilen uyarı türleri — temizlik yalnız bunlara dokunur. */
   readTypes: string[];
 }
@@ -136,8 +143,15 @@ const PLATFORM_LABEL: Record<string, string> = {
   hepsiburada: "Hepsiburada",
 };
 
-/** Stok/filament kaynaklı kalıcı satırların tipleri — eşik düşünce bu tipler temizlenir. */
-export const INVENTORY_TYPES = ["stock", "site-stock", "spool"];
+/**
+ * Stok/filament kaynaklı kalıcı satırların tipleri — eşik düşünce bu tipler temizlenir.
+ *
+ * "spool" ARTIK ÜRETİLMİYOR ama listede KALMALI: filament uyarısı gram eşiğinden kapalı-makara
+ * sayısı eşiğine geçtiğinde kimlik düzeni de değişti (`spool-<makara>` → `filament-<grup>`).
+ * Tip listeden çıkarılsaydı, sahada birikmiş eski `spool-…` satırları hiçbir zaman silinmez ve
+ * zilde çelişkili bir ikinci filament uyarısı olarak asılı kalırdı.
+ */
+export const INVENTORY_TYPES = ["stock", "site-stock", "spool", "filament"];
 
 // ── Saf yardımcılar ─────────────────────────────────────────────────────────────────────────
 
@@ -251,15 +265,14 @@ export function buildInventoryNotifications(inv: ScanInventory): WatchNotificati
       href: `/products/${l.productId}`,
     });
   }
-  for (const s of inv.spools) {
-    const empty = s.remainingGrams <= 0;
+  for (const f of inv.filament) {
     out.push({
-      id: `spool-${s.id}`,
-      type: "spool",
-      severity: empty ? "critical" : "warning",
-      title: empty ? "Filament bitti" : "Filament azaldı",
-      body: `${s.name} — ${Math.round(s.remainingGrams)} g kaldı`,
-      href: "/spools",
+      id: f.id,
+      type: "filament",
+      severity: f.severity,
+      title: f.title,
+      body: f.body,
+      href: f.href,
     });
   }
   return out;
@@ -452,21 +465,45 @@ async function loadInventory(): Promise<ScanInventory> {
       take: 50,
     })
     .catch(() => null); // okunamadı → o türün satırlarına DOKUNULMAZ (aşağıya bak)
-  const spoolRows = await prisma.filamentSpool.findMany({
-    where: { isActive: true },
-    select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
-  });
+  // Zilin (/api/notifications) okuduğu ALAN LİSTESİYLE aynı — gruplama bu alanlara dayanıyor.
+  const spoolRows = await prisma.filamentSpool
+    .findMany({
+      where: { isActive: true },
+      select: {
+        id: true, name: true, material: true, brand: true,
+        colorName: true, colorHex: true, colorKey: true,
+        totalGrams: true, remainingGrams: true, openedAt: true,
+      },
+    })
+    .catch(() => null); // okunamadı → filament satırlarına DOKUNULMAZ
+  // Eşik/susturma/izlenen grup ayarları da uyarının parçası; okunamazsa filament turu atlanır.
+  const filamentSettings =
+    spoolRows === null ? null : await loadFilamentSettings().catch(() => null);
+  const filament =
+    spoolRows && filamentSettings
+      ? buildFilamentAlerts(groupSpools(spoolRows as SpoolLike[]), filamentSettings)
+      : [];
   return {
     lowStock,
     siteOutOfStock: (listings ?? [])
       .filter((l) => l.product)
       .map((l) => ({ productId: l.product!.id, name: l.product!.name })),
-    spools: spoolRows
-      .filter((s) => s.remainingGrams <= s.reorderGrams)
-      .map((s) => ({ id: s.id, name: s.name, remainingGrams: s.remainingGrams })),
+    filament: filament.map((a) => ({
+      id: a.id,
+      severity: a.severity,
+      title: a.title,
+      body: a.body,
+      href: a.href,
+    })),
     // Bu turda GERÇEKTEN okunabilen türler. Okunamayan bir tür için "eşiğin üstüne çıktı"
     // sonucu çıkarılamaz — aşağıdaki temizlik yalnız bunlara dokunur.
-    readTypes: listings === null ? ["stock", "spool"] : [...INVENTORY_TYPES],
+    readTypes: [
+      "stock",
+      // Shopify listing okunamadıysa "sitede stok bitti" satırları çözülmüş SAYILAMAZ.
+      ...(listings === null ? [] : ["site-stock"]),
+      // Filament okunabildiyse eski "spool" satırları da bu turda temizlenir (kimlik düzeni değişti).
+      ...(spoolRows && filamentSettings ? ["filament", "spool"] : []),
+    ],
   };
 }
 

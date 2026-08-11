@@ -2,13 +2,15 @@ import { NextResponse } from "next/server";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
+import { buildFilamentAlerts, groupSpools } from "@/core/filament-groups";
+import { loadFilamentSettings } from "@/lib/filament-settings";
 
 /**
  * Bildirim ucu — zil bunu SIK yoklar (~20 sn), bu yüzden turu ucuz tutulur:
  *
  *   - Kalıcı bildirim satırları ve yazıcı durumu HER istekte taze okunur (olay anı budur).
  *   - Düşük stok / sitede tükenen / azalan filament taraması KISA ÖMÜRLÜ önbellekten gelir:
- *     bu değerler dakikalar içinde değişir, her yoklamada üç tabloyu taramak gereksizdi.
+ *     bu değerler dakikalar içinde değişir, her yoklamada dört tabloyu taramak gereksizdi.
  *
  * Eşiği ilk geçen stok/filament durumları ayrıca kalıcı satıra yazılır (lib/order-watch) →
  * telefona da düşer. O satırlar buradaki anlık uyarılarla AYNI kimliği taşır, aşağıda tek
@@ -66,10 +68,6 @@ async function inventoryAlerts(): Promise<AppAlert[]> {
       take: 50,
     })
     .catch(() => []);
-  const spools = await prisma.filamentSpool.findMany({
-    where: { isActive: true },
-    select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
-  });
 
   for (const p of lowStock) {
     const empty = p.stock <= 0;
@@ -95,16 +93,24 @@ async function inventoryAlerts(): Promise<AppAlert[]> {
     });
   }
 
-  for (const s of spools.filter((x) => x.remainingGrams <= x.reorderGrams)) {
-    const empty = s.remainingGrams <= 0;
-    alerts.push({
-      id: `spool-${s.id}`,
-      type: "filament",
-      severity: empty ? "critical" : "warning",
-      title: empty ? "Filament bitti" : "Filament azaldı",
-      body: `${s.name} — ${Math.round(s.remainingGrams)} g kaldı`,
-      href: "/spools",
+  // FİLAMENT — v37: gram eşiği DEĞİL, grup (tür ailesi + renk tonu) başına KAPALI MAKARA SAYISI.
+  //
+  // Makara sorgusu da bu try/catch'in İÇİNDE: bu blok patlarsa stok + yazıcı + sipariş uyarıları
+  // da sessizce yok olurdu (dış catch her şeyi yutuyor) — üstelik sonuç 90 sn önbelleğe girdiği
+  // için kayıp sonraki yoklamalara da taşınırdı; kullanıcı bildirimlerinin gittiğini fark etmezdi.
+  try {
+    const spools = await prisma.filamentSpool.findMany({
+      where: { isActive: true },
+      select: {
+        id: true, name: true, material: true, brand: true,
+        colorName: true, colorHex: true, colorKey: true,
+        totalGrams: true, remainingGrams: true, openedAt: true,
+      },
     });
+    const filamentSettings = await loadFilamentSettings();
+    alerts.push(...buildFilamentAlerts(groupSpools(spools), filamentSettings));
+  } catch (filamentError) {
+    console.error("[notifications] filament uyarıları üretilemedi:", filamentError);
   }
 
   return alerts;

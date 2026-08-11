@@ -24,12 +24,21 @@ let schemaReady: Promise<void> | null = null;
 // v34: PlatformOrderFinancial + snapshot komisyon kaynağı — Trendyol gerçek komisyonu.
 // v35: Ayrılmış sürüm; gerçek kargo faturası entegrasyonu geri alındı.
 // v36: Geri alma damgası — v35 veritabanlarını standart CargoRule hesabıyla güvenle ileri taşır.
-// v37: OrderItemSnapshot — sipariş kalemlerinin kalıcı geçmişi (ürün bazlı satış tarihçesi).
+// v37: ⚠️ ÇAKIŞAN SÜRÜM — iki dal aynı numarayı FARKLI DDL için kullandı, ikisi de bu dosyada:
+//      (a) OrderItemSnapshot — sipariş kalemlerinin kalıcı geçmişi (ürün bazlı satış tarihçesi);
+//      (b) FilamentSpool.colorKey + openedAt — filament sekmesi "kapalı makara envanteri"ne geçti
+//      (gruplama tür ailesi + renk tonu; uyarı gram değil KAPALI MAKARA SAYISI eşiğine bakıyor).
+//      colorKey/openedAt NULLABLE olmalı: telefonun INSERT'ü kolonları elle sayıyor, NOT NULL
+//      eklersek telefondan makara ekleme anında kırılır.
 // v38: OrderFinanceSnapshot.outputVatKurus/inputVatCreditKurus — pazaryeri siparişlerinin KDV'si
 //      artık kayıtlı; aylık KDV özeti yalnız manuel siparişleri kapsamaktan çıkar.
+// v39: Birleştirme damgası — v37/v38 çakışmasını temizler. Fast-path damgayı TAM EŞİTLİKLE
+//      karşılaştırdığı için sahada "37" ya da "38" damgalı bir veritabanı iki dalın DDL'ini
+//      birden görmemiş olabilir; 39 her iki numaradan da büyük olduğundan tam tarama bir kez
+//      daha koşar. CREATE IF NOT EXISTS + ensureColumn idempotent, tekrar zararsız.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "38";
+const CURRENT_SCHEMA_VERSION = "39";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -847,10 +856,21 @@ export function ensureRuntimeSchema(): Promise<void> {
         "spoolCost" REAL,
         "reorderGrams" REAL NOT NULL DEFAULT 200,
         "vendorUrl" TEXT,
+        "colorKey" TEXT,
+        "openedAt" DATETIME,
         "isActive" BOOLEAN NOT NULL DEFAULT true,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+    // v37: MEVCUT veritabanları için (CREATE TABLE IF NOT EXISTS onlara dokunmaz).
+    // İkisi de NULLABLE — NOT NULL olsaydı varsayılan zorunlu olur ve telefonun elle yazılmış
+    // INSERT kolon listesi yüzünden telefondan makara ekleme kırılırdı.
+    await ensureColumn("FilamentSpool", "colorKey", "TEXT");
+    await ensureColumn("FilamentSpool", "openedAt", "DATETIME");
+    await bufDDL(`
+      CREATE INDEX IF NOT EXISTS "FilamentSpool_material_colorKey_idx"
+        ON "FilamentSpool"("material", "colorKey")
     `);
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "FilamentUsage" (
@@ -1146,10 +1166,16 @@ export function ensureRuntimeSchema(): Promise<void> {
     await migrateTrendyolProductsToListings();
     await migrateParentVariantsToGroups();
 
-    // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner
+    // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner.
+    // MONOTONİK: depodaki damga sayısal olarak DAHA BÜYÜKSE üzerine yazma. Kullanıcının Windows'u
+    // ve Mac'i AYNI bulut veritabanını kullanıyor; biri v37'ye geçip diğeri v36'da kalırsa damga
+    // sürekli ileri-geri yazılır ve İKİ makine de her açılışta tam şema taraması + kilit beklemesi
+    // yapar (veri bozulmaz, ama açılış yavaşlar). Bu koşulla yalnız geride kalan makine yeniden
+    // göç koşar; güncel makine fast-path'te kalır.
     await prisma.$executeRawUnsafe(
       `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value
+       WHERE CAST(excluded.value AS INTEGER) >= CAST(AppSetting.value AS INTEGER)`,
       CURRENT_SCHEMA_VERSION
     );
     // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.

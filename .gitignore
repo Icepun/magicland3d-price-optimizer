@@ -72,6 +72,9 @@ scripts/*.local.sh
 perf.log
 .schema-version
 
+# yerel geliştirme verisi (makineye özel, paylaşılmaz)
+.devdata/
+
 # Yazıcı entegrasyonu için kök dizine indirilmiş üçüncü taraf kaynak dökümleri
 # (Moonraker / Klipper / Snapmaker). Referans amaçlı, depoya girmemeli.
 /_c.txt
