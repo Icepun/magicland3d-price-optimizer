@@ -10,7 +10,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { FinanceSnapshotOrder } from "./order-finance-snapshots";
+import type {
+  FinanceSnapshotItem,
+  FinanceSnapshotOrder,
+} from "./order-finance-snapshots";
 
 const tempDir = mkdtempSync(path.join(tmpdir(), "magicland-snapshot-test-"));
 process.env.DATABASE_URL = `file:${path.join(tempDir, "test.db")}`;
@@ -36,6 +39,27 @@ function order(overrides: Partial<FinanceSnapshotOrder> = {}): FinanceSnapshotOr
     currency: "TRY",
     ...overrides,
   };
+}
+
+function items(...rows: Array<Partial<FinanceSnapshotItem>>): FinanceSnapshotItem[] {
+  return rows.map((row) => ({
+    productId: row.productId ?? null,
+    productName: row.productName ?? "Ürün",
+    quantity: row.quantity ?? 1,
+    unitPrice: row.unitPrice ?? 100,
+  }));
+}
+
+/** Kalem satırları — Prisma istemcisi yeniden üretilmeden çalışsın diye ham sorguyla okunur. */
+async function itemRows(
+  externalOrderId: string
+): Promise<Array<Record<string, unknown>>> {
+  return db.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT "lineIndex","productId","productName","quantity","unitPriceKurus",
+            "lineRevenueKurus","statusKind","currency","syncedAt"
+       FROM "OrderItemSnapshot" WHERE "externalOrderId" = ? ORDER BY "lineIndex"`,
+    externalOrderId
+  );
 }
 
 async function syncedAtOf(externalOrderId: string): Promise<number | null> {
@@ -148,6 +172,11 @@ describe("persistOrderFinanceSnapshots — değişen-only yazma", () => {
     expect(await syncedAtOf("ty-3001")).toBe(before); // ← idempotent
   });
 
+  it("kalem verilmeyen sipariş için kalem geçmişine hiç dokunmaz", async () => {
+    await persist([order({ id: "ty-4001", orderNumber: "4001" })]);
+    expect(await itemRows("ty-4001")).toHaveLength(0);
+  });
+
   it("manuel siparişi ve tarihsizi yok sayar (çift sayım koruması)", async () => {
     await persist([
       order({ platform: "manual", id: "manual-9", orderNumber: "M9" }),
@@ -159,5 +188,106 @@ describe("persistOrderFinanceSnapshots — değişen-only yazma", () => {
     expect(
       await db.orderFinanceSnapshot.findFirst({ where: { externalOrderId: "ty-9999" } })
     ).toBeNull();
+  });
+});
+
+describe("ürün bazlı satış geçmişi (kalem satırları)", () => {
+  const base = order({ id: "ty-5001", orderNumber: "5001" });
+
+  it("kalemleri sipariş özetiyle aynı turda kaydeder", async () => {
+    await persist(
+      [base],
+      new Map([
+        [
+          "ty-5001",
+          items(
+            { productId: "p1", productName: "Kedi Figürü", quantity: 2, unitPrice: 74.9 },
+            { productId: null, productName: "Bilinmeyen Ürün", quantity: 1, unitPrice: 100.2 }
+          ),
+        ],
+      ])
+    );
+
+    const rows = await itemRows("ty-5001");
+    expect(rows).toHaveLength(2);
+    expect(Number(rows[0].quantity)).toBe(2);
+    expect(String(rows[0].productId)).toBe("p1");
+    expect(Number(rows[0].unitPriceKurus)).toBe(7_490);
+    expect(Number(rows[0].lineRevenueKurus)).toBe(14_980);
+    expect(rows[1].productId).toBeNull();
+    expect(String(rows[1].productName)).toBe("Bilinmeyen Ürün");
+    expect(String(rows[0].statusKind)).toBe("delivered");
+  });
+
+  it("aynı sipariş tekrar işlenince satırlar ÇOĞALMAZ ve yeniden yazılmaz", async () => {
+    const sameItems = new Map([
+      [
+        "ty-5001",
+        items(
+          { productId: "p1", productName: "Kedi Figürü", quantity: 2, unitPrice: 74.9 },
+          { productId: null, productName: "Bilinmeyen Ürün", quantity: 1, unitPrice: 100.2 }
+        ),
+      ],
+    ]);
+    const before = (await itemRows("ty-5001")).map((r) => Number(r.syncedAt));
+    await new Promise((r) => setTimeout(r, 30));
+
+    await persist([base], sameItems);
+
+    const after = await itemRows("ty-5001");
+    expect(after).toHaveLength(2);
+    expect(after.map((r) => Number(r.syncedAt))).toEqual(before); // ← yazma olmadı
+  });
+
+  it("kalem sayısı azalınca artık satırları siler", async () => {
+    await persist(
+      [base],
+      new Map([
+        ["ty-5001", items({ productId: "p1", productName: "Kedi Figürü", quantity: 3, unitPrice: 74.9 })],
+      ])
+    );
+
+    const rows = await itemRows("ty-5001");
+    expect(rows).toHaveLength(1);
+    expect(Number(rows[0].quantity)).toBe(3);
+  });
+
+  it("kalemler bir tur hiç gelmezse kayıtlı geçmişi SİLMEZ", async () => {
+    await persist([base], new Map([["ty-5001", []]]));
+
+    expect(await itemRows("ty-5001")).toHaveLength(1);
+  });
+
+  it("iptal edilen siparişin kalemlerini durumuyla birlikte saklar", async () => {
+    const cancelled = order({
+      id: "ty-5002",
+      orderNumber: "5002",
+      statusKind: "cancelled",
+    });
+    await persist(
+      [cancelled],
+      new Map([["ty-5002", items({ productId: "p9", productName: "İade Edilen", quantity: 1 })]])
+    );
+
+    const rows = await itemRows("ty-5002");
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].statusKind)).toBe("cancelled");
+  });
+
+  it("Shopify siparişini özetle aynı kanonik kimlik altında kaydeder", async () => {
+    await persist(
+      [
+        order({
+          platform: "shopify",
+          id: "gid://shopify/Order/777",
+          orderNumber: "#777",
+        }),
+      ],
+      new Map([
+        ["gid://shopify/Order/777", items({ productId: "p2", productName: "Kupa", quantity: 1 })],
+      ])
+    );
+
+    expect(await itemRows("sh-777")).toHaveLength(1);
   });
 });

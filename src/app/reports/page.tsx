@@ -340,8 +340,8 @@ export default function ReportsPage() {
           {financeQuery.data && (
             <p className="text-xs text-muted-foreground mt-1">
               {financeQuery.data.actualCommissionOrders > 0
-                ? `${financeQuery.data.actualCommissionOrders} Trendyol sipariş/paket kaydında gerçek komisyon hazır.`
-                : "Trendyol komisyonları henüz platformdan alınmadı."}
+                ? `${financeQuery.data.actualCommissionOrders} Trendyol siparişinde gerçek komisyon kullanılıyor.`
+                : "Trendyol komisyonları henüz alınmadı."}
             </p>
           )}
         </div>
@@ -412,15 +412,22 @@ export default function ReportsPage() {
               <Card className="border-amber-500/40 bg-amber-500/5">
                 <CardContent className="p-4 flex gap-3">
                   <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
-                  <div className="text-sm">
-                    <p className="font-medium">
-                      Bu yenileme finans geçmişine kaydedilemedi.
-                    </p>
+                  <div className="text-sm min-w-0">
+                    <p className="font-medium">Bu yenileme kaydedilemedi.</p>
                     <p className="text-muted-foreground mt-0.5">
-                      Aylık grafik önceki kayıtları gösteriyor. Siparişleri yeniden yenile;
-                      sürerse hata:{" "}
-                      {ordersQuery.data.financeHistory.error ?? "bilinmiyor"}
+                      Aylık grafik önceki kayıtları gösteriyor — siparişleri yeniden yenile.
                     </p>
+                    {/* Cihazın/servisin ham hata metni kullanıcıya hitap etmiyor → istenirse açılır. */}
+                    {ordersQuery.data.financeHistory.error && (
+                      <details className="group mt-1">
+                        <summary className="cursor-pointer select-none text-xs text-muted-foreground/70 hover:text-foreground transition-colors">
+                          Ayrıntı
+                        </summary>
+                        <p className="mt-1 text-xs text-muted-foreground break-words">
+                          {ordersQuery.data.financeHistory.error}
+                        </p>
+                      </details>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -490,11 +497,11 @@ export default function ReportsPage() {
                 <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">
-                    {financeQuery.data?.quality.unsupportedCurrencyOrders} sipariş TRY
-                    olmadığı için toplama katılmadı.
+                    {financeQuery.data?.quality.unsupportedCurrencyOrders} sipariş farklı
+                    para biriminde olduğu için toplama katılmadı.
                   </p>
                   <p className="text-muted-foreground mt-0.5">
-                    Döviz tutarı TL maliyetlerle doğrudan karıştırılmadı.
+                    Bu siparişler TL toplamlarına eklenmedi.
                   </p>
                 </div>
               </CardContent>
@@ -583,11 +590,8 @@ export default function ReportsPage() {
               )}
               {financeQuery.data?.dataFrom && (
                 <p className="text-xs text-muted-foreground mt-3 border-t border-border/50 pt-3">
-                  Finans geçmişi {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden
-                  beri kaydediliyor. İlk kurulumda erişilebilen son 60 gün doldurulur ve
-                  bu pencerenin iade/iptalleri yenilenir; daha eski geç değişiklikler
-                  otomatik yakalanmayabilir. Sipariş kârı ilk tam hesaplandığında saklanır,
-                  maliyeti eksik kayıt tamamlanınca güncellenir.
+                  Grafik {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden bu yana
+                  toplanan verilerle çiziliyor.
                 </p>
               )}
             </CardContent>

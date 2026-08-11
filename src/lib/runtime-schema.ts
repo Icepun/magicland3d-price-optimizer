@@ -24,9 +24,10 @@ let schemaReady: Promise<void> | null = null;
 // v34: PlatformOrderFinancial + snapshot komisyon kaynağı — Trendyol gerçek komisyonu.
 // v35: Ayrılmış sürüm; gerçek kargo faturası entegrasyonu geri alındı.
 // v36: Geri alma damgası — v35 veritabanlarını standart CargoRule hesabıyla güvenle ileri taşır.
+// v37: OrderItemSnapshot — sipariş kalemlerinin kalıcı geçmişi (ürün bazlı satış tarihçesi).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "36";
+const CURRENT_SCHEMA_VERSION = "37";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -698,6 +699,42 @@ export function ensureRuntimeSchema(): Promise<void> {
     );
     await ensureColumn("OrderFinanceSnapshot", "estimatedCommissionKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "actualCommissionKurus", "INTEGER");
+    // v37: Sipariş KALEMLERİ. Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu
+    // yanıtlamıyordu ve platform penceresi (30-60 gün) dolunca o bilgi kalıcı olarak kayboluyordu.
+    // Tekilleştirme (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "OrderItemSnapshot" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalOrderId" TEXT NOT NULL,
+        "lineIndex" INTEGER NOT NULL,
+        "orderedAt" DATETIME NOT NULL,
+        "productId" TEXT,
+        "productName" TEXT NOT NULL,
+        "quantity" INTEGER NOT NULL,
+        "unitPriceKurus" INTEGER NOT NULL,
+        "lineRevenueKurus" INTEGER NOT NULL,
+        "statusKind" TEXT NOT NULL,
+        "currency" TEXT NOT NULL DEFAULT 'TRY',
+        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "OrderItemSnapshot_platform_externalOrderId_lineIndex_key"
+       ON "OrderItemSnapshot"("platform", "externalOrderId", "lineIndex")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_orderedAt_idx"
+       ON "OrderItemSnapshot"("orderedAt")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_productId_orderedAt_idx"
+       ON "OrderItemSnapshot"("productId", "orderedAt")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_statusKind_orderedAt_idx"
+       ON "OrderItemSnapshot"("statusKind", "orderedAt")`
+    );
     // v34: Pazaryeri finans hareketi ana sipariş hattından ayrı senkronlanır. Böylece
     // Siparişler ekranı hiçbir zaman settlement API'sini beklemez.
     await bufDDL(`

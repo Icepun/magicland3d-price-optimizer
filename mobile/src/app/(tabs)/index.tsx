@@ -1,9 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { FadeInView } from "@/components/fade-in";
+import { AnimatedBar, AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { useMemo } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -21,8 +20,8 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
-import { formatCurrency, formatPercent } from "@/lib/format";
-import { ML, radius } from "@/theme/colors";
+import { formatCurrency, formatNumber, formatPercent, friendlyError } from "@/lib/format";
+import { ML, motion, radius } from "@/theme/colors";
 import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 
 export default function DashboardScreen() {
@@ -121,16 +120,14 @@ export default function DashboardScreen() {
 
       {isError ? (
         <View style={styles.center}>
-          <Text style={styles.errorTitle}>Bağlanılamadı</Text>
-          <Text style={styles.subtitle}>{(error as Error)?.message}</Text>
+          <Text style={styles.errorTitle}>Veriler alınamadı</Text>
+          <Text style={styles.subtitle}>{friendlyError(error)}</Text>
           <Pressable onPress={() => refetchProducts()} style={styles.retryBtn}>
             <Text style={styles.retryText}>Tekrar dene</Text>
           </Pressable>
         </View>
       ) : isLoading || !summary ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <DashboardSkeleton />
       ) : (
         <ScrollView
           contentContainerStyle={styles.content}
@@ -139,59 +136,89 @@ export default function DashboardScreen() {
           }
         >
           {/* Son 30 gün ciro/kâr */}
-          <View style={styles.revCard}>
+          <FadeInView style={styles.revCard}>
             <Text style={styles.revLabel}>SON 30 GÜN</Text>
             <View style={styles.revTopRow}>
               <View>
                 <Text style={styles.revCiroLabel}>Ciro</Text>
-                <Text style={styles.revCiro}>{rev ? formatCurrency(rev.total) : "…"}</Text>
+                {rev ? (
+                  <AnimatedNumber
+                    value={rev.total}
+                    format={(n) => formatCurrency(n)}
+                    style={styles.revCiro}
+                  />
+                ) : (
+                  <Skeleton width={150} height={28} style={{ marginTop: 4 }} />
+                )}
               </View>
               <View style={{ alignItems: "flex-end" }}>
                 <Text style={styles.revCiroLabel}>Sipariş kârı</Text>
-                <Text style={[styles.revProfit, { color: (rev?.profit ?? 0) < 0 ? ML.red : ML.green }]}>
-                  {rev ? formatCurrency(rev.profit) : "…"}
-                </Text>
+                {rev ? (
+                  <AnimatedNumber
+                    value={rev.profit}
+                    format={(n) => formatCurrency(n)}
+                    style={[styles.revProfit, { color: rev.profit < 0 ? ML.red : ML.green }]}
+                  />
+                ) : (
+                  <Skeleton width={110} height={22} delay={90} style={{ marginTop: 4 }} />
+                )}
               </View>
             </View>
             <View style={styles.revSplit}>
-              {ORDER_PLATFORMS.map((plat) => (
+              {ORDER_PLATFORMS.map((plat, i) => (
                 <View key={plat} style={styles.revPlat}>
                   <View style={[styles.dot, { backgroundColor: ML[plat] }]} />
-                  <Text style={styles.revPlatText}>
-                    {ORDER_PLATFORM_LABEL[plat]} {rev ? formatCurrency(rev.byPlat[plat].rev) : "…"}
-                    <Text style={styles.revPlatN}>{rev ? `  ${rev.byPlat[plat].n}` : ""}</Text>
-                  </Text>
+                  <Text style={styles.revPlatText}>{ORDER_PLATFORM_LABEL[plat]}</Text>
+                  {rev ? (
+                    <>
+                      <AnimatedNumber
+                        value={rev.byPlat[plat].rev}
+                        format={(n) => formatCurrency(n)}
+                        style={styles.revPlatText}
+                      />
+                      <AnimatedNumber
+                        value={rev.byPlat[plat].n}
+                        format={(n) => formatNumber(Math.round(n))}
+                        style={styles.revPlatN}
+                      />
+                    </>
+                  ) : (
+                    <Skeleton width={92} height={12} delay={i * 70} />
+                  )}
                 </View>
               ))}
             </View>
-          </View>
+          </FadeInView>
 
           {/* Stok/ürün durumu */}
           <View style={styles.grid}>
             <Stat
               label="Toplam Ürün"
-              value={String(summary.totalProducts)}
+              value={summary.totalProducts}
               tone="accent"
+              index={0}
               onPress={() => router.push({ pathname: "/products", params: { filter: "all" } })}
             />
             <Stat
               label="Stokta Biten"
-              value={String(summary.outOfStock)}
+              value={summary.outOfStock}
               tone="orange"
+              index={1}
               onPress={() => router.push({ pathname: "/products", params: { filter: "out-of-stock" } })}
             />
             <Stat
               label="Zarar Eden Ürün"
-              value={String(summary.lossListings)}
+              value={summary.lossListings}
               tone="red"
+              index={2}
               onPress={() => router.push({ pathname: "/products", params: { filter: "loss" } })}
               wide
             />
           </View>
 
           <Text style={styles.sectionLabel}>PLATFORM BAZLI (MARJ)</Text>
-          {summary.platforms.map((p) => (
-            <PlatformRow key={p.platform} p={p} />
+          {summary.platforms.map((p, i) => (
+            <PlatformRow key={p.platform} p={p} index={i} />
           ))}
 
           {summary.missingCost > 0 && (
@@ -205,10 +232,11 @@ export default function DashboardScreen() {
   );
 }
 
-function PlatformRow({ p }: { p: PlatformSummary }) {
+function PlatformRow({ p, index }: { p: PlatformSummary; index: number }) {
   const accent = ML[p.platform];
+  const lossPct = p.listingCount > 0 ? (p.lossCount / p.listingCount) * 100 : 0;
   return (
-    <FadeInView duration={360} baseDelay={120} style={styles.platformCard}>
+    <FadeInView index={index} baseDelay={140} style={styles.platformCard}>
       <View style={styles.platformHead}>
         <View style={[styles.dot, { backgroundColor: accent }]} />
         <Text style={[styles.platformName, { color: accent }]}>
@@ -219,17 +247,28 @@ function PlatformRow({ p }: { p: PlatformSummary }) {
       <View style={styles.platformStats}>
         <View>
           <Text style={styles.miniLabel}>Ortalama Marj</Text>
-          <Text style={[styles.miniValue, { color: p.avgMargin < 0 ? ML.red : ML.green }]}>
-            {formatPercent(p.avgMargin)}
-          </Text>
+          <AnimatedNumber
+            value={p.avgMargin}
+            format={(n) => formatPercent(n)}
+            style={[styles.miniValue, { color: p.avgMargin < 0 ? ML.red : ML.green }]}
+          />
         </View>
         <View style={{ alignItems: "flex-end" }}>
           <Text style={styles.miniLabel}>Zarar Eden</Text>
-          <Text style={[styles.miniValue, { color: p.lossCount ? ML.red : ML.textDim }]}>
-            {p.lossCount} / {p.listingCount}
-          </Text>
+          <AnimatedNumber
+            value={p.lossCount}
+            format={(n) => `${formatNumber(Math.round(n))} / ${formatNumber(p.listingCount)}`}
+            style={[styles.miniValue, { color: p.lossCount ? ML.red : ML.textDim }]}
+          />
         </View>
       </View>
+      <AnimatedBar
+        percent={lossPct}
+        color={ML.red}
+        height={5}
+        minPercent={lossPct > 0 ? 3 : 0}
+        delay={index * motion.stagger}
+      />
     </FadeInView>
   );
 }
@@ -239,26 +278,71 @@ function Stat({
   value,
   tone,
   wide,
+  index,
   onPress,
 }: {
   label: string;
-  value: string;
+  value: number;
   tone: "accent" | "green" | "red" | "orange";
   wide?: boolean;
+  index: number;
   onPress?: () => void;
 }) {
   const color = { accent: ML.accent, green: ML.green, red: ML.red, orange: ML.orange }[tone];
   return (
-    <FadeInView duration={320} style={[wide && styles.statWide, !wide && styles.statHalf]}>
+    <FadeInView index={index} style={[wide && styles.statWide, !wide && styles.statHalf]}>
       <Pressable
         onPress={onPress}
         style={({ pressed }) => [styles.stat, pressed && onPress ? { opacity: 0.7 } : null]}
       >
         <Text style={styles.statLabel}>{label}</Text>
-        <Text style={[styles.statValue, { color }]}>{value}</Text>
+        <AnimatedNumber
+          value={value}
+          format={(n) => formatNumber(Math.round(n))}
+          style={[styles.statValue, { color }]}
+        />
         {onPress ? <Text style={styles.statChevron}>›</Text> : null}
       </Pressable>
     </FadeInView>
+  );
+}
+
+/** Panel yüklenirken kartların yerini tutan iskelet — boş ekran ya da tek çark yerine. */
+function DashboardSkeleton() {
+  return (
+    <View style={styles.content}>
+      <View style={styles.revCard}>
+        <Skeleton width={90} height={11} />
+        <View style={styles.revTopRow}>
+          <View style={{ gap: 8 }}>
+            <Skeleton width={54} height={11} />
+            <Skeleton width={160} height={28} delay={60} />
+          </View>
+          <View style={{ gap: 8, alignItems: "flex-end" }}>
+            <Skeleton width={72} height={11} delay={40} />
+            <Skeleton width={104} height={22} delay={100} />
+          </View>
+        </View>
+        <View style={styles.revSplit}>
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} width="62%" height={12} delay={140 + i * 60} />
+          ))}
+        </View>
+      </View>
+      <View style={styles.grid}>
+        <View style={styles.statHalf}>
+          <SkeletonCard height={92} />
+        </View>
+        <View style={styles.statHalf}>
+          <SkeletonCard height={92} delay={80} />
+        </View>
+        <View style={styles.statWide}>
+          <SkeletonCard height={92} delay={160} />
+        </View>
+      </View>
+      <SkeletonCard height={104} delay={240} />
+      <SkeletonCard height={104} delay={320} />
+    </View>
   );
 }
 

@@ -4,7 +4,6 @@ import { router } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
 import { useMemo } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   RefreshControl,
   StyleSheet,
@@ -20,7 +19,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { formatCurrency, formatDate } from "@/lib/format";
-import { FadeInView } from "@/components/fade-in";
+import { FadeInView, Skeleton } from "@/components/fade-in";
 import { ML, radius } from "@/theme/colors";
 
 const TONE: Record<StatusTone, string> = {
@@ -87,10 +86,7 @@ export default function OrdersScreen() {
       </View>
 
       {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-          <Text style={styles.dim}>Siparişler getiriliyor…</Text>
-        </View>
+        <OrderListSkeleton />
       ) : (
         <FlashList
           data={shown}
@@ -102,11 +98,9 @@ export default function OrdersScreen() {
           ListHeaderComponent={
             data?.errors.length ? (
               <View style={styles.errBox}>
-                {data.errors.map((e, i) => (
-                  <Text key={i} style={styles.errText} numberOfLines={2}>
-                    ⚠ {e}
-                  </Text>
-                ))}
+                <Text style={styles.errText}>
+                  {failedChannels(data.errors)} siparişleri şu an alınamadı.
+                </Text>
               </View>
             ) : null
           }
@@ -127,6 +121,41 @@ export default function OrdersScreen() {
         />
       )}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Hangi satış kanalının gelmediğini yazar; teknik hata metni ekrana ASLA basılmaz.
+ * Kaynak dizideki her kayıt "Kanal: ham hata" biçiminde geliyor — yalnız kanal adı alınır.
+ */
+function failedChannels(errors: string[]): string {
+  const names = errors
+    .map((e) => e.split(":")[0]?.trim())
+    .filter((n): n is string => Boolean(n));
+  const unique = [...new Set(names)];
+  if (unique.length === 0) return "Bazı satış kanalları";
+  if (unique.length === 1) return unique[0];
+  return `${unique.slice(0, -1).join(", ")} ve ${unique[unique.length - 1]}`;
+}
+
+/** Siparişler yüklenirken kartların yerini tutan iskelet. */
+function OrderListSkeleton() {
+  return (
+    <View style={styles.skeletonList}>
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <View key={i} style={styles.skeletonRow}>
+          <Skeleton width={52} height={52} radius={14} delay={i * 70} />
+          <View style={styles.skeletonBody}>
+            <Skeleton width="55%" height={14} delay={i * 70 + 40} />
+            <Skeleton width="75%" height={11} delay={i * 70 + 90} />
+          </View>
+          <View style={styles.skeletonRight}>
+            <Skeleton width={70} height={14} delay={i * 70 + 120} />
+            <Skeleton width={54} height={12} delay={i * 70 + 160} />
+          </View>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -234,7 +263,6 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   addButtonText: { color: ML.accent, fontSize: 14, fontWeight: "800" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
   dim: { color: ML.textDim, fontSize: 14 },
   list: { padding: 16, paddingBottom: 24 },
   errBox: {
@@ -247,6 +275,19 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   errText: { color: ML.red, fontSize: 12 },
+  skeletonList: { padding: 16, gap: 10 },
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: ML.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    padding: 12,
+  },
+  skeletonBody: { flex: 1, gap: 8 },
+  skeletonRight: { alignItems: "flex-end", gap: 8 },
   card: {
     flexDirection: "row",
     alignItems: "center",

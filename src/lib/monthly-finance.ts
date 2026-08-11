@@ -126,6 +126,56 @@ export function recentMonthKeys(
   return result;
 }
 
+/** Bir anın, verilen saat diliminde UTC'ye göre kaç ms ileride/geride olduğu. */
+function zoneOffsetMs(instant: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(instant);
+  const pick = (type: string) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const asUtc = Date.UTC(
+    pick("year"),
+    pick("month") - 1,
+    pick("day"),
+    pick("hour"),
+    pick("minute"),
+    pick("second")
+  );
+  return asUtc - instant.getTime();
+}
+
+/**
+ * İstenen ay penceresinin ilk anı (UTC karşılığı).
+ *
+ * NEDEN: aylık finans sorgusu tarih sınırı olmadan TÜM geçmişi çekiyordu; oysa pencere
+ * dışındaki satırlar zaten hiçbir aya düşmeden eleniyor. Sorguyu bu ana göre daraltmak
+ * hiçbir rakamı değiştirmez, yalnız okunan satır sayısını sabitler.
+ */
+export function monthlyFinanceWindowStart(
+  monthCount: number,
+  now = new Date(),
+  timeZone = FINANCE_TIME_ZONE
+): Date {
+  const [year, month] = recentMonthKeys(monthCount, now, timeZone)[0]
+    .split("-")
+    .map(Number);
+  const naive = Date.UTC(year, month - 1, 1, 0, 0, 0);
+  // İki adımda yakınsa: ilk tahminin bölge kayması ölçülür, düzeltilir ve doğrulanır.
+  // (Yaz saati geçişi ayın ilk gününe denk gelse bile doğru sonuç verir.)
+  let instant = naive;
+  for (let pass = 0; pass < 2; pass++) {
+    instant = naive - zoneOffsetMs(new Date(instant), timeZone);
+  }
+  return new Date(instant);
+}
+
 export function aggregateMonthlyFinance({
   snapshots,
   manualOrders = [],

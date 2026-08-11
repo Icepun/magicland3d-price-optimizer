@@ -193,7 +193,7 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
 
   const startPart = (part: LibFile) => { if (multiColor) setPicked(part); else runPrint(part.id); };
 
-  // Çok renkli (Bambu/Snapmaker) → renk/slot eşleme adımı (paylaşılan SlotStep).
+  // Çok renkli (Bambu/Snapmaker) → renk eşleme adımı (paylaşılan SlotStep).
   if (picked) {
     const model: PrintableModel = {
       fileId: picked.id, productId: product.productId, productName: product.name, imageUrl: product.imageUrl,
@@ -212,7 +212,7 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> {product.name}</DialogTitle>
-          <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. {multiColor ? "Parçaya bas → renk/slot eşle → baskı." : "Bir parçaya bas → yazıcıya yüklenip baskı başlar."}</p>
+          <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. {multiColor ? "Parçaya bas → renkleri seç → baskı başlar." : "Bir parçaya bas → yazıcıya yüklenip baskı başlar."}</p>
         </DialogHeader>
         <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {parts.map((part, i) => (
@@ -232,7 +232,7 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
         </div>
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
         <p className="text-[11px] text-muted-foreground/70">
-          Çok parçalı baskıda parçaları sırayla bas (biri biterken diğerini başlat). Otomatik kuyruk sonraki güncellemede.
+          Çok parçalı baskıda parçaları sırayla bas — biri biterken diğerini başlat.
         </p>
       </DialogContent>
     </Dialog>

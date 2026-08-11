@@ -55,10 +55,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // Adres/durum kodu kullanıcıya hitap etmiyor → sade bir mesaja düş.
     const msg =
       body && typeof body === "object" && "error" in body
         ? String((body as { error: unknown }).error)
-        : `${url} ${res.status}`;
+        : "İşlem tamamlanamadı";
     throw new Error(msg);
   }
   return body as T;
@@ -66,7 +67,7 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 // ───────────── Trendyol Form ─────────────
 const TrendyolSchema = z.object({
-  sellerId: z.string().min(1, "Seller ID gerekli"),
+  sellerId: z.string().min(1, "Satıcı ID gerekli"),
   apiKey: z.string().optional(),
   apiSecret: z.string().optional(),
   integratorName: z.string().default("SelfIntegration"),
@@ -129,7 +130,7 @@ function TrendyolTab() {
       ),
     onSuccess: (d, mode) => {
       if (mode === "add-new") {
-        toast.success(`Trendyol: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} eşleşmemiş havuzda`);
+        toast.success(`Trendyol: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} ürün eşleşme bekliyor`);
       } else {
         toast.success(`Trendyol fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
       }
@@ -145,33 +146,33 @@ function TrendyolTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" /> Trendyol API
+            <ShieldCheck className="h-4 w-4" /> Trendyol Bağlantısı
           </CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={form.handleSubmit((d) => save.mutate(d))} className="space-y-3">
             <div>
-              <Label className="text-xs">Seller ID</Label>
+              <Label className="text-xs">Satıcı ID</Label>
               <Input {...form.register("sellerId")} placeholder="123456" />
             </div>
             <div>
-              <Label className="text-xs">API Key</Label>
+              <Label className="text-xs">API Anahtarı</Label>
               <Input
                 {...form.register("apiKey")}
                 type="password"
-                placeholder={settings?.hasApiKey ? settings.apiKeyMasked : "Yeni API key girin"}
+                placeholder={settings?.hasApiKey ? settings.apiKeyMasked : "Yeni anahtarı gir"}
               />
             </div>
             <div>
-              <Label className="text-xs">API Secret</Label>
+              <Label className="text-xs">API Gizli Anahtarı</Label>
               <Input
                 {...form.register("apiSecret")}
                 type="password"
-                placeholder={settings?.hasApiSecret ? settings.apiSecretMasked : "Yeni secret girin"}
+                placeholder={settings?.hasApiSecret ? settings.apiSecretMasked : "Yeni gizli anahtarı gir"}
               />
             </div>
             <div>
-              <Label className="text-xs">Integrator Name</Label>
+              <Label className="text-xs">Entegratör Adı</Label>
               <Input {...form.register("integratorName")} />
             </div>
             <Button type="submit" size="sm" disabled={save.isPending}>
@@ -234,8 +235,7 @@ function SyncProgressCard({ platform }: { platform: string }) {
           />
         </div>
         <p className="text-xs text-muted-foreground">
-          {platform} API taranıyor. Mağaza büyüklüğüne göre 10 saniye – birkaç dakika
-          sürebilir. Bu pencereyi kapatma.
+          {platform} ürünleri taranıyor. Mağaza büyüklüğüne göre birkaç dakika sürebilir.
         </p>
       </CardContent>
     </Card>
@@ -297,7 +297,7 @@ function ShopifyTab() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["shopify-settings"] });
       qc.invalidateQueries({ queryKey: ["integrations-status"] });
-      toast.success("Shopify token silindi");
+      toast.success("Shopify bağlantısı kaldırıldı");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -331,7 +331,7 @@ function ShopifyTab() {
       ),
     onSuccess: (d, mode) => {
       if (d.totalProducts === 0) {
-        toast.error("Shopify mağazasında ürün bulunamadı. Storefront izinleri açık mı?");
+        toast.error("Shopify mağazanda ürün bulunamadı — ürün okuma izinlerini kontrol et");
       } else if (mode === "add-new") {
         toast.success(`Shopify: ${d.added ?? 0} yeni ürün eklendi`);
       } else {
@@ -348,11 +348,10 @@ function ShopifyTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
-            <ShoppingBag className="h-4 w-4" /> Shopify API
+            <ShoppingBag className="h-4 w-4" /> Shopify Bağlantısı
           </CardTitle>
           <p className="text-[11px] text-muted-foreground mt-1">
-            Admin API Access Token ile çalışır. Aşağıdaki rehberi açıp adımları
-            izle.
+            Aşağıdaki adımları izleyerek mağazanı bağla.
           </p>
         </CardHeader>
         <CardContent>
@@ -365,7 +364,7 @@ function ShopifyTab() {
             <ShopifyStorefrontGuide />
 
             <div>
-              <Label className="text-xs">Storefront Private Access Token</Label>
+              <Label className="text-xs">Ürün Erişim Anahtarı</Label>
               <Input
                 {...form.register("storefrontAccessToken")}
                 type="password"
@@ -377,28 +376,27 @@ function ShopifyTab() {
               />
               <p className="text-[10px] text-muted-foreground mt-1">
                 {settings?.hasStorefrontAccessToken
-                  ? "Token kayıtlı. Değiştirmek istemiyorsan boş bırak."
-                  : `Headless kanalı → Storefront API → "Özel Erişim Belirteci" üzerinden kopyala.`}
+                  ? "Anahtar kayıtlı. Değiştirmek istemiyorsan boş bırak."
+                  : `Shopify'da Headless → "Özel Erişim Belirteci" bölümünden kopyala.`}
               </p>
             </div>
 
             <div className="rounded-md border border-border/60 bg-muted/20 p-3 space-y-2.5">
               <Label className="text-xs flex items-center gap-1.5">
-                <KeyRound className="h-3.5 w-3.5" /> Siparişler için — Client ID + Secret (opsiyonel)
+                <KeyRound className="h-3.5 w-3.5" /> Siparişler için (opsiyonel)
               </Label>
               <p className="text-[10px] text-muted-foreground leading-relaxed">
-                Siparişleri görmek için gerekir (Storefront token siparişleri vermez). Shopify dev
-                dashboard → uygulaman → <strong>Ayarlar → Kimlik bilgileri</strong>&apos;ndeki{" "}
-                <strong>İstemci Kimliği</strong> ve <strong>Gizli anahtar</strong>&apos;ı gir. Uygulama
-                bunlarla 24 saatlik erişim token&apos;ını otomatik üretir ve yeniler. Uygulamanın erişim
-                kapsamlarında <strong>sipariş okuma (read_orders)</strong> açık olmalı.
+                Siparişleri görebilmek için gerekir. Shopify uygulamanın{" "}
+                <strong>Ayarlar → Kimlik bilgileri</strong> bölümündeki{" "}
+                <strong>İstemci Kimliği</strong> ve <strong>Gizli anahtar</strong>&apos;ı gir;
+                uygulamanın sipariş okuma izni açık olsun.
               </p>
               <div>
-                <Label className="text-[11px] text-muted-foreground">İstemci Kimliği (Client ID)</Label>
+                <Label className="text-[11px] text-muted-foreground">İstemci Kimliği</Label>
                 <Input {...form.register("clientId")} placeholder="örn. a6aa7fdbb1421cd9..." />
               </div>
               <div>
-                <Label className="text-[11px] text-muted-foreground">Gizli Anahtar (Client Secret)</Label>
+                <Label className="text-[11px] text-muted-foreground">Gizli Anahtar</Label>
                 <Input
                   {...form.register("clientSecret")}
                   type="password"
@@ -413,7 +411,7 @@ function ShopifyTab() {
             </div>
 
             <div>
-              <Label className="text-xs">API Versiyonu (opsiyonel)</Label>
+              <Label className="text-xs">Bağlantı Sürümü (opsiyonel)</Label>
               <Input {...form.register("apiVersion")} placeholder="2024-10" />
             </div>
             <Button type="submit" size="sm" disabled={save.isPending}>
@@ -428,10 +426,10 @@ function ShopifyTab() {
           <CardContent className="pt-4 pb-4 flex items-center justify-between gap-3">
             <div className="text-sm">
               <div className="flex items-center gap-2 font-medium text-green-500">
-                ✓ Storefront token kayıtlı
+                ✓ Mağaza bağlı
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {settings.shopDomain} · token: {settings.storefrontAccessTokenMasked}
+                {settings.shopDomain}
               </p>
             </div>
             <Button
@@ -439,12 +437,12 @@ function ShopifyTab() {
               variant="outline"
               disabled={disconnect.isPending}
               onClick={() => {
-                if (confirm("Storefront token silinsin mi? Yeniden yapıştırman gerekir.")) {
+                if (confirm("Kayıtlı erişim anahtarı silinsin mi? Yeniden girmen gerekir.")) {
                   disconnect.mutate();
                 }
               }}
             >
-              {disconnect.isPending ? "Siliniyor…" : "Token'ı Sıfırla"}
+              {disconnect.isPending ? "Siliniyor…" : "Bağlantıyı Sıfırla"}
             </Button>
           </CardContent>
         </Card>
@@ -490,7 +488,7 @@ function ShopifyStorefrontGuide() {
   return (
     <details className="text-[11px] bg-muted/40 rounded-md leading-relaxed group" open>
       <summary className="cursor-pointer p-2.5 font-medium hover:bg-muted/60 rounded-md select-none">
-        🔑 Storefront API token nasıl alınır? (tıkla aç)
+        🔑 Erişim anahtarı nasıl alınır? (tıkla aç)
       </summary>
       <ol className="list-decimal pl-7 pr-3 pb-3 space-y-1.5 text-muted-foreground">
         <li>
@@ -504,36 +502,28 @@ function ShopifyStorefrontGuide() {
         </li>
         <li>
           Üstte <strong className="text-foreground">Storefronts</strong> →
-          mağaza vitrinini seç → <strong className="text-foreground">Storefront API</strong>{" "}
-          sekmesine geç
+          mağaza vitrinini seç → izinler sekmesine geç
         </li>
         <li>
-          <strong className="text-foreground">Storefront API izinleri</strong>{" "}
-          kartında en az şunlar açık olmalı (kalem ikonuyla düzenle):
-          <div className="mt-1 pl-3 font-mono text-[10px] text-foreground">
-            unauthenticated_read_product_listings
-            <br />
-            unauthenticated_read_product_inventory
-          </div>
+          <strong className="text-foreground">İzinler</strong> kartında{" "}
+          <strong className="text-foreground">ürün listesi</strong> ve{" "}
+          <strong className="text-foreground">stok okuma</strong> izinlerini aç (kalem ikonuyla düzenle)
         </li>
         <li>
           <strong className="text-foreground">Özel Erişim Belirteci</strong>{" "}
-          kartında token göz 👁 ikonuyla görünür kıl → kopyala
-          (<code>shpat_...</code> ile başlar)
+          kartında göz 👁 ikonuyla anahtarı görünür kıl → kopyala
         </li>
         <li>
-          Aşağıdaki <strong className="text-foreground">Storefront Private Access Token</strong>{" "}
+          Aşağıdaki <strong className="text-foreground">Ürün Erişim Anahtarı</strong>{" "}
           alanına yapıştır → <strong className="text-foreground">Kaydet</strong>
         </li>
         <li>
           <strong className="text-foreground">Bağlantıyı Test Et</strong> → iki
-          ✓ yeşil görmelisin → sonra <strong className="text-foreground">Ürünleri Senkronize Et</strong>
+          ✓ yeşil görmelisin → sonra <strong className="text-foreground">Yeni Ürün Ekle</strong>
         </li>
       </ol>
       <div className="px-3 pb-3 pt-1 text-[10px] text-muted-foreground">
-        <strong>Not:</strong> Storefront API sadece &quot;active&quot; (yayında)
-        ürünleri döner — draft / archive görmek istiyorsan Admin API gerekir, o
-        ayrı bir kurulum.
+        <strong>Not:</strong> Yalnızca mağazanda yayında olan ürünler gelir.
       </div>
     </details>
   );
@@ -588,22 +578,13 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
 
         {!allOk && (
           <div className="border-t border-border/50 pt-3 mt-3 text-[11px] text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">Sık karşılaşılan sorunlar:</p>
+            <p className="font-medium text-foreground">Bunları dene:</p>
             <ul className="list-disc list-inside space-y-0.5">
+              <li>Erişim anahtarını Shopify&apos;dan yeniden kopyalayıp kaydet.</li>
+              <li>Shopify&apos;da ürün listesi ve stok okuma izinlerini aç.</li>
               <li>
-                <strong>401/403:</strong> Storefront token yanlış ya da rotate
-                edilmiş. Headless → Storefront API → Özel Erişim Belirteci&apos;ni
-                yeniden kopyala.
-              </li>
-              <li>
-                <strong>0 ürün:</strong> Storefront API izinlerinde{" "}
-                <code>unauthenticated_read_product_listings</code> + {" "}
-                <code>unauthenticated_read_product_inventory</code> kapalı. İzinleri
-                aç ve kaydet.
-              </li>
-              <li>
-                <strong>404:</strong> Mağaza alan adı yanlış.{" "}
-                <code>magaza.myshopify.com</code> formatında olmalı.
+                Mağaza alan adını kontrol et — <code>magaza.myshopify.com</code>{" "}
+                biçiminde olmalı.
               </li>
             </ul>
           </div>
@@ -615,7 +596,7 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
 
 // ───────────── Hepsiburada Form ─────────────
 const HepsiburadaSchema = z.object({
-  merchantId: z.string().min(1, "merchantId gerekli"),
+  merchantId: z.string().min(1, "Mağaza kimliği gerekli"),
   secretKey: z.string().optional(),
   developerUsername: z.string().optional(),
   environment: z.enum(["test", "prod"]),
@@ -676,7 +657,7 @@ function HepsiburadaTab() {
       ),
     onSuccess: (d, mode) => {
       if (mode === "add-new") {
-        toast.success(`Hepsiburada: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} eşleşmemiş havuzda`);
+        toast.success(`Hepsiburada: ${d.linked ?? 0} ürün bağlandı, ${d.unmatched ?? 0} ürün eşleşme bekliyor`);
       } else {
         toast.success(`Hepsiburada fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
       }
@@ -692,10 +673,10 @@ function HepsiburadaTab() {
       <Card>
         <CardHeader>
           <CardTitle className="text-sm flex items-center gap-2">
-            <Store className="h-4 w-4" /> Hepsiburada API
+            <Store className="h-4 w-4" /> Hepsiburada Bağlantısı
           </CardTitle>
           <p className="text-[11px] text-muted-foreground mt-1">
-            Mağaza kimliği + gizli anahtar + geliştirici kullanıcı adı. Önce Test, onaylanınca Canlı.
+            Önce Test ortamında dene, çalışınca Canlı&apos;ya geç.
           </p>
         </CardHeader>
         <CardContent>
@@ -723,11 +704,11 @@ function HepsiburadaTab() {
               </div>
             </div>
             <div>
-              <Label className="text-xs">Merchant ID (Mağaza ID)</Label>
+              <Label className="text-xs">Mağaza Kimliği</Label>
               <Input {...form.register("merchantId")} placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
             </div>
             <div>
-              <Label className="text-xs">Gizli Anahtar (Secret Key)</Label>
+              <Label className="text-xs">Gizli Anahtar</Label>
               <Input
                 {...form.register("secretKey")}
                 type="password"
@@ -761,25 +742,31 @@ function HepsiburadaTab() {
       </Button>
 
       {sample !== null && (
-        <Card className="border-green-500/40 bg-green-500/5">
+        <Card className="border-green-500/40 bg-green-500/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Test başarılı — dönen örnek</CardTitle>
+            <CardTitle className="text-sm">Test başarılı — mağazaya ulaşıldı</CardTitle>
           </CardHeader>
           <CardContent>
-            <pre className="text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all max-h-64">
-              {JSON.stringify(sample, null, 2).slice(0, 4000)}
-            </pre>
-            <p className="text-[11px] text-muted-foreground mt-2">
-              Bu örneği bana iletirsen ürün/sipariş alan adlarını birebir eşleyip senkronu kurarım.
+            <p className="text-[11px] text-muted-foreground">
+              Şimdi <strong>Yeni Ürün Ekle</strong> ile ürünlerini bağlayabilirsin.
             </p>
+            {/* Ham yanıt kullanıcıya hitap etmiyor → yalnız gerektiğinde açılır. */}
+            <details className="group mt-2">
+              <summary className="cursor-pointer select-none text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors">
+                Teknik ayrıntı
+              </summary>
+              <pre className="mt-1 text-[10px] bg-muted/40 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all max-h-64">
+                {JSON.stringify(sample, null, 2).slice(0, 4000)}
+              </pre>
+            </details>
           </CardContent>
         </Card>
       )}
 
       <p className="text-[11px] text-muted-foreground">
         Önce kaydet + <strong>Bağlantıyı Test Et</strong>. Sonra <strong>Yeni Ürün Ekle</strong> →
-        barkodu eşleşenler bağlanır, kalanlar <strong>Ürünler → &quot;Ürün Seç&quot;</strong> ile manuel
-        eşleştirilir. <strong>Fiyatları Güncelle</strong> yalnızca eşleşmiş HB listing fiyatlarını tazeler.
+        barkodu eşleşenler bağlanır, kalanlar <strong>Ürünler → &quot;Ürün Seç&quot;</strong> ile elle
+        eşleştirilir. <strong>Fiyatları Güncelle</strong> yalnızca eşleşmiş ilanların fiyatını tazeler.
       </p>
 
       {sync.isPending && <SyncProgressCard platform="Hepsiburada" />}
@@ -793,11 +780,11 @@ export default function ApiSettingsPage() {
     <div className="p-6 space-y-5 max-w-3xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Settings2 className="h-6 w-6" /> Platform API Ayarları
+          <Settings2 className="h-6 w-6" /> Platform Bağlantıları
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Shopify ana ürün kaynağı; Trendyol + Hepsiburada satış kanalları — her birinin
-          listing&apos;leri ana ürünlere bağlanır.
+          Shopify ana ürün kaynağın; Trendyol ve Hepsiburada satış kanalların. Bu
+          kanallardaki ilanlar ana ürünlere bağlanır.
         </p>
       </div>
 

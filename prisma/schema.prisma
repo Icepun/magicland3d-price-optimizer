@@ -329,6 +329,34 @@ model OrderFinanceSnapshot {
 }
 
 /**
+ * Sipariş KALEMLERİNİN kalıcı geçmişi — "hangi üründen kaç adet sattık" sorusunun tek kaynağı.
+ * Platform API'leri yalnız son 30-60 günü verdiği için bu satırlar yazılmazsa ürün bazlı
+ * satış geçmişi geri getirilemez biçimde kaybolur (devir hızı, ölü stok, sezon karşılaştırması
+ * hepsi buna dayanır). İptaller de yazılır; raporlar statusKind ile ayıklar.
+ * Tekilleştirme: (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.
+ */
+model OrderItemSnapshot {
+  id               String   @id
+  platform         String
+  externalOrderId  String
+  lineIndex        Int
+  orderedAt        DateTime
+  productId        String?
+  productName      String
+  quantity         Int
+  unitPriceKurus   Int
+  lineRevenueKurus Int
+  statusKind       String
+  currency         String   @default("TRY")
+  syncedAt         DateTime
+
+  @@unique([platform, externalOrderId, lineIndex])
+  @@index([orderedAt])
+  @@index([productId, orderedAt])
+  @@index([statusKind, orderedAt])
+}
+
+/**
  * Pazaryeri cari hareketlerinden alınan gerçekleşmiş sipariş finansı.
  * Sipariş listesi harici API çağrısı yapmadan bu yerel tabloyu kullanır.
  */

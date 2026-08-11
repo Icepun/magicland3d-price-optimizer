@@ -23,7 +23,11 @@ import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
-import { persistOrderFinanceSnapshots } from "@/lib/order-finance-snapshots";
+import {
+  persistOrderFinanceSnapshots,
+  type FinanceSnapshotItem,
+} from "@/lib/order-finance-snapshots";
+import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
 import { swr } from "@/lib/route-cache";
 import {
   parseManualOrderBreakdown,
@@ -131,6 +135,24 @@ function normalizedCurrency(currency: string | null | undefined): string {
   return currency?.trim().toUpperCase() || "TRY";
 }
 
+/**
+ * Eşleştirme anahtarını (barkod/stok kodu/ürün adı) tek biçime indirger.
+ *
+ * NEDEN: karşılaştırma ham metin üzerindeydi; sondaki tek bir boşluk ya da harf düzeni farkı
+ * eşleşmeyi sessizce bozuyor, sipariş "maliyeti bilinmeyen" sayılıyordu. Türkçe I harfi ise ters
+ * yönden ısırıyordu: "ISIK" ile "Işık" iki farklı küçük harfe düşüyordu. Dört I biçimi (I/İ/ı/i)
+ * burada tek harfe indirgenir; bu yüzden yalnız I farkıyla ayrışan iki ürün "belirsiz" sayılır ve
+ * kör eşleşme yerine hiç eşleşmez.
+ */
+function normalizeMatchKey(raw: string | null | undefined): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[İıi]/g, "I")
+    .toUpperCase();
+}
+
 const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
   Created: { kind: "pending", label: "Yeni Sipariş" },
   Awaiting: { kind: "pending", label: "Onay Bekliyor" },
@@ -169,6 +191,20 @@ const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
 function hbStatus(s: string): { kind: OrderStatusKind; label: string } {
   return HB_STATUS[s] ?? { kind: "other", label: s || "Bilinmiyor" };
 }
+
+// Manuel sipariş durumları. Tanımadığımız bir durum daha önce "İptal" etiketiyle görünüyor ama
+// ciroya dahil ediliyordu → ekrandaki iki rakam birbirini tutmuyordu. Artık "Diğer" olarak
+// gösterilir ve ciroya dahil edilmeye devam eder (yalnız gerçek iptaller dışarıda kalır).
+const MANUAL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
+  pending: { kind: "pending", label: "Bekliyor" },
+  processing: { kind: "processing", label: "Hazırlanıyor" },
+  shipped: { kind: "shipped", label: "Gönderildi" },
+  delivered: { kind: "delivered", label: "Teslim Edildi" },
+  cancelled: { kind: "cancelled", label: "İptal" },
+};
+function manualStatus(s: string): { kind: OrderStatusKind; label: string } {
+  return MANUAL_STATUS[s] ?? { kind: "other", label: "Diğer" };
+}
 function hbNum(v: unknown): number {
   if (typeof v === "number") return v;
   if (v && typeof v === "object" && "amount" in (v as Record<string, unknown>)) {
@@ -201,8 +237,27 @@ function hbDate(...vals: unknown[]): string | null {
   }
   return null;
 }
+/**
+ * Sipariş satırı + ürünlerimizle eşleştirme anahtarları.
+ * Anahtarlar TÜRÜNE göre ayrı tutulur: aynı metin bir üründe barkod, başka bir üründe stok kodu
+ * olabiliyor. Tür bilgisi olmadan "ilk gelen kazanıyor" ve satır yanlış ürüne bağlanıyordu.
+ */
+type RawLine = {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  image: string | null;
+  barcodes: string[];
+  /** Platform ürün/varyant kimliği (Listing.externalId ile eşleşir). */
+  externalIds: string[];
+  skus: string[];
+};
+
+const matchKeyList = (...values: unknown[]): string[] =>
+  values.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+
 /** HB sipariş/detay kalemi → RawLine şekli (tutar + eşleştirme anahtarları). */
-function hbLineRaw(li: Record<string, any>): { name: string; quantity: number; unitPrice: number; image: string | null; matchKeys: string[] } {
+function hbLineRaw(li: Record<string, any>): RawLine {
   const qty = Math.max(1, Math.floor(hbNum(li.quantity ?? li.amount ?? 1)));
   const unit = hbNum(li.unitPrice ?? li.price) || (hbNum(li.totalPrice) / qty);
   return {
@@ -210,7 +265,9 @@ function hbLineRaw(li: Record<string, any>): { name: string; quantity: number; u
     quantity: qty,
     unitPrice: unit,
     image: null,
-    matchKeys: [li.merchantSku, li.hbSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter((k): k is string => typeof k === "string" && !!k),
+    barcodes: matchKeyList(li.barcode),
+    externalIds: matchKeyList(li.hbSku, li.hepsiburadaSku),
+    skus: matchKeyList(li.merchantSku, li.sku, li.stockCode),
   };
 }
 /** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
@@ -327,7 +384,6 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   let hepsiburada: PlatformStatus = { ok: false, count: 0 };
 
   // Ham siparişleri çek (her platform bağımsız) ──────────────────────────────
-  type RawLine = { name: string; quantity: number; unitPrice: number; image: string | null; matchKeys: string[] };
   type Raw = {
     platform: "shopify" | "trendyol" | "hepsiburada";
     id: string;
@@ -385,13 +441,12 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           unitPrice: l.unitPrice,
           image: l.image,
           // Çok-anahtarlı eşleştirme: variant barcode/sku, satır sku, variant id (Listing.externalId)
-          matchKeys: [
-            l.barcode,
-            l.variantSku,
-            l.sku,
+          barcodes: matchKeyList(l.barcode),
+          externalIds: matchKeyList(
             l.variantId,
-            l.variantId ? `shopify-variant-${l.variantId}` : null,
-          ].filter((k): k is string => !!k),
+            l.variantId ? `shopify-variant-${l.variantId}` : null
+          ),
+          skus: matchKeyList(l.variantSku, l.sku),
         })),
         trackingNumber: o.trackingNumber,
         cargoProvider: o.cargoProvider,
@@ -447,9 +502,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
               unitPrice: Number(l.price ?? 0),
               image: null,
               // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
-              matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
-                (k): k is string => !!k && k !== "merchantSku"
-              ),
+              barcodes: matchKeyList(l.barcode),
+              externalIds: [],
+              skus: matchKeyList(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
             })),
             trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
             cargoProvider: o.cargoProviderName ?? null,
@@ -635,17 +690,24 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const shopifyNames = new Set<string>(); // Shopify barkod tutmaz → ada göre eşleştirme
   for (const r of historyRows) {
     for (const l of r.lines) {
-      for (const k of l.matchKeys) allKeys.add(k);
+      for (const k of [...l.barcodes, ...l.externalIds, ...l.skus]) allKeys.add(k);
       if (r.platform === "shopify" && l.name) shopifyNames.add(l.name);
     }
   }
 
-  // Tek harita: Product.barcode/sku + Listing.externalId/externalSku/barcode → ürün
-  const byKey = new Map<string, Matched>();
-  // Shopify ad-eşleştirme haritası (null = çakışma: aynı ad birden çok üründe → eşleştirme).
-  const byName = new Map<string, Matched | null>();
-  const normName = (s: string | null | undefined) =>
-    (s ?? "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+  // Anahtar indeksleri TÜR BAZINDA ayrı: aynı metin bir üründe barkod, başkasında stok kodu
+  // olabiliyor. Tek harita kullanıldığında "ilk gelen kazanıyor" ve sipariş satırı yanlış ürüne —
+  // dolayısıyla yanlış maliyete — bağlanıyordu. Aynı anahtar birden çok ürüne düşerse o anahtar
+  // BELİRSİZ sayılır ve hiç kullanılmaz (uniqueIndex bunu kendisi yapar).
+  type KeyEntry = { key: string; product: Matched };
+  type KeyIndex = Map<string, KeyEntry>;
+  let productBarcodeIndex: KeyIndex = new Map();
+  let listingBarcodeIndex: KeyIndex = new Map();
+  let listingExternalIdIndex: KeyIndex = new Map();
+  let listingSkuIndex: KeyIndex = new Map();
+  let productSkuIndex: KeyIndex = new Map();
+  let anyKeyIndex: KeyIndex = new Map();
+  let nameIndex: KeyIndex = new Map();
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
@@ -670,22 +732,52 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
 
   if (allKeys.size > 0 || shopifyNames.size > 0) {
     const keyList = [...allKeys];
-    const normalizedShopifyNames = new Set([...shopifyNames].map(normName));
-    // SQLite/Prisma `name IN (...)` ham büyük-küçük harf ve boşluk farklarını kaçırıyordu.
-    // Önce yalnız id+ad tarayıp Türkçe-normalize eşleşen küçük id listesini çıkar.
-    // Ad indeksi: Shopify ad-eşleştirmesi için tüm ürünlerin id+adı gerekiyor. Bu tarama her
-    // sipariş hesabında (arka plan tazelemeleri dahil) tekrarlanıyordu. Ürün adları nadir
-    // değişir → kısa ömürlü SWR + ürün PATCH'inde bust (bkz. products/[id] route).
-    const nameMatchedIds =
-      normalizedShopifyNames.size > 0
-        ? (
-            await swr("order-name-index:v1", 5 * 60_000, () =>
-              prisma.product.findMany({ select: { id: true, name: true } })
-            )
-          )
-            .filter((product) => normalizedShopifyNames.has(normName(product.name)))
-            .map((product) => product.id)
-        : [];
+    const normalizedShopifyNames = new Set(
+      [...shopifyNames].map(normalizeMatchKey).filter(Boolean)
+    );
+    const wantedKeys = new Set([...allKeys].map(normalizeMatchKey).filter(Boolean));
+    // SQLite/Prisma `... IN (...)` ham büyük-küçük harf ve boşluk farklarını kaçırıyordu: ürün hiç
+    // ÇEKİLMEDİĞİ için sonradan sadeleştirmek de kurtarmıyordu. Önce küçük bir ad/anahtar dizini
+    // tarayıp eşleşen ürün kimliklerini çıkarıyoruz. Bu tarama her sipariş hesabında (arka plan
+    // tazelemeleri dahil) tekrarlanıyordu; ürün anahtarları nadir değişir → kısa ömürlü SWR +
+    // ürün PATCH'inde bust (bkz. products/[id] route).
+    const catalog = await swr("order-name-index:v2", 5 * 60_000, () =>
+      prisma.product.findMany({
+        select: {
+          id: true,
+          name: true,
+          barcode: true,
+          sku: true,
+          listings: { select: { externalId: true, externalSku: true, barcode: true } },
+        },
+      })
+    );
+    const preselectedIds = new Set<string>();
+    for (const product of catalog) {
+      const normalizedName = normalizeMatchKey(product.name);
+      if (normalizedName && normalizedShopifyNames.has(normalizedName)) {
+        preselectedIds.add(product.id);
+        continue;
+      }
+      const productKeys = [
+        product.barcode,
+        product.sku,
+        ...(product.listings ?? []).flatMap((listing) => [
+          listing.externalId,
+          listing.externalSku,
+          listing.barcode,
+        ]),
+      ];
+      if (
+        productKeys.some((key) => {
+          const normalized = normalizeMatchKey(key);
+          return normalized !== "" && wantedKeys.has(normalized);
+        })
+      ) {
+        preselectedIds.add(product.id);
+      }
+    }
+    const nameMatchedIds = [...preselectedIds];
     const trendyolRows = historyRows.filter((row) => row.platform === "trendyol");
     const [products, cRules, kRules, eRules, settings, platformFinancials] =
       await Promise.all([
@@ -734,6 +826,37 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       financialByOrderNumber.set(financial.orderNumber, rows);
     }
 
+    // Her anahtar türü kendi kovasına düşer; aynı ürün aynı anahtarı iki kez verirse (ör. ürün
+    // barkodu = ilan barkodu) tekrar sayılmaz, yoksa kendi kendine "belirsiz" görünürdü.
+    const makeBucket = () => ({ entries: [] as KeyEntry[], seen: new Set<string>() });
+    const buckets = {
+      productBarcode: makeBucket(),
+      listingBarcode: makeBucket(),
+      listingExternalId: makeBucket(),
+      listingSku: makeBucket(),
+      productSku: makeBucket(),
+      any: makeBucket(),
+      name: makeBucket(),
+    };
+    const addKey = (
+      bucket: ReturnType<typeof makeBucket>,
+      raw: string | null | undefined,
+      product: Matched,
+      alsoAny = true
+    ) => {
+      const key = normalizeMatchKey(raw);
+      if (!key) return;
+      const dedupe = `${key} ${product.id}`;
+      if (!bucket.seen.has(dedupe)) {
+        bucket.seen.add(dedupe);
+        bucket.entries.push({ key, product });
+      }
+      if (alsoAny && !buckets.any.seen.has(dedupe)) {
+        buckets.any.seen.add(dedupe);
+        buckets.any.entries.push({ key, product });
+      }
+    };
+
     for (const p of products) {
       const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
       // Listing komisyon override'ı platform bazlı taşınır (Ürünler/Panel ile AYNI kaynak).
@@ -762,21 +885,46 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         stock: p.stock,
         listingByPlatform,
       };
-      const add = (k: string | null | undefined) => {
-        if (k && !byKey.has(k)) byKey.set(k, m);
-      };
-      add(p.barcode);
-      add(p.sku);
+      addKey(buckets.productBarcode, p.barcode, m);
+      addKey(buckets.productSku, p.sku, m);
       for (const l of p.listings) {
-        add(l.externalId);
-        add(l.externalSku);
-        add(l.barcode); // platform-bazlı barkod (her platformda farklı olabilir)
+        addKey(buckets.listingBarcode, l.barcode, m); // platform-bazlı barkod
+        addKey(buckets.listingExternalId, l.externalId, m);
+        addKey(buckets.listingSku, l.externalSku, m);
       }
-      // Shopify ad-eşleştirme: aynı ad birden çok üründe varsa null (belirsiz → eşleştirme).
-      const nk = normName(p.name);
-      if (nk) byName.set(nk, byName.has(nk) ? null : m);
+      // Shopify ad-eşleştirme: aynı ad birden çok üründeyse belirsiz → hiç eşleştirilmez.
+      addKey(buckets.name, p.name, m, false);
     }
+
+    productBarcodeIndex = uniqueIndex(buckets.productBarcode.entries, (e) => e.key);
+    listingBarcodeIndex = uniqueIndex(buckets.listingBarcode.entries, (e) => e.key);
+    listingExternalIdIndex = uniqueIndex(buckets.listingExternalId.entries, (e) => e.key);
+    listingSkuIndex = uniqueIndex(buckets.listingSku.entries, (e) => e.key);
+    productSkuIndex = uniqueIndex(buckets.productSku.entries, (e) => e.key);
+    anyKeyIndex = uniqueIndex(buckets.any.entries, (e) => e.key);
+    nameIndex = uniqueIndex(buckets.name.entries, (e) => e.key);
   }
+
+  /**
+   * Sipariş satırını ürünle eşleştir. Sıra = GÜVEN sırası: ürün barkodu > ilan barkodu >
+   * platform kimliği > stok kodu. En son çare, anahtarın türü platformda karışmış olabileceği
+   * için tür ayrımı olmayan indekstir. Belirsiz (birden çok ürüne düşen) anahtar hiç kullanılmaz.
+   */
+  const matchLine = (line: RawLine, platform: string): Matched | null => {
+    const candidates: Array<readonly [string | null | undefined, KeyIndex]> = [];
+    const addCandidates = (values: string[], index: KeyIndex) => {
+      for (const value of values) candidates.push([normalizeMatchKey(value), index]);
+    };
+    addCandidates(line.barcodes, productBarcodeIndex);
+    addCandidates(line.barcodes, listingBarcodeIndex);
+    addCandidates(line.externalIds, listingExternalIdIndex);
+    addCandidates(line.skus, listingSkuIndex);
+    addCandidates(line.skus, productSkuIndex);
+    addCandidates([...line.barcodes, ...line.externalIds, ...line.skus], anyKeyIndex);
+    // Shopify barkod taşımaz → son çare ürün adı.
+    if (platform === "shopify") candidates.push([normalizeMatchKey(line.name), nameIndex]);
+    return matchByPriority(candidates)?.product ?? null;
+  };
 
   // NOT: Sipariş kârının TAMAMI @/core/order-profit → computeOrderProfit içinde (masaüstü + mobil
   // AYNI fonksiyon). Adet başına: ürün/paketleme/komisyon/yüzdesel gider. Siparişe BİR KEZ: kargo +
@@ -788,6 +936,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const notifCutoff = Date.now() - 7 * 86_400_000;
   const notifs: { id: string; type: string; severity: string; title: string; body: string; href: string }[] = [];
 
+  // Sipariş kimliği → kalemleri (kalıcı ürün bazlı satış geçmişine yazılacak).
+  const snapshotItemsByOrderId = new Map<string, FinanceSnapshotItem[]>();
+
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of historyRows) {
     const actionable =
@@ -795,22 +946,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       (!r.date || new Date(r.date).getTime() >= notifCutoff);
     let thumb: string | null = null;
     const profitLines: OrderProfitLine[] = [];
+    // Ürün bazlı satış geçmişi için kalemler (kalıcı kaydedilir — pazaryeri penceresi dolsa da kalır).
+    const snapshotItems: FinanceSnapshotItem[] = [];
     const items: UnifiedOrderItem[] = r.lines.map((l) => {
-      let m: Matched | null = null;
-      for (const k of l.matchKeys) {
-        const hit = byKey.get(k);
-        if (hit) {
-          m = hit;
-          break;
-        }
-      }
-      // Anahtarlar tutmadı + Shopify ise: ürün adıyla eşleştir (Shopify barkod tutmaz).
-      if (!m && r.platform === "shopify") {
-        const named = byName.get(normName(l.name));
-        if (named) m = named;
-      }
+      const m = matchLine(l, r.platform);
       const image = l.image || m?.imageUrl || null;
       if (image && !thumb) thumb = image;
+
+      snapshotItems.push({
+        productId: m?.id ?? null,
+        productName: m?.name || l.name,
+        quantity: l.quantity,
+        unitPrice: l.unitPrice,
+      });
 
       // Kâr hesabı için satırı topla — hesabın tamamı aşağıda computeOrderProfit'te (tek çağrı).
       profitLines.push({
@@ -908,6 +1056,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     );
     const profitPartial = pr.profitPartial;
 
+    snapshotItemsByOrderId.set(r.id, snapshotItems);
     orders.push({
       platform: r.platform,
       id: r.id,
@@ -959,17 +1108,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         id: manual.id,
         orderNumber: manual.orderNumber,
         date: manual.orderedAt.toISOString(),
-        statusKind: manual.statusKind as OrderStatusKind,
-        statusLabel:
-          manual.statusKind === "pending"
-            ? "Bekliyor"
-            : manual.statusKind === "processing"
-              ? "Hazırlanıyor"
-              : manual.statusKind === "shipped"
-                ? "Gönderildi"
-                : manual.statusKind === "delivered"
-                  ? "Teslim Edildi"
-                  : "İptal",
+        statusKind: manualStatus(manual.statusKind).kind,
+        statusLabel: manualStatus(manual.statusKind).label,
         total: kurusToTl(manual.revenueKurus),
         currency: manual.currency,
         customer: manual.customerName,
@@ -1051,7 +1191,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   // kayıt varsa olduğu gibi korunur; bilgi tamamlandığında normal akışta güncellenir.
   const persistableOrders = orders.filter((order) => !order.dataIncomplete);
   try {
-    await persistOrderFinanceSnapshots(persistableOrders);
+    await persistOrderFinanceSnapshots(persistableOrders, snapshotItemsByOrderId);
     financeHistory = {
       ok: true,
       syncedOrders: persistableOrders.filter(
@@ -1147,6 +1287,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   };
 
   return {
+    // Bu verinin hesaplandığı an — arayüz "X dakika önce güncellendi" bilgisini bundan üretir
+    // (önbellekten dönen yanıt da kendi hesap zamanını taşır).
+    computedAt: new Date().toISOString(),
     orders: visibleOrders,
     summary: {
       days: WINDOW_DAYS,

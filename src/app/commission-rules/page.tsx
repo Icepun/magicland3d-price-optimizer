@@ -235,7 +235,7 @@ export default function CommissionRulesPage() {
         <EmptyState
           icon={Percent}
           title="Henüz komisyon kuralı yok"
-          description="Trendyol API sayfasından 'Komisyonları Güncelle' ile ürün bazlı komisyonları çek, ya da fallback için manuel kural ekle."
+          description="Raporlar sayfasındaki 'Trendyol Komisyonlarını Güncelle' ile gerçek komisyonları çekebilir ya da buraya genel bir kural ekleyebilirsin."
           action={
             <Button onClick={() => setOpen(true)} size="sm">
               <Plus className="h-4 w-4 mr-2" /> İlk Kuralı Ekle
@@ -365,7 +365,7 @@ function ShopifyCommissionCard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       clearPricingQueryCache(qc);
-      toast.success("Shopify komisyonu kaydedildi — tüm Shopify listing'lerine uygulandı");
+      toast.success("Shopify komisyonu kaydedildi — tüm Shopify ilanlarına uygulandı");
     },
     onError: () => toast.error("Kaydedilemedi"),
   });
@@ -400,7 +400,7 @@ function ShopifyCommissionCard() {
         </div>
         <p className="text-[11px] text-muted-foreground mt-2">
           Shopify tüm ürünlerde aynı komisyonu alır (varsayılan %3.2). Bir Shopify
-          listing&apos;inde özel oran girersen o öncelikli olur.
+          ilanına özel oran girersen o geçerli olur.
         </p>
       </CardContent>
     </Card>

@@ -130,12 +130,11 @@ export default function SettingsPage() {
             Ürün maliyeti, paketleme, komisyon, kargo ve KDV&apos;den net kâr hesaplar.
           </p>
           <p>
-            Veritabanı yerel SQLite veya Turso bulut (libSQL) olarak çalışabilir. Turso
-            bağlıysa Windows ve Mac aynı veriyi paylaşır; bağlantı durumu yukarıdaki kartta gösterilir.
+            Veriler bu bilgisayarda ya da bulutta tutulabilir. Bulut senkron açıkken
+            Windows ve Mac aynı veriyi paylaşır.
           </p>
           <p>
-            Otomatik güncelleme GitHub Releases üzerinden (Windows + Mac). Ayarlar
-            ve veriler güncelleme sırasında korunur.
+            Uygulama kendini otomatik günceller; ayarların ve verilerin korunur.
           </p>
         </CardContent>
       </Card>
@@ -160,10 +159,10 @@ function DataManagementCard() {
       });
       const result = await res.json();
       if (!res.ok) {
-        throw new Error(result.error ?? "Import başarısız");
+        throw new Error(result.error ?? "Geri yükleme başarısız");
       }
       const s = result.stats;
-      const summary = `Veri içe aktarıldı: ${s.products} ürün, ${s.listings} listing, ${s.commissionRules + s.cargoRules + s.expenseRules} kural`;
+      const summary = `Yedek geri yüklendi: ${s.products} ürün, ${s.listings} ilan, ${s.commissionRules + s.cargoRules + s.expenseRules} kural`;
       const warnings = Array.isArray(result.warnings) ? (result.warnings as string[]) : [];
       if (warnings.length > 0) {
         toast.warning(`${summary}. ${warnings.join(" ")}`, { duration: 10_000 });
@@ -174,7 +173,7 @@ function DataManagementCard() {
       queryClient.removeQueries({ type: "inactive" });
       await queryClient.invalidateQueries({ type: "active" });
     } catch (e) {
-      toast.error(`İçe aktarma hatası: ${e instanceof Error ? e.message : "bilinmiyor"}`);
+      toast.error(`Yedek geri yüklenemedi: ${e instanceof Error ? e.message : "dosya okunamadı"}`);
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -200,7 +199,7 @@ function DataManagementCard() {
             download
             className={cn(buttonVariants({ variant: "outline" }), "w-full justify-center")}
           >
-            <Download className="h-4 w-4 mr-2" /> JSON Dışa Aktar
+            <Download className="h-4 w-4 mr-2" /> Yedeği İndir
           </a>
           <Button
             variant="outline"
@@ -208,7 +207,7 @@ function DataManagementCard() {
             onClick={() => fileRef.current?.click()}
           >
             <Upload className="h-4 w-4 mr-2" />
-            {importing ? "İçe Aktarılıyor..." : "JSON İçe Aktar"}
+            {importing ? "Yükleniyor..." : "Yedekten Yükle"}
           </Button>
           <input
             ref={fileRef}
@@ -272,7 +271,7 @@ function TursoSyncCard() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["turso-settings"] });
       setAuthToken("");
-      toast.success("Turso bilgileri kaydedildi. Test edip uygulamayı yeniden başlat.");
+      toast.success("Bilgiler kaydedildi. Test edip uygulamayı yeniden başlat.");
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Kaydedilemedi"),
   });
@@ -286,7 +285,7 @@ function TursoSyncCard() {
       }),
     onSuccess: (res) => {
       setTestResult(res);
-      if (res.ok) toast.success("Turso bağlantısı başarılı");
+      if (res.ok) toast.success("Bulut bağlantısı başarılı");
     },
     onError: (e: Error) => {
       setTestResult({ ok: false, message: e.message });
@@ -300,7 +299,7 @@ function TursoSyncCard() {
       qc.invalidateQueries({ queryKey: ["turso-settings"] });
       setUrl("");
       setTestResult(null);
-      toast.success("Turso bağlantısı kaldırıldı. Yeniden başlatınca local DB'ye döner.");
+      toast.success("Bulut senkron kapatıldı. Yeniden başlatınca veriler bu bilgisayarda tutulur.");
     },
   });
 
@@ -315,7 +314,7 @@ function TursoSyncCard() {
           ) : (
             <CloudOff className="h-4 w-4 text-muted-foreground" />
           )}
-          Veritabanı / Çoklu Cihaz Senkron (Turso)
+          Cihazlar Arası Senkron
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -328,20 +327,20 @@ function TursoSyncCard() {
           )}
         >
           {activeMode === "turso" ? (
-            <>✓ Şu an <strong>bulut DB (Turso)</strong> aktif — Mac ve Windows aynı veriyi görür.</>
+            <>✓ <strong>Bulut senkron açık</strong> — Mac ve Windows aynı veriyi görüyor.</>
           ) : (
-            <>Şu an <strong>local veritabanı</strong> kullanılıyor (bu makineye özel). Bulut senkron için aşağıya Turso bilgilerini gir.</>
+            <>Veriler şu an <strong>yalnızca bu bilgisayarda</strong> tutuluyor. Cihazlar arası senkron için aşağıdaki bilgileri gir.</>
           )}
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-relaxed">
-          turso.tech&apos;te ücretsiz veritabanı aç → <strong>Database URL</strong> ve
-          <strong> Auth Token</strong>&apos;ı buraya gir. <u>Aynı bilgileri iki makineye de gir.</u>
-          {" "}Kaydedip <strong>Test Et</strong>, sonra uygulamayı yeniden başlat.
+          turso.tech&apos;te ücretsiz bir veritabanı aç, adresini ve erişim anahtarını buraya
+          yapıştır. <u>Aynı bilgileri iki bilgisayara da gir.</u> Kaydedip{" "}
+          <strong>Test Et</strong>, sonra uygulamayı yeniden başlat.
         </p>
 
         <div>
-          <Label className="text-xs">Database URL</Label>
+          <Label className="text-xs">Veritabanı Adresi</Label>
           <Input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
@@ -349,7 +348,7 @@ function TursoSyncCard() {
           />
         </div>
         <div>
-          <Label className="text-xs">Auth Token</Label>
+          <Label className="text-xs">Erişim Anahtarı</Label>
           <Input
             type="password"
             value={authToken}
@@ -358,7 +357,7 @@ function TursoSyncCard() {
           />
           {data?.hasAuthToken && (
             <p className="text-[10px] text-muted-foreground mt-1">
-              Token kayıtlı. Değiştirmek istemiyorsan boş bırak.
+              Anahtar kayıtlı. Değiştirmek istemiyorsan boş bırak.
             </p>
           )}
         </div>
@@ -394,7 +393,7 @@ function TursoSyncCard() {
             variant="outline"
             className="text-destructive"
             onClick={() => {
-              if (confirm("Turso bağlantısı kaldırılsın mı? Yeniden başlatınca local DB'ye döner."))
+              if (confirm("Bulut senkron kapatılsın mı? Yeniden başlatınca veriler bu bilgisayarda tutulur."))
                 disconnect.mutate();
             }}
             disabled={disconnect.isPending}

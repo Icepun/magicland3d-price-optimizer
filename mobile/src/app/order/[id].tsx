@@ -1,16 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { ScreenHeader } from "@/components/form";
 import { thumbUrl } from "@/lib/image";
 import { getAllOrders, ORDERS_STALE_MS, statusInfo, type StatusTone } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
-import { formatCurrency, formatDate } from "@/lib/format";
+import { formatCurrency, formatDate, formatPercent, friendlyError } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 
@@ -44,20 +45,17 @@ export default function OrderDetailScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <ScreenHeader title="Sipariş" />
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <OrderDetailSkeleton />
       </SafeAreaView>
     );
   }
 
   if (ordersFailed || !order) {
+    // Ham hata metni gösterilmez: kullanıcı için tek satır, eyleme dönük bir cümle.
     const message = ordersFailed
-      ? ordersError instanceof Error
-        ? ordersError.message
-        : "Siparişler yüklenemedi."
+      ? friendlyError(ordersError)
       : orders?.errors.length
-        ? `Sipariş bulunamadı. Bazı platformlar yüklenemedi:\n${orders.errors.join("\n")}`
+        ? "Sipariş bulunamadı. Bazı satış kanalları şu an yüklenemedi."
         : "Sipariş bulunamadı.";
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -112,27 +110,40 @@ export default function OrderDetailScreen() {
         ) : null}
 
         {/* Kâr/ciro */}
-        <View style={styles.kpiCard}>
+        <FadeInView style={styles.kpiCard}>
           <View style={styles.kpiCol}>
             <Text style={styles.kpiLabel}>CİRO</Text>
-            <Text style={styles.kpiValue}>{formatCurrency(order.total)}</Text>
+            <AnimatedNumber
+              value={order.total}
+              format={(n) => formatCurrency(n)}
+              style={styles.kpiValue}
+            />
           </View>
           <View style={styles.kpiCol}>
             <Text style={styles.kpiLabel}>KÂR</Text>
-            <Text
-              style={[
-                styles.kpiValue,
-                { color: profit?.profit == null ? ML.textDim : profit.profit < 0 ? ML.red : ML.green },
-              ]}
-            >
-              {profit?.profit == null ? "—" : `${profit.partial ? "~" : ""}${formatCurrency(profit.profit)}`}
-            </Text>
+            {profit?.profit == null ? (
+              <Text style={[styles.kpiValue, { color: ML.textDim }]}>—</Text>
+            ) : (
+              <AnimatedNumber
+                value={profit.profit}
+                format={(n) => `${profit.partial ? "~" : ""}${formatCurrency(n)}`}
+                style={[styles.kpiValue, { color: profit.profit < 0 ? ML.red : ML.green }]}
+              />
+            )}
           </View>
           <View style={styles.kpiCol}>
             <Text style={styles.kpiLabel}>MARJ</Text>
-            <Text style={styles.kpiValue}>{margin == null ? "—" : `%${(margin * 100).toFixed(1)}`}</Text>
+            {margin == null ? (
+              <Text style={styles.kpiValue}>—</Text>
+            ) : (
+              <AnimatedNumber
+                value={margin}
+                format={(n) => formatPercent(n)}
+                style={styles.kpiValue}
+              />
+            )}
           </View>
-        </View>
+        </FadeInView>
         {profit?.partial ? (
           <Text style={styles.note}>~ bazı ürünler eşleşmedi, kâr kısmi.</Text>
         ) : null}
@@ -158,7 +169,7 @@ export default function OrderDetailScreen() {
           const p = matchOrderLine(line, order.platform, pm);
           const lineImage = line.image ?? p?.imageUrl ?? null;
           return (
-            <View key={i} style={styles.lineRow}>
+            <FadeInView key={i} index={i} baseDelay={60} style={styles.lineRow}>
               {lineImage ? (
                 <Image
                   source={{ uri: thumbUrl(lineImage, 128)! }}
@@ -185,11 +196,26 @@ export default function OrderDetailScreen() {
                   {formatCurrency(line.unitPrice * line.quantity)}
                 </Text>
               ) : null}
-            </View>
+            </FadeInView>
           );
         })}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+/** Sipariş detayı açılırken kartların yerini tutan iskelet. */
+function OrderDetailSkeleton() {
+  return (
+    <View style={styles.content}>
+      <Skeleton width="55%" height={18} />
+      <Skeleton width="40%" height={12} delay={70} />
+      <SkeletonCard height={92} delay={140} />
+      <Skeleton width="35%" height={11} delay={220} />
+      {[0, 1, 2].map((i) => (
+        <SkeletonCard key={i} height={68} delay={280 + i * 80} />
+      ))}
+    </View>
   );
 }
 

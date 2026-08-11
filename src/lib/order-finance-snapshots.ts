@@ -1,8 +1,23 @@
 import { prisma } from "@/lib/prisma";
+import { batchWrite } from "./libsql-batch";
 import {
   FINANCE_CALCULATION_VERSION,
   tlToKurus,
 } from "./monthly-finance";
+
+/**
+ * Siparişin TEK BİR kaleminin kalıcı geçmişe yazılan hâli.
+ * Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu yanıtlamıyordu ve pazaryeri
+ * penceresi (30-60 gün) dolunca bu bilgi geri getirilemez biçimde kayboluyordu.
+ */
+export interface FinanceSnapshotItem {
+  /** Eşleşen ürün (eşleşmediyse null — satır yine de kaydedilir, adıyla). */
+  productId: string | null;
+  productName: string;
+  quantity: number;
+  /** Adet fiyatı (TL). */
+  unitPrice: number;
+}
 
 export interface FinanceSnapshotOrder {
   platform: string;
@@ -128,8 +143,191 @@ function snapshotDiffers(
   );
 }
 
+/** Kalem satırına yazılan alanlar (syncedAt hariç — o yalnız damga). */
+type ItemWriteData = {
+  orderedAt: Date;
+  productId: string | null;
+  productName: string;
+  quantity: number;
+  unitPriceKurus: number;
+  lineRevenueKurus: number;
+  statusKind: string;
+  currency: string;
+};
+
+type ExistingItemRow = ItemWriteData & { lineIndex: number };
+
+type WriteStatement = { sql: string; args: unknown[] };
+
+/** Kalem satırında yazmayı gerektiren bir alan değişmiş mi? */
+function itemDiffers(existing: ExistingItemRow, next: ItemWriteData): boolean {
+  return (
+    existing.orderedAt.getTime() !== next.orderedAt.getTime() ||
+    existing.productId !== next.productId ||
+    existing.productName !== next.productName ||
+    existing.quantity !== next.quantity ||
+    existing.unitPriceKurus !== next.unitPriceKurus ||
+    existing.lineRevenueKurus !== next.lineRevenueKurus ||
+    existing.statusKind !== next.statusKind ||
+    existing.currency !== next.currency
+  );
+}
+
+// SQLite'ta tarihler Prisma ile AYNI biçimde (epoch milisaniye tamsayısı) yazılır; aksi halde
+// Prisma bu satırları okurken tarihleri çözemez.
+function snapshotStatement(
+  platform: string,
+  externalOrderId: string,
+  data: SnapshotWriteData
+): WriteStatement {
+  return {
+    sql: `INSERT INTO "OrderFinanceSnapshot" (
+            "id","platform","externalOrderId","orderNumber","orderedAt","revenueKurus","profitKurus",
+            "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
+            "statusKind","currency","calculationVersion","syncedAt"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT("platform","externalOrderId") DO UPDATE SET
+            "orderNumber" = excluded."orderNumber",
+            "orderedAt" = excluded."orderedAt",
+            "revenueKurus" = excluded."revenueKurus",
+            "profitKurus" = excluded."profitKurus",
+            "profitPartial" = excluded."profitPartial",
+            "profitSource" = excluded."profitSource",
+            "estimatedCommissionKurus" = excluded."estimatedCommissionKurus",
+            "actualCommissionKurus" = excluded."actualCommissionKurus",
+            "statusKind" = excluded."statusKind",
+            "currency" = excluded."currency",
+            "calculationVersion" = excluded."calculationVersion",
+            "syncedAt" = excluded."syncedAt"`,
+    args: [
+      `finance:${platform}:${externalOrderId}`,
+      platform,
+      externalOrderId,
+      data.orderNumber,
+      data.orderedAt.getTime(),
+      data.revenueKurus,
+      data.profitKurus,
+      data.profitPartial ? 1 : 0,
+      data.profitSource,
+      data.estimatedCommissionKurus,
+      data.actualCommissionKurus,
+      data.statusKind,
+      data.currency,
+      data.calculationVersion,
+      data.syncedAt.getTime(),
+    ],
+  };
+}
+
+function itemStatement(
+  platform: string,
+  externalOrderId: string,
+  lineIndex: number,
+  data: ItemWriteData,
+  syncedAt: Date
+): WriteStatement {
+  return {
+    sql: `INSERT INTO "OrderItemSnapshot" (
+            "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
+            "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
+            "orderedAt" = excluded."orderedAt",
+            "productId" = excluded."productId",
+            "productName" = excluded."productName",
+            "quantity" = excluded."quantity",
+            "unitPriceKurus" = excluded."unitPriceKurus",
+            "lineRevenueKurus" = excluded."lineRevenueKurus",
+            "statusKind" = excluded."statusKind",
+            "currency" = excluded."currency",
+            "syncedAt" = excluded."syncedAt"`,
+    args: [
+      `item:${platform}:${externalOrderId}:${lineIndex}`,
+      platform,
+      externalOrderId,
+      lineIndex,
+      data.orderedAt.getTime(),
+      data.productId,
+      data.productName,
+      data.quantity,
+      data.unitPriceKurus,
+      data.lineRevenueKurus,
+      data.statusKind,
+      data.currency,
+      syncedAt.getTime(),
+    ],
+  };
+}
+
+/** Sipariş küçüldüyse (iade/iptal ile kalem düştü) artık olmayan satırları temizle. */
+function itemTrimStatement(
+  platform: string,
+  externalOrderId: string,
+  lineCount: number
+): WriteStatement {
+  return {
+    sql: `DELETE FROM "OrderItemSnapshot"
+           WHERE "platform" = ? AND "externalOrderId" = ? AND "lineIndex" >= ?`,
+    args: [platform, externalOrderId, lineCount],
+  };
+}
+
+/** Yazımı TEK turda gönder. Uzak-HTTP'de tek istek; yerel/replica modunda aynı ifadeler sırayla. */
+async function flushWrites(statements: WriteStatement[]): Promise<void> {
+  if (statements.length === 0) return;
+  if (await batchWrite(statements)) return;
+  for (const statement of statements) {
+    await prisma.$executeRawUnsafe(statement.sql, ...statement.args);
+  }
+}
+
+/** Ham sorgu sonucu tamsayıları sürücüye göre BigInt gelebilir — karşılaştırmadan önce sadeleştir. */
+function toInt(value: unknown): number {
+  return typeof value === "bigint" ? Number(value) : Number(value ?? 0);
+}
+
+/** Bu siparişler için kayıtlı kalem satırlarını oku (tek okuma turu, 500'lük dilimler). */
+async function readExistingItems(
+  externalIds: string[]
+): Promise<Map<string, ExistingItemRow[]>> {
+  const byOrder = new Map<string, ExistingItemRow[]>();
+  for (let offset = 0; offset < externalIds.length; offset += READ_CHUNK) {
+    const slice = externalIds.slice(offset, offset + READ_CHUNK);
+    const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `SELECT "platform","externalOrderId","lineIndex","orderedAt","productId","productName",
+              "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency"
+         FROM "OrderItemSnapshot"
+        WHERE "externalOrderId" IN (${slice.map(() => "?").join(",")})`,
+      ...slice
+    );
+    for (const row of rows) {
+      const key = snapshotKey(String(row.platform), String(row.externalOrderId));
+      const list = byOrder.get(key) ?? [];
+      list.push({
+        lineIndex: toInt(row.lineIndex),
+        orderedAt: new Date(toInt(row.orderedAt)),
+        productId: row.productId == null ? null : String(row.productId),
+        productName: String(row.productName ?? ""),
+        quantity: toInt(row.quantity),
+        unitPriceKurus: toInt(row.unitPriceKurus),
+        lineRevenueKurus: toInt(row.lineRevenueKurus),
+        statusKind: String(row.statusKind ?? ""),
+        currency: String(row.currency ?? "TRY"),
+      });
+      byOrder.set(key, list);
+    }
+  }
+  return byOrder;
+}
+
+// IN(...) parametre sayısı SQLite'ın değişken sınırına (999) dayanmasın: sipariş hacmi
+// büyüdükçe 60 günlük pencere binlerce satıra çıkabilir.
+const READ_CHUNK = 500;
+
 export async function persistOrderFinanceSnapshots(
-  orders: FinanceSnapshotOrder[]
+  orders: FinanceSnapshotOrder[],
+  /** Sipariş kimliği → kalemler. Verilmeyen siparişin kalem geçmişine DOKUNULMAZ. */
+  itemsByOrderId?: ReadonlyMap<string, FinanceSnapshotItem[]>
 ): Promise<void> {
   const valid = orders.flatMap((order) => {
     // Manuel siparişin captured finansı ManualOrder satırındadır. Buraya da yazılırsa
@@ -149,9 +347,6 @@ export async function persistOrderFinanceSnapshots(
   // TEK OKUMA: eskiden 50'lik OR blokları hâlinde ayrı ayrı sorgulanıyordu (180 sipariş = 4 sorgu).
   // externalOrderId listesiyle tek sorgu yeter; platform ayrımı anahtar eşleşmesinde yapılır.
   const externalIds = [...new Set(valid.map((v) => v.externalOrderId))];
-  // IN(...) parametre sayısı SQLite'ın değişken sınırına (999) dayanmasın: sipariş hacmi
-  // büyüdükçe 60 günlük pencere binlerce satıra çıkabilir.
-  const READ_CHUNK = 500;
   const existingRows: Array<{
     platform: string;
     externalOrderId: string;
@@ -249,23 +444,74 @@ export async function persistOrderFinanceSnapshots(
     });
   }
 
-  if (pending.length === 0) return;
-
-  for (let offset = 0; offset < pending.length; offset += 50) {
-    const chunk = pending.slice(offset, offset + 50);
-    await prisma.$transaction(
-      chunk.map(({ platform, externalOrderId, data }) =>
-        prisma.orderFinanceSnapshot.upsert({
-          where: { platform_externalOrderId: { platform, externalOrderId } },
-          create: {
-            id: `finance:${platform}:${externalOrderId}`,
-            platform,
-            externalOrderId,
-            ...data,
-          },
-          update: data,
-        })
-      )
-    );
+  // ── Kalem geçmişi ────────────────────────────────────────────────────────────────────
+  // Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu yanıtlamıyor; pazaryeri
+  // penceresi dolunca o bilgi kalıcı olarak kayboluyordu. İptal edilen siparişlerin kalemleri
+  // de yazılır — raporlar statusKind ile ayıklar.
+  const itemPlans: Array<{
+    platform: string;
+    externalOrderId: string;
+    rows: ItemWriteData[];
+  }> = [];
+  if (itemsByOrderId) {
+    for (const { order, orderedAt, externalOrderId } of valid) {
+      const lines = itemsByOrderId.get(order.id);
+      // Kalem verilmediyse dokunma: "kalem yok" ile "bilgi gelmedi" aynı şey değil.
+      if (!lines) continue;
+      const rows: ItemWriteData[] = [];
+      for (const line of lines) {
+        const quantity = Math.round(line.quantity);
+        if (!Number.isFinite(quantity) || quantity <= 0) continue;
+        if (!Number.isFinite(line.unitPrice)) continue;
+        const unitPriceKurus = tlToKurus(line.unitPrice);
+        rows.push({
+          orderedAt,
+          productId: line.productId ?? null,
+          productName: (line.productName || "Ürün").slice(0, 300),
+          quantity,
+          unitPriceKurus,
+          // Satır cirosu adet fiyatının tam katıdır → kuruş toplamları her zaman tutar.
+          lineRevenueKurus: unitPriceKurus * quantity,
+          statusKind: order.statusKind,
+          currency: order.currency || "TRY",
+        });
+      }
+      itemPlans.push({ platform: order.platform, externalOrderId, rows });
+    }
   }
+
+  const itemStatements: WriteStatement[] = [];
+  if (itemPlans.length > 0) {
+    const existingItems = await readExistingItems([
+      ...new Set(itemPlans.map((plan) => plan.externalOrderId)),
+    ]);
+    for (const plan of itemPlans) {
+      const stored = existingItems.get(snapshotKey(plan.platform, plan.externalOrderId)) ?? [];
+      const storedByIndex = new Map(stored.map((row) => [row.lineIndex, row]));
+      plan.rows.forEach((row, lineIndex) => {
+        const existing = storedByIndex.get(lineIndex);
+        // Değişmeyen satıra HİÇ yazma (yenilemelerin çoğunda hiçbir şey değişmez).
+        if (existing && !itemDiffers(existing, row)) return;
+        itemStatements.push(
+          itemStatement(plan.platform, plan.externalOrderId, lineIndex, row, syncedAt)
+        );
+      });
+      const maxStoredIndex = stored.reduce((max, row) => Math.max(max, row.lineIndex), -1);
+      // Kalem sayısı azaldıysa fazlalığı sil. Ama TÜM kalemleri silmeyiz: satırların geçici olarak
+      // hiç gelmemesi (pazaryeri yanıtı eksik döndü) kalıcı geçmişi yok etmemeli.
+      if (plan.rows.length > 0 && maxStoredIndex >= plan.rows.length) {
+        itemStatements.push(
+          itemTrimStatement(plan.platform, plan.externalOrderId, plan.rows.length)
+        );
+      }
+    }
+  }
+
+  // Özet ve kalemler AYNI turda gider: uzak-HTTP'de tek istek, ek gidiş-dönüş yok.
+  await flushWrites([
+    ...pending.map(({ platform, externalOrderId, data }) =>
+      snapshotStatement(platform, externalOrderId, data)
+    ),
+    ...itemStatements,
+  ]);
 }

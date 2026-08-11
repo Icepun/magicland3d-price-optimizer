@@ -2,10 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { FadeInView } from "@/components/fade-in";
+import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Modal,
   Pressable,
   ScrollView,
@@ -22,7 +21,7 @@ import { adjustProductStock, getPriceHistory, setProductAlias, type PriceChange 
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
 import { computePriceLab } from "@/lib/price-lab";
-import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
+import { formatCurrency, formatDate, formatNumber, formatPercent, friendlyError } from "@/lib/format";
 import { ML, radius } from "@/theme/colors";
 import { PLATFORM_LABEL } from "@/lib/platforms";
 
@@ -129,9 +128,7 @@ export default function ProductDetailScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <Header title="" />
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <ProductDetailSkeleton />
       </SafeAreaView>
     );
   }
@@ -141,9 +138,7 @@ export default function ProductDetailScreen() {
       <SafeAreaView style={styles.safe}>
         <Header title="Ürün" />
         <View style={[styles.center, styles.errorBox]}>
-          <Text style={styles.errorText}>
-            {productError instanceof Error ? productError.message : "Ürün yüklenemedi."}
-          </Text>
+          <Text style={styles.errorText}>{friendlyError(productError, "Ürün yüklenemedi.")}</Text>
           <Pressable
             onPress={() => void refetchProduct()}
             disabled={productRefetching}
@@ -251,7 +246,12 @@ export default function ProductDetailScreen() {
               disabled={stock <= 0 || stockMutation.isPending}
             />
             <View style={styles.stockValue}>
-              <Text style={styles.stockNumber}>{stock}</Text>
+              <AnimatedNumber
+                value={stock}
+                format={(n) => formatNumber(Math.round(n))}
+                durationMs={280}
+                style={styles.stockNumber}
+              />
               <Text style={styles.stockUnit}>adet</Text>
             </View>
             <StockButton
@@ -454,26 +454,36 @@ function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
             ×{p.minOrderQty} sipariş
           </Text>
         ) : null}
-        <Text style={styles.salePrice}>{formatCurrency(p.salePrice)}</Text>
+        <AnimatedNumber
+          value={p.salePrice}
+          format={(n) => formatCurrency(n)}
+          style={styles.salePrice}
+        />
       </View>
 
       <View style={styles.kpiRow}>
         <View>
           <Text style={styles.kpiLabel}>NET KÂR</Text>
-          <Text style={[styles.kpiValue, { color: loss ? ML.red : ML.green }]}>
-            {formatCurrency(r.netProfit)}
-          </Text>
+          <AnimatedNumber
+            value={r.netProfit}
+            format={(n) => formatCurrency(n)}
+            style={[styles.kpiValue, { color: loss ? ML.red : ML.green }]}
+          />
         </View>
         <View style={{ alignItems: "flex-end" }}>
           <Text style={styles.kpiLabel}>MARJ</Text>
-          <Text style={styles.kpiValue}>{formatPercent(r.profitMargin)}</Text>
+          <AnimatedNumber
+            value={r.profitMargin}
+            format={(n) => formatPercent(n)}
+            style={styles.kpiValue}
+          />
         </View>
       </View>
 
       {p.commissionMissing ? (
         <View style={styles.commWarn}>
           <Text style={styles.commWarnText}>
-            ⚠️ {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş — kâr olduğundan yüksek görünüyor. Masaüstünden komisyon oranını gir veya kurallara ekle.
+            {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş — kâr olduğundan yüksek görünüyor.
           </Text>
         </View>
       ) : null}
@@ -547,6 +557,24 @@ function StockButton({
     >
       <Text style={styles.stockBtnText}>{label}</Text>
     </Pressable>
+  );
+}
+
+/** Ürün detayı açılırken kartların yerini tutan iskelet. */
+function ProductDetailSkeleton() {
+  return (
+    <View style={styles.content}>
+      <View style={styles.titleRow}>
+        <Skeleton width={64} height={64} radius={14} />
+        <View style={{ flex: 1, gap: 8 }}>
+          <Skeleton width="80%" height={20} delay={60} />
+          <Skeleton width="45%" height={12} delay={110} />
+        </View>
+      </View>
+      <SkeletonCard height={110} delay={180} />
+      <SkeletonCard height={96} delay={260} />
+      <SkeletonCard height={140} delay={340} />
+    </View>
   );
 }
 

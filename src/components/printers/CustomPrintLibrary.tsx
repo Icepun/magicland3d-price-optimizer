@@ -340,7 +340,7 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
           <div className="py-12 text-center space-y-1.5">
             <FileBox className="h-8 w-8 mx-auto text-muted-foreground/30" />
             <p className="text-sm text-muted-foreground">Henüz özel baskı yüklemedin.</p>
-            <p className="text-[11px] text-muted-foreground/70">&quot;Özel Baskı&quot; ile gcode/3mf yükleyince burada listelenir.</p>
+            <p className="text-[11px] text-muted-foreground/70">&quot;Özel Baskı&quot; ile baskı dosyası yükleyince burada listelenir.</p>
           </div>
         ) : filtered.length === 0 ? (
           <p className="py-10 text-center text-xs text-muted-foreground">Filtreye uyan dosya yok.</p>

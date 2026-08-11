@@ -159,7 +159,8 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body?.error || `${url} ${r.status}`);
+    // Kullanıcıya adres/durum kodu düşmesin — sade bir mesaj yeter.
+    throw new Error(body?.error || "İşlem tamamlanamadı");
   }
   return r.json() as Promise<T>;
 }
@@ -272,7 +273,7 @@ export default function PrintersPage() {
           <p className="text-sm text-muted-foreground mt-0.5">
             {simulated
               ? "Örnek görünüm — gerçek bağlantı için “Yönet”ten yazıcı ekleyin."
-              : "Yazıcılarınızın canlı baskı durumu (Moonraker — Elegoo / Snapmaker)."}
+              : "Yazıcılarınızın canlı baskı durumu."}
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -309,7 +310,7 @@ export default function PrintersPage() {
           <div>
             <p className="font-medium">Henüz gerçek yazıcı bağlı değil — bu kartlar örnektir.</p>
             <p className="text-muted-foreground text-xs mt-0.5">
-              <strong>Yönet</strong> → yazıcı ekle (örn. Elegoo Neptune 4 Pro · IP <code>192.168.1.18</code> · port 7125). Eklediğin anda canlı veriye geçer.
+              <strong>Yönet</strong> → yazıcını ekle. Eklediğin anda canlı duruma geçer.
             </p>
           </div>
         </div>
@@ -530,11 +531,19 @@ function PrinterCardInner({
           <div className="flex items-center gap-2.5 rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2">
             <AlertTriangle className="h-4 w-4 text-destructive shrink-0 motion-safe:animate-pulse" />
             <div className="min-w-0">
-              <p className="text-xs font-bold text-destructive leading-tight">Baskı durdu — yazıcıda sorun var</p>
-              {/* NEDEN göster: yazıcının bildirdiği mesaj → yoksa iş/dosya adı (eski hali hep "kontrol et"ti). */}
+              <p className="text-xs font-bold text-destructive leading-tight">Baskı durdu — yazıcıyı kontrol et</p>
+              {/* Hangi baskıda olduğu kullanıcıya yeter; cihazın ham hata metni "Ayrıntı" altında kalır. */}
               <p className="text-[11px] text-destructive/80 truncate">
-                {printer.statusMessage || job?.productName || printer.currentFilename || "Yazıcı ekranını kontrol et"}
+                {job?.productName || printer.currentFilename || "Yazıcı ekranındaki uyarıya bak"}
               </p>
+              {printer.statusMessage && (
+                <details className="group mt-0.5">
+                  <summary className="cursor-pointer select-none text-[10px] text-destructive/60 hover:text-destructive transition-colors">
+                    Ayrıntı
+                  </summary>
+                  <p className="mt-0.5 text-[10px] text-destructive/70 break-words">{printer.statusMessage}</p>
+                </details>
+              )}
             </div>
           </div>
         )}
@@ -634,7 +643,7 @@ function PrinterCardInner({
             <div className="flex-1 text-sm text-muted-foreground">
               <p className="font-medium text-foreground/70">{status === "error" ? "Hata" : "Hazır"}</p>
               <p className="text-xs mt-0.5">{status === "error" ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
-              <p className="text-[11px] mt-2 text-muted-foreground/70 tabular-nums">Nozzle {nozzle}° · Tabla {bed}°</p>
+              <p className="text-[11px] mt-2 text-muted-foreground/70 tabular-nums">Nozul {nozzle}° · Tabla {bed}°</p>
             </div>
           </div>
         )}
@@ -770,7 +779,17 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
         </span>
       </div>
       {isErr ? (
-        <p className="text-[11px] text-destructive/80 leading-snug">{ap.message || "Bir hata oluştu — tekrar dene."}</p>
+        <>
+          <p className="text-[11px] text-destructive/80 leading-snug">Baskı başlatılamadı — tekrar dene.</p>
+          {ap.message && (
+            <details className="group">
+              <summary className="cursor-pointer select-none text-[10px] text-destructive/60 hover:text-destructive transition-colors">
+                Ayrıntı
+              </summary>
+              <p className="mt-0.5 text-[10px] text-destructive/70 break-words">{ap.message}</p>
+            </details>
+          )}
+        </>
       ) : (
         <>
           <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -1158,8 +1177,8 @@ function ManageModal({ onClose }: { onClose: () => void }) {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium truncate">{c.name}</p>
-                      <p className="text-[11px] text-muted-foreground font-mono truncate">
-                        {c.host}:{c.port} · {c.type === "bambu" ? "Bambu" : "Moonraker"}
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {c.model || BRANDS.find((b) => b.value === c.brand)?.label || c.brand} · <span className="font-mono">{c.host}</span>
                       </p>
                     </div>
                     <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(c)} title="Düzenle">
@@ -1238,7 +1257,7 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
   });
 
   const runTest = async () => {
-    if (!host.trim()) { toast.error("Önce IP/host gir"); return; }
+    if (!host.trim()) { toast.error("Önce yazıcının IP adresini gir"); return; }
     setTest({ state: "loading" });
     try {
       const r = await fetchJson<{ ok: boolean; hostname?: string; port?: number; error?: string }>(
@@ -1246,12 +1265,13 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
       );
       if (r.ok) {
         if (r.port && r.port !== Number(port)) setPort(String(r.port)); // Elegoo → 80'e otomatik düzelt
-        setTest({ state: "ok", msg: r.port ? `port ${r.port}${r.hostname ? ` · ${r.hostname}` : ""}` : r.hostname });
+        // Port/durum bilgisi kullanıcıya gösterilmez; yalnız yazıcının adı anlamlı.
+        setTest({ state: "ok", msg: r.hostname });
       } else {
         setTest({ state: "fail", msg: r.error });
       }
     } catch (e) {
-      setTest({ state: "fail", msg: e instanceof Error ? e.message : "hata" });
+      setTest({ state: "fail", msg: e instanceof Error ? e.message : undefined });
     }
   };
 
@@ -1279,7 +1299,7 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
       </div>
       <div className="grid grid-cols-3 gap-3">
         <div className="col-span-2">
-          <Label className="text-xs">IP / Host</Label>
+          <Label className="text-xs">IP Adresi</Label>
           <Input value={host} onChange={(e) => { setHost(e.target.value); setTest({ state: "idle" }); }} placeholder="192.168.1.18" className="font-mono" />
         </div>
         <div>
@@ -1291,11 +1311,11 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
       {isBambu ? (
         <>
           <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-            Yazıcıda <strong>LAN Modu</strong> + <strong>Geliştirici (Developer) Modu</strong> açık olmalı. Access code ve seri no yazıcı ekranındadır (Ayarlar → WLAN).
+            Yazıcı ekranından <strong>LAN Modu</strong> ve <strong>Geliştirici Modu</strong>&apos;nu aç; erişim kodu ile seri no orada yazar.
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label className="text-xs">Access Code</Label>
+              <Label className="text-xs">Erişim Kodu</Label>
               <Input value={accessCode} onChange={(e) => setAccessCode(e.target.value)} placeholder="8 haneli kod" className="font-mono" />
             </div>
             <div>
@@ -1699,7 +1719,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Upload className="h-4 w-4 text-primary" /> Özel Baskı</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            {!picked ? "Baskı yapacağın yazıcıyı seç." : !file ? "Bu yazıcı için gcode/3mf dosyası yükle." : "Önizle ve bas."}
+            {!picked ? "Baskı yapacağın yazıcıyı seç." : !file ? "Bu yazıcı için baskı dosyası yükle." : "Önizle ve bas."}
           </p>
         </DialogHeader>
 
@@ -1759,8 +1779,8 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
                 </div>
               ) : (
                 <>
-                  <span className="text-sm font-medium">gcode / 3mf seç</span>
-                  <span className="text-[11px] text-muted-foreground">{isBambu ? "Bambu çok renkli için dilimlenmiş .3mf" : "dosyayı seçmek için tıkla"}</span>
+                  <span className="text-sm font-medium">Baskı dosyası seç</span>
+                  <span className="text-[11px] text-muted-foreground">{isBambu ? "çok renkli baskı için 3MF dosyası seç" : "dosyayı seçmek için tıkla"}</span>
                 </>
               )}
             </button>

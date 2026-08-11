@@ -601,7 +601,7 @@ export default function ProductsPage() {
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
-      toast.error("Silinemedi (geri alındı)");
+      toast.error("Ürün silinemedi — listeye geri alındı");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
@@ -633,7 +633,7 @@ export default function ProductsPage() {
     },
     onError: (e: Error, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
-      toast.error(`Toplu silme başarısız: ${e.message} (geri alındı)`);
+      toast.error(`Ürünler silinemedi — listeye geri alındı (${e.message})`);
     },
     onSuccess: (data) => toast.success(`${data.deleted} ürün silindi`),
     onSettled: () => {
@@ -662,7 +662,7 @@ export default function ProductsPage() {
     },
     onError: (e: Error, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
-      toast.error(`${e.message} (geri alındı)`);
+      toast.error(`${e.message} — değişiklik geri alındı`);
     },
     onSuccess: (data, variables) =>
       toast.success(variables.hidden ? `${data.updated} ürün gizlendi` : `${data.updated} ürün geri getirildi`),
@@ -733,7 +733,7 @@ export default function ProductsPage() {
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
-      toast.error("Takma ad kaydedilemedi — bağlantını kontrol et (geri alındı)");
+      toast.error("Takma ad kaydedilemedi — bağlantını kontrol et");
     },
     // Optimistic zaten çipi güncelledi → tüm listeyi refetch ETME (refetchType:none = sadece bayat işaretle).
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" }),
@@ -809,7 +809,7 @@ export default function ProductsPage() {
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
-      toast.error("İşlem başarısız (geri alındı)");
+      toast.error("İşlem başarısız — değişiklik geri alındı");
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" }),
   });
@@ -846,7 +846,8 @@ export default function ProductsPage() {
           });
           const body = (await r.json().catch(() => ({}))) as { changed?: number; checked?: number; error?: string };
           if (!r.ok) {
-            results.push({ p, ok: false, checked: 0, changed: 0, error: String(body?.error || `HTTP ${r.status}`) });
+            // Durum kodu kullanıcıya hitap etmiyor → sade bir neden yaz.
+            results.push({ p, ok: false, checked: 0, changed: 0, error: String(body?.error || "bağlantı kurulamadı") });
           } else {
             const ch = Number(body?.changed) || 0;
             results.push({ p, ok: true, checked: Number(body?.checked) || 0, changed: ch });
@@ -871,7 +872,7 @@ export default function ProductsPage() {
     done += 1;
     setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
     // DÜRÜST sonuç: hata varsa AÇIKÇA göster, yoksa platform-bazlı kaç fiyat değişti / kaç kontrol edildi.
-    const short = (p: string) => (p === "hepsiburada" ? "HB" : p === "trendyol" ? "Trendyol" : "Shopify");
+    const short = (p: string) => (p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : "Shopify");
     const errs = results.filter((r) => !r.ok);
     if (errs.length) {
       toast.error(`Fiyat güncellenemedi → ${errs.map((e) => `${short(e.p)}: ${e.error}`).join(" · ")}`, { duration: 9000 });
@@ -923,11 +924,11 @@ export default function ProductsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success("Urun eklendi");
+      toast.success("Ürün eklendi");
       setAddOpen(false);
       form.reset();
     },
-    onError: () => toast.error("Urun eklenemedi"),
+    onError: () => toast.error("Ürün eklenemedi"),
   });
 
   const filteredProducts = useMemo(() => {
@@ -1270,13 +1271,13 @@ export default function ProductsPage() {
               onClick={runRefreshAll}
               size="sm"
               variant="outline"
-              title="Tüm platformlardan güncel fiyatları çek + liste/panel/siparişleri tazele (başka cihazdaki değişiklikler dahil)"
+              title="Tüm platformlardan güncel fiyatları çeker ve listeyi tazeler"
             >
               <RefreshCw className="h-4 w-4 mr-2" />
               Fiyatları Güncelle &amp; Yenile
             </Button>
           )}
-          <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürünü barkoduyla ekle">
+          <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol veya Hepsiburada'daki ürünü ekle">
             <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
           </Button>
           <Button onClick={() => setAddOpen(true)} size="sm">
@@ -1441,7 +1442,7 @@ export default function ProductsPage() {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Yeni Urun Ekle</DialogTitle>
+            <DialogTitle>Yeni Ürün Ekle</DialogTitle>
           </DialogHeader>
           <form
             onSubmit={form.handleSubmit((d) => addMutation.mutate(d))}
@@ -1461,7 +1462,7 @@ export default function ProductsPage() {
               </div>
             </div>
             <div>
-              <Label>Urun Adi *</Label>
+              <Label>Ürün Adı *</Label>
               <Input {...form.register("name")} />
               {form.formState.errors.name && (
                 <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
@@ -1473,7 +1474,7 @@ export default function ProductsPage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>Satis Fiyati (TL) *</Label>
+                <Label>Satış Fiyatı (TL) *</Label>
                 <Input type="number" step="0.01" {...form.register("currentSalePrice")} />
               </div>
               <div>
@@ -1487,7 +1488,7 @@ export default function ProductsPage() {
                 <Input type="number" step="0.1" {...form.register("desi")} />
               </div>
               <div>
-                <Label>Urun Maliyeti (TL)</Label>
+                <Label>Ürün Maliyeti (TL)</Label>
                 <Input type="number" step="0.01" {...form.register("productCost")} />
               </div>
             </div>
@@ -1497,7 +1498,7 @@ export default function ProductsPage() {
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>
-                Iptal
+                İptal
               </Button>
               <Button type="submit" disabled={addMutation.isPending}>
                 {addMutation.isPending ? "Ekleniyor..." : "Ekle"}
@@ -1515,7 +1516,7 @@ export default function ProductsPage() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             <strong>{selectedIds.size}</strong> ürün silinecek. Bu işlem geri alınamaz.
-            Maliyet bilgileri, listings ve fiyat geçmişi de silinir.
+            Maliyet bilgileri, platform ilanları ve fiyat geçmişi de silinir.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>
@@ -1542,7 +1543,7 @@ export default function ProductsPage() {
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             <strong className="text-foreground">{deleteConfirm?.name}</strong> silinecek. Bu işlem geri
-            alınamaz — maliyet bilgileri, listings ve fiyat geçmişi de silinir.
+            alınamaz — maliyet bilgileri, platform ilanları ve fiyat geçmişi de silinir.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirm(null)}>
@@ -1773,7 +1774,7 @@ function MarketplaceAddModal({
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium line-clamp-1">{u.name}</p>
                           <p className="text-[10px] text-muted-foreground font-mono">
-                            {u.barcode} · {u.externalSku ?? "no-sku"}
+                            {u.barcode} · {u.externalSku ?? "SKU yok"}
                           </p>
                         </div>
                         <div className="text-right shrink-0">

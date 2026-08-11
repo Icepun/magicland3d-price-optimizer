@@ -36,9 +36,12 @@ yarn-error.log*
 .pnpm-debug.log*
 .next-dev*.log
 .next-start*.log
+# Pazaryeri kimlik bilgileri — ŞİFRELİ saklansalar bile depoya girmemeli.
+# (trendyol zaten kapsanıyordu; shopify ve hepsiburada kapsam DIŞINDAYDI.)
 .trendyol-credentials.key
 .trendyol-settings.json
-/data/trendyol-settings.json
+/data/*-settings.json
+/data/*.key
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -68,3 +71,18 @@ scripts/*.local.sh
 # yerel açılış/şema yardımcı çıktıları (userData'da; dev'de repo köküne düşebilir)
 perf.log
 .schema-version
+
+# Yazıcı entegrasyonu için kök dizine indirilmiş üçüncü taraf kaynak dökümleri
+# (Moonraker / Klipper / Snapmaker). Referans amaçlı, depoya girmemeli.
+/_c.txt
+/_k.txt
+/fm.txt
+/fss.txt
+/kapi.txt
+/meta.txt
+/snmk_cloud.txt
+/u1m.txt
+/vsd.txt
+
+# Test çalıştırmalarından kalan geçici veritabanı
+/prisma/t.db

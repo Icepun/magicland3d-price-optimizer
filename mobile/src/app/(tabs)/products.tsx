@@ -4,7 +4,6 @@ import { router, useLocalSearchParams } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
 import { useDeferredValue, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -19,8 +18,8 @@ import { getDashboardData } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfitMemo } from "@/lib/profit";
 import { useManualRefresh } from "@/lib/use-refresh";
-import { formatCurrency } from "@/lib/format";
-import { FadeInView } from "@/components/fade-in";
+import { formatCurrency, formatNumber, friendlyError } from "@/lib/format";
+import { AnimatedNumber, FadeInView, Skeleton } from "@/components/fade-in";
 import { ML, radius } from "@/theme/colors";
 import type { Platform } from "@/lib/platforms";
 import { thumbUrl } from "@/lib/image";
@@ -187,7 +186,15 @@ export default function ProductsScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Text style={styles.title}>Ürünler</Text>
-        <Text style={styles.subtitle}>{products ? `${filtered.length} ürün` : "yükleniyor…"}</Text>
+        {products ? (
+          <AnimatedNumber
+            value={filtered.length}
+            format={(n) => `${formatNumber(Math.round(n))} ürün`}
+            style={styles.subtitle}
+          />
+        ) : (
+          <Text style={styles.subtitle}>yükleniyor…</Text>
+        )}
       </View>
 
       <View style={styles.searchWrap}>
@@ -223,14 +230,14 @@ export default function ProductsScreen() {
       </ScrollView>
 
       {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-          <Text style={styles.dim}>{"Turso'dan çekiliyor…"}</Text>
-        </View>
+        <ProductListSkeleton />
       ) : isError ? (
         <View style={styles.center}>
-          <Text style={styles.errorTitle}>Bağlanılamadı</Text>
-          <Text style={styles.dim}>{(error as Error)?.message}</Text>
+          <Text style={styles.errorTitle}>Ürünler alınamadı</Text>
+          <Text style={styles.dim}>{friendlyError(error)}</Text>
+          <Pressable onPress={() => refetch()} style={styles.retryBtn}>
+            <Text style={styles.retryText}>Tekrar dene</Text>
+          </Pressable>
         </View>
       ) : (
         <FlashList
@@ -268,6 +275,27 @@ export default function ProductsScreen() {
         />
       )}
     </SafeAreaView>
+  );
+}
+
+/**
+ * Liste yüklenirken gerçek satırların yerini tutan iskelet.
+ * (Tam sayfa dönen çark, listenin ne kadar süreceği hakkında hiçbir şey söylemiyordu.)
+ */
+function ProductListSkeleton() {
+  return (
+    <View style={styles.skeletonList}>
+      {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+        <View key={i} style={styles.skeletonRow}>
+          <Skeleton width={52} height={52} radius={14} delay={i * 70} />
+          <View style={styles.skeletonBody}>
+            <Skeleton width="70%" height={14} delay={i * 70 + 40} />
+            <Skeleton width="40%" height={11} delay={i * 70 + 90} />
+          </View>
+          <Skeleton width={62} height={14} delay={i * 70 + 130} />
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -447,9 +475,30 @@ const styles = StyleSheet.create({
   platDot: { width: 7, height: 7, borderRadius: 4 },
   profitText: { fontSize: 13, fontWeight: "700", fontVariant: ["tabular-nums"] },
   noCost: { color: ML.textFaint, fontSize: 12 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12 },
-  dim: { color: ML.textDim, fontSize: 14 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 12, padding: 24 },
+  dim: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   errorTitle: { color: ML.red, fontSize: 18, fontWeight: "700" },
+  retryBtn: {
+    marginTop: 4,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ML.accent + "77",
+  },
+  retryText: { color: ML.accent, fontSize: 14, fontWeight: "700" },
+  skeletonList: { paddingHorizontal: 20, gap: 10 },
+  skeletonRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: ML.card,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    padding: 12,
+  },
+  skeletonBody: { flex: 1, gap: 8 },
   groupCard: { backgroundColor: ML.cardElevated },
   groupBadge: { backgroundColor: ML.accentSoft, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   groupBadgeText: { color: ML.accent, fontSize: 11, fontWeight: "700" },

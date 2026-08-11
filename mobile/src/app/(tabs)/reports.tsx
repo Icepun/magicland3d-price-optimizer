@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -13,8 +13,15 @@ import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
 import { computeProductProfitMemo } from "@/lib/profit";
-import { formatCurrency } from "@/lib/format";
-import { ML, radius } from "@/theme/colors";
+import { formatCurrency, formatMonthYear, formatNumber } from "@/lib/format";
+import {
+  AnimatedBar,
+  AnimatedNumber,
+  FadeInView,
+  Skeleton,
+  SkeletonCard,
+} from "@/components/fade-in";
+import { ML, motion, radius } from "@/theme/colors";
 import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 import {
   getMonthlyFinanceSummary,
@@ -129,12 +136,9 @@ export default function ReportsScreen() {
           void qc.invalidateQueries({ queryKey: ["monthly-finance"] });
         }
       })
-      .catch((error) => {
-        if (active) {
-          setSnapshotError(
-            error instanceof Error ? error.message : "Finans geçmişi güncellenemedi."
-          );
-        }
+      .catch(() => {
+        // Teknik ayrıntı ekrana basılmaz; kullanıcıya tek satır bilgi yeter.
+        if (active) setSnapshotError("Aylık geçmiş şu an güncellenemedi.");
       });
     return () => {
       active = false;
@@ -207,9 +211,11 @@ export default function ReportsScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
+        <View style={styles.header}>
+          <Text style={styles.title}>Raporlar</Text>
+          <Text style={styles.subtitle}>Son 30 gün — tüm satışlar</Text>
         </View>
+        <ReportsSkeleton />
       </SafeAreaView>
     );
   }
@@ -247,36 +253,47 @@ export default function ReportsScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         {/* Stat kartları */}
         <View style={styles.statGrid}>
-          <Stat label="Ciro" value={formatCurrency(rev.total)} tone="accent" />
-          <Stat label="Sipariş kârı" value={formatCurrency(rev.profit)} tone={rev.profit < 0 ? "red" : "green"} />
-          <Stat label="Sipariş" value={String(rev.count)} tone="text" />
-          <Stat label="Ort. sepet" value={formatCurrency(avgBasket)} tone="text" />
+          <Stat label="Ciro" value={rev.total} tone="accent" index={0} />
+          <Stat
+            label="Sipariş kârı"
+            value={rev.profit}
+            tone={rev.profit < 0 ? "red" : "green"}
+            index={1}
+          />
+          <Stat
+            label="Sipariş"
+            value={rev.count}
+            tone="text"
+            index={2}
+            format={(n) => formatNumber(Math.round(n))}
+          />
+          <Stat label="Ort. sepet" value={avgBasket} tone="text" index={3} />
         </View>
         {rev.unsupportedCurrencyOrders > 0 ? (
           <Text style={styles.warningText}>
-            {rev.unsupportedCurrencyOrders} sipariş TRY olmadığı için son 30 günlük
-            ciro, sipariş kârı ve platform toplamlarına katılmadı.
+            {rev.unsupportedCurrencyOrders} sipariş farklı para biriminde — toplamlara katılmadı.
           </Text>
         ) : null}
 
         <Text style={styles.sectionLabel}>AYLIK CİRO VE NET KÂR</Text>
-        <View style={styles.card}>
+        <FadeInView style={styles.card}>
           {monthlyQuery.isLoading ? (
-            <ActivityIndicator color={ML.accent} />
+            <View style={{ gap: 12 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <Skeleton key={i} width="100%" height={22} delay={i * 70} />
+              ))}
+            </View>
           ) : monthlyQuery.error ? (
-            <Text style={styles.warningText}>
-              {monthlyQuery.error instanceof Error
-                ? monthlyQuery.error.message
-                : "Aylık finans özeti yüklenemedi."}
-            </Text>
+            <Text style={styles.warningText}>Aylık özet şu an yüklenemedi.</Text>
           ) : !monthlyHasData ? (
             <Text style={styles.chartNote}>
-              Siparişler yüklendikçe aylık finans geçmişi burada birikecek.
+              Siparişler yüklendikçe aylık geçmiş burada birikecek.
             </Text>
           ) : (
-            monthly.map((period) => (
+            monthly.map((period, i) => (
               <MonthlyRow
                 key={period.month}
+                index={i}
                 label={period.label}
                 revenue={period.revenueKurus / 100}
                 netProfit={period.netProfitKurus / 100}
@@ -287,51 +304,52 @@ export default function ReportsScreen() {
           )}
           {currentMonth && (currentMonth.revenueKurus !== 0 || currentMonth.expensesKurus !== 0) ? (
             <View style={styles.monthSummary}>
-              <Text style={styles.monthSummaryText}>
-                Bu ay gider {formatCurrency(currentMonth.expensesKurus / 100)}
-              </Text>
-              <Text
-                style={[
-                  styles.monthSummaryProfit,
-                  { color: currentMonth.netProfitKurus < 0 ? ML.red : ML.green },
-                ]}
-              >
-                Net {formatCurrency(currentMonth.netProfitKurus / 100)}
-              </Text>
+              <View style={styles.monthSummaryPair}>
+                <Text style={styles.monthSummaryText}>Bu ay gider</Text>
+                <AnimatedNumber
+                  value={currentMonth.expensesKurus / 100}
+                  format={(n) => formatCurrency(n)}
+                  style={styles.monthSummaryText}
+                />
+              </View>
+              <View style={styles.monthSummaryPair}>
+                <Text style={styles.monthSummaryText}>Net</Text>
+                <AnimatedNumber
+                  value={currentMonth.netProfitKurus / 100}
+                  format={(n) => formatCurrency(n)}
+                  style={[
+                    styles.monthSummaryProfit,
+                    { color: currentMonth.netProfitKurus < 0 ? ML.red : ML.green },
+                  ]}
+                />
+              </View>
             </View>
           ) : null}
           {monthlyQuery.data?.historyStartedAt ? (
             <Text style={styles.chartNote}>
-              Geçmiş,{" "}
-              {new Date(monthlyQuery.data.historyStartedAt).toLocaleDateString("tr-TR", {
-                month: "long",
-                year: "numeric",
-                timeZone: "Europe/Istanbul",
-              })}{" "}
-              siparişlerinden itibaren birikiyor. Sipariş kârı ilk tam hesaplandığında
-              saklanır; maliyeti eksik kayıt tamamlanınca güncellenir.
+              Geçmiş {formatMonthYear(monthlyQuery.data.historyStartedAt)} ayından beri birikiyor.
             </Text>
           ) : null}
           {monthlyIncomplete > 0 ? (
             <Text style={styles.warningText}>
-              {monthlyIncomplete} siparişin maliyeti eksik veya kârı kısmi/yaklaşık.
+              {monthlyIncomplete} siparişin kârı henüz kesinleşmedi.
             </Text>
           ) : null}
           {unsupportedCurrencyOrders > 0 ? (
             <Text style={styles.warningText}>
-              {unsupportedCurrencyOrders} sipariş TRY olmadığı için aylık toplama
-              katılmadı.
+              {unsupportedCurrencyOrders} sipariş farklı para biriminde — aylık toplama katılmadı.
             </Text>
           ) : null}
           {snapshotError ? <Text style={styles.warningText}>{snapshotError}</Text> : null}
-        </View>
+        </FadeInView>
 
         {/* Platform karşılaştırma */}
         <Text style={styles.sectionLabel}>PLATFORM</Text>
-        <View style={styles.card}>
-          {ORDER_PLATFORMS.map((plat) => (
+        <FadeInView style={styles.card}>
+          {ORDER_PLATFORMS.map((plat, i) => (
             <PlatformBar
               key={plat}
+              index={i}
               name={ORDER_PLATFORM_LABEL[plat]}
               color={ML[plat]}
               rev={rev.byPlat[plat].rev}
@@ -339,23 +357,32 @@ export default function ReportsScreen() {
               pct={(rev.byPlat[plat].rev / maxBar) * 100}
             />
           ))}
-        </View>
+        </FadeInView>
 
         {/* 30 günlük ciro trendi */}
         {trendHasData && (
           <>
             <Text style={styles.sectionLabel}>30 GÜN CİRO TRENDİ</Text>
-            <View style={styles.card}>
+            <FadeInView style={styles.card}>
               {trend.map((t, i) => (
                 <View key={i} style={styles.trendRow}>
                   <Text style={styles.trendLabel}>{t.label}</Text>
-                  <View style={styles.sellerBarWrap}>
-                    <View style={[styles.trendBar, { width: `${Math.max(2, (t.rev / maxTrend) * 100)}%` }]} />
-                  </View>
-                  <Text style={styles.trendVal}>{formatCurrency(t.rev)}</Text>
+                  <AnimatedBar
+                    percent={(t.rev / maxTrend) * 100}
+                    minPercent={2}
+                    color={ML.accent}
+                    height={8}
+                    delay={i * motion.stagger}
+                    style={{ flex: 1 }}
+                  />
+                  <AnimatedNumber
+                    value={t.rev}
+                    format={(n) => formatCurrency(n)}
+                    style={styles.trendVal}
+                  />
                 </View>
               ))}
-            </View>
+            </FadeInView>
           </>
         )}
 
@@ -363,19 +390,28 @@ export default function ReportsScreen() {
         {topSellers.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>EN ÇOK SATANLAR</Text>
-            <View style={styles.card}>
+            <FadeInView style={styles.card}>
               {topSellers.map((s, i) => (
                 <View key={i} style={styles.sellerRow}>
                   <Text style={styles.sellerName} numberOfLines={1}>
                     {s.name}
                   </Text>
-                  <View style={styles.sellerBarWrap}>
-                    <View style={[styles.sellerBar, { width: `${(s.qty / maxQty) * 100}%` }]} />
-                  </View>
-                  <Text style={styles.sellerQty}>{s.qty}</Text>
+                  <AnimatedBar
+                    percent={(s.qty / maxQty) * 100}
+                    minPercent={2}
+                    color={ML.accent}
+                    height={8}
+                    delay={i * motion.stagger}
+                    style={{ flex: 1 }}
+                  />
+                  <AnimatedNumber
+                    value={s.qty}
+                    format={(n) => formatNumber(Math.round(n))}
+                    style={styles.sellerQty}
+                  />
                 </View>
               ))}
-            </View>
+            </FadeInView>
           </>
         )}
 
@@ -383,21 +419,21 @@ export default function ReportsScreen() {
         {profitability.top.length > 0 && (
           <>
             <Text style={styles.sectionLabel}>EN KÂRLI</Text>
-            <View style={styles.card}>
+            <FadeInView style={styles.card}>
               {profitability.top.map((p) => (
                 <ProfitRow key={p.id} name={p.name} profit={p.profit} />
               ))}
-            </View>
+            </FadeInView>
           </>
         )}
         {profitability.loss.length > 0 && (
           <>
             <Text style={[styles.sectionLabel, { color: ML.red }]}>ZARAR EDENLER</Text>
-            <View style={styles.card}>
+            <FadeInView style={styles.card}>
               {profitability.loss.map((p) => (
                 <ProfitRow key={p.id} name={p.name} profit={p.profit} />
               ))}
-            </View>
+            </FadeInView>
           </>
         )}
         <View style={{ height: 24 }} />
@@ -406,30 +442,72 @@ export default function ReportsScreen() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone: "accent" | "green" | "red" | "text" }) {
+function Stat({
+  label,
+  value,
+  tone,
+  index,
+  format,
+}: {
+  label: string;
+  value: number;
+  tone: "accent" | "green" | "red" | "text";
+  index: number;
+  /** Varsayılan para; sayım kartları için formatNumber geçilir. */
+  format?: (n: number) => string;
+}) {
   const color = { accent: ML.accent, green: ML.green, red: ML.red, text: ML.text }[tone];
   return (
-    <View style={styles.stat}>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={[styles.statValue, { color }]}>{value}</Text>
-    </View>
+    <FadeInView index={index} style={styles.statWrap}>
+      <View style={styles.stat}>
+        <Text style={styles.statLabel}>{label}</Text>
+        <AnimatedNumber
+          value={value}
+          format={format ?? ((n) => formatCurrency(n))}
+          style={[styles.statValue, { color }]}
+        />
+      </View>
+    </FadeInView>
   );
 }
 
-function PlatformBar({ name, color, rev, profit, pct }: { name: string; color: string; rev: number; profit: number; pct: number }) {
+function PlatformBar({
+  name,
+  color,
+  rev,
+  profit,
+  pct,
+  index,
+}: {
+  name: string;
+  color: string;
+  rev: number;
+  profit: number;
+  pct: number;
+  index: number;
+}) {
   return (
     <View style={styles.platBlock}>
       <View style={styles.platHead}>
         <View style={[styles.dot, { backgroundColor: color }]} />
         <Text style={[styles.platName, { color }]}>{name}</Text>
-        <Text style={styles.platRev}>{formatCurrency(rev)}</Text>
+        <AnimatedNumber value={rev} format={(n) => formatCurrency(n)} style={styles.platRev} />
       </View>
-      <View style={styles.platTrack}>
-        <View style={[styles.platFill, { width: `${Math.max(2, pct)}%`, backgroundColor: color }]} />
+      <AnimatedBar
+        percent={pct}
+        minPercent={2}
+        color={color}
+        height={10}
+        delay={index * motion.stagger}
+      />
+      <View style={styles.platProfitRow}>
+        <Text style={styles.platProfitLabel}>Kâr</Text>
+        <AnimatedNumber
+          value={profit}
+          format={(n) => formatCurrency(n)}
+          style={[styles.platProfit, { color: profit < 0 ? ML.red : ML.green }]}
+        />
       </View>
-      <Text style={[styles.platProfit, { color: profit < 0 ? ML.red : ML.green }]}>
-        Kâr {formatCurrency(profit)}
-      </Text>
     </View>
   );
 }
@@ -440,60 +518,73 @@ function MonthlyRow({
   netProfit,
   revenuePct,
   profitPct,
+  index,
 }: {
   label: string;
   revenue: number;
   netProfit: number;
   revenuePct: number;
   profitPct: number;
+  index: number;
 }) {
   const negative = netProfit < 0;
+  const delay = index * motion.stagger;
   return (
     <View style={styles.monthRow}>
       <Text style={styles.monthLabel}>{label}</Text>
       <View style={styles.monthCharts}>
         <View style={styles.monthMetricRow}>
           <Text style={styles.metricKey}>C</Text>
-          <View style={styles.monthRevenueTrack}>
-            <View
-              style={[
-                styles.monthRevenueFill,
-                { width: `${Math.max(revenue === 0 ? 0 : 2, revenuePct)}%` },
-              ]}
-            />
-          </View>
-          <Text style={styles.monthValue}>{formatCurrency(revenue)}</Text>
+          <AnimatedBar
+            percent={revenuePct}
+            minPercent={revenue === 0 ? 0 : 2}
+            color={ML.accent}
+            height={7}
+            delay={delay}
+            style={{ flex: 1 }}
+          />
+          <AnimatedNumber
+            value={revenue}
+            format={(n) => formatCurrency(n)}
+            style={styles.monthValue}
+          />
         </View>
         <View style={styles.monthMetricRow}>
           <Text style={styles.metricKey}>N</Text>
+          {/* Sıfır çizgisinin iki yanına dolan bar: solda zarar, sağda kâr. */}
           <View style={styles.monthProfitTrack}>
             <View style={styles.monthProfitHalf}>
               {negative ? (
-                <View
-                  style={[
-                    styles.monthProfitFill,
-                    styles.monthProfitNegative,
-                    { width: `${profitPct * 2}%` },
-                  ]}
+                <AnimatedBar
+                  percent={profitPct * 2}
+                  color={ML.red}
+                  height={7}
+                  trackColor="transparent"
+                  align="right"
+                  delay={delay}
+                  style={styles.monthProfitBar}
                 />
               ) : null}
             </View>
             <View style={styles.zeroLine} />
             <View style={styles.monthProfitHalf}>
               {!negative && netProfit !== 0 ? (
-                <View
-                  style={[
-                    styles.monthProfitFill,
-                    styles.monthProfitPositive,
-                    { width: `${profitPct * 2}%` },
-                  ]}
+                <AnimatedBar
+                  percent={profitPct * 2}
+                  color={ML.green}
+                  height={7}
+                  trackColor="transparent"
+                  delay={delay}
+                  style={styles.monthProfitBar}
                 />
               ) : null}
             </View>
           </View>
-          <Text style={[styles.monthValue, { color: negative ? ML.red : ML.green }]}>
-            {formatCurrency(netProfit)}
-          </Text>
+          <AnimatedNumber
+            value={netProfit}
+            format={(n) => formatCurrency(n)}
+            style={[styles.monthValue, { color: negative ? ML.red : ML.green }]}
+          />
         </View>
       </View>
     </View>
@@ -506,25 +597,51 @@ function ProfitRow({ name, profit }: { name: string; profit: number }) {
       <Text style={styles.profitName} numberOfLines={1}>
         {name}
       </Text>
-      <Text style={[styles.profitVal, { color: profit < 0 ? ML.red : ML.green }]}>
-        {profit >= 0 ? "+" : ""}
-        {formatCurrency(profit)}
-      </Text>
+      <AnimatedNumber
+        value={profit}
+        format={(n) => `${n >= 0 ? "+" : ""}${formatCurrency(n)}`}
+        style={[styles.profitVal, { color: profit < 0 ? ML.red : ML.green }]}
+      />
+    </View>
+  );
+}
+
+/** Raporlar açılırken kartların yerini tutan iskelet. */
+function ReportsSkeleton() {
+  return (
+    <View style={styles.content}>
+      <View style={styles.statGrid}>
+        {[0, 1, 2, 3].map((i) => (
+          <View key={i} style={styles.statWrap}>
+            <SkeletonCard height={78} delay={i * 70} />
+          </View>
+        ))}
+      </View>
+      <View style={{ height: 8 }} />
+      <View style={styles.card}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} width="100%" height={18} delay={200 + i * 70} />
+        ))}
+      </View>
+      <View style={{ height: 8 }} />
+      <View style={styles.card}>
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} width="100%" height={26} delay={420 + i * 70} />
+        ))}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 8 },
   statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  statWrap: { flexGrow: 1, flexBasis: "47%" },
   stat: {
-    flexGrow: 1,
-    flexBasis: "47%",
     backgroundColor: ML.card,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -554,17 +671,14 @@ const styles = StyleSheet.create({
   dot: { width: 8, height: 8, borderRadius: 4 },
   platName: { fontSize: 15, fontWeight: "700", flex: 1 },
   platRev: { color: ML.text, fontSize: 15, fontWeight: "800", fontVariant: ["tabular-nums"] },
-  platTrack: { height: 10, borderRadius: 5, backgroundColor: ML.cardElevated, overflow: "hidden" },
-  platFill: { height: "100%", borderRadius: 5 },
+  platProfitRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  platProfitLabel: { color: ML.textFaint, fontSize: 12, fontWeight: "600" },
   platProfit: { fontSize: 12, fontWeight: "600", fontVariant: ["tabular-nums"] },
   sellerRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   sellerName: { color: ML.textDim, fontSize: 13, width: 110 },
-  sellerBarWrap: { flex: 1, height: 8, borderRadius: 4, backgroundColor: ML.cardElevated, overflow: "hidden" },
-  sellerBar: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   sellerQty: { color: ML.text, fontSize: 13, fontWeight: "700", width: 28, textAlign: "right" },
   trendRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   trendLabel: { color: ML.textDim, fontSize: 12, width: 78, fontVariant: ["tabular-nums"] },
-  trendBar: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   trendVal: { color: ML.text, fontSize: 13, fontWeight: "700", width: 72, textAlign: "right", fontVariant: ["tabular-nums"] },
   monthRow: {
     flexDirection: "row",
@@ -583,14 +697,6 @@ const styles = StyleSheet.create({
   monthCharts: { flex: 1, gap: 5 },
   monthMetricRow: { flexDirection: "row", alignItems: "center", gap: 6 },
   metricKey: { color: ML.textFaint, fontSize: 9, fontWeight: "800", width: 10 },
-  monthRevenueTrack: {
-    flex: 1,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: ML.cardElevated,
-    overflow: "hidden",
-  },
-  monthRevenueFill: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   monthProfitTrack: {
     flex: 1,
     height: 7,
@@ -600,9 +706,7 @@ const styles = StyleSheet.create({
   },
   monthProfitHalf: { width: "50%", height: "100%", flexDirection: "row" },
   zeroLine: { width: 1, height: "100%", backgroundColor: ML.textFaint },
-  monthProfitFill: { height: "100%" },
-  monthProfitNegative: { backgroundColor: ML.red, marginLeft: "auto" },
-  monthProfitPositive: { backgroundColor: ML.green },
+  monthProfitBar: { flex: 1, borderRadius: 0 },
   monthValue: {
     color: ML.text,
     fontSize: 10,
@@ -617,6 +721,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingTop: 2,
   },
+  monthSummaryPair: { flexDirection: "row", alignItems: "baseline", gap: 5 },
   monthSummaryText: { color: ML.textDim, fontSize: 12 },
   monthSummaryProfit: { fontSize: 13, fontWeight: "800" },
   chartNote: { color: ML.textFaint, fontSize: 11, lineHeight: 16 },

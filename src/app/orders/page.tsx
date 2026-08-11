@@ -1,12 +1,21 @@
 "use client";
 
-import { type ReactNode, memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
+import { formatRelativeTime } from "@/lib/format";
 import {
   ClipboardList,
   RefreshCw,
@@ -90,8 +99,14 @@ interface SummaryQuality {
   unsupportedCurrencyOrders: number;
   unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
 }
+/** Manuel siparişin kayıtlı kalemleri — burada yalnız "maliyeti biliniyor mu" için okunur. */
+interface ManualOrderCostDetail {
+  items?: Array<{ costKnown?: boolean } | null>;
+}
 interface OrdersResponse {
   orders: UnifiedOrder[];
+  /** Bu listenin hesaplandığı an — "3 dakika önce güncellendi" satırı bundan yazılır. */
+  computedAt?: string | number | null;
   summary: {
     days: number;
     shopify: SummaryBucket;
@@ -180,6 +195,13 @@ export default function OrdersPage() {
     refetchOnMount: true,
     refetchOnWindowFocus: false,
   });
+
+  /** "Yenile" — hem butondan hem tazelik satırından aynı işi yapar. */
+  const refreshOrders = () => {
+    if (isFetching) return;
+    forceFresh.current = true;
+    refetch();
+  };
 
   const [platform, setPlatform] = useState<"all" | OrderPlatform>("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
@@ -337,6 +359,11 @@ export default function OrdersPage() {
           <p className="text-sm text-muted-foreground mt-0.5">
             Son {summary?.days ?? 30} gündeki platform ve manuel siparişlerin — tek yerde.
           </p>
+          <FreshnessLine
+            computedAt={data?.computedAt}
+            fetching={isFetching}
+            onRefresh={refreshOrders}
+          />
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           <Button
@@ -347,7 +374,7 @@ export default function OrdersPage() {
             <Plus className="h-4 w-4" />
             Manuel Sipariş
           </Button>
-          <Button variant="outline" size="sm" disabled={isFetching} onClick={() => { forceFresh.current = true; refetch(); }} className="gap-2">
+          <Button variant="outline" size="sm" disabled={isFetching} onClick={refreshOrders} className="gap-2">
             <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             Yenile
           </Button>
@@ -664,6 +691,86 @@ export default function OrdersPage() {
   );
 }
 
+/** Bu süreden eski liste "bayat" sayılır — kullanıcı görsün ve tek tıkla tazeleyebilsin. */
+const STALE_AFTER_MS = 10 * 60_000;
+
+// Bağıl zaman metni kendi kendini tazelesin diye yarım dakikada bir tikleyen saat. Değer kovalara
+// yuvarlanır (aynı render turunda aynı sonucu vermek zorunda) ve sunucuda null döner — böylece
+// metin yalnız tarayıcıda üretilir, sunucu/tarayıcı saat farkı ekranı bozmaz.
+const CLOCK_TICK_MS = 30_000;
+function subscribeClock(onChange: () => void): () => void {
+  const timer = setInterval(onChange, CLOCK_TICK_MS);
+  return () => clearInterval(timer);
+}
+function clockSnapshot(): number {
+  return Math.floor(Date.now() / CLOCK_TICK_MS) * CLOCK_TICK_MS;
+}
+function clockServerSnapshot(): null {
+  return null;
+}
+function useClientNow(): number | null {
+  return useSyncExternalStore<number | null>(
+    subscribeClock,
+    clockSnapshot,
+    clockServerSnapshot
+  );
+}
+
+/**
+ * Başlığın altındaki tazelik satırı: "3 dakika önce güncellendi".
+ * Sunucu hızlı açılış için kaydedilmiş bir listeyi de dönebiliyor; o zaman bu satır sararır ve
+ * tıklanınca canlı çekim başlar. Zaman metni yalnız tarayıcıda üretilir (sunucu saatiyle
+ * oynamasın diye) ve dakikada iki kez kendini tazeler.
+ */
+function FreshnessLine({
+  computedAt,
+  fetching,
+  onRefresh,
+}: {
+  computedAt?: string | number | null;
+  fetching: boolean;
+  onRefresh: () => void;
+}) {
+  const now = useClientNow();
+
+  if (now == null || computedAt == null) return null;
+  const at = new Date(computedAt).getTime();
+  if (!Number.isFinite(at)) return null;
+
+  const stale = now - at > STALE_AFTER_MS;
+  const label = `${formatRelativeTime(computedAt, now)} güncellendi`;
+  const shared =
+    "mt-1.5 inline-flex items-center gap-1.5 text-[11px] animate-in fade-in duration-500";
+
+  if (!stale || fetching) {
+    return (
+      <span className={cn(shared, "text-muted-foreground", fetching && "opacity-60")}>
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/70" />
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={onRefresh}
+      className={cn(
+        shared,
+        "rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+      )}
+    >
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-70" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+      </span>
+      {label}
+      <span className="opacity-70">·</span>
+      Yenile
+    </button>
+  );
+}
+
 function SummaryStat({
   label,
   value,
@@ -774,6 +881,35 @@ const OrderRow = memo(function OrderRow({
   deleting: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const isManualOrder = order.isManual === true || order.platform === "manual";
+  const manualId = order.manualOrderId || order.id;
+  // Manuel siparişte "hangi kalemin maliyeti eksik" bilgisi listeyle birlikte gelmiyor: eskiden
+  // hiçbir kalem işaretlenmiyordu ve kullanıcı neyi düzelteceğini bulamıyordu. Bu kaydı YALNIZ
+  // sipariş açıldığında ve gerçekten eksik varsa okuyoruz (tek satır, düzenleme penceresiyle
+  // aynı kayıt → ikinci bir istek olmuyor).
+  const serverMarkedMissing = order.items.some((it) => it.costMissing);
+  const manualCostQuery = useQuery<ManualOrderCostDetail>({
+    queryKey: ["manual-order", manualId],
+    queryFn: () =>
+      fetchJson<ManualOrderCostDetail>(
+        order.editHref || `/api/manual-orders/${manualId}`
+      ),
+    enabled:
+      isManualOrder &&
+      open &&
+      !serverMarkedMissing &&
+      (order.profitPartial || order.profit == null),
+    staleTime: 60_000,
+    retry: false,
+  });
+  const missingCostItems = useMemo(() => {
+    const flags = order.items.map((it) => it.costMissing === true);
+    // Kayıttaki kalemler listedekiyle aynı sırada tutuluyor.
+    manualCostQuery.data?.items?.forEach((stored, i) => {
+      if (stored?.costKnown === false && i < flags.length) flags[i] = true;
+    });
+    return flags;
+  }, [order.items, manualCostQuery.data]);
   const info = PLATFORM_INFO[order.platform];
   const st = STATUS_STYLE[order.statusKind];
   const firstItem = order.items[0];
@@ -882,6 +1018,15 @@ const OrderRow = memo(function OrderRow({
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Ürünler ({order.itemCount} adet)</p>
               <div className="space-y-2">
                 {order.items.map((it, i) => {
+                  const costMissing = missingCostItems[i];
+                  // Maliyeti eksik manuel kalemin ürün bağlantısı yok → düzenleme penceresine götür.
+                  const opensManualEditor = isManualOrder && costMissing && !it.productId;
+                  const clickable = Boolean(it.productId) || opensManualEditor;
+                  const rowCls = cn(
+                    "flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md transition-colors",
+                    costMissing && "bg-amber-500/10 ring-1 ring-inset ring-amber-500/25",
+                    clickable && (costMissing ? "hover:bg-amber-500/20" : "hover:bg-muted/50")
+                  );
                   const body = (
                     <>
                       <Thumb src={it.image} size="h-9 w-9" />
@@ -891,27 +1036,40 @@ const OrderRow = memo(function OrderRow({
                           <span className="ml-1.5 text-[9px] text-amber-500">· sipariş üzerine</span>
                         )}
                         {/* Kâra girmeyen satır: ürünü işaretle → kullanıcı hangisini düzelteceğini görür. */}
-                        {it.costMissing && (
+                        {costMissing && (
                           <span className="ml-1.5 text-[9px] font-medium text-amber-500">
-                            {it.productId ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
+                            {it.productId || isManualOrder ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
                           </span>
                         )}
                       </span>
-                      {it.productId && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
+                      {clickable && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
                       <span className="tabular-nums text-xs text-muted-foreground shrink-0">×{it.quantity}</span>
                     </>
                   );
+                  if (opensManualEditor) {
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={onEdit}
+                        className={cn(rowCls, "w-full text-left")}
+                        title="Bu ürünün maliyetini gir"
+                      >
+                        {body}
+                      </button>
+                    );
+                  }
                   return it.productId ? (
                     <Link
                       key={i}
                       href={`/products/${it.productId}`}
-                      className="flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md hover:bg-muted/50 transition-colors"
-                      title="Ürün sayfasına git (maliyet/kâr detayı)"
+                      className={rowCls}
+                      title={costMissing ? "Bu ürünün maliyetini gir" : "Ürün sayfasına git (maliyet/kâr detayı)"}
                     >
                       {body}
                     </Link>
                   ) : (
-                    <div key={i} className="flex items-center gap-2.5">{body}</div>
+                    <div key={i} className={rowCls}>{body}</div>
                   );
                 })}
               </div>
@@ -960,7 +1118,18 @@ const OrderRow = memo(function OrderRow({
                   </div>
                 )}
                 {order.profitPartial && (
-                  <p className="text-[10px] text-muted-foreground/70">{order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.</p>
+                  <p className="text-[10px] text-muted-foreground/70">
+                    {order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.
+                    {isManualOrder && (
+                      <button
+                        type="button"
+                        onClick={onEdit}
+                        className="ml-1 font-medium text-amber-500 underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80"
+                      >
+                        Maliyeti gir
+                      </button>
+                    )}
+                  </p>
                 )}
                 {order.desiEstimated && (
                   <p className="text-[10px] text-amber-500/90">

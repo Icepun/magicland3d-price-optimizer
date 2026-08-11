@@ -134,7 +134,19 @@ async function computeProducts(urlString: string) {
           // ekranı tek istisnaydı → aynı ürün iki yüzeyde farklı kâr gösteriyordu.
           // NOT: sipariş kârı hattı (api/orders) listing'leri FİLTRELEMEZ — eski bir sipariş,
           // ürün sonradan pasifleşse de "eşleşmedi"ye düşmemeli.
-          listings: { where: { isActive: true } },
+          // Yanıta konmayan bu kayıtlardan yalnız kâr hesabının kullandığı alanlar okunur.
+          listings: {
+            where: { isActive: true },
+            select: {
+              id: true,
+              platform: true,
+              salePrice: true,
+              stock: true,
+              commissionRate: true,
+              commissionFixed: true,
+              cargoCost: true,
+            },
+          },
           variantGroup: { select: { id: true, name: true } },
         },
         orderBy: { updatedAt: "desc" },
@@ -348,7 +360,9 @@ async function computeProducts(urlString: string) {
       currentNetProfit,
       currentProfitMargin,
       hasCost,
-      missingDesi: product.desi == null || product.desi <= 0,
+      // desi = 0 bilerek girilmiş geçerli bir değerdir (çok küçük ürünler) → uyarı verilmez.
+      // Sipariş kârı hattı da aynı kuralı uygular; iki ekran farklı uyarı göstermesin.
+      missingDesi: product.desi == null || product.desi < 0,
       resolvedTotalCost: resolved?.totalCost ?? null,
       platforms: platformSummaries,
     };

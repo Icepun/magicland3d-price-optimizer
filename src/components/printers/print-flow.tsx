@@ -40,7 +40,8 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body?.error || `${url} ${r.status}`);
+    // Kullanıcıya adres/durum kodu düşmesin — sade bir mesaj yeter.
+    throw new Error(body?.error || "Bilgiler alınamadı");
   }
   return r.json() as Promise<T>;
 }
@@ -61,7 +62,7 @@ export async function runPrintStream(
   });
   if (!res.ok || !res.body) {
     const j = await res.json().catch(() => ({}) as { error?: string });
-    throw new Error((j as { error?: string }).error || `HTTP ${res.status}`);
+    throw new Error((j as { error?: string }).error || "Baskı başlatılamadı");
   }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
@@ -87,7 +88,7 @@ export async function runPrintStream(
     }
   }
   if (errMsg) throw new Error(errMsg);
-  if (!ok) throw new Error("Baskı tamamlanmadı (akış beklenmedik kapandı)");
+  if (!ok) throw new Error("Baskı başlatılamadı — tekrar dene");
   onProgress({ stage: "done", pct: 100 });
   // Baskı başladı → arka planda görselleştirme varlıkları (inşa kareleri, md5 anahtarıyla) —
   // yazıcı kartındaki "canlı dolan model" bu baskıda ve sonrakilerde hazır olsun. Dinamik import:
@@ -255,8 +256,8 @@ export function SlotStep({
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
             {isBambu
-              ? "Renkler baskı dosyasından okundu. Her rengi bir AMS slotuna ata."
-              : "Renkler baskı dosyasından okundu. Her rengi bir kafaya (slot) ata — gcode bu seçime göre ayarlanır."}
+              ? "Renkler baskı dosyasından okundu. Her renk için hangi makarayı kullanacağını seç."
+              : "Renkler baskı dosyasından okundu. Her renk için hangi kafayı kullanacağını seç."}
           </p>
         </DialogHeader>
 
@@ -267,7 +268,7 @@ export function SlotStep({
             {slots.length > 0 ? (
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1.5">
-                  Yazıcıdaki slotlar (canlı) — rengi değiştirmek için yazıcı ekranını kullan
+                  Yazıcıdaki renkler — değiştirmek için yazıcı ekranını kullan
                 </p>
                 <div className="flex flex-wrap gap-1.5">
                   {slots.map((s) => (
@@ -329,7 +330,7 @@ export function SlotStep({
                           <button
                             key={s.slot}
                             onClick={() => setOne(i, s.slot)}
-                            title={`${isBambu ? "Slot" : "Kafa"} ${s.slot + 1}${s.type ? ` · ${s.type}` : ""}`}
+                            title={`${isBambu ? "Makara" : "Kafa"} ${s.slot + 1}${s.type ? ` · ${s.type}` : ""}`}
                             className={cn("flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors", sel ? "border-primary bg-primary/10 ring-1 ring-primary/30" : "border-border hover:bg-muted")}
                           >
                             <span className="font-bold tabular-nums">{s.slot + 1}</span>
@@ -348,13 +349,13 @@ export function SlotStep({
               <div className="rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2 text-[11px] text-destructive flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 <span>
-                  Çok renkli baskı için dosyayı Bambu Studio&apos;dan <strong>.3mf</strong> olarak dışa aktarıp yükle.
+                  Bu dosya çok renkli basılamaz — Bambu Studio&apos;da <strong>3MF</strong> olarak kaydedip yeniden yükle.
                 </span>
               </div>
             ) : rawGcodeBambu ? (
               <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
-                Filamenti yukarıdaki slot sırasına göre yükle.
+                Filamentleri yukarıdaki sıraya göre tak.
               </p>
             ) : null}
 
@@ -370,11 +371,11 @@ export function SlotStep({
                 Elegoo'da bu seçenekler yok. */}
             {(isBambu || isSnapmaker) && (
               <div className="space-y-1.5 pt-2 border-t border-border/50">
-                <p className="text-[11px] text-muted-foreground">Baskı seçenekleri (varsayılan kapalı — istersen aç)</p>
+                <p className="text-[11px] text-muted-foreground">Baskı seçenekleri</p>
                 {([
                   { k: "bedLeveling" as const, label: "Otomatik tabla terazileme" },
                   { k: "flowCali" as const, label: "Akış kalibrasyonu" },
-                  { k: "timelapse" as const, label: "Timelapse (hızlandırılmış video)" },
+                  { k: "timelapse" as const, label: "Hızlandırılmış video kaydı" },
                 ]).map((o) => (
                   <button key={o.k} onClick={() => setPrefs((p) => ({ ...p, [o.k]: !p[o.k] }))} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground w-full">
                     <span className={cn("h-4 w-4 rounded border flex items-center justify-center shrink-0", prefs[o.k] ? "bg-primary border-primary" : "border-border")}>
@@ -391,7 +392,7 @@ export function SlotStep({
                 <span className={cn("h-4 w-4 rounded border flex items-center justify-center", useAms ? "bg-primary border-primary" : "border-border")}>
                   {useAms && <Check className="h-3 w-3 text-primary-foreground" />}
                 </span>
-                AMS kullan (kapalıysa harici makaradan basar)
+                Çok renkli besleyiciyi kullan (kapalıysa dıştaki makaradan basar)
               </button>
             )}
           </div>

@@ -4,6 +4,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
   aggregateMonthlyFinance,
   FINANCE_TIME_ZONE,
+  monthlyFinanceWindowStart,
 } from "@/lib/monthly-finance";
 import { swr } from "@/lib/route-cache";
 
@@ -25,14 +26,35 @@ export async function GET(req: NextRequest) {
 async function computeMonthlyFinance(monthCount: number) {
   await ensureRuntimeSchema();
 
-  const [snapshots, manualOrders, expenses, actualCommissionSummary] =
-    await Promise.all([
+  // Pencere ve toplama AYNI "şimdi"yi kullanmalı; yoksa istek tam ay dönümüne denk gelirse
+  // çekilen aralık ile toplanan aylar bir ay kayabilir.
+  const now = new Date();
+  const windowStart = monthlyFinanceWindowStart(monthCount, now, FINANCE_TIME_ZONE);
+
+  const [
+    snapshots,
+    manualOrders,
+    expenses,
+    actualCommissionSummary,
+    snapshotSummary,
+    manualOrderSummary,
+  ] = await Promise.all([
+    // Yalnız gösterilen ay aralığı okunur (satır sayısı sabit kalır); dışarıdaki satırlar
+    // zaten hiçbir aya düşmüyordu.
     prisma.orderFinanceSnapshot.findMany({
-      where: { platform: { not: "manual" } },
-      orderBy: { orderedAt: "asc" },
+      where: { platform: { not: "manual" }, orderedAt: { gte: windowStart } },
+      select: {
+        platform: true,
+        orderedAt: true,
+        revenueKurus: true,
+        profitKurus: true,
+        profitPartial: true,
+        statusKind: true,
+        currency: true,
+      },
     }),
     remotePrisma.manualOrder.findMany({
-      orderBy: { orderedAt: "asc" },
+      where: { orderedAt: { gte: windowStart } },
       select: {
         orderedAt: true,
         revenueKurus: true,
@@ -43,13 +65,22 @@ async function computeMonthlyFinance(monthCount: number) {
       },
     }),
     remotePrisma.actualExpense.findMany({
-      orderBy: { paidAt: "asc" },
+      where: { paidAt: { gte: windowStart } },
+      select: { paidAt: true, amountKurus: true },
     }),
     prisma.platformOrderFinancial.aggregate({
       where: { platform: "trendyol" },
       _count: { _all: true },
       _max: { syncedAt: true },
     }),
+    // "Geçmiş şu tarihten beri" ve "son senkron" bilgisi TÜM geçmişi kapsar → satırları
+    // çekmeden özetten okunur.
+    prisma.orderFinanceSnapshot.aggregate({
+      where: { platform: { not: "manual" } },
+      _min: { orderedAt: true },
+      _max: { syncedAt: true },
+    }),
+    remotePrisma.manualOrder.aggregate({ _min: { orderedAt: true } }),
   ]);
 
   const months = aggregateMonthlyFinance({
@@ -57,6 +88,7 @@ async function computeMonthlyFinance(monthCount: number) {
     manualOrders,
     expenses,
     monthCount,
+    now,
     timeZone: FINANCE_TIME_ZONE,
   });
   const totals = months.reduce(
@@ -93,20 +125,19 @@ async function computeMonthlyFinance(monthCount: number) {
     excludedOrders: totals.excludedOrders,
     unsupportedCurrencyOrders: totals.unsupportedCurrencyOrders,
   };
-  const lastOrderSyncAt = snapshots.reduce<Date | null>(
-    (latest, row) => (!latest || row.syncedAt > latest ? row.syncedAt : latest),
-    null
-  );
+  const lastOrderSyncAt = snapshotSummary._max.syncedAt ?? null;
+  const firstOrderedAt = [
+    snapshotSummary._min.orderedAt,
+    manualOrderSummary._min.orderedAt,
+  ]
+    .filter((value): value is Date => value != null)
+    .sort((a, b) => a.getTime() - b.getTime())[0];
 
   return {
     currency: "TRY",
     timeZone: FINANCE_TIME_ZONE,
-    generatedAt: new Date().toISOString(),
-    dataFrom:
-      [...snapshots, ...manualOrders]
-        .map((row) => row.orderedAt)
-        .sort((a, b) => a.getTime() - b.getTime())[0]
-        ?.toISOString() ?? null,
+    generatedAt: now.toISOString(),
+    dataFrom: firstOrderedAt?.toISOString() ?? null,
     lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
     actualCommissionOrders: actualCommissionSummary._count._all,
     lastActualCommissionSyncAt:
