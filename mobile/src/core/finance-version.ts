@@ -6,3 +6,14 @@
  * geri-doldurma yazıldığı gün yanlış kümeyi seçerdi. Tek kaynak burada (sync-core ile paylaşılır).
  */
 export const FINANCE_CALCULATION_VERSION = 2;
+
+/**
+ * Bu satır GÜNCEL hesapla mı yazılmış?
+ *
+ * NEDEN tek yerde: "yeniden hesapla" eylemi hem hangi ayın bayat olduğunu işaretlemek hem de
+ * yazımdan sonra damgayı güncellemek için aynı karşılaştırmayı yapıyor. İki tarafta ayrı ayrı
+ * `< FINANCE_CALCULATION_VERSION` yazılırsa sürüm arttığı gün biri güncellenmeyi unutur.
+ */
+export function isFinanceSnapshotOutdated(calculationVersion: number): boolean {
+  return calculationVersion < FINANCE_CALCULATION_VERSION;
+}

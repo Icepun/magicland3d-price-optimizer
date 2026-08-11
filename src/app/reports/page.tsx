@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart,
@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -104,7 +105,43 @@ interface FinanceBucket {
   excludedOrders: number;
   unsupportedCurrencyOrders: number;
   vat?: VatSummary;
+  /** Eski hesapla kaydedilmiş sipariş sayısı — "bu ayın rakamı güncel değil" uyarısı için. */
+  outdatedOrders?: number;
   byPlatform: Record<string, unknown>;
+}
+
+/** Yeniden hesap turunun anlık durumu. */
+interface RecalcState {
+  month: string;
+  phase: "reading" | "calculating" | "writing" | "done" | "error";
+  processed: number;
+  total: number;
+  startedAt: string;
+  finishedAt: string | null;
+  result: {
+    month: string;
+    totalOrders: number;
+    recalculatedOrders: number;
+    skippedOrders: number;
+    changedOrders: number;
+    profitDeltaKurus: number;
+  } | null;
+  error: string | null;
+}
+
+const RECALC_ACTIVE_PHASES = new Set(["reading", "calculating", "writing"]);
+
+/** İlerleme yüzdesi: okuma/hesap/yazma aşamaları tek bir dolan çubuğa oturtulur. */
+function recalcPercent(state: RecalcState | null): number {
+  if (!state) return 0;
+  if (state.phase === "done") return 100;
+  if (state.phase === "error") return 100;
+  if (state.phase === "writing") return 94;
+  if (state.phase === "calculating") {
+    const ratio = state.total > 0 ? state.processed / state.total : 0;
+    return 14 + Math.min(1, ratio) * 78;
+  }
+  return 8;
 }
 
 interface FinanceTotals {
@@ -246,6 +283,85 @@ export default function ReportsPage() {
     },
   });
 
+  // ── Ayı yeniden hesapla ──────────────────────────────────────────────────────────────
+  // Maliyet/komisyon/kargo düzeltmesi geçmiş ayın kayıtlı rakamını kendiliğinden oynatmaz;
+  // kullanıcı bunu isteyince yapılır. Tur sunucuda sürer, ilerleme yoklanır.
+  const [recalcMonth, setRecalcMonth] = useState<string>("");
+  const recalcStatusQuery = useQuery<{ recalc: RecalcState | null }>({
+    queryKey: ["finance-recalc-status"],
+    queryFn: () =>
+      fetchJson<{ recalc: RecalcState | null }>(
+        "/api/finance/monthly?recalc=status",
+        { cache: "no-store" }
+      ),
+    refetchInterval: (query) =>
+      RECALC_ACTIVE_PHASES.has(query.state.data?.recalc?.phase ?? "") ? 400 : false,
+    staleTime: 0,
+  });
+  const recalc = recalcStatusQuery.data?.recalc ?? null;
+  const recalcRunning = recalc != null && RECALC_ACTIVE_PHASES.has(recalc.phase);
+  // Bu ekranda başlatılıp biten turun özeti görünür kalır; günler önce yapılmış bir tur
+  // sayfayı açanı yanıltmasın diye eskiler sessizce geçilir.
+  const [finishedRecalc, setFinishedRecalc] = useState<string | null>(null);
+  const recalcStamp = recalc?.finishedAt
+    ? `${recalc.startedAt}|${recalc.finishedAt}`
+    : null;
+  const recalcJustFinished =
+    recalc?.phase === "done" && recalcStamp != null && finishedRecalc === recalcStamp;
+  const startRecalc = useMutation({
+    mutationFn: (month: string) =>
+      fetchJson<{ recalc: RecalcState }>(
+        `/api/finance/monthly?month=${encodeURIComponent(month)}`,
+        { method: "POST" }
+      ),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["finance-recalc-status"], data);
+      void recalcStatusQuery.refetch();
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Yeniden hesaplama başlatılamadı."
+      );
+    },
+  });
+
+  // Biten turu BİR KEZ bildir: yoklama sürdüğü için aynı sonuç tekrar tekrar gelir.
+  const reportedRecalcRef = useRef<string | null>(null);
+  const seenRecalcRef = useRef(false);
+  useEffect(() => {
+    if (!recalc) return;
+    const wasSeen = seenRecalcRef.current;
+    seenRecalcRef.current = true;
+    if (!recalc.finishedAt) return;
+    const stamp = `${recalc.startedAt}|${recalc.finishedAt}`;
+    if (reportedRecalcRef.current === stamp) return;
+    reportedRecalcRef.current = stamp;
+    // Sayfa açılmadan ÖNCE bitmiş tur: sonucu şimdi duyurmak yanıltıcı olurdu.
+    if (!wasSeen) return;
+    setFinishedRecalc(stamp);
+    if (recalc.phase === "error") {
+      toast.error("Ay yeniden hesaplanamadı.", { description: recalc.error ?? undefined });
+      return;
+    }
+    const result = recalc.result;
+    if (!result) return;
+    const delta = result.profitDeltaKurus / 100;
+    toast.success(
+      result.changedOrders === 0
+        ? "Bu ayda değişen bir rakam yok."
+        : `${result.changedOrders} siparişin kârı güncellendi (${
+            delta >= 0 ? "+" : "−"
+          }${formatCurrency(Math.abs(delta))}).`,
+      {
+        description:
+          result.skippedOrders > 0
+            ? `${result.skippedOrders} siparişin ürün bilgisi kayıtlı değil, dokunulmadı.`
+            : undefined,
+      }
+    );
+    void queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
+  }, [recalc, queryClient]);
+
   const summary = ordersQuery.data?.summary;
   const orders = useMemo(() => ordersQuery.data?.orders ?? [], [ordersQuery.data]);
   const productList = useMemo(
@@ -257,6 +373,14 @@ export default function ReportsPage() {
     [financeQuery.data]
   );
   const currentMonth = financeMonths.at(-1);
+  // Kullanıcı bir ay seçmediyse "bu ay" — düzeltmeler en sık içinde bulunulan ayda yapılıyor.
+  const selectedRecalcMonth =
+    financeMonths.some((month) => month.month === recalcMonth)
+      ? recalcMonth
+      : currentMonth?.month ?? "";
+  const selectedRecalcBucket = financeMonths.find(
+    (month) => month.month === selectedRecalcMonth
+  );
 
   const topSellers = useMemo(() => {
     const sellers = new Map<string, { qty: number; image: string | null }>();
@@ -627,12 +751,73 @@ export default function ReportsPage() {
                   </p>
                 </div>
               )}
-              {financeQuery.data?.dataFrom && (
-                <p className="text-xs text-muted-foreground mt-3 border-t border-border/50 pt-3">
-                  Grafik {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden bu yana
-                  toplanan verilerle çiziliyor.
+              <div className="mt-3 border-t border-border/50 pt-3 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={selectedRecalcMonth}
+                    onChange={(event) => setRecalcMonth(event.target.value)}
+                    disabled={recalcRunning || financeMonths.length === 0}
+                    className="h-8 rounded-md border bg-background px-2 text-xs disabled:opacity-60"
+                    title="Yeniden hesaplanacak ay"
+                  >
+                    {financeMonths.map((month) => (
+                      <option key={month.month} value={month.month}>
+                        {month.label}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-2"
+                    disabled={
+                      recalcRunning || startRecalc.isPending || !selectedRecalcMonth
+                    }
+                    onClick={() => startRecalc.mutate(selectedRecalcMonth)}
+                  >
+                    <RefreshCw
+                      className={cn("h-4 w-4", recalcRunning && "animate-spin")}
+                    />
+                    {recalcRunning ? "Yeniden hesaplanıyor..." : "Bu ayı yeniden hesapla"}
+                  </Button>
+                  {!recalcRunning && (selectedRecalcBucket?.outdatedOrders ?? 0) > 0 && (
+                    <span className="text-xs text-amber-600 dark:text-amber-500">
+                      Bu ayın rakamı güncel değil.
+                    </span>
+                  )}
+                </div>
+
+                {recalc && (recalcRunning || recalcJustFinished) && (
+                  <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+                    <Progress value={recalcPercent(recalc)} className="h-1.5" />
+                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>
+                        {recalc.phase === "reading" && "Satış geçmişi okunuyor"}
+                        {recalc.phase === "calculating" &&
+                          `${recalc.processed}/${recalc.total} sipariş yeniden hesaplanıyor`}
+                        {recalc.phase === "writing" && "Yeni rakamlar kaydediliyor"}
+                        {recalc.phase === "done" &&
+                          `${recalc.result?.changedOrders ?? 0} siparişin kârı güncellendi`}
+                      </span>
+                      <span className="tabular-nums">
+                        {Math.round(recalcPercent(recalc))}%
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground">
+                  Maliyet, komisyon veya kargoyu düzelttiysen o ayı yeniden hesapla.
                 </p>
-              )}
+
+                {financeQuery.data?.dataFrom && (
+                  <p className="text-xs text-muted-foreground">
+                    Grafik {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden bu yana
+                    toplanan verilerle çiziliyor.
+                  </p>
+                )}
+              </div>
             </CardContent>
           </Card>
 

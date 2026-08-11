@@ -1,4 +1,5 @@
-import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
+import { simulatePrice } from "@core/pricing-engine";
+import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules";
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import {
   withProductCommissionRule,
@@ -111,12 +112,10 @@ export function computeProductProfit(
       expenseRules: filterRulesByPlatform(rules.expense, listing.platform),
       vatRate,
       ...resolveListingCommissionOverride(listing, settings),
-      // Shopify sepet min 150₺ → <150₺ ürün tek başına satılamaz, kargo paylaşılır → 0.
+      // Platform kuralları TEK kaynaktan (@core/platform-rules) → masaüstüyle birebir.
       cargoCostOverride:
-        listing.cargoCost ??
-        (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
-      // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden (masaüstüyle birebir).
-      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+        listing.cargoCost ?? shopifyCargoOverride(listing.platform, listing.salePrice),
+      minOrderQty: platformMinOrderQty(listing.platform, listing.salePrice),
       vatableProductCost: filamentMatCost,
     });
     return {
@@ -172,14 +171,8 @@ export function computeProductProfit(
           },
           settings
         ),
-        cargoCostOverride:
-          fallbackPlatform === "shopify" && detail.currentSalePrice < 150
-            ? 0
-            : undefined,
-        minOrderQty:
-          fallbackPlatform === "trendyol"
-            ? trendyolMinQty(detail.currentSalePrice)
-            : 1,
+        cargoCostOverride: shopifyCargoOverride(fallbackPlatform, detail.currentSalePrice),
+        minOrderQty: platformMinOrderQty(fallbackPlatform, detail.currentSalePrice),
         vatableProductCost: filamentMatCost,
       });
       currentNetProfit = sim.netProfit;

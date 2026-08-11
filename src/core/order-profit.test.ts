@@ -343,3 +343,85 @@ describe("sipariş kârı — kapsam kuralları", () => {
     expect(result.profit).toBeCloseTo(151.717298, 6);
   });
 });
+
+/**
+ * KISMİ / TAM İADE — satır adedi artık KALAN adettir.
+ *
+ * Eski hata: sipariş tutarı iade sonrası alınıyor ama satır adedi orijinal adet olarak
+ * kalıyordu → iade edilen ürünün maliyeti kârdan düşülmeye devam ediyor, üstelik satır
+ * toplamı sipariş toplamını aştığı için sipariş-geneli düzeltme de bozuluyordu.
+ */
+describe("sipariş kârı — kısmi ve tam iade adedi", () => {
+  it("T14 · iadesiz sipariş (2 adet) — REGRESYON: bugünkü değer korunur", () => {
+    const r = run([{ unitPrice: P, quantity: 2, product: prod("a") }], { total: P * 2 });
+    expect(r.profit).toBeCloseTo(2 * LINE - FIX_NET, 2); // 191,932
+    expect(r.totalQty).toBe(2);
+    expect(r.partial).toBe(false);
+    expect(r.orderRevenueAdjustment).toBeCloseTo(0, 8);
+  });
+
+  it("T14b · kısmi iade (3 adetten 1'i iade) — ÖNCE/SONRA farkı", () => {
+    const total = P * 2; // iade sonrası sipariş tutarı (2 adedin bedeli)
+    const sonra = run([{ unitPrice: P, quantity: 2, product: prod("a") }], { total }).profit!;
+    // ÖNCE: adet orijinal (3) kalıyordu → 3 adedin maliyeti kesiliyor, satır toplamı sipariş
+    // toplamını 199,99 aştığı için sipariş-geneli düzeltme de kârı aşağı çekiyordu.
+    const once = run([{ unitPrice: P, quantity: 3, product: prod("a") }], { total }).profit!;
+
+    expect(sonra).toBeCloseTo(2 * LINE - FIX_NET, 2); // = iadesiz 2 adetlik siparişle AYNI
+    expect(once).toBeCloseTo(161.7335, 2);
+    expect(sonra - once).toBeCloseTo(30.1989, 2); // hatanın imzası
+  });
+
+  it("T14c · tamamen iade edilen satır kâra HİÇ girmez (ne maliyeti ne cirosu)", () => {
+    const total = P * 2;
+    const yalnizKalan = run(
+      [{ unitPrice: P, quantity: 2, product: prod("a") }],
+      { total }
+    );
+    const iadeliSatirla = run(
+      [
+        { unitPrice: P, quantity: 2, product: prod("a") },
+        { unitPrice: P, quantity: 0, product: prod("b") }, // satırın tamamı iade edildi
+      ],
+      { total }
+    );
+
+    expect(iadeliSatirla.profit).toBeCloseTo(yalnizKalan.profit!, 8);
+    expect(iadeliSatirla.matchedLines).toBe(1);
+    expect(iadeliSatirla.totalQty).toBe(2);
+    expect(iadeliSatirla.partial).toBe(false);
+  });
+
+  it("T14d · tamamen iade edilen satır ürünle eşleşmese bile siparişi kısmi yapmaz", () => {
+    const r = run(
+      [
+        { unitPrice: P, quantity: 2, product: prod("a") },
+        { unitPrice: P, quantity: 0, product: null },
+      ],
+      { total: P * 2 }
+    );
+
+    expect(r.partial).toBe(false);
+    expect(r.unmatchedLines).toBe(0);
+    expect(r.unmatchedQty).toBe(0);
+    expect(r.unmatchedRevenue).toBeCloseTo(0, 8);
+    expect(r.desiEstimated).toBe(false);
+    expect(r.profit).toBeCloseTo(2 * LINE - FIX_NET, 2);
+  });
+
+  it("T14e · tek ürün kaldıysa elle girilen listing kargosu yine kazanır", () => {
+    const withManual = prod("a", {
+      listing: { platform: "trendyol", commissionRate: 0.21, commissionFixed: null, cargoCost: 20 },
+    });
+    const r = run(
+      [
+        { unitPrice: P, quantity: 1, product: withManual },
+        { unitPrice: P, quantity: 0, product: prod("b") }, // tamamen iade
+      ],
+      { cargo: CARGO_34, total: P }
+    );
+
+    // T7 ile AYNI sonuç: iade edilen satır "eşleşmemiş" sayılıp tek-ürün kargosunu düşürmemeli.
+    expect(r.profit).toBeCloseTo(LINE - FIX_NET - 20 * (5 / 6), 2);
+  });
+});

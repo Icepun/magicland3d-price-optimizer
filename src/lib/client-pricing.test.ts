@@ -193,6 +193,95 @@ describe("computeClientPricing", () => {
     ).toBe(2);
   });
 
+  // ── Fiyat Lab ↔ Ürünler hizası (platform kuralları tek kaynak) ────────────────────────────
+  // Kargo 88₺: "%30 indirim %25'ten 88₺ daha kârlı" denetim bulgusunun birebir senaryosu.
+  const CARGO_88 = {
+    id: "cargo",
+    name: "Kargo",
+    minPrice: 0,
+    maxPrice: 999999,
+    minDesi: 0,
+    maxDesi: 999,
+    cargoCost: 88,
+    priority: 1,
+    isActive: true,
+  };
+
+  /** Ürünler/Panel yüzeyinin bugünkü hesabı — referans (Fiyat Lab buna hizalanmalı). */
+  function urunlerSayfasiGibi(price: number, discountBuffer = 0) {
+    return simulatePrice({
+      salePrice: price,
+      productCost: 100,
+      packagingCost: 0,
+      categoryName: "Dekor",
+      desi: 2,
+      commissionRules: [],
+      cargoRules: [CARGO_88],
+      expenseRules: [],
+      vatRate: 20,
+      discountBuffer,
+      ...resolveListingCommissionOverride(
+        { platform: "shopify", commissionRate: null, commissionFixed: null },
+        SETTINGS
+      ),
+      // Eşiğe LİSTE fiyatı girer (indirimli fiyat değil) — çoğunluk davranışı.
+      cargoCostOverride: price < 150 ? 0 : undefined,
+      minOrderQty: 1,
+      vatableProductCost: 100,
+    });
+  }
+
+  it("Fiyat Lab ile Ürünler aynı ürün+fiyat için AYNI kârı verir (eşiğin iki yanında)", () => {
+    for (const price of [120, 200]) {
+      const input = baseInput({ cargoRules: [CARGO_88] });
+      input.product.listings[0].salePrice = price;
+      input.product.currentSalePrice = price;
+
+      const { preview, priceLab } = computeClientPricing(input);
+      const beklenen = urunlerSayfasiGibi(price);
+      const onizleme = preview.platforms.find((p) => p.platform === "shopify")?.result;
+      const lab = priceLab.targets?.find((t) => t.platform === "shopify");
+
+      expect(onizleme?.netProfit).toBeCloseTo(beklenen.netProfit, 10);
+      expect(onizleme?.cargoCost).toBe(price < 150 ? 0 : beklenen.cargoCost);
+      expect(lab?.currentMargin).toBeCloseTo(beklenen.profitMargin, 10);
+    }
+  });
+
+  /**
+   * KAMPANYA EŞİĞİ — sepet minimumu müşterinin ÖDEDİĞİ tutara bakar.
+   *
+   * Bu bir kez yanlış "düzeltildi": eşiğe liste fiyatı sokulunca 140₺'ye inen bir kampanyada
+   * kargo hâlâ satıcıya yazılıyordu. Doğrusu: indirim ürünü 150₺'nin altına düşürürse kargo
+   * müşteriye geçer ve satıcının kârı ARTAR. Sayı ters görünür ama kuralın gerçek etkisidir;
+   * arayüz o satırda tek satırlık açıklama gösterir (crossesFreeShipping).
+   */
+  it("Fiyat Lab kampanya: eşiğin altına inen indirimde kargo müşteriye geçer", () => {
+    const input = baseInput({ cargoRules: [CARGO_88] });
+    input.product.listings[0].salePrice = 200; // %25 → 150₺ (eşikte), %30 → 140₺ (eşiğin altı)
+    input.product.currentSalePrice = 200;
+
+    const rows = computeClientPricing(input).priceLab.campaign?.rows ?? [];
+    expect(rows).toHaveLength(5);
+
+    const d25 = rows.find((r) => r.discount === 25)!;
+    const d30 = rows.find((r) => r.discount === 30)!;
+
+    // Eşiğin ÜSTÜNDEKİ satırlarda indirim arttıkça kâr azalır (normal davranış).
+    const ustSatirlar = rows.filter((r) => !r.crossesFreeShipping);
+    for (let i = 1; i < ustSatirlar.length; i++) {
+      expect(ustSatirlar[i].profit).toBeLessThan(ustSatirlar[i - 1].profit);
+    }
+
+    // %30 satırı eşiği geçiyor: işaretlenmeli ve kâr YÜKSELMELİ (kargo artık satıcıda değil).
+    expect(d25.crossesFreeShipping).toBeFalsy();
+    expect(d30.crossesFreeShipping).toBe(true);
+    expect(d30.profit).toBeGreaterThan(d25.profit);
+
+    // Ürünler sayfası aynı etkili fiyat için AYNI kârı vermeli (yüzeyler ayrışmasın).
+    expect(d30.profit).toBeCloseTo(urunlerSayfasiGibi(140, 0).netProfit, 10);
+  });
+
   it("pasif komisyon kuralı hesaba katılmaz (isActive süzme)", () => {
     // Trendyol için %50'lik PASİF bir kural → uygulanmamalı; aktif kural yokken komisyon 0 kalır.
     const input = baseInput({

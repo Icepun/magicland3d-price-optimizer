@@ -36,6 +36,15 @@ const SCAN_WINDOW_MS = 2 * 86_400_000;
 /** Tek turda telefona gidecek en fazla bildirim (birikmiş durumda telefonu bombalamamak için). */
 const MAX_PUSH_PER_SCAN = 5;
 
+/**
+ * TELEFONA bildirim gönderilecek bildirim türleri.
+ *
+ * Kullanıcının kararı: telefona yalnız SİPARİŞLER ve YAZICI olayları (bitti/durdu/hata) düşsün.
+ * Stok ve filament uyarıları bilgilendirmedir — gün içinde eşik defalarca geçilebilir ve hemen
+ * müdahale gerektirmez; onlar uygulamadaki zilde kalır. (Yazıcı olaylarını relay ayrı gönderir.)
+ */
+const PUSHABLE_TYPES = new Set(["order-stock", "order-made"]);
+
 let started = false;
 let warming = false;
 let scanning = false;
@@ -480,8 +489,13 @@ async function persistNotifications(rows: WatchNotification[]): Promise<void> {
       .catch(() => 0);
   }
 
-  const critical = fresh.filter((n) => n.severity === "critical").slice(0, MAX_PUSH_PER_SCAN);
-  for (const n of critical) {
+  // TELEFONA yalnız SİPARİŞ olayları gider (yazıcı olaylarını relay ayrıca gönderir).
+  // Kullanıcının kararı: stok/filament uyarıları telefonu meşgul etmesin, zilde kalsın —
+  // bunlar "hemen müdahale" gerektirmiyor ve gün içinde tekrar tekrar eşik geçebiliyor.
+  const pushable = fresh
+    .filter((n) => n.severity === "critical" && PUSHABLE_TYPES.has(n.type))
+    .slice(0, MAX_PUSH_PER_SCAN);
+  for (const n of pushable) {
     await pushToAllDevices(n.title, n.body).catch(() => {});
   }
 }

@@ -1,4 +1,10 @@
-import { simulatePrice, trendyolMinQty } from "../core/pricing-engine";
+import { simulatePrice } from "../core/pricing-engine";
+import {
+  belowShopifyMinBasket,
+  platformMinOrderQty,
+  platformPriceBreakpoints,
+  shopifyCargoOverride,
+} from "../core/platform-rules";
 import { vatRateOf } from "../core/vat";
 import {
   withProductCommissionRule,
@@ -92,6 +98,11 @@ interface CampaignRow {
   effectivePrice: number;
   profit: number;
   margin: number;
+  /**
+   * Bu indirimde sepet minimumunun altına düşülüyor → kargo satıcıda kalmıyor ve kâr
+   * ARTABİLİR. Sayı doğru ama açıklamasız bakınca hesap hatası sanılır; arayüz tek satırla söyler.
+   */
+  crossesFreeShipping?: boolean;
 }
 export interface PriceLab {
   hasCost: boolean;
@@ -211,11 +222,10 @@ function previewFromBase(b: PricingBase): ProfitPreview {
       expenseRules: b.expenseByPlatform[listing.platform] ?? [],
       vatRate: b.vatRate,
       ...resolveListingCommissionOverride(listing, b.settings),
-      // Shopify sepet min 150₺ → <150₺ üründe kargo paylaşılır → katma (0).
+      // Platform kuralları TEK kaynaktan (core/platform-rules).
       cargoCostOverride:
-        listing.cargoCost ??
-        (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
-      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+        listing.cargoCost ?? shopifyCargoOverride(listing.platform, listing.salePrice),
+      minOrderQty: platformMinOrderQty(listing.platform, listing.salePrice),
       vatableProductCost: b.filamentMatCost,
     });
     return { platform: listing.platform, listingId: listing.id, salePrice: listing.salePrice, result };
@@ -256,15 +266,12 @@ function priceLabFromBase(b: PricingBase): PriceLab {
           : { platform, commissionRate: null, commissionFixed: null },
         b.settings
       ),
-      // Canlı önizlemeyle aynı platform semantiği: Shopify'da 150 TL altı
-      // ürünün kargosu sepete paylaşılır; Trendyol baremi fiyat adayına göre değişir.
+      // Eşiğe müşterinin GERÇEKTEN ödediği tutar girer → kampanyada indirim uygulandıktan
+      // sonraki fiyat. Sepet minimumu ürünün etiketine değil, müşterinin ödediğine bakar.
       cargoCostOverride:
         listing?.cargoCost ??
-        (platform === "shopify" &&
-        salePrice * (1 - discountBuffer / 100) < 150
-          ? 0
-          : undefined),
-      minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
+        shopifyCargoOverride(platform, salePrice * (1 - discountBuffer / 100)),
+      minOrderQty: platformMinOrderQty(platform, salePrice),
       vatableProductCost: b.filamentMatCost,
     });
 
@@ -279,8 +286,7 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       b.cargoByPlatform[platform] ?? [],
       b.expenseByPlatform[platform] ?? []
     );
-    if (platform === "trendyol") breakpoints.push(25, 35, 50, 75);
-    if (platform === "shopify") breakpoints.push(150);
+    breakpoints.push(...platformPriceBreakpoints(platform));
     return findMinimumPriceForMargin({
       marginAt: (price) => simFor(platform, listing, price).profitMargin,
       targetMargin,
@@ -311,11 +317,16 @@ function priceLabFromBase(b: PricingBase): PriceLab {
           currentPrice: shopifyPrice,
           rows: DISCOUNTS.map((d) => {
             const sim = simFor("shopify", shopifyListing, shopifyPrice, d);
+            const effectivePrice = shopifyPrice * (1 - d / 100);
             return {
               discount: d,
-              effectivePrice: shopifyPrice * (1 - d / 100),
+              effectivePrice,
               profit: sim.netProfit,
               margin: sim.profitMargin,
+              crossesFreeShipping:
+                shopifyListing?.cargoCost == null &&
+                belowShopifyMinBasket("shopify", effectivePrice) &&
+                !belowShopifyMinBasket("shopify", shopifyPrice),
             };
           }),
         }

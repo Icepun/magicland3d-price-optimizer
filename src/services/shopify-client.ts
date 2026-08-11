@@ -41,7 +41,15 @@ export interface ShopifyProduct {
 
 export interface ShopifyOrderLine {
   title: string;
+  /**
+   * İade sonrası KALAN adet — kâr hesabının kullandığı adet budur.
+   * 0 = satır tamamen iade edildi (ne cirosu ne maliyeti sayılır).
+   */
   quantity: number;
+  /** Sipariş anındaki adet (iadeler düşülmemiş). */
+  orderedQuantity: number;
+  /** Bu satırdan iade edilen adet (orderedQuantity - quantity). */
+  refundedQuantity: number;
   unitPrice: number;
   barcode: string | null;
   sku: string | null;
@@ -131,6 +139,8 @@ interface AdminOrdersResponse {
               node: {
                 title: string;
                 quantity: number;
+                /** Eski API sürümünde sorulmadığı için undefined olabilir. */
+                currentQuantity?: number | null;
                 sku: string | null;
                 variant: { id: string | null; barcode: string | null; sku: string | null } | null;
                 image: { url: string } | null;
@@ -200,7 +210,22 @@ const SHOP_QUERY = `
   }
 `;
 
-const ORDERS_QUERY = `
+/**
+ * Satırın iade sonrası kalan adedini veren `currentQuantity` alanı Admin API 2022-04 ile geldi
+ * (`quantity` her zaman SİPARİŞ ANINDAKİ adedi verir). Daha eski bir sürüm ayarlanmışsa alanı
+ * sormak sorgunun TAMAMINI hataya düşürür ve sipariş listesi hiç gelmez; o yüzden sürümü
+ * kontrol edip eski sürümlerde sormuyoruz (adet o durumda orijinal adet olarak kalır).
+ */
+function supportsCurrentQuantity(apiVersion: string): boolean {
+  const match = /^(\d{4})-(\d{2})$/.exec(apiVersion.trim());
+  // Tanınmayan sürüm etiketi (ör. "unstable") → güncel varsay; varsayılan sürüm zaten yeni.
+  if (!match) return true;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  return year > 2022 || (year === 2022 && month >= 4);
+}
+
+const ordersQuery = (apiVersion: string) => `
   query GetOrders($first: Int!, $query: String, $cursor: String) {
     orders(first: $first, after: $cursor, sortKey: CREATED_AT, reverse: true, query: $query) {
       edges {
@@ -217,7 +242,7 @@ const ORDERS_QUERY = `
             edges {
               node {
                 title
-                quantity
+                quantity${supportsCurrentQuantity(apiVersion) ? "\n                currentQuantity" : ""}
                 sku
                 variant { id barcode sku }
                 image { url }
@@ -509,11 +534,12 @@ export class ShopifyClient {
       NonNullable<AdminOrdersResponse["data"]>["orders"]
     >["edges"] = [];
     let cursor: string | null = null;
+    const gql = ordersQuery(this.credentials.apiVersion);
     // 30 günlük sorguyu cursor ile tamamen tüket. 20 sayfalık güvenlik tavanı yanlış
     // pageInfo yüzünden sonsuz döngüyü engeller.
     for (let page = 0; page < 20; page++) {
       const response: AdminOrdersResponse = await this.adminGraphql<AdminOrdersResponse>(
-        ORDERS_QUERY,
+        gql,
         { first: pageSize, query, cursor }
       );
       const orders = response.data?.orders;
@@ -544,16 +570,30 @@ export class ShopifyClient {
         totalAmount: Number(node.currentTotalPriceSet?.shopMoney?.amount ?? 0),
         currency: node.currentTotalPriceSet?.shopMoney?.currencyCode ?? "TRY",
         customerName,
-        lines: node.lineItems.edges.map((e) => ({
-          title: e.node.title,
-          quantity: e.node.quantity,
-          unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
-          barcode: e.node.variant?.barcode ?? null,
-          sku: e.node.sku ?? null,
-          variantId: e.node.variant?.id?.split("/").pop() ?? null,
-          variantSku: e.node.variant?.sku ?? null,
-          image: e.node.image?.url ?? null,
-        })),
+        lines: node.lineItems.edges.map((e) => {
+          const orderedQuantity = Number.isFinite(e.node.quantity)
+            ? Math.max(0, e.node.quantity)
+            : 0;
+          // Kalan adet: iade edilen adet düşülmüş hali. Alan yoksa (eski API sürümü) sipariş
+          // anındaki adet kullanılır — yani bugünkü davranış korunur, sessiz sıfırlama olmaz.
+          const remainingQuantity =
+            typeof e.node.currentQuantity === "number" &&
+            Number.isFinite(e.node.currentQuantity)
+              ? Math.min(orderedQuantity, Math.max(0, e.node.currentQuantity))
+              : orderedQuantity;
+          return {
+            title: e.node.title,
+            quantity: remainingQuantity,
+            orderedQuantity,
+            refundedQuantity: orderedQuantity - remainingQuantity,
+            unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
+            barcode: e.node.variant?.barcode ?? null,
+            sku: e.node.sku ?? null,
+            variantId: e.node.variant?.id?.split("/").pop() ?? null,
+            variantSku: e.node.variant?.sku ?? null,
+            image: e.node.image?.url ?? null,
+          };
+        }),
         linesTruncated: node.lineItems.pageInfo.hasNextPage,
         trackingNumber: tracking?.number ?? null,
         cargoProvider: tracking?.company ?? null,

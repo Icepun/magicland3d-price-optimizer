@@ -176,19 +176,27 @@ function PriceLabCardImpl({
                   {data.campaign.rows.map((r) => {
                     const loss = r.profit < 0;
                     return (
-                      <div
-                        key={r.discount}
-                        className={cn(
-                          "grid grid-cols-4 gap-2 text-xs tabular-nums px-1 py-1 rounded",
-                          loss && "bg-destructive/10"
+                      <div key={r.discount}>
+                        <div
+                          className={cn(
+                            "grid grid-cols-4 gap-2 text-xs tabular-nums px-1 py-1 rounded",
+                            loss && "bg-destructive/10"
+                          )}
+                        >
+                          <span className="font-medium">%{r.discount}</span>
+                          <span className="text-right text-muted-foreground">{formatCurrency(r.effectivePrice)}</span>
+                          <span className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-600 dark:text-green-500")}>
+                            {formatCurrency(r.profit)}
+                          </span>
+                          <span className={cn("text-right", loss && "text-destructive")}>{formatPercent(r.margin)}</span>
+                        </div>
+                        {/* Kâr bu satırda ARTMIŞ görünebilir — sayı doğru, sebebi kargonun el
+                            değiştirmesi. Açıklamasız bırakılırsa hesap hatası sanılır. */}
+                        {r.crossesFreeShipping && (
+                          <p className="px-1 pb-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                            Bu fiyatta sepet 150₺&apos;nin altına iniyor — kargo sana kalmıyor, kâr bu yüzden yükseliyor.
+                          </p>
                         )}
-                      >
-                        <span className="font-medium">%{r.discount}</span>
-                        <span className="text-right text-muted-foreground">{formatCurrency(r.effectivePrice)}</span>
-                        <span className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-600 dark:text-green-500")}>
-                          {formatCurrency(r.profit)}
-                        </span>
-                        <span className={cn("text-right", loss && "text-destructive")}>{formatPercent(r.margin)}</span>
                       </div>
                     );
                   })}

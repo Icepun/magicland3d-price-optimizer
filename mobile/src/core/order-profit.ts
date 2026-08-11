@@ -57,6 +57,7 @@ export interface OrderProfitProduct {
 
 export interface OrderProfitLine {
   unitPrice: number;
+  /** İade sonrası KALAN adet. 0 = satır tamamen iade edildi → kâra hiç girmez. */
   quantity: number;
   /** null = ürün eşleşmedi / maliyeti girilmemiş → kâra girmez. */
   product: OrderProfitProduct | null;
@@ -125,19 +126,29 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   >();
 
   for (const line of lines) {
-    totalQty += line.quantity;
+    // TAMAMEN İADE EDİLMİŞ SATIR (kalan adet 0) → ne cirosu ne maliyeti vardır; hesaba HİÇ girmez.
+    //
+    // Eleme neden ÇEKİRDEKTE: adet zaten çekirdeğin girdisi ve "0 adetten 0 ciro, 0 maliyet çıkar"
+    // aritmetik bir gerçek — platforma özel bir bilgi değil (forceProfitPartial gibi dışarıda
+    // kalması gerekmiyor). Çağırana bırakılsaydı masaüstü ve mobil aynı sipariş için farklı kâr
+    // gösterme riski doğardı. Ayrıca çekirdek 0 adetli satırı eskiden ya "maliyeti bilinmiyor"
+    // sayıp siparişi boş yere kısmi işaretliyor ya da eşleşmişse motorun qty = max(1, …) tabanı
+    // yüzünden İADE EDİLEN ürünün TAM maliyetini kesmeye devam ediyordu.
+    const quantity = Number.isFinite(line.quantity) ? line.quantity : 0;
+    if (quantity <= 0) continue;
+    totalQty += quantity;
     const p = line.product;
     // Promosyon/hediye satırının satış fiyatı 0 olabilir; ürün eşleşmişse üretim ve paketleme
     // maliyeti yine vardır ve kârdan düşülmelidir. Geçersiz/negatif fiyatı da güvenli tarafta
     // kalarak 0 gelir kabul et; "maliyet eksik" yalnız ürün veya maliyet gerçekten yokken denir.
     const unitPrice = Number.isFinite(line.unitPrice) ? Math.max(0, line.unitPrice) : 0;
-    const lineGross = unitPrice * line.quantity;
+    const lineGross = unitPrice * quantity;
     lineRevenueGross += lineGross;
     // "Maliyet eksik" kararı ÜRETİM payına bakar: paketleme her üründe otomatik eklendiği için
     // tutarların toplamı hiçbir zaman 0 olmuyor ve maliyeti girilmemiş satır kâra dahil oluyordu.
     if (!p || !p.productionCostKnown) {
       unmatchedLines++;
-      unmatchedQty += line.quantity;
+      unmatchedQty += quantity;
       unmatchedRevenue += lineGross;
       continue;
     }
@@ -147,7 +158,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     const lineDesi = p.desi != null && p.desi >= 0 ? p.desi : 1;
     if (p.desi == null) {
       missingDesiLines++;
-      missingDesiQty += line.quantity;
+      missingDesiQty += quantity;
     }
     const lst = p.listing ?? { platform, commissionRate: null, commissionFixed: null, cargoCost: null };
     matchedCategories.add(p.categoryName);
@@ -184,7 +195,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       vatRate,
       ...commissionOverride,
       cargoCostOverride: 0, // kargo sipariş düzeyinde
-      minOrderQty: line.quantity, // adet motorun İÇİNDE (dıştan × qty YOK)
+      minOrderQty: quantity, // adet motorun İÇİNDE (dıştan × qty YOK)
       vatableProductCost: p.filamentCost,
     });
     profit += sim.netProfit;
@@ -195,8 +206,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       (commissionOverride.commissionRateOverride ??
         sim.appliedCommissionRule?.commissionRate ??
         0);
-    matchedQty += line.quantity;
-    totalDesi += lineDesi * line.quantity;
+    matchedQty += quantity;
+    totalDesi += lineDesi * quantity;
     if (matchedLines === 0) {
       soloCargo = lst.cargoCost;
     }

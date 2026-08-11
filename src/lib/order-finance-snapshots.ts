@@ -1,7 +1,20 @@
 import { prisma } from "@/lib/prisma";
+import { resolveProductCost } from "@/core/product-cost";
+import {
+  resolveOrderProfit,
+  type OrderProfitLine,
+  type OrderProfitProduct,
+} from "@/core/order-profit";
+import type {
+  CargoRuleInput,
+  CommissionRuleInput,
+  ExpenseRuleInput,
+} from "@/core/types";
 import { batchWrite } from "./libsql-batch";
 import {
   FINANCE_CALCULATION_VERSION,
+  kurusToTl,
+  monthKey,
   tlToKurus,
 } from "./monthly-finance";
 
@@ -334,10 +347,23 @@ async function readExistingItems(
 // büyüdükçe 60 günlük pencere binlerce satıra çıkabilir.
 const READ_CHUNK = 500;
 
+export interface PersistOrderFinanceSnapshotsOptions {
+  /**
+   * Yakalanmış kârı KOŞULSUZ yenile.
+   *
+   * Normal yenilemede tam hesaplanmış bir sipariş bir daha oynatılmaz (geçmiş ay kendiliğinden
+   * kaymasın diye). Ama kullanıcı maliyeti düzeltip "yeniden hesapla" dediğinde eski rakamda
+   * donmak yanlış: Siparişler ekranı düzelirken Raporlar eski kalıyordu. Bu bayrak SADECE o
+   * kullanıcı eyleminde açılır; "yalnız değişeni yaz" kuralı yine geçerlidir.
+   */
+  replaceCapturedProfit?: boolean;
+}
+
 export async function persistOrderFinanceSnapshots(
   orders: FinanceSnapshotOrder[],
   /** Sipariş kimliği → kalemler. Verilmeyen siparişin kalem geçmişine DOKUNULMAZ. */
-  itemsByOrderId?: ReadonlyMap<string, FinanceSnapshotItem[]>
+  itemsByOrderId?: ReadonlyMap<string, FinanceSnapshotItem[]>,
+  options: PersistOrderFinanceSnapshotsOptions = {}
 ): Promise<FinanceSnapshotWriteResult> {
   const valid = orders.flatMap((order) => {
     // Manuel siparişin captured finansı ManualOrder satırındadır. Buraya da yazılırsa
@@ -421,7 +447,9 @@ export async function persistOrderFinanceSnapshots(
       actualCommissionKurus:
         order.actualCommission == null ? null : tlToKurus(order.actualCommission),
     };
-    const replaceProfit = shouldReplaceCapturedProfit(existing, incoming);
+    const replaceProfit =
+      options.replaceCapturedProfit === true ||
+      shouldReplaceCapturedProfit(existing, incoming);
     const data = {
       orderNumber: order.orderNumber,
       orderedAt,
@@ -656,4 +684,432 @@ export async function flushOrderFinanceSnapshots(): Promise<void> {
 /** Yer darlığından düşürülen tur sayısı (tanılama). */
 export function droppedOrderFinanceSnapshotJobs(): number {
   return droppedJobs;
+}
+
+// ── Bir ayı yeniden hesaplama ───────────────────────────────────────────────────────────
+// NEDEN: bir sipariş bir kez TAM hesaplandıktan sonra kârı bilerek donduruluyor (geçmiş ay
+// kendiliğinden kaymasın). Ama kullanıcı maliyeti/komisyonu/kargoyu DÜZELTTİĞİNDE Siparişler
+// ekranı yeni rakamı gösterirken Raporlar eskisinde kalıyordu ve bunu düzeltmenin hiçbir yolu
+// yoktu. Burası o düzeltmeyi kullanıcının isteğiyle geçmişe taşır.
+//
+// Girdi pazaryerinden DEĞİL, kalıcı kalem geçmişinden (OrderItemSnapshot) okunur: pazaryeri
+// penceresi 30-60 günle sınırlı, oysa düzeltilmek istenen ay çoğunlukla daha eski. Ciro, sipariş
+// numarası, tarih ve durum kayıtlı özetten AYNEN korunur — yeniden hesap yalnız maliyet/komisyon/
+// kargo/gider tarafını günceller.
+
+/** Yeniden hesap turunun sonucu. */
+export interface FinanceMonthRecalcResult {
+  /** "YYYY-MM". */
+  month: string;
+  /** Ayda bulunan (manuel olmayan) sipariş sayısı. */
+  totalOrders: number;
+  /** Yeniden hesaplanabilen sipariş sayısı. */
+  recalculatedOrders: number;
+  /** Kalem geçmişi olmadığı (veya maliyeti artık okunamadığı) için DOKUNULMAYAN sipariş sayısı. */
+  skippedOrders: number;
+  /** Rakamı gerçekten değiştiği için yazılan sipariş sayısı. */
+  changedOrders: number;
+  /** Ayın toplam kâr farkı — kuruş. */
+  profitDeltaKurus: number;
+}
+
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/**
+ * Ay penceresini KABA olarak daraltır (okunan satır sayısı sabit kalsın diye).
+ * Kesin ayıklama monthKey ile yapılır — ay sınırı saat dilimine bağlı ve o bilgi TEK yerde.
+ */
+function roughMonthRange(month: string): { from: Date; to: Date } {
+  const [year, index] = month.split("-").map(Number);
+  const padMs = 3 * 86_400_000;
+  return {
+    from: new Date(Date.UTC(year, index - 1, 1) - padMs),
+    to: new Date(Date.UTC(year, index, 1) + padMs),
+  };
+}
+
+type RecalcSnapshotRow = {
+  platform: string;
+  externalOrderId: string;
+  orderNumber: string;
+  orderedAt: Date;
+  revenueKurus: number;
+  profitKurus: number | null;
+  profitPartial: boolean;
+  statusKind: string;
+  currency: string;
+};
+
+/** Sipariş kârı için gereken ürün alanları — güncel maliyetle çözülmüş hâli. */
+type RecalcProduct = OrderProfitProduct & {
+  listingByPlatform: Record<string, OrderProfitProduct["listing"]>;
+};
+
+async function readRecalcProducts(
+  productIds: string[],
+  settings: Record<string, string | undefined>
+): Promise<Map<string, RecalcProduct>> {
+  const byId = new Map<string, RecalcProduct>();
+  for (let offset = 0; offset < productIds.length; offset += READ_CHUNK) {
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds.slice(offset, offset + READ_CHUNK) } },
+      include: {
+        cost: { include: { filamentType: { select: { costPerGram: true } } } },
+        listings: true,
+      },
+    });
+    for (const product of products) {
+      const resolved = resolveProductCost(
+        product.cost,
+        settings,
+        product.cost?.filamentType?.costPerGram ?? 0
+      );
+      const listingByPlatform: RecalcProduct["listingByPlatform"] = {};
+      for (const listing of product.listings) {
+        listingByPlatform[listing.platform] = {
+          platform: listing.platform,
+          commissionRate: listing.commissionRate,
+          commissionFixed: listing.commissionFixed,
+          cargoCost: listing.cargoCost,
+        };
+      }
+      byId.set(product.id, {
+        id: product.id,
+        name: product.name,
+        categoryName: product.categoryName,
+        desi: product.desi,
+        commissionRate: product.commissionRate,
+        productionCost: resolved?.productionCost ?? 0,
+        packagingCost: resolved?.packagingCost ?? 0,
+        packagingComponents: resolved?.packagingBreakdown?.components ?? null,
+        filamentCost: resolved?.filamentCost ?? 0,
+        productionCostKnown: resolved?.productionCostKnown ?? false,
+        listing: null,
+        listingByPlatform,
+      });
+    }
+  }
+  return byId;
+}
+
+/** Trendyol'un bildirdiği GERÇEK komisyon — sipariş kimliğiyle, yoksa tekil sipariş numarasıyla. */
+async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
+  Map<string, { actualCommission: number; settlementRevenue: number }>
+> {
+  const trendyol = rows.filter((row) => row.platform === "trendyol");
+  const result = new Map<string, { actualCommission: number; settlementRevenue: number }>();
+  if (trendyol.length === 0) return result;
+
+  const orderNumberCounts = new Map<string, number>();
+  for (const row of trendyol) {
+    orderNumberCounts.set(row.orderNumber, (orderNumberCounts.get(row.orderNumber) ?? 0) + 1);
+  }
+
+  const financials: Array<{
+    externalOrderId: string;
+    orderNumber: string;
+    grossRevenueKurus: number;
+    commissionKurus: number;
+  }> = [];
+  for (let offset = 0; offset < trendyol.length; offset += READ_CHUNK) {
+    const slice = trendyol.slice(offset, offset + READ_CHUNK);
+    financials.push(
+      ...(await prisma.platformOrderFinancial.findMany({
+        where: {
+          platform: "trendyol",
+          OR: [
+            { externalOrderId: { in: slice.map((row) => row.externalOrderId) } },
+            { orderNumber: { in: slice.map((row) => row.orderNumber) } },
+          ],
+        },
+        select: {
+          externalOrderId: true,
+          orderNumber: true,
+          grossRevenueKurus: true,
+          commissionKurus: true,
+        },
+      }))
+    );
+  }
+
+  const byExternalId = new Map(financials.map((row) => [row.externalOrderId, row]));
+  const byOrderNumber = new Map<string, typeof financials>();
+  for (const row of financials) {
+    const list = byOrderNumber.get(row.orderNumber) ?? [];
+    list.push(row);
+    byOrderNumber.set(row.orderNumber, list);
+  }
+
+  for (const row of trendyol) {
+    // Sipariş listesi hattıyla AYNI kural: kimlik eşleşmesi öncelikli, yoksa sipariş numarası
+    // iki tarafta da TEKİLSE güvenli yedek eşleşme.
+    let financial = byExternalId.get(row.externalOrderId) ?? null;
+    if (!financial && orderNumberCounts.get(row.orderNumber) === 1) {
+      const candidates = byOrderNumber.get(row.orderNumber) ?? [];
+      if (candidates.length === 1) financial = candidates[0];
+    }
+    if (!financial) continue;
+    result.set(snapshotKey(row.platform, row.externalOrderId), {
+      actualCommission: kurusToTl(financial.commissionKurus),
+      settlementRevenue: kurusToTl(financial.grossRevenueKurus),
+    });
+  }
+  return result;
+}
+
+/** Yeniden hesap ilerlemesi — arayüz X/Y gösterebilsin diye adım adım bildirilir. */
+export type FinanceRecalcPhase =
+  | "reading"
+  | "calculating"
+  | "writing"
+  | "done"
+  | "error";
+
+type RecalcProgress = (phase: FinanceRecalcPhase, processed: number, total: number) => void;
+
+/** Hesap turu arada nefes alsın: durum sorgusu bekleyen istemci donmuş görünmemeli. */
+const RECALC_CHUNK = 25;
+
+export async function recalculateFinanceMonth(
+  month: string,
+  onProgress?: RecalcProgress
+): Promise<FinanceMonthRecalcResult> {
+  if (!MONTH_PATTERN.test(month)) throw new Error("Geçersiz ay.");
+  const report: RecalcProgress = (phase, processed, total) =>
+    onProgress?.(phase, processed, total);
+
+  report("reading", 0, 0);
+  const { from, to } = roughMonthRange(month);
+  const rows: RecalcSnapshotRow[] = (
+    await prisma.orderFinanceSnapshot.findMany({
+      // Manuel siparişin finansı ManualOrder satırında DONDURULMUŞTUR (kendi KDV oranı ve kalem
+      // maliyetiyle) — yeniden hesap ona asla dokunmaz.
+      where: { platform: { not: "manual" }, orderedAt: { gte: from, lt: to } },
+      select: {
+        platform: true,
+        externalOrderId: true,
+        orderNumber: true,
+        orderedAt: true,
+        revenueKurus: true,
+        profitKurus: true,
+        profitPartial: true,
+        statusKind: true,
+        currency: true,
+      },
+    })
+  ).filter((row) => monthKey(row.orderedAt) === month);
+
+  const empty: FinanceMonthRecalcResult = {
+    month,
+    totalOrders: 0,
+    recalculatedOrders: 0,
+    skippedOrders: 0,
+    changedOrders: 0,
+    profitDeltaKurus: 0,
+  };
+  if (rows.length === 0) {
+    report("done", 0, 0);
+    return empty;
+  }
+  report("reading", 0, rows.length);
+
+  const itemsByOrder = await readExistingItems([
+    ...new Set(rows.map((row) => row.externalOrderId)),
+  ]);
+  const productIds = new Set<string>();
+  for (const lines of itemsByOrder.values()) {
+    for (const line of lines) if (line.productId) productIds.add(line.productId);
+  }
+
+  // Kurallar ve ayarlar sipariş listesi hattıyla AYNI kaynaktan okunur (aktif olanlar).
+  // Sorgular sırayla gider: uzak bağlantıda hepsi zaten süreç genelinde sıralanıyor.
+  const commissionRules = await prisma.commissionRule.findMany({ where: { isActive: true } });
+  const cargoRules = await prisma.cargoRule.findMany({ where: { isActive: true } });
+  const expenseRules = await prisma.expenseRule.findMany({ where: { isActive: true } });
+  const settingRows = await prisma.appSetting.findMany();
+  const settings: Record<string, string | undefined> = Object.fromEntries(
+    settingRows.map((row) => [row.key, row.value])
+  );
+  const productById = await readRecalcProducts([...productIds], settings);
+  const financialByOrder = await readRecalcFinancials(rows);
+
+  const updates: FinanceSnapshotOrder[] = [];
+  let recalculatedOrders = 0;
+  let skippedOrders = 0;
+  let profitDeltaKurus = 0;
+  let processed = 0;
+
+  for (let offset = 0; offset < rows.length; offset += RECALC_CHUNK) {
+    for (const row of rows.slice(offset, offset + RECALC_CHUNK)) {
+      const key = snapshotKey(row.platform, row.externalOrderId);
+      const lines = (itemsByOrder.get(key) ?? [])
+        .slice()
+        .sort((a, b) => a.lineIndex - b.lineIndex);
+      // Kalem geçmişi yoksa siparişin neyden oluştuğunu bilmiyoruz → kayıtlı rakama DOKUNMA.
+      if (lines.length === 0) {
+        skippedOrders++;
+        continue;
+      }
+      const profitLines: OrderProfitLine[] = lines.map((line) => {
+        const match = line.productId ? productById.get(line.productId) ?? null : null;
+        if (!match) {
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null };
+        }
+        const { listingByPlatform, ...product } = match;
+        return {
+          unitPrice: kurusToTl(line.unitPriceKurus),
+          quantity: line.quantity,
+          // Komisyon/kargo override'ı siparişin platformundaki ilandan gelir (Ürünler ile aynı kaynak).
+          product: { ...product, listing: listingByPlatform[row.platform] ?? null },
+        };
+      });
+
+      const resolved = resolveOrderProfit(
+        {
+          platform: row.platform,
+          // Ciro kayıtlı özetten gelir; yeniden hesap ciroyu DEĞİŞTİRMEZ.
+          orderTotal: kurusToTl(row.revenueKurus),
+          lines: profitLines,
+          commissionRules: commissionRules as CommissionRuleInput[],
+          cargoRules: cargoRules as CargoRuleInput[],
+          expenseRules: expenseRules as ExpenseRuleInput[],
+          settings,
+        },
+        {
+          statusKind: row.statusKind,
+          financial: financialByOrder.get(key) ?? null,
+        }
+      );
+
+      // Ürün katalogdan silinmişse yeni hesap "maliyet bilinmiyor" der. Daha önce yakalanmış
+      // gerçek bir kârı bu yüzden SİLMEYİZ — yeniden hesap bilgi kaybettirmemeli.
+      if (resolved.profit == null && row.profitKurus != null) {
+        skippedOrders++;
+        continue;
+      }
+
+      recalculatedOrders++;
+      profitDeltaKurus +=
+        (resolved.profit == null ? 0 : tlToKurus(resolved.profit)) - (row.profitKurus ?? 0);
+      updates.push({
+        platform: row.platform,
+        id: row.externalOrderId,
+        orderNumber: row.orderNumber,
+        date: row.orderedAt.toISOString(),
+        total: kurusToTl(row.revenueKurus),
+        profit: resolved.profit,
+        // Shopify'da "kısmi" işareti satır kırpılması / kısmi iadeden de gelebilir; bu bilgi
+        // kalem geçmişinde YOK. Yanlışlıkla "hesap tam" demektense kayıtlı işareti koruruz.
+        profitPartial:
+          row.platform === "shopify"
+            ? resolved.profitPartial || row.profitPartial
+            : resolved.profitPartial,
+        profitSource: resolved.profitSource,
+        estimatedCommission: resolved.estimatedCommission,
+        actualCommission: resolved.actualCommission,
+        statusKind: row.statusKind,
+        currency: row.currency,
+      });
+    }
+    processed = Math.min(rows.length, offset + RECALC_CHUNK);
+    report("calculating", processed, rows.length);
+    // Olay döngüsüne dönmeden ilerleme sorgusu yanıtlanamaz.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  report("writing", rows.length, rows.length);
+  const write = await persistOrderFinanceSnapshots(updates, undefined, {
+    replaceCapturedProfit: true,
+  });
+  report("done", rows.length, rows.length);
+
+  return {
+    month,
+    totalOrders: rows.length,
+    recalculatedOrders,
+    skippedOrders,
+    changedOrders: write.writtenOrders,
+    profitDeltaKurus,
+  };
+}
+
+/** Arayüzün yokladığı ilerleme durumu (JSON'a olduğu gibi konur). */
+export interface FinanceRecalcState {
+  month: string;
+  phase: FinanceRecalcPhase;
+  processed: number;
+  total: number;
+  startedAt: string;
+  finishedAt: string | null;
+  result: FinanceMonthRecalcResult | null;
+  error: string | null;
+}
+
+let recalcState: FinanceRecalcState | null = null;
+let recalcRunning: Promise<void> | null = null;
+
+/** Son (veya süren) yeniden hesap turunun durumu. */
+export function financeRecalcState(): FinanceRecalcState | null {
+  return recalcState;
+}
+
+/** Şu anda bir ay yeniden hesaplanıyor mu? */
+export function financeRecalcInFlight(): boolean {
+  return recalcRunning !== null;
+}
+
+/**
+ * Yeniden hesabı BAŞLAT ve anında durumu döndür (istemci ilerlemeyi yoklar).
+ * Aynı anda tek tur çalışır: sürüyorsa mevcut durum döner, yeni tur açılmaz.
+ */
+export function startFinanceMonthRecalc(
+  month: string,
+  options: { onDone?: () => void } = {}
+): FinanceRecalcState {
+  if (recalcRunning && recalcState) return recalcState;
+  const startedAt = new Date().toISOString();
+  recalcState = {
+    month,
+    phase: "reading",
+    processed: 0,
+    total: 0,
+    startedAt,
+    finishedAt: null,
+    result: null,
+    error: null,
+  };
+  recalcRunning = (async () => {
+    try {
+      const result = await recalculateFinanceMonth(month, (phase, processed, total) => {
+        if (!recalcState) return;
+        recalcState = { ...recalcState, phase, processed, total };
+      });
+      recalcState = {
+        ...recalcState!,
+        phase: "done",
+        processed: result.totalOrders,
+        total: result.totalOrders,
+        finishedAt: new Date().toISOString(),
+        result,
+      };
+    } catch (error) {
+      console.error("[finance-recalc] Ay yeniden hesaplanamadı:", error);
+      recalcState = {
+        ...recalcState!,
+        phase: "error",
+        finishedAt: new Date().toISOString(),
+        error:
+          error instanceof Error ? error.message : "Ay yeniden hesaplanamadı.",
+      };
+    } finally {
+      recalcRunning = null;
+      options.onDone?.();
+    }
+  })();
+  return recalcState;
+}
+
+/** Tur bitene kadar bekler. Yalnız testler için. */
+export async function flushFinanceMonthRecalc(): Promise<void> {
+  while (recalcRunning) await recalcRunning;
 }

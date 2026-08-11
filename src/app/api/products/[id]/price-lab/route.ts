@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
+import { simulatePrice } from "@/core/pricing-engine";
+import {
+  belowShopifyMinBasket,
+  platformMinOrderQty,
+  platformPriceBreakpoints,
+  shopifyCargoOverride,
+} from "@/core/platform-rules";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
@@ -72,15 +78,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       ...(listing
         ? resolveListingCommissionOverride({ platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }, settingsMap)
         : resolveListingCommissionOverride({ platform, commissionRate: null, commissionFixed: null }, settingsMap)),
+      // Platform kuralları TEK kaynaktan (core/platform-rules). Eşiğe müşterinin GERÇEKTEN
+      // ödediği tutar girer → kampanyada indirim UYGULANDIKTAN sonraki fiyat. Sepet minimumu
+      // ürünün etiketine değil, müşterinin ödediğine bakar.
       cargoCostOverride:
         listing?.cargoCost ??
-        (platform === "shopify" &&
-        salePrice * (1 - discountBuffer / 100) < 150
-          ? 0
-          : undefined),
-      // Trendyol min sipariş adedi — karar: Fiyat Lab da uygular (mobil price-lab.ts ile birebir;
-      // Ürünler sayfası zaten uyguluyordu → üç yüzey aynı).
-      minOrderQty: platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
+        shopifyCargoOverride(platform, salePrice * (1 - discountBuffer / 100)),
+      minOrderQty: platformMinOrderQty(platform, salePrice),
       vatableProductCost: filamentMatCost,
     });
   }
@@ -94,8 +98,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       platformCargo,
       platformExpense
     );
-    if (platform === "trendyol") breakpoints.push(25, 35, 50, 75);
-    if (platform === "shopify") breakpoints.push(150);
+    breakpoints.push(...platformPriceBreakpoints(platform));
     return findMinimumPriceForMargin({
       marginAt: (price) => simFor(platform, listing, price).profitMargin,
       targetMargin,
@@ -126,11 +129,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
           currentPrice: shopifyPrice,
           rows: DISCOUNTS.map((d) => {
             const sim = simFor("shopify", shopifyListing, shopifyPrice, d);
+            const effectivePrice = shopifyPrice * (1 - d / 100);
             return {
               discount: d,
-              effectivePrice: shopifyPrice * (1 - d / 100),
+              effectivePrice,
               profit: sim.netProfit,
               margin: sim.profitMargin,
+              /**
+               * Bu indirimde sepet minimumunun altına düşülüyor → kargo satıcıda kalmıyor.
+               * Kâr bu satırda ARTABİLİR; sayı doğru ama açıklamasız bakınca ters görünür,
+               * o yüzden arayüz bunu tek satırla söyler.
+               */
+              crossesFreeShipping:
+                shopifyListing?.cargoCost == null &&
+                belowShopifyMinBasket("shopify", effectivePrice) &&
+                !belowShopifyMinBasket("shopify", shopifyPrice),
             };
           }),
         }

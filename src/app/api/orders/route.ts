@@ -831,7 +831,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     ) => {
       const key = normalizeMatchKey(raw);
       if (!key) return;
-      const dedupe = `${key} ${product.id}`;
+      const dedupe = `${key}\u0000${product.id}`;
       if (!bucket.seen.has(dedupe)) {
         bucket.seen.add(dedupe);
         bucket.entries.push({ key, product });
@@ -1147,8 +1147,11 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
           ...params
         );
-        // Kritik iş olayı telefona da düşsün (baskı-bitti gibi) — yalnız İLK kez görülenler.
-        for (const n of fresh.filter((f) => f.severity === "critical")) {
+        // Telefona yalnız SİPARİŞ olayları düşer (kullanıcı kararı: stok/filament uyarıları
+        // zilde kalsın, telefonu meşgul etmesin). Bu blok zaten yalnız sipariş bildirimi
+        // üretiyor; koşul ileride başka tür eklenirse sessizce push'a dönüşmesin diye açık.
+        const PUSHABLE = new Set(["order-stock", "order-made"]);
+        for (const n of fresh.filter((f) => f.severity === "critical" && PUSHABLE.has(f.type))) {
           await pushToAllDevices(n.title, n.body).catch(() => {});
         }
       } catch { /* tablo yoksa/yazma hatası → sessiz geç */ }

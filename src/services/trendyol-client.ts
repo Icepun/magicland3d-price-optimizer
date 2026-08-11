@@ -37,18 +37,6 @@ export interface TrendyolProductPage {
   content?: TrendyolProduct[];
 }
 
-export interface TrendyolPriceInventoryItem {
-  barcode: string;
-  quantity?: number;
-  salePrice?: number;
-  listPrice?: number;
-}
-
-export interface TrendyolBatchResponse {
-  batchRequestId?: string;
-  [key: string]: unknown;
-}
-
 export interface TrendyolSettlementItem {
   id?: string | number;
   barcode?: string;
@@ -262,18 +250,6 @@ export class TrendyolClient {
     }
 
     return result;
-  }
-
-  async updatePriceAndInventory(
-    items: TrendyolPriceInventoryItem[]
-  ): Promise<TrendyolBatchResponse> {
-    return this.request<TrendyolBatchResponse>(
-      `/integration/inventory/sellers/${this.credentials.sellerId}/products/price-and-inventory`,
-      {
-        method: "POST",
-        body: JSON.stringify({ items }),
-      }
-    );
   }
 
   async getBatchRequestResult(batchRequestId: string): Promise<unknown> {

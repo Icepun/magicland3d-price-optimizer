@@ -26,6 +26,21 @@ async function getAdminToken(): Promise<string> {
   return json.access_token;
 }
 
+/**
+ * Satırın iade sonrası kalan adedini veren `currentQuantity` alanı Shopify'ın 2022-04
+ * sürümüyle geldi (`quantity` her zaman sipariş anındaki adedi verir). Daha eski bir sürüm
+ * ayarlıysa alanı sormak sorgunun tamamını hataya düşürür; o yüzden sürümü kontrol ediyoruz.
+ * Masaüstündeki shopify-client ile AYNI kural (iki taraf aynı adedi kullanmalı).
+ */
+function supportsCurrentQuantity(apiVersion: string): boolean {
+  const match = /^(\d{4})-(\d{2})$/.exec(apiVersion.trim());
+  // Tanınmayan sürüm etiketi → güncel varsay; varsayılan sürüm zaten yeni.
+  if (!match) return true;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  return year > 2022 || (year === 2022 && month >= 4);
+}
+
 const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
   orders(first:$first, after:$after, sortKey:CREATED_AT, reverse:true, query:$query){
     pageInfo{ hasNextPage endCursor }
@@ -36,7 +51,7 @@ const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
       lineItems(first:20){
         pageInfo{ hasNextPage }
         edges{ node{
-        title quantity sku
+        title quantity${supportsCurrentQuantity(VER) ? " currentQuantity" : ""} sku
         variant{ id barcode sku }
         discountedUnitPriceSet{ shopMoney{ amount } }
       } } }
@@ -62,6 +77,8 @@ interface ShEdge {
         node: {
           title: string;
           quantity: number;
+          /** Eski sürümde sorulmadığı için undefined olabilir. */
+          currentQuantity?: number | null;
           sku?: string | null;
           variant?: { id?: string | null; barcode?: string | null; sku?: string | null };
           discountedUnitPriceSet?: { shopMoney?: { amount?: string } };
@@ -153,9 +170,16 @@ export async function getShopifyOrders(
         variantId ? `shopify-variant-${variantId}` : null,
         variantId,
       ].filter((k): k is string => !!k);
+      // Kâr hesabı KALAN adedi kullanır (iade edilen ürünün maliyeti düşülmemeli).
+      // Alan gelmiyorsa sipariş anındaki adet kullanılır — bugünkü davranış korunur.
+      const ordered = Number.isFinite(e.node.quantity) ? Math.max(0, e.node.quantity) : 0;
+      const remaining =
+        typeof e.node.currentQuantity === "number" && Number.isFinite(e.node.currentQuantity)
+          ? Math.min(ordered, Math.max(0, e.node.currentQuantity))
+          : ordered;
       return {
         name: e.node.title,
-        quantity: e.node.quantity,
+        quantity: remaining,
         unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
         matchKeys: keys,
       };

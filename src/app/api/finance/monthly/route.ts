@@ -4,25 +4,66 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
   aggregateMonthlyFinance,
   FINANCE_TIME_ZONE,
+  monthKey,
   monthlyFinanceWindowStart,
 } from "@/lib/monthly-finance";
+import { isFinanceSnapshotOutdated } from "@/core/finance-version";
+import {
+  financeRecalcState,
+  startFinanceMonthRecalc,
+} from "@/lib/order-finance-snapshots";
+import { bustFinanceCaches } from "@/lib/cache-busting";
 import { swr } from "@/lib/route-cache";
 
+const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
 export async function GET(req: NextRequest) {
+  // Yeniden hesap ilerlemesi: ağır aylık toplama hiç çalıştırılmadan anında yanıtlanır
+  // (arayüz bunu saniyede birkaç kez yokluyor).
+  if (req.nextUrl.searchParams.get("recalc") === "status") {
+    return NextResponse.json(
+      { recalc: financeRecalcState() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
   const requested = Number(req.nextUrl.searchParams.get("months") ?? 12);
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
-  // v3: yanıta KDV özeti eklendi. Sürüm artmazsa güncelleme sonrası diskteki eski yanıt
-  // (KDV alanı olmayan) taze sayılıp gösterilirdi.
+  // v4: yanıta KDV özeti (v3) ve ay bazında "hesabı güncel değil" sayısı eklendi. Sürüm
+  // artmazsa güncelleme sonrası diskteki eski yanıt (yeni alanları olmayan) taze sayılırdı.
   const data = await swr(
-    `finance-monthly:v3:${monthCount}`,
+    `finance-monthly:v4:${monthCount}`,
     60_000,
     () => computeMonthlyFinance(monthCount)
   );
   return NextResponse.json(data, {
     headers: { "Cache-Control": "no-store" },
   });
+}
+
+/**
+ * Bir ayı güncel maliyet/kural/oranlarla yeniden hesapla.
+ *
+ * Uzun sürebildiği için burada BEKLETMEYİZ: tur arka planda başlar, arayüz ilerlemeyi
+ * `?recalc=status` ile okur. Tur bitince aylık yanıt önbelleği düşürülür ki yeni rakam
+ * bir sonraki okumada görünsün.
+ */
+export async function POST(req: NextRequest) {
+  const month = req.nextUrl.searchParams.get("month") ?? "";
+  if (!MONTH_PATTERN.test(month)) {
+    return NextResponse.json(
+      { error: "Hangi ayın yeniden hesaplanacağı anlaşılmadı." },
+      { status: 400 }
+    );
+  }
+  await ensureRuntimeSchema();
+  const state = startFinanceMonthRecalc(month, { onDone: () => bustFinanceCaches() });
+  return NextResponse.json(
+    { recalc: state },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 async function computeMonthlyFinance(monthCount: number) {
@@ -53,6 +94,8 @@ async function computeMonthlyFinance(monthCount: number) {
         profitPartial: true,
         statusKind: true,
         currency: true,
+        // "Bu ayın hesabı güncel değil" rozeti için — ayrı sorgu açmadan aynı satırlardan sayılır.
+        calculationVersion: true,
       },
     }),
     remotePrisma.manualOrder.findMany({
@@ -88,6 +131,16 @@ async function computeMonthlyFinance(monthCount: number) {
     remotePrisma.manualOrder.aggregate({ _min: { orderedAt: true } }),
   ]);
 
+  // Eski hesap sürümüyle yazılmış siparişler ay ay sayılır: kullanıcı hangi ayın yeniden
+  // hesaplanması gerektiğini görebilsin. İptal/yabancı para satırları da sayılır — onlar da
+  // yeniden hesap kapsamındadır.
+  const outdatedByMonth = new Map<string, number>();
+  for (const snapshot of snapshots) {
+    if (!isFinanceSnapshotOutdated(snapshot.calculationVersion)) continue;
+    const key = monthKey(snapshot.orderedAt, FINANCE_TIME_ZONE);
+    outdatedByMonth.set(key, (outdatedByMonth.get(key) ?? 0) + 1);
+  }
+
   const months = aggregateMonthlyFinance({
     snapshots,
     manualOrders,
@@ -95,7 +148,10 @@ async function computeMonthlyFinance(monthCount: number) {
     monthCount,
     now,
     timeZone: FINANCE_TIME_ZONE,
-  });
+  }).map((month) => ({
+    ...month,
+    outdatedOrders: outdatedByMonth.get(month.month) ?? 0,
+  }));
   const totals = months.reduce(
     (sum, month) => ({
       revenue: Number((sum.revenue + month.revenue).toFixed(2)),

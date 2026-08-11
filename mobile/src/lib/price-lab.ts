@@ -1,4 +1,9 @@
-import { simulatePrice, trendyolMinQty } from "@core/pricing-engine";
+import { simulatePrice } from "@core/pricing-engine";
+import {
+  platformMinOrderQty,
+  platformPriceBreakpoints,
+  shopifyCargoOverride,
+} from "@core/platform-rules";
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import {
   collectRulePriceBreakpoints,
@@ -75,16 +80,12 @@ export function computePriceLab(
       vatRate,
       discountBuffer,
       ...resolveListingCommissionOverride(listing, settings),
-      // Masaüstü price-lab route ile birebir: listing kargosu varsa onu kullanır; yoksa
-      // Shopify'ın 150 TL altı ücretsiz kargo varsayımını kampanya sonrası etkin fiyata uygular.
+      // Platform kuralları TEK kaynaktan (@core/platform-rules) → masaüstüyle birebir.
+      // Eşiğe müşterinin GERÇEKTEN ödediği tutar girer (kampanyada indirimli fiyat).
       cargoCostOverride:
         listing.cargoCost ??
-        (listing.platform === "shopify" &&
-        salePrice * (1 - discountBuffer / 100) < 150
-          ? 0
-          : undefined),
-      // Trendyol min sipariş adedi — karar: iki tarafta da uygulanır (masaüstü route'a da eklendi).
-      minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(salePrice) : 1,
+        shopifyCargoOverride(listing.platform, salePrice * (1 - discountBuffer / 100)),
+      minOrderQty: platformMinOrderQty(listing.platform, salePrice),
       vatableProductCost: filamentMatCost,
     });
 
@@ -98,8 +99,7 @@ export function computePriceLab(
       platformCargo,
       platformExpense
     );
-    if (listing.platform === "trendyol") breakpoints.push(25, 35, 50, 75);
-    if (listing.platform === "shopify") breakpoints.push(150);
+    breakpoints.push(...platformPriceBreakpoints(listing.platform));
     return findMinimumPriceForMargin({
       marginAt: (price) => simFor(listing, price).profitMargin,
       targetMargin: tm,

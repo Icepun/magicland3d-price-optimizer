@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, saveListState, scrollContainer } from "@/lib/list-state";
@@ -35,6 +35,8 @@ import { MatchListingModal } from "@/components/products/MatchListingModal";
 import { fetchJson } from "@/lib/fetch-json";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { undoToast } from "@/components/ui/undo-toast";
 import Link from "next/link";
 import { toast } from "sonner";
 import { useForm } from "react-hook-form";
@@ -278,8 +280,9 @@ const ProductRow = memo(function ProductRow({
   measureRef?: (node: HTMLTableRowElement | null) => void;
   dataIndex?: number;
   onToggleSelect: (id: string, checked: boolean) => void;
-  onAdjustStock: (id: string, delta: number, current: number) => void;
-  onSetStock: (id: string, stock: number) => void;
+  /** `current` + `name`: yanlış tıklamayı geri alabilmek için eski değer ve okunur ad gerekir. */
+  onAdjustStock: (id: string, delta: number, current: number, name: string) => void;
+  onSetStock: (id: string, stock: number, current: number, name: string) => void;
   onAliasStart: (id: string, current: string) => void;
   onAliasChange: (value: string) => void;
   onAliasCommit: () => void;
@@ -405,14 +408,14 @@ const ProductRow = memo(function ProductRow({
               size="icon"
               className="h-7 w-7 text-muted-foreground"
               disabled={product.stock <= 0}
-              onClick={() => onAdjustStock(product.id, -1, product.stock)}
+              onClick={() => onAdjustStock(product.id, -1, product.stock, product.name)}
             >
               <Minus className="h-4 w-4" />
             </Button>
             {/* Elle giriş: büyük stok değişikliklerinde (+/- ile tek tek imkânsızdı) tıkla-yaz */}
             <StockInput
               value={product.stock}
-              onCommit={(next) => onSetStock(product.id, next)}
+              onCommit={(next) => onSetStock(product.id, next, product.stock, product.name)}
               className="text-sm w-[5ch] py-0.5"
               title={product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined}
             />
@@ -420,7 +423,7 @@ const ProductRow = memo(function ProductRow({
               variant="outline"
               size="icon"
               className="h-7 w-7 text-muted-foreground"
-              onClick={() => onAdjustStock(product.id, 1, product.stock)}
+              onClick={() => onAdjustStock(product.id, 1, product.stock, product.name)}
             >
               <Plus className="h-4 w-4" />
             </Button>
@@ -595,6 +598,18 @@ export default function ProductsPage() {
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  // Toplu düzenleme — her alan kendi anahtarıyla açılır, kapalı alan OLDUĞU GİBİ kalır.
+  // ⚠️ Maliyet alanı bilerek yok: maliyet-kâr rakamını değiştiren düzenlemeler ayrı onay ister.
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkEdit, setBulkEdit] = useState({
+    desiOn: false,
+    desi: "",
+    categoryOn: false,
+    category: "",
+    madeToOrderOn: false,
+    madeToOrder: false,
+  });
+  const [bulkEditProgress, setBulkEditProgress] = useState<{ done: number; total: number } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
   const [matchModal, setMatchModal] = useState<{
@@ -704,6 +719,58 @@ export default function ProductsPage() {
   // Optimistic stok: UI anında güncellenir, yazma arka planda + debounce'lu + retry'lı.
   const { adjustStock, setStock } = useStockWriter();
 
+  /**
+   * Stok değişikliğine "Geri al" ekle.
+   *
+   * Art arda basılan +/- tıklamaları TEK bildirime toplanır: her tıklamada bildirim çıkarsa
+   * ekran çöp olur. Bekleyen kayıt ilk tıklamadaki değeri (`original`) saklar; 800 ms sessizlik
+   * sonrası tek bildirim çıkar ve geri alma o ilk değere döner.
+   */
+  const stockUndo = useRef<
+    Map<string, { original: number; latest: number; name: string; timer: ReturnType<typeof setTimeout> }>
+  >(new Map());
+  const armStockUndo = useCallback(
+    (id: string, name: string, before: number, after: number) => {
+      const pending = stockUndo.current.get(id);
+      if (pending) clearTimeout(pending.timer);
+      const original = pending?.original ?? before;
+      const timer = setTimeout(() => {
+        const entry = stockUndo.current.get(id);
+        stockUndo.current.delete(id);
+        if (!entry || entry.latest === entry.original) return;
+        undoToast({
+          message: `${entry.name} · stok ${entry.original} → ${entry.latest}`,
+          onUndo: () => setStock(id, entry.original),
+        });
+      }, 800);
+      stockUndo.current.set(id, { original, latest: after, name, timer });
+    },
+    [setStock]
+  );
+  // Sayfadan ayrılırken bekleyen bildirim zamanlayıcıları asılı kalmasın.
+  useEffect(() => {
+    const timers = stockUndo.current;
+    return () => {
+      timers.forEach((entry) => clearTimeout(entry.timer));
+      timers.clear();
+    };
+  }, []);
+
+  const handleAdjustStock = useCallback(
+    (id: string, delta: number, current: number, name: string) => {
+      adjustStock(id, delta, current);
+      armStockUndo(id, name, current, Math.max(0, current + delta));
+    },
+    [adjustStock, armStockUndo]
+  );
+  const handleSetStock = useCallback(
+    (id: string, stock: number, current: number, name: string) => {
+      setStock(id, stock);
+      armStockUndo(id, name, current, Math.max(0, Math.round(stock)));
+    },
+    [setStock, armStockUndo]
+  );
+
   const bulkDeleteMutation = useMutation({
     mutationFn: (ids: string[]) =>
       fetchJson<{ deleted: number }>("/api/products/bulk-delete", {
@@ -757,7 +824,20 @@ export default function ProductsPage() {
       toast.error(`${e.message} — değişiklik geri alındı`);
     },
     onSuccess: (data, variables) =>
-      toast.success(variables.hidden ? `${data.updated} ürün gizlendi` : `${data.updated} ürün geri getirildi`),
+      undoToast({
+        message: variables.hidden
+          ? `${data.updated} ürün gizlendi`
+          : `${data.updated} ürün geri getirildi`,
+        onUndo: async () => {
+          await fetchJson("/api/products/bulk-visibility", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: variables.ids, hidden: !variables.hidden }),
+          });
+          // Ürünler listeden optimistic olarak çıkarılmıştı → geri gelmeleri için gerçek tazeleme şart.
+          await queryClient.invalidateQueries({ queryKey: ["products"] });
+        },
+      }),
     onSettled: () => {
       // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
@@ -789,7 +869,18 @@ export default function ProductsPage() {
     onSuccess: (_data, variables) => {
       // Liste optimistic güncellendi → tekrar çekme yok. Panel sayacı tazelensin.
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      toast.success(variables.hidden ? "Ürün gizlendi" : "Ürün geri getirildi");
+      undoToast({
+        message: variables.hidden ? "Ürün gizlendi" : "Ürün geri getirildi",
+        onUndo: async () => {
+          await fetchJson(`/api/products/${variables.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hidden: !variables.hidden }),
+          });
+          // Ürün listeden optimistic olarak çıkarılmıştı → geri gelmesi için gerçek tazeleme şart.
+          await queryClient.invalidateQueries({ queryKey: ["products"] });
+        },
+      });
     },
   });
 
@@ -975,6 +1066,73 @@ export default function ProductsPage() {
       toast.success(`Fiyatlar zaten güncel · ${totalChecked} ürün kontrol edildi`);
     }
     setTimeout(() => setRefreshProgress(null), 1200);
+  };
+
+  /**
+   * Seçili ürünleri topluca düzenle.
+   *
+   * Kimlikler 200'lük dilimler hâlinde gönderilir: hem tek istek devasa olmaz hem de
+   * ilerleme çubuğu GERÇEKTEN belirli olur (kaçıncı dilim / kaç dilim).
+   */
+  const runBulkEdit = async () => {
+    if (bulkEditProgress) return;
+    const patch: { desi?: number; categoryName?: string; madeToOrder?: boolean } = {};
+    if (bulkEdit.desiOn) {
+      const value = Number(bulkEdit.desi.replace(",", "."));
+      if (!Number.isFinite(value) || value <= 0 || value > 30) {
+        toast.error("Desi 0'dan büyük, 30'dan küçük olmalı");
+        return;
+      }
+      patch.desi = value;
+    }
+    if (bulkEdit.categoryOn) {
+      const value = bulkEdit.category.trim();
+      if (!value) {
+        toast.error("Kategori boş olamaz");
+        return;
+      }
+      patch.categoryName = value;
+    }
+    if (bulkEdit.madeToOrderOn) patch.madeToOrder = bulkEdit.madeToOrder;
+    if (Object.keys(patch).length === 0) {
+      toast.error("Değiştirilecek bir alan seç");
+      return;
+    }
+
+    const ids = [...selectedIds];
+    const chunks: string[][] = [];
+    for (let offset = 0; offset < ids.length; offset += 200) {
+      chunks.push(ids.slice(offset, offset + 200));
+    }
+    setBulkEditProgress({ done: 0, total: chunks.length });
+    let updated = 0;
+    try {
+      for (let index = 0; index < chunks.length; index += 1) {
+        const result = await fetchJson<{ updated: number }>("/api/products/bulk-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: chunks[index], ...patch }),
+        });
+        updated += result.updated;
+        setBulkEditProgress({ done: index + 1, total: chunks.length });
+      }
+      setBulkEditOpen(false);
+      setSelectedIds(new Set());
+      // Desi ve kategori kâr rakamını besliyor → listeyi optimistic yamamak ESKİ kârı ekranda
+      // bırakırdı. Kullanıcı bilerek tetikledi, gerçek tazeleme burada doğru olan.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["products"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["orders"], refetchType: "none" }),
+      ]);
+      toast.success(`${updated} ürün güncellendi`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? `Güncellenemedi — ${error.message}` : "Ürünler güncellenemedi"
+      );
+    } finally {
+      setBulkEditProgress(null);
+    }
   };
 
   const form = useForm<AddProductForm>({
@@ -1340,6 +1498,15 @@ export default function ProductsPage() {
         <div className="flex gap-2">
           {selectedIds.size > 0 && (
             <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkEditOpen(true)}
+                title="Seçili ürünlerin desi, kategori ve sipariş üzerine üretim bilgisini birlikte değiştir"
+              >
+                <SlidersHorizontal className="h-4 w-4 mr-2" />
+                {selectedIds.size} Ürünü Düzenle
+              </Button>
               {filterMode === "hidden" ? (
                 <Button
                   variant="outline"
@@ -1560,8 +1727,8 @@ export default function ProductsPage() {
                     aliasValue={aliasEdit?.id === product.id ? aliasEdit.value : ""}
                     integrations={integrations}
                     onToggleSelect={handleToggleSelect}
-                    onAdjustStock={adjustStock}
-                    onSetStock={setStock}
+                    onAdjustStock={handleAdjustStock}
+                    onSetStock={handleSetStock}
                     onAliasStart={handleAliasStart}
                     onAliasChange={handleAliasChange}
                     onAliasCommit={commitAlias}
@@ -1651,6 +1818,122 @@ export default function ProductsPage() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Toplu düzenleme — yalnız işaretlenen alanlar değişir */}
+      <Dialog
+        open={bulkEditOpen}
+        onOpenChange={(open) => {
+          if (bulkEditProgress) return; // iş sürerken kapanmasın
+          setBulkEditOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{selectedIds.size} Ürünü Düzenle</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-1">
+            Yalnız işaretlediğin alanlar değişir; diğerleri olduğu gibi kalır.
+          </p>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3 space-y-2 transition-colors hover:bg-muted/30">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={bulkEdit.desiOn}
+                  onCheckedChange={(v) => setBulkEdit((s) => ({ ...s, desiOn: !!v }))}
+                />
+                <span className="text-sm font-medium">Desi</span>
+              </label>
+              {bulkEdit.desiOn && (
+                <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="30"
+                    placeholder="örn. 2"
+                    value={bulkEdit.desi}
+                    onChange={(e) => setBulkEdit((s) => ({ ...s, desi: e.target.value }))}
+                  />
+                  <p className="text-[11px] text-amber-500 mt-1">Desi değişince kargo ve kâr yeniden hesaplanır.</p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border p-3 space-y-2 transition-colors hover:bg-muted/30">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={bulkEdit.categoryOn}
+                  onCheckedChange={(v) => setBulkEdit((s) => ({ ...s, categoryOn: !!v }))}
+                />
+                <span className="text-sm font-medium">Kategori</span>
+              </label>
+              {bulkEdit.categoryOn && (
+                <div className="animate-in fade-in slide-in-from-top-1 duration-200">
+                  <Input
+                    placeholder="örn. Dekorasyon"
+                    value={bulkEdit.category}
+                    onChange={(e) => setBulkEdit((s) => ({ ...s, category: e.target.value }))}
+                  />
+                  <p className="text-[11px] text-amber-500 mt-1">Kategori değişince komisyon ve kâr yeniden hesaplanır.</p>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border p-3 space-y-2 transition-colors hover:bg-muted/30">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox
+                  checked={bulkEdit.madeToOrderOn}
+                  onCheckedChange={(v) => setBulkEdit((s) => ({ ...s, madeToOrderOn: !!v }))}
+                />
+                <span className="text-sm font-medium">Sipariş üzerine üretilir</span>
+              </label>
+              {bulkEdit.madeToOrderOn && (
+                <div className="flex items-center gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <Switch
+                    checked={bulkEdit.madeToOrder}
+                    onCheckedChange={(v) => setBulkEdit((s) => ({ ...s, madeToOrder: v }))}
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {bulkEdit.madeToOrder ? "Evet — stok tutulmaz" : "Hayır — stok tutulur"}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {bulkEditProgress && (
+            <div className="space-y-1 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Ürünler güncelleniyor…
+                </span>
+                <span className="tabular-nums font-semibold">
+                  {bulkEditProgress.done}/{bulkEditProgress.total} · %
+                  {Math.round((bulkEditProgress.done / Math.max(1, bulkEditProgress.total)) * 100)}
+                </span>
+              </div>
+              <Progress
+                value={(bulkEditProgress.done / Math.max(1, bulkEditProgress.total)) * 100}
+                className="h-1.5"
+              />
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setBulkEditOpen(false)}
+              disabled={!!bulkEditProgress}
+            >
+              İptal
+            </Button>
+            <Button onClick={() => void runBulkEdit()} disabled={!!bulkEditProgress}>
+              {bulkEditProgress ? "Güncelleniyor…" : `${selectedIds.size} Ürünü Güncelle`}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
-import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
+import { simulatePrice } from "@/core/pricing-engine";
+import { platformMinOrderQty, shopifyCargoOverride } from "@/core/platform-rules";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
@@ -162,12 +163,10 @@ async function computeDashboard() {
         ...resolveListingCommissionOverride(listing, settingsMap),
         // ÜRÜNLER sayfası matematiğiyle BİREBİR (karar): Panel eskiden bu iki kuralı uygulamıyordu
         // → aynı listing Panel'de farklı, Ürünler sayfasında/mobilde farklı kâr gösteriyordu.
-        // Shopify sepet min 150₺ → <150₺ ürün tek başına satılamaz, kargo paylaşılır → 0.
+        // Artık iki kural da TEK kaynaktan (core/platform-rules) geliyor.
         cargoCostOverride:
-          listing.cargoCost ??
-          (listing.platform === "shopify" && listing.salePrice < 150 ? 0 : undefined),
-        // Trendyol min sipariş adedi → kâr N-adetlik sipariş üzerinden.
-        minOrderQty: listing.platform === "trendyol" ? trendyolMinQty(listing.salePrice) : 1,
+          listing.cargoCost ?? shopifyCargoOverride(listing.platform, listing.salePrice),
+        minOrderQty: platformMinOrderQty(listing.platform, listing.salePrice),
         vatableProductCost: resolved.filamentCost,
       });
 
