@@ -13,6 +13,7 @@ const DAY_MS = 86_400_000;
 
 let getUsage: typeof import("./[id]/usage/route").GET;
 let listSpools: typeof import("./route").GET;
+let deleteSpool: typeof import("./[id]/route").DELETE;
 let db: typeof import("@/lib/prisma").prisma;
 
 interface SpoolRow {
@@ -76,6 +77,7 @@ async function seedSpool(daysAgo: number[], grams = 100) {
 beforeAll(async () => {
   ({ GET: getUsage } = await import("./[id]/usage/route"));
   ({ GET: listSpools } = await import("./route"));
+  ({ DELETE: deleteSpool } = await import("./[id]/route"));
   ({ prisma: db } = await import("@/lib/prisma"));
   // Makara/tüketim tabloları migration'larda değil, çalışma anı şemasında tanımlı.
   const { ensureRuntimeSchema } = await import("@/lib/runtime-schema");
@@ -244,5 +246,48 @@ describe("makara listesi gram maliyeti karşılaştırması", () => {
 
     const row = await findSpool(spool.id);
     expect(row.costGap?.actualPerGram).toBeCloseTo(0.8, 5);
+  });
+});
+
+/**
+ * Silme ucu — kullanıcı "sile basıyorum hiçbir şey olmuyor" dediğinde bulunan gerilemenin
+ * koruması. Buradaki iki davranış SIRAYA bağlı ve şema tek başına garanti etmiyor:
+ * çalışma anı tablosunda yabancı anahtar yok, yani "cascade" veritabanı tarafından
+ * uygulanmıyor — tüketim satırlarını rota elle siliyor.
+ */
+describe("makara silme ucu", () => {
+  const cagir = (id: string) =>
+    deleteSpool(new NextRequest(`http://localhost/api/spools/${id}`, { method: "DELETE" }), {
+      params: Promise.resolve({ id }),
+    });
+
+  it("makarayı ve tüketim kayıtlarını birlikte siler", async () => {
+    const spool = await seedSpool([1, 2, 3]);
+    expect(await db.filamentUsage.count({ where: { spoolId: spool.id } })).toBe(3);
+
+    const response = await cagir(spool.id);
+
+    expect(response.status).toBe(200);
+    expect(await db.filamentSpool.findUnique({ where: { id: spool.id } })).toBeNull();
+    // Şemada "cascade" yazıyor diye bu satır silinirse kayıtlar sessizce öksüz kalır.
+    expect(await db.filamentUsage.count({ where: { spoolId: spool.id } })).toBe(0);
+  });
+
+  it("başka makaranın kayıtlarına dokunmaz", async () => {
+    const silinecek = await seedSpool([1, 2]);
+    const kalacak = await seedSpool([1, 2, 3]);
+
+    expect((await cagir(silinecek.id)).status).toBe(200);
+
+    expect(await db.filamentSpool.findUnique({ where: { id: kalacak.id } })).not.toBeNull();
+    expect(await db.filamentUsage.count({ where: { spoolId: kalacak.id } })).toBe(3);
+  });
+
+  it("zaten silinmiş satırda hata vermez (çift tık / eski liste)", async () => {
+    const spool = await seedSpool([1]);
+    expect((await cagir(spool.id)).status).toBe(200);
+
+    // İkinci çağrı da başarı dönmeli: kullanıcı açısından sonuç aynı, arayüz satırı geri koymamalı.
+    expect((await cagir(spool.id)).status).toBe(200);
   });
 });

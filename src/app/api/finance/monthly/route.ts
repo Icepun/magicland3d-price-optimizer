@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { jsonError } from "@/lib/api-error";
 import {
   aggregateMonthlyFinance,
   FINANCE_TIME_ZONE,
@@ -15,6 +16,22 @@ import {
 import { bustFinanceCaches } from "@/lib/cache-busting";
 import { swr } from "@/lib/route-cache";
 
+/**
+ * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
+ *
+ * Uygulama Prisma'yı libSQL driver adapter'ı üzerinden çalıştırıyor. Toplama ifadesi
+ * (MIN/MAX) kolonun tipini kaybettiği için Prisma dönen ham epoch-ms sayısını DateTime'a
+ * çeviremiyor ve TÜM sorgu şu hatayla düşüyor:
+ *
+ *   Inconsistent column data: Could not convert value 1786394653611 to type `DateTime`
+ *
+ * `_count` ve SAYISAL `_min/_max` sorunsuz; kırılan yalnız tarih. Bunun yerine
+ * `findFirst({ orderBy: { <tarih>: "asc" | "desc" }, select: { <tarih>: true } })` kullan —
+ * doğru `Date` döner ve maliyeti aynıdır (LIMIT 1).
+ *
+ * Bu hata Raporlar sayfasını komple boş bıraktı (v0.19.139); regresyon testi:
+ * `src/lib/date-aggregate.test.ts`.
+ */
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export async function GET(req: NextRequest) {
@@ -33,14 +50,23 @@ export async function GET(req: NextRequest) {
     : 12;
   // v5: KDV özeti artık pazaryeri siparişlerini de kapsıyor (snapshot'ta kayıtlı KDV kolonları).
   // Sürüm artmazsa güncelleme sonrası diskteki eski yanıt (eksik kapsamlı) taze sayılırdı.
-  const data = await swr(
-    `finance-monthly:v5:${monthCount}`,
-    60_000,
-    () => computeMonthlyFinance(monthCount)
-  );
-  return NextResponse.json(data, {
-    headers: { "Cache-Control": "no-store" },
-  });
+  //
+  // try/catch neden ŞART: bu uç eskiden sarmalanmamıştı ve hata olunca Next GÖVDESİZ bir 500
+  // döndürüyordu. Raporlar "veri alınamadı" yazıyor, sebep ise hiçbir yere yazılmıyordu —
+  // teşhis için uygulamayı çalışır hâlde tek tek uç yoklamak gerekti. Diğer uçların hepsi
+  // `jsonError` kullanıyor; bu da artık kullanıyor.
+  try {
+    const data = await swr(
+      `finance-monthly:v5:${monthCount}`,
+      60_000,
+      () => computeMonthlyFinance(monthCount)
+    );
+    return NextResponse.json(data, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  } catch (error) {
+    return jsonError(error);
+  }
 }
 
 /**
@@ -78,9 +104,11 @@ async function computeMonthlyFinance(monthCount: number) {
     snapshots,
     manualOrders,
     expenses,
-    actualCommissionSummary,
-    snapshotSummary,
-    manualOrderSummary,
+    actualCommissionCount,
+    lastCommissionSync,
+    firstSnapshot,
+    lastSnapshotSync,
+    firstManualOrder,
   ] = await Promise.all([
     // Yalnız gösterilen ay aralığı okunur (satır sayısı sabit kalır); dışarıdaki satırlar
     // zaten hiçbir aya düşmüyordu.
@@ -119,19 +147,29 @@ async function computeMonthlyFinance(monthCount: number) {
       where: { paidAt: { gte: windowStart } },
       select: { paidAt: true, amountKurus: true },
     }),
-    prisma.platformOrderFinancial.aggregate({
+    prisma.platformOrderFinancial.count({ where: { platform: "trendyol" } }),
+    // ⚠️ TARİH alanında `aggregate({_min/_max})` KULLANMA — bkz. dosya başındaki uyarı.
+    // "Geçmiş şu tarihten beri" ve "son senkron" TÜM geçmişi kapsar; satırları çekmeden
+    // uçtaki tek satır okunur (LIMIT 1 + index) — maliyeti aggregate ile aynı.
+    prisma.platformOrderFinancial.findFirst({
       where: { platform: "trendyol" },
-      _count: { _all: true },
-      _max: { syncedAt: true },
+      orderBy: { syncedAt: "desc" },
+      select: { syncedAt: true },
     }),
-    // "Geçmiş şu tarihten beri" ve "son senkron" bilgisi TÜM geçmişi kapsar → satırları
-    // çekmeden özetten okunur.
-    prisma.orderFinanceSnapshot.aggregate({
+    prisma.orderFinanceSnapshot.findFirst({
       where: { platform: { not: "manual" } },
-      _min: { orderedAt: true },
-      _max: { syncedAt: true },
+      orderBy: { orderedAt: "asc" },
+      select: { orderedAt: true },
     }),
-    remotePrisma.manualOrder.aggregate({ _min: { orderedAt: true } }),
+    prisma.orderFinanceSnapshot.findFirst({
+      where: { platform: { not: "manual" } },
+      orderBy: { syncedAt: "desc" },
+      select: { syncedAt: true },
+    }),
+    remotePrisma.manualOrder.findFirst({
+      orderBy: { orderedAt: "asc" },
+      select: { orderedAt: true },
+    }),
   ]);
 
   // Eski hesap sürümüyle yazılmış siparişler ay ay sayılır: kullanıcı hangi ayın yeniden
@@ -215,11 +253,8 @@ async function computeMonthlyFinance(monthCount: number) {
     vatUnknownRevenue: vat.unknownRevenue,
     vatPartialOrders: vat.partialOrders,
   };
-  const lastOrderSyncAt = snapshotSummary._max.syncedAt ?? null;
-  const firstOrderedAt = [
-    snapshotSummary._min.orderedAt,
-    manualOrderSummary._min.orderedAt,
-  ]
+  const lastOrderSyncAt = lastSnapshotSync?.syncedAt ?? null;
+  const firstOrderedAt = [firstSnapshot?.orderedAt, firstManualOrder?.orderedAt]
     .filter((value): value is Date => value != null)
     .sort((a, b) => a.getTime() - b.getTime())[0];
 
@@ -229,9 +264,8 @@ async function computeMonthlyFinance(monthCount: number) {
     generatedAt: now.toISOString(),
     dataFrom: firstOrderedAt?.toISOString() ?? null,
     lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
-    actualCommissionOrders: actualCommissionSummary._count._all,
-    lastActualCommissionSyncAt:
-      actualCommissionSummary._max.syncedAt?.toISOString() ?? null,
+    actualCommissionOrders: actualCommissionCount,
+    lastActualCommissionSyncAt: lastCommissionSync?.syncedAt?.toISOString() ?? null,
     totals: { ...totals, vat },
     months,
     quality,

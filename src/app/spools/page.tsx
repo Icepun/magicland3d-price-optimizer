@@ -100,6 +100,23 @@ function costGapOf(spool: SpoolLike): CostGap | null {
   return (spool as Spool).costGap ?? null;
 }
 
+/**
+ * Son makarası silinen grubun BOŞ hâli.
+ *
+ * NEDEN gerekli: gruplar canlı makara satırlarından türetilir, yani son satır gidince grup da
+ * listeden düşer. Detay penceresi o an açık olan grubu bulamayınca eski anlık görüntüye dönerse
+ * SİLİNEN SATIRLAR GERİ GELİR — kullanıcıya "silme çalışmadı" gibi görünür. Bunun yerine grubun
+ * kimliği (ad/renk) korunur, sayılar sıfırlanır.
+ */
+function emptiedGroup(group: FilamentGroup): FilamentGroup {
+  return {
+    ...group,
+    sealedCount: 0, openCount: 0, emptyCount: 0, activeCount: 0,
+    remainingGrams: 0, totalGrams: 0,
+    spools: [],
+  };
+}
+
 export default function SpoolsPage() {
   const qc = useQueryClient();
 
@@ -136,9 +153,29 @@ export default function SpoolsPage() {
     [settings]
   );
 
+  /**
+   * İZLENEN GRUPLAR — son makarası biten renkler.
+   *
+   * Bu liste geçilmezse sayfa ile zil AYNI gerçeği farklı söyler: zil (/api/notifications)
+   * ayarların tamamını geçtiği için "Siyah PLA bitti" der, sayfada ise o rengin kartı hiç
+   * kalmadığı için ne uyarı ne rozet görünür — kullanıcı alışverişe zilde yazan rengi
+   * listesinde bulamadan gider.
+   */
+  const watchedGroups = useMemo(
+    () =>
+      Object.entries(settings ?? {})
+        .filter(([k]) => k.startsWith("filamentWatch:"))
+        .map(([k, v]) => ({
+          key: k.slice("filamentWatch:".length),
+          label: (v ?? "").trim() || undefined,
+        })),
+    [settings]
+  );
+
   const alerts = useMemo(
-    () => buildFilamentAlerts(groups, { threshold, groupThresholds, mutedGroups }),
-    [groups, threshold, groupThresholds, mutedGroups]
+    () =>
+      buildFilamentAlerts(groups, { threshold, groupThresholds, mutedGroups, watchedGroups }),
+    [groups, threshold, groupThresholds, mutedGroups, watchedGroups]
   );
   const alertKeys = useMemo(() => new Set(alerts.map((a) => a.groupKey)), [alerts]);
 
@@ -149,6 +186,7 @@ export default function SpoolsPage() {
   const [detail, setDetail] = useState<FilamentGroup | null>(null);
   const [editing, setEditing] = useState<Spool | null>(null);
   const [consuming, setConsuming] = useState<Spool | null>(null);
+  const [deleting, setDeleting] = useState<SpoolLike | null>(null);
 
   const visible = useMemo(() => {
     const q = query.trim().toLocaleLowerCase("tr");
@@ -227,6 +265,42 @@ export default function SpoolsPage() {
       });
     },
   });
+
+  /**
+   * Makara silme — onay penceresinden sonra çalışır.
+   *
+   * İYİMSER: satır sunucu yanıtını beklemeden listeden düşer. Uzak veritabanında her sorgu
+   * sıraya girdiği için bekleme saniyeleri bulabiliyor; o süre boyunca ekranın hiç kıpırdamaması
+   * "silme çalışmıyor" izlenimi veriyordu. Hata olursa liste eski hâline döner ve kısa bir
+   * uyarı çıkar — sessizce yutulmaz.
+   */
+  const deleteSpool = useMutation<{ ok: boolean }, Error, string, { prev: Spool[] | undefined }>({
+    mutationFn: (id) => fetchJson<{ ok: boolean }>(`/api/spools/${id}`, { method: "DELETE" }),
+    onMutate: async (id) => {
+      await qc.cancelQueries({ queryKey: ["spools"] });
+      const prev = qc.getQueryData<Spool[]>(["spools"]);
+      qc.setQueryData<Spool[]>(["spools"], (old) =>
+        Array.isArray(old) ? old.filter((s) => s.id !== id) : old
+      );
+      return { prev };
+    },
+    onError: (_error, _id, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["spools"], ctx.prev);
+      toast.error("Makara silinemedi");
+    },
+    onSuccess: (_data, id) => {
+      // Silinen makaranın tüketim geçmişi bellekte asılı kalmasın.
+      qc.removeQueries({ queryKey: ["spool-usage", id] });
+      toast.success("Makara silindi");
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ["spools"] }),
+  });
+
+  /** Açık detay penceresi HER ZAMAN canlı veriden beslenir (bkz. `emptiedGroup`). */
+  const detailGroup = useMemo(() => {
+    if (!detail) return null;
+    return groups.find((g) => g.key === detail.key) ?? emptiedGroup(detail);
+  }, [groups, detail]);
 
   function copyShoppingList() {
     const text = alerts
@@ -442,10 +516,9 @@ export default function SpoolsPage() {
         </div>
       )}
 
-      {adding && <AddSpoolDialog prefill={adding} onClose={() => setAdding(null)} />}
-      {detail && (
+      {detail && detailGroup && (
         <GroupDetailDialog
-          group={groups.find((g) => g.key === detail.key) ?? detail}
+          group={detailGroup}
           threshold={groupThresholds[detail.key] ?? threshold}
           generalThreshold={threshold}
           onSetThreshold={(v) =>
@@ -454,10 +527,35 @@ export default function SpoolsPage() {
           onClose={() => setDetail(null)}
           onEdit={(s) => setEditing(s as Spool)}
           onConsume={(s) => setConsuming(s as Spool)}
+          onDelete={(s) => setDeleting(s)}
+          onAdd={() =>
+            setAdding({
+              material: detailGroup.material,
+              colorName: detailGroup.colorName,
+              colorHex: detailGroup.colorHex,
+              colorKey: detailGroup.colorKey,
+              brand: detailGroup.brands[0] ?? "",
+            })
+          }
         />
       )}
+      {/* Pencereler PORTAL kullanmıyor ve hepsi aynı z-50 katmanında; hangisinin üstte kaldığını
+          YALNIZCA çizim sırası belirler. Bu yüzden detay penceresinden açılabilen her pencere
+          (ekle / düzenle / düş / sil) ondan SONRA gelmek zorunda — aksi halde detayın arkasında
+          açılır, kullanıcı ekranın karardığını görür ve düğme bozuk sanır. */}
+      {adding && <AddSpoolDialog prefill={adding} onClose={() => setAdding(null)} />}
       {editing && <EditSpoolDialog spool={editing} onClose={() => setEditing(null)} />}
       {consuming && <ConsumeDialog spool={consuming} onClose={() => setConsuming(null)} />}
+      {deleting && (
+        <DeleteSpoolDialog
+          spool={deleting}
+          onClose={() => setDeleting(null)}
+          onConfirm={() => {
+            deleteSpool.mutate(deleting.id);
+            setDeleting(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1066,22 +1164,14 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
 }
 
 function GroupDetailDialog({
-  group: g, threshold, generalThreshold, onSetThreshold, onClose, onEdit, onConsume,
+  group: g, threshold, generalThreshold, onSetThreshold, onClose, onEdit, onConsume, onDelete, onAdd,
 }: {
   group: FilamentGroup; threshold: number; generalThreshold: number;
   onSetThreshold: (v: number | null) => void;
   onClose: () => void; onEdit: (s: SpoolLike) => void; onConsume: (s: SpoolLike) => void;
+  onDelete: (s: SpoolLike) => void; onAdd: () => void;
 }) {
   const qc = useQueryClient();
-  const del = useMutation({
-    mutationFn: (id: string) => fetch(`/api/spools/${id}`, { method: "DELETE" }).then((r) => r.json()),
-    onSuccess: (_result, id) => {
-      qc.invalidateQueries({ queryKey: ["spools"] });
-      // Silinen makaranın geçmişi bellekte kalmasın.
-      qc.removeQueries({ queryKey: ["spool-usage", id] });
-      toast.success("Makara silindi");
-    },
-  });
   const toggleOpen = useMutation({
     mutationFn: ({ id, sealed }: { id: string; sealed: boolean }) =>
       fetch(`/api/spools/${id}`, {
@@ -1139,21 +1229,73 @@ function GroupDetailDialog({
         </div>
 
         <div className="space-y-1.5">
-          {g.spools.map((s, i) => (
-            <SpoolRow
-              key={s.id}
-              spool={s}
-              index={i}
-              groupColorHex={g.colorHex}
-              groupLabel={g.label}
-              onEdit={() => onEdit(s)}
-              onConsume={() => onConsume(s)}
-              onToggleOpen={(sealed) => toggleOpen.mutate({ id: s.id, sealed })}
-              onDelete={() => {
-                if (confirm("Bu makarayı sil? (Biten makarayı silmek yerine listede bırakman önerilir.)")) del.mutate(s.id);
-              }}
+          {g.spools.length === 0 ? (
+            <EmptyState
+              icon={PackageOpen}
+              title="Bu renkten makara kalmadı"
+              description="Yenisini aldığında buraya ekle; azalınca yine uyarılırsın."
+              className="py-6"
+              action={
+                <Button size="sm" className="gap-2" onClick={onAdd}>
+                  <Plus className="h-4 w-4" /> Makara ekle
+                </Button>
+              }
             />
-          ))}
+          ) : (
+            g.spools.map((s, i) => (
+              <SpoolRow
+                key={s.id}
+                spool={s}
+                index={i}
+                groupColorHex={g.colorHex}
+                groupLabel={g.label}
+                onEdit={() => onEdit(s)}
+                onConsume={() => onConsume(s)}
+                onToggleOpen={(sealed) => toggleOpen.mutate({ id: s.id, sealed })}
+                onDelete={() => onDelete(s)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Silme onayı — uygulamanın kendi penceresi.
+ *
+ * Tarayıcının yerel `confirm()` kutusu kullanılmıyordu: tüm pencereyi kilitliyor, uygulamanın
+ * diline/görünümüne uymuyor ve masaüstü kabuğunda arkada kalabiliyor. Onay artık ekranın içinde.
+ */
+function DeleteSpoolDialog({
+  spool: s, onClose, onConfirm,
+}: { spool: SpoolLike; onClose: () => void; onConfirm: () => void }) {
+  const title = [s.brand, s.name].filter(Boolean).join(" · ") || "Bu makara";
+
+  return (
+    <Modal title="Makarayı Sil" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="flex items-start gap-3">
+          <ColorDot hex={s.colorHex ?? "#9ca3af"} size={16} />
+          <div className="min-w-0 text-sm">
+            <p className="font-medium truncate">{title}</p>
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {formatNumber(s.remainingGrams, 0)} / {formatNumber(s.totalGrams, 0)} g
+            </p>
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Bu makara listeden kalkacak ve tüketim geçmişi silinecek. Geri alınamaz.
+        </p>
+        <p className="text-[11px] text-muted-foreground">
+          Biten makarayı silmek yerine listede bırakabilirsin.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>İptal</Button>
+          <Button variant="destructive" className="gap-1.5" onClick={onConfirm}>
+            <Trash2 className="h-4 w-4" /> Sil
+          </Button>
         </div>
       </div>
     </Modal>

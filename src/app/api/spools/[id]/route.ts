@@ -69,11 +69,44 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
+/** Prisma "silinecek satır yok" hatası — makara zaten gitmişse silme başarısız SAYILMAZ. */
+function isMissingRow(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2025"
+  );
+}
+
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    await prisma.filamentSpool.delete({ where: { id } });
+
+    // Grup izleme kaydına (filamentWatch:<grup>) DOKUNULMAZ: son makara silinse bile
+    // "bu renk bitti" uyarısı o kayıttan üretiliyor.
+    try {
+      await prisma.filamentSpool.delete({ where: { id } });
+    } catch (error) {
+      // Liste eski olduğu ya da iki kez tıklandığı için satır çoktan gitmiş olabilir; kullanıcı
+      // açısından sonuç aynı. Yine de önbellek düşürülür ki ekran gerçekten güncellensin.
+      if (!isMissingRow(error)) throw error;
+      bustInventoryAlertCaches();
+      return NextResponse.json({ ok: true });
+    }
+
+    // Tüketim kayıtları makarayla birlikte gider. Şemada ilişki "cascade" tanımlı ama çalışma anı
+    // tablosunda yabancı anahtar yok, yani veritabanı bunu kendiliğinden yapmıyor.
+    // Ayrı ifade olarak koşuyor: $transaction uzak veritabanında tüm uygulamayı kilitliyor.
+    //
+    // KENDİ try/catch'inde: makara BU NOKTADA zaten kalıcı olarak silindi. Buradaki bir ağ
+    // hatası dışarı sızsaydı istemci silmeyi "başarısız" sayıp satırı geri koyar, ardından
+    // tazeleme onu yeniden yok ederdi — kullanıcı çelişkili bir hata görürdü. Üstelik önbellek
+    // de düşürülmemiş olurdu. Artıkta kalan tüketim satırı zararsızdır; sessizce geçiyoruz.
+    try {
+      await prisma.filamentUsage.deleteMany({ where: { spoolId: id } });
+    } catch {
+      /* makara gitti; öksüz tüketim satırı bir sonraki temizlikte düşer */
+    }
+
     bustInventoryAlertCaches(); // silinen makaranın uyarısı ekranda kalmasın
     return NextResponse.json({ ok: true });
   } catch (error) {

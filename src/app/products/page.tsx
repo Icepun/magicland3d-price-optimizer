@@ -313,7 +313,9 @@ const ProductRow = memo(function ProductRow({
       <TableCell className={cn("py-2 pr-0", isMember && "pl-6")}>
         <ProductImage src={product.imageUrl} name={product.name} />
       </TableCell>
-      <TableCell className="max-w-0">
+      {/* max-w-0: uzun ürün adı sütunu şişirmesin, üç nokta ile kırpılsın.
+          min-w: taban genişlik olmadan diğer sütunlar bu sütunu tek harfe eziyordu. */}
+      <TableCell className="max-w-0 min-w-[260px]">
         <div className="flex items-center gap-1.5 min-w-0">
           {isEditingAlias ? (
             <input
@@ -1461,7 +1463,8 @@ export default function ProductsPage() {
             </span>
           </span>
         </TableCell>
-        <TableCell className="max-w-0">
+        {/* Ürün satırıyla aynı taban genişlik — grup ve varyant satırları hizalı kalsın. */}
+        <TableCell className="max-w-0 min-w-[260px]">
           <div className="flex items-center gap-1.5 w-full">
             <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
             <span className="font-semibold text-sm truncate">{row.groupName}</span>
@@ -1632,7 +1635,8 @@ export default function ProductsPage() {
                 />
               </TableHead>
               <TableHead className="w-[52px]" />
-              <TableHead>Ürün</TableHead>
+              {/* Sütunun tabanı burada belirlenir; dar pencerede ezilmek yerine tablo yatay kayar. */}
+              <TableHead className="min-w-[260px]">Ürün</TableHead>
               <TableHead className="text-center w-[110px]">Stok</TableHead>
               <TableHead className="text-right tabular-nums w-[90px]">Maliyet</TableHead>
               <TableHead className="text-right w-[100px] p-0">
