@@ -29,7 +29,8 @@ kimse `prisma migrate` çalıştırmaz (`package.json` build adımı sadece `pri
 3. `CURRENT_SCHEMA_VERSION`'ı artır ve üstündeki yorum listesine bir satır yaz. Artırmazsan
    hızlı-yol migration'ı atlar, kolon eklenmez ve Prisma "no such column" ile tüm sorguları
    patlatır.
-4. `npx prisma generate`.
+4. `npx prisma generate` — yalnız `schema.prisma` değiştiyse gerekli (Client tiplerini yeniler).
+   Build zaten çalıştırır; ama yeni alan üzerinde tsc/eslint/vitest koşturacaksan önce elle çalıştır.
 
 ## `prisma migrate` NEDEN çalıştırılmamalı
 
@@ -40,6 +41,19 @@ kimse `prisma migrate` çalıştırmaz (`package.json` build adımı sadece `pri
   Turso verisi için kabul edilemez.
 - `migrate reset` / `db push`: mevcut (runtime-schema ile kurulmuş) tabloları şemaya "hizalamak"
   için düşürebilir → veri kaybı.
+
+## `prisma/migrations/` klasörünün akıbeti: **DONDURULDU**
+
+Klasör silinmez, yeniden üretilmez (baseline alınmaz), yeni dosya eklenmez — salt-okunur
+tarihsel kayıt olarak repoda kalır.
+
+- **Silmeyiz:** boş klasörle `migrate dev` veritabanını "tamamen sapmış" görür ve doğrudan
+  sıfırlama teklif eder; ayrıca `prisma.config.ts` bu yolu işaret ediyor.
+- **Baseline almayız:** tablo yaratan iki kaynak doğar (bugünkü hatanın ta kendisi) ve SQL
+  baseline'ı `runtime-schema.ts` içindeki veri migration'larını
+  (`migrateTrendyolProductsToListings`, `migrateParentVariantsToGroups`, …) temsil edemez.
+
+Gerekçenin tamamı ve ölçüm dökümü: `prisma/README.md`.
 
 Migration dosyalarına dokunma; şema değişikliği yalnız `schema.prisma` + `runtime-schema.ts`
 ikilisiyle yapılır.

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { chunkIds, affectsProfitInputs } from "@/lib/bulk-update-helpers";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { batchWrite } from "@/lib/libsql-batch";
@@ -18,7 +19,6 @@ import { z } from "zod";
 const MAX_DESI = 30;
 
 /** SQLite değişken sınırına (999) dayanmasın diye kimlikler dilimlenir. */
-const ID_CHUNK = 400;
 
 const Schema = z
   .object({
@@ -59,28 +59,6 @@ function updateColumns(input: BulkUpdateInput): { sql: string[]; values: unknown
   sql.push(`"updatedAt" = ?`);
   values.push(Date.now());
   return { sql, values };
-}
-
-/** Kimlikleri dilimlere böl — tek UPDATE bin kimlik taşıyamaz. */
-export function chunkIds(ids: string[], size: number = ID_CHUNK): string[][] {
-  const unique = [...new Set(ids)];
-  const chunks: string[][] = [];
-  for (let offset = 0; offset < unique.length; offset += size) {
-    chunks.push(unique.slice(offset, offset + size));
-  }
-  return chunks;
-}
-
-/**
- * Bu düzenleme kâr rakamını etkiler mi?
- * Desi kargoyu, kategori komisyon/paketleme kuralını seçer → ikisi de kâra girer.
- * "Sipariş üzerine üretilir" yalnız listeleri ve stok uyarısını etkiler.
- */
-export function affectsProfitInputs(input: {
-  desi?: number;
-  categoryName?: string;
-}): boolean {
-  return input.desi !== undefined || input.categoryName !== undefined;
 }
 
 export async function POST(req: NextRequest) {

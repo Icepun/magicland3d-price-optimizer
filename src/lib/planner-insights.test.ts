@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 /**
  * Satış hızı türetmesi — Üretim Planı'nın sırasını ve "satmayan ürün" süzgecini bu besliyor.
@@ -7,8 +7,6 @@ import { describe, expect, it, vi } from "vitest";
  * sayımının dürüstlüğü ve en önemlisi: GEÇMİŞ AZKEN RAKAM UYDURMAMASI.
  */
 
-vi.mock("@/lib/prisma", () => ({ prisma: { $queryRawUnsafe: vi.fn(async () => []) } }));
-vi.mock("@/lib/runtime-schema", () => ({ ensureRuntimeSchema: vi.fn(async () => {}) }));
 
 const {
   coverageStart,
@@ -16,7 +14,7 @@ const {
   DEAD_STOCK_DAYS,
   MIN_HISTORY_DAYS,
   SALES_WINDOW_DAYS,
-} = await import("./route");
+} = await import("@/lib/planner-insights");
 
 const GUN = 86_400_000;
 const SIMDI = Date.UTC(2026, 7, 11, 12, 0, 0);

@@ -19,7 +19,7 @@ vi.mock("@/lib/cache-busting", () => ({
   bustProfitInputCaches: vi.fn(),
 }));
 
-const { chunkIds, affectsProfitInputs } = await import("./route");
+const { chunkIds, affectsProfitInputs } = await import("@/lib/bulk-update-helpers");
 
 describe("kimlik dilimleme", () => {
   it("tek sorgu değişken sınırına dayanmasın diye dilimler", () => {
@@ -53,7 +53,12 @@ describe("hangi düzenleme kâr rakamını etkiler", () => {
 
 describe("maliyet alanları bu uçtan yazılamaz", () => {
   it("kaynakta hiçbir maliyet kolonu geçmiyor", () => {
-    const kaynak = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+    // Rota dosyası src/app altında; bu test src/lib'e taşındı (Next 16 rota dosyaları yalnız
+    // istek işleyicisi dışa açabildiği için saf yardımcılar buraya alındı).
+    const kaynak = readFileSync(
+      new URL("../app/api/products/bulk-update/route.ts", import.meta.url),
+      "utf8"
+    );
     const yasakli = [
       "manualCost",
       "packagingCost",
