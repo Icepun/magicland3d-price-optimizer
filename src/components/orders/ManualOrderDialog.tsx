@@ -15,6 +15,7 @@ import {
   ReceiptText,
   Search,
   Trash2,
+  Truck,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -24,9 +25,15 @@ import {
   type ManualOrderSelectedExpense,
   type ManualOrderStatusKind,
 } from "@/core/manual-order";
+import { computeFullProductCost } from "@/core/cost-calculator";
+import { filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { resolveVatableCost } from "@/core/pricing-engine";
+import type { CargoRuleInput } from "@/core/types";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { formatCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -74,10 +81,41 @@ interface ManualExpenseRuleOption {
   isActive?: boolean;
 }
 
+interface ManualFilamentTypeOption {
+  id: string;
+  name: string;
+  costPerGram: number;
+}
+
+interface ManualCostRates {
+  electricityPerHour: number;
+  machineWearPerHour: number;
+  laborPerHour: number;
+}
+
 interface ManualOrderOptions {
   vatRate: number;
   products: ManualProductOption[];
   expenseRules: ManualExpenseRuleOption[];
+  filamentTypes?: ManualFilamentTypeOption[];
+  costRates?: ManualCostRates;
+}
+
+interface CargoRuleResponse {
+  id: string;
+  name: string;
+  platform?: string | null;
+  categoryName?: string | null;
+  minPrice: number;
+  maxPrice: number;
+  minDesi: number;
+  maxDesi: number;
+  cargoCost: number;
+  vatIncluded?: boolean | null;
+  priority: number;
+  validFrom?: string | null;
+  validTo?: string | null;
+  isActive: boolean;
 }
 
 interface MoneyCostDraft {
@@ -91,12 +129,22 @@ interface CatalogItemDraft {
   quantity: number;
 }
 
+interface FreeformProductionDraft {
+  filamentTypeId?: string | null;
+  filamentWeight?: number | null;
+  printTimeHours?: number | null;
+  wasteRate?: number | null;
+}
+
 interface FreeformItemDraft {
   id?: string;
   name: string;
   quantity: number;
   unitCost: number | null;
   manualCostHasVatInvoice?: boolean;
+  desi?: number | null;
+  production?: FreeformProductionDraft | null;
+  costSource?: "manual" | "detailed";
 }
 
 interface SelectedExpenseDraft {
@@ -142,6 +190,7 @@ interface ManualOrderCapturedItem extends ManualOrderResolvedItem {
   alias?: string | null;
   variantLabel?: string | null;
   currentSalePrice?: number | null;
+  production?: FreeformProductionDraft | null;
 }
 
 export interface ManualOrderEditTarget {
@@ -167,13 +216,21 @@ interface CatalogLineState {
   quantity: string;
 }
 
+type FreeformCostMode = "detailed" | "manual";
+
 interface FreeformLineState {
   key: string;
   persistedId?: string;
   name: string;
   quantity: string;
+  costMode: FreeformCostMode;
   unitCost: string;
   manualCostHasVatInvoice: boolean;
+  desi: string;
+  filamentTypeId: string;
+  filamentWeight: string;
+  printTimeHours: string;
+  wastePercent: string;
 }
 
 interface CustomExpenseState {
@@ -277,6 +334,46 @@ function invalidOptionalMoney(value: string | number | null | undefined) {
   return !Number.isFinite(parsed) || parsed < 0 || parsed > 21_474_836.47;
 }
 
+function invalidOptionalNumber(
+  value: string | number | null | undefined,
+  max: number
+) {
+  const raw = String(value ?? "").trim();
+  if (raw === "") return false;
+  const parsed = Number(raw);
+  return !Number.isFinite(parsed) || parsed < 0 || parsed > max;
+}
+
+/** Boş bırakılan alan "0" değil "girilmedi" demektir. */
+function optionalNumber(value: string): number | null {
+  const raw = value.trim();
+  if (raw === "") return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : null;
+}
+
+function numberText(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(Number(value))) return "";
+  return String(value);
+}
+
+function emptyFreeformLine(): FreeformLineState {
+  return {
+    key: nextKey("free"),
+    persistedId: newPersistentId("manual-item"),
+    name: "",
+    quantity: "1",
+    costMode: "detailed",
+    unitCost: "",
+    manualCostHasVatInvoice: false,
+    desi: "",
+    filamentTypeId: "",
+    filamentWeight: "",
+    printTimeHours: "",
+    wastePercent: "",
+  };
+}
+
 function emptyForm(): FormState {
   return {
     orderedAt: istanbulDateTimeInput(),
@@ -291,22 +388,19 @@ function emptyForm(): FormState {
     commission: { amount: "0", hasVatInvoice: false },
     cargo: { amount: "0", hasVatInvoice: false },
     catalogItems: [],
-    freeformItems: [
-      {
-        key: nextKey("free"),
-        persistedId: newPersistentId("manual-item"),
-        name: "",
-        quantity: "1",
-        unitCost: "",
-        manualCostHasVatInvoice: false,
-      },
-    ],
+    freeformItems: [emptyFreeformLine()],
     selectedExpenses: {},
     customExpenses: [],
   };
 }
 
-function stateFromDraft(draft: ManualOrderDraft): FormState {
+function stateFromDraft(
+  draft: ManualOrderDraft,
+  capturedItems?: ManualOrderCapturedItem[]
+): FormState {
+  const capturedById = new Map(
+    (capturedItems ?? []).map((item) => [item.id, item])
+  );
   const catalogItems: CatalogLineState[] = [];
   const freeformItems: FreeformLineState[] = [];
   for (const item of draft.items ?? []) {
@@ -319,16 +413,37 @@ function stateFromDraft(draft: ManualOrderDraft): FormState {
       });
     } else {
       const freeform = item as FreeformItemDraft;
+      // Kayıtlı üretim/desi bilgisi hesap kaydında (items) da taşınır — hangisi
+      // gelirse gelsin form aynı dolsun.
+      const stored = freeform.id ? capturedById.get(freeform.id) : undefined;
+      const production = freeform.production ?? stored?.production ?? null;
+      const savedSource = freeform.costSource ?? stored?.costSource ?? null;
+      const hasProduction =
+        (production?.filamentWeight ?? 0) > 0 ||
+        (production?.printTimeHours ?? 0) > 0;
+      const unitCost = freeform.unitCost ?? stored?.manualUnitCost ?? null;
       freeformItems.push({
         key: freeform.id ?? nextKey("free"),
         persistedId: freeform.id ?? newPersistentId("manual-item"),
         name: freeform.name ?? "",
         quantity: String(quantityValue(freeform.quantity)),
-        unitCost:
-          freeform.unitCost == null || !Number.isFinite(Number(freeform.unitCost))
+        costMode:
+          savedSource === "detailed" || (savedSource == null && hasProduction)
+            ? "detailed"
+            : "manual",
+        unitCost: numberText(unitCost),
+        manualCostHasVatInvoice: Boolean(
+          freeform.manualCostHasVatInvoice ?? stored?.manualCostHasVatInvoice
+        ),
+        desi: numberText(freeform.desi ?? stored?.desi ?? null),
+        filamentTypeId: production?.filamentTypeId ?? "",
+        filamentWeight: numberText(production?.filamentWeight),
+        printTimeHours: numberText(production?.printTimeHours),
+        wastePercent:
+          production?.wasteRate == null ||
+          !Number.isFinite(Number(production.wasteRate))
             ? ""
-            : String(freeform.unitCost),
-        manualCostHasVatInvoice: Boolean(freeform.manualCostHasVatInvoice),
+            : String(Math.round(Number(production.wasteRate) * 10_000) / 100),
       });
     }
   }
@@ -352,18 +467,7 @@ function stateFromDraft(draft: ManualOrderDraft): FormState {
     },
     catalogItems,
     freeformItems:
-      freeformItems.length > 0
-        ? freeformItems
-        : [
-            {
-              key: nextKey("free"),
-              persistedId: newPersistentId("manual-item"),
-              name: "",
-              quantity: "1",
-              unitCost: "",
-              manualCostHasVatInvoice: false,
-            },
-          ],
+      freeformItems.length > 0 ? freeformItems : [emptyFreeformLine()],
     selectedExpenses: Object.fromEntries(
       (draft.expenseRules ?? []).map((expense) => [
         expense.ruleId,
@@ -444,6 +548,15 @@ export function ManualOrderDialog({
     retry: false,
   });
 
+  // Serbest siparişin kargosu desiden çıkar; barem burada sadece ÖNİZLEME için okunur,
+  // kaydedilen tutarı her zaman sunucu belirler.
+  const cargoRulesQuery = useQuery<CargoRuleResponse[]>({
+    queryKey: ["cargo-rules"],
+    queryFn: () => fetchJson<CargoRuleResponse[]>("/api/cargo-rules"),
+    enabled: open && form.mode === "freeform",
+    staleTime: 60_000,
+  });
+
   useEffect(() => {
     if (!open) {
       initializedFor.current = null;
@@ -458,7 +571,7 @@ export function ManualOrderDialog({
     if (editing && !draft) return;
     initializedFor.current = key;
     const timeout = window.setTimeout(() => {
-      setForm(draft ? stateFromDraft(draft) : emptyForm());
+      setForm(draft ? stateFromDraft(draft, detail?.items) : emptyForm());
       setProductSearch("");
     }, 0);
     return () => window.clearTimeout(timeout);
@@ -536,6 +649,55 @@ export function ManualOrderDialog({
     [capturedItemsById, form.catalogItems, productById]
   );
 
+  const filamentTypes = useMemo(
+    () => (Array.isArray(options?.filamentTypes) ? options.filamentTypes : []),
+    [options]
+  );
+  const filamentById = useMemo(
+    () => new Map(filamentTypes.map((filament) => [filament.id, filament])),
+    [filamentTypes]
+  );
+  const costRates = useMemo<ManualCostRates>(
+    () => ({
+      electricityPerHour: numberOrZero(options?.costRates?.electricityPerHour),
+      machineWearPerHour: numberOrZero(options?.costRates?.machineWearPerHour),
+      laborPerHour: numberOrZero(options?.costRates?.laborPerHour),
+    }),
+    [options]
+  );
+  /**
+   * Serbest kalemin canlı birim maliyeti — sunucunun kullandığı motorun aynısı.
+   * Yalnızca önizleme; kaydedilen rakamı her zaman sunucu üretir.
+   */
+  const freeformPreviewByKey = useMemo(() => {
+    const preview = new Map<
+      string,
+      { unitCost: number; filamentCost: number; costKnown: boolean }
+    >();
+    for (const line of form.freeformItems) {
+      if (line.costMode !== "detailed") continue;
+      const wastePercent = optionalNumber(line.wastePercent) ?? 0;
+      const calculated = computeFullProductCost({
+        filamentWeight: optionalNumber(line.filamentWeight) ?? 0,
+        costPerGram: numberOrZero(
+          filamentById.get(line.filamentTypeId)?.costPerGram
+        ),
+        printTimeHours: optionalNumber(line.printTimeHours) ?? 0,
+        electricityCostPerHour: costRates.electricityPerHour,
+        machineWearCostPerHour: costRates.machineWearPerHour,
+        laborCostPerHour: costRates.laborPerHour,
+        wasteRate: Math.min(1, Math.max(0, wastePercent / 100)),
+        packagingCost: 0,
+      });
+      preview.set(line.key, {
+        unitCost: calculated.productionCost,
+        filamentCost: calculated.filamentCost,
+        costKnown: calculated.productionCost > 0,
+      });
+    }
+    return preview;
+  }, [costRates, filamentById, form.freeformItems]);
+
   const productResults = useMemo(() => {
     const query = productSearch.trim().toLocaleLowerCase("tr-TR");
     if (!query) return [];
@@ -577,17 +739,34 @@ export function ManualOrderDialog({
       });
     }
     return form.freeformItems.map((line) => {
-      const costIsKnown = line.unitCost.trim() !== "";
-      return {
+      const base = {
         id: line.persistedId ?? line.key,
         productId: null,
         name: line.name.trim() || "Adsız ürün",
         imageUrl: null,
         quantity: quantityValue(line.quantity),
+        packagingCost: 0,
+        desi: optionalNumber(line.desi),
+      };
+      if (line.costMode === "detailed") {
+        const preview = freeformPreviewByKey.get(line.key);
+        return {
+          ...base,
+          costKnown: preview?.costKnown ?? false,
+          productionCost: preview?.unitCost ?? 0,
+          filamentCost: preview?.filamentCost ?? 0,
+          costSource: "detailed" as const,
+          manualUnitCost: null,
+          manualCostHasVatInvoice: false,
+        };
+      }
+      const costIsKnown = line.unitCost.trim() !== "";
+      return {
+        ...base,
         costKnown: costIsKnown,
         productionCost: costIsKnown ? numberOrZero(line.unitCost) : 0,
-        packagingCost: 0,
         filamentCost: 0,
+        costSource: "manual" as const,
         manualUnitCost: costIsKnown ? numberOrZero(line.unitCost) : null,
         manualCostHasVatInvoice: line.manualCostHasVatInvoice,
       };
@@ -597,6 +776,7 @@ export function ManualOrderDialog({
     form.catalogItems,
     form.freeformItems,
     form.mode,
+    freeformPreviewByKey,
   ]);
 
   const saleTotal = numberOrZero(form.saleTotal);
@@ -630,6 +810,82 @@ export function ManualOrderDialog({
     [form.customExpenses]
   );
 
+  const savedBreakdown = editing ? detailQuery.data?.breakdown ?? null : null;
+
+  /** Serbest siparişte kargo: toplam desi → Shopify baremi. Elle giriş yok. */
+  const freeformTotalDesi = useMemo(() => {
+    if (form.mode !== "freeform") return 0;
+    return form.freeformItems.reduce((sum, line) => {
+      const desi = optionalNumber(line.desi);
+      return desi == null ? sum : sum + desi * quantityValue(line.quantity);
+    }, 0);
+  }, [form.freeformItems, form.mode]);
+
+  const autoCargo = useMemo(() => {
+    if (form.mode !== "freeform") return null;
+    const rules = cargoRulesQuery.data;
+    if (!Array.isArray(rules)) {
+      const fallback = numberOrZero(savedBreakdown?.cargoCost);
+      return {
+        pending: !cargoRulesQuery.isError,
+        unavailable: cargoRulesQuery.isError,
+        desi: freeformTotalDesi,
+        amount: fallback,
+        hasVatInvoice: fallback > 0,
+        // Barem listesi gelene kadar kayıtlı sonucu göster.
+        ruleMissing: savedBreakdown?.cargoRuleMissing === true,
+      };
+    }
+    const shopifyRules = filterRulesByPlatform(
+      rules.filter((rule) => rule.isActive !== false),
+      "shopify"
+    ).map<CargoRuleInput>((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      platform: rule.platform ?? null,
+      categoryName: rule.categoryName ?? null,
+      minPrice: numberOrZero(rule.minPrice),
+      maxPrice: numberOrZero(rule.maxPrice),
+      minDesi: numberOrZero(rule.minDesi),
+      maxDesi: numberOrZero(rule.maxDesi),
+      cargoCost: numberOrZero(rule.cargoCost),
+      vatIncluded: rule.vatIncluded !== false,
+      priority: Number(rule.priority) || 0,
+      validFrom: rule.validFrom ? new Date(rule.validFrom) : null,
+      validTo: rule.validTo ? new Date(rule.validTo) : null,
+      isActive: true,
+    }));
+    const matched = findCargoRule(
+      shopifyRules,
+      saleTotal,
+      "",
+      freeformTotalDesi || 1
+    );
+    const resolved = matched
+      ? resolveVatableCost(
+          matched.cargoCost,
+          matched.vatIncluded !== false,
+          calculationVatRate
+        )
+      : null;
+    return {
+      pending: false,
+      unavailable: false,
+      desi: freeformTotalDesi,
+      amount: resolved?.gross ?? 0,
+      hasVatInvoice: Boolean(matched),
+      ruleMissing: !matched,
+    };
+  }, [
+    calculationVatRate,
+    cargoRulesQuery.data,
+    cargoRulesQuery.isError,
+    form.mode,
+    freeformTotalDesi,
+    saleTotal,
+    savedBreakdown,
+  ]);
+
   const breakdown = useMemo(
     () =>
       calculateManualOrder({
@@ -643,14 +899,24 @@ export function ManualOrderDialog({
           amount: numberOrZero(form.commission.amount),
           hasVatInvoice: form.commission.hasVatInvoice,
         },
-        cargo: {
-          amount: numberOrZero(form.cargo.amount),
-          hasVatInvoice: form.cargo.hasVatInvoice,
-        },
+        cargo: autoCargo
+          ? { amount: autoCargo.amount, hasVatInvoice: autoCargo.hasVatInvoice }
+          : {
+              amount: numberOrZero(form.cargo.amount),
+              hasVatInvoice: form.cargo.hasVatInvoice,
+            },
+        ...(autoCargo
+          ? {
+              cargoAuto: true,
+              cargoDesi: autoCargo.desi,
+              cargoRuleMissing: autoCargo.ruleMissing,
+            }
+          : {}),
         expenseRules: selectedRuleInputs,
         customExpenses: customExpenseInputs,
       }),
     [
+      autoCargo,
       customExpenseInputs,
       form.cargo,
       form.commission,
@@ -697,14 +963,34 @@ export function ManualOrderDialog({
     }
     if (
       form.mode === "freeform" &&
-      form.freeformItems.some((line) => invalidOptionalMoney(line.unitCost))
+      form.freeformItems.some(
+        (line) => line.costMode === "manual" && invalidOptionalMoney(line.unitCost)
+      )
     ) {
       return "Birim maliyetleri kontrol et.";
+    }
+    if (
+      form.mode === "freeform" &&
+      form.freeformItems.some((line) => invalidOptionalNumber(line.desi, 999))
+    ) {
+      return "Desi değerlerini kontrol et.";
+    }
+    if (
+      form.mode === "freeform" &&
+      form.freeformItems.some(
+        (line) =>
+          line.costMode === "detailed" &&
+          (invalidOptionalNumber(line.filamentWeight, 100_000) ||
+            invalidOptionalNumber(line.printTimeHours, 10_000) ||
+            invalidOptionalNumber(line.wastePercent, 100))
+      )
+    ) {
+      return "Gramaj, baskı süresi ve fire payını kontrol et.";
     }
     if (invalidOptionalMoney(form.commission.amount)) {
       return "Komisyon tutarını kontrol et.";
     }
-    if (invalidOptionalMoney(form.cargo.amount)) {
+    if (form.mode === "catalog" && invalidOptionalMoney(form.cargo.amount)) {
       return "Kargo tutarını kontrol et.";
     }
     if (
@@ -748,10 +1034,14 @@ export function ManualOrderDialog({
           amount: numberOrZero(form.commission.amount),
           hasVatInvoice: form.commission.hasVatInvoice,
         },
-        cargo: {
-          amount: numberOrZero(form.cargo.amount),
-          hasVatInvoice: form.cargo.hasVatInvoice,
-        },
+        // Serbest siparişte kargoyu desiden sunucu çözer; elle tutar gönderilmez.
+        cargo:
+          form.mode === "freeform"
+            ? { amount: 0, hasVatInvoice: false }
+            : {
+                amount: numberOrZero(form.cargo.amount),
+                hasVatInvoice: form.cargo.hasVatInvoice,
+              },
         expenseRules: Object.entries(form.selectedExpenses).map(
           ([ruleId, selected]) => ({
             ruleId,
@@ -776,16 +1066,34 @@ export function ManualOrderDialog({
                 productId: line.productId,
                 quantity: quantityValue(line.quantity),
               }))
-            : form.freeformItems.map((line) => ({
-                ...(line.persistedId ? { id: line.persistedId } : {}),
-                name: line.name.trim(),
-                quantity: quantityValue(line.quantity),
-                unitCost:
-                  line.unitCost.trim() === ""
-                    ? null
-                    : numberOrZero(line.unitCost),
-                manualCostHasVatInvoice: line.manualCostHasVatInvoice,
-              })),
+            : form.freeformItems.map((line) => {
+                const detailed = line.costMode === "detailed";
+                const wastePercent = optionalNumber(line.wastePercent);
+                return {
+                  ...(line.persistedId ? { id: line.persistedId } : {}),
+                  name: line.name.trim(),
+                  quantity: quantityValue(line.quantity),
+                  unitCost:
+                    detailed || line.unitCost.trim() === ""
+                      ? null
+                      : numberOrZero(line.unitCost),
+                  manualCostHasVatInvoice: detailed
+                    ? false
+                    : line.manualCostHasVatInvoice,
+                  desi: optionalNumber(line.desi),
+                  production: detailed
+                    ? {
+                        filamentTypeId: line.filamentTypeId || null,
+                        filamentWeight: optionalNumber(line.filamentWeight),
+                        printTimeHours: optionalNumber(line.printTimeHours),
+                        wasteRate:
+                          wastePercent == null
+                            ? null
+                            : Math.min(1, Math.max(0, wastePercent / 100)),
+                      }
+                    : null,
+                };
+              }),
       };
       return fetchJson(
         editing && detailHref ? detailHref : "/api/manual-orders",
@@ -816,6 +1124,29 @@ export function ManualOrderDialog({
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateFreeformLine(key: string, patch: Partial<FreeformLineState>) {
+    setForm((current) => ({
+      ...current,
+      freeformItems: current.freeformItems.map((item) =>
+        item.key === key ? { ...item, ...patch } : item
+      ),
+    }));
+  }
+
+  function removeFreeformLine(key: string) {
+    setForm((current) => ({
+      ...current,
+      freeformItems: current.freeformItems.filter((item) => item.key !== key),
+    }));
+  }
+
+  function addFreeformLine() {
+    setForm((current) => ({
+      ...current,
+      freeformItems: [...current.freeformItems, emptyFreeformLine()],
+    }));
   }
 
   function addCatalogProduct(product: ManualProductOption) {
@@ -1202,158 +1533,76 @@ export function ManualOrderDialog({
                     ) : (
                       <div className="space-y-2">
                         {form.freeformItems.map((line, index) => (
-                          <div
+                          <FreeformItemCard
                             key={line.key}
-                            className="rounded-xl border bg-muted/15 p-3"
-                          >
-                            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_80px_130px_auto]">
-                              <Field
-                                label={`Ürün adı${index === 0 ? " *" : ""}`}
-                                htmlFor={`free-name-${line.key}`}
-                              >
-                                <Input
-                                  id={`free-name-${line.key}`}
-                                  value={line.name}
-                                  placeholder="Örn. Özel tasarım baskı"
-                                  onChange={(event) =>
-                                    setForm((current) => ({
-                                      ...current,
-                                      freeformItems:
-                                        current.freeformItems.map((item) =>
-                                          item.key === line.key
-                                            ? {
-                                                ...item,
-                                                name: event.target.value,
-                                              }
-                                            : item
-                                        ),
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <Field
-                                label="Adet"
-                                htmlFor={`free-qty-${line.key}`}
-                              >
-                                <Input
-                                  id={`free-qty-${line.key}`}
-                                  type="number"
-                                  min="1"
-                                  step="1"
-                                  value={line.quantity}
-                                  onChange={(event) =>
-                                    setForm((current) => ({
-                                      ...current,
-                                      freeformItems:
-                                        current.freeformItems.map((item) =>
-                                          item.key === line.key
-                                            ? {
-                                                ...item,
-                                                quantity: event.target.value,
-                                              }
-                                            : item
-                                        ),
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <Field
-                                label="Birim maliyet"
-                                htmlFor={`free-cost-${line.key}`}
-                              >
-                                <Input
-                                  id={`free-cost-${line.key}`}
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={line.unitCost}
-                                  placeholder="Bilinmiyorsa boş"
-                                  onChange={(event) =>
-                                    setForm((current) => ({
-                                      ...current,
-                                      freeformItems:
-                                        current.freeformItems.map((item) =>
-                                          item.key === line.key
-                                            ? {
-                                                ...item,
-                                                unitCost: event.target.value,
-                                              }
-                                            : item
-                                        ),
-                                    }))
-                                  }
-                                />
-                              </Field>
-                              <div className="flex items-end justify-end">
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  variant="ghost"
-                                  className="h-9 w-9 text-muted-foreground hover:text-destructive"
-                                  disabled={form.freeformItems.length === 1}
-                                  title="Satırı kaldır"
-                                  onClick={() =>
-                                    setForm((current) => ({
-                                      ...current,
-                                      freeformItems:
-                                        current.freeformItems.filter(
-                                          (item) => item.key !== line.key
-                                        ),
-                                    }))
-                                  }
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                            <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-[11px] text-muted-foreground">
-                              <Checkbox
-                                checked={line.manualCostHasVatInvoice}
-                                disabled={line.unitCost.trim() === ""}
-                                onCheckedChange={(checked) =>
-                                  setForm((current) => ({
-                                    ...current,
-                                    freeformItems:
-                                      current.freeformItems.map((item) =>
-                                        item.key === line.key
-                                          ? {
-                                              ...item,
-                                              manualCostHasVatInvoice:
-                                                Boolean(checked),
-                                            }
-                                          : item
-                                      ),
-                                  }))
-                                }
-                              />
-                              Birim maliyet için KDV faturası var
-                            </label>
-                          </div>
+                            line={line}
+                            index={index}
+                            required={index === 0}
+                            canRemove={form.freeformItems.length > 1}
+                            filamentTypes={filamentTypes}
+                            optionsLoading={optionsQuery.isLoading}
+                            preview={freeformPreviewByKey.get(line.key) ?? null}
+                            onChange={(patch) =>
+                              updateFreeformLine(line.key, patch)
+                            }
+                            onRemove={() => removeFreeformLine(line.key)}
+                          />
                         ))}
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setForm((current) => ({
-                              ...current,
-                              freeformItems: [
-                                ...current.freeformItems,
-                                {
-                                  key: nextKey("free"),
-                                  persistedId: newPersistentId("manual-item"),
-                                  name: "",
-                                  quantity: "1",
-                                  unitCost: "",
-                                  manualCostHasVatInvoice: false,
-                                },
-                              ],
-                            }))
-                          }
-                        >
-                          <CirclePlus className="h-4 w-4" />
-                          Serbest ürün ekle
-                        </Button>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="transition-transform active:scale-[0.97]"
+                            onClick={addFreeformLine}
+                          >
+                            <CirclePlus className="h-4 w-4" />
+                            Serbest ürün ekle
+                          </Button>
+                          {autoCargo && (
+                            <div
+                              className={cn(
+                                "flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] transition-colors",
+                                autoCargo.ruleMissing
+                                  ? "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+                                  : "bg-muted/30 text-muted-foreground"
+                              )}
+                            >
+                              <Truck className="h-3.5 w-3.5 shrink-0" />
+                              <span className="tabular-nums">
+                                Toplam{" "}
+                                <AnimatedNumber
+                                  value={autoCargo.desi}
+                                  format={(n) => formatNumber(n, 1)}
+                                  className="font-semibold text-foreground"
+                                />{" "}
+                                desi
+                              </span>
+                              <span className="text-muted-foreground/50">·</span>
+                              <span className="flex items-center gap-1.5 tabular-nums">
+                                {autoCargo.pending ? (
+                                  <>
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                    Kargo hesaplanıyor
+                                  </>
+                                ) : autoCargo.unavailable ? (
+                                  "Kargo kaydedince hesaplanır"
+                                ) : autoCargo.ruleMissing ? (
+                                  "Kargo baremi yok"
+                                ) : (
+                                  <>
+                                    Kargo{" "}
+                                    <AnimatedNumber
+                                      value={autoCargo.amount}
+                                      format={(n) => formatCurrency(n)}
+                                      className="font-semibold text-foreground"
+                                    />
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </section>
@@ -1398,12 +1647,22 @@ export function ManualOrderDialog({
                           updateForm("commission", commission)
                         }
                       />
-                      <MoneyCostCard
-                        id="manual-cargo"
-                        title="Kargo"
-                        value={form.cargo}
-                        onChange={(cargo) => updateForm("cargo", cargo)}
-                      />
+                      {autoCargo ? (
+                        <AutoCargoCard
+                          desi={autoCargo.desi}
+                          amount={autoCargo.amount}
+                          pending={autoCargo.pending}
+                          unavailable={autoCargo.unavailable}
+                          ruleMissing={autoCargo.ruleMissing}
+                        />
+                      ) : (
+                        <MoneyCostCard
+                          id="manual-cargo"
+                          title="Kargo"
+                          value={form.cargo}
+                          onChange={(cargo) => updateForm("cargo", cargo)}
+                        />
+                      )}
                     </div>
                   </section>
 
@@ -1834,6 +2093,307 @@ function MoneyCostCard({
   );
 }
 
+function FreeformItemCard({
+  line,
+  index,
+  required,
+  canRemove,
+  filamentTypes,
+  optionsLoading,
+  preview,
+  onChange,
+  onRemove,
+}: {
+  line: FreeformLineState;
+  index: number;
+  required: boolean;
+  canRemove: boolean;
+  filamentTypes: ManualFilamentTypeOption[];
+  optionsLoading: boolean;
+  preview: { unitCost: number; filamentCost: number; costKnown: boolean } | null;
+  onChange: (patch: Partial<FreeformLineState>) => void;
+  onRemove: () => void;
+}) {
+  const detailed = line.costMode === "detailed";
+  const quantity = quantityValue(line.quantity);
+  const unitCost = detailed
+    ? preview?.unitCost ?? 0
+    : numberOrZero(line.unitCost);
+  const costKnown = detailed
+    ? Boolean(preview?.costKnown)
+    : line.unitCost.trim() !== "";
+
+  return (
+    <div
+      className="animate-in fade-in slide-in-from-bottom-1 rounded-xl border bg-muted/15 p-3 transition-colors duration-300 hover:border-primary/25"
+      style={{
+        animationDelay: `${Math.min(index, 6) * 45}ms`,
+        animationFillMode: "both",
+      }}
+    >
+      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_76px_86px_auto]">
+        <Field
+          label={`Ürün adı${required ? " *" : ""}`}
+          htmlFor={`free-name-${line.key}`}
+        >
+          <Input
+            id={`free-name-${line.key}`}
+            value={line.name}
+            placeholder="Örn. Özel tasarım baskı"
+            onChange={(event) => onChange({ name: event.target.value })}
+          />
+        </Field>
+        <Field label="Adet" htmlFor={`free-qty-${line.key}`}>
+          <Input
+            id={`free-qty-${line.key}`}
+            type="number"
+            min="1"
+            step="1"
+            className="tabular-nums"
+            value={line.quantity}
+            onChange={(event) => onChange({ quantity: event.target.value })}
+          />
+        </Field>
+        <Field label="Desi" htmlFor={`free-desi-${line.key}`}>
+          <Input
+            id={`free-desi-${line.key}`}
+            type="number"
+            min="0"
+            step="0.1"
+            inputMode="decimal"
+            className="tabular-nums"
+            placeholder="0"
+            value={line.desi}
+            onChange={(event) => onChange({ desi: event.target.value })}
+          />
+        </Field>
+        <div className="flex items-end justify-end">
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-9 w-9 text-muted-foreground transition-transform hover:text-destructive active:scale-90"
+            disabled={!canRemove}
+            title="Satırı kaldır"
+            onClick={onRemove}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="mt-3 inline-flex rounded-lg border bg-background/70 p-0.5">
+        {(
+          [
+            ["detailed", "Maliyeti hesapla"],
+            ["manual", "Elle gir"],
+          ] as const
+        ).map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => onChange({ costMode: mode })}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-[11px] font-medium transition-all active:scale-[0.97]",
+              line.costMode === mode
+                ? "bg-primary/12 text-primary shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {detailed ? (
+        <div className="mt-2 space-y-2">
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1.3fr)_repeat(3,minmax(0,1fr))]">
+            <Field label="Filament türü">
+              <Select
+                value={line.filamentTypeId || "none"}
+                onValueChange={(value) =>
+                  onChange({
+                    filamentTypeId: !value || value === "none" ? "" : value,
+                  })
+                }
+                disabled={optionsLoading || filamentTypes.length === 0}
+              >
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue placeholder="Seç" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Filament yok</SelectItem>
+                  {filamentTypes.map((filament) => (
+                    <SelectItem key={filament.id} value={filament.id}>
+                      {filament.name} · {formatCurrency(filament.costPerGram)}/g
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Gramaj (g)" htmlFor={`free-gram-${line.key}`}>
+              <Input
+                id={`free-gram-${line.key}`}
+                type="number"
+                min="0"
+                step="1"
+                inputMode="decimal"
+                className="tabular-nums"
+                placeholder="0"
+                value={line.filamentWeight}
+                onChange={(event) =>
+                  onChange({ filamentWeight: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Baskı süresi (saat)" htmlFor={`free-hours-${line.key}`}>
+              <Input
+                id={`free-hours-${line.key}`}
+                type="number"
+                min="0"
+                step="0.1"
+                inputMode="decimal"
+                className="tabular-nums"
+                placeholder="0"
+                value={line.printTimeHours}
+                onChange={(event) =>
+                  onChange({ printTimeHours: event.target.value })
+                }
+              />
+            </Field>
+            <Field label="Fire payı (%)" htmlFor={`free-waste-${line.key}`}>
+              <Input
+                id={`free-waste-${line.key}`}
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                inputMode="decimal"
+                className="tabular-nums"
+                placeholder="0"
+                value={line.wastePercent}
+                onChange={(event) =>
+                  onChange({ wastePercent: event.target.value })
+                }
+              />
+            </Field>
+          </div>
+          {!optionsLoading && filamentTypes.length === 0 && (
+            <p className="text-[11px] text-muted-foreground">
+              Filament türü tanımlı değil; maliyete filament eklenmez.
+            </p>
+          )}
+        </div>
+      ) : (
+        <div className="mt-2 grid items-end gap-2 sm:grid-cols-[170px_minmax(0,1fr)]">
+          <Field label="Birim maliyet" htmlFor={`free-cost-${line.key}`}>
+            <Input
+              id={`free-cost-${line.key}`}
+              type="number"
+              min="0"
+              step="0.01"
+              inputMode="decimal"
+              className="tabular-nums"
+              value={line.unitCost}
+              placeholder="Bilinmiyorsa boş"
+              onChange={(event) => onChange({ unitCost: event.target.value })}
+            />
+          </Field>
+          <label className="flex h-9 cursor-pointer items-center gap-2 text-[11px] text-muted-foreground">
+            <Checkbox
+              checked={line.manualCostHasVatInvoice}
+              disabled={line.unitCost.trim() === ""}
+              onCheckedChange={(checked) =>
+                onChange({ manualCostHasVatInvoice: Boolean(checked) })
+              }
+            />
+            Birim maliyet için KDV faturası var
+          </label>
+        </div>
+      )}
+
+      <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t pt-2 text-[11px]">
+        <span className="text-muted-foreground">
+          {detailed ? "Hesaplanan birim maliyet" : "Birim maliyet"}
+        </span>
+        {costKnown ? (
+          <span className="flex items-center gap-2">
+            <AnimatedNumber
+              value={unitCost}
+              format={(value) => formatCurrency(value)}
+              className="text-sm font-semibold tabular-nums"
+            />
+            {quantity > 1 && (
+              <span className="text-muted-foreground">
+                × {quantity} ={" "}
+                <AnimatedNumber
+                  value={unitCost * quantity}
+                  format={(value) => formatCurrency(value)}
+                  className="font-semibold tabular-nums text-foreground"
+                />
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-amber-600 dark:text-amber-400">
+            {detailed ? "Gramaj veya baskı süresi gir" : "Maliyet girilmedi"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AutoCargoCard({
+  desi,
+  amount,
+  pending,
+  unavailable,
+  ruleMissing,
+}: {
+  desi: number;
+  amount: number;
+  pending: boolean;
+  unavailable: boolean;
+  ruleMissing: boolean;
+}) {
+  return (
+    <div className="space-y-2 rounded-xl border bg-muted/15 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-medium">
+          <Truck className="h-3.5 w-3.5 text-muted-foreground" />
+          Kargo ({formatNumber(desi, 1)} desi)
+        </span>
+        {pending ? (
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Hesaplanıyor
+          </span>
+        ) : unavailable ? (
+          <span className="text-[11px] text-muted-foreground">
+            Kaydedince hesaplanır
+          </span>
+        ) : (
+          <AnimatedNumber
+            value={amount}
+            format={(value) => formatCurrency(value)}
+            className="text-sm font-semibold tabular-nums"
+          />
+        )}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Girdiğin desiye göre otomatik hesaplanır.
+      </p>
+      {ruleMissing && (
+        <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/5 p-2 text-[11px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function InlineWarning({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
@@ -1883,7 +2443,14 @@ function ProfitBreakdown({
         <BreakdownRow label="Ürün maliyeti" value={-breakdown.productCost} />
         <BreakdownRow label="Paketleme" value={-breakdown.packagingCost} />
         <BreakdownRow label="Komisyon" value={-breakdown.commissionCost} />
-        <BreakdownRow label="Kargo" value={-breakdown.cargoCost} />
+        <BreakdownRow
+          label={
+            breakdown.cargoAuto
+              ? `Kargo (${formatNumber(breakdown.cargoDesi, 1)} desi)`
+              : "Kargo"
+          }
+          value={-breakdown.cargoCost}
+        />
         <BreakdownRow
           label="Seçili giderler"
           value={-breakdown.expenseRulesCost}
@@ -1905,14 +2472,25 @@ function ProfitBreakdown({
           Net kâr
         </p>
         <p className={cn("mt-1 text-2xl font-bold tabular-nums", netProfitColor)}>
-          {breakdown.netProfit == null
-            ? "Hesaplanamadı"
-            : formatCurrency(breakdown.netProfit)}
+          {breakdown.netProfit == null ? (
+            "Hesaplanamadı"
+          ) : (
+            <AnimatedNumber
+              value={breakdown.netProfit}
+              format={(value) => formatCurrency(value)}
+            />
+          )}
         </p>
         {breakdown.netProfit != null && breakdown.profitMargin != null && (
           <p className="mt-1 text-xs text-muted-foreground">
-            KDV hariç gelirin %{(breakdown.profitMargin * 100).toFixed(1)}’i
+            KDV hariç gelirin {formatPercent(breakdown.profitMargin)}’i
           </p>
+        )}
+        {breakdown.cargoRuleMissing && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
+          </div>
         )}
         {breakdown.profitPartial && (
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
@@ -1954,8 +2532,12 @@ function BreakdownRow({
           positive && value > 0 && "text-emerald-600 dark:text-emerald-400"
         )}
       >
-        {value > 0 && positive ? "+" : ""}
-        {formatCurrency(value)}
+        <AnimatedNumber
+          value={value}
+          format={(current) =>
+            `${value > 0 && positive ? "+" : ""}${formatCurrency(current)}`
+          }
+        />
       </span>
     </div>
   );

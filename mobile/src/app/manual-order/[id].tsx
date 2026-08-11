@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -16,20 +16,20 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useReducedMotion } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
   calculateManualOrder,
-  type ManualOrderCalculationInput,
   type ManualOrderCustomExpense,
   type ManualOrderMode,
-  type ManualOrderResolvedItem,
   type ManualOrderSelectedExpense,
   type ManualOrderStatusKind,
 } from "@core/manual-order";
 import { resolveProductCost } from "@core/product-cost";
 import type { ExpenseRuleInput } from "@core/types";
 
+import { FadeInView } from "@/components/fade-in";
 import {
   DeleteButton,
   Field,
@@ -40,11 +40,17 @@ import {
 } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
 import {
+  applyFreeformResolution,
   createManualOrder,
   deleteManualOrder,
+  getFreeformCostContext,
   getManualOrder,
   updateManualOrder,
+  type FreeformCostContext,
   type ManualOrder,
+  type ManualOrderDraft,
+  type ManualOrderItem,
+  type ManualOrderProduction,
 } from "@/lib/db/manual-orders";
 import type { ProductDetail } from "@/lib/db/product-detail";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -53,12 +59,29 @@ import { thumbUrl } from "@/lib/image";
 import { parseTrNumber } from "@/lib/number";
 import { ML, radius } from "@/theme/colors";
 
-type FormItem = ManualOrderResolvedItem & { manualCostText: string };
+type CostSource = "manual" | "detailed";
+
+/** Form satırı: kaydedilen kalem + kullanıcının yazdığı ham metinler. */
+type FormItem = ManualOrderItem & {
+  costSource: CostSource;
+  manualCostText: string;
+  desiText: string;
+  filamentTypeId: string | null;
+  filamentWeightText: string;
+  printTimeText: string;
+  wasteRateText: string;
+};
+
 type CustomExpenseForm = Omit<ManualOrderCustomExpense, "amount"> & { amountText: string };
 
 const MODES: { key: ManualOrderMode; label: string }[] = [
   { key: "catalog", label: "Katalog ürünü" },
   { key: "freeform", label: "Ürünsüz / özel" },
+];
+
+const COST_SOURCES: { key: CostSource; label: string }[] = [
+  { key: "detailed", label: "Hesapla" },
+  { key: "manual", label: "Elle gir" },
 ];
 
 const STATUSES: { key: ManualOrderStatusKind; label: string }[] = [
@@ -112,6 +135,15 @@ function numberText(value: number | null | undefined): string {
   return String(Number(value.toFixed(4))).replace(".", ",");
 }
 
+const EMPTY_TEXTS = {
+  manualCostText: "",
+  desiText: "",
+  filamentTypeId: null,
+  filamentWeightText: "",
+  printTimeText: "",
+  wasteRateText: "",
+} as const;
+
 function resolveCatalogItem(
   product: ProductDetail,
   settings: Record<string, string>,
@@ -135,7 +167,8 @@ function resolveCatalogItem(
     packagingComponents: resolved?.packagingBreakdown?.components ?? null,
     manualUnitCost: null,
     manualCostHasVatInvoice: false,
-    manualCostText: "",
+    costSource: "manual",
+    ...EMPTY_TEXTS,
   };
 }
 
@@ -153,14 +186,22 @@ function emptyFreeformItem(): FormItem {
     packagingComponents: null,
     manualUnitCost: null,
     manualCostHasVatInvoice: false,
-    manualCostText: "",
+    costSource: "detailed",
+    ...EMPTY_TEXTS,
   };
 }
 
-function formItems(items: ManualOrderResolvedItem[]): FormItem[] {
+function formItems(items: ManualOrderItem[]): FormItem[] {
   return items.map((item) => ({
     ...item,
+    costSource: item.costSource === "detailed" ? "detailed" : "manual",
     manualCostText: numberText(item.manualUnitCost),
+    desiText: numberText(item.desi),
+    filamentTypeId: item.production?.filamentTypeId ?? null,
+    filamentWeightText: numberText(item.production?.filamentWeight),
+    printTimeText: numberText(item.production?.printTimeHours),
+    wasteRateText:
+      item.production?.wasteRate == null ? "" : numberText(item.production.wasteRate * 100),
   }));
 }
 
@@ -190,16 +231,22 @@ export default function ManualOrderEditScreen() {
   });
   const rulesQuery = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const costContextQuery = useQuery({
+    queryKey: ["freeform-cost-context"],
+    queryFn: getFreeformCostContext,
+  });
 
   const loading =
     productsQuery.isLoading ||
     rulesQuery.isLoading ||
     settingsQuery.isLoading ||
+    costContextQuery.isLoading ||
     (!isNew && orderQuery.isLoading);
   const error =
     productsQuery.error ??
     rulesQuery.error ??
     settingsQuery.error ??
+    costContextQuery.error ??
     (!isNew && !orderQuery.data ? orderQuery.error ?? new Error("Manuel sipariş bulunamadı.") : null);
 
   if (loading) {
@@ -218,6 +265,7 @@ export default function ManualOrderEditScreen() {
     !productsQuery.data ||
     !rulesQuery.data ||
     !settingsQuery.data ||
+    !costContextQuery.data ||
     (!isNew && !orderQuery.data)
   ) {
     return (
@@ -233,6 +281,7 @@ export default function ManualOrderEditScreen() {
               void productsQuery.refetch();
               void rulesQuery.refetch();
               void settingsQuery.refetch();
+              void costContextQuery.refetch();
               if (!isNew) void orderQuery.refetch();
             }}
           />
@@ -252,6 +301,7 @@ export default function ManualOrderEditScreen() {
       products={productsQuery.data}
       expenseRules={rulesQuery.data.expense}
       settings={settingsQuery.data}
+      costContext={costContextQuery.data}
       initialProduct={initialProduct}
     />
   );
@@ -262,12 +312,14 @@ function ManualOrderForm({
   products,
   expenseRules,
   settings,
+  costContext,
   initialProduct,
 }: {
   existing: ManualOrder | null;
   products: ProductDetail[];
   expenseRules: ExpenseRuleInput[];
   settings: Record<string, string>;
+  costContext: FreeformCostContext;
   initialProduct: ProductDetail | null;
 }) {
   const qc = useQueryClient();
@@ -319,6 +371,11 @@ function ManualOrderForm({
   });
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  const activeFilaments = useMemo(
+    () => costContext.filaments.filter((filament) => filament.isActive),
+    [costContext.filaments]
+  );
+
   const availableExpenseRules = useMemo(() => {
     const byId = new Map<
       string,
@@ -338,9 +395,19 @@ function ManualOrderForm({
     return [...byId.values()];
   }, [expenseRules, selectedExpenses]);
 
-  const resolvedItems = useMemo<ManualOrderResolvedItem[]>(
+  const resolvedItems = useMemo<ManualOrderItem[]>(
     () =>
-      items.map(({ manualCostText, ...item }) => {
+      items.map((formItem) => {
+        const {
+          costSource,
+          manualCostText,
+          desiText,
+          filamentTypeId,
+          filamentWeightText,
+          printTimeText,
+          wasteRateText,
+          ...item
+        } = formItem;
         if (mode === "catalog") {
           return {
             ...item,
@@ -348,7 +415,17 @@ function ManualOrderForm({
             manualCostHasVatInvoice: false,
           };
         }
-        const parsed = parseTrNumber(manualCostText);
+        const detailed = costSource === "detailed";
+        const wastePercent = parseTrNumber(wasteRateText);
+        const production: ManualOrderProduction | null = detailed
+          ? {
+              filamentTypeId,
+              filamentWeight: parseTrNumber(filamentWeightText),
+              printTimeHours: parseTrNumber(printTimeText),
+              wasteRate: wastePercent == null ? null : wastePercent / 100,
+            }
+          : null;
+        const manualUnitCost = detailed ? null : parseTrNumber(manualCostText);
         return {
           ...item,
           productId: null,
@@ -357,8 +434,14 @@ function ManualOrderForm({
           packagingCost: 0,
           filamentCost: 0,
           packagingComponents: null,
-          costKnown: manualCostText.trim() !== "" && parsed != null,
-          manualUnitCost: parsed,
+          costSource: detailed ? "detailed" : "manual",
+          costKnown: !detailed && manualCostText.trim() !== "" && manualUnitCost != null,
+          desi: parseTrNumber(desiText),
+          production,
+          manualUnitCost,
+          manualCostHasVatInvoice: detailed
+            ? false
+            : Boolean(item.manualCostHasVatInvoice),
         };
       }),
     [items, mode]
@@ -380,8 +463,8 @@ function ManualOrderForm({
     [customExpenses]
   );
 
-  const draft = useMemo<ManualOrderCalculationInput>(
-    () => ({
+  const draft = useMemo<ManualOrderDraft>(() => {
+    const base: ManualOrderDraft = {
       saleTotal: Math.max(0, parseTrNumber(saleTotal) ?? 0),
       vatRate: existing?.draft.vatRate ?? Number(settings.vatRate ?? 20),
       mode,
@@ -398,24 +481,31 @@ function ManualOrderForm({
       },
       expenseRules: selectedExpenses.map(({ amount: _amount, ...expense }) => expense),
       customExpenses: normalizedCustomExpenses,
-    }),
-    [
-      cargoAmount,
-      cargoVat,
-      commissionAmount,
-      commissionVat,
-      existing?.draft.vatRate,
-      includePackaging,
-      includeProductCost,
-      mode,
-      normalizedCustomExpenses,
-      resolvedItems,
-      saleTotal,
-      selectedExpenses,
-      settings.vatRate,
-    ]
-  );
+    };
+    // Ürünsüz siparişte maliyet ve kargo, kayıt yolundaki ile AYNI yardımcıyla çözülür →
+    // ekranda gördüğün rakam kaydedilen rakamdır.
+    return mode === "freeform" ? applyFreeformResolution(base, costContext) : base;
+  }, [
+    cargoAmount,
+    cargoVat,
+    commissionAmount,
+    commissionVat,
+    costContext,
+    existing?.draft.vatRate,
+    includePackaging,
+    includeProductCost,
+    mode,
+    normalizedCustomExpenses,
+    resolvedItems,
+    saleTotal,
+    selectedExpenses,
+    settings.vatRate,
+  ]);
   const breakdown = useMemo(() => calculateManualOrder(draft), [draft]);
+  const resolvedById = useMemo(
+    () => new Map(draft.items.map((item) => [item.id, item])),
+    [draft]
+  );
 
   function invalidateManualOrderQueries(id?: string) {
     const tasks = [
@@ -439,7 +529,9 @@ function ManualOrderForm({
       return parsed;
     };
     const validatedCommission = parseOptionalCost(commissionAmount, "Komisyon");
-    const validatedCargo = parseOptionalCost(cargoAmount, "Kargo");
+    // Ürünsüz siparişte kargo elle girilmez; desiden çözülen tutar kullanılır.
+    const validatedCargo =
+      mode === "freeform" ? draft.cargo.amount : parseOptionalCost(cargoAmount, "Kargo");
     const orderedAt = orderDateIso(dateValue, timeValue);
     if (!orderedAt) throw new Error("Tarih YYYY-AA-GG, saat SS:DD biçiminde olmalı.");
     if (resolvedItems.length === 0) throw new Error("En az bir sipariş kalemi ekleyin.");
@@ -448,10 +540,22 @@ function ManualOrderForm({
     }
     if (mode === "freeform") {
       for (const item of items) {
-        if (item.manualCostText.trim() === "") continue;
-        const unitCost = parseTrNumber(item.manualCostText);
-        if (unitCost == null || unitCost < 0) {
-          throw new Error(`${item.name.trim() || "Sipariş kalemi"} birim maliyetini kontrol edin.`);
+        const label = item.name.trim() || "Sipariş kalemi";
+        const checks: [string, string, number][] = [
+          [item.desiText, `${label} desisini`, 999],
+          [item.filamentWeightText, `${label} filament gramajını`, 100_000],
+          [item.printTimeText, `${label} baskı süresini`, 10_000],
+          [item.wasteRateText, `${label} fire payını`, 100],
+        ];
+        if (item.costSource === "manual") {
+          checks.push([item.manualCostText, `${label} birim maliyetini`, Number.MAX_SAFE_INTEGER]);
+        }
+        for (const [text, message, max] of checks) {
+          if (text.trim() === "") continue;
+          const parsed = parseTrNumber(text);
+          if (parsed == null || parsed < 0 || parsed > max) {
+            throw new Error(`${message} kontrol edin.`);
+          }
         }
       }
     }
@@ -571,16 +675,16 @@ function ManualOrderForm({
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScreenHeader title={existing ? "Manuel Siparişi Düzenle" : "Yeni Manuel Sipariş"} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Section title="SİPARİŞ TÜRÜ">
+        <Section title="SİPARİŞ TÜRÜ" index={0}>
           <Segmented items={MODES} selected={mode} onSelect={changeMode} />
           <Text style={styles.help}>
             {mode === "catalog"
               ? "Kayıtlı ürün maliyeti ve paketleme anlık görüntü olarak saklanır."
-              : "Kayıtlı ürüne bağlı olmayan satış; birim maliyet boş bırakılabilir."}
+              : "Kargo, kalemlere yazdığın desiden otomatik hesaplanır."}
           </Text>
         </Section>
 
-        <Section title="GENEL BİLGİ">
+        <Section title="GENEL BİLGİ" index={1}>
           <Field label="SATIŞ TUTARI · KDV DAHİL (₺)">
             <TextField
               value={saleTotal}
@@ -614,8 +718,15 @@ function ManualOrderForm({
                 return (
                   <Pressable
                     key={status.key}
-                    onPress={() => setStatusKind(status.key)}
-                    style={[styles.statusChip, selected && styles.statusChipOn]}
+                    onPress={() => {
+                      void Haptics.selectionAsync();
+                      setStatusKind(status.key);
+                    }}
+                    style={({ pressed }) => [
+                      styles.statusChip,
+                      selected && styles.statusChipOn,
+                      pressed && { opacity: 0.7 },
+                    ]}
                   >
                     <Text style={[styles.statusChipText, selected && styles.statusChipTextOn]}>
                       {status.label}
@@ -627,38 +738,42 @@ function ManualOrderForm({
           </Field>
         </Section>
 
-        <Section title={`KALEMLER · ${items.length}`}>
+        <Section title={`KALEMLER · ${items.length}`} index={2}>
           {mode === "catalog" ? (
             <>
-              {items.map((item) => (
-                <CatalogItemCard
-                  key={item.id}
-                  item={item}
-                  onQuantity={(quantity) => setQuantity(item.id, quantity)}
-                  onRemove={() =>
-                    setItems((current) => current.filter((row) => row.id !== item.id))
-                  }
-                />
+              {items.map((item, index) => (
+                <FadeInView key={item.id} index={index}>
+                  <CatalogItemCard
+                    item={item}
+                    onQuantity={(quantity) => setQuantity(item.id, quantity)}
+                    onRemove={() =>
+                      setItems((current) => current.filter((row) => row.id !== item.id))
+                    }
+                  />
+                </FadeInView>
               ))}
               <OutlineButton label="+ Ürün seç" onPress={() => setPickerOpen(true)} />
             </>
           ) : (
             <>
               {items.map((item, index) => (
-                <FreeformItemCard
-                  key={item.id}
-                  index={index}
-                  item={item}
-                  onChange={(patch) =>
-                    setItems((current) =>
-                      current.map((row) => (row.id === item.id ? { ...row, ...patch } : row))
-                    )
-                  }
-                  onQuantity={(quantity) => setQuantity(item.id, quantity)}
-                  onRemove={() =>
-                    setItems((current) => current.filter((row) => row.id !== item.id))
-                  }
-                />
+                <FadeInView key={item.id} index={index}>
+                  <FreeformItemCard
+                    index={index}
+                    item={item}
+                    filaments={activeFilaments}
+                    resolved={resolvedById.get(item.id)}
+                    onChange={(patch) =>
+                      setItems((current) =>
+                        current.map((row) => (row.id === item.id ? { ...row, ...patch } : row))
+                      )
+                    }
+                    onQuantity={(quantity) => setQuantity(item.id, quantity)}
+                    onRemove={() =>
+                      setItems((current) => current.filter((row) => row.id !== item.id))
+                    }
+                  />
+                </FadeInView>
               ))}
               <OutlineButton
                 label="+ Ürünsüz satır ekle"
@@ -668,7 +783,7 @@ function ManualOrderForm({
           )}
         </Section>
 
-        <Section title="MALİYET KAPSAMI">
+        <Section title="MALİYET KAPSAMI" index={3}>
           <ToggleRow
             title="Ürün maliyetini düş"
             note="Kapalıysa ürün/birim maliyeti bilinçli olarak hesap dışında kalır."
@@ -685,7 +800,7 @@ function ManualOrderForm({
           ) : null}
         </Section>
 
-        <Section title="DIŞ GİDERLER">
+        <Section title="DIŞ GİDERLER" index={4}>
           <MoneyCostField
             title="Komisyon"
             value={commissionAmount}
@@ -693,108 +808,123 @@ function ManualOrderForm({
             hasVatInvoice={commissionVat}
             onVatChange={setCommissionVat}
           />
-          <MoneyCostField
-            title="Kargo"
-            value={cargoAmount}
-            onChange={setCargoAmount}
-            hasVatInvoice={cargoVat}
-            onVatChange={setCargoVat}
-          />
+          {mode === "freeform" ? (
+            <AutoCargoCard
+              amount={breakdown.cargoCost}
+              desi={breakdown.cargoDesi}
+              ruleMissing={breakdown.cargoRuleMissing}
+            />
+          ) : (
+            <MoneyCostField
+              title="Kargo"
+              value={cargoAmount}
+              onChange={setCargoAmount}
+              hasVatInvoice={cargoVat}
+              onVatChange={setCargoVat}
+            />
+          )}
         </Section>
 
-        <Section title="AKTİF GİDER KURALLARI">
+        <Section title="AKTİF GİDER KURALLARI" index={5}>
           {availableExpenseRules.length === 0 ? (
             <Text style={styles.help}>Aktif gider kuralı yok.</Text>
           ) : (
-            availableExpenseRules.map((expense) => {
+            availableExpenseRules.map((expense, index) => {
               const selected = selectedExpenses.find((item) => item.id === expense.id);
               const valueLabel =
                 expense.type === "percentage"
                   ? `%${Number((expense.value * 100).toFixed(2))}`
                   : formatCurrency(expense.value);
               return (
-                <View key={expense.id} style={styles.expenseCard}>
-                  <Pressable
-                    onPress={() => toggleExpense(expense)}
-                    style={styles.expenseSelectRow}
-                  >
-                    <View style={[styles.check, selected && styles.checkOn]}>
-                      <Text style={styles.checkText}>{selected ? "✓" : ""}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.expenseName}>{expense.name}</Text>
-                      <Text style={styles.help}>{valueLabel}</Text>
-                    </View>
-                  </Pressable>
-                  {selected ? (
-                    <InvoiceToggle
-                      value={selected.hasVatInvoice}
-                      onChange={(value) =>
-                        setSelectedExpenses((current) =>
-                          current.map((item) =>
-                            item.id === expense.id
-                              ? { ...item, hasVatInvoice: value, amount: undefined }
-                              : item
+                <FadeInView key={expense.id} index={index}>
+                  <View style={styles.expenseCard}>
+                    <Pressable
+                      onPress={() => {
+                        void Haptics.selectionAsync();
+                        toggleExpense(expense);
+                      }}
+                      style={({ pressed }) => [
+                        styles.expenseSelectRow,
+                        pressed && { opacity: 0.7 },
+                      ]}
+                    >
+                      <View style={[styles.check, selected && styles.checkOn]}>
+                        <Text style={styles.checkText}>{selected ? "✓" : ""}</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.expenseName}>{expense.name}</Text>
+                        <Text style={styles.help}>{valueLabel}</Text>
+                      </View>
+                    </Pressable>
+                    {selected ? (
+                      <InvoiceToggle
+                        value={selected.hasVatInvoice}
+                        onChange={(value) =>
+                          setSelectedExpenses((current) =>
+                            current.map((item) =>
+                              item.id === expense.id
+                                ? { ...item, hasVatInvoice: value, amount: undefined }
+                                : item
+                            )
                           )
-                        )
-                      }
-                    />
-                  ) : null}
-                </View>
+                        }
+                      />
+                    ) : null}
+                  </View>
+                </FadeInView>
               );
             })
           )}
         </Section>
 
-        <Section title="ÖZEL GİDERLER">
-          {customExpenses.map((expense) => (
-            <View key={expense.id} style={styles.customExpense}>
-              <TextField
-                value={expense.name}
-                onChange={(name) =>
-                  setCustomExpenses((current) =>
-                    current.map((item) => (item.id === expense.id ? { ...item, name } : item))
-                  )
-                }
-                placeholder="Gider adı"
-              />
-              <View style={styles.customExpenseBottom}>
-                <View style={{ flex: 1 }}>
-                  <TextField
-                    value={expense.amountText}
-                    onChange={(amountText) =>
-                      setCustomExpenses((current) =>
-                        current.map((item) =>
-                          item.id === expense.id ? { ...item, amountText } : item
-                        )
-                      )
-                    }
-                    placeholder="0,00 ₺"
-                    numeric
-                  />
-                </View>
-                <Pressable
-                  onPress={() =>
+        <Section title="ÖZEL GİDERLER" index={6}>
+          {customExpenses.map((expense, index) => (
+            <FadeInView key={expense.id} index={index}>
+              <View style={styles.customExpense}>
+                <TextField
+                  value={expense.name}
+                  onChange={(name) =>
                     setCustomExpenses((current) =>
-                      current.filter((item) => item.id !== expense.id)
+                      current.map((item) => (item.id === expense.id ? { ...item, name } : item))
                     )
                   }
-                  hitSlop={8}
-                >
-                  <Text style={styles.removeText}>Sil</Text>
-                </Pressable>
-              </View>
-              <InvoiceToggle
-                value={expense.hasVatInvoice}
-                onChange={(hasVatInvoice) =>
-                  setCustomExpenses((current) =>
-                    current.map((item) =>
-                      item.id === expense.id ? { ...item, hasVatInvoice } : item
+                  placeholder="Gider adı"
+                />
+                <View style={styles.customExpenseBottom}>
+                  <View style={{ flex: 1 }}>
+                    <TextField
+                      value={expense.amountText}
+                      onChange={(amountText) =>
+                        setCustomExpenses((current) =>
+                          current.map((item) =>
+                            item.id === expense.id ? { ...item, amountText } : item
+                          )
+                        )
+                      }
+                      placeholder="0,00 ₺"
+                      numeric
+                    />
+                  </View>
+                  <RemoveButton
+                    onPress={() =>
+                      setCustomExpenses((current) =>
+                        current.filter((item) => item.id !== expense.id)
+                      )
+                    }
+                  />
+                </View>
+                <InvoiceToggle
+                  value={expense.hasVatInvoice}
+                  onChange={(hasVatInvoice) =>
+                    setCustomExpenses((current) =>
+                      current.map((item) =>
+                        item.id === expense.id ? { ...item, hasVatInvoice } : item
+                      )
                     )
-                  )
-                }
-              />
-            </View>
+                  }
+                />
+              </View>
+            </FadeInView>
           ))}
           <OutlineButton
             label="+ Özel gider ekle"
@@ -812,13 +942,17 @@ function ManualOrderForm({
           />
         </Section>
 
-        <Section title="CANLI NET KÂR">
+        <Section title="CANLI NET KÂR" index={7}>
           <BreakdownRow label="Brüt satış" value={breakdown.grossRevenue} />
           <BreakdownRow label={`Net satış · KDV %${draft.vatRate}`} value={breakdown.netRevenue} />
           <BreakdownRow label="Ürün maliyeti" value={-breakdown.productCost} muted />
           <BreakdownRow label="Paketleme" value={-breakdown.packagingCost} muted />
           <BreakdownRow label="Komisyon" value={-breakdown.commissionCost} muted />
-          <BreakdownRow label="Kargo" value={-breakdown.cargoCost} muted />
+          <BreakdownRow
+            label={mode === "freeform" ? "Kargo · desiye göre" : "Kargo"}
+            value={-breakdown.cargoCost}
+            muted
+          />
           <BreakdownRow label="Seçili gider kuralları" value={-breakdown.expenseRulesCost} muted />
           <BreakdownRow label="Özel giderler" value={-breakdown.customExpensesCost} muted />
           <BreakdownRow label="İndirilecek KDV" value={breakdown.inputVatCredit} positive />
@@ -832,33 +966,27 @@ function ManualOrderForm({
                   : `Marj ${formatPercent(breakdown.profitMargin)}`}
               </Text>
             </View>
-            <Text
-              style={[
-                styles.profitValue,
-                {
-                  color:
-                    breakdown.netProfit == null
-                      ? ML.orange
-                      : breakdown.netProfit < 0
-                        ? ML.red
-                        : ML.green,
-                },
-              ]}
-            >
-              {breakdown.netProfit == null
-                ? "Maliyet eksik"
-                : formatCurrency(breakdown.netProfit)}
-            </Text>
+            {breakdown.netProfit == null ? (
+              <Text style={[styles.profitValue, { color: ML.orange }]}>Maliyet eksik</Text>
+            ) : (
+              <AnimatedMoney
+                value={breakdown.netProfit}
+                style={[
+                  styles.profitValue,
+                  { color: breakdown.netProfit < 0 ? ML.red : ML.green },
+                ]}
+              />
+            )}
           </View>
           {breakdown.missingCostItems > 0 ? (
             <Text style={styles.warning}>
-              {breakdown.missingCostItems} kalemin maliyeti boş. Birim maliyet gir veya “Ürün
-              maliyetini düş” seçeneğini kapat.
+              {breakdown.missingCostItems} kalemin maliyeti boş. Maliyet gir veya “Ürün maliyetini
+              düş” seçeneğini kapat.
             </Text>
           ) : null}
         </Section>
 
-        <Section title="NOT (opsiyonel)">
+        <Section title="NOT (opsiyonel)" index={8}>
           <TextInput
             value={note}
             onChangeText={setNote}
@@ -902,22 +1030,101 @@ function ManualOrderForm({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  index = 0,
+  children,
+}: {
+  title: string;
+  index?: number;
+  children: React.ReactNode;
+}) {
   return (
-    <View style={styles.section}>
+    <FadeInView index={index} style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
       <View style={styles.sectionCard}>{children}</View>
-    </View>
+    </FadeInView>
+  );
+}
+
+/**
+ * Sayıyı hedefe doğru yumuşakça akıtır. Sistemde "hareketi azalt" açıksa anında yazar.
+ */
+function useTweenedNumber(value: number, duration = 340): number {
+  const reducedMotion = useReducedMotion();
+  const safeValue = Number.isFinite(value) ? value : 0;
+  const [display, setDisplay] = useState(safeValue);
+  const currentRef = useRef(safeValue);
+
+  useEffect(() => {
+    if (reducedMotion) {
+      currentRef.current = safeValue;
+      return;
+    }
+    const from = currentRef.current;
+    if (from === safeValue) return;
+    const startedAt = Date.now();
+    let frame: number | null = null;
+    const tick = () => {
+      const progress = Math.min(1, (Date.now() - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const next = from + (safeValue - from) * eased;
+      currentRef.current = progress < 1 ? next : safeValue;
+      setDisplay(currentRef.current);
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => {
+      if (frame != null) cancelAnimationFrame(frame);
+    };
+  }, [duration, reducedMotion, safeValue]);
+
+  return reducedMotion ? safeValue : display;
+}
+
+function AnimatedMoney({
+  value,
+  style,
+  prefix = "",
+}: {
+  value: number;
+  style?: React.ComponentProps<typeof Text>["style"];
+  prefix?: string;
+}) {
+  const shown = useTweenedNumber(value);
+  return (
+    <Text style={style}>
+      {prefix}
+      {formatCurrency(shown)}
+    </Text>
   );
 }
 
 function OutlineButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
     <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.outlineButton, pressed && { opacity: 0.75 }]}
+      onPress={() => {
+        void Haptics.selectionAsync();
+        onPress();
+      }}
+      style={({ pressed }) => [
+        styles.outlineButton,
+        pressed && { opacity: 0.72, transform: [{ scale: 0.99 }] },
+      ]}
     >
       <Text style={styles.outlineButtonText}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function RemoveButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      style={({ pressed }) => pressed && { opacity: 0.6 }}
+    >
+      <Text style={styles.removeText}>Sil</Text>
     </Pressable>
   );
 }
@@ -931,11 +1138,23 @@ function QuantityControl({
 }) {
   return (
     <View style={styles.quantity}>
-      <Pressable onPress={() => onChange(value - 1)} style={styles.quantityButton}>
+      <Pressable
+        onPress={() => {
+          void Haptics.selectionAsync();
+          onChange(value - 1);
+        }}
+        style={({ pressed }) => [styles.quantityButton, pressed && { opacity: 0.6 }]}
+      >
         <Text style={styles.quantityButtonText}>−</Text>
       </Pressable>
       <Text style={styles.quantityValue}>{value}</Text>
-      <Pressable onPress={() => onChange(value + 1)} style={styles.quantityButton}>
+      <Pressable
+        onPress={() => {
+          void Haptics.selectionAsync();
+          onChange(value + 1);
+        }}
+        style={({ pressed }) => [styles.quantityButton, pressed && { opacity: 0.6 }]}
+      >
         <Text style={styles.quantityButtonText}>+</Text>
       </Pressable>
     </View>
@@ -973,9 +1192,7 @@ function CatalogItemCard({
               : "Maliyet kaydı yok"}
           </Text>
         </View>
-        <Pressable onPress={onRemove} hitSlop={8}>
-          <Text style={styles.removeText}>Sil</Text>
-        </Pressable>
+        <RemoveButton onPress={onRemove} />
       </View>
       <View style={styles.quantityLine}>
         <Text style={styles.help}>Adet</Text>
@@ -985,26 +1202,79 @@ function CatalogItemCard({
   );
 }
 
+function FilamentPicker({
+  filaments,
+  selectedId,
+  onSelect,
+}: {
+  filaments: { id: string; name: string; costPerGram: number }[];
+  selectedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  if (filaments.length === 0) {
+    return <Text style={styles.help}>Kayıtlı filament yok.</Text>;
+  }
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={styles.filamentRow}
+    >
+      {filaments.map((filament) => {
+        const selected = filament.id === selectedId;
+        return (
+          <Pressable
+            key={filament.id}
+            onPress={() => {
+              void Haptics.selectionAsync();
+              onSelect(selected ? null : filament.id);
+            }}
+            style={({ pressed }) => [
+              styles.filamentChip,
+              selected && styles.filamentChipOn,
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Text
+              style={[styles.filamentChipText, selected && styles.filamentChipTextOn]}
+              numberOfLines={1}
+            >
+              {filament.name}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 function FreeformItemCard({
   item,
   index,
+  filaments,
+  resolved,
   onChange,
   onQuantity,
   onRemove,
 }: {
   item: FormItem;
   index: number;
+  filaments: { id: string; name: string; costPerGram: number }[];
+  resolved: ManualOrderItem | undefined;
   onChange: (patch: Partial<FormItem>) => void;
   onQuantity: (value: number) => void;
   onRemove: () => void;
 }) {
+  const detailed = item.costSource === "detailed";
+  const selectedFilament = filaments.find((filament) => filament.id === item.filamentTypeId);
+  const unitCost = resolved?.productionCost ?? 0;
+
   return (
     <View style={styles.itemCard}>
       <View style={styles.itemHeader}>
         <Text style={styles.itemIndex}>KALEM {index + 1}</Text>
-        <Pressable onPress={onRemove} hitSlop={8}>
-          <Text style={styles.removeText}>Sil</Text>
-        </Pressable>
+        <RemoveButton onPress={onRemove} />
       </View>
       <Field label="KALEM ADI">
         <TextField
@@ -1017,19 +1287,124 @@ function FreeformItemCard({
         <Text style={styles.help}>Adet</Text>
         <QuantityControl value={item.quantity} onChange={onQuantity} />
       </View>
-      <Field label="BİRİM MALİYET (boş bırakılabilir)">
+      <Field label="DESİ (kargo için)">
         <TextField
-          value={item.manualCostText}
-          onChange={(manualCostText) => onChange({ manualCostText })}
-          placeholder="0,00"
+          value={item.desiText}
+          onChange={(desiText) => onChange({ desiText })}
+          placeholder="Örn. 2"
           numeric
         />
       </Field>
-      <InvoiceToggle
-        value={Boolean(item.manualCostHasVatInvoice)}
-        onChange={(manualCostHasVatInvoice) => onChange({ manualCostHasVatInvoice })}
-        disabled={item.manualCostText.trim() === ""}
-      />
+
+      <Field label="MALİYET">
+        <Segmented
+          items={COST_SOURCES}
+          selected={item.costSource}
+          onSelect={(costSource) => onChange({ costSource })}
+        />
+      </Field>
+
+      {detailed ? (
+        <FadeInView key="detailed">
+          <View style={styles.detailedBox}>
+            <Field label="FİLAMENT TÜRÜ">
+              <FilamentPicker
+                filaments={filaments}
+                selectedId={item.filamentTypeId}
+                onSelect={(filamentTypeId) => onChange({ filamentTypeId })}
+              />
+            </Field>
+            <View style={styles.twoCol}>
+              <View style={{ flex: 1 }}>
+                <Field label="GRAMAJ (g)">
+                  <TextField
+                    value={item.filamentWeightText}
+                    onChange={(filamentWeightText) => onChange({ filamentWeightText })}
+                    placeholder="0"
+                    numeric
+                  />
+                </Field>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Field label="BASKI SÜRESİ (saat)">
+                  <TextField
+                    value={item.printTimeText}
+                    onChange={(printTimeText) => onChange({ printTimeText })}
+                    placeholder="0"
+                    numeric
+                  />
+                </Field>
+              </View>
+            </View>
+            <Field label="FİRE PAYI (%)">
+              <TextField
+                value={item.wasteRateText}
+                onChange={(wasteRateText) => onChange({ wasteRateText })}
+                placeholder="0"
+                numeric
+              />
+            </Field>
+            <View style={styles.unitCostRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.unitCostLabel}>BİRİM MALİYET</Text>
+                <Text style={styles.help}>
+                  {selectedFilament
+                    ? `${selectedFilament.name} · elektrik, aşınma ve işçilik dahil`
+                    : "Filament türü seç"}
+                </Text>
+              </View>
+              <AnimatedMoney value={unitCost} style={styles.unitCostValue} />
+            </View>
+          </View>
+        </FadeInView>
+      ) : (
+        <FadeInView key="manual">
+          <View style={styles.detailedBox}>
+            <Field label="BİRİM MALİYET (boş bırakılabilir)">
+              <TextField
+                value={item.manualCostText}
+                onChange={(manualCostText) => onChange({ manualCostText })}
+                placeholder="0,00"
+                numeric
+              />
+            </Field>
+            <InvoiceToggle
+              value={Boolean(item.manualCostHasVatInvoice)}
+              onChange={(manualCostHasVatInvoice) => onChange({ manualCostHasVatInvoice })}
+              disabled={item.manualCostText.trim() === ""}
+            />
+          </View>
+        </FadeInView>
+      )}
+    </View>
+  );
+}
+
+function AutoCargoCard({
+  amount,
+  desi,
+  ruleMissing,
+}: {
+  amount: number;
+  desi: number;
+  ruleMissing: boolean;
+}) {
+  return (
+    <View style={styles.autoCargo}>
+      <View style={styles.unitCostRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.unitCostLabel}>KARGO</Text>
+          <Text style={styles.help}>
+            {desi > 0
+              ? `Toplam ${Number(desi.toFixed(2))} desi üzerinden`
+              : "Kalemlere desi gir"}
+          </Text>
+        </View>
+        <AnimatedMoney value={amount} style={styles.unitCostValue} />
+      </View>
+      {ruleMissing && desi > 0 ? (
+        <Text style={styles.warning}>Bu desi için kargo fiyatı tanımlı değil.</Text>
+      ) : null}
     </View>
   );
 }
@@ -1125,24 +1500,19 @@ function BreakdownRow({
   positive?: boolean;
   muted?: boolean;
 }) {
-  const formatted =
-    value > 0 && positive
-      ? `+${formatCurrency(value)}`
-      : value < 0
-        ? `−${formatCurrency(Math.abs(value))}`
-        : formatCurrency(value);
+  const prefix = value > 0 && positive ? "+" : value < 0 ? "−" : "";
   return (
     <View style={styles.breakdownRow}>
       <Text style={styles.breakdownLabel}>{label}</Text>
-      <Text
+      <AnimatedMoney
+        value={Math.abs(value)}
+        prefix={prefix}
         style={[
           styles.breakdownValue,
           muted && { color: ML.textDim },
           positive && value > 0 && { color: ML.green },
         ]}
-      >
-        {formatted}
-      </Text>
+      />
     </View>
   );
 }
@@ -1317,6 +1687,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "800",
   },
+  detailedBox: {
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: ML.borderSoft,
+    paddingTop: 12,
+  },
+  filamentRow: { gap: 7, paddingRight: 4 },
+  filamentChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ML.border,
+    backgroundColor: ML.card,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    maxWidth: 190,
+  },
+  filamentChipOn: { backgroundColor: ML.accentSoft, borderColor: ML.accent },
+  filamentChipText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
+  filamentChipTextOn: { color: ML.accent, fontWeight: "800" },
+  unitCostRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  unitCostLabel: { color: ML.textFaint, fontSize: 11, fontWeight: "800", letterSpacing: 1 },
+  unitCostValue: {
+    color: ML.text,
+    fontSize: 17,
+    fontWeight: "900",
+    fontVariant: ["tabular-nums"],
+  },
+  autoCargo: { gap: 10 },
   toggleRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   toggleTitle: { color: ML.text, fontSize: 14, fontWeight: "700" },
   invoiceRow: {

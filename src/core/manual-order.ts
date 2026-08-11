@@ -30,6 +30,17 @@ export interface ManualOrderResolvedItem {
     scope: PackagingScope;
     cost: number;
   }[] | null;
+  /**
+   * Serbest kalemin maliyeti NASIL belirlendi:
+   *   "manual"   → kullanıcı tek bir birim maliyet yazdı (manualUnitCost).
+   *   "detailed" → filament türü/gramajı + baskı süresi girildi; maliyet katalog ürünüyle
+   *                AYNI motorla hesaplandı (filament + elektrik + makine aşınması + işçilik)
+   *                ve filament payı indirilecek KDV'ye girer.
+   * Katalog kalemlerinde alan kullanılmaz (her zaman detaylı).
+   */
+  costSource?: "manual" | "detailed";
+  /** Serbest kalemin desisi — sipariş kargosu bunların toplamından hesaplanır. */
+  desi?: number | null;
   /** Freeform satırın kullanıcı tarafından girilen birim maliyeti. */
   manualUnitCost?: number | null;
   /** Freeform maliyet faturası varsa birim maliyetin iç KDV'si indirilebilir. */
@@ -67,7 +78,21 @@ export interface ManualOrderCalculationInput {
   includeProductCost: boolean;
   includePackaging: boolean;
   commission: ManualOrderMoneyCost;
+  /**
+   * Kargo tutarı (KDV dahil brüt). Custom siparişte bu değer ELLE girilmez: çağıran
+   * (lib/manual-orders) kalemlerin toplam desisinden Shopify baremiyle çözer ve buraya yazar.
+   *
+   * NEDEN çözüm burada DEĞİL: kargo kuralları hesabın girdisi olsaydı, kural listesinin
+   * tamamı her manuel siparişin kayıtlı hesabına gömülürdü (şişkinlik) ve kayıt sonradan
+   * yeniden doğrulanamazdı. Bu şekilde kayıt küçük, kendine yeter ve o günkü tarife donar.
+   */
   cargo: ManualOrderMoneyCost;
+  /** Kargo desiden mi çözüldü (yalnız gösterim/doğrulama için taşınır). */
+  cargoAuto?: boolean;
+  /** Kargonun hesaplandığı toplam desi. */
+  cargoDesi?: number;
+  /** Otomatik kargoda hiçbir barem eşleşmedi → tutar ₺0 kaldı, kullanıcı uyarılmalı. */
+  cargoRuleMissing?: boolean;
   expenseRules: ManualOrderSelectedExpense[];
   customExpenses: ManualOrderCustomExpense[];
 }
@@ -88,6 +113,12 @@ export interface ManualOrderBreakdown {
   profitPartial: boolean;
   missingCostItems: number;
   profitMargin: number | null;
+  /** Kargo desiden mi hesaplandı (true) yoksa elle mi girildi (false). */
+  cargoAuto: boolean;
+  /** Kargonun hesaplandığı toplam desi (autoCargo açıkken). */
+  cargoDesi: number;
+  /** autoCargo açık ama hiçbir barem eşleşmedi → kargo ₺0 sayıldı, kullanıcı UYARILMALI. */
+  cargoRuleMissing: boolean;
 }
 
 function nonNegative(value: number): number {
@@ -135,21 +166,31 @@ export function calculateManualOrder(
   let freeformVatableCost = 0;
   let missingCostItems = 0;
 
+  // Kargo baremi için toplam desi — kalem maliyeti hariç tutulsa bile kargo hesaplanır.
+  let totalDesi = 0;
+  for (const item of input.items) {
+    const quantity = safeQuantity(item.quantity);
+    if (item.desi != null && Number.isFinite(item.desi) && item.desi >= 0) {
+      totalDesi += item.desi * quantity;
+    }
+  }
+
   for (const item of input.items) {
     const quantity = safeQuantity(item.quantity);
     if (!input.includeProductCost) continue;
 
-    const unitCost =
-      input.mode === "freeform"
-        ? item.manualUnitCost
-        : item.productionCost;
+    // Katalog kalemi HER ZAMAN detaylıdır. Serbest kalem ise ya tek bir birim maliyetle
+    // ya da filament/süre girdileriyle (katalogla aynı motor) hesaplanmış olabilir.
+    const detailed = input.mode === "catalog" || item.costSource === "detailed";
+    const unitCost = detailed ? item.productionCost : item.manualUnitCost;
     if (!item.costKnown || unitCost == null || !Number.isFinite(unitCost)) {
       missingCostItems++;
       continue;
     }
 
     productCost += nonNegative(unitCost) * quantity;
-    if (input.mode === "catalog") {
+    if (detailed) {
+      // Filament payı faturalı malzemedir → indirilecek KDV'ye girer (katalogla birebir).
       filamentCost += nonNegative(item.filamentCost) * quantity;
     } else if (item.manualCostHasVatInvoice) {
       freeformVatableCost += nonNegative(unitCost) * quantity;
@@ -192,6 +233,7 @@ export function calculateManualOrder(
   }
 
   const commissionCost = nonNegative(input.commission.amount);
+
   const cargoCost = nonNegative(input.cargo.amount);
   const resolvedExpenseRules = input.expenseRules.map((expense) => ({
     ...expense,
@@ -231,7 +273,7 @@ export function calculateManualOrder(
       freeformVatableCost +
       packagingCost +
       vatableExternalCost) *
-    vatFactor;
+      vatFactor;
   const profitPartial = missingCostItems > 0;
   const netProfit = profitPartial
     ? null
@@ -254,5 +296,8 @@ export function calculateManualOrder(
     missingCostItems,
     profitMargin:
       netProfit == null || netRevenue <= 0 ? null : netProfit / netRevenue,
+    cargoAuto: input.cargoAuto === true,
+    cargoDesi: input.cargoDesi ?? totalDesi,
+    cargoRuleMissing: input.cargoRuleMissing === true,
   };
 }

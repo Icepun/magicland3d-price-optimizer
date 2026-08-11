@@ -200,3 +200,124 @@ describe("manual order calculation", () => {
     expect(result.inputVatCredit).toBeCloseTo((230 + 145) / 6, 8);
   });
 });
+
+/**
+ * CUSTOM SİPARİŞ — serbest kalem artık katalog ürünüyle AYNI maliyet motorunu kullanabiliyor.
+ * Eskiden yalnız tek bir "birim maliyet" yazılabiliyordu ve filament KDV'si ancak kullanıcı
+ * "faturam var" işaretlerse indiriliyordu; üretim maliyeti de elle tahmin ediliyordu.
+ */
+describe("custom sipariş — detaylı maliyetli serbest kalem", () => {
+  const detayli = (over: Partial<ManualOrderCalculationInput> = {}) =>
+    calculateManualOrder({
+      saleTotal: 600,
+      vatRate: 20,
+      mode: "freeform",
+      includeProductCost: true,
+      includePackaging: true,
+      items: [
+        {
+          id: "l1",
+          productId: null,
+          name: "Özel figür",
+          imageUrl: null,
+          quantity: 2,
+          costKnown: true,
+          costSource: "detailed",
+          productionCost: 50, // filament + elektrik + aşınma + işçilik
+          filamentCost: 24, // faturalı malzeme payı
+          packagingCost: 0,
+          packagingComponents: null,
+          desi: 1.5,
+        },
+      ],
+      commission: { amount: 0, hasVatInvoice: false },
+      cargo: { amount: 118, hasVatInvoice: true },
+      cargoAuto: true,
+      cargoDesi: 3,
+      expenseRules: [],
+      customExpenses: [],
+      ...over,
+    });
+
+  it("üretim maliyetini adetle çarpar ve filament KDV'sini indirir", () => {
+    const r = detayli();
+    expect(r.productCost).toBe(100); // 50 × 2
+    // İndirilecek KDV: filament 24×2 = 48, kargo 118 → (48 + 118) / 6
+    expect(r.inputVatCredit).toBeCloseTo((48 + 118) / 6, 8);
+  });
+
+  it("kargonun desiden geldiğini ve hangi desiyle hesaplandığını taşır", () => {
+    const r = detayli();
+    expect(r.cargoAuto).toBe(true);
+    expect(r.cargoDesi).toBe(3);
+    expect(r.cargoCost).toBe(118);
+    expect(r.cargoRuleMissing).toBe(false);
+  });
+
+  it("barem bulunamadıysa uyarı bayrağını taşır (sessiz ₺0 değil)", () => {
+    const r = detayli({
+      cargo: { amount: 0, hasVatInvoice: false },
+      cargoRuleMissing: true,
+    });
+    expect(r.cargoRuleMissing).toBe(true);
+    expect(r.cargoCost).toBe(0);
+  });
+
+  it("elle birim maliyetli serbest kalem eski davranışını korur", () => {
+    const r = calculateManualOrder({
+      saleTotal: 600,
+      vatRate: 20,
+      mode: "freeform",
+      includeProductCost: true,
+      includePackaging: true,
+      items: [
+        {
+          id: "l1",
+          productId: null,
+          name: "Serbest",
+          imageUrl: null,
+          quantity: 1,
+          costKnown: true,
+          costSource: "manual",
+          productionCost: 0,
+          filamentCost: 0,
+          packagingCost: 0,
+          packagingComponents: null,
+          manualUnitCost: 90,
+          manualCostHasVatInvoice: true,
+        },
+      ],
+      commission: { amount: 0, hasVatInvoice: false },
+      cargo: { amount: 0, hasVatInvoice: false },
+      expenseRules: [],
+      customExpenses: [],
+    });
+    expect(r.productCost).toBe(90);
+    expect(r.inputVatCredit).toBeCloseTo(90 / 6, 8);
+    expect(r.cargoAuto).toBe(false);
+  });
+
+  it("detaylı kalemde üretim maliyeti girilmemişse maliyet EKSİK sayılır", () => {
+    const r = detayli({
+      items: [
+        {
+          id: "l1",
+          productId: null,
+          name: "Özel figür",
+          imageUrl: null,
+          quantity: 1,
+          costKnown: false, // filament/süre girilmemiş
+          costSource: "detailed",
+          productionCost: 0,
+          filamentCost: 0,
+          packagingCost: 0,
+          packagingComponents: null,
+          desi: 1,
+        },
+      ],
+    });
+    expect(r.missingCostItems).toBe(1);
+    expect(r.profitPartial).toBe(true);
+    expect(r.netProfit).toBeNull();
+  });
+});

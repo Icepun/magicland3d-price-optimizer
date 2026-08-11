@@ -292,3 +292,181 @@ describe("manual order persistence", () => {
     expect(breakdown.draft.items[0]).not.toHaveProperty("kind");
   });
 });
+
+/**
+ * CUSTOM SİPARİŞ — serbest kalem katalog maliyet motoruna bağlandı ve kargo desiden çıkıyor.
+ * Bu test uçtan uca çalışır: gerçek şema, gerçek ayarlar, gerçek kargo baremi.
+ */
+describe("custom sipariş — üretim girdileri ve desiden kargo", () => {
+  beforeAll(async () => {
+    // Saatlik oranlar: elektrik dahil 10₺, aşınma 5₺, işçilik 35₺ → saatlik toplam 50₺.
+    for (const [key, value] of [
+      ["costElectricityIncluded", "true"],
+      ["costElectricityPerHour", "10"],
+      ["costMachineWearPerHour", "5"],
+      ["costLaborPerHour", "35"],
+    ] as const) {
+      await db.appSetting.upsert({
+        where: { key },
+        create: { key, value },
+        update: { value },
+      });
+    }
+    await db.filamentType.create({
+      data: { id: "pla-siyah", name: "PLA Siyah", costPerGram: 1.2, isActive: true },
+    });
+    // Shopify kargo baremi: 0-5 desi arası 118₺ (KDV dahil).
+    await db.cargoRule.create({
+      data: {
+        id: "shopify-0-5",
+        name: "Shopify 0-5 desi",
+        platform: "shopify",
+        minPrice: 0,
+        maxPrice: 999999,
+        minDesi: 0,
+        maxDesi: 5,
+        cargoCost: 118,
+        vatIncluded: true,
+        priority: 10,
+        isActive: true,
+      },
+    });
+  });
+
+  function freeformInput(over: Record<string, unknown> = {}) {
+    return manualOrders.ManualOrderInputSchema.parse({
+      orderedAt: "2026-08-11T10:00:00.000Z",
+      orderNumber: null,
+      customerName: null,
+      statusKind: "processing",
+      currency: "TRY",
+      saleTotal: 600,
+      note: null,
+      mode: "freeform",
+      includeProductCost: true,
+      includePackaging: false,
+      commission: { amount: 0, hasVatInvoice: false },
+      // Serbest modda bu alan YOK SAYILIR — kargo desiden çıkar.
+      cargo: { amount: 999, hasVatInvoice: false },
+      expenseRules: [],
+      customExpenses: [],
+      items: [
+        {
+          id: "ozel-1",
+          name: "Özel figür",
+          quantity: 1,
+          unitCost: null,
+          desi: 2,
+          production: {
+            filamentTypeId: "pla-siyah",
+            filamentWeight: 50, // 50 × 1,2 = 60₺ filament
+            printTimeHours: 2, // 2 × 50 = 100₺ makine+işçilik
+            wasteRate: 0,
+          },
+        },
+      ],
+      ...over,
+    });
+  }
+
+  it("üretim maliyetini katalog motoruyla hesaplar ve elle kargoyu yok sayar", async () => {
+    const created = await manualOrders.createManualOrder(
+      freeformInput({ orderNumber: "M-CUSTOM-1" })
+    );
+    const breakdown = manualOrders.parseManualOrderBreakdown(created.breakdownJson);
+
+    // Filament 60 + (elektrik 10 + aşınma 5 + işçilik 35) × 2 saat = 160₺
+    expect(breakdown.breakdown.productCost).toBeCloseTo(160, 6);
+    // Kargo: elle girilen 999 DEĞİL, 2 desi → 118₺
+    expect(breakdown.breakdown.cargoCost).toBeCloseTo(118, 6);
+    expect(breakdown.breakdown.cargoAuto).toBe(true);
+    expect(breakdown.breakdown.cargoDesi).toBeCloseTo(2, 6);
+    expect(breakdown.breakdown.cargoRuleMissing).toBe(false);
+    // İndirilecek KDV: filament payı 60 + kargo 118 = 178 → /6
+    expect(breakdown.breakdown.inputVatCredit).toBeCloseTo(178 / 6, 6);
+  });
+
+  it("desi barem dışına taşarsa kargoyu 0 bırakır ama SESSİZ kalmaz", async () => {
+    const created = await manualOrders.createManualOrder(
+      freeformInput({
+        orderNumber: "M-CUSTOM-2",
+        items: [
+          {
+            id: "ozel-2",
+            name: "Kocaman figür",
+            quantity: 1,
+            unitCost: null,
+            desi: 40, // hiçbir barem kapsamıyor
+            production: { filamentTypeId: "pla-siyah", filamentWeight: 10, printTimeHours: 1 },
+          },
+        ],
+      })
+    );
+    const breakdown = manualOrders.parseManualOrderBreakdown(created.breakdownJson);
+    expect(breakdown.breakdown.cargoCost).toBe(0);
+    expect(breakdown.breakdown.cargoRuleMissing).toBe(true);
+  });
+
+  it("adet arttıkça desi toplanır ve üst barem seçilir", async () => {
+    const created = await manualOrders.createManualOrder(
+      freeformInput({
+        orderNumber: "M-CUSTOM-3",
+        items: [
+          {
+            id: "ozel-3",
+            name: "Üçlü set",
+            quantity: 3,
+            unitCost: null,
+            desi: 2, // 3 × 2 = 6 desi → 0-5 baremi DIŞINDA
+            production: { filamentTypeId: "pla-siyah", filamentWeight: 10, printTimeHours: 1 },
+          },
+        ],
+      })
+    );
+    const breakdown = manualOrders.parseManualOrderBreakdown(created.breakdownJson);
+    expect(breakdown.breakdown.cargoDesi).toBeCloseTo(6, 6);
+    expect(breakdown.breakdown.cargoRuleMissing).toBe(true);
+  });
+
+  it("üretim girdisi yoksa elle birim maliyet yolu korunur", async () => {
+    const created = await manualOrders.createManualOrder(
+      freeformInput({
+        orderNumber: "M-CUSTOM-4",
+        items: [
+          {
+            id: "ozel-4",
+            name: "Elle maliyetli",
+            quantity: 1,
+            unitCost: 75,
+            manualCostHasVatInvoice: false,
+            desi: 1,
+            production: null,
+          },
+        ],
+      })
+    );
+    const breakdown = manualOrders.parseManualOrderBreakdown(created.breakdownJson);
+    expect(breakdown.breakdown.productCost).toBeCloseTo(75, 6);
+    expect(breakdown.breakdown.cargoCost).toBeCloseTo(118, 6);
+  });
+  /**
+   * REGRESYON: düzenleme yanıtı serbest kalemde desi/production/costSource alanlarını
+   * DÜŞÜRÜYORDU. Kullanıcı siparişi açıp kaydettiğinde gramaj/süre/desi boş gider,
+   * maliyet "elle giriş"e düşer ve kargo yeniden hesaplanamazdı — sessiz veri kaybı.
+   */
+  it("düzenleme yanıtı üretim girdilerini ve desiyi geri verir", async () => {
+    const created = await manualOrders.createManualOrder(
+      freeformInput({ orderNumber: "M-CUSTOM-5" })
+    );
+    const detail = manualOrders.manualOrderDetailResponse(created);
+    const item = detail.draft.items[0] as Record<string, unknown>;
+
+    expect(item.desi).toBe(2);
+    expect(item.costSource).toBe("detailed");
+    expect(item.production).toMatchObject({
+      filamentTypeId: "pla-siyah",
+      filamentWeight: 50,
+      printTimeHours: 2,
+    });
+  });
+});

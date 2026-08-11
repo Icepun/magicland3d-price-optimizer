@@ -3,6 +3,9 @@ import { vatRateOf } from "@/core/vat";
 import { z } from "zod";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
+import { computeFullProductCost } from "@/core/cost-calculator";
+import { filterCargoRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { resolveVatableCost } from "@/core/pricing-engine";
 import {
   calculateManualOrder,
   MANUAL_ORDER_CALCULATION_VERSION,
@@ -44,12 +47,29 @@ const CatalogItemSchema = z.object({
   quantity: z.number().int().min(1).max(10_000),
 });
 
+/**
+ * Serbest (custom) sipariş kalemi. İki maliyet yolu var:
+ *   • unitCost → kullanıcı tek bir birim maliyet yazar (eski davranış, korunuyor).
+ *   • production → filament türü/gramajı + baskı süresi girilir; maliyet katalog ürünüyle
+ *     AYNI motorla hesaplanır (elektrik, makine aşınması, işçilik Maliyet Ayarları'ndan gelir)
+ *     ve filament payı indirilecek KDV'ye girer.
+ * `desi` her iki yolda da girilebilir — sipariş kargosu kalemlerin toplam desisinden çıkar.
+ */
+const FreeformProductionSchema = z.object({
+  filamentTypeId: z.string().trim().min(1).nullable().optional(),
+  filamentWeight: z.number().finite().min(0).max(100_000).nullable().optional(),
+  printTimeHours: z.number().finite().min(0).max(10_000).nullable().optional(),
+  wasteRate: z.number().finite().min(0).max(1).nullable().optional(),
+});
+
 const FreeformItemSchema = z.object({
   id: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1).max(200),
   quantity: z.number().int().min(1).max(10_000),
   unitCost: money.nullable(),
   manualCostHasVatInvoice: z.boolean().optional().default(false),
+  desi: z.number().finite().min(0).max(999).nullable().optional(),
+  production: FreeformProductionSchema.nullable().optional(),
 });
 
 const StoredPackagingComponentSchema = z.object({
@@ -80,6 +100,11 @@ const ManualOrderStoredItemSchema = z
       .optional(),
     manualUnitCost: money.nullable().optional(),
     manualCostHasVatInvoice: z.boolean().optional(),
+    // Serbest kalemin maliyeti nasıl bulundu + kargo baremini besleyen desi.
+    // Eski kayıtlarda yok → "manual" varsayılır, davranış değişmez.
+    costSource: z.enum(["manual", "detailed"]).optional(),
+    desi: z.number().finite().min(0).max(999).nullable().optional(),
+    production: FreeformProductionSchema.nullable().optional(),
     kind: z.enum(["catalog", "freeform"]).optional(),
     alias: z.string().nullable().optional(),
     variantLabel: z.string().nullable().optional(),
@@ -117,6 +142,10 @@ const ManualOrderCalculationInputSchema = z
     includePackaging: z.boolean(),
     commission: ManualMoneyCostSchema,
     cargo: ManualMoneyCostSchema,
+    // Kargo desiden çözüldüyse taşınan bilgi — kayıt yeniden doğrulanırken aynı sonucu versin.
+    cargoAuto: z.boolean().optional(),
+    cargoDesi: z.number().finite().min(0).optional(),
+    cargoRuleMissing: z.boolean().optional(),
     expenseRules: z.array(StoredSelectedExpenseSchema).max(100),
     customExpenses: z.array(StoredCustomExpenseSchema).max(100),
   })
@@ -140,6 +169,10 @@ const ManualOrderBreakdownSchema = z
     profitPartial: z.boolean(),
     missingCostItems: z.number().int().min(0).max(250),
     profitMargin: nullableFinite,
+    // Eski kayıtlarda bu üç alan YOK — varsayılanla doldurulur, geri uyumluluk korunur.
+    cargoAuto: z.boolean().optional().default(false),
+    cargoDesi: z.number().finite().min(0).optional().default(0),
+    cargoRuleMissing: z.boolean().optional().default(false),
   })
   .passthrough();
 
@@ -237,6 +270,17 @@ export interface ManualOrderStoredItem extends ManualOrderResolvedItem {
   alias?: string | null;
   variantLabel?: string | null;
   currentSalePrice?: number | null;
+  /**
+   * Serbest kalemin üretim girdileri — maliyet bunlardan hesaplandıysa saklanır ki
+   * sipariş düzenlenirken alanlar forma geri yüklenebilsin. (Maliyet ve kargo yine
+   * kaydedilen tutarlardan okunur; bunlar yalnız girdinin kendisidir.)
+   */
+  production?: {
+    filamentTypeId?: string | null;
+    filamentWeight?: number | null;
+    printTimeHours?: number | null;
+    wasteRate?: number | null;
+  } | null;
 }
 
 export interface ManualOrderItemsEnvelope {
@@ -514,7 +558,7 @@ async function resolveManualOrderInput(
     .filter((selection) => !capturedRulesById.has(selection.ruleId))
     .map((selection) => selection.ruleId);
 
-  const [products, rules, settings] = await Promise.all([
+  const [products, rules, settings, filamentTypes, allCargoRules] = await Promise.all([
     productIds.length
       ? prisma.product.findMany({
           where: { id: { in: productIds } },
@@ -534,6 +578,9 @@ async function resolveManualOrderInput(
         })
       : Promise.resolve([]),
     prisma.appSetting.findMany(),
+    // Serbest kalemin filament ₺/g'ı + custom siparişin kargo baremi (Shopify anlaşması).
+    prisma.filamentType.findMany({ select: { id: true, costPerGram: true } }),
+    prisma.cargoRule.findMany({ where: { isActive: true } }),
   ]);
 
   const productsById = new Map(products.map((product) => [product.id, product]));
@@ -541,6 +588,12 @@ async function resolveManualOrderInput(
   const settingsMap = Object.fromEntries(
     settings.map((setting) => [setting.key, setting.value])
   );
+  const filamentCostPerGramById = new Map(
+    filamentTypes.map((f) => [f.id, f.costPerGram])
+  );
+  // Custom siparişler Shopify kargo anlaşmasıyla gönderiliyor → o platformun baremi.
+  const shopifyCargoRules = filterCargoRulesByPlatform(allCargoRules, "shopify");
+
   // A manual order's VAT rate is part of its captured financial history.
   // Financial edits may change amounts, but must not silently reprice the
   // original sale when the global VAT setting has changed since creation.
@@ -605,6 +658,52 @@ async function resolveManualOrderInput(
         "Serbest siparişte katalog kalemi kullanılamaz."
       );
     }
+    // Filament/süre girildiyse maliyeti KATALOGLA AYNI motorla hesapla: elektrik, makine
+    // aşınması ve işçilik Maliyet Ayarları'ndaki saatlik oranlardan gelir. Böylece custom
+    // baskının maliyeti, aynı işi katalog ürünü olarak yapsaydık çıkacak maliyetle eşleşir.
+    const production = item.production ?? null;
+    const hasProductionInput =
+      !!production &&
+      ((production.filamentWeight ?? 0) > 0 || (production.printTimeHours ?? 0) > 0);
+
+    if (hasProductionInput) {
+      const costPerGram =
+        filamentCostPerGramById.get(production!.filamentTypeId ?? "") ?? 0;
+      const calc = computeFullProductCost({
+        filamentWeight: production!.filamentWeight ?? 0,
+        costPerGram,
+        printTimeHours: production!.printTimeHours ?? 0,
+        electricityCostPerHour:
+          settingsMap.costElectricityIncluded === "true"
+            ? Number(settingsMap.costElectricityPerHour ?? 0)
+            : 0,
+        machineWearCostPerHour: Number(settingsMap.costMachineWearPerHour ?? 0),
+        laborCostPerHour: Number(settingsMap.costLaborPerHour ?? 0),
+        wasteRate: production!.wasteRate ?? 0,
+        // Paketleme serbest kalemde ayrı yönetiliyor (katalog kalemine özel kapsam mantığı).
+        packagingCost: 0,
+      });
+      return {
+        kind: "freeform",
+        id: lineId(item.id),
+        productId: null,
+        name: item.name,
+        imageUrl: null,
+        quantity: item.quantity,
+        // Üretim payı > 0 ise maliyet biliniyor (productionCostKnown ile aynı ölçüt).
+        costKnown: calc.productionCost > 0,
+        productionCost: calc.productionCost,
+        packagingCost: 0,
+        filamentCost: calc.filamentCost,
+        packagingComponents: null,
+        costSource: "detailed",
+        desi: item.desi ?? null,
+        production,
+        manualUnitCost: null,
+        manualCostHasVatInvoice: false,
+      };
+    }
+
     return {
       kind: "freeform",
       id: lineId(item.id),
@@ -617,6 +716,9 @@ async function resolveManualOrderInput(
       packagingCost: 0,
       filamentCost: 0,
       packagingComponents: null,
+      costSource: "manual",
+      desi: item.desi ?? null,
+      production: null,
       manualUnitCost: item.unitCost,
       manualCostHasVatInvoice: item.manualCostHasVatInvoice,
     };
@@ -653,6 +755,42 @@ async function resolveManualOrderInput(
       amount: expense.amount,
       hasVatInvoice: expense.hasVatInvoice,
     }));
+  /**
+   * Serbest (custom) siparişte kargo ELLE girilmez: kalemlerin toplam desisinden Shopify
+   * baremiyle çıkar (Berke custom siparişleri Shopify kargo anlaşmasıyla gönderiyor).
+   * Barem sipariş başına BİR KEZ uygulanır ve desi adetle çarpılarak toplanır — sipariş
+   * kârı hattındaki (core/order-profit) desenle birebir aynı.
+   *
+   * Çözülen tutar normal bir kargo bedeli olarak kaydedilir; böylece kayıt kendine yeter
+   * ve o günkü tarife donar (KDV oranının dondurulmasıyla aynı mantık).
+   */
+  const autoCargo = input.mode === "freeform";
+  let cargoInput = input.cargo;
+  let autoCargoFields: {
+    cargoAuto?: boolean;
+    cargoDesi?: number;
+    cargoRuleMissing?: boolean;
+  } = {};
+  if (autoCargo) {
+    let totalDesi = 0;
+    for (const item of resolvedItems) {
+      const desi = item.desi;
+      if (desi != null && Number.isFinite(desi) && desi >= 0) {
+        totalDesi += desi * Math.max(1, Math.trunc(item.quantity));
+      }
+    }
+    const rule = findCargoRule(shopifyCargoRules, input.saleTotal, "", totalDesi || 1);
+    const resolvedCargo = rule
+      ? resolveVatableCost(rule.cargoCost, rule.vatIncluded !== false, vatRate)
+      : { gross: 0, inputVat: 0 };
+    cargoInput = { amount: resolvedCargo.gross, hasVatInvoice: !!rule };
+    autoCargoFields = {
+      cargoAuto: true,
+      cargoDesi: totalDesi,
+      cargoRuleMissing: !rule,
+    };
+  }
+
   const calculationInput: ManualOrderCalculationInput = {
     saleTotal: input.saleTotal,
     vatRate,
@@ -661,7 +799,8 @@ async function resolveManualOrderInput(
     includeProductCost: input.includeProductCost,
     includePackaging: input.includePackaging,
     commission: input.commission,
-    cargo: input.cargo,
+    cargo: cargoInput,
+    ...autoCargoFields,
     expenseRules: resolvedExpenseRules,
     customExpenses,
   };
@@ -768,6 +907,12 @@ export function manualOrderDetailResponse(order: ManualOrderRecordShape) {
           unitCost: item.manualUnitCost ?? null,
           manualCostHasVatInvoice:
             item.manualCostHasVatInvoice ?? false,
+          // Üretim girdileri ve desi de geri dönmeli: sipariş düzenlenirken kullanıcı
+          // gramaj/süre/desi alanlarını boş bulmamalı, yoksa kaydettiği anda maliyet
+          // "elle giriş"e düşer ve kargo yeniden hesaplanamaz.
+          desi: item.desi ?? null,
+          production: item.production ?? null,
+          costSource: item.costSource ?? "manual",
         }));
   const draft = {
     orderedAt: order.orderedAt.toISOString(),
@@ -817,7 +962,7 @@ export function manualOrderDetailResponse(order: ManualOrderRecordShape) {
 }
 
 export async function getManualOrderOptions() {
-  const [products, expenseRules, settings] = await Promise.all([
+  const [products, expenseRules, settings, filamentTypes] = await Promise.all([
     prisma.product.findMany({
       where: { isActive: true, hidden: false },
       orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -835,14 +980,39 @@ export async function getManualOrderOptions() {
       orderBy: [{ priority: "desc" }, { name: "asc" }],
     }),
     prisma.appSetting.findMany(),
+    prisma.filamentType.findMany({
+      where: { isActive: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      select: { id: true, name: true, costPerGram: true },
+    }),
   ]);
   const settingsMap = Object.fromEntries(
     settings.map((setting) => [setting.key, setting.value])
   );
   const vatRate = vatRateOf(settingsMap);
+  const numericSetting = (key: string) => {
+    const parsed = Number(settingsMap[key] ?? 0);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  const costRates = {
+    electricityPerHour:
+      settingsMap.costElectricityIncluded === "true"
+        ? numericSetting("costElectricityPerHour")
+        : 0,
+    machineWearPerHour: numericSetting("costMachineWearPerHour"),
+    laborPerHour: numericSetting("costLaborPerHour"),
+  };
 
   return {
     vatRate: Number.isFinite(vatRate) ? vatRate : 0,
+    costRates,
+    filamentTypes: filamentTypes.map((filament) => ({
+      id: filament.id,
+      name: filament.name,
+      costPerGram: Number.isFinite(filament.costPerGram)
+        ? filament.costPerGram
+        : 0,
+    })),
     products: products.map((product) => {
       const resolved = resolveProductCost(
         product.cost,

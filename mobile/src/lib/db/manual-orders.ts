@@ -4,13 +4,18 @@ import {
   type ManualOrderBreakdown,
   type ManualOrderCalculationInput,
   type ManualOrderMode,
+  type ManualOrderMoneyCost,
   type ManualOrderResolvedItem,
   type ManualOrderStatusKind,
 } from "@core/manual-order";
+import { computeFullProductCost } from "@core/cost-calculator";
+import { filterRulesByPlatform, findCargoRule } from "@core/cargo-calculator";
+import { resolveVatableCost } from "@core/pricing-engine";
+import type { CargoRuleInput } from "@core/types";
 
-import { ensureManualOrderSchema } from "@/lib/db/schema";
+import { ensureCargoVatSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { tlToKurus } from "@/lib/db/finance";
-import { execute, query } from "@/lib/turso";
+import { batch, execute, query, type SqlValue } from "@/lib/turso";
 
 interface ManualOrderRow {
   id: string;
@@ -34,18 +39,35 @@ interface ManualOrderRow {
   updatedAt: string | number;
 }
 
-type ManualOrderStoredItem = ManualOrderResolvedItem & {
+/**
+ * Serbest kalemin üretim girdileri. Masaüstündeki `FreeformProductionSchema` ile BİREBİR
+ * aynı alanlar — iki cihaz aynı satırı okuyup yazdığı için şekil sabittir.
+ */
+export interface ManualOrderProduction {
+  filamentTypeId: string | null;
+  filamentWeight: number | null;
+  printTimeHours: number | null;
+  wasteRate: number | null;
+}
+
+export type ManualOrderItem = ManualOrderResolvedItem & {
   kind?: ManualOrderMode;
+  production?: ManualOrderProduction | null;
+};
+
+/** Çekirdek girdisinin kalem tipi genişletilmiş hâli (kayıtta `production` da taşınır). */
+export type ManualOrderDraft = Omit<ManualOrderCalculationInput, "items"> & {
+  items: ManualOrderItem[];
 };
 
 interface ItemsEnvelope {
   version: 1;
-  items: ManualOrderStoredItem[];
+  items: ManualOrderItem[];
 }
 
 interface BreakdownEnvelope {
   version: 1;
-  draft: ManualOrderCalculationInput;
+  draft: ManualOrderDraft;
   breakdown: ManualOrderBreakdown;
 }
 
@@ -63,8 +85,8 @@ export interface ManualOrder {
   inputVatCreditKurus: number;
   profitKurus: number | null;
   profitPartial: boolean;
-  items: ManualOrderResolvedItem[];
-  draft: ManualOrderCalculationInput;
+  items: ManualOrderItem[];
+  draft: ManualOrderDraft;
   breakdown: ManualOrderBreakdown;
   calculationVersion: number;
   note: string | null;
@@ -78,7 +100,7 @@ export interface ManualOrderWriteInput {
   statusKind: ManualOrderStatusKind;
   customerName?: string | null;
   note?: string | null;
-  draft: ManualOrderCalculationInput;
+  draft: ManualOrderDraft;
 }
 
 const STATUS_KINDS = new Set<ManualOrderStatusKind>([
@@ -147,7 +169,246 @@ function normalizeText(
   return normalized;
 }
 
-function validateDraft(draft: ManualOrderCalculationInput): void {
+/* ------------------------------------------------------------------ *
+ * Serbest (ürünsüz) siparişin maliyet + kargo çözümü
+ *
+ * Masaüstünde bunu sunucu yapıyor (lib/manual-orders.ts). Mobil doğrudan Turso'ya
+ * yazdığı için AYNI çözümü burada tekrar eder; ekran da aynı yardımcıları çağırır,
+ * böylece canlı önizleme ile kaydedilen rakam birebir aynıdır.
+ * ------------------------------------------------------------------ */
+
+export interface FreeformFilament {
+  id: string;
+  name: string;
+  costPerGram: number;
+  isActive: boolean;
+}
+
+export interface FreeformCostContext {
+  settings: Record<string, string>;
+  /** Tüm filament türleri; seçim listesi yalnız `isActive` olanları göstermeli. */
+  filaments: FreeformFilament[];
+  cargoRules: CargoRuleInput[];
+}
+
+function ruleDate(value: SqlValue): Date | null {
+  if (value == null || value === "") return null;
+  const numeric =
+    typeof value === "number" ? value : /^\d+$/.test(String(value)) ? Number(value) : null;
+  const date = new Date(
+    numeric == null ? String(value) : numeric < 100_000_000_000 ? numeric * 1000 : numeric
+  );
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** Ayarlar + filament fiyatları + kargo baremi: TEK round-trip. */
+export async function getFreeformCostContext(): Promise<FreeformCostContext> {
+  await ensureCargoVatSchema();
+  const [settingRows, filamentRows, cargoRows] = await batch([
+    { sql: `SELECT key, value FROM AppSetting` },
+    { sql: `SELECT id, name, costPerGram, isActive FROM FilamentType ORDER BY name ASC` },
+    {
+      sql: `SELECT id, name, platform, cargoProvider, categoryName, minPrice, maxPrice,
+                   minDesi, maxDesi, cargoCost, vatIncluded, validFrom, validTo, priority, isActive
+              FROM CargoRule WHERE isActive = 1`,
+    },
+  ]);
+
+  const settings: Record<string, string> = {};
+  for (const row of settingRows.rows as unknown as { key: string; value: string }[]) {
+    settings[row.key] = row.value;
+  }
+
+  const filaments = (
+    filamentRows.rows as unknown as {
+      id: string;
+      name: string;
+      costPerGram: number;
+      isActive: number | boolean;
+    }[]
+  ).map((row) => ({
+    id: String(row.id),
+    name: String(row.name),
+    costPerGram: Number(row.costPerGram) || 0,
+    isActive: Boolean(row.isActive),
+  }));
+
+  const cargoRules = (
+    cargoRows.rows as unknown as (CargoRuleInput & {
+      validFrom: SqlValue;
+      validTo: SqlValue;
+      vatIncluded: SqlValue;
+    })[]
+  ).map((row) => ({
+    ...row,
+    validFrom: ruleDate(row.validFrom),
+    validTo: ruleDate(row.validTo),
+    vatIncluded: row.vatIncluded == null ? true : Number(row.vatIncluded) !== 0,
+  })) as CargoRuleInput[];
+
+  return { settings, filaments, cargoRules };
+}
+
+/** Gramaj veya süre girilmişse maliyet motordan hesaplanır; aksi halde elle girilen tutar geçerlidir. */
+export function hasProductionInput(
+  production: ManualOrderProduction | null | undefined
+): boolean {
+  if (!production) return false;
+  return (production.filamentWeight ?? 0) > 0 || (production.printTimeHours ?? 0) > 0;
+}
+
+/**
+ * Serbest kalemin maliyeti — katalog ürünüyle AYNI motor
+ * (filament ₺/g × gram + süre × [elektrik + makine aşınması + işçilik], üstüne fire payı).
+ * Paketleme serbest kalemde hesaba katılmaz (katalog kalemine özel kapsam mantığı).
+ */
+export function resolveFreeformProduction(
+  production: ManualOrderProduction | null | undefined,
+  context: Pick<FreeformCostContext, "settings" | "filaments">
+): { productionCost: number; filamentCost: number; costKnown: boolean } {
+  if (!hasProductionInput(production)) {
+    return { productionCost: 0, filamentCost: 0, costKnown: false };
+  }
+  const settings = context.settings;
+  const costPerGram =
+    context.filaments.find((item) => item.id === production!.filamentTypeId)?.costPerGram ?? 0;
+  const calc = computeFullProductCost({
+    filamentWeight: production!.filamentWeight ?? 0,
+    costPerGram,
+    printTimeHours: production!.printTimeHours ?? 0,
+    electricityCostPerHour:
+      settings.costElectricityIncluded === "true"
+        ? Number(settings.costElectricityPerHour ?? 0)
+        : 0,
+    machineWearCostPerHour: Number(settings.costMachineWearPerHour ?? 0),
+    laborCostPerHour: Number(settings.costLaborPerHour ?? 0),
+    wasteRate: production!.wasteRate ?? 0,
+    packagingCost: 0,
+  });
+  return {
+    productionCost: calc.productionCost,
+    filamentCost: calc.filamentCost,
+    costKnown: calc.productionCost > 0,
+  };
+}
+
+/**
+ * Serbest siparişin kargosu: kalemlerin toplam desisinden (desi × adet) Shopify baremiyle çözülür.
+ * Barem sipariş başına BİR KEZ uygulanır; çözülen tutar normal bir kargo bedeli olarak kaydedilir,
+ * böylece o günkü tarife kayda donar.
+ */
+export function resolveFreeformCargo(
+  items: ManualOrderItem[],
+  saleTotal: number,
+  vatRate: number,
+  cargoRules: CargoRuleInput[]
+): { cargo: ManualOrderMoneyCost; cargoDesi: number; cargoRuleMissing: boolean } {
+  let totalDesi = 0;
+  for (const item of items) {
+    const desi = item.desi;
+    if (desi != null && Number.isFinite(desi) && desi >= 0) {
+      totalDesi += desi * Math.max(1, Math.trunc(item.quantity));
+    }
+  }
+  const rule = findCargoRule(
+    filterRulesByPlatform(cargoRules, "shopify"),
+    Math.max(0, saleTotal),
+    "",
+    totalDesi || 1
+  );
+  const resolved = rule
+    ? resolveVatableCost(rule.cargoCost, rule.vatIncluded !== false, vatRate)
+    : { gross: 0, inputVat: 0 };
+  return {
+    cargo: { amount: resolved.gross, hasVatInvoice: !!rule },
+    cargoDesi: totalDesi,
+    cargoRuleMissing: !rule,
+  };
+}
+
+/**
+ * Serbest siparişin kalem maliyetlerini ve kargosunu güncel ayarlara göre yeniden çözer.
+ * Ekran canlı önizlemede, kayıt yolu da yazmadan hemen önce bunu çağırır.
+ */
+export function applyFreeformResolution(
+  draft: ManualOrderDraft,
+  context: FreeformCostContext
+): ManualOrderDraft {
+  if (draft.mode !== "freeform") return draft;
+
+  const items = draft.items.map((item): ManualOrderItem => {
+    const production = item.production ?? null;
+    if (hasProductionInput(production)) {
+      const calc = resolveFreeformProduction(production, context);
+      return {
+        ...item,
+        productId: null,
+        imageUrl: null,
+        costKnown: calc.costKnown,
+        productionCost: calc.productionCost,
+        packagingCost: 0,
+        filamentCost: calc.filamentCost,
+        packagingComponents: null,
+        costSource: "detailed",
+        desi: item.desi ?? null,
+        production: {
+          filamentTypeId: production!.filamentTypeId ?? null,
+          filamentWeight: production!.filamentWeight ?? null,
+          printTimeHours: production!.printTimeHours ?? null,
+          wasteRate: production!.wasteRate ?? null,
+        },
+        manualUnitCost: null,
+        manualCostHasVatInvoice: false,
+      };
+    }
+    return {
+      ...item,
+      productId: null,
+      imageUrl: null,
+      costKnown: item.manualUnitCost != null,
+      productionCost: 0,
+      packagingCost: 0,
+      filamentCost: 0,
+      packagingComponents: null,
+      costSource: "manual",
+      desi: item.desi ?? null,
+      production: null,
+      manualUnitCost: item.manualUnitCost ?? null,
+      manualCostHasVatInvoice: item.manualCostHasVatInvoice ?? false,
+    };
+  });
+
+  const cargo = resolveFreeformCargo(
+    items,
+    draft.saleTotal,
+    draft.vatRate,
+    context.cargoRules
+  );
+  return {
+    ...draft,
+    items,
+    cargo: cargo.cargo,
+    cargoAuto: true,
+    cargoDesi: cargo.cargoDesi,
+    cargoRuleMissing: cargo.cargoRuleMissing,
+  };
+}
+
+function validateProduction(production: ManualOrderProduction, itemName: string): void {
+  const checks: [number | null | undefined, number, string][] = [
+    [production.filamentWeight, 100_000, "filament gramajı"],
+    [production.printTimeHours, 10_000, "baskı süresi"],
+    [production.wasteRate, 1, "fire payı"],
+  ];
+  for (const [value, max, label] of checks) {
+    if (value == null) continue;
+    if (!Number.isFinite(value) || value < 0 || value > max) {
+      throw new Error(`${itemName}: ${label} değerini kontrol edin.`);
+    }
+  }
+}
+
+function validateDraft(draft: ManualOrderDraft): void {
   if (draft.mode !== "catalog" && draft.mode !== "freeform") {
     throw new Error("Sipariş türü geçersiz.");
   }
@@ -215,6 +476,13 @@ function validateDraft(draft: ManualOrderCalculationInput): void {
     ) {
       throw new Error(`${item.name}: birim maliyet negatif olamaz.`);
     }
+    if (
+      item.desi != null &&
+      (!Number.isFinite(item.desi) || item.desi < 0 || item.desi > 999)
+    ) {
+      throw new Error(`${item.name}: desi 0 ile 999 arasında olmalı.`);
+    }
+    if (item.production) validateProduction(item.production, item.name.trim() || "Sipariş kalemi");
   }
 }
 
@@ -261,19 +529,24 @@ function rowToManualOrder(row: ManualOrderRow): ManualOrder {
   };
 }
 
-function normalizedWrite(input: ManualOrderWriteInput) {
+async function normalizedWrite(input: ManualOrderWriteInput) {
   validateDraft(input.draft);
   if (!STATUS_KINDS.has(input.statusKind)) throw new Error("Sipariş durumu geçersiz.");
   const orderedAt = asIso(input.orderedAt);
   const customerName = normalizeText(input.customerName, 160, "Müşteri adı");
   const note = normalizeText(input.note, 1_000, "Not");
   const requestedOrderNumber = normalizeText(input.orderNumber, 80, "Sipariş numarası");
-  const storedItems: ManualOrderStoredItem[] = input.draft.items.map((item) => ({
+  // Serbest siparişte maliyet ve kargo, yazmadan hemen önce güncel ayar/barem ile çözülür.
+  const resolvedDraft =
+    input.draft.mode === "freeform"
+      ? applyFreeformResolution(input.draft, await getFreeformCostContext())
+      : input.draft;
+  const storedItems: ManualOrderItem[] = resolvedDraft.items.map((item) => ({
     ...item,
-    kind: input.draft.mode,
+    kind: resolvedDraft.mode,
   }));
-  const storedDraft: ManualOrderCalculationInput = {
-    ...input.draft,
+  const storedDraft: ManualOrderDraft = {
+    ...resolvedDraft,
     items: storedItems,
   };
   const breakdown = calculateManualOrder(storedDraft);
@@ -333,7 +606,7 @@ export async function getManualOrder(id: string): Promise<ManualOrder | null> {
 
 export async function createManualOrder(input: ManualOrderWriteInput): Promise<string> {
   await ensureManualOrderSchema();
-  const normalized = normalizedWrite(input);
+  const normalized = await normalizedWrite(input);
   const id = newId("mo_");
   const orderNumber = normalized.orderNumber ?? generatedOrderNumber();
   const now = new Date().toISOString();
@@ -375,7 +648,7 @@ export async function updateManualOrder(
   input: ManualOrderWriteInput
 ): Promise<void> {
   await ensureManualOrderSchema();
-  const normalized = normalizedWrite(input);
+  const normalized = await normalizedWrite(input);
   const current = await getManualOrder(id);
   if (!current) throw new Error("Manuel sipariş bulunamadı.");
   const result = await execute(
