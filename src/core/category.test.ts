@@ -31,9 +31,19 @@ describe("kategori normalizasyonu", () => {
 });
 
 describe("categoryMatches", () => {
-  it("kuralda kategori yoksa tüm kategorilere uyar", () => {
+  it("kuralda kategori HİÇ yoksa tüm kategorilere uyar", () => {
     expect(categoryMatches(null, "Herhangi")).toBe(true);
-    expect(categoryMatches("   ", "Herhangi")).toBe(true);
+    expect(categoryMatches(undefined, "Herhangi")).toBe(true);
+  });
+
+  /**
+   * Kategori alanı DOLU ama yalnız boşluksa kullanıcı bir şey yazmaya çalışmış ama anlamlı bir
+   * değer girmemiştir. Bunu "tüm kategoriler" saymak, yanlışlıkla boşluk bırakılmış bir gider
+   * kuralını HER ürünün kârından düşürür — sessiz para kaybı. Eşleşme yok sayılır.
+   */
+  it("kategori yalnız boşluktan ibaretse hiçbir ürüne uymaz", () => {
+    expect(categoryMatches("   ", "Herhangi")).toBe(false);
+    expect(categoryMatches("	", "Herhangi")).toBe(false);
   });
 
   it("Türkçe büyük/küçük harf farkına takılmaz", () => {

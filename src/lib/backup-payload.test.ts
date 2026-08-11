@@ -12,19 +12,27 @@ const state = vi.hoisted(() => ({
   maxInFlight: 0,
 }));
 
+async function fakeRead(table: string): Promise<unknown[]> {
+  state.inFlight++;
+  state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  state.inFlight--;
+  return state.tables[table] ?? [];
+}
+
 function fakeClient() {
   return new Proxy(
     {},
     {
-      get: (_target, model: string) => ({
-        findMany: async () => {
-          state.inFlight++;
-          state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          state.inFlight--;
-          return state.tables[model] ?? [];
-        },
-      }),
+      get: (_target, model: string) => {
+        // Satış geçmişi ham SQL ile okunuyor (Prisma istemcisi bu tabloyu üretilmiş
+        // istemcide taşımayabiliyor) → sahte istemci de o yolu tanımalı.
+        if (model === "$queryRawUnsafe") {
+          return async (sql: string) =>
+            fakeRead(/OrderItemSnapshot/.test(sql) ? "orderItemSnapshot" : "unknownRawTable");
+        }
+        return { findMany: () => fakeRead(model) };
+      },
     }
   );
 }
@@ -106,5 +114,41 @@ describe("yedek gövdesi", () => {
     state.maxInFlight = 0;
     await buildBackupPayload();
     expect(state.maxInFlight).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * REGRESYON: satış geçmişi yedeğe HİÇ girmiyordu. Geri yükleme (yeni bilgisayar, bozulan
+ * veritabanı, Turso taşıma) o geçmişi KALICI olarak siler — pazaryeri penceresi 30-60 gün
+ * olduğu için geri de getirilemez. Üretim Planı'ndaki satış hızı ve ölü stok boşalırdı.
+ */
+describe("satış geçmişi yedeğe girer", () => {
+  it("kalem satırlarını gövdeye koyar", async () => {
+    state.tables.orderItemSnapshot = [
+      {
+        id: "i1",
+        platform: "shopify",
+        externalOrderId: "SIP-1",
+        lineIndex: 0,
+        orderedAt: 1_754_870_000_000,
+        productId: "p1",
+        productName: "Test ürünü",
+        quantity: 2,
+        unitPriceKurus: 10_000,
+        lineRevenueKurus: 20_000,
+        statusKind: "delivered",
+        currency: "TRY",
+      },
+    ];
+
+    const { buildBackupPayload } = await import("./backup-payload");
+    const payload = await buildBackupPayload();
+
+    expect(payload.orderItemSnapshots).toHaveLength(1);
+    expect(payload.orderItemSnapshots[0]).toMatchObject({
+      externalOrderId: "SIP-1",
+      lineIndex: 0,
+      quantity: 2,
+    });
   });
 });

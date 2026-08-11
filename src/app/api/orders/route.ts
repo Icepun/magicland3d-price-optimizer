@@ -24,7 +24,7 @@ import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/co
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
 import {
-  persistOrderFinanceSnapshots,
+  scheduleOrderFinanceSnapshots,
   type FinanceSnapshotItem,
 } from "@/lib/order-finance-snapshots";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
@@ -1179,7 +1179,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   // kayıt varsa olduğu gibi korunur; bilgi tamamlandığında normal akışta güncellenir.
   const persistableOrders = orders.filter((order) => !order.dataIncomplete);
   try {
-    await persistOrderFinanceSnapshots(persistableOrders, snapshotItemsByOrderId);
+    // Finans geçmişi yazımı YANIT YOLUNDA DEĞİL: ilk dolumda veya toplu statü değişiminde
+    // yüzlerce satır yazılıyor ve uzak-HTTP tek mutex'inde uygulama yarım dakika kilitleniyordu.
+    // "Ateşle ve unut" — çağıran beklemez, hata fırlatmaz, aynı anda tek tur çalışır.
+    scheduleOrderFinanceSnapshots(persistableOrders, snapshotItemsByOrderId);
     financeHistory = {
       ok: true,
       syncedOrders: persistableOrders.filter(

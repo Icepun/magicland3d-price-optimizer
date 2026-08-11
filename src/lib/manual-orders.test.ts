@@ -470,3 +470,122 @@ describe("custom sipariş — üretim girdileri ve desiden kargo", () => {
     });
   });
 });
+
+/**
+ * DONMUŞ FİNANS KALKANI — bir kez delindi, tekrar delinmesin.
+ *
+ * Kayıtlı manuel siparişin maliyeti/kargosu/kârı, kullanıcı finansal bir GİRDİYİ değiştirmedikçe
+ * DEĞİŞMEMELİ. Geçmiş bir siparişi "Teslim Edildi" yapmak ya da not eklemek, o günün filament
+ * fiyatlarıyla ve kargo baremiyle yeniden hesaplamayı TETİKLEMEMELİ.
+ *
+ * Nasıl delinmişti: serbest siparişte kargo desiden türetilmeye başlandı; istemci sıfır
+ * gönderirken kayıtta çözülmüş tutar duruyordu ve kalem imzası desi/üretim alanlarını görmüyordu.
+ * İki imza asla eşleşemediği için hızlı yol ölmüş, HER metadata düzenlemesi finansı yeniden
+ * yazmıştı.
+ */
+describe("custom siparişte donmuş finans korunur", () => {
+  it("yalnız durum değişince maliyet, kargo ve kâr AYNI kalır", async () => {
+    const olustur = () =>
+      manualOrders.ManualOrderInputSchema.parse({
+        orderedAt: "2026-08-11T10:00:00.000Z",
+        orderNumber: "M-DONMUS-1",
+        customerName: null,
+        statusKind: "processing",
+        currency: "TRY",
+        saleTotal: 600,
+        note: null,
+        mode: "freeform",
+        includeProductCost: true,
+        includePackaging: false,
+        commission: { amount: 0, hasVatInvoice: false },
+        cargo: { amount: 0, hasVatInvoice: false },
+        expenseRules: [],
+        customExpenses: [],
+        items: [
+          {
+            id: "donmus-1",
+            name: "Özel figür",
+            quantity: 1,
+            unitCost: null,
+            desi: 2,
+            production: {
+              filamentTypeId: "pla-siyah",
+              filamentWeight: 50,
+              printTimeHours: 2,
+              wasteRate: 0,
+            },
+          },
+        ],
+      });
+
+    const created = await manualOrders.createManualOrder(olustur());
+    const ilkKar = created.profitKurus;
+    const ilkMaliyet = created.totalCostKurus;
+    expect(ilkKar).not.toBeNull();
+
+    // Sipariş kaydedildikten SONRA hem filament zamlanıyor hem kargo baremi değişiyor.
+    await db.filamentType.update({
+      where: { id: "pla-siyah" },
+      data: { costPerGram: 3.6 }, // 1,20 → 3,60 (üç katı)
+    });
+    await db.cargoRule.update({
+      where: { id: "shopify-0-5" },
+      data: { cargoCost: 250 }, // 118 → 250
+    });
+
+    // Kullanıcı YALNIZCA durumu ve notu değiştiriyor — hiçbir finansal girdiye dokunmuyor.
+    const guncel = await manualOrders.updateManualOrder(created.id, {
+      ...olustur(),
+      statusKind: "delivered",
+      note: "Kargoya verildi",
+    });
+
+    expect(guncel.statusKind).toBe("delivered");
+    expect(guncel.note).toBe("Kargoya verildi");
+    // Finans DONMUŞ olmalı — zam ve yeni barem geçmiş siparişe yansımamalı.
+    expect(guncel.profitKurus).toBe(ilkKar);
+    expect(guncel.totalCostKurus).toBe(ilkMaliyet);
+  });
+
+  it("finansal girdi gerçekten değişince yeniden hesaplanır", async () => {
+    const temel = {
+      orderedAt: "2026-08-11T10:00:00.000Z",
+      orderNumber: "M-DONMUS-2",
+      customerName: null,
+      statusKind: "processing" as const,
+      currency: "TRY" as const,
+      saleTotal: 600,
+      note: null,
+      mode: "freeform" as const,
+      includeProductCost: true,
+      includePackaging: false,
+      commission: { amount: 0, hasVatInvoice: false },
+      cargo: { amount: 0, hasVatInvoice: false },
+      expenseRules: [],
+      customExpenses: [],
+      items: [
+        {
+          id: "donmus-2",
+          name: "Özel figür",
+          quantity: 1,
+          unitCost: null,
+          desi: 2,
+          production: { filamentTypeId: "pla-siyah", filamentWeight: 50, printTimeHours: 2 },
+        },
+      ],
+    };
+    const created = await manualOrders.createManualOrder(
+      manualOrders.ManualOrderInputSchema.parse(temel)
+    );
+
+    // Gramaj DEĞİŞTİ → bu gerçek bir finansal girdi değişikliği, yeniden hesap BEKLENİR.
+    const guncel = await manualOrders.updateManualOrder(
+      created.id,
+      manualOrders.ManualOrderInputSchema.parse({
+        ...temel,
+        items: [{ ...temel.items[0], production: { ...temel.items[0].production, filamentWeight: 100 } }],
+      })
+    );
+    expect(guncel.totalCostKurus).not.toBe(created.totalCostKurus);
+  });
+});

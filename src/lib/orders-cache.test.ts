@@ -156,13 +156,23 @@ describe("orders disk kopyası tazeliği", () => {
     vi.resetModules();
   });
 
-  it("yarım günden eski disk kopyasını kullanmaz", async () => {
-    process.env.MLHUB_ORDERS_CACHE_FILE = writeDiskCache(8 * 60 * 60_000);
+  it("üç günden eski disk kopyasını kullanmaz", async () => {
+    process.env.MLHUB_ORDERS_CACHE_FILE = writeDiskCache(4 * 24 * 60 * 60_000);
     vi.resetModules();
 
     const mod = await import("./orders-cache");
 
     expect(mod.getOrdersCache()).toBeNull();
+  });
+
+  /** En sık senaryo: akşam kapat, sabah aç. Kalıcı önbelleğin varlık sebebi bu — soğumamalı. */
+  it("bir gece boyunca kapalı kaldıktan sonra disk kopyası hâlâ kullanılır", async () => {
+    process.env.MLHUB_ORDERS_CACHE_FILE = writeDiskCache(14 * 60 * 60_000);
+    vi.resetModules();
+
+    const mod = await import("./orders-cache");
+
+    expect(mod.getOrdersCache()).not.toBeNull();
   });
 
   it("taze disk kopyasını hesaplama zamanıyla birlikte kullanır", async () => {

@@ -25,11 +25,15 @@ export function categoryMatches(
   ruleCategoryName: string | null | undefined,
   productCategoryName: string
 ): boolean {
+  // Kuralda kategori HİÇ yoksa (null/boş) kural tüm kategorilere uygulanır — bu bilinçli.
   if (!ruleCategoryName) return true;
 
   const ruleCategory = normalizeCategory(ruleCategoryName);
   const productCategory = normalizeCategory(productCategoryName);
-  if (!ruleCategory) return true;
+  // Kategori alanı DOLU ama yalnız boşluktan ibaretse: kullanıcı bir şey yazmak istemiş ama
+  // anlamlı bir değer girmemiş. Bunu "tüm kategoriler" saymak, yanlışlıkla boşluk bırakılmış
+  // bir gider kuralını her ürünün kârından düşürür. Eşleşme YOK sayılır.
+  if (!ruleCategory) return false;
 
   return productCategory.includes(ruleCategory);
 }

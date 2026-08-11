@@ -63,7 +63,11 @@ export default function ModelsPage() {
           <div className="flex-1">
             <h1 className="text-2xl font-bold tracking-tight">Model Kütüphanesi</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Ürünlerin baskı dosyaları. Yeşil yazıcı rozetine tıkla → parçaları gör ve bas.
+              Ürünlerin baskı dosyaları. Yeşil yazıcı rozetine tıkla → parçaları gör ve bas.{" "}
+              <Link href="/planner" className="font-medium text-primary hover:underline">
+                Üretim Planı
+              </Link>{" "}
+              hangi ürünü hangi yazıcıya göndereceğini söyler.
             </p>
           </div>
           <div className="hidden sm:flex items-center gap-4 text-right">
@@ -231,8 +235,14 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
           ))}
         </div>
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
+        {/* Sıra otomatik ilerlemiyor: her parçayı kullanıcı başlatır. Söz verip yapmamak yerine
+            ne olduğunu olduğu gibi yaz; planlama Üretim Planı'nda. */}
         <p className="text-[11px] text-muted-foreground/70">
-          Çok parçalı baskıda parçaları sırayla bas — biri biterken diğerini başlat.
+          Parçalar tek tek basılır: biri bitince buradan diğerini başlat.{" "}
+          <Link href="/planner" className="text-primary hover:underline">
+            Üretim Planı
+          </Link>{" "}
+          sıranın ne olduğunu gösterir.
         </p>
       </DialogContent>
     </Dialog>

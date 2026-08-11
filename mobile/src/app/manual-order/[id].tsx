@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { vatRateOf } from "@core/vat";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
@@ -160,7 +161,7 @@ function resolveCatalogItem(
     name: product.name,
     imageUrl: product.imageUrl,
     quantity: 1,
-    costKnown: product.cost != null,
+    costKnown: resolved?.productionCostKnown ?? false,
     productionCost: resolved?.productionCost ?? 0,
     packagingCost: resolved?.packagingCost ?? 0,
     filamentCost: resolved?.filamentCost ?? 0,
@@ -466,7 +467,7 @@ function ManualOrderForm({
   const draft = useMemo<ManualOrderDraft>(() => {
     const base: ManualOrderDraft = {
       saleTotal: Math.max(0, parseTrNumber(saleTotal) ?? 0),
-      vatRate: existing?.draft.vatRate ?? Number(settings.vatRate ?? 20),
+      vatRate: existing?.draft.vatRate ?? vatRateOf(settings),
       mode,
       items: resolvedItems,
       includeProductCost,

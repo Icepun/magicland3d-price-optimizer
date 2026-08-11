@@ -10,6 +10,7 @@
  * kilitler.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FINANCE_CALCULATION_VERSION } from "@/core/finance-version";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -160,7 +161,7 @@ describe("recalculateFinanceMonth — maliyet düzeltmesi geçmiş aya yansır",
     const result = await recalculate(MONTH);
 
     expect(result.changedOrders).toBe(1);
-    expect((await snapshotOf("ty-r1")).calculationVersion).toBe(2);
+    expect((await snapshotOf("ty-r1")).calculationVersion).toBe(FINANCE_CALCULATION_VERSION);
   });
 });
 

@@ -5,7 +5,12 @@
  * sürüm damgasını 1'e düşürüyordu. "Sürümü N'den eski satırları yeniden hesapla" türü bir
  * geri-doldurma yazıldığı gün yanlış kümeyi seçerdi. Tek kaynak burada (sync-core ile paylaşılır).
  */
-export const FINANCE_CALCULATION_VERSION = 2;
+// v3: bu sürümde sipariş kârının çekirdek formülü değişti (maliyet bilinirliği kapısı, tamamen
+// iade edilmiş satırın elenmesi, KDV yedeği, gider kuralı kategori eşleşmesi). Sürümü artırmak
+// hiçbir rakamı KENDİLİĞİNDEN değiştirmez; yalnızca eski damgalı ayları "güncel değil" olarak
+// işaretler ki kullanıcı isterse "Bu ayı yeniden hesapla" diyebilsin.
+// KURAL: çekirdek kâr formülüne dokunan her değişiklikte bu sayı artar.
+export const FINANCE_CALCULATION_VERSION = 3;
 
 /**
  * Bu satır GÜNCEL hesapla mı yazılmış?

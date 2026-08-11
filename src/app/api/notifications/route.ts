@@ -46,7 +46,8 @@ async function inventoryAlerts(): Promise<AppAlert[]> {
   const alerts: AppAlert[] = [];
 
   const lowStock = await prisma.product.findMany({
-    where: { isActive: true, hidden: false, stock: { lte: 1 } },
+    // Sipariş üzerine üretilende stok 0 normaldir — uyarı üretmez (Panel ile aynı kural).
+    where: { isActive: true, hidden: false, madeToOrder: false, stock: { lte: 1 } },
     select: { id: true, name: true, stock: true },
     take: 50,
   });

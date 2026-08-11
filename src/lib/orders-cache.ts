@@ -34,7 +34,12 @@ const DISK_FORMAT = 2;
  * canlı çekim yapılır (ekranda çekim göstergesi zaten var). Daha genç kopyalar hızlı açılış
  * için kullanılır ama gövdedeki computedAt sayesinde ekranda "ne zaman güncellendi" yazar.
  */
-const MAX_DISK_AGE_MS = 6 * 60 * 60_000;
+// Disk kopyasının kabul edilebilir yaşı. 14 gün fazlaydı (bayat veri sessizce güncel gibi
+// dönüyordu), 6 saat ise fazla sertti: "akşam kapat, sabah aç" senaryosunda kopya HER ZAMAN
+// eskiyor ve kalıcı önbelleğin varlık sebebi olan anında açılış çalışmıyordu. 3 gün ikisinin
+// arasında: hafta içi her sabah anında açılır, gerçekten bayat veri de dönmez. Yanıt kendi
+// hesap zamanını taşıdığı için ekran zaten "X önce güncellendi" diyor.
+const MAX_DISK_AGE_MS = 3 * 24 * 60 * 60_000;
 
 /**
  * Kural değişimi hesabın ortasına denk gelirse kaç kez yeniden hesaplanacağının sınırı.

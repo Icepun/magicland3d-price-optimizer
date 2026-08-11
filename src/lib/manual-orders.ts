@@ -480,9 +480,82 @@ export function validateManualOrderCapturedFinance(
   }
 }
 
-function inputFinancialSignature(input: ManualOrderInput): string {
+/**
+ * "Kullanıcı finansal bir GİRDİYİ değiştirdi mi?" imzası.
+ *
+ * Bu imza tuttuğu sürece kayıtlı finans DONMUŞ kalır: yalnız durum/müşteri/not gibi metadata
+ * yazılır ve maliyet, kargo, kâr o günün fiyatlarıyla YENİDEN HESAPLANMAZ. Geçmiş bir siparişi
+ * "Teslim Edildi" yapmak kârını değiştirmemeli.
+ *
+ * ⚠️ İki tarafın da AYNI alanları görmesi şart. Serbest (custom) siparişte kargo artık kullanıcı
+ * girdisi DEĞİL, desiden türetiliyor: istemci sıfır gönderiyor, kayıtta çözülmüş tutar duruyor.
+ * Kargo imzaya girerse iki taraf asla eşleşmez, hızlı yol ölür ve HER metadata düzenlemesi
+ * finansı yeniden yazar. Bu yüzden serbest modda kargo imzadan çıkarılır — onu belirleyen
+ * girdiler (desi, adet) zaten kalemlerin içinde.
+ */
+function financialSignature(
+  mode: "catalog" | "freeform",
+  parts: {
+    saleTotal: number;
+    includeProductCost: boolean;
+    includePackaging: boolean;
+    commission: unknown;
+    cargo: unknown;
+    expenseRules: unknown;
+    customExpenses: unknown;
+    items: unknown;
+  }
+): string {
   return JSON.stringify({
-    mode: input.mode,
+    mode,
+    saleTotal: parts.saleTotal,
+    includeProductCost: parts.includeProductCost,
+    includePackaging: parts.includePackaging,
+    commission: parts.commission,
+    // Serbest modda türetilmiş değer → imzaya girmez (yukarıdaki nota bak).
+    cargo: mode === "freeform" ? null : parts.cargo,
+    expenseRules: parts.expenseRules,
+    customExpenses: parts.customExpenses,
+    items: parts.items,
+  });
+}
+
+/** Serbest kalemin finansal girdileri — iki taraf da BU şekilde serileştirir. */
+function freeformItemSignature(item: {
+  id?: string;
+  name: string;
+  quantity: number;
+  unitCost?: number | null;
+  manualCostHasVatInvoice?: boolean;
+  desi?: number | null;
+  production?: {
+    filamentTypeId?: string | null;
+    filamentWeight?: number | null;
+    printTimeHours?: number | null;
+    wasteRate?: number | null;
+  } | null;
+}) {
+  const p = item.production ?? null;
+  return {
+    id: item.id ?? null,
+    name: item.name,
+    quantity: item.quantity,
+    unitCost: item.unitCost ?? null,
+    manualCostHasVatInvoice: item.manualCostHasVatInvoice ?? false,
+    desi: item.desi ?? null,
+    production: p
+      ? {
+          filamentTypeId: p.filamentTypeId ?? null,
+          filamentWeight: p.filamentWeight ?? null,
+          printTimeHours: p.printTimeHours ?? null,
+          wasteRate: p.wasteRate ?? null,
+        }
+      : null,
+  };
+}
+
+function inputFinancialSignature(input: ManualOrderInput): string {
+  return financialSignature(input.mode, {
     saleTotal: input.saleTotal,
     includeProductCost: input.includeProductCost,
     includePackaging: input.includePackaging,
@@ -490,15 +563,24 @@ function inputFinancialSignature(input: ManualOrderInput): string {
     cargo: input.cargo,
     expenseRules: input.expenseRules,
     customExpenses: input.customExpenses,
-    items: input.items,
+    items:
+      input.mode === "catalog"
+        ? input.items.map((item) => {
+            const c = item as { id?: string; productId: string; quantity: number };
+            return { id: c.id ?? null, productId: c.productId, quantity: c.quantity };
+          })
+        : input.items.map((item) =>
+            freeformItemSignature(
+              item as Parameters<typeof freeformItemSignature>[0]
+            )
+          ),
   });
 }
 
 function storedFinancialSignature(order: ManualOrderRecordShape): string {
   const items = parseManualOrderItems(order.itemsJson).items;
   const draft = parseManualOrderBreakdown(order.breakdownJson).draft;
-  return JSON.stringify({
-    mode: draft.mode,
+  return financialSignature(draft.mode, {
     saleTotal: draft.saleTotal,
     includeProductCost: draft.includeProductCost,
     includePackaging: draft.includePackaging,
@@ -516,14 +598,17 @@ function storedFinancialSignature(order: ManualOrderRecordShape): string {
             productId: item.productId,
             quantity: item.quantity,
           }))
-        : items.map((item) => ({
-            id: item.id,
-            name: item.name,
-            quantity: item.quantity,
-            unitCost: item.manualUnitCost ?? null,
-            manualCostHasVatInvoice:
-              item.manualCostHasVatInvoice ?? false,
-          })),
+        : items.map((item) =>
+            freeformItemSignature({
+              id: item.id,
+              name: item.name,
+              quantity: item.quantity,
+              unitCost: item.manualUnitCost ?? null,
+              manualCostHasVatInvoice: item.manualCostHasVatInvoice ?? false,
+              desi: item.desi ?? null,
+              production: item.production ?? null,
+            })
+          ),
   });
 }
 

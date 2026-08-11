@@ -431,7 +431,10 @@ async function loadScanProducts(orders: ScanOrder[]): Promise<ScanProduct[]> {
 /** Düşük stok / sitede tükenen / azalan filament — bildirim ucundaki eşiklerle BİREBİR aynı. */
 async function loadInventory(): Promise<ScanInventory> {
   const lowStock = await prisma.product.findMany({
-    where: { isActive: true, hidden: false, stock: { lte: 1 } },
+    // "Sipariş üzerine üretilir" ürünlerde stok TANIMI GEREĞİ 0'dır → hepsi kalıcı KRİTİK
+    // "Stok bitti" satırı doğururdu ve zil sürekli kırmızı kalırdı. Panel de bunları
+    // dışlıyor (api/dashboard: !madeToOrder) — aynı kural.
+    where: { isActive: true, hidden: false, madeToOrder: false, stock: { lte: 1 } },
     select: { id: true, name: true, stock: true },
     take: 50,
   });

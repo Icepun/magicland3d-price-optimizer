@@ -1,4 +1,5 @@
 import { simulatePrice } from "@core/pricing-engine";
+import { vatRateOf } from "@core/vat";
 import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules";
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import {
@@ -95,7 +96,7 @@ export function computeProductProfit(
   const packagingCost = resolved?.packagingCost ?? 0;
   const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
   const hasCost = resolved?.productionCostKnown ?? false;
-  const vatRate = Number(settings.vatRate ?? 0);
+  const vatRate = vatRateOf(settings);
 
   const productRules = withProductCommissionRule(detail, rules.commission);
 

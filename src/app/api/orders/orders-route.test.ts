@@ -33,7 +33,8 @@ vi.mock("@/lib/orders-cache", () => ({
 }));
 vi.mock("@/lib/push-notify", () => ({ pushToAllDevices: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-finance-snapshots", () => ({
-  persistOrderFinanceSnapshots: vi.fn(async (orders: any[]) => {
+  // Yazım artık "ateşle ve unut" (yanıt yolunda değil) → senkron çağrı, Promise döndürmez.
+  scheduleOrderFinanceSnapshots: vi.fn((orders: any[]) => {
     h.state.persisted = orders;
   }),
 }));

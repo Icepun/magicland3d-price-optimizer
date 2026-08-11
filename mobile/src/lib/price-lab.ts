@@ -1,4 +1,5 @@
 import { simulatePrice } from "@core/pricing-engine";
+import { vatRateOf } from "@core/vat";
 import {
   platformMinOrderQty,
   platformPriceBreakpoints,
@@ -60,7 +61,7 @@ export function computePriceLab(
   const packagingCost = resolved.packagingCost;
   const filamentMatCost = resolved.filamentCost; // KDV iadesine giren malzeme payı
 
-  const vatRate = Number(settings.vatRate ?? 0);
+  const vatRate = vatRateOf(settings);
   const productRules = withProductCommissionRule(detail, rules.commission);
 
   // Listing olmayan platformda masaüstü null-listing ile simüle eder (route:66-68) — aynı şekil.

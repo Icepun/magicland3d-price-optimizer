@@ -215,6 +215,22 @@ const OrderFinanceSnapshotSchema = z.object({
   actualCommissionKurus: sqliteInt.nullable().optional(),
 });
 
+/** Ürün bazlı satış geçmişi — yedeğe bu oturumda eklendi, eski yedeklerde YOK (opsiyonel). */
+const OrderItemSnapshotSchema = z.object({
+  id,
+  platform: id,
+  externalOrderId: id,
+  lineIndex: integer.nonnegative(),
+  orderedAt: z.coerce.date(),
+  productId: nullableString,
+  productName: z.string(),
+  quantity: integer.nonnegative(),
+  unitPriceKurus: sqliteInt,
+  lineRevenueKurus: sqliteInt,
+  statusKind: z.string(),
+  currency: z.string().optional(),
+});
+
 const PlatformOrderFinancialSchema = z.object({
   id,
   platform: id,
@@ -367,6 +383,7 @@ const ImportSchema = z.object({
   expenseRules: z.array(ExpenseRuleSchema).optional(),
   actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
+  orderItemSnapshots: z.array(OrderItemSnapshotSchema).optional().default([]),
   platformOrderFinancials: z
     .array(PlatformOrderFinancialSchema)
     .optional()
@@ -449,6 +466,7 @@ interface ImportStats {
   actualExpenses: number;
   orderFinanceSnapshots: number;
   orderFinanceSnapshotsSkipped: number;
+  orderItemSnapshots: number;
   platformOrderFinancials: number;
   manualOrders: number;
   costTemplates: number;
@@ -508,6 +526,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
     actualExpenses: 0,
     orderFinanceSnapshots: 0,
     orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
+    orderItemSnapshots: 0,
     platformOrderFinancials: 0,
     manualOrders: 0,
     costTemplates: 0,
@@ -845,6 +864,58 @@ async function runImport(data: ImportPayload, emit: Emit) {
     }),
   });
   stats.orderFinanceSnapshots = jobs[jobs.length - 1].stmts.length;
+
+  // Ürün bazlı satış geçmişi. Yedeğe bu oturumda eklendi → eski yedeklerde bu dizi boştur ve
+  // mevcut kayıtlara DOKUNULMAZ (silme yok, yalnız ekleme/güncelleme).
+  const itemSnapshots = data.orderItemSnapshots.filter((row) => row.platform !== "manual");
+  const itemIdByKey = new Map<string, string>();
+  if (itemSnapshots.length) {
+    for (const row of await readRows<{
+      id: string;
+      platform: string;
+      externalOrderId: string;
+      lineIndex: number;
+    }>(`SELECT id, platform, externalOrderId, lineIndex FROM OrderItemSnapshot`)) {
+      itemIdByKey.set(
+        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`,
+        row.id
+      );
+    }
+  }
+  jobs.push({
+    label: "Satış geçmişi",
+    statKey: "orderItemSnapshots",
+    stmts: itemSnapshots.map((row) => {
+      const fields: Row = {
+        orderedAt: row.orderedAt,
+        productId: row.productId ?? null,
+        productName: row.productName,
+        quantity: row.quantity,
+        unitPriceKurus: row.unitPriceKurus,
+        lineRevenueKurus: row.lineRevenueKurus,
+        statusKind: row.statusKind,
+        currency: row.currency ?? "TRY",
+        syncedAt: stamp,
+      };
+      const existingId = itemIdByKey.get(
+        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`
+      );
+      if (existingId) return updateById("OrderItemSnapshot", "id", existingId, fields);
+      return upsert(
+        "OrderItemSnapshot",
+        ["platform", "externalOrderId", "lineIndex"],
+        {
+          id: row.id,
+          platform: row.platform,
+          externalOrderId: row.externalOrderId,
+          lineIndex: row.lineIndex,
+          ...fields,
+        },
+        fields
+      );
+    }),
+  });
+  stats.orderItemSnapshots = jobs[jobs.length - 1].stmts.length;
 
   const financialIdByKey = new Map<string, string>();
   if (data.platformOrderFinancials.length) {
