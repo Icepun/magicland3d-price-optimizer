@@ -23,10 +23,12 @@ describe("mobil biçimlendirme (tr-TR)", () => {
     expect(formatCurrency(1234.56, { decimals: 0 })).not.toContain(",");
   });
 
-  it("geçersiz tutarı 0 kabul eder — ekranda NaN görünmez", () => {
-    expect(formatCurrency(Number.NaN)).toContain("0,00");
-    expect(formatCurrency(null)).toContain("0,00");
-    expect(formatCurrency(undefined)).toContain("0,00");
+  /** BİLİNMEYEN ≠ SIFIR — masaüstü src/lib/format.ts ile aynı kural. */
+  it("geçersiz tutarı — yazar, gerçek sıfırı normal yazar", () => {
+    expect(formatCurrency(Number.NaN)).toBe("—");
+    expect(formatCurrency(null)).toBe("—");
+    expect(formatCurrency(undefined)).toBe("—");
+    expect(formatCurrency(0)).toContain("0,00");
   });
 
   it("tanınmayan para birimi kodunda tutarı kaybetmez", () => {

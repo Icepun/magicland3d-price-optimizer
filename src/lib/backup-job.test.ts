@@ -28,7 +28,12 @@ vi.mock("./backup-payload", () => ({
   buildBackupPayload: async () => ({ version: 3, products: [{ id: "p1" }] }),
 }));
 
-const envKeys = ["MLHUB_BACKUP_DIR", "MLHUB_ROUTE_CACHE_DIR", "MLHUB_ORDERS_CACHE_FILE"] as const;
+const envKeys = [
+  "MLHUB_BACKUP_DIR",
+  "MLHUB_ROUTE_CACHE_DIR",
+  "MLHUB_ORDERS_CACHE_FILE",
+  "MLHUB_BACKUP_MAX_BYTES",
+] as const;
 const originalEnv: Record<string, string | undefined> = {};
 const tempDirs: string[] = [];
 
@@ -88,6 +93,40 @@ describe("günlük yedek", () => {
     expect(files.some((f) => f.name === "yedek-2026-01-01-0300.json")).toBe(false);
     expect(files.some((f) => f.name === "yedek-2026-01-05-0300.json")).toBe(false);
     expect(files.some((f) => f.name === "yedek-2026-01-34-0300.json")).toBe(true);
+  });
+
+  /**
+   * Sayı sınırı tek başına yetmiyordu: veri büyüdükçe 30 tam kopya kullanıcı klasöründe
+   * sessizce yüzlerce megabayta çıkabiliyordu.
+   */
+  it("toplam boyut tavanını aşan eski yedekleri düşer, en yenisini asla silmez", async () => {
+    const dir = tempBackupDir();
+    process.env.MLHUB_BACKUP_MAX_BYTES = "300";
+    for (let i = 1; i <= 5; i++) {
+      fs.writeFileSync(
+        path.join(dir, `yedek-2026-02-${String(i).padStart(2, "0")}-0300.json`),
+        "x".repeat(200)
+      );
+    }
+
+    const { runBackupNow, listBackups, backupsTotalBytes } = await import("./backup-job");
+    await runBackupNow();
+
+    const files = listBackups();
+    // En yeni (bu turda yazılan) + tavanı doldurmadan sığan bir önceki kalır.
+    expect(files.length).toBeGreaterThanOrEqual(1);
+    expect(backupsTotalBytes()).toBeLessThanOrEqual(300 + files[0].size);
+    expect(files.some((f) => f.name === "yedek-2026-02-01-0300.json")).toBe(false);
+  });
+
+  it("tek yedek tavandan büyük olsa bile kullanıcıyı yedeksiz bırakmaz", async () => {
+    tempBackupDir();
+    process.env.MLHUB_BACKUP_MAX_BYTES = "1";
+
+    const { runBackupNow, listBackups } = await import("./backup-job");
+    await runBackupNow();
+
+    expect(listBackups()).toHaveLength(1);
   });
 
   it("kullanıcı verisi klasörünü ayar dosyası yollarından türetir", async () => {

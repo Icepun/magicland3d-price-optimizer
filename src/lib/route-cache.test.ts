@@ -87,4 +87,44 @@ describe("route cache", () => {
     const settings = await third.swr("settings:v1", 60_000, async () => ({ vatRate: "BOZUK" }));
     expect(settings).toEqual({ vatRate: "20" });
   });
+  /**
+   * Tek ürün düzenlemesi dört ayrı ön ek düşürüyordu ve her biri önbellek klasörünü baştan
+   * geziyordu. Toplu çağrı, aynı temizliği TEK taramada yapmalı.
+   */
+  it("çok ön ekli temizlik klasörü tek kez tarar ve ilgisiz anahtara dokunmaz", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+
+    const first = await import("./route-cache");
+    await first.swr("products:aktif", 60_000, async () => ({ kar: 1 }));
+    await first.swr("dashboard:v1", 60_000, async () => ({ ciro: 2 }));
+    await first.swr("order-name-index:v1", 60_000, async () => ({ ad: 3 }));
+    await first.swr("settings:v1", 60_000, async () => ({ vatRate: "20" }));
+    expect(fs.readdirSync(dir)).toHaveLength(4);
+
+    // Yeni oturum: hiçbiri bellekte değil → temizlik yalnız disk taramasıyla çalışmalı.
+    vi.resetModules();
+    const second = await import("./route-cache");
+    const readdir = vi.spyOn(fs, "readdirSync");
+    second.bustCaches(["products:", "dashboard:", "order-name-index:"]);
+    expect(readdir).toHaveBeenCalledTimes(1);
+    readdir.mockRestore();
+
+    expect(fs.readdirSync(dir)).toHaveLength(1);
+    const settings = await second.swr("settings:v1", 60_000, async () => ({ vatRate: "BOZUK" }));
+    expect(settings).toEqual({ vatRate: "20" });
+  });
+
+  it("boş ön ek listesi hiçbir şeyi silmez", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+
+    const mod = await import("./route-cache");
+    await mod.swr("products:aktif", 60_000, async () => ({ kar: 1 }));
+    mod.bustCaches([]);
+    mod.bustCaches([""]);
+    expect(fs.readdirSync(dir)).toHaveLength(1);
+  });
 });

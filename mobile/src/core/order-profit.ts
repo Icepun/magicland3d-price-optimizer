@@ -92,6 +92,19 @@ export interface OrderProfitResult {
   /** Sipariş toplamı ile ürün satırları toplamı arasındaki kargo geliri / sipariş indirimi (brüt). */
   orderRevenueAdjustment: number;
   orderRevenueAdjustmentNet: number;
+  /**
+   * Satıştan doğan (hesaplanan) KDV — sipariş cirosunun İÇİNDEKİ KDV.
+   * Motorun satır başına yaptığı ayrıştırmanın (fiyat / vatMultiplier) sipariş düzeyindeki
+   * aynısıdır; yeni bir oran uygulanmaz. Maliyeti bilinmeyen satırlar da satılmıştır → bu
+   * tutar kâr hesabının kapsamına DEĞİL, cironun tamamına dayanır.
+   */
+  outputVat: number;
+  /**
+   * Girdilerin (paketleme, komisyon, kargo, gider, KDV'li malzeme) içinden indirilecek KDV.
+   * Kâra ARTI olarak yansıyan payların TOPLAMIDIR — burada yeniden hesaplanmaz, taşınır.
+   * Kâr kısmi ise (bazı satırların maliyeti bilinmiyor) bu tutar da eksik kalır.
+   */
+  inputVatCredit: number;
 }
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
@@ -99,6 +112,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const vatRate = vatRateOf(settings);
   // Bir maliyetin içindeki KDV payı (indirilecek KDV) — kargo/gider için aynı formül.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  // Fiyatın içindeki KDV'yi ayıran çarpan — simulatePrice ile AYNI (salePriceExVat = fiyat / bu).
+  const vatMultiplier = 1 + (vatRate > 0 ? vatRate / 100 : 0);
 
   const platCargo = filterRulesByPlatform(cargoRules, platform);
   // SABİT gider satır hesabından ÇIKARILIR → aşağıda siparişe bir kez uygulanır.
@@ -119,6 +134,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let missingDesiQty = 0;
   let totalDesi = 0;
   let soloCargo: number | null = null;
+  // İndirilecek KDV: kâra "+" olarak eklenen KDV paylarının aynısı, ayrıca toplanır.
+  let inputVatCredit = 0;
   const matchedCategories = new Set<string>();
   const sharedPackaging = new Map<
     string,
@@ -199,6 +216,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       vatableProductCost: p.filamentCost,
     });
     profit += sim.netProfit;
+    inputVatCredit += sim.inputVatCredit;
     estimatedCommission += sim.commissionCost;
     matchedRevenueGross += lineGross;
     commissionRateRevenue +=
@@ -213,6 +231,11 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     }
     matchedLines++;
   }
+
+  // HESAPLANAN KDV: cironun tamamı üzerinden, motorun kendi ayrıştırmasıyla. Maliyeti
+  // bilinmeyen satırlar da müşteriye satılmıştır; satış KDV'si maliyet bilgisine bağlı değildir.
+  const grossRevenue = Number.isFinite(orderTotal) ? orderTotal : lineRevenueGross;
+  const outputVat = grossRevenue - grossRevenue / vatMultiplier;
 
   if (matchedLines === 0) {
     return {
@@ -229,6 +252,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
       orderRevenueAdjustment: 0,
       orderRevenueAdjustmentNet: 0,
+      outputVat,
+      // Hiçbir satırın maliyeti bilinmiyor → indirilebilecek bir girdi KDV'si de yok.
+      inputVatCredit: 0,
     };
   }
 
@@ -244,7 +270,6 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const orderRevenueAdjustment = Number.isFinite(orderTotal)
     ? orderTotal - lineRevenueGross
     : 0;
-  const vatMultiplier = 1 + (vatRate > 0 ? vatRate / 100 : 0);
   const adjustmentRevenueExVat = orderRevenueAdjustment / vatMultiplier;
   const adjustmentCommissionRate =
     matchedRevenueGross > 0 ? commissionRateRevenue / matchedRevenueGross : 0;
@@ -255,6 +280,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     adjustmentCommission +
     adjustmentCommission * vatFactor;
   profit += orderRevenueAdjustmentNet;
+  inputVatCredit += adjustmentCommission * vatFactor;
 
   // SABİT GİDER — siparişe BİR KEZ (kargoyla simetrik: aynı taban, aynı KDV formülü).
   const categories = [...matchedCategories];
@@ -266,6 +292,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   );
   profit -= orderFixed;
   profit += orderFixed * vatFactor;
+  inputVatCredit += orderFixed * vatFactor;
 
   // Kart/sticker gibi sipariş ve kutu/bant gibi gönderi kalemleri, aynı bileşen için
   // siparişte yalnız bir kez uygulanır. Farklı ürün seçimlerinde pahalı olan kazanır.
@@ -275,6 +302,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   );
   profit -= sharedPackagingCost;
   profit += sharedPackagingCost * vatFactor;
+  inputVatCredit += sharedPackagingCost * vatFactor;
 
   // KARGO — siparişe BİR KEZ. Tek ürünlü ve eksiksiz siparişte listing'e ELLE girilen bedel kazanır
   // (Ürünler ekranı da onu kullanıyor → iki ekran aynı rakamı gösterir).
@@ -318,6 +346,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   );
   profit -= cargo.gross;
   profit += cargo.inputVat;
+  inputVatCredit += cargo.inputVat;
 
   return {
     profit,
@@ -333,6 +362,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
     orderRevenueAdjustment,
     orderRevenueAdjustmentNet,
+    outputVat,
+    inputVatCredit,
   };
 }
 
@@ -386,6 +417,7 @@ export function resolveOrderProfit(
     return { ...base, profitPartial, profitSource: "calculated", actualCommission: null };
   }
 
+  const vatRate = vatRateOf(input.settings);
   const applied = applyActualCommissionToProfit({
     profit: base.profit,
     profitPartial,
@@ -393,12 +425,21 @@ export function resolveOrderProfit(
     estimatedCommission: base.estimatedCommission,
     actualCommission: financial.actualCommission,
     settlementRevenue: financial.settlementRevenue,
-    vatRate: vatRateOf(input.settings),
+    vatRate,
   });
+
+  // Kâr gerçek komisyonla düzeltildiyse, o komisyonun içindeki indirilecek KDV de gerçek
+  // tutara göre değişir — kârın düzeltmesiyle AYNI pay, aynı yönde taşınır.
+  const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  const inputVatCredit = applied.applied
+    ? base.inputVatCredit +
+      (financial.actualCommission - base.estimatedCommission) * vatFactor
+    : base.inputVatCredit;
 
   return {
     ...base,
     profit: applied.profit,
+    inputVatCredit,
     profitPartial,
     profitSource: applied.applied ? "platform" : "calculated",
     actualCommission: applied.applied ? financial.actualCommission : null,

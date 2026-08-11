@@ -45,6 +45,13 @@ export interface FinanceSnapshotOrder {
   actualCommission?: number | null;
   statusKind: string;
   currency: string;
+  /**
+   * Satıştan doğan (hesaplanan) KDV — TL. Kâr motorunun (resolveOrderProfit) KENDİ çıktısı;
+   * burada yeniden hesaplanmaz. Verilmezse "bilinmiyor" olarak kaydedilir ve KDV özetine girmez.
+   */
+  outputVat?: number | null;
+  /** Girdilerden indirilecek KDV — TL. Aynı motor çıktısı. */
+  inputVatCredit?: number | null;
 }
 
 export function canonicalFinanceOrderId(platform: string, externalOrderId: string): string {
@@ -105,6 +112,8 @@ type SnapshotWriteData = {
   profitSource: string;
   estimatedCommissionKurus: number | null;
   actualCommissionKurus: number | null;
+  outputVatKurus: number | null;
+  inputVatCreditKurus: number | null;
   statusKind: string;
   currency: string;
   calculationVersion: number;
@@ -113,33 +122,11 @@ type SnapshotWriteData = {
 
 /** Snapshot satırında yazmayı gerektiren bir alan değişmiş mi? (syncedAt HARİÇ — o yalnız
  *  "en son ne zaman bakıldı" damgası; tek başına değişmesi yeniden yazmayı haklı çıkarmaz.) */
+type SnapshotComparable = Omit<SnapshotWriteData, "syncedAt">;
+
 function snapshotDiffers(
-  existing: {
-    orderNumber: string;
-    orderedAt: Date;
-    revenueKurus: number;
-    profitKurus: number | null;
-    profitPartial: boolean;
-    profitSource: string;
-    estimatedCommissionKurus: number | null;
-    actualCommissionKurus: number | null;
-    statusKind: string;
-    currency: string;
-    calculationVersion: number;
-  },
-  next: {
-    orderNumber: string;
-    orderedAt: Date;
-    revenueKurus: number;
-    profitKurus: number | null;
-    profitPartial: boolean;
-    profitSource: string;
-    estimatedCommissionKurus: number | null;
-    actualCommissionKurus: number | null;
-    statusKind: string;
-    currency: string;
-    calculationVersion: number;
-  }
+  existing: SnapshotComparable,
+  next: SnapshotComparable
 ): boolean {
   return (
     existing.orderNumber !== next.orderNumber ||
@@ -150,6 +137,8 @@ function snapshotDiffers(
     existing.profitSource !== next.profitSource ||
     existing.estimatedCommissionKurus !== next.estimatedCommissionKurus ||
     existing.actualCommissionKurus !== next.actualCommissionKurus ||
+    existing.outputVatKurus !== next.outputVatKurus ||
+    existing.inputVatCreditKurus !== next.inputVatCreditKurus ||
     existing.statusKind !== next.statusKind ||
     existing.currency !== next.currency ||
     existing.calculationVersion !== next.calculationVersion
@@ -197,8 +186,9 @@ function snapshotStatement(
     sql: `INSERT INTO "OrderFinanceSnapshot" (
             "id","platform","externalOrderId","orderNumber","orderedAt","revenueKurus","profitKurus",
             "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
+            "outputVatKurus","inputVatCreditKurus",
             "statusKind","currency","calculationVersion","syncedAt"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId") DO UPDATE SET
             "orderNumber" = excluded."orderNumber",
             "orderedAt" = excluded."orderedAt",
@@ -208,6 +198,8 @@ function snapshotStatement(
             "profitSource" = excluded."profitSource",
             "estimatedCommissionKurus" = excluded."estimatedCommissionKurus",
             "actualCommissionKurus" = excluded."actualCommissionKurus",
+            "outputVatKurus" = excluded."outputVatKurus",
+            "inputVatCreditKurus" = excluded."inputVatCreditKurus",
             "statusKind" = excluded."statusKind",
             "currency" = excluded."currency",
             "calculationVersion" = excluded."calculationVersion",
@@ -224,6 +216,8 @@ function snapshotStatement(
       data.profitSource,
       data.estimatedCommissionKurus,
       data.actualCommissionKurus,
+      data.outputVatKurus,
+      data.inputVatCreditKurus,
       data.statusKind,
       data.currency,
       data.calculationVersion,
@@ -397,6 +391,8 @@ export async function persistOrderFinanceSnapshots(
     profitSource: string;
     actualCommissionKurus: number | null;
     estimatedCommissionKurus: number | null;
+    outputVatKurus: number | null;
+    inputVatCreditKurus: number | null;
     statusKind: string;
     currency: string;
   }> = [];
@@ -415,6 +411,8 @@ export async function persistOrderFinanceSnapshots(
         profitSource: true,
         actualCommissionKurus: true,
         estimatedCommissionKurus: true,
+        outputVatKurus: true,
+        inputVatCreditKurus: true,
         statusKind: true,
         currency: true,
       },
@@ -446,6 +444,10 @@ export async function persistOrderFinanceSnapshots(
         order.estimatedCommission == null ? null : tlToKurus(order.estimatedCommission),
       actualCommissionKurus:
         order.actualCommission == null ? null : tlToKurus(order.actualCommission),
+      // KDV motorun çıktısından AYNEN taşınır; verilmediyse "bilinmiyor" (null) kalır.
+      outputVatKurus: order.outputVat == null ? null : tlToKurus(order.outputVat),
+      inputVatCreditKurus:
+        order.inputVatCredit == null ? null : tlToKurus(order.inputVatCredit),
     };
     const replaceProfit =
       options.replaceCapturedProfit === true ||
@@ -467,6 +469,14 @@ export async function persistOrderFinanceSnapshots(
       actualCommissionKurus: replaceProfit
         ? incoming.actualCommissionKurus
         : existing?.actualCommissionKurus ?? incoming.actualCommissionKurus,
+      // Bilinen bir KDV değerini "bilinmiyor" ile EZME: değeri taşımayan bir çağrı yeri
+      // kayıtlı geçmişi silmemeli. Yeni değer varsa (yenileme/yeniden hesap) o kazanır.
+      outputVatKurus: replaceProfit
+        ? incoming.outputVatKurus ?? existing?.outputVatKurus ?? null
+        : existing?.outputVatKurus ?? incoming.outputVatKurus,
+      inputVatCreditKurus: replaceProfit
+        ? incoming.inputVatCreditKurus ?? existing?.inputVatCreditKurus ?? null
+        : existing?.inputVatCreditKurus ?? incoming.inputVatCreditKurus,
       statusKind: order.statusKind,
       currency: order.currency || "TRY",
       calculationVersion: replaceProfit
@@ -1007,6 +1017,9 @@ export async function recalculateFinanceMonth(
         profitSource: resolved.profitSource,
         estimatedCommission: resolved.estimatedCommission,
         actualCommission: resolved.actualCommission,
+        // KDV: motorun bu turdaki çıktısı. Geçmiş ayların KDV'si kapsama böyle girer.
+        outputVat: resolved.outputVat,
+        inputVatCredit: resolved.inputVatCredit,
         statusKind: row.statusKind,
         currency: row.currency,
       });

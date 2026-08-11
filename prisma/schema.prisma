@@ -322,6 +322,10 @@ model OrderFinanceSnapshot {
   profitSource       String   @default("calculated")
   estimatedCommissionKurus Int?
   actualCommissionKurus    Int?
+  // KDV — null = bu sipariş için henüz ayrıştırılmadı (SIFIR ile karıştırılmaz).
+  // Eski satırlar null kalır; "bu ayı yeniden hesapla" ile dolar.
+  outputVatKurus           Int?
+  inputVatCreditKurus      Int?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])

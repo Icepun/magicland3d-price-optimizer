@@ -19,6 +19,7 @@ interface BackupsResponse {
   enabled: boolean;
   lastBackupAt: string | null;
   keep: number;
+  totalBytes: number;
   backups: BackupFile[];
 }
 
@@ -135,9 +136,14 @@ export function BackupCard() {
 
         {!!data?.backups?.length && (
           <div className="space-y-1 border-t border-border/50 pt-3">
-            <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
-              Son yedekler
-            </p>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+                Son yedekler
+              </p>
+              <p className="text-[11px] text-muted-foreground/70 tabular-nums">
+                {data.backups.length} dosya · {formatSize(data.totalBytes ?? 0)}
+              </p>
+            </div>
             {data.backups.slice(0, 4).map((b, i) => (
               <div
                 key={b.name}

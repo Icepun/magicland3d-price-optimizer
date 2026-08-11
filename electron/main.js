@@ -626,6 +626,15 @@ const NOTIFY_POLL_MS = 12_000;
 const OS_AGE_LIMITS = { critical: 72 * 60 * 60_000, success: 24 * 60 * 60_000 };
 const OS_BURST_LIMIT = 4;
 const OS_NOTIFIED_CAP = 400;
+/**
+ * "Bunu zaten bildirdim" hafızasının ömrü.
+ *
+ * Bildirim kimlikleri SABİT (stock-<ürün>, spool-<makara>). Hafıza hiç eskimezse bir ürünün
+ * stoğu ilk kez bitip bildirildikten sonra, stok dolup TEKRAR bittiğinde bildirim bir daha
+ * ASLA gelmez — oysa sunucu tarafı eşiğin üstüne çıkınca satırı siliyor ve yeniden bildirmeyi
+ * vaat ediyor. Yaş sınırı iki tarafı uzlaştırır.
+ */
+const OS_NOTIFIED_TTL_MS = 7 * 24 * 60 * 60_000;
 let notifyWatchStarted = false;
 let notifiedIds = [];
 
@@ -637,12 +646,27 @@ function notifiedFilePath() {
   }
 }
 
+/**
+ * Kayıtlar {id, at} olarak tutulur. Eski biçim (düz metin dizisi) okunmaya devam eder ve
+ * "şimdi" damgasıyla yükseltilir — güncelleme sonrası kimse bildirim kaybetmesin.
+ */
 function loadNotifiedIds() {
   const p = notifiedFilePath();
   if (!p) return [];
   try {
     const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
-    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed
+      .map((x) =>
+        typeof x === "string"
+          ? { id: x, at: now }
+          : x && typeof x.id === "string" && typeof x.at === "number"
+            ? x
+            : null
+      )
+      .filter(Boolean)
+      .filter((x) => now - x.at <= OS_NOTIFIED_TTL_MS);
   } catch {
     return [];
   }
@@ -735,11 +759,16 @@ function startNotificationWatch(baseUrl) {
         clearTimeout(t);
       }
       const alerts = Array.isArray(payload?.alerts) ? payload.alerts : [];
-      const notified = new Set(notifiedIds);
-      const plan = planOsToasts(alerts, notified, Date.now());
+      const now = Date.now();
+      // Süresi dolmuş kayıtları düş: aynı olay tekrar yaşanırsa yeniden duyurulabilsin.
+      notifiedIds = notifiedIds.filter((x) => now - x.at <= OS_NOTIFIED_TTL_MS);
+      const notified = new Set(notifiedIds.map((x) => x.id));
+      const plan = planOsToasts(alerts, notified, now);
       if (plan.markNotified.length === 0) return;
       for (const toast of plan.toasts) showOsNotification(toast.title, toast.body);
-      notifiedIds = [...notifiedIds, ...plan.markNotified].slice(-OS_NOTIFIED_CAP);
+      notifiedIds = [...notifiedIds, ...plan.markNotified.map((id) => ({ id, at: now }))].slice(
+        -OS_NOTIFIED_CAP
+      );
       saveNotifiedIds(notifiedIds);
     } catch {
       /* sunucu henüz hazır değil / ağ yok → sonraki tur dener */

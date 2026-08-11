@@ -25,9 +25,11 @@ let schemaReady: Promise<void> | null = null;
 // v35: Ayrılmış sürüm; gerçek kargo faturası entegrasyonu geri alındı.
 // v36: Geri alma damgası — v35 veritabanlarını standart CargoRule hesabıyla güvenle ileri taşır.
 // v37: OrderItemSnapshot — sipariş kalemlerinin kalıcı geçmişi (ürün bazlı satış tarihçesi).
+// v38: OrderFinanceSnapshot.outputVatKurus/inputVatCreditKurus — pazaryeri siparişlerinin KDV'si
+//      artık kayıtlı; aylık KDV özeti yalnız manuel siparişleri kapsamaktan çıkar.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "37";
+const CURRENT_SCHEMA_VERSION = "38";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -677,7 +679,9 @@ export function ensureRuntimeSchema(): Promise<void> {
         "calculationVersion" INTEGER NOT NULL DEFAULT 1,
         "profitSource" TEXT NOT NULL DEFAULT 'calculated',
         "estimatedCommissionKurus" INTEGER,
-        "actualCommissionKurus" INTEGER
+        "actualCommissionKurus" INTEGER,
+        "outputVatKurus" INTEGER,
+        "inputVatCreditKurus" INTEGER
       )
     `);
     await bufDDL(
@@ -699,6 +703,9 @@ export function ensureRuntimeSchema(): Promise<void> {
     );
     await ensureColumn("OrderFinanceSnapshot", "estimatedCommissionKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "actualCommissionKurus", "INTEGER");
+    // v38: KDV. Nullable ve VARSAYILANSIZ — eski satırlarda değer YOKTUR ve uydurulmaz.
+    await ensureColumn("OrderFinanceSnapshot", "outputVatKurus", "INTEGER");
+    await ensureColumn("OrderFinanceSnapshot", "inputVatCreditKurus", "INTEGER");
     // v37: Sipariş KALEMLERİ. Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu
     // yanıtlamıyordu ve platform penceresi (30-60 gün) dolunca o bilgi kalıcı olarak kayboluyordu.
     // Tekilleştirme (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.

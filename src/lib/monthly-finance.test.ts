@@ -210,6 +210,85 @@ describe("aylık KDV özeti", () => {
     });
   });
 
+  /**
+   * GERİLEME KİLİDİ: KDV özeti bir dönem YALNIZ manuel siparişleri kapsıyordu — pazaryeri
+   * siparişlerinin KDV'si hiç kaydedilmediği için hepsi "bilinmiyor" sayılıyor ve muhasebeye
+   * götürülen "Ödenecek KDV" rakamı ayın küçük bir parçasını gösteriyordu.
+   */
+  it("pazaryeri siparişlerinin kayıtlı KDV'sini de özete katar", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [
+        {
+          platform: "trendyol",
+          orderedAt: new Date("2026-07-06T10:00:00.000Z"),
+          revenueKurus: 45_000,
+          profitKurus: 9_000,
+          profitPartial: false,
+          statusKind: "delivered",
+          currency: "TRY",
+          outputVatKurus: 7_500,
+          inputVatCreditKurus: 2_500,
+        },
+        {
+          platform: "shopify",
+          orderedAt: new Date("2026-07-08T10:00:00.000Z"),
+          revenueKurus: 30_000,
+          profitKurus: 6_000,
+          profitPartial: false,
+          statusKind: "delivered",
+          currency: "TRY",
+          outputVatKurus: 5_000,
+          inputVatCreditKurus: 1_500,
+        },
+      ],
+      manualOrders: [manual],
+      expenses: [],
+    });
+
+    // Manuel 200 + Trendyol 75 + Shopify 50; indirilecek 60 + 25 + 15.
+    expect(months[0].vat).toEqual({
+      outputVat: 325,
+      inputVatCredit: 100,
+      payable: 225,
+      knownOrders: 3,
+      partialOrders: 0,
+      unknownOrders: 0,
+      unknownRevenue: 0,
+    });
+  });
+
+  it("pazaryeri siparişinin indirilecek KDV'si yoksa hesaplananı yine sayar", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [
+        {
+          platform: "hepsiburada",
+          orderedAt: new Date("2026-07-09T10:00:00.000Z"),
+          revenueKurus: 24_000,
+          profitKurus: null,
+          profitPartial: true,
+          statusKind: "delivered",
+          currency: "TRY",
+          outputVatKurus: 4_000,
+          inputVatCreditKurus: null,
+        },
+      ],
+      expenses: [],
+    });
+
+    expect(months[0].vat).toMatchObject({
+      outputVat: 40,
+      inputVatCredit: 0,
+      knownOrders: 1,
+      // Maliyeti eksik → indirilecek KDV de eksik olabilir; kullanıcı uyarılmalı.
+      partialOrders: 1,
+      unknownOrders: 0,
+    });
+  });
+
   it("KDV'si ayrıştırılmamış siparişi sıfır saymaz, kapsam dışı olarak sayar", () => {
     const months = aggregateMonthlyFinance({
       monthCount: 1,

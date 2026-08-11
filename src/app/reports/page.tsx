@@ -944,8 +944,9 @@ export default function ReportsPage() {
                     )}
                     {(currentVat?.unknownOrders ?? 0) > 0 && (
                       <p className="text-xs text-amber-600 dark:text-amber-500">
-                        {currentVat?.unknownOrders} siparişin KDV&apos;si bu özete girmedi (
-                        {formatCurrency(currentVat?.unknownRevenue ?? 0)} ciro).
+                        {currentVat?.unknownOrders} siparişin KDV&apos;si henüz hesaplanmadı (
+                        {formatCurrency(currentVat?.unknownRevenue ?? 0)} ciro) — bu ayı
+                        yeniden hesapla.
                       </p>
                     )}
                   </div>
@@ -956,7 +957,7 @@ export default function ReportsPage() {
                   title="KDV özeti için henüz veri yok"
                   description={
                     (currentVat?.unknownOrders ?? 0) > 0
-                      ? `${currentVat?.unknownOrders} siparişin KDV'si ayrı tutulmuyor; şimdilik yalnız manuel siparişlerin KDV'si özetleniyor.`
+                      ? `${currentVat?.unknownOrders} siparişin KDV'si henüz hesaplanmadı — bu ayı yeniden hesapla.`
                       : "Satış kaydedildikçe hesaplanan ve indirilecek KDV burada birikir."
                   }
                   className="py-8"

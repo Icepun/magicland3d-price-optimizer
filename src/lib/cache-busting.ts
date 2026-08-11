@@ -13,7 +13,7 @@
  * Karşı tuzak da gerçek: aşırı-geniş bust pahalı önbelleği işlevsiz bırakır (bkz. pricing-inputs.ts
  * — kâr-etkileyen değişiklik ayrımı). Bu yüzden her yardımcı DAR ve amaca özel.
  */
-import { bustCache } from "@/lib/route-cache";
+import { bustCache, bustCaches } from "@/lib/route-cache";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 
 /**
@@ -21,10 +21,13 @@ import { invalidateOrdersCache } from "@/lib/orders-cache";
  * Fiyat/stok/ad/listing değiştiği için ürün görünümleri + sipariş eşleşmesi/kârı tazelenmeli.
  */
 export function bustProductCaches(): void {
-  bustCache("products:");
-  bustCache("dashboard:");
-  bustCache("order-name-index:"); // yeni/silinen ürün veya değişen ad
-  bustInventoryAlertCaches();
+  // Tek tarama: dört ön ek ayrı ayrı verilseydi önbellek klasörü dört kez baştan gezilirdi.
+  bustCaches([
+    "products:",
+    "dashboard:",
+    "order-name-index:", // yeni/silinen ürün veya değişen ad
+    "notifications-inventory:",
+  ]);
   invalidateOrdersCache(); // fiyat + eşleşme değişimi kâr gövdesini etkiler
 }
 
@@ -42,16 +45,14 @@ export function bustProductCaches(): void {
  * yeniden kurulmamalı (bkz. dosya başlığındaki "dar ve amaca özel" kuralı).
  */
 export function bustProfitInputCaches(): void {
-  bustCache("products:");
-  bustCache("dashboard:");
+  bustCaches(["products:", "dashboard:"]);
   invalidateOrdersCache();
 }
 
 /** Yalnız ürün GÖRÜNÜMLERİ değişti (kâr/eşleşme etkilenmiyor) — ör. görsel, sıralama. */
 export function bustProductViewCaches(): void {
-  bustCache("products:");
-  bustCache("dashboard:");
-  bustInventoryAlertCaches(); // stok değiştiyse zildeki "stok kritik" uyarısı da tazelensin
+  // stok değiştiyse zildeki "stok kritik" uyarısı da tazelensin — hepsi tek taramada.
+  bustCaches(["products:", "dashboard:", "notifications-inventory:"]);
 }
 
 /**

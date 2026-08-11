@@ -16,6 +16,7 @@ import {
   inventoryNotificationIds,
   type ScanOrder,
   type ScanProduct,
+  INVENTORY_TYPES,
 } from "./order-watch";
 
 const urun = (over: Partial<ScanProduct> & { id: string; name: string }): ScanProduct => ({
@@ -177,6 +178,7 @@ describe("buildInventoryNotifications", () => {
       { id: "s1", name: "Siyah PLA", remainingGrams: 0 },
       { id: "s2", name: "Beyaz PLA", remainingGrams: 120 },
     ],
+    readTypes: INVENTORY_TYPES,
   };
 
   it("biten stok ve biten filamenti acil, azalanları uyarı olarak işaretler", () => {
@@ -202,7 +204,7 @@ describe("buildInventoryNotifications", () => {
 
   it("eşik altında hiçbir şey yoksa bildirim üretmez", () => {
     expect(
-      buildInventoryNotifications({ lowStock: [], siteOutOfStock: [], spools: [] })
+      buildInventoryNotifications({ lowStock: [], siteOutOfStock: [], spools: [], readTypes: INVENTORY_TYPES })
     ).toEqual([]);
   });
 });

@@ -182,6 +182,84 @@ describe("persistOrderFinanceSnapshots — değişen-only yazma", () => {
     expect(await syncedAtOf("ty-3001")).toBe(before); // ← idempotent
   });
 
+  /**
+   * KDV kolonları olmadan pazaryeri siparişlerinin KDV'si hiçbir yere yazılmıyor, aylık özet
+   * de onları "bilinmiyor" sayıp kapsam dışında bırakıyordu.
+   */
+  it("motorun KDV çıktısını kuruş olarak saklar", async () => {
+    await persist([
+      order({ id: "ty-7001", orderNumber: "7001", outputVat: 41.67, inputVatCredit: 9.5 }),
+    ]);
+
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-7001" },
+    });
+    expect(row!.outputVatKurus).toBe(4_167);
+    expect(row!.inputVatCreditKurus).toBe(950);
+  });
+
+  it("KDV verilmeyen siparişte alanları BOŞ bırakır (uydurma sıfır yazmaz)", async () => {
+    await persist([order({ id: "ty-7002", orderNumber: "7002" })]);
+
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-7002" },
+    });
+    expect(row!.outputVatKurus).toBeNull();
+    expect(row!.inputVatCreditKurus).toBeNull();
+  });
+
+  /**
+   * KDV kolonları eklenmeden önce yazılmış satırlar boştur. Kullanıcıyı "yeniden hesapla"ya
+   * mecbur bırakmadan, ilk normal yenilemede dolmaları gerekir.
+   */
+  it("KDV'si boş olan eski satırı ilk yenilemede doldurur", async () => {
+    await persist([order({ id: "ty-7003", orderNumber: "7003" })]);
+    const before = await syncedAtOf("ty-7003");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await persist([
+      order({ id: "ty-7003", orderNumber: "7003", outputVat: 50, inputVatCredit: 12 }),
+    ]);
+
+    expect(await syncedAtOf("ty-7003")).not.toBe(before); // ← yazma oldu
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-7003" },
+    });
+    expect(row!.outputVatKurus).toBe(5_000);
+    expect(row!.inputVatCreditKurus).toBe(1_200);
+  });
+
+  it("KDV yakalandıktan sonra aynı veriyle tekrar YAZMAZ", async () => {
+    const settled = order({
+      id: "ty-7003",
+      orderNumber: "7003",
+      outputVat: 50,
+      inputVatCredit: 12,
+    });
+    const before = await syncedAtOf("ty-7003");
+    await new Promise((r) => setTimeout(r, 30));
+
+    await persist([settled]);
+
+    expect(await syncedAtOf("ty-7003")).toBe(before); // ← değişen-only sözleşmesi korundu
+  });
+
+  it("KDV taşımayan bir tur, kayıtlı KDV'yi SİLMEZ", async () => {
+    await persist([
+      order({ id: "ty-7004", orderNumber: "7004", outputVat: 33.33, inputVatCredit: 8 }),
+    ]);
+
+    // Aynı sipariş, gelirle birlikte (KDV alanları verilmeden) yeniden yazılıyor.
+    await persist([order({ id: "ty-7004", orderNumber: "7004", total: 199.99, profit: 40 })]);
+
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-7004" },
+    });
+    expect(row!.revenueKurus).toBe(19_999);
+    expect(row!.outputVatKurus).toBe(3_333);
+    expect(row!.inputVatCreditKurus).toBe(800);
+  });
+
   it("kalem verilmeyen sipariş için kalem geçmişine hiç dokunmaz", async () => {
     await persist([order({ id: "ty-4001", orderNumber: "4001" })]);
     expect(await itemRows("ty-4001")).toHaveLength(0);

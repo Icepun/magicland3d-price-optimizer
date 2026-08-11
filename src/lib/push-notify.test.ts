@@ -154,3 +154,39 @@ describe("push gönderimi", () => {
     expect(ozet.sebepler).toEqual(["Kayıtlı telefon listesi okunamadı."]);
   });
 });
+
+/**
+ * REGRESYON: proje düzeyindeki bir kimlik hatası (InvalidCredentials) TÜM telefon kayıtlarını
+ * siliyordu. O hata cihaza özel değil, o an gönderilen her mesaj için döner — tek bir yanlış
+ * ayar bütün kayıtları geri alınamaz biçimde silerdi ve kullanıcı uygulamaları yeniden kurana
+ * kadar hiç bildirim alamazdı.
+ */
+describe("telefon kaydı yalnız cihaza özel hatada silinir", () => {
+  it("InvalidCredentials kaydı SİLMEZ, yalnız sebep olarak bildirir", async () => {
+    findMany.mockResolvedValue([{ token: token(1) }]);
+    fetchMock.mockResolvedValueOnce(
+      yanit({
+        data: [{ status: "error", details: { error: "InvalidCredentials" }, message: "bad creds" }],
+      })
+    );
+
+    const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
+
+    expect(ozet.temizlenenKayit).toBe(0);
+    expect(ozet.sebepler.join(" ")).toMatch(/geçersiz/i);
+  });
+
+  it("DeviceNotRegistered kaydı siler", async () => {
+    findMany.mockResolvedValue([{ token: token(1) }]);
+    deleteMany.mockResolvedValue({ count: 1 });
+    fetchMock.mockResolvedValueOnce(
+      yanit({
+        data: [{ status: "error", details: { error: "DeviceNotRegistered" }, message: "gone" }],
+      })
+    );
+
+    const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
+
+    expect(ozet.temizlenenKayit).toBe(1);
+  });
+});

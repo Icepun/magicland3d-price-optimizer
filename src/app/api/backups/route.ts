@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import { jsonError } from "@/lib/api-error";
-import { getLastBackupAt, isBackupEnabled, listBackups, runBackupNow } from "@/lib/backup-job";
+import {
+  backupsTotalBytes,
+  getLastBackupAt,
+  isBackupEnabled,
+  listBackups,
+  runBackupNow,
+} from "@/lib/backup-job";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +18,7 @@ export async function GET() {
       enabled: isBackupEnabled(),
       lastBackupAt: await getLastBackupAt(),
       keep: 30,
+      totalBytes: backupsTotalBytes(),
       backups,
     });
   } catch (e) {

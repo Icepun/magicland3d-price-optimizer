@@ -93,6 +93,10 @@ export interface UnifiedOrder {
   missingDesiCount?: number;
   desiEstimated?: boolean;
   orderRevenueAdjustment?: number;
+  /** Satıştan doğan (hesaplanan) KDV — kalıcı finans geçmişine taşınır. */
+  outputVat?: number | null;
+  /** Girdilerden indirilecek KDV — aynı motor çıktısı. */
+  inputVatCredit?: number | null;
   trackingNumber: string | null;
   cargoProvider: string | null;
   /**
@@ -1064,6 +1068,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
       orderRevenueAdjustment: pr.orderRevenueAdjustment,
+      // KDV motorun çıktısından aynen taşınır — snapshot'a yazılıp aylık özete girer.
+      outputVat: pr.outputVat,
+      inputVatCredit: pr.inputVatCredit,
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
       dataIncomplete: r.dataIncomplete,

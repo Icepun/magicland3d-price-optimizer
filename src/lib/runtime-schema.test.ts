@@ -66,6 +66,19 @@ describe("açılış şema göçü", () => {
   });
 
   /**
+   * KDV kolonları olmadan pazaryeri siparişlerinin KDV'si hiçbir yere yazılamaz ve aylık
+   * KDV özeti sessizce yalnız manuel siparişleri kapsar.
+   */
+  it("finans geçmişinde KDV kolonlarını kurar", async () => {
+    const cols = await db.$queryRawUnsafe<Array<{ name: string }>>(
+      `PRAGMA table_info("OrderFinanceSnapshot")`
+    );
+    const names = cols.map((c) => c.name);
+    expect(names).toContain("outputVatKurus");
+    expect(names).toContain("inputVatCreditKurus");
+  });
+
+  /**
    * Tekilleştirme anahtarı bozulursa aynı sipariş her yenilemede satır ÇOĞALTIR ve
    * ürün bazlı satış raporu sessizce şişer. Bu yüzden veritabanı seviyesinde kilitli.
    */

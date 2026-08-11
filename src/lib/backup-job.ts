@@ -20,6 +20,18 @@ import { prisma } from "./prisma";
  */
 
 const KEEP_FILES = 30;
+/**
+ * Yedek klasörünün toplam boyut tavanı. Yalnız DOSYA SAYISI sınırlamak yetmiyordu: veri
+ * büyüdükçe 30 tam kopya kullanıcı klasöründe sessizce yüzlerce megabayta çıkabiliyor.
+ * Tavan aşılırsa en eskiden başlayarak budanır (en az bir yedek her zaman kalır).
+ */
+const MAX_TOTAL_BYTES = 500 * 1024 * 1024;
+
+/** Tavan (test valfi: MLHUB_BACKUP_MAX_BYTES). */
+function maxTotalBytes(): number {
+  const raw = Number(process.env.MLHUB_BACKUP_MAX_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : MAX_TOTAL_BYTES;
+}
 const DAY_MS = 24 * 60 * 60_000;
 /** Aynı güne denk gelen ufak sapmalar yüzünden bir günün atlanmaması için küçük pay. */
 const DUE_SLACK_MS = 10 * 60_000;
@@ -101,16 +113,34 @@ export function listBackups(): BackupFileInfo[] {
   return files;
 }
 
-/** En eski dosyaları silerek son KEEP_FILES kaydı bırakır. */
+/** En eski dosyaları silerek son KEEP_FILES kaydı VE toplam boyut tavanını korur. */
 function pruneOldBackups(dir: string): void {
-  const files = listBackups();
-  for (const file of files.slice(KEEP_FILES)) {
+  const files = listBackups(); // en yeniden eskiye sıralı
+  const sil = (name: string) => {
     try {
-      fs.unlinkSync(path.join(dir, file.name));
+      fs.unlinkSync(path.join(dir, name));
     } catch {
       /* silinemeyen dosya bir sonraki turda tekrar denenir */
     }
-  }
+  };
+
+  // 1) Sayı sınırı.
+  for (const file of files.slice(KEEP_FILES)) sil(file.name);
+
+  // 2) Boyut tavanı: en yeniden başlayarak topla, tavanı aşan eskileri düş.
+  //    En az BİR yedek her zaman kalır — tek yedek tavandan büyük olsa bile onu silmek,
+  //    kullanıcıyı hiç yedeksiz bırakmak demektir.
+  const tavan = maxTotalBytes();
+  let toplam = 0;
+  files.slice(0, KEEP_FILES).forEach((file, index) => {
+    toplam += file.size;
+    if (index > 0 && toplam > tavan) sil(file.name);
+  });
+}
+
+/** Yedek klasörünün toplam boyutu (arayüz gösterir). */
+export function backupsTotalBytes(): number {
+  return listBackups().reduce((sum, f) => sum + f.size, 0);
 }
 
 /** Son yedek zamanı: önce yerel dosyalar, yoksa ayarlardaki damga. */
@@ -170,7 +200,7 @@ export async function runBackupNow(sequential = false): Promise<BackupFileInfo> 
   const temp = path.join(dir, `.${name}.tmp`);
   try {
     // Önce geçici dosyaya yazılır: yazım yarıda kalırsa bozuk bir "yedek" görünmez.
-    fs.writeFileSync(temp, JSON.stringify(payload), "utf8");
+    await fs.promises.writeFile(temp, JSON.stringify(payload), "utf8");
     fs.renameSync(temp, target);
   } catch (e) {
     try {

@@ -544,6 +544,46 @@ describe("portable backup routes", () => {
     expect(await db.priceHistory.count({ where: { id: "idempotent-history" } })).toBe(1);
   });
 
+  /**
+   * Geri yükleme ifadeleri DOĞAL anahtarı hedefliyor ama satır kendi id'sini de taşıyor
+   * (ör. ProductCost → çakışma hedefi productId, birincil anahtar id). Yedekteki bir kayıt,
+   * veritabanında BAŞKA bir ürüne bağlı aynı id ile duruyorsa çakışma birincil anahtarda olur.
+   * Sıralı yedek yol veri kaybını zaten önlüyordu; hedefsiz cümle o dilimin geri alınıp
+   * satır satır yeniden yazılmasını önler (uzak modda dakikalarca fark eder).
+   */
+  it("id'si başka satırda kullanılan kaydı atlar ama yedeğin geri kalanını yazar", async () => {
+    // Hazırlık: "pk-cost" id'si ZATEN başka bir ürüne ait.
+    expect(
+      (
+        await postBackup({
+          version: 3,
+          products: [{ id: "pk-onceki", barcode: "pk-onceki-barkod", currentSalePrice: 10 }],
+          productCosts: [{ id: "pk-cost", productId: "pk-onceki", manualCost: 11 }],
+        })
+      ).status
+    ).toBe(200);
+
+    const response = await postBackup({
+      version: 3,
+      products: [
+        { id: "pk-yeni", barcode: "pk-yeni-barkod", currentSalePrice: 20 },
+        { id: "pk-komsu", barcode: "pk-komsu-barkod", currentSalePrice: 30 },
+      ],
+      // Aynı id, FARKLI ürün → birincil anahtar çakışması.
+      productCosts: [{ id: "pk-cost", productId: "pk-yeni", manualCost: 99 }],
+    });
+
+    expect(response.status).toBe(200);
+    // Sağlam satırlar yazıldı — çakışan kayıt dilimi düşürmedi.
+    expect(
+      await db.product.findUniqueOrThrow({ where: { barcode: "pk-komsu-barkod" } })
+    ).toMatchObject({ id: "pk-komsu" });
+    // Çakışan kayıt eski sahibinde kaldı, ezilmedi.
+    expect(await db.productCost.findUniqueOrThrow({ where: { id: "pk-cost" } })).toMatchObject({
+      productId: "pk-onceki",
+    });
+  });
+
   it("çok satırlı yedeği gruplar hâlinde yazar ve ilerlemeyi aşama aşama bildirir", async () => {
     const products = Array.from({ length: 620 }, (_, index) => ({
       id: `bulk-${index}`,

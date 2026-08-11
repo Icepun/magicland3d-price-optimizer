@@ -129,7 +129,7 @@ export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<
  * kopyası hayatta kalır ve bir sonraki açılışta ESKİ kuralla hesaplanmış kâr geri dönerdi.
  * Tam gövdeyi ayrıştırmıyoruz — anahtar dosyanın ilk baytlarında, gövde ise çok büyük olabilir.
  */
-function diskFilesWithPrefix(prefix: string): string[] {
+function diskFilesWithPrefix(prefixes: string[]): string[] {
   const dir = cacheDir();
   if (!dir) return [];
   let names: string[];
@@ -168,7 +168,7 @@ function diskFilesWithPrefix(prefix: string): string[] {
     } catch {
       continue;
     }
-    if (key.startsWith(prefix)) matches.push(file);
+    if (prefixes.some((prefix) => key.startsWith(prefix))) matches.push(file);
   }
   return matches;
 }
@@ -190,19 +190,32 @@ export function bustCache(prefix?: string): void {
     diskChecked.clear();
     return;
   }
+  bustCaches([prefix]);
+}
+
+/**
+ * Birden çok ön eki TEK disk taramasıyla temizler.
+ *
+ * NEDEN: `bustCache` her çağrısında önbellek klasörünün tamamını gezip her dosyanın başını
+ * okuyor. Tek bir ürün düzenlemesi dört ayrı ön ek temizlediği için klasör dört kez baştan
+ * taranıyordu; yüzlerce dosyada bu, her kayıtta gereksiz disk yükü demek. Aynı temizlik turunun
+ * ön eklerini burada topluca ver → tarama bir kez yapılır.
+ */
+export function bustCaches(prefixes: string[]): void {
+  const list = prefixes.filter((p) => p.length > 0);
+  if (list.length === 0) return;
   for (const k of [...store.keys()]) {
-    if (k.startsWith(prefix)) {
-      store.delete(k);
-      diskChecked.delete(k);
-      const file = cacheFile(k);
-      if (file) {
-        try { fs.rmSync(file, { force: true }); } catch { /* sonraki GET canlı hesaplar */ }
-      }
+    if (!list.some((prefix) => k.startsWith(prefix))) continue;
+    store.delete(k);
+    diskChecked.delete(k);
+    const file = cacheFile(k);
+    if (file) {
+      try { fs.rmSync(file, { force: true }); } catch { /* sonraki GET canlı hesaplar */ }
     }
   }
   // Bellekte olmayan (bu oturumda hiç okunmamış) disk kopyaları da gitmeli — yoksa uygulama
   // yeniden başlayınca eski gövde geri yüklenir ve değişiklik "uygulanmamış" görünür.
-  for (const file of diskFilesWithPrefix(prefix)) {
+  for (const file of diskFilesWithPrefix(list)) {
     try { fs.rmSync(file, { force: true }); } catch { /* sonraki GET canlı hesaplar */ }
   }
 }

@@ -152,6 +152,22 @@ describe("recalculateFinanceMonth — maliyet düzeltmesi geçmiş aya yansır",
     expect(result.profitDeltaKurus).toBe(after - profitWithCheapCost);
   });
 
+  /**
+   * Geçmiş ayların KDV'si kapsama BURADAN girer: eski satırlarda KDV kolonları boştur
+   * (uydurulmaz), "bu ayı yeniden hesapla" ile motorun çıktısından dolar.
+   */
+  it("pazaryeri siparişinin KDV'sini kaydeder (KDV özeti kapsamına girer)", async () => {
+    await recalculate(MONTH);
+
+    const row = await snapshotOf("ty-r1");
+    // %20 KDV: ₺300 cironun içindeki hesaplanan KDV ₺50.
+    expect(row.outputVatKurus).toBe(5_000);
+    // İndirilecek KDV de KAYDEDİLİR ("bilinmiyor" olarak kalmaz). Bu test veritabanında
+    // komisyon/kargo/gider kuralı ve KDV'li malzeme yok → motorun sonucu ₺0'dır.
+    expect(row.inputVatCreditKurus).not.toBeNull();
+    expect(row.inputVatCreditKurus).toBe(0);
+  });
+
   it("eski hesap sürümüyle yazılmış satırı güncel sürüme taşır", async () => {
     await db.$executeRawUnsafe(
       `UPDATE "OrderFinanceSnapshot" SET "calculationVersion" = 1 WHERE "externalOrderId" = ?`,

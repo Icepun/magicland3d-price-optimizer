@@ -22,10 +22,16 @@ describe("formatCurrency", () => {
     expect(norm(formatCurrency(1234.56, { decimals: 0 }))).toBe("₺1.235");
   });
 
-  it("NaN/null/undefined için 0 gösterir — ekranda asla NaN çıkmaz", () => {
-    expect(norm(formatCurrency(NaN))).toBe("₺0,00");
-    expect(norm(formatCurrency(null))).toBe("₺0,00");
-    expect(norm(formatCurrency(undefined))).toBe("₺0,00");
+  /**
+   * BİLİNMEYEN ≠ SIFIR. Hesaplanamamış bir tutarı "₺0,00" yazmak, kullanıcıya gerçek bir sıfır
+   * gibi görünür ve "maliyeti girilmemiş ürün" uyarısını biçimlendirme katmanında geri alır.
+   * Ekranda NaN de çıkmaz — ikisinin ortası "—".
+   */
+  it("NaN/null/undefined için — gösterir, gerçek sıfırı normal yazar", () => {
+    expect(formatCurrency(NaN)).toBe("—");
+    expect(formatCurrency(null)).toBe("—");
+    expect(formatCurrency(undefined)).toBe("—");
+    expect(norm(formatCurrency(0))).toBe("₺0,00");
   });
 
   it("tanınmayan para birimi kodunda tutarı kaybetmez, TRY'ye düşer", () => {
@@ -45,6 +51,13 @@ describe("formatPercent", () => {
 
   it("hazır yüzde değerini olduğu gibi yazar", () => {
     expect(formatPercentValue(18)).toBe("%18");
+  });
+
+  it("bilinmeyen oranı %0 diye yazmaz", () => {
+    expect(formatPercent(null)).toBe("—");
+    expect(formatPercent(undefined)).toBe("—");
+    expect(formatPercent(NaN)).toBe("—");
+    expect(formatPercent(0)).toBe("%0,0");
   });
 });
 

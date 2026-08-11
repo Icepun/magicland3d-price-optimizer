@@ -31,10 +31,10 @@ export async function GET(req: NextRequest) {
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
-  // v4: yanıta KDV özeti (v3) ve ay bazında "hesabı güncel değil" sayısı eklendi. Sürüm
-  // artmazsa güncelleme sonrası diskteki eski yanıt (yeni alanları olmayan) taze sayılırdı.
+  // v5: KDV özeti artık pazaryeri siparişlerini de kapsıyor (snapshot'ta kayıtlı KDV kolonları).
+  // Sürüm artmazsa güncelleme sonrası diskteki eski yanıt (eksik kapsamlı) taze sayılırdı.
   const data = await swr(
-    `finance-monthly:v4:${monthCount}`,
+    `finance-monthly:v5:${monthCount}`,
     60_000,
     () => computeMonthlyFinance(monthCount)
   );
@@ -94,6 +94,9 @@ async function computeMonthlyFinance(monthCount: number) {
         profitPartial: true,
         statusKind: true,
         currency: true,
+        // KDV motorun kayıtlı çıktısı; null = bu sipariş için henüz ayrıştırılmadı.
+        outputVatKurus: true,
+        inputVatCreditKurus: true,
         // "Bu ayın hesabı güncel değil" rozeti için — ayrı sorgu açmadan aynı satırlardan sayılır.
         calculationVersion: true,
       },
@@ -207,6 +210,10 @@ async function computeMonthlyFinance(monthCount: number) {
     missingProfitOrders: totals.missingProfitOrders,
     excludedOrders: totals.excludedOrders,
     unsupportedCurrencyOrders: totals.unsupportedCurrencyOrders,
+    // KDV kapsamı AÇIKÇA bildirilir: özet kaç siparişi kapsamıyor ve o siparişlerin cirosu ne?
+    vatUnknownOrders: vat.unknownOrders,
+    vatUnknownRevenue: vat.unknownRevenue,
+    vatPartialOrders: vat.partialOrders,
   };
   const lastOrderSyncAt = snapshotSummary._max.syncedAt ?? null;
   const firstOrderedAt = [

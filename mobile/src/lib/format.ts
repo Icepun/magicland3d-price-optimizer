@@ -27,9 +27,22 @@ function currencyFormatter(currency: string, decimals: 0 | 2): Intl.NumberFormat
   return fmt;
 }
 
-/** Geçersiz/eksik sayıları 0 kabul et — ekranda "NaN ₺" ASLA görünmesin. */
+/** Bilinmeyen değer için ekranda gösterilen işaret. */
+export const UNKNOWN_DASH = "—";
+
+/**
+ * Değer gerçekten bir sayı mı?
+ *
+ * ⚠️ BİLİNMEYEN ≠ SIFIR — masaüstü src/lib/format.ts ile aynı kural. Hesaplanamamış tutarı
+ * "₺0,00" yazmak, kullanıcıya gerçek bir sıfır gibi görünür.
+ */
+function isNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** Sayı olmayan girdileri 0'a indirger — YALNIZ sıfırın anlamlı olduğu yerlerde. */
 function safe(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return isNumber(value) ? value : 0;
 }
 
 export interface CurrencyOptions {
@@ -44,6 +57,7 @@ export function formatCurrency(
   options: CurrencyOptions = {}
 ): string {
   const { decimals = 2, currency = "TRY" } = options;
+  if (!isNumber(value)) return UNKNOWN_DASH;
   try {
     return currencyFormatter(currency, decimals).format(safe(value));
   } catch {
@@ -90,7 +104,8 @@ export function formatCompactCurrency(value: number | null | undefined, currency
  * Türkçe'de yüzde işareti sayının ÖNÜNDE ve ondalık ayracı VİRGÜL.
  */
 export function formatPercent(ratio: number | null | undefined, decimals = 1): string {
-  return `%${formatNumber(safe(ratio) * 100, decimals)}`;
+  if (!isNumber(ratio)) return UNKNOWN_DASH;
+  return `%${formatNumber(ratio * 100, decimals)}`;
 }
 
 /** Zaten yüzde cinsinden gelen değer için (18 → "%18"). */

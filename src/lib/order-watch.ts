@@ -126,6 +126,8 @@ export interface ScanInventory {
   lowStock: Array<{ id: string; name: string; stock: number }>;
   siteOutOfStock: Array<{ productId: string; name: string }>;
   spools: Array<{ id: string; name: string; remainingGrams: number }>;
+  /** Bu turda gerçekten okunabilen uyarı türleri — temizlik yalnız bunlara dokunur. */
+  readTypes: string[];
 }
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -449,19 +451,22 @@ async function loadInventory(): Promise<ScanInventory> {
       select: { product: { select: { id: true, name: true } } },
       take: 50,
     })
-    .catch(() => [] as Array<{ product: { id: string; name: string } | null }>);
+    .catch(() => null); // okunamadı → o türün satırlarına DOKUNULMAZ (aşağıya bak)
   const spoolRows = await prisma.filamentSpool.findMany({
     where: { isActive: true },
     select: { id: true, name: true, remainingGrams: true, reorderGrams: true },
   });
   return {
     lowStock,
-    siteOutOfStock: listings
+    siteOutOfStock: (listings ?? [])
       .filter((l) => l.product)
       .map((l) => ({ productId: l.product!.id, name: l.product!.name })),
     spools: spoolRows
       .filter((s) => s.remainingGrams <= s.reorderGrams)
       .map((s) => ({ id: s.id, name: s.name, remainingGrams: s.remainingGrams })),
+    // Bu turda GERÇEKTEN okunabilen türler. Okunamayan bir tür için "eşiğin üstüne çıktı"
+    // sonucu çıkarılamaz — aşağıdaki temizlik yalnız bunlara dokunur.
+    readTypes: listings === null ? ["stock", "spool"] : [...INVENTORY_TYPES],
   };
 }
 
@@ -503,10 +508,21 @@ async function persistNotifications(rows: WatchNotification[]): Promise<void> {
   }
 }
 
-/** Eşiğin üstüne çıkan ürün/makaraların bildirim satırını sil → tekrar düşerse yeniden bildirilir. */
-async function clearResolvedInventory(validIds: string[]): Promise<void> {
+/**
+ * Eşiğin üstüne çıkan ürün/makaraların bildirim satırını sil → tekrar düşerse yeniden bildirilir.
+ *
+ * ⚠️ YALNIZ bu turda GERÇEKTEN okunabilen türlere dokunur. Site-stok sorgusu geçici bir hatada
+ * boş dönebiliyor; tüm türleri kapsayan bir silme, o turda okunamayan türün TAMAMINI "çözüldü"
+ * sayıp kullanıcının okuduğu uyarıları siliyordu — sonraki turda hepsi okunmamış olarak geri
+ * doğuyor ve zil tekrar kırmızıya dönüyordu.
+ */
+async function clearResolvedInventory(
+  validIds: string[],
+  readTypes: string[]
+): Promise<void> {
+  if (readTypes.length === 0) return;
   await prisma.notification
-    .deleteMany({ where: { type: { in: INVENTORY_TYPES }, id: { notIn: validIds } } })
+    .deleteMany({ where: { type: { in: readTypes }, id: { notIn: validIds } } })
     .catch(() => ({ count: 0 }));
 }
 
@@ -528,7 +544,7 @@ async function scanTick(): Promise<void> {
     const inventory = await loadInventory();
     rows.push(...buildInventoryNotifications(inventory));
     await persistNotifications(rows);
-    await clearResolvedInventory(inventoryNotificationIds(inventory));
+    await clearResolvedInventory(inventoryNotificationIds(inventory), inventory.readTypes);
   } catch {
     /* ağ yok / pazaryeri meşgul — sonraki tur dener */
   } finally {

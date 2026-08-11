@@ -27,9 +27,24 @@ function currencyFormatter(currency: string, decimals: 0 | 2): Intl.NumberFormat
   return fmt;
 }
 
-/** Geçersiz/eksik sayıları 0 kabul et — ekranda "NaN ₺" ASLA görünmesin. */
+/** Bilinmeyen değer için ekranda gösterilen işaret. */
+export const UNKNOWN_DASH = "—";
+
+/**
+ * Değer gerçekten bir sayı mı?
+ *
+ * ⚠️ BİLİNMEYEN ≠ SIFIR. Eksik/bozuk bir tutarı 0 göstermek, "maliyet eksik" kuralının
+ * (productionCostKnown) tüm amacını biçimlendirme katmanında geri alır: kullanıcı hesaplanamamış
+ * bir rakamı gerçek sıfır sanır. Bu yüzden null/undefined/NaN artık "—" olarak yazılır.
+ * Gerçek 0 normal biçimlenir.
+ */
+function isNumber(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** Sayı olmayan girdileri 0'a indirger — YALNIZ sıfırın anlamlı olduğu yerlerde kullanılır. */
 function safe(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return isNumber(value) ? value : 0;
 }
 
 export interface CurrencyOptions {
@@ -41,6 +56,7 @@ export interface CurrencyOptions {
 
 export function formatCurrency(value: number | null | undefined, options: CurrencyOptions = {}): string {
   const { decimals = 2, currency = "TRY" } = options;
+  if (!isNumber(value)) return UNKNOWN_DASH;
   try {
     return currencyFormatter(currency, decimals).format(safe(value));
   } catch {
@@ -87,7 +103,8 @@ export function formatNumber(value: number | null | undefined, decimals = 0): st
  * Türkçe'de yüzde işareti sayının ÖNÜNDE ve ondalık ayracı VİRGÜL.
  */
 export function formatPercent(ratio: number | null | undefined, decimals = 1): string {
-  return `%${formatNumber(safe(ratio) * 100, decimals)}`;
+  if (!isNumber(ratio)) return UNKNOWN_DASH;
+  return `%${formatNumber(ratio * 100, decimals)}`;
 }
 
 /** Zaten yüzde cinsinden gelen değer için (18 → "%18"). */

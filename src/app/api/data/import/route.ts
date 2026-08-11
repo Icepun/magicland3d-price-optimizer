@@ -415,7 +415,19 @@ function toArg(value: unknown): unknown {
   return value;
 }
 
-/** Doğal anahtara göre ekle-veya-güncelle. Tekrar çalıştırılabilir (batch geri alınırsa sıralı yol aynı ifadeyi yeniden koşar). */
+/**
+ * Doğal anahtara göre ekle-veya-güncelle. Tekrar çalıştırılabilir (batch geri alınırsa sıralı
+ * yol aynı ifadeyi yeniden koşar).
+ *
+ * SONDAKİ HEDEFSİZ `ON CONFLICT DO NOTHING` neden var: ifade doğal anahtarı hedefliyor ama satır
+ * kendi `id`'sini de taşıyor (ör. ProductCost → hedef productId, birincil anahtar id). Yedekteki
+ * bir satır veritabanında BAŞKA bir doğal anahtarla aynı id altında duruyorsa çakışma birincil
+ * anahtarda olur ve hedefli cümle onu yakalamaz → 500 ifadelik dilimin TAMAMI geri alınır ve
+ * sıralı yola düşülür. Veri kaybı olmaz (sıralı yol satırları tek tek yazar) ama uzak-HTTP modunda
+ * her ifade ~96 ms sürdüğü için o dilim saniyeler yerine DAKİKALAR alır. Hedefsiz cümle yalnız
+ * TEKİLLİK çakışmalarını yutar (NOT NULL / CHECK / yabancı anahtar hataları yine yükselir):
+ * çakışan satır atlanır, dilimin geri kalanı tek toplu yazımda tamamlanır.
+ */
 function upsert(table: string, conflict: string[], insert: Row, update: Row): Stmt {
   const insertCols = Object.keys(insert);
   const updateCols = Object.keys(update);
@@ -425,7 +437,8 @@ function upsert(table: string, conflict: string[], insert: Row, update: Row): St
     `ON CONFLICT(${conflict.map((c) => `"${c}"`).join(", ")}) DO ` +
     (updateCols.length
       ? `UPDATE SET ${updateCols.map((c) => `"${c}" = ?`).join(", ")}`
-      : "NOTHING");
+      : "NOTHING") +
+    " ON CONFLICT DO NOTHING";
   return {
     sql,
     args: [

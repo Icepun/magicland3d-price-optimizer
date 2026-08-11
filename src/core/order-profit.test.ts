@@ -425,3 +425,59 @@ describe("sipariş kârı — kısmi ve tam iade adedi", () => {
     expect(r.profit).toBeCloseTo(LINE - FIX_NET - 20 * (5 / 6), 2);
   });
 });
+
+/**
+ * KDV ÇIKTISI — motorun zaten yaptığı ayrıştırma dışarı taşınır.
+ *
+ * NEDEN: aylık KDV özeti pazaryeri siparişlerini hiç kapsamıyordu; çünkü siparişin KDV'si
+ * hesaplansa da hiçbir yere yazılmıyordu. Bu testler, dışarı verilen iki rakamın motorun
+ * kendi sonucu olduğunu (yeni bir oran/formül uydurulmadığını) kilitler.
+ */
+describe("sipariş KDV çıktısı", () => {
+  it("hesaplanan KDV, sipariş cirosunun içindeki KDV'dir", () => {
+    const r = run([{ unitPrice: P, quantity: 1, product: prod("a") }], { cargo: CARGO_34 });
+    expect(r.outputVat).toBeCloseTo(P - P / 1.2, 6);
+  });
+
+  it("indirilecek KDV, kâra artı yansıyan payların toplamıdır", () => {
+    const r = run([{ unitPrice: P, quantity: 1, product: prod("a") }], { cargo: CARGO_34 });
+    // (paketleme + komisyon + sabit gider + KDV'li malzeme) × 1/6 + kargonun içindeki KDV.
+    const beklenen = (10.65 + P * 0.21 + 13.19 + 11.65) / 6 + 34.16 / 6;
+    expect(r.inputVatCredit).toBeCloseTo(beklenen, 6);
+  });
+
+  it("maliyeti bilinmeyen satır hesaplanan KDV'yi EKSİLTMEZ (satış yine yapıldı)", () => {
+    const r = run([
+      { unitPrice: P, quantity: 1, product: prod("a") },
+      { unitPrice: P, quantity: 1, product: null },
+    ]);
+    expect(r.partial).toBe(true);
+    expect(r.outputVat).toBeCloseTo(2 * P - (2 * P) / 1.2, 6);
+  });
+
+  it("hiçbir satır eşleşmezse hesaplanan KDV yine bilinir, indirilecek KDV sıfırdır", () => {
+    const r = run([{ unitPrice: P, quantity: 1, product: null }]);
+    expect(r.profit).toBeNull();
+    expect(r.outputVat).toBeCloseTo(P - P / 1.2, 6);
+    expect(r.inputVatCredit).toBe(0);
+  });
+
+  it("KDV oranı 0 ise iki rakam da sıfırdır", () => {
+    const r = computeOrderProfit({
+      platform: "trendyol",
+      orderTotal: P,
+      lines: [{ unitPrice: P, quantity: 1, product: prod("a") }],
+      commissionRules: [],
+      cargoRules: [],
+      expenseRules: [],
+      settings: { vatRate: "0" },
+    });
+    expect(r.outputVat).toBe(0);
+    expect(r.inputVatCredit).toBe(0);
+  });
+
+  it("kargo geliri (sipariş toplamı satırları aşıyor) hesaplanan KDV'ye girer", () => {
+    const r = run([{ unitPrice: P, quantity: 1, product: prod("a") }], { total: P + 60 });
+    expect(r.outputVat).toBeCloseTo(P + 60 - (P + 60) / 1.2, 6);
+  });
+});

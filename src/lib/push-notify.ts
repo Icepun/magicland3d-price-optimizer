@@ -141,7 +141,12 @@ export async function makbuzlariDogrula(
         const sebep = sadeSebep(kod, makbuz?.message);
         if (!sonuc.sebepler.includes(sebep)) sonuc.sebepler.push(sebep);
         console.warn(`[push] makbuz hatası: ${kod ?? "?"} — ${makbuz?.message ?? ""}`);
-        if (kod === "DeviceNotRegistered" || kod === "InvalidCredentials") {
+        // YALNIZ DeviceNotRegistered kaydı siler: o hata CİHAZA özeldir (uygulama silinmiş,
+        // token dönmüş). InvalidCredentials ise PROJE düzeyinde bir yapılandırma hatasıdır ve
+        // o an gönderilen HER mesaj için döner — silinirse tek bir yanlış ayar yüzünden bütün
+        // telefon kayıtları geri alınamaz biçimde gider ve kullanıcı uygulamaları yeniden
+        // kurana kadar hiç bildirim alamaz. Sebep listesine yazılır, kayıt korunur.
+        if (kod === "DeviceNotRegistered") {
           const token = biletToken.get(id);
           if (token) olu.push(token);
         }
@@ -277,7 +282,8 @@ export async function pushToAllDevices(
           const kod = bilet?.details?.error;
           sebepEkle(ozet, sadeSebep(kod, bilet?.message));
           console.warn(`[push] bilet hatası: ${kod ?? "?"} — ${bilet?.message ?? ""}`);
-          if ((kod === "DeviceNotRegistered" || kod === "InvalidCredentials") && token) olu.push(token);
+          // Yalnız cihaza özel hata kaydı siler (yukarıdaki nota bak).
+          if (kod === "DeviceNotRegistered" && token) olu.push(token);
         });
       } catch (err) {
         ozet.hata += grup.length;
