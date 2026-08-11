@@ -21,6 +21,10 @@ delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 
 let persist: typeof import("./order-finance-snapshots").persistOrderFinanceSnapshots;
+let schedule: typeof import("./order-finance-snapshots").scheduleOrderFinanceSnapshots;
+let flush: typeof import("./order-finance-snapshots").flushOrderFinanceSnapshots;
+let lastWrite: typeof import("./order-finance-snapshots").lastOrderFinanceSnapshotWrite;
+let inFlight: typeof import("./order-finance-snapshots").orderFinanceSnapshotWriteInFlight;
 let db: typeof import("@/lib/prisma").prisma;
 
 function order(overrides: Partial<FinanceSnapshotOrder> = {}): FinanceSnapshotOrder {
@@ -72,7 +76,13 @@ async function syncedAtOf(externalOrderId: string): Promise<number | null> {
 
 beforeAll(async () => {
   const { ensureRuntimeSchema } = await import("./runtime-schema");
-  ({ persistOrderFinanceSnapshots: persist } = await import("./order-finance-snapshots"));
+  ({
+    persistOrderFinanceSnapshots: persist,
+    scheduleOrderFinanceSnapshots: schedule,
+    flushOrderFinanceSnapshots: flush,
+    lastOrderFinanceSnapshotWrite: lastWrite,
+    orderFinanceSnapshotWriteInFlight: inFlight,
+  } = await import("./order-finance-snapshots"));
   ({ prisma: db } = await import("@/lib/prisma"));
   await ensureRuntimeSchema();
 }, 120_000);
@@ -289,5 +299,71 @@ describe("ürün bazlı satış geçmişi (kalem satırları)", () => {
     );
 
     expect(await itemRows("sh-777")).toHaveLength(1);
+  });
+});
+
+/**
+ * Yazım artık sipariş listesi YANITININ içinde değil. İlk dolumda yüzlerce satır yazılırken
+ * uygulama donuyordu; bu testler çağıranın beklemediğini ve hatanın yutulmadığını kanıtlar.
+ */
+describe("arka plan yazımı (ateşle ve unut)", () => {
+  it("çağıranı bekletmeden yazar", async () => {
+    const target = order({ id: "ty-6001", orderNumber: "6001", total: 500, profit: 120 });
+
+    schedule([target]);
+    // Çağıran döndüğünde satır HENÜZ yazılmamıştır — yazım yanıt yolundan çıktı.
+    expect(
+      await db.orderFinanceSnapshot.findFirst({ where: { externalOrderId: "ty-6001" } })
+    ).toBeNull();
+    expect(inFlight()).toBe(true);
+
+    await flush();
+
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-6001" },
+    });
+    expect(row!.revenueKurus).toBe(50_000);
+    expect(inFlight()).toBe(false);
+  });
+
+  it("kalemleri de arka planda kaydeder ve tur sonucunu bildirir", async () => {
+    schedule(
+      [order({ id: "ty-6002", orderNumber: "6002" })],
+      new Map([["ty-6002", items({ productId: "p7", productName: "Vazo", quantity: 2 })]])
+    );
+    await flush();
+
+    expect(await itemRows("ty-6002")).toHaveLength(1);
+    expect(lastWrite()).toMatchObject({ ok: true, writtenOrders: 1, writtenItems: 1 });
+  });
+
+  it("üst üste gelen turlarda son veri kazanır ve hata fırlatmaz", async () => {
+    const base = order({ id: "ty-6003", orderNumber: "6003", total: 100, profit: 10 });
+    schedule([base]);
+    schedule([{ ...base, total: 250, profit: 40 }]);
+    await flush();
+
+    const row = await db.orderFinanceSnapshot.findFirst({
+      where: { externalOrderId: "ty-6003" },
+    });
+    expect(row!.revenueKurus).toBe(25_000);
+  });
+
+  it("hata olursa çağıranı çökertmez ama son tur durumu hatayı taşır", async () => {
+    // Kuruş sınırını aşan tutar yazım turunu düşürür — hata yutulmamalı.
+    schedule([order({ id: "ty-6004", orderNumber: "6004", total: 9e12 })]);
+    await flush();
+
+    const status = lastWrite();
+    expect(status?.ok).toBe(false);
+    expect(status?.error).toBeTruthy();
+    expect(
+      await db.orderFinanceSnapshot.findFirst({ where: { externalOrderId: "ty-6004" } })
+    ).toBeNull();
+  });
+
+  it("yazılacak sipariş yoksa hiç tur başlatmaz", () => {
+    schedule([]);
+    expect(inFlight()).toBe(false);
   });
 });

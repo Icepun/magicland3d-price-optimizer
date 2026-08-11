@@ -172,3 +172,132 @@ describe("monthly finance", () => {
     });
   });
 });
+
+/**
+ * KDV özeti: rakamlar yalnız KAYITLI alanlardan gelir. Ayrıştırılmamış siparişin KDV'si
+ * SIFIR sayılmaz — "bilinmiyor" olarak ayrı sayılır ki arayüz kapsamı dürüstçe söyleyebilsin.
+ */
+describe("aylık KDV özeti", () => {
+  const now = new Date("2026-07-20T12:00:00.000Z");
+  const manual = {
+    orderedAt: new Date("2026-07-05T10:00:00.000Z"),
+    revenueKurus: 120_000,
+    netRevenueKurus: 100_000,
+    inputVatCreditKurus: 6_000,
+    profitKurus: 25_000,
+    profitPartial: false,
+    statusKind: "delivered",
+    currency: "TRY",
+  };
+
+  it("hesaplanan KDV'yi kayıtlı brüt ve net cironun farkından çıkarır", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [],
+      manualOrders: [manual],
+      expenses: [],
+    });
+
+    expect(months[0].vat).toEqual({
+      outputVat: 200,
+      inputVatCredit: 60,
+      payable: 140,
+      knownOrders: 1,
+      partialOrders: 0,
+      unknownOrders: 0,
+      unknownRevenue: 0,
+    });
+  });
+
+  it("KDV'si ayrıştırılmamış siparişi sıfır saymaz, kapsam dışı olarak sayar", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [
+        {
+          platform: "trendyol",
+          orderedAt: new Date("2026-07-06T10:00:00.000Z"),
+          revenueKurus: 45_000,
+          profitKurus: 9_000,
+          profitPartial: false,
+          statusKind: "delivered",
+          currency: "TRY",
+        },
+      ],
+      manualOrders: [manual],
+      expenses: [],
+    });
+
+    expect(months[0].vat).toMatchObject({
+      outputVat: 200,
+      inputVatCredit: 60,
+      knownOrders: 1,
+      unknownOrders: 1,
+      unknownRevenue: 450,
+    });
+  });
+
+  it("iptal ve yabancı para siparişleri KDV'ye hiç girmez", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [],
+      manualOrders: [
+        { ...manual, statusKind: "cancelled" },
+        { ...manual, currency: "USD" },
+      ],
+      expenses: [],
+    });
+
+    expect(months[0].vat).toMatchObject({
+      outputVat: 0,
+      inputVatCredit: 0,
+      knownOrders: 0,
+      unknownOrders: 0,
+      unknownRevenue: 0,
+    });
+  });
+
+  it("maliyeti eksik siparişte indirilecek KDV'nin eksik olabileceğini işaretler", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [],
+      manualOrders: [{ ...manual, profitKurus: null, profitPartial: true }],
+      expenses: [],
+    });
+
+    expect(months[0].vat).toMatchObject({ knownOrders: 1, partialOrders: 1 });
+  });
+
+  it("indirilecek KDV daha yüksekse fark eksi (devreden) çıkar", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [],
+      manualOrders: [{ ...manual, inputVatCreditKurus: 35_000 }],
+      expenses: [],
+    });
+
+    expect(months[0].vat.payable).toBe(-150);
+  });
+
+  it("KDV eklemek mevcut ciro ve kâr rakamlarını değiştirmez", () => {
+    const months = aggregateMonthlyFinance({
+      monthCount: 1,
+      now,
+      snapshots: [],
+      manualOrders: [manual],
+      expenses: [{ paidAt: new Date("2026-07-10T10:00:00.000Z"), amountKurus: 5_000 }],
+    });
+
+    expect(months[0]).toMatchObject({
+      revenue: 1_200,
+      orderProfit: 250,
+      expenses: 50,
+      netProfit: 200,
+      orderCount: 1,
+    });
+  });
+});

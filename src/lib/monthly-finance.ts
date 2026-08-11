@@ -27,6 +27,14 @@ type SnapshotInput = {
   profitPartial: boolean;
   statusKind: string;
   currency: string;
+  /**
+   * Satıştan doğan (hesaplanan) KDV — kuruş.
+   * null/undefined = bu sipariş için KDV ayrıştırılmış DEĞİL. Sıfır ile karıştırılmaz:
+   * bilinmeyen siparişler toplama girmez, ayrıca "kapsam dışı" olarak sayılır.
+   */
+  outputVatKurus?: number | null;
+  /** Girdilerden indirilecek KDV — kuruş. Yalnız outputVatKurus biliniyorsa anlamlıdır. */
+  inputVatCreditKurus?: number | null;
 };
 
 type ManualOrderFinanceInput = {
@@ -36,6 +44,13 @@ type ManualOrderFinanceInput = {
   profitPartial: boolean;
   statusKind: string;
   currency: string;
+  /**
+   * Manuel siparişin KDV hariç cirosu (kayıtlı alan). Hesaplanan KDV bu iki kayıtlı
+   * alanın farkıdır — motorun kendi çıktısıdır, burada yeni bir KDV formülü kurulmaz.
+   */
+  netRevenueKurus?: number | null;
+  /** Manuel siparişin kayıtlı indirilecek KDV tutarı (motor çıktısı). */
+  inputVatCreditKurus?: number | null;
 };
 
 type ExpenseInput = {
@@ -61,8 +76,35 @@ type MonthKurus = {
   missingProfitOrders: number;
   excludedOrders: number;
   unsupportedCurrencyOrders: number;
+  outputVatKurus: number;
+  inputVatCreditKurus: number;
+  vatKnownOrders: number;
+  vatPartialOrders: number;
+  vatUnknownOrders: number;
+  vatUnknownRevenueKurus: number;
   byPlatform: Record<string, PlatformKurus>;
 };
+
+/**
+ * Ayın KDV özeti. Rakamlar sipariş motorunun KENDİ çıktısından toplanır; burada
+ * hiçbir KDV oranı uygulanmaz, hiçbir tutar yeniden hesaplanmaz.
+ */
+export interface MonthlyVatSummary {
+  /** Satıştan doğan (hesaplanan) KDV. */
+  outputVat: number;
+  /** Girdilerden indirilecek KDV. */
+  inputVatCredit: number;
+  /** Fark. Eksi değer "sonraki aya devreden" demektir. */
+  payable: number;
+  /** KDV'si bilinen sipariş sayısı. */
+  knownOrders: number;
+  /** KDV'si bilinen ama maliyeti eksik olan sipariş sayısı (indirilecek KDV eksik kalmış olabilir). */
+  partialOrders: number;
+  /** Ciroya giren ama KDV'si ayrıştırılmamış sipariş sayısı. */
+  unknownOrders: number;
+  /** O siparişlerin cirosu — "ne kadarı bilinmiyor" sorusunun dürüst yanıtı. */
+  unknownRevenue: number;
+}
 
 export interface MonthlyFinanceItem {
   month: string;
@@ -77,6 +119,7 @@ export interface MonthlyFinanceItem {
   missingProfitOrders: number;
   excludedOrders: number;
   unsupportedCurrencyOrders: number;
+  vat: MonthlyVatSummary;
   byPlatform: Record<
     string,
     { revenue: number; orderProfit: number; orderCount: number }
@@ -207,6 +250,12 @@ export function aggregateMonthlyFinance({
         missingProfitOrders: 0,
         excludedOrders: 0,
         unsupportedCurrencyOrders: 0,
+        outputVatKurus: 0,
+        inputVatCreditKurus: 0,
+        vatKnownOrders: 0,
+        vatPartialOrders: 0,
+        vatUnknownOrders: 0,
+        vatUnknownRevenueKurus: 0,
         byPlatform: {
           shopify: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
           trendyol: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
@@ -242,6 +291,20 @@ export function aggregateMonthlyFinance({
     }
     if (snapshot.profitKurus == null || snapshot.profitPartial) bucket.incompleteOrders++;
 
+    // KDV yalnız ciroya GİREN siparişlerden toplanır (iptal ve yabancı para yukarıda elendi).
+    // Ayrıştırılmamış siparişin KDV'si SIFIR sayılmaz; "bilinmeyen" olarak ayrı sayılır ki
+    // arayüz özetin ne kadarını kapsamadığını dürüstçe söyleyebilsin.
+    if (snapshot.outputVatKurus == null) {
+      bucket.vatUnknownOrders++;
+      bucket.vatUnknownRevenueKurus += snapshot.revenueKurus;
+    } else {
+      bucket.outputVatKurus += snapshot.outputVatKurus;
+      bucket.inputVatCreditKurus += snapshot.inputVatCreditKurus ?? 0;
+      bucket.vatKnownOrders++;
+      // Maliyeti eksik siparişte indirilecek KDV de eksik kalır → kullanıcı uyarılmalı.
+      if (snapshot.profitPartial || snapshot.profitKurus == null) bucket.vatPartialOrders++;
+    }
+
     const platform = (bucket.byPlatform[snapshot.platform] ??= {
       revenueKurus: 0,
       orderProfitKurus: 0,
@@ -259,7 +322,16 @@ export function aggregateMonthlyFinance({
     addOrder(snapshot);
   }
   for (const order of manualOrders) {
-    addOrder({ ...order, platform: "manual" });
+    // Hesaplanan KDV = kayıtlı brüt ciro − kayıtlı KDV hariç ciro. Bu, manuel sipariş
+    // motorunun (calculateManualOrder) ürettiği `outputVat` değerinin ta kendisidir;
+    // burada yeni bir oran uygulanmaz.
+    addOrder({
+      ...order,
+      platform: "manual",
+      outputVatKurus:
+        order.netRevenueKurus == null ? null : order.revenueKurus - order.netRevenueKurus,
+      inputVatCreditKurus: order.inputVatCreditKurus ?? null,
+    });
   }
 
   for (const expense of expenses) {
@@ -282,6 +354,15 @@ export function aggregateMonthlyFinance({
       missingProfitOrders: bucket.missingProfitOrders,
       excludedOrders: bucket.excludedOrders,
       unsupportedCurrencyOrders: bucket.unsupportedCurrencyOrders,
+      vat: {
+        outputVat: kurusToTl(bucket.outputVatKurus),
+        inputVatCredit: kurusToTl(bucket.inputVatCreditKurus),
+        payable: kurusToTl(bucket.outputVatKurus - bucket.inputVatCreditKurus),
+        knownOrders: bucket.vatKnownOrders,
+        partialOrders: bucket.vatPartialOrders,
+        unknownOrders: bucket.vatUnknownOrders,
+        unknownRevenue: kurusToTl(bucket.vatUnknownRevenueKurus),
+      },
       byPlatform: Object.fromEntries(
         Object.entries(bucket.byPlatform).map(([platform, values]) => [
           platform,

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Search,
   LayoutDashboard,
   BarChart3,
   Package,
@@ -23,6 +24,8 @@ import { cn } from "@/lib/utils";
 import { UpdateWidget } from "./UpdateWidget";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
+import { openCommandPalette } from "@/components/ui/command-palette";
+import { useIsClient } from "@/lib/client-state";
 
 const navItems = [
   { href: "/",                 label: "Panel",              icon: LayoutDashboard },
@@ -43,6 +46,10 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  // Kısayol etiketi cihaza göre değişir; ilk çizimde Ctrl yazılır, tarayıcıya geçilince
+  // Mac'te ⌘ olur (hidrasyon uyuşmazlığı olmasın diye istemci beklenir).
+  const isClient = useIsClient();
+  const macKisayolu = isClient && /mac/i.test(navigator.userAgent);
 
   return (
     <aside
@@ -90,8 +97,24 @@ export function Sidebar() {
         </div>
       </div>
 
+      {/* Hızlı arama — kısayolun varlığı görünür olsun diye düğme olarak duruyor. */}
+      <div className="px-2 pt-3">
+        <button
+          type="button"
+          onClick={openCommandPalette}
+          title="Ürün, sipariş, makara ve sayfa ara"
+          className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border/60 bg-sidebar-accent/30 px-2.5 py-1.5 text-[12px] text-sidebar-foreground/60 transition-all duration-200 hover:border-primary/40 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground active:scale-[0.98]"
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 transition-colors group-hover:text-primary" />
+          <span className="flex-1 text-left">Ara</span>
+          <kbd className="rounded border border-sidebar-border/70 px-1 py-0.5 text-[9px] font-medium tabular-nums text-sidebar-foreground/55">
+            {macKisayolu ? "⌘K" : "Ctrl K"}
+          </kbd>
+        </button>
+      </div>
+
       {/* Navigasyon */}
-      <nav className="flex-1 overflow-y-auto p-2 pt-3 space-y-0.5 relative">
+      <nav className="flex-1 overflow-y-auto p-2 pt-2 space-y-0.5 relative">
         {navItems.map(({ href, label, icon: Icon }, index) => {
           const isActive =
             href === "/" ? pathname === "/" : pathname.startsWith(href);

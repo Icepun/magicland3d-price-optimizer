@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { bustInventoryAlertCaches } from "@/lib/cache-busting";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -24,6 +25,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const { id } = await params;
     const data = UpdateSchema.parse(await req.json());
     const updated = await prisma.filamentSpool.update({ where: { id }, data });
+    bustInventoryAlertCaches(); // kalan gram/eşik değişti → zildeki uyarı bekletmesin
     return NextResponse.json(updated);
   } catch (error) {
     return jsonError(error);
@@ -35,6 +37,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     await ensureRuntimeSchema();
     const { id } = await params;
     await prisma.filamentSpool.delete({ where: { id } });
+    bustInventoryAlertCaches(); // silinen makaranın uyarısı ekranda kalmasın
     return NextResponse.json({ ok: true });
   } catch (error) {
     return jsonError(error);

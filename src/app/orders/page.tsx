@@ -31,6 +31,10 @@ import {
   Pencil,
   Plus,
   Trash2,
+  Check,
+  PackageCheck,
+  RotateCcw,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -43,6 +47,17 @@ import {
   ManualOrderDialog,
   type ManualOrderEditTarget,
 } from "@/components/orders/ManualOrderDialog";
+import {
+  ORDERS_REQUEST_EVENT,
+  takeOrdersRequest,
+  type OrdersRequest,
+} from "@/components/ui/command-palette";
+import {
+  buildPrepItems,
+  loadPrepDone,
+  savePrepDone,
+  type PrepItem,
+} from "./hazirlik";
 import { cn } from "@/lib/utils";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
@@ -180,6 +195,7 @@ function fmtDate(iso: string | null) {
   }
 }
 
+
 export default function OrdersPage() {
   const queryClient = useQueryClient();
   const forceFresh = useRef(false); // "Yenile" → sunucu önbelleğini atla (?fresh=1), canlı çek.
@@ -206,6 +222,8 @@ export default function OrdersPage() {
   const [platform, setPlatform] = useState<"all" | OrderPlatform>("all");
   const [status, setStatus] = useState<"all" | OrderStatusKind>("all");
   const [search, setSearch] = useState("");
+  /** "liste" = sipariş sipariş; "hazirlik" = ürün bazında toplanmış paketleme listesi. */
+  const [view, setView] = useState<"liste" | "hazirlik">("liste");
   /** Özet karttaki "N siparişte maliyet eksik" uyarısına tıklayınca yalnız o siparişler listelenir. */
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [manualCreateOpen, setManualCreateOpen] = useState(false);
@@ -217,6 +235,48 @@ export default function OrdersPage() {
     const t = setTimeout(() => setDebouncedSearch(search), 200);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Hızlı aramadan (Ctrl+K) gelen istek: bir sipariş numarası ya da hazırlık listesi.
+  useEffect(() => {
+    const uygula = (request: OrdersRequest | null) => {
+      if (!request) return;
+      if (request.search != null) {
+        setSearch(request.search);
+        setDebouncedSearch(request.search);
+        setPlatform("all");
+        setStatus("all");
+        setOnlyIncomplete(false);
+      }
+      if (request.view) setView(request.view);
+    };
+    uygula(takeOrdersRequest());
+    const onRequest = (event: Event) => {
+      takeOrdersRequest(); // sayfa zaten açıkken not birikmesin
+      uygula((event as CustomEvent<OrdersRequest>).detail ?? null);
+    };
+    window.addEventListener(ORDERS_REQUEST_EVENT, onRequest);
+    return () => window.removeEventListener(ORDERS_REQUEST_EVENT, onRequest);
+  }, []);
+
+  // Hazırlıkta işaretlenenler — oturum boyunca saklanır, açılışta geri yüklenir.
+  const [prepDone, setPrepDone] = useState<string[]>([]);
+  useEffect(() => {
+    setPrepDone(loadPrepDone());
+  }, []);
+  const prepDoneSet = useMemo(() => new Set(prepDone), [prepDone]);
+  const togglePrepDone = (key: string) => {
+    setPrepDone((current) => {
+      const next = current.includes(key)
+        ? current.filter((k) => k !== key)
+        : [...current, key];
+      savePrepDone(next);
+      return next;
+    });
+  };
+  const resetPrepDone = () => {
+    setPrepDone([]);
+    savePrepDone([]);
+  };
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
   const summary = data?.summary;
@@ -292,6 +352,24 @@ export default function OrdersPage() {
     [beforeStatus, status]
   );
 
+  // Hazırlık listesi üstteki platform/arama filtrelerine uyar, durum çipine uymaz:
+  // kapsamı zaten "gönderilmeyi bekleyenler".
+  const prepItems = useMemo(() => buildPrepItems(beforeStatus), [beforeStatus]);
+  const prepUnitTotal = useMemo(
+    () => prepItems.reduce((sum, item) => sum + item.quantity, 0),
+    [prepItems]
+  );
+  const prepOrderCount = useMemo(() => {
+    const numbers = new Set<string>();
+    for (const item of prepItems) for (const no of item.orderNumbers) numbers.add(no);
+    return numbers.size;
+  }, [prepItems]);
+  const prepDoneCount = useMemo(
+    () => prepItems.filter((item) => prepDoneSet.has(item.key)).length,
+    [prepItems, prepDoneSet]
+  );
+  const prepProgress = prepItems.length ? prepDoneCount / prepItems.length : 0;
+
   // ── Sayfalama ──────────────────────────────────────────────────────────────
   // Liste sanallaştırılmış olsa da satırlar açılıp kapandıkça yükseklikleri değişiyor ve
   // TanStack Virtual TÜM satırları yeniden ölçüyor; sipariş sayısı büyüdükçe bu iş artıyor.
@@ -328,7 +406,8 @@ export default function OrdersPage() {
     return () => window.removeEventListener("resize", measure);
     // safePage/pageSize + onlyIncomplete de bağımlı: sayfa değişince liste içeriği, filtre bandı
     // açılıp kapanınca da listenin ÜSTTEN ofseti değişiyor → scrollMargin yeniden ölçülmeli.
-  }, [scrollEl, isLoading, platform, status, filtered.length, safePage, pageSize, onlyIncomplete]);
+    // view: hazırlık görünümünde durum çipleri gizleniyor, listeye dönünce ofset değişiyor.
+  }, [scrollEl, isLoading, platform, status, filtered.length, safePage, pageSize, onlyIncomplete, view]);
 
   // TanStack Virtual callback tabanlı API döndürür; React Compiler bu bileşeni bilinçli olarak atlar.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -517,6 +596,33 @@ export default function OrdersPage() {
         </Card>
       )}
 
+      {/* Görünüm seçimi — sipariş sipariş bakmak ya da paketleme için ürün bazında toplamak. */}
+      <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
+        {([
+          { key: "liste", label: "Sipariş listesi", icon: ClipboardList },
+          { key: "hazirlik", label: "Hazırlık", icon: PackageCheck },
+        ] as const).map(({ key, label, icon: Icon }) => (
+          <button
+            key={key}
+            onClick={() => setView(key)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all duration-200 active:scale-95",
+              view === key
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {label}
+            {key === "hazirlik" && prepItems.length - prepDoneCount > 0 && (
+              <span className="rounded-full bg-primary/15 px-1.5 py-px text-[10px] font-semibold tabular-nums text-primary">
+                {prepItems.length - prepDoneCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
       {/* Kontroller */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
@@ -556,16 +662,30 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* Durum filtreleri */}
+      {/* Durum filtreleri — hazırlık görünümünün kapsamı zaten sabit, orada gösterilmez. */}
+      {view === "liste" && (
       <div className="flex flex-wrap gap-1.5">
         <StatusChip active={status === "all"} onClick={() => setStatus("all")} label="Hepsi" count={orders.length} />
         {STATUS_ORDER.map((k) => (
           <StatusChip key={k} active={status === k} onClick={() => setStatus(k)} label={STATUS_STYLE[k].label} count={statusCounts[k] ?? 0} dot={STATUS_STYLE[k].dot} />
         ))}
       </div>
+      )}
 
-      {/* Liste */}
-      {isLoading ? (
+      {/* Liste ya da hazırlık görünümü */}
+      {view === "hazirlik" ? (
+        <PrepPanel
+          items={prepItems}
+          doneSet={prepDoneSet}
+          unitTotal={prepUnitTotal}
+          orderCount={prepOrderCount}
+          doneCount={prepDoneCount}
+          progress={prepProgress}
+          loading={isLoading}
+          onToggle={togglePrepDone}
+          onReset={resetPrepDone}
+        />
+      ) : isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-[76px] w-full rounded-xl" />
@@ -636,7 +756,7 @@ export default function OrdersPage() {
       )}
 
       {/* Sayfalama — tek sayfaya sığıyorsa gösterilmez (gereksiz kalabalık yapmasın). */}
-      {filtered.length > pageSize && (
+      {view === "liste" && filtered.length > pageSize && (
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <span className="text-xs text-muted-foreground tabular-nums">
             {safePage * pageSize + 1}–{Math.min(filtered.length, (safePage + 1) * pageSize)} / {filtered.length} sipariş
@@ -853,6 +973,212 @@ function StatusChip({ active, onClick, label, count, dot }: { active: boolean; o
       {label}
       <span className={cn("tabular-nums", active ? "opacity-90" : "opacity-60")}>{count}</span>
     </button>
+  );
+}
+
+/**
+ * Hazırlık listesi: gönderilmeyi bekleyen siparişlerin kalemleri ürün bazında toplanmış,
+ * toplandıkça işaretlenebilir hâlde. Amaç paketleme sırasında tek ekrana bakmak.
+ */
+function PrepPanel({
+  items,
+  doneSet,
+  unitTotal,
+  orderCount,
+  doneCount,
+  progress,
+  loading,
+  onToggle,
+  onReset,
+}: {
+  items: PrepItem[];
+  doneSet: Set<string>;
+  unitTotal: number;
+  orderCount: number;
+  doneCount: number;
+  progress: number;
+  loading: boolean;
+  onToggle: (key: string) => void;
+  onReset: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-[64px] w-full rounded-xl" />
+        ))}
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        icon={PackageCheck}
+        title="Hazırlanacak bir şey yok"
+        description="Bekleyen ya da hazırlanan sipariş çıktığında, toplanacak ürünler adetleriyle burada listelenir."
+      />
+    );
+  }
+
+  const allDone = doneCount === items.length;
+
+  return (
+    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-300">
+      {/* Özet + ilerleme */}
+      <Card className="overflow-hidden">
+        <CardContent className="space-y-2.5 py-3">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-[11px] text-muted-foreground">Bugün gönderilecekler</p>
+              <p className="text-xl font-bold tabular-nums">
+                <AnimatedNumber value={unitTotal} /> adet
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                {items.length} çeşit · {orderCount} sipariş
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-[11px] text-muted-foreground">Hazırlanan</p>
+              <p className="text-lg font-semibold tabular-nums">
+                <AnimatedNumber value={doneCount} /> / {items.length}
+              </p>
+            </div>
+          </div>
+
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/50">
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            {allDone ? (
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 animate-in fade-in zoom-in-95 duration-300 dark:text-green-500">
+                <Sparkles className="h-3.5 w-3.5" />
+                Hepsi hazır
+              </span>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">
+                Ürünü topladıkça işaretle.
+              </span>
+            )}
+            {doneCount > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                onClick={onReset}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                İşaretleri temizle
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Toplanacak ürünler */}
+      <div className="space-y-2">
+        {items.map((item, index) => {
+          const done = doneSet.has(item.key);
+          return (
+            <div
+              key={item.key}
+              style={{
+                animation: "nav-slide-in 260ms ease forwards",
+                animationDelay: `${Math.min(index, 12) * 30}ms`,
+                opacity: 0,
+                animationFillMode: "forwards",
+              }}
+            >
+              <Card
+                className={cn(
+                  "overflow-hidden transition-all duration-300",
+                  done ? "opacity-55" : "hover:border-primary/30"
+                )}
+              >
+                <div className="flex items-center gap-3 px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => onToggle(item.key)}
+                    aria-pressed={done}
+                    title={done ? "İşareti kaldır" : "Hazır olarak işaretle"}
+                    className={cn(
+                      "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 active:scale-90",
+                      done
+                        ? "border-green-500 bg-green-500 text-white"
+                        : "border-border hover:border-primary/60 hover:bg-primary/10"
+                    )}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 transition-all duration-200",
+                        done ? "scale-100 opacity-100" : "scale-50 opacity-0"
+                      )}
+                      strokeWidth={3}
+                    />
+                  </button>
+
+                  <Thumb src={item.image} size="h-11 w-11" />
+
+                  <button
+                    type="button"
+                    onClick={() => onToggle(item.key)}
+                    className="min-w-0 flex-1 text-left"
+                  >
+                    <p
+                      className={cn(
+                        "truncate text-sm font-medium transition-all",
+                        done && "line-through"
+                      )}
+                    >
+                      {item.name}
+                    </p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+                      {item.orderNumbers.slice(0, 3).map((no) => (
+                        <span
+                          key={no}
+                          className="rounded border border-border/60 px-1 py-px tabular-nums"
+                        >
+                          {no}
+                        </span>
+                      ))}
+                      {item.orderNumbers.length > 3 && (
+                        <span className="opacity-70">
+                          +{item.orderNumbers.length - 3} sipariş
+                        </span>
+                      )}
+                      {item.madeToOrder && (
+                        <span className="text-amber-500">· sipariş üzerine</span>
+                      )}
+                      {item.costMissing && (
+                        <span className="text-amber-500">· maliyet girilmemiş</span>
+                      )}
+                    </div>
+                  </button>
+
+                  <span className="flex h-9 min-w-[2.25rem] shrink-0 items-center justify-center rounded-lg bg-primary/10 px-2 text-base font-bold tabular-nums text-primary">
+                    ×{item.quantity}
+                  </span>
+
+                  {item.productId && (
+                    <Link
+                      href={`/products/${item.productId}`}
+                      className="shrink-0 text-muted-foreground/60 transition-colors hover:text-primary"
+                      title="Ürün sayfasına git"
+                    >
+                      <ArrowUpRight className="h-4 w-4" />
+                    </Link>
+                  )}
+                </div>
+              </Card>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { bustInventoryAlertCaches } from "@/lib/cache-busting";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -58,6 +59,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       return NextResponse.json({ error: "Makara bulunamadı" }, { status: 404 });
     }
 
+    bustInventoryAlertCaches(); // filament düşümü eşiği geçmiş olabilir → uyarı tazelensin
     return NextResponse.json(updated);
   } catch (error) {
     return jsonError(error);

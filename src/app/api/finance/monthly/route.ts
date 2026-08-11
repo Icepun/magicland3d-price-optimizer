@@ -13,8 +13,10 @@ export async function GET(req: NextRequest) {
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
+  // v3: yanıta KDV özeti eklendi. Sürüm artmazsa güncelleme sonrası diskteki eski yanıt
+  // (KDV alanı olmayan) taze sayılıp gösterilirdi.
   const data = await swr(
-    `finance-monthly:v2:${monthCount}`,
+    `finance-monthly:v3:${monthCount}`,
     60_000,
     () => computeMonthlyFinance(monthCount)
   );
@@ -58,6 +60,9 @@ async function computeMonthlyFinance(monthCount: number) {
       select: {
         orderedAt: true,
         revenueKurus: true,
+        // KDV özeti bu iki kayıtlı alandan çıkar (motorun kendi çıktısı) — yeni hesap yok.
+        netRevenueKurus: true,
+        inputVatCreditKurus: true,
         profitKurus: true,
         profitPartial: true,
         statusKind: true,
@@ -118,6 +123,28 @@ async function computeMonthlyFinance(monthCount: number) {
       unsupportedCurrencyOrders: 0,
     }
   );
+  // KDV toplamı ay ay toplanır (ay içindeki kuruş yuvarlaması tek kaynakta kalsın diye
+  // ayrıca hesaplanmaz, aylık çıktılar üst üste eklenir).
+  const vat = months.reduce(
+    (sum, month) => ({
+      outputVat: Number((sum.outputVat + month.vat.outputVat).toFixed(2)),
+      inputVatCredit: Number((sum.inputVatCredit + month.vat.inputVatCredit).toFixed(2)),
+      payable: Number((sum.payable + month.vat.payable).toFixed(2)),
+      knownOrders: sum.knownOrders + month.vat.knownOrders,
+      partialOrders: sum.partialOrders + month.vat.partialOrders,
+      unknownOrders: sum.unknownOrders + month.vat.unknownOrders,
+      unknownRevenue: Number((sum.unknownRevenue + month.vat.unknownRevenue).toFixed(2)),
+    }),
+    {
+      outputVat: 0,
+      inputVatCredit: 0,
+      payable: 0,
+      knownOrders: 0,
+      partialOrders: 0,
+      unknownOrders: 0,
+      unknownRevenue: 0,
+    }
+  );
   const quality = {
     incompleteOrders: totals.incompleteOrders,
     partialProfitOrders: totals.partialProfitOrders,
@@ -142,7 +169,7 @@ async function computeMonthlyFinance(monthCount: number) {
     actualCommissionOrders: actualCommissionSummary._count._all,
     lastActualCommissionSyncAt:
       actualCommissionSummary._max.syncedAt?.toISOString() ?? null,
-    totals,
+    totals: { ...totals, vat },
     months,
     quality,
   };

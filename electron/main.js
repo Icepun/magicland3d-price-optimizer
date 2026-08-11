@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
-const { app, BrowserWindow, ipcMain, shell, powerMonitor, Tray, Menu } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, powerMonitor, Tray, Menu, Notification } = require("electron");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -612,6 +612,147 @@ async function startNextServer() {
   return `http://127.0.0.1:${port}`;
 }
 
+// =========================================================================
+// BİLDİRİM KÖPRÜSÜ — işletim sistemi bildirimlerini ARKA PLAN gösterir.
+//
+// Eskiden bildirimi yalnız açık sayfa (renderer) atıyordu: pencere gizliyken, yeniden
+// yüklenirken ya da tepside beklerken olay anı kaçıyor, bildirim yalnız zil rozetinde
+// birikiyordu. Arka plan sunucuyu doğrudan yokladığı için pencere hiç açık olmasa da çalışır.
+// Sayfa tarafındaki yol ikinci yol olarak duruyor; masaüstünde kendini devre dışı bırakıyor
+// (kimlikle tekilleştirme yerine tek gösterici kuralı → çift bildirim imkânsız).
+// =========================================================================
+const NOTIFY_POLL_MS = 12_000;
+/** Yaş sınırları — src/components/layout/NotificationBell.tsx OS_AGE_LIMITS ile aynı tutulmalı. */
+const OS_AGE_LIMITS = { critical: 72 * 60 * 60_000, success: 24 * 60 * 60_000 };
+const OS_BURST_LIMIT = 4;
+const OS_NOTIFIED_CAP = 400;
+let notifyWatchStarted = false;
+let notifiedIds = [];
+
+function notifiedFilePath() {
+  try {
+    return path.join(app.getPath("userData"), "os-notified.json");
+  } catch {
+    return null;
+  }
+}
+
+function loadNotifiedIds() {
+  const p = notifiedFilePath();
+  if (!p) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNotifiedIds(ids) {
+  const p = notifiedFilePath();
+  if (!p) return;
+  try {
+    fs.writeFileSync(p, JSON.stringify(ids.slice(-OS_NOTIFIED_CAP)), "utf8");
+  } catch {
+    /* bildirim geçmişi yazılamazsa uygulama akışı bozulmaz */
+  }
+}
+
+function showOsNotification(title, body) {
+  try {
+    if (!Notification.isSupported || !Notification.isSupported()) return;
+    const n = new Notification({ title, body });
+    n.on("click", () => {
+      const w = BrowserWindow.getAllWindows()[0];
+      if (w && !w.isDestroyed()) {
+        w.show();
+        if (w.isMinimized()) w.restore();
+        w.focus();
+      }
+    });
+    n.show();
+  } catch (e) {
+    logStartup("[bildirim] gösterilemedi:", e?.message || e);
+  }
+}
+
+/** Gösterilecek bildirimleri seçer (yaş sınırı + patlama koruması). */
+function planOsToasts(alerts, notified, now) {
+  const candidates = alerts.filter(
+    (a) =>
+      a &&
+      typeof a.id === "string" &&
+      (a.severity === "critical" || a.severity === "success") &&
+      !notified.has(a.id)
+  );
+  if (candidates.length === 0) return { toasts: [], markNotified: [] };
+
+  const isFresh = (a) => {
+    if (!a.createdAt) return true;
+    const at = new Date(a.createdAt).getTime();
+    if (!Number.isFinite(at)) return true;
+    const limit = a.severity === "critical" ? OS_AGE_LIMITS.critical : OS_AGE_LIMITS.success;
+    return now - at < limit;
+  };
+  const fresh = candidates.filter(isFresh);
+  const stale = candidates.filter((a) => !isFresh(a));
+  const toasts = [];
+  if (fresh.length > OS_BURST_LIMIT) {
+    toasts.push({ title: "Magicland 3D Hub", body: `${fresh.length} yeni bildirim — zile göz at` });
+  } else {
+    for (const a of fresh) {
+      toasts.push({ title: `Magicland 3D Hub — ${a.title}`, body: a.body });
+    }
+  }
+  // Yaş sınırını aşanlar sessizce yutulmaz — tek özetle haber verilir.
+  if (stale.length > 0) {
+    toasts.push({ title: "Magicland 3D Hub", body: `${stale.length} bildirim seni bekliyor — zile göz at` });
+  }
+  return { toasts, markNotified: candidates.map((a) => a.id) };
+}
+
+function startNotificationWatch(baseUrl) {
+  if (notifyWatchStarted || !baseUrl) return;
+  notifyWatchStarted = true;
+  notifiedIds = loadNotifiedIds();
+  let busy = false;
+
+  const poll = async () => {
+    if (busy || isShuttingDown) return;
+    if (globalThis.__MLHUB_DB_PAUSED__) return; // uyku/uyanma — ağ işine girme
+    busy = true;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 8000);
+      let payload;
+      try {
+        const res = await fetch(`${baseUrl}/api/notifications?scope=events`, {
+          signal: ctrl.signal,
+          cache: "no-store",
+        });
+        payload = await res.json();
+      } finally {
+        clearTimeout(t);
+      }
+      const alerts = Array.isArray(payload?.alerts) ? payload.alerts : [];
+      const notified = new Set(notifiedIds);
+      const plan = planOsToasts(alerts, notified, Date.now());
+      if (plan.markNotified.length === 0) return;
+      for (const toast of plan.toasts) showOsNotification(toast.title, toast.body);
+      notifiedIds = [...notifiedIds, ...plan.markNotified].slice(-OS_NOTIFIED_CAP);
+      saveNotifiedIds(notifiedIds);
+    } catch {
+      /* sunucu henüz hazır değil / ağ yok → sonraki tur dener */
+    } finally {
+      busy = false;
+    }
+  };
+
+  setTimeout(() => { void poll(); }, 8000);
+  setInterval(() => { void poll(); }, NOTIFY_POLL_MS);
+  logStartup("bildirim köprüsü hazır ✓");
+}
+
 async function createWindow() {
   logStartup("createWindow: starting next server");
   const url = await startNextServer();
@@ -625,6 +766,9 @@ async function createWindow() {
       void fetch(`${url}/api/notifications`, { cache: "no-store" }).catch(() => {});
     } catch { /* fetch yoksa/eski runtime — önemsiz */ }
   }
+
+  // Bildirimler pencereden BAĞIMSIZ çalışsın: pencere gizliyken/yüklenirken de düşerler.
+  startNotificationWatch(url);
 
   const win = new BrowserWindow({
     width: 1440,

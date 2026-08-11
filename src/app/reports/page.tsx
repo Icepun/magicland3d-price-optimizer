@@ -19,16 +19,20 @@ import {
   AlertTriangle,
   BarChart3,
   CalendarRange,
+  Landmark,
   Package,
+  Percent,
   Receipt,
   RefreshCw,
   ShoppingCart,
   TrendingDown,
   TrendingUp,
   Trophy,
+  Undo2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatCompactCurrency, formatCurrency, formatNumber, formatPercent } from "@/lib/format";
@@ -75,6 +79,17 @@ interface ProductRow {
   hasCost: boolean;
 }
 
+/** Ayın KDV özeti. Eski bir yanıt gelirse alan hiç olmayabilir → her yerde savunmacı okunur. */
+interface VatSummary {
+  outputVat: number;
+  inputVatCredit: number;
+  payable: number;
+  knownOrders: number;
+  partialOrders: number;
+  unknownOrders: number;
+  unknownRevenue: number;
+}
+
 interface FinanceBucket {
   month: string;
   label: string;
@@ -88,6 +103,7 @@ interface FinanceBucket {
   missingProfitOrders: number;
   excludedOrders: number;
   unsupportedCurrencyOrders: number;
+  vat?: VatSummary;
   byPlatform: Record<string, unknown>;
 }
 
@@ -97,6 +113,7 @@ interface FinanceTotals {
   expenses: number;
   netProfit: number;
   orderCount: number;
+  vat?: VatSummary;
 }
 
 interface FinanceQuality {
@@ -163,6 +180,9 @@ const MANUAL = "oklch(0.64 0.19 285)";
 const PRIMARY = "oklch(0.62 0.20 278)";
 const PROFIT = "oklch(0.68 0.17 145)";
 const LOSS = "oklch(0.63 0.22 25)";
+/** KDV kartı: hesaplanan (satıştan) sıcak, indirilecek (girdilerden) soğuk renkte. */
+const VAT_OUT = "oklch(0.70 0.16 30)";
+const VAT_IN = "oklch(0.68 0.13 200)";
 
 /** Özet kartları: kuruş göstermeye gerek yok, ondalıksız daha okunaklı. */
 const fmtK = (value: number) => formatCurrency(value, { decimals: 0 });
@@ -310,6 +330,25 @@ export default function ReportsPage() {
           ]
         : [],
     [summary]
+  );
+
+  // KDV özeti: rakamlar motorun kayıtlı çıktısından gelir. Kapsam dışı kalan siparişler
+  // (KDV'si ayrıştırılmamış) toplanmaz, kullanıcıya ayrıca söylenir.
+  const vatMonths = useMemo(
+    () =>
+      financeMonths.map((month) => ({
+        month: month.month,
+        label: month.label,
+        Hesaplanan: month.vat?.outputVat ?? 0,
+        İndirilecek: month.vat?.inputVatCredit ?? 0,
+        payable: month.vat?.payable ?? 0,
+      })),
+    [financeMonths]
+  );
+  const currentVat = currentMonth?.vat ?? null;
+  const yearVat = financeQuery.data?.totals.vat ?? null;
+  const hasVatData = vatMonths.some(
+    (month) => month.Hesaplanan !== 0 || month.İndirilecek !== 0
   );
 
   const hasMonthlyData = financeMonths.some(
@@ -593,6 +632,150 @@ export default function ReportsPage() {
                   Grafik {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden bu yana
                   toplanan verilerle çiziliyor.
                 </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2 border-b border-border/50">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Percent className="h-4 w-4 text-primary" />
+                KDV Özeti
+                {currentMonth && (
+                  <span className="ml-auto text-xs font-normal text-muted-foreground">
+                    {currentMonth.label}
+                  </span>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4 space-y-4">
+              {hasVatData ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Stat
+                      label="Hesaplanan KDV (bu ay)"
+                      value={currentVat ? currentVat.outputVat : null}
+                      format={fmtK}
+                      color={VAT_OUT}
+                      icon={Percent}
+                      delay={0}
+                    />
+                    <Stat
+                      label="İndirilecek KDV (bu ay)"
+                      value={currentVat ? currentVat.inputVatCredit : null}
+                      format={fmtK}
+                      color={VAT_IN}
+                      icon={Undo2}
+                      delay={70}
+                    />
+                    <Stat
+                      label={
+                        (currentVat?.payable ?? 0) < 0
+                          ? "Devreden KDV (bu ay)"
+                          : "Ödenecek KDV (bu ay)"
+                      }
+                      value={currentVat ? Math.abs(currentVat.payable) : null}
+                      format={fmtK}
+                      color={PRIMARY}
+                      icon={Landmark}
+                      delay={140}
+                    />
+                  </div>
+
+                  <div className="h-48 w-full text-muted-foreground">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={vatMonths}
+                        margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+                      >
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke="currentColor"
+                          strokeOpacity={0.12}
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 10, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={{ stroke: "currentColor", strokeOpacity: 0.15 }}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 10, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={56}
+                          tickFormatter={(value) => formatCompactCurrency(Number(value))}
+                        />
+                        <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
+                        <RTooltip
+                          contentStyle={{
+                            background: "oklch(0.2 0.02 278)",
+                            border: "1px solid oklch(1 0 0 / 12%)",
+                            borderRadius: 8,
+                            fontSize: 12,
+                            color: "oklch(0.95 0 0)",
+                          }}
+                          formatter={(value: number, name: string) => [
+                            formatCurrency(Number(value)),
+                            name,
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Bar
+                          dataKey="Hesaplanan"
+                          fill={VAT_OUT}
+                          radius={[4, 4, 0, 0]}
+                        />
+                        <Bar
+                          dataKey="İndirilecek"
+                          fill={VAT_IN}
+                          radius={[4, 4, 0, 0]}
+                        />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  <div className="border-t border-border/50 pt-3 space-y-1">
+                    {yearVat && (
+                      <p className="text-xs text-muted-foreground">
+                        Son 12 ayda{" "}
+                        {yearVat.payable < 0 ? "devreden" : "ödenecek"} KDV:{" "}
+                        <span className="font-medium text-foreground tabular-nums">
+                          {formatCurrency(Math.abs(yearVat.payable))}
+                        </span>
+                      </p>
+                    )}
+                    {(currentVat?.payable ?? 0) < 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Bu ay indirilecek KDV daha yüksek — fark sonraki aya devreder.
+                      </p>
+                    )}
+                    {(currentVat?.partialOrders ?? 0) > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-500">
+                        {currentVat?.partialOrders} siparişte maliyet eksik; indirilecek KDV
+                        olduğundan düşük görünüyor.
+                      </p>
+                    )}
+                    {(currentVat?.unknownOrders ?? 0) > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-500">
+                        {currentVat?.unknownOrders} siparişin KDV&apos;si bu özete girmedi (
+                        {formatCurrency(currentVat?.unknownRevenue ?? 0)} ciro).
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <EmptyState
+                  icon={Percent}
+                  title="KDV özeti için henüz veri yok"
+                  description={
+                    (currentVat?.unknownOrders ?? 0) > 0
+                      ? `${currentVat?.unknownOrders} siparişin KDV'si ayrı tutulmuyor; şimdilik yalnız manuel siparişlerin KDV'si özetleniyor.`
+                      : "Satış kaydedildikçe hesaplanan ve indirilecek KDV burada birikir."
+                  }
+                  className="py-8"
+                />
               )}
             </CardContent>
           </Card>

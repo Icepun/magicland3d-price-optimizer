@@ -1,8 +1,9 @@
 "use client";
 
 import { fetchJson } from "@/lib/fetch-json";
+import Link from "next/link";
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Disc3,
@@ -14,6 +15,11 @@ import {
   RefreshCcw,
   X,
   PackageOpen,
+  History,
+  ChevronDown,
+  Hourglass,
+  Coins,
+  ArrowRight,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +27,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
+import { AnimatedNumber } from "@/components/ui/animated-number";
+import { formatCurrency, formatDate, formatDateTime, formatNumber, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface Spool {
@@ -35,6 +43,8 @@ interface Spool {
   spoolCost: number | null;
   reorderGrams: number;
   vendorUrl: string | null;
+  /** Makaranın gerçek gram maliyeti ile maliyet ayarlarındaki değer belirgin ayrıştıysa dolu gelir. */
+  costGap?: { actualPerGram: number; tablePerGram: number } | null;
 }
 
 interface ProductLite {
@@ -43,7 +53,33 @@ interface ProductLite {
   cost?: { filamentWeight: number | null } | null;
 }
 
+interface UsageEntry {
+  id: string;
+  grams: number;
+  productId: string | null;
+  productName: string | null;
+  note: string | null;
+  createdAt: string;
+}
+
+interface UsagePace {
+  gramsPerDay: number;
+  sampleCount: number;
+  spanDays: number;
+  windowGrams: number;
+}
+
+interface UsagePage {
+  items: UsageEntry[];
+  nextCursor: string | null;
+  pace: UsagePace | null;
+  now: number;
+}
+
 const MATERIALS = ["PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "Reçine"];
+
+const USAGE_PAGE_SIZE = 15;
+const DAY_MS = 86_400_000;
 
 function statusOf(s: Spool): { label: string; cls: string; bar: string } {
   if (s.remainingGrams <= 0)
@@ -73,8 +109,10 @@ export default function SpoolsPage() {
 
   const del = useMutation({
     mutationFn: (id: string) => fetch(`/api/spools/${id}`, { method: "DELETE" }).then((r) => r.json()),
-    onSuccess: () => {
+    onSuccess: (_result, id) => {
       qc.invalidateQueries({ queryKey: ["spools"] });
+      // Silinen makaranın geçmişi bellekte kalmasın.
+      qc.removeQueries({ queryKey: ["spool-usage", id] });
       toast.success("Makara silindi");
     },
   });
@@ -143,75 +181,307 @@ export default function SpoolsPage() {
           }
         />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {spools.map((s) => {
-            const st = statusOf(s);
-            const pct = Math.max(0, Math.min(100, Math.round((s.remainingGrams / Math.max(1, s.totalGrams)) * 100)));
-            return (
-              <Card key={s.id} className="overflow-hidden">
-                <div className="h-1.5 w-full" style={{ background: s.colorHex }} />
-                <CardContent className="p-4 space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span
-                        className="h-8 w-8 rounded-full border shrink-0"
-                        style={{ background: s.colorHex }}
-                        title={s.colorName ?? s.colorHex}
-                      />
-                      <div className="min-w-0">
-                        <p className="font-semibold text-sm truncate leading-tight">{s.name}</p>
-                        <p className="text-[11px] text-muted-foreground truncate">
-                          {s.material}
-                          {s.brand ? ` · ${s.brand}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0", st.cls)}>
-                      {st.label}
-                    </span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                      <div className={cn("h-full rounded-full transition-all", st.bar)} style={{ width: `${pct}%` }} />
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] tabular-nums">
-                      <span className="font-medium">{Math.round(s.remainingGrams)} g kaldı</span>
-                      <span className="text-muted-foreground">/ {Math.round(s.totalGrams)} g · %{pct}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 pt-0.5">
-                    <Button size="sm" variant="outline" className="h-7 flex-1 gap-1 text-xs" onClick={() => setConsuming(s)}>
-                      <ArrowDownToLine className="h-3.5 w-3.5" /> Düş
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7" title="Dolu işaretle" onClick={() => refill.mutate(s)}>
-                      <RefreshCcw className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button size="icon" variant="ghost" className="h-7 w-7" title="Düzenle" onClick={() => setEditing(s)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 text-destructive/70 hover:text-destructive"
-                      title="Sil"
-                      onClick={() => {
-                        if (confirm(`"${s.name}" makarası silinsin mi?`)) del.mutate(s.id);
-                      }}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 items-start">
+          {spools.map((s, index) => (
+            <SpoolCard
+              key={s.id}
+              spool={s}
+              index={index}
+              onConsume={() => setConsuming(s)}
+              onEdit={() => setEditing(s)}
+              onRefill={() => refill.mutate(s)}
+              onDelete={() => {
+                if (confirm(`"${s.name}" makarası silinsin mi?`)) del.mutate(s.id);
+              }}
+            />
+          ))}
         </div>
       )}
 
       {editing && <SpoolModal spool={editing === "new" ? null : editing} onClose={() => setEditing(null)} />}
       {consuming && <ConsumeModal spool={consuming} onClose={() => setConsuming(null)} />}
+    </div>
+  );
+}
+
+function SpoolCard({
+  spool,
+  index,
+  onConsume,
+  onEdit,
+  onRefill,
+  onDelete,
+}: {
+  spool: Spool;
+  index: number;
+  onConsume: () => void;
+  onEdit: () => void;
+  onRefill: () => void;
+  onDelete: () => void;
+}) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // Bir kez açıldıktan sonra içerik takılı kalır: kapanış animasyonu boş kutuya değil,
+  // gerçek listeye uygulanır (ve tekrar açınca veri anında hazır).
+  const [historyMounted, setHistoryMounted] = useState(false);
+  const st = statusOf(spool);
+  const pct = Math.max(0, Math.min(100, Math.round((spool.remainingGrams / Math.max(1, spool.totalGrams)) * 100)));
+  const gap = spool.costGap ?? null;
+
+  return (
+    <Card
+      className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300 transition-shadow hover:shadow-md"
+      style={{ animationDelay: `${Math.min(index, 11) * 40}ms`, animationFillMode: "backwards" }}
+    >
+      <div className="h-1.5 w-full" style={{ background: spool.colorHex }} />
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className="h-8 w-8 rounded-full border shrink-0"
+              style={{ background: spool.colorHex }}
+              title={spool.colorName ?? spool.colorHex}
+            />
+            <div className="min-w-0">
+              <p className="font-semibold text-sm truncate leading-tight">{spool.name}</p>
+              <p className="text-[11px] text-muted-foreground truncate">
+                {spool.material}
+                {spool.brand ? ` · ${spool.brand}` : ""}
+              </p>
+            </div>
+          </div>
+          <span className={cn("px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0", st.cls)}>
+            {st.label}
+          </span>
+        </div>
+
+        <div className="space-y-1">
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn("h-full rounded-full transition-all duration-700 ease-out", st.bar)}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[11px] tabular-nums">
+            <span className="font-medium">
+              <AnimatedNumber value={spool.remainingGrams} format={(n) => formatNumber(n, 0)} /> g kaldı
+            </span>
+            <span className="text-muted-foreground">
+              / {formatNumber(spool.totalGrams, 0)} g · %
+              <AnimatedNumber value={pct} format={(n) => formatNumber(n, 0)} />
+            </span>
+          </div>
+        </div>
+
+        {gap && (
+          <p className="flex items-start gap-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400 animate-in fade-in duration-500">
+            <Coins className="h-3.5 w-3.5 shrink-0 mt-px" />
+            <span className="text-muted-foreground">
+              Bu makaranın gerçek maliyeti{" "}
+              <span className="font-semibold text-amber-600 dark:text-amber-400">
+                {formatCurrency(gap.actualPerGram)}/g
+              </span>
+              ; tabloda {formatCurrency(gap.tablePerGram)}/g yazıyor.{" "}
+              <Link
+                href="/cost-templates"
+                className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline"
+              >
+                Maliyet ayarları <ArrowRight className="h-3 w-3" />
+              </Link>
+            </span>
+          </p>
+        )}
+
+        <div className="flex items-center gap-1 pt-0.5">
+          <Button size="sm" variant="outline" className="h-7 flex-1 gap-1 text-xs" onClick={onConsume}>
+            <ArrowDownToLine className="h-3.5 w-3.5" /> Düş
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className={cn("h-7 w-7", historyOpen && "bg-muted text-foreground")}
+            title="Geçmiş"
+            aria-expanded={historyOpen}
+            onClick={() => {
+              setHistoryMounted(true);
+              setHistoryOpen((v) => !v);
+            }}
+          >
+            <History className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-7 w-7" title="Dolu işaretle" onClick={onRefill}>
+            <RefreshCcw className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-7 w-7" title="Düzenle" onClick={onEdit}>
+            <Pencil className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 text-destructive/70 hover:text-destructive"
+            title="Sil"
+            onClick={onDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+
+        {/* Çekmece: grid satırını 0fr→1fr akıtmak, sabit bir max-height uydurmadan
+            içeriğe göre yumuşak açılma verir. */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows] duration-300 ease-out",
+            historyOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          )}
+        >
+          <div className="overflow-hidden">
+            <div className="pt-3 border-t">{historyMounted && <UsageHistory spool={spool} />}</div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function UsageHistory({ spool }: { spool: Spool }) {
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: ["spool-usage", spool.id],
+    queryFn: ({ pageParam }) =>
+      fetchJson<UsagePage>(
+        `/api/spools/${spool.id}/usage?limit=${USAGE_PAGE_SIZE}` +
+          (pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : "")
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    staleTime: 60_000,
+  });
+
+  const entries = useMemo(() => (data?.pages ?? []).flatMap((p) => p.items), [data]);
+  const firstPage = data?.pages?.[0];
+  const pace = firstPage?.pace ?? null;
+
+  if (isLoading) {
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-8 w-full rounded-md" />
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-6 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  }
+
+  if (isError) {
+    return <p className="text-[11px] text-muted-foreground">Geçmiş şu an açılamadı, birazdan tekrar dene.</p>;
+  }
+
+  if (entries.length === 0) {
+    return (
+      <EmptyState
+        icon={History}
+        title="Henüz düşüm yok"
+        description="Bu makaradan filament düştükçe burada tarih tarih listelenir."
+        className="py-6"
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tüketim geçmişi</p>
+
+      <RunOutEstimate remainingGrams={spool.remainingGrams} pace={pace} now={firstPage?.now ?? 0} />
+
+      <ul className="space-y-2">
+        {entries.map((entry, i) => (
+          <li
+            key={entry.id}
+            className="relative pl-4 animate-in fade-in slide-in-from-left-1 duration-300"
+            style={{ animationDelay: `${Math.min(i, 9) * 35}ms`, animationFillMode: "backwards" }}
+            title={formatDateTime(entry.createdAt)}
+          >
+            <span
+              className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full ring-2 ring-background"
+              style={{ background: spool.colorHex }}
+            />
+            {i < entries.length - 1 && (
+              <span className="absolute left-[2.5px] top-3.5 bottom-[-8px] w-px bg-border" />
+            )}
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-xs truncate">{entry.productName ?? "Elle düşüldü"}</span>
+              <span className="text-xs font-semibold tabular-nums shrink-0">
+                -{formatNumber(entry.grams, 0)} g
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[10px] text-muted-foreground truncate">{entry.note ?? ""}</span>
+              <span className="text-[10px] text-muted-foreground shrink-0">
+                {formatRelativeTime(entry.createdAt)}
+              </span>
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {hasNextPage && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 w-full gap-1 text-[11px]"
+          disabled={isFetchingNextPage}
+          onClick={() => fetchNextPage()}
+        >
+          {isFetchingNextPage ? (
+            "Yükleniyor…"
+          ) : (
+            <>
+              <ChevronDown className="h-3.5 w-3.5" /> Daha eskisini göster
+            </>
+          )}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * "Tahminen N gün sonra biter". Hız yoksa (yeterli geçmiş yok) HİÇBİR ŞEY gösterilmez —
+ * iki baskılık veriden çıkan tahmin yanıltıcı olur.
+ */
+function RunOutEstimate({
+  remainingGrams,
+  pace,
+  now,
+}: {
+  remainingGrams: number;
+  pace: UsagePace | null;
+  now: number;
+}) {
+  if (!pace || !(pace.gramsPerDay > 0) || remainingGrams <= 0 || !(now > 0)) return null;
+
+  const days = remainingGrams / pace.gramsPerDay;
+  const perDay = `günde ~${formatNumber(pace.gramsPerDay, pace.gramsPerDay < 10 ? 1 : 0)} g`;
+
+  let headline: React.ReactNode;
+  if (days > 180) {
+    headline = <>Bu hızla 6 aydan uzun süre yeter</>;
+  } else if (days < 1) {
+    headline = <>Bu hızla bugün bitebilir</>;
+  } else {
+    headline = (
+      <>
+        Tahminen <AnimatedNumber value={days} format={(n) => formatNumber(n, 0)} className="font-semibold" /> gün
+        sonra biter · {formatDate(now + days * DAY_MS)}
+      </>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-2 rounded-md bg-muted/60 px-2.5 py-2 animate-in fade-in duration-500">
+      <Hourglass className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium leading-tight">{headline}</p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">Son kullanıma göre {perDay}.</p>
+      </div>
     </div>
   );
 }
@@ -389,6 +659,8 @@ function ConsumeModal({ spool, onClose }: { spool: Spool; onClose: () => void })
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["spools"] });
+      // Yeni düşüm kaydı geçmişte ve "ne zaman biter" tahmininde anında görünsün.
+      qc.invalidateQueries({ queryKey: ["spool-usage", spool.id] });
       toast.success(`${grams} g düşüldü — ${spool.name}`);
       onClose();
     },
@@ -399,7 +671,7 @@ function ConsumeModal({ spool, onClose }: { spool: Spool; onClose: () => void })
     <Modal title={`Filament Düş — ${spool.name}`} onClose={onClose}>
       <div className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          Kalan: <span className="font-medium text-foreground">{Math.round(spool.remainingGrams)} g</span>. Ürün
+          Kalan: <span className="font-medium text-foreground">{formatNumber(spool.remainingGrams, 0)} g</span>. Ürün
           seçersen gramaj maliyet bilgisinden otomatik gelir.
         </p>
         <div>

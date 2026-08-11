@@ -5,7 +5,9 @@ import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Factory, Package, Disc3, AlertTriangle, CheckCircle2, Printer, RefreshCw } from "lucide-react";
+import { Factory, Package, Disc3, AlertTriangle, CheckCircle2, Printer, RefreshCw, Timer } from "lucide-react";
+import { AnimatedNumber } from "@/components/ui/animated-number";
+import { formatCurrency, formatNumber } from "@/lib/format";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +24,8 @@ interface ProductRow {
   imageUrl: string | null;
   stock: number;
   madeToOrder?: boolean;
+  /** Net kâr ÷ baskı süresi — üretim önceliğini bu belirler (süre girilmemişse null). */
+  profitPerHour: number | null;
   cost?: { filamentWeight: number | null } | null;
 }
 
@@ -80,7 +84,16 @@ export default function PlannerPage() {
         const gramPer = p.cost?.filamentWeight ?? 0;
         return { ...p, printQty, filament: printQty * gramPer, gramPer };
       })
-      .sort((a, b) => a.stock - b.stock);
+      // Öncelik: makine saati başına en çok kazandıran önce. Baskı süresi girilmemiş ürünler
+      // (kâr/saat bilinmiyor) sona düşer, kendi aralarında stoğu en az olan başta kalır.
+      .sort((a, b) => {
+        const av = a.profitPerHour;
+        const bv = b.profitPerHour;
+        if (av != null && bv != null && av !== bv) return bv - av;
+        if (av != null && bv == null) return -1;
+        if (av == null && bv != null) return 1;
+        return a.stock - b.stock;
+      });
   }, [products, target]);
 
   const totalFilament = plan.reduce((s, p) => s + p.filament, 0);
@@ -94,7 +107,7 @@ export default function PlannerPage() {
             <Factory className="h-6 w-6 text-primary" /> Üretim Planı
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Stoğu hedefin altındaki ürünler — ne, kaç adet basmalısın + gereken filament. Sağdaki{" "}
+            Stoğu hedefin altındaki ürünler — saat başına en çok kazandıran en üstte. Sağdaki{" "}
             <span className="font-medium text-foreground">Bas</span> ile o ürünü doğrudan bir yazıcıya gönder.
           </p>
         </div>
@@ -145,22 +158,34 @@ export default function PlannerPage() {
             <CardContent className="py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
               <span className="inline-flex items-center gap-1.5">
                 <Factory className="h-4 w-4 text-primary" />
-                <strong className="tabular-nums">{plan.length}</strong> ürün basılmalı
+                <AnimatedNumber value={plan.length} className="font-bold tabular-nums" /> ürün basılmalı
               </span>
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <Package className="h-4 w-4" />
-                toplam <strong className="text-foreground tabular-nums">{totalPrints}</strong> baskı
+                toplam{" "}
+                <AnimatedNumber value={totalPrints} className="text-foreground font-bold tabular-nums" /> baskı
               </span>
               <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                 <Disc3 className="h-4 w-4" />
-                ~<strong className="text-foreground tabular-nums">{(totalFilament / 1000).toFixed(2)}</strong> kg filament
+                ~
+                <AnimatedNumber
+                  value={totalFilament / 1000}
+                  format={(n) => formatNumber(n, 2)}
+                  className="text-foreground font-bold tabular-nums"
+                />{" "}
+                kg filament
               </span>
             </CardContent>
           </Card>
 
           <div className="space-y-2">
-            {plan.map((p) => (
-              <Card key={p.id} className="overflow-hidden">
+            {plan.map((p, i) => (
+              <Card
+                key={p.id}
+                className="overflow-hidden transition-shadow hover:shadow-md animate-in fade-in slide-in-from-bottom-2 duration-300"
+                // Sıralı beliriş; uzun listede beklemeyi uzatmamak için gecikme ilk satırlarla sınırlı.
+                style={{ animationDelay: `${Math.min(i, 12) * 35}ms`, animationFillMode: "both" }}
+              >
                 <CardContent className="p-3 flex items-center gap-3">
                   <div className="h-12 w-12 shrink-0 rounded-lg border bg-muted flex items-center justify-center overflow-hidden">
                     {p.imageUrl ? (
@@ -187,6 +212,20 @@ export default function PlannerPage() {
                       </span>
                       {p.gramPer > 0 && (
                         <span className="text-[11px] text-muted-foreground tabular-nums">{Math.round(p.gramPer)} g/adet</span>
+                      )}
+                      {p.profitPerHour != null && (
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 text-[11px] font-medium tabular-nums px-1.5 py-0.5 rounded-full border",
+                            p.profitPerHour > 0
+                              ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/30"
+                              : "bg-destructive/10 text-destructive border-destructive/30"
+                          )}
+                          title="Baskı saati başına kazanç"
+                        >
+                          <Timer className="h-3 w-3" />
+                          {formatCurrency(p.profitPerHour, { decimals: 0 })}/saat
+                        </span>
                       )}
                     </div>
                   </div>

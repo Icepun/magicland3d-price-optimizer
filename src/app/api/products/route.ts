@@ -7,6 +7,12 @@ import { withProductCommissionRule, resolveListingCommissionOverride } from "@/c
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { collectRulePriceBreakpoints } from "@/core/price-target";
+import {
+  chooseThresholdHint,
+  perUnitRatio,
+  thresholdCandidatePrices,
+} from "@/lib/product-metrics";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
 import { z } from "zod";
@@ -35,6 +41,16 @@ interface PlatformSummary {
   /** Hiçbir kargo bareni eşleşmedi ve elle kargo da girilmemiş → kargo ₺0 sayıldı. */
   cargoMissing: boolean;
   minOrderQty?: number;
+}
+
+/** "Küçük zam, büyük kazanç" önerisi — kural bandı lehe dönen ilk kırılım noktası. */
+interface PriceThresholdSummary {
+  platform: string;
+  currentPrice: number;
+  targetPrice: number;
+  currentProfit: number;
+  targetProfit: number;
+  gain: number;
 }
 
 export async function GET(req: NextRequest) {
@@ -186,6 +202,45 @@ async function computeProducts(urlString: string) {
     const hasCost = resolved?.productionCostKnown ?? false;
     const filamentMatCost = resolved?.filamentCost ?? 0; // KDV iadesine giren malzeme payı
 
+    // "Ya fiyat şu olsaydı?" sorusunu SORMAK için motoru aynı girdilerle yeniden çağıran yardımcı.
+    // Aşağıdaki mevcut kâr hesaplarının girdileriyle BİREBİR aynıdır; formüle dokunmaz, yalnızca
+    // farklı bir satış fiyatı verir (eşik önerisi bunu kullanır).
+    const simulateAtPrice = (
+      platform: string,
+      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null } | null,
+      price: number
+    ) =>
+      simulatePrice({
+        salePrice: price,
+        productCost,
+        packagingCost,
+        ...packagingScopeInput(resolved),
+        categoryName: product.categoryName,
+        desi: product.desi ?? 1,
+        commissionRules: productRules,
+        cargoRules: filterCargoRulesByPlatform(
+          cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
+          platform
+        ),
+        expenseRules: filterRulesByPlatform(
+          expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
+          platform
+        ),
+        vatRate,
+        ...resolveListingCommissionOverride(
+          {
+            platform,
+            commissionRate: listing?.commissionRate ?? null,
+            commissionFixed: listing?.commissionFixed ?? null,
+          },
+          settingsMap
+        ),
+        cargoCostOverride:
+          listing?.cargoCost ?? (platform === "shopify" && price < 150 ? 0 : undefined),
+        minOrderQty: platform === "trendyol" ? trendyolMinQty(price) : 1,
+        vatableProductCost: filamentMatCost,
+      });
+
     // Her listing için ayrı kâr hesabı (platform-specific override'lar dahil)
     const platformSummaries: PlatformSummary[] = product.listings
       .filter((l) => !platformFilter || l.platform === platformFilter)
@@ -261,6 +316,14 @@ async function computeProducts(urlString: string) {
     // karıştırmak TEX kargosunu Shopify ürününe uygulayabiliyordu.
     let currentNetProfit: number | null = null;
     let currentProfitMargin: number | null = null;
+    // Kâr hangi platformun hangi fiyatından geldi? Kâr/saat ve eşik önerisi aynı sonucu bölmek /
+    // karşılaştırmak zorunda — yoksa iki rakam farklı platformları anlatır.
+    let profitBasis: {
+      platform: string;
+      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null } | null;
+      price: number;
+      orderQty: number;
+    } | null = null;
     if (hasCost) {
       const preferredPlatforms = [
         product.source,
@@ -274,6 +337,13 @@ async function computeProducts(urlString: string) {
       if (primary) {
         currentNetProfit = primary.netProfit;
         currentProfitMargin = primary.profitMargin;
+        const primaryListing = product.listings.find((l) => l.id === primary.listingId) ?? null;
+        profitBasis = {
+          platform: primary.platform,
+          listing: primaryListing,
+          price: primary.salePrice,
+          orderQty: primary.minOrderQty ?? 1,
+        };
       } else {
         const fallbackPlatform =
           platformFilter === "trendyol" ||
@@ -322,6 +392,63 @@ async function computeProducts(urlString: string) {
         });
         currentNetProfit = sim.netProfit;
         currentProfitMargin = sim.profitMargin;
+        profitBasis = {
+          platform: fallbackPlatform,
+          listing: null,
+          price: product.currentSalePrice,
+          orderQty: sim.minOrderQty,
+        };
+      }
+    }
+
+    // ── Kâr/saat ve kâr/gram ────────────────────────────────────────────────────────────────
+    // "Şimdi hangi ürünü basayım?" sorusunun cevabı: darboğaz makine saati. Yeni bir kâr hesabı
+    // YOK — yukarıda çıkan net kâr, aynı siparişin baskı süresine / filament gramajına bölünür.
+    const profitPerHour = perUnitRatio(
+      currentNetProfit,
+      product.cost?.printTimeHours,
+      profitBasis?.orderQty ?? 1
+    );
+    const profitPerGram = perUnitRatio(
+      currentNetProfit,
+      product.cost?.filamentWeight,
+      profitBasis?.orderQty ?? 1
+    );
+
+    // ── Eşik uyarısı: "küçük zam, büyük kazanç" ────────────────────────────────────────────
+    // Komisyon/kargo/adet bantlarının kırılım noktaları motorda zaten biliniyor. Fiyat bir bandın
+    // hemen altındaysa, o noktadaki kârı AYNI motorla simüle edip farkı gösteririz.
+    let priceThreshold: PriceThresholdSummary | null = null;
+    if (currentNetProfit != null && profitBasis) {
+      const { platform, listing, price, orderQty } = profitBasis;
+      const breakpoints = collectRulePriceBreakpoints(
+        productRules,
+        filterCargoRulesByPlatform(
+          cargoRules as Parameters<typeof simulatePrice>[0]["cargoRules"],
+          platform
+        ),
+        filterRulesByPlatform(
+          expenseRules as Parameters<typeof simulatePrice>[0]["expenseRules"],
+          platform
+        )
+      );
+      // Bantları kurallardan gelmeyen platform eşikleri tamamlar (Fiyat Lab ile aynı liste).
+      if (platform === "trendyol") breakpoints.push(25, 35, 50, 75);
+      if (platform === "shopify") breakpoints.push(150);
+
+      const candidates = thresholdCandidatePrices(breakpoints, price);
+      if (candidates.length > 0) {
+        const options = [];
+        for (const candidate of candidates) {
+          const sim = simulateAtPrice(platform, listing, candidate);
+          // Trendyol'da fiyat bandı minimum sipariş adedini de değiştirebiliyor. O durumda iki
+          // rakam farklı büyüklükte siparişi anlatır (6 adetlik kâr ↔ 1 adetlik kâr) → kıyaslama
+          // yanıltıcı olur, aday elenir.
+          if (sim.minOrderQty !== orderQty) continue;
+          options.push({ price: candidate, profit: sim.netProfit });
+        }
+        const hint = chooseThresholdHint(price, currentNetProfit, options);
+        if (hint) priceThreshold = { platform, currentPrice: price, ...hint };
       }
     }
 
@@ -359,6 +486,12 @@ async function computeProducts(urlString: string) {
         : null,
       currentNetProfit,
       currentProfitMargin,
+      /** Net kâr ÷ baskı süresi — makine saati başına kazanç (süre yoksa null). */
+      profitPerHour,
+      /** Net kâr ÷ filament gramajı — gram başına kazanç (gramaj yoksa null). */
+      profitPerGram,
+      /** Fiyat bir kural bandının hemen altındaysa: o noktaya çıkmanın kâra etkisi. */
+      priceThreshold,
       hasCost,
       // desi = 0 bilerek girilmiş geçerli bir değerdir (çok küçük ürünler) → uyarı verilmez.
       // Sipariş kârı hattı da aynı kuralı uygular; iki ekran farklı uyarı göstermesin.

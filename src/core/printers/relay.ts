@@ -58,6 +58,83 @@ const lastDoneNotify = new Map<string, { key: string; at: number }>();
 /** Hata/duraklama bildirimi için aynı mükerrer-koruma (yazıcı → son bildirilen durum+dosya). */
 const lastFaultNotify = new Map<string, { key: string; at: number }>();
 
+/**
+ * Baskı bildirimi hafızası KALICI tutulur (AppSetting).
+ *
+ * NEDEN: yukarıdaki üç harita yalnız bellekteydi. Uygulama kapanıp açılınca "önceki durum"
+ * sıfırlanıyor, ilk gözlem sessizce tohumlanıyordu → uygulama KAPALIYKEN biten baskı hiç
+ * bildirilmiyordu (gece biten baskı sabah sessizce yutuluyordu). Kalıcı hafızayla açılışta
+ * "baskı yapıyordu → şimdi bitmiş" geçişi görülüp bildirim atılır.
+ */
+const NOTIFY_STATE_KEY = "printerRelayNotifyState";
+/** Uygulama bu süreden uzun kapalı kaldıysa eski durum "bilinmiyor" sayılır — günler öncesinin
+ *  baskısını "az önce bitti" gibi duyurmak kafa karıştırır. */
+const NOTIFY_STATE_TTL_MS = 24 * 60 * 60_000;
+/** En sık bu aralıkla yazılır (durum çevrimdışı↔çevrimiçi zıplasa bile bulut yazması patlamasın). */
+const NOTIFY_STATE_MIN_WRITE_MS = 60_000;
+interface NotifyState {
+  status?: string;
+  doneKey?: string;
+  doneAt?: number;
+  faultKey?: string;
+  faultAt?: number;
+}
+let notifyStateLoaded = false;
+let notifyStateWrittenAt = 0;
+let notifyStateSerialized = "";
+
+function serializeNotifyState(): string {
+  const printers: Record<string, NotifyState> = {};
+  for (const [id, status] of lastStatus) printers[id] = { status };
+  for (const [id, d] of lastDoneNotify) printers[id] = { ...(printers[id] ?? {}), doneKey: d.key, doneAt: d.at };
+  for (const [id, f] of lastFaultNotify) printers[id] = { ...(printers[id] ?? {}), faultKey: f.key, faultAt: f.at };
+  return JSON.stringify(printers);
+}
+
+/** Kalıcı hafızayı oturumda BİR KEZ belleğe al. */
+async function loadNotifyState(): Promise<void> {
+  if (notifyStateLoaded) return;
+  notifyStateLoaded = true;
+  try {
+    const row = await remotePrisma.appSetting.findUnique({ where: { key: NOTIFY_STATE_KEY } });
+    if (!row?.value) return;
+    const parsed = JSON.parse(row.value) as { at?: number; printers?: Record<string, NotifyState> };
+    if (!parsed?.printers || typeof parsed.at !== "number") return;
+    if (Date.now() - parsed.at > NOTIFY_STATE_TTL_MS) return;
+    for (const [id, s] of Object.entries(parsed.printers)) {
+      if (typeof s?.status === "string") lastStatus.set(id, s.status);
+      if (typeof s?.doneKey === "string" && typeof s?.doneAt === "number") {
+        lastDoneNotify.set(id, { key: s.doneKey, at: s.doneAt });
+      }
+      if (typeof s?.faultKey === "string" && typeof s?.faultAt === "number") {
+        lastFaultNotify.set(id, { key: s.faultKey, at: s.faultAt });
+      }
+    }
+    notifyStateSerialized = serializeNotifyState();
+  } catch {
+    /* okunamadıysa bellekten devam — yalnız kapalıyken biten baskı bildirimi kaçar */
+  }
+}
+
+/** Değiştiyse (ve en fazla dakikada bir) kalıcı hafızayı güncelle. */
+async function saveNotifyState(): Promise<void> {
+  const next = serializeNotifyState();
+  if (next === notifyStateSerialized) return;
+  if (Date.now() - notifyStateWrittenAt < NOTIFY_STATE_MIN_WRITE_MS) return;
+  const value = JSON.stringify({ at: Date.now(), printers: JSON.parse(next) });
+  try {
+    await remotePrisma.appSetting.upsert({
+      where: { key: NOTIFY_STATE_KEY },
+      create: { key: NOTIFY_STATE_KEY, value },
+      update: { value },
+    });
+    notifyStateSerialized = next;
+    notifyStateWrittenAt = Date.now();
+  } catch {
+    /* yazılamadıysa sonraki tick dener */
+  }
+}
+
 export function startPrinterRelay() {
   if (started) return;
   started = true;
@@ -257,6 +334,8 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     await ensureRuntimeSchema();
+    // Kapalıyken biten/hataya düşen baskıyı yakalayabilmek için önceki oturumun durumu.
+    await loadNotifyState();
     tickCount++;
     // İlk-tick yan işleri (caps yazımı + depo hademesi) 3. tick'e (~t+25sn) ertelendi:
     // açılışın ilk saniyelerinde bulut yazması/R2 listelemesi ilk ekran sorgularıyla yarışmasın.
@@ -294,8 +373,9 @@ async function tick(): Promise<void> {
       let snap: SnapFields | null = null;
       try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
       if (!snap) return;
-      // BASKI BİTTİ geçişi (… → finished) → bir kez bildirim + mobil push. İlk gözlemde sessizce
-      // tohumla: uygulama kapalıyken biten eski bir baskı yüzünden açılışta sahte bildirim atma.
+      // BASKI BİTTİ geçişi (… → finished) → bir kez bildirim + mobil push. Önceki durum kalıcı
+      // hafızadan gelir (loadNotifyState) → uygulama kapalıyken biten baskı da açılışta bildirilir;
+      // 24 saatten eski hafıza kullanılmaz, o yüzden çok eski baskılar sahte bildirim üretmez.
       const prevStatus = lastStatus.get(c.id);
       lastStatus.set(c.id, snap.status);
       // YALNIZ gerçek baskı bitişinde bildir: printing/paused → finished. Eski koşul
@@ -343,6 +423,9 @@ async function tick(): Promise<void> {
         lastWriteAt.set(c.id, nowMs);
       } catch { /* yazılamadıysa sonraki tick dener */ }
     }));
+
+    // Durum/bildirim hafızasını kalıcılaştır (değiştiyse) → uygulama kapansa bile geçişler kaybolmaz.
+    await saveNotifyState();
 
     // 2) Bekleyen komutlar — tick'ten AYRIK (fire-and-forget + kendi guard'ı). Uzun bir komut
     // (R2 indirme + 180sn'lik yazıcıya upload) eskiden ticking=true'yu tutup snapshot/heartbeat'i

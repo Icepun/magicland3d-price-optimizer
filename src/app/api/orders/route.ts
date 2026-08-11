@@ -28,6 +28,9 @@ import {
   type FinanceSnapshotItem,
 } from "@/lib/order-finance-snapshots";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
+// Eşleştirme anahtarı sadeleştirmesi TEK yerde: hızlı bildirim taraması da aynısını kullanır,
+// iki taraf ayrı kural yazarsa aynı sipariş burada eşleşip orada eşleşmez.
+import { normalizeMatchKey } from "@/lib/order-watch";
 import { swr } from "@/lib/route-cache";
 import {
   parseManualOrderBreakdown,
@@ -133,24 +136,6 @@ interface SummaryQuality {
 
 function normalizedCurrency(currency: string | null | undefined): string {
   return currency?.trim().toUpperCase() || "TRY";
-}
-
-/**
- * Eşleştirme anahtarını (barkod/stok kodu/ürün adı) tek biçime indirger.
- *
- * NEDEN: karşılaştırma ham metin üzerindeydi; sondaki tek bir boşluk ya da harf düzeni farkı
- * eşleşmeyi sessizce bozuyor, sipariş "maliyeti bilinmeyen" sayılıyordu. Türkçe I harfi ise ters
- * yönden ısırıyordu: "ISIK" ile "Işık" iki farklı küçük harfe düşüyordu. Dört I biçimi (I/İ/ı/i)
- * burada tek harfe indirgenir; bu yüzden yalnız I farkıyla ayrışan iki ürün "belirsiz" sayılır ve
- * kör eşleşme yerine hiç eşleşmez.
- */
-function normalizeMatchKey(raw: string | null | undefined): string {
-  if (typeof raw !== "string") return "";
-  return raw
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/[İıi]/g, "I")
-    .toUpperCase();
 }
 
 const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {

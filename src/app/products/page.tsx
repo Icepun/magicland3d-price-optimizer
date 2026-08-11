@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, saveListState, scrollContainer } from "@/lib/list-state";
@@ -98,6 +98,19 @@ interface Product {
   /** Fly'da hesaplanan güncel net kâr (KDV+kargo+komisyon dahil, indirim payı uygulanmış). */
   currentNetProfit: number | null;
   currentProfitMargin: number | null;
+  /** Net kâr ÷ baskı süresi (süre girilmemişse null). */
+  profitPerHour: number | null;
+  /** Net kâr ÷ filament gramajı (gramaj girilmemişse null). */
+  profitPerGram: number | null;
+  /** Fiyat bir kural bandının hemen altındaysa: küçük zamla gelen kâr artışı. */
+  priceThreshold: {
+    platform: string;
+    currentPrice: number;
+    targetPrice: number;
+    currentProfit: number;
+    targetProfit: number;
+    gain: number;
+  } | null;
   hasCost: boolean;
   missingDesi: boolean;
   platforms: Array<{
@@ -135,7 +148,13 @@ const AddProductSchema = z.object({
 
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
-type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "missing-desi" | "hidden" | "most-profitable";
+type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "missing-desi" | "hidden" | "most-profitable" | "near-threshold";
+
+/** Sunucuda karşılığı olmayan, istemcide sıralanan/süzülen görünümler → "active" listesini çeker. */
+const CLIENT_ONLY_FILTERS: FilterMode[] = ["most-profitable", "near-threshold"];
+
+/** Kolon başlığından sıralama: kâr/saat ve kâr/gram. null → varsayılan (alfabetik) sıra. */
+type SortKey = "profitPerHour" | "profitPerGram";
 
 
 function ProductImage({ src, name }: { src: string | null; name: string }) {
@@ -167,6 +186,40 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
   );
 }
 
+/** Tıklanabilir kolon başlığı — aktif yön oku ile. */
+function SortableHead({
+  label,
+  hint,
+  active,
+  onClick,
+}: {
+  label: string;
+  hint: string;
+  active: "asc" | "desc" | null;
+  onClick: () => void;
+}) {
+  const Icon = active === "desc" ? ArrowDown : active === "asc" ? ArrowUp : ChevronsUpDown;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={hint}
+      className={cn(
+        "group/sort w-full h-full px-2 py-1 flex items-center justify-end gap-1 rounded-sm transition-colors active:scale-[0.97]",
+        active ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+      <Icon
+        className={cn(
+          "h-3 w-3 transition-opacity",
+          active ? "opacity-100" : "opacity-30 group-hover/sort:opacity-70"
+        )}
+      />
+    </button>
+  );
+}
+
 /** URL ?filter=... query string'inden ilk filter mode'u oku (SSR safe). */
 function readFilterFromUrl(): FilterMode {
   if (typeof window === "undefined") return "active";
@@ -180,7 +233,8 @@ function readFilterFromUrl(): FilterMode {
     f === "missing-cost" ||
     f === "missing-desi" ||
     f === "hidden" ||
-    f === "most-profitable"
+    f === "most-profitable" ||
+    f === "near-threshold"
   ) {
     return f;
   }
@@ -318,6 +372,16 @@ const ProductRow = memo(function ProductRow({
             Desi eksik · kargo 1 desi
           </span>
         )}
+        {product.priceThreshold && (
+          <span
+            className="inline-flex items-center gap-1 mt-1 rounded-full border border-green-500/40 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-green-600 dark:text-green-500 transition-colors hover:bg-green-500/20"
+            title={`Fiyatı ${formatCurrency(product.priceThreshold.targetPrice)} yaparsan kâr ${formatCurrency(product.priceThreshold.targetProfit)} olur`}
+          >
+            <TrendingUp className="h-3 w-3" />
+            {formatCurrency(product.priceThreshold.targetPrice)} yap · kâr +
+            {formatCurrency(product.priceThreshold.gain)}
+          </span>
+        )}
         {isMember && product.variantLabel && (
           <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
             <Layers className="h-3 w-3" /> {product.variantLabel}
@@ -368,6 +432,25 @@ const ProductRow = memo(function ProductRow({
           formatCurrency(cost)
         ) : (
           <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
+        )}
+      </TableCell>
+      {/* Baskı süresi ve gramaj başına kazanç — "şimdi hangisini basayım?" kolonları. */}
+      <TableCell className="text-right tabular-nums text-xs">
+        {product.profitPerHour != null ? (
+          <span className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}>
+            {formatCurrency(product.profitPerHour)}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-xs">
+        {product.profitPerGram != null ? (
+          <span className={cn("font-medium", product.profitPerGram < 0 && "text-destructive")}>
+            {formatCurrency(product.profitPerGram)}
+          </span>
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
         )}
       </TableCell>
       {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
@@ -499,6 +582,15 @@ export default function ProductsPage() {
     return () => clearTimeout(t);
   }, [globalFilter]);
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
+  // Kâr/saat · kâr/gram sıralaması — başlığa tıklayınca önce büyükten küçüğe, sonra tersi, sonra kapalı.
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
+  const toggleSort = useCallback((key: SortKey) => {
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: "desc" };
+      if (prev.dir === "desc") return { key, dir: "asc" };
+      return null;
+    });
+  }, []);
   const [addOpen, setAddOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -557,10 +649,10 @@ export default function ProductsPage() {
   } = useQuery<Product[]>({
     queryKey: ["products", filterMode],
     queryFn: ({ signal }) =>
-      // "most-profitable" sunucuda yok → aktif ürünleri çek, client'ta sırala.
+      // "En Kârlı" / "Eşiğe Yakın" sunucuda yok → aktif ürünleri çek, client'ta süz/sırala.
       // signal: başka sayfaya geçince bu (ağır) fetch iptal olur → birikme/boşa parse yok.
       fetchJson<Product[]>(
-        `/api/products?filter=${filterMode === "most-profitable" ? "active" : filterMode}`,
+        `/api/products?filter=${CLIENT_ONLY_FILTERS.includes(filterMode) ? "active" : filterMode}`,
         { signal }
       ),
     // CACHE-FIRST: liste cache'te yaşar, KENDİLİĞİNDEN tazelenmez (staleTime: Infinity).
@@ -966,6 +1058,13 @@ export default function ProductsPage() {
       return [...searched].sort((a, b) => avgMargin(b) - avgMargin(a));
     }
 
+    // "Eşiğe Yakın": küçük bir zamla kârı belirgin artan ürünler — en çok kazandıran başta.
+    if (filterMode === "near-threshold") {
+      return searched
+        .filter((p) => p.priceThreshold != null)
+        .sort((a, b) => (b.priceThreshold?.gain ?? 0) - (a.priceThreshold?.gain ?? 0));
+    }
+
     return searched;
   }, [debouncedFilter, products, filterMode]);
 
@@ -1001,9 +1100,33 @@ export default function ProductsPage() {
         rows.push({ kind: "product", key: p.id, product: p, isMember: false });
       }
     }
-    // "En Kârlı" dışındaki tüm modlarda Türkçe alfabetik sırala (görünür etikete göre).
-    // Böylece sıra İSME bağlı olur → stok/maliyet düzenleyince ürün başa fırlamaz, yerinde kalır.
-    if (filterMode !== "most-profitable") {
+    if (sort) {
+      // Kolon sıralaması: grup satırı üyelerinin EN İYİsiyle temsil edilir (grubu açınca aynı sıra).
+      // Değeri olmayan ürün her yönde en sona düşer — "—" satırları listenin başını kapatmasın.
+      const valueOf = (p: Product) => p[sort.key];
+      const best = (row: DisplayRow) => {
+        const values =
+          row.kind === "group"
+            ? row.members.map(valueOf).filter((v): v is number => v != null)
+            : [valueOf(row.product)].filter((v): v is number => v != null);
+        return values.length ? Math.max(...values) : null;
+      };
+      const direction = sort.dir === "desc" ? -1 : 1;
+      const compare = (a: number | null, b: number | null) => {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        return (a - b) * direction;
+      };
+      rows.sort((a, b) => compare(best(a), best(b)));
+      for (const r of rows) {
+        if (r.kind === "group") r.members.sort((a, b) => compare(valueOf(a), valueOf(b)));
+      }
+      return rows;
+    }
+    // "En Kârlı"/"Eşiğe Yakın" kendi sırasını korur; diğer tüm modlarda Türkçe alfabetik sırala
+    // (görünür etikete göre). Sıra İSME bağlı olunca stok/maliyet düzenleyince ürün başa fırlamaz.
+    if (!CLIENT_ONLY_FILTERS.includes(filterMode)) {
       rows.sort((a, b) =>
         trCollator.compare(
           a.kind === "group" ? a.groupName : a.product.name,
@@ -1019,7 +1142,7 @@ export default function ProductsPage() {
       }
     }
     return rows;
-  }, [filteredProducts, filterMode]);
+  }, [filteredProducts, filterMode, sort]);
 
   // Açık grupların üyelerini başlığın hemen altına serpiştir.
   const flatRows = useMemo<DisplayRow[]>(() => {
@@ -1122,6 +1245,7 @@ export default function ProductsPage() {
   const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
     { value: "active", label: "Aktif" },
     { value: "most-profitable", label: "En Kârlı" },
+    { value: "near-threshold", label: "Eşiğe Yakın" },
     { value: "negative-profit", label: "Zarar Eden" },
     { value: "missing-cost", label: "Maliyet Eksik" },
     { value: "missing-desi", label: "Desi Eksik" },
@@ -1193,6 +1317,8 @@ export default function ProductsPage() {
         <TableCell className="py-2 text-center">
           <span className="text-xs tabular-nums text-muted-foreground" title="Üyelerin toplam stoğu">Σ {totalStock}</span>
         </TableCell>
+        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
         <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
         <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
         <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
@@ -1342,6 +1468,22 @@ export default function ProductsPage() {
               <TableHead>Ürün</TableHead>
               <TableHead className="text-center w-[110px]">Stok</TableHead>
               <TableHead className="text-right tabular-nums w-[90px]">Maliyet</TableHead>
+              <TableHead className="text-right w-[100px] p-0">
+                <SortableHead
+                  label="Kâr/saat"
+                  hint="Baskı süresine göre kazanç — sıralamak için tıkla"
+                  active={sort?.key === "profitPerHour" ? sort.dir : null}
+                  onClick={() => toggleSort("profitPerHour")}
+                />
+              </TableHead>
+              <TableHead className="text-right w-[100px] p-0">
+                <SortableHead
+                  label="Kâr/gram"
+                  hint="Filament gramajına göre kazanç — sıralamak için tıkla"
+                  active={sort?.key === "profitPerGram" ? sort.dir : null}
+                  onClick={() => toggleSort("profitPerGram")}
+                />
+              </TableHead>
               <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.shopify }}>
                 Shopify
               </TableHead>
@@ -1367,6 +1509,8 @@ export default function ProductsPage() {
                     </TableCell>
                     <TableCell><Skeleton className="h-3 w-16 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-16 ml-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-12 ml-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-3 w-12 ml-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
                     <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
@@ -1376,25 +1520,27 @@ export default function ProductsPage() {
               </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-destructive">
+                <TableCell colSpan={11} className="text-center py-8 text-destructive">
                   Ürünler yüklenemedi.
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                   {filterMode === "inactive"
                     ? "İnaktif ürün bulunmuyor."
                     : filterMode === "out-of-stock"
                       ? "Stoğu biten aktif ürün bulunmuyor."
-                      : "Ürün bulunamadı. CSV ile içe aktar veya manuel ekle."}
+                      : filterMode === "near-threshold"
+                        ? "Şu an küçük bir zamla kârı belirgin artacak ürün yok."
+                        : "Ürün bulunamadı. CSV ile içe aktar veya manuel ekle."}
                 </TableCell>
               </TableRow>
             ) : (
               <>
               {paddingTop > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={9} className="p-0 border-0" style={{ height: paddingTop }} />
+                  <td colSpan={11} className="p-0 border-0" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualItems.map((vi) => {
@@ -1430,7 +1576,7 @@ export default function ProductsPage() {
               })}
               {paddingBottom > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={9} className="p-0 border-0" style={{ height: paddingBottom }} />
+                  <td colSpan={11} className="p-0 border-0" style={{ height: paddingBottom }} />
                 </tr>
               )}
               </>

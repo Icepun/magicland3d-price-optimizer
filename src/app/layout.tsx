@@ -6,6 +6,7 @@ import { SplashScreen } from "@/components/layout/SplashScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
+import { CommandPalette } from "@/components/ui/command-palette";
 
 const plusJakartaSans = Plus_Jakarta_Sans({
   variable: "--font-sans",
@@ -44,6 +45,8 @@ export default function RootLayout({
             <main className="flex-1 overflow-y-auto bg-background min-w-0">
               {children}
             </main>
+            {/* Ctrl/Cmd + K ile her sayfadan açılan hızlı arama. */}
+            <CommandPalette />
             <Toaster richColors position="top-right" />
           </QueryProvider>
         </ThemeProvider>

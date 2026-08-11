@@ -1,11 +1,23 @@
 "use client";
 
 import { memo } from "react";
-import { FlaskConical, Target, Tag, AlertTriangle } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
+import { FlaskConical, Target, Tag, AlertTriangle, TrendingUp } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { PriceLab } from "@/lib/client-pricing";
+
+/** Ürünler listesinde hesaplanan "küçük zam, büyük kazanç" önerisi. */
+export interface PriceThresholdInfo {
+  platform: string;
+  currentPrice: number;
+  targetPrice: number;
+  currentProfit: number;
+  targetProfit: number;
+  gain: number;
+}
 
 const PLATFORM = {
   shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
@@ -16,11 +28,40 @@ function platformInfo(p: string) {
   return PLATFORM[p as keyof typeof PLATFORM] ?? { label: p, color: "oklch(0.62 0.20 278)" };
 }
 
+/**
+ * Eşik önerisi ürün listesiyle BİRLİKTE hesaplanıp önbelleğe düşer; burada yeniden hesaplanmaz
+ * (bu kart hiçbir zaman sunucuya istek atmaz). Liste henüz açılmamışsa öneri gösterilmez.
+ */
+function useCachedThreshold(): PriceThresholdInfo | null {
+  const pathname = usePathname();
+  const queryClient = useQueryClient();
+  const productId = pathname?.startsWith("/products/") ? pathname.split("/")[2] : undefined;
+  if (!productId) return null;
+  const caches = queryClient.getQueriesData<
+    Array<{ id: string; priceThreshold?: PriceThresholdInfo | null }>
+  >({ queryKey: ["products"] });
+  for (const [, list] of caches) {
+    if (!Array.isArray(list)) continue;
+    const found = list.find((p) => p?.id === productId);
+    if (found?.priceThreshold) return found.priceThreshold;
+  }
+  return null;
+}
+
 // İSTEMCİDE hesaplanır (parent → computeClientPricing) ve `data` prop'uyla gelir → sunucuya istek YOK.
 // memo: parent her render olduğunda değil, yalnız `data` referansı değişince yeniden çizilir.
 export const PriceLabCard = memo(PriceLabCardImpl);
-function PriceLabCardImpl({ data }: { data: PriceLab | undefined }) {
+function PriceLabCardImpl({
+  data,
+  threshold,
+}: {
+  data: PriceLab | undefined;
+  /** Dışarıdan verilirse bu kullanılır; verilmezse ürün listesi önbelleğinden okunur. */
+  threshold?: PriceThresholdInfo | null;
+}) {
   const isLoading = data === undefined; // kurallar/maliyet henüz hazır değil → iskelet
+  const cachedThreshold = useCachedThreshold();
+  const hint = threshold ?? cachedThreshold;
 
   return (
     <Card
@@ -43,6 +84,18 @@ function PriceLabCardImpl({ data }: { data: PriceLab | undefined }) {
           </div>
         ) : (
           <div className="space-y-5">
+            {/* Eşik uyarısı — küçük zam, belirgin kazanç. Yalnızca anlamlı fark varsa görünür. */}
+            {hint && (
+              <div className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:text-green-400 animate-in fade-in slide-in-from-top-1 duration-300">
+                <TrendingUp className="h-4 w-4 shrink-0" />
+                <span>
+                  Fiyatı <strong className="tabular-nums">{formatCurrency(hint.targetPrice)}</strong>{" "}
+                  yaparsan kâr{" "}
+                  <strong className="tabular-nums">+{formatCurrency(hint.gain)}</strong>
+                </span>
+              </div>
+            )}
+
             {/* Hedef marj → fiyat */}
             <div>
               <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2.5">

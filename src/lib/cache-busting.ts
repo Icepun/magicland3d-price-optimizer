@@ -24,6 +24,7 @@ export function bustProductCaches(): void {
   bustCache("products:");
   bustCache("dashboard:");
   bustCache("order-name-index:"); // yeni/silinen ürün veya değişen ad
+  bustInventoryAlertCaches();
   invalidateOrdersCache(); // fiyat + eşleşme değişimi kâr gövdesini etkiler
 }
 
@@ -50,6 +51,18 @@ export function bustProfitInputCaches(): void {
 export function bustProductViewCaches(): void {
   bustCache("products:");
   bustCache("dashboard:");
+  bustInventoryAlertCaches(); // stok değiştiyse zildeki "stok kritik" uyarısı da tazelensin
+}
+
+/**
+ * Stok / filament UYARI taraması değişti (bildirim zilinin beslediği tarama).
+ *
+ * Bu tarama 90 saniyelik kısa ömürlü bir önbellekten geliyor — zil 20 saniyede bir yokladığı
+ * için her yoklamada üç tabloyu taramak gereksizdi. Ama kullanıcı stoğu ELLE değiştirdiğinde
+ * uyarının 90 saniye eski kalması yanlış: düzelttiği bir uyarıyı hâlâ görür.
+ */
+export function bustInventoryAlertCaches(): void {
+  bustCache("notifications-inventory:");
 }
 
 /** Finans geçmişi değişti (gerçek gider, manuel sipariş, komisyon senkronu). */
