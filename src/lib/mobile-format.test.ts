@@ -9,8 +9,20 @@ import {
   formatPercentValue,
   formatRelativeTime,
   friendlyError,
-} from "./format";
+} from "../../mobile/src/lib/format";
 
+/**
+ * Mobil biçimlendirme aynasının testi — DOSYA NEDEN `mobile/` ALTINDA DEĞİL:
+ *
+ * `mobile/` kendi `npm ci`'siyle kurulur ve `vitest` onun bağımlılıklarında YOKTUR; testleri
+ * kökteki koşucu çalıştırır. Dosya `mobile/` altındayken yerelde sorunsuz görünüyordu çünkü
+ * TypeScript `vitest`'i üst dizindeki KÖK `node_modules`'tan çözüyordu. CI ise yalnız `mobile/`
+ * içinde kurulum yapıyor → orada kök `node_modules` hiç yok → `npx tsc --noEmit` "Cannot find
+ * module 'vitest'" ile düşüyor ve iOS TestFlight işi kırılıyor.
+ *
+ * Proje kuralı zaten bu yönde: `sync-core` çekirdek kopyasındaki `*.test.ts` dosyalarını siler,
+ * kök `tsconfig` `mobile`'ı dışlar. `mobile/` altına test dosyası KOYMA.
+ */
 describe("mobil biçimlendirme (tr-TR)", () => {
   it("parayı ₺ önde, virgüllü ondalıkla yazar", () => {
     const out = formatCurrency(1234.5);
