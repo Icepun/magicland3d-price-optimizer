@@ -1,0 +1,13 @@
+# Satır sonlarını LF'e sabitle.
+# NEDEN: bu depo LF kullanıyor, ama Windows'ta bazı araçlar dosyayı yeniden yazarken
+# CRLF'e çeviriyor. O zaman tek satırlık bir değişiklik bile diff'te "dosyanın tamamı
+# değişti" gibi görünüyor ve git blame kullanılamaz hale geliyor.
+* text=auto eol=lf
+
+# İkili dosyalar dönüştürülmemeli.
+*.png binary
+*.jpg binary
+*.ico binary
+*.db  binary
+*.p12 binary
+*.node binary
