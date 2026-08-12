@@ -28,26 +28,31 @@ export async function GET() {
     // ⚠️ Tarih karşılaştırması `dbEpochMs()` ile normalize edilir: kolonda hem eski epoch-ms
     // tamsayı hem kanonik ISO metin bulunabilir ve SQLite'ta tamsayı her zaman metinden
     // küçüktür — düz `>= ?` bir grubu komple elerdi. Gerekçe: src/lib/sqlite-date.ts.
+    // TEK GİDİŞ-DÖNÜŞ: satışlar ve kapsam başlangıcı ayrı iki sorguydu. Uzak-HTTP modunda her
+    // sorgu ~96 ms ve hepsi süreç genelinde SIRAYA giriyor → Planlayıcı her açılışta bir tur
+    // fazla bekliyordu. `kind` sütunu iki gövdeyi ayırır; hesap aynı hesap.
     const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT "productId","orderedAt","quantity","statusKind"
+      `SELECT 0 AS "kind","productId","orderedAt","quantity","statusKind"
          FROM "OrderItemSnapshot"
         WHERE "productId" IS NOT NULL
           AND "statusKind" <> ?
-          AND ${dbEpochMs("orderedAt")} >= ?`,
+          AND ${dbEpochMs("orderedAt")} >= ?
+       UNION ALL
+       SELECT 1 AS "kind", NULL AS "productId", MIN(${dbEpochMs("orderedAt")}) AS "orderedAt",
+              NULL AS "quantity", NULL AS "statusKind"
+         FROM "OrderItemSnapshot"
+        GROUP BY "platform"`,
       EXCLUDED_STATUS,
       since
     );
-    const oldestRows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT "platform", MIN(${dbEpochMs("orderedAt")}) AS "oldest"
-         FROM "OrderItemSnapshot"
-        GROUP BY "platform"`
-    );
+    const satisSatirlari = rows.filter((row) => Number(row.kind) === 0);
+    const kapsamSatirlari = rows.filter((row) => Number(row.kind) === 1);
     const coverageStartMs = coverageStart(
-      oldestRows.map((row) => parseDbDate(row.oldest)?.getTime() ?? 0)
+      kapsamSatirlari.map((row) => parseDbDate(row.orderedAt)?.getTime() ?? 0)
     );
 
     const payload = deriveSalesInsights(
-      rows.map((row) => ({
+      satisSatirlari.map((row) => ({
         productId: row.productId == null ? null : String(row.productId),
         orderedAt: parseDbDate(row.orderedAt)?.getTime() ?? NaN,
         quantity: toInt(row.quantity),

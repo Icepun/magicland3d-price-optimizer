@@ -66,7 +66,8 @@ export async function GET(req: NextRequest) {
 
     const data = cacheable
       ? await swr(
-          `products:v1:${url.searchParams.toString()}`,
+          // v2: gövdeye kâr kaynağı platformu eklendi — eski disk kopyası rozetsiz kalmasın.
+          `products:v2:${url.searchParams.toString()}`,
           2 * 60_000,
           () => computeProducts(req.url)
         )
@@ -211,7 +212,38 @@ async function computeProducts(urlString: string) {
   );
   const vatRate = vatRateOf(settingsMap);
 
-  const productsWithProfit = products.map((product) => {
+  /**
+   * KÂRA BAKMADAN karar verilebilen görünümler ÖNCE süzülür.
+   *
+   * "Maliyet Eksik", "Desi Eksik", "Stoğu Bitenler" ve platform daraltması üyeliği yalnız ürünün
+   * kendi alanlarından belli olur. Süzgeç aşağıdaki kâr simülasyonundan SONRA çalıştığı için,
+   * bu sekmeler tüm katalogun kârını (ürün başına 1–3 fiyat simülasyonu + eşik taraması)
+   * hesaplayıp sonucun neredeyse tamamını çöpe atıyordu. Sıra değişti; hesap DEĞİŞMEDİ —
+   * listede kalan ürünler aynı ürünler, rakamları aynı rakamlar.
+   */
+  let candidates = products;
+  if (!idList) {
+    if (filter === "missing-desi") {
+      candidates = candidates.filter((p) => p.desi == null || p.desi < 0);
+    } else if (filter === "missing-cost") {
+      candidates = candidates.filter(
+        (p) =>
+          !(
+            resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0)
+              ?.productionCostKnown ?? false
+          )
+      );
+    } else if (filter === "out-of-stock") {
+      // "Sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
+      candidates = candidates.filter((p) => p.stock === 0 && !p.madeToOrder);
+    }
+    // Platform daraltması: ilanı olmayan ürün nasılsa listeden düşecekti.
+    if (platformFilter) {
+      candidates = candidates.filter((p) => p.listings.some((l) => l.platform === platformFilter));
+    }
+  }
+
+  const productsWithProfit = candidates.map((product) => {
     const productRules = withProductCommissionRule(product, commissionRules);
     const rule = findCommissionRule(
       productRules,
@@ -528,6 +560,13 @@ async function computeProducts(urlString: string) {
       profitPerHour,
       /** Net kâr ÷ filament gramajı — gram başına kazanç (gramaj yoksa null). */
       profitPerGram,
+      /**
+       * Yukarıdaki iki oran HANGİ platformun fiyatından hesaplandı.
+       * ⚠️ Yalnız KAYNAK bilgisi — rakama dokunmaz. Liste bunu küçük bir rozette gösterir;
+       * aynı ürünün platformlar arası kârı çok farklı olabildiği için "hangi fiyat?" sorusu
+       * ekranda cevapsız kalıyordu.
+       */
+      profitBasisPlatform: profitBasis?.platform ?? null,
       /** Fiyat bir kural bandının hemen altındaysa: o noktaya çıkmanın kâra etkisi. */
       priceThreshold,
       hasCost,
@@ -539,33 +578,19 @@ async function computeProducts(urlString: string) {
     };
   });
 
-  let filtered = productsWithProfit;
+  // Kâra BAKARAK karar verilen tek görünüm — bu yüzden hesaptan sonra süzülür.
+  // (Diğer süzgeçler yukarıda, simülasyondan ÖNCE uygulandı.)
   // ids modu (tekil/çoklu cache patch) → post-filtre YOK: istenen ürünler filtreden bağımsız aynen döner.
-  if (!idList) {
-    if (filter === "negative-profit") {
-      filtered = filtered.filter((p) => {
-        if (p.platforms.length > 0) {
-          return p.platforms.some((pl) => pl.netProfit !== null && pl.netProfit < 0);
-        }
-        return p.currentNetProfit !== null && p.currentNetProfit < 0;
-      });
-    } else if (filter === "missing-cost") {
-      filtered = filtered.filter((p) => !p.hasCost);
-    } else if (filter === "missing-desi") {
-      filtered = filtered.filter((p) => p.missingDesi);
-    } else if (filter === "out-of-stock") {
-      // Local stok bazında; "sipariş üzerine üretilir" ürünler stok takip etmez → 0 sayılmaz.
-      filtered = filtered.filter((p) => p.stock === 0 && !p.madeToOrder);
-    }
-
-    if (platformFilter) {
-      filtered = filtered.filter((p) =>
-        p.platforms.some((pl) => pl.platform === platformFilter)
-      );
-    }
+  if (!idList && filter === "negative-profit") {
+    return productsWithProfit.filter((p) => {
+      if (p.platforms.length > 0) {
+        return p.platforms.some((pl) => pl.netProfit !== null && pl.netProfit < 0);
+      }
+      return p.currentNetProfit !== null && p.currentNetProfit < 0;
+    });
   }
 
-  return filtered;
+  return productsWithProfit;
 }
 
 export async function POST(req: NextRequest) {

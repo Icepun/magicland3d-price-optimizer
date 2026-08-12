@@ -42,15 +42,25 @@ import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { usePrefersReducedMotion } from "@/lib/client-state";
 import {
+  CLIENT_ONLY_FILTERS,
   PLATFORM_KEYS,
+  PLATFORM_LABEL,
+  countActiveList,
+  emptyListText,
+  isPlatformKey,
   isStaleProductListKey,
   listErrorText,
-  productListKey,
+  sameQueryKey,
   selectionPreview,
+  serverFilterOf,
+  sharedProductListKey,
   summarizeGroup,
   variantCountLabel,
   visibleSelection,
+  type ListCounts,
+  type PlatformKey,
   type ValueRange,
 } from "./product-list-logic";
 
@@ -137,6 +147,8 @@ interface Product {
   profitPerHour: number | null;
   /** Net kâr ÷ filament gramajı (gramaj girilmemişse null). */
   profitPerGram: number | null;
+  /** Kâr/saat · kâr/gram HANGİ platformun fiyatından geldi (yalnız kaynak — rakamı etkilemez). */
+  profitBasisPlatform?: string | null;
   /** Fiyat bir kural bandının hemen altındaysa: küçük zamla gelen kâr artışı. */
   priceThreshold: {
     platform: string;
@@ -164,11 +176,115 @@ interface Product {
   variantGroup?: { id: string; name: string; variantCount?: number } | null;
 }
 
-const PLATFORM_COLOR: Record<string, string> = {
-  shopify: "oklch(0.60 0.16 152)", // yeşil
-  trendyol: "oklch(0.72 0.17 60)", // turuncu
-  hepsiburada: "oklch(0.66 0.19 38)", // HB turuncu
+/** Sütun başlıklarının platform renkleri — globals.css'teki tek kaynaktan. */
+const PLATFORM_COLOR: Record<PlatformKey, string> = {
+  shopify: "var(--panel-shopify)",
+  trendyol: "var(--panel-trendyol)",
+  hepsiburada: "var(--panel-hepsiburada)",
 };
+const PLATFORM_SOFT: Record<PlatformKey, string> = {
+  shopify: "var(--panel-shopify-soft)",
+  trendyol: "var(--panel-trendyol-soft)",
+  hepsiburada: "var(--panel-hepsiburada-soft)",
+};
+
+/**
+ * YAPIŞKAN SÜTUNLAR — seçim kutusu, görsel ve ürün adı yatay kaydırmada ekranda kalır.
+ *
+ * Zemin OPAK olmak zorunda: altından kayan sütunlar görünmesin. Satırın yarı saydam tonu
+ * (hover / grup / üye) burada kart rengiyle karıştırılmış opak karşılığıyla tekrarlanır.
+ * Soldan uzaklıklar ilk iki sütunun GERÇEK genişliğinden ölçülür (--pcol2 / --pcol3):
+ * sabit piksel yazmak pencere genişledikçe sütunları kaydırıyordu.
+ */
+const STICKY_1 = "sticky left-0 z-20";
+const STICKY_2 = "sticky left-[var(--pcol2,36px)] z-20";
+const STICKY_3 = "sticky left-[var(--pcol3,88px)] z-20 border-r border-border/50";
+/** Normal satır: kart zemini + hover tonu. */
+const STICKY_TONE_ROW =
+  "bg-card group-hover:bg-[color-mix(in_oklab,var(--muted)_50%,var(--card))]";
+/** Varyant üyesi satırı biraz daha koyu durur. */
+const STICKY_TONE_MEMBER =
+  "bg-[color-mix(in_oklab,var(--muted)_15%,var(--card))] group-hover:bg-[color-mix(in_oklab,var(--muted)_50%,var(--card))]";
+/** Grup başlığı mor zeminlidir. */
+const STICKY_TONE_GROUP =
+  "bg-[color-mix(in_oklab,var(--primary)_7%,var(--card))] group-hover:bg-[color-mix(in_oklab,var(--primary)_13%,var(--card))]";
+
+/** Kâr/saat · kâr/gram rakamının hangi platformdan geldiğini söyleyen küçük rozet. */
+function ProfitSourceBadge({ platform }: { platform: PlatformKey }) {
+  return (
+    <span
+      className="mt-0.5 inline-flex items-center rounded-full px-1.5 py-px text-[9px] font-semibold leading-[1.4] tracking-tight"
+      style={{ color: PLATFORM_COLOR[platform], backgroundColor: PLATFORM_SOFT[platform] }}
+      title={`${PLATFORM_LABEL[platform]} fiyatına göre`}
+    >
+      {PLATFORM_LABEL[platform]}
+    </span>
+  );
+}
+
+/**
+ * Değer DEĞİŞİNCE akan sayı.
+ *
+ * İlk gösterimde animasyon YOK — liste sanallaştırılmış olduğu için satır her kaydırışta
+ * yeniden bağlanıyor; her seferinde sıfırdan sayması baş döndürürdü. Yalnız ekranda dururken
+ * değişen rakam (fiyat tazelendi, stok düzeltildi) yumuşak geçer.
+ */
+function FlowNumber({
+  value,
+  format,
+  className,
+}: {
+  value: number;
+  format: (n: number) => string;
+  className?: string;
+}) {
+  const [display, setDisplay] = useState(value);
+  const currentRef = useRef(value);
+  const rafRef = useRef<number | null>(null);
+  const reduceMotion = usePrefersReducedMotion();
+
+  useEffect(() => {
+    const from = currentRef.current;
+    if (from === value) return;
+    if (reduceMotion) {
+      // Hareket azaltma açık → akış yok, ama rakam yine de güncellenmeli.
+      currentRef.current = value;
+      rafRef.current = requestAnimationFrame(() => setDisplay(value));
+      return () => {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      };
+    }
+    const start = performance.now();
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / 420);
+      const next = t < 1 ? from + (value - from) * ease(t) : value;
+      currentRef.current = next;
+      setDisplay(next);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [value, reduceMotion]);
+
+  return <span className={className}>{format(display)}</span>;
+}
+
+/** Sayı değişince kısa bir vurgulama — "+ bastım, oldu mu?" sorusunu bitirir. */
+function useChangePulse(value: number): boolean {
+  const [pulse, setPulse] = useState(false);
+  const previous = useRef(value);
+  useEffect(() => {
+    if (previous.current === value) return;
+    previous.current = value;
+    setPulse(true);
+    const timer = setTimeout(() => setPulse(false), 260);
+    return () => clearTimeout(timer);
+  }, [value]);
+  return pulse;
+}
 
 const AddProductSchema = z.object({
   barcode: z.string().min(1, "Barkod zorunlu"),
@@ -185,9 +301,6 @@ const AddProductSchema = z.object({
 type AddProductForm = z.infer<typeof AddProductSchema>;
 
 type FilterMode = "active" | "out-of-stock" | "inactive" | "all" | "negative-profit" | "missing-cost" | "missing-desi" | "hidden" | "most-profitable" | "near-threshold";
-
-/** Sunucuda karşılığı olmayan, istemcide sıralanan/süzülen görünümler → "active" listesini çeker. */
-const CLIENT_ONLY_FILTERS: FilterMode[] = ["most-profitable", "near-threshold"];
 
 /** Kolon başlığından sıralama: kâr/saat ve kâr/gram. null → varsayılan (alfabetik) sıra. */
 type SortKey = "profitPerHour" | "profitPerGram";
@@ -256,7 +369,10 @@ function SortableHead({
   );
 }
 
-type PlatformParam = "shopify" | "trendyol" | "hepsiburada";
+/** İskelet satır sayısı — ilk ekranı dolduracak kadar; veri gelince sayfa zıplamasın. */
+const SKELETON_ROWS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+type PlatformParam = PlatformKey;
 
 /** Panel'deki platform kartından gelen ?platform=... (SSR safe). Tanınmayan değer yok sayılır. */
 function readPlatformFromUrl(): PlatformParam | null {
@@ -264,12 +380,6 @@ function readPlatformFromUrl(): PlatformParam | null {
   const p = new URLSearchParams(window.location.search).get("platform");
   return p === "shopify" || p === "trendyol" || p === "hepsiburada" ? p : null;
 }
-
-const PLATFORM_PARAM_LABEL: Record<PlatformParam, string> = {
-  shopify: "Shopify",
-  trendyol: "Trendyol",
-  hepsiburada: "Hepsiburada",
-};
 
 /** URL ?filter=... query string'inden ilk filter mode'u oku (SSR safe). */
 function readFilterFromUrl(): FilterMode {
@@ -318,6 +428,7 @@ const ProductRow = memo(function ProductRow({
   onPrint,
   measureRef,
   dataIndex,
+  enterDelayMs,
 }: {
   product: Product;
   isMember: boolean;
@@ -328,6 +439,8 @@ const ProductRow = memo(function ProductRow({
   /** Virtualizer: satırın gerçek yüksekliğini ölçmek için (dinamik) + flatRows indexi. */
   measureRef?: (node: HTMLTableRowElement | null) => void;
   dataIndex?: number;
+  /** İlk boyamada kademeli giriş; kaydırma sırasında gelen satırlarda null (animasyon yok). */
+  enterDelayMs?: number | null;
   onToggleSelect: (id: string, checked: boolean) => void;
   /** `current` + `name`: yanlış tıklamayı geri alabilmek için eski değer ve okunur ad gerekir. */
   onAdjustStock: (id: string, delta: number, current: number, name: string) => void;
@@ -352,6 +465,11 @@ const ProductRow = memo(function ProductRow({
     : null;
   const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
     product.platforms.find((x) => x.platform === p);
+  const karKaynagi = isPlatformKey(product.profitBasisPlatform)
+    ? product.profitBasisPlatform
+    : null;
+  const stockPulse = useChangePulse(product.stock);
+  const stickyTone = isMember ? STICKY_TONE_MEMBER : STICKY_TONE_ROW;
 
   return (
     <TableRow
@@ -360,18 +478,20 @@ const ProductRow = memo(function ProductRow({
       className={cn(
         "group hover:bg-muted/50",
         !product.isActive && "opacity-50",
-        isMember && "bg-muted/15"
+        isMember && "bg-muted/15",
+        enterDelayMs != null && "animate-in fade-in slide-in-from-bottom-1 duration-300 fill-mode-both"
       )}
+      style={enterDelayMs != null ? { animationDelay: `${enterDelayMs}ms` } : undefined}
     >
-      <TableCell className="py-2">
+      <TableCell className={cn("py-2", STICKY_1, stickyTone)}>
         <Checkbox checked={isSelected} onCheckedChange={(v) => onToggleSelect(product.id, !!v)} />
       </TableCell>
-      <TableCell className={cn("py-2 pr-0", isMember && "pl-6")}>
+      <TableCell className={cn("py-2 pr-0", STICKY_2, stickyTone, isMember && "pl-6")}>
         <ProductImage src={product.imageUrl} name={product.name} />
       </TableCell>
       {/* max-w-0: uzun ürün adı sütunu şişirmesin, üç nokta ile kırpılsın.
           min-w: taban genişlik olmadan diğer sütunlar bu sütunu tek harfe eziyordu. */}
-      <TableCell className="max-w-0 min-w-[260px]">
+      <TableCell className={cn("max-w-0 min-w-[260px]", STICKY_3, stickyTone)}>
         <div className="flex items-center gap-1.5 min-w-0">
           {isEditingAlias ? (
             <input
@@ -460,11 +580,16 @@ const ProductRow = memo(function ProductRow({
             </span>
           </div>
         ) : (
-          <div className="flex items-center justify-center gap-1.5">
+          <div
+            className={cn(
+              "flex items-center justify-center gap-1.5 transition-transform duration-200 ease-out",
+              stockPulse && "scale-[1.12]"
+            )}
+          >
             <Button
               variant="outline"
               size="icon"
-              className="h-7 w-7 text-muted-foreground"
+              className="h-7 w-7 text-muted-foreground transition-transform active:scale-90"
               disabled={product.stock <= 0}
               onClick={() => onAdjustStock(product.id, -1, product.stock, product.name)}
             >
@@ -474,13 +599,16 @@ const ProductRow = memo(function ProductRow({
             <StockInput
               value={product.stock}
               onCommit={(next) => onSetStock(product.id, next, product.stock, product.name)}
-              className="text-sm w-[5ch] py-0.5"
+              className={cn(
+                "text-sm w-[5ch] py-0.5 rounded transition-shadow duration-200",
+                stockPulse && "shadow-[0_0_0_2px_var(--panel-primary-soft)]"
+              )}
               title={product.stock === 0 ? "Stok tükendi" : product.stock === 1 ? "Kritik stok" : undefined}
             />
             <Button
               variant="outline"
               size="icon"
-              className="h-7 w-7 text-muted-foreground"
+              className="h-7 w-7 text-muted-foreground transition-transform active:scale-90"
               onClick={() => onAdjustStock(product.id, 1, product.stock, product.name)}
             >
               <Plus className="h-4 w-4" />
@@ -490,26 +618,37 @@ const ProductRow = memo(function ProductRow({
       </TableCell>
       <TableCell className="text-right tabular-nums text-xs">
         {cost !== null && cost !== undefined ? (
-          formatCurrency(cost)
+          <FlowNumber value={cost} format={(n) => formatCurrency(n)} />
         ) : (
-          <span className="text-[10px] text-muted-foreground/60 italic">eksik</span>
+          <span className="text-[10px] text-muted-foreground/60">Girilmemiş</span>
         )}
       </TableCell>
-      {/* Baskı süresi ve gramaj başına kazanç — "şimdi hangisini basayım?" kolonları. */}
+      {/* Baskı süresi ve gramaj başına kazanç — "şimdi hangisini basayım?" kolonları.
+          Rozet, rakamın hangi platformun fiyatından çıktığını söyler (hesap değişmez). */}
       <TableCell className="text-right tabular-nums text-xs">
         {product.profitPerHour != null ? (
-          <span className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}>
-            {formatCurrency(product.profitPerHour)}
-          </span>
+          <div className="flex flex-col items-end">
+            <FlowNumber
+              value={product.profitPerHour}
+              format={(n) => formatCurrency(n)}
+              className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}
+            />
+            {karKaynagi && <ProfitSourceBadge platform={karKaynagi} />}
+          </div>
         ) : (
           <span className="text-muted-foreground/40">—</span>
         )}
       </TableCell>
       <TableCell className="text-right tabular-nums text-xs">
         {product.profitPerGram != null ? (
-          <span className={cn("font-medium", product.profitPerGram < 0 && "text-destructive")}>
-            {formatCurrency(product.profitPerGram)}
-          </span>
+          <div className="flex flex-col items-end">
+            <FlowNumber
+              value={product.profitPerGram}
+              format={(n) => formatCurrency(n)}
+              className={cn("font-medium", product.profitPerGram < 0 && "text-destructive")}
+            />
+            {karKaynagi && <ProfitSourceBadge platform={karKaynagi} />}
+          </div>
         ) : (
           <span className="text-muted-foreground/40">—</span>
         )}
@@ -521,7 +660,12 @@ const ProductRow = memo(function ProductRow({
           if (!integrationActive) {
             return (
               <TableCell key={platform} className="text-center">
-                <span className="text-[10px] text-muted-foreground/40">Entegrasyon yok</span>
+                <span
+                  className="text-[10px] text-muted-foreground/40"
+                  title={`${PLATFORM_LABEL[platform]} hesabı bağlı değil`}
+                >
+                  Bağlı değil
+                </span>
               </TableCell>
             );
           }
@@ -537,11 +681,12 @@ const ProductRow = memo(function ProductRow({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[11px] px-2"
+                className="h-7 text-[11px] px-2 transition-transform active:scale-95"
+                title={`Bu ürünü ${PLATFORM_LABEL[platform]} ilanıyla eşleştir`}
                 onClick={() => onMatch(product.id, product.name, platform as "trendyol" | "hepsiburada")}
               >
                 <Link2 className="h-3 w-3 mr-1" />
-                Ürün Seç
+                Eşleştir
               </Button>
             </TableCell>
           );
@@ -550,7 +695,9 @@ const ProductRow = memo(function ProductRow({
         const isThin = p.netProfit !== null && p.netProfit >= 0 && (p.profitMargin ?? 0) < 0.1;
         return (
           <TableCell key={platform} className="text-center">
-            <div className="text-xs font-medium tabular-nums">{formatCurrency(p.salePrice)}</div>
+            <div className="text-xs font-medium tabular-nums">
+              <FlowNumber value={p.salePrice} format={(n) => formatCurrency(n)} />
+            </div>
             {p.commissionMissing && (
               <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> Komisyon gir!
@@ -568,11 +715,11 @@ const ProductRow = memo(function ProductRow({
                   isLoss ? "text-destructive font-medium" : isThin ? "text-amber-500" : "text-green-500"
                 }`}
               >
-                {formatCurrency(p.netProfit)}{" "}
+                <FlowNumber value={p.netProfit} format={(n) => formatCurrency(n)} />{" "}
                 <span className="opacity-70">({formatPercent(p.profitMargin ?? 0)})</span>
               </div>
             ) : (
-              <div className="text-[10px] text-muted-foreground/60 mt-0.5">maliyet eksik</div>
+              <div className="text-[10px] text-muted-foreground/60 mt-0.5">Maliyet girilmemiş</div>
             )}
             {(p.minOrderQty ?? 1) > 1 && (
               <div
@@ -586,11 +733,12 @@ const ProductRow = memo(function ProductRow({
         );
       })}
       <TableCell>
-        <div className="flex items-center gap-0.5">
+        {/* Satır üstünde değilken araçlar geri çekilir; hover/odakta tam görünür. */}
+        <div className="flex items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-muted-foreground/60 hover:text-primary"
+            className="h-8 w-8 text-muted-foreground/60 hover:text-primary transition-transform active:scale-90"
             title="Baskı başlat"
             onClick={() => onPrint(product.id, product.name)}
           >
@@ -600,7 +748,7 @@ const ProductRow = memo(function ProductRow({
             variant="ghost"
             size="icon"
             className={cn(
-              "h-8 w-8",
+              "h-8 w-8 transition-transform active:scale-90",
               product.madeToOrder ? "text-primary" : "text-muted-foreground/50 hover:text-foreground"
             )}
             title={product.madeToOrder ? "Sipariş üzerine üretilir (kapat)" : "Sipariş üzerine üretilir olarak işaretle"}
@@ -611,8 +759,8 @@ const ProductRow = memo(function ProductRow({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-muted-foreground hover:text-foreground"
-            title={product.hidden ? "Geri getir" : "Gizle"}
+            className="h-8 w-8 text-muted-foreground hover:text-foreground transition-transform active:scale-90"
+            title={product.hidden ? "Listeye geri getir" : "Listeden gizle"}
             onClick={() => onToggleHidden(product.id, !product.hidden)}
           >
             {product.hidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
@@ -620,7 +768,7 @@ const ProductRow = memo(function ProductRow({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-destructive/70 hover:text-destructive"
+            className="h-8 w-8 text-destructive/70 hover:text-destructive transition-transform active:scale-90"
             title="Sil"
             onClick={() => onDelete(product.id, product.name)}
           >
@@ -628,6 +776,247 @@ const ProductRow = memo(function ProductRow({
           </Button>
         </div>
       </TableCell>
+    </TableRow>
+  );
+});
+
+/** Varyant grubu başlığı — sanallaştırılmış listede satır olarak taşınır. */
+interface GroupRowData {
+  key: string;
+  groupId: string;
+  groupName: string;
+  /** Grubun TAM varyant sayısı — `members` yalnız listede görünenleri tutar. */
+  variantCount?: number;
+  members: Product[];
+}
+
+type DisplayRow =
+  | ({ kind: "group" } & GroupRowData)
+  | { kind: "product"; key: string; product: Product; isMember: boolean };
+
+/**
+ * Varyant grubu başlık satırı — genel ad + görünen varyantlar + özet rakamlar.
+ *
+ * memo'lu: kaydırma sırasında üst bileşen her karede yeniden çizilse de bu satır KENDİ prop'ları
+ * değişmedikçe boyanmaz (grup satırları listenin büyük kısmını oluşturuyor).
+ *
+ * ⚠️ Özet YENİ bir kâr hesabı YAPMAZ: satırlarda zaten duran maliyet/kâr/fiyat değerlerini
+ * aralığa çevirir. Bilinmeyen değer 0 gösterilmez, "—" kalır.
+ * Tüm sayılar O AN LİSTEDE GÖRÜNEN varyantlardan gelir (filtre/arama ile tutarlı).
+ */
+const GroupRow = memo(function GroupRow({
+  row,
+  expanded,
+  allSelected,
+  integrations,
+  onToggleExpand,
+  onToggleSelectGroup,
+  measureRef,
+  dataIndex,
+  enterDelayMs,
+}: {
+  row: GroupRowData;
+  expanded: boolean;
+  allSelected: boolean;
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  onToggleExpand: (groupId: string) => void;
+  onToggleSelectGroup: (ids: string[], checked: boolean) => void;
+  measureRef?: (node: HTMLTableRowElement | null) => void;
+  dataIndex?: number;
+  enterDelayMs?: number | null;
+}) {
+  const ozet = summarizeGroup(row.members);
+  const sayim = variantCountLabel(ozet.varyant, row.variantCount);
+  const firstImg = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
+  const labels = row.members.map((m) => m.variantLabel || m.name).join(" · ");
+  const priceText = ozet.fiyat ? rangeText(ozet.fiyat) : null;
+  const stokIpucu = [
+    `Görünen ${ozet.stokTutan} varyantın toplam stoğu`,
+    ozet.siparisUzerine > 0 ? `${ozet.siparisUzerine} varyant sipariş üzerine` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <TableRow
+      ref={measureRef}
+      data-index={dataIndex}
+      onClick={() => onToggleExpand(row.groupId)}
+      title={expanded ? "Varyantları gizle" : "Varyantları aç"}
+      // Grup başlığı normal satıra benzemesin: mor zemin + sol kenar çubuğu + kalın ad.
+      // Koyu temada nötr gri tonlar birbirinden ayırt edilemiyordu.
+      className={cn(
+        "group bg-primary/[0.07] hover:bg-primary/[0.13] border-y border-border/60 cursor-pointer transition-colors",
+        enterDelayMs != null && "animate-in fade-in slide-in-from-bottom-1 duration-300 fill-mode-both"
+      )}
+      style={enterDelayMs != null ? { animationDelay: `${enterDelayMs}ms` } : undefined}
+    >
+      <TableCell
+        className={cn("py-2 border-l-2 border-l-primary/70", STICKY_1, STICKY_TONE_GROUP)}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Checkbox
+          checked={allSelected}
+          onCheckedChange={(v) => onToggleSelectGroup(row.members.map((m) => m.id), !!v)}
+        />
+      </TableCell>
+      <TableCell className={cn("py-2 pr-0", STICKY_2, STICKY_TONE_GROUP)}>
+        <span className="relative block w-fit">
+          <ProductImage src={firstImg} name={row.groupName} />
+          <span className="absolute -bottom-1 -right-1 rounded bg-primary text-primary-foreground p-0.5 leading-none">
+            <Layers className="h-2.5 w-2.5" />
+          </span>
+        </span>
+      </TableCell>
+      {/* Ürün satırıyla aynı taban genişlik — grup ve varyant satırları hizalı kalsın. */}
+      <TableCell className={cn("max-w-0 min-w-[260px]", STICKY_3, STICKY_TONE_GROUP)}>
+        <div className="flex items-center gap-1.5 w-full">
+          <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200", expanded && "rotate-90")} />
+          <span className="font-semibold text-sm truncate">{row.groupName}</span>
+          <Badge
+            variant="secondary"
+            className={cn(
+              "shrink-0 tabular-nums",
+              // Kısmi görünüm göze çarpsın: satırdaki rakamlar grubun TAMAMINI anlatmıyor.
+              sayim.kismi && "bg-primary/20 text-primary"
+            )}
+            title={sayim.ipucu}
+          >
+            {sayim.metin}
+          </Badge>
+        </div>
+        <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
+          {labels}
+          {priceText && <span className="opacity-80"> · {priceText}</span>}
+        </div>
+      </TableCell>
+      <TableCell className="py-2 text-center">
+        {ozet.stokToplam == null ? (
+          <span
+            className="text-[10px] leading-tight text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5"
+            title="Tüm varyantlar sipariş üzerine üretilir — stok takip edilmez"
+          >
+            Sipariş üzerine
+          </span>
+        ) : (
+          <span className="text-xs tabular-nums text-muted-foreground" title={stokIpucu}>
+            Σ {ozet.stokToplam}
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-xs">
+        <span
+          className={cn(ozet.maliyet ? "text-muted-foreground" : "text-muted-foreground/40")}
+          title={rangeHint(ozet.maliyet, "Maliyet")}
+        >
+          {rangeText(ozet.maliyet)}
+        </span>
+        {/* Maliyeti girilmemiş varyantlar aralığa GİRMEZ; kaç tane olduğu burada yazar,
+            yoksa eksik maliyet grup satırında tamamen görünmez oluyordu. */}
+        {ozet.maliyetiEksik > 0 && (
+          <div className="text-[10px] text-amber-500 mt-0.5">
+            {ozet.maliyetiEksik} varyantta maliyet yok
+          </div>
+        )}
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-xs">
+        <div className="flex flex-col items-end">
+          <span
+            className={cn(
+              ozet.karSaat
+                ? ozet.karSaat.max < 0
+                  ? "text-destructive font-medium"
+                  : "text-muted-foreground"
+                : "text-muted-foreground/40"
+            )}
+            title={rangeHint(ozet.karSaat, "Kâr/saat")}
+          >
+            {rangeText(ozet.karSaat)}
+          </span>
+          {ozet.karSaat && ozet.karKaynagi && <ProfitSourceBadge platform={ozet.karKaynagi} />}
+        </div>
+      </TableCell>
+      <TableCell className="text-right tabular-nums text-xs">
+        <div className="flex flex-col items-end">
+          <span
+            className={cn(
+              ozet.karGram
+                ? ozet.karGram.max < 0
+                  ? "text-destructive font-medium"
+                  : "text-muted-foreground"
+                : "text-muted-foreground/40"
+            )}
+            title={rangeHint(ozet.karGram, "Kâr/gram")}
+          >
+            {rangeText(ozet.karGram)}
+          </span>
+          {ozet.karGram && ozet.karKaynagi && <ProfitSourceBadge platform={ozet.karKaynagi} />}
+        </div>
+      </TableCell>
+      {PLATFORM_KEYS.map((platform) => {
+        const ps = ozet.platformlar[platform];
+        const integrationActive = integrations?.[platform] ?? false;
+        if (!ps) {
+          return (
+            <TableCell key={platform} className="text-center">
+              <span
+                className="text-[10px] text-muted-foreground/40"
+                title={integrationActive ? undefined : `${PLATFORM_LABEL[platform]} hesabı bağlı değil`}
+              >
+                {integrationActive ? "—" : "Bağlı değil"}
+              </span>
+            </TableCell>
+          );
+        }
+        const zarar = ps.kar != null && ps.kar.max < 0;
+        const karisik = ps.kar != null && ps.kar.min < 0 && ps.kar.max >= 0;
+        return (
+          <TableCell key={platform} className="text-center">
+            <div className="text-xs font-medium tabular-nums" title={rangeHint(ps.fiyat, "Fiyat")}>
+              {rangeText(ps.fiyat)}
+            </div>
+            {ps.ilanli < ozet.varyant && (
+              <div className="text-[9px] text-muted-foreground/60 mt-0.5 tabular-nums">
+                {ps.ilanli}/{ozet.varyant} varyantta
+              </div>
+            )}
+            {ps.kar ? (
+              <div
+                className={cn(
+                  "text-[11px] tabular-nums mt-0.5",
+                  zarar ? "text-destructive font-medium" : karisik ? "text-amber-500" : "text-green-500"
+                )}
+                title={rangeHint(ps.kar, "Kâr")}
+              >
+                {rangeText(ps.kar)}
+                {ps.marj && (
+                  <span className="opacity-70">
+                    {" "}
+                    (
+                    {ps.marj.min === ps.marj.max
+                      ? formatPercent(ps.marj.min)
+                      : `${formatPercent(ps.marj.min, 0)} – ${formatPercent(ps.marj.max, 0)}`}
+                    )
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted-foreground/60 mt-0.5">Maliyet girilmemiş</div>
+            )}
+            {ps.komisyonEksik > 0 && (
+              <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> {ps.komisyonEksik} varyantta komisyon yok
+              </div>
+            )}
+            {ps.kargoEksik > 0 && (
+              <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> {ps.kargoEksik} varyantta kargo yok
+              </div>
+            )}
+          </TableCell>
+        );
+      })}
+      <TableCell className="w-[80px]" />
     </TableRow>
   );
 });
@@ -705,18 +1094,31 @@ export default function ProductsPage() {
    * ürün Aktif'e dönmüyordu. Silince o sekmeye geçildiğinde taze çekim garanti olur — ekrandaki
    * listeye dokunulmadığı için gereksiz ağır çekim de olmaz.
    */
+  /**
+   * Listenin sorgu anahtarı — Planlayıcı / Raporlar / Makaralar ile AYNI gövdeyi paylaşır.
+   * (Daha önce Ürünler tek başına 3 parçalı bir anahtar kullandığı için aynı ~450 KB'lık liste
+   * iki kez indiriliyordu.)
+   */
+  const listQueryKey = useMemo(
+    () => sharedProductListKey(filterMode, platformParam),
+    [filterMode, platformParam]
+  );
+
   const dropOtherProductLists = useCallback(() => {
     queryClient.removeQueries({
       queryKey: ["products"],
-      predicate: (query) => isStaleProductListKey(query.queryKey, filterMode, platformParam),
+      predicate: (query) =>
+        // Ekranda duran gövde iyimser güncellendi → ona dokunma (artık başka ekranlarla ORTAK).
+        !sameQueryKey(query.queryKey, listQueryKey) &&
+        isStaleProductListKey(query.queryKey, filterMode, platformParam),
     });
-  }, [queryClient, filterMode, platformParam]);
+  }, [queryClient, filterMode, platformParam, listQueryKey]);
 
   /** "Geri al" — satırları ekrandaki listeye geri koyar (372 ürünü baştan çekmeden). */
   const restoreProductRows = useCallback(
     (rows: Product[]) => {
       if (rows.length === 0) return;
-      queryClient.setQueryData<Product[]>(productListKey(filterMode, platformParam), (old) => {
+      queryClient.setQueryData<Product[]>(listQueryKey, (old) => {
         if (!Array.isArray(old)) return old;
         const mevcut = new Set(old.map((p) => p.id));
         const eksik = rows.filter((row) => !mevcut.has(row.id));
@@ -724,7 +1126,7 @@ export default function ProductsPage() {
         return eksik.length ? [...old, ...eksik] : old;
       });
     },
-    [queryClient, filterMode, platformParam]
+    [queryClient, listQueryKey]
   );
 
   // URL filter parametresinden başlangıç değeri (mount sonrası, hydration safe).
@@ -804,12 +1206,12 @@ export default function ProductsPage() {
     refetch: refetchProducts,
   } = useQuery<Product[]>({
     enabled: urlOkundu,
-    queryKey: ["products", filterMode, platformParam],
+    queryKey: listQueryKey,
     queryFn: ({ signal }) =>
       // "En Kârlı" / "Eşiğe Yakın" sunucuda yok → aktif ürünleri çek, client'ta süz/sırala.
       // signal: başka sayfaya geçince bu (ağır) fetch iptal olur → birikme/boşa parse yok.
       fetchJson<Product[]>(
-        `/api/products?filter=${CLIENT_ONLY_FILTERS.includes(filterMode) ? "active" : filterMode}` +
+        `/api/products?filter=${serverFilterOf(filterMode)}` +
           (platformParam ? `&platform=${platformParam}` : ""),
         { signal }
       ),
@@ -1095,15 +1497,22 @@ export default function ProductsPage() {
   // aliasEdit'i ref'te tut → commitAlias her render'da yeni closure olmaz (memo kırılmaz).
   const aliasEditRef = useRef(aliasEdit);
   aliasEditRef.current = aliasEdit;
+  /**
+   * ⚠️ `useMutation` HER render'da yeni bir nesne döndürür — bütün mutation'ı bağımlılık yapmak
+   * aşağıdaki handler'ları her karede yeniliyor, bu da satırlardaki `memo`yu tamamen etkisiz
+   * bırakıyordu (kaydırmanın her karesinde ekrandaki TÜM satırlar baştan çiziliyordu).
+   * `.mutate` referansı kalıcıdır; bağımlılık olarak yalnız onu alıyoruz.
+   */
+  const mutateAlias = setAliasMutation.mutate;
   const commitAlias = useCallback(() => {
     const ae = aliasEditRef.current;
     if (!ae) return;
     const value = ae.value.trim();
     if (value !== ae.original.trim()) {
-      setAliasMutation.mutate({ id: ae.id, alias: value || null });
+      mutateAlias({ id: ae.id, alias: value || null });
     }
     setAliasEdit(null);
-  }, [setAliasMutation]);
+  }, [mutateAlias]);
 
   // ProductRow'a geçilen STABİL handler'lar — useCallback, böylece scroll'da memo'lu satırlar
   // (prop ref'leri değişmediği için) yeniden render olmaz.
@@ -1127,9 +1536,10 @@ export default function ProductsPage() {
       setMatchModal({ productId, productName, platform }),
     []
   );
+  const mutateHidden = toggleHiddenMutation.mutate;
   const handleToggleHidden = useCallback(
-    (id: string, hidden: boolean) => toggleHiddenMutation.mutate({ id, hidden }),
-    [toggleHiddenMutation]
+    (id: string, hidden: boolean) => mutateHidden({ id, hidden }),
+    [mutateHidden]
   );
   // Silme ANINDA değil — önce onay penceresi (yanlışlıkla tıklama veri kaybettirmesin).
   const handleDelete = useCallback(
@@ -1166,9 +1576,10 @@ export default function ProductsPage() {
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" }),
   });
+  const mutateMadeToOrder = setMadeToOrderMutation.mutate;
   const handleToggleMadeToOrder = useCallback(
-    (id: string, madeToOrder: boolean) => setMadeToOrderMutation.mutate({ id, madeToOrder }),
-    [setMadeToOrderMutation]
+    (id: string, madeToOrder: boolean) => mutateMadeToOrder({ id, madeToOrder }),
+    [mutateMadeToOrder]
   );
 
   // "Yenile" — TEK buton: tüm platformların fiyatlarını çeker + liste/panel/siparişleri DB'den
@@ -1419,26 +1830,23 @@ export default function ProductsPage() {
   );
 
   // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
-  type DisplayRow =
-    | {
-        kind: "group";
-        key: string;
-        groupId: string;
-        groupName: string;
-        /** Grubun TAM varyant sayısı — `members` yalnız listede görünenleri tutar. */
-        variantCount?: number;
-        members: Product[];
-      }
-    | { kind: "product"; key: string; product: Product; isMember: boolean };
-
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const toggleGroup = (id: string) =>
+  // useCallback: memo'lu grup satırı bu fonksiyonu prop olarak alıyor, her render'da yenilenmemeli.
+  const toggleGroup = useCallback((id: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }, []);
+  const handleToggleSelectGroup = useCallback((ids: string[], checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => (checked ? next.add(id) : next.delete(id)));
+      return next;
+    });
+  }, []);
 
   // Düz ürün listesini grup başlıkları + tekil ürünler haline getir (sıra korunur).
   const displayRows = useMemo<DisplayRow[]>(() => {
@@ -1607,223 +2015,80 @@ export default function ProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoading, flatRows.length, scrollEl]);
 
-  const FILTER_OPTIONS: { value: FilterMode; label: string }[] = [
-    { value: "active", label: "Aktif" },
+  const FILTER_OPTIONS: { value: FilterMode; label: string; countKey?: keyof ListCounts }[] = [
+    { value: "active", label: "Aktif", countKey: "active" },
     { value: "most-profitable", label: "En Kârlı" },
-    { value: "near-threshold", label: "Eşiğe Yakın" },
-    { value: "negative-profit", label: "Zarar Eden" },
-    { value: "missing-cost", label: "Maliyet Eksik" },
-    { value: "missing-desi", label: "Desi Eksik" },
-    { value: "out-of-stock", label: "Stoğu Bitenler" },
+    { value: "near-threshold", label: "Eşiğe Yakın", countKey: "near-threshold" },
+    { value: "negative-profit", label: "Zarar Eden", countKey: "negative-profit" },
+    { value: "missing-cost", label: "Maliyet Eksik", countKey: "missing-cost" },
+    { value: "missing-desi", label: "Desi Eksik", countKey: "missing-desi" },
+    { value: "out-of-stock", label: "Stoğu Bitenler", countKey: "out-of-stock" },
     { value: "inactive", label: "İnaktif" },
     { value: "hidden", label: "Gizlenenler" },
     { value: "all", label: "Tümü" },
   ];
 
   /**
-   * Varyant grubu başlık satırı — genel ad + görünen varyantlar + özet rakamlar.
-   *
-   * ⚠️ Özet YENİ bir kâr hesabı YAPMAZ: satırlarda zaten duran maliyet/kâr/fiyat değerlerini
-   * aralığa çevirir. Bilinmeyen değer 0 gösterilmez, "—" kalır.
-   * Tüm sayılar O AN LİSTEDE GÖRÜNEN varyantlardan gelir (filtre/arama ile tutarlı).
+   * Sekme rozetleri — hangi sekmede kaç ürün olduğunu tıklamadan göster.
+   * Sayılar EKRANDAKİ aktif listeden hesaplanır (ek istek yok). Başka bir sekmedeyken en son
+   * bilinen sayılar korunur; İnaktif/Gizlenenler/Tümü başka listedir → onlara rozet yazılmaz.
    */
-  const renderGroupRow = (
-    row: Extract<DisplayRow, { kind: "group" }>,
-    measureRef?: (node: HTMLTableRowElement | null) => void,
-    dataIndex?: number
-  ) => {
-    const expanded = expandedGroups.has(row.groupId);
-    const ozet = summarizeGroup(row.members);
-    const sayim = variantCountLabel(ozet.varyant, row.variantCount);
-    const allSelected = row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id));
-    const firstImg = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
-    const labels = row.members.map((m) => m.variantLabel || m.name).join(" · ");
-    const priceText = ozet.fiyat ? rangeText(ozet.fiyat) : null;
-    const stokIpucu = [
-      `Görünen ${ozet.stokTutan} varyantın toplam stoğu`,
-      ozet.siparisUzerine > 0 ? `${ozet.siparisUzerine} varyant sipariş üzerine` : null,
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return (
-      <TableRow
-        key={row.key}
-        ref={measureRef}
-        data-index={dataIndex}
-        onClick={() => toggleGroup(row.groupId)}
-        title={expanded ? "Varyantları gizle" : "Varyantları aç"}
-        // Grup başlığı normal satıra benzemesin: mor zemin + sol kenar çubuğu + kalın ad.
-        // Koyu temada nötr gri tonlar birbirinden ayırt edilemiyordu.
-        className="bg-primary/[0.07] hover:bg-primary/[0.13] border-y border-border/60 cursor-pointer transition-colors"
-      >
-        <TableCell
-          className="py-2 border-l-2 border-l-primary/70"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Checkbox
-            checked={allSelected}
-            onCheckedChange={(v) =>
-              setSelectedIds((prev) => {
-                const next = new Set(prev);
-                row.members.forEach((m) => (v ? next.add(m.id) : next.delete(m.id)));
-                return next;
-              })
-            }
-          />
-        </TableCell>
-        <TableCell className="py-2 pr-0">
-          <span className="relative block w-fit">
-            <ProductImage src={firstImg} name={row.groupName} />
-            <span className="absolute -bottom-1 -right-1 rounded bg-primary text-primary-foreground p-0.5 leading-none">
-              <Layers className="h-2.5 w-2.5" />
-            </span>
-          </span>
-        </TableCell>
-        {/* Ürün satırıyla aynı taban genişlik — grup ve varyant satırları hizalı kalsın. */}
-        <TableCell className="max-w-0 min-w-[260px]">
-          <div className="flex items-center gap-1.5 w-full">
-            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
-            <span className="font-semibold text-sm truncate">{row.groupName}</span>
-            <Badge
-              variant="secondary"
-              className={cn(
-                "shrink-0 tabular-nums",
-                // Kısmi görünüm göze çarpsın: satırdaki rakamlar grubun TAMAMINI anlatmıyor.
-                sayim.kismi && "bg-primary/20 text-primary"
-              )}
-              title={sayim.ipucu}
-            >
-              {sayim.metin}
-            </Badge>
-          </div>
-          <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
-            {labels}
-            {priceText && <span className="opacity-80"> · {priceText}</span>}
-          </div>
-        </TableCell>
-        <TableCell className="py-2 text-center">
-          {ozet.stokToplam == null ? (
-            <span
-              className="text-[10px] leading-tight text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5"
-              title="Tüm varyantlar sipariş üzerine üretilir — stok takip edilmez"
-            >
-              Sipariş üzerine
-            </span>
-          ) : (
-            <span className="text-xs tabular-nums text-muted-foreground" title={stokIpucu}>
-              Σ {ozet.stokToplam}
-            </span>
-          )}
-        </TableCell>
-        <TableCell className="text-right tabular-nums text-xs">
-          <span
-            className={cn(
-              ozet.maliyet ? "text-muted-foreground" : "text-muted-foreground/40"
-            )}
-            title={rangeHint(ozet.maliyet, "Maliyet")}
-          >
-            {rangeText(ozet.maliyet)}
-          </span>
-          {/* Maliyeti girilmemiş varyantlar aralığa GİRMEZ; kaç tane olduğu burada yazar,
-              yoksa eksik maliyet grup satırında tamamen görünmez oluyordu. */}
-          {ozet.maliyetiEksik > 0 && (
-            <div className="text-[10px] text-amber-500 mt-0.5">
-              {ozet.maliyetiEksik} varyantta maliyet yok
-            </div>
-          )}
-        </TableCell>
-        <TableCell className="text-right tabular-nums text-xs">
-          <span
-            className={cn(
-              ozet.karSaat
-                ? ozet.karSaat.max < 0
-                  ? "text-destructive font-medium"
-                  : "text-muted-foreground"
-                : "text-muted-foreground/40"
-            )}
-            title={rangeHint(ozet.karSaat, "Kâr/saat")}
-          >
-            {rangeText(ozet.karSaat)}
-          </span>
-        </TableCell>
-        <TableCell className="text-right tabular-nums text-xs">
-          <span
-            className={cn(
-              ozet.karGram
-                ? ozet.karGram.max < 0
-                  ? "text-destructive font-medium"
-                  : "text-muted-foreground"
-                : "text-muted-foreground/40"
-            )}
-            title={rangeHint(ozet.karGram, "Kâr/gram")}
-          >
-            {rangeText(ozet.karGram)}
-          </span>
-        </TableCell>
-        {PLATFORM_KEYS.map((platform) => {
-          const ps = ozet.platformlar[platform];
-          const integrationActive = integrations?.[platform] ?? false;
-          if (!ps) {
-            return (
-              <TableCell key={platform} className="text-center">
-                <span className="text-[10px] text-muted-foreground/40">
-                  {integrationActive ? "—" : "Entegrasyon yok"}
-                </span>
-              </TableCell>
-            );
-          }
-          const zarar = ps.kar != null && ps.kar.max < 0;
-          const karisik = ps.kar != null && ps.kar.min < 0 && ps.kar.max >= 0;
-          return (
-            <TableCell key={platform} className="text-center">
-              <div className="text-xs font-medium tabular-nums" title={rangeHint(ps.fiyat, "Fiyat")}>
-                {rangeText(ps.fiyat)}
-              </div>
-              {ps.ilanli < ozet.varyant && (
-                <div className="text-[9px] text-muted-foreground/60 mt-0.5 tabular-nums">
-                  {ps.ilanli}/{ozet.varyant} varyantta
-                </div>
-              )}
-              {ps.kar ? (
-                <div
-                  className={cn(
-                    "text-[11px] tabular-nums mt-0.5",
-                    zarar ? "text-destructive font-medium" : karisik ? "text-amber-500" : "text-green-500"
-                  )}
-                  title={rangeHint(ps.kar, "Kâr")}
-                >
-                  {rangeText(ps.kar)}
-                  {ps.marj && (
-                    <span className="opacity-70">
-                      {" "}
-                      (
-                      {ps.marj.min === ps.marj.max
-                        ? formatPercent(ps.marj.min)
-                        : `${formatPercent(ps.marj.min, 0)} – ${formatPercent(ps.marj.max, 0)}`}
-                      )
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <div className="text-[10px] text-muted-foreground/60 mt-0.5">maliyet eksik</div>
-              )}
-              {ps.komisyonEksik > 0 && (
-                <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
-                  <AlertTriangle className="h-3 w-3" /> {ps.komisyonEksik} varyantta komisyon yok
-                </div>
-              )}
-              {ps.kargoEksik > 0 && (
-                <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
-                  <AlertTriangle className="h-3 w-3" /> {ps.kargoEksik} varyantta kargo yok
-                </div>
-              )}
-            </TableCell>
-          );
-        })}
-        <TableCell className="w-[80px]" />
-      </TableRow>
-    );
-  };
+  const aktifListeGoruntuleniyor = serverFilterOf(filterMode) === "active" && !platformParam;
+  const [tabCounts, setTabCounts] = useState<ListCounts | null>(null);
+  useEffect(() => {
+    if (!aktifListeGoruntuleniyor || isLoading || isError) return;
+    setTabCounts(countActiveList(products));
+  }, [aktifListeGoruntuleniyor, isLoading, isError, products]);
+
+  /**
+   * Satırların kademeli girişi — liste ilk göründüğünde ve sekme değiştiğinde kısa bir pencere
+   * boyunca. Liste sanallaştırılmış olduğu için pencere kapanmasa kaydırdıkça yeni satırlar
+   * sürekli animasyonla girer ve kaydırma huzursuz görünürdü. Arama yazarken de bilerek
+   * tetiklenmez: her tuşta liste yeniden "uçuşursa" okumak zorlaşır.
+   */
+  const reduceMotion = usePrefersReducedMotion();
+  const listeHazir = !isLoading && !isError && flatRows.length > 0;
+  const [staggerOn, setStaggerOn] = useState(false);
+  useEffect(() => {
+    if (!listeHazir || reduceMotion) {
+      setStaggerOn(false);
+      return;
+    }
+    setStaggerOn(true);
+    const timer = setTimeout(() => setStaggerOn(false), 700);
+    return () => clearTimeout(timer);
+  }, [listeHazir, reduceMotion, filterMode, platformParam]);
+
+  /**
+   * Yapışkan sütunların soldan uzaklığı — ilk iki sütunun GERÇEK genişliğinden ölçülür.
+   * Sabit piksel yazmak pencere genişledikçe sütunları birbirinin üstüne bindiriyordu.
+   */
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const headSelectRef = useRef<HTMLTableCellElement>(null);
+  const headImageRef = useRef<HTMLTableCellElement>(null);
+  useEffect(() => {
+    const wrap = tableWrapRef.current;
+    if (!wrap) return;
+    const measure = () => {
+      const first = headSelectRef.current?.getBoundingClientRect().width ?? 0;
+      const second = headImageRef.current?.getBoundingClientRect().width ?? 0;
+      if (first <= 0) return;
+      wrap.style.setProperty("--pcol2", `${Math.round(first)}px`);
+      wrap.style.setProperty("--pcol3", `${Math.round(first + second)}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    if (headSelectRef.current) observer.observe(headSelectRef.current);
+    if (headImageRef.current) observer.observe(headImageRef.current);
+    return () => observer.disconnect();
+  }, [isLoading]);
+
+  const bosListe = emptyListText({
+    filterMode,
+    search: debouncedFilter,
+    platformLabel: platformParam ? PLATFORM_LABEL[platformParam] : null,
+  });
+
 
   return (
     <div className="p-6 space-y-5">
@@ -1831,7 +2096,7 @@ export default function ProductsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Shopify ana ürünleri + Trendyol eşleştirmeleri · varyantlar genel başlık altında tek satırda toplanır
+            Tüm ürünlerin fiyatı, maliyeti ve kârı · varyantlar tek satırda toplanır
           </p>
         </div>
         <div className="flex gap-2">
@@ -1918,57 +2183,109 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+      {/* Arama KENDİ satırında: filtre çipleriyle aynı satırdayken dar pencerede 124 piksele
+          eziliyor, yer tutucu yazının ilk kelimesi bile sığmıyordu. */}
+      <div className="space-y-2.5">
+        <div className="relative w-full max-w-2xl min-w-[240px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
-            placeholder="Ara: ad, barkod, SKU, kategori..."
+            placeholder="Ürün adı, barkod, stok kodu veya kategori ara"
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-9"
+            className="pl-9 pr-9"
           />
-        </div>
-
-        <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5">
-          {FILTER_OPTIONS.map((opt) => (
+          {globalFilter && (
             <button
-              key={opt.value}
-              onClick={() => setFilterMode(opt.value)}
-              className={`px-3 py-1.5 text-sm font-medium rounded-sm transition-colors ${
-                filterMode === opt.value
-                  ? "bg-background shadow-sm text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
+              type="button"
+              onClick={() => setGlobalFilter("")}
+              title="Aramayı temizle"
+              className="absolute right-2 top-1/2 -translate-y-1/2 grid place-items-center h-6 w-6 rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-90"
             >
-              {opt.label}
+              <X className="h-3.5 w-3.5" />
             </button>
-          ))}
+          )}
         </div>
 
-        {/* Panel'den gelen platform daraltması görünür olsun ve tek tıkla kalksın. */}
-        {platformParam && (
-          <button
-            type="button"
-            onClick={() => setPlatformParam(null)}
-            title="Bu platform daraltmasını kaldır"
-            className="inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
-          >
-            {PLATFORM_PARAM_LABEL[platformParam]}
-            <X className="h-3.5 w-3.5 opacity-70" />
-          </button>
-        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 flex-wrap">
+            {FILTER_OPTIONS.map((opt) => {
+              const secili = filterMode === opt.value;
+              const adet = opt.countKey && tabCounts ? tabCounts[opt.countKey] : null;
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => setFilterMode(opt.value)}
+                  className={cn(
+                    "px-3 py-1.5 text-sm font-medium rounded-sm transition-all duration-150 active:scale-[0.97] flex items-center gap-1.5",
+                    secili
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+                  )}
+                >
+                  {opt.label}
+                  {adet != null && (
+                    <span
+                      className={cn(
+                        "rounded-full px-1.5 text-[10px] font-semibold tabular-nums leading-[1.6] transition-colors",
+                        secili ? "bg-primary/20 text-primary" : "bg-muted-foreground/15 text-muted-foreground"
+                      )}
+                    >
+                      {adet}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
 
-        <span className="text-sm text-muted-foreground ml-auto">
-          {displayRows.length} kayıt
-          {filteredProducts.length !== displayRows.length ? ` · ${filteredProducts.length} ürün` : ""}
-        </span>
+          {/* Panel'den gelen platform daraltması görünür olsun ve tek tıkla kalksın. */}
+          {platformParam && (
+            <button
+              type="button"
+              onClick={() => setPlatformParam(null)}
+              title="Bu platform daraltmasını kaldır"
+              className="inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60 active:scale-[0.97]"
+            >
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ backgroundColor: PLATFORM_COLOR[platformParam] }}
+              />
+              {PLATFORM_LABEL[platformParam]}
+              <X className="h-3.5 w-3.5 opacity-70" />
+            </button>
+          )}
+
+          <span className="text-sm text-muted-foreground ml-auto tabular-nums">
+            {displayRows.length} satır
+            {filteredProducts.length !== displayRows.length ? ` · ${filteredProducts.length} ürün` : ""}
+            {listFetching && !isLoading && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs text-muted-foreground/80">
+                <RefreshCw className="h-3 w-3 animate-spin" /> Güncelleniyor
+              </span>
+            )}
+          </span>
+        </div>
       </div>
 
-      <div className="rounded-lg border bg-card overflow-x-auto">
+      {/* Yükleme çubuğu HER ZAMAN görünür. Hareket azaltma açıkken kayma durur, çubuk kalır —
+          "çalışıyor" bilgisinin tek kaynağı animasyona bağlı olamaz. */}
+      {isLoading && (
+        <div className="flex items-center gap-3">
+          <span className="shrink-0 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Ürünler yükleniyor…
+          </span>
+          <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-1/3 rounded-full bg-primary animate-in slide-in-from-left duration-1000 repeat-infinite" />
+          </div>
+        </div>
+      )}
+
+      <div ref={tableWrapRef} className="rounded-lg border bg-card overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-[36px]">
+              <TableHead ref={headSelectRef} className={cn("w-[36px]", STICKY_1, "bg-card")}>
                 <Checkbox
                   checked={
                     filteredProducts.length > 0 &&
@@ -1983,9 +2300,10 @@ export default function ProductsPage() {
                   }}
                 />
               </TableHead>
-              <TableHead className="w-[52px]" />
-              {/* Sütunun tabanı burada belirlenir; dar pencerede ezilmek yerine tablo yatay kayar. */}
-              <TableHead className="min-w-[260px]">Ürün</TableHead>
+              <TableHead ref={headImageRef} className={cn("w-[52px]", STICKY_2, "bg-card")} />
+              {/* Sütunun tabanı burada belirlenir; dar pencerede ezilmek yerine tablo yatay kayar.
+                  İlk üç sütun yapışkan: sağa kaydırınca hangi satırda olduğun kaybolmasın. */}
+              <TableHead className={cn("min-w-[260px]", STICKY_3, "bg-card")}>Ürün</TableHead>
               <TableHead className="text-center w-[110px]">Stok</TableHead>
               <TableHead className="text-right tabular-nums w-[90px]">Maliyet</TableHead>
               <TableHead className="text-right w-[100px] p-0">
@@ -2019,22 +2337,54 @@ export default function ProductsPage() {
           <TableBody ref={listRef}>
             {isLoading ? (
               <>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-                  <TableRow key={`skeleton-${i}`}>
-                    <TableCell><Skeleton className="h-4 w-4 rounded" /></TableCell>
-                    <TableCell><Skeleton className="h-10 w-10 rounded-md" /></TableCell>
-                    <TableCell>
-                      <Skeleton className="h-3 w-3/4 mb-1.5" />
-                      <Skeleton className="h-2 w-1/2" />
+                {/* İskelet GERÇEK satırla aynı yükseklikte (64px) ve aynı hücre düzeninde:
+                    veri gelince liste yerinden oynamasın. */}
+                {SKELETON_ROWS.map((i) => (
+                  <TableRow key={`skeleton-${i}`} className="h-[64px]">
+                    <TableCell className={cn(STICKY_1, "bg-card")}>
+                      <Skeleton className="h-4 w-4 rounded" />
                     </TableCell>
-                    <TableCell><Skeleton className="h-3 w-16 mx-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-16 ml-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-12 ml-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-12 ml-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-3 w-20 mx-auto" /></TableCell>
-                    <TableCell><Skeleton className="h-7 w-7 rounded" /></TableCell>
+                    <TableCell className={cn("pr-0", STICKY_2, "bg-card")}>
+                      <Skeleton className="h-10 w-10 rounded-md" />
+                    </TableCell>
+                    <TableCell className={cn("min-w-[260px]", STICKY_3, "bg-card")}>
+                      <Skeleton className="h-3.5 w-[62%] mb-2" />
+                      <Skeleton className="h-2.5 w-[38%]" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-center gap-1.5">
+                        <Skeleton className="h-7 w-7 rounded-md" />
+                        <Skeleton className="h-5 w-7 rounded" />
+                        <Skeleton className="h-7 w-7 rounded-md" />
+                      </div>
+                    </TableCell>
+                    <TableCell><Skeleton className="h-3 w-14 ml-auto" /></TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-12 ml-auto mb-1.5" />
+                      <Skeleton className="h-2 w-10 ml-auto" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-12 ml-auto mb-1.5" />
+                      <Skeleton className="h-2 w-10 ml-auto" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-16 mx-auto mb-1.5" />
+                      <Skeleton className="h-2.5 w-20 mx-auto" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-16 mx-auto mb-1.5" />
+                      <Skeleton className="h-2.5 w-20 mx-auto" />
+                    </TableCell>
+                    <TableCell>
+                      <Skeleton className="h-3 w-16 mx-auto mb-1.5" />
+                      <Skeleton className="h-2.5 w-20 mx-auto" />
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-0.5">
+                        <Skeleton className="h-7 w-7 rounded" />
+                        <Skeleton className="h-7 w-7 rounded" />
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </>
@@ -2066,14 +2416,31 @@ export default function ProductsPage() {
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                  {filterMode === "inactive"
-                    ? "İnaktif ürün bulunmuyor."
-                    : filterMode === "out-of-stock"
-                      ? "Stoğu biten aktif ürün bulunmuyor."
-                      : filterMode === "near-threshold"
-                        ? "Şu an küçük bir zamla kârı belirgin artacak ürün yok."
-                        : "Ürün bulunamadı. CSV ile içe aktar veya manuel ekle."}
+                <TableCell colSpan={11} className="py-12">
+                  {/* Boş listenin SEBEBİ farklı: arama sonuçsuz mu, sekme mi boş, daraltma mı dar? */}
+                  <div className="flex flex-col items-center gap-2 text-center animate-in fade-in duration-300">
+                    <span className="rounded-full bg-muted/60 p-3">
+                      {debouncedFilter.trim() ? (
+                        <Search className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <Package className="h-5 w-5 text-muted-foreground" />
+                      )}
+                    </span>
+                    <p className="text-sm font-medium">{bosListe.baslik}</p>
+                    {bosListe.ipucu && (
+                      <p className="text-xs text-muted-foreground max-w-sm">{bosListe.ipucu}</p>
+                    )}
+                    {debouncedFilter.trim() && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-1 transition-transform active:scale-95"
+                        onClick={() => setGlobalFilter("")}
+                      >
+                        Aramayı temizle
+                      </Button>
+                    )}
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
@@ -2083,16 +2450,36 @@ export default function ProductsPage() {
                   <td colSpan={11} className="p-0 border-0" style={{ height: paddingTop }} />
                 </tr>
               )}
-              {virtualItems.map((vi) => {
+              {virtualItems.map((vi, sira) => {
                 const row = flatRows[vi.index];
                 if (!row) return null;
-                if (row.kind === "group") return renderGroupRow(row, rowVirtualizer.measureElement, vi.index);
+                // Kademeli giriş: ekrandaki sıraya göre, en fazla 14 adım (≈350 ms).
+                const enterDelayMs = staggerOn ? Math.min(sira, 14) * 25 : null;
+                if (row.kind === "group") {
+                  return (
+                    <GroupRow
+                      key={row.key}
+                      row={row}
+                      expanded={expandedGroups.has(row.groupId)}
+                      allSelected={
+                        row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id))
+                      }
+                      integrations={integrations}
+                      onToggleExpand={toggleGroup}
+                      onToggleSelectGroup={handleToggleSelectGroup}
+                      measureRef={rowVirtualizer.measureElement}
+                      dataIndex={vi.index}
+                      enterDelayMs={enterDelayMs}
+                    />
+                  );
+                }
                 const product = row.product;
                 return (
                   <ProductRow
                     key={row.key}
                     measureRef={rowVirtualizer.measureElement}
                     dataIndex={vi.index}
+                    enterDelayMs={enterDelayMs}
                     product={product}
                     isMember={row.isMember}
                     isSelected={selectedIds.has(product.id)}

@@ -1,11 +1,12 @@
 "use client";
 
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
+import { usePrefersReducedMotion } from "@/lib/client-state";
 
 // three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
 const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
@@ -22,6 +23,62 @@ import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
 interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; thumbnail?: string | null }
+
+/**
+ * Satırı ekranda GEREKEN alanlara indirger.
+ *
+ * Liste ucu kaydın tüm sütunlarını döndürüyor: dilimleyici renk tablosu, plaka yerleşimi, disk
+ * yolu, bulut anahtarı… Kart bunların hiçbirini çizmiyor ama hepsi belleğe alınıp React Query
+ * önbelleğinde dakikalarca duruyordu. Ayıklama parse'tan hemen sonra yapılır → önbelleğe yalnız
+ * çizilen alanlar girer.
+ */
+function hafifSatir(row: ModelFile): ModelFile {
+  return {
+    id: row.id,
+    printerConfigId: row.printerConfigId,
+    label: row.label ?? null,
+    originalName: row.originalName,
+    sizeBytes: row.sizeBytes,
+    gramaj: row.gramaj ?? null,
+    fileType: row.fileType,
+    sortOrder: row.sortOrder,
+    contentMd5: row.contentMd5 ?? null,
+    thumbnail: row.thumbnail ?? null,
+  };
+}
+
+/**
+ * Kart ekrana girene kadar (yaklaşınca) veri çekmeyi bekletir.
+ *
+ * Baskı dosyaları listesi ürün detayının EN ALTINDA; sayfayı fiyat/kâr için açan kullanıcı çoğu
+ * zaman oraya hiç inmiyor. Buna rağmen önizleme görselleriyle birlikte megabaytlarca satır
+ * indiriliyordu. Kart görüş alanına 400px yaklaşınca istek başlar — inmeyen kullanıcı için sıfır.
+ */
+function useGorununceYukle<T extends HTMLElement>(ref: React.RefObject<T | null>): boolean {
+  const [gorundu, setGorundu] = useState(false);
+  useEffect(() => {
+    if (gorundu) return;
+    const el = ref.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      // Gözlemci yoksa eski davranışa dön: hemen çek (bir sonraki tick'te → basamaklı render yok).
+      const t = setTimeout(() => setGorundu(true), 0);
+      return () => clearTimeout(t);
+    }
+    const io = new IntersectionObserver(
+      (girisler) => {
+        if (girisler.some((g) => g.isIntersecting)) {
+          setGorundu(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "400px 0px" } // yaklaşırken başlat → kullanıcı indiğinde veri hazır
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [gorundu, ref]);
+  return gorundu;
+}
 
 /**
  * Bir listenin ekranda hangi durumu göstereceği.
@@ -59,7 +116,7 @@ function KartHatasi({
       <Button
         size="sm"
         variant="outline"
-        className="h-7 gap-1.5 text-xs shrink-0"
+        className="h-7 gap-1.5 text-xs shrink-0 transition-transform active:scale-95"
         disabled={deneniyor}
         onClick={onRetry}
       >
@@ -114,20 +171,29 @@ function fmtEta(p: UploadProgress) {
 export const ModelFilesCard = memo(ModelFilesCardImpl);
 function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; variantGroup?: VariantGroupLite | null }) {
   const qc = useQueryClient();
+  const kartRef = useRef<HTMLDivElement>(null);
+  const gorundu = useGorununceYukle(kartRef);
   // fetchJson: HTTP hatasında fırlatır. Eski hâlinde hata gövdesi de "veri" sayılıyor, liste boş
   // kalıyor ve kart "Henüz parça yok" diyordu — yüklü dosyalar yokmuş gibi görünüyordu.
   const printersQuery = useQuery<PrinterCfg[]>({
     queryKey: ["printer-configs"],
+    enabled: gorundu,
     queryFn: () => fetchJson<PrinterCfg[]>("/api/printers/config"),
   });
   const filesQuery = useQuery<ModelFile[]>({
     queryKey: ["product-models", productId],
-    queryFn: () => fetchJson<ModelFile[]>(`/api/products/${productId}/models`),
+    enabled: gorundu,
+    queryFn: async () => {
+      const rows = await fetchJson<ModelFile[]>(`/api/products/${productId}/models`);
+      return Array.isArray(rows) ? rows.map(hafifSatir) : [];
+    },
   });
   const printers = Array.isArray(printersQuery.data) ? printersQuery.data : [];
   const files = Array.isArray(filesQuery.data) ? filesQuery.data : [];
-  const yaziciDurumu = veriDurumu(printersQuery.isLoading, printersQuery.isError, printers.length);
-  const dosyaDurumu = veriDurumu(filesQuery.isLoading, filesQuery.isError, files.length);
+  // isPending (isLoading DEĞİL): sorgu görünürlüğü bekleyip duraklarken isLoading false döner ve
+  // kart "yazıcı yok / parça yok" diye yalan söylerdi. Beklerken de durum "yükleniyor"dur.
+  const yaziciDurumu = veriDurumu(printersQuery.isPending, printersQuery.isError, printers.length);
+  const dosyaDurumu = veriDurumu(filesQuery.isPending, filesQuery.isError, files.length);
 
   const memberCount = variantGroup?.products?.length ?? 0;
   const inGroup = memberCount >= 2;
@@ -183,11 +249,15 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   };
 
   return (
-    <Card className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationFillMode: "both" }}>
+    <Card ref={kartRef} className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationFillMode: "both" }}>
       <CardHeader className="pb-3 border-b border-border/50">
         <CardTitle className="text-sm flex items-center gap-2">
-          <FileBox className="h-4 w-4 text-primary" /> Baskı Dosyaları (Modeller)
-          {files.length > 0 && <Badge variant="outline" className="ml-1 tabular-nums">{files.length} parça</Badge>}
+          <FileBox className="h-4 w-4 text-primary" /> Baskı Dosyaları
+          {files.length > 0 && (
+            <Badge variant="outline" className="ml-1 tabular-nums animate-in fade-in zoom-in-95 duration-300">
+              {files.length} parça
+            </Badge>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-3 space-y-3">
@@ -198,7 +268,7 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
             disabled={toggleShare.isPending}
             aria-pressed={shareOn}
             className={cn(
-              "w-full flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors disabled:opacity-70",
+              "w-full flex items-center gap-2.5 rounded-xl border p-2.5 text-left transition-all active:scale-[0.995] disabled:opacity-70",
               shareOn ? "border-primary/40 bg-primary/[0.06]" : "border-dashed hover:bg-muted/40"
             )}
           >
@@ -213,8 +283,8 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
               </p>
               <p className="text-[11px] text-muted-foreground">
                 {shareOn
-                  ? `Yüklediğin her dosya ${memberCount} varyantın hepsine eklenir — bu ayar kayıtlı kalır.`
-                  : `Dosyalar yalnızca bu varyanta eklenir. Aç → ${memberCount} varyanta birden uygulanır (aynı model, farklı renk).`}
+                  ? `Yüklediğin her dosya ${memberCount} varyanta birden eklenir.`
+                  : `Dosyalar yalnız bu varyanta eklenir. Aç → ${memberCount} varyanta birden gider.`}
               </p>
             </div>
           </button>
@@ -235,19 +305,24 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
         ) : yaziciDurumu === "yukleniyor" || dosyaDurumu === "yukleniyor" ? (
           <ModelIskeleti />
         ) : yaziciDurumu === "bos" ? (
-          <p className="text-xs text-muted-foreground py-1.5">
-            Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten yazıcı ekle; sonra her yazıcı için parça parça dosya yükle. Çok parçalı ürünlerde tüm parçaları ekleyebilirsin.
+          <p className="text-xs text-muted-foreground py-1.5 animate-in fade-in duration-300">
+            Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten bir yazıcı ekle. Sonra her parçanın dosyasını buraya yükleyebilirsin.
           </p>
         ) : (
-          printers.map((p) => (
-            <PrinterGroup
+          printers.map((p, gi) => (
+            <div
               key={p.id}
-              printer={p}
-              parts={files.filter((f) => f.printerConfigId === p.id)}
-              productId={productId}
-              applyToVariants={shareOn}
-              onChanged={refresh}
-            />
+              className="animate-in fade-in slide-in-from-bottom-1 duration-500"
+              style={{ animationDelay: `${gi * 70}ms`, animationFillMode: "both" }}
+            >
+              <PrinterGroup
+                printer={p}
+                parts={files.filter((f) => f.printerConfigId === p.id)}
+                productId={productId}
+                applyToVariants={shareOn}
+                onChanged={refresh}
+              />
+            </div>
           ))
         )}
       </CardContent>
@@ -261,6 +336,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
   const [prog, setProg] = useState<UploadProgress | null>(null);
   const [uploadingName, setUploadingName] = useState("");
   const [viewer, setViewer] = useState<ModelFile | null>(null);
+  const azHareket = usePrefersReducedMotion();
 
   const del = useMutation({
     // "Tüm varyantlara uygula" açıksa ?allVariants=1 → sunucu dosyayı TÜM varyantlardan siler.
@@ -361,11 +437,13 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
         <p className="text-sm font-medium flex-1 truncate">{printer.name}</p>
         {parts.length > 0 && <Badge variant="secondary" className="tabular-nums text-[10px]">{parts.length} parça</Badge>}
         <input ref={inputRef} type="file" accept=".gcode,.gco,.g,.3mf" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) handleFiles(e.target.files); }} />
-        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0" disabled={prog !== null} onClick={() => inputRef.current?.click()}>
+        <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0 transition-transform active:scale-95" disabled={prog !== null} onClick={() => inputRef.current?.click()}>
           {prog !== null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Parça Ekle
         </Button>
       </div>
 
+      {/* Yükleme göstergesi BELİRLEYİCİ (yüzde + bar + kalan süre) ve hareket azaltma açıkken de
+          görünür kalır — yalnız üstündeki parıltı kapanır. */}
       {prog !== null && (
         <div className="px-3 py-2 space-y-1.5 animate-in fade-in">
           <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
@@ -374,7 +452,9 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
           </div>
           <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
             <div className="h-full rounded-full bg-primary relative overflow-hidden transition-[width] duration-200" style={{ width: `${Math.max(3, pct(prog))}%` }}>
-              <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent)", animation: "printer-shimmer 1.2s linear infinite" }} />
+              {!azHareket && (
+                <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent)", animation: "printer-shimmer 1.2s linear infinite" }} />
+              )}
             </div>
           </div>
           <div className="flex items-center justify-between text-[10px] text-muted-foreground/80 tabular-nums">
@@ -390,15 +470,40 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
 
       <div className="p-2 space-y-1.5">
         {parts.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground/60 px-1 py-1">Henüz parça yok. Tek parçalıysa bir dosya, çok parçalıysa her parçayı ekle.</p>
+          <p className="text-[11px] text-muted-foreground/60 px-1 py-1">Henüz parça yok. Her parça için bir dosya ekle.</p>
         ) : (
           parts.map((part, pi) => (
             <div
               key={part.id}
-              className="flex items-center gap-2 rounded-lg border bg-background p-1.5 animate-in fade-in slide-in-from-left-1 duration-300"
+              className="flex items-center gap-2 rounded-lg border bg-background p-1.5 transition-colors hover:border-primary/30 animate-in fade-in slide-in-from-left-1 duration-300"
               style={{ animationDelay: `${pi * 40}ms`, animationFillMode: "both" }}
             >
-              <span className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary text-[11px] font-bold tabular-nums shrink-0">{pi + 1}</span>
+              {/* KÜÇÜK GÖRSEL ÖNCE: parçanın neye benzediği için artık koca dosyayı indirip
+                  3B izleyiciyi açmak gerekmiyor — küçük resim varsa doğrudan o gösterilir. */}
+              <button
+                type="button"
+                onClick={() => setViewer(part)}
+                title="3D önizleme"
+                className="relative flex items-center justify-center h-9 w-9 shrink-0 overflow-hidden rounded bg-primary/10 text-primary transition-transform hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {part.thumbnail ? (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={part.thumbnail}
+                    alt=""
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-contain"
+                  />
+                ) : (
+                  <span className="text-[11px] font-bold tabular-nums">{pi + 1}</span>
+                )}
+                {part.thumbnail && (
+                  <span className="absolute bottom-0 left-0 rounded-tr bg-background/85 px-1 text-[9px] font-bold leading-tight tabular-nums text-primary">
+                    {pi + 1}
+                  </span>
+                )}
+              </button>
               <div className="min-w-0 flex-1">
                 <Input
                   defaultValue={part.label ?? ""}
@@ -410,13 +515,13 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 <p className="text-[10px] text-muted-foreground/70 truncate px-1">{part.originalName} · {fmtSize(part.sizeBytes)}</p>
               </div>
               <Button
-                size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground hover:text-primary"
-                title="3D önizleme — katman katman izle"
+                size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground transition-transform hover:text-primary active:scale-90"
+                title="Katman katman izle"
                 onClick={() => setViewer(part)}
               >
                 <Box className="h-3.5 w-3.5" />
               </Button>
-              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0" disabled={del.isPending} onClick={() => del.mutate(part.id)} title="Parçayı sil">
+              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0 transition-transform active:scale-90" disabled={del.isPending} onClick={() => del.mutate(part.id)} title="Parçayı sil">
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             </div>

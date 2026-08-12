@@ -7,6 +7,7 @@ import { FlaskConical, Target, Tag, AlertTriangle, TrendingUp, RefreshCw } from 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { PriceLab } from "@/lib/client-pricing";
 
@@ -124,7 +125,12 @@ function PriceLabCardImpl({
               Fiyat önerileri hesaplanamadı.
             </p>
             {onRetry && (
-              <Button variant="outline" size="sm" className="gap-2" onClick={onRetry}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 transition-transform active:scale-95"
+                onClick={onRetry}
+              >
                 <RefreshCw className="h-3.5 w-3.5" /> Tekrar dene
               </Button>
             )}
@@ -132,9 +138,9 @@ function PriceLabCardImpl({
         ) : isLoading ? (
           <TargetsSkeleton />
         ) : !data?.hasCost ? (
-          <div className="flex items-center gap-2 text-sm text-amber-500 py-2">
-            <AlertTriangle className="h-4 w-4" />
-            Maliyet girilmemiş — hedef fiyat hesaplanamıyor. Önce üretim maliyetini kaydet.
+          <div className="flex items-center gap-2 text-sm text-amber-500 py-2 animate-in fade-in duration-300">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            Maliyet girilmeden hedef fiyat hesaplanamaz.
           </div>
         ) : (
           <div className="space-y-5">
@@ -143,9 +149,20 @@ function PriceLabCardImpl({
               <div className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-400 animate-in fade-in slide-in-from-top-1 duration-300">
                 <TrendingUp className="h-4 w-4 shrink-0" />
                 <span>
-                  Fiyatı <strong className="tabular-nums">{formatCurrency(hint.targetPrice)}</strong>{" "}
+                  Fiyatı{" "}
+                  <AnimatedNumber
+                    value={hint.targetPrice}
+                    durationMs={420}
+                    format={(n) => formatCurrency(n)}
+                    className="font-bold tabular-nums"
+                  />{" "}
                   yaparsan kâr{" "}
-                  <strong className="tabular-nums">+{formatCurrency(hint.gain)}</strong>
+                  <AnimatedNumber
+                    value={hint.gain}
+                    durationMs={420}
+                    format={(n) => `+${formatCurrency(n)}`}
+                    className="font-bold tabular-nums"
+                  />
                 </span>
               </div>
             )}
@@ -158,10 +175,14 @@ function PriceLabCardImpl({
               {/* Fiyatın dayandığı varsayım rakamların HEMEN üstünde — kartın dışında değil. */}
               {assumptionNotes}
               <div className="space-y-3">
-                {(data.targets ?? []).map((t) => {
+                {(data.targets ?? []).map((t, ti) => {
                   const info = platformInfo(t.platform);
                   return (
-                    <div key={t.platform}>
+                    <div
+                      key={t.platform}
+                      className="animate-in fade-in slide-in-from-bottom-1 duration-500"
+                      style={{ animationDelay: `${ti * 90}ms`, animationFillMode: "both" }}
+                    >
                       <div className="flex items-center justify-between mb-1.5">
                         <span className="text-xs font-medium" style={{ color: info.color }}>
                           {info.label}
@@ -194,18 +215,20 @@ function PriceLabCardImpl({
                               )}
                             >
                               <div className="text-[10px] text-muted-foreground">%{r.margin} marj</div>
-                              <div
+                              {/* Hesaplanamayan fiyat NaN → "—" (BİLİNMEYEN ≠ SIFIR); geri kalanı akar. */}
+                              <AnimatedNumber
+                                value={r.price ?? NaN}
+                                durationMs={420}
+                                format={(n) => formatCurrency(n)}
                                 className={cn(
-                                  "text-xs font-bold tabular-nums mt-0.5",
+                                  "block text-xs font-bold tabular-nums mt-0.5 transition-colors",
                                   tone === "green"
                                     ? "text-green-500"
                                     : tone === "red"
                                       ? "text-destructive"
                                       : "text-foreground"
                                 )}
-                              >
-                                {r.price != null ? formatCurrency(r.price) : "—"}
-                              </div>
+                              />
                             </div>
                           );
                         })}
@@ -229,21 +252,33 @@ function PriceLabCardImpl({
                     <span className="text-right">Net kâr</span>
                     <span className="text-right">Marj</span>
                   </div>
-                  {data.campaign.rows.map((r) => {
+                  {data.campaign.rows.map((r, ri) => {
                     const loss = r.profit < 0;
                     return (
-                      <div key={r.discount}>
+                      <div
+                        key={r.discount}
+                        className="animate-in fade-in slide-in-from-left-1 duration-300"
+                        style={{ animationDelay: `${ri * 45}ms`, animationFillMode: "both" }}
+                      >
                         <div
                           className={cn(
-                            "grid grid-cols-4 gap-2 text-xs tabular-nums px-1 py-1 rounded",
+                            "grid grid-cols-4 gap-2 text-xs tabular-nums px-1 py-1 rounded transition-colors",
                             loss && "bg-destructive/10"
                           )}
                         >
                           <span className="font-medium">%{r.discount}</span>
-                          <span className="text-right text-muted-foreground">{formatCurrency(r.effectivePrice)}</span>
-                          <span className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-500")}>
-                            {formatCurrency(r.profit)}
-                          </span>
+                          <AnimatedNumber
+                            value={r.effectivePrice}
+                            durationMs={380}
+                            format={(n) => formatCurrency(n)}
+                            className="text-right text-muted-foreground"
+                          />
+                          <AnimatedNumber
+                            value={r.profit}
+                            durationMs={380}
+                            format={(n) => formatCurrency(n)}
+                            className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-500")}
+                          />
                           <span className={cn("text-right", loss && "text-destructive")}>{formatPercent(r.margin)}</span>
                         </div>
                         {/* Kâr bu satırda ARTMIŞ görünebilir — sayı doğru, sebebi kargonun el

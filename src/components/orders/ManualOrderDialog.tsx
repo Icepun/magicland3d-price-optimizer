@@ -193,6 +193,32 @@ interface ManualOrderCapturedItem extends ManualOrderResolvedItem {
   production?: FreeformProductionDraft | null;
 }
 
+/**
+ * Kaydedilen manuel siparişin sunucudan dönen hâli.
+ *
+ * Sipariş listesi bunu doğrudan kendi satırına çevirir: tek bir manuel kayıt için üç
+ * pazaryerini yeniden sorgulamak gerekmez (ölçülen ~4 saniyelik bekleme buydu). Rakamlar
+ * SUNUCUDAN geldiği gibi taşınır, istemcide yeniden hesaplanmaz.
+ */
+export interface ManualOrderSaveResult {
+  id: string;
+  orderNumber: string;
+  orderedAt: string;
+  statusKind: string;
+  customerName: string | null;
+  currency: string;
+  saleTotal: number;
+  profit: number | null;
+  profitPartial: boolean;
+  items?: Array<{
+    name: string;
+    quantity: number;
+    imageUrl?: string | null;
+    productId?: string | null;
+  }>;
+  breakdown?: { commissionCost?: number; missingCostItems?: number };
+}
+
 export interface ManualOrderEditTarget {
   id: string;
   manualOrderId?: string | null;
@@ -268,7 +294,11 @@ interface ManualOrderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editing?: ManualOrderEditTarget | null;
-  onSaved?: () => void | Promise<void>;
+  /**
+   * Kayıt başarılı. Verilirse sipariş listesi bu kayıtla YERİNDE güncellenir ve pazaryeri
+   * çekimi tetiklenmez; verilmezse liste baştan çekilir (yavaş yol).
+   */
+  onSaved?: (saved: ManualOrderSaveResult) => void | Promise<void>;
 }
 
 let draftKey = 0;
@@ -392,6 +422,82 @@ function emptyForm(): FormState {
     selectedExpenses: {},
     customExpenses: [],
   };
+}
+
+/**
+ * Yarım kalan YENİ sipariş formu tarayıcıda saklanır: pencere kazara kapansa, uygulama
+ * yenilense ya da kayıt hata verse bile girilenler kaybolmaz. Düzenleme bundan etkilenmez —
+ * o her zaman kayıttan okunur.
+ */
+const DRAFT_STORAGE_KEY = "magicland.manual-order-draft.v1";
+
+function draftHasContent(form: FormState): boolean {
+  return (
+    form.saleTotal.trim() !== "" ||
+    form.orderNumber.trim() !== "" ||
+    form.customerName.trim() !== "" ||
+    form.note.trim() !== "" ||
+    form.catalogItems.length > 0 ||
+    form.customExpenses.length > 0 ||
+    Object.keys(form.selectedExpenses).length > 0 ||
+    form.freeformItems.some(
+      (line) =>
+        line.name.trim() !== "" ||
+        line.unitCost.trim() !== "" ||
+        line.filamentWeight.trim() !== "" ||
+        line.printTimeHours.trim() !== ""
+    )
+  );
+}
+
+function readStoredDraft(): FormState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<FormState> | null;
+    if (!parsed || typeof parsed !== "object") return null;
+    const base = emptyForm();
+    const restored: FormState = {
+      ...base,
+      ...parsed,
+      commission: { ...base.commission, ...(parsed.commission ?? {}) },
+      cargo: { ...base.cargo, ...(parsed.cargo ?? {}) },
+      catalogItems: Array.isArray(parsed.catalogItems) ? parsed.catalogItems : [],
+      freeformItems:
+        Array.isArray(parsed.freeformItems) && parsed.freeformItems.length > 0
+          ? parsed.freeformItems
+          : [emptyFreeformLine()],
+      customExpenses: Array.isArray(parsed.customExpenses)
+        ? parsed.customExpenses
+        : [],
+      selectedExpenses:
+        parsed.selectedExpenses && typeof parsed.selectedExpenses === "object"
+          ? parsed.selectedExpenses
+          : {},
+    };
+    return draftHasContent(restored) ? restored : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredDraft(form: FormState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(form));
+  } catch {
+    /* saklama alanı doluysa form yine de çalışmaya devam eder */
+  }
+}
+
+function clearStoredDraft(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+  } catch {
+    /* yok sayılır */
+  }
 }
 
 function stateFromDraft(
@@ -528,7 +634,9 @@ export function ManualOrderDialog({
   const queryClient = useQueryClient();
   const [form, setForm] = useState<FormState>(() => emptyForm());
   const [productSearch, setProductSearch] = useState("");
+  const [draftRestored, setDraftRestored] = useState(false);
   const initializedFor = useRef<string | null>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const optionsQuery = useQuery<ManualOrderOptions>({
     queryKey: ["manual-order-options"],
@@ -571,7 +679,15 @@ export function ManualOrderDialog({
     if (editing && !draft) return;
     initializedFor.current = key;
     const timeout = window.setTimeout(() => {
-      setForm(draft ? stateFromDraft(draft, detail?.items) : emptyForm());
+      if (draft) {
+        setForm(stateFromDraft(draft, detail?.items));
+        setDraftRestored(false);
+      } else {
+        // Yarım kalmış bir form varsa geri yüklenir (kazara kapatma / hata sonrası).
+        const stored = readStoredDraft();
+        setForm(stored ?? emptyForm());
+        setDraftRestored(stored != null);
+      }
       setProductSearch("");
     }, 0);
     return () => window.clearTimeout(timeout);
@@ -582,6 +698,16 @@ export function ManualOrderDialog({
     manualOrderId,
     open,
   ]);
+
+  // Girilenler yazıldıkça saklanır — kapanma/hata sonrası aynı yerden devam edilir.
+  useEffect(() => {
+    if (!open || editing) return;
+    const timer = window.setTimeout(() => {
+      if (draftHasContent(form)) writeStoredDraft(form);
+      else clearStoredDraft();
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [form, open, editing]);
 
   const options = optionsQuery.data;
   const products = useMemo(
@@ -1096,7 +1222,7 @@ export function ManualOrderDialog({
                 };
               }),
       };
-      return fetchJson(
+      return fetchJson<ManualOrderSaveResult>(
         editing && detailHref ? detailHref : "/api/manual-orders",
         {
           method: editing ? "PATCH" : "POST",
@@ -1105,15 +1231,18 @@ export function ManualOrderDialog({
         }
       );
     },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["orders"] }),
-        queryClient.invalidateQueries({ queryKey: ["finance-monthly"] }),
-      ]);
+    onSuccess: async (saved) => {
+      if (onSaved) {
+        // Liste bu kayıtla yerinde güncellenir → pazaryerlerini yeniden sorgulamaya gerek yok.
+        await onSaved(saved);
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["orders"] });
+      }
+      await queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
       if (manualOrderId) {
         queryClient.removeQueries({ queryKey: ["manual-order", manualOrderId] });
       }
-      await onSaved?.();
+      clearStoredDraft();
       toast.success(editing ? "Manuel sipariş güncellendi" : "Manuel sipariş eklendi");
       onOpenChange(false);
     },
@@ -1180,6 +1309,43 @@ export function ManualOrderDialog({
     setProductSearch("");
   }
 
+  // ── Adım rehberi ────────────────────────────────────────────────────────────
+  // Form uzun: hangi adımın zorunlu olduğu ve nerede eksik kaldığı üstte tek bakışta görünür,
+  // adım başlığına basınca oraya kayar.
+  const saleTotalMissing =
+    form.saleTotal.trim() === "" || invalidOptionalMoney(form.saleTotal);
+  const step1Done = Boolean(form.orderedAt) && !saleTotalMissing;
+  const step2Done =
+    form.mode === "catalog"
+      ? form.catalogItems.length > 0 &&
+        form.catalogItems.every(
+          (line) => line.productId && validQuantity(line.quantity)
+        )
+      : form.freeformItems.length > 0 &&
+        form.freeformItems.every(
+          (line) => line.name.trim() !== "" && validQuantity(line.quantity)
+        );
+  const steps = [
+    { id: "manual-step-1", step: "1", label: "Sipariş", required: true, done: step1Done },
+    { id: "manual-step-2", step: "2", label: "Ürünler", required: true, done: step2Done },
+    { id: "manual-step-3", step: "3", label: "Maliyetler", required: false, done: false },
+    { id: "manual-step-4", step: "4", label: "Giderler", required: false, done: false },
+    { id: "manual-step-5", step: "5", label: "Not", required: false, done: false },
+  ];
+  const jumpToStep = (id: string) => {
+    const target = document.getElementById(id);
+    const area = scrollAreaRef.current;
+    if (!target) return;
+    if (!area) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    area.scrollTo({
+      top: Math.max(0, target.offsetTop - area.offsetTop - 8),
+      behavior: "smooth",
+    });
+  };
+
   const editDraft =
     detailQuery.data?.draft ?? detailQuery.data?.breakdownJson?.draft ?? null;
   const waitingForEdit = Boolean(
@@ -1200,9 +1366,13 @@ export function ManualOrderDialog({
       open={open}
       onOpenChange={(next, details) => {
         if (busy) return;
-        // Uzun form: pencere dışına düşen tek bir tık doldurulan her şeyi siliyordu.
-        // Kapatma artık bilinçli olmalı (Vazgeç / ✕ / Esc).
-        if (!next && details.reason === "outside-press") {
+        // Uzun form: pencere dışına düşen tek bir tık ya da Esc doldurulan her şeyi
+        // siliyordu. Kapatma artık bilinçli olmalı (Vazgeç / ✕).
+        if (
+          !next &&
+          (details.reason === "outside-press" ||
+            details.reason === "escape-key")
+        ) {
           toast("Kapatmak için Vazgeç'e bas.", { id: "manual-order-dismiss" });
           return;
         }
@@ -1261,13 +1431,74 @@ export function ManualOrderDialog({
               if (!formError && !busy) saveMutation.mutate();
             }}
           >
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            {/* Adım rehberi — zorunlu adımlar işaretli, tıklanınca oraya kayar. */}
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b bg-muted/20 px-4 py-2 sm:px-5">
+              {steps.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => jumpToStep(item.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all duration-200 active:scale-95",
+                    item.required && item.done
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                      : item.required
+                        ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                        : "border-border/60 text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold",
+                      item.required && item.done
+                        ? "bg-emerald-500/20"
+                        : item.required
+                          ? "bg-amber-500/20"
+                          : "bg-muted"
+                    )}
+                  >
+                    {item.required && item.done ? (
+                      <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                    ) : (
+                      item.step
+                    )}
+                  </span>
+                  {item.label}
+                  {item.required && !item.done && <span className="opacity-80">•</span>}
+                </button>
+              ))}
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                <span className="text-amber-400">•</span> zorunlu
+              </span>
+            </div>
+
+            {draftRestored && (
+              <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/25 bg-amber-500/5 px-4 py-2 text-[11px] text-amber-300 sm:px-5 animate-in fade-in slide-in-from-top-1 duration-300">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span className="flex-1">Yarım kalan sipariş geri yüklendi.</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => {
+                    clearStoredDraft();
+                    setForm(emptyForm());
+                    setDraftRestored(false);
+                  }}
+                >
+                  Baştan başla
+                </Button>
+              </div>
+            )}
+
+            <div ref={scrollAreaRef} className="min-h-0 flex-1 overflow-y-auto">
               <div className="grid items-start gap-5 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_320px]">
                 <div className="min-w-0 space-y-5">
-                  <section className="space-y-3">
-                    <SectionTitle step="1" title="Sipariş Bilgileri" />
+                  <section id="manual-step-1" className="space-y-3 scroll-mt-4">
+                    <SectionTitle step="1" title="Sipariş Bilgileri" required />
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <Field label="Tarih ve saat *" htmlFor="manual-ordered-at">
+                      <Field label="Tarih ve saat" required htmlFor="manual-ordered-at">
                         <Input
                           id="manual-ordered-at"
                           type="datetime-local"
@@ -1316,20 +1547,26 @@ export function ManualOrderDialog({
                           <SelectTrigger className="h-9 w-full">
                             <SelectValue />
                           </SelectTrigger>
+                          {/* Adlar sipariş listesindekiyle AYNI (api/orders/route.ts
+                              MANUAL_STATUS): burada seçilen ad listede de aynen görünür. */}
                           <SelectContent>
                             <SelectItem value="pending">Bekleyen</SelectItem>
                             <SelectItem value="processing">
                               Hazırlanıyor
                             </SelectItem>
-                            <SelectItem value="shipped">Kargoda</SelectItem>
-                            <SelectItem value="delivered">Teslim</SelectItem>
+                            <SelectItem value="shipped">Gönderildi</SelectItem>
+                            <SelectItem value="delivered">
+                              Teslim Edildi
+                            </SelectItem>
                             <SelectItem value="cancelled">İptal</SelectItem>
                           </SelectContent>
                         </Select>
                       </Field>
                       <div className="sm:col-span-2">
                         <Field
-                          label="Satış tutarı (TRY) *"
+                          label="Satış tutarı (TRY)"
+                          required
+                          invalid={saleTotalMissing}
                           htmlFor="manual-sale-total"
                           hint="Müşteriden aldığın KDV dahil toplam."
                         >
@@ -1340,7 +1577,11 @@ export function ManualOrderDialog({
                               min="0"
                               step="0.01"
                               inputMode="decimal"
-                              className="pr-10 text-base font-semibold tabular-nums"
+                              className={cn(
+                                "pr-10 text-base font-semibold tabular-nums",
+                                saleTotalMissing &&
+                                  "border-amber-500/60 ring-2 ring-amber-500/15"
+                              )}
                               value={form.saleTotal}
                               placeholder="0,00"
                               onChange={(event) =>
@@ -1356,9 +1597,9 @@ export function ManualOrderDialog({
                     </div>
                   </section>
 
-                  <section className="space-y-3">
+                  <section id="manual-step-2" className="space-y-3 scroll-mt-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <SectionTitle step="2" title="Ürünler" />
+                      <SectionTitle step="2" title="Ürünler" required />
                       <div className="inline-flex rounded-lg border bg-muted/30 p-0.5">
                         {(
                           [
@@ -1620,7 +1861,7 @@ export function ManualOrderDialog({
                     )}
                   </section>
 
-                  <section className="space-y-3">
+                  <section id="manual-step-3" className="space-y-3 scroll-mt-4">
                     <SectionTitle step="3" title="Maliyetler" />
                     <div className="grid gap-3 sm:grid-cols-2">
                       <ToggleCard
@@ -1679,7 +1920,7 @@ export function ManualOrderDialog({
                     </div>
                   </section>
 
-                  <section className="space-y-3">
+                  <section id="manual-step-4" className="space-y-3 scroll-mt-4">
                     <div className="flex items-center justify-between gap-3">
                       <SectionTitle step="4" title="Diğer Giderler" />
                       <span className="text-[10px] text-muted-foreground">
@@ -1900,7 +2141,7 @@ export function ManualOrderDialog({
                     </div>
                   </section>
 
-                  <section className="space-y-2">
+                  <section id="manual-step-5" className="space-y-2 scroll-mt-4">
                     <SectionTitle step="5" title="Not" />
                     <Label htmlFor="manual-note" className="sr-only">
                       Sipariş notu
@@ -1976,13 +2217,26 @@ export function ManualOrderDialog({
   );
 }
 
-function SectionTitle({ step, title }: { step: string; title: string }) {
+function SectionTitle({
+  step,
+  title,
+  required,
+}: {
+  step: string;
+  title: string;
+  required?: boolean;
+}) {
   return (
     <div className="flex items-center gap-2">
       <span className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/12 text-[10px] font-bold text-primary">
         {step}
       </span>
       <h2 className="text-sm font-semibold">{title}</h2>
+      {required && (
+        <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold text-amber-400">
+          zorunlu
+        </span>
+      )}
     </div>
   );
 }
@@ -1991,18 +2245,30 @@ function Field({
   label,
   htmlFor,
   hint,
+  required,
+  invalid,
   children,
 }: {
   label: string;
   htmlFor?: string;
   hint?: string;
+  /** Zorunlu alan — etikette görünür işaret. */
+  required?: boolean;
+  /** Şu an boş/geçersiz — etiket ve alan vurgulanır. */
+  invalid?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-2">
-        <Label htmlFor={htmlFor} className="text-xs">
+        <Label
+          htmlFor={htmlFor}
+          className={cn("text-xs transition-colors", invalid && "text-amber-400")}
+        >
           {label}
+          {required && (
+            <span className="ml-0.5 font-bold text-amber-400">*</span>
+          )}
         </Label>
         {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
       </div>
@@ -2146,7 +2412,9 @@ function FreeformItemCard({
     >
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_76px_86px_auto]">
         <Field
-          label={`Ürün adı${required ? " *" : ""}`}
+          label="Ürün adı"
+          required={required}
+          invalid={required && line.name.trim() === ""}
           htmlFor={`free-name-${line.key}`}
         >
           <Input

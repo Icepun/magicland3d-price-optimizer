@@ -14,7 +14,7 @@ import {
   ShopifyAdminTokenMissingError,
 } from "@/services/shopify-client";
 import { getShopifyCredentials } from "@/services/shopify-settings";
-import { TrendyolClient } from "@/services/trendyol-client";
+import { TrendyolClient, type TrendyolOrder } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import {
   HepsiburadaClient,
@@ -243,7 +243,9 @@ const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
   Packaged: { kind: "processing", label: "Paketlendi" },
   ReadyToShip: { kind: "processing", label: "Kargoya Hazır" },
   Shipped: { kind: "shipped", label: "Kargoda" },
-  InTransit: { kind: "shipped", label: "Yolda" },
+  // Aynı duruma iki ad verilmesin: "Yolda" da kargodaki siparişti, ekranda iki farklı
+  // isim görünüyordu.
+  InTransit: { kind: "shipped", label: "Kargoda" },
   Delivered: { kind: "delivered", label: "Teslim Edildi" },
   UnDelivered: { kind: "cancelled", label: "Teslim Edilemedi" },
   Cancelled: { kind: "cancelled", label: "İptal" },
@@ -265,8 +267,10 @@ function hbStatus(s: string): {
 // gösterilir ve ciroya dahil edilmeye devam eder (yalnız gerçek iptaller dışarıda kalır).
 // NOT: Pazaryerlerinin AKSİNE burada bilinmeyen durum toplamdan çıkarılmaz — bu kaydı kullanıcı
 // kendi eliyle girdi; onu "belki iadedir" diye ciro dışına almak kendi satışını gizlerdi.
+// ⚠️ Etiketler manuel sipariş penceresindeki durum listesiyle AYNI olmak zorunda
+// (components/orders/ManualOrderDialog.tsx): kullanıcı orada seçtiği adı burada aynen görmeli.
 const MANUAL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
-  pending: { kind: "pending", label: "Bekliyor" },
+  pending: { kind: "pending", label: "Bekleyen" },
   processing: { kind: "processing", label: "Hazırlanıyor" },
   shipped: { kind: "shipped", label: "Gönderildi" },
   delivered: { kind: "delivered", label: "Teslim Edildi" },
@@ -299,6 +303,17 @@ function hbArray(o: unknown, keys: string[]): Record<string, unknown>[] {
   }
   return [];
 }
+/**
+ * ⚠️ SİPARİŞİN VERİLİŞ ANI — teslim/kargo/iade tarihi DEĞİL.
+ *
+ * Bu alan hem ekranda "sipariş saati" olarak yazılıyor hem de listenin sıralama ölçütü.
+ * Bir yol yanlışlıkla `DeliveredDate`i öne alıyordu: teslim edilmiş Hepsiburada siparişleri
+ * "teslim edildiği saatte verilmiş" gibi görünüyor ve kronolojik sırada yanlış yere düşüyordu.
+ * Kullanıcı bunu "veriliş saati bazen yanlış geliyor" diye bildirdi ("bazen", çünkü yalnız
+ * durum filtreli listeden gelen siparişler etkileniyordu).
+ *
+ * Kural: ÖNCE sipariş/oluşturulma tarihi; teslim-kargo-iade damgaları ASLA öne alınmaz.
+ */
 function hbDate(...vals: unknown[]): string | null {
   for (const v of vals) {
     if (v == null || v === "") continue;
@@ -366,7 +381,8 @@ function shopifyStatus(
   if (f === "PARTIALLY_FULFILLED") return { kind: "processing", label: "Kısmi Gönderim" };
   if (f === "IN_PROGRESS" || f === "SCHEDULED") return { kind: "processing", label: "Hazırlanıyor" };
   if (fin === "PENDING" || fin === "AUTHORIZED") return { kind: "pending", label: "Ödeme Bekliyor" };
-  return { kind: "pending", label: "Hazırlanmadı" };
+  // "Hazırlanmadı" aynı durumun ikinci adıydı; her yerde "Bekleyen" kullanılıyor.
+  return { kind: "pending", label: "Bekleyen" };
 }
 
 interface Matched {
@@ -401,6 +417,84 @@ type ExpenseRules = ExpenseRuleInput[];
 // Panel kârı kendi SWR gövdelerinden okur ve o gövdeler diske de yazılır.
 const ORDERS_SOFT_MS = 60_000;
 
+// ── Çekim ilerlemesi ────────────────────────────────────────────────────────────────────────
+// Üç pazaryeri CANLI çekildiği için bekleme 10-20 saniyeyi bulabiliyor ve ekranda yalnız akan
+// bir çizgi vardı: ne kadar kaldığı belli değildi. Burada her kaynak bittikçe durumu işaretlenir;
+// arayüz `GET /api/orders?stage=1` ile "3/4 kaynak alındı" diyebiliyor. Bu uç veritabanına ve
+// pazaryerlerine HİÇ dokunmaz (yalnız bellekteki durumu okur) → beklerken sorulması bedava.
+type OrdersSourceKey = "shopify" | "trendyol" | "hepsiburada" | "manual";
+type OrdersSourceState = "pending" | "done" | "error" | "skipped";
+const ORDERS_SOURCE_KEYS: OrdersSourceKey[] = [
+  "shopify",
+  "trendyol",
+  "hepsiburada",
+  "manual",
+];
+interface OrdersFetchStage {
+  runId: number;
+  startedAt: number;
+  finishedAt: number | null;
+  sources: Record<OrdersSourceKey, { state: OrdersSourceState; count: number }>;
+}
+
+function emptyStageSources(): OrdersFetchStage["sources"] {
+  return {
+    shopify: { state: "pending", count: 0 },
+    trendyol: { state: "pending", count: 0 },
+    hepsiburada: { state: "pending", count: 0 },
+    manual: { state: "pending", count: 0 },
+  };
+}
+
+let ordersFetchStage: OrdersFetchStage = {
+  runId: 0,
+  startedAt: 0,
+  finishedAt: 0,
+  sources: emptyStageSources(),
+};
+
+function beginOrdersFetchStage(): number {
+  const runId = ordersFetchStage.runId + 1;
+  ordersFetchStage = {
+    runId,
+    startedAt: Date.now(),
+    finishedAt: null,
+    sources: emptyStageSources(),
+  };
+  return runId;
+}
+
+/** Geç kalan eski bir turun işareti güncel turu bozmasın diye runId karşılaştırılır. */
+function markOrdersSource(
+  runId: number,
+  key: OrdersSourceKey,
+  state: OrdersSourceState,
+  count = 0
+): void {
+  if (ordersFetchStage.runId !== runId) return;
+  ordersFetchStage.sources[key] = { state, count };
+}
+
+function finishOrdersFetchStage(runId: number): void {
+  if (ordersFetchStage.runId !== runId) return;
+  ordersFetchStage.finishedAt = Date.now();
+}
+
+function ordersFetchStageSnapshot() {
+  const sources = ORDERS_SOURCE_KEYS.map((key) => ({
+    key,
+    ...ordersFetchStage.sources[key],
+  }));
+  return {
+    runId: ordersFetchStage.runId,
+    active: ordersFetchStage.startedAt > 0 && ordersFetchStage.finishedAt == null,
+    startedAt: ordersFetchStage.startedAt || null,
+    total: sources.length,
+    completed: sources.filter((s) => s.state !== "pending").length,
+    sources,
+  };
+}
+
 // EŞZAMANLI HESAP TEKİLLEŞTİRME + NESİL KORUMASI: Panel, Siparişler, Raporlar ve order-watch
 // aynı anda tetikleyebiliyor; hepsi lib/orders-cache içindeki computeOrdersShared'ı paylaşır.
 // Burada AYRI bir kopya vardı ve o kopya nesli gözetmiyordu: kullanıcı hesap sürerken kargo/
@@ -409,7 +503,15 @@ const ORDERS_SOFT_MS = 60_000;
 // artık tek yerde: sonuç eskimişse yayınlanmaz, hesap yeni kurallarla baştan koşar.
 export async function GET(req: NextRequest) {
   try {
-    const fresh = new URL(req.url).searchParams.get("fresh") === "1";
+    const params = new URL(req.url).searchParams;
+    // Sadece "nerede kaldı" sorusu: bellekteki ilerleme durumu. Veritabanına ve pazaryerlerine
+    // dokunmadığı için çekim sürerken saniyede bir sorulabilir.
+    if (params.get("stage") === "1") {
+      return NextResponse.json(ordersFetchStageSnapshot(), {
+        headers: { "Cache-Control": "no-store" },
+      });
+    }
+    const fresh = params.get("fresh") === "1";
     const cached = getOrdersCache();
     if (!fresh && cached) {
       if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
@@ -427,6 +529,17 @@ export async function GET(req: NextRequest) {
 }
 
 async function computeOrdersBody(): Promise<Record<string, unknown>> {
+  const runId = beginOrdersFetchStage();
+  try {
+    return await computeOrdersBodyInner(runId);
+  } finally {
+    finishOrdersFetchStage(runId);
+  }
+}
+
+async function computeOrdersBodyInner(
+  runId: number
+): Promise<Record<string, unknown>> {
   await ensureRuntimeSchema();
 
   // Gün başına sabitlenmiş cutoff — mobil (mobile/src/lib/api/window.ts orderWindowCutoff) ile
@@ -449,12 +562,18 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       where: { orderedAt: { gte: new Date(historyCutoff) } },
       orderBy: { orderedAt: "desc" },
     })
-    .then((rows) => ({ rows, error: null }))
-    .catch((error: unknown) => ({
-      rows: [] as ManualOrderRow[],
-      error:
-        error instanceof Error ? error.message : "Manuel siparişler okunamadı",
-    }));
+    .then((rows) => {
+      markOrdersSource(runId, "manual", "done", rows.length);
+      return { rows, error: null };
+    })
+    .catch((error: unknown) => {
+      markOrdersSource(runId, "manual", "error");
+      return {
+        rows: [] as ManualOrderRow[],
+        error:
+          error instanceof Error ? error.message : "Manuel siparişler okunamadı",
+      };
+    });
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
   let hepsiburada: PlatformStatus = { ok: false, count: 0 };
@@ -509,8 +628,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
    } catch (error) {
      if (isMissingCredentialError(error)) {
        shopify = { ok: false, count: 0, notConfigured: true };
+       markOrdersSource(runId, "shopify", "skipped");
      } else {
        shopify = { ok: false, count: 0, error: errorMessage(error) };
+       markOrdersSource(runId, "shopify", "error");
      }
      return;
    }
@@ -553,15 +674,18 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     }
     commitRaws(buffer);
     shopify = { ok: true, count: buffer.length };
+    markOrdersSource(runId, "shopify", "done", buffer.length);
   } catch (e) {
     if (e instanceof ShopifyAdminTokenMissingError) {
       shopify = { ok: false, count: 0, needsAdminToken: true };
+      markOrdersSource(runId, "shopify", "skipped");
     } else {
       shopify = {
         ok: false,
         count: 0,
         error: e instanceof Error ? e.message : "Shopify siparişleri alınamadı",
       };
+      markOrdersSource(runId, "shopify", "error");
     }
   }
    })(),
@@ -576,8 +700,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
      // "bağlı değil" sayılırsa uyarı hiç çıkmaz ve eksik ciro tam sanılır.
      if (isMissingCredentialError(error)) {
        trendyol = { ok: false, count: 0, notConfigured: true };
+       markOrdersSource(runId, "trendyol", "skipped");
      } else {
        trendyol = { ok: false, count: 0, error: errorMessage(error) };
+       markOrdersSource(runId, "trendyol", "error");
      }
      return;
    }
@@ -585,64 +711,87 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     const client = new TrendyolClient(credentials);
     // Trendyol /orders (shipmentPackages): statü filtresi YOK → TÜM statüler (oluşturuldu/kargoda/
     // teslim/iptal) gelir. Ama tek sayfa size:100 son-100'le sınırlıydı → 30 günde 100+ sipariş varsa
-    // eksik çekiyordu (kâr yanlış). Çözüm: son 30 günü 14 GÜNLÜK pencerelerle (Trendyol startDate/endDate
-    // aralık limiti ≤2 hafta) tara + her pencerede sayfala. (Route ayrıca orderDate'e göre 30 güne kırpar.)
+    // eksik çekiyordu (kâr yanlış). Çözüm: pencereyi 14 GÜNLÜK dilimlere (Trendyol startDate/endDate
+    // aralık limiti ≤2 hafta — AŞILAMAZ) böl + her dilimde sayfala. (Route ayrıca orderDate'e göre
+    // görünür pencereye kırpar.)
+    //
+    // ⏱️ Dilimler BİRBİRİNDEN BAĞIMSIZ: eskiden 60 gün = 5 dilim SIRAYLA çekiliyordu, yani beş ayrı
+    // bekleme. Artık aynı anda (sınırlı sayıda) çekiliyorlar; toplam bekleme en yavaş dilime iner.
+    // Eşzamanlılık sınırı Trendyol servis limitine takılmamak için bilinçli olarak düşük.
     const CHUNK = 14 * 86_400_000;
-    const seenTy = new Set<string>();
+    const TY_WINDOW_CONCURRENCY = 3;
+    const tyWindows: Array<{ start: number; end: number }> = [];
     for (let chunkEnd = Date.now(); chunkEnd > historyCutoff; chunkEnd -= CHUNK) {
-      const chunkStart = Math.max(historyCutoff, chunkEnd - CHUNK);
-      for (let pageNo = 0; pageNo < 50; pageNo++) {
-        const page = await client.listOrders({ page: pageNo, size: 100, startDate: chunkStart, endDate: chunkEnd });
-        const content = page.content ?? [];
-        for (const [i, o] of content.entries()) {
-          const key = String(o.id ?? o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`);
-          if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
-          seenTy.add(key);
-          const st = trendyolStatus(o.status);
-          // Çok kalemli siparişte TEK kalemin iadesi paket durumuna yansımıyor: satır
-          // durumundan sayılır. Paket tutarının bu durumda ne olduğu doğrulanmadığı için
-          // ciroya DOKUNMUYORUZ — yalnız kullanıcıya "bu siparişte iade var" diyoruz.
-          const returnedLineCount = (o.lines ?? []).filter((l) =>
-            isReturnedLineStatus(l.orderLineItemStatusName)
-          ).length;
-          buffer.push({
-            platform: "trendyol",
-            id: `ty-${o.id ?? o.orderNumber ?? key}`,
-            orderNumber: String(o.orderNumber ?? o.id ?? "—"),
-            date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
-            statusKind: st.kind,
-            statusLabel: st.label,
-            statusUnknown: st.unknown,
-            returnedLineCount: st.kind === "cancelled" ? 0 : returnedLineCount,
-            total: Number(o.totalPrice ?? o.grossAmount ?? 0),
-            currency: "TRY",
-            customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
-            lines: (o.lines ?? []).map((l) => ({
-              name: l.productName ?? l.barcode ?? "Ürün",
-              quantity: Number(l.quantity ?? 1),
-              unitPrice: Number(l.price ?? 0),
-              image: null,
-              // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
-              barcodes: matchKeyList(l.barcode),
-              externalIds: [],
-              skus: matchKeyList(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
-            })),
-            trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
-            cargoProvider: o.cargoProviderName ?? null,
-          });
+      tyWindows.push({ start: Math.max(historyCutoff, chunkEnd - CHUNK), end: chunkEnd });
+    }
+    // Sonuçlar dilim sırasında toplanır (yeni → eski): eşzamanlı çekim listenin sırasını bozmasın.
+    const tyByWindow: TrendyolOrder[][] = tyWindows.map(() => []);
+    await mapLimit(
+      tyWindows.map((_, index) => index),
+      TY_WINDOW_CONCURRENCY,
+      async (index) => {
+        const { start, end } = tyWindows[index];
+        for (let pageNo = 0; pageNo < 50; pageNo++) {
+          const page = await client.listOrders({ page: pageNo, size: 100, startDate: start, endDate: end });
+          const content = page.content ?? [];
+          for (const order of content) tyByWindow[index].push(order);
+          if (content.length < 100) break; // son sayfa
         }
-        if (content.length < 100) break; // son sayfa
       }
+    );
+    const seenTy = new Set<string>();
+    for (const [rowIndex, o] of tyByWindow.flat().entries()) {
+      const key = String(o.id ?? o.orderNumber ?? "");
+      if (key) {
+        if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
+        seenTy.add(key);
+      }
+      const st = trendyolStatus(o.status);
+      // Çok kalemli siparişte TEK kalemin iadesi paket durumuna yansımıyor: satır
+      // durumundan sayılır. Paket tutarının bu durumda ne olduğu doğrulanmadığı için
+      // ciroya DOKUNMUYORUZ — yalnız kullanıcıya "bu siparişte iade var" diyoruz.
+      const returnedLineCount = (o.lines ?? []).filter((l) =>
+        isReturnedLineStatus(l.orderLineItemStatusName)
+      ).length;
+      buffer.push({
+        platform: "trendyol",
+        // Kimliksiz satır (beklenmez) yine de tekil kalsın: iki sipariş aynı kimliğe düşerse
+        // finans geçmişinde biri diğerini eziyor.
+        id: `ty-${o.id ?? o.orderNumber ?? `row-${rowIndex}`}`,
+        orderNumber: String(o.orderNumber ?? o.id ?? "—"),
+        date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
+        statusKind: st.kind,
+        statusLabel: st.label,
+        statusUnknown: st.unknown,
+        returnedLineCount: st.kind === "cancelled" ? 0 : returnedLineCount,
+        total: Number(o.totalPrice ?? o.grossAmount ?? 0),
+        currency: "TRY",
+        customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
+        lines: (o.lines ?? []).map((l) => ({
+          name: l.productName ?? l.barcode ?? "Ürün",
+          quantity: Number(l.quantity ?? 1),
+          unitPrice: Number(l.price ?? 0),
+          image: null,
+          // Trendyol order satırı barcode verir ("merchantSku" literal'i çöp → ele)
+          barcodes: matchKeyList(l.barcode),
+          externalIds: [],
+          skus: matchKeyList(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
+        })),
+        trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
+        cargoProvider: o.cargoProviderName ?? null,
+      });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
     commitRaws(buffer);
     trendyol = { ok: true, count: buffer.length };
+    markOrdersSource(runId, "trendyol", "done", buffer.length);
   } catch (e) {
     trendyol = {
       ok: false,
       count: 0,
       error: e instanceof Error ? e.message : "Trendyol siparişleri alınamadı",
     };
+    markOrdersSource(runId, "trendyol", "error");
   }
    })(),
    (async () => {
@@ -653,8 +802,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
    } catch (error) {
      if (isMissingCredentialError(error)) {
        hepsiburada = { ok: false, count: 0, notConfigured: true };
+       markOrdersSource(runId, "hepsiburada", "skipped");
      } else {
        hepsiburada = { ok: false, count: 0, error: errorMessage(error) };
+       markOrdersSource(runId, "hepsiburada", "error");
      }
      return;
    }
@@ -731,7 +882,14 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         } else {
           const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
           if (!on || agg.has(on)) continue;
-          agg.set(on, { status: label, date: hbDate(p.DeliveredDate, p.ShippedDate, p.UndeliveredDate, p.CreatedDate, p.orderDate, p.PackageReadyDate), customer: null, lines: null });
+          agg.set(on, {
+            status: label,
+            // Veriliş anı: sipariş tarihi > oluşturulma > paket hazır. Teslim/kargo/iade
+            // damgaları BİLEREK yok — onlar siparişin verildiği an değil.
+            date: hbDate(p.orderDate, p.CreatedDate, p.PackageReadyDate),
+            customer: null,
+            lines: null,
+          });
         }
       }
     }
@@ -785,7 +943,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         // kalıcı kayıttaki eski "satıldı" satırı düzelsin.
         agg.set(on, {
           status: selfCancelled ? selfStatus : label,
-          date: hbDate(p.ClaimDate, p.CancelledDate, p.ReturnDate, p.CreatedDate, p.orderDate),
+          // İade/iptal damgaları siparişin VERİLİŞ anı değil; onlar öne alınırsa iade edilen
+          // sipariş "iade tarihinde verilmiş" gibi görünür ve sıralamayı bozar.
+          date: hbDate(p.orderDate, p.CreatedDate, p.ClaimDate, p.CancelledDate, p.ReturnDate),
           customer: null,
           lines: null,
         });
@@ -801,11 +961,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     //    Üst sınır 250'ydi ve fazlası SESSİZCE kalemsiz kalıyordu → ₺0 ciroyla özete giriyordu.
     //    Sınır yükseltildi; yine de dışarıda kalan ya da detayı alınamayan sipariş aşağıda
     //    "bilgisi eksik" işaretlenir, özete girmez ve sayısı platform durumuna taşınır.
+    //    ⏱️ Teslim edilmiş / iptal / iade siparişlerin detayı BİR DAHA DEĞİŞMEZ. Eskiden her
+    //    yenilemede hepsi yeniden indiriliyordu (40 sipariş = 40 istek, her turda). Artık bu
+    //    siparişlerin detayı istemcide hatırlanıyor; ikinci yenilemede yalnız yeni/hareketli
+    //    siparişler indiriliyor.
     const HB_DETAIL_CAP = 1000;
     const missingDetail = [...agg.entries()].filter(([, e]) => e.lines === null).map(([on]) => on);
     await mapLimit(missingDetail.slice(0, HB_DETAIL_CAP), 8, async (on) => {
       try {
-        const d = (await client.getOrderDetail(on)) as Record<string, any>;
+        const kind = hbStatus(agg.get(on)?.status ?? "").kind;
+        const settled = kind === "delivered" || kind === "cancelled";
+        const d = (await client.getOrderDetail(on, {
+          reuseCached: settled,
+        })) as Record<string, any>;
         const e = agg.get(on);
         if (!e) return;
         e.lines = (hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, any>[]).map(hbLineRaw);
@@ -864,12 +1032,14 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     // f) Çekim sorunsuz bitti → ancak şimdi ortak listeye aktar ve durumu yaz.
     commitRaws(buffer);
     hepsiburada = { ok: true, count: buffer.length, incompleteCount: hbIncomplete };
+    markOrdersSource(runId, "hepsiburada", "done", buffer.length);
   } catch (e) {
     hepsiburada = {
       ok: false,
       count: 0,
       error: e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı",
     };
+    markOrdersSource(runId, "hepsiburada", "error");
   }
    })(),
   ]);
@@ -1393,11 +1563,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     })();
   }
 
-  // En yeni üstte
+  // En yeni üstte. Tarihi olmayan/okunamayan sipariş EN ALTA düşer (0), yukarı sızmaz.
+  // Geçersiz tarih NaN üretip karşılaştırmayı bozuyordu; eşit zaman damgalarında ikincil
+  // ölçüt olmadığı için de sıra her yenilemede oynayabiliyordu — ikisi de kapatıldı.
+  const zaman = (d: string | null): number => {
+    if (!d) return 0;
+    const t = new Date(d).getTime();
+    return Number.isFinite(t) ? t : 0;
+  };
   orders.sort((a, b) => {
-    const ta = a.date ? new Date(a.date).getTime() : 0;
-    const tb = b.date ? new Date(b.date).getTime() : 0;
-    return tb - ta;
+    const fark = zaman(b.date) - zaman(a.date);
+    if (fark !== 0) return fark;
+    // Aynı saniyeye düşen siparişlerde sabit sıra: numara (yoksa kimlik).
+    return (b.orderNumber || b.id).localeCompare(a.orderNumber || a.id, "tr-TR");
   });
 
   // Canlı 30 günlük pencereyi kalıcı finans geçmişine işle. Bu kayıtlar sonraki aylarda

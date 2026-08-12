@@ -35,6 +35,8 @@ import {
   PackageCheck,
   RotateCcw,
   Sparkles,
+  CalendarDays,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -46,6 +48,7 @@ import { PlatformLogo } from "@/components/PlatformLogo";
 import {
   ManualOrderDialog,
   type ManualOrderEditTarget,
+  type ManualOrderSaveResult,
 } from "@/components/orders/ManualOrderDialog";
 import {
   ORDERS_REQUEST_EVENT,
@@ -92,6 +95,10 @@ interface UnifiedOrder {
   image: string | null;
   profit: number | null;
   profitPartial: boolean;
+  /** Kurallardan hesaplanan komisyon (her siparişte var). */
+  estimatedCommission?: number;
+  /** Pazaryerinin bildirdiği GERÇEK komisyon — yoksa null. Hesaba burada dokunulmaz, gösterilir. */
+  actualCommission?: number | null;
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -182,16 +189,44 @@ const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: s
   pending: { label: "Bekleyen", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30", dot: "bg-amber-500" },
   processing: { label: "Hazırlanıyor", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30", dot: "bg-blue-500" },
   shipped: { label: "Kargoda", cls: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30", dot: "bg-indigo-500" },
-  delivered: { label: "Teslim", cls: "bg-green-500/15 text-green-400 border-green-500/30", dot: "bg-green-500" },
+  // "Teslim" ile "Teslim Edildi" aynı durumun iki adıydı; tek ad kullanılıyor.
+  delivered: { label: "Teslim Edildi", cls: "bg-green-500/15 text-green-400 border-green-500/30", dot: "bg-green-500" },
   cancelled: { label: "İptal/İade", cls: "bg-destructive/15 text-destructive border-destructive/30", dot: "bg-destructive" },
   other: { label: "Diğer", cls: "bg-muted text-muted-foreground border-border", dot: "bg-muted-foreground" },
 };
-/** Yenileme sırasında beklenen kaynaklar — kurulu olmayan pazaryeri gösterilmez. */
-const SOURCE_CHIPS = [
-  { key: "shopify", label: "Shopify" },
-  { key: "trendyol", label: "Trendyol" },
-  { key: "hepsiburada", label: "Hepsiburada" },
-] as const;
+/**
+ * Manuel siparişin durum adı ve kovası. Sunucudaki liste (api/orders/route.ts MANUAL_STATUS)
+ * ile AYNI olmak zorunda: yeni eklenen sipariş listeye önce buradan yazılıyor, yenileyince
+ * sunucudan geliyor — iki ad tutmazsa aynı sipariş yenilemeden önce ve sonra farklı görünür.
+ */
+const MANUAL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
+  pending: { kind: "pending", label: "Bekleyen" },
+  processing: { kind: "processing", label: "Hazırlanıyor" },
+  shipped: { kind: "shipped", label: "Gönderildi" },
+  delivered: { kind: "delivered", label: "Teslim Edildi" },
+  cancelled: { kind: "cancelled", label: "İptal" },
+};
+/** Yenileme sırasında beklenen kaynaklar — sunucunun bildirdiği sırayla gösterilir. */
+const SOURCE_LABEL: Record<string, string> = {
+  shopify: "Shopify",
+  trendyol: "Trendyol",
+  hepsiburada: "Hepsiburada",
+  manual: "Manuel",
+};
+
+/** Sunucudan gelen çekim ilerlemesi (`/api/orders?stage=1`). */
+interface FetchStageSource {
+  key: OrderPlatform;
+  state: "pending" | "done" | "error" | "skipped";
+  count: number;
+}
+interface FetchStage {
+  runId: number;
+  active: boolean;
+  total: number;
+  completed: number;
+  sources: FetchStageSource[];
+}
 
 // Formatter'ları MODÜL seviyesinde bir kez kur (her hücrede yeni Intl nesnesi pahalı → satır başına ×N).
 const _fmtTRY0 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -220,6 +255,151 @@ function fmtDate(iso: string | null) {
   } catch {
     return "—";
   }
+}
+
+/** Bir tarihin "hangi gün" karşılığı — yerel güne göre (Türkiye'de yaz saati yok). */
+function dayKey(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+interface DayBucket {
+  orderCount: number;
+  revenue: number;
+  profit: number;
+  /** Maliyeti eksik olduğu için kârı yarım hesaplanan sipariş sayısı. */
+  incompleteOrders: number;
+}
+const emptyDayBucket = (): DayBucket => ({
+  orderCount: 0,
+  revenue: 0,
+  profit: 0,
+  incompleteOrders: 0,
+});
+
+/**
+ * "Bugün ne geldi, ne kazandım" özeti. Rakamlar sunucudan gelen siparişlerin AYNISI —
+ * burada yeni bir hesap yapılmaz, yalnız toplanır. Toplama girme koşulu 30 günlük özetle
+ * birebir aynı yerden (countsInSummary) okunur ki iki rakam birbirini tutsun.
+ */
+function bucketForDay(orders: UnifiedOrder[], key: string | null): DayBucket {
+  const bucket = emptyDayBucket();
+  if (!key) return bucket;
+  for (const order of orders) {
+    if (!order.date) continue;
+    const date = new Date(order.date);
+    if (Number.isNaN(date.getTime()) || dayKey(date) !== key) continue;
+    if (!countsInSummary(order)) continue;
+    bucket.orderCount += 1;
+    bucket.revenue += order.total;
+    bucket.profit += order.profit ?? 0;
+    if (order.profit == null || order.profitPartial) bucket.incompleteOrders += 1;
+  }
+  return bucket;
+}
+
+const EMPTY_BUCKET: SummaryBucket = {
+  revenue: 0,
+  profit: 0,
+  orderCount: 0,
+  incompleteOrders: 0,
+};
+
+/** Bir siparişin özet toplamlarına katkısı. Koşul 30 günlük özetle aynı yerden okunur. */
+function summaryDelta(order: UnifiedOrder | null, sign: 1 | -1): SummaryBucket {
+  if (!order || !countsInSummary(order)) return EMPTY_BUCKET;
+  return {
+    revenue: sign * order.total,
+    profit: sign * (order.profit ?? 0),
+    orderCount: sign,
+    incompleteOrders:
+      order.profit == null || order.profitPartial ? sign : 0,
+  };
+}
+
+function addBucket(base: SummaryBucket | undefined, delta: SummaryBucket): SummaryBucket {
+  const b = base ?? EMPTY_BUCKET;
+  return {
+    revenue: b.revenue + delta.revenue,
+    profit: b.profit + delta.profit,
+    orderCount: b.orderCount + delta.orderCount,
+    incompleteOrders: (b.incompleteOrders ?? 0) + (delta.incompleteOrders ?? 0),
+  };
+}
+
+/** Kaydedilen manuel sipariş → listedeki satır. Alanlar sunucununkiyle birebir eşlenir. */
+function manualOrderRow(saved: ManualOrderSaveResult): UnifiedOrder {
+  const status = MANUAL_STATUS[saved.statusKind] ?? {
+    kind: "other" as OrderStatusKind,
+    label: "Diğer",
+  };
+  const items: UnifiedOrderItem[] = (saved.items ?? []).map((item) => ({
+    name: item.name,
+    quantity: item.quantity,
+    image: item.imageUrl ?? null,
+    productId: item.productId ?? null,
+    madeToOrder: false,
+  }));
+  return {
+    platform: "manual",
+    id: saved.id,
+    orderNumber: saved.orderNumber,
+    date: saved.orderedAt,
+    statusKind: status.kind,
+    statusLabel: status.label,
+    total: saved.saleTotal,
+    currency: saved.currency,
+    customer: saved.customerName,
+    itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
+    items,
+    image: items.length === 1 ? items[0].image : null,
+    profit: saved.profit,
+    profitPartial: saved.profitPartial,
+    estimatedCommission: saved.breakdown?.commissionCost ?? 0,
+    actualCommission: null,
+    unmatchedCount: saved.breakdown?.missingCostItems ?? 0,
+    missingDesiCount: 0,
+    desiEstimated: false,
+    orderRevenueAdjustment: 0,
+    trackingNumber: null,
+    cargoProvider: null,
+    isManual: true,
+    manualOrderId: saved.id,
+    editHref: `/api/manual-orders/${saved.id}`,
+  };
+}
+
+/** Görünür pencerenin başlangıcı — sunucudaki formülün aynısı (gün başına sabitlenmiş). */
+function windowCutoff(days: number): number {
+  return (Math.floor(Date.now() / 86_400_000) - days) * 86_400_000;
+}
+
+/**
+ * Çekim sürerken "nerede kalındı" bilgisi. Sunucu her kaynağı bitirdikçe işaretliyor; bu uç
+ * yalnız bellekteki durumu döndürdüğü için beklerken sık sık sorulabilir.
+ */
+function useFetchStage(active: boolean): FetchStage | null {
+  const [stage, setStage] = useState<FetchStage | null>(null);
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    const read = () => {
+      fetch("/api/orders?stage=1", { cache: "no-store" })
+        .then((r) => r.json())
+        .then((body: FetchStage) => {
+          if (alive) setStage(body);
+        })
+        .catch(() => {
+          /* ilerleme bilgisi kritik değil — çekim etkilenmez */
+        });
+    };
+    read();
+    const timer = setInterval(read, 700);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [active]);
+  return active ? stage : null;
 }
 
 
@@ -307,6 +487,47 @@ export default function OrdersPage() {
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
   const summary = data?.summary;
+
+  // ── Günlük bakış ────────────────────────────────────────────────────────────
+  // Gün sınırı yalnız tarayıcıda hesaplanır (sunucu saatiyle oynamasın); gün anahtarı gün
+  // içinde değişmediği için toplamlar boşuna yeniden hesaplanmaz.
+  const clientNow = useClientNow();
+  const todayKey = clientNow == null ? null : dayKey(new Date(clientNow));
+  const yesterdayKey =
+    clientNow == null ? null : dayKey(new Date(clientNow - 86_400_000));
+  const todayBucket = useMemo(
+    () => bucketForDay(orders, todayKey),
+    [orders, todayKey]
+  );
+  const yesterdayBucket = useMemo(
+    () => bucketForDay(orders, yesterdayKey),
+    [orders, yesterdayKey]
+  );
+  /** Gönderilmeyi bekleyen siparişler — hazırlık listesinin kapsamıyla aynı. */
+  const openOrderCount = useMemo(
+    () =>
+      orders.filter(
+        (o) => o.statusKind === "pending" || o.statusKind === "processing"
+      ).length,
+    [orders]
+  );
+
+  // Yeni gelen siparişler — bir sonraki yenilemede vurgulanır. İlk yüklemede hiçbiri "yeni"
+  // sayılmaz (yoksa açılışta bütün liste yanıp söner).
+  const seenOrderIds = useRef<Set<string> | null>(null);
+  const [freshOrderIds, setFreshOrderIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (orders.length === 0) return;
+    const ids = new Set(orders.map((o) => `${o.platform}-${o.id}`));
+    const known = seenOrderIds.current;
+    seenOrderIds.current = ids;
+    if (!known) return;
+    const added = [...ids].filter((id) => !known.has(id));
+    if (added.length === 0) return;
+    setFreshOrderIds(new Set(added));
+    const timer = setTimeout(() => setFreshOrderIds(new Set()), 15_000);
+    return () => clearTimeout(timer);
+  }, [orders]);
   const manualSummary = useMemo<SummaryBucket>(() => {
     if (summary?.manual) return summary.manual;
     return orders.reduce<SummaryBucket>(
@@ -327,6 +548,62 @@ export default function OrdersPage() {
     );
   }, [orders, summary?.manual]);
 
+  /**
+   * Manuel sipariş değişikliğini listeye YERİNDE uygula.
+   *
+   * Eskiden her ekleme/düzenleme/silme sonrası liste sıfırdan çekiliyordu: üç pazaryeri yeniden
+   * sorgulanıyor ve tek bir kayıt için ~4 saniye bekleniyordu. Değişen tek şey manuel sipariş
+   * olduğuna göre satırı ve özet toplamlarını burada güncellemek yeter — rakamlar sunucudan
+   * geldiği gibi kullanılır, yeniden hesaplanmaz.
+   */
+  const applyManualOrderToList = (
+    saved: ManualOrderSaveResult | null,
+    removedId?: string
+  ) => {
+    // Liste henüz hiç yüklenmediyse yerinde güncellenecek bir şey yok — normal yoldan gelsin.
+    if (!queryClient.getQueryData<OrdersResponse>(["orders"])) {
+      void queryClient.invalidateQueries({ queryKey: ["orders"] });
+      return;
+    }
+    queryClient.setQueryData<OrdersResponse>(["orders"], (current) => {
+      if (!current) return current;
+      const targetId = saved?.id ?? removedId;
+      if (!targetId) return current;
+      const previous =
+        current.orders.find((o) => o.platform === "manual" && o.id === targetId) ??
+        null;
+      const rest = current.orders.filter(
+        (o) => !(o.platform === "manual" && o.id === targetId)
+      );
+      const next = saved ? manualOrderRow(saved) : null;
+      // Görünür pencerenin dışında kalan tarih sunucuda da listelenmez → burada da eklenmez.
+      const cutoff = windowCutoff(current.summary?.days ?? 30);
+      const visible =
+        next && (!next.date || new Date(next.date).getTime() >= cutoff)
+          ? next
+          : null;
+      const orders = visible ? [...rest, visible] : rest;
+      orders.sort((a, b) => {
+        const ta = a.date ? new Date(a.date).getTime() : 0;
+        const tb = b.date ? new Date(b.date).getTime() : 0;
+        return tb - ta;
+      });
+      const delta = addBucket(
+        summaryDelta(previous, -1),
+        summaryDelta(visible, 1)
+      );
+      return {
+        ...current,
+        orders,
+        summary: {
+          ...current.summary,
+          manual: addBucket(current.summary?.manual, delta),
+          total: addBucket(current.summary?.total, delta),
+        },
+      };
+    });
+  };
+
   const deleteManualMutation = useMutation({
     mutationFn: (order: UnifiedOrder) => {
       const id = order.manualOrderId || order.id;
@@ -334,11 +611,9 @@ export default function OrdersPage() {
         method: "DELETE",
       });
     },
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["orders"] }),
-        queryClient.invalidateQueries({ queryKey: ["finance-monthly"] }),
-      ]);
+    onSuccess: async (_result, order) => {
+      applyManualOrderToList(null, order.manualOrderId || order.id);
+      await queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
       toast.success("Manuel sipariş silindi");
     },
     onError: (error) =>
@@ -489,42 +764,49 @@ export default function OrdersPage() {
       </div>
 
       {/* Çekim sırasında ne olduğunu göster — "Yenile" üç pazaryerinden CANLI çekiyor ve
-          10-20 saniye sürebiliyor. Eskiden tek geri bildirim dönen ikondu; kullanıcı
-          hiçbir şey olmuyor sanıp tekrar basıyordu. Sunucu aşama bildirmediği için sahte
-          yüzde UYDURMUYORUZ — hangi kaynakların beklendiğini dürüstçe yazıyoruz. */}
-      {isFetching && (
-        <div className="animate-in fade-in slide-in-from-top-1 duration-300 overflow-hidden rounded-lg border border-border/60 bg-muted/25">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
-            <span className="flex items-center gap-2 text-xs font-medium">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
-              </span>
-              Siparişler alınıyor
-            </span>
-            <span className="flex flex-wrap items-center gap-1.5">
-              {SOURCE_CHIPS.filter(
-                (c) => !data || !data[c.key] || !data[c.key]?.notConfigured
-              ).map((c, i) => (
-                <span
-                  key={c.key}
-                  className="inline-flex items-center gap-1 rounded-md border border-border/70 bg-background/60 px-1.5 py-0.5 text-[11px] text-muted-foreground animate-in fade-in duration-300"
-                  style={{ animationDelay: `${i * 90}ms`, animationFillMode: "both" }}
-                >
-                  <PlatformLogo platform={c.key} className="h-2.5 w-2.5" />
-                  {c.label}
-                </span>
-              ))}
-            </span>
+          10-20 saniye sürebiliyor. Artık sunucu her kaynağı bitirdikçe bildiriyor: kaçıncı
+          adımda olduğumuz ve hangi kaynaktan kaç sipariş geldiği gerçek veriden yazılıyor. */}
+      {isFetching && <FetchProgress active={isFetching} />}
+
+      {/* Bugünün özeti — "bugün ne geldi, ne kazandım" için 30 günlük özete inmek gerekmesin. */}
+      {isLoading ? (
+        <Skeleton className="h-[86px] w-full rounded-xl" />
+      ) : error && !data ? (
+        // Veri HİÇ gelmediyse "bugün 0 sipariş · ₺0 ciro" YAZILMAZ. Sıfır, gerçek bir sıfır
+        // gibi okunur ve kullanıcı o gün satış olmadığını sanır (BİLİNMEYEN ≠ SIFIR).
+        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-destructive">Bugünün özeti alınamadı</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Bağlantını kontrol edip tekrar dene.</p>
           </div>
-          {/* İnce akan çizgi — süre bilinmiyor, ama iş sürüyor. */}
-          <div className="relative h-0.5 w-full overflow-hidden bg-border/40">
-            <div
-              className="absolute inset-y-0 w-1/3 bg-primary/70"
-              style={{ animation: "indeterminate-bar 1.25s ease-in-out infinite" }}
-            />
-          </div>
+          <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
+            {isFetching ? "Deneniyor…" : "Tekrar dene"}
+          </Button>
         </div>
+      ) : (
+        <DailyStrip
+          today={todayBucket}
+          yesterday={yesterdayBucket}
+          openCount={openOrderCount}
+          ready={clientNow != null}
+          missingSources={missingSources}
+          onOpenPrep={() => setView("hazirlik")}
+        />
+      )}
+
+      {/* İskelet gerçek düzenle aynı hücre sayısında: veri gelince sayfa zıplamaz. */}
+      {isLoading && (
+        <Card className="overflow-hidden">
+          <CardContent className="grid grid-cols-2 gap-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="space-y-1.5">
+                <Skeleton className="h-3 w-16 rounded" />
+                <Skeleton className="h-6 w-24 rounded" />
+                <Skeleton className="h-2.5 w-14 rounded" />
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
 
       {/* 30 günlük özet şeridi — bir kaynak alınamadıysa sipariş olmasa da gösterilir
@@ -838,6 +1120,7 @@ export default function OrdersPage() {
               >
                 <OrderRow
                   order={o}
+                  isNew={freshOrderIds.has(`${o.platform}-${o.id}`)}
                   deleting={
                     deleteManualMutation.isPending &&
                     deleteManualMutation.variables?.id === o.id
@@ -920,6 +1203,7 @@ export default function OrdersPage() {
       <ManualOrderDialog
         open={manualCreateOpen || editingManual !== null}
         editing={editingManual}
+        onSaved={applyManualOrderToList}
         onOpenChange={(open) => {
           if (!open) {
             setManualCreateOpen(false);
@@ -1008,6 +1292,205 @@ function FreshnessLine({
       <span className="opacity-70">·</span>
       Yenile
     </button>
+  );
+}
+
+/**
+ * Çekim ilerlemesi — BELİRLEYİCİ. Sunucu her kaynağı bitirdikçe işaretlediği için "3/4 kaynak"
+ * uydurma değil; gelen sipariş sayıları da anında görünür (bir platform geldiyse beklemeye
+ * gerek yok, sonucu orada yazar). Çubuk genişlikle çalıştığı için hareket azaltma açıkken de
+ * görünür kalır.
+ */
+function FetchProgress({ active }: { active: boolean }) {
+  const stage = useFetchStage(active);
+  // Bitmiş bir turun kalıntısı yeni turun ilerlemesi gibi görünmesin: yalnız SÜREN tur okunur.
+  const live = stage?.active ? stage : null;
+  const sources = live?.sources ?? [];
+  const total = live?.total ?? 0;
+  const completed = live?.completed ?? 0;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return (
+    <div className="animate-in fade-in slide-in-from-top-1 duration-300 overflow-hidden rounded-lg border border-border/60 bg-muted/25">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2">
+        <span className="flex items-center gap-2 text-xs font-medium">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+          </span>
+          Siparişler alınıyor
+          {total > 0 && (
+            <span className="tabular-nums text-muted-foreground">
+              {completed}/{total} kaynak
+            </span>
+          )}
+        </span>
+        <span className="flex flex-wrap items-center gap-1.5">
+          {sources.map((source, i) => (
+            <span
+              key={source.key}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] transition-colors duration-300 animate-in fade-in",
+                source.state === "done" &&
+                  "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+                source.state === "error" &&
+                  "border-destructive/40 bg-destructive/10 text-destructive",
+                source.state === "skipped" &&
+                  "border-border/50 bg-background/40 text-muted-foreground/60",
+                source.state === "pending" &&
+                  "border-border/70 bg-background/60 text-muted-foreground"
+              )}
+              style={{ animationDelay: `${i * 70}ms`, animationFillMode: "both" }}
+            >
+              {source.key === "manual" ? (
+                <Pencil className="h-2.5 w-2.5" />
+              ) : (
+                <PlatformLogo platform={source.key} className="h-2.5 w-2.5" />
+              )}
+              {SOURCE_LABEL[source.key] ?? source.key}
+              {source.state === "done" && (
+                <span className="tabular-nums font-semibold">{source.count}</span>
+              )}
+              {source.state === "error" && <span>alınamadı</span>}
+              {source.state === "skipped" && <span>bağlı değil</span>}
+            </span>
+          ))}
+        </span>
+      </div>
+      {/* Doluluk çubuğu: genişlik gerçek ilerlemeden gelir (hareket azaltmada da görünür). */}
+      <div className="relative h-1 w-full overflow-hidden bg-border/40">
+        <div
+          className="h-full bg-primary/80 transition-[width] duration-500 ease-out"
+          style={{ width: `${Math.max(6, percent)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Günlük bakış: "bugün ne geldi, ne göndermeliyim, ne kazandım".
+ * 30 günlük özetin yerine geçmez — onun yanında, üstte durur.
+ */
+function DailyStrip({
+  today,
+  yesterday,
+  openCount,
+  ready,
+  missingSources,
+  onOpenPrep,
+}: {
+  today: DayBucket;
+  yesterday: DayBucket;
+  openCount: number;
+  /** Gün sınırı tarayıcıda hesaplanır; hazır olmadan rakam gösterilmez. */
+  ready: boolean;
+  /** Verisi alınamayan kaynaklar — doluysa bugünün rakamları da eksik. */
+  missingSources: string[];
+  onOpenPrep: () => void;
+}) {
+  if (!ready) return <Skeleton className="h-[86px] w-full rounded-xl" />;
+
+  const diff = today.revenue - yesterday.revenue;
+  const hasCompare = yesterday.orderCount > 0 || today.orderCount > 0;
+
+  return (
+    <Card className="overflow-hidden animate-in fade-in slide-in-from-top-1 duration-300">
+      <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-3 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary">
+            <CalendarDays className="h-4 w-4" />
+          </span>
+          <div>
+            <p className="text-[11px] text-muted-foreground">Bugün</p>
+            <p className="text-xl font-bold tabular-nums leading-tight">
+              <AnimatedNumber value={today.orderCount} /> sipariş
+            </p>
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-[11px] text-muted-foreground">Bugünkü ciro</p>
+          <p className="text-lg font-semibold tabular-nums leading-tight">
+            <AnimatedNumber value={today.revenue} format={fmtMoney} />
+          </p>
+          {hasCompare && (
+            <p className="text-[10px] text-muted-foreground">
+              Dün {fmtMoney(yesterday.revenue)}
+              {Math.abs(diff) >= 1 && (
+                <span
+                  className={cn(
+                    "ml-1 font-medium",
+                    diff > 0 ? "text-green-500" : "text-destructive"
+                  )}
+                >
+                  {diff > 0 ? "+" : "−"}
+                  {fmtMoney(Math.abs(diff))}
+                </span>
+              )}
+            </p>
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-[11px] text-muted-foreground">Bugünkü kâr</p>
+          <p
+            className="text-lg font-semibold tabular-nums leading-tight"
+            style={{
+              color:
+                today.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)",
+            }}
+          >
+            <AnimatedNumber value={today.profit} format={fmtMoney} />
+          </p>
+          <p
+            className={cn(
+              "text-[10px]",
+              today.incompleteOrders > 0 ? "text-amber-400" : "text-muted-foreground"
+            )}
+          >
+            {today.incompleteOrders > 0
+              ? `${today.incompleteOrders} siparişte maliyet eksik`
+              : "tahmini"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onOpenPrep}
+          disabled={openCount === 0}
+          className={cn(
+            "ml-auto flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-200",
+            openCount > 0
+              ? "border-amber-500/35 bg-amber-500/10 hover:border-amber-500/60 hover:bg-amber-500/15 active:scale-[0.97]"
+              : "border-border/60 bg-muted/20"
+          )}
+        >
+          <PackageCheck
+            className={cn(
+              "h-4 w-4 shrink-0",
+              openCount > 0 ? "text-amber-400" : "text-muted-foreground/60"
+            )}
+          />
+          <span>
+            <span className="block text-[11px] text-muted-foreground">
+              Gönderilecek
+            </span>
+            <span className="block text-base font-bold tabular-nums leading-tight">
+              <AnimatedNumber value={openCount} /> sipariş
+            </span>
+          </span>
+        </button>
+
+        {/* Bir kaynak alınamadıysa bugünün rakamları da eksiktir — sessiz kalınmaz. */}
+        {missingSources.length > 0 && (
+          <p className="w-full flex items-center gap-1.5 text-[10px] font-medium text-amber-400">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            {missingSources.join(", ")} verisi alınamadı — bugünün rakamları eksik.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -1343,6 +1826,39 @@ function PrepPanel({
   );
 }
 
+/** Takip numarası — tek tıkla kopyalanır (kargo takibi için elle yazmak gerekmesin). */
+function TrackingNumber({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      toast.success("Takip numarası kopyalandı");
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      toast.error("Kopyalanamadı");
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Takip numarasını kopyala"
+      className="group flex w-full items-center gap-1.5 rounded-md -mx-1 px-1 py-0.5 text-left transition-colors hover:bg-muted/60 active:scale-[0.99]"
+    >
+      <span className="text-muted-foreground">Takip:</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-foreground/90">{value}</span>
+      {copied ? (
+        <Check className="h-3.5 w-3.5 shrink-0 text-green-500 animate-in zoom-in-50 duration-200" />
+      ) : (
+        <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+      )}
+    </button>
+  );
+}
+
 function Thumb({ src, size = "h-12 w-12" }: { src: string | null; size?: string }) {
   return (
     <div className={cn("relative shrink-0 rounded-lg overflow-hidden border bg-muted flex items-center justify-center", size)}>
@@ -1361,11 +1877,14 @@ const OrderRow = memo(function OrderRow({
   onEdit,
   onDelete,
   deleting,
+  isNew,
 }: {
   order: UnifiedOrder;
   onEdit: () => void;
   onDelete: () => void;
   deleting: boolean;
+  /** Bu sipariş son yenilemede geldi → kısa süre vurgulanır. */
+  isNew?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const isManualOrder = order.isManual === true || order.platform === "manual";
@@ -1404,6 +1923,25 @@ const OrderRow = memo(function OrderRow({
   const orderCurrency = order.currency.trim().toUpperCase() || "TRY";
   const isTryOrder = orderCurrency === "TRY";
   const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-500" : "text-destructive";
+  // Gösterilecek komisyon: pazaryerinin bildirdiği gerçek tutar varsa o, yoksa kurallardan
+  // hesaplanan tahmin. İkisi farklıysa fark da yazılır (hesap DEĞİŞMEZ, sadece görünür).
+  // ⚠️ 0 ile BİLİNMEYEN ayrı: hiçbir komisyon kuralı eşleşmediğinde tahmin 0 çıkıyor ve satır
+  // tamamen kayboluyordu → kullanıcı komisyonun hesaba katıldığını sanıyordu (Ürünler ekranı
+  // aynı ürün için "Komisyon gir!" derken). Artık 0 da gösterilir, yok olan satır değil.
+  const commission =
+    order.actualCommission != null
+      ? order.actualCommission
+      : typeof order.estimatedCommission === "number" && Number.isFinite(order.estimatedCommission)
+        ? order.estimatedCommission
+        : null;
+  // Maliyeti eksik siparişte tahmin YALNIZ eşleşen satırları kapsıyor; sipariş toplamının
+  // yanında tam komisyonmuş gibi durmasın diye "kısmi" olduğu yazılır.
+  const commissionPartial = order.actualCommission == null && order.profitPartial === true;
+  const commissionGap =
+    order.actualCommission != null &&
+    Math.abs(order.actualCommission - (order.estimatedCommission ?? 0)) >= 0.01
+      ? order.actualCommission - (order.estimatedCommission ?? 0)
+      : null;
   // İptal/iade siparişi üstteki ciro ve kâr toplamlarına GİRMİYOR. Satır normal görünüp yeşil
   // kâr yazdığı sürece ekrandaki iki rakam birbirini tutmuyordu; artık soluk + üstü çizili.
   const isCancelled = order.statusKind === "cancelled";
@@ -1411,9 +1949,11 @@ const OrderRow = memo(function OrderRow({
   return (
     <Card
       className={cn(
-        "overflow-hidden transition-[color,background-color,border-color,opacity] duration-200 hover:border-primary/30",
+        "overflow-hidden transition-[color,background-color,border-color,opacity,box-shadow] duration-300 hover:border-primary/30",
         // Soluk ama okunur; üzerine gelince tam görünür (kullanıcı iptal satırını da inceleyebilsin).
-        isCancelled && "border-dashed bg-muted/25 opacity-70 hover:opacity-100"
+        isCancelled && "border-dashed bg-muted/25 opacity-70 hover:opacity-100",
+        // Yeni gelen sipariş gözden kaçmasın.
+        isNew && "border-primary/60 bg-primary/[0.06] ring-2 ring-primary/35"
       )}
     >
       <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
@@ -1451,6 +1991,11 @@ const OrderRow = memo(function OrderRow({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-sm tabular-nums">{order.orderNumber}</span>
               <span className="text-[11px] text-muted-foreground">{fmtDate(order.date)}</span>
+              {isNew && (
+                <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground animate-in fade-in zoom-in-95 duration-300">
+                  Yeni
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground truncate mt-0.5">
               {order.customer ? <span className="text-foreground/80">{order.customer}</span> : "Müşteri —"}
@@ -1492,26 +2037,28 @@ const OrderRow = memo(function OrderRow({
                 Kâr: kur dönüşümü yok
               </span>
             ) : order.profit != null ? (
-              <span className={cn("text-[11px] font-semibold tabular-nums flex items-center gap-0.5", profitColor)}>
-                <TrendingUp className="h-3 w-3" />
-                {order.profit >= 0 ? "+" : ""}
-                {fmtMoney2(order.profit, orderCurrency)}
-                {order.profitPartial && (
-                  <span className="text-amber-500 font-bold" title={`${order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil`}>!</span>
-                )}
-                {order.desiEstimated && (
-                  <span
-                    className="text-amber-500 font-bold"
-                    title={
-                      (order.missingDesiCount ?? 0) > 0
-                        ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı`
-                        : "Eşleşmeyen ürünlerin desisi, eşleşen ürünlerin ortalamasıyla tahmin edildi"
-                    }
-                  >
-                    ◆
+              <>
+                <span className={cn("text-[11px] font-semibold tabular-nums flex items-center gap-0.5", profitColor)}>
+                  <TrendingUp className="h-3 w-3" />
+                  {order.profit >= 0 ? "+" : ""}
+                  {fmtMoney2(order.profit, orderCurrency)}
+                </span>
+                {/* Sarı işaretin anlamı eskiden yalnız fareyle üstüne gelince görünüyordu. */}
+                {(order.profitPartial || order.desiEstimated) && (
+                  <span className="flex items-center gap-1 text-[10px] font-medium text-amber-400">
+                    <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                    {/* İki uyarı BİRBİRİNİ DIŞLAMAZ: hem maliyeti eksik hem desisi eksik bir
+                        siparişte kargonun tahmin edildiği de söylenmeli — yoksa kâr, olduğundan
+                        yüksek olabileceği hiç belirtilmeden kesin rakam gibi duruyor. */}
+                    {[
+                      order.profitPartial ? `${order.unmatchedCount ?? 1} üründe maliyet yok` : null,
+                      order.desiEstimated ? "kargo tahmini" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </span>
                 )}
-              </span>
+              </>
             ) : null}
             <span className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border", st.cls)}>
               <span className={cn("h-1.5 w-1.5 rounded-full", st.dot)} />
@@ -1599,7 +2146,7 @@ const OrderRow = memo(function OrderRow({
                   </div>
                 )}
                 {order.trackingNumber ? (
-                  <div className="text-muted-foreground">Takip: <span className="font-mono text-foreground/90">{order.trackingNumber}</span></div>
+                  <TrackingNumber value={order.trackingNumber} />
                 ) : (
                   <div className="text-muted-foreground">Takip numarası yok</div>
                 )}
@@ -1611,9 +2158,53 @@ const OrderRow = memo(function OrderRow({
                       isCancelled && "text-muted-foreground line-through"
                     )}
                   >
-                    {fmtMoney2(order.total, order.currency)}
+                    <AnimatedNumber
+                      value={order.total}
+                      format={(n) => fmtMoney2(n, order.currency)}
+                    />
                   </span>
                 </div>
+                {/* Komisyon: pazaryeri GERÇEK tutarı bildirdiyse o gösterilir ve tahminden
+                    farkı belirtilir. Rakama dokunulmaz — yalnız görünür kılınır. */}
+                {isTryOrder && commission != null && (
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-muted-foreground">
+                      Komisyon
+                      {order.actualCommission != null ? (
+                        <span className="ml-1 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-semibold text-emerald-400">
+                          gerçek
+                        </span>
+                      ) : (
+                        <span className="ml-1 text-[10px] text-muted-foreground/70">
+                          {commissionPartial ? "tahmini · eksik" : "tahmini"}
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-right">
+                      <span className="block tabular-nums font-medium">
+                        {fmtMoney2(commission, orderCurrency)}
+                      </span>
+                      {commissionPartial && (
+                        <span className="block text-[10px] text-amber-400">
+                          yalnız maliyeti bilinen ürünler için
+                        </span>
+                      )}
+                      {commissionGap != null && (
+                        <span
+                          className={cn(
+                            "block text-[10px] tabular-nums",
+                            commissionGap > 0 ? "text-amber-400" : "text-green-500"
+                          )}
+                        >
+                          tahmin {fmtMoney2(order.estimatedCommission ?? 0, orderCurrency)}
+                          {" · "}
+                          {commissionGap > 0 ? "+" : "−"}
+                          {fmtMoney2(Math.abs(commissionGap), orderCurrency)}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Net kâr</span>
                   {isCancelled ? (
@@ -1626,7 +2217,11 @@ const OrderRow = memo(function OrderRow({
                     </span>
                   ) : order.profit != null ? (
                     <span className={cn("tabular-nums font-semibold", profitColor)}>
-                      {order.profit >= 0 ? "+" : ""}{fmtMoney2(order.profit, orderCurrency)}{order.profitPartial && <span className="text-amber-500">!</span>}
+                      {order.profit >= 0 ? "+" : ""}
+                      <AnimatedNumber
+                        value={order.profit}
+                        format={(n) => fmtMoney2(n, orderCurrency)}
+                      />
                     </span>
                   ) : (
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>

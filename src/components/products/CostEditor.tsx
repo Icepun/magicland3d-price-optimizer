@@ -1,13 +1,14 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, cn } from "@/lib/utils";
 import { computePackagingCost, type PackagingSettings, type NylonLevel } from "@/core/packaging";
 import { resolveProductCost } from "@/core/product-cost";
 
@@ -162,6 +163,56 @@ export function costValuesEqual(a: CostValues | null, b: CostValues | null): boo
   );
 }
 
+/** Döküm satırı — tutar zıplamadan akar (ayar değiştirirken hangi kalemin oynadığı görünür). */
+function DokumSatiri({
+  ad,
+  tutar,
+  isaret = "",
+  className,
+}: {
+  ad: string;
+  tutar: number;
+  isaret?: string;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex justify-between", className)}>
+      <span>{ad}</span>
+      <AnimatedNumber
+        value={tutar}
+        durationMs={260}
+        format={(n) => `${isaret}${formatCurrency(n)}`}
+      />
+    </div>
+  );
+}
+
+/** Form bölümü — kart açılırken kademeli girer. */
+function Bolum({
+  baslik,
+  sag,
+  gecikmeMs,
+  children,
+}: {
+  baslik: string;
+  sag?: ReactNode;
+  gecikmeMs: number;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className="space-y-3 animate-in fade-in slide-in-from-bottom-1 duration-500"
+      style={{ animationDelay: `${gecikmeMs}ms`, animationFillMode: "both" }}
+    >
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-primary">{baslik}</p>
+        {sag}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 /**
  * İZOLE maliyet formu (state colocation). Tüm input state'i BURADA local tutulur → tuşa basınca
  * yalnızca bu küçük kart render olur; ağır ürün-detay sayfası (3 platform kartı, grafikler) DEĞİL.
@@ -308,17 +359,49 @@ function CostEditorImpl({
     []
   );
 
+  // Başlıktaki tek satırlık durum — üç ayrı yerde tekrarlanan uyarıların yerini alır ve
+  // toplam rakamla birlikte kart boyunca ekranda kalır.
+  const durum = hasFieldError
+    ? { metin: "Kırmızı alanı düzelt", renk: "text-destructive" }
+    : !productionKnown
+      ? { metin: "Filament ve ağırlık gir", renk: "text-amber-500" }
+      : savePending
+        ? { metin: "Kaydediliyor…", renk: "text-muted-foreground" }
+        : { metin: "Otomatik kaydedilir", renk: "text-muted-foreground" };
+
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm">Üretim Maliyeti</CardTitle>
-        <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
-          Filament + elektrik + paketleme. Kargo, komisyon ve KDV her platform için otomatik hesaplanır.
-        </p>
+    // overflow-visible ŞART: Card'ın varsayılan `overflow-hidden`'ı kartı kendi kaydırma kutusu
+    // yapar ve içindeki sticky başlık yapışmaz (toplam ekrandan kaçardı).
+    <Card
+      className="overflow-visible animate-in fade-in slide-in-from-bottom-2 duration-500"
+      style={{ animationFillMode: "both" }}
+    >
+      {/* Toplam BAŞLIĞA sabit: kartta aşağı inip gramaj/süre değiştirirken etkilenen rakam ekranda kalır. */}
+      <CardHeader className="sticky top-0 z-20 -mt-4 pt-4 border-b border-border/60 bg-card/95 backdrop-blur-sm">
+        <div className="flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-sm">Üretim Maliyeti</CardTitle>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Kargo, komisyon ve KDV platform kartlarında.
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <AnimatedNumber
+              /* BİLİNMEYEN ≠ SIFIR: hesaplanamıyorsa NaN → formatCurrency "—" yazar, 0 değil. */
+              value={productionKnown ? calculatedTotalCost : NaN}
+              durationMs={420}
+              format={(n) => formatCurrency(n)}
+              className={cn(
+                "block text-xl font-bold tabular-nums leading-none transition-colors",
+                productionKnown ? "text-foreground" : "text-muted-foreground"
+              )}
+            />
+            <p className={cn("mt-1.5 text-[10px] leading-none", durum.renk)}>{durum.metin}</p>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-3">
-          <p className="text-xs font-semibold text-primary">3D BASKI</p>
+        <Bolum baslik="3D BASKI" gecikmeMs={40}>
           <div>
             <Label className="text-xs">Filament Türü</Label>
             <select
@@ -333,11 +416,6 @@ function CostEditorImpl({
                 </option>
               ))}
             </select>
-            {!filamentTypeId && (
-              <p className="text-[10px] text-amber-500 mt-1 animate-in fade-in duration-200">
-                Filament türü seçilmeden maliyet hesaplanamaz.
-              </p>
-            )}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -384,20 +462,22 @@ function CostEditorImpl({
               <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.wasteRate}</p>
             )}
           </div>
-        </div>
+        </Bolum>
 
         <Separator />
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-primary">PAKETLEME</p>
+        <Bolum
+          baslik="PAKETLEME"
+          gecikmeMs={110}
+          sag={
             <Link
               href="/cost-templates"
-              className="text-[10px] text-muted-foreground hover:text-primary underline underline-offset-2"
+              className="text-[10px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-primary active:text-primary/70"
             >
               Fiyatları düzenle
             </Link>
-          </div>
+          }
+        >
           <div>
             <Label className="text-xs">Poşet / Koli</Label>
             <select
@@ -440,16 +520,15 @@ function CostEditorImpl({
             </div>
           </div>
           {fixedExtras > 0 && (
-            <p className="text-[10px] text-muted-foreground">
-              + Kart/Sticker/Sakız birim toplamı: {formatCurrency(fixedExtras)} — seçilen kapsama göre
+            <p className="text-[10px] text-muted-foreground animate-in fade-in duration-300">
+              Kart, sticker ve sakız: {formatCurrency(fixedExtras)}
             </p>
           )}
-        </div>
+        </Bolum>
 
         <Separator />
 
-        <div className="space-y-2">
-          <p className="text-xs font-semibold text-primary">KARGO</p>
+        <Bolum baslik="KARGO" gecikmeMs={180}>
           <div>
             <Label className="text-xs">Desi</Label>
             <Input
@@ -465,79 +544,39 @@ function CostEditorImpl({
               <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.desi}</p>
             ) : (
               <p className="text-[10px] text-muted-foreground mt-1">
-                Trendyol kargosu desi + barem&apos;e göre otomatik hesaplanır. Shopify kargosu Kargo
-                Kuralları&apos;ndaki Shopify baremine göre.
+                Kargo ücreti desiye göre otomatik hesaplanır.
               </p>
             )}
           </div>
-        </div>
+        </Bolum>
 
         <Separator />
 
-        <div className="space-y-1 text-xs text-muted-foreground tabular-nums">
-          <div className="flex justify-between">
-            <span>Malzeme</span>
-            <span>{formatCurrency(calcFilament)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Elektrik</span>
-            <span>{formatCurrency(calcElectricity)}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Aşınma</span>
-            <span>{formatCurrency(calcMachineWear)}</span>
-          </div>
-          {calcLabor > 0 && (
-            <div className="flex justify-between">
-              <span>İşçilik</span>
-              <span>{formatCurrency(calcLabor)}</span>
-            </div>
-          )}
-          <div className="flex justify-between">
-            <span>Paketleme</span>
-            <span>{formatCurrency(calcPackaging)}</span>
-          </div>
+        {/* Döküm — başlıktaki toplamın nereden geldiği. Rakamlar akar, ayar değiştirince zıplamaz. */}
+        <div
+          className="space-y-1 text-xs text-muted-foreground tabular-nums animate-in fade-in duration-500"
+          style={{ animationDelay: "240ms", animationFillMode: "both" }}
+        >
+          <DokumSatiri ad="Malzeme" tutar={calcFilament} />
+          <DokumSatiri ad="Elektrik" tutar={calcElectricity} />
+          <DokumSatiri ad="Aşınma" tutar={calcMachineWear} />
+          {calcLabor > 0 && <DokumSatiri ad="İşçilik" tutar={calcLabor} />}
+          <DokumSatiri ad="Paketleme" tutar={calcPackaging} />
           {calcWaste > 0 && (
-            <div className="flex justify-between text-amber-500">
-              <span>Fire</span>
-              <span>+{formatCurrency(calcWaste)}</span>
-            </div>
+            <DokumSatiri ad="Fire" tutar={calcWaste} isaret="+" className="text-amber-500" />
           )}
         </div>
-
-        <div className="flex justify-between items-baseline pt-1">
-          <span className="text-xs font-semibold uppercase tracking-wider">Üretim Maliyeti</span>
-          <span className="text-lg font-bold tabular-nums">
-            {/* BİLİNMEYEN ≠ SIFIR: maliyet girilmemişken paketlemeden gelen tutarı göstermek yanıltıyordu. */}
-            {formatCurrency(productionKnown ? calculatedTotalCost : null)}
-          </span>
-        </div>
-        {!productionKnown && (
-          <p className="text-[11px] text-amber-500 -mt-2 animate-in fade-in duration-200">
-            Filament türü ve ağırlık girilince maliyet hesaplanır.
-          </p>
-        )}
-
-        <p className="text-center text-[11px] pt-0.5 h-4">
-          {hasFieldError ? (
-            <span className="text-destructive">Kırmızı alanı düzeltmeden kaydedilmez</span>
-          ) : (
-            <span className="text-muted-foreground">
-              {savePending ? "Kaydediliyor…" : "✓ Değişiklikler otomatik kaydedilir"}
-            </span>
-          )}
-        </p>
 
         {variantCount > 1 && (
           <Button
             size="sm"
             variant="outline"
-            className="w-full"
+            className="w-full transition-transform active:scale-[0.99]"
             onClick={onApply}
             disabled={applyPending}
-            title="Aynı varyant grubundaki tüm ürünlere bu maliyeti (ve desi) uygular"
+            title="Bu maliyeti gruptaki tüm varyantlara yazar"
           >
-            {applyPending ? "Uygulanıyor..." : `Bu maliyeti tüm varyantlara uygula (${variantCount})`}
+            {applyPending ? "Uygulanıyor…" : `Tüm varyantlara uygula (${variantCount})`}
           </Button>
         )}
       </CardContent>

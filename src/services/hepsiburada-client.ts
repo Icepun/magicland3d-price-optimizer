@@ -109,6 +109,17 @@ const HB_CLAIM_PATHS: Record<HbClaimKind, string[]> = {
  */
 const HB_PATH_MISSING_STATUS = new Set([403, 404, 405, 501]);
 
+/**
+ * Kapanmış siparişlerin detay belleği (süreç ömrü boyunca).
+ *
+ * Teslim edilmiş / iptal / iade bir siparişin kalemleri ve tutarları BİR DAHA DEĞİŞMEZ; buna
+ * rağmen her yenilemede hepsi tek tek yeniden indiriliyordu. Anahtar ortam + mağaza + sipariş
+ * numarası: farklı hesap ya da test/canlı geçişinde birbirine karışmaz. Yalnız çağıran
+ * "bu sipariş kapandı" dediğinde (reuseCached) kullanılır — hareketli siparişler hep canlı çekilir.
+ */
+const HB_ORDER_DETAIL_CACHE_MAX = 4000;
+const hbOrderDetailCache = new Map<string, unknown>();
+
 export class HepsiburadaClient {
   private readonly hosts: ReturnType<typeof hepsiburadaHosts>;
   /** Denenmiş iptal/iade yolları: yol = çalışan aday, null = hiçbiri yok (bir daha deneme). */
@@ -261,10 +272,31 @@ export class HepsiburadaClient {
     return null;
   }
 
-  /** Sipariş detayı (kalem + tutarlar). Özet paket uçlarının döndürmediği fiyatlar buradan. */
-  async getOrderDetail(orderNumber: string): Promise<unknown> {
-    return this.request<unknown>(
+  /**
+   * Sipariş detayı (kalem + tutarlar). Özet paket uçlarının döndürmediği fiyatlar buradan.
+   *
+   * `reuseCached`: sipariş kapandıysa (teslim/iptal/iade) detayı bir kez indirilir ve süreç
+   * boyunca hatırlanır — sonraki yenilemelerde ağa hiç çıkılmaz.
+   */
+  async getOrderDetail(
+    orderNumber: string,
+    options: { reuseCached?: boolean } = {}
+  ): Promise<unknown> {
+    const cacheKey = `${this.credentials.environment}:${this.credentials.merchantId}:${orderNumber}`;
+    if (options.reuseCached && hbOrderDetailCache.has(cacheKey)) {
+      return hbOrderDetailCache.get(cacheKey);
+    }
+    const detail = await this.request<unknown>(
       `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}/ordernumber/${encodeURIComponent(orderNumber)}`
     );
+    if (options.reuseCached) {
+      // En eski kayıt düşer: bellek sınırsız büyümesin.
+      if (hbOrderDetailCache.size >= HB_ORDER_DETAIL_CACHE_MAX) {
+        const oldest = hbOrderDetailCache.keys().next();
+        if (!oldest.done) hbOrderDetailCache.delete(oldest.value);
+      }
+      hbOrderDetailCache.set(cacheKey, detail);
+    }
+    return detail;
   }
 }

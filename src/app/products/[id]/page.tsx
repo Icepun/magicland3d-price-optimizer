@@ -30,6 +30,7 @@ import {
   type CostValues,
   type CostInitial,
 } from "@/components/products/CostEditor";
+import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle } from "lucide-react";
@@ -154,7 +155,12 @@ function ProfitUnavailable({ onRetry }: { onRetry: () => void }) {
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
         <span>Kâr hesaplanamadı.</span>
       </div>
-      <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={onRetry}>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-7 gap-1.5 text-xs transition-transform active:scale-95"
+        onClick={onRetry}
+      >
         <RefreshCw className="h-3 w-3" /> Tekrar dene
       </Button>
     </div>
@@ -669,8 +675,10 @@ export default function ProductDetailPage({
   }, [id, queryClient]);
 
   if (isLoading) {
+    // İskelet GERÇEK düzeni taklit eder (sol maliyet · sağda üç platform + Fiyat Laboratuvarı) →
+    // veri gelince kartlar yer değiştirmez, sayfa zıplamaz.
     return (
-      <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300">
+      <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300" aria-busy="true">
         <div className="flex items-center gap-4">
           <Skeleton className="h-9 w-9 rounded-md" />
           <Skeleton className="h-16 w-16 rounded-lg" />
@@ -679,11 +687,23 @@ export default function ProductDetailPage({
             <Skeleton className="h-3 w-1/3" />
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Skeleton className="h-[440px] lg:col-span-1" />
-          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Skeleton className="h-64" />
-            <Skeleton className="h-64" />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+          <Skeleton className="h-[560px] rounded-xl lg:col-span-1" />
+          <div className="lg:col-span-2 space-y-4">
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-56" />
+              <Skeleton className="h-3 w-80 max-w-full" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {[0, 1, 2].map((i) => (
+                <Skeleton
+                  key={i}
+                  className="h-64 rounded-xl animate-in fade-in duration-500"
+                  style={{ animationDelay: `${i * 70}ms`, animationFillMode: "both" }}
+                />
+              ))}
+            </div>
+            <Skeleton className="h-[320px] rounded-xl" />
           </div>
         </div>
       </div>
@@ -776,7 +796,7 @@ export default function ProductDetailPage({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-7 w-7"
+                    className="h-7 w-7 transition-transform active:scale-90"
                     disabled={product.stock <= 0}
                     onClick={() => adjustStock(id, -1, product.stock)}
                   >
@@ -791,7 +811,7 @@ export default function ProductDetailPage({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-7 w-7"
+                    className="h-7 w-7 transition-transform active:scale-90"
                     onClick={() => adjustStock(id, 1, product.stock)}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -814,7 +834,7 @@ export default function ProductDetailPage({
               <Button
                 variant={product.madeToOrder ? "default" : "outline"}
                 size="sm"
-                className="h-7 text-xs"
+                className="h-7 text-xs transition-transform active:scale-95"
                 disabled={setMadeToOrderMutation.isPending}
                 onClick={() => setMadeToOrderMutation.mutate(!product.madeToOrder)}
               >
@@ -827,7 +847,7 @@ export default function ProductDetailPage({
         <Button
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 shrink-0"
+          className="h-8 gap-1.5 shrink-0 transition-transform active:scale-95"
           disabled={refreshing}
           onClick={handleRefresh}
           title="Bu ürünün verilerini sunucudan tazele"
@@ -837,7 +857,9 @@ export default function ProductDetailPage({
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* KARAR ÖNCE, AYRINTI SONRA: maliyet · her platformdaki kâr · kaça satmalı — hepsi tek ekranda.
+          Fiyat Laboratuvarı sağ sütunun altındaki boşluğu doldurur (eskiden iki ekran aşağıdaydı). */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
         {/* Sol: Maliyet formu (izole — yazarken sadece bu kart render olur) */}
         <div className="space-y-4 lg:col-span-1">
           <CostEditor
@@ -856,36 +878,49 @@ export default function ProductDetailPage({
           />
         </div>
 
-        {/* Sağ: 3 Platform Yan Yana */}
+        {/* Sağ: 3 Platform Yan Yana + hemen altında hedef fiyatlar */}
         <div className="lg:col-span-2 space-y-4">
-          <div>
+          <div className="animate-in fade-in duration-500">
             <h2 className="text-base font-semibold mb-1">Platform Kâr/Zarar Durumu</h2>
             <p className="text-xs text-muted-foreground">
-              Bu ürünün her platformdaki listing&apos;i için ayrı kâr hesabı (KDV + kargo +
-              komisyon dahil, indirim payı uygulanmış).
+              Her platform için ayrı kâr hesabı — KDV, kargo ve komisyon dahil.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
+            {(["shopify", "trendyol", "hepsiburada"] as const).map((platform, i) => {
               const listing = product.listings.find((l) => l.platform === platform);
               const platformPreview = preview?.platforms.find((p) => p.platform === platform);
               return (
-                <PlatformProfitCard
+                // h-full + [&>*]:h-full: kademeli giriş sarmalayıcısı kartların eşit yüksekliğini bozmasın.
+                <div
                   key={platform}
-                  platform={platform}
-                  listing={listing ?? null}
-                  productId={product.id}
-                  productName={product.name}
-                  liveResult={platformPreview?.result ?? null}
-                  hasCost={preview?.hasCost ?? null}
-                  desiMissing={desiMissing}
-                  profitState={profitState}
-                  onRetryProfit={retryPricingRules}
-                />
+                  className="h-full [&>*]:h-full animate-in fade-in slide-in-from-bottom-2 duration-500"
+                  style={{ animationDelay: `${i * 70}ms`, animationFillMode: "both" }}
+                >
+                  <PlatformProfitCard
+                    platform={platform}
+                    listing={listing ?? null}
+                    productId={product.id}
+                    productName={product.name}
+                    liveResult={platformPreview?.result ?? null}
+                    hasCost={preview?.hasCost ?? null}
+                    desiMissing={desiMissing}
+                    profitState={profitState}
+                    onRetryProfit={retryPricingRules}
+                  />
+                </div>
               );
             })}
           </div>
+
+          {/* Hedef fiyatlar da aynı varsayımlarla çıkıyor → uyarılar kartın İÇİNDE, fiyatların yanında. */}
+          <PriceLabCard
+            data={priceLab}
+            failed={pricingRulesFailed}
+            onRetry={retryPricingRules}
+            assumptionNotes={priceLabNotes}
+          />
         </div>
       </div>
 
@@ -896,14 +931,6 @@ export default function ProductDetailPage({
       />
 
       <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
-
-      {/* Hedef fiyatlar da aynı varsayımlarla çıkıyor → uyarılar kartın İÇİNDE, fiyatların yanında. */}
-      <PriceLabCard
-        data={priceLab}
-        failed={pricingRulesFailed}
-        onRetry={retryPricingRules}
-        assumptionNotes={priceLabNotes}
-      />
 
       <PriceHistoryCard productId={product.id} />
 
@@ -1321,9 +1348,12 @@ function PlatformProfitCardImpl({
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
                 Satış Fiyatı
               </p>
-              <p className="text-2xl font-bold tabular-nums mt-0.5">
-                {formatCurrency(listing.salePrice)}
-              </p>
+              <AnimatedNumber
+                value={listing.salePrice}
+                durationMs={420}
+                format={(n) => formatCurrency(n)}
+                className="block text-2xl font-bold tabular-nums mt-0.5"
+              />
             </div>
 
             {showBarcodeField && (
@@ -1374,26 +1404,31 @@ function PlatformProfitCardImpl({
                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
                       Net Kâr
                     </p>
-                    <p
+                    {/* Kâr AKARAK değişir: maliyeti kurcalarken rakam zıplamaz, yönü hissedilir. */}
+                    <AnimatedNumber
+                      value={result.netProfit}
+                      durationMs={480}
+                      format={(n) => formatCurrency(n)}
                       className={cn(
-                        "text-lg font-bold tabular-nums",
+                        "block text-lg font-bold tabular-nums transition-colors",
                         isLoss
                           ? "text-destructive"
                           : isThin
                             ? "text-amber-500"
                             : "text-green-500"
                       )}
-                    >
-                      {formatCurrency(result.netProfit)}
-                    </p>
+                    />
                   </div>
                   <div>
                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80">
                       Marj
                     </p>
-                    <p className="text-lg font-bold tabular-nums">
-                      {formatPercent(result.profitMargin)}
-                    </p>
+                    <AnimatedNumber
+                      value={result.profitMargin}
+                      durationMs={480}
+                      format={(n) => formatPercent(n)}
+                      className="block text-lg font-bold tabular-nums"
+                    />
                   </div>
                 </div>
 

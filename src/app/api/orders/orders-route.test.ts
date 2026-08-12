@@ -283,6 +283,55 @@ describe("siparişler ucu — çekim bütünlüğü", () => {
     expect(body.summary.hepsiburada).toMatchObject({ revenue: 1300, orderCount: 130 });
   });
 
+  /**
+   * Kullanıcı bildirdi: "siparişlerin veriliş saati yanlış geliyor bazen".
+   * Sebep: durum filtreli Hepsiburada listesinde `DeliveredDate` sipariş tarihi olarak
+   * yazılıyordu — teslim edilmiş sipariş "teslim edildiği saatte verilmiş" görünüyor ve
+   * liste bu alana göre sıralandığı için kronolojik sırada yanlış yere düşüyordu.
+   */
+  it("teslim tarihi, siparişin VERİLİŞ tarihi olarak yazılmaz", async () => {
+    const verilis = "2026-08-01T09:00:00.000Z";
+    const teslim = "2026-08-09T18:00:00.000Z";
+    h.state.hbPackages = {
+      delivered: [{ OrderNumber: "T1", orderDate: verilis, DeliveredDate: teslim }],
+    };
+    h.state.hbDetails = {
+      T1: {
+        orderDate: verilis,
+        items: [{ quantity: 1, unitPrice: 100, productName: "Ürün", merchantSku: "SKU-T1" }],
+      },
+    };
+
+    const body = await fetchOrders();
+    const order = body.orders.find((o: any) => o.orderNumber === "T1");
+
+    expect(order?.date).toBe(verilis);
+    expect(order?.date).not.toBe(teslim);
+  });
+
+  it("en yeni sipariş en üstte; tarihi olmayan en alta düşer", async () => {
+    h.state.hbPackages = {
+      delivered: [
+        { OrderNumber: "ESKI", orderDate: "2026-08-01T09:00:00.000Z" },
+        { OrderNumber: "YENI", orderDate: "2026-08-10T09:00:00.000Z" },
+        { OrderNumber: "TARIHSIZ" },
+      ],
+    };
+    h.state.hbDetails = {
+      ESKI: { orderDate: "2026-08-01T09:00:00.000Z", items: [{ quantity: 1, unitPrice: 10, productName: "A", merchantSku: "S1" }] },
+      YENI: { orderDate: "2026-08-10T09:00:00.000Z", items: [{ quantity: 1, unitPrice: 10, productName: "B", merchantSku: "S2" }] },
+      TARIHSIZ: { items: [{ quantity: 1, unitPrice: 10, productName: "C", merchantSku: "S3" }] },
+    };
+
+    const body = await fetchOrders();
+    const sira = body.orders
+      .filter((o: any) => ["ESKI", "YENI", "TARIHSIZ"].includes(o.orderNumber))
+      .map((o: any) => o.orderNumber);
+
+    expect(sira[0]).toBe("YENI");
+    expect(sira[sira.length - 1]).toBe("TARIHSIZ");
+  });
+
   it("detayı alınamayan Hepsiburada siparişi ₺0 ciroyla özete ve finans geçmişine girmez", async () => {
     h.state.hbPackages = {
       delivered: [
