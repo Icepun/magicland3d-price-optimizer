@@ -281,6 +281,9 @@ export async function syncOrderFinanceSnapshots(
         snapshot.platform,
         snapshot.externalOrderId,
         snapshot.orderNumber,
+        // ⚠️ TARİHLER DAİMA ISO-8601 METİN. Masaüstü de aynı biçimi yazar (src/lib/sqlite-date.ts).
+        // Buraya epoch-ms sayı yazılırsa SQLite'ta tamsayı < metin olduğu için masaüstünün
+        // `orderedAt >= …` filtresi bu satırları sessizce eler ve Raporlar eksik çıkar.
         asDate(snapshot.orderedAt).toISOString(),
         tlToKurus(snapshot.revenue),
         snapshot.profit == null ? null : tlToKurus(snapshot.profit),

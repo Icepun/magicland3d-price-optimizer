@@ -445,3 +445,70 @@ describe("arka plan yazımı (ateşle ve unut)", () => {
     expect(inFlight()).toBe(false);
   });
 });
+
+/**
+ * ⚠️ SESSİZ VERİ KAYBI KORUMASI — ham SQL yazımı Prisma ile AYNI depolama tipini kullanmalı.
+ *
+ * SQLite dinamik tiplidir: aynı kolona hem tamsayı hem metin yazılabilir ve tamsayı her
+ * zaman metinden küçük sayılır. Bu yazım yolu Prisma'dan farklı bir tip kullanırsa
+ * `orderedAt >= …` filtreleri bu satırların TAMAMINI sessizce eler — Raporlar 359 siparişin
+ * 280'ini tam olarak bu yüzden göstermiyordu (v0.19.142).
+ */
+describe("ham SQL yazımı Prisma ile aynı tarih biçimini kullanır", () => {
+  it("orderedAt/syncedAt depolama tipi Prisma'nın yazdığıyla birebir aynı", async () => {
+    await persist([order({ id: "ty-tip-1", orderNumber: "TIP1" })]);
+    await db.orderFinanceSnapshot.create({
+      data: {
+        id: "finance:trendyol:ty-tip-2",
+        platform: "trendyol",
+        externalOrderId: "ty-tip-2",
+        orderNumber: "TIP2",
+        orderedAt: new Date("2026-07-01T10:00:00.000Z"),
+        revenueKurus: 24_999,
+        statusKind: "delivered",
+        syncedAt: new Date("2026-07-01T10:00:00.000Z"),
+      },
+    });
+
+    const rows = await db.$queryRawUnsafe<
+      Array<{ externalOrderId: string; ordType: string; syncType: string; ordRaw: string }>
+    >(
+      `SELECT "externalOrderId",
+              typeof("orderedAt") AS "ordType",
+              typeof("syncedAt")  AS "syncType",
+              CAST("orderedAt" AS TEXT) AS "ordRaw"
+         FROM "OrderFinanceSnapshot"
+        WHERE "externalOrderId" IN ('ty-tip-1','ty-tip-2')
+        ORDER BY "externalOrderId"`
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows[0].ordType).toBe(rows[1].ordType);
+    expect(rows[0].syncType).toBe(rows[1].syncType);
+    // Aynı an → aynı ham değer (biçim de birebir aynı olmalı, yalnız tip değil).
+    expect(rows[0].ordRaw).toBe(rows[1].ordRaw);
+  });
+
+  it("kalem geçmişi de aynı biçimi kullanır ve tarih filtresinden düşmez", async () => {
+    await persist(
+      [order({ id: "ty-tip-3", orderNumber: "TIP3", date: "2026-07-02T10:00:00.000Z" })],
+      new Map([["ty-tip-3", items({ productName: "Kutu" })]])
+    );
+    const [item] = await db.$queryRawUnsafe<Array<{ t: string }>>(
+      `SELECT typeof("orderedAt") AS t FROM "OrderItemSnapshot" WHERE "externalOrderId" = 'ty-tip-3'`
+    );
+    const [snapshot] = await db.$queryRawUnsafe<Array<{ t: string }>>(
+      `SELECT typeof("orderedAt") AS t FROM "OrderFinanceSnapshot" WHERE "externalOrderId" = 'ty-tip-3'`
+    );
+    expect(item.t).toBe(snapshot.t);
+
+    // Uçtan uca: Prisma'nın kendi tarih filtresi bu satırı GÖRMELİ.
+    const found = await db.orderFinanceSnapshot.findMany({
+      where: {
+        externalOrderId: "ty-tip-3",
+        orderedAt: { gte: new Date("2026-01-01T00:00:00.000Z") },
+      },
+      select: { externalOrderId: true },
+    });
+    expect(found.map((row) => row.externalOrderId)).toEqual(["ty-tip-3"]);
+  });
+});

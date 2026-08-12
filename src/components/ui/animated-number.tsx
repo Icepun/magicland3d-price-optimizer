@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePrefersReducedMotion } from "@/lib/client-state";
+import { UNKNOWN_DASH } from "@/lib/format";
 
 /**
  * Sayıyı yumuşakça akıtır: mount'ta 0'dan değere, sonra her değişimde eski→yeni (count-up).
@@ -20,17 +21,28 @@ export function AnimatedNumber({
   className?: string;
 }) {
   const [display, setDisplay] = useState(0);
-  const fromRef = useRef(0);
+  /**
+   * EKRANDA duran değer. Eskiden yalnız animasyon bitince güncellenen bir "hedef" ref'i vardı:
+   * akış ortasında yeni veri gelirse animasyon en son TAMAMLANAN değerden (çoğu zaman 0)
+   * başlıyor, sayı sıfıra düşüp baştan tırmanıyordu. Her karede güncellenen bu ref sayesinde
+   * yeni animasyon kaldığı yerden devam eder.
+   */
+  const displayRef = useRef(0);
   const rafRef = useRef<number | null>(null);
   const reduceMotion = usePrefersReducedMotion();
 
+  const known = Number.isFinite(value);
+
   useEffect(() => {
-    const from = fromRef.current;
-    const to = Number.isFinite(value) ? value : 0;
+    // BİLİNMEYEN ≠ SIFIR: hesaplanamamış değeri 0'a akıtmak yanlış bilgi olur, animasyon yok.
+    if (!Number.isFinite(value)) return;
+
+    const from = displayRef.current;
+    const to = value;
     if (from === to) return;
 
     if (reduceMotion || durationMs <= 0) {
-      fromRef.current = to;
+      displayRef.current = to;
       rafRef.current = requestAnimationFrame(() => setDisplay(to));
       return () => {
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -41,19 +53,20 @@ export function AnimatedNumber({
     const ease = (t: number) => 1 - Math.pow(1 - t, 3); // easeOutCubic
     const tick = (now: number) => {
       const t = Math.min(1, (now - start) / durationMs);
-      setDisplay(from + (to - from) * ease(t));
-      if (t < 1) {
-        rafRef.current = requestAnimationFrame(tick);
-      } else {
-        fromRef.current = to;
-        setDisplay(to);
-      }
+      const next = t < 1 ? from + (to - from) * ease(t) : to;
+      displayRef.current = next;
+      setDisplay(next);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [value, durationMs, reduceMotion]);
+
+  if (!known) {
+    return <span className={className}>{format ? format(value) : UNKNOWN_DASH}</span>;
+  }
 
   return (
     <span className={className}>

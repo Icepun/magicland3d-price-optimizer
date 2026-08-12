@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, LIST_STATE_EVENT, type ListState, saveListState, scrollContainer } from "@/lib/list-state";
@@ -221,6 +221,21 @@ function SortableHead({
     </button>
   );
 }
+
+type PlatformParam = "shopify" | "trendyol" | "hepsiburada";
+
+/** Panel'deki platform kartından gelen ?platform=... (SSR safe). Tanınmayan değer yok sayılır. */
+function readPlatformFromUrl(): PlatformParam | null {
+  if (typeof window === "undefined") return null;
+  const p = new URLSearchParams(window.location.search).get("platform");
+  return p === "shopify" || p === "trendyol" || p === "hepsiburada" ? p : null;
+}
+
+const PLATFORM_PARAM_LABEL: Record<PlatformParam, string> = {
+  shopify: "Shopify",
+  trendyol: "Trendyol",
+  hepsiburada: "Hepsiburada",
+};
 
 /** URL ?filter=... query string'inden ilk filter mode'u oku (SSR safe). */
 function readFilterFromUrl(): FilterMode {
@@ -587,6 +602,14 @@ export default function ProductsPage() {
     return () => clearTimeout(t);
   }, [globalFilter]);
   const [filterMode, setFilterMode] = useState<FilterMode>("active");
+  // Panel'in platform kartından gelen daraltma (?platform=trendyol gibi).
+  const [platformParam, setPlatformParam] = useState<PlatformParam | null>(null);
+  /**
+   * URL parametreleri mount efektinde okunuyor (hydration güvenliği). Sorgu o efektten ÖNCE
+   * açılırsa `?platform=` ile gelindiğinde önce daraltmasız TÜM katalog çekilir (300+ ürünün
+   * kâr simülasyonu) ve yanıt çöpe gider. Bu bayrak, ilk isteği doğru adresle attırır.
+   */
+  const [urlOkundu, setUrlOkundu] = useState(false);
   // Kâr/saat · kâr/gram sıralaması — başlığa tıklayınca önce büyükten küçüğe, sonra tersi, sonra kapalı.
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" } | null>(null);
   const toggleSort = useCallback((key: SortKey) => {
@@ -628,9 +651,15 @@ export default function ProductsPage() {
     const url = new URL(window.location.href);
     const hasUrlFilter = url.searchParams.has("filter");
     const f = readFilterFromUrl();
+    const platform = readPlatformFromUrl();
     const saved = loadListState("products");
+    if (platform) setPlatformParam(platform);
     if (hasUrlFilter) {
       if (f !== filterMode) setFilterMode(f);
+    } else if (platform) {
+      // Adres bir platform istiyorsa oturumdaki son filtreyi GERİ YÜKLEME: Trendyol kartına
+      // basınca "Gizlenenler" listesi açılıyordu.
+      if (filterMode !== "active") setFilterMode("active");
     } else if (saved.filterMode && saved.filterMode !== filterMode) {
       setFilterMode(saved.filterMode as FilterMode);
     }
@@ -645,6 +674,7 @@ export default function ProductsPage() {
         if (el) el.scrollTop = saved.scrollTop!;
       });
     }
+    setUrlOkundu(true); // artık ilk istek doğru adresle atılabilir
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -686,12 +716,14 @@ export default function ProductsPage() {
     isLoading,
     isError,
   } = useQuery<Product[]>({
-    queryKey: ["products", filterMode],
+    enabled: urlOkundu,
+    queryKey: ["products", filterMode, platformParam],
     queryFn: ({ signal }) =>
       // "En Kârlı" / "Eşiğe Yakın" sunucuda yok → aktif ürünleri çek, client'ta süz/sırala.
       // signal: başka sayfaya geçince bu (ağır) fetch iptal olur → birikme/boşa parse yok.
       fetchJson<Product[]>(
-        `/api/products?filter=${CLIENT_ONLY_FILTERS.includes(filterMode) ? "active" : filterMode}`,
+        `/api/products?filter=${CLIENT_ONLY_FILTERS.includes(filterMode) ? "active" : filterMode}` +
+          (platformParam ? `&platform=${platformParam}` : ""),
         { signal }
       ),
     // CACHE-FIRST: liste cache'te yaşar, KENDİLİĞİNDEN tazelenmez (staleTime: Infinity).
@@ -1630,6 +1662,19 @@ export default function ProductsPage() {
             </button>
           ))}
         </div>
+
+        {/* Panel'den gelen platform daraltması görünür olsun ve tek tıkla kalksın. */}
+        {platformParam && (
+          <button
+            type="button"
+            onClick={() => setPlatformParam(null)}
+            title="Bu platform daraltmasını kaldır"
+            className="inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60"
+          >
+            {PLATFORM_PARAM_LABEL[platformParam]}
+            <X className="h-3.5 w-3.5 opacity-70" />
+          </button>
+        )}
 
         <span className="text-sm text-muted-foreground ml-auto">
           {displayRows.length} kayıt

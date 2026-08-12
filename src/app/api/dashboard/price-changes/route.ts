@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { swr } from "@/lib/route-cache";
+import { bustCache, swr } from "@/lib/route-cache";
 
 /**
  * Son N günde fiyatı değişen ürünlerin özeti (Panel'deki "Fiyat Hareketleri" kartı).
@@ -31,9 +31,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "limit 1-100 arasında tam sayı olmalı" }, { status: 400 });
     }
 
-    const data = await swr(`dashboard:price-changes:v2:${days}:${limit}`, TTL_MS, () =>
-      computePriceChanges(days, limit)
-    );
+    // v3: gövde artık hesaplama zamanı damgası (computedAt) taşıyor. Sürüm artmazsa diskteki
+    // damgasız ESKİ gövde taze sayılır ve Panel'in tazelik satırı bu kaynağı hiç göremez.
+    const key = `dashboard:price-changes:v3:${days}:${limit}`;
+    // `?fresh=1` → önbellek ATLANIR (kullanıcı "Yenile"ye bastı): kayıtlı kopya düşürülür,
+    // swr taze hesaplar ve önbelleği yeniden doldurur.
+    if (url.searchParams.get("fresh") === "1") bustCache(key);
+    const data = await swr(key, TTL_MS, () => computePriceChanges(days, limit));
     return NextResponse.json(data);
   } catch (error) {
     // Sarmalanmamış rota GÖVDESİZ 500 döndürüyordu: kullanıcı boş kart görüyor, sebep hiçbir
@@ -156,6 +160,8 @@ async function computePriceChanges(days: number, limit: number) {
   );
 
   return {
+    // Bu gövdenin HESAPLANDIĞI an — Panel'in tazelik satırı üç kaynağın EN ESKİSİNİ yazar.
+    computedAt: new Date().toISOString(),
     days,
     since: since.toISOString(),
     totalChanges: rows.length,

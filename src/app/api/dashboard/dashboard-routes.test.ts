@@ -24,15 +24,21 @@ interface PlatformStats {
 }
 
 interface DashboardBody {
+  computedAt: string;
+  totalProducts: number;
   lowStockCount: number;
   lowStockProducts: Array<{ id: string; name: string; stock: number; imageUrl: string | null }>;
   lowStockShown: number;
   lowStockMore: number;
+  lowStockMoreOutOfStock: number;
+  lowStockMoreLow: number;
   missingCost: number;
   platforms: PlatformStats[];
   problemProducts: Array<{ id: string; problem: string; profit: number | null }>;
   problemTotal: number;
   problemMore: number;
+  problemMoreNegative: number;
+  problemMoreMissingCost: number;
   problemNegativeCount: number;
   problemMissingCostCount: number;
 }
@@ -48,6 +54,7 @@ interface PriceChangeItem {
 }
 
 interface PriceChangesBody {
+  computedAt: string;
   days: number;
   since: string;
   totalChanges: number;
@@ -55,21 +62,33 @@ interface PriceChangesBody {
   recent: PriceChangeItem[];
 }
 
-async function readDashboard(): Promise<DashboardBody> {
-  bustCache("dashboard:");
-  const response = await dashboard();
+/** Rotayı OLDUĞU GİBİ çağırır — önbellek düşürülmez (önbellek davranışı sınanabilsin). */
+async function callDashboard(query = ""): Promise<DashboardBody> {
+  const request = new Request(
+    `http://localhost/api/dashboard${query ? `?${query}` : ""}`
+  ) as NextRequest;
+  const response = await dashboard(request);
   expect(response.status).toBe(200);
   return (await response.json()) as DashboardBody;
 }
 
-async function readPriceChanges(query = "days=30&limit=10"): Promise<PriceChangesBody> {
+async function readDashboard(): Promise<DashboardBody> {
   bustCache("dashboard:");
+  return callDashboard();
+}
+
+async function callPriceChanges(query = "days=30&limit=10"): Promise<PriceChangesBody> {
   const request = new Request(
     `http://localhost/api/dashboard/price-changes?${query}`
   ) as NextRequest;
   const response = await priceChanges(request);
   expect(response.status).toBe(200);
   return (await response.json()) as PriceChangesBody;
+}
+
+async function readPriceChanges(query = "days=30&limit=10"): Promise<PriceChangesBody> {
+  bustCache("dashboard:");
+  return callPriceChanges(query);
 }
 
 function platformOf(body: DashboardBody, platform: string): PlatformStats {
@@ -170,12 +189,12 @@ async function seedProduct(opts: {
 
 describe("GET /api/dashboard", () => {
   it("düşük stok listesini ÖNCE sıralar SONRA keser — stoğu bitenler dışarı itilmez", async () => {
-    // Stoğu 1 olanlar önce eklenir: eski kod ilk 30 satırı alıp sonra sıraladığı için
+    // Stoğu 1 olanlar önce eklenir: eski kod ilk N satırı alıp sonra sıraladığı için
     // bunlar stoğu 0 olanları listeden atıyordu.
     for (let i = 0; i < 5; i++) {
       await seedProduct({ id: `az-${i}`, stock: 1, salePrice: 200, withListing: false });
     }
-    for (let i = 0; i < 35; i++) {
+    for (let i = 0; i < 62; i++) {
       await seedProduct({
         id: `bitti-${String(i).padStart(2, "0")}`,
         stock: 0,
@@ -187,11 +206,15 @@ describe("GET /api/dashboard", () => {
 
     const body = await readDashboard();
 
-    expect(body.lowStockCount).toBe(40);
-    expect(body.lowStockProducts).toHaveLength(30);
+    expect(body.lowStockCount).toBe(67);
+    expect(body.lowStockProducts).toHaveLength(60);
     expect(body.lowStockProducts.every((p) => p.stock === 0)).toBe(true);
-    expect(body.lowStockShown).toBe(30);
-    expect(body.lowStockMore).toBe(10);
+    expect(body.lowStockShown).toBe(60);
+    expect(body.lowStockMore).toBe(7);
+    // Karta sığmayanların TÜR DAĞILIMI: arayüz yalnız "stoğu biten" kısmı için bağlantı kurar;
+    // "stoğu 1 kalan" kısmının Ürünler'de karşılığı yok (bağlantı boş liste açardı).
+    expect(body.lowStockMoreOutOfStock).toBe(2);
+    expect(body.lowStockMoreLow).toBe(5);
     // Satırda ürün görseli gösterilebilsin diye imageUrl yanıtta olmalı.
     expect(body.lowStockProducts[0].imageUrl).toMatch(/^https:\/\/cdn\.test\//);
   });
@@ -221,6 +244,10 @@ describe("GET /api/dashboard", () => {
     ]);
     expect(body.problemTotal).toBe(35);
     expect(body.problemMore).toBe(5);
+    // Taşan 5 satırın TAMAMI maliyeti eksik — "+5" bağlantısı zarar edenler listesine
+    // gitseydi kullanıcı 5 bekleyip 3 kayıt görürdü.
+    expect(body.problemMoreNegative).toBe(0);
+    expect(body.problemMoreMissingCost).toBe(5);
     expect(body.problemNegativeCount).toBe(3);
     expect(body.problemMissingCostCount).toBe(32);
     // Maliyeti eksik olanlar ayırt edilebilir kalmalı (arayüz filtreleyebilsin).
@@ -274,6 +301,35 @@ describe("GET /api/dashboard", () => {
     expect(platformOf(body, "shopify").averageMargin).toBeNull();
     expect(platformOf(body, "trendyol").averageMargin).toBeNull();
     expect(platformOf(body, "shopify").activeListings).toBe(0);
+  });
+
+  it("gövde HESAPLAMA anını taşır — önbellekten dönen yanıt kendi damgasını korur", async () => {
+    await seedProduct({ id: "damga", salePrice: 400, withListing: false });
+    bustCache("dashboard:");
+
+    const first = await callDashboard();
+    expect(Number.isFinite(new Date(first.computedAt).getTime())).toBe(true);
+
+    // Önbellekten dönen ikinci yanıt YENİ bir damga üretmemeli: yoksa ekran bir haftalık
+    // veriyi "az önce güncellendi" diye gösterir.
+    const cached = await callDashboard();
+    expect(cached.computedAt).toBe(first.computedAt);
+  });
+
+  it("?fresh=1 sunucu önbelleğini atlar", async () => {
+    await seedProduct({ id: "ilk", salePrice: 400, withListing: false });
+    bustCache("dashboard:");
+
+    expect((await callDashboard()).totalProducts).toBe(1);
+
+    await seedProduct({ id: "ikinci", salePrice: 400, withListing: false });
+    // Önbellek ömrü dolmadı → eski gövde. "Yenile" bu yüzden hiçbir rakamı değiştirmiyordu.
+    expect((await callDashboard()).totalProducts).toBe(1);
+
+    const fresh = await callDashboard("fresh=1");
+    expect(fresh.totalProducts).toBe(2);
+    // Taze hesap önbelleği de yeniler.
+    expect((await callDashboard()).totalProducts).toBe(2);
   });
 });
 
@@ -384,6 +440,30 @@ describe("GET /api/dashboard/price-changes", () => {
 
     expect(body.recent.map((i) => i.productId)).toEqual(["sinirda"]);
     expect(new Date(body.since).getTime()).toBe(daysAgoAtMidnight(29).getTime());
+  });
+
+  it("gövde hesaplama anını taşır ve ?fresh=1 önbelleği atlar", async () => {
+    await seedProduct({ id: "fk-1", salePrice: 130, withListing: false });
+    await seedHistory("fk-1", [
+      { id: "h-fk-1", oldPrice: 100, newPrice: 130, source: "manual", at: daysAgoAtMidnight(4) },
+    ]);
+    bustCache("dashboard:");
+
+    const first = await callPriceChanges();
+    expect(Number.isFinite(new Date(first.computedAt).getTime())).toBe(true);
+    expect(first.productsAffected).toBe(1);
+
+    await seedProduct({ id: "fk-2", salePrice: 130, withListing: false });
+    await seedHistory("fk-2", [
+      { id: "h-fk-2", oldPrice: 100, newPrice: 130, source: "manual", at: daysAgoAtMidnight(3) },
+    ]);
+
+    const cached = await callPriceChanges();
+    expect(cached.productsAffected).toBe(1);
+    expect(cached.computedAt).toBe(first.computedAt);
+
+    const fresh = await callPriceChanges("days=30&limit=10&fresh=1");
+    expect(fresh.productsAffected).toBe(2);
   });
 
   it("geçersiz parametreleri 400 ile reddeder", async () => {

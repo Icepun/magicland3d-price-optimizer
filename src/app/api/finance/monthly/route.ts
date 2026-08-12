@@ -15,6 +15,7 @@ import {
 } from "@/lib/order-finance-snapshots";
 import { bustFinanceCaches } from "@/lib/cache-busting";
 import { swr } from "@/lib/route-cache";
+import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
 
 /**
  * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
@@ -31,8 +32,103 @@ import { swr } from "@/lib/route-cache";
  *
  * Bu hata Raporlar sayfasını komple boş bıraktı (v0.19.139); regresyon testi:
  * `src/lib/date-aggregate.test.ts`.
+ *
+ * ────────────────────────────────────────────────────────────────────────────────────────
+ * ⚠️ AYNI AİLEDEN İKİNCİ HATA: TARİH KOLONUNDA TİP KARIŞIKLIĞI (v0.19.142).
+ *
+ * Sipariş geçmişine iki taraf yazıyor (masaüstünün ham SQL yolu + telefon). Biri epoch-ms
+ * TAMSAYI, diğeri ISO METİN yazınca — SQLite'ta tamsayı her zaman metinden küçük sayıldığı
+ * için — Prisma'nın `orderedAt >= …` filtresi uyumsuz tipteki satırların TAMAMINI sessizce
+ * eledi: 359 siparişin 280'i Raporlar'a hiç girmedi, "geçmiş şu tarihten beri" yanlış tarih
+ * gösterdi, hiçbir hata da verilmedi.
+ *
+ * Bu yüzden buradaki okumalar `dbEpochMs()` ile normalize edilmiş HAM SQL üzerinden yapılır:
+ * depolama tipi ne olursa olsun hiçbir satır düşmez. (Normalize ifade indeksi kullanamaz —
+ * tam tarama olur; sipariş geçmişi birkaç yüz satır olduğu için maliyeti ihmal edilebilir ve
+ * doğruluk önce gelir.) Şema göçü v40 mevcut veriyi tek biçime çeker; buradaki koruma ikinci
+ * emniyet kemeridir. Gerekçe ve ölçüm: `src/lib/sqlite-date.ts`,
+ * test: `src/lib/mixed-date-storage.test.ts`.
  */
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** Ham sorgu tamsayıları sürücüye göre BigInt gelebilir. */
+function toInt(value: unknown): number {
+  return typeof value === "bigint" ? Number(value) : Number(value);
+}
+
+/** Ham sorgudan gelen nullable tamsayı — "yok" ile "sıfır" karıştırılmaz. */
+function toNullableInt(value: unknown): number | null {
+  if (value == null) return null;
+  const parsed = toInt(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+type SnapshotRow = {
+  platform: string;
+  orderedAt: Date;
+  revenueKurus: number;
+  profitKurus: number | null;
+  profitPartial: boolean;
+  statusKind: string;
+  currency: string;
+  outputVatKurus: number | null;
+  inputVatCreditKurus: number | null;
+  calculationVersion: number;
+};
+
+/** Pencere içindeki (manuel olmayan) sipariş özetleri — tarih tipi ne olursa olsun. */
+async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
+  const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT "platform","orderedAt","revenueKurus","profitKurus","profitPartial",
+            "statusKind","currency","outputVatKurus","inputVatCreditKurus","calculationVersion"
+       FROM "OrderFinanceSnapshot"
+      WHERE "platform" <> 'manual'
+        AND ${dbEpochMs("orderedAt")} >= ?`,
+    windowStart.getTime()
+  );
+  const snapshots: SnapshotRow[] = [];
+  for (const row of rows) {
+    const orderedAt = parseDbDate(row.orderedAt);
+    // Tarihi hiç çözülemeyen satır hiçbir aya düşemez; sessizce yutmak yerine atlanır.
+    if (!orderedAt) continue;
+    snapshots.push({
+      platform: String(row.platform ?? ""),
+      orderedAt,
+      revenueKurus: toInt(row.revenueKurus),
+      profitKurus: toNullableInt(row.profitKurus),
+      profitPartial: Boolean(toInt(row.profitPartial)),
+      statusKind: String(row.statusKind ?? ""),
+      currency: String(row.currency ?? "TRY"),
+      outputVatKurus: toNullableInt(row.outputVatKurus),
+      inputVatCreditKurus: toNullableInt(row.inputVatCreditKurus),
+      calculationVersion: toInt(row.calculationVersion),
+    });
+  }
+  return snapshots;
+}
+
+/**
+ * "Geçmiş şu tarihten beri" + "son senkron" — TÜM geçmiş üzerinden, normalize edilmiş.
+ *
+ * Not: buradaki MIN/MAX HAM SQL'dir; yasak olan Prisma'nın `aggregate({_min/_max})` API'si
+ * (dosya başındaki uyarı). Ham sonuç sayı olarak döner, Prisma DateTime'a çevirmeye çalışmaz.
+ */
+async function readSnapshotBounds(): Promise<{
+  firstOrderedAt: Date | null;
+  lastSyncedAt: Date | null;
+}> {
+  const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT MIN(${dbEpochMs("orderedAt")}) AS "oldest",
+            MAX(${dbEpochMs("syncedAt")})  AS "latest"
+       FROM "OrderFinanceSnapshot"
+      WHERE "platform" <> 'manual'`
+  );
+  const row = rows[0] ?? {};
+  return {
+    firstOrderedAt: parseDbDate(row.oldest),
+    lastSyncedAt: parseDbDate(row.latest),
+  };
+}
 
 export async function GET(req: NextRequest) {
   // Yeniden hesap ilerlemesi: ağır aylık toplama hiç çalıştırılmadan anında yanıtlanır
@@ -48,8 +144,9 @@ export async function GET(req: NextRequest) {
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
     : 12;
-  // v5: KDV özeti artık pazaryeri siparişlerini de kapsıyor (snapshot'ta kayıtlı KDV kolonları).
-  // Sürüm artmazsa güncelleme sonrası diskteki eski yanıt (eksik kapsamlı) taze sayılırdı.
+  // v6: Tarih tipi karışıklığı yüzünden siparişlerin çoğu hiç okunmuyordu; artık hepsi okunuyor.
+  // Sürüm artmazsa güncelleme sonrası diskteki ESKİ (eksik) yanıt 30 güne kadar taze sayılır ve
+  // kullanıcı düzelmiş rakamı göremezdi.
   //
   // try/catch neden ŞART: bu uç eskiden sarmalanmamıştı ve hata olunca Next GÖVDESİZ bir 500
   // döndürüyordu. Raporlar "veri alınamadı" yazıyor, sebep ise hiçbir yere yazılmıyordu —
@@ -57,7 +154,7 @@ export async function GET(req: NextRequest) {
   // `jsonError` kullanıyor; bu da artık kullanıyor.
   try {
     const data = await swr(
-      `finance-monthly:v5:${monthCount}`,
+      `finance-monthly:v6:${monthCount}`,
       60_000,
       () => computeMonthlyFinance(monthCount)
     );
@@ -106,29 +203,12 @@ async function computeMonthlyFinance(monthCount: number) {
     expenses,
     actualCommissionCount,
     lastCommissionSync,
-    firstSnapshot,
-    lastSnapshotSync,
+    snapshotBounds,
     firstManualOrder,
   ] = await Promise.all([
     // Yalnız gösterilen ay aralığı okunur (satır sayısı sabit kalır); dışarıdaki satırlar
-    // zaten hiçbir aya düşmüyordu.
-    prisma.orderFinanceSnapshot.findMany({
-      where: { platform: { not: "manual" }, orderedAt: { gte: windowStart } },
-      select: {
-        platform: true,
-        orderedAt: true,
-        revenueKurus: true,
-        profitKurus: true,
-        profitPartial: true,
-        statusKind: true,
-        currency: true,
-        // KDV motorun kayıtlı çıktısı; null = bu sipariş için henüz ayrıştırılmadı.
-        outputVatKurus: true,
-        inputVatCreditKurus: true,
-        // "Bu ayın hesabı güncel değil" rozeti için — ayrı sorgu açmadan aynı satırlardan sayılır.
-        calculationVersion: true,
-      },
-    }),
+    // zaten hiçbir aya düşmüyordu. Tarih karşılaştırması tip-bağımsız (bkz. dosya başı).
+    readSnapshots(windowStart),
     remotePrisma.manualOrder.findMany({
       where: { orderedAt: { gte: windowStart } },
       select: {
@@ -156,16 +236,9 @@ async function computeMonthlyFinance(monthCount: number) {
       orderBy: { syncedAt: "desc" },
       select: { syncedAt: true },
     }),
-    prisma.orderFinanceSnapshot.findFirst({
-      where: { platform: { not: "manual" } },
-      orderBy: { orderedAt: "asc" },
-      select: { orderedAt: true },
-    }),
-    prisma.orderFinanceSnapshot.findFirst({
-      where: { platform: { not: "manual" } },
-      orderBy: { syncedAt: "desc" },
-      select: { syncedAt: true },
-    }),
+    // `findFirst({ orderBy })` karışık tipli kolonda ÖNCE tüm tamsayıları sıralar → "en eski
+    // sipariş" yanlış çıkıyordu (Raporlar 24 May yerine 12 Haz diyordu). Normalize okuma:
+    readSnapshotBounds(),
     remotePrisma.manualOrder.findFirst({
       orderBy: { orderedAt: "asc" },
       select: { orderedAt: true },
@@ -253,8 +326,8 @@ async function computeMonthlyFinance(monthCount: number) {
     vatUnknownRevenue: vat.unknownRevenue,
     vatPartialOrders: vat.partialOrders,
   };
-  const lastOrderSyncAt = lastSnapshotSync?.syncedAt ?? null;
-  const firstOrderedAt = [firstSnapshot?.orderedAt, firstManualOrder?.orderedAt]
+  const lastOrderSyncAt = snapshotBounds.lastSyncedAt;
+  const firstOrderedAt = [snapshotBounds.firstOrderedAt, firstManualOrder?.orderedAt]
     .filter((value): value is Date => value != null)
     .sort((a, b) => a.getTime() - b.getTime())[0];
 

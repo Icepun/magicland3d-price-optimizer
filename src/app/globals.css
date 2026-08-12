@@ -92,6 +92,40 @@
 
   --radius: 0.7rem;
 
+  /* --- PANEL VURGU RENKLERİ ---------------------------------------------
+     Panel'in rakam/uyarı renkleri koyu tema için seçilmişti ve koşulsuz
+     uygulanıyordu: beyaz kart üstünde kehribar uyarılar 2,2:1, marj ve kâr
+     rakamları 2,3-2,6:1 kalıyordu (okunmuyordu). Açık temada aynı tonların
+     KOYU karşılıkları kullanılır — hepsi beyaz kart üstünde ≥4,6:1.
+     Pazaryeri renkleri hue'sunu korur, yalnız koyulaşır (marka tanınır kalsın). */
+  --panel-primary:          oklch(0.53 0.22 278);
+  --panel-primary-soft:     oklch(0.53 0.22 278 / 12%);
+  --panel-amber:            oklch(0.55 0.14 75);
+  --panel-amber-soft:       oklch(0.55 0.14 75 / 12%);
+  --panel-amber-line:       oklch(0.55 0.14 75 / 35%);
+  --panel-red:              oklch(0.53 0.21 25);
+  --panel-red-soft:         oklch(0.53 0.21 25 / 12%);
+  --panel-red-line:         oklch(0.53 0.21 25 / 35%);
+  --panel-green:            oklch(0.50 0.15 145);
+  --panel-shopify:          oklch(0.50 0.15 152);
+  --panel-shopify-soft:     oklch(0.50 0.15 152 / 14%);
+  --panel-trendyol:         oklch(0.57 0.16 60);
+  --panel-trendyol-soft:    oklch(0.57 0.16 60 / 14%);
+  --panel-hepsiburada:      oklch(0.55 0.17 38);
+  --panel-hepsiburada-soft: oklch(0.55 0.17 38 / 14%);
+  --panel-manual:           oklch(0.52 0.16 300);
+  --panel-track:            oklch(0.20 0.020 265 / 10%);
+
+  /* Küçük etiket/rozet yazıları KENDİ -soft zemininin üstünde durur (beyaz kartın değil).
+     Ölçüm: trendyol 3,87 · hepsiburada 4,28 · amber 4,23 · shopify 4,49 — hepsi 4,5 altındaydı.
+     Aşağıdaki koyu karşılıklar kendi zemininde 4,96-5,00 veriyor (sayfa zemininde 4,77+,
+     satır üstüne gelince 4,71+). Yalnız AÇIK tema; koyu temada aynı tonlar korunur. */
+  --panel-amber-on-soft:       oklch(0.51 0.14 75);
+  --panel-red-on-soft:         oklch(0.52 0.21 25);
+  --panel-shopify-on-soft:     oklch(0.475 0.15 152);
+  --panel-trendyol-on-soft:    oklch(0.51 0.16 60);
+  --panel-hepsiburada-on-soft: oklch(0.515 0.17 38);
+
   /* Light sidebar — beyaza yakın, body'den biraz daha gri */
   --sidebar:           oklch(0.96 0.008 265);
   --sidebar-foreground: oklch(0.30 0.018 265);
@@ -130,6 +164,33 @@
   --chart-3:           oklch(0.72 0.20 47.6);
   --chart-4:           oklch(0.70 0.22 305);
   --chart-5:           oklch(0.66 0.22 25);
+
+  /* Panel vurgu renkleri — koyu temadaki BUGÜNKÜ tonlar birebir korunur. */
+  --panel-primary:          oklch(0.62 0.20 278);
+  --panel-primary-soft:     oklch(0.62 0.20 278 / 12%);
+  --panel-amber:            oklch(0.75 0.18 75);
+  --panel-amber-soft:       oklch(0.75 0.18 75 / 14%);
+  --panel-amber-line:       oklch(0.75 0.18 75 / 40%);
+  --panel-red:              oklch(0.63 0.22 25);
+  --panel-red-soft:         oklch(0.63 0.22 25 / 14%);
+  --panel-red-line:         oklch(0.63 0.22 25 / 40%);
+  --panel-green:            oklch(0.72 0.18 145);
+  --panel-shopify:          oklch(0.60 0.16 152);
+  --panel-shopify-soft:     oklch(0.60 0.16 152 / 15%);
+  --panel-trendyol:         oklch(0.72 0.17 60);
+  --panel-trendyol-soft:    oklch(0.72 0.17 60 / 15%);
+  --panel-hepsiburada:      oklch(0.66 0.19 38);
+  --panel-hepsiburada-soft: oklch(0.66 0.19 38 / 15%);
+  --panel-manual:           #A78BFA;
+  --panel-track:            oklch(1 0 0 / 10%);
+
+  /* Koyu temada küçük etiketler kendi zemininde zaten yeterli → tonlar birebir aynı kalır. */
+  --panel-amber-on-soft:       oklch(0.75 0.18 75);
+  --panel-red-on-soft:         oklch(0.63 0.22 25);
+  --panel-shopify-on-soft:     oklch(0.60 0.16 152);
+  --panel-trendyol-on-soft:    oklch(0.72 0.17 60);
+  --panel-hepsiburada-on-soft: oklch(0.66 0.19 38);
+
   --sidebar:           oklch(0.135 0.016 265);
   --sidebar-foreground: oklch(0.84 0.010 265);
   --sidebar-primary:   oklch(0.66 0.20 278);
@@ -217,6 +278,13 @@
   100% { transform: translateX(260%); }
 }
 
+/* Panel'deki oran barları — ilk görünüşte soldan dolar (sonraki değişimler
+   width geçişiyle akar, bu yüzden animasyon transform üzerinden çalışır). */
+@keyframes panel-bar-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
 /* Baskı bitince konfeti */
 @keyframes confetti-fall {
   0%   { transform: translateY(-8px) rotate(0deg);   opacity: 1; }
@@ -241,26 +309,52 @@
 
 /* =============================================
    CARD — Belirgin yüzey + hover elevation
+
+   @layer ŞART: katmansız yazılan bu kurallar Tailwind'in utility katmanını EZİYORDU.
+   Bir karta `border-amber-500/30` gibi bir sınıf verildiğinde kenarlık hiç çizilmiyordu
+   (uyarı rengi sessizce kayboluyordu). Components katmanı utilities'in altında kalır →
+   sınıf verilmediğinde varsayılan görünüm aynı, verildiğinde sınıf kazanır.
    ============================================= */
-[data-slot="card"] {
-  background: var(--card);
-  border: 1px solid var(--border);
-  transition: box-shadow 220ms ease, border-color 220ms ease, transform 220ms ease;
+/* KART GÖRÜNÜMÜ — iki parça, BİLEREK farklı katmanlarda.
+ *
+ * KENAR ve ZEMİN `@layer components` içinde: böylece bir karta Tailwind sınıfı
+ * (ör. `border-amber-500/30`) verildiğinde o KAZANIR. Katmansız bırakılsaydı utility
+ * sınıfı hiç uygulanmazdı — uyarı kartlarının renkli kenarlığı bu yüzden hiç çizilmiyordu.
+ *
+ * GÖLGE ise KATMANSIZ: katmansız kurallar tüm katmanları yener. Katman içine alındığında
+ * Tailwind'in `ring-1` sınıfı (Card bileşeninin kendi sınıfı) `box-shadow`u ele geçirip
+ * kartların gölgesini ve hover yükselmesini TÜM uygulamada siliyordu.
+ */
+@layer components {
+  [data-slot="card"] {
+    background: var(--card);
+    border: 1px solid var(--border);
+    transition: box-shadow 220ms ease, border-color 220ms ease, transform 220ms ease;
+  }
+  .dark [data-slot="card"] {
+    background: linear-gradient(
+      180deg,
+      oklch(1 0 0 / 1.5%) 0%,
+      transparent 100%
+    ),
+    var(--card);
+    border-color: oklch(1 0 0 / 8%);
+  }
+  .dark [data-slot="card"]:hover {
+    border-color: oklch(1 0 0 / 14%);
+  }
+  :root:not(.dark) [data-slot="card"]:hover {
+    border-color: oklch(0.55 0.22 278 / 25%);
+  }
 }
+
+/* Katmansız: gölgeyi hiçbir utility ezemesin. */
 .dark [data-slot="card"] {
-  background: linear-gradient(
-    180deg,
-    oklch(1 0 0 / 1.5%) 0%,
-    transparent 100%
-  ),
-  var(--card);
-  border-color: oklch(1 0 0 / 8%);
   box-shadow:
     0 1px 0 oklch(1 0 0 / 4%) inset,
     0 1px 2px oklch(0 0 0 / 25%);
 }
 .dark [data-slot="card"]:hover {
-  border-color: oklch(1 0 0 / 14%);
   box-shadow:
     0 1px 0 oklch(1 0 0 / 5%) inset,
     0 8px 32px oklch(0 0 0 / 35%),
@@ -270,7 +364,6 @@
   box-shadow: 0 1px 2px oklch(0.20 0.020 265 / 5%);
 }
 :root:not(.dark) [data-slot="card"]:hover {
-  border-color: oklch(0.55 0.22 278 / 25%);
   box-shadow: 0 4px 16px oklch(0.20 0.020 265 / 8%);
 }
 

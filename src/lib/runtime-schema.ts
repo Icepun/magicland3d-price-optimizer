@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { repairDateColumnSql } from "@/lib/sqlite-date";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -36,9 +37,16 @@ let schemaReady: Promise<void> | null = null;
 //      karşılaştırdığı için sahada "37" ya da "38" damgalı bir veritabanı iki dalın DDL'ini
 //      birden görmemiş olabilir; 39 her iki numaradan da büyük olduğundan tam tarama bir kez
 //      daha koşar. CREATE IF NOT EXISTS + ensureColumn idempotent, tekrar zararsız.
+// v40: Tarih kolonu ONARIMI — aynı kolona iki farklı depolama tipi yazılmıştı (masaüstünün ham
+//      SQL yolu epoch-ms TAMSAYI, telefon ve Prisma ISO METİN). SQLite'ta tamsayı her zaman
+//      metinden küçük sayıldığı için `orderedAt >= …` filtreleri satırların çoğunu SESSİZCE
+//      eliyor, `ORDER BY` "en eski kayıt"ı yanlış veriyordu (Raporlar 359 siparişin ~280'ini
+//      göstermiyordu). Yazma yolları tek biçime çekildi; bu göç MEVCUT veriyi onarır.
+//      Onarım BİLEREK her tam göçte yeniden koşar (idempotent): güncellenmemiş bir cihaz
+//      araya tamsayı damga yazarsa bir sonraki sürüm bunu tekrar düzeltir.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "39";
+const CURRENT_SCHEMA_VERSION = "40";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -419,6 +427,90 @@ async function migrateTrendyolProductsToListings() {
     create: { key: migrationKey, value: new Date().toISOString() },
     update: { value: new Date().toISOString() },
   });
+}
+
+/**
+ * v40 ONARIMI — tarih kolonlarını TEK depolama biçimine çeker.
+ *
+ * NEDEN: SQLite dinamik tiplidir; aynı kolona hem epoch-ms TAMSAYI hem ISO METİN yazıldı
+ * (masaüstünün ham SQL yazımı vs. Prisma/telefon). SQLite'ta TAMSAYI her zaman METİN'den
+ * küçük sayıldığından karışık kolonda `>= <tarih>` filtresi bir grubu KOMPLE eler ve
+ * `ORDER BY` önce tüm tamsayıları sıralar. Hata verilmez, rapor sessizce eksilir.
+ *
+ * Kanonik biçim, bu süreçteki Prisma motorunun KENDİ yazdığı biçimdir (Turso/libSQL adapter
+ * → ISO metin, klasik yerel motor → epoch-ms tamsayı). Ölçüm ve kural: `src/lib/sqlite-date.ts`.
+ *
+ * Idempotent: yalnız yabancı biçimli satırlara dokunur, çözülemeyen değeri hiç değiştirmez.
+ * Bilerek her tam göçte yeniden koşar — eski sürümde kalmış bir cihaz araya yanlış biçim
+ * yazarsa bir sonraki sürüm bunu tekrar düzeltir.
+ */
+async function normalizeDateColumns(): Promise<boolean> {
+  let dateColumns: Array<{ table: string; column: string }> = [];
+  try {
+    const rows = await prisma.$queryRawUnsafe<Array<{ tbl: string; col: string }>>(
+      `SELECT m.name AS tbl, p.name AS col
+         FROM sqlite_master m
+         JOIN pragma_table_info(m.name) p
+        WHERE m.type = 'table'
+          AND m.name NOT LIKE 'sqlite_%'
+          AND m.name NOT LIKE '\_%' ESCAPE '\'
+          AND m.name <> 'Recommendation'
+          AND UPPER(p.type) = 'DATETIME'`
+    );
+    dateColumns = rows.map((row) => ({ table: String(row.tbl), column: String(row.col) }));
+  } catch (error) {
+    // Tablo-değerli PRAGMA desteklenmiyorsa onarım atlanır; okuma tarafındaki normalizasyon
+    // (dbEpochMs) raporları yine doğru gösterir.
+    logPerf(`normalizeDateColumns introspection failed (${String(error).slice(0, 120)})`);
+    return false;
+  }
+  if (dateColumns.length === 0) return true;
+
+  // ÖN KONTROL: yalnız GERÇEKTEN karışık tipli kolonlar onarılır.
+  // Gömülü replica modunda toplu yazım kapalı olduğu için her onarım AYRI bir uzak yazma
+  // demek; 49 kolonu koşulsuz güncellemek açılışı saniyelerce uzatıyordu. Ucuz bir EXISTS
+  // sorgusu kolonların neredeyse tamamını eler.
+  const bozuk: Array<{ table: string; column: string }> = [];
+  for (const { table, column } of dateColumns) {
+    try {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ v: number }>>(
+        `SELECT EXISTS(
+           SELECT 1 FROM "${table}"
+            WHERE "${column}" IS NOT NULL
+              AND (
+                typeof("${column}") IN ('integer','real')
+                -- "YYYY-MM-DD HH:MM:SS" (SQLite CURRENT_TIMESTAMP): metin ama kanonik değil.
+                -- Metin sıralamasında boşluk 'T'den küçük olduğu için bu satırlar da
+                -- yanlış sıralanır; onarım kapsamına girmeli.
+                OR (typeof("${column}") = 'text' AND instr("${column}", 'T') = 0)
+              )
+         ) AS v`
+      );
+      if (Number(row?.v) === 1) bozuk.push({ table, column });
+    } catch {
+      // Okunamayan tabloyu atla; onarım zorunlu değil, okuma tarafı zaten tip-bağımsız.
+    }
+  }
+  if (bozuk.length === 0) {
+    logPerf("normalizeDateColumns: onarılacak kolon yok");
+    return true;
+  }
+  for (const { table, column } of bozuk) {
+    _ddlBuf.push(repairDateColumnSql(table, column));
+  }
+  try {
+    await flushSchemaBuffer();
+    logPerf(`normalizeDateColumns repaired ${bozuk.length} column(s)`);
+    return true;
+  } catch (error) {
+    // Onarım başarısızsa göç DÜŞMEZ (uygulama açılır, okuma tarafı tip-bağımsız) ama
+    // BAŞARISIZ olduğunu bildirir: sürüm damgalanmaz, böylece sonraki açılış YENİDEN dener.
+    // Damgalansaydı veritabanı "onarıldı" sayılır ve bir sonraki sürüme kadar bir daha
+    // denenmezdi — Siparişler ve fiyat kartı sessizce eksik veri okumaya devam ederdi.
+    _ddlBuf = [];
+    logPerf(`normalizeDateColumns failed (${String(error).slice(0, 120)})`);
+    return false;
+  }
 }
 
 async function cleanupPdfCommissionRules() {
@@ -1165,6 +1257,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
     await migrateParentVariantsToGroups();
+    // v40: karışık tipli tarih damgalarını tek biçime çek (Raporlar'daki kayıp siparişler).
+    const tarihOnarimiTamam = await normalizeDateColumns();
 
     // Şema sürümünü damgala → sonraki açılışlar fast-path'ten anında döner.
     // MONOTONİK: depodaki damga sayısal olarak DAHA BÜYÜKSE üzerine yazma. Kullanıcının Windows'u
@@ -1172,14 +1266,23 @@ export function ensureRuntimeSchema(): Promise<void> {
     // sürekli ileri-geri yazılır ve İKİ makine de her açılışta tam şema taraması + kilit beklemesi
     // yapar (veri bozulmaz, ama açılış yavaşlar). Bu koşulla yalnız geride kalan makine yeniden
     // göç koşar; güncel makine fast-path'te kalır.
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value
-       WHERE CAST(excluded.value AS INTEGER) >= CAST(AppSetting.value AS INTEGER)`,
-      CURRENT_SCHEMA_VERSION
-    );
-    // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.
-    writeLocalSchemaMarker();
+    //
+    // ⚠️ TARİH ONARIMI BAŞARISIZSA DAMGALAMA. Damgalansaydı veritabanı "onarıldı" sayılır ve
+    // bir sonraki SÜRÜME kadar bir daha denenmezdi; Siparişler ve fiyat kartı o süre boyunca
+    // sessizce eksik veri okumaya devam ederdi. Damgalanmazsa açılış biraz yavaşlar (tam
+    // tarama tekrarlanır) ama onarım her açılışta yeniden denenir — doğru olan bu.
+    if (tarihOnarimiTamam) {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value
+         WHERE CAST(excluded.value AS INTEGER) >= CAST(AppSetting.value AS INTEGER)`,
+        CURRENT_SCHEMA_VERSION
+      );
+      // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.
+      writeLocalSchemaMarker();
+    } else {
+      logPerf("schemaVersion damgalanmadı: tarih onarımı başarısız, sonraki açılışta yeniden denenecek");
+    }
     // Kilidi bırak (biz tuttuysak). Hata olursa kilit bayatlayıp devralınır.
     await releaseSchemaLock();
     logPerf(`ensureRuntimeSchema FULL setup (${Date.now() - __t0}ms)`);

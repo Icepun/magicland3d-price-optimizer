@@ -7,6 +7,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { bustCache } from "@/lib/route-cache";
 import { validateManualOrderCapturedFinance } from "@/lib/manual-orders";
+import { toDbDate } from "@/lib/sqlite-date";
 
 export const dynamic = "force-dynamic";
 
@@ -410,10 +411,18 @@ const CHUNK = 500;
 type Stmt = { sql: string; args: unknown[] };
 type Row = Record<string, unknown>;
 
-/** SQLite bağlaması: Prisma tarih alanlarını epoch-ms INTEGER, boolean'ları 0/1 tutar. */
+/**
+ * SQLite bağlaması: boolean → 0/1, tarih → Prisma'nın aynı kolona yazacağı kanonik biçim.
+ *
+ * ⚠️ Burası eskiden koşulsuz `value.getTime()` (epoch-ms TAMSAYI) yazıyordu. Turso/libSQL
+ * adapter üzerinde Prisma tarihleri ISO METİN yazar ve filtrelerde METİN bağlar; SQLite'ta
+ * tamsayı her zaman metinden küçük sayıldığı için yedekten dönen satırlar `paidAt >= …` /
+ * `orderedAt >= …` gibi HER tarih filtresinden sessizce düşüyordu — yani geri yükleme
+ * sonrası Raporlar ve Giderler eksik çıkıyordu. Ayrıntı: src/lib/sqlite-date.ts.
+ */
 function toArg(value: unknown): unknown {
   if (value === undefined || value === null) return null;
-  if (value instanceof Date) return value.getTime();
+  if (value instanceof Date) return toDbDate(value);
   if (typeof value === "boolean") return value ? 1 : 0;
   return value;
 }

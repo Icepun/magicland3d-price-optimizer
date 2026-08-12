@@ -11,6 +11,7 @@ import type {
   ExpenseRuleInput,
 } from "@/core/types";
 import { batchWrite } from "./libsql-batch";
+import { parseDbDate, toDbDate } from "./sqlite-date";
 import {
   FINANCE_CALCULATION_VERSION,
   kurusToTl,
@@ -175,8 +176,11 @@ function itemDiffers(existing: ExistingItemRow, next: ItemWriteData): boolean {
   );
 }
 
-// SQLite'ta tarihler Prisma ile AYNI biçimde (epoch milisaniye tamsayısı) yazılır; aksi halde
-// Prisma bu satırları okurken tarihleri çözemez.
+// ⚠️ TARİHLER `toDbDate()` İLE YAZILIR — bu süreçteki Prisma motorunun kolona yazacağı değerin
+// AYNISI (Turso/libSQL adapter → ISO metin, klasik yerel motor → epoch-ms tamsayı). Eski kod
+// koşulsuz `getTime()` yazıyordu; telefon ve Prisma ise Turso'da ISO metin yazıyordu. SQLite'ta
+// tamsayı her zaman metinden küçük sayıldığı için Raporlar'ın `orderedAt >= …` filtresi
+// satırların çoğunu SESSİZCE eliyordu. Gerekçe ve ölçüm: src/lib/sqlite-date.ts.
 function snapshotStatement(
   platform: string,
   externalOrderId: string,
@@ -209,7 +213,7 @@ function snapshotStatement(
       platform,
       externalOrderId,
       data.orderNumber,
-      data.orderedAt.getTime(),
+      toDbDate(data.orderedAt),
       data.revenueKurus,
       data.profitKurus,
       data.profitPartial ? 1 : 0,
@@ -221,7 +225,7 @@ function snapshotStatement(
       data.statusKind,
       data.currency,
       data.calculationVersion,
-      data.syncedAt.getTime(),
+      toDbDate(data.syncedAt),
     ],
   };
 }
@@ -253,7 +257,7 @@ function itemStatement(
       platform,
       externalOrderId,
       lineIndex,
-      data.orderedAt.getTime(),
+      toDbDate(data.orderedAt),
       data.productId,
       data.productName,
       data.quantity,
@@ -261,7 +265,7 @@ function itemStatement(
       data.lineRevenueKurus,
       data.statusKind,
       data.currency,
-      syncedAt.getTime(),
+      toDbDate(syncedAt),
     ],
   };
 }
@@ -322,7 +326,8 @@ async function readExistingItems(
       const list = byOrder.get(key) ?? [];
       list.push({
         lineIndex: toInt(row.lineIndex),
-        orderedAt: new Date(toInt(row.orderedAt)),
+        // Depolama tipi ne olursa olsun (eski epoch-ms tamsayı / kanonik ISO metin) çözülür.
+        orderedAt: parseDbDate(row.orderedAt) ?? new Date(0),
         productId: row.productId == null ? null : String(row.productId),
         productName: String(row.productName ?? ""),
         quantity: toInt(row.quantity),
@@ -729,14 +734,6 @@ const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
  * Ay penceresini KABA olarak daraltır (okunan satır sayısı sabit kalsın diye).
  * Kesin ayıklama monthKey ile yapılır — ay sınırı saat dilimine bağlı ve o bilgi TEK yerde.
  */
-function roughMonthRange(month: string): { from: Date; to: Date } {
-  const [year, index] = month.split("-").map(Number);
-  const padMs = 3 * 86_400_000;
-  return {
-    from: new Date(Date.UTC(year, index - 1, 1) - padMs),
-    to: new Date(Date.UTC(year, index, 1) + padMs),
-  };
-}
 
 type RecalcSnapshotRow = {
   platform: string;
@@ -889,12 +886,15 @@ export async function recalculateFinanceMonth(
     onProgress?.(phase, processed, total);
 
   report("reading", 0, 0);
-  const { from, to } = roughMonthRange(month);
   const rows: RecalcSnapshotRow[] = (
     await prisma.orderFinanceSnapshot.findMany({
       // Manuel siparişin finansı ManualOrder satırında DONDURULMUŞTUR (kendi KDV oranı ve kalem
       // maliyetiyle) — yeniden hesap ona asla dokunmaz.
-      where: { platform: { not: "manual" }, orderedAt: { gte: from, lt: to } },
+      // ⚠️ TARİH FİLTRESİ YOK — bilerek. Prisma'nın `gte/lt` filtresi karışık depolama
+      // tipinde satırları SESSİZCE eler (bkz. src/lib/sqlite-date.ts). Bu, "Bu ayı yeniden
+      // hesapla" düğmesinin 0 kayıt güncelleyip "tamamlandı" demesine ve uyarının sonsuza
+      // kadar takılı kalmasına yol açıyordu. Ay süzmesi aşağıda `monthKey` ile yapılır.
+      where: { platform: { not: "manual" } },
       select: {
         platform: true,
         externalOrderId: true,

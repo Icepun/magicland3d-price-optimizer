@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
@@ -8,7 +8,7 @@ import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { swr } from "@/lib/route-cache";
+import { bustCache, swr } from "@/lib/route-cache";
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
 
@@ -24,23 +24,38 @@ interface PlatformStats {
   thinMarginCount: number;
 }
 
-/** Kartlarda gösterilen satır sayısı; kalanı "+N" olarak yazılır. */
-const LOW_STOCK_LIMIT = 30;
+/**
+ * Kartlarda gösterilen satır sayısı; kalanı "+N" olarak yazılır.
+ *
+ * Düşük stok listesi 30'dan 60'a çıkarıldı: kart ilk 30'u gösterip gerisini KENDİ İÇİNDE
+ * açabilsin. Eski hâlinde taşan satırların hepsi zorunlu olarak "stok 1" oluyordu ve karttaki
+ * bağlantı "stoğu bitenler" listesine gidip BOŞ açılıyordu.
+ */
+const LOW_STOCK_LIMIT = 60;
 const PROBLEM_LIMIT = 30;
+
+/** SWR önbellek anahtarı — gövdenin ANLAMI değişince sürümü artır (aşağıdaki nota bak). */
+const CACHE_KEY = "dashboard:v3";
 
 /**
  * Panel verisini SWR önbelleğiyle sun: kullanıcı uygulamayı açtığında (açılışta ısıtılır) veya
  * panele döndüğünde ANINDA gelir; veri arka planda tazelenir. Uzak-HTTP'de panel ~2sn'lik ağ
  * gidiş-dönüşüydü — artık kullanıcı bunu beklemiyor. (Toplam/özet veri; ~20sn bayatlık kabul
  * edilebilir ve arka planda kendini tazeler.)
+ *
+ * `?fresh=1` → önbellek ATLANIR: kullanıcı "Yenile"ye bastığında disk kopyası değil gerçek
+ * rakamlar gelir (ve önbellek o taze gövdeyle yenilenir).
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    // v2: marj artık ciroya göre ağırlıklı ve ilan sayısı maliyetten bağımsız — yanıtın ANLAMI
-    // değişti. Sürüm artmazsa güncelleme sonrası ilk açılışta diskteki ESKİ gövde taze sayılır
-    // (route-cache diski 30 güne kadar geçerli tutar) ve "düzelttik" denen rakamlar düzelmiş
-    // görünmez.
-    const data = await swr("dashboard:v2", 20_000, computeDashboard);
+    // v2 → v3: gövde artık hesaplama zamanı damgası (computedAt) ve taşan satırların tür bazlı
+    // sayılarını taşıyor. Sürüm artmazsa güncelleme sonrası ilk açılışta diskteki ESKİ gövde taze
+    // sayılır (route-cache diski 30 güne kadar geçerli tutar); tazelik satırı ve "+N" bağlantıları
+    // eksik alanlarla çalışmaz.
+    const fresh = new URL(req.url).searchParams.get("fresh") === "1";
+    // Kayıtlı kopyayı düşür → swr taze hesaplayıp önbelleği yeniden doldurur.
+    if (fresh) bustCache(CACHE_KEY);
+    const data = await swr(CACHE_KEY, 20_000, computeDashboard);
     return NextResponse.json(data);
   } catch (error) {
     // Sarmalanmamış rota GÖVDESİZ 500 döndürüyordu: Panel boş kalıyor, sebep hiçbir yere yazılmıyordu.
@@ -241,6 +256,11 @@ async function computeDashboard() {
     (a, b) => a.stock - b.stock || a.name.localeCompare(b.name, "tr-TR")
   );
   const lowStockShown = lowStockProducts.slice(0, LOW_STOCK_LIMIT);
+  // Karta sığmayan satırlar TÜRE GÖRE ayrılır: "stoğu biten" kısmının Ürünler'de doğru bir
+  // karşılığı var (filter=out-of-stock), "stoğu 1 kalan" kısmının YOK. Tek sayı gönderilseydi
+  // kart yine boş açılan bir bağlantı kurardı.
+  const lowStockHidden = lowStockProducts.slice(LOW_STOCK_LIMIT);
+  const lowStockMoreOutOfStock = lowStockHidden.filter((p) => p.stock === 0).length;
 
   // ÖNEM sırası: en çok kaybettiren ilan en üstte, maliyeti eksik olanlar en sonda (onların kendi
   // kartı var). Eskiden ürün sırasına göre ilk 30 alındığı için zarar eden ilanların yarısı hiç görünmüyordu.
@@ -252,15 +272,25 @@ async function computeDashboard() {
     return a.name.localeCompare(b.name, "tr-TR");
   });
   const problemShown = problemProducts.slice(0, PROBLEM_LIMIT);
+  // Taşan satırların TÜR DAĞILIMI: kart "+N satır daha" derken hangi listeye götüreceğini
+  // buradan bilir. Toplam sayılar (negatif/maliyet-eksik) taşan kümeyi temsil etmiyordu:
+  // 12 zarar + 50 maliyet-eksik varken "+32" deyip 12 kayıtlık listeyi açıyordu.
+  const problemHidden = problemProducts.slice(PROBLEM_LIMIT);
+  const problemMoreNegative = problemHidden.filter((p) => p.problem === "negative_profit").length;
 
   return {
+    // Bu gövdenin HESAPLANDIĞI an. Panel tazelik satırını bundan yazar: yanıt diskteki
+    // kopyadan da dönebildiği için "isteğin geldiği an" bir haftalık veriyi taze gösteriyordu.
+    computedAt: new Date().toISOString(),
     totalProducts,
     inStockCount,
     outOfStockCount,
     lowStockCount,
     lowStockProducts: lowStockShown,
     lowStockShown: lowStockShown.length,
-    lowStockMore: Math.max(0, lowStockCount - lowStockShown.length),
+    lowStockMore: lowStockHidden.length,
+    lowStockMoreOutOfStock,
+    lowStockMoreLow: lowStockHidden.length - lowStockMoreOutOfStock,
     missingCost,
     negativeListings: totalNegativeListings,
     grandTotalProfit,
@@ -268,7 +298,9 @@ async function computeDashboard() {
     problemProducts: problemShown,
     problemTotal: problemProducts.length,
     problemShown: problemShown.length,
-    problemMore: Math.max(0, problemProducts.length - problemShown.length),
+    problemMore: problemHidden.length,
+    problemMoreNegative,
+    problemMoreMissingCost: problemHidden.length - problemMoreNegative,
     problemNegativeCount: totalNegativeListings,
     problemMissingCostCount: missingCost,
   };
