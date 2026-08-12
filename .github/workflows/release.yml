@@ -80,7 +80,23 @@ jobs:
           rm -f "$P12" "$CER"
           echo "Gecerli imza kimlikleri:"
           security find-identity -v -p codesigning "$KEYCHAIN"
-      - run: npx electron-builder --mac --publish always
+      # Windows tarafiyla ayni gerekce: electron-builder ikilileri kesintili bir adresten
+      # iniyor. macOS bugun sansliydi ama ayni riski tasiyor.
+      - name: Cache electron-builder binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/electron-builder
+          key: eb-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            eb-cache-${{ runner.os }}-
+      - name: Build app
+        run: |
+          for i in 1 2 3; do
+            npx electron-builder --mac --publish always && exit 0
+            echo "electron-builder denemesi $i/3 basarisiz"
+            [ "$i" -lt 3 ] && sleep $((20 * i))
+          done
+          exit 1
       # Guvence: electron-builder bazen latest-mac.yml'i atliyor. Taslaga gh ile
       # garanti yukle (--clobber: varsa uzerine yaz). gh draft'i tag ile bulur.
       # continue-on-error: gh yukleyemezse build'i bozma — electron-builder'inki kalir.
@@ -101,7 +117,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx electron-builder --win --publish always
+      # electron-builder her calismada kendi ikililerini (winCodeSign, nsis, nsis-resources)
+      # github.com/.../releases/download adresinden cekiyor ve bu adres kesintili: 12 Agu 2026'da
+      # UC AYRI derleme "EOF" ile dustu. Onbellek dolduktan sonra indirme hic yapilmaz.
+      - name: Cache electron-builder binaries
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\electron-builder\Cache
+          key: eb-cache-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            eb-cache-${{ runner.os }}-
+      # Soguk onbellekte indirme yine gerekiyor. electron-builder'in kendi yeniden denemesi
+      # dort kez 1 SANIYE arayla oldugu icin dalgalanmayi asamiyor; disaridan sabirli sar.
+      # Indirme asamasinda dusen calisma hicbir sey yayinlamamis olur, tekrar guvenli.
+      - name: Build installer
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 3; $i++) {
+            npx electron-builder --win --publish always
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "electron-builder denemesi $i/3 basarisiz (cikis kodu $LASTEXITCODE)"
+            if ($i -lt 3) { Start-Sleep -Seconds (20 * $i) }
+          }
+          exit 1
       - name: Ensure latest.yml uploaded
         continue-on-error: true
         run: gh release upload "${env:GITHUB_REF_NAME}" dist/latest.yml --clobber
