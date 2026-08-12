@@ -77,6 +77,9 @@ async function computeProducts(urlString: string) {
   const filter = searchParams.get("filter") ?? "active";
   const search = searchParams.get("search");
   const platformFilter = searchParams.get("platform"); // shopify | trendyol
+  // Gizli ürünler listelerin dışındadır; hızlı arama (Ctrl+K) ise hepsini ister:
+  // satıştan kaldırılmış bir ürünün maliyetine bakmak da bir arama sebebidir.
+  const includeHidden = searchParams.get("includeHidden") === "1";
 
   // TEKİL/ÇOKLU ürün tazeleme: ?ids=a,b,c → SADECE bu ürünler, filtreden bağımsız hesaplanıp döner.
   // Amaç: bir ürünün maliyeti/listing'i değişince TÜM 368 ürünü değil yalnız o ürünü çekmek
@@ -95,7 +98,7 @@ async function computeProducts(urlString: string) {
     where.hidden = true;
   } else {
     // Diğer tüm görünümler gizli ürünleri hariç tutar
-    where.hidden = false;
+    if (!includeHidden) where.hidden = false;
     if (filter === "active") {
       where.isActive = true;
     } else if (filter === "out-of-stock") {
@@ -132,6 +135,14 @@ async function computeProducts(urlString: string) {
         alias: true,
         imageUrl: true,
         currentSalePrice: true,
+        // Barkod/stok kodu ve varyant etiketi olmadan hızlı arama okuduğu listede
+        // barkod eşleşmesi bulamıyor, her tuşta sunucuya sorup uygulamayı bekletiyordu.
+        // Satır sayısı aynı, yalnız birkaç küçük kolon eklendi.
+        barcode: true,
+        sku: true,
+        variantLabel: true,
+        isActive: true,
+        hidden: true,
         variantGroup: { select: { id: true, name: true } },
       },
       orderBy: { name: "asc" },

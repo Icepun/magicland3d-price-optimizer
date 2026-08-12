@@ -35,6 +35,22 @@ export function saveListState(name: string, patch: ListState): void {
   }
 }
 
+/**
+ * Durumu kaydet VE açık sayfaya duyur.
+ *
+ * NEDEN ayrı bir olay: `saveListState` yalnız yazıyor; sayfalar bu durumu YALNIZCA ilk açılışta
+ * (mount) okuyor. Kullanıcı zaten o sayfadayken aynı rotaya gitmek App Router'da bileşeni
+ * yeniden mount ETMEZ → yazılan arama hiçbir zaman uygulanmaz ve düğme ölü görünür
+ * (Ctrl+K → "Tümünü Ürünler'de gör" tam olarak böyle çalışmıyordu).
+ */
+export const LIST_STATE_EVENT = "mh-list-state";
+
+export function requestListState(name: string, patch: ListState): void {
+  saveListState(name, patch);
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(LIST_STATE_EVENT, { detail: { name, patch } }));
+}
+
 /** Uygulamanın kaydırma kabı (layout'taki <main>). Yoksa null. */
 export function scrollContainer(): HTMLElement | null {
   return typeof document === "undefined" ? null : document.querySelector("main");

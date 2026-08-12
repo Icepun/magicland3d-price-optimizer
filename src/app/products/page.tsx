@@ -27,7 +27,7 @@ import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
-import { loadListState, saveListState, scrollContainer } from "@/lib/list-state";
+import { loadListState, LIST_STATE_EVENT, type ListState, saveListState, scrollContainer } from "@/lib/list-state";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
@@ -646,6 +646,28 @@ export default function ProductsPage() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Sayfa AÇIKKEN gelen istek (Ctrl+K → "Tümünü Ürünler'de gör"): mount efekti bir daha
+  // çalışmadığı için aramayı burada uygularız.
+  useEffect(() => {
+    const uygula = (event: Event) => {
+      const detay = (event as CustomEvent<{ name: string; patch: ListState }>).detail;
+      if (!detay || detay.name !== "products") return;
+      if (detay.patch.filterMode) setFilterMode(detay.patch.filterMode as FilterMode);
+      if (typeof detay.patch.search === "string") {
+        setGlobalFilter(detay.patch.search);
+        setDebouncedFilter(detay.patch.search);
+      }
+      if (detay.patch.scrollTop != null) {
+        requestAnimationFrame(() => {
+          const el = scrollContainer();
+          if (el) el.scrollTop = detay.patch.scrollTop!;
+        });
+      }
+    };
+    window.addEventListener(LIST_STATE_EVENT, uygula);
+    return () => window.removeEventListener(LIST_STATE_EVENT, uygula);
   }, []);
 
   // Durumu oturuma yaz (arama/filtre anında; kaydırma sayfadan ayrılırken).

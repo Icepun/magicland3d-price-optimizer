@@ -28,7 +28,8 @@ interface PlatformStats {
   platform: Platform;
   activeListings: number;
   totalProfit: number;
-  averageMargin: number;
+  /** null = o platformda hesaplanacak ciro yok. SIFIR DEĞİL — "—" gösterilir. */
+  averageMargin: number | null;
   negativeProfitCount: number;
   thinMarginCount: number;
 }
@@ -162,7 +163,7 @@ function PlatformCard({ stats, delay }: { stats: PlatformStats; delay: number })
             <span className="text-xs text-muted-foreground">Ortalama Marj</span>
             <span
               className="text-lg font-bold tabular-nums"
-              style={{ color: stats.averageMargin < 0 ? ACCENTS.red : info.color }}
+              style={{ color: (stats.averageMargin ?? 0) < 0 ? ACCENTS.red : info.color }}
             >
               {formatPercent(stats.averageMargin)}
             </span>
@@ -190,7 +191,8 @@ interface PriceChangeItem {
   productName: string;
   firstPrice: number;
   lastPrice: number;
-  changePercent: number;
+  /** null = yüzde hesaplanamadı (eski fiyat yok/sıfır). SIFIR DEĞİL — "—" gösterilir. */
+  changePercent: number | null;
   changeCount: number;
   lastChangedAt: string;
 }
@@ -230,7 +232,9 @@ function PriceChangesCard({ delay }: { delay: number }) {
       <CardContent className="pt-3">
         <div className="space-y-0.5">
           {data.recent.map((item) => {
-            const up = item.changePercent >= 0;
+            const yuzde = item.changePercent;
+            const biliniyor = typeof yuzde === "number" && Number.isFinite(yuzde);
+            const up = biliniyor && yuzde >= 0;
             return (
               <Link key={item.productId} href={`/products/${item.productId}`}>
                 <div className="flex items-center justify-between py-2 px-3 -mx-3 rounded-lg cursor-pointer transition-all duration-150 hover:bg-muted/40 group">
@@ -248,16 +252,20 @@ function PriceChangesCard({ delay }: { delay: number }) {
                   <div
                     className={cn(
                       "flex items-center gap-1 text-sm font-bold tabular-nums shrink-0 ml-3",
-                      up ? "text-green-500" : "text-destructive"
+                      !biliniyor
+                        ? "text-muted-foreground"
+                        : up
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-destructive"
                     )}
                   >
-                    {up ? (
-                      <TrendingUp className="h-3.5 w-3.5" />
-                    ) : (
-                      <TrendingDown className="h-3.5 w-3.5" />
-                    )}
-                    {up ? "+" : ""}
-                    {item.changePercent.toFixed(1)}%
+                    {biliniyor &&
+                      (up ? (
+                        <TrendingUp className="h-3.5 w-3.5" />
+                      ) : (
+                        <TrendingDown className="h-3.5 w-3.5" />
+                      ))}
+                    {biliniyor ? `${up ? "+" : ""}${formatPercent(yuzde / 100)}` : "—"}
                   </div>
                 </div>
               </Link>

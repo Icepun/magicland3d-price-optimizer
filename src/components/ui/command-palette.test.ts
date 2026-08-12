@@ -4,10 +4,12 @@ import {
   highlightParts,
   moveActiveIndex,
   normalizeSearchText,
+  paletteResults,
   rankPaletteItems,
   requestOrdersView,
   scoreEntry,
   scoreMatch,
+  splitVariantTitle,
   takeOrdersRequest,
   type PaletteItem,
 } from "./command-palette";
@@ -108,6 +110,111 @@ describe("sonuç sıralama", () => {
   });
 });
 
+describe("boş aramada kısayol sayfaları", () => {
+  const sayfalar: PaletteItem[] = [
+    "Panel",
+    "Ürünler",
+    "Siparişler",
+    "Raporlar",
+    "Yazıcılar",
+    "Üretim",
+    "Hazırlık Listesi",
+    "Filament",
+    "Modeller",
+    "Ayarlar",
+  ].map((title, i) => ({ id: `s${i}`, kind: "sayfa", title }));
+
+  it("alfabetik değil, dizideki kullanım sırasıyla gelir", () => {
+    const sonuc = rankPaletteItems(sayfalar, "");
+    expect(sonuc[0].title).toBe("Panel");
+    expect(sonuc[1].title).toBe("Ürünler");
+    expect(sonuc.map((item) => item.title)).not.toContain("Ayarlar");
+  });
+
+  it("en çok kullanılan sekiz sayfa gösterilir", () => {
+    expect(rankPaletteItems(sayfalar, "")).toHaveLength(8);
+  });
+});
+
+describe("kırpılan sonuçların sayısı", () => {
+  const cokUrun: PaletteItem[] = Array.from({ length: 30 }, (_, i) => ({
+    id: `u${i}`,
+    kind: "urun",
+    title: `Stand ${i}`,
+  }));
+
+  it("grup başlığı gizlenenler dahil TÜM eşleşmeyi sayar", () => {
+    const { groups } = paletteResults(cokUrun, "stand");
+    expect(groups[0].items).toHaveLength(6);
+    expect(groups[0].total).toBe(30);
+  });
+
+  it("düz liste ekrandaki sırayla döner", () => {
+    const { groups, flat } = paletteResults(cokUrun, "stand");
+    expect(flat).toEqual(groups.flatMap((group) => group.items));
+  });
+});
+
+describe("eşleşme kalitesine göre sıralama", () => {
+  it("baştan eşleşen, içinde geçenden önce gelir", () => {
+    const kayitlar: PaletteItem[] = [
+      { id: "a", kind: "urun", title: "Ahşap Stand Küçük" },
+      { id: "b", kind: "urun", title: "Stand" },
+    ];
+    expect(rankPaletteItems(kayitlar, "stand")[0].id).toBe("b");
+  });
+
+  it("puan eşitse kısa ad önce gelir", () => {
+    const kayitlar: PaletteItem[] = [
+      { id: "uzun", kind: "urun", title: "Standlı Telefon Tutucu Büyük Boy" },
+      { id: "kisa", kind: "urun", title: "Standlı Kutu" },
+    ];
+    expect(rankPaletteItems(kayitlar, "standli")[0].id).toBe("kisa");
+  });
+
+  it("gizli/pasif ürünler aramaya girer ama aktiflerin altında kalır", () => {
+    const kayitlar: PaletteItem[] = [
+      { id: "gizli", kind: "urun", title: "Vazo", muted: true, tag: "Gizli" },
+      { id: "aktif", kind: "urun", title: "Vazo Büyük Boy" },
+    ];
+    const sonuc = rankPaletteItems(kayitlar, "vazo");
+    expect(sonuc.map((item) => item.id)).toEqual(["aktif", "gizli"]);
+  });
+});
+
+describe("varyantı başlıktan ayırma", () => {
+  it("grup adı başlıkta kalır, ayırt eden parça çipe geçer", () => {
+    expect(splitVariantTitle("Diş Macunu Sıkacağı Sarı", "Diş Macunu Sıkacağı")).toEqual({
+      title: "Diş Macunu Sıkacağı",
+      variant: "Sarı",
+    });
+  });
+
+  it("elle girilen etiket varsa o kullanılır", () => {
+    expect(
+      splitVariantTitle("Diş Macunu Sıkacağı - Mavi", "Diş Macunu Sıkacağı", "Gece Mavisi")
+    ).toEqual({ title: "Diş Macunu Sıkacağı", variant: "Gece Mavisi" });
+  });
+
+  it("ad grup adıyla başlamıyorsa ada dokunulmaz", () => {
+    expect(splitVariantTitle("Mavi Kalemlik", "Kalemlik")).toEqual({
+      title: "Mavi Kalemlik",
+      variant: undefined,
+    });
+  });
+
+  it("grup yokken sondaki etiket ayrılır", () => {
+    expect(splitVariantTitle("Kalemlik Kırmızı", null, "Kırmızı")).toEqual({
+      title: "Kalemlik",
+      variant: "Kırmızı",
+    });
+  });
+
+  it("grubu olmayan ürünün adı bölünmez", () => {
+    expect(splitVariantTitle("Kalemlik")).toEqual({ title: "Kalemlik" });
+  });
+});
+
 describe("klavye gezinmesi", () => {
   it("liste sonunda başa, başında sona sarar", () => {
     expect(moveActiveIndex(2, 1, 3)).toBe(0);
@@ -138,6 +245,20 @@ describe("eşleşen bölümün vurgulanması", () => {
 
   it("arama boşken metni bölmez", () => {
     expect(highlightParts("Kalemlik", "")).toEqual([{ text: "Kalemlik", hit: false }]);
+  });
+
+  it("aramanın TÜM kelimelerini işaretler", () => {
+    expect(highlightParts("Mavi Büyük Kutu", "mavi kutu")).toEqual([
+      { text: "Mavi", hit: true },
+      { text: " Büyük ", hit: false },
+      { text: "Kutu", hit: true },
+    ]);
+  });
+
+  it("çakışan eşleşmeleri tek parçaya birleştirir", () => {
+    expect(highlightParts("Kalemlik", "kalem kalemlik")).toEqual([
+      { text: "Kalemlik", hit: true },
+    ]);
   });
 });
 
