@@ -453,7 +453,7 @@ async function normalizeDateColumns(): Promise<boolean> {
          JOIN pragma_table_info(m.name) p
         WHERE m.type = 'table'
           AND m.name NOT LIKE 'sqlite_%'
-          AND m.name NOT LIKE '\_%' ESCAPE '\'
+          AND substr(m.name, 1, 1) <> '_'
           AND m.name <> 'Recommendation'
           AND UPPER(p.type) = 'DATETIME'`
     );
@@ -1267,22 +1267,27 @@ export function ensureRuntimeSchema(): Promise<void> {
     // yapar (veri bozulmaz, ama açılış yavaşlar). Bu koşulla yalnız geride kalan makine yeniden
     // göç koşar; güncel makine fast-path'te kalır.
     //
-    // ⚠️ TARİH ONARIMI BAŞARISIZSA DAMGALAMA. Damgalansaydı veritabanı "onarıldı" sayılır ve
-    // bir sonraki SÜRÜME kadar bir daha denenmezdi; Siparişler ve fiyat kartı o süre boyunca
-    // sessizce eksik veri okumaya devam ederdi. Damgalanmazsa açılış biraz yavaşlar (tam
-    // tarama tekrarlanır) ama onarım her açılışta yeniden denenir — doğru olan bu.
-    if (tarihOnarimiTamam) {
-      await prisma.$executeRawUnsafe(
-        `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-         WHERE CAST(excluded.value AS INTEGER) >= CAST(AppSetting.value AS INTEGER)`,
-        CURRENT_SCHEMA_VERSION
-      );
-      // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.
-      writeLocalSchemaMarker();
-    } else {
-      logPerf("schemaVersion damgalanmadı: tarih onarımı başarısız, sonraki açılışta yeniden denenecek");
+    // ⚠️ SÜRÜM HER HÂLÜKÂRDA DAMGALANIR — tarih onarımı başarısız olsa bile.
+    //
+    // Bir tur bunu "onarım başarısızsa damgalama" diye yazdım ve uygulamayı KULLANILAMAZ hale
+    // getirdi: onarımın introspection sorgusu geçersiz SQL üretiyordu, sürüm hiç damgalanmadı
+    // ve her açılış tam şema göçünü baştan koştu — ölçülen 205 SANİYE, her istek onu bekliyor.
+    // Ders: isteğe bağlı bir bakım adımının başarısızlığı, zorunlu hızlı yolu ASLA bloklamamalı.
+    //
+    // Onarım atlanırsa rapor doğruluğu bozulmaz: okuma tarafı zaten tip-bağımsız (`dbEpochMs`),
+    // bu yüzden onarım "ikinci emniyet kemeri". Başarısızlık perf.log'a düşer ve bir sonraki
+    // SÜRÜM yükseltmesinde yeniden denenir.
+    if (!tarihOnarimiTamam) {
+      logPerf("tarih onarımı atlandı (sürüm yine damgalandı — okuma tarafı tip-bağımsız)");
     }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO AppSetting (key, value) VALUES ('schemaVersion', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value
+       WHERE CAST(excluded.value AS INTEGER) >= CAST(AppSetting.value AS INTEGER)`,
+      CURRENT_SCHEMA_VERSION
+    );
+    // Yerel işaretçiyi yaz → bu cihazda sonraki kontroller ağa hiç gitmez.
+    writeLocalSchemaMarker();
     // Kilidi bırak (biz tuttuysak). Hata olursa kilit bayatlayıp devralınır.
     await releaseSchemaLock();
     logPerf(`ensureRuntimeSchema FULL setup (${Date.now() - __t0}ms)`);
