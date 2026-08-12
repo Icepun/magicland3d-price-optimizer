@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
+import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,12 @@ export async function POST(req: NextRequest) {
     const data = CreateSchema.parse(await req.json());
     const sortOrder = await prisma.printerConfig.count();
     const created = await prisma.printerConfig.create({ data: { ...data, sortOrder } });
+    // Panel 15sn'lik yapılandırma önbelleğini kullanıyor; geçersiz kılmazsak yeni yazıcı
+    // 15 saniye görünmez. Aynı adreste daha önce başka bir yazıcı varsa ondan kalan yetenek
+    // tablosu ve bağlantı portu da unutulur — yeni cihaz sıfırdan keşfedilsin.
+    invalidatePrinterConfigs();
+    clearMoonrakerCaps(created.host);
+    clearMoonrakerPort(created.host);
     return NextResponse.json(created, { status: 201 });
   } catch (error) {
     return jsonError(error);

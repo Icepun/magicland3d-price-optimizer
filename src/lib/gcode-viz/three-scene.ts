@@ -1,35 +1,154 @@
 "use client";
 /**
  * three.js sahne yapı taşları — izleyici dialogu, thumbnail ve inşa-karesi (sprite) üretimi
- * AYNI sahneyi paylaşır. Çizgi tabanlı (LineSegments) gösterim: 900k segmenti bile akıcı çizer;
- * katman ilerletme = drawRange (yeniden geometri üretmeden anlık).
+ * AYNI sahneyi paylaşır. Çizgi tabanlı (LineSegments) gösterim: milyonlarca segmenti tek çizim
+ * çağrısında akıcı çizer; katman ilerletme = drawRange (yeniden geometri üretmeden anlık).
+ *
+ * İKİ ÖNEMLİ DAVRANIŞ:
+ *  • RENK ARAÇTAN GELİR. Segmentler basıldıkları kafaya (T0/T1/…) göre boyanır; renk paleti
+ *    dışarıdan verilebilir (yazıcının bildirdiği gerçek filament renkleri). Palet yoksa gcode
+ *    başlığındaki renkler, o da yoksa özellik renkleri kullanılır.
+ *  • GÖVDE BASKIN. Dolgu, destek ve etek modelin eti değildir: izleyicide soluklaşır, kart
+ *    görselinde hiç çizilmez. Aksi hâlde her segment aynı kalınlıkta çizildiği için kare doluluğu
+ *    baskı boyunca neredeyse değişmiyor ve ilerleme gözle ayırt edilemiyordu.
  */
 import * as THREE from "three";
-import type { ParsedGcode } from "./parse-gcode";
-import { FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SUPPORT } from "./parse-gcode";
+import type { ParsedGcode } from "./viz-pack";
+import {
+  FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SUPPORT, FEATURE_OTHER,
+  FEATURE_SOLID, FEATURE_SKIRT, isBodyFeature,
+} from "./viz-pack";
 
-/** Özellik renkleri (koyu zeminde canlı, aydınlıkta okunur). */
+/** Palet yokken kullanılan özellik renkleri (koyu zeminde okunur). */
 const FEATURE_COLORS: Record<number, [number, number, number]> = {
-  [FEATURE_OUTER]: [1.0, 0.52, 0.24], // dış duvar — turuncu (model silueti)
-  [FEATURE_INNER]: [0.95, 0.72, 0.25], // iç duvar — amber
-  [FEATURE_INFILL]: [0.34, 0.45, 0.95], // dolgu — mavi (geri planda)
-  [FEATURE_SUPPORT]: [0.45, 0.48, 0.55], // destek — gri
+  [FEATURE_OUTER]: [1.0, 0.52, 0.24],
+  [FEATURE_INNER]: [0.95, 0.72, 0.25],
+  [FEATURE_SOLID]: [0.98, 0.62, 0.3],
+  [FEATURE_INFILL]: [0.34, 0.45, 0.95],
+  [FEATURE_SUPPORT]: [0.45, 0.48, 0.55],
+  [FEATURE_SKIRT]: [0.4, 0.42, 0.5],
+  [FEATURE_OTHER]: [0.62, 0.65, 0.72],
 };
-const FEATURE_DEFAULT: [number, number, number] = [0.62, 0.65, 0.72];
 
-/** XY footprint'in %2-%98 yüzdeliği — purge/prime/skirt gibi uç aykırıları çerçeveden dışlar.
- *  Örneklem (~30k) alınır → büyük modelde bile hızlı (izleyici açılışını dondurmaz). */
-function robustXYBounds(positions: Float32Array): { minX: number; maxX: number; minY: number; maxY: number } {
-  const nv = positions.length / 3; // köşe sayısı
-  if (nv === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
-  const step = Math.max(1, Math.floor(nv / 30000));
-  const xs: number[] = [], ys: number[] = [];
-  for (let i = 0; i < nv; i += step) {
-    xs.push(positions[i * 3]);
-    ys.push(positions[i * 3 + 1]);
+/** Özelliğe göre parlaklık — dış duvar en parlak (siluet), dolgu/destek geride kalır. */
+const FEATURE_SHADE: Record<number, number> = {
+  [FEATURE_OUTER]: 1.0,
+  [FEATURE_SOLID]: 0.88,
+  [FEATURE_INNER]: 0.76,
+  [FEATURE_OTHER]: 0.8,
+  [FEATURE_INFILL]: 0.6,
+  [FEATURE_SUPPORT]: 0.55,
+  [FEATURE_SKIRT]: 0.5,
+};
+
+export interface VizPalette {
+  /** Araç (kafa) başına gerçek filament rengi "#RRGGBB". Boş/eksik girdi → yedeğe düşer. */
+  toolColors?: (string | null | undefined)[];
+}
+
+export type VizMode = "viewer" | "card";
+
+export interface VizSceneOptions {
+  background?: number | null;
+  palette?: VizPalette;
+  /** "card": yalnız gövde çizilir (siluet dolumu gözle görülür). "viewer": dolgu/destek soluk. */
+  mode?: VizMode;
+}
+
+/** "#RRGGBB" → [r,g,b] 0-1. Tanınmazsa null. */
+function hexToRgb(hex: string | null | undefined): [number, number, number] | null {
+  if (!hex) return null;
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  const v = parseInt(m[1], 16);
+  return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+}
+
+/**
+ * Koyu zeminde görünürlük tabanı: siyah filament (#000000) koyu arka planda kaybolur.
+ * Rengi tonunu koruyarak alt sınıra taşı — kullanıcı hâlâ "siyah parça"yı ayırt eder.
+ */
+function readable(c: [number, number, number]): [number, number, number] {
+  const lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  // 0,45: gerçek dosyada model neredeyse tümüyle SİYAH filament (1,17 M segmentin 1,15 M'i).
+  // Daha düşük tabanla figür koyu zeminde okunmuyordu.
+  const FLOOR = 0.45;
+  if (lum >= FLOOR) return c;
+  const lift = FLOOR - lum;
+  return [Math.min(1, c[0] + lift), Math.min(1, c[1] + lift), Math.min(1, c[2] + lift)];
+}
+
+/**
+ * Özellik × araç renk tablosu — segment döngüsü bunu okur (segment başına hesap yapılmaz).
+ * Renk kaynağı sırası: dışarıdan verilen palet → gcode başlığındaki filament renkleri →
+ * özellik renkleri.
+ */
+export function vizColorTable(g: ParsedGcode, opts: VizSceneOptions = {}): { rgb: Float32Array; alpha: Float32Array; toolCount: number } {
+  const toolCount = Math.max(1, g.toolCount || 1);
+  const features = [FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SUPPORT, FEATURE_OTHER, FEATURE_SOLID, FEATURE_SKIRT];
+  const rgb = new Float32Array(7 * toolCount * 3);
+  const alpha = new Float32Array(7 * toolCount);
+  const card = opts.mode === "card";
+
+  for (let t = 0; t < toolCount; t++) {
+    const fromPalette = hexToRgb(opts.palette?.toolColors?.[t]);
+    const fromFile = hexToRgb(g.filamentColors?.[t]);
+    const base = fromPalette ?? fromFile;
+    for (const f of features) {
+      const shade = FEATURE_SHADE[f] ?? 0.8;
+      const c = base ? readable(base) : (FEATURE_COLORS[f] ?? FEATURE_COLORS[FEATURE_OTHER]);
+      const i = (f * toolCount + t) * 3;
+      rgb[i] = c[0] * shade;
+      rgb[i + 1] = c[1] * shade;
+      rgb[i + 2] = c[2] * shade;
+      alpha[f * toolCount + t] = isBodyFeature(f) ? 1 : card ? 0 : 0.2;
+    }
   }
-  xs.sort((a, b) => a - b);
-  ys.sort((a, b) => a - b);
+  return { rgb, alpha, toolCount };
+}
+
+/** Segment başına RGBA (Uint8, normalized) — Float32'ye göre 4 kat az bellek. */
+function fillColors(target: Uint8Array, g: ParsedGcode, opts: VizSceneOptions): void {
+  const { rgb, alpha, toolCount } = vizColorTable(g, opts);
+  const n = g.totalSegments;
+  for (let i = 0; i < n; i++) {
+    const f = g.features[i];
+    const t = g.tools ? Math.min(toolCount - 1, g.tools[i]) : 0;
+    const k = f * toolCount + t;
+    const r = (rgb[k * 3] * 255) | 0;
+    const gg = (rgb[k * 3 + 1] * 255) | 0;
+    const b = (rgb[k * 3 + 2] * 255) | 0;
+    const a = (alpha[k] * 255) | 0;
+    const o = i * 8;
+    target[o] = r; target[o + 1] = gg; target[o + 2] = b; target[o + 3] = a;
+    target[o + 4] = r; target[o + 5] = gg; target[o + 6] = b; target[o + 7] = a;
+  }
+}
+
+/**
+ * Çerçeveleme sınırları: yalnız GÖVDE segmentlerinden. Dilimleyicinin tabla-kenarı purge/prime
+ * çizgisi (tek uzun düz çizgi) tüm bounding-box'ı şişirip modeli köşede minicik bırakıyordu.
+ * Gövde yoksa (çok küçük dosya) tüm segmentlerin %2-%98 yüzdeliğine düşer.
+ */
+function bodyXYBounds(g: ParsedGcode): { minX: number; maxX: number; minY: number; maxY: number } {
+  const n = g.totalSegments;
+  if (n === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, seen = 0;
+  for (let i = 0; i < n; i++) {
+    if (!isBodyFeature(g.features[i])) continue;
+    seen++;
+    const o = i * 6;
+    const x1 = g.positions[o], y1 = g.positions[o + 1], x2 = g.positions[o + 3], y2 = g.positions[o + 4];
+    if (x1 < minX) minX = x1; if (x1 > maxX) maxX = x1;
+    if (x2 < minX) minX = x2; if (x2 > maxX) maxX = x2;
+    if (y1 < minY) minY = y1; if (y1 > maxY) maxY = y1;
+    if (y2 < minY) minY = y2; if (y2 > maxY) maxY = y2;
+  }
+  if (seen > 0) return { minX, maxX, minY, maxY };
+  const step = Math.max(1, Math.floor((g.positions.length / 3) / 30000));
+  const xs: number[] = [], ys: number[] = [];
+  for (let i = 0; i < g.positions.length / 3; i += step) { xs.push(g.positions[i * 3]); ys.push(g.positions[i * 3 + 1]); }
+  xs.sort((a, b) => a - b); ys.sort((a, b) => a - b);
   const q = (arr: number[], p: number) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(p * (arr.length - 1))))];
   return { minX: q(xs, 0.02), maxX: q(xs, 0.98), minY: q(ys, 0.02), maxY: q(ys, 0.98) };
 }
@@ -41,35 +160,37 @@ export interface VizScene {
   geometry: THREE.BufferGeometry;
   /** Katman i'ye kadar (dahil) çiz — -1 = hepsi. */
   setLayer: (layerIdx: number) => void;
+  /** Gerçek filament renkleri sonradan gelirse (API) paleti değiştir. */
+  setPalette: (palette: VizPalette) => void;
   layerCount: number;
   dispose: () => void;
 }
 
-export function buildVizScene(g: ParsedGcode, opts?: { background?: number | null }): VizScene {
+export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene {
+  const options: VizSceneOptions = { mode: "viewer", ...opts };
   const scene = new THREE.Scene();
-  if (opts?.background != null) scene.background = new THREE.Color(opts.background);
+  if (options.background != null) scene.background = new THREE.Color(options.background);
 
   const segCount = g.totalSegments;
-  const colors = new Float32Array(segCount * 6);
-  for (let i = 0; i < segCount; i++) {
-    const c = FEATURE_COLORS[g.features[i]] ?? FEATURE_DEFAULT;
-    const o = i * 6;
-    colors[o] = c[0]; colors[o + 1] = c[1]; colors[o + 2] = c[2];
-    colors[o + 3] = c[0]; colors[o + 4] = c[1]; colors[o + 5] = c[2];
-  }
+  const colorBytes = new Uint8Array(segCount * 8);
+  fillColors(colorBytes, g, options);
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(g.positions, 3));
-  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  const colorAttr = new THREE.BufferAttribute(colorBytes, 4, true);
+  geometry.setAttribute("color", colorAttr);
 
-  const material = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.92 });
+  // alphaTest: alfası 0 olan (kartta dolgu/destek) parçalar TAMAMEN atılır — derinlik tamponuna da
+  // yazmaz, yoksa görünmez çizgiler gövdeyi kapatırdı.
+  const material = new THREE.LineBasicMaterial({
+    vertexColors: true,
+    transparent: options.mode !== "card",
+    alphaTest: 0.02,
+  });
   const lines = new THREE.LineSegments(geometry, material);
 
-  // ROBUST çerçeveleme: dilimleyici tabla-kenarı purge/prime çizgisi (tek uzun düz çizgi) tüm
-  // bounding-box'ı şişiriyor → model küçük + köşede görünüyordu. XY için %2-%98 yüzdelikle asıl
-  // gövdeyi çerçeveleriz (uç aykırılar dışlanır); Z (yükseklik) tam min/max (dikey aykırı yok).
   const { minZ } = g.bounds;
-  const rb = robustXYBounds(g.positions);
+  const rb = bodyXYBounds(g);
   const cx = (rb.minX + rb.maxX) / 2, cy = (rb.minY + rb.maxY) / 2;
   const group = new THREE.Group();
   lines.position.set(-cx, -cy, -minZ); // modeli GERÇEK merkezine göre ortala
@@ -77,7 +198,7 @@ export function buildVizScene(g: ParsedGcode, opts?: { background?: number | nul
   group.rotation.x = -Math.PI / 2;
   scene.add(group);
 
-  // Tabla ızgarası (hafif) — robust span'e göre (purge çizgisi ızgarayı da devleştirmesin).
+  // Tabla ızgarası (hafif) — gövde span'ine göre.
   const spanX = Math.max(10, rb.maxX - rb.minX), spanY = Math.max(10, rb.maxY - rb.minY);
   const gridSize = Math.ceil(Math.max(spanX, spanY) * 1.4 / 10) * 10;
   const grid = new THREE.GridHelper(gridSize, Math.max(6, Math.round(gridSize / 10)), 0x475069, 0x2a3042);
@@ -85,8 +206,7 @@ export function buildVizScene(g: ParsedGcode, opts?: { background?: number | nul
   (grid.material as THREE.Material).opacity = 0.3;
   scene.add(grid);
 
-  // Kamera: izometrik açı. Faktör 0.72 (kanıtlanmış, kırpmaz); asıl iyileşme robust span'den gelir
-  // (purge çizgisi artık span'i şişirmiyor → model kadrajı doldurur + ortalanır).
+  // Kamera: izometrik açı. Faktör 0.72 (kanıtlanmış, kırpmaz).
   const spanZ = Math.max(5, g.bounds.maxZ - minZ);
   const radius = Math.max(spanX, spanY, spanZ) * 0.72;
   const camera = new THREE.PerspectiveCamera(38, 1, 0.5, radius * 20);
@@ -101,16 +221,25 @@ export function buildVizScene(g: ParsedGcode, opts?: { background?: number | nul
     }
   };
 
+  const setPalette = (palette: VizPalette) => {
+    fillColors(colorBytes, g, { ...options, palette });
+    colorAttr.needsUpdate = true;
+  };
+
   return {
-    scene, camera, lines, geometry, setLayer,
+    scene, camera, lines, geometry, setLayer, setPalette,
     layerCount: g.layerRanges.length,
-    dispose: () => { geometry.dispose(); material.dispose(); (grid.material as THREE.Material).dispose(); grid.geometry.dispose(); },
+    dispose: () => {
+      geometry.dispose();
+      material.dispose();
+      (grid.material as THREE.Material).dispose();
+      grid.geometry.dispose();
+    },
   };
 }
 
 // PAYLAŞILAN offscreen renderer — her çağrıda yeni WebGL context YARATMAK pahalıdır ve tarayıcı
-// context sayısını (~16) sınırlar; çok dosyada context tükenir. Üretim zaten SERİ (tek seferde bir
-// iş) olduğundan tek renderer güvenle yeniden kullanılır.
+// context sayısını (~16) sınırlar. Üretim zaten SERİ olduğundan tek renderer güvenle kullanılır.
 let sharedRenderer: THREE.WebGLRenderer | null = null;
 let sharedCanvas: HTMLCanvasElement | null = null;
 function getSharedRenderer(size: number): THREE.WebGLRenderer | null {
@@ -129,10 +258,10 @@ function getSharedRenderer(size: number): THREE.WebGLRenderer | null {
 }
 
 /** Offscreen tek kare (thumbnail) — PNG data URL. Paylaşılan renderer, sahne dispose edilir. */
-export function renderThumbnail(g: ParsedGcode, size = 512): string | null {
+export function renderThumbnail(g: ParsedGcode, size = 512, palette?: VizPalette): string | null {
   const renderer = getSharedRenderer(size);
   if (!renderer) return null;
-  const viz = buildVizScene(g, { background: null });
+  const viz = buildVizScene(g, { background: null, mode: "card", palette });
   viz.camera.aspect = 1;
   viz.camera.updateProjectionMatrix();
   try {
@@ -151,12 +280,13 @@ export async function renderBuildFrames(
   frameCount = 24,
   size = 240,
   yieldFn?: () => Promise<void>,
+  palette?: VizPalette,
 ): Promise<Blob[]> {
   const renderer = getSharedRenderer(size);
   if (!renderer) return [];
   const canvas = renderer.domElement as HTMLCanvasElement;
   const blobs: Blob[] = [];
-  const viz = buildVizScene(g, { background: null });
+  const viz = buildVizScene(g, { background: null, mode: "card", palette });
   viz.camera.aspect = 1;
   viz.camera.updateProjectionMatrix();
   try {

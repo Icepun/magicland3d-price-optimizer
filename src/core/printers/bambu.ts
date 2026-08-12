@@ -26,6 +26,8 @@ export interface BambuStatus {
   gcodeState: string | null;
   percent: number; // 0..100
   remainingSec: number | null;
+  /** Baskının gerçekten başladığı an (print.gcode_start_time, unix sn) — geçen süre için. */
+  startedAtMs: number | null;
   layerNum: number | null;
   totalLayerNum: number | null;
   nozzle: number;
@@ -36,12 +38,56 @@ export interface BambuStatus {
   printError: number | null; // print.print_error (0 = sorun yok)
   hmsCount: number; // print.hms[] uzunluğu (aktif uyarı sayısı)
   hmsCodes: string[]; // print.hms[] → okunur HMS kodları (ör. "0700-8001-0002-0008")
+  /** Panele düşecek uyarılar — sade Türkçe metin + ham kod (MADDE 14). */
+  warnings: BambuWarning[];
+  /** Hız profili (1 sessiz · 2 standart · 3 hızlı · 4 çok hızlı). Bilinmiyorsa null. */
+  speedLevel: number | null;
+  /** AMS'te o an takılı slot (tray_now). 254/255 = harici makara. */
+  activeTray: number | null;
+  /** Duraklatma/hata NEDENİ — sade Türkçe (yoksa null). */
+  statusReason: string | null;
+}
+
+export interface BambuWarning {
+  /** "0700-8001-0002-0008" — üreticinin HMS kodu (destek araması için). */
+  code: string;
+  level: "fatal" | "serious" | "common" | "info";
+  /** Son kullanıcıya gösterilecek kısa metin. */
+  text: string;
 }
 
 /** Bambu HMS girişini ({attr,code}) okunur koda çevir: AAAA-BBBB-CCCC-DDDD (hex). */
 function formatHms(attr: number, code: number): string {
   const h = (n: number) => (n >>> 0).toString(16).toUpperCase().padStart(4, "0");
   return `${h((attr >>> 16) & 0xffff)}-${h(attr & 0xffff)}-${h((code >>> 16) & 0xffff)}-${h(code & 0xffff)}`;
+}
+
+const HMS_LEVEL_TEXT: Record<BambuWarning["level"], string> = {
+  fatal: "Yazıcı durdu — donanım uyarısı",
+  serious: "Yazıcı ciddi bir uyarı veriyor",
+  common: "Yazıcı uyarı veriyor",
+  info: "Yazıcı bilgi veriyor",
+};
+
+/** HMS kodunun ilk 4 hanesi hangi birimden geldiğini söyler — kullanıcıya ANLAMLI kısım budur. */
+function hmsModuleText(code: string): string | null {
+  const head = code.slice(0, 4).toUpperCase();
+  if (head === "0700" || head === "0701") return "Baskı kafası";
+  if (head === "0300") return "AMS / filament";
+  if (head === "0500") return "Tabla";
+  if (head === "1200") return "Ana kart";
+  return null;
+}
+
+/** HMS girişini kullanıcı diline çevir. Kod bilinmiyorsa uydurmuyoruz: birim + önem düzeyi. */
+function toWarning(attr: number, code: number): BambuWarning {
+  const text = formatHms(attr, code);
+  const sev = (code >>> 16) & 0xffff;
+  const level: BambuWarning["level"] =
+    sev === 1 ? "fatal" : sev === 2 ? "serious" : sev === 3 ? "common" : "info";
+  // Değişken adı `module` OLAMAZ — Next derlemesi bunu hata sayıyor (@next/next/no-assign-module-variable).
+  const part = hmsModuleText(text);
+  return { code: text, level, text: part ? `${part} — ${HMS_LEVEL_TEXT[level]}` : HMS_LEVEL_TEXT[level] };
 }
 
 interface Conn {
@@ -240,24 +286,24 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   // backoff'uyla birleşip kartı uzun uzun "Bağlantı yok"ta tutuyordu (pybambu deseni: kısa
   // kopuşta son bilinen durumla devam, kalıcı kopuşta dürüst çevrimdışı).
   const hasData = conn.hasData && (conn.connected || now - conn.disconnectedAt < 15_000);
-  if (!hasData) {
-    return {
-      online: false, gcodeState: null, percent: 0, remainingSec: null,
-      layerNum: null, totalLayerNum: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0, filename: null,
-      printError: null, hmsCount: 0, hmsCodes: [],
-    };
-  }
+  if (!hasData) return offlineBambuStatus();
+
   const hmsArr = Array.isArray(p.hms) ? p.hms : [];
-  const hmsCodes = hmsArr
-    .map((h: any) => (h && typeof h.attr === "number" && typeof h.code === "number" ? formatHms(h.attr, h.code) : null))
-    .filter((x: string | null): x is string => !!x);
+  const warnings: BambuWarning[] = hmsArr
+    .map((h: any) => (h && typeof h.attr === "number" && typeof h.code === "number" ? toWarning(h.attr, h.code) : null))
+    .filter((x: BambuWarning | null): x is BambuWarning => !!x);
 
   const remainingMin = typeof p.mc_remaining_time === "number" ? p.mc_remaining_time : null;
+  const startSec = Number(p.gcode_start_time);
+  const gcodeState = typeof p.gcode_state === "string" ? p.gcode_state : null;
+  const printError = typeof p.print_error === "number" ? p.print_error : null;
+  const trayNow = Number(p.ams?.tray_now);
   return {
     online: true,
-    gcodeState: typeof p.gcode_state === "string" ? p.gcode_state : null,
+    gcodeState,
     percent: typeof p.mc_percent === "number" ? p.mc_percent : 0,
     remainingSec: remainingMin != null ? Math.round(remainingMin * 60) : null, // Bambu: DAKİKA
+    startedAtMs: Number.isFinite(startSec) && startSec > 1_000_000_000 ? startSec * 1000 : null,
     layerNum: typeof p.layer_num === "number" ? p.layer_num : null,
     totalLayerNum: typeof p.total_layer_num === "number" ? p.total_layer_num : null,
     nozzle: Math.round(p.nozzle_temper ?? 0),
@@ -265,33 +311,214 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     bed: Math.round(p.bed_temper ?? 0),
     bedTarget: Math.round(p.bed_target_temper ?? 0),
     filename: p.subtask_name || p.gcode_file || null,
-    printError: typeof p.print_error === "number" ? p.print_error : null,
+    printError,
     hmsCount: hmsArr.length,
-    hmsCodes,
+    hmsCodes: warnings.map((w) => w.code),
+    warnings,
+    speedLevel: typeof p.spd_lvl === "number" ? p.spd_lvl : null,
+    activeTray: Number.isFinite(trayNow) && trayNow >= 0 && trayNow < 250 ? trayNow : null,
+    statusReason: bambuStatusReason(gcodeState, printError, warnings),
   };
 }
 
-export function bambuControl(host: string, accessCode: string, serial: string, action: "pause" | "resume" | "cancel"): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const conn = ensureConn(host, accessCode, serial);
-    // BAĞLI DEĞİLKEN reddet: mqtt.js QoS-1 publish'i kuyruğa alır → çevrimdışıyken basılan
-    // "duraklat" saatler sonra yeniden bağlanınca uygulanabilirdi (bayat komut tehlikesi).
-    // Ayrıca eski fire-and-forget hali hatayı hiç bildirmiyordu (kullanıcı "ok" sanıyordu).
-    if (!conn.connected) {
-      reject(new Error("Yazıcı bağlı değil — komut gönderilemedi"));
-      return;
+function offlineBambuStatus(): BambuStatus {
+  return {
+    online: false, gcodeState: null, percent: 0, remainingSec: null, startedAtMs: null,
+    layerNum: null, totalLayerNum: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0, filename: null,
+    printError: null, hmsCount: 0, hmsCodes: [], warnings: [], speedLevel: null, activeTray: null,
+    statusReason: null,
+  };
+}
+
+/**
+ * MADDE 14 — "neden durdu / ne uyarıyor" panele düşsün.
+ * Bambu düz metin sebep vermiyor; elimizde hata kodu ve HMS uyarıları var. En ciddi uyarıyı
+ * öne çıkarıp sade Türkçe tek satır üretiyoruz (kod, ayrı alanda zaten duruyor).
+ */
+function bambuStatusReason(
+  gcodeState: string | null,
+  printError: number | null,
+  warnings: BambuWarning[],
+): string | null {
+  const order: BambuWarning["level"][] = ["fatal", "serious", "common", "info"];
+  const top = order.map((lvl) => warnings.find((w) => w.level === lvl)).find(Boolean) ?? null;
+  const state = (gcodeState || "").toUpperCase();
+  if (state === "FAILED") {
+    return top ? `Baskı hatayla durdu · ${top.text}` : "Baskı hatayla durdu";
+  }
+  if (state === "PAUSE") {
+    if (top) return `Duraklatıldı · ${top.text}`;
+    if (printError) return "Duraklatıldı — yazıcı bir sorun bildirdi";
+    return null; // kullanıcı elle duraklatmış olabilir; uydurma sebep yazma
+  }
+  // NORMAL DURUMDA sebep yazma. HMS listesinde kalıcı düşük önemli girişler (ör. boş AMS slotu)
+  // duruyor; bunları `statusReason` yapmak sorunsuz basan yazıcı için telefonda kalıcı sahte
+  // uyarı üretiyordu. Uyarılar zaten ayrı `warnings[]` dizisinde gidiyor.
+  if (top && (top.level === "fatal" || top.level === "serious")) return top.text;
+  return null;
+}
+
+/** Komuttan sonra yazıcının olması gereken gcode_state değerleri. */
+const BAMBU_EXPECTED_STATES: Record<"pause" | "resume" | "cancel", string[]> = {
+  pause: ["PAUSE"],
+  resume: ["RUNNING", "PREPARE", "SLICING"],
+  cancel: ["IDLE", "FINISH", "FAILED"],
+};
+const BAMBU_ACTION_LABEL: Record<"pause" | "resume" | "cancel", string> = {
+  pause: "Duraklatma", resume: "Devam ettirme", cancel: "İptal",
+};
+/** Durum değişimi için tanınan süre — A1 rapor aralığı ~1sn, iptal makrosu daha uzun sürer. */
+const BAMBU_VERIFY_MS: Record<"pause" | "resume" | "cancel", number> = {
+  pause: 12_000, resume: 12_000, cancel: 20_000,
+};
+
+/**
+ * Komut GÖNDERİLMEDEN ÖNCE yazıcının olması gereken durumları.
+ * Bambu firmware "son istemci kazanır" ile bizi susturduğunda `conn.print` önceki işten kalma
+ * değerde DONUYOR. Ön koşul olmadan boşta/bitmiş bir yazıcıya "İptal" gönderiliyor, donmuş
+ * "FINISH" değeri beklenen listede olduğu için de anında "iptal edildi" deniyordu.
+ */
+const BAMBU_REQUIRED_STATES: Record<"pause" | "resume" | "cancel", string[]> = {
+  pause: ["RUNNING", "PREPARE", "SLICING"],
+  resume: ["PAUSE"],
+  cancel: ["RUNNING", "PREPARE", "SLICING", "PAUSE"],
+};
+
+const BAMBU_NOT_APPLICABLE: Record<"pause" | "resume" | "cancel", string> = {
+  pause: "Duraklatma yapılamadı — yazıcı şu an basmıyor.",
+  resume: "Devam ettirme yapılamadı — duraklatılmış bir baskı yok.",
+  cancel: "İptal yapılamadı — süren bir baskı yok.",
+};
+
+/** Rapor bu süreden eskiyse yazıcının bildirdiği duruma GÜVENİLMEZ (susturulmuş olabiliriz). */
+const BAMBU_FRESH_MS = 20_000;
+
+/** Tam durum isteği — beş çağrı yeriyle AYNI biçim (`version`/`push_target` şart). */
+function publishPushall(conn: Conn, serial: string): void {
+  try {
+    conn.client.publish(
+      `device/${serial}/request`,
+      JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
+      { qos: 0 }
+    );
+    conn.lastPushallAt = Date.now();
+  } catch { /* gitmezse normal raporlar zaten gelecek */ }
+}
+
+export interface BambuControlResult {
+  verified: boolean;
+  state: string | null;
+}
+
+/**
+ * MADDE 9 — Duraklat / devam / iptal ve KOMUTUN UYGULANDIĞININ DOĞRULANMASI.
+ *
+ * Eski davranış: publish geri çağrısı hatasız dönünce başarı sayılıyordu. MQTT QoS 0'da bu
+ * yalnız "paket sokete yazıldı" demektir — yazıcı komutu reddetse bile arayüz "Duraklatıldı"
+ * yazıyordu. Artık komuttan sonra yazıcının BİLDİRDİĞİ durum beklenir; geçmezse net hata döner.
+ */
+export async function bambuControl(
+  host: string,
+  accessCode: string,
+  serial: string,
+  action: "pause" | "resume" | "cancel",
+): Promise<BambuControlResult> {
+  const conn = ensureConn(host, accessCode, serial);
+  // BAĞLI DEĞİLKEN reddet: mqtt.js QoS-1 publish'i kuyruğa alır → çevrimdışıyken basılan
+  // "duraklat" saatler sonra yeniden bağlanınca uygulanabilirdi (bayat komut tehlikesi).
+  if (!conn.connected) throw new Error("Yazıcı bağlı değil — komut gönderilmedi.");
+
+  // TAZELİK: `conn.print` yalnız MQTT raporu geldiğinde tazelenir ve yeniden bağlanmada
+  // TEMİZLENMEZ. Bayat durum üzerinden komut yollamak ya da doğrulamak, olmamış bir işlemi
+  // "başarılı" gösteriyordu. Önce tam durum iste, kısa süre bekle; hâlâ taze veri yoksa net hata.
+  if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+    publishPushall(conn, serial);
+    const wait = Date.now() + 3000;
+    while (Date.now() < wait && (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS)) {
+      await new Promise((r) => setTimeout(r, 200));
     }
-    const command = action === "cancel" ? "stop" : action;
-    // QoS 0 (hayalet-komut koruması): QoS 1'de ACK kaybolan duraklat/devam saatler sonra
-    // yeniden bağlanınca TEKRAR gönderilirdi (bayat resume = kendi kendine baskı sürdürme).
-    // Teslim doğrulaması kullanıcı tarafında: durum 5sn poll'da değişmezse tekrar basar.
+    if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+      throw new Error("Yazıcı şu an durumunu bildirmiyor — komut gönderilmedi.");
+    }
+  }
+
+  const stateBefore = typeof conn.print.gcode_state === "string" ? conn.print.gcode_state.toUpperCase() : null;
+  if (!stateBefore || !BAMBU_REQUIRED_STATES[action].includes(stateBefore)) {
+    throw new Error(BAMBU_NOT_APPLICABLE[action]);
+  }
+  // Doğrulama YALNIZ bu damgadan SONRA gelen raporlara bakar — komut öncesi durum "doğrulama"
+  // sayılmaz.
+  const sentAfterMs = conn.lastMessageAt;
+
+  const command = action === "cancel" ? "stop" : action;
+  // QoS 0 (hayalet-komut koruması): QoS 1'de ACK kaybolan duraklat/devam saatler sonra
+  // yeniden bağlanınca TEKRAR gönderilirdi (bayat resume = kendi kendine baskı sürdürme).
+  await new Promise<void>((resolve, reject) => {
     conn.client.publish(
       `device/${serial}/request`,
       JSON.stringify({ print: { sequence_id: "0", command, param: "" } }),
       { qos: 0 },
-      (err) => (err ? reject(err) : resolve())
+      (err) => {
+        if (!err) { resolve(); return; }
+        console.warn(`[bambu] ${action} publish hatası:`, err);
+        reject(new Error(`${BAMBU_ACTION_LABEL[action]} komutu yazıcıya iletilemedi.`));
+      }
     );
   });
+  // A1/P1 delta raporlar; durum geçişini beklemeden görebilmek için tam durum iste.
+  publishPushall(conn, serial);
+
+  const expected = BAMBU_EXPECTED_STATES[action];
+  const deadline = Date.now() + BAMBU_VERIFY_MS[action];
+  for (;;) {
+    const state = typeof conn.print.gcode_state === "string" ? conn.print.gcode_state.toUpperCase() : null;
+    // Rapor KOMUTTAN SONRA gelmiş olmalı: eski (donmuş) durum doğrulama sayılmaz.
+    if (conn.lastMessageAt > sentAfterMs && state && expected.includes(state)) return { verified: true, state };
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`${BAMBU_ACTION_LABEL[action]} komutu gönderildi ama yazıcı uygulamadı — ekranını kontrol et.`);
+}
+
+/**
+ * MADDE 10 — Bambu'da hız "profil" ile ayarlanır (serbest yüzde yok):
+ *   1 sessiz (%50) · 2 standart (%100) · 3 hızlı (%124) · 4 çok hızlı (%166)
+ * Komut: `{ print: { command: "print_speed", param: "<1-4>" } }`. Uygulandığı `spd_lvl`'den doğrulanır.
+ */
+export const BAMBU_SPEED_LEVELS: readonly { level: number; label: string; pct: number }[] = [
+  { level: 1, label: "Sessiz", pct: 50 },
+  { level: 2, label: "Standart", pct: 100 },
+  { level: 3, label: "Hızlı", pct: 124 },
+  { level: 4, label: "Çok hızlı", pct: 166 },
+];
+
+export async function bambuSetSpeedLevel(
+  host: string, accessCode: string, serial: string, level: number,
+): Promise<number> {
+  if (!BAMBU_SPEED_LEVELS.some((l) => l.level === level)) {
+    throw new Error("Geçersiz hız profili.");
+  }
+  const conn = ensureConn(host, accessCode, serial);
+  if (!conn.connected) throw new Error("Yazıcı bağlı değil — komut gönderilmedi.");
+  await new Promise<void>((resolve, reject) => {
+    conn.client.publish(
+      `device/${serial}/request`,
+      JSON.stringify({ print: { sequence_id: "0", command: "print_speed", param: String(level) } }),
+      { qos: 0 },
+      (err) => {
+        if (!err) { resolve(); return; }
+        console.warn("[bambu] print_speed publish hatası:", err);
+        reject(new Error("Hız değiştirilemedi."));
+      }
+    );
+  });
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    if (typeof conn.print.spd_lvl === "number" && conn.print.spd_lvl === level) return level;
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error("Hız komutu gönderildi ama yazıcı yeni değeri uygulamadı.");
 }
 
 export interface BambuSlot { slot: number; color: string; type: string; remain: number | null; empty: boolean }

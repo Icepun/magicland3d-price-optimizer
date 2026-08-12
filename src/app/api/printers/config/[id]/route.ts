@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dropBambuConns } from "@/core/printers/bambu";
+import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
+import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
 
 const UpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -29,6 +31,18 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // Bambu MQTT bağlantısını tazele: access code/host/serial değişikliği eski bağlantıda
     // GEÇERSİZDİ (uygulama yeniden başlatılana dek bayat şifreyle reconnect); disable'da da
     // zombie reconnect kalmasın. Eski VE yeni kimlikler düşürülür; sonraki sorgu taze kurar.
+    // Panel 15sn'lik yapılandırma önbelleğinden okuyor: geçersiz kılmazsak IP/port değişikliği
+    // 15 saniye boyunca ESKİ adrese sorulur ve kullanıcı "ulaşılamadı" görüp ayarı yanlış
+    // yaptığını sanar. Yetenek tablosu da adrese bağlı → o da unutulur.
+    invalidatePrinterConfigs();
+    // Keşfedilen bağlantı portu da adrese bağlı: eski adresten kalan port yeni adrese
+    // uygulanırsa yazıcı "ulaşılamıyor" görünür.
+    if (before && (before.host !== updated.host || before.port !== updated.port)) {
+      clearMoonrakerCaps(before.host);
+      clearMoonrakerCaps(updated.host);
+      clearMoonrakerPort(before.host);
+      clearMoonrakerPort(updated.host);
+    }
     if (before?.serial) dropBambuConns(before.host, before.serial);
     if (updated.type === "bambu" && updated.serial && (data.enabled === false || before?.host !== updated.host || before?.serial !== updated.serial || before?.accessCode !== updated.accessCode)) {
       dropBambuConns(updated.host, updated.serial);
@@ -48,6 +62,12 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id } });
     await prisma.appSetting.deleteMany({ where: { key: `slotSnapshot:${id}` } });
     await prisma.printerConfig.delete({ where: { id } });
+    // Panel silinen yazıcıyı 15 saniye daha çizip LAN'da yoklamasın.
+    invalidatePrinterConfigs();
+    if (cfg?.host) {
+      clearMoonrakerCaps(cfg.host);
+      clearMoonrakerPort(cfg.host);
+    }
     // Silinen Bambu'nun MQTT bağlantısı zombie reconnect yapmasın.
     if (cfg?.type === "bambu" && cfg.serial) dropBambuConns(cfg.host, cfg.serial);
     return NextResponse.json({ ok: true });

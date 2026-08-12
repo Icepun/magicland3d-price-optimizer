@@ -27,6 +27,15 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  /* Yazıcı durumları — `bg-status-printing/15`, `text-status-error`, `border-status-paused/40`
+     gibi sınıflarla kullanılır (opaklık ekleri çalışır). */
+  --color-status-printing: var(--status-printing);
+  --color-status-paused: var(--status-paused);
+  --color-status-done: var(--status-done);
+  --color-status-error: var(--status-error);
+  --color-status-idle: var(--status-idle);
+  --color-status-offline: var(--status-offline);
+  --color-status-setup: var(--status-setup);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -107,6 +116,56 @@
   --panel-shopify-on-soft:     oklch(0.60 0.16 152);
   --panel-trendyol-on-soft:    oklch(0.72 0.17 60);
   --panel-hepsiburada-on-soft: oklch(0.66 0.19 38);
+
+  /* =============================================
+     YAZICI DURUM RENKLERİ
+
+     Her durumun KENDİ tonu var ve `--destructive` YALNIZ hataya ayrıldı: "Yazdırıyor" rozeti
+     tehlike kırmızısıyla aynı tonu aldığında sağlıklı bir baskı arızalı gibi görünüyordu.
+     Tonlar birbirinden hem RENK hem AÇIKLIK olarak ayrılır (yan yana dizilen kartlarda
+     tek bakışta ayırt edilsin).
+
+     Her durum üç değişkenle gelir:
+       --status-X        rozet/ikon/metin rengi (dolu zeminde --status-on-solid ile yazılır)
+       --status-X-soft   yumuşak zemin
+       --status-X-line   kenarlık
+
+     ⚠️ TEK KAYNAK: `printers/panel-view.ts` TONE_VISUALS doğrudan bu değişkenleri okur.
+     Durum tonu için `--panel-*` KULLANILMAZ (iki palet yan yana durursa aynı ekranda iki
+     farklı "Yazdırıyor" rengi çıkar).
+     ============================================= */
+  --status-printing:      oklch(0.72 0.155 232);   /* yazdırıyor — camgöbeği mavi */
+  --status-printing-soft: oklch(0.72 0.155 232 / 15%);
+  --status-printing-line: oklch(0.72 0.155 232 / 38%);
+  --status-printing-glow: oklch(0.72 0.155 232 / 28%);
+
+  --status-paused:        oklch(0.79 0.155 78);    /* duraklatıldı — kehribar */
+  --status-paused-soft:   oklch(0.79 0.155 78 / 15%);
+  --status-paused-line:   oklch(0.79 0.155 78 / 38%);
+
+  --status-done:          oklch(0.76 0.175 150);   /* tamamlandı — yeşil */
+  --status-done-soft:     oklch(0.76 0.175 150 / 15%);
+  --status-done-line:     oklch(0.76 0.175 150 / 38%);
+
+  --status-error:         oklch(0.66 0.225 22);    /* hata — tehlike ailesi BİLEREK burada */
+  --status-error-soft:    oklch(0.66 0.225 22 / 15%);
+  --status-error-line:    oklch(0.66 0.225 22 / 42%);
+  --status-error-glow:    oklch(0.66 0.225 22 / 32%);
+
+  --status-idle:          oklch(0.78 0.045 255);   /* hazır — sakin açık gri-mavi */
+  --status-idle-soft:     oklch(0.78 0.045 255 / 12%);
+  --status-idle-line:     oklch(0.78 0.045 255 / 26%);
+
+  --status-offline:       oklch(0.56 0.014 265);   /* çevrimdışı — sönük gri */
+  --status-offline-soft:  oklch(0.56 0.014 265 / 14%);
+  --status-offline-line:  oklch(0.56 0.014 265 / 26%);
+
+  --status-setup:         oklch(0.70 0.135 310);   /* kurulum tamamlanmadı — çevrimdışı DEĞİL */
+  --status-setup-soft:    oklch(0.70 0.135 310 / 14%);
+  --status-setup-line:    oklch(0.70 0.135 310 / 34%);
+
+  /* Durum renginin DOLU kullanıldığı yerde (dolu rozet, dolan bar) üstteki yazı. */
+  --status-on-solid:      oklch(0.16 0.02 265);
 
   --sidebar:           oklch(0.135 0.016 265);
   --sidebar-foreground: oklch(0.84 0.010 265);
@@ -255,6 +314,9 @@
     0 8px 32px oklch(0 0 0 / 35%),
     0 0 0 1px oklch(0.66 0.20 278 / 8%);
 }
+
+/* Baskı karesi çapraz geçişi `printers/page.tsx` içinde (önceki/şimdiki kare) çözülür —
+   burada ikinci bir kural TUTULMAZ, iki opaklık kuralı çakışınca kare göz kırpıyor. */
 
 /* =============================================
    TABLE — Daha okunabilir, modern stil

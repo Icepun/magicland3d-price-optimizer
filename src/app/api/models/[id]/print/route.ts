@@ -12,17 +12,20 @@ import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuS
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
+import { buildSignedUploadName } from "@/lib/print-file-signature";
 
 export const dynamic = "force-dynamic";
 
-/** Yükleme adına içerik kimliği göm: "gövde.gcode" + md5 → "gövde-a1b2c3d4e5.gcode".
- *  Yazıcıda bu ad + AYNI bayt boyutu görülürse dosya KESİN aynı içeriktir (adı bu içerikten biz
- *  ürettik) → indirme + yükleme atlanabilir. İsim benzerliği tahmini DEĞİLDİR. */
-function hashedUploadName(originalName: string, md5: string): string {
-  const h = md5.slice(0, 10);
-  const m = originalName.match(/^(.*?)(\.[^.]+)$/);
-  return m ? `${m[1]}-${h}${m[2]}` : `${originalName}-${h}`;
-}
+/*
+ * Yükleme adına içerik kimliği gömülür: "gövde.gcode" + md5 → "gövde-a1b2c3d4e5.gcode"
+ * (`buildSignedUploadName`). İki işi birden görür:
+ *   1) Yazıcıda bu ad + AYNI bayt boyutu görülürse dosya KESİN aynı içeriktir → indirme +
+ *      yükleme atlanır. İsim benzerliği tahmini DEĞİLDİR.
+ *   2) Baskı sürerken kartta gösterilecek modeli doğrular (bkz. api/printers/[id]/print-model) —
+ *      aynı adla yeniden dilimlenmiş dosyalarda yanlış model gösterilmesini engeller.
+ * Bu yüzden imza SİLİNMEZ. Ad üretimi ile ayrıştırma tek modülde (lib/print-file-signature)
+ * durur ki biçim ikiye ayrılmasın.
+ */
 
 /**
  * Modeli yazıcıya yükle + baskıyı başlat. Yanıt = NDJSON akışı (satır satır ilerleme):
@@ -91,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           // (ilk baskı doldurur, sonrakiler atlar). Probe hatası = sessizce normal yola düş.
           if (mf.contentMd5 && mf.sizeBytes > 0 && (!isBambu || (mf.sliced === true && mf.colorsJson && mf.plateJson))) {
             try {
-              const upName = hashedUploadName(mf.originalName, mf.contentMd5);
+              const upName = buildSignedUploadName(mf.originalName, mf.contentMd5);
               if (isBambu) {
                 const probe = await bambuRemoteFileSize(printer.host, printer.accessCode!, upName);
                 if (probe.size != null && probe.size === mf.sizeBytes) {
@@ -149,7 +152,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
             // İçerik kimliği: yükleme adına gömülür + DB'ye yazılır → SONRAKİ baskılar indirme/yükleme atlar.
             const fileMd5 = crypto.createHash("md5").update(buf).digest("hex");
-            const upName = hashedUploadName(mf.originalName, fileMd5);
+            const upName = buildSignedUploadName(mf.originalName, fileMd5);
 
             // Geçici parse yolu — SADECE kalıcı meta eksikse yazılır (varsa dosya hiç açılmaz).
             let parsePath: string | null = mf.r2Key ? null : mf.storedPath;

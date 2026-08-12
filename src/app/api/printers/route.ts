@@ -2,12 +2,16 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
-import { mapBambuState } from "@/core/printers/bambu";
+import { mapBambuState, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
 import { fileMatchKey } from "@/core/printers/file-match";
-// Canlı yoklama yerine PAYLAŞILAN önbellek: relay ile tek yoklayıcı, çevrimdışı yazıcıya backoff
-// (30sn'de bir dene, arada anında dön) → çevrimdışı yazıcı her 5sn'lik paneli 1.5-2.2sn geciktirmez.
+import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
+import { SPEED_PRESETS_PCT, type PrinterControlCaps } from "@/core/printers/controls";
+import { printJobDisplayName } from "@/lib/print-job-name";
+// Canlı yoklama yerine PAYLAŞILAN önbellek: relay ile tek yoklayıcı, çevrimdışı yazıcıya üstel
+// backoff + arka planda tazeleme → çevrimdışı yazıcı 5sn'lik paneli HİÇ geciktirmez.
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached, getPrintFileMatches,
+  getMoonrakerExtrasCached, getBambuSlotsCached, getMatchedProducts, getEnabledPrinterConfigs,
 } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +42,36 @@ export interface PrinterJob {
   layerTotal: number;
   filamentType: string;
   filamentColor: string;
+  // ── Faz 3 eklentileri (arayüz Tur 2'de kullanacak) ──────────────────────────────────────
+  /** Kalan süre GERÇEKTEN biliniyor mu. false ise `remainingSec` yalnız yer tutucudur → "—" göster. */
+  remainingKnown: boolean;
+  /** İlerlemenin kaynağı: "slicer" = M73 zaman tahmini, "bytes" = dosya bayt oranı. */
+  progressSource: ProgressSource;
+  /** Kalan sürenin kaynağı: "printer" = yazıcının kendi değeri, "measured" = ölçülen hız. */
+  etaSource: EtaSource;
+  /** Basılan plakanın dilimleyici görüntüsü (gcode'a gömülü / Moonraker .thumbs). */
+  plateThumbnail: string | null;
+  /** Eşleşen ürünün mağaza fotoğrafı — plaka görüntüsü varsa artık ikinci sırada. */
+  storeImage: string | null;
+  /** Dilimleyicinin bildirdiği toplam filament (gram) — YALNIZ GÖSTERİM. */
+  filamentGrams: number | null;
+  /** Bu baskıda kullanılan slot/kafa indeksleri. */
+  activeSlots: number[];
+  /** Canlı aşama verisi (MADDE 7) — katman çevirisi için ham alanlar. */
+  live: {
+    filePosition: number | null;
+    fileSize: number | null;
+    zHeight: number | null;
+    nozzleX: number | null;
+    nozzleY: number | null;
+  };
+}
+
+/** Panelde gösterilecek uyarı (Bambu HMS / Moonraker mesajı). */
+export interface PanelWarning {
+  code: string | null;
+  level: "fatal" | "serious" | "common" | "info";
+  text: string;
 }
 
 export interface PanelPrinter {
@@ -50,13 +84,34 @@ export interface PanelPrinter {
   status: PrinterStatus;
   online: boolean;
   note: string | null;
+  /** "ok" · "offline" (ağda yok) · "unconfigured" (kurulumu tamamlanmamış) — AYRI durumlar. */
+  connection: "ok" | "offline" | "unconfigured" | "unsupported";
   /** Hata/duraklatma NEDENİ (Moonraker print_stats.message / Bambu hata kodu) — kartta gösterilir.
       Mobil snapshot'ta zaten vardı; masaüstü paneli bunu düşürüyordu. */
   statusMessage: string | null;
-  /** Çalışan baskının ham gcode dosya adı (eşleştirme + kontrol için). */
+  /** Baskı sırasındaki uyarılar (Bambu HMS) — eskiden panele hiç düşmüyordu. */
+  warnings: PanelWarning[];
+  /** Çalışan baskının ham gcode dosya adı (eşleştirme + kontrol için — KİMLİK, temizlenmez). */
   currentFilename: string | null;
   matchedProductId: string | null;
   temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number };
+  /** Yazıcının desteklediği kontroller — düğmeler buna göre çizilir. */
+  caps: PrinterControlCaps;
+  /** Hız durumu ve izin verilen kademeler (SUNUCUDA zorlanır). */
+  speed: {
+    percent: number | null;
+    presets: readonly number[];
+    /** Bambu'da yüzde yerine profil: 1 sessiz … 4 çok hızlı. */
+    levels: readonly { level: number; label: string; pct: number }[] | null;
+    level: number | null;
+  };
+  light: { supported: boolean; readable: boolean; on: boolean | null };
+  /** Ayarlı "şu katmanda duraklat" değeri (yoksa null). */
+  pauseAtLayer: number | null;
+  /** Spagetti / kirli tabla gözetimi (yalnız destekleyen yazıcıda). */
+  defectWatch: { supported: boolean; enabled: boolean; spaghetti: boolean; cleanBed: boolean } | null;
+  /** Yüklü filamentler — renk + tip + doluluk (MADDE 12). */
+  slots: { slot: number; color: string; type: string; empty: boolean }[];
   job: PrinterJob | null;
 }
 
@@ -69,9 +124,36 @@ const ACCENTS = [
   "oklch(0.72 0.17 60)",
 ];
 
+/**
+ * MADDE 13 — kartta gösterilecek ad. Ham dosya adı dilimleyici artıklarıyla dolu
+ * ("EN4Plus 0.4 PS5+Dummy+Controller+Display Generic PLA 0.2 3h36m-65b2a0d971"); kullanıcı
+ * ürünün adını görmeli. Kimlik (eşleştirme anahtarı) HAM addan üretilmeye devam eder.
+ */
 function cleanFilename(fn: string): string {
-  const base = fn.includes("/") ? fn.slice(fn.lastIndexOf("/") + 1) : fn;
-  return base.replace(/\.(gcode|gco|g|3mf)$/i, "").replace(/_+/g, " ").trim() || base;
+  return printJobDisplayName(fn) || fn;
+}
+
+/** Simülasyon/gerçek fark etmeksizin her kartın taşıdığı kontrol alanları — varsayılan: hiçbiri. */
+const NO_CAPS_PANEL: PrinterControlCaps = {
+  pauseResume: false, speed: false, light: false, lightReadable: false,
+  pauseAtLayer: false, filamentChange: false, defectDetection: false,
+};
+
+function emptyJobExtras(): Pick<
+  PrinterJob,
+  "remainingKnown" | "progressSource" | "etaSource" | "plateThumbnail" | "storeImage" |
+  "filamentGrams" | "activeSlots" | "live"
+> {
+  return {
+    remainingKnown: false,
+    progressSource: "none",
+    etaSource: "unknown",
+    plateThumbnail: null,
+    storeImage: null,
+    filamentGrams: null,
+    activeSlots: [],
+    live: { filePosition: null, fileSize: null, zHeight: null, nozzleX: null, nozzleY: null },
+  };
 }
 
 // fileMatchKey artık paylaşılan modülde (@/core/printers/file-match) — relay ile AYNI normalize.
@@ -155,20 +237,24 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
 
     const common = {
       id: c.id, name: c.name, brand: c.brand, model: c.model, accent: c.accent,
-      type: "sim" as const, online: true, note: null, statusMessage: null,
-      currentFilename: null, matchedProductId: null,
+      type: "sim" as const, online: true, note: null, connection: "ok" as const,
+      statusMessage: null, warnings: [], currentFilename: null, matchedProductId: null,
+      caps: NO_CAPS_PANEL,
+      speed: { percent: null, presets: SPEED_PRESETS_PCT, levels: null, level: null },
+      light: { supported: false, readable: false, on: null },
+      pauseAtLayer: null, defectWatch: null, slots: [],
     };
 
     if (rel < c.printSec) {
       return {
         ...common, status: "printing" as const, temps: simTemps(filament.type, "hot"),
-        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: Math.min(1, Math.max(0, rel / c.printSec)), remainingSec: Math.max(0, c.printSec - rel), layerCurrent: Math.round((rel / c.printSec) * c.layerTotal), layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
+        job: { ...emptyJobExtras(), remainingKnown: true, productName: product.name, productImage: product.image, storeImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: Math.min(1, Math.max(0, rel / c.printSec)), remainingSec: Math.max(0, c.printSec - rel), layerCurrent: Math.round((rel / c.printSec) * c.layerTotal), layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
       };
     }
     if (rel < c.printSec + c.finishedSec) {
       return {
         ...common, status: "finished" as const, temps: simTemps(filament.type, "cooling"),
-        job: { productName: product.name, productImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: 1, remainingSec: 0, layerCurrent: c.layerTotal, layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
+        job: { ...emptyJobExtras(), remainingKnown: true, productName: product.name, productImage: product.image, storeImage: product.image, startedAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString(), progress: 1, remainingSec: 0, layerCurrent: c.layerTotal, layerTotal: c.layerTotal, filamentType: filament.type, filamentColor: filament.color },
       };
     }
     return { ...common, status: "idle" as const, temps: simTemps(filament.type, "ambient"), job: null };
@@ -180,10 +266,9 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
 export async function GET() {
   await ensureRuntimeSchema();
 
-  const configs = await prisma.printerConfig.findMany({
-    where: { enabled: true },
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  });
+  // MADDE 20: yapılandırma satırları neredeyse hiç değişmez ama panel 5sn'de bir buluta
+  // sorguluyordu (uzak-HTTP libSQL'de her sorgu ~96ms ve SIRALI). 15sn önbellek.
+  const configs = await getEnabledPrinterConfigs();
 
   // Hiç yazıcı yapılandırılmamış → DEMO
   if (configs.length === 0) {
@@ -195,11 +280,7 @@ export async function GET() {
   // (eskiden her 5sn'de sınırsız findMany; tablo baskı geçmişiyle büyüyor).
   const matches = await getPrintFileMatches();
   const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
-  const pids = [...new Set(matches.map((m) => m.productId))];
-  const products = pids.length
-    ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
-    : [];
-  const productMap = new Map(products.map((p) => [p.id, p]));
+  const productMap = await getMatchedProducts();
 
   const nowMs = Date.now();
 
@@ -209,92 +290,130 @@ export async function GET() {
       const base: PanelPrinter = {
         id: c.id, name: c.name, brand: c.brand, model: c.model || "",
         accent, type: (c.type === "bambu" ? "bambu" : "moonraker"),
-        status: "idle", online: false, note: null, statusMessage: null,
+        status: "idle", online: false, note: null, connection: "offline",
+        statusMessage: null, warnings: [],
         currentFilename: null, matchedProductId: null,
-        temps: { nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0 }, job: null,
+        temps: { nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0 },
+        caps: NO_CAPS_PANEL,
+        speed: { percent: null, presets: SPEED_PRESETS_PCT, levels: null, level: null },
+        light: { supported: false, readable: false, on: null },
+        pauseAtLayer: null, defectWatch: null, slots: [], job: null,
       };
 
       if (c.type === "bambu") {
+        // MADDE 14: "kurulumu tamamlanmamış" ≠ "bağlantı yok". Kullanıcı ilkinde ayar yapmalı,
+        // ikincisinde yazıcıyı açmalı — kart bunları ayrı göstermeli.
         if (!c.accessCode || !c.serial) {
-          return { ...base, note: "Access code + seri no gerekli (Yönet → düzenle)" };
+          return { ...base, connection: "unconfigured", note: "Kurulum tamamlanmadı — access code ve seri no gerekiyor." };
         }
         const bs = await getBambuStatusCached(c.host, c.accessCode, c.serial);
         if (!bs.online) {
-          return { ...base, note: `Çevrimdışı — ${c.host} (LAN + Developer Mode açık mı?)` };
+          return { ...base, connection: "offline", note: `Yazıcıya ulaşılamadı — ${c.host}` };
         }
         const bStatus = mapBambuState(bs.gcodeState);
         const bHasJob = !!bs.filename && (bStatus === "printing" || bStatus === "paused" || bStatus === "finished");
+        const slots = await getBambuSlotsCached(c.host, c.accessCode, c.serial);
         let bJob: PrinterJob | null = null;
         let bMatchedId: string | null = null;
         if (bHasJob && bs.filename) {
-          const pct = Math.min(1, Math.max(0, bs.percent / 100));
-          const remaining = bs.remainingSec ?? 0;
-          let totalSec: number;
-          if (pct > 0.001 && pct < 1 && remaining > 0) totalSec = remaining / (1 - pct);
-          else totalSec = Math.max(60, remaining);
+          // MADDE 1: yüzde + yazıcının KENDİ kalan süresi (mc_remaining_time) tek hesaba girer.
+          const picked = pickProgress({ printerPercent: bs.percent });
+          const elapsedSec = bs.startedAtMs != null ? Math.max(0, (nowMs - bs.startedAtMs) / 1000) : null;
+          const eta = resolveEta({
+            progress: picked.progress,
+            elapsedSec,
+            slicerEstimateSec: null,
+            printerRemainingSec: bs.remainingSec,
+          });
+          const remaining = eta.remainingSec ?? 0;
           const endMs = nowMs + remaining * 1000;
-          const startMs = endMs - totalSec * 1000;
+          // Geçen süre bilinmiyorsa BAŞLANGIÇ "şimdi"dir. `endMs` yazmak başlangıcı GELECEĞE
+          // taşıyordu (hazırlık aşamasındaki A1'de: başlangıç = şimdi + 90dk) ve panel baskı
+          // boyunca 0 geçen süre gösteriyordu.
+          const startMs = eta.elapsedSec != null ? nowMs - eta.elapsedSec * 1000 : nowMs;
           bMatchedId = matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) ?? null;
           const matched = bMatchedId ? productMap.get(bMatchedId) : undefined;
+          const activeSlots = bs.activeTray != null ? [bs.activeTray] : [];
+          const activeSlot = bs.activeTray != null ? slots.find((s) => s.slot === bs.activeTray) : undefined;
           bJob = {
+            ...emptyJobExtras(),
             productName: matched?.name || cleanFilename(bs.filename),
             productImage: matched?.imageUrl || null,
+            storeImage: matched?.imageUrl ?? null,
             startedAt: new Date(startMs).toISOString(),
             endsAt: new Date(endMs).toISOString(),
-            progress: pct,
+            progress: picked.progress,
             remainingSec: remaining,
+            remainingKnown: eta.remainingSec != null,
+            progressSource: picked.source,
+            etaSource: eta.source,
             layerCurrent: bs.layerNum,
             layerTotal: bs.totalLayerNum ?? 0,
             // Gerçek AMS verisi okunmuyorsa UYDURMA "PLA" gösterme — boş bırak, UI çipi gizler.
-            filamentType: "",
-            filamentColor: "",
+            filamentType: activeSlot?.type ?? "",
+            filamentColor: activeSlot && !activeSlot.empty ? activeSlot.color : "",
+            activeSlots,
           };
         }
         return {
           ...base,
           online: true,
+          connection: "ok",
           status: bStatus,
-          // Hata nedeni kartta görünsün (mobilde vardı, masaüstünde yoktu).
+          // Hata/duraklatma nedeni ve uyarılar kartta görünsün (mobilde vardı, masaüstünde yoktu).
           statusMessage:
-            bStatus === "error"
+            bs.statusReason ??
+            (bStatus === "error"
               ? `Baskı hatayla durdu${bs.printError ? ` (kod 0x${(bs.printError >>> 0).toString(16).toUpperCase()})` : ""}`
-              : null,
+              : null),
+          warnings: bs.warnings.map((w: BambuWarning) => ({ code: w.code, level: w.level, text: w.text })),
           currentFilename: bs.filename,
           matchedProductId: bMatchedId,
           temps: { nozzle: bs.nozzle, nozzleTarget: bs.nozzleTarget, bed: bs.bed, bedTarget: bs.bedTarget },
+          caps: {
+            pauseResume: true, speed: true, light: false, lightReadable: false,
+            pauseAtLayer: false, filamentChange: false, defectDetection: false,
+          },
+          speed: {
+            percent: BAMBU_SPEED_LEVELS.find((l) => l.level === bs.speedLevel)?.pct ?? null,
+            presets: SPEED_PRESETS_PCT,
+            levels: BAMBU_SPEED_LEVELS,
+            level: bs.speedLevel,
+          },
+          slots,
           job: bJob,
         };
       }
 
+      if (c.type !== "moonraker") {
+        return { ...base, connection: "unsupported", note: "Bu yazıcı uygulamadan yönetilemiyor." };
+      }
+      if (!c.host) {
+        return { ...base, connection: "unconfigured", note: "Kurulum tamamlanmadı — yazıcının IP adresi gerekiyor." };
+      }
+
       const st = await getMoonrakerStatusCached(c.host, c.port);
       if (!st.online) {
-        return { ...base, online: false, note: `Çevrimdışı — ${c.host} ulaşılamadı` };
+        return { ...base, connection: "offline", note: `Yazıcıya ulaşılamadı — ${c.host}` };
       }
 
       const status = mapState(st.state);
+      const extras = await getMoonrakerExtrasCached(c.host, c.port);
       const hasJob = !!st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete");
       let job: PrinterJob | null = null;
       let matchedId: string | null = null;
 
       if (hasJob && st.filename) {
         const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename);
-        // ETA STABİLİZASYONU: süre/ilerleme ekstrapolasyonu %1'de gürültüyü 100× büyütüp geri
-        // sayımı her poll'da zıplatıyordu. Erken evrede (%<5) dilimleyici tahmini, %5-15 arası
-        // harman, %15 sonrası gerçek hız.
-        const extrapolated = st.progress >= 0.01 && st.printDurationSec > 0 ? st.printDurationSec / st.progress : null;
-        const slicerEst = meta?.estimatedTimeSec && meta.estimatedTimeSec > 0 ? meta.estimatedTimeSec : null;
-        let estTotalSec: number;
-        if (extrapolated != null && (st.progress >= 0.15 || !slicerEst)) {
-          estTotalSec = extrapolated;
-        } else if (slicerEst && extrapolated != null && st.progress >= 0.05) {
-          const w = (st.progress - 0.05) / 0.10; // %5→0 … %15→1
-          estTotalSec = slicerEst * (1 - w) + extrapolated * w;
-        } else if (slicerEst) {
-          estTotalSec = slicerEst;
-        } else {
-          estTotalSec = Math.max(st.printDurationSec, 60);
-        }
-        const remainingSec = Math.max(0, estTotalSec - st.printDurationSec);
+        // MADDE 1: ilerleme adaptörde DOĞRU kaynaktan seçildi (M73 → bayt); süre hesabı
+        // src/core/printers/eta.ts'te, üç marka için AYNI.
+        const eta = resolveEta({
+          progress: st.progress,
+          elapsedSec: st.printDurationSec,
+          slicerEstimateSec: meta?.estimatedTimeSec ?? null,
+          printerRemainingSec: null,
+        });
+        const remainingSec = eta.remainingSec ?? 0;
         const startMs = nowMs - st.printDurationSec * 1000;
         const endMs = nowMs + remainingSec * 1000;
 
@@ -310,33 +429,87 @@ export async function GET() {
 
         matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`) ?? null;
         const matched = matchedId ? productMap.get(matchedId) : undefined;
-        const thumb = meta?.thumbnailRelPath
+        // MADDE 3: BASILAN PLAKANIN görüntüsü mağaza fotoğrafını YENER — kullanıcı tablada ne
+        // olduğunu görmeli. Moonraker'ın ürettiği .thumbs varsa o, yoksa gcode'a gömülü blok.
+        // Gcode'a gömülü blok 800×800 olabiliyor (~130 KB) — 5sn'de bir JSON'a gömmek yerine
+        // küçük bir URL veriyoruz; görsel ayrı, uzun önbellekli uçtan gelir.
+        const plateThumb = meta?.thumbnailRelPath
           ? moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)
-          : null;
+          : meta?.thumbnailDataUrl
+            ? `/api/printers/${c.id}/plate-thumbnail?f=${encodeURIComponent(st.filename)}`
+            : null;
+        // MADDE 12: baskıda kullanılan slot(lar)ın rengi. Tek kafalı yazıcıda dilimleyicinin
+        // yazdığı renk kullanılır (yazıcıda slot kavramı yok).
+        const activeSlots = extras.activeSlots;
+        const activeSlot = activeSlots.length ? extras.slots.find((s) => s.slot === activeSlots[0]) : undefined;
+        const filamentColor =
+          (activeSlot && !activeSlot.empty ? activeSlot.color : null) ??
+          meta?.filamentColours[0] ??
+          "";
         job = {
+          ...emptyJobExtras(),
           productName: matched?.name || cleanFilename(st.filename),
-          productImage: matched?.imageUrl || thumb,
+          productImage: plateThumb || matched?.imageUrl || null,
+          plateThumbnail: plateThumb,
+          storeImage: matched?.imageUrl ?? null,
           startedAt: new Date(startMs).toISOString(),
           endsAt: new Date(endMs).toISOString(),
           progress: st.progress,
           remainingSec,
+          remainingKnown: eta.remainingSec != null,
+          progressSource: st.progressSource,
+          etaSource: eta.source,
           layerCurrent,
           layerTotal: totalLayer,
           // Bilinmiyorsa boş — UI uydurma "PLA" çipi göstermesin.
-          filamentType: meta?.filamentType || "",
-          filamentColor: "",
+          filamentType: meta?.filamentType || activeSlot?.type || "",
+          filamentColor,
+          filamentGrams: meta?.filamentGrams ?? null,
+          activeSlots,
+          live: {
+            filePosition: st.filePosition,
+            fileSize: st.fileSize,
+            zHeight: st.zHeight,
+            nozzleX: st.posX,
+            nozzleY: st.posY,
+          },
         };
       }
 
       return {
         ...base,
         online: true,
+        connection: "ok",
         status,
         // Duraklatma/hata NEDENİ (örn. "Filament runout") kartta görünsün.
         statusMessage: status === "error" || status === "paused" ? st.message : null,
+        // MADDE 14 + 22: duraklatma nedeni ve firmware uyarıları (spagetti / kirli tabla dahil)
+        // panele düşer — eskiden yalnız telefona gidiyordu.
+        warnings: [
+          ...((status === "error" || status === "paused") && st.message
+            ? [{ code: null, level: status === "error" ? ("serious" as const) : ("common" as const), text: st.message }]
+            : []),
+          ...extras.alerts
+            .filter((a) => a.text !== st.message)
+            .map((a) => ({ code: a.code, level: "common" as const, text: a.text })),
+        ],
         currentFilename: st.filename,
         matchedProductId: matchedId,
         temps: { nozzle: st.nozzle, nozzleTarget: st.nozzleTarget, bed: st.bed, bedTarget: st.bedTarget },
+        caps: {
+          pauseResume: true,
+          speed: extras.caps.speed,
+          light: extras.caps.lightKind !== "none",
+          lightReadable: extras.light.readable,
+          pauseAtLayer: extras.caps.pauseAtLayer,
+          filamentChange: extras.caps.filamentChange,
+          defectDetection: extras.caps.defectDetection,
+        },
+        speed: { percent: st.speedPercent, presets: SPEED_PRESETS_PCT, levels: null, level: null },
+        light: extras.light,
+        pauseAtLayer: extras.pauseAtLayer,
+        defectWatch: extras.defectWatch.supported ? extras.defectWatch : null,
+        slots: extras.slots,
         job,
       };
     })

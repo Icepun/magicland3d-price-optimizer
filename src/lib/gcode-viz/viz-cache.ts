@@ -1,27 +1,25 @@
 "use client";
 /**
- * Görselleştirme önbelleği (IndexedDB, cihaz-yerel): parse edilmiş geometri + inşa kareleri.
+ * Görselleştirme önbelleği (IndexedDB, cihaz-yerel): kompakt "viz-pack" + inşa kareleri.
  * Anahtar: contentMd5'in ilk 10 hex'i ("md5:xxxxxxxxxx") — baskı dosya adına gömülen ekle AYNI,
  * böylece yazıcı kartındaki canlı iş doğrudan önbelleğe eşlenir. Md5 yoksa "file:<id>:<boyut>".
+ *
+ * v3'te AÇILMIŞ geometri yerine PAKET saklanır: 178 MB'lık gerçek dosyada açılmış geometri
+ * 41 MB yer kaplıyordu, paket ~15 MB. Açma (paket → segment) worker'da milisaniyeler sürer.
  */
-import type { ParsedGcode } from "./parse-gcode";
 
 const DB_NAME = "mlhub-gcode-viz";
-// v2: robust çerçeveleme (model ortalama + purge çizgisi dışlama) → eski KARELER eski framing'le
-// üretildi; upgrade'de sprites store'u temizlenir → yeni framing'le yeniden oluşur. Geometri korunur.
-const DB_VER = 2;
+// v3: geometri store'u paket store'una dönüştü (eski satırlar okunamaz) + kareler yeni renk/gövde
+// kuralıyla üretiliyor → iki store da sıfırlanır ve yeniden dolar.
+const DB_VER = 3;
 const GEOM = "geom";
 const SPRITES = "sprites";
-const MAX_GEOM = 24; // LRU üst sınırları (disk şişmesin)
+const MAX_GEOM = 16; // LRU üst sınırları (disk şişmesin)
 const MAX_SPRITES = 60;
 
-interface GeomRow {
+interface PackRow {
   key: string;
-  positions: ArrayBuffer;
-  features: ArrayBuffer;
-  layerRanges: ParsedGcode["layerRanges"];
-  bounds: ParsedGcode["bounds"];
-  totalSegments: number;
+  pack: ArrayBuffer;
   savedAt: number;
 }
 export interface SpriteSet { key: string; frames: Blob[]; layerCount: number; savedAt: number }
@@ -31,8 +29,9 @@ function openDb(): Promise<IDBDatabase> {
     const req = indexedDB.open(DB_NAME, DB_VER);
     req.onupgradeneeded = () => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(GEOM)) db.createObjectStore(GEOM, { keyPath: "key" });
-      // Sprites: render kodu (çerçeveleme) değiştiğinde eski kareler bayat → sıfırla + yeniden kur.
+      // Eski biçimdeki satırlar okunamaz → iki store da sıfırdan kurulur.
+      if (db.objectStoreNames.contains(GEOM)) db.deleteObjectStore(GEOM);
+      db.createObjectStore(GEOM, { keyPath: "key" });
       if (db.objectStoreNames.contains(SPRITES)) db.deleteObjectStore(SPRITES);
       db.createObjectStore(SPRITES, { keyPath: "key" });
     };
@@ -64,36 +63,22 @@ async function pruneLru(store: string, max: number): Promise<void> {
   } catch { /* önbellek budaması kritik değil */ }
 }
 
-export async function getGeom(key: string): Promise<ParsedGcode | null> {
+/** Önbellekteki kompakt paketi getir (yoksa null). */
+export async function getPack(key: string): Promise<ArrayBuffer | null> {
   try {
-    const row = await tx<GeomRow | undefined>(GEOM, "readonly", (s) => s.get(key) as IDBRequest<GeomRow | undefined>);
-    if (!row) return null;
-    return {
-      positions: new Float32Array(row.positions),
-      features: new Uint8Array(row.features),
-      layerRanges: row.layerRanges,
-      bounds: row.bounds,
-      totalSegments: row.totalSegments,
-    };
+    const row = await tx<PackRow | undefined>(GEOM, "readonly", (s) => s.get(key) as IDBRequest<PackRow | undefined>);
+    return row?.pack ?? null;
   } catch {
     return null;
   }
 }
 
-export async function putGeom(key: string, g: ParsedGcode): Promise<void> {
+/** Paketi önbelleğe yaz. Kota dolarsa sessizce vazgeçilir (görselleştirme yine çalışır). */
+export async function putPack(key: string, pack: ArrayBuffer): Promise<void> {
   try {
-    const row: GeomRow = {
-      key,
-      positions: g.positions.buffer as ArrayBuffer,
-      features: g.features.buffer as ArrayBuffer,
-      layerRanges: g.layerRanges,
-      bounds: g.bounds,
-      totalSegments: g.totalSegments,
-      savedAt: Date.now(),
-    };
-    await tx(GEOM, "readwrite", (s) => s.put(row));
+    await tx(GEOM, "readwrite", (s) => s.put({ key, pack, savedAt: Date.now() } satisfies PackRow));
     void pruneLru(GEOM, MAX_GEOM);
-  } catch { /* kota/da hata — önbelleksiz devam */ }
+  } catch { /* kota/db hatası — önbelleksiz devam */ }
 }
 
 export async function getSprites(key: string): Promise<SpriteSet | null> {

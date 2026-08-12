@@ -16,21 +16,26 @@ import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
-  moonrakerThumbUrl, moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
+  moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
 } from "./moonraker";
 import { bambuControl, mapBambuState } from "./bambu";
 import { fileMatchKey } from "./file-match";
+import { pickProgress, resolveEta } from "./eta";
+import { printJobDisplayName } from "@/lib/print-job-name";
 import { tryAcquirePrintLock, releasePrintLock } from "./print-lock";
 // Panel API ile PAYLAŞILAN yoklayıcı — aynı yazıcı 5sn (panel) + 10sn (relay) ayrı ayrı
 // yoklanmıyor; çevrimdışına backoff + tek-kaçak histerezisi de buradan gelir.
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached,
   getMoonrakerThumbDataUrl, getPrintFileMatches, invalidatePrintFileMatches,
+  SNAPSHOT_IMAGE_MAX_BYTES,
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
 
 const TICK_MS = 10_000;
+/** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
+const SNAPSHOT_IMAGE_MAX_CHARS = Math.round((SNAPSHOT_IMAGE_MAX_BYTES * 4) / 3);
 /** Heartbeat aralığı: snapshot İÇERİK değişmese de updatedAt en geç bu aralıkla tazelenir.
  *  (Eski davranış yalnız değişince yazıyordu → boşta/duraklamış yazıcıda updatedAt yaşlanıyor,
  *  mobil 90sn'de yanlış "masaüstü kapalı" alarmı verip kontrolleri/tekrar-bas'ı kilitliyordu.) */
@@ -51,6 +56,7 @@ let commandsRunning = false; // komut koşucusu guard'ı — tick'ten ayrık, te
 let tickCount = 0; // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
 const lastKey = new Map<string, string>();
 const lastWriteAt = new Map<string, number>(); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
+const lastImage = new Map<string, string | null>(); // buluta EN SON yazılan görsel (aynıysa tekrar gönderilmez)
 const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
 // Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
 // snapshot'lar arasında uzantılı/uzantısız değişince sahte ikinci "finished" geçişi görülebiliyor).
@@ -177,15 +183,25 @@ async function buildSnapshot(
     const status = mapBambuState(bs.gcodeState);
     const matchedId = bs.filename ? matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) : undefined;
     const matched = matchedId ? productMap.get(matchedId) : undefined;
+    // MADDE 14: duraklatma/hata nedeni telefona da AYNI metinle gitsin.
     const statusMessage =
-      status === "error" ? `Baskı hatayla durdu${bs.printError ? ` (kod: ${bs.printError})` : ""}` : null;
+      bs.statusReason ??
+      (status === "error" ? `Baskı hatayla durdu${bs.printError ? ` (kod: ${bs.printError})` : ""}` : null);
+    // MADDE 1: kalan süre yazıcının KENDİ değerinden (mc_remaining_time) — panelle aynı hesap.
+    const picked = pickProgress({ printerPercent: bs.percent });
+    const eta = resolveEta({
+      progress: picked.progress,
+      elapsedSec: bs.startedAtMs != null ? Math.max(0, (Date.now() - bs.startedAtMs) / 1000) : null,
+      slicerEstimateSec: null,
+      printerRemainingSec: bs.remainingSec,
+    });
     return {
       name: baseName, brand: c.brand, status, online: true, statusMessage,
-      productName: matched?.name ?? bs.filename ?? null,
+      productName: matched?.name ?? (bs.filename ? printJobDisplayName(bs.filename) || bs.filename : null),
       productImage: matched?.imageUrl ?? null,
-      progress: Math.min(1, Math.max(0, bs.percent / 100)),
+      progress: picked.progress,
       nozzle: bs.nozzle, bed: bs.bed,
-      currentFilename: bs.filename, etaSec: bs.remainingSec,
+      currentFilename: bs.filename, etaSec: eta.remainingSec,
     };
   }
 
@@ -199,26 +215,28 @@ async function buildSnapshot(
   if (st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete")) {
     const matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`);
     const matched = matchedId ? productMap.get(matchedId) : undefined;
-    productName = matched?.name ?? st.filename;
+    // MADDE 13: eşleşme yoksa ham dosya adı değil, temizlenmiş gösterim adı gitsin (telefonda da).
+    productName = matched?.name ?? (printJobDisplayName(st.filename) || st.filename);
     const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename); // dosya başına önbellekli — ucuz
-    if (matched?.imageUrl) productImage = matched.imageUrl;
-    else if (meta?.thumbnailRelPath) {
-      // Data-URL göm: LAN-IP URL'i telefonda (LAN dışı) kırık görsel oluyordu.
-      productImage =
-        (await getMoonrakerThumbDataUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)) ??
-        moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
+    // MADDE 3: basılan plakanın görüntüsü mağaza fotoğrafını YENER — ama snapshot satırı baskı
+    // boyunca defalarca uzak Turso'ya yazıldığı için görsel KÜÇÜK olmak zorunda
+    // (bkz. SNAPSHOT_IMAGE_MAX_BYTES). Sınırı aşan görselde mağaza fotoğrafına düşülür;
+    // LAN-IP URL'i yazılmaz (telefon LAN dışındayken kırık görsel oluyordu).
+    if (meta?.thumbnailRelPath) {
+      productImage = await getMoonrakerThumbDataUrl(c.host, c.port, st.filename, meta.thumbnailRelPath);
     }
-    // ETA STABİLİZASYONU (panel ile AYNI harman): erken evrede dilimleyici tahmini,
-    // %5-15 harman, sonrası gerçek hız — telefondaki kalan süre de zıplamaz.
-    const extrapolated = st.progress >= 0.01 && st.printDurationSec > 0 ? st.printDurationSec / st.progress : null;
-    const slicerEst = meta?.estimatedTimeSec && meta.estimatedTimeSec > 0 ? meta.estimatedTimeSec : null;
-    let estTotal: number | null = null;
-    if (extrapolated != null && (st.progress >= 0.15 || !slicerEst)) estTotal = extrapolated;
-    else if (slicerEst && extrapolated != null && st.progress >= 0.05) {
-      const w = (st.progress - 0.05) / 0.10;
-      estTotal = slicerEst * (1 - w) + extrapolated * w;
-    } else if (slicerEst) estTotal = slicerEst;
-    if (estTotal != null) etaSec = Math.max(0, Math.round(estTotal - st.printDurationSec));
+    if (!productImage && meta?.thumbnailDataUrl && meta.thumbnailDataUrl.length <= SNAPSHOT_IMAGE_MAX_CHARS) {
+      productImage = meta.thumbnailDataUrl;
+    }
+    if (!productImage && matched?.imageUrl) productImage = matched.imageUrl;
+    // MADDE 1: kalan süre panelle AYNI hesap (src/core/printers/eta.ts) — telefon ve masaüstü
+    // artık farklı rakam göstermez.
+    etaSec = resolveEta({
+      progress: st.progress,
+      elapsedSec: st.printDurationSec,
+      slicerEstimateSec: meta?.estimatedTimeSec ?? null,
+      printerRemainingSec: null,
+    }).remainingSec;
   }
   return {
     name: baseName, brand: c.brand, status, online: true,
@@ -414,13 +432,20 @@ async function tick(): Promise<void> {
       const fresh = nowMs - (lastWriteAt.get(c.id) ?? 0) < HEARTBEAT_MS;
       if (unchanged && fresh) return;
       lastKey.set(c.id, key);
+      // GÖRSELİ TEKRAR GÖNDERME: plaka görüntüsü baskı boyunca DEĞİŞMEZ, ama her tick/heartbeat
+      // yazmasında aynı data-URL yeniden buluta gidiyordu. Değişmediyse update'ten çıkarılır
+      // (create'te kalır — ilk satırda görsel yine yazılır).
+      const imageUnchanged = lastImage.get(c.id) === snap.productImage;
+      const update: Partial<SnapFields> = { ...snap };
+      if (imageUnchanged) delete update.productImage;
       try {
         await remotePrisma.printerSnapshot.upsert({
           where: { printerConfigId: c.id },
           create: { printerConfigId: c.id, ...snap },
-          update: snap,
+          update,
         });
         lastWriteAt.set(c.id, nowMs);
+        lastImage.set(c.id, snap.productImage);
       } catch { /* yazılamadıysa sonraki tick dener */ }
     }));
 

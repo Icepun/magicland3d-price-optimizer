@@ -4,40 +4,69 @@
  * sunucuya thumbnail + IDB'ye inşa kareleri. Aynı dosya için eşzamanlı istekler tekilleştirilir.
  */
 import type { ParsedGcode } from "./parse-gcode";
-import { getGeom, putGeom, getSprites, putSprites } from "./viz-cache";
+import { getPack, putPack, getSprites, putSprites } from "./viz-cache";
 import { renderThumbnail, renderBuildFrames } from "./three-scene";
 // Yükleme sayacı three İÇERMEYEN ayrı modülde (tek kaynak) — bkz. viz-uploads.ts.
 import { waitUploadsIdle } from "./viz-uploads";
 
 const inflight = new Map<string, Promise<ParsedGcode>>();
 
+/** İlerleme aşamaları — arayüzdeki BELİRLİ çubuğu besler (ölü bekleme yok). */
+export type VizStage = "fetch" | "decode" | "scan";
+
+export interface VizProgress {
+  stage: VizStage;
+  /** 0-1 arası, aşama içindeki ilerleme. */
+  fraction: number;
+}
+
 type WorkerResult =
   | { ok: false; error?: string }
+  | { ok: true; type: "progress"; stage: VizStage; fraction: number }
   | {
       ok: true;
+      type: "done";
       positions: ArrayBufferLike;
       features: ArrayBufferLike;
+      tools: ArrayBufferLike;
       layerRanges: ParsedGcode["layerRanges"];
       bounds: ParsedGcode["bounds"];
       totalSegments: number;
+      scannedSegments: number;
+      toolCount: number;
+      filamentColors: string[];
+      fileSize: number;
+      thinLevel: number;
+      pack: ArrayBuffer | null;
     };
 
-/** Geometriyi getir: IDB önbelleği → yoksa Web Worker'da parse (arayüz donmaz) → önbelleğe. */
-export function loadGeometry(cacheKey: string, fileId: string): Promise<ParsedGcode> {
+/**
+ * Geometriyi getir: IDB'deki kompakt paket → yoksa Web Worker (sunucu paketi ya da ham dosya).
+ * `onProgress` verilirse yüzde bildirilir; aynı dosya için eşzamanlı çağrılar tekilleştirilir
+ * (bu durumda ilerleme yalnız ilk çağrana gider).
+ */
+export function loadGeometry(
+  cacheKey: string,
+  fileId: string,
+  onProgress?: (p: VizProgress) => void,
+): Promise<ParsedGcode> {
   const existing = inflight.get(cacheKey);
   if (existing) return existing;
   const p = (async () => {
-    const cached = await getGeom(cacheKey);
-    if (cached && cached.totalSegments > 0) return cached;
-    const g = await parseInWorker(fileId);
-    if (g.totalSegments > 0) void putGeom(cacheKey, g);
-    return g;
+    const cachedPack = await getPack(cacheKey).catch(() => null);
+    const { geom, pack } = await parseInWorker(fileId, cachedPack, onProgress);
+    if (pack && geom.totalSegments > 0) void putPack(cacheKey, pack);
+    return geom;
   })().finally(() => inflight.delete(cacheKey));
   inflight.set(cacheKey, p);
   return p;
 }
 
-function parseInWorker(fileId: string): Promise<ParsedGcode> {
+function parseInWorker(
+  fileId: string,
+  cachedPack: ArrayBuffer | null,
+  onProgress?: (p: VizProgress) => void,
+): Promise<{ geom: ParsedGcode; pack: ArrayBuffer | null }> {
   return new Promise((resolve, reject) => {
     let worker: Worker;
     try {
@@ -46,22 +75,45 @@ function parseInWorker(fileId: string): Promise<ParsedGcode> {
       reject(e instanceof Error ? e : new Error(String(e)));
       return;
     }
-    const to = setTimeout(() => { worker.terminate(); reject(new Error("Görselleştirme zaman aşımı")); }, 180_000);
+    // Zaman aşımı ilerleme geldikçe TAZELENİR: iş ilerliyorsa kesilmez, gerçekten takılırsa kesilir.
+    // İlk süre daha uzun: paket ilk kez üretilirken dosya buluttan indirilip taranır ve bu sırada
+    // henüz hiç ilerleme mesajı gelmez.
+    let to: ReturnType<typeof setTimeout>;
+    const arm = (ms: number) => {
+      clearTimeout(to);
+      to = setTimeout(() => { worker.terminate(); reject(new Error("Görselleştirme yanıt vermedi")); }, ms);
+    };
+    arm(240_000);
     worker.onmessage = (ev: MessageEvent<WorkerResult>) => {
+      const d = ev.data;
+      if (!d?.ok) { clearTimeout(to); worker.terminate(); reject(new Error(d?.error || "Dosya işlenemedi")); return; }
+      if (d.type === "progress") {
+        arm(60_000);
+        onProgress?.({ stage: d.stage, fraction: d.fraction });
+        return;
+      }
       clearTimeout(to);
       worker.terminate();
-      const d = ev.data;
-      if (!d?.ok) { reject(new Error(d?.error || "Dosya işlenemedi")); return; }
       resolve({
-        positions: new Float32Array(d.positions),
-        features: new Uint8Array(d.features),
-        layerRanges: d.layerRanges,
-        bounds: d.bounds,
-        totalSegments: d.totalSegments,
+        geom: {
+          positions: new Float32Array(d.positions),
+          features: new Uint8Array(d.features),
+          tools: new Uint8Array(d.tools),
+          layerRanges: d.layerRanges,
+          bounds: d.bounds,
+          totalSegments: d.totalSegments,
+          scannedSegments: d.scannedSegments,
+          toolCount: d.toolCount,
+          filamentColors: d.filamentColors ?? [],
+          fileSize: d.fileSize,
+          thinLevel: d.thinLevel,
+        },
+        pack: d.pack ?? null,
       });
     };
     worker.onerror = (e) => { clearTimeout(to); worker.terminate(); reject(new Error(e.message || "Worker hatası")); };
-    worker.postMessage({ fileId });
+    if (cachedPack) worker.postMessage({ fileId, pack: cachedPack }, [cachedPack]);
+    else worker.postMessage({ fileId });
   });
 }
 
@@ -142,7 +194,9 @@ async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: b
   if (!haveSprites) {
     await waitUploadsIdle();
     await idle();
-    const frames = await renderBuildFrames(g, 24, 240, idle); // her kareden sonra boşta bekle
+    // 32 kare: kart artık YALNIZ gövdeyi çiziyor, dolum gözle görülür şekilde büyüyor —
+    // daha çok ara kare geçişi akıcılaştırır. (Kart kaç kare olduğunu kendi okur.)
+    const frames = await renderBuildFrames(g, 32, 240, idle); // her kareden sonra boşta bekle
     if (!frames.length) return false;
     await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
   }

@@ -3,12 +3,14 @@
 
 import { TimelapseStrip } from "@/components/printers/TimelapseGallery";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Printer, Box, Flame, Layers, Clock, CheckCircle2, Loader2, Sparkles, Power,
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
+  Lightbulb, Gauge, Rotate3d, Minus, Repeat, Hourglass, Eye,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -23,7 +25,7 @@ import { usePrefersReducedMotion } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
-import { vizKeyForModel, getSprites } from "@/lib/gcode-viz/viz-cache";
+import { vizKeyForModel, getSprites, getPack } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 // Görselleştirme boru hattı three (~539KB) çeker → DİNAMİK yükle (Yazıcılar initial bundle'ında değil).
 const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
@@ -33,38 +35,50 @@ import {
 } from "@/components/printers/print-flow";
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
+import type { VizPack } from "@/lib/gcode-viz/viz-pack";
+// Kart görünümünün SAF kararları (durum tonu, kare seçimi, katman rozeti, nozul ölçeği…)
+// test edilebilir tek yerde. Tipler API sözleşmesinin aynası — sapma testte tsc ile yakalanır.
+import {
+  bedFrameFor, buildSlotChips, connectionNotice, formatRemaining, intraLayerFraction,
+  jobImageCandidates, layerBadgeText, nozzleDot, orderWarnings, pickBuildFrame, pickImage,
+  resolvePackLayerIndex, resolveRemaining, resolveStage, resolveStatusVisual, slotLabel,
+  type NozzleDot, type PanelPrinter, type PrinterJob, type PrinterStatus, type SlotChip,
+  type StageFrame, type StatusTone, type StatusVisual,
+} from "./panel-view";
+// Kontrol düğmelerinin kararları (hangi düğme etkin, hangi hız kademesi seçilebilir, iptal
+// onayında ne yazacak…) — saf ve test edilebilir tek yerde.
+import {
+  PENDING_LABEL, cancelSummary, clampLayerValue, layerStepTarget, nextFinishing, pauseLayerRange,
+  pausedReminder, pendingBadgeLabel, resolveSpeedView, slotToolColors, transportControls,
+  troubleList, type CancelSummary, type LayerRange, type SpeedView, type TroubleItem,
+} from "./panel-controls";
+// Komut durumu YAZICI BAŞINA tutulur — tek mutation gözlemcisi eşzamanlı komutları karıştırıyordu.
+import {
+  NO_PENDING, addPending, anyPending, pendingFor, removePending, type PendingMap,
+} from "./pending-actions";
 
-type PrinterStatus = "printing" | "finished" | "idle" | "paused" | "error";
+// 3B izleyici three (~539KB) çeker → yalnız açıldığında yüklensin.
+// Parça inerken ekran BOŞ kalmasın: tıklamanın işe yaradığı anında görünsün.
+const GcodeViewerDialog = dynamic(
+  () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
+  { ssr: false, loading: () => <ViewerLoadingShell /> },
+);
 
-interface PrinterJob {
-  productName: string;
-  productImage: string | null;
-  startedAt: string;
-  endsAt: string;
-  progress: number;
-  remainingSec: number;
-  layerCurrent: number | null;
-  layerTotal: number;
-  filamentType: string;
-  filamentColor: string;
+/** 3B görünüm parçası inerken açılan kabuk — "ölü bekleme" olmasın. */
+function ViewerLoadingShell() {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-200">
+      <div className="flex flex-col items-center gap-3 rounded-xl border bg-card px-8 py-7 shadow-xl">
+        <Loader2 className="h-6 w-6 animate-spin text-primary" />
+        <p className="text-sm font-medium">3B görünüm hazırlanıyor…</p>
+        <div className="relative h-1.5 w-44 overflow-hidden rounded-full bg-muted">
+          <div className="absolute inset-y-0 h-full w-1/3 rounded-full bg-primary" style={{ animation: "indeterminate-bar 1.4s ease-in-out infinite" }} />
+        </div>
+      </div>
+    </div>
+  );
 }
-interface PanelPrinter {
-  id: string;
-  name: string;
-  brand: string;
-  model: string;
-  accent: string;
-  type: "moonraker" | "bambu" | "sim";
-  status: PrinterStatus;
-  online: boolean;
-  note: string | null;
-  /** Hata/duraklatma NEDENİ (Moonraker mesajı / Bambu hata kodu) — kartta gösterilir. */
-  statusMessage?: string | null;
-  currentFilename: string | null;
-  matchedProductId: string | null;
-  temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number };
-  job: PrinterJob | null;
-}
+
 interface PrintersResponse {
   printers: PanelPrinter[];
   simulated: boolean;
@@ -128,32 +142,41 @@ function createLastJobsStore() {
   };
 }
 
+const EMPTY_PAUSED_SINCE: Record<string, number> = {};
+
+/**
+ * "Bu yazıcı ne zamandır duraklatılmış?" — hiçbir uçtan gelmiyor, ilk görüldüğü an damgalanıyor.
+ * Bu yüzden metin ALT SINIR olarak yazılır (`pausedReminder`), kesin süre gibi değil.
+ * Dış depo olarak tutulur (render sırasında ref okumadan, effect'te setState etmeden).
+ */
+function createPausedSinceStore() {
+  let snapshot = EMPTY_PAUSED_SINCE;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    update: (printers: PanelPrinter[]) => {
+      const next: Record<string, number> = {};
+      for (const p of printers) {
+        // ÇEVRİMDIŞI olurken damga DÜŞMEZ: kısa bir ağ kesintisi 3 saatlik duraklamayı
+        // sıfırdan başlatıyordu. Damga yalnız yazıcı çevrimiçiyken ve artık duraklamamışken silinir.
+        if (p.online && p.status !== "paused") continue;
+        if (p.status === "paused" || snapshot[p.id] != null) next[p.id] = snapshot[p.id] ?? Date.now();
+      }
+      const keys = Object.keys(next);
+      const prevKeys = Object.keys(snapshot);
+      if (keys.length === prevKeys.length && prevKeys.every((k) => snapshot[k] === next[k])) return;
+      snapshot = keys.length ? next : EMPTY_PAUSED_SINCE;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const alpha = (oklch: string, pct: number) => oklch.replace(")", ` / ${pct}%)`);
-
-function fmtRemaining(sec: number) {
-  sec = Math.max(0, Math.round(sec));
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  if (h > 0) return `${h}sa ${m}dk`;
-  if (m > 0) return `${m}dk ${s.toString().padStart(2, "0")}sn`;
-  return `${s}sn`;
-}
-
-/** Bitiş saati — bugünse "HH:MM", yarınsa "yarın HH:MM", sonraysa "g.a HH:MM". */
-function fmtClock(ms: number, nowMs: number): string {
-  const d = new Date(ms);
-  const hh = d.getHours().toString().padStart(2, "0");
-  const mm = d.getMinutes().toString().padStart(2, "0");
-  const cur = new Date(nowMs);
-  const dayDiff = Math.floor((d.setHours(0, 0, 0, 0) - cur.setHours(0, 0, 0, 0)) / 86400000);
-  const d2 = new Date(ms);
-  if (dayDiff <= 0) return `${hh}:${mm}`;
-  if (dayDiff === 1) return `yarın ${hh}:${mm}`;
-  // "5.7 14:30" kriptikti → "5 Tem 14:30"
-  return `${d2.toLocaleDateString("tr-TR", { day: "numeric", month: "short" })} ${hh}:${mm}`;
-}
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
@@ -165,35 +188,100 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+// ── Komut ucu: POST /api/printers/<id>/action ──────────────────────────────
+type ActionVars =
+  | { id: string; action: "pause" | "resume" | "cancel" }
+  | { id: string; action: "start"; filename?: string }
+  | { id: string; action: "speed"; speedPercent?: number; speedLevel?: number }
+  | { id: string; action: "light"; light: boolean | "toggle" }
+  | { id: string; action: "pauseAtLayer"; layer: number | null }
+  | { id: string; action: "changeFilament" };
+
+type ActionKind = ActionVars["action"];
+
+interface ActionResult {
+  ok?: boolean;
+  /** Yazıcı yeni durumu ONAYLADI → iyimser gösterim güvenle korunur. */
+  verified?: boolean;
+  state?: string;
+  light?: boolean | null;
+  speedPercent?: number;
+  speedLevel?: number;
+  pauseAtLayer?: number | null;
+}
+
+const SUCCESS_LABEL: Record<ActionKind, string> = {
+  pause: "Duraklatıldı",
+  resume: "Devam ettirildi",
+  cancel: "İptal edildi",
+  start: "Baskı başlatıldı",
+  speed: "Hız değişti",
+  light: "Işık değişti",
+  pauseAtLayer: "Katman duraklatması güncellendi",
+  changeFilament: "Filament değişimi için duraklatılıyor",
+};
+
+/** `layer: null` KORUNMALI (kaldırma komutu); undefined alanlar düşer. */
+function actionBody(v: ActionVars): Record<string, unknown> {
+  return { ...v, id: undefined };
+}
+
+/** Komut gönderilir gönderilmez kartta görünecek iyimser değişiklik (yoksa null). */
+function optimisticPatch(v: ActionVars): ((p: PanelPrinter) => Partial<PanelPrinter>) | null {
+  if (v.action === "pause") return () => ({ status: "paused" as PrinterStatus });
+  if (v.action === "resume") return () => ({ status: "printing" as PrinterStatus });
+  if (v.action === "cancel") return () => ({ status: "idle" as PrinterStatus, job: null });
+  if (v.action === "light") {
+    return (p) => (p.light.readable && typeof v.light === "boolean" ? { light: { ...p.light, on: v.light } } : {});
+  }
+  if (v.action === "speed") {
+    return (p) =>
+      v.speedLevel != null
+        ? { speed: { ...p.speed, level: v.speedLevel } }
+        : v.speedPercent != null
+          ? { speed: { ...p.speed, percent: v.speedPercent } }
+          : {};
+  }
+  if (v.action === "pauseAtLayer") return () => ({ pauseAtLayer: v.layer });
+  return null;
+}
+
 export default function PrintersPage() {
   const qc = useQueryClient();
+  const reduceMotion = usePrefersReducedMotion();
+  // Komut YOLDAYKEN yoklama durur: iyimser durum (ör. "iptal edildi") 5 saniye sonra gelen
+  // henüz-değişmemiş gerçekle EZİLİYOR, kart iki kez zıplıyordu (Moonraker iptali 65sn sürebilir).
+  const [pendingMap, setPendingMap] = useState<PendingMap<ActionKind>>(NO_PENDING);
+  const commandInFlight = anyPending(pendingMap);
   const { data, dataUpdatedAt, isLoading, refetch } = useQuery<PrintersResponse>({
     queryKey: ["printers"],
     queryFn: () => fetchJson<PrintersResponse>("/api/printers"),
-    refetchInterval: 5000,
+    refetchInterval: commandInFlight ? false : 5000,
     staleTime: 0,
   });
 
   // Canlı geri sayım (now) saniyede bir güncellenir → tüm yazıcı kartları o sıklıkta render olur.
   // Yazıcılar ÇOĞU zaman boştadır; boştayken saniyelik tik = sürekli boşa arka-plan render (jank).
-  // Bu yüzden tik YALNIZCA aktif baskı varken çalışır. Boştayken now=0 (SSR ile de uyumlu, geri sayım yok).
+  // Bu yüzden tik YALNIZCA aktif iş varken çalışır. Boştayken now=0 (SSR ile de uyumlu, geri sayım yok).
   // (SSR/prerender ile ilk client render'ı now=0 kalarak eşleşir → hydration mismatch olmaz.)
-  const anyPrinting = (data?.printers ?? []).some((p) => p.status === "printing");
+  // Duraklatılmış baskı da "aktif": üstteki hatırlatma sayacı onunla ilerliyor.
+  const anyActive = (data?.printers ?? []).some((p) => p.status === "printing" || p.status === "paused");
   const [now, setNow] = useState(0);
   useEffect(() => {
-    if (!anyPrinting) return;
+    if (!anyActive) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [anyPrinting]);
+  }, [anyActive]);
   // Yeni baskı uzun bir boşluktan sonra başlarsa önceki baskıdan kalmış saati bir kare bile
   // kullanma; son veri zamanını alt sınır yap, 1 sn'lik sayaç oradan devam etsin.
-  const clockNow = anyPrinting ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
+  const clockNow = anyActive ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
 
   const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
+  const retryNow = () => { setManualRefresh(true); refetch().finally(() => setManualRefresh(false)); };
   const [manageOpen, setManageOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
-  const [cancelTarget, setCancelTarget] = useState<{ id: string; name: string } | null>(null);
+  const [cancelId, setCancelId] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
 
@@ -203,48 +291,60 @@ export default function PrintersPage() {
   const printingCount = printers.filter((p) => p.status === "printing").length;
   const idleCount = printers.filter((p) => p.online && p.status === "idle").length;
 
-  const action = useMutation({
-    mutationFn: (v: { id: string; action: "pause" | "resume" | "cancel" | "start"; filename?: string }) =>
-      fetchJson(`/api/printers/${v.id}/action`, {
+  // MADDE 18: duraklatmanın NE ZAMAN başladığı hiçbir uçtan gelmiyor → ilk görüldüğü an damgalanır.
+  const [pausedStore] = useState(createPausedSinceStore);
+  useEffect(() => { pausedStore.update(data?.printers ?? []); }, [data, pausedStore]);
+  const pausedSince = useSyncExternalStore(pausedStore.subscribe, pausedStore.getSnapshot, () => EMPTY_PAUSED_SINCE);
+
+  const action = useMutation<ActionResult, Error, ActionVars, { prev?: PrintersResponse }>({
+    mutationFn: (v) =>
+      fetchJson<ActionResult>(`/api/printers/${v.id}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: v.action, filename: v.filename }),
+        // ⚠️ `layer` AÇIKÇA null gönderilmeli (alan hiç yoksa sunucu 400 verir) → JSON.stringify
+        // undefined alanları düşürür, null'ı korur. Bu yüzden payload olduğu gibi geçirilir.
+        body: JSON.stringify(actionBody(v)),
       }),
     // OPTIMISTIC: kart durumu ANINDA yansır (eskiden 5sn poll'a kadar "Yazdırıyor" kalıyordu);
     // hata olursa eski durum geri gelir + zaten sonraki poll gerçeği getirir.
     onMutate: async (v) => {
+      setPendingMap((m) => addPending(m, v.id, v.action));
       await qc.cancelQueries({ queryKey: ["printers"] });
       const prev = qc.getQueryData<PrintersResponse>(["printers"]);
-      if (v.action === "pause" || v.action === "resume" || v.action === "cancel") {
+      const patch = optimisticPatch(v);
+      if (patch) {
         qc.setQueryData<PrintersResponse>(["printers"], (old) =>
-          old
-            ? {
-                ...old,
-                printers: old.printers.map((p) =>
-                  p.id === v.id
-                    ? {
-                        ...p,
-                        status: (v.action === "pause" ? "paused" : v.action === "resume" ? "printing" : "idle") as PrinterStatus,
-                        ...(v.action === "cancel" ? { job: null } : {}),
-                      }
-                    : p
-                ),
-              }
-            : old
+          old ? { ...old, printers: old.printers.map((p) => (p.id === v.id ? { ...p, ...patch(p) } : p)) } : old,
         );
       }
       return { prev };
     },
-    onSuccess: (_d, v) => {
-      const label = { pause: "Duraklatıldı", resume: "Devam ettirildi", cancel: "İptal edildi", start: "Baskı başlatıldı" }[v.action];
-      toast.success(label);
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 600);
+    onSuccess: (res, v) => {
+      toast.success(SUCCESS_LABEL[v.action]);
+      // MADDE 6: sunucu komut sonrası kendi önbelleğini attı → paneli HEMEN tazele. Yazıcı durumu
+      // birkaç saniye sonra oturabildiği için kısa bir doğrulama yoklaması daha yapılır.
+      qc.invalidateQueries({ queryKey: ["printers"] });
+      if (!res?.verified) setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 1500);
     },
-    onError: (e: Error, _v, ctx) => {
+    onError: (e, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(["printers"], ctx.prev);
       toast.error(e.message);
     },
+    // Kilit YALNIZ komutu gönderilen yazıcıda ve YALNIZ o komut bitince açılır.
+    onSettled: (_d, _e, v) => { setPendingMap((m) => removePending(m, v.id, v.action)); },
   });
+
+  const cancelTarget = cancelId ? printers.find((p) => p.id === cancelId) ?? null : null;
+  const nextFinish = nextFinishing(printers, clockNow);
+  const troubles = troubleList(printers);
+  const focusCard = (id: string) => {
+    if (typeof document === "undefined") return;
+    const card = document.getElementById(`printer-card-${id}`);
+    if (!card) return;
+    card.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+    // Kaydırmak yetmez: klavye/ekran okuyucu kullanan kişi nereye gittiğini duymalı.
+    card.focus({ preventScroll: true });
+  };
 
   // Bağlantı KOPARSA son bilinen işi göster (eskiden kart tüm iş bilgisini kaybediyordu —
   // baskı yazıcıda çoğunlukla devam eder, kısa ağ kesintisi işi "yok" göstermemeli).
@@ -259,9 +359,11 @@ export default function PrintersPage() {
   );
 
   return (
-    <div className="p-6 space-y-5 max-w-5xl">
-      <div className="flex items-start justify-between gap-4">
-        <div>
+    <div className="p-4 sm:p-6 space-y-5 max-w-6xl">
+      {/* Dar pencerede düğmeler EKRAN DIŞINA taşmasın: hem satır hem düğme grubu sarar,
+          böylece yazıcı eklemenin tek yolu olan “Yönet” her genişlikte görünür kalır. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Printer className="h-6 w-6 text-primary" /> Yazıcılar
             {simulated && (
@@ -276,10 +378,10 @@ export default function PrintersPage() {
               : "Yazıcılarınızın canlı baskı durumu."}
           </p>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           {/* Yalnız ELLE yenilemede döner/kilitler — eski isFetching her 5sn'lik arka-plan
               poll'unda butonu yanıp söndürüyordu. */}
-          <Button variant="outline" size="sm" disabled={manualRefresh} onClick={() => { setManualRefresh(true); refetch().finally(() => setManualRefresh(false)); }} className="gap-2">
+          <Button variant="outline" size="sm" disabled={manualRefresh} onClick={retryNow} className="gap-2">
             <RefreshCw className={cn("h-4 w-4", manualRefresh && "animate-spin")} />
             Yenile
           </Button>
@@ -301,6 +403,21 @@ export default function PrintersPage() {
           {!simulated && <SummaryChip icon={Power} label={`${onlineCount} çevrimiçi`} />}
           <SummaryChip icon={Loader2} label={`${printingCount} yazdırıyor`} spin={printingCount > 0} accent />
           <SummaryChip icon={Power} label={`${idleCount} hazır`} muted />
+          {/* MADDE 18: hangi yazıcı önce boşalacak — dört kartı okumadan, geri sayarak. */}
+          {nextFinish && (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-medium bg-card border-border text-foreground/80 motion-safe:animate-in motion-safe:fade-in duration-300">
+              <Hourglass className="h-3.5 w-3.5 text-primary" />
+              Sıradaki bitiş
+              <span className="tabular-nums font-semibold">
+                {formatRemaining(nextFinish.remainingSec)}
+              </span>
+              <span className="text-muted-foreground truncate max-w-[9rem]">· {nextFinish.name}</span>
+            </span>
+          )}
+          {/* Sorun varsa tıklanınca ilgili karta götürür. */}
+          {troubles.map((t) => (
+            <TroubleChip key={t.id} item={t} onClick={() => focusCard(t.id)} />
+          ))}
         </div>
       )}
 
@@ -317,9 +434,11 @@ export default function PrintersPage() {
       )}
 
       {isLoading ? (
-        <div className="grid gap-4 lg:grid-cols-2">
+        // İskelet gerçek kart yüksekliğine yakın olmalı — 130 px kısa iskelet veri gelince
+        // sayfayı zıplatıyordu.
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[260px] w-full rounded-xl" />
+            <Skeleton key={i} className="h-[392px] w-full rounded-xl" />
           ))}
         </div>
       ) : printers.length === 0 ? (
@@ -332,20 +451,23 @@ export default function PrintersPage() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
           {printers.map((p, i) => (
             <PrinterCard
               key={p.id}
               printer={p}
               now={clockNow}
               index={i}
-              busy={action.isPending && action.variables?.id === p.id}
+              pending={pendingFor(pendingMap, p.id)}
+              pausedReminderText={pausedReminder(pausedSince[p.id] ?? null, clockNow)}
               lastKnownJob={!p.online ? lastJobs.get(p.id) : undefined}
-              onPause={() => action.mutate({ id: p.id, action: "pause" })}
-              onResume={() => action.mutate({ id: p.id, action: "resume" })}
-              onCancel={() => setCancelTarget({ id: p.id, name: p.name })}
+              onCommand={(v) => action.mutate(v)}
+              onCancel={() => setCancelId(p.id)}
               onStart={() => setStartTarget({ id: p.id, name: p.name, brand: p.brand })}
               onMatch={() => p.currentFilename && setMatchTarget({ id: p.id, filename: p.currentFilename })}
+              onManage={() => setManageOpen(true)}
+              onRetry={retryNow}
+              retrying={manualRefresh}
             />
           ))}
         </div>
@@ -359,30 +481,209 @@ export default function PrintersPage() {
       {customOpen && <CustomPrintModal printers={printers} onClose={() => setCustomOpen(false)} />}
       {libraryOpen && <CustomPrintLibrary printers={printers} onClose={() => setLibraryOpen(false)} />}
 
-      <Dialog open={!!cancelTarget} onOpenChange={(o) => !o && setCancelTarget(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Baskıyı iptal et?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            <strong className="text-foreground">{cancelTarget?.name}</strong> üzerindeki baskı durdurulacak. Bu işlem geri alınamaz.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCancelTarget(null)}>Vazgeç</Button>
-            <Button
-              variant="destructive"
-              disabled={action.isPending}
-              onClick={() => {
-                if (cancelTarget) action.mutate({ id: cancelTarget.id, action: "cancel" });
-                setCancelTarget(null);
-              }}
-            >
-              Baskıyı İptal Et
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {cancelTarget && (
+        <CancelDialog
+          printer={cancelTarget}
+          nowMs={clockNow}
+          busy={pendingFor(pendingMap, cancelTarget.id) != null}
+          onClose={() => setCancelId(null)}
+          onConfirm={() => { action.mutate({ id: cancelTarget.id, action: "cancel" }); setCancelId(null); }}
+        />
+      )}
     </div>
+  );
+}
+
+/** MADDE 18 — “nerede sorun var” çipi; tıklayınca o karta götürür. */
+function TroubleChip({ item, onClick }: { item: TroubleItem; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-medium transition-all hover:brightness-125 active:scale-[0.97] motion-safe:animate-in motion-safe:fade-in duration-300"
+      style={{
+        color: item.severe ? "var(--panel-red)" : "var(--panel-amber)",
+        backgroundColor: item.severe ? "var(--panel-red-soft)" : "var(--panel-amber-soft)",
+        borderColor: item.severe ? "var(--panel-red-line)" : "var(--panel-amber-line)",
+      }}
+      title="Karta git"
+    >
+      <AlertTriangle className="h-3.5 w-3.5" />
+      <span className="truncate max-w-[10rem]">{item.name}</span>
+      <span className="opacity-80">· {item.text}</span>
+      <ArrowRight className="h-3 w-3 opacity-70" />
+    </button>
+  );
+}
+
+// ── MADDE 15: iptal onayı — neyin kaybedileceğini SÖYLE, yanlış tıklamayı KES ──
+
+const HOLD_MS = 1400;
+
+function CancelDialog({
+  printer, nowMs, busy, onClose, onConfirm,
+}: {
+  printer: PanelPrinter; nowMs: number; busy: boolean; onClose: () => void; onConfirm: () => void;
+}) {
+  const reduceMotion = usePrefersReducedMotion();
+  const job = printer.job;
+  const s: CancelSummary = cancelSummary({ job, nowMs, paused: printer.status === "paused" });
+  const images = jobImageCandidates(job);
+  const [armed, setArmed] = useState(false); // reduced-motion yolu: ikinci onay
+  // Pencere açıkken baskı bitebilir: boş bir kutuya dönüp yine de "iptal et" kabul etmesin.
+  const gone = !job || !transportControls(printer).canCancel;
+
+  return (
+    // Kapatmak yıkıcı değil → HİÇBİR koşulda kilitlenmez (ESC ve dışa tıklama dahil).
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            {gone
+              ? <><CheckCircle2 className="h-4 w-4" style={{ color: "var(--status-done)" }} /> Baskı bitti</>
+              : <><Ban className="h-4 w-4 text-destructive" /> Baskıyı iptal et?</>}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="flex gap-3.5">
+          <div className="relative h-[104px] w-[104px] shrink-0 rounded-xl border overflow-hidden bg-muted/30">
+            <FallbackImage
+              candidates={images}
+              alt=""
+              className="absolute inset-0 h-full w-full object-contain p-1.5"
+              fallback={<div className="absolute inset-0 flex items-center justify-center"><Box className="h-8 w-8 text-muted-foreground/30" /></div>}
+            />
+            {s.pct != null && (
+              <span className="absolute inset-x-0 bottom-0 bg-background/80 px-1 py-0.5 text-center text-[10px] font-bold tabular-nums backdrop-blur-sm">
+                %{s.pct}
+              </span>
+            )}
+          </div>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <p className="text-sm font-medium leading-snug line-clamp-2">{job?.productName || printer.name}</p>
+            <p className="text-[11px] text-muted-foreground truncate">{printer.name}</p>
+            {s.pct != null && (
+              <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${s.pct}%`, background: "linear-gradient(90deg, var(--status-printing-soft), var(--status-printing))" }}
+                />
+              </div>
+            )}
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+              {s.elapsedText && <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {s.elapsedText} geçti</span>}
+              {s.gramsText && <span className="inline-flex items-center gap-1"><Weight className="h-3.5 w-3.5" /> {s.gramsText}</span>}
+              {s.remainingText && <span className="inline-flex items-center gap-1"><Hourglass className="h-3.5 w-3.5" /> {s.remainingText} kaldı</span>}
+            </div>
+          </div>
+        </div>
+
+        {s.nearFinish && (
+          <div
+            className="flex items-start gap-2 rounded-lg border px-2.5 py-2 motion-safe:animate-in motion-safe:fade-in duration-300"
+            style={{ borderColor: "var(--panel-amber-line)", backgroundColor: "var(--panel-amber-soft)" }}
+          >
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" style={{ color: "var(--panel-amber)" }} />
+            <p className="text-[11px] leading-snug text-foreground/85">Baskı bitmek üzere — birkaç dakika beklemek yeterli olabilir.</p>
+          </div>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          {gone ? "Bu baskı artık sürmüyor — iptal edilecek bir şey yok." : "Durdurulan baskı geri alınamaz; harcanan filament çöpe gider."}
+        </p>
+
+        <DialogFooter className="gap-2">
+          {/* Vazgeç ASLA kilitlenmez — kullanıcı ilgisiz bir komut bitene kadar pencerede tutulmaz. */}
+          <Button variant="outline" onClick={onClose}>{gone ? "Kapat" : "Vazgeç"}</Button>
+          {gone ? null : reduceMotion ? (
+            // Hareket azaltılmışsa basılı tutma yerine ikinci bir onay.
+            <Button variant="destructive" disabled={busy} onClick={() => (armed ? onConfirm() : setArmed(true))}>
+              {armed ? "Evet, iptal et" : "Baskıyı iptal et"}
+            </Button>
+          ) : (
+            <HoldToConfirm busy={busy} onConfirm={onConfirm} />
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Yanlış tıklamayı keser: düğme BASILI TUTULDUKÇA dolar, dolunca iptal eder. */
+function HoldToConfirm({ busy, onConfirm }: { busy: boolean; onConfirm: () => void }) {
+  const [holding, setHolding] = useState(false);
+  // Kısa basış (özellikle klavyede Enter) sessizce hiçbir şey yapıyordu → kullanıcı bozuk sanıyordu.
+  const [hint, setHint] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stop = () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+      setHint(true);
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+      hintTimer.current = setTimeout(() => setHint(false), 2500);
+    }
+    setHolding(false);
+  };
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (hintTimer.current) clearTimeout(hintTimer.current);
+  }, []);
+  const start = () => {
+    if (busy || timer.current) return;
+    setHint(false);
+    setHolding(true);
+    timer.current = setTimeout(() => { timer.current = null; setHolding(false); onConfirm(); }, HOLD_MS);
+  };
+
+  const label = holding ? "Bırakma…" : hint ? "Basılı tutmalısın" : "Basılı tut, iptal olsun";
+  return (
+    <>
+      {/* Ekran okuyucu da ne olduğunu duysun. */}
+      <span role="status" aria-live="polite" className="sr-only">{holding ? "Basılı tutuluyor" : hint ? "Basılı tutmalısın" : ""}</span>
+      <Button
+        variant="destructive"
+        disabled={busy}
+        aria-describedby="hold-to-confirm-hint"
+        className="relative overflow-hidden select-none touch-none"
+        onPointerDown={start}
+        onPointerUp={stop}
+        onPointerLeave={stop}
+        onPointerCancel={stop}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); start(); } }}
+        onKeyUp={stop}
+        onBlur={stop}
+      >
+        <span
+          aria-hidden
+          className="absolute inset-y-0 left-0 bg-white/25"
+          style={{ width: holding ? "100%" : "0%", transition: `width ${holding ? HOLD_MS : 180}ms linear` }}
+        />
+        <span className="relative z-10">{label}</span>
+      </Button>
+      <span id="hold-to-confirm-hint" className="sr-only">Düğmeyi bir buçuk saniye basılı tut.</span>
+    </>
+  );
+}
+
+/**
+ * Görsel zinciri: aday düşerse SIRADAKİNE geçer (plaka görüntüsü yazıcının LAN adresinden,
+ * mağaza fotoğrafı buluttan gelir — biri gitti diye kart boş kalmasın).
+ */
+function FallbackImage({
+  candidates, alt, className, fallback,
+}: { candidates: readonly string[]; alt: string; className?: string; fallback: React.ReactNode }) {
+  const [failed, setFailed] = useState<readonly string[]>([]);
+  const src = pickImage(candidates, failed);
+  if (!src) return <>{fallback}</>;
+  return (
+    <img
+      key={src}
+      src={src}
+      alt={alt}
+      className={className}
+      onError={() => setFailed((f) => (f.includes(src) ? f : [...f, src]))}
+    />
   );
 }
 
@@ -400,13 +701,34 @@ function SummaryChip({ icon: Icon, label, spin, accent, muted }: { icon: React.E
   );
 }
 
-const STATUS_META: Record<PrinterStatus, { label: string; cls: string }> = {
-  printing: { label: "Yazdırıyor", cls: "" },
-  finished: { label: "Tamamlandı", cls: "bg-green-500/15 text-green-400 border-green-500/30" },
-  idle: { label: "Hazır", cls: "bg-muted text-muted-foreground border-border" },
-  paused: { label: "Duraklatıldı", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
-  error: { label: "Hata", cls: "bg-destructive/15 text-destructive border-destructive/30" },
+/** Renk TEK sinyal olmasın — her durumun kendi ikonu var (renk körlüğü + hızlı tarama). */
+const TONE_ICON: Record<StatusTone, React.ElementType> = {
+  printing: Loader2,
+  paused: Pause,
+  finished: Sparkles,
+  error: AlertTriangle,
+  idle: Power,
+  offline: WifiOff,
+  unconfigured: Settings2,
+  unsupported: Ban,
 };
+
+function StatusBadge({ visual, reduceMotion, override }: { visual: StatusVisual; reduceMotion: boolean; override?: string | null }) {
+  // MADDE 6: komut yolda → rozet ARA durumda kalır, "oldu mu?" sorusu bırakmaz.
+  const Icon = override ? Loader2 : TONE_ICON[visual.tone];
+  // Komut yoldayken dönme "çalışıyor" bilgisinin tek kaynağı → hareket azaltmada da döner
+  // (globals.css `.animate-spin` istisnası). Durum ikonunun dönmesi ise dekorasyon.
+  const spin = override ? true : visual.tone === "printing" && !reduceMotion;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 whitespace-nowrap transition-colors"
+      style={{ backgroundColor: visual.soft, color: visual.color, borderColor: visual.line }}
+    >
+      <Icon className={cn("h-3 w-3", spin && "animate-spin")} />
+      {override ?? visual.label}
+    </span>
+  );
+}
 
 // Konfeti — yalnız "accent" prop'una bağlı; memo ile her saniyelik render'da 18 düğüm YENİDEN kurulmaz.
 const Confetti = memo(function Confetti({ accent }: { accent: string }) {
@@ -431,17 +753,22 @@ const Confetti = memo(function Confetti({ accent }: { accent: string }) {
  */
 const PrinterCard = memo(PrinterCardInner, (a, b) =>
   a.printer === b.printer &&
-  a.busy === b.busy &&
+  a.pending === b.pending &&
   a.index === b.index &&
+  a.retrying === b.retrying &&
+  a.pausedReminderText === b.pausedReminderText &&
   a.lastKnownJob === b.lastKnownJob &&
   (!a.printer.job || a.now === b.now)
 );
 
 function PrinterCardInner({
-  printer, now, index, busy, lastKnownJob, onPause, onResume, onCancel, onStart, onMatch,
+  printer, now, index, pending, retrying, pausedReminderText, lastKnownJob,
+  onCommand, onCancel, onStart, onMatch, onManage, onRetry,
 }: {
-  printer: PanelPrinter; now: number; index: number; busy: boolean; lastKnownJob?: PrinterJob;
-  onPause: () => void; onResume: () => void; onCancel: () => void; onStart: () => void; onMatch: () => void;
+  printer: PanelPrinter; now: number; index: number; pending: ActionKind | null; retrying: boolean;
+  pausedReminderText: string | null; lastKnownJob?: PrinterJob;
+  onCommand: (v: ActionVars) => void; onCancel: () => void; onStart: () => void; onMatch: () => void;
+  onManage: () => void; onRetry: () => void;
 }) {
   const { job, status, accent, online } = printer;
   const isReal = printer.type !== "sim";
@@ -467,7 +794,6 @@ function PrinterCardInner({
     if (isFinished) { progress = 1; remainingSec = 0; }
   }
   const pct = Math.round(progress * 100);
-  const finishingNow = isPrinting && remainingSec <= 0.5;
   // Isınma evresi: hedef var ama sıcaklık henüz uzak → "yazdırıyor ama %0 ve soğuk" kafa karışıklığını
   // "ısınıyor" rozetiyle açıkla.
   const heating =
@@ -475,17 +801,35 @@ function PrinterCardInner({
     ((printer.temps.nozzleTarget > 0 && printer.temps.nozzle < printer.temps.nozzleTarget - 3) ||
       (printer.temps.bedTarget > 0 && printer.temps.bed < printer.temps.bedTarget - 2));
   const elapsedSec = job && isPrinting ? Math.max(0, (now - new Date(job.startedAt).getTime()) / 1000) : 0;
-  const offline = isReal && !online;
-  const isError = status === "error";
+  const notice = isReal ? connectionNotice(printer.connection, online, printer.note) : null;
+  const offline = !!notice;
+  const isError = status === "error" && !offline;
 
-  // HAZIRLIK EVRESİ: ısınma/homing/ilk-hareket sırasında yazıcı henüz malzeme sürmüyor → progress,
-  // ETA ve katman ÇÖP (süre sürekli başa atıyor, katman "284/284" gibi yanlış). Baskı GERÇEKTEN
-  // başlayana (ısındı + ilk katman/ilerleme) dek "Baskıya hazırlanıyor" göster; sayaç sonra başlasın.
-  const preparing = isPrinting && !isFinished && (heating || ((layerCurrent ?? 0) < 1 && progress <= 0.01));
+  // MADDE 2 — HAZIRLIK yalnız baskının GERÇEK başında. Snapmaker U1 her renk değişiminde kafayı
+  // 70→220 ısıtıyor; eski kural yüzünden kart tek baskıda binlerce kez yüzdeyi/katmanı/kalan
+  // süreyi gizleyip "Baskıya hazırlanıyor"a düşüyordu. Artık ilerleme/katman göründüyse bilgiler
+  // KALIR, ısınma yalnız küçük bir çip olur.
+  const stage = resolveStage({ status, heating, progress, layerCurrent });
+  const preparing = stage.preparing;
+  const remainingView = resolveRemaining({
+    remainingSec,
+    remainingKnown: job?.remainingKnown ?? false,
+    nowMs: now,
+    finished: isFinished,
+    showClock: !isPaused && !preparing,
+  });
+  const finishingNow = isPrinting && remainingView.known && remainingSec <= 0.5;
 
   const nozzle = printer.temps.nozzle; // gerçek değer (5sn poll); sahte sn-bazlı titreme kaldırıldı
   const bed = printer.temps.bed;
-  const sm = STATUS_META[status];
+  const sv = resolveStatusVisual(printer);
+  const warnings = orderWarnings(printer.warnings);
+  const slotChips = buildSlotChips(printer.slots, job?.activeSlots, {
+    color: job?.filamentColor ?? "",
+    type: job?.filamentType ?? "",
+  });
+  // Duraklama nedeni "Duraklatıldı"nın yanında; uzun cihaz metni kartı taşırmasın.
+  const pauseReason = isPaused && printer.statusMessage ? printer.statusMessage.trim().slice(0, 46) : null;
 
   // CANLI DOLAN MODEL (çekme modeli): süren baskı hangi modele aitse (dosya adından çözülür,
   // yeniden yükleme GEREKMEZ), inşa kareleri o modelin kalıcı kimliğiyle aranır; yoksa arka planda
@@ -494,31 +838,80 @@ function PrinterCardInner({
   const live = useLiveBuildModel(printer.id, printer.currentFilename, printingNow);
   const buildFrames = live.frames;
 
+  // MADDE 4: kare KATMAN oranından seçilir — kareler katman oranıyla üretiliyor, bayt ilerlemesi
+  // aynı anda 23 puana kadar sapabiliyor (canlı ölçüm: bayt %90 / katman %66,5).
+  const framePick = pickBuildFrame({
+    frameCount: buildFrames?.length ?? 0,
+    layerCurrent,
+    layerTotal: job?.layerTotal ?? 0,
+    progress,
+  });
+
+  // MADDE 7 — CANLI AŞAMA: o an basılan katmanın üstten görünümü + nozulun yeri.
+  const bedFrame = bedFrameFor(printer.brand, printer.model);
+  const vizPack = live.pack;
+  const filePosition = job?.live.filePosition ?? null;
+  const byteLayer = vizPack && filePosition != null
+    ? vizPack.layerAt(vizPack.pack.layerByteOffset, filePosition)
+    : null;
+  const packLayerIndex = resolvePackLayerIndex({
+    layerCurrent, byteLayer, layerCount: vizPack?.pack.layerZ.length ?? 0,
+  });
+  const intra = vizPack && packLayerIndex != null && filePosition != null
+    ? intraLayerFraction(
+        vizPack.pack.layerByteOffset[packLayerIndex] ?? null,
+        vizPack.pack.layerByteOffset[packLayerIndex + 1] ?? vizPack.pack.fileSize,
+        filePosition,
+      )
+    : null;
+  const dot = nozzleDot(job?.live.nozzleX ?? null, job?.live.nozzleY ?? null, bedFrame);
+  const showStage = printingNow && !!bedFrame && (!!dot || packLayerIndex != null);
+
   // ARKA PLAN BASKI: bu yazıcıya başlatılan yükleme/başlatma akışı (modal kapansa da sürer) →
   // kartta ilerleme/hata göster (kullanıcı ekranda kilitlenmez).
   const activePrint = useActivePrint(printer.id);
 
+  // ── Kontroller (MADDE 6/10/16/17/22) ────────────────────────────────────
+  const transport = transportControls(printer);
+  const speedView = resolveSpeedView(printer);
+  const layerRange = pauseLayerRange(job);
+  const busy = pending != null;
+  const badgeOverride = pendingBadgeLabel(
+    pending === "pause" || pending === "resume" || pending === "cancel" ? pending : null,
+  );
+  const toolColors = useMemo(() => slotToolColors(printer.slots), [printer.slots]);
+
+  // MADDE 11: süren baskının 3B görünümü karttan açılır (model dosyası varsa).
+  // Açılışta model bilgisi KOPYALANIR: yazıcı bir yoklamada yanıt vermeyince dosya adı null
+  // oluyordu → pencere kendiliğinden kapanıp (kamera açısı, katman, oynatma gider) bir sonraki
+  // yoklamada kendiliğinden geri açılıyordu.
+  const viewer = live.viewer;
+  const [viewerSnap, setViewerSnap] = useState<{ fileId: string; cacheKey: string; name: string } | null>(null);
+
   return (
     <Card
+      id={`printer-card-${printer.id}`}
+      // Üstteki sorun çipi buraya götürüyor; kaydırmanın yanında ODAK da taşınabilsin.
+      tabIndex={-1}
+      aria-label={printer.name}
       className={cn(
-        "relative overflow-hidden motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 duration-500",
-        offline && "opacity-70",
-        isError && "border-destructive/55 ring-1 ring-destructive/35 shadow-[0_10px_34px_-10px] shadow-destructive/40"
+        "relative overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-primary/50 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 duration-500",
+        offline && "opacity-80"
       )}
       style={{
         animationDelay: `${index * 80}ms`, animationFillMode: "both",
-        borderColor: isPrinting && online ? alpha(accent, 35) : undefined,
-        boxShadow: isPrinting && online ? `0 0 0 1px ${alpha(accent, 18)}, 0 8px 30px ${alpha(accent, 12)}` : undefined,
+        // MADDE 5: çerçeve DURUM rengini taşır (kimlik rengi değil) — sağlıklı kart artık
+        // arızalı karttan ilk bakışta ayrılıyor.
+        borderColor: sv.emphasize ? sv.line : undefined,
+        boxShadow: sv.emphasize ? `0 10px 32px -14px ${sv.soft}` : undefined,
       }}
     >
-      {isPrinting && online && (
-        <div className="absolute inset-x-0 top-0 h-[2px] overflow-hidden">
-          {reduceMotion
-            ? <div className="h-full w-full" style={{ background: accent }} />
-            : <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />}
-        </div>
-      )}
-      {isError && <div className="absolute inset-x-0 top-0 h-[3px] bg-destructive" />}
+      {/* Kimlik rengi yalnız burada ve ikonda: ince üst çizgi (baskıda akar). */}
+      <div className="absolute inset-x-0 top-0 h-[2px] overflow-hidden">
+        {isPrinting && online && !reduceMotion
+          ? <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />
+          : <div className="h-full w-full" style={{ background: alpha(accent, offline ? 22 : 55) }} />}
+      </div>
       {/* Konfeti yalnız YENİ biten baskıda (≤5dk) — eskiden finished kaldıkça saatlerce yağıyordu. */}
       {isFinished && online && !reduceMotion && endMs > 0 && now - endMs < 5 * 60_000 && <Confetti accent={accent} />}
 
@@ -526,25 +919,48 @@ function PrinterCardInner({
         {/* ARKA PLAN BASKI ilerlemesi/hatası — modal kapansa da kullanıcı süreci burada görür */}
         {activePrint && <ActivePrintBanner ap={activePrint} accent={accent} />}
 
-        {/* Acil: baskı durdu / yazıcı hatası */}
+        {/* Acil: baskı durdu / yazıcı hatası (nedeni hemen altındaki uyarı satırında) */}
         {isError && (
-          <div className="flex items-center gap-2.5 rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2">
-            <AlertTriangle className="h-4 w-4 text-destructive shrink-0 motion-safe:animate-pulse" />
+          <div className="flex items-center gap-2.5 rounded-lg border px-3 py-2"
+            style={{ borderColor: "var(--status-error-line)", backgroundColor: "var(--status-error-soft)" }}>
+            <AlertTriangle className="h-4 w-4 shrink-0 motion-safe:animate-pulse" style={{ color: "var(--status-error)" }} />
             <div className="min-w-0">
-              <p className="text-xs font-bold text-destructive leading-tight">Baskı durdu — yazıcıyı kontrol et</p>
-              {/* Hangi baskıda olduğu kullanıcıya yeter; cihazın ham hata metni "Ayrıntı" altında kalır. */}
-              <p className="text-[11px] text-destructive/80 truncate">
-                {job?.productName || printer.currentFilename || "Yazıcı ekranındaki uyarıya bak"}
+              <p className="text-xs font-bold leading-tight" style={{ color: "var(--status-error)" }}>Baskı durdu — yazıcıyı kontrol et</p>
+              <p className="text-[11px] truncate text-foreground/70">
+                {job?.productName || "Yazıcı ekranındaki uyarıya bak"}
               </p>
-              {printer.statusMessage && (
-                <details className="group mt-0.5">
-                  <summary className="cursor-pointer select-none text-[10px] text-destructive/60 hover:text-destructive transition-colors">
-                    Ayrıntı
-                  </summary>
-                  <p className="mt-0.5 text-[10px] text-destructive/70 break-words">{printer.statusMessage}</p>
-                </details>
-              )}
             </div>
+          </div>
+        )}
+
+        {/* MADDE 14: yazıcının uyarıları (neden duraklattı, ne oldu) */}
+        {warnings.length > 0 && !offline && (
+          <div className="space-y-1">
+            {warnings.map((w, i) => (
+              <div
+                key={`${w.code ?? "w"}-${i}`}
+                className="flex items-start gap-2 rounded-lg border px-2.5 py-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 duration-300"
+                style={{
+                  borderColor: w.severe ? "var(--panel-red-line)" : "var(--panel-amber-line)",
+                  backgroundColor: w.severe ? "var(--panel-red-soft)" : "var(--panel-amber-soft)",
+                  animationDelay: `${i * 60}ms`, animationFillMode: "both",
+                }}
+              >
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" style={{ color: w.severe ? "var(--panel-red)" : "var(--panel-amber)" }} />
+                <p className="text-[11px] leading-snug text-foreground/85">{w.text}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* MADDE 18: uzun süredir duraklamış baskı unutulmasın */}
+        {pausedReminderText && isPaused && !offline && (
+          <div
+            className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 motion-safe:animate-in motion-safe:fade-in duration-300"
+            style={{ borderColor: "var(--panel-amber-line)", backgroundColor: "var(--panel-amber-soft)" }}
+          >
+            <Clock className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--panel-amber)" }} />
+            <p className="text-[11px] leading-snug text-foreground/85">{pausedReminderText}</p>
           </div>
         )}
 
@@ -559,64 +975,69 @@ function PrinterCardInner({
               <p className="text-[11px] text-muted-foreground truncate">{printer.model || printer.brand}</p>
             </div>
           </div>
-          {offline ? (
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 bg-muted text-muted-foreground border-border">
-              <WifiOff className="h-3 w-3" /> Çevrimdışı
-            </span>
-          ) : (
-            <span
-              className={cn("inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0", sm.cls)}
-              style={isPrinting ? { backgroundColor: alpha(accent, 14), color: accent, borderColor: alpha(accent, 30) } : undefined}
-            >
-              {isPrinting && <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: accent }} />}
-              {isFinished && <Sparkles className="h-3 w-3" />}
-              {isError && <AlertTriangle className="h-3 w-3" />}
-              {sm.label}
-            </span>
-          )}
+          <StatusBadge visual={sv} reduceMotion={reduceMotion} override={badgeOverride} />
         </div>
 
         {/* Gövde */}
-        {offline ? (
-          <div className="flex items-center gap-3.5 py-4">
+        {notice ? (
+          <div className="flex items-center gap-3.5 py-3">
             <div className="flex items-center justify-center h-20 w-20 shrink-0 rounded-xl border border-dashed bg-muted/30">
-              <WifiOff className="h-7 w-7 text-muted-foreground/30" />
+              {notice.action === "manage"
+                ? <Settings2 className="h-7 w-7 text-muted-foreground/35" />
+                : <WifiOff className="h-7 w-7 text-muted-foreground/35" />}
             </div>
-            <div className="flex-1 text-sm text-muted-foreground">
-              <p className="font-medium text-foreground/70">Bağlantı yok</p>
-              <p className="text-xs mt-0.5">{printer.note ?? "Yazıcıya ulaşılamadı."}</p>
+            <div className="flex-1 min-w-0 text-sm">
+              <p className="font-medium text-foreground/80">{notice.title}</p>
+              {/* NEYİN eksik olduğu yazsın — "Yazıcı bilgileri eksik." dört karttan hangisinde
+                  IP mi, access code mu, seri no mu gerektiğini söylemiyordu. */}
+              <p className="text-xs text-muted-foreground mt-0.5">{notice.detail}</p>
               {/* Kısa ağ kesintisinde iş bilgisi kaybolmasın — baskı yazıcıda genelde sürüyor. */}
               {lastKnownJob && (
                 <p className="text-[11px] mt-1.5 text-muted-foreground/80 truncate">
                   Son bilinen: <span className="font-medium text-foreground/70">{lastKnownJob.productName}</span> · %{Math.round(clamp(lastKnownJob.progress, 0, 1) * 100)}
                 </p>
               )}
+              {/* Desteklenmeyen yazıcıda tamamlanacak bir kurulum YOK → düğme de çizilmez. */}
+              {notice.action !== "none" && (
+                <Button
+                  size="sm" variant="outline" className="h-7 mt-2 gap-1.5 text-xs"
+                  disabled={notice.action === "retry" && retrying}
+                  onClick={notice.action === "manage" ? onManage : onRetry}
+                >
+                  {notice.action === "manage"
+                    ? <><Settings2 className="h-3.5 w-3.5" /> Yönet</>
+                    : <><RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} /> Tekrar dene</>}
+                </Button>
+              )}
             </div>
           </div>
         ) : job ? (
           <div className="flex gap-3.5">
-            {buildFrames?.length ? (
-              <LiveBuildImage frames={buildFrames} progress={progress} accent={accent} />
-            ) : (
-              // Kareler hazır değilse: model statik önizlemesi (varsa) → yoksa ürün görseli.
-              <PrintInImage image={live.thumbnail || job.productImage} productName={job.productName} progress={progress} accent={accent} printing={isPrinting} />
-            )}
+            {/* MADDE 3 + 7: büyük gerçek plaka görseli, üstünde katman rozeti ve canlı aşama */}
+            <JobVisual
+              frames={buildFrames}
+              frameIndex={framePick.index}
+              images={jobImageCandidates(job, live.thumbnail)}
+              productName={job.productName}
+              accent={accent}
+              badge={preparing ? null : layerBadgeText(layerCurrent, job.layerTotal)}
+              reduceMotion={reduceMotion}
+              stage={showStage && bedFrame ? { pack: live.pack, layerIndex: packLayerIndex, intra, dot, frame: bedFrame } : null}
+              // MADDE 11: model dosyası varsa görsel tıklanabilir → 3B izleyici (yoksa ölü tık yok)
+              onOpen3d={viewer ? () => setViewerSnap({ ...viewer, name: job.productName || printer.name }) : null}
+            />
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
+              {/* MADDE 12: yüklü filamentler — bu baskıda kullanılanlar vurgulu */}
+              <SlotStrip chips={slotChips} />
+              <CardBadges printer={printer} speedView={speedView} />
               <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
-                {/* Katman: yalnız GERÇEK baskıda (hazırlıkta değer çöp — "284/284" gibi). */}
-                {!preparing && job.layerTotal > 0 && layerCurrent != null && layerCurrent > 0 && (
-                  <span className="inline-flex items-center gap-1"><Layers className="h-3.5 w-3.5" /> {layerCurrent}/{job.layerTotal}</span>
-                )}
-                {/* Filament çipi yalnız GERÇEK veri varsa (Bambu'da uydurma "PLA" gösteriliyordu). */}
-                {job.filamentType && (
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full border border-black/10" style={{ background: job.filamentColor || "#9ca3af" }} />
-                    {job.filamentType}
-                  </span>
-                )}
                 {!preparing && isPrinting && elapsedSec > 0 && (
-                  <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {fmtRemaining(elapsedSec)} geçti</span>
+                  <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {formatRemaining(elapsedSec)} geçti</span>
+                )}
+                {/* Dilimleyicinin bildirdiği TOPLAM ağırlık — "şimdiye kadar harcanan" sanılmasın. */}
+                {job.filamentGrams != null && job.filamentGrams > 0 && (
+                  <span className="inline-flex items-center gap-1"><Weight className="h-3.5 w-3.5" /> toplam {Math.round(job.filamentGrams)} g</span>
                 )}
               </div>
               <div className="flex items-center gap-3 text-[11px] tabular-nums">
@@ -627,9 +1048,10 @@ function PrinterCardInner({
                 <span className="inline-flex items-center gap-1 text-muted-foreground">
                   Tabla {bed}°{printer.temps.bedTarget > 0 ? <span className="text-muted-foreground/60">/ {printer.temps.bedTarget}</span> : null}
                 </span>
-                {heating && (
-                  <span className="inline-flex items-center gap-1 text-amber-500 font-medium">
-                    <Flame className="h-3 w-3 motion-safe:animate-pulse" /> ısınıyor
+                {/* MADDE 2: ısınma artık bilgileri gizlemez — küçük bir çip */}
+                {stage.heatingChip && (
+                  <span className="inline-flex items-center gap-1 font-medium motion-safe:animate-in motion-safe:fade-in duration-300" style={{ color: "var(--panel-amber)" }}>
+                    <Flame className="h-3 w-3 motion-safe:animate-pulse" /> Isınıyor
                   </span>
                 )}
               </div>
@@ -640,9 +1062,11 @@ function PrinterCardInner({
             <div className="flex items-center justify-center h-28 w-28 shrink-0 rounded-xl border border-dashed bg-muted/30">
               <Box className="h-9 w-9 text-muted-foreground/30" />
             </div>
-            <div className="flex-1 text-sm text-muted-foreground">
-              <p className="font-medium text-foreground/70">{status === "error" ? "Hata" : "Hazır"}</p>
-              <p className="text-xs mt-0.5">{status === "error" ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
+            <div className="flex-1 min-w-0 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground/70">{isError ? "Hata" : "Hazır"}</p>
+              <p className="text-xs mt-0.5">{isError ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
+              <SlotStrip chips={slotChips} className="mt-2" />
+              <CardBadges printer={printer} speedView={speedView} className="mt-2" />
               <p className="text-[11px] mt-2 text-muted-foreground/70 tabular-nums">Nozul {nozzle}° · Tabla {bed}°</p>
             </div>
           </div>
@@ -654,43 +1078,59 @@ function PrinterCardInner({
             <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted">
               {preparing ? (
                 reduceMotion
-                  ? <div className="absolute inset-y-0 left-0 h-full w-1/4 rounded-full" style={{ background: alpha(accent, 60) }} />
-                  : <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: accent, animation: "indeterminate-bar 1.8s ease-in-out infinite" }} />
+                  ? <div className="absolute inset-y-0 left-0 h-full w-1/4 rounded-full" style={{ background: sv.color, opacity: 0.6 }} />
+                  : <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: sv.color, animation: "indeterminate-bar 1.8s ease-in-out infinite" }} />
               ) : (
                 <div
                   className="h-full rounded-full relative overflow-hidden transition-[width] duration-1000 ease-linear"
                   style={{
+                    // Dolgu da DURUM rengini taşır — kimlik rengi kartın üst çizgisinde kalır.
                     width: `${pct}%`,
-                    background: isFinished
-                      ? "linear-gradient(90deg, oklch(0.72 0.18 145 / 80%), oklch(0.72 0.18 145))"
-                      : `linear-gradient(90deg, ${alpha(accent, 70)}, ${accent})`,
+                    background: `linear-gradient(90deg, ${sv.soft}, ${sv.color})`,
                   }}
                 >
                   {isPrinting && !reduceMotion && <div className="absolute inset-0" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.5), transparent)", animation: "printer-shimmer 1.6s linear infinite" }} />}
                 </div>
               )}
             </div>
-            <div className="flex items-center justify-between text-xs tabular-nums">
+            <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
               {preparing ? (
                 <>
-                  <span className="font-semibold text-sm inline-flex items-center gap-1.5" style={{ color: accent }}>
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Baskıya hazırlanıyor…
+                  <span className="font-semibold text-sm inline-flex items-center gap-1.5" style={{ color: sv.color }}>
+                    {/* MADDE 21(e): hareket azaltılmışsa dönme YOK. */}
+                    <Loader2 className={"h-3.5 w-3.5 animate-spin"} /> Baskıya hazırlanıyor…
                   </span>
                   <span className="text-muted-foreground inline-flex items-center gap-1">
-                    {heating ? <><Flame className="h-3.5 w-3.5 text-amber-500" /> ısınıyor</> : "yerleşiyor"}
-                    {elapsedSec > 2 ? ` · ${fmtRemaining(elapsedSec)}` : ""}
+                    {heating ? <><Flame className="h-3.5 w-3.5" style={{ color: "var(--panel-amber)" }} /> ısınıyor</> : "yerleşiyor"}
+                    {elapsedSec > 2 ? ` · ${formatRemaining(elapsedSec)}` : ""}
                   </span>
                 </>
               ) : (
                 <>
-                  <span className="font-bold text-sm" style={{ color: isFinished ? "oklch(0.72 0.18 145)" : accent }}>
+                  <span className="font-bold text-sm shrink-0" style={{ color: sv.color }}>
                     {isFinished ? "Tamamlandı 🎉" : <>%<AnimatedNumber value={pct} durationMs={800} /></>}
                   </span>
-                  <span className="text-muted-foreground inline-flex items-center gap-1">
-                    {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 text-green-500" /> Baskı bitti</>)
-                      : isPaused ? (<><Pause className="h-3.5 w-3.5 text-amber-500" /> Duraklatıldı · {fmtRemaining(remainingSec)} kaldı</>)
-                        : finishingNow ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" /> Tamamlanıyor…</>)
-                          : (<><Clock className="h-3.5 w-3.5" /> {fmtRemaining(remainingSec)} kaldı · ~{fmtClock(endMs, now)}</>)}
+                  {/* MADDE 1: kalan süre bilinmiyorsa "—"; bitiş saati AYNI kalan süreden üretilir. */}
+                  <span className="text-muted-foreground inline-flex items-center gap-1 min-w-0">
+                    {isFinished ? (<><CheckCircle2 className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--status-done)" }} /> Baskı bitti</>)
+                      : isPaused ? (
+                        <>
+                          <Pause className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--status-paused)" }} />
+                          <span className="truncate">
+                            Duraklatıldı{pauseReason ? ` · ${pauseReason}` : remainingView.known ? ` · ${remainingView.text} kaldı` : ""}
+                          </span>
+                        </>
+                      )
+                        : finishingNow ? (<><Loader2 className={"h-3.5 w-3.5 shrink-0 animate-spin"} /> Tamamlanıyor…</>)
+                          : (
+                            <>
+                              <Clock className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">
+                                {remainingView.known ? `${remainingView.text} kaldı` : "kalan süre —"}
+                                {remainingView.clock ? ` · ~${remainingView.clock}` : ""}
+                              </span>
+                            </>
+                          )}
                   </span>
                 </>
               )}
@@ -700,42 +1140,342 @@ function PrinterCardInner({
 
         {/* Kontroller — sadece gerçek + çevrimiçi yazıcılarda */}
         {isReal && online && (
-          <div className="flex items-center gap-1.5 pt-0.5 border-t border-border/50 mt-1">
-            <div className="flex items-center gap-1.5 pt-2 flex-wrap">
-              {isPrinting && (
-                <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onPause}>
-                  <Pause className="h-3.5 w-3.5" /> Duraklat
-                </Button>
-              )}
-              {isPaused && (
-                <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onResume}>
-                  <Play className="h-3.5 w-3.5" /> Devam
-                </Button>
-              )}
+          <div className="pt-2 mt-1 border-t border-border/50 space-y-2">
+            {/* Birincil eylemler */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {/* MADDE 6: duraklamışken düğme "Devam et" der; uygun olmayan yön ETKİSİZ. */}
               {(isPrinting || isPaused) && (
-                <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10" disabled={busy} onClick={onCancel}>
-                  <Ban className="h-3.5 w-3.5" /> İptal
+                <Button
+                  size="sm" variant="outline" className="h-7 gap-1 text-xs min-w-[6.5rem]"
+                  disabled={busy || !(transport.canPause || transport.canResume)}
+                  onClick={() => onCommand({ id: printer.id, action: transport.canResume ? "resume" : "pause" })}
+                  title={transport.canResume ? "Baskıya devam et" : "Baskıyı duraklat"}
+                >
+                  {pending === "pause" || pending === "resume" ? (
+                    <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {PENDING_LABEL[pending]}</>
+                  ) : transport.canResume ? (
+                    <><Play className="h-3.5 w-3.5" /> Devam et</>
+                  ) : (
+                    <><Pause className="h-3.5 w-3.5" /> Duraklat</>
+                  )}
                 </Button>
               )}
-              {(printer.type === "moonraker" || printer.type === "bambu") && (status === "idle" || status === "finished" || status === "error") && (
+              {transport.canStart && (
                 <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onStart}>
                   <Play className="h-3.5 w-3.5" /> Baskı Başlat
                 </Button>
               )}
-              {job && (
-                <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs ml-auto" onClick={onMatch} title="Bu baskıyı bir ürünle eşleştir">
-                  <Link2 className="h-3.5 w-3.5" />
-                  {printer.matchedProductId ? "Ürünü değiştir" : "Ürün seç"}
-                </Button>
+
+              {/* MADDE 10 — hız: serbest sayı girişi YOK, yalnız komşu kademeler */}
+              {speedView && (
+                <SpeedControl
+                  view={speedView}
+                  busy={busy}
+                  pending={pending === "speed"}
+                  onPick={(v) =>
+                    onCommand(
+                      speedView.kind === "level"
+                        ? { id: printer.id, action: "speed", speedLevel: v }
+                        : { id: printer.id, action: "speed", speedPercent: v },
+                    )
+                  }
+                />
+              )}
+
+              {/* MADDE 16 — ışık */}
+              {printer.caps.light && (
+                <LightControl
+                  light={printer.light}
+                  busy={busy}
+                  pending={pending === "light"}
+                  accent={accent}
+                  onToggle={(next) => onCommand({ id: printer.id, action: "light", light: next })}
+                />
+              )}
+
+              {/* MADDE 17 — katmanda duraklat + filament değiştir.
+                  Kurulu duraklatma yazıcıda BASKIDAN BAĞIMSIZ kalıcı: baskı bitse de, katman
+                  toplamı okunamasa da KALDIRILABİLMELİ (yoksa sonraki baskı yarıda duruyordu). */}
+              {printer.caps.pauseAtLayer && (isPrinting || isPaused || printer.pauseAtLayer != null) && (
+                <PauseAtLayerControl
+                  range={layerRange}
+                  current={printer.pauseAtLayer}
+                  busy={busy}
+                  pending={pending === "pauseAtLayer"}
+                  onSet={(layer) => onCommand({ id: printer.id, action: "pauseAtLayer", layer })}
+                />
+              )}
+              {printer.caps.filamentChange && isPrinting && (
+                <FilamentChangeControl
+                  busy={busy}
+                  pending={pending === "changeFilament"}
+                  onConfirm={() => onCommand({ id: printer.id, action: "changeFilament" })}
+                />
               )}
             </div>
+
+            {/* İkincil satır — yıkıcı eylem AYRI ve sağda, yanlış tıklama uzağında */}
+            {(job || transport.canCancel) && (
+              <div className="flex items-center gap-2">
+                {job && (
+                  <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={onMatch} title="Bu baskı hangi ürüne ait?">
+                    <Link2 className="h-3.5 w-3.5" />
+                    {printer.matchedProductId ? "Ürünü değiştir" : "Ürünle eşleştir"}
+                  </Button>
+                )}
+                {transport.canCancel && (
+                  <div className="ml-auto pl-3 border-l border-border/50">
+                    <Button
+                      size="sm" variant="ghost"
+                      className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      disabled={busy} onClick={onCancel}
+                    >
+                      {pending === "cancel"
+                        ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {PENDING_LABEL.cancel}</>
+                        : <><Ban className="h-3.5 w-3.5" /> Baskıyı iptal et</>}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
         {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
+
+      {viewerSnap && (
+        <GcodeViewerDialog
+          fileId={viewerSnap.fileId}
+          cacheKey={viewerSnap.cacheKey}
+          name={viewerSnap.name}
+          liveLayer={layerCurrent}
+          toolColors={toolColors}
+          onClose={() => setViewerSnap(null)}
+        />
+      )}
     </Card>
+  );
+}
+
+// ── Kart rozetleri: hız / katman duraklatması / gözetim ────────────────────
+
+function CardBadges({ printer, speedView, className }: { printer: PanelPrinter; speedView: SpeedView | null; className?: string }) {
+  const items: { key: string; icon: React.ElementType; text: string }[] = [];
+  // Hız rozeti YALNIZ varsayılan dışındayken: Moonraker hızı boştayken de bildirdiği için
+  // "Hız %100" dört kartta da hiç değişmeden durup gerçek rozetleri bastırıyordu.
+  if (speedView && !speedView.atDefault) items.push({ key: "speed", icon: Gauge, text: `Hız ${speedView.label}` });
+  if (printer.pauseAtLayer != null) items.push({ key: "layer", icon: Layers, text: `${printer.pauseAtLayer}. katmanda duracak` });
+  // MADDE 22 — yalnız Snapmaker U1
+  if (printer.defectWatch?.enabled) items.push({ key: "watch", icon: Eye, text: "Gözetim açık" });
+  if (items.length === 0) return null;
+  return (
+    <div className={cn("flex flex-wrap items-center gap-1", className)}>
+      {items.map((it) => (
+        <span
+          key={it.key}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] font-semibold text-foreground/75 tabular-nums motion-safe:animate-in motion-safe:fade-in duration-300"
+        >
+          <it.icon className="h-3 w-3 text-muted-foreground" />
+          {it.text}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── MADDE 10 — hız kademesi ────────────────────────────────────────────────
+
+function SpeedControl({
+  view, busy, pending, onPick,
+}: { view: SpeedView; busy: boolean; pending: boolean; onPick: (value: number) => void }) {
+  return (
+    <div className="inline-flex items-center h-7 rounded-md border border-input overflow-hidden" title="Baskı hızı">
+      <button
+        className="h-full px-1.5 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-35 disabled:hover:bg-transparent transition-colors"
+        disabled={busy || view.down == null}
+        onClick={() => view.down != null && onPick(view.down)}
+        aria-label="Hızı düşür"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      {/* Beklerken de DEĞER görünür kalır: eskiden etiket tamamen dönen ikonla değişiyordu ve
+          hareket azaltma açıkken ortada hareketsiz bir daireden başka bir şey kalmıyordu. */}
+      <span className="px-1.5 text-xs font-semibold tabular-nums inline-flex items-center gap-1 min-w-[3.5rem] justify-center">
+        {pending
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          : <Gauge className="h-3.5 w-3.5 text-muted-foreground" />}
+        {view.label}
+      </span>
+      <button
+        className="h-full px-1.5 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-35 disabled:hover:bg-transparent transition-colors"
+        disabled={busy || view.up == null}
+        onClick={() => view.up != null && onPick(view.up)}
+        aria-label="Hızı artır"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ── MADDE 16 — ışık ────────────────────────────────────────────────────────
+
+function LightControl({
+  light, busy, pending, accent, onToggle,
+}: {
+  light: PanelPrinter["light"]; busy: boolean; pending: boolean; accent: string;
+  onToggle: (next: boolean | "toggle") => void;
+}) {
+  // Durumu okunamayan modelde (Neptune 4 Plus) açık/kapalı GÖSTERGESİ ÇİZİLMEZ — tek "değiştir".
+  const on = light.readable ? light.on === true : null;
+  return (
+    <Button
+      size="sm" variant="outline" className="h-7 gap-1 text-xs"
+      disabled={busy}
+      onClick={() => onToggle(light.readable ? !on : "toggle")}
+      title={light.readable ? (on ? "Işığı kapat" : "Işığı aç") : "Işığı değiştir"}
+    >
+      {pending
+        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        : <Lightbulb className="h-3.5 w-3.5 transition-colors" style={on ? { color: accent } : undefined} />}
+      {light.readable ? (on ? "Işık açık" : "Işık kapalı") : "Işığı değiştir"}
+    </Button>
+  );
+}
+
+// ── MADDE 17 — katmanda duraklat ───────────────────────────────────────────
+
+function PauseAtLayerControl({
+  range, current, busy, pending, onSet,
+}: {
+  range: LayerRange | null;
+  current: number | null; busy: boolean; pending: boolean; onSet: (layer: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(range?.suggested ?? 1);
+  const openPicker = () => { setValue(range?.suggested ?? 1); setOpen(true); };
+  // Seçici açıkken baskı ilerliyor (`range.min` büyüyor). Değer render sırasında kırpılır ki
+  // ekrandaki sayı ile kaydırıcının topuzu ayrılmasın ve sunucunun reddedeceği değer gönderilmesin.
+  const safe = range ? clampLayerValue(value, range) : value;
+  // Kurulu duraklatmayı KALDIRMAK katman aralığı gerektirmez.
+  const canOpen = !!range || current != null;
+
+  return (
+    <>
+      <Button
+        size="sm" variant="outline" className="h-7 gap-1 text-xs"
+        disabled={busy || !canOpen} onClick={openPicker}
+        title={range ? "Seçilen katmanda duraklat" : current != null ? "Kurulu duraklatmayı kaldır" : "Katman bilgisi yok"}
+      >
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
+        {current != null ? `${current}. katmanda dur` : "Katmanda duraklat"}
+      </Button>
+
+      {open && canOpen && (
+        <Dialog open onOpenChange={(o) => !o && setOpen(false)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-base">
+                <Layers className="h-4 w-4 text-primary" /> Katmanda duraklat
+              </DialogTitle>
+            </DialogHeader>
+            {range ? (
+              <>
+                <p className="text-xs text-muted-foreground">Baskı seçtiğin katmana gelince duracak.</p>
+                <div className="flex items-baseline justify-center gap-1 py-1">
+                  <span className="text-3xl font-bold tabular-nums">
+                    <AnimatedNumber value={safe} durationMs={220} />
+                  </span>
+                  <span className="text-sm text-muted-foreground tabular-nums">/ {range.max}</span>
+                </div>
+                <input
+                  type="range"
+                  min={range.min}
+                  max={range.max}
+                  value={safe}
+                  onChange={(e) => setValue(Number(e.target.value))}
+                  className="w-full accent-[var(--panel-primary)]"
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {/* GERÇEKTEN ekler (eskiden aralığın başına atıp değeri düşürüyordu). */}
+                  {[5, 25, 100].map((step) => {
+                    const target = layerStepTarget(safe, step, range);
+                    return (
+                      <Button
+                        key={step} size="sm" variant="outline" className="h-7 text-xs"
+                        disabled={target === safe}
+                        onClick={() => setValue(target)}
+                      >
+                        +{step}
+                      </Button>
+                    );
+                  })}
+                  <Button
+                    size="sm" variant="outline" className="h-7 text-xs"
+                    disabled={safe === range.max}
+                    onClick={() => setValue(range.max)}
+                  >
+                    Son katman
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Bu baskıda katman sayısı okunamıyor — kurulu duraklatmayı kaldırabilirsin.
+              </p>
+            )}
+            <DialogFooter className="gap-2">
+              {current != null && (
+                // ⚠️ Kaldırmak için AÇIKÇA null gönderilir — alan hiç gönderilmezse sunucu reddeder.
+                <Button variant="ghost" size="sm" className="mr-auto" disabled={busy} onClick={() => { onSet(null); setOpen(false); }}>
+                  Duraklatmayı kaldır
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Vazgeç</Button>
+              {range && (
+                <Button size="sm" disabled={busy} onClick={() => { onSet(safe); setOpen(false); }}>Kur</Button>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  );
+}
+
+// ── MADDE 17 — filament değiştir (baskıyı DURAKLATIR → onay ister) ─────────
+
+function FilamentChangeControl({ busy, pending, onConfirm }: { busy: boolean; pending: boolean; onConfirm: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button
+        size="sm" variant="outline" className="h-7 gap-1 text-xs"
+        disabled={busy} onClick={() => setOpen(true)}
+        title="Baskıyı duraklatıp filament değiştir"
+      >
+        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat className="h-3.5 w-3.5" />}
+        Duraklat, filament değiştir
+      </Button>
+      <Dialog open={open} onOpenChange={(o) => !o && setOpen(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Repeat className="h-4 w-4 text-primary" /> Filament değiştir
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Baskı duraklatılacak ve kafa filament değişimi için yana çekilecek. Değişimden sonra yazıcı ekranından devam ettir.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Vazgeç</Button>
+            <Button size="sm" disabled={busy} onClick={() => { onConfirm(); setOpen(false); }}>Duraklat ve değiştir</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
@@ -763,6 +1503,8 @@ const AP_STAGE_LABEL: Record<string, string> = {
 function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) {
   const isErr = ap.stage === "error";
   const pct = typeof ap.pct === "number" ? Math.max(0, Math.min(100, Math.round(ap.pct))) : null;
+  // MADDE 21(e): bu bantta dönen ikon ve belirsiz bar hareket ayarını hiç dinlemiyordu.
+  const reduceMotion = usePrefersReducedMotion();
   return (
     <div
       className={cn(
@@ -772,7 +1514,7 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
     >
       <div className="flex items-center gap-2 text-xs">
         {isErr ? <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0" />
-          : <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" style={{ color: accent }} />}
+          : <Loader2 className={"h-3.5 w-3.5 shrink-0 animate-spin"} style={{ color: accent }} />}
         <span className={cn("font-semibold truncate", isErr && "text-destructive")}>{ap.label}</span>
         <span className="ml-auto tabular-nums shrink-0" style={{ color: isErr ? undefined : accent }}>
           {isErr ? "başlatılamadı" : pct != null ? `${pct}%` : (AP_STAGE_LABEL[ap.stage] ?? "…")}
@@ -795,6 +1537,8 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
           <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-muted">
             {pct != null ? (
               <div className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${pct}%`, background: accent }} />
+            ) : reduceMotion ? (
+              <div className="absolute inset-y-0 left-0 h-full w-1/4 rounded-full" style={{ background: accent, opacity: 0.6 }} />
             ) : (
               <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: accent, animation: "indeterminate-bar 1.6s ease-in-out infinite" }} />
             )}
@@ -809,12 +1553,27 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
 // ── Canlı dolan model: baskı kartında modelin katman katman inşası ──────────
 interface PrintModelInfo { id: string; contentMd5: string | null; sizeBytes: number | null; thumbnail?: string | null }
 
+/** Canlı aşama çizimi için gereken paket + yardımcıları (görselleştirme modülü DİNAMİK yüklenir). */
+interface LivePack {
+  pack: VizPack;
+  layerAt: (offsets: ArrayLike<number>, filePosition: number) => number;
+  isBody: (feature: number) => boolean;
+}
+
 /**
  * Süren baskının modelini çöz → inşa karelerini kalıcı kimlikle bul; yoksa arka planda üret.
  * Yeniden yükleme gerekmez; var olan modellerde ve halihazırda süren baskılarda da çalışır.
  * Kareler oluşana dek null döner (kart mevcut ürün görseline düşer).
  */
-function useLiveBuildModel(printerId: string, filename: string | null, printing: boolean): { frames: string[] | null; thumbnail: string | null } {
+function useLiveBuildModel(
+  printerId: string, filename: string | null, printing: boolean,
+): {
+  frames: string[] | null;
+  thumbnail: string | null;
+  pack: LivePack | null;
+  /** 3B izleyicinin ihtiyacı — model çözülmediyse null (kart tıklanamaz kalır). */
+  viewer: { fileId: string; cacheKey: string } | null;
+} {
   // 1) Baskı → model kaydı (dosya adından, hash-eki/uzantı toleranslı). Uzun cache: aynı iş boyu sabit.
   const modelQ = useQuery<{ model: PrintModelInfo | null }>({
     queryKey: ["print-model", printerId, filename],
@@ -868,27 +1627,284 @@ function useLiveBuildModel(printerId: string, filename: string | null, printing:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [frameSourceKey]);
 
-  return { frames: urls, thumbnail: model?.thumbnail ?? null };
+  // CANLI AŞAMA paketi: kareleri üreten iş zaten kompakt paketi IDB'ye yazıyor. Paket varsa o an
+  // basılan katmanın üstten görünümünü çizebiliyoruz; yoksa kart yalnız nozul noktasını gösterir.
+  const [livePack, setLivePack] = useState<{ key: string; value: LivePack } | null>(null);
+  const pack = livePack?.key === frameSourceKey ? livePack.value : null;
+  const framesReady = !!urls;
+  useEffect(() => {
+    if (!frameSourceKey || !vizKey) return;
+    let alive = true;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const attempt = async () => {
+      if (!alive) return;
+      const buf = await getPack(vizKey).catch(() => null);
+      if (!alive) return;
+      if (buf) {
+        try {
+          const m = await import("@/lib/gcode-viz/viz-pack");
+          if (!alive) return;
+          setLivePack({
+            key: frameSourceKey,
+            value: { pack: m.decodeVizPack(buf), layerAt: m.layerAtBytePosition, isBody: m.isBodyFeature },
+          });
+          return;
+        } catch { /* bozuk paket → aşama çizimi yok, kart çalışmaya devam eder */ }
+      }
+      // Paket henüz üretilmedi (kareler üretilirken yazılıyor) → seyrek yokla.
+      if (tries++ < 20) timer = setTimeout(() => void attempt(), 8000);
+    };
+    void attempt();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [frameSourceKey, framesReady]);
+
+  return {
+    frames: urls,
+    thumbnail: model?.thumbnail ?? null,
+    pack,
+    viewer: model && vizKey ? { fileId: model.id, cacheKey: vizKey } : null,
+  };
 }
 
-function LiveBuildImage({ frames, progress, accent }: { frames: string[]; progress: number; accent: string }) {
-  const idx = Math.max(0, Math.min(frames.length - 1, Math.floor(clamp(progress, 0, 1) * frames.length)));
+// ── Kart görseli: gerçek plaka + katman rozeti + canlı aşama ────────────────
+
+interface StageProps {
+  pack: LivePack | null;
+  layerIndex: number | null;
+  intra: number | null;
+  dot: NozzleDot | null;
+  frame: StageFrame;
+}
+
+function JobVisual({
+  frames, frameIndex, images, productName, accent, badge, stage, reduceMotion, onOpen3d,
+}: {
+  frames: string[] | null;
+  frameIndex: number;
+  /** Öncelik sırası — biri yüklenemezse sıradakine düşülür. */
+  images: string[];
+  productName: string;
+  accent: string;
+  badge: string | null;
+  stage: StageProps | null;
+  reduceMotion: boolean;
+  /** MADDE 11: model dosyası varsa görsel 3B izleyiciyi açar; yoksa null (ölü tık yok). */
+  onOpen3d?: (() => void) | null;
+}) {
+  const list = frames ?? [];
+  const hasFrames = list.length > 0;
+  // ÇAPRAZ GEÇİŞ: yeni kare üsttte belirirken ÖNCEKİ kare altta duruyor. Eskiden yalnız yeni kare
+  // vardı ve her kare değişiminde bir an boşluğa göz kırpıyordu.
+  const [prevIndex, setPrevIndex] = useState(frameIndex);
+  useEffect(() => {
+    if (prevIndex === frameIndex) return;
+    // Geçiş bitince alttaki kareyi eşitle — üstteki zaten tam görünür olduğu için göz fark etmez.
+    const t = setTimeout(() => setPrevIndex(frameIndex), 520);
+    return () => clearTimeout(t);
+  }, [frameIndex, prevIndex]);
+
+  const clickable = !!onOpen3d;
   return (
     <div
-      className="relative h-28 w-28 shrink-0 rounded-xl border overflow-hidden bg-[radial-gradient(ellipse_at_center,rgba(90,110,180,0.10),transparent_72%)]"
-      style={{ borderColor: alpha(accent, 30) }}
-      title="Model, gerçek baskı ilerlemesine göre doluyor"
+      className={cn(
+        "group relative h-[168px] w-[168px] shrink-0 rounded-xl border overflow-hidden",
+        clickable && "cursor-pointer transition-shadow hover:shadow-lg focus-within:ring-2 focus-within:ring-primary/50",
+      )}
+      style={{
+        // Siyah filamentli şeffaf PNG koyu zeminde kaybolmasın: hafif açık zemin + ince kontur.
+        background: "radial-gradient(ellipse at 50% 38%, oklch(0.95 0.02 265 / 15%), oklch(0.90 0.02 265 / 5%) 72%)",
+        borderColor: alpha(accent, 26),
+      }}
     >
-      {/* key=idx → kare değişince yumuşak fade (remount) */}
-      <img
-        key={idx}
-        src={frames[idx]}
-        alt=""
-        className="absolute inset-0 h-full w-full object-contain motion-safe:animate-in motion-safe:fade-in duration-300"
-      />
-      <span className="absolute bottom-1 right-1 rounded bg-background/85 border px-1 py-px text-[9px] font-bold tabular-nums" style={{ color: accent }}>
-        3D
-      </span>
+      {hasFrames ? (
+        <>
+          {prevIndex !== frameIndex && list[prevIndex] && (
+            <img key={`prev-${prevIndex}`} src={list[prevIndex]} alt="" className="absolute inset-0 h-full w-full object-contain" />
+          )}
+          <img
+            key={frameIndex}
+            src={list[frameIndex]}
+            alt={productName}
+            className="absolute inset-0 h-full w-full object-contain motion-safe:animate-in motion-safe:fade-in duration-500"
+          />
+        </>
+      ) : (
+        <FallbackImage
+          candidates={images}
+          alt={productName}
+          className="absolute inset-0 h-full w-full object-contain p-2 motion-safe:animate-in motion-safe:fade-in duration-500"
+          fallback={<VisualPlaceholder reduceMotion={reduceMotion} />}
+        />
+      )}
+
+      {badge && (
+        <span className="absolute left-1.5 top-1.5 rounded-md border bg-background/80 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
+          {badge}
+        </span>
+      )}
+      {stage && <LiveStageTile {...stage} accent={accent} reduceMotion={reduceMotion} />}
+
+      {/* MADDE 11: tıklanabilirlik GÖRÜNSÜN — sağ üstte 3B rozeti, üstünde hafif örtü. */}
+      {clickable && (
+        <button
+          type="button"
+          onClick={onOpen3d ?? undefined}
+          className="absolute inset-0 z-20 flex items-start justify-end p-1.5 outline-none"
+          title="3B görünümü aç"
+        >
+          <span className="inline-flex items-center gap-1 rounded-md border bg-background/80 px-1.5 py-0.5 text-[10px] font-semibold backdrop-blur-sm opacity-70 transition-all group-hover:opacity-100 group-hover:bg-background/95 group-hover:scale-105">
+            <Rotate3d className="h-3 w-3" /> 3B
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Görsel yokken boş kutu değil, nefes alan bir yer tutucu. */
+function VisualPlaceholder({ reduceMotion }: { reduceMotion: boolean }) {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
+      <Box className="h-12 w-12 text-muted-foreground/25" />
+      {!reduceMotion && (
+        <div
+          className="absolute inset-0"
+          style={{ background: "linear-gradient(100deg, transparent 20%, rgba(255,255,255,0.07) 50%, transparent 80%)", animation: "printer-shimmer 2.6s linear infinite" }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * CANLI AŞAMA — o an basılan katmanın üstten görünümü ve nozulun tabladaki yeri.
+ * Katman `job.layerCurrent`tan gelir; bayt konumu yalnız katman İÇİ ince oran için kullanılır
+ * (hareket kuyruğu yüzünden gerçekte basılanın birkaç KB önündedir).
+ */
+function LiveStageTile({
+  pack, layerIndex, intra, dot, frame, accent, reduceMotion,
+}: StageProps & { accent: string; reduceMotion: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Çerçeve her render'da yeni bir nesne olarak geliyor → bağımlılık olarak SAYILARINI kullan,
+  // yoksa saniyelik tikte tuval boşuna yeniden çizilir.
+  const { minX, maxX, minY, maxY } = frame;
+  const aspect = maxY - minY > 0 ? (maxX - minX) / (maxY - minY) : 1;
+  // Katman içi oran her yoklamada azıcık oynuyor; yeniden çizimi 20 kademeye indir.
+  const intraStep = intra == null ? -1 : Math.round(intra * 20);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const box = canvas.getBoundingClientRect();
+    const w = Math.max(1, Math.round(box.width));
+    const h = Math.max(1, Math.round(box.height));
+    const dpr = Math.min(2, typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1);
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!pack || layerIndex == null) return;
+    drawLayerTopView(ctx, w, h, {
+      pack: pack.pack, isBody: pack.isBody, layerIndex,
+      intra: intraStep < 0 ? null : intraStep / 20,
+      frame: { minX, maxX, minY, maxY }, accent,
+    });
+  }, [pack, layerIndex, intraStep, minX, maxX, minY, maxY, accent]);
+
+  return (
+    <div className="absolute bottom-1.5 right-1.5 h-[58px] w-[58px] rounded-md border bg-background/72 p-[3px] backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
+      <div className="relative h-full w-full flex items-center justify-center">
+        <div
+          className="relative rounded-[2px] border border-white/12"
+          style={aspect >= 1 ? { width: "100%", aspectRatio: `${aspect}` } : { height: "100%", aspectRatio: `${aspect}` }}
+        >
+          <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+          {dot && (
+            <span
+              className="absolute h-[5px] w-[5px] -ml-[2.5px] -mt-[2.5px] rounded-full"
+              style={{
+                left: `${dot.left * 100}%`,
+                top: `${dot.top * 100}%`,
+                background: dot.clamped ? "oklch(0.75 0 0 / 45%)" : accent,
+                boxShadow: dot.clamped ? undefined : `0 0 6px 1.5px ${accent}`,
+                transition: reduceMotion ? undefined : "left 900ms ease-out, top 900ms ease-out",
+              }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Katmanın XY yollarını mini tuvale çizer: basılan kısım parlak, kalanı soluk. */
+function drawLayerTopView(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  o: { pack: VizPack; isBody: (f: number) => boolean; layerIndex: number; intra: number | null; frame: StageFrame; accent: string },
+) {
+  const { pack, frame } = o;
+  const spanX = frame.maxX - frame.minX;
+  const spanY = frame.maxY - frame.minY;
+  if (!(spanX > 0) || !(spanY > 0)) return;
+  const start = pack.layerPathStart[o.layerIndex];
+  const end = pack.layerPathEnd[o.layerIndex];
+  if (end == null || start == null || end <= start) return;
+  const cut = o.intra == null ? end : start + Math.round((end - start) * clamp(o.intra, 0, 1));
+  const px = (q: number) => ((pack.originX + q * pack.scaleXY) - frame.minX) / spanX * w;
+  const py = (q: number) => (frame.maxY - (pack.originY + q * pack.scaleXY)) / spanY * h;
+
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  // 0: henüz basılmayan yollar (soluk) — 1: basılanlar (yazıcının kimlik renginde)
+  for (const printedPass of [0, 1]) {
+    ctx.beginPath();
+    ctx.strokeStyle = printedPass ? o.accent : "oklch(0.85 0 0 / 22%)";
+    ctx.lineWidth = printedPass ? 1.1 : 0.8;
+    for (let i = start; i < end; i++) {
+      if (!o.isBody(pack.pathFeature[i])) continue;
+      if ((i < cut ? 1 : 0) !== printedPass) continue;
+      const first = pack.pathStart[i];
+      const len = pack.pathLen[i];
+      if (len < 2) continue;
+      ctx.moveTo(px(pack.points[first * 2]), py(pack.points[first * 2 + 1]));
+      for (let k = 1; k < len; k++) {
+        ctx.lineTo(px(pack.points[(first + k) * 2]), py(pack.points[(first + k) * 2 + 1]));
+      }
+    }
+    ctx.stroke();
+  }
+}
+
+/** MADDE 12 — yüklü filamentler. Renk tek sinyal değil: slot numarası da yazar. */
+function SlotStrip({ chips, className }: { chips: SlotChip[]; className?: string }) {
+  if (chips.length === 0) return null;
+  return (
+    <div className={cn("flex flex-wrap items-center gap-1", className)}>
+      {chips.map((c) => (
+        <span
+          key={c.slot}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-full border py-0.5 pl-1 pr-1.5 text-[10px] font-semibold tabular-nums transition-opacity duration-300",
+            c.active ? "opacity-100" : "opacity-45",
+            c.empty ? "border-dashed text-muted-foreground" : "text-foreground/80"
+          )}
+        >
+          <span
+            className={cn("h-2.5 w-2.5 rounded-full border", c.empty && "border-dashed")}
+            style={{ background: c.empty ? "transparent" : (c.color || "oklch(0.7 0 0)"), borderColor: "oklch(1 0 0 / 25%)" }}
+          />
+          {/* Yazıcının kendi ekranı ve AMS etiketleri 1'den başlıyor → GÖSTERİM 1 tabanlı.
+              İç veri (renk dizisi, activeSlots, kafa indeksi) 0 tabanlı kalır. */}
+          {slotLabel(c.slot)}
+          <span className="font-normal text-muted-foreground">{c.empty ? "boş" : c.type}</span>
+        </span>
+      ))}
     </div>
   );
 }
@@ -1086,38 +2102,6 @@ function PrinterStorageDialog({ printerId, activeFile, onClose }: { printerId: s
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function PrintInImage({ image, productName, progress, accent, printing }: { image: string | null; productName: string; progress: number; accent: string; printing: boolean }) {
-  // Mount'ta 0'dan gerçek değere AKSIN (eskiden direkt pct'de beliriyordu — snap).
-  const [revealed, setRevealed] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setRevealed(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  // Görsel yüklenemezse (yazıcı-IP thumbnail'i, yazıcı araya çevrimdışı düştü) kırık-görsel
-  // ikonu yerine kutu placeholder'ına düş.
-  const [failedImage, setFailedImage] = useState<string | null>(null);
-  const imgFailed = failedImage === image;
-  const pct = revealed ? Math.round(progress * 100) : 0;
-  return (
-    <div className="relative h-28 w-28 shrink-0 rounded-xl overflow-hidden border bg-muted/40">
-      {image && !imgFailed ? (
-        <>
-          <img src={image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-25 grayscale" onError={() => setFailedImage(image)} />
-          <img src={image} alt={productName} className="absolute inset-0 h-full w-full object-cover transition-[clip-path] duration-1000 ease-linear" style={{ clipPath: `inset(${100 - pct}% 0 0 0)` }} />
-        </>
-      ) : (
-        <>
-          <Box className="absolute inset-0 m-auto h-10 w-10 text-muted-foreground/25" />
-          <div className="absolute inset-x-0 bottom-0 transition-[height] duration-1000 ease-linear" style={{ height: `${pct}%`, background: `linear-gradient(0deg, ${alpha(accent, 22)}, transparent)` }} />
-        </>
-      )}
-      {printing && pct < 100 && (
-        <div className="absolute inset-x-0 h-[2px] transition-[bottom] duration-1000 ease-linear" style={{ bottom: `${pct}%`, background: accent, boxShadow: `0 0 10px 1px ${accent}` }} />
-      )}
-    </div>
   );
 }
 
