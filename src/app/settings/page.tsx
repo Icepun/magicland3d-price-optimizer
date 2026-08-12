@@ -90,7 +90,7 @@ export default function SettingsPage() {
                 {...form.register("vatRate")}
               />
               {settings && vat.invalid && (
-                <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-600 dark:text-amber-400 animate-in fade-in slide-in-from-bottom-1 duration-400">
+                <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-400 animate-in fade-in slide-in-from-bottom-1 duration-400">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                   KDV oranı okunamadı, geçici olarak %{DEFAULT_VAT_RATE} kullanılıyor. Doğru
                   oranı girip kaydet.
@@ -322,7 +322,7 @@ function TursoSyncCard() {
           className={cn(
             "text-xs rounded-md px-3 py-2 border",
             activeMode === "turso"
-              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
               : "bg-muted/40 border-border text-muted-foreground"
           )}
         >
@@ -367,7 +367,7 @@ function TursoSyncCard() {
             className={cn(
               "text-xs rounded-md px-3 py-2 border",
               testResult.ok
-                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                 : "bg-destructive/10 border-destructive/30 text-destructive"
             )}
           >

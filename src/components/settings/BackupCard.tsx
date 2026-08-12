@@ -78,7 +78,7 @@ export function BackupCard() {
         {isLoading ? (
           <Skeleton className="h-16 w-full rounded-lg" />
         ) : !data?.enabled ? (
-          <p className="text-sm text-amber-600 dark:text-amber-400">
+          <p className="text-sm text-amber-400">
             Bu bilgisayarda otomatik yedek kapalı. Aşağıdan elle yedek alabilirsin.
           </p>
         ) : (
@@ -103,7 +103,7 @@ export function BackupCard() {
               </p>
             )}
             {stale && (
-              <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">
+              <p className="text-xs text-amber-400 mt-1.5">
                 İki günden uzun süredir yedek alınmadı.
               </p>
             )}

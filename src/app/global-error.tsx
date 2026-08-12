@@ -5,10 +5,12 @@
  * Boş ekran yerine kullanıcıya anlaşılır bir hata + "Yeniden dene" gösterir.
  *
  * NEDEN SATIR İÇİ STİL: bu bileşen kök layout'un YERİNE geçer, kendi <html>'ini
- * render eder — uygulamanın tema değişkenleri ve sınıfları burada yok. Bu yüzden
- * tema, tek çalışan sinyal olan sistem tercihiyle (@media prefers-color-scheme)
- * çözülüyor. Eskiden renkler sabit koyu tonlardı: açık tema kullanan kullanıcıya
- * ekran birden simsiyah çıkıyordu.
+ * render eder — uygulamanın tema değişkenleri ve sınıfları burada yok.
+ *
+ * RENKLER KOŞULSUZ KOYU: uygulamanın tek teması koyu (açık tema kaldırıldı) ve Electron
+ * penceresinin arka planı da koyu. Eskiden burada sistem tercihi (@media
+ * prefers-color-scheme) okunuyordu; artık okunsaydı, işletim sistemi açık temadayken
+ * koyu bir uygulamanın ortasında bembeyaz bir hata ekranı çıkardı.
  *
  * Ayrıca ham hata mesajı ve Next'in iç "digest" kodu artık ekranda DEĞİL —
  * son kullanıcı için anlamsız. Tek tıkla kopyalanabiliyor.
@@ -33,14 +35,9 @@ export default function GlobalError({
         <style
           dangerouslySetInnerHTML={{
             __html: `
-:root { color-scheme: light dark; --g-bg:#f5f4f8; --g-fg:#191622; --g-muted:#6f6a80;
-        --g-line:#e2dfea; --g-accent:#6a45f5; --g-accent-fg:#ffffff; --g-warn:#b8791a;
-        --g-warn-bg:rgba(184,121,26,.12); --g-surface:#ffffff; }
-@media (prefers-color-scheme: dark) {
-  :root { --g-bg:#0f0d15; --g-fg:#eae7f1; --g-muted:#948da6; --g-line:#282334;
-          --g-accent:#9b81ff; --g-accent-fg:#12101a; --g-warn:#e0a94a;
-          --g-warn-bg:rgba(224,169,74,.14); --g-surface:#17141e; }
-}
+:root { color-scheme: dark; --g-bg:#0f0d15; --g-fg:#eae7f1; --g-muted:#948da6;
+        --g-line:#282334; --g-accent:#9b81ff; --g-accent-fg:#12101a; --g-warn:#e0a94a;
+        --g-warn-bg:rgba(224,169,74,.14); --g-surface:#17141e; }
 body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
        background:var(--g-bg); color:var(--g-fg);
        font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif; }

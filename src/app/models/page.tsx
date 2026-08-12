@@ -122,7 +122,7 @@ export default function ModelsPage() {
                         className={cn(
                           "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors",
                           has
-                            ? "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 cursor-pointer"
+                            ? "border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer"
                             : "border-dashed border-border text-muted-foreground/45"
                         )}
                         title={has ? `${pr.name}: parçaları gör & bas` : `${pr.name}: dosya yok`}

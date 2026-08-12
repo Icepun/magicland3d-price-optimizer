@@ -432,7 +432,7 @@ const ProductRow = memo(function ProductRow({
         )}
         {product.priceThreshold && (
           <span
-            className="inline-flex items-center gap-1 mt-1 rounded-full border border-green-500/40 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-green-600 dark:text-green-500 transition-colors hover:bg-green-500/20"
+            className="inline-flex items-center gap-1 mt-1 rounded-full border border-green-500/40 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-green-500 transition-colors hover:bg-green-500/20"
             title={`Fiyatı ${formatCurrency(product.priceThreshold.targetPrice)} yaparsan kâr ${formatCurrency(product.priceThreshold.targetProfit)} olur`}
           >
             <TrendingUp className="h-3 w-3" />

@@ -1330,7 +1330,7 @@ function PlatformProfitCardImpl({
 
                 {result.minOrderQty > 1 && (
                   <div
-                    className="rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-1 text-[11px] font-medium"
+                    className="rounded-md bg-amber-500/10 text-amber-400 px-2 py-1 text-[11px] font-medium"
                     title="Trendyol min sipariş adedi — kâr bu adetlik sipariş üzerinden hesaplandı"
                   >
                     Trendyol min sipariş: {result.minOrderQty} adet · kâr {formatCurrency(result.salePrice * result.minOrderQty)} ciro üzerinden
@@ -1392,7 +1392,7 @@ function PlatformProfitCardImpl({
                     ))}
                   {result.inputVatCredit > 0 && (
                     <div
-                      className="flex justify-between text-green-600 dark:text-green-500 font-medium pt-0.5"
+                      className="flex justify-between text-green-500 font-medium pt-0.5"
                       title="Komisyon, kargo, platform ve filament faturalarındaki indirilebilen KDV"
                     >
                       <span>KDV İadesi</span>

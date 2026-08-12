@@ -49,96 +49,13 @@
 }
 
 /* =============================================
-   MAGICLAND 3D — Light/Dark Theme System
-   - Default: light (next-themes ile değiştirilebilir)
-   - .dark class active iken koyu tema
+   MAGICLAND 3D — Tek tema: KOYU
+   Uygulama tek bir palette çalışır; tema seçimi yoktur.
    ============================================= */
 :root {
-  color-scheme: light;
-
-  /* LIGHT THEME — sıcak ofbeyaz tabanlar */
-  --background:        oklch(0.985 0.005 265);
-  --foreground:        oklch(0.20 0.020 265);
-
-  --card:              oklch(1 0 0);
-  --card-foreground:   oklch(0.20 0.020 265);
-
-  --popover:           oklch(1 0 0);
-  --popover-foreground: oklch(0.20 0.020 265);
-
-  --primary:           oklch(0.55 0.22 278);
-  --primary-foreground: oklch(0.99 0.005 265);
-
-  --secondary:         oklch(0.95 0.010 265);
-  --secondary-foreground: oklch(0.25 0.020 265);
-
-  --muted:             oklch(0.95 0.008 265);
-  --muted-foreground:  oklch(0.50 0.015 265);
-
-  --accent:            oklch(0.93 0.018 278);
-  --accent-foreground: oklch(0.30 0.022 278);
-
-  --destructive:       oklch(0.58 0.22 25);
-
-  --border:            oklch(0.20 0.020 265 / 12%);
-  --input:             oklch(0.20 0.020 265 / 16%);
-  --ring:              oklch(0.55 0.22 278 / 50%);
-
-  --chart-1:           oklch(0.55 0.22 278);
-  --chart-2:           oklch(0.62 0.20 145);
-  --chart-3:           oklch(0.65 0.20 47.6);
-  --chart-4:           oklch(0.62 0.22 305);
-  --chart-5:           oklch(0.58 0.22 25);
+  color-scheme: dark;
 
   --radius: 0.7rem;
-
-  /* --- PANEL VURGU RENKLERİ ---------------------------------------------
-     Panel'in rakam/uyarı renkleri koyu tema için seçilmişti ve koşulsuz
-     uygulanıyordu: beyaz kart üstünde kehribar uyarılar 2,2:1, marj ve kâr
-     rakamları 2,3-2,6:1 kalıyordu (okunmuyordu). Açık temada aynı tonların
-     KOYU karşılıkları kullanılır — hepsi beyaz kart üstünde ≥4,6:1.
-     Pazaryeri renkleri hue'sunu korur, yalnız koyulaşır (marka tanınır kalsın). */
-  --panel-primary:          oklch(0.53 0.22 278);
-  --panel-primary-soft:     oklch(0.53 0.22 278 / 12%);
-  --panel-amber:            oklch(0.55 0.14 75);
-  --panel-amber-soft:       oklch(0.55 0.14 75 / 12%);
-  --panel-amber-line:       oklch(0.55 0.14 75 / 35%);
-  --panel-red:              oklch(0.53 0.21 25);
-  --panel-red-soft:         oklch(0.53 0.21 25 / 12%);
-  --panel-red-line:         oklch(0.53 0.21 25 / 35%);
-  --panel-green:            oklch(0.50 0.15 145);
-  --panel-shopify:          oklch(0.50 0.15 152);
-  --panel-shopify-soft:     oklch(0.50 0.15 152 / 14%);
-  --panel-trendyol:         oklch(0.57 0.16 60);
-  --panel-trendyol-soft:    oklch(0.57 0.16 60 / 14%);
-  --panel-hepsiburada:      oklch(0.55 0.17 38);
-  --panel-hepsiburada-soft: oklch(0.55 0.17 38 / 14%);
-  --panel-manual:           oklch(0.52 0.16 300);
-  --panel-track:            oklch(0.20 0.020 265 / 10%);
-
-  /* Küçük etiket/rozet yazıları KENDİ -soft zemininin üstünde durur (beyaz kartın değil).
-     Ölçüm: trendyol 3,87 · hepsiburada 4,28 · amber 4,23 · shopify 4,49 — hepsi 4,5 altındaydı.
-     Aşağıdaki koyu karşılıklar kendi zemininde 4,96-5,00 veriyor (sayfa zemininde 4,77+,
-     satır üstüne gelince 4,71+). Yalnız AÇIK tema; koyu temada aynı tonlar korunur. */
-  --panel-amber-on-soft:       oklch(0.51 0.14 75);
-  --panel-red-on-soft:         oklch(0.52 0.21 25);
-  --panel-shopify-on-soft:     oklch(0.475 0.15 152);
-  --panel-trendyol-on-soft:    oklch(0.51 0.16 60);
-  --panel-hepsiburada-on-soft: oklch(0.515 0.17 38);
-
-  /* Light sidebar — beyaza yakın, body'den biraz daha gri */
-  --sidebar:           oklch(0.96 0.008 265);
-  --sidebar-foreground: oklch(0.30 0.018 265);
-  --sidebar-primary:   oklch(0.55 0.22 278);
-  --sidebar-primary-foreground: oklch(0.99 0.005 265);
-  --sidebar-accent:    oklch(0.55 0.22 278 / 11%);
-  --sidebar-accent-foreground: oklch(0.30 0.022 278);
-  --sidebar-border:    oklch(0.20 0.020 265 / 8%);
-  --sidebar-ring:      oklch(0.55 0.22 278 / 40%);
-}
-
-.dark {
-  color-scheme: dark;
 
   /* DARK THEME — sıcak lacivert */
   --background:        oklch(0.155 0.018 265);
@@ -205,11 +122,9 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Gövdede hafif radial ambient ışık */
   body {
     @apply bg-background text-foreground;
-  }
-  /* Dark theme'de hafif radial ambient ışık */
-  .dark body {
     background-image:
       radial-gradient(
         ellipse 1200px 700px at 65% -10%,
@@ -219,16 +134,6 @@
       radial-gradient(
         ellipse 900px 600px at 100% 100%,
         oklch(0.66 0.22 305 / 8%),
-        transparent 70%
-      );
-    background-attachment: fixed;
-  }
-  /* Light theme'de yumuşak ambient (daha incelikli) */
-  :root:not(.dark) body {
-    background-image:
-      radial-gradient(
-        ellipse 1200px 700px at 65% -10%,
-        oklch(0.55 0.22 278 / 5%),
         transparent 70%
       );
     background-attachment: fixed;
@@ -297,14 +202,11 @@
 ::-webkit-scrollbar        { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  {
-  background: var(--border);
+  background: oklch(1 0 0 / 9%);
   border-radius: 4px;
   transition: background 200ms ease;
 }
-.dark ::-webkit-scrollbar-thumb       { background: oklch(1 0 0 / 9%); }
-.dark ::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 18%); }
-:root:not(.dark) ::-webkit-scrollbar-thumb       { background: oklch(0.20 0.020 265 / 18%); }
-:root:not(.dark) ::-webkit-scrollbar-thumb:hover { background: oklch(0.20 0.020 265 / 35%); }
+::-webkit-scrollbar-thumb:hover { background: oklch(1 0 0 / 18%); }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* =============================================
@@ -327,56 +229,40 @@
  */
 @layer components {
   [data-slot="card"] {
-    background: var(--card);
-    border: 1px solid var(--border);
-    transition: box-shadow 220ms ease, border-color 220ms ease, transform 220ms ease;
-  }
-  .dark [data-slot="card"] {
     background: linear-gradient(
       180deg,
       oklch(1 0 0 / 1.5%) 0%,
       transparent 100%
     ),
     var(--card);
-    border-color: oklch(1 0 0 / 8%);
+    border: 1px solid oklch(1 0 0 / 8%);
+    transition: box-shadow 220ms ease, border-color 220ms ease, transform 220ms ease;
   }
-  .dark [data-slot="card"]:hover {
+  [data-slot="card"]:hover {
     border-color: oklch(1 0 0 / 14%);
-  }
-  :root:not(.dark) [data-slot="card"]:hover {
-    border-color: oklch(0.55 0.22 278 / 25%);
   }
 }
 
 /* Katmansız: gölgeyi hiçbir utility ezemesin. */
-.dark [data-slot="card"] {
+[data-slot="card"] {
   box-shadow:
     0 1px 0 oklch(1 0 0 / 4%) inset,
     0 1px 2px oklch(0 0 0 / 25%);
 }
-.dark [data-slot="card"]:hover {
+[data-slot="card"]:hover {
   box-shadow:
     0 1px 0 oklch(1 0 0 / 5%) inset,
     0 8px 32px oklch(0 0 0 / 35%),
     0 0 0 1px oklch(0.66 0.20 278 / 8%);
 }
-:root:not(.dark) [data-slot="card"] {
-  box-shadow: 0 1px 2px oklch(0.20 0.020 265 / 5%);
-}
-:root:not(.dark) [data-slot="card"]:hover {
-  box-shadow: 0 4px 16px oklch(0.20 0.020 265 / 8%);
-}
 
 /* =============================================
    TABLE — Daha okunabilir, modern stil
    ============================================= */
-/* Renkler TEMAYA GÖRE ayrışır. Eskiden koyu tema için yazılmış beyaz-alfa değerler
-   koşulsuz uygulanıyordu: açık temada kenarlık ve başlık zemini beyaz üstüne beyaz
-   (görünmez), başlık yazısı ise okunamayacak kadar açık gri kalıyordu. */
 [data-slot="table-container"] {
   border-radius: var(--radius-md);
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid oklch(1 0 0 / 8%);
 }
 table thead th,
 [data-slot="table-head"] {
@@ -384,25 +270,11 @@ table thead th,
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-}
-.dark [data-slot="table-container"] {
-  border-color: oklch(1 0 0 / 8%);
-}
-.dark table thead th,
-.dark [data-slot="table-head"] {
   background: oklch(1 0 0 / 2.5%);
   color: oklch(0.72 0.012 265);
 }
-:root:not(.dark) table thead th,
-:root:not(.dark) [data-slot="table-head"] {
-  background: oklch(0.20 0.020 265 / 3.5%);
-  color: oklch(0.42 0.020 265); /* beyaz zeminde ~7:1 — eskiden ~2,6:1 idi */
-}
 [data-slot="table-row"]:hover {
   background: oklch(0.66 0.20 278 / 5%);
-}
-:root:not(.dark) [data-slot="table-row"]:hover {
-  background: oklch(0.55 0.22 278 / 6%);
 }
 
 /* =============================================

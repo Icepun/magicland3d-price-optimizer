@@ -200,9 +200,9 @@ function finishText(at: number, now = Date.now()): string {
 
 const PRINTER_STATUS: Record<string, { label: string; cls: string }> = {
   printing: { label: "Yazdırıyor", cls: "bg-primary/10 text-primary border-primary/30" },
-  paused: { label: "Duraklatıldı", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" },
-  finished: { label: "Baskı bitti", cls: "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30" },
-  idle: { label: "Hazır", cls: "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/25" },
+  paused: { label: "Duraklatıldı", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
+  finished: { label: "Baskı bitti", cls: "bg-green-500/15 text-green-400 border-green-500/30" },
+  idle: { label: "Hazır", cls: "bg-green-500/10 text-green-400 border-green-500/25" },
   error: { label: "Hata", cls: "bg-destructive/15 text-destructive border-destructive/30" },
   offline: { label: "Bağlı değil", cls: "bg-muted text-muted-foreground border-border" },
 };
@@ -633,7 +633,7 @@ export default function PlannerPage() {
                             "inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full border tabular-nums",
                             p.stock === 0
                               ? "bg-destructive/15 text-destructive border-destructive/30"
-                              : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+                              : "bg-amber-500/15 text-amber-400 border-amber-500/30"
                           )}
                         >
                           {p.stock === 0 && <AlertTriangle className="h-3 w-3" />}
@@ -647,7 +647,7 @@ export default function PlannerPage() {
                             className={cn(
                               "inline-flex items-center gap-1 text-[11px] font-medium tabular-nums px-1.5 py-0.5 rounded-full border",
                               p.profitPerHour > 0
-                                ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/30"
+                                ? "bg-green-500/10 text-green-400 border-green-500/30"
                                 : "bg-destructive/10 text-destructive border-destructive/30"
                             )}
                             title="Baskı saati başına kazanç"
@@ -659,7 +659,7 @@ export default function PlannerPage() {
                         {/* Satış hızı rozetleri — yalnız geçmiş yeterliyken. */}
                         {p.deadStock ? (
                           <span
-                            className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full border bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30"
+                            className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full border bg-sky-500/10 text-sky-400 border-sky-500/30"
                             title="Bu ürün uzun süredir satmadı — yeniden basmadan önce düşün"
                           >
                             <Snowflake className="h-3 w-3" />
@@ -773,7 +773,7 @@ function QueueView({
       {!queue.enough && (
         <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
           <CardContent className="py-2.5 flex items-center gap-2 text-sm">
-            <Disc3 className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <Disc3 className="h-4 w-4 text-amber-400 shrink-0" />
             <span>
               Bu plan ~{formatNumber(queue.neededGrams / 1000, 2)} kg filament ister, makaralarda ~
               {formatNumber(queue.remainingGrams / 1000, 2)} kg kaldı.
@@ -917,7 +917,7 @@ function PrinterQueueCard({
             </span>
           )}
           {unknownTimeJobs > 0 && (
-            <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+            <span className="inline-flex items-center gap-1 text-amber-400">
               <AlertTriangle className="h-3 w-3" />
               {unknownTimeJobs} üründe baskı süresi girilmemiş
             </span>

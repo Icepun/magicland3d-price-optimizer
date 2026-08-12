@@ -1475,7 +1475,7 @@ export function ManualOrderDialog({
                                         "text-[10px]",
                                         product.costKnown
                                           ? "text-muted-foreground"
-                                          : "text-amber-600 dark:text-amber-400"
+                                          : "text-amber-400"
                                       )}
                                     >
                                       {product.costKnown
@@ -1577,7 +1577,7 @@ export function ManualOrderDialog({
                               className={cn(
                                 "flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] transition-colors",
                                 autoCargo.ruleMissing
-                                  ? "border-amber-500/40 bg-amber-500/5 text-amber-700 dark:text-amber-300"
+                                  ? "border-amber-500/40 bg-amber-500/5 text-amber-300"
                                   : "bg-muted/30 text-muted-foreground"
                               )}
                             >
@@ -2348,7 +2348,7 @@ function FreeformItemCard({
             )}
           </span>
         ) : (
-          <span className="text-amber-600 dark:text-amber-400">
+          <span className="text-amber-400">
             {detailed ? "Gramaj veya baskı süresi gir" : "Maliyet girilmedi"}
           </span>
         )}
@@ -2398,7 +2398,7 @@ function AutoCargoCard({
         Girdiğin desiye göre otomatik hesaplanır.
       </p>
       {ruleMissing && (
-        <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/5 p-2 text-[11px] text-amber-700 dark:text-amber-300">
+        <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/5 p-2 text-[11px] text-amber-300">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
         </p>
@@ -2409,7 +2409,7 @@ function AutoCargoCard({
 
 function InlineWarning({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+    <div className="flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs text-amber-300">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       {children}
     </div>
@@ -2425,9 +2425,9 @@ function ProfitBreakdown({
 }) {
   const netProfitColor =
     breakdown.netProfit == null
-      ? "text-amber-600 dark:text-amber-400"
+      ? "text-amber-400"
       : breakdown.netProfit >= 0
-        ? "text-emerald-600 dark:text-emerald-400"
+        ? "text-emerald-400"
         : "text-destructive";
   return (
     <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
@@ -2500,13 +2500,13 @@ function ProfitBreakdown({
           </p>
         )}
         {breakdown.cargoRuleMissing && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-300">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
           </div>
         )}
         {breakdown.profitPartial && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-300">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {breakdown.missingCostItems} kalemin maliyeti eksik. Maliyeti gir veya
             ürün maliyetini kapat.
@@ -2542,7 +2542,7 @@ function BreakdownRow({
       <span
         className={cn(
           "shrink-0 tabular-nums",
-          positive && value > 0 && "text-emerald-600 dark:text-emerald-400"
+          positive && value > 0 && "text-emerald-400"
         )}
       >
         <AnimatedNumber

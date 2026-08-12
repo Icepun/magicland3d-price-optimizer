@@ -300,7 +300,7 @@ export function SlotStep({
 
             {!usingFile && (
               <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5 space-y-2">
-                <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+                <p className="text-[11px] text-amber-400 flex items-start gap-1.5">
                   <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                   {colorsQ.data?.missing ? "Dosya bu cihazda yok." : "Dosyadan renk okunamadı — renk sayısını elle seç."}
                 </p>
@@ -365,7 +365,7 @@ export function SlotStep({
                 </span>
               </div>
             ) : rawGcodeBambu ? (
-              <p className="text-[11px] text-amber-700 dark:text-amber-400 flex items-start gap-1.5">
+              <p className="text-[11px] text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 Filamentleri yukarıdaki sıraya göre tak.
               </p>

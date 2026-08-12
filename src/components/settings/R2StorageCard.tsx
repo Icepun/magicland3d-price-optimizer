@@ -118,7 +118,7 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
         <CardTitle className="text-base flex items-center gap-2">
           <Cloud className="h-4 w-4 text-primary" /> Cloud Depolama (Cloudflare R2)
           {configured && test.kind === "ok" && (
-            <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold text-green-600 dark:text-green-500">
+            <span className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold text-green-500">
               <CheckCircle2 className="h-3.5 w-3.5" /> Bağlı
             </span>
           )}
@@ -155,7 +155,7 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
           </div>
         )}
         {test.kind === "ok" && (
-          <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-500 bg-green-500/10 border border-green-500/30 rounded-md px-2.5 py-2">
+          <div className="flex items-center gap-2 text-xs text-green-500 bg-green-500/10 border border-green-500/30 rounded-md px-2.5 py-2">
             <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
             <span>Bağlantı ve CORS çalışıyor. Artık model yüklemeleri buluta gidecek.</span>
           </div>

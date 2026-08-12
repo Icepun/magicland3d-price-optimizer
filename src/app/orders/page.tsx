@@ -161,10 +161,10 @@ const PLATFORM_INFO = {
 } as const;
 
 const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: string }> = {
-  pending: { label: "Bekleyen", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30", dot: "bg-amber-500" },
-  processing: { label: "Hazırlanıyor", cls: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30", dot: "bg-blue-500" },
-  shipped: { label: "Kargoda", cls: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 border-indigo-500/30", dot: "bg-indigo-500" },
-  delivered: { label: "Teslim", cls: "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30", dot: "bg-green-500" },
+  pending: { label: "Bekleyen", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30", dot: "bg-amber-500" },
+  processing: { label: "Hazırlanıyor", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30", dot: "bg-blue-500" },
+  shipped: { label: "Kargoda", cls: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30", dot: "bg-indigo-500" },
+  delivered: { label: "Teslim", cls: "bg-green-500/15 text-green-400 border-green-500/30", dot: "bg-green-500" },
   cancelled: { label: "İptal/İade", cls: "bg-destructive/15 text-destructive border-destructive/30", dot: "bg-destructive" },
   other: { label: "Diğer", cls: "bg-muted text-muted-foreground border-border", dot: "bg-muted-foreground" },
 };
@@ -546,7 +546,7 @@ export default function OrdersPage() {
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-600 dark:text-amber-400">
+              <p className="font-medium text-amber-400">
                 TRY dışındaki siparişler TL toplamına eklenmedi
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -570,7 +570,7 @@ export default function OrdersPage() {
           <CardContent className="py-3 flex items-start gap-3">
             <KeyRound className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-600 dark:text-amber-400">Shopify siparişleri için Client ID + Secret gerekli</p>
+              <p className="font-medium text-amber-400">Shopify siparişleri için Client ID + Secret gerekli</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Storefront token siparişleri vermez. Shopify dev dashboard → uygulaman → Ayarlar →
                 Kimlik bilgileri&apos;ndeki <strong>İstemci Kimliği + Gizli anahtar</strong>&apos;ı{" "}
@@ -598,7 +598,7 @@ export default function OrdersPage() {
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-600 dark:text-amber-400">
+              <p className="font-medium text-amber-400">
                 {data?.manual?.incompleteCount} manuel sipariş açılamadı
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -613,7 +613,7 @@ export default function OrdersPage() {
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-600 dark:text-amber-400">
+              <p className="font-medium text-amber-400">
                 Finans geçmişi kaydedilemedi
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -907,7 +907,7 @@ function FreshnessLine({
       onClick={onRefresh}
       className={cn(
         shared,
-        "rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+        "rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-400 transition-colors hover:bg-amber-500/20"
       )}
     >
       <span className="relative flex h-1.5 w-1.5">
@@ -1085,7 +1085,7 @@ function PrepPanel({
 
           <div className="flex items-center justify-between gap-2">
             {allDone ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600 animate-in fade-in zoom-in-95 duration-300 dark:text-green-500">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-500 animate-in fade-in zoom-in-95 duration-300">
                 <Sparkles className="h-3.5 w-3.5" />
                 Hepsi hazır
               </span>
@@ -1272,7 +1272,7 @@ const OrderRow = memo(function OrderRow({
   const extraItems = order.items.length - 1;
   const orderCurrency = order.currency.trim().toUpperCase() || "TRY";
   const isTryOrder = orderCurrency === "TRY";
-  const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-600 dark:text-green-500" : "text-destructive";
+  const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-500" : "text-destructive";
   // İptal/iade siparişi üstteki ciro ve kâr toplamlarına GİRMİYOR. Satır normal görünüp yeşil
   // kâr yazdığı sürece ekrandaki iki rakam birbirini tutmuyordu; artık soluk + üstü çizili.
   const isCancelled = order.statusKind === "cancelled";
@@ -1349,7 +1349,7 @@ const OrderRow = memo(function OrderRow({
               </span>
             ) : !isTryOrder ? (
               <span
-                className="text-[10px] font-medium text-amber-600 dark:text-amber-400"
+                className="text-[10px] font-medium text-amber-400"
                 title={`${orderCurrency} için döviz kuru dönüşümü tanımlı değil; TL net kâr hesaplanmadı.`}
               >
                 Kâr: kur dönüşümü yok
@@ -1484,7 +1484,7 @@ const OrderRow = memo(function OrderRow({
                       — {order.statusLabel.toLocaleLowerCase("tr-TR")}, toplama girmiyor
                     </span>
                   ) : !isTryOrder ? (
-                    <span className="text-amber-600 dark:text-amber-400">
+                    <span className="text-amber-400">
                       — {orderCurrency} için kur dönüşümü yok
                     </span>
                   ) : order.profit != null ? (

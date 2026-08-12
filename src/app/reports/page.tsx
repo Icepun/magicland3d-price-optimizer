@@ -751,7 +751,7 @@ export default function ReportsPage() {
                     {recalcRunning ? "Yeniden hesaplanıyor..." : "Bu ayı yeniden hesapla"}
                   </Button>
                   {!recalcRunning && (selectedRecalcBucket?.outdatedOrders ?? 0) > 0 && (
-                    <span className="inline-flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-500 animate-in fade-in duration-500">
+                    <span className="inline-flex items-center gap-1.5 text-xs text-amber-500 animate-in fade-in duration-500">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                       Bu ayda {selectedRecalcBucket?.outdatedOrders} siparişin kârı eski
                       hesaplamayla kayıtlı — güncellemek için yeniden hesapla.
@@ -914,7 +914,7 @@ export default function ReportsPage() {
                       <div key={product.id} className="flex items-center gap-2 text-xs py-0.5">
                         <MiniThumb src={product.imageUrl} />
                         <span className="truncate flex-1 min-w-0">{product.name}</span>
-                        <span className="tabular-nums font-medium text-green-600 dark:text-green-500 ml-2 shrink-0">
+                        <span className="tabular-nums font-medium text-green-500 ml-2 shrink-0">
                           {formatCurrency(product.currentNetProfit ?? 0)}
                           <span className="text-muted-foreground font-normal ml-1">
                             ({formatPercent(product.currentProfitMargin ?? 0)})

@@ -374,7 +374,7 @@ export default function SpoolsPage() {
           <CardContent className="py-3 flex items-start gap-3 flex-wrap">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-1 shrink-0" />
             <div className="flex-1 min-w-[200px]">
-              <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+              <p className="text-sm font-medium text-amber-400">
                 <AnimatedNumber value={alerts.length} format={(n) => formatNumber(n, 0)} /> grup dikkat istiyor
               </p>
               <div className="flex flex-wrap gap-1.5 mt-1.5">
@@ -389,7 +389,7 @@ export default function SpoolsPage() {
                         "animate-in fade-in zoom-in-95 fill-mode-both duration-300",
                         a.severity === "critical"
                           ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20"
-                          : "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                          : "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
                       )}
                       style={{ animationDelay: `${Math.min(i, 10) * 40}ms` }}
                     >
@@ -647,10 +647,10 @@ function statusBadge(g: FilamentGroup, threshold: number) {
   if (g.sealedCount === 0 && g.openCount === 0)
     return { label: "Bitti", cls: "bg-destructive/15 text-destructive border-destructive/30" };
   if (g.sealedCount === 0)
-    return { label: "Son makara açık", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" };
+    return { label: "Son makara açık", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
   if (g.sealedCount <= threshold)
-    return { label: "Azaldı", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" };
-  return { label: "Yeterli", cls: "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30" };
+    return { label: "Azaldı", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
+  return { label: "Yeterli", cls: "bg-green-500/15 text-green-400 border-green-500/30" };
 }
 
 function GroupCard({
@@ -711,7 +711,7 @@ function GroupCard({
 
         {hasCostGap && (
           <p className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground animate-in fade-in duration-500">
-            <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-600 dark:text-amber-400" />
+            <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-400" />
             <span>
               Makara fiyatı maliyet tablosundan farklı.{" "}
               <Link
@@ -1009,7 +1009,7 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
     <Modal title="Makara Ekle" onClose={onClose} wide>
       <div className="space-y-4">
         {sessionCount > 0 && (
-          <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 animate-in fade-in slide-in-from-top-1 duration-300">
+          <p className="text-xs text-green-400 flex items-center gap-1 animate-in fade-in slide-in-from-top-1 duration-300">
             <Check className="h-3.5 w-3.5" /> Bu oturumda eklenen:{" "}
             <AnimatedNumber value={sessionCount} format={(n) => formatNumber(n, 0)} className="font-semibold" />
           </p>
@@ -1340,8 +1340,8 @@ function SpoolRow({
         <span className={cn(
           "text-[11px] px-1.5 py-0.5 rounded border shrink-0",
           empty ? "bg-destructive/15 text-destructive border-destructive/30"
-            : sealed ? "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30"
-              : "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30"
+            : sealed ? "bg-green-500/15 text-green-400 border-green-500/30"
+              : "bg-amber-500/15 text-amber-400 border-amber-500/30"
         )}>
           {empty ? "Bitti" : sealed ? "Kapalı" : "Açık"}
         </span>
@@ -1379,10 +1379,10 @@ function SpoolRow({
 
       {gap && (
         <p className="flex items-start gap-1.5 px-3 pb-2 text-[11px] leading-snug text-muted-foreground">
-          <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-600 dark:text-amber-400" />
+          <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-400" />
           <span>
             Bu makaranın gerçek maliyeti{" "}
-            <span className="font-semibold text-amber-600 dark:text-amber-400">
+            <span className="font-semibold text-amber-400">
               {formatCurrency(gap.actualPerGram)}/g
             </span>
             ; tabloda {formatCurrency(gap.tablePerGram)}/g yazıyor.{" "}

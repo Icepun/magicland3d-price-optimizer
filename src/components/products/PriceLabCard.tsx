@@ -86,7 +86,7 @@ function PriceLabCardImpl({
           <div className="space-y-5">
             {/* Eşik uyarısı — küçük zam, belirgin kazanç. Yalnızca anlamlı fark varsa görünür. */}
             {hint && (
-              <div className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-700 dark:text-green-400 animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-400 animate-in fade-in slide-in-from-top-1 duration-300">
                 <TrendingUp className="h-4 w-4 shrink-0" />
                 <span>
                   Fiyatı <strong className="tabular-nums">{formatCurrency(hint.targetPrice)}</strong>{" "}
@@ -142,7 +142,7 @@ function PriceLabCardImpl({
                                 className={cn(
                                   "text-xs font-bold tabular-nums mt-0.5",
                                   tone === "green"
-                                    ? "text-green-600 dark:text-green-500"
+                                    ? "text-green-500"
                                     : tone === "red"
                                       ? "text-destructive"
                                       : "text-foreground"
@@ -185,7 +185,7 @@ function PriceLabCardImpl({
                         >
                           <span className="font-medium">%{r.discount}</span>
                           <span className="text-right text-muted-foreground">{formatCurrency(r.effectivePrice)}</span>
-                          <span className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-600 dark:text-green-500")}>
+                          <span className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-500")}>
                             {formatCurrency(r.profit)}
                           </span>
                           <span className={cn("text-right", loss && "text-destructive")}>{formatPercent(r.margin)}</span>
@@ -193,7 +193,7 @@ function PriceLabCardImpl({
                         {/* Kâr bu satırda ARTMIŞ görünebilir — sayı doğru, sebebi kargonun el
                             değiştirmesi. Açıklamasız bırakılırsa hesap hatası sanılır. */}
                         {r.crossesFreeShipping && (
-                          <p className="px-1 pb-1 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+                          <p className="px-1 pb-1 text-[10px] leading-snug text-amber-400">
                             Bu fiyatta sepet 150₺&apos;nin altına iniyor — kargo sana kalmıyor, kâr bu yüzden yükseliyor.
                           </p>
                         )}

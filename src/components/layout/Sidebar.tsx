@@ -22,7 +22,6 @@ import {
 import Image from "next/image";
 import { cn } from "@/lib/utils";
 import { UpdateWidget } from "./UpdateWidget";
-import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { openCommandPalette } from "@/components/ui/command-palette";
 import { useIsClient } from "@/lib/client-state";
@@ -56,9 +55,9 @@ export function Sidebar() {
       className="flex h-screen w-60 flex-col bg-sidebar shrink-0 relative"
       style={{ boxShadow: "inset -1px 0 0 oklch(1 0 0 / 7%)" }}
     >
-      {/* Ambient glow — subtle mor halo (her tema) */}
+      {/* Ambient glow — subtle mor halo */}
       <div
-        className="pointer-events-none absolute inset-x-0 top-0 h-40 opacity-50 dark:opacity-80"
+        className="pointer-events-none absolute inset-x-0 top-0 h-40 opacity-80"
         style={{
           background:
             "radial-gradient(ellipse 200px 120px at 50% 0%, oklch(0.55 0.22 278 / 18%), transparent 70%)",
@@ -70,24 +69,14 @@ export function Sidebar() {
         className="flex flex-col items-center justify-center px-4 py-5 shrink-0 relative"
         style={{ borderBottom: "1px solid var(--sidebar-border)" }}
       >
-        {/* Tema-koşullu logo: light → koyu logo (mevcut), dark → açık varyant (koyu zeminde görünsün).
-            İki görsel de render edilir, CSS `dark:` ile biri gizlenir → SSR-güvenli, flaş yok. */}
-        <Image
-          src="/logo.png"
-          alt="Magicland 3D"
-          width={120}
-          height={120}
-          priority
-          className="object-contain select-none block dark:hidden"
-          style={{ filter: "drop-shadow(0 2px 12px oklch(0.66 0.20 278 / 35%))" }}
-        />
+        {/* Koyu zeminde görünen açık logo varyantı. */}
         <Image
           src="/logo-dark.png"
           alt="Magicland 3D"
           width={120}
           height={120}
           priority
-          className="object-contain select-none hidden dark:block"
+          className="object-contain select-none block"
           style={{ filter: "drop-shadow(0 2px 14px oklch(0.72 0.16 278 / 45%))" }}
         />
         <div className="mt-3 text-center">
@@ -165,12 +154,6 @@ export function Sidebar() {
         style={{ borderTop: "1px solid var(--sidebar-border)" }}
       >
         <NotificationBell />
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-sidebar-foreground/55">
-            Tema
-          </span>
-          <ThemeToggle />
-        </div>
       </div>
 
       <UpdateWidget />

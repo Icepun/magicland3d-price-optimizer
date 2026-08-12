@@ -145,7 +145,7 @@ export default function ImportExportPage() {
 
             {importResult && (
               <div className="space-y-2 rounded-lg border border-border/70 bg-muted/25 p-3 text-sm animate-in fade-in slide-in-from-bottom-2 duration-400">
-                <p className="flex items-center gap-2 font-medium text-emerald-600 dark:text-emerald-400">
+                <p className="flex items-center gap-2 font-medium text-emerald-400">
                   <Check className="h-4 w-4 shrink-0" />
                   {importResult.created} ürün eklendi, {importResult.updated} ürün güncellendi
                 </p>

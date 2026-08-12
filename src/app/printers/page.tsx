@@ -402,9 +402,9 @@ function SummaryChip({ icon: Icon, label, spin, accent, muted }: { icon: React.E
 
 const STATUS_META: Record<PrinterStatus, { label: string; cls: string }> = {
   printing: { label: "Yazdırıyor", cls: "" },
-  finished: { label: "Tamamlandı", cls: "bg-green-500/15 text-green-600 dark:text-green-400 border-green-500/30" },
+  finished: { label: "Tamamlandı", cls: "bg-green-500/15 text-green-400 border-green-500/30" },
   idle: { label: "Hazır", cls: "bg-muted text-muted-foreground border-border" },
-  paused: { label: "Duraklatıldı", cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30" },
+  paused: { label: "Duraklatıldı", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" },
   error: { label: "Hata", cls: "bg-destructive/15 text-destructive border-destructive/30" },
 };
 
@@ -1310,7 +1310,7 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
 
       {isBambu ? (
         <>
-          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-400">
             Yazıcı ekranından <strong>LAN Modu</strong> ve <strong>Geliştirici Modu</strong>&apos;nu aç; erişim kodu ile seri no orada yazar.
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -1330,7 +1330,7 @@ function PrinterForm({ config, onCancel, onSaved }: { config: PrinterConfig | nu
             {test.state === "loading" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             Bağlantıyı Test Et
           </Button>
-          {test.state === "ok" && <span className="text-xs text-green-600 dark:text-green-400 inline-flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Bağlandı{test.msg ? ` (${test.msg})` : ""}</span>}
+          {test.state === "ok" && <span className="text-xs text-green-400 inline-flex items-center gap-1"><Check className="h-3.5 w-3.5" /> Bağlandı{test.msg ? ` (${test.msg})` : ""}</span>}
           {test.state === "fail" && <span className="text-xs text-destructive inline-flex items-center gap-1"><X className="h-3.5 w-3.5" /> {test.msg || "Bağlanılamadı"}</span>}
         </div>
       )}
