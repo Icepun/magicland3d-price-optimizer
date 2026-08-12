@@ -32,6 +32,14 @@ app.setAppUserModelId("com.magicland3d.trendyol-price-optimizer");
 // SABİT tut ki kullanıcı verisi (ayarlar, db, gizlenen ürünler) taşınmasın/kaybolmasın.
 app.setName("trendyol-price-optimizer");
 
+// GitHub'ın dosya indirme adresi bu ağdan kesintili olarak HTTP/2 akışını reddediyor
+// (ERR_HTTP2_SERVER_REFUSED_STREAM). Ölçüldü: releases.atom her seferinde 200 dönerken
+// releases/download/… üç denemenin ikisinde bağlantıyı yanıtsız kapatıyor. HTTP/1.1'de
+// aynı istek geçiyor. Electron'un ağ katmanını HTTP/1.1'e sabitlemek güncellemeyi
+// kurtarıyor; uygulamanın kendi istekleri (Trendyol, Shopify, Turso) Node tarafında
+// çalıştığı için bu anahtardan etkilenmez.
+app.commandLine.appendSwitch("disable-http2");
+
 // =========================================================================
 // GLOBAL STARTUP LOGGER — paketlenmiş app'te startup hataları için.
 // Log: %APPDATA%/Trendyol Price Optimizer/startup.log
@@ -256,18 +264,42 @@ function setupAutoUpdater() {
       });
       return updateState;
     }
-    try {
-      await autoUpdater.checkForUpdates();
-    } catch {
-      // Ignore, error handled by the "error" event listener above
+    // Ağ hatası kesintili: tek denemede vazgeçmek kullanıcıyı sürüm atlatıyordu.
+    // Üç deneme, artan bekleme (1sn, 3sn). Yalnız SON deneme hata durumunu yazar.
+    const denemeler = 3;
+    for (let i = 1; i <= denemeler; i++) {
+      try {
+        await autoUpdater.checkForUpdates();
+        return updateState;
+      } catch (e) {
+        writeLog(`kontrol denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+        if (i === denemeler) break;
+        setUpdateState({
+          status: "checking",
+          message: `Guncelleme kontrol ediliyor (${i + 1}. deneme)`,
+          percent: 0,
+        });
+        await new Promise((r) => setTimeout(r, i * 2000 - 1000));
+      }
     }
     return updateState;
   });
   ipcMain.handle("updater:download", async () => {
     if (!app.isPackaged) return updateState;
-    autoUpdater.downloadUpdate().catch(() => {
-      // Ignore, error handled by the "error" event listener above
-    });
+    // İndirme de aynı kesintili ağ hatasına düşüyor; sessizce vazgeçmek yerine
+    // iki kez daha dene. 184 MB'lık kurulumun yarıda kopması da buraya düşer.
+    void (async () => {
+      for (let i = 1; i <= 3; i++) {
+        try {
+          await autoUpdater.downloadUpdate();
+          return;
+        } catch (e) {
+          writeLog(`indirme denemesi ${i}/3 basarisiz:`, e?.message || e);
+          if (i === 3) return;
+          await new Promise((r) => setTimeout(r, i * 3000));
+        }
+      }
+    })();
     return updateState;
   });
   ipcMain.handle("updater:quit-and-install", async () => {
