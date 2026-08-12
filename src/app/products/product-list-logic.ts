@@ -366,6 +366,18 @@ export interface EmptyListText {
  * gösteriyor, ikincisi ise aslında İYİ bir haberi hata gibi sunuyordu. Sıra önemli: önce arama,
  * sonra platform daraltması, sonra sekme.
  */
+/** Boş liste ipucunda geçen sekme adları. Burada olmayan sekme = ek süzgeç yok. */
+const FILTER_EMPTY_LABEL: Record<string, string> = {
+  "en-karli": "En Kârlı",
+  "esige-yakin": "Eşiğe Yakın",
+  "negative-profit": "Zarar Eden",
+  "missing-cost": "Maliyet Eksik",
+  "missing-desi": "Desi Eksik",
+  "out-of-stock": "Stoğu Bitenler",
+  inactive: "İnaktif",
+  hidden: "Gizlenenler",
+};
+
 export function emptyListText(input: {
   filterMode: string;
   search: string;
@@ -379,9 +391,14 @@ export function emptyListText(input: {
     };
   }
   if (input.platformLabel) {
+    // Sekme filtresi de açıksa "daraltmayı kaldırınca hepsi görünür" YANLIŞ bir söz olur —
+    // sekme süzgeci uygulanmaya devam eder. O durumda ikisini birlikte söyle.
+    const sekmeAdi = FILTER_EMPTY_LABEL[input.filterMode];
     return {
       baslik: `Bu listede ${input.platformLabel} ürünü yok`,
-      ipucu: `${input.platformLabel} daraltmasını kaldırınca tüm ürünler görünür.`,
+      ipucu: sekmeAdi
+        ? `“${sekmeAdi}” sekmesi ve ${input.platformLabel} daraltması birlikte süzüyor.`
+        : `${input.platformLabel} daraltmasını kaldırınca tüm ürünler görünür.`,
     };
   }
   switch (input.filterMode) {

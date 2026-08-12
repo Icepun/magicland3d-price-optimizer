@@ -118,7 +118,13 @@ const HB_PATH_MISSING_STATUS = new Set([403, 404, 405, 501]);
  * "bu sipariş kapandı" dediğinde (reuseCached) kullanılır — hareketli siparişler hep canlı çekilir.
  */
 const HB_ORDER_DETAIL_CACHE_MAX = 4000;
-const hbOrderDetailCache = new Map<string, unknown>();
+/**
+ * Süre sınırı: kapanmış sipariş de sonradan DEĞİŞEBİLİR (fiyat düzeltmesi, kısmi iade sonrası
+ * kalem güncellemesi). Süresiz hatırlanınca "Yenile"ye kaç kez basılırsa basılsın uygulama eski
+ * tutarı ve tarihi göstermeye devam ediyordu — düzelmesi için uygulamayı kapatmak gerekiyordu.
+ */
+const HB_ORDER_DETAIL_CACHE_TTL_MS = 30 * 60_000;
+const hbOrderDetailCache = new Map<string, { at: number; detail: unknown }>();
 
 export class HepsiburadaClient {
   private readonly hosts: ReturnType<typeof hepsiburadaHosts>;
@@ -283,8 +289,10 @@ export class HepsiburadaClient {
     options: { reuseCached?: boolean } = {}
   ): Promise<unknown> {
     const cacheKey = `${this.credentials.environment}:${this.credentials.merchantId}:${orderNumber}`;
-    if (options.reuseCached && hbOrderDetailCache.has(cacheKey)) {
-      return hbOrderDetailCache.get(cacheKey);
+    if (options.reuseCached) {
+      const hit = hbOrderDetailCache.get(cacheKey);
+      if (hit && Date.now() - hit.at < HB_ORDER_DETAIL_CACHE_TTL_MS) return hit.detail;
+      if (hit) hbOrderDetailCache.delete(cacheKey); // bayat: yeniden çekilecek
     }
     const detail = await this.request<unknown>(
       `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}/ordernumber/${encodeURIComponent(orderNumber)}`
@@ -295,7 +303,7 @@ export class HepsiburadaClient {
         const oldest = hbOrderDetailCache.keys().next();
         if (!oldest.done) hbOrderDetailCache.delete(oldest.value);
       }
-      hbOrderDetailCache.set(cacheKey, detail);
+      hbOrderDetailCache.set(cacheKey, { at: Date.now(), detail });
     }
     return detail;
   }

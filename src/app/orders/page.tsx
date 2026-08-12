@@ -512,6 +512,7 @@ export default function OrdersPage() {
     [orders]
   );
 
+  const freshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Yeni gelen siparişler — bir sonraki yenilemede vurgulanır. İlk yüklemede hiçbiri "yeni"
   // sayılmaz (yoksa açılışta bütün liste yanıp söner).
   const seenOrderIds = useRef<Set<string> | null>(null);
@@ -523,11 +524,22 @@ export default function OrdersPage() {
     seenOrderIds.current = ids;
     if (!known) return;
     const added = [...ids].filter((id) => !known.has(id));
+    // ⚠️ Zamanlayıcı efektin temizliğine BAĞLANMAZ. Bağlıyken şu oluyordu: rozet yanar, sonra
+    // yeni sipariş EKLENMEDEN başka bir şey değişince (durum/kâr) efekt yeniden koşar, React
+    // önce eski temizliği çalıştırıp zamanlayıcıyı öldürür, bu dal da erken döndüğü için yenisi
+    // kurulmaz → "Yeni" rozeti ve mor halka kalıcı olarak takılı kalırdı.
     if (added.length === 0) return;
     setFreshOrderIds(new Set(added));
-    const timer = setTimeout(() => setFreshOrderIds(new Set()), 15_000);
-    return () => clearTimeout(timer);
+    if (freshTimer.current) clearTimeout(freshTimer.current);
+    freshTimer.current = setTimeout(() => setFreshOrderIds(new Set()), 15_000);
   }, [orders]);
+  // Zamanlayıcı yalnız bileşen sökülürken temizlenir.
+  useEffect(
+    () => () => {
+      if (freshTimer.current) clearTimeout(freshTimer.current);
+    },
+    []
+  );
   const manualSummary = useMemo<SummaryBucket>(() => {
     if (summary?.manual) return summary.manual;
     return orders.reduce<SummaryBucket>(
@@ -1309,6 +1321,11 @@ function FetchProgress({ active }: { active: boolean }) {
   const total = live?.total ?? 0;
   const completed = live?.completed ?? 0;
   const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  // Önbellekten karşılanan istekte sunucu hiçbir aşama bildirmez (hesap hiç koşmaz) → kaynak
+  // listesi boş, çubuk %6'da takılı kalır ve kart anlamsız görünür. O durumda belirleyici bir
+  // şey söyleyemeyiz; kartı hiç göstermemek, boş bir ilerleme göstermekten dürüst.
+  if (sources.length === 0) return null;
 
   return (
     <div className="animate-in fade-in slide-in-from-top-1 duration-300 overflow-hidden rounded-lg border border-border/60 bg-muted/25">
