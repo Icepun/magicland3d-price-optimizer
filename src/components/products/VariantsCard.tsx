@@ -19,13 +19,17 @@ import {
   FolderPlus,
   Trash2,
   Camera,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
+import { fetchJson } from "@/lib/fetch-json";
 import { formatCurrency, cn } from "@/lib/utils";
 
 interface VMember {
@@ -53,6 +57,43 @@ type DetailCache = {
   variantGroup?: { id: string; name: string; products?: VMember[] } | null;
 } & Record<string, unknown>;
 
+/** Kartın içinde kalan hata satırı: tek cümle + tekrar denemek için tek buton. */
+function KartHatasi({
+  mesaj,
+  onRetry,
+  deneniyor,
+  className,
+}: {
+  mesaj: string;
+  onRetry: () => void;
+  deneniyor?: boolean;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2",
+        "animate-in fade-in slide-in-from-top-1 duration-300",
+        className
+      )}
+      role="alert"
+    >
+      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+      <span className="flex-1 text-xs text-amber-400">{mesaj}</span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1.5 text-xs shrink-0"
+        disabled={deneniyor}
+        onClick={onRetry}
+      >
+        <RefreshCw className={cn("h-3 w-3", deneniyor && "animate-spin")} />
+        Tekrar dene
+      </Button>
+    </div>
+  );
+}
+
 function Thumb({ src, className }: { src: string | null; className?: string }) {
   return (
     <div className={cn("h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden", className)}>
@@ -64,6 +105,13 @@ function Thumb({ src, className }: { src: string | null; className?: string }) {
     </div>
   );
 }
+
+/** Tekrar denenebilir işlemler — hata satırındaki "Tekrar dene" bunu yeniden çalıştırır. */
+type BasarisizIslem =
+  | { tur: "ad"; ad: string }
+  | { tur: "etiket"; id: string; etiket: string }
+  | { tur: "cikar"; id: string }
+  | { tur: "dagit" };
 
 // memo: detay cache'i değişince (örn. madeToOrder/maliyet optimistic toggle — group ref'i AYNI kalır)
 // bu kart gereksiz render olmasın → toggle anlık hisseder. (Impl hoist edilir.)
@@ -87,6 +135,9 @@ function VariantsCardImpl({
   const [confirmDissolve, setConfirmDissolve] = useState(false);
   const [confirmUnlinkId, setConfirmUnlinkId] = useState<string | null>(null);
   const [editImageId, setEditImageId] = useState<string | null>(null);
+  // Başarısız işlem kartın içinde görünür kalır ve tek tıkla tekrar denenir. İşlemi VERİ olarak
+  // tutarız (kapanış değil) — mutasyonlar kendi tanımlarının içinden birbirine referans veremez.
+  const [islemHatasi, setIslemHatasi] = useState<{ mesaj: string; islem: BasarisizIslem } | null>(null);
 
   const refresh = () => {
     // SADECE bu ürünü tazele (prefix ["product"] DEĞİL → diğer ürün cache'lerini boşuna bayatlatma).
@@ -108,6 +159,7 @@ function VariantsCardImpl({
     // Optimistic: editörü anında kapat + grup adını cache'te anında değiştir.
     onMutate: async (name: string) => {
       setEditingName(false);
+      setIslemHatasi(null);
       await qc.cancelQueries({ queryKey: ["product", productId] });
       const prev = qc.getQueryData<DetailCache>(["product", productId]);
       qc.setQueryData<DetailCache>(["product", productId], (old) =>
@@ -115,9 +167,9 @@ function VariantsCardImpl({
       );
       return { prev };
     },
-    onError: (_e, _v, ctx) => {
+    onError: (_e, ad, ctx) => {
       if (ctx?.prev) qc.setQueryData(["product", productId], ctx.prev);
-      toast.error("Grup adı güncellenemedi (geri alındı)");
+      setIslemHatasi({ mesaj: "Grup adı kaydedilemedi.", islem: { tur: "ad", ad } });
     },
     onSuccess: () => toast.success("Grup adı güncellendi"),
     // Optimistic onMutate zaten cache'i yamaladı → ürünü refetch etme; liste sadece bayat işaretlenir.
@@ -125,29 +177,40 @@ function VariantsCardImpl({
   });
 
   const unlink = useMutation({
-    mutationFn: (id: string) =>
-      fetch(`/api/products/${id}`, {
+    // Sunucu reddettiyse BAŞARI sayma: `r.json()` hata gövdesini de çözer, kontrol edilmezse
+    // kullanıcı "çıkarıldı" mesajını görür ama varyant gruptadır.
+    mutationFn: async (id: string) => {
+      const r = await fetch(`/api/products/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variantGroupId: null, variantLabel: null }),
-      }).then((r) => r.json()),
+      });
+      if (!r.ok) throw new Error("Çıkarılamadı");
+      return r.json();
+    },
+    onMutate: () => setIslemHatasi(null),
     onSuccess: () => {
       refresh();
       toast.success("Varyant gruptan çıkarıldı");
     },
-    onError: () => toast.error("İşlem başarısız"),
+    onError: (_e, id) =>
+      setIslemHatasi({ mesaj: "Varyant gruptan çıkarılamadı.", islem: { tur: "cikar", id } }),
   });
 
   const editLabel = useMutation({
-    mutationFn: ({ id, label }: { id: string; label: string }) =>
-      fetch(`/api/products/${id}`, {
+    mutationFn: async ({ id, label }: { id: string; label: string }) => {
+      const r = await fetch(`/api/products/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ variantLabel: label.trim() || null }),
-      }).then((r) => r.json()),
+      });
+      if (!r.ok) throw new Error("Kaydedilemedi");
+      return r.json();
+    },
     // Optimistic: etiket editörünü anında kapat + üyenin etiketini cache'te anında değiştir.
     onMutate: async ({ id, label }) => {
       setEditingLabelId(null);
+      setIslemHatasi(null);
       await qc.cancelQueries({ queryKey: ["product", productId] });
       const prev = qc.getQueryData<DetailCache>(["product", productId]);
       qc.setQueryData<DetailCache>(["product", productId], (old) =>
@@ -165,9 +228,12 @@ function VariantsCardImpl({
       );
       return { prev };
     },
-    onError: (_e, _v, ctx) => {
+    onError: (_e, v, ctx) => {
       if (ctx?.prev) qc.setQueryData(["product", productId], ctx.prev);
-      toast.error("Etiket güncellenemedi (geri alındı)");
+      setIslemHatasi({
+        mesaj: "Etiket kaydedilemedi — eski adı duruyor.",
+        islem: { tur: "etiket", id: v.id, etiket: v.label },
+      });
     },
     onSuccess: () => toast.success("Etiket güncellendi"),
     // Optimistic onMutate zaten cache'i yamaladı → ürünü refetch etme; liste sadece bayat işaretlenir.
@@ -175,15 +241,35 @@ function VariantsCardImpl({
   });
 
   const dissolve = useMutation({
-    mutationFn: () =>
-      fetch(`/api/variant-groups/${group!.id}`, { method: "DELETE" }).then((r) => r.json()),
+    mutationFn: async () => {
+      const r = await fetch(`/api/variant-groups/${group!.id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Dağıtılamadı");
+      return r.json();
+    },
+    onMutate: () => setIslemHatasi(null),
     onSuccess: () => {
       refresh();
       setConfirmDissolve(false);
       toast.success("Grup dağıtıldı");
     },
-    onError: () => toast.error("İşlem başarısız"),
+    onError: () => {
+      setConfirmDissolve(false);
+      setIslemHatasi({ mesaj: "Grup dağıtılamadı.", islem: { tur: "dagit" } });
+    },
   });
+
+  // Hata satırındaki tekrar denemesi — mutasyonlar tanımlandıktan SONRA kurulur.
+  const islemPending =
+    renameGroup.isPending || editLabel.isPending || unlink.isPending || dissolve.isPending;
+  const tekrarDene = () => {
+    if (!islemHatasi) return;
+    const { islem } = islemHatasi;
+    setIslemHatasi(null);
+    if (islem.tur === "ad") renameGroup.mutate(islem.ad);
+    else if (islem.tur === "etiket") editLabel.mutate({ id: islem.id, label: islem.etiket });
+    else if (islem.tur === "cikar") unlink.mutate(islem.id);
+    else dissolve.mutate();
+  };
 
   // ───────────────────────── Gruplanmamış ürün ─────────────────────────
   if (!group) {
@@ -266,6 +352,14 @@ function VariantsCardImpl({
       </CardHeader>
 
       <CardContent className="pt-3 space-y-1.5">
+        {islemHatasi && (
+          <KartHatasi
+            mesaj={islemHatasi.mesaj}
+            onRetry={tekrarDene}
+            deneniyor={islemPending}
+            className="mb-2"
+          />
+        )}
         {members.map((m) => {
           const isCurrent = m.id === productId;
           return (
@@ -512,10 +606,17 @@ function VariantPicker({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const { data } = useQuery<PickProduct[]>({
+  const {
+    data,
+    isLoading: listeYukleniyor,
+    isError: listeHatali,
+    isFetching: listeCekiliyor,
+    refetch: listeyiTazele,
+  } = useQuery<PickProduct[]>({
     queryKey: ["products", "variant-picker"],
     // lite=1: kâr hesabı olmadan hafif liste (ad/resim/fiyat) — picker'ı yormaz.
-    queryFn: () => fetch("/api/products?filter=all&lite=1").then((r) => r.json()),
+    // fetchJson: HTTP hatasında fırlatır → "liste boş" ile "liste alınamadı" birbirine karışmaz.
+    queryFn: () => fetchJson<PickProduct[]>("/api/products?filter=all&lite=1"),
   });
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
@@ -580,8 +681,31 @@ function VariantPicker({
                 <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ürün ara…" className="pl-8 h-9" autoFocus />
               </div>
               <div className="max-h-72 overflow-y-auto -mx-1 px-1 space-y-0.5">
-                {list.length === 0 ? (
-                  <p className="text-xs text-muted-foreground text-center py-6">Eklenebilecek ürün bulunamadı.</p>
+                {listeHatali ? (
+                  <KartHatasi
+                    mesaj="Ürün listesi alınamadı."
+                    onRetry={() => void listeyiTazele()}
+                    deneniyor={listeCekiliyor}
+                    className="my-2"
+                  />
+                ) : listeYukleniyor ? (
+                  <div className="space-y-0.5 py-1" aria-busy="true">
+                    {[0, 1, 2, 3].map((i) => (
+                      <div
+                        key={i}
+                        className="flex items-center gap-2.5 p-1.5 animate-in fade-in duration-300"
+                        style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
+                      >
+                        <Skeleton className="h-9 w-9 rounded-md" />
+                        <Skeleton className="h-3.5 flex-1" />
+                        <Skeleton className="h-3.5 w-14" />
+                      </div>
+                    ))}
+                  </div>
+                ) : list.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-6">
+                    {debouncedQ.trim() ? "Aramana uyan ürün yok." : "Eklenebilecek ürün bulunamadı."}
+                  </p>
                 ) : (
                   list.map((p) => (
                     <button

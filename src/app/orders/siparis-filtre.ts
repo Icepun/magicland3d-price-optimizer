@@ -36,6 +36,8 @@ export interface FilterableOrder {
   profitPartial?: boolean;
   /** Kalem/tutar bilgisi platformdan alınamadı → özet toplamlarının dışında. */
   dataIncomplete?: boolean;
+  /** Pazaryeri durumu tanınmıyor (satış mı iade mi belli değil) → özet toplamlarının dışında. */
+  statusUnknown?: boolean;
 }
 
 /**
@@ -86,6 +88,10 @@ export function orderMatchesSearch(
  */
 export function countsInSummary(order: FilterableOrder): boolean {
   if (order.statusKind === "cancelled") return false;
+  // Durumu tanınmayan sipariş sunucu özetinde de ciro dışında; burada elenmezse "N siparişte
+  // maliyet eksik" bağlantısı özette olmayan siparişleri listeler ve aynı ekranda iki farklı
+  // sayı çıkar (bu depoda daha önce yaşanan hata sınıfı).
+  if (order.statusUnknown) return false;
   if (order.dataIncomplete) return false;
   const currency = order.currency?.trim().toUpperCase() || "TRY";
   return currency === "TRY";

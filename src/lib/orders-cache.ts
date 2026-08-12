@@ -126,6 +126,10 @@ export function setOrdersCache(body: Record<string, unknown>, expectedGeneration
   if (cache && cache.body === body) return true;
   const at = Date.now();
   cache = { at, body: stampComputedAt(body, at) };
+  // EKSİK sonuç diske YAZILMAZ. Bir pazaryeri alınamadığında hesaplanan yarım ciro diske
+  // yazılırsa 3 güne kadar (MAX_DISK_AGE_MS) yeniden servis edilir ve sonraki açılışta önceki
+  // TAM sonucun yerine geçer. RAM'de tutulur (aynı oturumda tekrar hesaplanmasın), diske değil.
+  if (body.dataComplete === false) return true;
   persistDiskCache(cache);
   return true;
 }

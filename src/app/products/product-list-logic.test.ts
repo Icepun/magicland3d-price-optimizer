@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   isStaleProductListKey,
+  listErrorText,
   memberCost,
   productListKey,
   selectionPreview,
   summarizeGroup,
   toRange,
+  variantCountLabel,
   visibleSelection,
   type GroupMember,
 } from "./product-list-logic";
@@ -20,6 +22,7 @@ const uye = (over: Partial<GroupMember> = {}): GroupMember => ({
   stock: 0,
   madeToOrder: false,
   currentSalePrice: 100,
+  hasCost: true,
   resolvedTotalCost: null,
   cost: null,
   profitPerHour: null,
@@ -128,6 +131,16 @@ describe("maliyet kaynağı ürün satırıyla aynı", () => {
     expect(memberCost(uye({ cost: { totalCost: null, manualCost: 7 } }))).toBe(7);
     expect(memberCost(uye({ cost: null }))).toBeNull();
   });
+
+  /**
+   * Paketleme her ürüne otomatik eklendiği için maliyeti GİRİLMEMİŞ varyantta bile
+   * `resolvedTotalCost` dolu geliyor. Kapı olmasaydı grup satırı bir tutar yazarken,
+   * açılan varyantın kendi satırı "—" diyordu.
+   */
+  it("üretim maliyeti bilinmiyorsa tutar varmış gibi gösterilmez", () => {
+    expect(memberCost(uye({ hasCost: false, resolvedTotalCost: 4.2 }))).toBeNull();
+    expect(memberCost(uye({ hasCost: false, cost: { totalCost: 4.2, manualCost: null } }))).toBeNull();
+  });
 });
 
 describe("grup satırı ekranda görünenle tutarlı", () => {
@@ -173,6 +186,25 @@ describe("grup satırında kâr ve maliyet artık görünüyor", () => {
     expect(ozet.karGram).toMatchObject({ min: 0.5, max: 0.9 });
   });
 
+  it("maliyeti eksik varyantlar aralığa girmez ama sayılır", () => {
+    const ozet = summarizeGroup([
+      uye({ resolvedTotalCost: 20 }),
+      uye({ resolvedTotalCost: 26 }),
+      // Paketleme yüzünden tutar dolu görünüyor ama ÜRETİM maliyeti girilmemiş.
+      uye({ hasCost: false, resolvedTotalCost: 4.2 }),
+      uye({ hasCost: false, resolvedTotalCost: 4.2 }),
+      uye({ hasCost: false, resolvedTotalCost: 4.2 }),
+    ]);
+    expect(ozet.maliyet).toMatchObject({ min: 20, max: 26, bilinen: 2, bilinmeyen: 3 });
+    expect(ozet.maliyetiEksik).toBe(3);
+  });
+
+  it("hiçbir varyantın maliyeti yoksa '—' kalır, sayı yine bilinir", () => {
+    const ozet = summarizeGroup([uye({ hasCost: false }), uye({ hasCost: false })]);
+    expect(ozet.maliyet).toBeNull();
+    expect(ozet.maliyetiEksik).toBe(2);
+  });
+
   it("maliyeti bilinmeyen varyant kâr aralığını sıfıra çekmez", () => {
     const ozet = summarizeGroup([
       uye({
@@ -205,6 +237,15 @@ describe("grup satırında kâr ve maliyet artık görünüyor", () => {
       bilinmeyen: 1,
     });
     expect(ozet.platformlar.trendyol?.fiyat).toMatchObject({ min: 200, max: 260 });
+  });
+
+  it("maliyeti eksik varyant kâr/saat aralığını da bozmaz", () => {
+    const ozet = summarizeGroup([
+      uye({ profitPerHour: 30, profitPerGram: 0.5 }),
+      uye({ hasCost: false, profitPerHour: null, profitPerGram: null }),
+    ]);
+    expect(ozet.karSaat).toMatchObject({ min: 30, max: 30, bilinen: 1, bilinmeyen: 1 });
+    expect(ozet.karGram).toMatchObject({ min: 0.5, max: 0.5 });
   });
 
   it("ilanı olmayan platform '—' kalır, 0 gösterilmez", () => {
@@ -247,5 +288,62 @@ describe("grup satırında kâr ve maliyet artık görünüyor", () => {
     expect(shopify?.komisyonEksik).toBe(1);
     expect(shopify?.kargoEksik).toBe(1);
     expect(shopify?.kar).toMatchObject({ min: -5, max: 20 });
+  });
+});
+
+// ── 4) Grup rozeti: kaç varyant görünüyor ────────────────────────────────────────────────────
+
+describe("grup rozeti kısmi görünümü saklamaz", () => {
+  it("grubun tamamı listedeyse tek sayı yazar", () => {
+    const etiket = variantCountLabel(8, 8);
+    expect(etiket.metin).toBe("8 varyant");
+    expect(etiket.kismi).toBe(false);
+  });
+
+  it("arama/filtre bir kısmını elediyse pay/payda yazar", () => {
+    const etiket = variantCountLabel(5, 8);
+    expect(etiket.metin).toBe("5 / 8 varyant");
+    expect(etiket.kismi).toBe(true);
+    expect(etiket.ipucu).toContain("8 varyantından 5");
+  });
+
+  it("toplam bilinmiyorsa payda uydurulmaz", () => {
+    expect(variantCountLabel(5).metin).toBe("5 varyant");
+    expect(variantCountLabel(5, null).metin).toBe("5 varyant");
+    expect(variantCountLabel(5, Number.NaN).metin).toBe("5 varyant");
+  });
+
+  // Bir varyant silinince sunucudan gelen toplam bir an geride kalır; "9 / 8" yazılmamalı.
+  it("toplam görünenden küçük gelirse imkânsız rakam yazılmaz", () => {
+    const etiket = variantCountLabel(9, 8);
+    expect(etiket.metin).toBe("9 varyant");
+    expect(etiket.kismi).toBe(false);
+  });
+});
+
+// ── 5) Hata sebebi ekranda ───────────────────────────────────────────────────────────────────
+
+describe("hata sebebi kısa bir cümleye iner", () => {
+  it("sunucunun okunur mesajı olduğu gibi görünür", () => {
+    expect(listErrorText(new Error("Barkod zorunlu"))).toBe("Barkod zorunlu.");
+  });
+
+  it("ağ kopması teknik metin yerine sade cümle olur", () => {
+    expect(listErrorText(new TypeError("Failed to fetch"))).toBe("Sunucuya ulaşılamadı.");
+  });
+
+  it("sebep yoksa boş satır bırakmaz", () => {
+    expect(listErrorText(new Error("   "))).toBe("Bağlantı kurulamadı.");
+    expect(listErrorText(undefined)).toBe("Bağlantı kurulamadı.");
+  });
+
+  it("çok uzun mesaj satırı taşırmaz", () => {
+    const metin = listErrorText(new Error("x".repeat(400)));
+    expect(metin.length).toBeLessThanOrEqual(141);
+    expect(metin.endsWith("…")).toBe(true);
+  });
+
+  it("zaten noktalı mesaja ikinci nokta eklenmez", () => {
+    expect(listErrorText(new Error("Kayıt bulunamadı."))).toBe("Kayıt bulunamadı.");
   });
 });

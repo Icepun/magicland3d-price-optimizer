@@ -69,6 +69,12 @@ export interface TrendyolOrderLine {
   quantity?: number;
   price?: number;
   amount?: number;
+  /**
+   * SATIR bazlı durum (paket durumundan AYRI): çok kalemli bir siparişte tek kalem iade
+   * edilirse paket "Delivered" kalır ama bu alan "Returned"/"Cancelled" olur. Paket tutarı
+   * (totalPrice) bu durumda ne oluyor DOĞRULANMADI → tutara dokunulmaz, yalnız işaretlenir.
+   */
+  orderLineItemStatusName?: string;
 }
 
 export interface TrendyolOrder {

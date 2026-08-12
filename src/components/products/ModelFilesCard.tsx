@@ -3,7 +3,7 @@
 import { memo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box } from "lucide-react";
+import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 
@@ -13,13 +13,87 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { fetchJson } from "@/lib/fetch-json";
 import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
 interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; thumbnail?: string | null }
+
+/**
+ * Bir listenin ekranda hangi durumu göstereceği.
+ *
+ * "Boş liste" bir BİLGİDİR ("henüz parça yok"), "alınamadı" ise bilinmezliktir. İkisi aynı ekranı
+ * gösterirse kullanıcı var olan dosyaları yok sanır ve yeniden yükler. Hata her zaman önce gelir.
+ */
+export function veriDurumu(
+  yukleniyor: boolean,
+  hata: boolean,
+  adet: number
+): "yukleniyor" | "hata" | "bos" | "dolu" {
+  if (hata) return "hata";
+  if (yukleniyor) return "yukleniyor";
+  return adet > 0 ? "dolu" : "bos";
+}
+
+/** Kartın içinde kalan hata satırı: tek cümle + tekrar denemek için tek buton. */
+function KartHatasi({
+  mesaj,
+  onRetry,
+  deneniyor,
+}: {
+  mesaj: string;
+  onRetry: () => void;
+  deneniyor?: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-300"
+      role="alert"
+    >
+      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+      <span className="flex-1 text-xs text-amber-400">{mesaj}</span>
+      <Button
+        size="sm"
+        variant="outline"
+        className="h-7 gap-1.5 text-xs shrink-0"
+        disabled={deneniyor}
+        onClick={onRetry}
+      >
+        <RefreshCw className={cn("h-3 w-3", deneniyor && "animate-spin")} />
+        Tekrar dene
+      </Button>
+    </div>
+  );
+}
+
+/** Yükleme sırasında boş alan bırakma — yazıcı kutuları kadar yer tutan iskelet. */
+function ModelIskeleti() {
+  return (
+    <div className="space-y-3" aria-busy="true">
+      {[0, 1].map((i) => (
+        <div
+          key={i}
+          className="rounded-xl border bg-muted/20 overflow-hidden animate-in fade-in duration-500"
+          style={{ animationDelay: `${i * 90}ms`, animationFillMode: "both" }}
+        >
+          <div className="flex items-center gap-2.5 px-3 py-2 border-b border-border/40 bg-muted/30">
+            <Skeleton className="h-7 w-7 rounded-md" />
+            <Skeleton className="h-3.5 flex-1 max-w-[9rem]" />
+            <Skeleton className="h-7 w-24 rounded-md" />
+          </div>
+          <div className="p-2 space-y-1.5">
+            <Skeleton className="h-9 w-full rounded-lg" />
+            <Skeleton className="h-9 w-full rounded-lg" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function fmtSize(b: number) {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
@@ -40,14 +114,20 @@ function fmtEta(p: UploadProgress) {
 export const ModelFilesCard = memo(ModelFilesCardImpl);
 function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; variantGroup?: VariantGroupLite | null }) {
   const qc = useQueryClient();
-  const { data: printers = [] } = useQuery<PrinterCfg[]>({
+  // fetchJson: HTTP hatasında fırlatır. Eski hâlinde hata gövdesi de "veri" sayılıyor, liste boş
+  // kalıyor ve kart "Henüz parça yok" diyordu — yüklü dosyalar yokmuş gibi görünüyordu.
+  const printersQuery = useQuery<PrinterCfg[]>({
     queryKey: ["printer-configs"],
-    queryFn: () => fetch("/api/printers/config").then((r) => r.json()),
+    queryFn: () => fetchJson<PrinterCfg[]>("/api/printers/config"),
   });
-  const { data: files = [] } = useQuery<ModelFile[]>({
+  const filesQuery = useQuery<ModelFile[]>({
     queryKey: ["product-models", productId],
-    queryFn: () => fetch(`/api/products/${productId}/models`).then((r) => r.json()),
+    queryFn: () => fetchJson<ModelFile[]>(`/api/products/${productId}/models`),
   });
+  const printers = Array.isArray(printersQuery.data) ? printersQuery.data : [];
+  const files = Array.isArray(filesQuery.data) ? filesQuery.data : [];
+  const yaziciDurumu = veriDurumu(printersQuery.isLoading, printersQuery.isError, printers.length);
+  const dosyaDurumu = veriDurumu(filesQuery.isLoading, filesQuery.isError, files.length);
 
   const memberCount = variantGroup?.products?.length ?? 0;
   const inGroup = memberCount >= 2;
@@ -139,7 +219,22 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
             </div>
           </button>
         )}
-        {printers.length === 0 ? (
+        {yaziciDurumu === "hata" ? (
+          <KartHatasi
+            mesaj="Yazıcı listesi alınamadı."
+            onRetry={() => void printersQuery.refetch()}
+            deneniyor={printersQuery.isFetching}
+          />
+        ) : dosyaDurumu === "hata" ? (
+          // Dosyalar bilinmiyorken yazıcı kutularını çizmek "hiç parça yok" izlenimi verirdi.
+          <KartHatasi
+            mesaj="Baskı dosyaları alınamadı."
+            onRetry={() => void filesQuery.refetch()}
+            deneniyor={filesQuery.isFetching}
+          />
+        ) : yaziciDurumu === "yukleniyor" || dosyaDurumu === "yukleniyor" ? (
+          <ModelIskeleti />
+        ) : yaziciDurumu === "bos" ? (
           <p className="text-xs text-muted-foreground py-1.5">
             Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten yazıcı ekle; sonra her yazıcı için parça parça dosya yükle. Çok parçalı ürünlerde tüm parçaları ekleyebilirsin.
           </p>
@@ -169,8 +264,12 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
 
   const del = useMutation({
     // "Tüm varyantlara uygula" açıksa ?allVariants=1 → sunucu dosyayı TÜM varyantlardan siler.
-    mutationFn: (fileId: string) =>
-      fetch(`/api/models/${fileId}${applyToVariants ? "?allVariants=1" : ""}`, { method: "DELETE" }).then((r) => r.json()),
+    // Sunucu reddettiyse BAŞARI sayma: yoksa satır ekrandan siliniyor ama dosya duruyordu.
+    mutationFn: async (fileId: string) => {
+      const r = await fetch(`/api/models/${fileId}${applyToVariants ? "?allVariants=1" : ""}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("Silinemedi");
+      return r.json().catch(() => null);
+    },
     // OPTIMISTIC: satırı cache'ten çıkar → refetch YOK (yazma-sonrası-okuma donması yok). Diğer
     // varyantların listesi onChanged (removeQueries) ile sonraki ziyarette tazelenir.
     onSuccess: (_data, fileId) => {
@@ -185,8 +284,15 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
   });
 
   const patchField = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) =>
-      fetch(`/api/models/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json()),
+    mutationFn: async ({ id, body }: { id: string; body: Record<string, unknown> }) => {
+      const r = await fetch(`/api/models/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error("Kaydedilemedi");
+      return r.json().catch(() => null);
+    },
     // Optimistic: etiket/gramaj cache'te anında güncellenir → REFETCH YOK. (Eski refetch, blur'da
     // yazdığın değeri uncontrolled input'ta eziyordu + ağır.) Hata olursa geri alınır.
     onMutate: async ({ id, body }) => {

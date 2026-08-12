@@ -79,8 +79,40 @@ export class HepsiburadaApiError extends Error {
   }
 }
 
+/** İptal mi iade mi — iki ayrı liste, aynı deneme mantığı. */
+export type HbClaimKind = "cancelled" | "returned";
+
+/**
+ * İptal/iade liste uçlarının ADAY yolları.
+ *
+ * ⚠️ Bu yollar DOĞRULANMADI (HB belgeleri kapalı; elimizde canlı kimlik yok). Bu yüzden sırayla
+ * denenir, çalışan hatırlanır, hiçbiri çalışmazsa uç "yok" sayılır ve sipariş akışı bundan
+ * ETKİLENMEZ. Doğrulanan gerçek yol bulununca listenin başına alınmalı.
+ */
+const HB_CLAIM_PATHS: Record<HbClaimKind, string[]> = {
+  cancelled: [
+    "/packages/merchantid/{mid}/cancelled",
+    "/orders/merchantid/{mid}/cancelled",
+  ],
+  returned: [
+    "/packages/merchantid/{mid}/returned",
+    "/claims/merchantid/{mid}",
+  ],
+};
+
+/**
+ * "Bu yol YOK" demek olan durumlar — yalnız bunlarda aday kalıcı olarak elenir.
+ *
+ * 400 ve 401 BİLEREK DIŞARIDA: 400 "yol doğru ama istek eksik" (HB liste uçları tarih aralığı
+ * isteyebiliyor), 401 ise kimlik sorunu. İkisini "yol yok" saymak, DOĞRU yolu kalıcı olarak
+ * eleyip iptal/iade taramasını sessizce kapatırdı.
+ */
+const HB_PATH_MISSING_STATUS = new Set([403, 404, 405, 501]);
+
 export class HepsiburadaClient {
   private readonly hosts: ReturnType<typeof hepsiburadaHosts>;
+  /** Denenmiş iptal/iade yolları: yol = çalışan aday, null = hiçbiri yok (bir daha deneme). */
+  private readonly claimPath = new Map<HbClaimKind, string | null>();
   constructor(private readonly credentials: HepsiburadaCredentials) {
     this.hosts = hepsiburadaHosts(credentials.environment);
   }
@@ -189,6 +221,44 @@ export class HepsiburadaClient {
     const mid = encodeURIComponent(this.credentials.merchantId);
     const path = status ? `/packages/merchantid/${mid}/${status}` : `/packages/merchantid/${mid}`;
     return this.request<unknown>(`${this.hosts.oms}${path}?offset=${offset}&limit=${limit}`);
+  }
+
+  /**
+   * İPTAL / İADE edilen siparişler.
+   *
+   * NEDEN: teslim edilmiş bir sipariş sonradan iade edilince diğer listelerden düşüyor, bizim
+   * kalıcı kaydımızda ise "satıldı" olarak kalıp ciroda sonsuza kadar duruyordu.
+   *
+   * ⚠️ Uç yolu doğrulanmadı: aday yollar sırayla denenir. Yol yoksa (404/403…) `null` döner ve
+   * bir daha denenmez; geçici hata (500/limit/ağ) olursa yalnız bu tur `null` döner, aday
+   * "yok" sayılmaz. HİÇBİR koşulda hata fırlatmaz — sipariş çekimi bu uca bağlı değildir.
+   */
+  async listClaimPackages(
+    kind: HbClaimKind,
+    params: { offset?: number; limit?: number } = {}
+  ): Promise<unknown | null> {
+    const known = this.claimPath.get(kind);
+    if (known === null) return null;
+    const offset = params.offset ?? 0;
+    const limit = params.limit ?? 100;
+    const mid = encodeURIComponent(this.credentials.merchantId);
+    const candidates = known ? [known] : HB_CLAIM_PATHS[kind];
+    let allPathsMissing = true;
+    for (const template of candidates) {
+      try {
+        const body = await this.request<unknown>(
+          `${this.hosts.oms}${template.replace("{mid}", mid)}?offset=${offset}&limit=${limit}`
+        );
+        this.claimPath.set(kind, template);
+        return body;
+      } catch (error) {
+        // Yolun yanlış olduğunu SADECE durum kodundan anlarız; mesaj metnine bakmayız.
+        const status = error instanceof HepsiburadaApiError ? error.status : 0;
+        if (!HB_PATH_MISSING_STATUS.has(status)) allPathsMissing = false;
+      }
+    }
+    if (allPathsMissing) this.claimPath.set(kind, null);
+    return null;
   }
 
   /** Sipariş detayı (kalem + tutarlar). Özet paket uçlarının döndürmediği fiyatlar buradan. */

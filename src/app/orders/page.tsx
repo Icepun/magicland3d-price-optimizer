@@ -100,6 +100,10 @@ interface UnifiedOrder {
   cargoProvider: string | null;
   /** Kalem/tutar bilgisi platformdan alınamadı → üstteki toplamlara girmez. */
   dataIncomplete?: boolean;
+  /** Durumu tanınmadı → satış mı iade mi bilinmiyor, toplamlara girmez. */
+  statusUnknown?: boolean;
+  /** Bu siparişte iade edilmiş kalem sayısı. */
+  returnedLineCount?: number;
   isManual?: boolean;
   manualOrderId?: string | null;
   editHref?: string | null;
@@ -122,6 +126,13 @@ interface SummaryBucket {
 interface SummaryQuality {
   unsupportedCurrencyOrders: number;
   unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
+  /** Durumu tanınmadığı için toplamların dışında tutulan siparişler. */
+  unknownStatusOrders?: number;
+  unknownStatuses?: Array<{ status: string; orderCount: number }>;
+  /** İçinde iade edilmiş kalem bulunan sipariş sayısı. */
+  partialReturnOrders?: number;
+  /** Verisi alınamayan kaynaklar — doluysa toplamlar eksik. */
+  missingSources?: string[];
 }
 /** Manuel siparişin kayıtlı kalemleri — burada yalnız "maliyeti biliniyor mu" için okunur. */
 interface ManualOrderCostDetail {
@@ -131,6 +142,11 @@ interface OrdersResponse {
   orders: UnifiedOrder[];
   /** Bu listenin hesaplandığı an — "3 dakika önce güncellendi" satırı bundan yazılır. */
   computedAt?: string | number | null;
+  /**
+   * Bütün kaynaklardan veri geldi mi. Sunucu damgalar ve kaydedilen kopyaya da yazılır:
+   * eksik bir toplam, sonraki açılışta "tam" sanılmasın.
+   */
+  dataComplete?: boolean;
   summary: {
     days: number;
     shopify: SummaryBucket;
@@ -149,6 +165,8 @@ interface OrdersResponse {
     ok: boolean;
     syncedOrders: number;
     syncDays: number;
+    /** Kayıt şu an sürüyor — sonuç bir sonraki yenilemede kesinleşir. */
+    pending?: boolean;
     error?: string;
   };
 }
@@ -350,6 +368,12 @@ export default function OrdersPage() {
     0,
     orders.length - (summary?.total.orderCount ?? orders.length)
   );
+  /**
+   * Verisi alınamayan kaynaklar. Boşsa toplamlar tam. Doluysa ekrandaki her rakam eksik bir
+   * veriyle hesaplanmıştır ve bunu SÖYLEMEK zorundayız — "₺0" da bir cevap gibi görünüyor.
+   */
+  const missingSources = summary?.quality?.missingSources ?? [];
+  const unknownStatusOrders = summary?.quality?.unknownStatusOrders ?? 0;
 
   const filtered = useMemo(
     () => (status === "all" ? beforeStatus : beforeStatus.filter((o) => o.statusKind === status)),
@@ -503,11 +527,18 @@ export default function OrdersPage() {
         </div>
       )}
 
-      {/* 30 günlük özet şeridi */}
-      {summary && summary.total.orderCount > 0 && (
+      {/* 30 günlük özet şeridi — bir kaynak alınamadıysa sipariş olmasa da gösterilir
+          (yoksa "sipariş yok" ekranı, aslında alınamamış veriyi sıfır gibi gösteriyordu). */}
+      {summary && (summary.total.orderCount > 0 || missingSources.length > 0) && (
         <Card className="overflow-hidden">
           <CardContent className="grid grid-cols-2 gap-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
-            <SummaryStat label={`${summary.total.orderCount} sipariş`} value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />} sub="Toplam ciro" strong />
+            <SummaryStat
+              label={`${summary.total.orderCount} sipariş`}
+              value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />}
+              sub={missingSources.length > 0 ? "Toplam ciro · eksik veri" : "Toplam ciro"}
+              subColor={missingSources.length > 0 ? "oklch(0.75 0.15 75)" : undefined}
+              strong
+            />
             <SummaryStat
               label="Sipariş kârı"
               value={<AnimatedNumber value={summary.total.profit} format={fmtMoney} />}
@@ -526,10 +557,17 @@ export default function OrdersPage() {
               }
               subActive={onlyIncomplete}
             />
-            <SummaryStat label="Shopify" value={<AnimatedNumber value={summary.shopify.revenue} format={fmtMoney} />} sub={`${summary.shopify.orderCount} sipariş`} platform="shopify" />
-            <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
-            <SummaryStat label="Hepsiburada" value={<AnimatedNumber value={summary.hepsiburada.revenue} format={fmtMoney} />} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
-            <SummaryStat label="Manuel" value={<AnimatedNumber value={manualSummary.revenue} format={fmtMoney} />} sub={`${manualSummary.orderCount} sipariş`} platform="manual" />
+            <PlatformStat label="Shopify" platform="shopify" bucket={summary.shopify} status={data?.shopify} />
+            <PlatformStat label="Trendyol" platform="trendyol" bucket={summary.trendyol} status={data?.trendyol} />
+            <PlatformStat label="Hepsiburada" platform="hepsiburada" bucket={summary.hepsiburada} status={data?.hepsiburada} />
+            <PlatformStat label="Manuel" platform="manual" bucket={manualSummary} status={data?.manual} />
+            {/* Rakamların eksik olduğunu SÖYLE — sessiz yarım toplam en tehlikelisi. */}
+            {missingSources.length > 0 && (
+              <p className="col-span-full flex items-center gap-1.5 text-[10px] font-medium text-amber-400 animate-in fade-in duration-500">
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                {missingSources.join(", ")} verisi alınamadı — ciro ve kâr toplamları eksik.
+              </p>
+            )}
             {/* Listedeki sipariş sayısı ile özetteki sayı neden farklı — tek satırda. */}
             {excludedFromSummary > 0 && (
               <p className="col-span-full text-[10px] text-muted-foreground animate-in fade-in duration-500">
@@ -558,6 +596,43 @@ export default function OrdersPage() {
                       .join(", ")}.`
                   : "."}{" "}
                 Sipariş tutarları aşağıda kendi para birimiyle gösteriliyor.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {unknownStatusOrders > 0 && (
+        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+          <CardContent className="py-3 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-400">
+                {unknownStatusOrders} siparişin durumu tanınmadı
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Satış mı iade mi belli olmadığı için toplamlara katılmadı
+                {summary?.quality?.unknownStatuses?.length
+                  ? `: ${summary.quality.unknownStatuses
+                      .map(({ status, orderCount }) => `${status} (${orderCount})`)
+                      .join(", ")}.`
+                  : "."}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {(summary?.quality?.partialReturnOrders ?? 0) > 0 && (
+        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+          <CardContent className="py-3 flex items-start gap-3">
+            <RotateCcw className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-400">
+                {summary?.quality?.partialReturnOrders} siparişte iade edilmiş ürün var
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Ciro platformun bildirdiği tutar — iade edilen ürün düşülmedi.
               </p>
             </div>
           </CardContent>
@@ -612,14 +687,19 @@ export default function OrdersPage() {
         <Card className="border-amber-500/40 bg-amber-500/5">
           <CardContent className="py-3 flex items-start gap-3">
             <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
-            <div className="text-sm">
+            <div className="min-w-0 text-sm">
               <p className="font-medium text-amber-400">
-                Finans geçmişi kaydedilemedi
+                Raporlara kaydedilemedi
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Siparişler listelendi ama aylık grafik bu yenilemeyi kaydetmedi. Yeniden
-                dene; sürerse hata: {data.financeHistory.error ?? "bilinmiyor"}
+                Siparişler listelendi ama aylık rapora işlenmedi. Yenile&apos;ye bas.
               </p>
+              {data.financeHistory.error && (
+                <details className="mt-1 text-[11px] text-muted-foreground/80">
+                  <summary className="cursor-pointer select-none">Ayrıntı</summary>
+                  <p className="mt-0.5 break-all">{data.financeHistory.error}</p>
+                </details>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -724,15 +804,25 @@ export default function OrdersPage() {
       ) : error ? (
         <EmptyState icon={AlertTriangle} title="Siparişler yüklenemedi" description="API bağlantısında sorun oluştu. Yenile'ye basıp tekrar dene." />
       ) : filtered.length === 0 ? (
-        <EmptyState
-          icon={PackageX}
-          title={orders.length === 0 ? "Son 30 günde sipariş yok" : "Filtreyle eşleşen sipariş yok"}
-          description={
-            orders.length === 0
-              ? "Platformlardan sipariş gelince veya manuel sipariş ekleyince burada listelenir."
-              : "Filtre veya aramayı değiştirip tekrar dene."
-          }
-        />
+        // "Sipariş yok" ile "veri alınamadı" AYNI ŞEY DEĞİL: alınamayan veriyi boş liste
+        // olarak göstermek, olmayan bir sıfırı doğru bilgi gibi sunuyordu.
+        orders.length === 0 && missingSources.length > 0 ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="Siparişler alınamadı"
+            description={`${missingSources.join(", ")} yanıt vermedi. Yenile'ye basıp tekrar dene.`}
+          />
+        ) : (
+          <EmptyState
+            icon={PackageX}
+            title={orders.length === 0 ? "Son 30 günde sipariş yok" : "Filtreyle eşleşen sipariş yok"}
+            description={
+              orders.length === 0
+                ? "Platformlardan sipariş gelince veya manuel sipariş ekleyince burada listelenir."
+                : "Filtre veya aramayı değiştirip tekrar dene."
+            }
+          />
+        )
       ) : (
         <div ref={listRef}>
           {padTop > 0 && <div style={{ height: padTop }} />}
@@ -973,6 +1063,47 @@ function SummaryStat({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Pazaryeri kutusu.
+ *
+ * 🔴 Veri ALINAMADIĞINDA "₺0 · 0 sipariş" yazıyordu: kesin bir rakam gibi duruyor, o platformun
+ * cirosu sessizce yok oluyordu. Artık alınamayan kaynak "—" gösterir ve nedenini söyler.
+ * Kurulu olmayan platform bundan AYRI durumdur (eksiklik değil, kullanıcının tercihi).
+ */
+function PlatformStat({
+  label,
+  platform,
+  bucket,
+  status,
+}: {
+  label: string;
+  platform: OrderPlatform;
+  bucket: SummaryBucket;
+  status?: PlatformStatus;
+}) {
+  if (status && !status.ok) {
+    const notSetUp = status.notConfigured === true;
+    const needsKey = status.needsAdminToken === true;
+    return (
+      <SummaryStat
+        label={label}
+        platform={platform}
+        value={<span className="text-muted-foreground">—</span>}
+        sub={notSetUp ? "bağlı değil" : needsKey ? "bağlantı gerekli" : "veri alınamadı"}
+        subColor={notSetUp ? undefined : "oklch(0.75 0.15 75)"}
+      />
+    );
+  }
+  return (
+    <SummaryStat
+      label={label}
+      platform={platform}
+      value={<AnimatedNumber value={bucket.revenue} format={fmtMoney} />}
+      sub={`${bucket.orderCount} sipariş`}
+    />
   );
 }
 
@@ -1347,6 +1478,12 @@ const OrderRow = memo(function OrderRow({
               <span className="text-[10px] font-medium text-muted-foreground">
                 Toplama girmiyor
               </span>
+            ) : order.statusUnknown ? (
+              // Durumu tanımadığımız sipariş toplamların dışında — satırda da görünsün ki
+              // ekrandaki iki rakam neden tutmuyor belli olsun.
+              <span className="text-[10px] font-medium text-amber-400">
+                Durumu belirsiz · toplama girmiyor
+              </span>
             ) : !isTryOrder ? (
               <span
                 className="text-[10px] font-medium text-amber-400"
@@ -1524,6 +1661,16 @@ const OrderRow = memo(function OrderRow({
                     {(order.missingDesiCount ?? 0) > 0
                       ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı.`
                       : "Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi."}
+                  </p>
+                )}
+                {!isCancelled && (order.returnedLineCount ?? 0) > 0 && (
+                  <p className="text-[10px] text-amber-500/90">
+                    {order.returnedLineCount} ürün iade edilmiş — ciro düşülmedi.
+                  </p>
+                )}
+                {order.statusUnknown && (
+                  <p className="text-[10px] text-amber-500/90">
+                    Durumu tanınmadı — ciro ve kâr toplamlarına girmedi.
                   </p>
                 )}
               </div>

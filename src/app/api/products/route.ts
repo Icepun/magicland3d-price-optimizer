@@ -181,7 +181,19 @@ async function computeProducts(urlString: string) {
               cargoCost: true,
             },
           },
-          variantGroup: { select: { id: true, name: true } },
+          // _count: grubun TAM varyant sayısı. Liste bir grubun yalnız bir kısmını gösterdiğinde
+          // (arama, "Zarar Eden", "Maliyet Eksik" …) grup satırı "5 / 8 varyant" yazabilsin;
+          // aksi halde kullanıcı 5 varyantlık bir grup görüyor sanıyordu.
+          variantGroup: {
+            select: {
+              id: true,
+              name: true,
+              // Sayım listeyle AYNI kapsamı kullanmalı: liste varsayılan olarak gizli/pasif
+              // ürünleri elediği için filtresiz `_count`, hiçbir filtre açık değilken bile
+              // kalıcı "2 / 3 varyant" rozeti üretiyordu.
+              _count: { select: { products: { where: { isActive: true, hidden: false } } } },
+            },
+          },
         },
         orderBy: { updatedAt: "desc" },
       }),
@@ -491,6 +503,14 @@ async function computeProducts(urlString: string) {
             manualCost: product.cost.manualCost,
             packagingCost: product.cost.packagingCost,
             filamentWeight: product.cost.filamentWeight, // planner kullanıyor
+          }
+        : null,
+      // Ham `_count` yerine tek okunur alan: grubun kaç varyantı var (süzülenler dahil).
+      variantGroup: product.variantGroup
+        ? {
+            id: product.variantGroup.id,
+            name: product.variantGroup.name,
+            variantCount: product.variantGroup._count.products,
           }
         : null,
       appliedCommissionRule: rule

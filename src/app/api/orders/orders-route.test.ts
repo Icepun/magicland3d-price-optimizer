@@ -15,8 +15,14 @@ const h = vi.hoisted(() => ({
     trendyolCall: 0,
     hbOpenPages: [] as any[][],
     hbPackages: {} as Record<string, any[]>,
+    /** İptal/iade listeleri. null = uç yok (istemci null döner) → akış etkilenmemeli. */
+    hbClaims: {} as Record<string, any[] | null>,
     hbDetails: {} as Record<string, any>,
     persisted: [] as any[],
+    /** Son arka plan yazımının durumu (null = henüz tur bitmedi). */
+    lastWrite: null as any,
+    /** Kimlik bilgisi okunamayan platformlar — "kurulu değil" yolu. */
+    missingCredentials: new Set<string>(),
     /** Manuel sipariş okuması bu mesajla patlar (null = sorunsuz). */
     manualError: null as string | null,
     sharedCalls: 0,
@@ -48,6 +54,9 @@ vi.mock("@/lib/order-finance-snapshots", () => ({
   scheduleOrderFinanceSnapshots: vi.fn((orders: any[]) => {
     h.state.persisted = orders;
   }),
+  // Uyarı ancak SON TAMAMLANAN turun sonucundan doğabilir (yazım artık arka planda).
+  lastOrderFinanceSnapshotWrite: () => h.state.lastWrite,
+  orderFinanceSnapshotWriteInFlight: () => false,
 }));
 vi.mock("@/lib/prisma", () => {
   const table = () => ({ findMany: vi.fn(async () => [] as any[]) });
@@ -73,7 +82,12 @@ vi.mock("@/lib/prisma", () => {
     },
   };
 });
-vi.mock("@/services/shopify-settings", () => ({ getShopifyCredentials: vi.fn(async () => ({})) }));
+vi.mock("@/services/shopify-settings", () => ({
+  getShopifyCredentials: vi.fn(async () => {
+    if (h.state.missingCredentials.has("shopify")) throw new Error("Shopify bilgileri eksik");
+    return {};
+  }),
+}));
 vi.mock("@/services/shopify-client", () => ({
   ShopifyAdminTokenMissingError: class ShopifyAdminTokenMissingError extends Error {},
   ShopifyClient: class {
@@ -82,7 +96,12 @@ vi.mock("@/services/shopify-client", () => ({
     }
   },
 }));
-vi.mock("@/services/trendyol-settings", () => ({ getTrendyolCredentials: vi.fn(async () => ({})) }));
+vi.mock("@/services/trendyol-settings", () => ({
+  getTrendyolCredentials: vi.fn(async () => {
+    if (h.state.missingCredentials.has("trendyol")) throw new Error("Trendyol API bilgileri eksik");
+    return {};
+  }),
+}));
 vi.mock("@/services/trendyol-client", () => ({
   // jsonError bu sınıfı tanımak için import ediyor (rota artık onunla sarmalı).
   TrendyolApiError: class TrendyolApiError extends Error {},
@@ -95,7 +114,12 @@ vi.mock("@/services/trendyol-client", () => ({
   },
 }));
 vi.mock("@/services/hepsiburada-settings", () => ({
-  getHepsiburadaCredentials: vi.fn(async () => ({})),
+  getHepsiburadaCredentials: vi.fn(async () => {
+    if (h.state.missingCredentials.has("hepsiburada")) {
+      throw new Error("Hepsiburada API bilgileri eksik");
+    }
+    return {};
+  }),
 }));
 vi.mock("@/services/hepsiburada-client", () => ({
   HepsiburadaClient: class {
@@ -104,6 +128,12 @@ vi.mock("@/services/hepsiburada-client", () => ({
     }
     async listPackages(status: string, params: { offset?: number } = {}) {
       return { items: (params.offset ?? 0) === 0 ? h.state.hbPackages[status] ?? [] : [] };
+    }
+    // Uç yolu doğrulanmadığı için istemci "yok" durumunu null ile bildirir (asla fırlatmaz).
+    async listClaimPackages(kind: string, params: { offset?: number } = {}) {
+      const rows = h.state.hbClaims[kind];
+      if (rows == null) return null;
+      return { items: (params.offset ?? 0) === 0 ? rows : [] };
     }
     async getOrderDetail(orderNumber: string) {
       const detail = h.state.hbDetails[orderNumber];
@@ -130,8 +160,11 @@ beforeEach(() => {
   h.state.trendyolCall = 0;
   h.state.hbOpenPages = [];
   h.state.hbPackages = {};
+  h.state.hbClaims = { cancelled: null, returned: null };
   h.state.hbDetails = {};
   h.state.persisted = [];
+  h.state.lastWrite = null;
+  h.state.missingCredentials = new Set<string>();
   h.state.manualError = null;
   h.state.sharedCalls = 0;
   h.state.sharedResult = null;
@@ -278,5 +311,205 @@ describe("siparişler ucu — çekim bütünlüğü", () => {
     // Finans geçmişine ₺0 satır yazılmaz.
     expect(h.state.persisted.map((o: any) => o.id)).not.toContain("hb-D2");
     expect(h.state.persisted.map((o: any) => o.id)).toContain("hb-D1");
+  });
+});
+
+describe("bir kaynak alınamazsa toplam EKSİK olduğunu söyler", () => {
+  it("çekim patlarsa 'kurulu değil' sanılmaz — mesajda 'bulunamadı' geçse bile", async () => {
+    // 🔴 Eskiden notConfigured hata METNİNDEN türetiliyordu: "Adres bulunamadı" diyen GERÇEK
+    // bir hata "kurulu değil" sayılıyor ve ekranda tek bir uyarı bile kalmıyordu.
+    h.state.trendyolPages = [new Error("Trendyol adresi bulunamadı")];
+
+    const body = await fetchOrders();
+
+    expect(body.trendyol).toMatchObject({ ok: false });
+    expect(body.trendyol.notConfigured).toBeFalsy();
+    expect(body.summary.quality.missingSources).toContain("Trendyol");
+    expect(body.dataComplete).toBe(false);
+  });
+
+  it("kimlik bilgisi yoksa platform 'kurulu değil' olur ve eksik veri sayılmaz", async () => {
+    h.state.missingCredentials = new Set(["trendyol"]);
+
+    const body = await fetchOrders();
+
+    expect(body.trendyol).toMatchObject({ ok: false, notConfigured: true });
+    expect(body.trendyol.error).toBeUndefined();
+    expect(body.summary.quality.missingSources).not.toContain("Trendyol");
+    expect(body.dataComplete).toBe(true);
+  });
+
+  it("manuel siparişler okunamazsa da toplam eksik işaretlenir", async () => {
+    h.state.manualError = "manuel kayıtlar okunamadı";
+
+    const body = await fetchOrders();
+
+    expect(body.summary.quality.missingSources).toContain("Manuel siparişler");
+    expect(body.dataComplete).toBe(false);
+  });
+});
+
+describe("iade ve iptaller ciroda kalmaz", () => {
+  /**
+   * Gerileme koruması: "Paket Bölündü" (UnPacked) ve "Yeniden Paketleniyor" (Repack) İPTAL
+   * DEĞİLDİR — satış devam ediyor. Bir tur bunları iptal/bilinmeyen sayıp ciroyu düşürmüştü.
+   */
+  it("paket bölünmesi ve yeniden paketleme ciroda KALIR", async () => {
+    h.state.trendyolPages = [
+      [
+        { ...trendyolOrder(), id: 8, orderNumber: "TY-8", status: "UnPacked" },
+        { ...trendyolOrder(), id: 9, orderNumber: "TY-9", status: "Repack" },
+      ],
+    ];
+
+    const body = await fetchOrders();
+
+    expect(body.summary.trendyol).toMatchObject({ orderCount: 2 });
+    expect(body.summary.quality.unknownStatusOrders).toBe(0);
+  });
+
+  it("tanınmayan Trendyol durumu ciroya girmez, sayısı ve adı görünür", async () => {
+    // GERÇEKTEN tanınmayan bir durum adı. Örnek olarak "Repack" KULLANILMAZ: o Trendyol'un
+    // gerçek ve AKTİF bir paket durumu ("yeniden paketleniyor") ve tabloda tanımlı —
+    // bilinmeyen sayılsaydı geçerli bir satış ciro dışında kalırdı.
+    h.state.trendyolPages = [
+      [
+        { ...trendyolOrder(), id: 7, orderNumber: "TY-7", status: "SomeFutureStatus" },
+        trendyolOrder(),
+      ],
+    ];
+
+    const body = await fetchOrders();
+
+    // Yalnız durumu bilinen sipariş ciroda.
+    expect(body.summary.trendyol).toMatchObject({ revenue: 250, orderCount: 1 });
+    expect(body.summary.quality.unknownStatusOrders).toBe(1);
+    expect(body.summary.quality.unknownStatuses).toEqual([
+      { status: "SomeFutureStatus", orderCount: 1 },
+    ]);
+    // Listede kalır ama işaretli; kalıcı geçmişe YAZILMAZ (satış mı iade mi bilmiyoruz).
+    expect(body.orders.find((o: any) => o.id === "ty-7")).toMatchObject({
+      statusUnknown: true,
+    });
+    expect(h.state.persisted.map((o: any) => o.id)).not.toContain("ty-7");
+  });
+
+  it("bilinen iade durumu ciroya girmez (UnDeliveredAndReturned)", async () => {
+    h.state.trendyolPages = [
+      [{ ...trendyolOrder(), id: 8, orderNumber: "TY-8", status: "UnDeliveredAndReturned" }],
+    ];
+
+    const body = await fetchOrders();
+
+    expect(body.summary.trendyol).toMatchObject({ revenue: 0, orderCount: 0 });
+    const order = body.orders.find((o: any) => o.id === "ty-8");
+    expect(order.statusKind).toBe("cancelled");
+    // Bilinen bir iade adı: "tanınmayan durum" kovasına düşmez.
+    expect(order.statusUnknown).toBeFalsy();
+    expect(body.summary.quality.unknownStatusOrders).toBe(0);
+  });
+
+  it("çok kalemli siparişte tek kalemin iadesi görünür (tutar değişmez)", async () => {
+    h.state.trendyolPages = [
+      [
+        {
+          ...trendyolOrder(),
+          id: 9,
+          orderNumber: "TY-9",
+          totalPrice: 300,
+          lines: [
+            { barcode: "B1", productName: "A", quantity: 1, price: 200 },
+            {
+              barcode: "B2",
+              productName: "B",
+              quantity: 1,
+              price: 100,
+              orderLineItemStatusName: "Returned",
+            },
+          ],
+        },
+      ],
+    ];
+
+    const body = await fetchOrders();
+
+    expect(body.orders.find((o: any) => o.id === "ty-9")).toMatchObject({
+      returnedLineCount: 1,
+    });
+    expect(body.summary.quality.partialReturnOrders).toBe(1);
+    // Tutar platformdan geldiği gibi kalır — tahminle ciro düşülmez.
+    expect(body.summary.trendyol.revenue).toBe(300);
+  });
+
+  it("iade listesinde çıkan teslim sipariş ciroya girmez ve geçmişe iptal olarak yazılır", async () => {
+    h.state.hbPackages = { delivered: [{ OrderNumber: "R1", DeliveredDate: now() }] };
+    h.state.hbDetails = {
+      R1: { orderDate: now(), items: [{ quantity: 1, unitPrice: 120, productName: "Ürün" }] },
+    };
+    // Aynı sipariş iade listesinde de var ve KAYDIN KENDİ durumu iade diyor.
+    h.state.hbClaims = { cancelled: null, returned: [{ OrderNumber: "R1", status: "Returned" }] };
+
+    const body = await fetchOrders();
+
+    expect(body.orders.find((o: any) => o.id === "hb-R1")).toMatchObject({
+      statusKind: "cancelled",
+    });
+    expect(body.summary.hepsiburada).toMatchObject({ revenue: 0, orderCount: 0 });
+    // Kalıcı kayıt "satıldı"da kalmasın diye iptal bilgisi yine de yazılır.
+    expect(
+      h.state.persisted.find((o: any) => o.id === "hb-R1")
+    ).toMatchObject({ statusKind: "cancelled" });
+  });
+
+  it("iade listesi siparişin kendi durumunu doğrulamıyorsa ciroya DOKUNULMAZ", async () => {
+    // Güvenlik freni: uç yolu doğrulanmadı; "her siparişi döndüren" bir yanıt ciroyu silemez.
+    h.state.hbPackages = { delivered: [{ OrderNumber: "K1", DeliveredDate: now() }] };
+    h.state.hbDetails = {
+      K1: { orderDate: now(), items: [{ quantity: 1, unitPrice: 90, productName: "Ürün" }] },
+    };
+    h.state.hbClaims = { cancelled: [{ OrderNumber: "K1" }], returned: null };
+
+    const body = await fetchOrders();
+
+    expect(body.orders.find((o: any) => o.id === "hb-K1")).toMatchObject({
+      statusKind: "delivered",
+    });
+    expect(body.summary.hepsiburada).toMatchObject({ revenue: 90, orderCount: 1 });
+  });
+
+  it("iade/iptal ucu yoksa sipariş akışı etkilenmez", async () => {
+    h.state.hbPackages = { delivered: [{ OrderNumber: "N1", DeliveredDate: now() }] };
+    h.state.hbDetails = {
+      N1: { orderDate: now(), items: [{ quantity: 1, unitPrice: 60, productName: "Ürün" }] },
+    };
+    h.state.hbClaims = { cancelled: null, returned: null };
+
+    const body = await fetchOrders();
+
+    expect(body.hepsiburada).toMatchObject({ ok: true, count: 1 });
+    expect(body.summary.hepsiburada).toMatchObject({ revenue: 60, orderCount: 1 });
+  });
+});
+
+describe("finans geçmişi hatası kullanıcıya ulaşır", () => {
+  it("arka plan yazımı düştüyse yanıt bunu bildirir", async () => {
+    // 🔴 Yazım arka plana alınınca bu uyarı hiçbir koşulda çıkamıyordu.
+    h.state.lastWrite = { ok: false, error: "veritabanı kilitli" };
+    h.state.trendyolPages = [[trendyolOrder()]];
+
+    const body = await fetchOrders();
+
+    expect(body.financeHistory).toMatchObject({ ok: false });
+    expect(body.financeHistory.error).toContain("veritabanı kilitli");
+  });
+
+  it("son tur başarılıysa uyarı çıkmaz", async () => {
+    h.state.lastWrite = { ok: true, eligibleOrders: 1, writtenOrders: 1, writtenItems: 0 };
+    h.state.trendyolPages = [[trendyolOrder()]];
+
+    const body = await fetchOrders();
+
+    expect(body.financeHistory.ok).toBe(true);
+    expect(body.financeHistory.error).toBeUndefined();
   });
 });

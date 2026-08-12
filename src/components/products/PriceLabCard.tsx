@@ -1,10 +1,11 @@
 "use client";
 
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { FlaskConical, Target, Tag, AlertTriangle, TrendingUp } from "lucide-react";
+import { FlaskConical, Target, Tag, AlertTriangle, TrendingUp, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import type { PriceLab } from "@/lib/client-pricing";
@@ -48,18 +49,57 @@ function useCachedThreshold(): PriceThresholdInfo | null {
   return null;
 }
 
+/** Hesap hazır olana kadar kartın kendi iskeleti — boş/donuk alan bırakmaz. */
+function TargetsSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true">
+      <Skeleton className="h-3.5 w-52" />
+      {[0, 1].map((row) => (
+        <div
+          key={row}
+          className="space-y-2 animate-in fade-in duration-500"
+          style={{ animationDelay: `${row * 90}ms`, animationFillMode: "both" }}
+        >
+          <div className="flex items-center justify-between">
+            <Skeleton className="h-3 w-20" />
+            <Skeleton className="h-3 w-36" />
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {[0, 1, 2, 3].map((cell) => (
+              <Skeleton key={cell} className="h-12 rounded-lg" />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // İSTEMCİDE hesaplanır (parent → computeClientPricing) ve `data` prop'uyla gelir → sunucuya istek YOK.
 // memo: parent her render olduğunda değil, yalnız `data` referansı değişince yeniden çizilir.
 export const PriceLabCard = memo(PriceLabCardImpl);
 function PriceLabCardImpl({
   data,
   threshold,
+  failed,
+  onRetry,
+  assumptionNotes,
 }: {
   data: PriceLab | undefined;
   /** Dışarıdan verilirse bu kullanılır; verilmezse ürün listesi önbelleğinden okunur. */
   threshold?: PriceThresholdInfo | null;
+  /** Hesap için gereken kurallar çekilemedi → iskelet sonsuza kadar dönmesin, durumu söyle. */
+  failed?: boolean;
+  onRetry?: () => void;
+  /**
+   * Fiyatın hangi varsayımla çıktığını söyleyen uyarılar. Kartın İÇİNDE, önerilen fiyatların
+   * hemen üstünde gösterilir — kullanıcı rakamı ve dayanağını aynı yerde okur.
+   * (Slot: uyarılar sayfadaki kâr önizlemesinden türüyor, kart onları kendi hesaplamıyor.)
+   */
+  assumptionNotes?: ReactNode;
 }) {
-  const isLoading = data === undefined; // kurallar/maliyet henüz hazır değil → iskelet
+  // Kurallar başarısızsa `data` sonsuza kadar undefined kalır → önce hatayı göster, sonra iskeleti.
+  const isLoading = !failed && data === undefined; // kurallar/maliyet henüz hazır değil → iskelet
   const cachedThreshold = useCachedThreshold();
   const hint = threshold ?? cachedThreshold;
 
@@ -75,8 +115,22 @@ function PriceLabCardImpl({
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-4">
-        {isLoading ? (
-          <Skeleton className="h-40 w-full" />
+        {failed ? (
+          <div className="flex flex-col items-center gap-3 py-6 text-center animate-in fade-in duration-300">
+            <span className="rounded-full bg-amber-500/10 p-2.5">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+            </span>
+            <p className="text-sm text-muted-foreground max-w-xs">
+              Fiyat önerileri hesaplanamadı.
+            </p>
+            {onRetry && (
+              <Button variant="outline" size="sm" className="gap-2" onClick={onRetry}>
+                <RefreshCw className="h-3.5 w-3.5" /> Tekrar dene
+              </Button>
+            )}
+          </div>
+        ) : isLoading ? (
+          <TargetsSkeleton />
         ) : !data?.hasCost ? (
           <div className="flex items-center gap-2 text-sm text-amber-500 py-2">
             <AlertTriangle className="h-4 w-4" />
@@ -101,6 +155,8 @@ function PriceLabCardImpl({
               <p className="text-xs font-semibold text-muted-foreground flex items-center gap-1.5 mb-2.5">
                 <Target className="h-3.5 w-3.5" /> Hedef marj için satış fiyatı (KDV dahil)
               </p>
+              {/* Fiyatın dayandığı varsayım rakamların HEMEN üstünde — kartın dışında değil. */}
+              {assumptionNotes}
               <div className="space-y-3">
                 {(data.targets ?? []).map((t) => {
                   const info = platformInfo(t.platform);

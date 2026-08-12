@@ -197,7 +197,15 @@ export function statusInfo(o: UnifiedOrder): { label: string; tone: StatusTone }
  */
 const CANCELLED_STATUS: Record<OrderPlatform, Set<string>> = {
   shopify: new Set(["CANCELLED", "REFUNDED"]),
-  trendyol: new Set(["Cancelled", "UnDelivered", "UnPacked", "Returned", "UnSupplied"]),
+  // Masaüstü `TRENDYOL_STATUS` ile BİREBİR. "UnPacked" (Paket Bölündü) bilerek YOK: iptal
+  // değil, sipariş birden çok pakete ayrılıyor — iptal sayılırsa ciro düşer.
+  trendyol: new Set([
+    "Cancelled",
+    "UnDelivered",
+    "UnDeliveredAndReturned",
+    "Returned",
+    "UnSupplied",
+  ]),
   hepsiburada: new Set(["UnDelivered", "Cancelled", "CancelledByMerchant", "CancelledByCustomer", "Returned"]),
   manual: new Set(["cancelled"]),
 };

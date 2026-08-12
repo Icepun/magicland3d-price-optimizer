@@ -32,7 +32,7 @@ import {
 } from "@/components/products/CostEditor";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
-import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw } from "lucide-react";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -127,6 +127,9 @@ const PLATFORM_INFO = {
   hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
 } as const;
 
+/** Kâr hesabının durumu — "veri yok" ile "hesaplanamadı" ayrı ekranlar gösterir. */
+type ProfitState = "hazir" | "yukleniyor" | "hesaplanamadi";
+
 /**
  * Bu fiyata uyan bir kargo bareni bulunamadı mı? (Bulunamazsa kargo 0₺ sayılır ve kâr şişer.)
  *
@@ -141,6 +144,21 @@ function cargoRuleMissingFor(
   if (!result || result.appliedCargoRule) return false;
   if (listing?.cargoCost != null) return false;
   return !belowShopifyMinBasket(platform, result.effectiveSalePrice);
+}
+
+/** Kâr rakamı çıkarılamadı — sessiz kalmak yerine durumu söyler ve tek tıkla tekrar dener. */
+function ProfitUnavailable({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="space-y-2 animate-in fade-in duration-300">
+      <div className="flex items-start gap-2 text-xs text-amber-500">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+        <span>Kâr hesaplanamadı.</span>
+      </div>
+      <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={onRetry}>
+        <RefreshCw className="h-3 w-3" /> Tekrar dene
+      </Button>
+    </div>
+  );
 }
 
 /** Kâr rakamının hangi eksik girdiyle hesaplandığını tek satırda söyler. */
@@ -206,21 +224,29 @@ export default function ProductDetailPage({
   // Maliyet önizlemesi + Fiyat Lab BUNLARLA İSTEMCİDE hesaplanır → maliyet değişince Electron ana
   // sürecine otomatik okuma gitmez (eskiden her değişimde profit-preview, her kayıtta price-lab
   // ana süreçte koşup pencereyi donduruyordu).
-  const { data: commissionRules } = useQuery<CommissionRuleInput[]>({
+  const { data: commissionRules, isError: commissionRulesFailed } = useQuery<CommissionRuleInput[]>({
     queryKey: ["commission-rules"],
     queryFn: () => fetchJson("/api/commission-rules"),
     staleTime: 5 * 60_000,
   });
-  const { data: cargoRules } = useQuery<CargoRuleInput[]>({
+  const { data: cargoRules, isError: cargoRulesFailed } = useQuery<CargoRuleInput[]>({
     queryKey: ["cargo-rules"],
     queryFn: () => fetchJson("/api/cargo-rules"),
     staleTime: 5 * 60_000,
   });
-  const { data: expenseRules } = useQuery<ExpenseRuleInput[]>({
+  const { data: expenseRules, isError: expenseRulesFailed } = useQuery<ExpenseRuleInput[]>({
     queryKey: ["expense-rules"],
     queryFn: () => fetchJson("/api/expense-rules"),
     staleTime: 5 * 60_000,
   });
+  // Kural sorgularında retry KAPALI (QueryProvider) → biri düşerse kâr/hedef fiyat asla
+  // hesaplanamaz. Bu durumda kartlar "Hesaplanıyor" demeye devam etmemeli: gerçek durumu yazarız.
+  const pricingRulesFailed = commissionRulesFailed || cargoRulesFailed || expenseRulesFailed;
+  const retryPricingRules = useCallback(() => {
+    void queryClient.refetchQueries({ queryKey: ["commission-rules"] });
+    void queryClient.refetchQueries({ queryKey: ["cargo-rules"] });
+    void queryClient.refetchQueries({ queryKey: ["expense-rules"] });
+  }, [queryClient]);
 
   // Kimlik formu state (maliyet formu artık izole CostEditor'da → yazarken bu dev sayfa render olmaz)
   const productKey = product?.id ?? "";
@@ -533,6 +559,27 @@ export default function ProductDetailPage({
     [preview, product]
   );
 
+  // Uyarılar Fiyat Laboratuvarı'nın İÇİNE, önerilen fiyatların hemen üstüne verilir. useMemo şart:
+  // kart memo'lu ve hesabı pahalı — her tuş vuruşunda yeni bir düğüm göndermek onu yeniden çizerdi.
+  const priceLabNotes = useMemo(
+    () => (
+      <ProfitAssumptionNotes
+        desiMissing={desiMissing}
+        cargoRuleMissing={cargoRuleMissingAnywhere}
+        className="mb-3"
+      />
+    ),
+    [desiMissing, cargoRuleMissingAnywhere]
+  );
+
+  // Kâr rakamı hazır mı, hesaplanıyor mu, yoksa hiç hesaplanamıyor mu? (Platform kartları buna göre
+  // iskelet / gerçek durum gösterir — "Hesaplanıyor" yazısında asılı kalmaz.)
+  const profitState: ProfitState = pricingRulesFailed
+    ? "hesaplanamadi"
+    : preview
+      ? "hazir"
+      : "yukleniyor";
+
   // FİYAT LAB — PAHALI (~36ms, hedef-marj ikili araması): ERTELENMİŞ maliyetle hesaplanır. Böylece
   // poşet/naylon dropdown'larına tıklamak/yazı yazmak bu hesabı BEKLEMEZ (donma yok); kullanıcı
   // durunca lab boşta yetişir. (useDeferredValue: ara değerleri atlar, düşük öncelikte çalışır.)
@@ -833,6 +880,8 @@ export default function ProductDetailPage({
                   liveResult={platformPreview?.result ?? null}
                   hasCost={preview?.hasCost ?? null}
                   desiMissing={desiMissing}
+                  profitState={profitState}
+                  onRetryProfit={retryPricingRules}
                 />
               );
             })}
@@ -848,15 +897,13 @@ export default function ProductDetailPage({
 
       <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
 
-      {/* Hedef fiyatlar da aynı varsayımlarla çıkıyor → uyarı Fiyat Laboratuvarı'nın başında. */}
-      {priceLab?.hasCost && (
-        <ProfitAssumptionNotes
-          desiMissing={desiMissing}
-          cargoRuleMissing={cargoRuleMissingAnywhere}
-          className="-mb-3"
-        />
-      )}
-      <PriceLabCard data={priceLab} />
+      {/* Hedef fiyatlar da aynı varsayımlarla çıkıyor → uyarılar kartın İÇİNDE, fiyatların yanında. */}
+      <PriceLabCard
+        data={priceLab}
+        failed={pricingRulesFailed}
+        onRetry={retryPricingRules}
+        assumptionNotes={priceLabNotes}
+      />
 
       <PriceHistoryCard productId={product.id} />
 
@@ -928,6 +975,8 @@ function PlatformProfitCardImpl({
   liveResult,
   hasCost,
   desiMissing,
+  profitState,
+  onRetryProfit,
 }: {
   platform: "shopify" | "trendyol" | "hepsiburada";
   listing: Listing | null;
@@ -939,6 +988,9 @@ function PlatformProfitCardImpl({
   hasCost: boolean | null;
   /** Desi hiç girilmemiş → kargo 1 desi varsayıldı (kâr şişmiş olabilir). */
   desiMissing: boolean;
+  /** Kâr hesabı hazır mı / hesaplanıyor mu / hiç hesaplanamıyor mu. */
+  profitState: ProfitState;
+  onRetryProfit: () => void;
 }) {
   const info = PLATFORM_INFO[platform];
   const queryClient = useQueryClient();
@@ -1149,6 +1201,9 @@ function PlatformProfitCardImpl({
 
   const result = liveResult;
   const missingCost = hasCost === false;
+  // Pasif ilan canlı önizlemeye HİÇ girmez (yalnız aktif ilanlar hesaplanır) → sonucu beklemek
+  // sonsuza kadar "Hesaplanıyor" demek olurdu. Durumu açıkça yaz.
+  const listingPaused = !listing.isActive;
   const isLoss = result && result.netProfit < 0;
   const isThin = result && !isLoss && result.profitMargin < 0.1;
   // Pazaryerinde (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar.
@@ -1182,6 +1237,11 @@ function PlatformProfitCardImpl({
               style={{ backgroundColor: info.color }}
             />
             <span style={{ color: info.color }}>{info.label}</span>
+            {listingPaused && (
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                pasif
+              </span>
+            )}
           </CardTitle>
           <div className="flex gap-0.5">
             <Button
@@ -1287,7 +1347,21 @@ function PlatformProfitCardImpl({
               </div>
             )}
 
-            {missingCost ? (
+            {listingPaused ? (
+              <div className="flex items-start gap-2 text-xs text-muted-foreground animate-in fade-in duration-300">
+                <PauseCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>İlan şu an pasif — bu ürün için kâr hesaplanmıyor.</span>
+              </div>
+            ) : profitState === "hesaplanamadi" ? (
+              <ProfitUnavailable onRetry={onRetryProfit} />
+            ) : profitState === "yukleniyor" || hasCost === null ? (
+              <div className="space-y-2 pt-1" aria-busy="true">
+                <Skeleton className="h-3 w-20" />
+                <Skeleton className="h-6 w-28" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
+            ) : missingCost ? (
               <div className="flex items-start gap-2 text-xs text-amber-500">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>Üretim maliyeti girilmedi — net kâr hesaplanamaz</span>
@@ -1402,7 +1476,8 @@ function PlatformProfitCardImpl({
                 </div>
               </>
             ) : (
-              <p className="text-xs text-muted-foreground">Hesaplanıyor...</p>
+              // Buraya düşmek "hesap hazır ama sonuç yok" demek → boş bırakma, durumu söyle.
+              <ProfitUnavailable onRetry={onRetryProfit} />
             )}
 
             {listing.lastSyncedAt && (

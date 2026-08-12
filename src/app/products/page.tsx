@@ -45,9 +45,11 @@ import { z } from "zod";
 import {
   PLATFORM_KEYS,
   isStaleProductListKey,
+  listErrorText,
   productListKey,
   selectionPreview,
   summarizeGroup,
+  variantCountLabel,
   visibleSelection,
   type ValueRange,
 } from "./product-list-logic";
@@ -158,7 +160,8 @@ interface Product {
     minOrderQty?: number;
   }>;
   variantLabel?: string | null;
-  variantGroup?: { id: string; name: string } | null;
+  /** `variantCount` = grubun TAM varyant sayısı; eski önbellekten gelen yanıtta olmayabilir. */
+  variantGroup?: { id: string; name: string; variantCount?: number } | null;
 }
 
 const PLATFORM_COLOR: Record<string, string> = {
@@ -795,6 +798,10 @@ export default function ProductsPage() {
     data: products = [],
     isLoading,
     isError,
+    // Hata sebebi + "Tekrar dene": liste düştüğünde ekranda tek satır açıklama ve tek tık kurtarma.
+    error: listError,
+    isFetching: listFetching,
+    refetch: refetchProducts,
   } = useQuery<Product[]>({
     enabled: urlOkundu,
     queryKey: ["products", filterMode, platformParam],
@@ -1346,7 +1353,8 @@ export default function ProductsPage() {
       setAddOpen(false);
       form.reset();
     },
-    onError: () => toast.error("Ürün eklenemedi"),
+    // Sunucu "Barkod zorunlu" gibi okunur bir sebep döndürüyor; eskiden yutuluyordu.
+    onError: (error) => toast.error("Ürün eklenemedi", { description: listErrorText(error) }),
   });
 
   const filteredProducts = useMemo(() => {
@@ -1412,7 +1420,15 @@ export default function ProductsPage() {
 
   // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
   type DisplayRow =
-    | { kind: "group"; key: string; groupId: string; groupName: string; members: Product[] }
+    | {
+        kind: "group";
+        key: string;
+        groupId: string;
+        groupName: string;
+        /** Grubun TAM varyant sayısı — `members` yalnız listede görünenleri tutar. */
+        variantCount?: number;
+        members: Product[];
+      }
     | { kind: "product"; key: string; product: Product; isMember: boolean };
 
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
@@ -1436,7 +1452,14 @@ export default function ProductsPage() {
           (rows[existing] as Extract<DisplayRow, { kind: "group" }>).members.push(p);
         } else {
           groupIdx.set(g.id, rows.length);
-          rows.push({ kind: "group", key: `g_${g.id}`, groupId: g.id, groupName: g.name, members: [p] });
+          rows.push({
+            kind: "group",
+            key: `g_${g.id}`,
+            groupId: g.id,
+            groupName: g.name,
+            variantCount: g.variantCount,
+            members: [p],
+          });
         }
       } else {
         rows.push({ kind: "product", key: p.id, product: p, isMember: false });
@@ -1611,6 +1634,7 @@ export default function ProductsPage() {
   ) => {
     const expanded = expandedGroups.has(row.groupId);
     const ozet = summarizeGroup(row.members);
+    const sayim = variantCountLabel(ozet.varyant, row.variantCount);
     const allSelected = row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id));
     const firstImg = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
     const labels = row.members.map((m) => m.variantLabel || m.name).join(" · ");
@@ -1628,9 +1652,14 @@ export default function ProductsPage() {
         data-index={dataIndex}
         onClick={() => toggleGroup(row.groupId)}
         title={expanded ? "Varyantları gizle" : "Varyantları aç"}
-        className="bg-muted/25 hover:bg-muted/40 border-y border-border/60 cursor-pointer"
+        // Grup başlığı normal satıra benzemesin: mor zemin + sol kenar çubuğu + kalın ad.
+        // Koyu temada nötr gri tonlar birbirinden ayırt edilemiyordu.
+        className="bg-primary/[0.07] hover:bg-primary/[0.13] border-y border-border/60 cursor-pointer transition-colors"
       >
-        <TableCell className="py-2" onClick={(e) => e.stopPropagation()}>
+        <TableCell
+          className="py-2 border-l-2 border-l-primary/70"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Checkbox
             checked={allSelected}
             onCheckedChange={(v) =>
@@ -1657,10 +1686,14 @@ export default function ProductsPage() {
             <span className="font-semibold text-sm truncate">{row.groupName}</span>
             <Badge
               variant="secondary"
-              className="shrink-0 tabular-nums"
-              title="Listede görünen varyant sayısı"
+              className={cn(
+                "shrink-0 tabular-nums",
+                // Kısmi görünüm göze çarpsın: satırdaki rakamlar grubun TAMAMINI anlatmıyor.
+                sayim.kismi && "bg-primary/20 text-primary"
+              )}
+              title={sayim.ipucu}
             >
-              {ozet.varyant} varyant
+              {sayim.metin}
             </Badge>
           </div>
           <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
@@ -1691,6 +1724,13 @@ export default function ProductsPage() {
           >
             {rangeText(ozet.maliyet)}
           </span>
+          {/* Maliyeti girilmemiş varyantlar aralığa GİRMEZ; kaç tane olduğu burada yazar,
+              yoksa eksik maliyet grup satırında tamamen görünmez oluyordu. */}
+          {ozet.maliyetiEksik > 0 && (
+            <div className="text-[10px] text-amber-500 mt-0.5">
+              {ozet.maliyetiEksik} varyantta maliyet yok
+            </div>
+          )}
         </TableCell>
         <TableCell className="text-right tabular-nums text-xs">
           <span
@@ -2000,8 +2040,28 @@ export default function ProductsPage() {
               </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center py-8 text-destructive">
-                  Ürünler yüklenemedi.
+                <TableCell colSpan={11} className="py-10">
+                  <div className="flex flex-col items-center gap-3 text-center animate-in fade-in duration-300">
+                    <span className="rounded-full bg-destructive/15 p-2.5">
+                      <AlertTriangle className="h-5 w-5 text-destructive" />
+                    </span>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">Ürünler yüklenemedi</p>
+                      <p className="text-xs text-muted-foreground max-w-md mx-auto break-words">
+                        {listErrorText(listError)}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      disabled={listFetching}
+                      onClick={() => void refetchProducts()}
+                    >
+                      <RefreshCw className={cn("h-3.5 w-3.5", listFetching && "animate-spin")} />
+                      {listFetching ? "Deneniyor…" : "Tekrar dene"}
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : filteredProducts.length === 0 ? (

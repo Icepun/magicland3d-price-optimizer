@@ -16,7 +16,10 @@ import {
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { TrendyolClient } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
-import { HepsiburadaClient } from "@/services/hepsiburada-client";
+import {
+  HepsiburadaClient,
+  type HbClaimKind,
+} from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
@@ -24,6 +27,8 @@ import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/co
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
 import {
+  lastOrderFinanceSnapshotWrite,
+  orderFinanceSnapshotWriteInFlight,
   scheduleOrderFinanceSnapshots,
   type FinanceSnapshotItem,
 } from "@/lib/order-finance-snapshots";
@@ -104,6 +109,14 @@ export interface UnifiedOrder {
    * toplamlarına ve finans geçmişine GİRMEZ — yoksa ₺0'lık sahte bir sipariş gibi sayılır.
    */
   dataIncomplete?: boolean;
+  /**
+   * Pazaryeri tanımadığımız bir durum adı gönderdi. Satış mı iade mi bilmiyoruz → ciro/kâr
+   * toplamlarına ve kalıcı finans geçmişine GİRMEZ; listede kalır ve sayısı kullanıcıya
+   * gösterilir (BİLİNMEYEN ≠ SIFIR, ama bilinmeyen ≠ satış da değil).
+   */
+  statusUnknown?: boolean;
+  /** Bu siparişte iade/iptal edilmiş kalem sayısı (tutar platformdan geldiği gibi kalır). */
+  returnedLineCount?: number;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;
@@ -113,6 +126,12 @@ interface PlatformStatus {
   ok: boolean;
   count: number;
   needsAdminToken?: boolean;
+  /**
+   * Bu pazaryeri hiç kurulmamış (kimlik bilgisi yok) — HATA DEĞİL, ayrı durum.
+   * ⚠️ Bu bilgi kimlik bilgisi okuma adımından gelir; hata METNİNE bakılarak türetilmez.
+   * (Eskiden mesajda "bulunamadı" geçen GERÇEK hatalar da "kurulu değil" sanılıyor ve
+   * ekranda tek bir uyarı bile kalmıyordu.)
+   */
   notConfigured?: boolean;
   error?: string;
   /**
@@ -136,6 +155,17 @@ interface SummaryQuality {
   unsupportedCurrencies: Array<{ currency: string; orderCount: number }>;
   /** Kalem/tutar bilgisi alınamadığı için ciro/kâr toplamlarına katılmayan siparişler. */
   incompleteDataOrders: number;
+  /** Durumu tanınmadığı için toplamların dışında tutulan siparişler. */
+  unknownStatusOrders: number;
+  /** Hangi durum adı kaç siparişte geldi (kullanıcı bunu bize iletebilsin diye ham adıyla). */
+  unknownStatuses: Array<{ status: string; orderCount: number }>;
+  /** İçinde iade edilmiş kalem bulunan sipariş sayısı (ciro platformdan geldiği gibi). */
+  partialReturnOrders: number;
+  /**
+   * Verisi ALINAMAYAN kaynakların adları. Boş değilse toplamlar EKSİK bir veriyle
+   * hesaplanmıştır — arayüz bunu rakamın yanında açıkça söyler.
+   */
+  missingSources: string[];
 }
 
 function normalizedCurrency(currency: string | null | undefined): string {
@@ -152,14 +182,58 @@ const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> 
   Delivered: { kind: "delivered", label: "Teslim Edildi" },
   Cancelled: { kind: "cancelled", label: "İptal" },
   UnDelivered: { kind: "cancelled", label: "Teslim Edilemedi" },
-  UnPacked: { kind: "cancelled", label: "Paket Bölündü" },
+  UnDeliveredAndReturned: { kind: "cancelled", label: "İade" },
+  // "Paket Bölündü" bir İPTAL DEĞİL: sipariş birden çok pakete ayrılıyor, satış duruyor.
+  // İptal kovasında olması hem ciroyu düşürüyor hem satır bazlı iade sayacını yanıltıyordu.
+  UnPacked: { kind: "processing", label: "Paket Bölündü" },
+  Repack: { kind: "processing", label: "Yeniden Paketleniyor" },
   Returned: { kind: "cancelled", label: "İade" },
   UnSupplied: { kind: "cancelled", label: "Tedarik Edilemedi" },
 };
 
-function trendyolStatus(s?: string): { kind: OrderStatusKind; label: string } {
+/**
+ * Tanımadığımız durum "Diğer" olur ve `unknown` işaretini taşır.
+ *
+ * 🔴 Eskiden yalnız "Diğer" etiketi verilip sipariş ciroya TAM ekleniyordu: pazaryeri iade
+ * anlamına gelen yeni bir durum adı gönderdiğinde iade, ciroda satış gibi duruyordu. Artık
+ * bilinmeyen durum toplamlara girmez ve sayısı ekranda görünür.
+ */
+/**
+ * Kimlik bilgisi hatası "kurulu değil" mi, yoksa GERÇEK bir arıza mı?
+ *
+ * Ayarlar katmanı iki farklı şey için de fırlatıyor: bilgiler hiç girilmemişse ("… eksik")
+ * ve girilmiş ama ÇÖZÜLEMİYORSA ("… okunamadi", şifreleme anahtarı değişmiş/bozulmuş).
+ * İkincisi sessizce "bağlı değil" sayılırsa hiçbir uyarı çıkmaz ve eksik ciro tam sanılır —
+ * bu turda kapatılan hatanın ta kendisi. Yalnız "eksik" kurulmamış sayılır.
+ */
+function isMissingCredentialError(error: unknown): boolean {
+  return /eksik/i.test(error instanceof Error ? error.message : String(error ?? ""));
+}
+
+/** Kullanıcıya taşınacak hata metni. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error ?? "Bilinmeyen hata");
+}
+
+function trendyolStatus(s?: string): {
+  kind: OrderStatusKind;
+  label: string;
+  unknown?: boolean;
+} {
   if (s && TRENDYOL_STATUS[s]) return TRENDYOL_STATUS[s];
-  return { kind: "other", label: s || "Bilinmiyor" };
+  return { kind: "other", label: s || "Bilinmiyor", unknown: true };
+}
+
+/**
+ * Satır bazlı iade mi? (Çok kalemli siparişte tek kalemin iadesi.)
+ *
+ * PAKET durum tablosu KULLANILMAZ: orada "Paket Bölündü" ve "Tedarik Edilemedi" gibi iade
+ * OLMAYAN durumlar da var; onlarla yorumlayınca hiç iade olmayan normal siparişlerde
+ * "N ürün iade edilmiş" uyarısı çıkıyordu. Yalnız gerçekten iadeyi anlatan satır durumları.
+ */
+const TRENDYOL_RETURNED_LINE_STATUS = new Set(["Returned", "UnDeliveredAndReturned"]);
+function isReturnedLineStatus(status?: string): boolean {
+  return Boolean(status && TRENDYOL_RETURNED_LINE_STATUS.has(status));
 }
 
 // ── Hepsiburada yardımcıları (yanıt şekli Test'le doğrulanana dek defansif) ──
@@ -177,13 +251,20 @@ const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
   CancelledByCustomer: { kind: "cancelled", label: "İptal (Müşteri)" },
   Returned: { kind: "cancelled", label: "İade" },
 };
-function hbStatus(s: string): { kind: OrderStatusKind; label: string } {
-  return HB_STATUS[s] ?? { kind: "other", label: s || "Bilinmiyor" };
+function hbStatus(s: string): {
+  kind: OrderStatusKind;
+  label: string;
+  unknown?: boolean;
+} {
+  // Trendyol ile aynı kural: tanımadığımız durum ciroya sessizce giremez.
+  return HB_STATUS[s] ?? { kind: "other", label: s || "Bilinmiyor", unknown: true };
 }
 
 // Manuel sipariş durumları. Tanımadığımız bir durum daha önce "İptal" etiketiyle görünüyor ama
 // ciroya dahil ediliyordu → ekrandaki iki rakam birbirini tutmuyordu. Artık "Diğer" olarak
 // gösterilir ve ciroya dahil edilmeye devam eder (yalnız gerçek iptaller dışarıda kalır).
+// NOT: Pazaryerlerinin AKSİNE burada bilinmeyen durum toplamdan çıkarılmaz — bu kaydı kullanıcı
+// kendi eliyle girdi; onu "belki iadedir" diye ciro dışına almak kendi satışını gizlerdi.
 const MANUAL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
   pending: { kind: "pending", label: "Bekliyor" },
   processing: { kind: "processing", label: "Hazırlanıyor" },
@@ -399,6 +480,10 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     forceProfitPartial?: boolean;
     /** Kalem/tutar bilgisi hiç alınamadı → ciro/kâr toplamlarına ve finans geçmişine girmez. */
     dataIncomplete?: boolean;
+    /** Durum adı tanınmadı → toplamlara ve finans geçmişine girmez, sayısı gösterilir. */
+    statusUnknown?: boolean;
+    /** İade/iptal işaretli kalem sayısı (paket tutarına dokunulmaz). */
+    returnedLineCount?: number;
   };
   const raws: Raw[] = [];
   /** Yerel tamponu ana listeye aktar (spread yerine döngü: binlerce satırda argüman sınırı yok). */
@@ -416,8 +501,21 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   await Promise.all([
    (async () => {
    const buffer: Raw[] = [];
+   // Kimlik bilgisi adımı AYRI. Burada "eksik" hatası = kurulu değil; başka her hata (ör.
+   // kayıtlı anahtar çözülemiyor) GERÇEK arızadır ve kullanıcıya gösterilir.
+   let credentials: Awaited<ReturnType<typeof getShopifyCredentials>>;
    try {
-    const client = new ShopifyClient(await getShopifyCredentials());
+     credentials = await getShopifyCredentials();
+   } catch (error) {
+     if (isMissingCredentialError(error)) {
+       shopify = { ok: false, count: 0, notConfigured: true };
+     } else {
+       shopify = { ok: false, count: 0, error: errorMessage(error) };
+     }
+     return;
+   }
+   try {
+    const client = new ShopifyClient(credentials);
     // +1 gün: gün-başı historyCutoff'tan biraz daha geniş çek (superset); aşağıdaki
     // historyRows filtresi tam kırpar. Shopify created_at = orderDate.
     const list = await client.listOrders({ sinceDays: HISTORY_SYNC_DAYS + 1, limit: 100 });
@@ -459,15 +557,32 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     if (e instanceof ShopifyAdminTokenMissingError) {
       shopify = { ok: false, count: 0, needsAdminToken: true };
     } else {
-      const msg = e instanceof Error ? e.message : "Shopify siparişleri alınamadı";
-      shopify = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
+      shopify = {
+        ok: false,
+        count: 0,
+        error: e instanceof Error ? e.message : "Shopify siparişleri alınamadı",
+      };
     }
   }
    })(),
    (async () => {
    const buffer: Raw[] = [];
+   let credentials: Awaited<ReturnType<typeof getTrendyolCredentials>>;
    try {
-    const client = new TrendyolClient(await getTrendyolCredentials());
+     credentials = await getTrendyolCredentials();
+   } catch (error) {
+     // "Kurulu değil" ile "kurulu ama OKUNAMIYOR" ayrı şeyler. Kayıtlı anahtar çözülemezse
+     // (şifreleme anahtarı değişmiş / dosya bozulmuş) bu GERÇEK bir hatadır: sessizce
+     // "bağlı değil" sayılırsa uyarı hiç çıkmaz ve eksik ciro tam sanılır.
+     if (isMissingCredentialError(error)) {
+       trendyol = { ok: false, count: 0, notConfigured: true };
+     } else {
+       trendyol = { ok: false, count: 0, error: errorMessage(error) };
+     }
+     return;
+   }
+   try {
+    const client = new TrendyolClient(credentials);
     // Trendyol /orders (shipmentPackages): statü filtresi YOK → TÜM statüler (oluşturuldu/kargoda/
     // teslim/iptal) gelir. Ama tek sayfa size:100 son-100'le sınırlıydı → 30 günde 100+ sipariş varsa
     // eksik çekiyordu (kâr yanlış). Çözüm: son 30 günü 14 GÜNLÜK pencerelerle (Trendyol startDate/endDate
@@ -484,6 +599,12 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
           if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
           seenTy.add(key);
           const st = trendyolStatus(o.status);
+          // Çok kalemli siparişte TEK kalemin iadesi paket durumuna yansımıyor: satır
+          // durumundan sayılır. Paket tutarının bu durumda ne olduğu doğrulanmadığı için
+          // ciroya DOKUNMUYORUZ — yalnız kullanıcıya "bu siparişte iade var" diyoruz.
+          const returnedLineCount = (o.lines ?? []).filter((l) =>
+            isReturnedLineStatus(l.orderLineItemStatusName)
+          ).length;
           buffer.push({
             platform: "trendyol",
             id: `ty-${o.id ?? o.orderNumber ?? key}`,
@@ -491,6 +612,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
             date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
             statusKind: st.kind,
             statusLabel: st.label,
+            statusUnknown: st.unknown,
+            returnedLineCount: st.kind === "cancelled" ? 0 : returnedLineCount,
             total: Number(o.totalPrice ?? o.grossAmount ?? 0),
             currency: "TRY",
             customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
@@ -515,14 +638,28 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     commitRaws(buffer);
     trendyol = { ok: true, count: buffer.length };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Trendyol siparişleri alınamadı";
-    trendyol = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
+    trendyol = {
+      ok: false,
+      count: 0,
+      error: e instanceof Error ? e.message : "Trendyol siparişleri alınamadı",
+    };
   }
    })(),
    (async () => {
    const buffer: Raw[] = [];
+   let credentials: Awaited<ReturnType<typeof getHepsiburadaCredentials>>;
    try {
-    const client = new HepsiburadaClient(await getHepsiburadaCredentials());
+     credentials = await getHepsiburadaCredentials();
+   } catch (error) {
+     if (isMissingCredentialError(error)) {
+       hepsiburada = { ok: false, count: 0, notConfigured: true };
+     } else {
+       hepsiburada = { ok: false, count: 0, error: errorMessage(error) };
+     }
+     return;
+   }
+   try {
+    const client = new HepsiburadaClient(credentials);
     // HB siparişleri TEK uçta gelmez: /orders sadece "Open" (paketlenecek) verir; kargoda/teslim
     // siparişler /packages/.../{shipped|delivered|undelivered} ÖZETLERİNDE (tutar YOK) → detay ayrı çekilir.
     type HbAgg = { status: string; date: string | null; customer: string | null; lines: RawLine[] | null };
@@ -599,6 +736,62 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       }
     }
 
+    // b2) İPTAL ve İADE listeleri. Bunlar HİÇ sorgulanmıyordu: teslim edilmiş bir sipariş
+    //     sonradan iade edilince diğer listelerden düşüyor, bizim kalıcı kaydımızda ise
+    //     "satıldı" olarak kalıp Raporlar'da sonsuza kadar ciro sayılıyordu.
+    //     Uç yolu doğrulanmadığı için istemci hata durumunda null döner → sessizce geçilir.
+    const claimKinds: Array<[HbClaimKind, string]> = [
+      ["cancelled", "Cancelled"],
+      ["returned", "Returned"],
+    ];
+    const claimResults = await Promise.all(
+      claimKinds.map(async ([kind]) => {
+        const items: Record<string, any>[] = [];
+        try {
+          for (let off = 0; off < 3000; off += 100) {
+            const page = await client.listClaimPackages(kind, { offset: off, limit: 100 });
+            if (page == null) break; // uç yok / geçici hata → bu tur atla
+            const arr = hbArray(page, ["items", "data", "content", "result"]);
+            if (!arr.length) break;
+            items.push(...(arr as Record<string, any>[]));
+            if (arr.length < 100) break;
+          }
+        } catch {
+          /* iptal/iade listesi sipariş çekimini ASLA bozmaz */
+        }
+        return items;
+      })
+    );
+    for (const [idx, rows] of claimResults.entries()) {
+      const [, label] = claimKinds[idx];
+      for (const p of rows) {
+        const on = hbStr(
+          p.OrderNumber,
+          p.orderNumber,
+          Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : ""
+        );
+        if (!on) continue;
+        const selfStatus = hbStr(p.status, p.Status, p.packageStatus, p.claimStatus);
+        const selfCancelled = selfStatus ? hbStatus(selfStatus).kind === "cancelled" : false;
+        const existing = agg.get(on);
+        if (existing) {
+          // ⚠️ GÜVENLİK FRENİ: sipariş başka listede de görünüyorsa, ancak KAYDIN KENDİ durumu
+          // iptal/iade diyorsa ezilir. Uç yolu doğrulanmadığı için "her siparişi döndüren" bir
+          // yanıt bütün ciroyu silemesin.
+          if (selfCancelled) existing.status = selfStatus;
+          continue;
+        }
+        // Hiçbir aktif listede yok: zaten ciroya girmiyordu. İptal/iade olarak eklenir ki
+        // kalıcı kayıttaki eski "satıldı" satırı düzelsin.
+        agg.set(on, {
+          status: selfCancelled ? selfStatus : label,
+          date: hbDate(p.ClaimDate, p.CancelledDate, p.ReturnDate, p.CreatedDate, p.orderDate),
+          customer: null,
+          lines: null,
+        });
+      }
+    }
+
     // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz detay çağrısı olmasın).
     for (const [on, e] of [...agg]) {
       if (e.date && new Date(e.date).getTime() < historyCutoff) agg.delete(on);
@@ -641,6 +834,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         date: e.date,
         statusKind: st.kind,
         statusLabel: st.label,
+        statusUnknown: st.unknown,
         total: lines.reduce((s, l) => s + l.unitPrice * l.quantity, 0),
         currency: "TRY",
         customer: e.customer,
@@ -671,8 +865,11 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     commitRaws(buffer);
     hepsiburada = { ok: true, count: buffer.length, incompleteCount: hbIncomplete };
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı";
-    hepsiburada = { ok: false, count: 0, notConfigured: /eksik|bulunamadı/i.test(msg), error: msg };
+    hepsiburada = {
+      ok: false,
+      count: 0,
+      error: e instanceof Error ? e.message : "Hepsiburada siparişleri alınamadı",
+    };
   }
    })(),
   ]);
@@ -1083,6 +1280,8 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
       dataIncomplete: r.dataIncomplete,
+      statusUnknown: r.statusUnknown,
+      returnedLineCount: r.returnedLineCount,
     });
   }
 
@@ -1208,23 +1407,43 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     ok: boolean;
     syncedOrders: number;
     syncDays: number;
+    /** Yazım şu an arka planda sürüyor mu (sonuç bir sonraki yenilemede kesinleşir). */
+    pending?: boolean;
     error?: string;
   };
   // Bilgisi eksik gelen sipariş finans geçmişine YAZILMAZ: ₺0 ciro/kâr olarak kaydedilirse
   // sonraki aylarda düzeltilemeyen sahte bir satır kalır. Bir önceki turda doğru yazılmış
   // kayıt varsa olduğu gibi korunur; bilgi tamamlandığında normal akışta güncellenir.
-  const persistableOrders = orders.filter((order) => !order.dataIncomplete);
+  //
+  // İKİ İSTİSNA:
+  //  • İPTAL/İADE: tutarı okunamasa bile "bu sipariş iptal/iade" bilgisi yazılır — yoksa
+  //    kalıcı kayıt "satıldı"da kalır ve iade sonsuza kadar ciro sayılır (raporlar iptalleri
+  //    tutarına bakmadan eler, o yüzden eksik tutar zarar vermez).
+  //  • DURUMU TANINMAYAN sipariş hiç yazılmaz: satış mı iade mi bilmiyoruz.
+  const persistableOrders = orders.filter(
+    (order) =>
+      !order.statusUnknown &&
+      (!order.dataIncomplete || order.statusKind === "cancelled")
+  );
   try {
     // Finans geçmişi yazımı YANIT YOLUNDA DEĞİL: ilk dolumda veya toplu statü değişiminde
     // yüzlerce satır yazılıyor ve uzak-HTTP tek mutex'inde uygulama yarım dakika kilitleniyordu.
     // "Ateşle ve unut" — çağıran beklemez, hata fırlatmaz, aynı anda tek tur çalışır.
     scheduleOrderFinanceSnapshots(persistableOrders, snapshotItemsByOrderId);
+    // 🔴 UYARI HİÇ ÇIKAMIYORDU: yazım arka plana alındığından bu blok her zaman "başarılı"
+    // diyordu ve "Finans geçmişi kaydedilemedi" uyarısı hiçbir koşulda görünmüyordu. Artık
+    // SON TAMAMLANAN turun gerçek sonucu taşınır (yazım sürüyorsa "pending").
+    const lastWrite = lastOrderFinanceSnapshotWrite();
     financeHistory = {
-      ok: true,
+      ok: lastWrite?.ok ?? true,
       syncedOrders: persistableOrders.filter(
         (order) => order.platform !== "manual" && Boolean(order.date)
       ).length,
       syncDays: HISTORY_SYNC_DAYS,
+      pending: orderFinanceSnapshotWriteInFlight(),
+      ...(lastWrite && !lastWrite.ok
+        ? { error: lastWrite.error ?? "Sipariş finans geçmişi kaydedilemedi." }
+        : {}),
     };
   } catch (error) {
     console.error("[finance-snapshot] Sipariş finans geçmişi yazılamadı:", error);
@@ -1250,7 +1469,9 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const sHepsiburada = empty();
   const sManual = empty();
   const unsupportedCurrencies = new Map<string, number>();
+  const unknownStatuses = new Map<string, number>();
   let incompleteDataOrders = 0;
+  let partialReturnOrders = 0;
   for (const o of visibleOrders) {
     if (o.statusKind === "cancelled") continue;
     // Kalem/tutar bilgisi alınamamış sipariş toplamlara ₺0 ekler ve ciroyu olduğundan düşük,
@@ -1259,6 +1480,13 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       incompleteDataOrders += 1;
       continue;
     }
+    // Durumu tanımadığımız sipariş satış da olabilir iade de. Toplama eklemek "iade sayıldı"
+    // riskini sessizce taşıyordu; artık ayrı sayılır ve ekranda ham durum adıyla görünür.
+    if (o.statusUnknown) {
+      unknownStatuses.set(o.statusLabel, (unknownStatuses.get(o.statusLabel) ?? 0) + 1);
+      continue;
+    }
+    if ((o.returnedLineCount ?? 0) > 0) partialReturnOrders += 1;
     const currency = normalizedCurrency(o.currency);
     // Farklı para birimlerini kur dönüşümü olmadan TL toplamına eklemek yanlış sonuç üretir.
     // Sipariş listede kendi para birimiyle kalır; yalnızca 30 günlük TL özeti dışında tutulur.
@@ -1302,6 +1530,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       sHepsiburada.incompleteOrders +
       sManual.incompleteOrders,
   };
+  // Verisi ALINAMAYAN kaynaklar. "Kurulu değil" bu listeye girmez — o bir eksiklik değil,
+  // kullanıcının tercihi. Toplamların yanındaki "eksik veri" işareti bundan üretilir.
+  const missingSources = (
+    [
+      [shopify, "Shopify"],
+      [trendyol, "Trendyol"],
+      [hepsiburada, "Hepsiburada"],
+      [manualSource, "Manuel siparişler"],
+    ] as Array<[PlatformStatus, string]>
+  )
+    .filter(([status]) => !status.ok && !status.notConfigured)
+    .map(([, label]) => label);
+
   const quality: SummaryQuality = {
     unsupportedCurrencyOrders: [...unsupportedCurrencies.values()].reduce(
       (sum, count) => sum + count,
@@ -1311,9 +1552,18 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([currency, orderCount]) => ({ currency, orderCount })),
     incompleteDataOrders,
+    unknownStatusOrders: [...unknownStatuses.values()].reduce((sum, count) => sum + count, 0),
+    unknownStatuses: [...unknownStatuses.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([status, orderCount]) => ({ status, orderCount })),
+    partialReturnOrders,
+    missingSources,
   };
 
   return {
+    // 🔴 EKSİK SONUÇ DAMGALANIR: bu gövde önbelleğe VE diske yazılıyor. Damga olmadan bir
+    // pazaryeri alınamamışken hesaplanan yarım ciro, sonraki açılışta "tam" sanılıyordu.
+    dataComplete: missingSources.length === 0,
     // Bu verinin hesaplandığı an — arayüz "X dakika önce güncellendi" bilgisini bundan üretir
     // (önbellekten dönen yanıt da kendi hesap zamanını taşır).
     computedAt: new Date().toISOString(),
