@@ -32,13 +32,19 @@ app.setAppUserModelId("com.magicland3d.trendyol-price-optimizer");
 // SABİT tut ki kullanıcı verisi (ayarlar, db, gizlenen ürünler) taşınmasın/kaybolmasın.
 app.setName("trendyol-price-optimizer");
 
-// GitHub'ın dosya indirme adresi bu ağdan kesintili olarak HTTP/2 akışını reddediyor
-// (ERR_HTTP2_SERVER_REFUSED_STREAM). Ölçüldü: releases.atom her seferinde 200 dönerken
-// releases/download/… üç denemenin ikisinde bağlantıyı yanıtsız kapatıyor. HTTP/1.1'de
-// aynı istek geçiyor. Electron'un ağ katmanını HTTP/1.1'e sabitlemek güncellemeyi
-// kurtarıyor; uygulamanın kendi istekleri (Trendyol, Shopify, Turso) Node tarafında
-// çalıştığı için bu anahtardan etkilenmez.
-app.commandLine.appendSwitch("disable-http2");
+// GÜNCELLEME İNDİRME KARARLILIĞI — protokol SABİTLENMEZ (bilinçli).
+//
+// Sorun: sürüm dosyaları `release-assets.githubusercontent.com` üzerinden geliyor ve bu adrese
+// erişim bazı ağlarda KESİNTİLİ (HTTP/2'de ERR_HTTP2_SERVER_REFUSED_STREAM, HTTP/1.1'de
+// "Empty reply from server" — aynı arızanın iki yüzü). Bir ara çözüm olarak Electron'un ağ
+// katmanı `disable-http2` ile HTTP/1.1'e sabitlenmişti; Mac'te DÖNÜŞÜMLÜ ölçüm (10 tur, her turda
+// iki protokol arka arkaya → ağ dalgalanması ikisini de eşit etkiler) bunun TERS etki yaptığını
+// gösterdi: HTTP/2 8/10 başarılı, HTTP/1.1 1/10. Windows'ta tablo tersine dönebildiği için artık
+// hiçbir protokol zorlanmıyor; kararlılık protokolden BAĞIMSIZ iki önlemle sağlanıyor:
+//   1) fark-indirmesi kapalı (aşağıda) → tek büyük istek, düzinelerce parça isteği yerine
+//   2) kontrol/indirme için 3'er deneme + artan bekleme (setupAutoUpdater içinde)
+// Uygulamanın kendi istekleri (Trendyol, Shopify, Turso) Node tarafında çalıştığı için bu
+// katmandan zaten etkilenmiyor.
 
 // =========================================================================
 // GLOBAL STARTUP LOGGER — paketlenmiş app'te startup hataları için.
@@ -201,6 +207,13 @@ async function gracefulShutdown(reason) {
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
+  // FARK-İNDİRMESİ KAPALI. Blockmap yöntemi dosyayı parçalara bölüp ONLARCA ayrı aralık isteği
+  // atıyor; sürüm dosyalarının sunucusuna erişim kesintili olduğu için isteklerden BİRİNİN
+  // düşmesi tüm indirmeyi düşürüyordu → pratikte her denemede "Cannot download differentially"
+  // ardından tam indirme de aynı turda ölüyordu (updater.log'da birebir bu görüldü). Tek parça
+  // indirme hem daha az istek hem yeniden denemeye elverişli. Bedeli: her güncellemede tam
+  // dosya (~230 MB) iner — güncelleme haftada birkaç kez olduğu için kabul edilebilir.
+  autoUpdater.disableDifferentialDownload = true;
 
   // Write update logs to a file so they are visible in packaged builds.
   // Log file: %APPDATA%\Trendyol Price Optimizer\updater.log
