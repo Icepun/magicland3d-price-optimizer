@@ -1,5 +1,6 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { padTrendyolWindow, trendyolDateToUtc } from "@core/trendyol-date";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -71,7 +72,10 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
       const rows: { key: string; o: TyOrder }[] = [];
       for (let pageNo = 0; pageNo < 50; pageNo++) {
         const res = await fetchT(
-          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${chunkStart}&endDate=${chunkEnd}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
+          // Sınırlar masaüstüyle aynı şekilde iki uçtan genişletiliyor: Trendyol sorgu
+          // parametrelerini de duvar saati düzleminde yorumluyorsa, gerçek UTC göndermek
+          // pencereyi kaydırır ve en yeni siparişler listeye hiç girmez.
+          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${padTrendyolWindow(chunkStart, "start")}&endDate=${padTrendyolWindow(chunkEnd, "end")}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
           { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
         );
         if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
@@ -97,7 +101,9 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         id: `ty-${o.id ?? o.orderNumber ?? key}`,
         platform: "trendyol" as const,
         orderNumber: String(o.orderNumber ?? o.id ?? "—"),
-        date: o.orderDate ?? null,
+        // Masaüstüyle AYNI çeviri: Trendyol'un damgası Türkiye duvar saatini taşıyor,
+        // gerçek UTC'ye çevrilmezse sipariş 3 saat ileri görünür.
+        date: trendyolDateToUtc(o.orderDate)?.getTime() ?? null,
         status: o.status,
         customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
         // Masaüstüyle birebir savunmalı alanlar (totalPrice gelmezse NaN ciroya bulaşmasın).

@@ -22,6 +22,7 @@ import {
 } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
+import { padTrendyolWindow, trendyolDateToIso } from "@/core/trendyol-date";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
@@ -732,7 +733,15 @@ async function computeOrdersBodyInner(
       async (index) => {
         const { start, end } = tyWindows[index];
         for (let pageNo = 0; pageNo < 50; pageNo++) {
-          const page = await client.listOrders({ page: pageNo, size: 100, startDate: start, endDate: end });
+          const page = await client.listOrders({
+            page: pageNo,
+            size: 100,
+            // Trendyol sınırları da duvar saati düzleminde yorumluyorsa gerçek UTC
+            // göndermek pencereyi kaydırır ve en yeni siparişler listeye hiç girmez.
+            // İki uçtan da genişletiyoruz; fazlası aşağıdaki kırpmayla zaten eleniyor.
+            startDate: padTrendyolWindow(start, "start"),
+            endDate: padTrendyolWindow(end, "end"),
+          });
           const content = page.content ?? [];
           for (const order of content) tyByWindow[index].push(order);
           if (content.length < 100) break; // son sayfa
@@ -759,7 +768,9 @@ async function computeOrdersBodyInner(
         // finans geçmişinde biri diğerini eziyor.
         id: `ty-${o.id ?? o.orderNumber ?? `row-${rowIndex}`}`,
         orderNumber: String(o.orderNumber ?? o.id ?? "—"),
-        date: o.orderDate ? new Date(o.orderDate).toISOString() : null,
+        // Trendyol'un damgası Türkiye duvar saatini taşıyor; gerçek UTC'ye çeviriyoruz.
+        // Ham hâliyle arayüz üstüne +3 daha ekleyip siparişleri 3 saat ileri gösteriyordu.
+        date: trendyolDateToIso(o.orderDate),
         statusKind: st.kind,
         statusLabel: st.label,
         statusUnknown: st.unknown,
