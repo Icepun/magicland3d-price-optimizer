@@ -522,6 +522,34 @@ function pyRepr(v: unknown): string {
  * Calibration tercihleri DEFAULT 0/OFF — native preference (gcode'a dokunmadan; `flow_calibrate==0` makroyu
  * zararsızca erken döndürür, priming'i BOZMAZ).
  */
+/**
+ * MAP_TABLE çiftleri — `[mantıksal araç, fiziksel kafa]`.
+ *
+ * ⚠️ MANTIKSAL İNDEKS 4'TEN BÜYÜK OLABİLİR. Eskiden burada sabit `[0,1,2,3]` döngüsü vardı ve
+ * dilimleyici projesinde 4'ten fazla filament tanımlıysa (Orca'da çok yaygın) 4 ve üstü
+ * mantıksal araçlar tabloya HİÇ girmiyordu: kullanıcının o renk için seçtiği kafa sessizce
+ * düşüyor, firmware varsayılanda kalıyor ve o renk YANLIŞ KAFADAN basılıyordu.
+ *
+ * Sahadan alınan kanıt (aynı dosya, 5 filamentli proje, kullanılan araçlar 0/1/3/4):
+ *   bizim eski çıktı : [[0, 0], [1, 2], [2, 2], [3, 3]]     ← 4 YOK, kullanılmayan 2 var
+ *   Snapmaker uygul. : [[0, 0], [1, 2], [3, 3], [4, 1]]     ← doğrusu
+ * Üreticinin kendi istemcisi kullanılmayan indeksi hiç yazmıyor, kullanılanı atlamıyor.
+ *
+ * 0-3 için eşleme yoksa kimlik (identity) yazılır: tablo her baskıda tam gönderilsin ki
+ * ekrandan set edilmiş BAYAT bir tablo bu baskıyı etkilemesin. 3'ün üstünde kimlik YAZILMAZ —
+ * fiziksel kafa 0-3 ile sınırlı, `[4, 4]` geçersiz bir hedef olurdu.
+ */
+export function buildSnapmakerMapTable(toolMap?: Record<number, number>): string {
+  const keys = Object.keys(toolMap ?? {}).map(Number).filter((n) => Number.isInteger(n) && n >= 0);
+  const maxLogical = Math.max(3, ...(keys.length ? keys : [3]));
+  const pairs: string[] = [];
+  for (let i = 0; i <= maxLogical; i++) {
+    if (toolMap && i in toolMap) pairs.push(`[${i}, ${toolMap[i]}]`);
+    else if (i <= 3) pairs.push(`[${i}, ${i}]`);
+  }
+  return pairs.join(", ");
+}
+
 function buildSnapmakerStartScript(
   filename: string,
   meta: Record<string, unknown>,
@@ -536,8 +564,7 @@ function buildSnapmakerStartScript(
   // SM_PRINT_START_LINE INDEX= ve ısıtma/besleme kapıları dahil HER ŞEY tutarlı eşlenir;
   // metadata dizileri MANTIKSAL indeksli kalır (permütasyon gerekmez). Identity olsa bile HER
   // baskıda gönderilir → boştayken ekrandan set edilmiş bayat tablo etkisiz (çifte-remap imkânsız).
-  const pairs = [0, 1, 2, 3].map((i) => `[${i}, ${toolMap && i in toolMap ? toolMap[i] : i}]`).join(", ");
-  s += ` MAP_TABLE="[${pairs}]"`;
+  s += ` MAP_TABLE="[${buildSnapmakerMapTable(toolMap)}]"`;
   for (const field of SM_META_FIELDS) {
     let out: string | null = null;
     if (field === "filament_used_g") {

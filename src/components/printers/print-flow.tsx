@@ -239,6 +239,18 @@ export function SlotStep({
   // (Snapmaker) iki rengi AYNI kafaya atamak her zaman yanlış → engelle.
   const assignReady = assign.length === printColors.length && assign.every((v) => v != null);
   const dupHeads = !!isSnapmaker && printColors.length > 1 && assignReady && new Set(assign).size !== assign.length;
+  /**
+   * GEÇERSİZ KAFA — yazıcıda olmayan bir kafaya atama.
+   *
+   * Snapmaker varsayılanı "dilimlendiği kafa" (color.index). Dilimleyici projesinde 4'ten fazla
+   * filament tanımlıysa bir rengin indeksi 4 veya daha büyük olabilir; o kafa fiziksel olarak
+   * YOKTUR. Eskiden bu sessizce yutuluyordu (eşleme tablosuna 4 ve üstü hiç yazılmıyordu ve
+   * renk yanlış kafadan basılıyordu). Artık tablo eksiksiz gönderildiği için geçersiz hedefi
+   * başlamadan durduruyoruz — yanlış renkle basmaktansa kullanıcıdan seçim istemek doğru.
+   */
+  const headIds = slots.map((s) => s.slot);
+  const invalidHeads =
+    !!isSnapmaker && assignReady && headIds.length > 0 && assign.some((v) => !headIds.includes(v as number));
 
   const start = () => {
     // ams_mapping: dilimleyici filament index'ine göre yerleştir, boşlukları -1 ile doldur
@@ -405,11 +417,18 @@ export function SlotStep({
           </p>
         )}
 
+        {invalidHeads && (
+          <p className="text-[11px] text-destructive flex items-start gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+            Bir renk yazıcıda olmayan bir kafaya atanmış — her renk için yukarıdan bir kafa seç.
+          </p>
+        )}
+
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>
-          <Button disabled={printing || !assignReady || dupHeads || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
+          <Button disabled={printing || !assignReady || dupHeads || invalidHeads || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
             {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>
         </DialogFooter>
