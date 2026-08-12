@@ -1,7 +1,28 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+
+/**
+ * Yazılan stok değerinden KAYDEDİLECEK sayıyı çözer.
+ *
+ * `null` = yazma yok, alan eski değerine dönsün. Esc iptal sayılır: kutu odaktan çıkarken
+ * blur olayı yazmayı tetikliyordu ve Esc yazılan rakamı KAYDEDİYORDU (iptal etmesi gerekirken).
+ * Karar tek yerde ve saf tutuluyor ki bu davranış testle kilitli kalsın.
+ */
+export function stockCommitValue(
+  draft: string,
+  current: number,
+  cancelled: boolean
+): number | null {
+  if (cancelled) return null;
+  const trimmed = draft.trim();
+  if (!trimmed) return null; // boş bırakıldı → kaza ile 0 olmasın
+  const parsed = Math.floor(Number(trimmed));
+  if (!Number.isFinite(parsed)) return null;
+  const next = Math.max(0, parsed);
+  return next === current ? null : next;
+}
 
 /**
  * Stok değeri — hem OKUNUR hem ELLE DÜZENLENEBİLİR.
@@ -23,13 +44,19 @@ export function StockInput({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(String(value));
+  // Esc'in bıraktığı iptal işareti REF'te tutulur: blur, state güncellenmeden önce
+  // çalıştığı için state ile bakıldığında iptal görünmüyor ve eski rakam kaydediliyordu.
+  const cancelledRef = useRef(false);
 
   const commit = () => {
     setEditing(false);
-    const n = Math.max(0, Math.floor(Number(draft)));
-    if (!draft.trim() || !Number.isFinite(n)) { setDraft(String(value)); return; } // boş/geçersiz → eski değer
-    if (n !== value) onCommit(n);
-    else setDraft(String(value));
+    const next = stockCommitValue(draft, value, cancelledRef.current);
+    cancelledRef.current = false;
+    if (next == null) {
+      setDraft(String(value));
+      return;
+    }
+    onCommit(next);
   };
 
   const tone =
@@ -42,12 +69,22 @@ export function StockInput({
       value={editing ? draft : String(value)}
       title={title ?? "Stok — tıkla ve doğrudan yaz"}
       aria-label="Stok adedi"
-      onFocus={(e) => { setDraft(String(value)); setEditing(true); e.currentTarget.select(); }}
+      onFocus={(e) => {
+        cancelledRef.current = false;
+        setDraft(String(value));
+        setEditing(true);
+        e.currentTarget.select();
+      }}
       onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, ""))}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === "Enter") { e.currentTarget.blur(); }
-        else if (e.key === "Escape") { setDraft(String(value)); setEditing(false); e.currentTarget.blur(); }
+        else if (e.key === "Escape") {
+          cancelledRef.current = true;
+          setDraft(String(value));
+          setEditing(false);
+          e.currentTarget.blur();
+        }
       }}
       className={cn(
         "tabular-nums font-bold text-center bg-transparent rounded-md border border-transparent",

@@ -42,6 +42,15 @@ import { toast } from "sonner";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import {
+  PLATFORM_KEYS,
+  isStaleProductListKey,
+  productListKey,
+  selectionPreview,
+  summarizeGroup,
+  visibleSelection,
+  type ValueRange,
+} from "./product-list-logic";
 
 /**
  * Türkçe-duyarlı arama normalleştirme: küçük harfe indir + diakritikleri sadeleştir
@@ -66,6 +75,28 @@ function normalizeSearch(s: string): string {
  * sensitivity: "base" → büyük/küçük harf duyarsız; numeric → "Kol 2" < "Kol 10".
  */
 const trCollator = new Intl.Collator("tr-TR", { sensitivity: "base", numeric: true });
+
+/**
+ * Grup satırının aralık metni: tüm varyantlarda aynıysa tek rakam, değilse "en düşük – en yüksek".
+ * Aralıkta kuruş gösterilmez (sütun dar); tam rakam satırın kendisinde ve ipucunda durur.
+ * Bilinmeyen değer "—" kalır, 0 yazılmaz.
+ */
+function rangeText(range: ValueRange | null): string {
+  if (!range) return "—";
+  if (range.min === range.max) return formatCurrency(range.min);
+  return `${formatCurrency(range.min, { decimals: 0 })} – ${formatCurrency(range.max, { decimals: 0 })}`;
+}
+
+/** Aralık ipucu: tam rakamlar + kaç varyantta değer yok. */
+function rangeHint(range: ValueRange | null, baslik: string): string | undefined {
+  if (!range) return undefined;
+  const tutar =
+    range.min === range.max
+      ? formatCurrency(range.min)
+      : `${formatCurrency(range.min)} – ${formatCurrency(range.max)}`;
+  const taban = `${baslik}: ${tutar} · ${range.bilinen} varyant`;
+  return range.bilinmeyen > 0 ? `${taban} · ${range.bilinmeyen} varyantta yok` : taban;
+}
 
 interface Product {
   id: string;
@@ -308,7 +339,14 @@ const ProductRow = memo(function ProductRow({
   onToggleMadeToOrder: (id: string, value: boolean) => void;
   onPrint: (id: string, name: string) => void;
 }) {
-  const cost = product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost;
+  // ⚠️ Maliyet BİLİNİRLİĞİ tutara bakılarak anlaşılmaz: paketleme her ürüne otomatik eklendiği
+  // için toplam asla 0 olmuyor. Sunucu bu kararı zaten `hasCost` ile gönderiyor
+  // (çekirdekteki `productionCostKnown`). Bunu yok saydığımız için aynı satır "Maliyet ₺12,40"
+  // derken yanındaki Kâr/saat "—" ve platform hücresi "maliyet eksik" diyordu; ürün detayı ise
+  // "Üretim Maliyeti —" gösteriyordu. Tek kaynak: hasCost.
+  const cost = product.hasCost
+    ? (product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost)
+    : null;
   const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
     product.platforms.find((x) => x.platform === p);
 
@@ -622,6 +660,17 @@ export default function ProductsPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  /**
+   * Filtre veya platform daraltması değişince seçim SIFIRLANIR — veri kümesi tamamen değişir.
+   *
+   * ARAMA metni bilerek DIŞARIDA: kullanıcı "kutu" arayıp 12 ürün işaretledikten sonra kontrol
+   * için arama kutusunu temizleyince seçimi kaybediyordu ve düğmeler sessizce yok oluyordu.
+   * Asıl koruma zaten `visibleSelection`: toplu işlem YALNIZ o an görünen satırlara uygulanır,
+   * yani ekranda görünmeyen ürün hiçbir şekilde silinemez.
+   */
+  useEffect(() => {
+    setSelectedIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [filterMode, platformParam]);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   // Toplu düzenleme — her alan kendi anahtarıyla açılır, kapalı alan OLDUĞU GİBİ kalır.
   // ⚠️ Maliyet alanı bilerek yok: maliyet-kâr rakamını değiştiren düzenlemeler ayrı onay ister.
@@ -643,6 +692,37 @@ export default function ProductsPage() {
     platform: "trendyol" | "hepsiburada";
   } | null>(null);
   const queryClient = useQueryClient();
+
+  /**
+   * Gizle / geri getir sonrası DİĞER sekmelerin listesini önbellekten sil.
+   *
+   * Ekrandaki liste iyimser güncellenir; geri kalan sekmelerin gövdesi artık yanlıştır. Bu liste
+   * kendiliğinden tazelenmediği için (staleTime: Infinity + refetchOnMount: false) onları yalnız
+   * "bayat" işaretlemek işe yaramıyordu: gizlenen ürün Gizlenenler'e HİÇ girmiyor, geri getirilen
+   * ürün Aktif'e dönmüyordu. Silince o sekmeye geçildiğinde taze çekim garanti olur — ekrandaki
+   * listeye dokunulmadığı için gereksiz ağır çekim de olmaz.
+   */
+  const dropOtherProductLists = useCallback(() => {
+    queryClient.removeQueries({
+      queryKey: ["products"],
+      predicate: (query) => isStaleProductListKey(query.queryKey, filterMode, platformParam),
+    });
+  }, [queryClient, filterMode, platformParam]);
+
+  /** "Geri al" — satırları ekrandaki listeye geri koyar (372 ürünü baştan çekmeden). */
+  const restoreProductRows = useCallback(
+    (rows: Product[]) => {
+      if (rows.length === 0) return;
+      queryClient.setQueryData<Product[]>(productListKey(filterMode, platformParam), (old) => {
+        if (!Array.isArray(old)) return old;
+        const mevcut = new Set(old.map((p) => p.id));
+        const eksik = rows.filter((row) => !mevcut.has(row.id));
+        // Sıra istemcide (alfabetik / kolon sıralaması) kurulduğu için sona eklemek yeterli.
+        return eksik.length ? [...old, ...eksik] : old;
+      });
+    },
+    [queryClient, filterMode, platformParam]
+  );
 
   // URL filter parametresinden başlangıç değeri (mount sonrası, hydration safe).
   // URL'de filtre YOKSA oturumdaki son durumu (arama + filtre) geri yükle → ürün detayına girip
@@ -867,33 +947,49 @@ export default function ProductsPage() {
     // Optimistic: seçilenler mevcut görünümden ANINDA kalkar + seçim temizlenir; hata olursa geri al.
     onMutate: async ({ ids }) => {
       await queryClient.cancelQueries({ queryKey: ["products"] });
-      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData<Product[]>({ queryKey: ["products"] });
       const idset = new Set(ids);
+      // Geri alma satırları: "Geri al"a basılınca listeyi baştan çekmeden yerine koyabilmek için.
+      const kaldirilan = new Map<string, Product>();
+      for (const [, data] of prev) {
+        if (!Array.isArray(data)) continue;
+        for (const p of data) if (idset.has(p.id) && !kaldirilan.has(p.id)) kaldirilan.set(p.id, p);
+      }
       queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
         Array.isArray(old) ? old.filter((p) => !idset.has(p.id)) : old
       );
       setSelectedIds(new Set());
-      return { prev };
+      return { prev, kaldirilan: [...kaldirilan.values()] };
     },
     onError: (e: Error, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error(`${e.message} — değişiklik geri alındı`);
     },
-    onSuccess: (data, variables) =>
+    onSuccess: (data, variables, ctx) => {
+      // Ürünler karşı sekmeye (Aktif ↔ Gizlenenler) geçti → o sekmenin önbelleği artık yanlış.
+      dropOtherProductLists();
       undoToast({
         message: variables.hidden
           ? `${data.updated} ürün gizlendi`
           : `${data.updated} ürün geri getirildi`,
         onUndo: async () => {
-          await fetchJson("/api/products/bulk-visibility", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: variables.ids, hidden: !variables.hidden }),
-          });
-          // Ürünler listeden optimistic olarak çıkarılmıştı → geri gelmeleri için gerçek tazeleme şart.
-          await queryClient.invalidateQueries({ queryKey: ["products"] });
+          // Hata YUTULMAMALI: eskiden istek düşse bile satır listeye geri konuyordu ve
+          // kullanıcı ürünü geri gelmiş sanıyordu — oysa veritabanında hâlâ gizliydi.
+          try {
+            await fetchJson("/api/products/bulk-visibility", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ids: variables.ids, hidden: !variables.hidden }),
+            });
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Geri alınamadı");
+            return;
+          }
+          restoreProductRows(ctx?.kaldirilan ?? []);
+          dropOtherProductLists();
         },
-      }),
+      });
+    },
     onSettled: () => {
       // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
@@ -912,29 +1008,40 @@ export default function ProductsPage() {
     // gelince gizli görünümünde kalmamalı). UI beklemez; hata olursa geri alınır.
     onMutate: async ({ id }) => {
       await queryClient.cancelQueries({ queryKey: ["products"] });
-      const prev = queryClient.getQueriesData({ queryKey: ["products"] });
+      const prev = queryClient.getQueriesData<Product[]>({ queryKey: ["products"] });
+      // Geri alma satırı: "Geri al"a basılınca listeyi baştan çekmeden yerine koyabilmek için.
+      const kaldirilan = prev
+        .map(([, data]) => (Array.isArray(data) ? data.find((p) => p.id === id) : undefined))
+        .find((p): p is Product => p != null);
       queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
         Array.isArray(old) ? old.filter((p) => p.id !== id) : old
       );
-      return { prev };
+      return { prev, kaldirilan };
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error("İşlem başarısız");
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (_data, variables, ctx) => {
       // Liste optimistic güncellendi → tekrar çekme yok. Panel sayacı tazelensin.
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      // Ürün karşı sekmeye (Aktif ↔ Gizlenenler) geçti → o sekmenin önbelleği artık yanlış.
+      dropOtherProductLists();
       undoToast({
         message: variables.hidden ? "Ürün gizlendi" : "Ürün geri getirildi",
         onUndo: async () => {
-          await fetchJson(`/api/products/${variables.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ hidden: !variables.hidden }),
-          });
-          // Ürün listeden optimistic olarak çıkarılmıştı → geri gelmesi için gerçek tazeleme şart.
-          await queryClient.invalidateQueries({ queryKey: ["products"] });
+          try {
+            await fetchJson(`/api/products/${variables.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ hidden: !variables.hidden }),
+            });
+          } catch (error) {
+            toast.error(error instanceof Error ? error.message : "Geri alınamadı");
+            return;
+          }
+          restoreProductRows(ctx?.kaldirilan ? [ctx.kaldirilan] : []);
+          dropOtherProductLists();
         },
       });
     },
@@ -1129,9 +1236,15 @@ export default function ProductsPage() {
    *
    * Kimlikler 200'lük dilimler hâlinde gönderilir: hem tek istek devasa olmaz hem de
    * ilerleme çubuğu GERÇEKTEN belirli olur (kaçıncı dilim / kaç dilim).
+   *
+   * `ids` dışarıdan verilir: yalnız O AN LİSTEDE GÖRÜNEN seçili ürünler gelsin.
    */
-  const runBulkEdit = async () => {
+  const runBulkEdit = async (ids: string[]) => {
     if (bulkEditProgress) return;
+    if (ids.length === 0) {
+      toast.error("Seçili ürün kalmadı");
+      return;
+    }
     const patch: { desi?: number; categoryName?: string; madeToOrder?: boolean } = {};
     if (bulkEdit.desiOn) {
       const value = Number(bulkEdit.desi.replace(",", "."));
@@ -1155,7 +1268,6 @@ export default function ProductsPage() {
       return;
     }
 
-    const ids = [...selectedIds];
     const chunks: string[][] = [];
     for (let offset = 0; offset < ids.length; offset += 200) {
       chunks.push(ids.slice(offset, offset + 200));
@@ -1281,6 +1393,22 @@ export default function ProductsPage() {
 
     return searched;
   }, [debouncedFilter, products, filterMode]);
+
+  /**
+   * Toplu işlemlerin dokunacağı ürünler — SADECE o an listede görünenler.
+   * Filtre/arama değişince seçim zaten sıfırlanıyor; bu kesişim ikinci emniyet kemeri.
+   */
+  const selectedProducts = useMemo(
+    () => visibleSelection(filteredProducts, selectedIds),
+    [filteredProducts, selectedIds]
+  );
+  const selectedCount = selectedProducts.length;
+  const selectedIdList = useMemo(() => selectedProducts.map((p) => p.id), [selectedProducts]);
+  /** Onay penceresinde ürün adları görünsün — "12 ürün" tek başına neyin gittiğini anlatmıyor. */
+  const selectedNames = useMemo(
+    () => selectionPreview(selectedProducts.map((p) => p.name)),
+    [selectedProducts]
+  );
 
   // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
   type DisplayRow =
@@ -1469,25 +1597,30 @@ export default function ProductsPage() {
     { value: "all", label: "Tümü" },
   ];
 
-  // Varyant grubu başlık satırı — genel ad + N varyant + aç/gizle. Üyeler açıkken altına serpilir.
+  /**
+   * Varyant grubu başlık satırı — genel ad + görünen varyantlar + özet rakamlar.
+   *
+   * ⚠️ Özet YENİ bir kâr hesabı YAPMAZ: satırlarda zaten duran maliyet/kâr/fiyat değerlerini
+   * aralığa çevirir. Bilinmeyen değer 0 gösterilmez, "—" kalır.
+   * Tüm sayılar O AN LİSTEDE GÖRÜNEN varyantlardan gelir (filtre/arama ile tutarlı).
+   */
   const renderGroupRow = (
     row: Extract<DisplayRow, { kind: "group" }>,
     measureRef?: (node: HTMLTableRowElement | null) => void,
     dataIndex?: number
   ) => {
     const expanded = expandedGroups.has(row.groupId);
-    const totalStock = row.members.reduce((s, m) => s + m.stock, 0);
-    const prices = row.members.map((m) => m.currentSalePrice).filter((n) => n > 0);
-    const priceMin = prices.length ? Math.min(...prices) : 0;
-    const priceMax = prices.length ? Math.max(...prices) : 0;
+    const ozet = summarizeGroup(row.members);
     const allSelected = row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id));
     const firstImg = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
     const labels = row.members.map((m) => m.variantLabel || m.name).join(" · ");
-    const priceText = prices.length
-      ? priceMin === priceMax
-        ? formatCurrency(priceMin)
-        : `${formatCurrency(priceMin)} – ${formatCurrency(priceMax)}`
-      : null;
+    const priceText = ozet.fiyat ? rangeText(ozet.fiyat) : null;
+    const stokIpucu = [
+      `Görünen ${ozet.stokTutan} varyantın toplam stoğu`,
+      ozet.siparisUzerine > 0 ? `${ozet.siparisUzerine} varyant sipariş üzerine` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     return (
       <TableRow
         key={row.key}
@@ -1522,7 +1655,13 @@ export default function ProductsPage() {
           <div className="flex items-center gap-1.5 w-full">
             <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
             <span className="font-semibold text-sm truncate">{row.groupName}</span>
-            <Badge variant="secondary" className="shrink-0 tabular-nums">{row.members.length} varyant</Badge>
+            <Badge
+              variant="secondary"
+              className="shrink-0 tabular-nums"
+              title="Listede görünen varyant sayısı"
+            >
+              {ozet.varyant} varyant
+            </Badge>
           </div>
           <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
             {labels}
@@ -1530,14 +1669,117 @@ export default function ProductsPage() {
           </div>
         </TableCell>
         <TableCell className="py-2 text-center">
-          <span className="text-xs tabular-nums text-muted-foreground" title="Üyelerin toplam stoğu">Σ {totalStock}</span>
+          {ozet.stokToplam == null ? (
+            <span
+              className="text-[10px] leading-tight text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5"
+              title="Tüm varyantlar sipariş üzerine üretilir — stok takip edilmez"
+            >
+              Sipariş üzerine
+            </span>
+          ) : (
+            <span className="text-xs tabular-nums text-muted-foreground" title={stokIpucu}>
+              Σ {ozet.stokToplam}
+            </span>
+          )}
         </TableCell>
-        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell className="text-right text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
-        <TableCell className="text-center text-xs text-muted-foreground/40">—</TableCell>
+        <TableCell className="text-right tabular-nums text-xs">
+          <span
+            className={cn(
+              ozet.maliyet ? "text-muted-foreground" : "text-muted-foreground/40"
+            )}
+            title={rangeHint(ozet.maliyet, "Maliyet")}
+          >
+            {rangeText(ozet.maliyet)}
+          </span>
+        </TableCell>
+        <TableCell className="text-right tabular-nums text-xs">
+          <span
+            className={cn(
+              ozet.karSaat
+                ? ozet.karSaat.max < 0
+                  ? "text-destructive font-medium"
+                  : "text-muted-foreground"
+                : "text-muted-foreground/40"
+            )}
+            title={rangeHint(ozet.karSaat, "Kâr/saat")}
+          >
+            {rangeText(ozet.karSaat)}
+          </span>
+        </TableCell>
+        <TableCell className="text-right tabular-nums text-xs">
+          <span
+            className={cn(
+              ozet.karGram
+                ? ozet.karGram.max < 0
+                  ? "text-destructive font-medium"
+                  : "text-muted-foreground"
+                : "text-muted-foreground/40"
+            )}
+            title={rangeHint(ozet.karGram, "Kâr/gram")}
+          >
+            {rangeText(ozet.karGram)}
+          </span>
+        </TableCell>
+        {PLATFORM_KEYS.map((platform) => {
+          const ps = ozet.platformlar[platform];
+          const integrationActive = integrations?.[platform] ?? false;
+          if (!ps) {
+            return (
+              <TableCell key={platform} className="text-center">
+                <span className="text-[10px] text-muted-foreground/40">
+                  {integrationActive ? "—" : "Entegrasyon yok"}
+                </span>
+              </TableCell>
+            );
+          }
+          const zarar = ps.kar != null && ps.kar.max < 0;
+          const karisik = ps.kar != null && ps.kar.min < 0 && ps.kar.max >= 0;
+          return (
+            <TableCell key={platform} className="text-center">
+              <div className="text-xs font-medium tabular-nums" title={rangeHint(ps.fiyat, "Fiyat")}>
+                {rangeText(ps.fiyat)}
+              </div>
+              {ps.ilanli < ozet.varyant && (
+                <div className="text-[9px] text-muted-foreground/60 mt-0.5 tabular-nums">
+                  {ps.ilanli}/{ozet.varyant} varyantta
+                </div>
+              )}
+              {ps.kar ? (
+                <div
+                  className={cn(
+                    "text-[11px] tabular-nums mt-0.5",
+                    zarar ? "text-destructive font-medium" : karisik ? "text-amber-500" : "text-green-500"
+                  )}
+                  title={rangeHint(ps.kar, "Kâr")}
+                >
+                  {rangeText(ps.kar)}
+                  {ps.marj && (
+                    <span className="opacity-70">
+                      {" "}
+                      (
+                      {ps.marj.min === ps.marj.max
+                        ? formatPercent(ps.marj.min)
+                        : `${formatPercent(ps.marj.min, 0)} – ${formatPercent(ps.marj.max, 0)}`}
+                      )
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="text-[10px] text-muted-foreground/60 mt-0.5">maliyet eksik</div>
+              )}
+              {ps.komisyonEksik > 0 && (
+                <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
+                  <AlertTriangle className="h-3 w-3" /> {ps.komisyonEksik} varyantta komisyon yok
+                </div>
+              )}
+              {ps.kargoEksik > 0 && (
+                <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
+                  <AlertTriangle className="h-3 w-3" /> {ps.kargoEksik} varyantta kargo yok
+                </div>
+              )}
+            </TableCell>
+          );
+        })}
         <TableCell className="w-[80px]" />
       </TableRow>
     );
@@ -1553,7 +1795,7 @@ export default function ProductsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {selectedIds.size > 0 && (
+          {selectedCount > 0 && (
             <>
               <Button
                 variant="outline"
@@ -1562,7 +1804,7 @@ export default function ProductsPage() {
                 title="Seçili ürünlerin desi, kategori ve sipariş üzerine üretim bilgisini birlikte değiştir"
               >
                 <SlidersHorizontal className="h-4 w-4 mr-2" />
-                {selectedIds.size} Ürünü Düzenle
+                {selectedCount} Ürünü Düzenle
               </Button>
               {filterMode === "hidden" ? (
                 <Button
@@ -1570,11 +1812,11 @@ export default function ProductsPage() {
                   size="sm"
                   disabled={bulkVisibilityMutation.isPending}
                   onClick={() =>
-                    bulkVisibilityMutation.mutate({ ids: [...selectedIds], hidden: false })
+                    bulkVisibilityMutation.mutate({ ids: selectedIdList, hidden: false })
                   }
                 >
                   <Eye className="h-4 w-4 mr-2" />
-                  {selectedIds.size} Ürünü Geri Getir
+                  {selectedCount} Ürünü Geri Getir
                 </Button>
               ) : (
                 <Button
@@ -1582,11 +1824,11 @@ export default function ProductsPage() {
                   size="sm"
                   disabled={bulkVisibilityMutation.isPending}
                   onClick={() =>
-                    bulkVisibilityMutation.mutate({ ids: [...selectedIds], hidden: true })
+                    bulkVisibilityMutation.mutate({ ids: selectedIdList, hidden: true })
                   }
                 >
                   <EyeOff className="h-4 w-4 mr-2" />
-                  {selectedIds.size} Seçileni Gizle
+                  {selectedCount} Seçileni Gizle
                 </Button>
               )}
               <Button
@@ -1595,7 +1837,7 @@ export default function ProductsPage() {
                 onClick={() => setBulkDeleteOpen(true)}
               >
                 <Trash2 className="h-4 w-4 mr-2" />
-                {selectedIds.size} Seçileni Sil
+                {selectedCount} Seçileni Sil
               </Button>
             </>
           )}
@@ -1902,10 +2144,11 @@ export default function ProductsPage() {
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{selectedIds.size} Ürünü Düzenle</DialogTitle>
+            <DialogTitle>{selectedCount} Ürünü Düzenle</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground -mt-1">
-            Yalnız işaretlediğin alanlar değişir; diğerleri olduğu gibi kalır.
+            Listede seçili {selectedCount} ürün güncellenecek. Yalnız işaretlediğin alanlar
+            değişir; diğerleri olduğu gibi kalır.
           </p>
 
           <div className="space-y-3">
@@ -2001,35 +2244,53 @@ export default function ProductsPage() {
             >
               İptal
             </Button>
-            <Button onClick={() => void runBulkEdit()} disabled={!!bulkEditProgress}>
-              {bulkEditProgress ? "Güncelleniyor…" : `${selectedIds.size} Ürünü Güncelle`}
+            <Button
+              onClick={() => void runBulkEdit(selectedIdList)}
+              disabled={!!bulkEditProgress || selectedCount === 0}
+            >
+              {bulkEditProgress ? "Güncelleniyor…" : `${selectedCount} Ürünü Güncelle`}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Toplu silme onayı */}
+      {/* Toplu silme onayı — hangi ürünlerin gittiği AÇIKÇA görünür */}
       <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Toplu Silme Onayı</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            <strong>{selectedIds.size}</strong> ürün silinecek. Bu işlem geri alınamaz.
-            Maliyet bilgileri, platform ilanları ve fiyat geçmişi de silinir.
+            Listede seçili <strong className="text-foreground">{selectedCount}</strong> ürün
+            silinecek. Bu işlem geri alınamaz — maliyet bilgileri, platform ilanları ve fiyat
+            geçmişi de silinir.
           </p>
+          {selectedCount > 0 && (
+            <div className="rounded-md border bg-muted/30 max-h-48 overflow-y-auto p-2 space-y-0.5 animate-in fade-in duration-200">
+              {selectedNames.shown.map((name, i) => (
+                <p key={`${name}-${i}`} className="text-xs truncate" title={name}>
+                  {name}
+                </p>
+              ))}
+              {selectedNames.rest > 0 && (
+                <p className="text-xs text-muted-foreground pt-1">
+                  ve {selectedNames.rest} ürün daha
+                </p>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>
               İptal
             </Button>
             <Button
               variant="destructive"
-              onClick={() => bulkDeleteMutation.mutate([...selectedIds])}
-              disabled={bulkDeleteMutation.isPending}
+              onClick={() => bulkDeleteMutation.mutate(selectedIdList)}
+              disabled={bulkDeleteMutation.isPending || selectedCount === 0}
             >
               {bulkDeleteMutation.isPending
                 ? "Siliniyor..."
-                : `${selectedIds.size} Ürünü Sil`}
+                : `${selectedCount} Ürünü Sil`}
             </Button>
           </DialogFooter>
         </DialogContent>

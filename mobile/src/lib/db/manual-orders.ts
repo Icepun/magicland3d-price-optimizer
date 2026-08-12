@@ -288,7 +288,9 @@ export function resolveFreeformProduction(
   return {
     productionCost: calc.productionCost,
     filamentCost: calc.filamentCost,
-    costKnown: calc.productionCost > 0,
+    // Çekirdekteki `productionCostKnown` ile AYNI ölçüt (@core/product-cost): malzeme payı
+    // yoksa maliyet BİLİNMİYOR. Masaüstüyle aynı kâr çıksın diye burada da uygulanır.
+    costKnown: calc.productionCost > 0 && calc.filamentCost > 0,
   };
 }
 

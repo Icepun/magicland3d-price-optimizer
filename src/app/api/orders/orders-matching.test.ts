@@ -26,10 +26,9 @@ vi.mock("@/lib/route-cache", () => ({
 }));
 vi.mock("@/lib/orders-cache", () => ({
   getOrdersCache: () => null,
-  getOrdersCacheGeneration: () => 0,
-  setOrdersCache: () => {},
   isOrdersRefreshing: () => false,
   setOrdersRefreshing: () => {},
+  computeOrdersShared: (compute: () => Promise<any>) => compute(),
 }));
 vi.mock("@/lib/push-notify", () => ({ pushToAllDevices: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-finance-snapshots", () => ({

@@ -41,6 +41,10 @@ export interface ResolvedCost {
    * koşulsuz eklenir (packaging.ts), dolayısıyla `totalCost` fiilen HİÇBİR zaman 0 olmaz. Filament
    * gramajı/süresi hiç girilmemiş bir ürün bu yüzden "maliyeti tam" sayılıp şişik kâr gösteriyordu.
    * Maliyet bilinirliğine bakan HER yeni kod yolu totalCost'a değil BUNA bakmalı.
+   *
+   * Detaylı modda MALZEME payı da şart: filament türü seçilmemişse gram maliyeti 0 olur, malzeme
+   * 0₺ hesaplanır ama süreden gelen aşınma/elektrik üretim payını 0'ın üstüne çıkarır — ürün eksik
+   * maliyetle "kârlı" görünüyordu. Malzeme payı 0 ise maliyet BİLİNMİYOR sayılır.
    */
   productionCostKnown: boolean;
 }
@@ -113,7 +117,9 @@ export function resolveProductCost(
       filamentCost: calc.filamentCost,
       packagingBreakdown: packaging,
       // Paketleme HARİÇ üretim payı: filament gramajı/süresi girilmemişse 0 kalır → bilinmiyor.
-      productionCostKnown: calc.productionCost > 0,
+      // Malzeme payı da 0 olmamalı: filament türü seçilmeden girilen süre/gramaj eksik maliyettir
+      // (gram maliyeti 0 → malzeme 0₺), kâr olduğundan yüksek çıkar.
+      productionCostKnown: calc.productionCost > 0 && calc.filamentCost > 0,
     };
   }
 

@@ -15,6 +15,7 @@ import {
 } from "@/lib/product-metrics";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
+import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
 
 const CreateProductSchema = z.object({
@@ -53,21 +54,27 @@ interface PriceThresholdSummary {
   gain: number;
 }
 
+// Sarmalanmamış rota GÖVDESİZ 500 döndürür: liste boş gelir, ekranda "Ürünler yüklenemedi"
+// yazar ve nedenini kimse göremez. jsonError hatayı okunur bir gövdeye çevirir.
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const cacheable =
-    !url.searchParams.has("ids") &&
-    !url.searchParams.has("search") &&
-    !url.searchParams.has("lite");
+  try {
+    const url = new URL(req.url);
+    const cacheable =
+      !url.searchParams.has("ids") &&
+      !url.searchParams.has("search") &&
+      !url.searchParams.has("lite");
 
-  const data = cacheable
-    ? await swr(
-        `products:v1:${url.searchParams.toString()}`,
-        2 * 60_000,
-        () => computeProducts(req.url)
-      )
-    : await computeProducts(req.url);
-  return NextResponse.json(data);
+    const data = cacheable
+      ? await swr(
+          `products:v1:${url.searchParams.toString()}`,
+          2 * 60_000,
+          () => computeProducts(req.url)
+        )
+      : await computeProducts(req.url);
+    return NextResponse.json(data);
+  } catch (error) {
+    return jsonError(error);
+  }
 }
 
 async function computeProducts(urlString: string) {
@@ -542,11 +549,16 @@ async function computeProducts(urlString: string) {
 }
 
 export async function POST(req: NextRequest) {
-  await ensureRuntimeSchema();
-  const body = await req.json();
-  const data = CreateProductSchema.parse(body);
-  const product = await prisma.product.create({ data });
-  // Yeni ürün listelerde ve sipariş eşleşmesinde ANINDA görünmeli.
-  bustProductCaches();
-  return NextResponse.json(product, { status: 201 });
+  try {
+    await ensureRuntimeSchema();
+    const body = await req.json();
+    const data = CreateProductSchema.parse(body);
+    const product = await prisma.product.create({ data });
+    // Yeni ürün listelerde ve sipariş eşleşmesinde ANINDA görünmeli.
+    bustProductCaches();
+    return NextResponse.json(product, { status: 201 });
+  } catch (error) {
+    // Zod hatası 400 + okunur mesaj döner (ör. "Barkod zorunlu") → "Ürün eklenemedi" bilmecesi biter.
+    return jsonError(error);
+  }
 }

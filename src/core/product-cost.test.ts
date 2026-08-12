@@ -87,6 +87,46 @@ describe("üretim maliyeti bilinirliği", () => {
     expect(result?.productionCostKnown).toBe(true);
   });
 
+  /**
+   * Filament TÜRÜ seçilmemiş ürün: gram maliyeti 0 gelir, malzeme 0₺ hesaplanır ama süreden gelen
+   * aşınma/elektrik üretim payını 0'ın üstüne çıkarır — ürün eksik maliyetle "kârlı" görünüyordu.
+   */
+  it("malzeme payı 0 ise (filament türü seçilmemiş) maliyet BİLİNMİYOR sayılır", () => {
+    const result = resolveProductCost(
+      {
+        ...BASE,
+        costMode: "detailed",
+        manualCost: null,
+        totalCost: null,
+        filamentWeight: 20,
+        printTimeHours: 3,
+      },
+      { ...PACKAGING_SETTINGS, costMachineWearPerHour: "4" },
+      0 // filament türü seçilmemiş → gram maliyeti yok
+    );
+
+    // Süreden gelen aşınma üretim payını 0'ın üstüne çıkarıyor — eski kapı burada "maliyet var" diyordu.
+    expect(result?.productionCost).toBeGreaterThan(0);
+    expect(result?.productionCostKnown).toBe(false);
+  });
+
+  it("filament türü seçilince aynı ürün BİLİNİYOR sayılır", () => {
+    const result = resolveProductCost(
+      {
+        ...BASE,
+        costMode: "detailed",
+        manualCost: null,
+        totalCost: null,
+        filamentWeight: 20,
+        printTimeHours: 3,
+      },
+      { ...PACKAGING_SETTINGS, costMachineWearPerHour: "4" },
+      1.2
+    );
+
+    expect(result?.productionCostKnown).toBe(true);
+  });
+
   it("elle girilen maliyet 0 ise bilinmiyor, pozitifse biliniyor sayılır", () => {
     const bos = resolveProductCost(
       { ...BASE, manualCost: 0, packagingCost: 10, totalCost: 10 },

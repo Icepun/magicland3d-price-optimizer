@@ -692,7 +692,8 @@ export function ManualOrderDialog({
       preview.set(line.key, {
         unitCost: calculated.productionCost,
         filamentCost: calculated.filamentCost,
-        costKnown: calculated.productionCost > 0,
+        // Çekirdekteki `productionCostKnown` ile aynı ölçüt — malzeme payı yoksa bilinmiyor.
+        costKnown: calculated.productionCost > 0 && calculated.filamentCost > 0,
       });
     }
     return preview;
@@ -1195,7 +1196,19 @@ export function ManualOrderDialog({
   const busy = saveMutation.isPending || waitingForEdit;
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        if (busy) return;
+        // Uzun form: pencere dışına düşen tek bir tık doldurulan her şeyi siliyordu.
+        // Kapatma artık bilinçli olmalı (Vazgeç / ✕ / Esc).
+        if (!next && details.reason === "outside-press") {
+          toast("Kapatmak için Vazgeç'e bas.", { id: "manual-order-dismiss" });
+          return;
+        }
+        onOpenChange(next);
+      }}
+    >
       <DialogContent className="flex h-[min(92vh,920px)] w-full max-w-[calc(100%-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
         <DialogHeader className="border-b px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="flex items-center gap-2 text-lg">

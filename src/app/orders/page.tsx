@@ -58,6 +58,11 @@ import {
   savePrepDone,
   type PrepItem,
 } from "./hazirlik";
+import {
+  countsInSummary,
+  filterOrdersBeforeStatus,
+  statusChipCounts,
+} from "./siparis-filtre";
 import { cn } from "@/lib/utils";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
@@ -93,6 +98,8 @@ interface UnifiedOrder {
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  /** Kalem/tutar bilgisi platformdan alınamadı → üstteki toplamlara girmez. */
+  dataIncomplete?: boolean;
   isManual?: boolean;
   manualOrderId?: string | null;
   editHref?: string | null;
@@ -103,6 +110,8 @@ interface PlatformStatus {
   needsAdminToken?: boolean;
   notConfigured?: boolean;
   error?: string;
+  /** Bilgisi eksik geldiği için listeye/toplamlara alınamayan sipariş sayısı. */
+  incompleteCount?: number;
 }
 interface SummaryBucket {
   revenue: number;
@@ -134,6 +143,8 @@ interface OrdersResponse {
   shopify: PlatformStatus;
   trendyol: PlatformStatus;
   hepsiburada: PlatformStatus;
+  /** Manuel siparişlerin okunma durumu — bozuk kayıt listeyi düşürmesin diye ayrı taşınır. */
+  manual?: PlatformStatus;
   financeHistory?: {
     ok: boolean;
     syncedOrders: number;
@@ -157,8 +168,6 @@ const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: s
   cancelled: { label: "İptal/İade", cls: "bg-destructive/15 text-destructive border-destructive/30", dot: "bg-destructive" },
   other: { label: "Diğer", cls: "bg-muted text-muted-foreground border-border", dot: "bg-muted-foreground" },
 };
-const STATUS_ORDER: OrderStatusKind[] = ["pending", "processing", "shipped", "delivered", "cancelled"];
-
 /** Yenileme sırasında beklenen kaynaklar — kurulu olmayan pazaryeri gösterilmez. */
 const SOURCE_CHIPS = [
   { key: "shopify", label: "Shopify" },
@@ -284,7 +293,8 @@ export default function OrdersPage() {
     if (summary?.manual) return summary.manual;
     return orders.reduce<SummaryBucket>(
       (bucket, order) => {
-        if (order.platform !== "manual" || order.statusKind === "cancelled") {
+        // Toplama girme koşulu sunucudakiyle aynı yerden okunur (iptal/eksik/döviz dışı hariç).
+        if (order.platform !== "manual" || !countsInSummary(order)) {
           return bucket;
         }
         bucket.revenue += order.total;
@@ -320,32 +330,26 @@ export default function OrdersPage() {
   });
 
   /**
-   * Durum DIŞINDAKİ tüm filtreler uygulanmış ara liste.
-   * Durum çiplerindeki sayılar BUNDAN hesaplanır — eskiden ham `orders` üzerinden sayılıyordu,
-   * yani platform/arama/eksik filtresi açıkken çip "Bekleyen 7" derken tıklayınca 2 sipariş
-   * geliyordu. Sayı artık her zaman tıklandığında görülecek satır sayısı.
+   * Durum DIŞINDAKİ tüm filtreler uygulanmış ara liste. Kurallar siparis-filtre.ts'te:
+   * çipler, "maliyet eksik" bağlantısı ve liste artık AYNI kümeden üretiliyor.
    */
-  const beforeStatus = useMemo(() => {
-    const q = debouncedSearch.trim().toLowerCase();
-    return orders.filter((o) => {
-      if (platform !== "all" && o.platform !== platform) return false;
-      // "Maliyeti eksik" filtresi — özet karttaki uyarıya tıklayınca açılır. Kâr hesaplanamayan
-      // (null) VEYA bazı satırları kâra girmeyen (partial) siparişler; ikisi de özet kartındaki
-      // incompleteOrders sayımıyla AYNI koşul (orders route: profit == null || profitPartial).
-      if (onlyIncomplete && !(o.profit == null || o.profitPartial)) return false;
-      if (q) {
-        const hay = `${o.orderNumber} ${o.customer ?? ""} ${o.items.map((i) => i.name).join(" ")}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [orders, platform, debouncedSearch, onlyIncomplete]);
+  const beforeStatus = useMemo(
+    () =>
+      filterOrdersBeforeStatus(orders, {
+        platform,
+        search: debouncedSearch,
+        onlyMissingCost: onlyIncomplete,
+      }),
+    [orders, platform, debouncedSearch, onlyIncomplete]
+  );
 
-  const statusCounts = useMemo(() => {
-    const c: Record<string, number> = {};
-    for (const o of beforeStatus) c[o.statusKind] = (c[o.statusKind] ?? 0) + 1;
-    return c;
-  }, [beforeStatus]);
+  const statusChips = useMemo(() => statusChipCounts(beforeStatus), [beforeStatus]);
+
+  /** Listede görünen ama üstteki toplamlara girmeyen sipariş sayısı (iptal/iade, bilgisi eksik). */
+  const excludedFromSummary = Math.max(
+    0,
+    orders.length - (summary?.total.orderCount ?? orders.length)
+  );
 
   const filtered = useMemo(
     () => (status === "all" ? beforeStatus : beforeStatus.filter((o) => o.statusKind === status)),
@@ -526,6 +530,13 @@ export default function OrdersPage() {
             <SummaryStat label="Trendyol" value={<AnimatedNumber value={summary.trendyol.revenue} format={fmtMoney} />} sub={`${summary.trendyol.orderCount} sipariş`} platform="trendyol" />
             <SummaryStat label="Hepsiburada" value={<AnimatedNumber value={summary.hepsiburada.revenue} format={fmtMoney} />} sub={`${summary.hepsiburada.orderCount} sipariş`} platform="hepsiburada" />
             <SummaryStat label="Manuel" value={<AnimatedNumber value={manualSummary.revenue} format={fmtMoney} />} sub={`${manualSummary.orderCount} sipariş`} platform="manual" />
+            {/* Listedeki sipariş sayısı ile özetteki sayı neden farklı — tek satırda. */}
+            {excludedFromSummary > 0 && (
+              <p className="col-span-full text-[10px] text-muted-foreground animate-in fade-in duration-500">
+                Listede {excludedFromSummary} sipariş daha var — iptal/iade ya da tutarı
+                okunamayanlar toplamlara girmiyor.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -578,6 +589,24 @@ export default function OrdersPage() {
       )}
       {data?.hepsiburada && !data.hepsiburada.ok && !data.hepsiburada.notConfigured && (
         <PlatformError platform="Hepsiburada" message={data.hepsiburada.error} />
+      )}
+      {data?.manual && !data.manual.ok && (
+        <PlatformError platform="Manuel" message={data.manual.error} />
+      )}
+      {(data?.manual?.incompleteCount ?? 0) > 0 && (
+        <Card className="border-amber-500/40 bg-amber-500/5">
+          <CardContent className="py-3 flex items-start gap-3">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-amber-600 dark:text-amber-400">
+                {data?.manual?.incompleteCount} manuel sipariş açılamadı
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Kaydı bozuk göründü; listeye ve toplamlara girmedi.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       )}
       {data?.financeHistory && !data.financeHistory.ok && (
         <Card className="border-amber-500/40 bg-amber-500/5">
@@ -665,9 +694,10 @@ export default function OrdersPage() {
       {/* Durum filtreleri — hazırlık görünümünün kapsamı zaten sabit, orada gösterilmez. */}
       {view === "liste" && (
       <div className="flex flex-wrap gap-1.5">
-        <StatusChip active={status === "all"} onClick={() => setStatus("all")} label="Hepsi" count={orders.length} />
-        {STATUS_ORDER.map((k) => (
-          <StatusChip key={k} active={status === k} onClick={() => setStatus(k)} label={STATUS_STYLE[k].label} count={statusCounts[k] ?? 0} dot={STATUS_STYLE[k].dot} />
+        {/* "Hepsi" de çipler de listenin TAM olarak aynı kümesinden sayılır. */}
+        <StatusChip active={status === "all"} onClick={() => setStatus("all")} label="Hepsi" count={beforeStatus.length} />
+        {statusChips.map(({ kind, count }) => (
+          <StatusChip key={kind} active={status === kind} onClick={() => setStatus(kind)} label={STATUS_STYLE[kind].label} count={count} dot={STATUS_STYLE[kind].dot} />
         ))}
       </div>
       )}
@@ -1243,9 +1273,18 @@ const OrderRow = memo(function OrderRow({
   const orderCurrency = order.currency.trim().toUpperCase() || "TRY";
   const isTryOrder = orderCurrency === "TRY";
   const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-600 dark:text-green-500" : "text-destructive";
+  // İptal/iade siparişi üstteki ciro ve kâr toplamlarına GİRMİYOR. Satır normal görünüp yeşil
+  // kâr yazdığı sürece ekrandaki iki rakam birbirini tutmuyordu; artık soluk + üstü çizili.
+  const isCancelled = order.statusKind === "cancelled";
 
   return (
-    <Card className="overflow-hidden transition-colors hover:border-primary/30">
+    <Card
+      className={cn(
+        "overflow-hidden transition-[color,background-color,border-color,opacity] duration-200 hover:border-primary/30",
+        // Soluk ama okunur; üzerine gelince tam görünür (kullanıcı iptal satırını da inceleyebilsin).
+        isCancelled && "border-dashed bg-muted/25 opacity-70 hover:opacity-100"
+      )}
+    >
       <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
         <div className="flex items-center gap-3 px-3 py-3">
           {/* Ürün görseli / çeşit kutusu + adet & platform rozeti */}
@@ -1296,8 +1335,19 @@ const OrderRow = memo(function OrderRow({
 
           {/* Tutar + kâr + durum */}
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <span className="font-bold text-sm tabular-nums">{fmtMoney2(order.total, order.currency)}</span>
-            {!isTryOrder ? (
+            <span
+              className={cn(
+                "font-bold text-sm tabular-nums transition-colors",
+                isCancelled && "font-semibold text-muted-foreground line-through decoration-muted-foreground/70"
+              )}
+            >
+              {fmtMoney2(order.total, order.currency)}
+            </span>
+            {isCancelled ? (
+              <span className="text-[10px] font-medium text-muted-foreground">
+                Toplama girmiyor
+              </span>
+            ) : !isTryOrder ? (
               <span
                 className="text-[10px] font-medium text-amber-600 dark:text-amber-400"
                 title={`${orderCurrency} için döviz kuru dönüşümü tanımlı değil; TL net kâr hesaplanmadı.`}
@@ -1418,11 +1468,22 @@ const OrderRow = memo(function OrderRow({
                 )}
                 <div className="flex items-center justify-between pt-1.5 border-t border-border/40">
                   <span className="text-muted-foreground">Ciro</span>
-                  <span className="tabular-nums font-medium">{fmtMoney2(order.total, order.currency)}</span>
+                  <span
+                    className={cn(
+                      "tabular-nums font-medium",
+                      isCancelled && "text-muted-foreground line-through"
+                    )}
+                  >
+                    {fmtMoney2(order.total, order.currency)}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Net kâr</span>
-                  {!isTryOrder ? (
+                  {isCancelled ? (
+                    <span className="text-muted-foreground">
+                      — {order.statusLabel.toLocaleLowerCase("tr-TR")}, toplama girmiyor
+                    </span>
+                  ) : !isTryOrder ? (
                     <span className="text-amber-600 dark:text-amber-400">
                       — {orderCurrency} için kur dönüşümü yok
                     </span>
@@ -1434,7 +1495,8 @@ const OrderRow = memo(function OrderRow({
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
-                {Math.abs(order.orderRevenueAdjustment ?? 0) >= 0.01 && (
+                {/* İptal/iade siparişte kâr ayrıntısı yanıltıcı olur — hiçbir toplama girmiyor. */}
+                {!isCancelled && Math.abs(order.orderRevenueAdjustment ?? 0) >= 0.01 && (
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">Kargo geliri / sipariş indirimi</span>
                     <span className="tabular-nums text-muted-foreground">
@@ -1443,7 +1505,7 @@ const OrderRow = memo(function OrderRow({
                     </span>
                   </div>
                 )}
-                {order.profitPartial && (
+                {!isCancelled && order.profitPartial && (
                   <p className="text-[10px] text-muted-foreground/70">
                     {order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.
                     {isManualOrder && (
@@ -1457,7 +1519,7 @@ const OrderRow = memo(function OrderRow({
                     )}
                   </p>
                 )}
-                {order.desiEstimated && (
+                {!isCancelled && order.desiEstimated && (
                   <p className="text-[10px] text-amber-500/90">
                     {(order.missingDesiCount ?? 0) > 0
                       ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı.`

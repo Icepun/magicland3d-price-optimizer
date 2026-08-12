@@ -10,6 +10,20 @@
 // hiçbir rakamı KENDİLİĞİNDEN değiştirmez; yalnızca eski damgalı ayları "güncel değil" olarak
 // işaretler ki kullanıcı isterse "Bu ayı yeniden hesapla" diyebilsin.
 // KURAL: çekirdek kâr formülüne dokunan her değişiklikte bu sayı artar.
+/**
+ * ⚠️ v3'te BIRAKILDI (2026-08-12) — bilerek, unutulduğu için değil.
+ *
+ * `productionCostKnown` kapısı sıkılaştırıldı (malzeme payı 0 ise maliyet artık "bilinmiyor").
+ * Kural gereği bu sayının artması gerekirdi; ölçüm bunu GEREKSİZ kıldı: canlı verideki 284
+ * detaylı maliyet kaydının TAMAMINDA filament türü seçili ve malzeme bedeli > 0, yani hiçbir
+ * mevcut kayıt yeni kuralla farklı sonuç vermiyor → bayat snapshot YOK. Sayıyı artırmak tüm
+ * geçmiş siparişleri "eski hesaplamayla kayıtlı" gösterip yüzlerce siparişi gereksiz yere
+ * yeniden hesaplatırdı (uzak veritabanında her sorgu ~96ms).
+ *
+ * ARTIRMA KOŞULU: kâr formülü ya da maliyet kapısı, MEVCUT bir kaydın sonucunu değiştirecek
+ * biçimde değişirse artır. Değiştirip artırmazsan Raporlar o ayları "yeniden hesapla" diye
+ * HİÇ işaretlemez ve eski rakamlar kalıcı olur.
+ */
 export const FINANCE_CALCULATION_VERSION = 3;
 
 /**

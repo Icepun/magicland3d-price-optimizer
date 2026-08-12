@@ -3,12 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
+  computeOrdersShared,
   getOrdersCache,
-  getOrdersCacheGeneration,
-  setOrdersCache,
   isOrdersRefreshing,
   setOrdersRefreshing,
 } from "@/lib/orders-cache";
+import { jsonError } from "@/lib/api-error";
 import {
   ShopifyClient,
   ShopifyAdminTokenMissingError,
@@ -116,8 +116,8 @@ interface PlatformStatus {
   notConfigured?: boolean;
   error?: string;
   /**
-   * Bu platformdan gelen ama bilgisi eksik kalan sipariş sayısı (detayı alınamadı ya da
-   * tek seferde çekilebilecek sınırı aştı). 0/undefined = veri tam.
+   * Bu kaynaktan gelen ama bilgisi eksik kalan sipariş sayısı (detayı alınamadı, tek seferde
+   * çekilebilecek sınırı aştı ya da manuel kaydı okunamadı). 0/undefined = veri tam.
    */
   incompleteCount?: number;
 }
@@ -320,38 +320,29 @@ type ExpenseRules = ExpenseRuleInput[];
 // Panel kârı kendi SWR gövdelerinden okur ve o gövdeler diske de yazılır.
 const ORDERS_SOFT_MS = 60_000;
 
-// EŞZAMANLI HESAP TEKİLLEŞTİRME: Panel, Siparişler, Raporlar ve order-watch aynı anda
-// tetiklenebiliyordu → 3 pazaryeri çekimi + kâr hesabı KAÇ çağrı varsa o kadar kez koşuyordu
-// (uzak-HTTP'de her biri onlarca ardışık sorgu). Devam eden bir hesap varsa hepsi ONU paylaşır.
-let inflightOrdersCompute: Promise<Record<string, unknown>> | null = null;
-
-function computeOrdersBodyShared(): Promise<Record<string, unknown>> {
-  if (inflightOrdersCompute) return inflightOrdersCompute;
-  const attempt = computeOrdersBody().finally(() => {
-    if (inflightOrdersCompute === attempt) inflightOrdersCompute = null;
-  });
-  inflightOrdersCompute = attempt;
-  return attempt;
-}
-
+// EŞZAMANLI HESAP TEKİLLEŞTİRME + NESİL KORUMASI: Panel, Siparişler, Raporlar ve order-watch
+// aynı anda tetikleyebiliyor; hepsi lib/orders-cache içindeki computeOrdersShared'ı paylaşır.
+// Burada AYRI bir kopya vardı ve o kopya nesli gözetmiyordu: kullanıcı hesap sürerken kargo/
+// komisyon/gider kuralını değiştirip "Yenile"ye bastığında DEVAM EDEN eski hesap dönüyor ve
+// önbelleğe de yazılıyordu (doğru rakam için iki kez yenilemek gerekiyordu). Yayınlama kararı
+// artık tek yerde: sonuç eskimişse yayınlanmaz, hesap yeni kurallarla baştan koşar.
 export async function GET(req: NextRequest) {
-  const fresh = new URL(req.url).searchParams.get("fresh") === "1";
-  const cached = getOrdersCache();
-  if (!fresh && cached) {
-    if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
-      const generation = getOrdersCacheGeneration();
-      setOrdersRefreshing(true);
-      void computeOrdersBodyShared()
-        .then((b) => { setOrdersCache(b, generation); })
-        .catch(() => {})
-        .finally(() => { setOrdersRefreshing(false); });
+  try {
+    const fresh = new URL(req.url).searchParams.get("fresh") === "1";
+    const cached = getOrdersCache();
+    if (!fresh && cached) {
+      if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
+        setOrdersRefreshing(true);
+        void computeOrdersShared(computeOrdersBody)
+          .catch(() => {})
+          .finally(() => { setOrdersRefreshing(false); });
+      }
+      return NextResponse.json(cached.body);
     }
-    return NextResponse.json(cached.body);
+    return NextResponse.json(await computeOrdersShared(computeOrdersBody));
+  } catch (error) {
+    return jsonError(error);
   }
-  const generation = getOrdersCacheGeneration();
-  const body = await computeOrdersBodyShared();
-  setOrdersCache(body, generation);
-  return NextResponse.json(body);
 }
 
 async function computeOrdersBody(): Promise<Record<string, unknown>> {
@@ -364,13 +355,31 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
   const historyCutoff =
     (Math.floor(Date.now() / 86_400_000) - HISTORY_SYNC_DAYS) * 86_400_000;
   const orders: UnifiedOrder[] = [];
-  const manualOrdersPromise = remotePrisma.manualOrder.findMany({
-    where: { orderedAt: { gte: new Date(historyCutoff) } },
-    orderBy: { orderedAt: "desc" },
-  });
+  // Hata BURADA yakalanır: sonuç ancak pazaryeri çekimi bittikten sonra bekleniyor ve o aralıkta
+  // sahipsiz kalan bir reddetme tüm hesabı düşürüyordu.
+  type ManualOrderRow = Awaited<
+    ReturnType<typeof remotePrisma.manualOrder.findMany>
+  >[number];
+  const manualOrdersPromise: Promise<{
+    rows: ManualOrderRow[];
+    error: string | null;
+  }> = remotePrisma.manualOrder
+    .findMany({
+      where: { orderedAt: { gte: new Date(historyCutoff) } },
+      orderBy: { orderedAt: "desc" },
+    })
+    .then((rows) => ({ rows, error: null }))
+    .catch((error: unknown) => ({
+      rows: [] as ManualOrderRow[],
+      error:
+        error instanceof Error ? error.message : "Manuel siparişler okunamadı",
+    }));
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
   let hepsiburada: PlatformStatus = { ok: false, count: 0 };
+  // Manuel siparişler de kendi durumunu taşır: okunamayan TEK kayıt yüzünden üç pazaryerinden
+  // yeni çekilmiş bütün veriyi çöpe atmıyoruz (aşağıya bkz.).
+  let manualSource: PlatformStatus = { ok: true, count: 0 };
 
   // Ham siparişleri çek (her platform bağımsız) ──────────────────────────────
   type Raw = {
@@ -1079,7 +1088,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
 
   // Manuel siparişler kendi kalıcı finans snapshot'larını aynı ManualOrder satırında taşır.
   // Platform siparişlerinin canlı hesap hattına veya OrderFinanceSnapshot'a sokulmazlar.
-  const manualOrders = await manualOrdersPromise;
+  //
+  // 🔴 TEK BOZUK KAYIT HER ŞEYİ ÇÖPE ATIYORDU: bu okuma hata verdiğinde (bağlantı düştü ya da
+  // tek bir kaydın JSON'u bozuk) tüm hesap patlıyor, üç pazaryerinden 1-3 saniyede yeni çekilmiş
+  // BÜTÜN veri kayboluyordu. Artık manuel kaynak atlanır, siparişler listelenmeye devam eder ve
+  // kullanıcıya kısa bir uyarı taşınır.
+  const manualRead = await manualOrdersPromise;
+  const manualOrders = manualRead.rows;
+  if (manualRead.error) {
+    console.error("[manual-order] liste okunamadı:", manualRead.error);
+    manualSource = { ok: false, count: 0, error: manualRead.error };
+  }
+  /** Kaydı bozuk olduğu için listeye alınamayan manuel sipariş sayısı. */
+  let manualSkipped = 0;
   for (const manual of manualOrders) {
     try {
       const storedItems = parseManualOrderItems(manual.itemsJson).items;
@@ -1127,11 +1148,19 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
         editHref: `/api/manual-orders/${manual.id}`,
       });
     } catch (error) {
+      manualSkipped += 1;
       console.error(
         `[manual-order] ${manual.id} okunamadı:`,
         error instanceof Error ? error.message : error
       );
     }
+  }
+  if (manualSource.ok) {
+    manualSource = {
+      ok: true,
+      count: manualOrders.length - manualSkipped,
+      incompleteCount: manualSkipped,
+    };
   }
 
   // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ / BOZMAZ).
@@ -1301,6 +1330,7 @@ async function computeOrdersBody(): Promise<Record<string, unknown>> {
     shopify,
     trendyol,
     hepsiburada,
+    manual: manualSource,
     financeHistory,
   };
 }

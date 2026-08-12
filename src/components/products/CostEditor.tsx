@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { formatCurrency } from "@/lib/utils";
 import { computePackagingCost, type PackagingSettings, type NylonLevel } from "@/core/packaging";
+import { resolveProductCost } from "@/core/product-cost";
 
 interface FilamentType {
   id: string;
@@ -40,6 +41,127 @@ export interface CostInitial {
   desiInput: string;
 }
 
+/** Kayıtlı (sunucudaki) maliyet — form değerleriyle karşılaştırmak için gereken en dar şekil. */
+export interface SavedCostSnapshot {
+  desi: number | null;
+  cost: {
+    filamentTypeId: string | null;
+    filamentWeight: number | null;
+    printTimeHours: number | null;
+    wasteRate: number | null;
+    packagingOptionId: string | null;
+    nylonLevel: string | null;
+    tapeUsed: boolean | null;
+  } | null;
+}
+
+/**
+ * Desi metnini sayıya çevirir.
+ *
+ * ⚠️ "0" GEÇERLİ bir desidir (çok küçük ürünlerde bilerek girilir). Eskiden `parseFloat(x) || null`
+ * kullanılıyordu: 0 "boş" sayılıp desi SİLİNİYORDU — ürün detayı açılır açılmaz kayıt tetikleniyor,
+ * desi null'a düşüyor ve kargo 1 desi üzerinden hesaplanmaya başlıyordu.
+ * Yalnız boş/geçersiz metin "girilmedi" (null) demektir.
+ */
+export function parseDesiInput(text: string): number | null {
+  const trimmed = text.trim().replace(",", ".");
+  if (!trimmed) return null;
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+/** Alan bazında kısa uyarılar — dolu olan her anahtar o alanın altında gösterilir. */
+export interface CostFieldErrors {
+  filamentWeight?: string;
+  printTimeHours?: string;
+  wasteRate?: string;
+  desi?: string;
+}
+
+/**
+ * Geçersiz değeri KAYNAKTA yakalar.
+ *
+ * Sunucu fire oranını %100 ile sınırlar ve sınır aşılınca isteğin TAMAMINI reddeder — o an
+ * formdaki hiçbir alan (gramaj, süre, desi…) kaydedilmez. Bu yüzden geçersiz alan varken istek
+ * hiç gönderilmez; kullanıcı tek satırlık uyarıyı alanın altında görür.
+ */
+export function validateCostFields(fields: {
+  filamentWeight: string;
+  printTimeHours: string;
+  wasteRate: string;
+  desiInput: string;
+}): CostFieldErrors {
+  const errors: CostFieldErrors = {};
+  /** Boş = kontrol edilecek bir şey yok; NaN = sayı değil. */
+  const sayi = (text: string): number | null => {
+    const trimmed = text.trim().replace(",", ".");
+    if (!trimmed) return null;
+    const parsed = Number.parseFloat(trimmed);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  };
+  const denetle = (
+    text: string,
+    ad: string,
+    ustSinir?: { limit: number; mesaj: string }
+  ): string | undefined => {
+    const value = sayi(text);
+    if (value === null) return undefined;
+    if (Number.isNaN(value)) return `${ad} için sayı gir`;
+    if (value < 0) return `${ad} eksi olamaz`;
+    if (ustSinir && value > ustSinir.limit) return ustSinir.mesaj;
+    return undefined;
+  };
+
+  const weight = denetle(fields.filamentWeight, "Ağırlık");
+  if (weight) errors.filamentWeight = weight;
+  const time = denetle(fields.printTimeHours, "Süre");
+  if (time) errors.printTimeHours = time;
+  const waste = denetle(fields.wasteRate, "Fire", {
+    limit: 100,
+    mesaj: "Fire en fazla %100 olabilir",
+  });
+  if (waste) errors.wasteRate = waste;
+  const desi = denetle(fields.desiInput, "Desi");
+  if (desi) errors.desi = desi;
+  return errors;
+}
+
+/** Kayıtlı maliyetin form değerleri karşılığı — seed, "değişti mi?" ve flush TEK kaynaktan. */
+export function costValuesOf(saved: SavedCostSnapshot): CostValues {
+  const c = saved.cost;
+  return {
+    filamentTypeId: c?.filamentTypeId || "",
+    filamentWeight: c?.filamentWeight ?? 0,
+    printTimeHours: c?.printTimeHours ?? 0,
+    wasteRate: Number(c?.wasteRate) || 0,
+    packagingOptionId: c?.packagingOptionId || "",
+    nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
+    tapeUsed: Boolean(c?.tapeUsed),
+    desi: saved.desi ?? null,
+  };
+}
+
+/**
+ * İki maliyet formu aynı mı? Tolerans şart: yüzde ↔ oran çevrimi (0,07 → 7 → 0,07) ondalık
+ * artığı bırakıyor ve form açılır açılmaz "değişmiş" görünüp kendiliğinden kayıt tetikliyordu.
+ */
+export function costValuesEqual(a: CostValues | null, b: CostValues | null): boolean {
+  if (!a || !b) return a === b;
+  const yakin = (x: number, y: number) => Math.abs(x - y) < 1e-9;
+  return (
+    a.filamentTypeId === b.filamentTypeId &&
+    yakin(a.filamentWeight, b.filamentWeight) &&
+    yakin(a.printTimeHours, b.printTimeHours) &&
+    yakin(a.wasteRate, b.wasteRate) &&
+    a.packagingOptionId === b.packagingOptionId &&
+    a.nylonLevel === b.nylonLevel &&
+    a.tapeUsed === b.tapeUsed &&
+    // Desi'de 0 ile "girilmedi" AYRI şeyler → null karşılaştırması sayıya düşürülmez.
+    (a.desi === null || b.desi === null ? a.desi === b.desi : yakin(a.desi, b.desi))
+  );
+}
+
 /**
  * İZOLE maliyet formu (state colocation). Tüm input state'i BURADA local tutulur → tuşa basınca
  * yalnızca bu küçük kart render olur; ağır ürün-detay sayfası (3 platform kartı, grafikler) DEĞİL.
@@ -49,6 +171,7 @@ export interface CostInitial {
  * render OLMAZ → yazarken donma yok.
  */
 function CostEditorImpl({
+  productId,
   initial,
   filaments,
   packagingSettings,
@@ -58,7 +181,9 @@ function CostEditorImpl({
   applyPending,
   onApply,
   onChange,
+  onFlush,
 }: {
+  productId: string;
   initial: CostInitial;
   filaments: FilamentType[];
   packagingSettings: PackagingSettings;
@@ -68,6 +193,8 @@ function CostEditorImpl({
   applyPending: boolean;
   onApply: () => void;
   onChange: (v: CostValues) => void;
+  /** Form sökülürken (varyant değişimi / sayfadan çıkış) bekleyen kaydı hemen yazdırır. */
+  onFlush: (productId: string, v: CostValues) => void;
 }) {
   const [filamentTypeId, setFilamentTypeId] = useState(initial.filamentTypeId);
   const [filamentWeight, setFilamentWeight] = useState(initial.filamentWeight);
@@ -77,6 +204,13 @@ function CostEditorImpl({
   const [nylonLevel, setNylonLevel] = useState<NylonLevel>(initial.nylonLevel);
   const [tapeUsed, setTapeUsed] = useState(initial.tapeUsed);
   const [desiInput, setDesiInput] = useState(initial.desiInput);
+
+  // Kullanıcı bu formda gerçekten bir şey değiştirdi mi? Açılışta hiçbir alana dokunulmadan
+  // kayıt tetiklenmesin (eskiden "Maliyet kaydedildi" bildirimi kendiliğinden çıkıyordu).
+  const touchedRef = useRef(false);
+  const touch = () => {
+    touchedRef.current = true;
+  };
 
   // ── Canlı maliyet (local, anında) ──
   const selectedFilament = filaments.find((f) => f.id === filamentTypeId);
@@ -110,6 +244,34 @@ function CostEditorImpl({
   const calculatedTotalCost = printSubtotal + calcWaste + calcPackaging;
   const fixedExtras = packagingBreakdown.card + packagingBreakdown.sticker + packagingBreakdown.sakiz;
 
+  // "Maliyet biliniyor mu?" kararı TEK kaynaktan (@/core). Paketleme her ürüne otomatik eklendiği
+  // için toplam asla 0 olmaz; maliyet girilmemişken tutar göstermek "girildi" izlenimi veriyordu.
+  const productionKnown =
+    resolveProductCost(
+      {
+        costMode: "detailed",
+        manualCost: null,
+        totalCost: null,
+        filamentWeight: fWeight,
+        printTimeHours: pTime,
+        wasteRate: wRate,
+        packagingOptionId: packagingOptionId || null,
+        nylonLevel,
+        tapeUsed,
+      },
+      globalSettings,
+      costPerGram
+    )?.productionCostKnown ?? false;
+
+  // ── Alan bazında doğrulama — geçersizken istek HİÇ gitmez ──
+  const fieldErrors = validateCostFields({
+    filamentWeight,
+    printTimeHours,
+    wasteRate,
+    desiInput,
+  });
+  const hasFieldError = Object.keys(fieldErrors).length > 0;
+
   // ── 250ms debounce → parent'a bildir (canlı önizleme + otomatik kayıt parent'ta) ──
   const values = useMemo<CostValues>(
     () => ({
@@ -120,14 +282,31 @@ function CostEditorImpl({
       packagingOptionId,
       nylonLevel,
       tapeUsed,
-      desi: parseFloat(desiInput) || null,
+      desi: parseDesiInput(desiInput),
     }),
     [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput]
   );
   useEffect(() => {
+    if (!touchedRef.current || hasFieldError) return;
     const t = setTimeout(() => onChange(values), 250);
     return () => clearTimeout(t);
-  }, [values, onChange]);
+  }, [values, onChange, hasFieldError]);
+
+  // Sökülme anında (varyant değişimi / geri tuşu) bekleyen 250ms + parent'taki kayıt gecikmesi
+  // birlikte ~1sn ediyordu; o süre dolmadan çıkınca değişiklik kayboluyordu. Son geçerli değerler
+  // ref'te tutulup sökülürken FLUSH edilir.
+  const pendingRef = useRef({ productId, values, valid: !hasFieldError, onFlush });
+  useEffect(() => {
+    pendingRef.current = { productId, values, valid: !hasFieldError, onFlush };
+  });
+  useEffect(
+    () => () => {
+      const p = pendingRef.current;
+      if (!touchedRef.current || !p.valid) return;
+      p.onFlush(p.productId, p.values);
+    },
+    []
+  );
 
   return (
     <Card>
@@ -144,7 +323,7 @@ function CostEditorImpl({
             <Label className="text-xs">Filament Türü</Label>
             <select
               value={filamentTypeId}
-              onChange={(e) => setFilamentTypeId(e.target.value)}
+              onChange={(e) => { touch(); setFilamentTypeId(e.target.value); }}
               className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <option value="">Seçin...</option>
@@ -154,6 +333,11 @@ function CostEditorImpl({
                 </option>
               ))}
             </select>
+            {!filamentTypeId && (
+              <p className="text-[10px] text-amber-500 mt-1 animate-in fade-in duration-200">
+                Filament türü seçilmeden maliyet hesaplanamaz.
+              </p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -163,8 +347,12 @@ function CostEditorImpl({
                 min="0"
                 step="1"
                 value={filamentWeight}
-                onChange={(e) => setFilamentWeight(e.target.value)}
+                onChange={(e) => { touch(); setFilamentWeight(e.target.value); }}
+                aria-invalid={Boolean(fieldErrors.filamentWeight)}
               />
+              {fieldErrors.filamentWeight && (
+                <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.filamentWeight}</p>
+              )}
             </div>
             <div>
               <Label className="text-xs">Süre (saat)</Label>
@@ -173,8 +361,12 @@ function CostEditorImpl({
                 min="0"
                 step="0.1"
                 value={printTimeHours}
-                onChange={(e) => setPrintTimeHours(e.target.value)}
+                onChange={(e) => { touch(); setPrintTimeHours(e.target.value); }}
+                aria-invalid={Boolean(fieldErrors.printTimeHours)}
               />
+              {fieldErrors.printTimeHours && (
+                <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.printTimeHours}</p>
+              )}
             </div>
           </div>
           <div>
@@ -185,8 +377,12 @@ function CostEditorImpl({
               max="100"
               step="0.1"
               value={wasteRate}
-              onChange={(e) => setWasteRate(e.target.value)}
+              onChange={(e) => { touch(); setWasteRate(e.target.value); }}
+              aria-invalid={Boolean(fieldErrors.wasteRate)}
             />
+            {fieldErrors.wasteRate && (
+              <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.wasteRate}</p>
+            )}
           </div>
         </div>
 
@@ -206,7 +402,7 @@ function CostEditorImpl({
             <Label className="text-xs">Poşet / Koli</Label>
             <select
               value={packagingOptionId}
-              onChange={(e) => setPackagingOptionId(e.target.value)}
+              onChange={(e) => { touch(); setPackagingOptionId(e.target.value); }}
               className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
             >
               <option value="">Yok</option>
@@ -222,7 +418,7 @@ function CostEditorImpl({
               <Label className="text-xs">Naylon</Label>
               <select
                 value={nylonLevel}
-                onChange={(e) => setNylonLevel(e.target.value as NylonLevel)}
+                onChange={(e) => { touch(); setNylonLevel(e.target.value as NylonLevel); }}
                 className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="none">Yok</option>
@@ -235,7 +431,7 @@ function CostEditorImpl({
               <Label className="text-xs">Bant</Label>
               <select
                 value={tapeUsed ? "yes" : "no"}
-                onChange={(e) => setTapeUsed(e.target.value === "yes")}
+                onChange={(e) => { touch(); setTapeUsed(e.target.value === "yes"); }}
                 className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="no">Yok</option>
@@ -261,13 +457,18 @@ function CostEditorImpl({
               min="0"
               step="0.1"
               value={desiInput}
-              onChange={(e) => setDesiInput(e.target.value)}
+              onChange={(e) => { touch(); setDesiInput(e.target.value); }}
               placeholder="örn. 2"
+              aria-invalid={Boolean(fieldErrors.desi)}
             />
-            <p className="text-[10px] text-muted-foreground mt-1">
-              Trendyol kargosu desi + barem&apos;e göre otomatik hesaplanır. Shopify kargosu Kargo
-              Kuralları&apos;ndaki Shopify baremine göre.
-            </p>
+            {fieldErrors.desi ? (
+              <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.desi}</p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Trendyol kargosu desi + barem&apos;e göre otomatik hesaplanır. Shopify kargosu Kargo
+                Kuralları&apos;ndaki Shopify baremine göre.
+              </p>
+            )}
           </div>
         </div>
 
@@ -306,11 +507,25 @@ function CostEditorImpl({
 
         <div className="flex justify-between items-baseline pt-1">
           <span className="text-xs font-semibold uppercase tracking-wider">Üretim Maliyeti</span>
-          <span className="text-lg font-bold tabular-nums">{formatCurrency(calculatedTotalCost)}</span>
+          <span className="text-lg font-bold tabular-nums">
+            {/* BİLİNMEYEN ≠ SIFIR: maliyet girilmemişken paketlemeden gelen tutarı göstermek yanıltıyordu. */}
+            {formatCurrency(productionKnown ? calculatedTotalCost : null)}
+          </span>
         </div>
+        {!productionKnown && (
+          <p className="text-[11px] text-amber-500 -mt-2 animate-in fade-in duration-200">
+            Filament türü ve ağırlık girilince maliyet hesaplanır.
+          </p>
+        )}
 
-        <p className="text-center text-[11px] text-muted-foreground pt-0.5 h-4">
-          {savePending ? "Kaydediliyor…" : "✓ Değişiklikler otomatik kaydedilir"}
+        <p className="text-center text-[11px] pt-0.5 h-4">
+          {hasFieldError ? (
+            <span className="text-destructive">Kırmızı alanı düzeltmeden kaydedilmez</span>
+          ) : (
+            <span className="text-muted-foreground">
+              {savePending ? "Kaydediliyor…" : "✓ Değişiklikler otomatik kaydedilir"}
+            </span>
+          )}
         </p>
 
         {variantCount > 1 && (

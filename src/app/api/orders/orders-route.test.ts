@@ -17,6 +17,13 @@ const h = vi.hoisted(() => ({
     hbPackages: {} as Record<string, any[]>,
     hbDetails: {} as Record<string, any>,
     persisted: [] as any[],
+    /** Manuel sipariş okuması bu mesajla patlar (null = sorunsuz). */
+    manualError: null as string | null,
+    sharedCalls: 0,
+    /** Doluysa paylaşılan hesap gerçek hesabı çalıştırmadan bu gövdeyi döndürür. */
+    sharedResult: null as any,
+    /** Doluysa paylaşılan hesap bu mesajla patlar. */
+    sharedError: null as string | null,
   },
 }));
 
@@ -26,10 +33,14 @@ vi.mock("@/lib/route-cache", () => ({
 }));
 vi.mock("@/lib/orders-cache", () => ({
   getOrdersCache: () => null,
-  getOrdersCacheGeneration: () => 0,
-  setOrdersCache: () => {},
   isOrdersRefreshing: () => false,
   setOrdersRefreshing: () => {},
+  // Rota artık paylaşılan hesabı KENDİ kopyasıyla değil bu uçla çağırıyor (nesil koruması orada).
+  computeOrdersShared: async (compute: () => Promise<any>) => {
+    h.state.sharedCalls += 1;
+    if (h.state.sharedError) throw new Error(h.state.sharedError);
+    return h.state.sharedResult ?? compute();
+  },
 }));
 vi.mock("@/lib/push-notify", () => ({ pushToAllDevices: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-finance-snapshots", () => ({
@@ -52,7 +63,14 @@ vi.mock("@/lib/prisma", () => {
       orderFinanceSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
       $executeRawUnsafe: vi.fn(async () => 0),
     },
-    remotePrisma: { manualOrder: { findMany: vi.fn(async () => [] as any[]) } },
+    remotePrisma: {
+      manualOrder: {
+        findMany: vi.fn(async () => {
+          if (h.state.manualError) throw new Error(h.state.manualError);
+          return [] as any[];
+        }),
+      },
+    },
   };
 });
 vi.mock("@/services/shopify-settings", () => ({ getShopifyCredentials: vi.fn(async () => ({})) }));
@@ -66,6 +84,8 @@ vi.mock("@/services/shopify-client", () => ({
 }));
 vi.mock("@/services/trendyol-settings", () => ({ getTrendyolCredentials: vi.fn(async () => ({})) }));
 vi.mock("@/services/trendyol-client", () => ({
+  // jsonError bu sınıfı tanımak için import ediyor (rota artık onunla sarmalı).
+  TrendyolApiError: class TrendyolApiError extends Error {},
   TrendyolClient: class {
     async listOrders() {
       const next = h.state.trendyolPages[h.state.trendyolCall++];
@@ -112,6 +132,58 @@ beforeEach(() => {
   h.state.hbPackages = {};
   h.state.hbDetails = {};
   h.state.persisted = [];
+  h.state.manualError = null;
+  h.state.sharedCalls = 0;
+  h.state.sharedResult = null;
+  h.state.sharedError = null;
+});
+
+const trendyolOrder = () => ({
+  id: 1,
+  orderNumber: "TY-1",
+  status: "Delivered",
+  orderDate: Date.now(),
+  totalPrice: 250,
+  lines: [{ barcode: "BAR-1", productName: "Ürün", quantity: 1, price: 250 }],
+});
+
+describe("siparişler ucu — hesap ve hata yolu", () => {
+  it("yanıt paylaşılan hesaptan gelir (rota kendi kopyasını çalıştırmaz)", async () => {
+    // Paylaşılan hesap kendi gövdesini döndürürse yanıtta O görünmeli: aksi halde rota
+    // kural değişimini gözeten nesil korumasını atlıyor demektir.
+    h.state.sharedResult = { orders: [], paylasilan: true };
+
+    const body = await fetchOrders();
+
+    expect(h.state.sharedCalls).toBe(1);
+    expect(body.paylasilan).toBe(true);
+  });
+
+  it("manuel siparişler okunamazsa pazaryerinden çekilen veri çöpe gitmez", async () => {
+    h.state.manualError = "manuel kayıtlar okunamadı";
+    h.state.trendyolPages = [[trendyolOrder()]];
+
+    const body = await fetchOrders();
+
+    // Trendyol verisi duruyor...
+    expect(body.trendyol).toMatchObject({ ok: true, count: 1 });
+    expect(body.summary.trendyol).toMatchObject({ revenue: 250, orderCount: 1 });
+    // ...manuel kaynak ise uyarısıyla birlikte atlanmış.
+    expect(body.manual).toMatchObject({ ok: false });
+    expect(body.manual.error).toContain("manuel kayıtlar okunamadı");
+  });
+
+  it("hesap tamamen patlarsa istek düşmez, hata gövdesi döner", async () => {
+    h.state.sharedError = "veritabanına ulaşılamadı";
+
+    const res = await GET(
+      new Request("http://localhost/api/orders?fresh=1") as NextRequest
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body.error).toContain("veritabanına ulaşılamadı");
+  });
 });
 
 describe("siparişler ucu — çekim bütünlüğü", () => {

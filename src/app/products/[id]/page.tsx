@@ -9,6 +9,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
@@ -16,7 +23,13 @@ import { StockInput } from "@/components/products/StockInput";
 import { ModelFilesCard } from "@/components/products/ModelFilesCard";
 import { ProductImageEditorDialog } from "@/components/products/ProductImageEditorDialog";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
-import { CostEditor, type CostValues, type CostInitial } from "@/components/products/CostEditor";
+import {
+  CostEditor,
+  costValuesEqual,
+  costValuesOf,
+  type CostValues,
+  type CostInitial,
+} from "@/components/products/CostEditor";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw } from "lucide-react";
@@ -25,6 +38,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
+import { belowShopifyMinBasket } from "@/core/platform-rules";
 import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/lib/client-pricing";
 import { fetchJson } from "@/lib/fetch-json";
 
@@ -113,6 +127,56 @@ const PLATFORM_INFO = {
   hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
 } as const;
 
+/**
+ * Bu fiyata uyan bir kargo bareni bulunamadı mı? (Bulunamazsa kargo 0₺ sayılır ve kâr şişer.)
+ *
+ * Kargonun BİLEREK 0 olduğu iki durum uyarı DEĞİLDİR: listing'de elle girilmiş kargo, ve
+ * Shopify'da sepet minimumunun altındaki ürün (kargo müşteride kalır, kural aranmaz).
+ */
+function cargoRuleMissingFor(
+  platform: string,
+  listing: Pick<Listing, "cargoCost"> | null,
+  result: SimulationResult | null
+): boolean {
+  if (!result || result.appliedCargoRule) return false;
+  if (listing?.cargoCost != null) return false;
+  return !belowShopifyMinBasket(platform, result.effectiveSalePrice);
+}
+
+/** Kâr rakamının hangi eksik girdiyle hesaplandığını tek satırda söyler. */
+function ProfitAssumptionNotes({
+  desiMissing,
+  cargoRuleMissing,
+  className,
+}: {
+  desiMissing: boolean;
+  cargoRuleMissing: boolean;
+  className?: string;
+}) {
+  if (!desiMissing && !cargoRuleMissing) return null;
+  return (
+    <div
+      className={cn(
+        "space-y-1 animate-in fade-in slide-in-from-top-1 duration-300",
+        className
+      )}
+    >
+      {desiMissing && (
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-amber-500">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
+          <span>Desi girilmedi — kargo 1 desi sayıldı, kâr olduğundan yüksek olabilir.</span>
+        </p>
+      )}
+      {cargoRuleMissing && (
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-destructive font-medium">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
+          <span>Bu ürüne uyan kargo fiyatı yok — kargo ₺0 sayıldı, kâr gerçekte daha düşük.</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function ProductDetailPage({
   params,
 }: {
@@ -174,17 +238,9 @@ export default function ProductDetailPage({
   // basınca yalnız o küçük kart render olur; bu dev sayfa (3 platform kartı + grafikler) DEĞİL.
   const seededCostValues = useMemo<CostValues | null>(() => {
     if (!product) return null;
-    const cost = product.cost;
-    return {
-      filamentTypeId: cost?.filamentTypeId || "",
-      filamentWeight: cost?.filamentWeight ?? 0,
-      printTimeHours: cost?.printTimeHours ?? 0,
-      wasteRate: Number(cost?.wasteRate) || 0,
-      packagingOptionId: cost?.packagingOptionId || "",
-      nylonLevel: (cost?.nylonLevel as NylonLevel) || "none",
-      tapeUsed: Boolean(cost?.tapeUsed),
-      desi: product.desi ?? null,
-    };
+    // Seed, "değişti mi?" karşılaştırması ve flush AYNI dönüşümü kullanır (costValuesOf) —
+    // üçü ayrı yazıldığında desi 0 gibi kenar durumlar sessizce ayrışıyordu.
+    return costValuesOf(product);
     // Yalnız ürün kimliği değişince seed et; aynı üründeki cache güncellemesi formu ezmemeli.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id]);
@@ -206,11 +262,14 @@ export default function ProductDetailPage({
       filamentTypeId: c?.filamentTypeId || "",
       filamentWeight: c?.filamentWeight ? String(c.filamentWeight) : "",
       printTimeHours: c?.printTimeHours ? String(c.printTimeHours) : "",
-      wasteRate: c?.wasteRate ? String(Number(c.wasteRate) * 100) : "",
+      // Oran → yüzde çevriminin ondalık artığı ekrana yazılıyordu (0,07 → "7.000000000000001").
+      wasteRate: c?.wasteRate ? String(Math.round(Number(c.wasteRate) * 10000) / 100) : "",
       packagingOptionId: c?.packagingOptionId || "",
       nylonLevel: (c?.nylonLevel as NylonLevel) || "none",
       tapeUsed: Boolean(c?.tapeUsed),
-      desiInput: product?.desi ? String(product.desi) : "",
+      // Desi 0 GEÇERLİ: `product.desi ? …` kutuyu boş bırakıyor, boş kutu da kaydedilince
+      // desiyi siliyordu. Yalnız gerçekten girilmemişse (null) boş göster.
+      desiInput: product?.desi != null ? String(product.desi) : "",
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.id]);
@@ -246,13 +305,24 @@ export default function ProductDetailPage({
             },
           }),
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          // Sunucu reddettiyse SEBEBİ kullanıcıya göster (eskiden yalnız "HTTP 500" vardı ve
+          // formdaki hiçbir alanın kaydedilmediği ekranda hiç görünmüyordu).
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw Object.assign(new Error(j?.error || "Kaydedilemedi"), { status: r.status });
+        }
         return r.json();
       } finally {
         clearTimeout(to);
       }
     },
-    retry: 2, // geçici kopmada otomatik tekrar (PATCH idempotent → çift-yazma riski yok)
+    // Geçici kopmada otomatik tekrar (PATCH idempotent → çift-yazma riski yok). Ama sunucu
+    // "bu değer geçersiz" dediyse (4xx) tekrar denemek anlamsız — aynı cevap gelir.
+    retry: (attempt, error) => {
+      const status = (error as { status?: number })?.status ?? 0;
+      if (status >= 400 && status < 500) return false;
+      return attempt < 2;
+    },
     retryDelay: (n) => Math.min(1000 * 2 ** n, 4000),
     // OPTIMISTIC: detay cache'ini anında güncelle → kullanıcı beklemez.
     onMutate: async ({ productId, values: v }) => {
@@ -279,11 +349,16 @@ export default function ProductDetailPage({
       );
       return { prev, productId };
     },
-    onError: (_e, _v, ctx) => {
+    onError: (e: Error, _v, ctx) => {
       // Sunucudaki/cache'teki kayıtlı değeri geri al. CostEditor yerel alanları korur; kullanıcı
       // bağlantı geldikten sonra küçük bir düzenlemeyle tekrar kaydetmeyi tetikleyebilir.
       if (ctx?.prev) queryClient.setQueryData(["product", ctx.productId], ctx.prev);
-      toast.error("Kaydedilemedi — alanlardaki değişiklikler korunuyor");
+      const status = (e as { status?: number })?.status ?? 0;
+      toast.error(
+        status >= 400 && status < 500
+          ? e.message // sunucunun kısa açıklaması ("Fire en fazla %100 olabilir")
+          : "Kaydedilemedi — alanlardaki değişiklikler korunuyor"
+      );
     },
     onSuccess: (_data, { productId }) => {
       toast.success("Maliyet kaydedildi");
@@ -444,6 +519,20 @@ export default function ProductDetailPage({
     });
   }, [product, costValues, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
 
+  // Kâr hangi VARSAYIMLARLA çıktı? Fiyatı bu ekranda belirlediğimiz için eksik girdiyi burada
+  // söylemek şart: desi boşken kargo 1 desi kabul edilir, ürüne uyan kargo fiyatı yoksa kargo 0₺
+  // sayılır — iki durumda da kâr olduğundan yüksek görünür. (Hesap DEĞİŞMEZ, yalnız uyarılır.)
+  // Desi 0 bilinçli bir değerdir → uyarı üretmez; yalnız hiç girilmemişse (null) uyarılır.
+  const desiMissing = costValues ? costValues.desi == null && product?.desi == null : false;
+  const cargoRuleMissingAnywhere = useMemo(
+    () =>
+      (preview?.platforms ?? []).some((p) => {
+        const listing = product?.listings.find((l) => l.id === p.listingId);
+        return cargoRuleMissingFor(p.platform, listing ?? null, p.result);
+      }),
+    [preview, product]
+  );
+
   // FİYAT LAB — PAHALI (~36ms, hedef-marj ikili araması): ERTELENMİŞ maliyetle hesaplanır. Böylece
   // poşet/naylon dropdown'larına tıklamak/yazı yazmak bu hesabı BEKLEMEZ (donma yok); kullanıcı
   // durunca lab boşta yetişir. (useDeferredValue: ara değerleri atlar, düşük öncelikte çalışır.)
@@ -465,16 +554,7 @@ export default function ProductDetailPage({
   // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).
   useEffect(() => {
     if (!product || !costValues) return;
-    const c = product.cost;
-    const unchanged =
-      (c?.filamentTypeId || "") === (costValues.filamentTypeId || "") &&
-      (c?.filamentWeight ?? 0) === costValues.filamentWeight &&
-      (c?.printTimeHours ?? 0) === costValues.printTimeHours &&
-      (Number(c?.wasteRate) || 0) === costValues.wasteRate &&
-      (c?.packagingOptionId || "") === (costValues.packagingOptionId || "") &&
-      ((c?.nylonLevel as string) || "none") === costValues.nylonLevel &&
-      Boolean(c?.tapeUsed) === costValues.tapeUsed &&
-      (product.desi ?? null) === costValues.desi;
+    const unchanged = costValuesEqual(costValuesOf(product), costValues);
     const revision = costRevisionRef.current;
     if (unchanged) {
       attemptedCostRevisionRef.current = Math.max(attemptedCostRevisionRef.current, revision);
@@ -494,9 +574,28 @@ export default function ProductDetailPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [costValues, product, saveCostMutation.isPending]);
 
+  // Bekleyen kaydı HEMEN yaz — form sökülürken (varyant değişimi / sayfadan çıkış) çağrılır.
+  // Yazma zinciri ~1sn sürüyordu (250ms form → 800ms otomatik kayıt); o süre dolmadan çıkanın
+  // değişikliği kayboluyordu. Kıyas cache'teki KAYITLI değerle yapılır: sayfa o an başka bir
+  // ürüne geçmiş olabilir, bu yüzden render'daki `product` kullanılamaz.
+  const saveCostMutate = saveCostMutation.mutate;
+  const flushCostSave = useCallback(
+    (productId: string, values: CostValues) => {
+      const saved = queryClient.getQueryData<ProductDetail>(["product", productId]);
+      if (saved && costValuesEqual(costValuesOf(saved), values)) return;
+      costRevisionRef.current += 1;
+      attemptedCostRevisionRef.current = costRevisionRef.current;
+      toast.info("Son değişiklikler kaydediliyor…");
+      saveCostMutate({ productId, values, revision: costRevisionRef.current });
+    },
+    [queryClient, saveCostMutate]
+  );
+
   // CostEditor'a STABİL onApply ver (memo bozulmasın) — mutate referansı zaten sabit.
   const applyMutate = applyCostToVariantsMutation.mutate;
-  const handleApplyToVariants = useCallback(() => applyMutate(), [applyMutate]);
+  // Onaysız çalıştırılmıyor: tek tık 28 ürünün maliyetini birden değiştirebiliyor ve geri alınamıyor.
+  const [applyConfirmOpen, setApplyConfirmOpen] = useState(false);
+  const handleApplyToVariants = useCallback(() => setApplyConfirmOpen(true), []);
 
   // Bu ürünü elle tazele (her ihtimale karşı) — uygulama mount'ta otomatik refetch yapmaz, bu yüzden
   // başka cihazdaki değişiklik veya kargo/komisyon kuralı güncellemesi için manuel yenileme.
@@ -696,6 +795,7 @@ export default function ProductDetailPage({
         <div className="space-y-4 lg:col-span-1">
           <CostEditor
             key={id}
+            productId={id}
             initial={initialCost}
             filaments={filaments}
             packagingSettings={packagingSettings}
@@ -705,6 +805,7 @@ export default function ProductDetailPage({
             applyPending={applyCostToVariantsMutation.isPending}
             onApply={handleApplyToVariants}
             onChange={handleCostChange}
+            onFlush={flushCostSave}
           />
         </div>
 
@@ -731,6 +832,7 @@ export default function ProductDetailPage({
                   productName={product.name}
                   liveResult={platformPreview?.result ?? null}
                   hasCost={preview?.hasCost ?? null}
+                  desiMissing={desiMissing}
                 />
               );
             })}
@@ -746,6 +848,14 @@ export default function ProductDetailPage({
 
       <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
 
+      {/* Hedef fiyatlar da aynı varsayımlarla çıkıyor → uyarı Fiyat Laboratuvarı'nın başında. */}
+      {priceLab?.hasCost && (
+        <ProfitAssumptionNotes
+          desiMissing={desiMissing}
+          cargoRuleMissing={cargoRuleMissingAnywhere}
+          className="-mb-3"
+        />
+      )}
       <PriceLabCard data={priceLab} />
 
       <PriceHistoryCard productId={product.id} />
@@ -768,6 +878,38 @@ export default function ProductDetailPage({
           }}
         />
       )}
+
+      <Dialog
+        open={applyConfirmOpen}
+        onOpenChange={(open) => !open && !applyCostToVariantsMutation.isPending && setApplyConfirmOpen(false)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tüm varyantlara uygulansın mı?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Bu maliyet ve desi, gruptaki{" "}
+            <strong className="text-foreground tabular-nums">
+              {product.variantGroup?.products?.length ?? 0} ürünün
+            </strong>{" "}
+            hepsine yazılacak. Eski maliyetleri geri getiremezsin.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApplyConfirmOpen(false)}>
+              Vazgeç
+            </Button>
+            <Button
+              disabled={applyCostToVariantsMutation.isPending}
+              onClick={() => {
+                setApplyConfirmOpen(false);
+                applyMutate();
+              }}
+            >
+              Uygula
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -785,6 +927,7 @@ function PlatformProfitCardImpl({
   productName,
   liveResult,
   hasCost,
+  desiMissing,
 }: {
   platform: "shopify" | "trendyol" | "hepsiburada";
   listing: Listing | null;
@@ -794,6 +937,8 @@ function PlatformProfitCardImpl({
   liveResult: SimulationResult | null;
   /** Maliyet girilmiş mi (preview yüklendiyse). null = preview henüz yüklenmedi */
   hasCost: boolean | null;
+  /** Desi hiç girilmemiş → kargo 1 desi varsayıldı (kâr şişmiş olabilir). */
+  desiMissing: boolean;
 }) {
   const info = PLATFORM_INFO[platform];
   const queryClient = useQueryClient();
@@ -1178,6 +1323,11 @@ function PlatformProfitCardImpl({
                   </div>
                 </div>
 
+                <ProfitAssumptionNotes
+                  desiMissing={desiMissing}
+                  cargoRuleMissing={cargoRuleMissingFor(platform, listing, result)}
+                />
+
                 {result.minOrderQty > 1 && (
                   <div
                     className="rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2 py-1 text-[11px] font-medium"
@@ -1190,9 +1340,16 @@ function PlatformProfitCardImpl({
                 <Separator />
 
                 <div className="space-y-1 text-[11px] tabular-nums">
+                  {result.minOrderQty > 1 && (
+                    <p className="text-[10px] uppercase tracking-wider text-muted-foreground/80 pb-0.5">
+                      {result.minOrderQty} adetlik sipariş üzerinden
+                    </p>
+                  )}
                   <div className="flex justify-between text-muted-foreground">
+                    {/* Diğer satırlar SİPARİŞ toplamı (×adet); KDV tek adetti → satırlar toplanınca
+                        net kâr çıkmıyordu. Hesap aynı, yalnız gösterim aynı ölçeğe getirildi. */}
                     <span>KDV (%{result.vatRate})</span>
-                    <span>−{formatCurrency(result.vatAmount)}</span>
+                    <span>−{formatCurrency(result.vatAmount * result.minOrderQty)}</span>
                   </div>
                   <div className="flex justify-between text-muted-foreground">
                     <span>Ürün + Paketleme</span>
@@ -1223,7 +1380,14 @@ function PlatformProfitCardImpl({
                         className="flex justify-between text-muted-foreground"
                       >
                         <span>{exp.name}</span>
-                        <span>−{formatCurrency(exp.amount)}</span>
+                        {/* Ciroyla orantılı gider her adette tekrar eder, sabit gider siparişe bir
+                            kez — motor da böyle hesaplıyor. Döküm sipariş ölçeğinde gösterilir. */}
+                        <span>
+                          −
+                          {formatCurrency(
+                            exp.type === "percentage" ? exp.amount * result.minOrderQty : exp.amount
+                          )}
+                        </span>
                       </div>
                     ))}
                   {result.inputVatCredit > 0 && (

@@ -776,7 +776,11 @@ async function resolveManualOrderInput(
         imageUrl: null,
         quantity: item.quantity,
         // Üretim payı > 0 ise maliyet biliniyor (productionCostKnown ile aynı ölçüt).
-        costKnown: calc.productionCost > 0,
+        // Çekirdekteki `productionCostKnown` ile AYNI ölçüt (product-cost.ts): malzeme payı
+        // yoksa maliyet BİLİNMİYOR sayılır. Aksi hâlde filament türü seçilmemiş serbest
+        // kalem, yalnız elektrik/aşınma/işçilik yüzünden "maliyeti biliniyor" sayılıp kâra
+        // malzeme bedeli hiç düşülmeden giriyordu (şişik kâr).
+        costKnown: calc.productionCost > 0 && calc.filamentCost > 0,
         productionCost: calc.productionCost,
         packagingCost: 0,
         filamentCost: calc.filamentCost,

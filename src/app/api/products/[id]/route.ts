@@ -7,6 +7,7 @@ import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches } from 
 import { bustCache } from "@/lib/route-cache";
 import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
 import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
+import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
 
 const UpdateProductSchema = z.object({
@@ -19,9 +20,11 @@ const UpdateProductSchema = z.object({
   categoryName: z.string().min(1).optional(),
   currentSalePrice: z.number().positive().optional(),
   listPrice: z.number().positive().nullable().optional(),
-  stock: z.number().int().min(0).optional(),
-  desi: z.number().positive().nullable().optional(),
-  weight: z.number().positive().nullable().optional(),
+  stock: z.number().int().min(0, "Stok eksi olamaz").optional(),
+  // Desi 0 GEÇERLİDİR: çok küçük ürünlerde bilerek girilir. `positive()` olduğu sürece 0 gönderen
+  // her istek komple reddediliyor, formdaki diğer alanlar da kaydedilmiyordu.
+  desi: z.number().min(0, "Desi eksi olamaz").nullable().optional(),
+  weight: z.number().positive("Ağırlık 0'dan büyük olmalı").nullable().optional(),
   // Görsel: elle URL yapıştırma / kaldırma. imageManual=true → sync (Yenile) ezmez.
   imageUrl: z.string().trim().max(2000).nullable().optional(),
   imageManual: z.boolean().optional(),
@@ -35,9 +38,15 @@ const UpdateProductSchema = z.object({
       costMode: z.enum(["manual", "template", "detailed"]).optional(),
       templateId: z.string().nullable().optional(),
       filamentTypeId: z.string().nullable().optional(),
-      filamentWeight: z.number().min(0).nullable().optional(),
-      printTimeHours: z.number().min(0).nullable().optional(),
-      wasteRate: z.number().min(0).max(1).nullable().optional(),
+      filamentWeight: z.number().min(0, "Ağırlık eksi olamaz").nullable().optional(),
+      printTimeHours: z.number().min(0, "Süre eksi olamaz").nullable().optional(),
+      // Mesajlar KULLANICIYA gösteriliyor (istemci yanıttaki `error` alanını olduğu gibi basar).
+      wasteRate: z
+        .number()
+        .min(0, "Fire eksi olamaz")
+        .max(1, "Fire en fazla %100 olabilir")
+        .nullable()
+        .optional(),
       packagingPoset: z.number().min(0).nullable().optional(),
       packagingNaylon: z.number().min(0).nullable().optional(),
       packagingBant: z.number().min(0).nullable().optional(),
@@ -96,6 +105,19 @@ export async function GET(
 }
 
 export async function PATCH(
+  req: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  try {
+    return await patchProduct(req, ctx);
+  } catch (error) {
+    // Doğrulamaya takılan istek eskiden gövdesiz 500 dönüyordu: kullanıcı sebebini göremiyor,
+    // formdaki hiçbir alanın kaydedilmediğini de anlamıyordu. Artık KISA bir cümle + 400 döner.
+    return jsonError(error);
+  }
+}
+
+async function patchProduct(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
