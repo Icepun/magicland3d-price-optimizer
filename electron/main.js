@@ -13,6 +13,8 @@ const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${defaultPo
 
 let server;
 let isQuittingForUpdate = false;
+/** Güncelleme yeniden-denemesi sürüyor mu — ara denemelerin hatası ekrana yansıtılmaz. */
+let updaterRetrying = false;
 // Tepsi (tray) modu: pencere X'i uygulamayı KAPATMAZ, arka plana alır — relay + sipariş izleyici
 // çalışmaya devam eder → bildirimler uygulama "kapalıyken" de zamanında düşer.
 let tray = null;
@@ -204,6 +206,27 @@ async function gracefulShutdown(reason) {
   }, 50);
 }
 
+/**
+ * Güncelleme hatasını kullanıcı diline çevir.
+ *
+ * GitHub'ın sürüm dosyalarını sunduğu adres (release-assets.githubusercontent.com) bu ağdan
+ * KESİNTİLİ: ölçüldü, altı istekten biri düşüyor. Güncelleme MANİFESTİ de (latest-mac.yml) aynı
+ * adresten indiği için "Kontrol Et" bazen ham `net::ERR_HTTP2_SERVER_REFUSED_STREAM` gösteriyordu.
+ * Bu, kullanıcıya uygulama bozulmuş hissi veriyor; oysa geçici bir ağ dalgalanması ve bir sonraki
+ * denemede geçiyor. Ağ kaynaklı hatalar sakin bir metne çevriliyor; diğer hatalar aynen kalıyor.
+ */
+function friendlyUpdateError(error) {
+  const raw = String(error?.message || error || "");
+  const networkish =
+    /ERR_HTTP2|ERR_CONNECTION|ERR_NETWORK|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|Empty reply/i.test(
+      raw
+    );
+  if (networkish) {
+    return "Sunucuya ulasilamadi (gecici ag sorunu). Birazdan tekrar deneyin.";
+  }
+  return raw || "Guncelleme kontrolu basarisiz";
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
@@ -260,9 +283,12 @@ function setupAutoUpdater() {
   autoUpdater.on("error", (error) => {
     const fullMsg = error?.stack || error?.message || "Guncelleme kontrolu basarisiz";
     writeLog("error event:", fullMsg);
+    // Yeniden deneme sürerken hatayı EKRANA yansıtma: kullanıcı geçici ağ dalgalanmasını
+    // arıza sanıyordu. Denemeler biter de hâlâ başarısızsa çağıran taraf durumu yazar.
+    if (updaterRetrying) return;
     setUpdateState({
       status: "error",
-      message: error?.message || "Guncelleme kontrolu basarisiz",
+      message: friendlyUpdateError(error),
       percent: 0,
     });
   });
@@ -277,40 +303,67 @@ function setupAutoUpdater() {
       });
       return updateState;
     }
-    // Ağ hatası kesintili: tek denemede vazgeçmek kullanıcıyı sürüm atlatıyordu.
-    // Üç deneme, artan bekleme (1sn, 3sn). Yalnız SON deneme hata durumunu yazar.
-    const denemeler = 3;
-    for (let i = 1; i <= denemeler; i++) {
-      try {
-        await autoUpdater.checkForUpdates();
-        return updateState;
-      } catch (e) {
-        writeLog(`kontrol denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
-        if (i === denemeler) break;
-        setUpdateState({
-          status: "checking",
-          message: `Guncelleme kontrol ediliyor (${i + 1}. deneme)`,
-          percent: 0,
-        });
-        await new Promise((r) => setTimeout(r, i * 2000 - 1000));
+    // Ağ hatası kesintili: tek denemede vazgeçmek kullanıcıyı sürüm atlatıyordu. Güncelleme
+    // MANİFESTİ (latest-mac.yml) de sürüm dosyalarıyla aynı adresten indiği için kontrol adımı
+    // da düşebiliyor — ölçüm: altı istekten biri. BEŞ deneme + artan bekleme ile pratikte sıfıra
+    // iner. `retrying` bayrağı ara denemelerin hata olayını UI'ye YANSITMAZ (kullanıcı geçici
+    // dalgalanmayı arıza sanmasın); son deneme de düşerse gerçek durum yazılır.
+    const denemeler = 5;
+    updaterRetrying = true;
+    try {
+      for (let i = 1; i <= denemeler; i++) {
+        try {
+          await autoUpdater.checkForUpdates();
+          return updateState;
+        } catch (e) {
+          writeLog(`kontrol denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+          if (i === denemeler) {
+            updaterRetrying = false;
+            setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
+            break;
+          }
+          setUpdateState({
+            status: "checking",
+            message: `Guncelleme kontrol ediliyor (${i + 1}. deneme)`,
+            percent: 0,
+          });
+          await new Promise((r) => setTimeout(r, Math.min(8000, 1000 * 2 ** (i - 1))));
+        }
       }
+    } finally {
+      updaterRetrying = false;
     }
     return updateState;
   });
   ipcMain.handle("updater:download", async () => {
     if (!app.isPackaged) return updateState;
-    // İndirme de aynı kesintili ağ hatasına düşüyor; sessizce vazgeçmek yerine
-    // iki kez daha dene. 184 MB'lık kurulumun yarıda kopması da buraya düşer.
+    // İndirme de aynı kesintili ağ hatasına düşüyor (~230 MB tek parça). Beş deneme + artan
+    // bekleme; ara denemelerin hatası ekrana yansımaz (updaterRetrying), yalnız hepsi biterse yazılır.
     void (async () => {
-      for (let i = 1; i <= 3; i++) {
-        try {
-          await autoUpdater.downloadUpdate();
-          return;
-        } catch (e) {
-          writeLog(`indirme denemesi ${i}/3 basarisiz:`, e?.message || e);
-          if (i === 3) return;
-          await new Promise((r) => setTimeout(r, i * 3000));
+      const denemeler = 5;
+      updaterRetrying = true;
+      try {
+        for (let i = 1; i <= denemeler; i++) {
+          try {
+            await autoUpdater.downloadUpdate();
+            return;
+          } catch (e) {
+            writeLog(`indirme denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+            if (i === denemeler) {
+              updaterRetrying = false;
+              setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
+              return;
+            }
+            setUpdateState({
+              status: "downloading",
+              message: `Baglanti dalgali — tekrar deneniyor (${i + 1}/${denemeler})`,
+              percent: 0,
+            });
+            await new Promise((r) => setTimeout(r, Math.min(10000, 2000 * i)));
+          }
         }
+      } finally {
+        updaterRetrying = false;
       }
     })();
     return updateState;
