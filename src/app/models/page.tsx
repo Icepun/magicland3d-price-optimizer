@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { fetchJson } from "@/lib/fetch-json";
+import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -18,17 +19,31 @@ import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
+import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
+
+// three.js ilk pakete girmesin — izleyici yalnız açıldığında iner.
+const GcodeViewerDialog = dynamic(
+  () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
+  { ssr: false }
+);
 
 interface LibPrinter { id: string; name: string; brand: string; type: string }
-interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string }
-interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[] }
+interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null }
+interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number }
+interface LibStorage {
+  totalBytes: number;
+  fileCount: number;
+  byPrinter: Array<{ printerConfigId: string; bytes: number; files: number }>;
+  largest: Array<{ id: string; productId: string; productName: string; printerConfigId: string; name: string; sizeBytes: number }>;
+}
 
 function fmtSize(b: number) {
+  if (b >= 1073741824) return `${(b / 1073741824).toFixed(1)} GB`;
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
 export default function ModelsPage() {
-  const { data, isLoading } = useQuery<{ products: LibProduct[]; printers: LibPrinter[] }>({
+  const { data, isLoading } = useQuery<{ products: LibProduct[]; printers: LibPrinter[]; storage?: LibStorage }>({
     queryKey: ["models"],
     queryFn: () => fetchJson("/api/models"),
     staleTime: 0,
@@ -39,6 +54,7 @@ export default function ModelsPage() {
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
   const allProducts = useMemo(() => data?.products ?? [], [data]);
+  const storage = data?.storage;
   const totalParts = useMemo(() => allProducts.reduce((s, p) => s + p.files.length, 0), [allProducts]);
 
   const products = useMemo(() => {
@@ -74,6 +90,8 @@ export default function ModelsPage() {
             <Stat value={allProducts.length} label="ürün" />
             <Stat value={totalParts} label="parça" />
             <Stat value={printers.length} label="yazıcı" />
+            {/* Kütüphanenin yer kaplaması hiçbir ekranda yazmıyordu; ölçüldü: 8,6 GB. */}
+            {storage && <Stat text={fmtSize(storage.totalBytes)} label="yer" />}
           </div>
         </div>
       </div>
@@ -108,7 +126,10 @@ export default function ModelsPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <Link href={`/products/${p.productId}`} className="font-medium text-sm hover:underline truncate block" title={p.name}>{p.name}</Link>
-                  <p className="text-[11px] text-muted-foreground tabular-nums">{p.files.length} parça</p>
+                  <p className="text-[11px] text-muted-foreground tabular-nums">
+                    {p.files.length} parça
+                    {p.totalBytes > 0 && <span className="text-muted-foreground/60"> · {fmtSize(p.totalBytes)}</span>}
+                  </p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap justify-end max-w-[58%]">
                   {printers.map((pr) => {
@@ -151,10 +172,10 @@ export default function ModelsPage() {
   );
 }
 
-function Stat({ value, label }: { value: number; label: string }) {
+function Stat({ value, text, label }: { value?: number; text?: string; label: string }) {
   return (
     <div>
-      <p className="text-xl font-bold tabular-nums leading-none">{value}</p>
+      <p className="text-xl font-bold tabular-nums leading-none">{text ?? value}</p>
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">{label}</p>
     </div>
   );
@@ -178,6 +199,8 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState<PrintProg | null>(null);
   const [picked, setPicked] = useState<LibFile | null>(null);
+  /** 3B izleyicide açık parça — basmakla ilgisi yok, yalnız inceleme. */
+  const [viewer, setViewer] = useState<LibFile | null>(null);
 
   const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
     setPrinting(true);
@@ -221,6 +244,31 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
         <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {parts.map((part, i) => (
             <div key={part.id} className="flex items-center gap-2.5 rounded-lg border p-2">
+              {/*
+                ÖNİZLEME: dosya adı tek başına "hangi parça bu?" sorusunu cevaplamıyordu —
+                altı parçalı bir üründe hangisini basacağını addan tahmin etmek gerekiyordu.
+                Görsel varsa gösterilir; her hâlde tıklanabilir ve 3B izleyiciyi açar.
+              */}
+              <button
+                type="button"
+                onClick={() => setViewer(part)}
+                title="3B önizleme — modeli döndür, katman katman incele"
+                className="group/th relative flex items-center justify-center h-11 w-11 shrink-0 rounded-md border bg-muted/40 overflow-hidden transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {part.hasThumbnail ? (
+                  <img
+                    src={`/api/models/${part.id}/preview`}
+                    alt=""
+                    loading="lazy"
+                    className="max-w-full max-h-full object-contain"
+                  />
+                ) : (
+                  <FileBox className="h-4 w-4 text-muted-foreground/40" />
+                )}
+                <span className="absolute inset-0 flex items-center justify-center bg-background/70 text-[9px] font-bold text-primary opacity-0 transition-opacity group-hover/th:opacity-100">
+                  3B
+                </span>
+              </button>
               <span className="flex items-center justify-center h-7 w-7 rounded bg-primary/10 text-primary text-xs font-bold tabular-nums shrink-0">{i + 1}</span>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
@@ -245,6 +293,16 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
           sıranın ne olduğunu gösterir.
         </p>
       </DialogContent>
+      {viewer && (
+        // `liveLayer` verilmiyor: burada basılan bir iş yok, sadece inceleme. İzleyici o zaman
+        // "canlı olmayan" kipte açılır (katman kilidi ve "Canlıya dön" düğmesi çıkmaz).
+        <GcodeViewerDialog
+          fileId={viewer.id}
+          cacheKey={vizKeyForModel(viewer)}
+          name={viewer.label || viewer.originalName}
+          onClose={() => setViewer(null)}
+        />
+      )}
     </Dialog>
   );
 }
