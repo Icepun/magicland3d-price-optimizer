@@ -123,7 +123,7 @@ export function resolveProductCost(
     };
   }
 
-  // manual / template. CSV ve hızlı ürün ekleme akışında ürün + ambalaj ayrı kaydedilir;
+  // ELLE GİRİLEN maliyet. CSV ve hızlı ürün ekleme akışında ürün + ambalaj ayrı kaydedilir;
   // totalCost bu ikisinin toplamına eşitse kapsamı kaybetmeden ayrı tut.
   const manual = cost.manualCost ?? 0;
   const cachedPackaging = Math.max(0, cost.packagingCost ?? 0);
