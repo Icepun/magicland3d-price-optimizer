@@ -134,7 +134,6 @@ model ProductCost {
   id             String  @id @default(cuid())
   productId      String  @unique
   costMode       String  @default("manual")
-  templateId     String?
 
   // Per-product: filament
   filamentTypeId String?
@@ -174,7 +173,6 @@ model ProductCost {
 
   product      Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
   filamentType FilamentType? @relation(fields: [filamentTypeId], references: [id])
-  template     CostTemplate? @relation(fields: [templateId], references: [id])
 }
 
 model FilamentType {
@@ -232,21 +230,6 @@ model FilamentUsage {
   spool FilamentSpool @relation(fields: [spoolId], references: [id], onDelete: Cascade)
 
   @@index([spoolId])
-}
-
-model CostTemplate {
-  id                     String  @id @default(cuid())
-  name                   String
-  materialCostPerGram    Float   @default(0)
-  electricityCostPerHour Float   @default(0)
-  machineWearCostPerHour Float   @default(0)
-  defaultPackagingCost   Float   @default(0)
-  defaultLaborCost       Float   @default(0)
-  defaultOtherCost       Float   @default(0)
-  defaultWasteRate       Float   @default(0)
-  isActive               Boolean @default(true)
-
-  productCosts ProductCost[]
 }
 
 model CommissionRule {

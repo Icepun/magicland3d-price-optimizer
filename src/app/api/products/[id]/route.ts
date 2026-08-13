@@ -36,7 +36,6 @@ const UpdateProductSchema = z.object({
   cost: z
     .object({
       costMode: z.enum(["manual", "template", "detailed"]).optional(),
-      templateId: z.string().nullable().optional(),
       filamentTypeId: z.string().nullable().optional(),
       filamentWeight: z.number().min(0, "Ağırlık eksi olamaz").nullable().optional(),
       printTimeHours: z.number().min(0, "Süre eksi olamaz").nullable().optional(),

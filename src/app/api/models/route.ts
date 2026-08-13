@@ -12,6 +12,8 @@ interface LibFile {
   originalName: string;
   sizeBytes: number;
   gramaj: number | null;
+  /** Dilimleyicinin tahmini baskı süresi (dk) — YALNIZ gösterim, ürün maliyetiyle ilgisi yok. */
+  estPrintMin: number | null;
   fileType: string;
   /**
    * Kayıtlı önizleme görselinin KENDİSİ değil, VAR MI bilgisi.
@@ -140,6 +142,7 @@ async function computeModels() {
       originalName: f.originalName,
       sizeBytes: f.sizeBytes,
       gramaj: f.gramaj,
+      estPrintMin: f.estPrintMin,
       fileType: f.fileType,
       hasThumbnail: Boolean(f.thumbnail),
       contentMd5: f.contentMd5 ?? null,

@@ -129,6 +129,10 @@ describe("portable backup routes", () => {
       version: 2,
       variantGroups: [{ id: "vg-1", name: "Varyantlar", shareModels: true }],
       filamentTypes: [{ id: "filament-1", name: "PLA", costPerGram: 0.5 }],
+      // ⚠️ BİLEREK BURADA: maliyet şablonu özelliği kaldırıldı (arayüzü hiç yoktu, motor
+      // okumuyordu). ESKİ yedekler bu alanı ve `productCosts[].templateId`'yi taşıyor —
+      // yükleme HATA VERMEMELİ, veri de sessizce canlanmamalı. Bu satırı silmeyin: eski bir
+      // yedeğin hâlâ açılabildiğinin tek koruması budur.
       costTemplates: [{ id: "template-1", name: "Standart" }],
       products: [
         {

@@ -393,6 +393,8 @@ const ImportSchema = z.object({
     .optional()
     .default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
+  // ESKİ YEDEKLER İÇİN TOLERANS: maliyet şablonu özelliği kaldırıldı (arayüzü hiç yoktu).
+  // Alan kabul edilir ama İÇE AKTARILMAZ — eski bir yedek yüklenirken hata vermesin diye durur.
   costTemplates: z.array(CostTemplateSchema).optional(),
   priceHistory: z.array(PriceHistorySchema).optional(),
   printerConfigs: z.array(PrinterConfigSchema).optional(),
@@ -654,25 +656,10 @@ async function runImport(data: ImportPayload, emit: Emit) {
   });
   stats.filamentTypes = jobs[jobs.length - 1].stmts.length;
 
-  jobs.push({
-    label: "Maliyet ayarları",
-    statKey: "costTemplates",
-    stmts: (data.costTemplates ?? []).map((template) => {
-      const fields = {
-        name: template.name,
-        materialCostPerGram: template.materialCostPerGram ?? 0,
-        electricityCostPerHour: template.electricityCostPerHour ?? 0,
-        machineWearCostPerHour: template.machineWearCostPerHour ?? 0,
-        defaultPackagingCost: template.defaultPackagingCost ?? 0,
-        defaultLaborCost: template.defaultLaborCost ?? 0,
-        defaultOtherCost: template.defaultOtherCost ?? 0,
-        defaultWasteRate: template.defaultWasteRate ?? 0,
-        isActive: template.isActive ?? true,
-      };
-      return upsert("CostTemplate", ["id"], { id: template.id, ...fields }, fields);
-    }),
-  });
-  stats.costTemplates = jobs[jobs.length - 1].stmts.length;
+  // MALİYET ŞABLONU KALDIRILDI. Özelliğin arayüzü hiç yoktu: hiçbir ekran uçlarını çağırmıyor,
+  // hiçbir yerden ürüne şablon atanamıyordu ve maliyet motoru şablonu hiç okumuyordu (sahada
+  // 284 maliyet kaydının tamamı "detailed" modda). Eski yedeklerde bu alan bulunabilir; şema
+  // onu KABUL eder ama içe aktarmaz — yükleme hata vermesin, veri de sessizce canlanmasın.
 
   jobs.push({
     label: "Kurallar",
@@ -1170,7 +1157,6 @@ async function runImport(data: ImportPayload, emit: Emit) {
     }
     const fields: Row = {
       costMode: cost.costMode ?? "manual",
-      templateId: cost.templateId ?? null,
       filamentTypeId: cost.filamentTypeId ?? null,
       filamentWeight: cost.filamentWeight ?? null,
       printTimeHours: cost.printTimeHours ?? null,

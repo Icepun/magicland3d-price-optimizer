@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { readModelGramaj } from "@/lib/model-gramaj";
+import { readModelOlcum } from "@/lib/model-gramaj";
 
 export const dynamic = "force-dynamic";
 
@@ -23,21 +23,34 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const { id } = await params;
     const mf = await prisma.productModelFile.findUnique({
       where: { id },
-      select: { id: true, r2Key: true, storedPath: true, fileType: true, gramaj: true },
+      select: { id: true, r2Key: true, storedPath: true, fileType: true, gramaj: true, estPrintMin: true },
     });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
 
-    // Zaten okunmuşsa dosyaya hiç gitme.
-    if (mf.gramaj != null) return NextResponse.json({ gramaj: mf.gramaj, cached: true });
-
-    const gramaj = await readModelGramaj(mf);
-    // Okunamadıysa 0 YAZMA — "bilinmiyor" ile "sıfır gram" aynı şey değil.
-    if (gramaj == null || !Number.isFinite(gramaj) || gramaj <= 0) {
-      return NextResponse.json({ gramaj: null, reason: "Bu dosyada gramaj yazmıyor" });
+    // İkisi de okunmuşsa dosyaya hiç gitme.
+    if (mf.gramaj != null && mf.estPrintMin != null) {
+      return NextResponse.json({ gramaj: mf.gramaj, estPrintMin: mf.estPrintMin, cached: true });
     }
 
-    await prisma.productModelFile.update({ where: { id }, data: { gramaj } });
-    return NextResponse.json({ gramaj });
+    const olcum = await readModelOlcum(mf);
+    // Okunamayanı 0 YAZMA — "bilinmiyor" ile "sıfır" aynı şey değil. Yalnız GERÇEKTEN
+    // okunabilen alan yazılır; diğeri eski değerinde kalır.
+    const data: { gramaj?: number; estPrintMin?: number } = {};
+    if (olcum.gramaj != null) data.gramaj = olcum.gramaj;
+    if (olcum.estPrintMin != null) data.estPrintMin = Math.round(olcum.estPrintMin);
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({
+        gramaj: null,
+        estPrintMin: null,
+        reason: "Bu dosyada gramaj ve süre yazmıyor",
+      });
+    }
+
+    await prisma.productModelFile.update({ where: { id }, data });
+    return NextResponse.json({
+      gramaj: olcum.gramaj ?? mf.gramaj,
+      estPrintMin: data.estPrintMin ?? mf.estPrintMin,
+    });
   } catch (error) {
     return jsonError(error);
   }

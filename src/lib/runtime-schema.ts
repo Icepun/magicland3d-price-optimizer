@@ -1113,20 +1113,9 @@ export function ensureRuntimeSchema(): Promise<void> {
       `CREATE INDEX IF NOT EXISTS "ManualOrder_statusKind_orderedAt_idx"
        ON "ManualOrder"("statusKind", "orderedAt")`
     );
-    await bufDDL(`
-      CREATE TABLE IF NOT EXISTS "CostTemplate" (
-        "id" TEXT NOT NULL PRIMARY KEY,
-        "name" TEXT NOT NULL,
-        "materialCostPerGram" REAL NOT NULL DEFAULT 0,
-        "electricityCostPerHour" REAL NOT NULL DEFAULT 0,
-        "machineWearCostPerHour" REAL NOT NULL DEFAULT 0,
-        "defaultPackagingCost" REAL NOT NULL DEFAULT 0,
-        "defaultLaborCost" REAL NOT NULL DEFAULT 0,
-        "defaultOtherCost" REAL NOT NULL DEFAULT 0,
-        "defaultWasteRate" REAL NOT NULL DEFAULT 0,
-        "isActive" BOOLEAN NOT NULL DEFAULT true
-      )
-    `);
+    // CostTemplate KALDIRILDI (arayüzü hiç yoktu, motor okumuyordu). Yeni kurulumlarda tablo
+    // yaratılmaz; mevcut veritabanlarında boş tablo kalır — düşürmek SQLite'ta tablo yeniden
+    // kurmayı gerektirir ve hiçbir kazancı yoktur.
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PriceHistory" (
         "id" TEXT NOT NULL PRIMARY KEY,

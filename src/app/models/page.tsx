@@ -32,7 +32,7 @@ const GcodeViewerDialog = dynamic(
 );
 
 interface LibPrinter { id: string; name: string; brand: string; type: string }
-interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number }
+interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; estPrintMin: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number }
 interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number }
 interface LibStorage {
   /** Buluttaki GERÇEK kullanım (aynı dosya varyantlarda paylaşılıyorsa bir kez sayılır). */
@@ -42,6 +42,14 @@ interface LibStorage {
   fileCount: number;
   byPrinter: Array<{ printerConfigId: string; bytes: number; files: number }>;
   largest: Array<{ id: string; productId: string; productName: string; printerConfigId: string; name: string; sizeBytes: number }>;
+}
+
+/** Dakikayı "2sa 18dk" biçiminde yaz — dosya adlarındaki yazımla aynı okunsun. */
+function fmtSure(dk: number | null | undefined): string {
+  if (dk == null || !Number.isFinite(dk) || dk <= 0) return "—";
+  const sa = Math.floor(dk / 60);
+  const kalan = Math.round(dk % 60);
+  return sa > 0 ? `${sa}sa ${kalan}dk` : `${kalan}dk`;
 }
 
 function fmtSize(b: number) {
@@ -349,6 +357,7 @@ function PartsModal({
   // dolgu, dilimleyici ayarı). Bu fark hiçbir yerde görünmüyordu.
   // ⚠️ Bu gramaj ÜRÜN MALİYETİNDEN tamamen ayrı bir alan — maliyeti etkilemez.
   const [gramajlar, setGramajlar] = useState<Record<string, number | null>>({});
+  const [sureler, setSureler] = useState<Record<string, number | null>>({});
   const [okuma, setOkuma] = useState<{ done: number; total: number } | null>(null);
   const dosyalar = useMemo(
     () => product.files.map((f) => ({ ...f, gramaj: gramajlar[f.id] ?? f.gramaj })),
@@ -363,8 +372,11 @@ function PartsModal({
     setOkuma({ done: 0, total: eksikler.length });
     for (const [i, f] of eksikler.entries()) {
       try {
-        const r = await fetchJson<{ gramaj: number | null }>(`/api/models/${f.id}/gramaj`, { method: "POST" });
+        const r = await fetchJson<{ gramaj: number | null; estPrintMin: number | null }>(
+          `/api/models/${f.id}/gramaj`, { method: "POST" }
+        );
         setGramajlar((prev) => ({ ...prev, [f.id]: r.gramaj }));
+        setSureler((prev) => ({ ...prev, [f.id]: r.estPrintMin }));
       } catch {
         // Tek dosya okunamazsa diğerleri devam etsin; sonuç zaten "—" kalır.
         setGramajlar((prev) => ({ ...prev, [f.id]: null }));
@@ -570,7 +582,9 @@ function PartsModal({
                   <>
                     <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
                     <p className="text-[10px] text-muted-foreground/70 truncate flex items-center gap-1.5">
-                      <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}{part.gramaj ? ` · ${part.gramaj} gr` : ""}
+                      <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}
+                      {(gramajlar[part.id] ?? part.gramaj) ? ` · ${gramajlar[part.id] ?? part.gramaj} gr` : ""}
+                      {(sureler[part.id] ?? part.estPrintMin) ? ` · ${fmtSure(sureler[part.id] ?? part.estPrintMin)}` : ""}
                       {part.sharedWith > 1 && (
                         <span className="text-amber-400/80" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
                           · {part.sharedWith} üründe

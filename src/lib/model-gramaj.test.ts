@@ -71,6 +71,23 @@ describe("model dosyası gramajı ↔ ürün maliyeti yalıtımı", () => {
     expect(yazanlar).toEqual([]);
   });
 
+  it("SÜRE de ürün maliyetine sızmıyor — `printTimeHours` ayrı alan", () => {
+    // Dosyanın süresi makineye göre değişir (aynı ürün Snapmaker'da 2sa18dk, Bambu'da 2sa27dk).
+    // Ürün maliyetindeki süre Berke'nin ELLE girdiği değerdir: hangi makinede basacağı onun
+    // kararı. Aynı satırda ikisinin geçmesi büyük ihtimalle atamadır.
+    const ihlaller: string[] = [];
+    for (const file of dosyalar) {
+      const src = fs.readFileSync(file, "utf8");
+      src.split("\n").forEach((line, i) => {
+        if (line.trim().startsWith("*") || line.trim().startsWith("//")) return;
+        if (/printTimeHours/.test(line) && /estPrintMin/.test(line)) {
+          ihlaller.push(`${path.relative(ROOT, file)}:${i + 1} → ${line.trim()}`);
+        }
+      });
+    }
+    expect(ihlaller).toEqual([]);
+  });
+
   it("gramaj ucu YALNIZ ProductModelFile güncelliyor", () => {
     const src = fs.readFileSync(
       path.join(ROOT, "app", "api", "models", "[id]", "gramaj", "route.ts"),
@@ -88,8 +105,11 @@ describe("model dosyası gramajı ↔ ürün maliyeti yalıtımı", () => {
       "utf8"
     );
     // BİLİNMEYEN ≠ SIFIR: `?? 0` ile doldurulursa dosya "0 gram" sanılır ve karşılaştırmada
-    // en az filament harcayan makine YANLIŞ seçilir.
+    // en az filament harcayan makine YANLIŞ seçilir. Aynısı süre için de geçerli.
     expect(src).not.toMatch(/gramaj[^\n]*\?\?\s*0/);
-    expect(src).toMatch(/gramaj == null/);
+    expect(src).not.toMatch(/estPrintMin[^\n]*\?\?\s*0/);
+    // Yalnız GERÇEKTEN okunabilen alan yazılır; okunamayan eski değerinde kalır.
+    expect(src).toMatch(/olcum\.gramaj != null/);
+    expect(src).toMatch(/olcum\.estPrintMin != null/);
   });
 });
