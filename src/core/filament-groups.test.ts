@@ -241,6 +241,12 @@ describe("ayar ayrıştırma — bozuk veri uyarı sistemini çökertmez", () =>
     expect(parseThreshold(null, 5)).toBe(5);
   });
 
+  it("kayıtlı 0 eşiği 1 sayılır", () => {
+    // Eşik 0 iken "azaldı" diye bir durum kalmaz; kullanıcı son makaraya düştüğünü hiç
+    // öğrenemezdi. "Yalnız bitenleri gör" ihtiyacı artık sayfadaki filtreyle karşılanıyor.
+    expect(parseThreshold("0")).toBe(1);
+  });
+
   it("liste", () => {
     expect(parseKeyList('["a","b"]')).toEqual(["a", "b"]);
     expect(parseKeyList("bozuk-json")).toEqual([]);

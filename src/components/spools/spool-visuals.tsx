@@ -20,6 +20,18 @@ import { cn } from "@/lib/utils";
 const OUTLINE = "inset 0 0 0 1px var(--border)";
 
 /**
+ * Sarılı filament dokusu — makarayı düz bir daire olmaktan çıkaran şey.
+ *
+ * Halkalar hem beyaz hem siyah yarı saydam çizgilerden oluşuyor: tek renk kullanılsa doku
+ * uçlarda kaybolurdu (siyah filamentte siyah çizgi, beyaz filamentte beyaz çizgi görünmez).
+ * İkisi birlikte her renkte okunur kalıyor.
+ */
+const SARIM =
+  "repeating-radial-gradient(circle at 50% 50%," +
+  " rgba(255,255,255,0.10) 0 1.5px," +
+  " rgba(0,0,0,0.10) 1.5px 3px)";
+
+/**
  * Makara silüeti: dış halka filament rengi, ortası kart zemini (gerçek makara gibi delikli).
  * Ortasında kapalı makara sayısı.
  */
@@ -28,29 +40,44 @@ export function SpoolDisk({
   count,
   size = 56,
   className,
+  hollow = false,
+  countClassName,
 }: {
   colorHex: string;
   count: number;
   size?: number;
   className?: string;
+  /** Stok yokken makara boş çizilir: dolu halka yerine kesikli çerçeve. */
+  hollow?: boolean;
+  countClassName?: string;
 }) {
   return (
     <div
-      className={cn("relative shrink-0 rounded-full grid place-items-center", className)}
+      className={cn("relative shrink-0 rounded-full grid place-items-center transition-all", className)}
       style={{
         width: size,
         height: size,
         // Halka kalınlığı makaranın "dolu" hissini verir; iç daire kart zeminiyle aynı.
-        background: `conic-gradient(${colorHex} 0turn, ${colorHex} 1turn)`,
-        boxShadow: OUTLINE,
+        background: hollow ? "transparent" : `${SARIM}, ${colorHex}`,
+        // Boş makara: kesikli çerçeve "burada makara yok"u renkten bağımsız anlatır.
+        // Çizgi rengi metin rengine doğru karıştırılır — ham `colorHex` kullanılsaydı koyu
+        // temada SİYAH filamentin kesikli halkası zeminle aynı tona düşüp kaybolurdu
+        // (aynı tuzak nokta göstergelerinde de yaşanmıştı, bkz. OUTLINE).
+        border: hollow
+          ? `2px dashed color-mix(in oklab, ${colorHex} 55%, var(--foreground))`
+          : undefined,
+        boxShadow: hollow ? undefined : OUTLINE,
+        opacity: hollow ? 0.6 : 1,
       }}
       aria-hidden
     >
       <div
-        className="rounded-full bg-card grid place-items-center"
+        className={cn("rounded-full grid place-items-center", hollow ? "bg-transparent" : "bg-card")}
         style={{ width: size * 0.56, height: size * 0.56 }}
       >
-        <span className="text-sm font-bold tabular-nums text-foreground">{count}</span>
+        <span className={cn("text-sm font-bold tabular-nums text-foreground", countClassName)}>
+          {count}
+        </span>
       </div>
     </div>
   );

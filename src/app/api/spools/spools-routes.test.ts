@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,19 +20,13 @@ interface SpoolRow {
   id: string;
   name: string;
   material: string;
-  costGap: { actualPerGram: number; tablePerGram: number } | null;
+  isActive: boolean;
 }
 
 async function readSpools(): Promise<SpoolRow[]> {
   const response = await listSpools();
   expect(response.status).toBe(200);
   return (await response.json()) as SpoolRow[];
-}
-
-async function findSpool(id: string): Promise<SpoolRow> {
-  const row = (await readSpools()).find((s) => s.id === id);
-  if (!row) throw new Error("Makara listede yok");
-  return row;
 }
 
 interface UsageResponse {
@@ -168,84 +162,37 @@ describe("makara tüketim geçmişi ucu", () => {
   });
 });
 
-/** Alış bedeli ve malzemesi verilmiş bir makara kurar (gram maliyeti karşılaştırması için). */
-async function seedPricedSpool(material: string, spoolCost: number | null, totalGrams = 1000) {
-  spoolSeq += 1;
-  return db.filamentSpool.create({
-    data: {
-      name: `Fiyatlı makara ${spoolSeq}`,
-      material,
-      totalGrams,
-      remainingGrams: totalGrams,
-      spoolCost,
-    },
-  });
-}
-
-describe("makara listesi gram maliyeti karşılaştırması", () => {
-  beforeEach(async () => {
-    await db.filamentUsage.deleteMany({});
-    await db.filamentSpool.deleteMany({});
-    await db.filamentType.deleteMany({});
+/**
+ * Makara listesi ucu.
+ *
+ * Buradan gram maliyeti karşılaştırması (`costGap`) kaldırıldı: arayüzde gösterilmiyordu ve
+ * 34 makaranın hiçbirinde alış bedeli girili olmadığı için sonuç her zaman boştu. Onunla
+ * birlikte `FilamentType` okuması da gitti — uzak veritabanında her sorgu sıraya girdiği için
+ * bu, sayfa açılışından silinen gerçek bir bekleme. Aşağıdaki test o okumanın geri
+ * sızmadığını ve listenin hâlâ doğru döndüğünü birlikte kontrol eder.
+ */
+describe("makara listesi", () => {
+  it("etkin makaraları döner", async () => {
+    const spool = await seedSpool([]);
+    const rows = await readSpools();
+    expect(rows.some((r) => r.id === spool.id)).toBe(true);
   });
 
-  it("belirgin fark varsa gerçek ve tablodaki gram maliyetini birlikte verir", async () => {
+  it("pasif makarayı listelemez", async () => {
+    const spool = await seedSpool([]);
+    await db.filamentSpool.update({ where: { id: spool.id }, data: { isActive: false } });
+    const rows = await readSpools();
+    expect(rows.some((r) => r.id === spool.id)).toBe(false);
+  });
+
+  it("maliyet tablosunu HİÇ okumaz", async () => {
+    // Gerileme koruması: `costGap`i geri getiren bir değişiklik burada patlar. Filament türü
+    // tablosu doluyken bile listede maliyet alanı belirmemeli.
     await db.filamentType.create({ data: { name: "PLA", costPerGram: 0.55 } });
-    const spool = await seedPricedSpool("PLA", 740);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).not.toBeNull();
-    expect(row.costGap?.actualPerGram).toBeCloseTo(0.74, 5);
-    expect(row.costGap?.tablePerGram).toBeCloseTo(0.55, 5);
-  });
-
-  it("fark küçükken uyarı üretmez", async () => {
-    await db.filamentType.create({ data: { name: "PLA", costPerGram: 0.55 } });
-    const spool = await seedPricedSpool("PLA", 570);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).toBeNull();
-  });
-
-  it("alış bedeli girilmemiş makarada karşılaştırma yapmaz", async () => {
-    await db.filamentType.create({ data: { name: "PLA", costPerGram: 0.55 } });
-    const spool = await seedPricedSpool("PLA", null);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).toBeNull();
-  });
-
-  it("malzeme tabloda yoksa karşılaştırma yapmaz", async () => {
-    await db.filamentType.create({ data: { name: "PETG", costPerGram: 0.55 } });
-    const spool = await seedPricedSpool("ABS", 900);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).toBeNull();
-  });
-
-  it("aynı malzemeye birden çok satır varsa yanlış satırla eşleşmez", async () => {
-    await db.filamentType.create({ data: { name: "PLA Ucuz", costPerGram: 0.4 } });
-    await db.filamentType.create({ data: { name: "PLA Premium", costPerGram: 0.9 } });
-    const spool = await seedPricedSpool("PLA", 740);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).toBeNull();
-  });
-
-  it("pasif filament satırını hesaba katmaz", async () => {
-    await db.filamentType.create({ data: { name: "PLA", costPerGram: 0.55, isActive: false } });
-    const spool = await seedPricedSpool("PLA", 740);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap).toBeNull();
-  });
-
-  it("büyük/küçük harf ve boşluk farkına takılmaz", async () => {
-    await db.filamentType.create({ data: { name: " pla+ ", costPerGram: 0.5 } });
-    const spool = await seedPricedSpool("PLA+", 800);
-
-    const row = await findSpool(spool.id);
-    expect(row.costGap?.actualPerGram).toBeCloseTo(0.8, 5);
+    const spool = await seedSpool([]);
+    const row = (await readSpools()).find((r) => r.id === spool.id)!;
+    expect(row).toBeDefined();
+    expect("costGap" in row).toBe(false);
   });
 });
 

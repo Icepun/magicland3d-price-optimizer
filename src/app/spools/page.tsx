@@ -1,14 +1,11 @@
 "use client";
 
 import { fetchJson } from "@/lib/fetch-json";
-import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
-  Disc3, Plus, AlertTriangle, Trash2, Pencil, ArrowDownToLine,
-  X, PackageOpen, Copy, Search, BellOff, Bell, Check, Minus,
-  History, ChevronDown, Hourglass, Coins, ArrowRight,
+  Disc3, Plus, Trash2, Pencil, X, PackageOpen, Copy, Search, Bell, Check, Minus,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,97 +14,46 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
-import { SpoolDisk, SpoolPips, ColorDot } from "@/components/spools/spool-visuals";
-import { formatCurrency, formatDate, formatDateTime, formatNumber, formatRelativeTime } from "@/lib/format";
+import { SpoolDisk, ColorDot } from "@/components/spools/spool-visuals";
+import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
-  FILAMENT_BRANDS, FILAMENT_COLORS, DEFAULT_LOW_SPOOL_COUNT,
-  groupSpools, buildFilamentAlerts, isSealed, isEmptySpool, parseThreshold,
+  FILAMENT_BRANDS, FILAMENT_COLORS, DEFAULT_LOW_SPOOL_COUNT, MIN_LOW_SPOOL_COUNT,
+  groupSpools, isSealed, isEmptySpool, parseThreshold,
   type FilamentGroup, type SpoolLike,
 } from "@/core/filament-groups";
+import {
+  alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_AILELER,
+  type RenkCip, type StokFiltre,
+} from "./spools-view";
 
 /**
- * FİLAMENT — KAPALI MAKARA ENVANTERİ.
+ * FİLAMENT — KAPALI MAKARA STOĞU.
  *
- * Sayfanın birimi tek tek makara DEĞİL, GRUP: tür ailesi + renk tonu (marka gruba girmez).
- * Ana soru: "hangi renkten kaç kapalı makaram var" ve "neyim bitiyor". Gram bilgisi duruyor ama
- * ikincil: kartta toplam kilo, detayda tek tek kalan gram. Ekleme formunda gram HİÇ sorulmuyor.
+ * Sayfanın TEK işi: "açılmamış hangi renkten kaç makaram kaldı ve neyi sipariş etmeliyim".
+ * Açık makaralar yazıcılara takılı; burada sayılmazlar.
  *
- * Tek tek makaranın tüketim geçmişi ve "ne zaman biter" tahmini grup detayında, makara satırının
- * altındaki çekmecede duruyor — envanterin ana ekranını kalabalıklaştırmadan erişilebilir kalsın.
+ * Bu yüzden şunlar sayfadan KALDIRILDI (kullanıcı kararı, 13 Ağu): tüketim geçmişi/kaydı,
+ * "ne zaman biter" tahmini, "aç" işlemi ve makara maliyeti. Hiçbiri kullanılmıyordu (0 kayıt,
+ * 34/34 makarada maliyet boş) ve ekranı stok görmeyi zorlaştıracak kadar şişiriyordu.
+ *
+ * Ekranın birimi tek tek makara DEĞİL RENK: her renk bir çip, çipin göbeğinde kapalı makara
+ * sayısı. En çok kullanılan renkler (siyah/gri/beyaz) her zaman en üstte ve stokları
+ * sıfırlanınca bile görünür.
  */
-
-/** Alış bedelinden çıkan gerçek gram maliyeti ile maliyet tablosundaki değerin farkı. */
-interface CostGap {
-  actualPerGram: number;
-  tablePerGram: number;
-}
 
 interface Spool extends SpoolLike {
   id: string;
   name: string;
   spoolCost: number | null;
   vendorUrl: string | null;
-  /** Makaranın gerçek gram maliyeti ile maliyet ayarlarındaki değer belirgin ayrıştıysa dolu gelir. */
-  costGap?: CostGap | null;
-}
-
-interface ProductLite {
-  id: string;
-  name: string;
-  cost?: { filamentWeight: number | null } | null;
-}
-
-interface UsageEntry {
-  id: string;
-  grams: number;
-  productId: string | null;
-  productName: string | null;
-  note: string | null;
-  createdAt: string;
-}
-
-interface UsagePace {
-  gramsPerDay: number;
-  sampleCount: number;
-  spanDays: number;
-  windowGrams: number;
-}
-
-interface UsagePage {
-  items: UsageEntry[];
-  nextCursor: string | null;
-  pace: UsagePace | null;
-  now: number;
 }
 
 const MATERIALS = ["PLA", "PETG", "ABS", "ASA", "TPU", "Reçine"];
 const WEIGHTS = [1000, 750, 500, 2000, 5000];
 const KEY_THRESHOLD = "filamentLowSpoolCount";
 
-const USAGE_PAGE_SIZE = 15;
-const DAY_MS = 86_400_000;
-
-/** Renk ailesi başlıkları — tonlar ayrı kart, ama aile altında toplanır (kullanıcı kararı). */
-const FAMILY_LABELS: Record<string, string> = {
-  siyah: "Siyah", beyaz: "Beyaz", gri: "Gri", kirmizi: "Kırmızı", turuncu: "Turuncu",
-  sari: "Sarı", yesil: "Yeşil", mavi: "Mavi", mor: "Mor", pembe: "Pembe",
-  kahverengi: "Kahverengi", seffaf: "Şeffaf", diger: "Diğer",
-};
-
 /** Grup satırları `SpoolLike` taşır; fiyat farkı yalnız listeden gelen kayıtlarda dolu olur. */
-function costGapOf(spool: SpoolLike): CostGap | null {
-  return (spool as Spool).costGap ?? null;
-}
-
-/**
- * Son makarası silinen grubun BOŞ hâli.
- *
- * NEDEN gerekli: gruplar canlı makara satırlarından türetilir, yani son satır gidince grup da
- * listeden düşer. Detay penceresi o an açık olan grubu bulamayınca eski anlık görüntüye dönerse
- * SİLİNEN SATIRLAR GERİ GELİR — kullanıcıya "silme çalışmadı" gibi görünür. Bunun yerine grubun
- * kimliği (ad/renk) korunur, sayılar sıfırlanır.
- */
 function emptiedGroup(group: FilamentGroup): FilamentGroup {
   return {
     ...group,
@@ -133,6 +79,8 @@ export default function SpoolsPage() {
 
   const spools = useMemo(() => (Array.isArray(data) ? data : []), [data]);
   const groups = useMemo(() => groupSpools(spools), [spools]);
+  const [search, setSearch] = useState("");
+  const [filtre, setFiltre] = useState<StokFiltre>("hepsi");
 
   const threshold = parseThreshold(settings?.[KEY_THRESHOLD], DEFAULT_LOW_SPOOL_COUNT);
   const groupThresholds = useMemo(() => {
@@ -172,65 +120,31 @@ export default function SpoolsPage() {
     [settings]
   );
 
-  const alerts = useMemo(
+  /** Renk çipleri — temel renkler ve izlenen renkler stok yokken bile listede kalır. */
+  const ciplerHam = useMemo(
     () =>
-      buildFilamentAlerts(groups, { threshold, groupThresholds, mutedGroups, watchedGroups }),
-    [groups, threshold, groupThresholds, mutedGroups, watchedGroups]
+      renkCipleri(
+        groups,
+        (g) => groupThresholds[g.key] ?? threshold,
+        threshold,
+        // Her aileden yalnız ana ton: "Gri" evet, "Koyu Gri"/"Gümüş" hayır.
+        FILAMENT_COLORS.filter(
+          (c) => c.key === c.family && (TEMEL_AILELER as readonly string[]).includes(c.family)
+        ),
+        watchedGroups
+      ),
+    [groups, groupThresholds, threshold, watchedGroups]
   );
-  const alertKeys = useMemo(() => new Set(alerts.map((a) => a.groupKey)), [alerts]);
+  const ozet = useMemo(() => stokOzeti(ciplerHam), [ciplerHam]);
+  const bolumler = useMemo(
+    () => bolumlere(filtrele(ciplerHam, filtre, search)),
+    [ciplerHam, filtre, search]
+  );
 
-  const [query, setQuery] = useState("");
-  const [materialFilter, setMaterialFilter] = useState<string>("");
-  const [onlyLow, setOnlyLow] = useState(false);
   const [adding, setAdding] = useState<Partial<AddPrefill> | null>(null);
   const [detail, setDetail] = useState<FilamentGroup | null>(null);
   const [editing, setEditing] = useState<Spool | null>(null);
-  const [consuming, setConsuming] = useState<Spool | null>(null);
   const [deleting, setDeleting] = useState<SpoolLike | null>(null);
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLocaleLowerCase("tr");
-    return groups.filter((g) => {
-      if (materialFilter && g.material !== materialFilter) return false;
-      if (onlyLow && !alertKeys.has(g.key)) return false;
-      if (!q) return true;
-      const hay = `${g.colorName} ${g.material} ${g.brands.join(" ")} ${g.spools.map((s) => s.name ?? "").join(" ")}`;
-      return hay.toLocaleLowerCase("tr").includes(q);
-    });
-  }, [groups, query, materialFilter, onlyLow, alertKeys]);
-
-  /** Aileye göre bölümlere ayır: "kaç yeşilim var" tek bakışta, tonlar ayrı kart. */
-  const sections = useMemo(() => {
-    const byFamily = new Map<string, FilamentGroup[]>();
-    for (const g of visible) {
-      const list = byFamily.get(g.colorFamily) ?? [];
-      list.push(g);
-      byFamily.set(g.colorFamily, list);
-    }
-    return Array.from(byFamily.entries())
-      .map(([family, items]) => ({
-        family,
-        label: FAMILY_LABELS[family] ?? family,
-        items,
-        sealed: items.reduce((n, g) => n + g.sealedCount, 0),
-        alerted: items.some((g) => alertKeys.has(g.key)),
-      }))
-      // ÖNCE dikkat isteyen aileler: "neyim bitiyor" ekranın üstünde olmalı, alfabe sonra gelir.
-      .sort((a, b) => Number(b.alerted) - Number(a.alerted) || a.label.localeCompare(b.label, "tr"));
-  }, [visible, alertKeys]);
-
-  const totals = useMemo(() => {
-    const sealed = groups.reduce((n, g) => n + g.sealedCount, 0);
-    const open = groups.reduce((n, g) => n + g.openCount, 0);
-    const kg = groups.reduce((n, g) => n + g.remainingGrams, 0) / 1000;
-    return { sealed, open, kg, groupCount: groups.length };
-  }, [groups]);
-
-  const materialCounts = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const g of groups) m.set(g.material, (m.get(g.material) ?? 0) + g.sealedCount);
-    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
-  }, [groups]);
 
   const saveSetting = useMutation({
     mutationFn: (body: Record<string, string>) =>
@@ -240,30 +154,6 @@ export default function SpoolsPage() {
         body: JSON.stringify(body),
       }).then((r) => r.json()),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
-  });
-
-  const openSpool = useMutation({
-    mutationFn: (s: Spool) =>
-      fetch(`/api/spools/${s.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ openedAt: new Date().toISOString() }),
-      }).then((r) => r.json()),
-    onSuccess: (_d, s) => {
-      qc.invalidateQueries({ queryKey: ["spools"] });
-      toast.success("Makara açık işaretlendi", {
-        action: {
-          label: "Geri al",
-          onClick: () => {
-            fetch(`/api/spools/${s.id}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ openedAt: null }),
-            }).then(() => qc.invalidateQueries({ queryKey: ["spools"] }));
-          },
-        },
-      });
-    },
   });
 
   /**
@@ -303,14 +193,7 @@ export default function SpoolsPage() {
   }, [groups, detail]);
 
   function copyShoppingList() {
-    const text = alerts
-      .map((a) => {
-        const g = groups.find((x) => x.key === a.groupKey);
-        const need = Math.max(1, threshold - (g?.sealedCount ?? 0) + 1);
-        const label = g?.label ?? a.body.split(" — ")[0];
-        return `${label} ×${need}`;
-      })
-      .join(", ");
+    const text = alisverisListesi(ciplerHam, mutedGroups);
     const clipboard = navigator.clipboard;
     if (!clipboard) {
       toast.error("Kopyalanamadı");
@@ -323,15 +206,15 @@ export default function SpoolsPage() {
   }
 
   return (
-    <div className="p-6 space-y-5 max-w-6xl">
-      {/* Başlık */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="animate-in fade-in slide-in-from-bottom-1 duration-300">
+    <div className="p-6 space-y-4 max-w-6xl">
+      {/* ── Üst şerit: ne kadar var, neyi sipariş etmeli ────────────────────────── */}
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Disc3 className="h-6 w-6 text-primary" /> Filament
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Kapalı makara envanteri — hangi renkten kaç makaran kaldı.
+            Stoktaki kapalı makaralar. Azalanı görüp sipariş ver.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -345,176 +228,95 @@ export default function SpoolsPage() {
         </div>
       </div>
 
-      {/* Özet şeridi — sayılar yüklenmeden 0 gösterilmez, iskelet beklenir. */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[72px] rounded-xl" />
-          ))}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <StatCard label="Kapalı makara" value={totals.sealed} index={0} accent />
-          <StatCard label="Açık makara" value={totals.open} index={1} />
-          <StatCard label="Renk grubu" value={totals.groupCount} index={2} />
-          <StatCard
-            label="Toplam"
-            value={totals.kg}
-            index={3}
-            suffix=" kg"
-            muted
-            format={(n) => formatNumber(n, 1)}
-          />
-        </div>
-      )}
-
-      {/* Uyarı bandı */}
-      {alerts.length > 0 && (
-        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
-          <CardContent className="py-3 flex items-start gap-3 flex-wrap">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-1 shrink-0" />
-            <div className="flex-1 min-w-[200px]">
-              <p className="text-sm font-medium text-amber-400">
-                <AnimatedNumber value={alerts.length} format={(n) => formatNumber(n, 0)} /> grup dikkat istiyor
-              </p>
-              <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {alerts.map((a, i) => {
-                  const g = groups.find((x) => x.key === a.groupKey);
-                  return (
-                    <button
-                      key={a.id}
-                      onClick={() => g && setDetail(g)}
-                      className={cn(
-                        "text-xs px-2 py-0.5 rounded-full border transition-all active:scale-95",
-                        "animate-in fade-in zoom-in-95 fill-mode-both duration-300",
-                        a.severity === "critical"
-                          ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20"
-                          : "border-amber-500/40 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
-                      )}
-                      style={{ animationDelay: `${Math.min(i, 10) * 40}ms` }}
-                    >
-                      {a.body}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={copyShoppingList}>
-              <Copy className="h-3.5 w-3.5" /> Eksik listesini kopyala
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Filtreler */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[180px] max-w-xs">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Renk, tür, marka ara…"
-            className="pl-8"
-          />
-        </div>
-        {isLoading ? (
-          <div className="flex items-center gap-1.5">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-7 w-16 rounded-full" />
-            ))}
-          </div>
-        ) : (
-          <>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <FilterChip active={!materialFilter} onClick={() => setMaterialFilter("")}>
-                Hepsi {formatNumber(totals.sealed, 0)}
-              </FilterChip>
-              {materialCounts.map(([m, n]) => (
-                <FilterChip key={m} active={materialFilter === m} onClick={() => setMaterialFilter(m)}>
-                  {m} {formatNumber(n, 0)}
-                </FilterChip>
-              ))}
-            </div>
-            <FilterChip active={onlyLow} onClick={() => setOnlyLow((v) => !v)}>
-              Sadece azalanlar
-            </FilterChip>
-          </>
+      {/* Tek satırlık durum: toplam + sipariş gerekenler + filtre. Eskiden dört büyük
+          kart vardı ve ekranın üçte birini yiyordu; asıl iş renkleri görmek. */}
+      <div className="flex items-center gap-2 flex-wrap rounded-xl border bg-card px-3 py-2">
+        <span className="font-mono text-sm tabular-nums">
+          <b className="text-base">
+            <AnimatedNumber value={ozet.toplam} format={(n) => formatNumber(n, 0)} />
+          </b>
+          <span className="text-muted-foreground"> makara · {ozet.renk} renk</span>
+        </span>
+        {ozet.biten > 0 && (
+          <span className="font-mono text-sm tabular-nums text-destructive">
+            · <AnimatedNumber value={ozet.biten} format={(n) => formatNumber(n, 0)} /> renk bitti
+          </span>
         )}
+        {ozet.azalan > 0 && (
+          <span className="font-mono text-sm tabular-nums text-amber-400">
+            · <AnimatedNumber value={ozet.azalan} format={(n) => formatNumber(n, 0)} /> renk azaldı
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Renk ara…"
+              className="h-8 w-36 pl-8 text-sm"
+            />
+          </div>
+          {/* Eşiği 0 yapma numarasının yerine GERÇEK filtre: "sadece bitenler" artık
+              eşiği bozmadan görülebiliyor (Berke eşiği bunun için 0'da tutuyordu). */}
+          {([
+            ["hepsi", "Hepsi"],
+            ["azalan", "Azalan"],
+            ["biten", "Biten"],
+          ] as Array<[StokFiltre, string]>).map(([k, l]) => (
+            <FilterChip key={k} active={filtre === k} onClick={() => setFiltre(k)}>
+              {l}
+            </FilterChip>
+          ))}
+          {ozet.sorunlu > 0 && (
+            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyShoppingList}>
+              <Copy className="h-3.5 w-3.5" /> Liste
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* İçerik */}
       {isLoading ? (
-        <div className="space-y-6">
-          {Array.from({ length: 2 }).map((_, s) => (
-            <div key={s} className="space-y-2">
-              <Skeleton className="h-4 w-40 rounded" />
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-[132px] rounded-xl" />
-                ))}
-              </div>
-            </div>
+        <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <Skeleton key={i} className="h-[104px] rounded-xl" />
           ))}
         </div>
-      ) : groups.length === 0 ? (
-        <EmptyState
-          icon={PackageOpen}
-          title="Henüz makara yok"
-          description="Elindeki kapalı filament makaralarını ekle; hangi renkten kaç tane olduğunu ve azalanları burada görürsün."
-          action={<Button onClick={() => setAdding({})} className="gap-2"><Plus className="h-4 w-4" /> İlk makarayı ekle</Button>}
-        />
-      ) : visible.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-8 text-center animate-in fade-in duration-300">
-          Filtreye uyan grup yok.
-        </p>
       ) : (
-        <div className="space-y-6">
-          {sections.map((sec, sectionIndex) => (
-            <div
-              key={sec.family}
-              className="animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300"
-              style={{ animationDelay: `${Math.min(sectionIndex, 8) * 60}ms` }}
-            >
+        <div className="space-y-4">
+          {bolumler.map((bolum) => (
+            <div key={bolum.baslik}>
               <div className="flex items-baseline gap-2 mb-2">
-                <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-                  {sec.label}
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  {bolum.baslik}
                 </h2>
-                <span className="text-xs text-muted-foreground">
-                  toplam {formatNumber(sec.sealed, 0)} kapalı makara
-                </span>
+                {bolum.aciklama && (
+                  <span className="text-[11px] text-muted-foreground/70">{bolum.aciklama}</span>
+                )}
               </div>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                {sec.items.map((g, i) => (
-                  <GroupCard
-                    key={g.key}
-                    group={g}
-                    index={sectionIndex * 2 + i}
-                    threshold={groupThresholds[g.key] ?? threshold}
-                    muted={mutedGroups.includes(g.key)}
-                    alerted={alertKeys.has(g.key)}
-                    onOpenDetail={() => setDetail(g)}
-                    onAdd={() =>
-                      setAdding({
-                        material: g.material,
-                        colorName: g.colorName,
-                        colorHex: g.colorHex,
-                        colorKey: g.colorKey,
-                        brand: g.brands[0] ?? "",
-                      })
-                    }
-                    onOpenSpool={(s) => openSpool.mutate(s as Spool)}
-                    onToggleMute={() =>
-                      saveSetting.mutate({
-                        [`filamentMute:${g.key}`]: mutedGroups.includes(g.key) ? "0" : "1",
-                      })
-                    }
-                  />
-                ))}
-              </div>
+              {bolum.cipler.length === 0 ? (
+                <p className="text-sm text-muted-foreground/70 py-2">Bu filtrede renk yok.</p>
+              ) : (
+                <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                  {bolum.cipler.map((cip, i) => (
+                    <RenkCipi
+                      key={cip.key}
+                      cip={cip}
+                      index={i}
+                      onClick={() =>
+                        cip.group
+                          ? setDetail(cip.group)
+                          : setAdding({ colorName: cip.colorName, colorHex: cip.colorHex, colorKey: cip.colorKey })
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
+
 
       {detail && detailGroup && (
         <GroupDetailDialog
@@ -526,7 +328,6 @@ export default function SpoolsPage() {
           }
           onClose={() => setDetail(null)}
           onEdit={(s) => setEditing(s as Spool)}
-          onConsume={(s) => setConsuming(s as Spool)}
           onDelete={(s) => setDeleting(s)}
           onAdd={() =>
             setAdding({
@@ -545,7 +346,6 @@ export default function SpoolsPage() {
           açılır, kullanıcı ekranın karardığını görür ve düğme bozuk sanır. */}
       {adding && <AddSpoolDialog prefill={adding} onClose={() => setAdding(null)} />}
       {editing && <EditSpoolDialog spool={editing} onClose={() => setEditing(null)} />}
-      {consuming && <ConsumeDialog spool={consuming} onClose={() => setConsuming(null)} />}
       {deleting && (
         <DeleteSpoolDialog
           spool={deleting}
@@ -562,28 +362,72 @@ export default function SpoolsPage() {
 
 /* ─────────────────────────── küçük parçalar ─────────────────────────── */
 
-function StatCard({
-  label, value, suffix = "", accent, muted, format, index = 0,
-}: {
-  label: string; value: number; suffix?: string; accent?: boolean; muted?: boolean;
-  format?: (n: number) => string; index?: number;
-}) {
+/**
+ * RENK ÇİPİ — bu sayfanın imza öğesi.
+ *
+ * Eski kartlar kocamandı: bir ekrana ancak dört renk sığıyor, 19 renk için sürekli kaydırmak
+ * gerekiyordu. Oysa sayfanın tek sorusu "neyim bitiyor". Çip, o soruyu tek bakışta cevaplayacak
+ * kadar küçük: gerçek filament rengi + adı + KAPALI makara sayısı. Sayı kahraman, gerisi sessiz.
+ *
+ * Durum halkadan okunur: biten kırmızı, azalan kehribar, yeterli sessiz. Renk TEK sinyal
+ * değildir — biten çipte ayrıca "bitti" yazar.
+ */
+function RenkCipi({ cip, index, onClick }: { cip: RenkCip; index: number; onClick: () => void }) {
+  const biten = cip.durum === "biten";
+  const azalan = cip.durum === "azalan";
   return (
-    <Card
+    <button
+      type="button"
+      onClick={onClick}
+      title={
+        cip.group
+          ? `${cip.colorName} — ${cip.sealed} kapalı makara`
+          : `${cip.colorName} — stokta yok, eklemek için tıkla`
+      }
+      style={{ animationDelay: `${Math.min(index, 18) * 22}ms` }}
       className={cn(
-        "transition-shadow hover:shadow-md animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300",
-        muted && "opacity-70"
+        "group relative flex flex-col items-center gap-1.5 rounded-xl border p-2.5 text-center text-foreground",
+        "transition-all hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "animate-in fade-in zoom-in-95 fill-mode-both duration-300",
+        // Renkli zemin YALNIZ bitenlere ayrıldı. Eşik 1'ken tek makarası kalan on renk birden
+        // "azalan" olur; hepsine kehribar zemin verilince ekranın yarısı uyarıya döner ve asıl
+        // acil olan üç renk kaybolur. Azalan artık yalnız etiketiyle konuşuyor.
+        biten && "border-destructive/50 hover:border-destructive/80",
+        azalan && "hover:border-amber-500/60",
+        !biten && !azalan && "hover:border-primary/35 hover:shadow-[0_4px_16px_oklch(0.66_0.2_278_/_10%)]"
       )}
-      style={{ animationDelay: `${index * 50}ms` }}
     >
-      <CardContent className="py-3">
-        <p className="text-xs text-muted-foreground">{label}</p>
-        <p className={cn("text-2xl font-bold tabular-nums mt-0.5", accent && "text-primary")}>
-          <AnimatedNumber value={value} format={format ?? ((n) => formatNumber(n, 0))} />
-          {suffix}
-        </p>
-      </CardContent>
-    </Card>
+      {/* Makara halkası: renk gerçek filament rengi, göbeğindeki sayı kapalı makara adedi. */}
+      <span className="relative">
+        {/* Biten renkte halkanın ardında yumuşak bir hale. Bilerek yavaş ve sönük: bu sayfa
+            her gün açılıyor, sürekli çarpan bir uyarı kısa sürede rahatsız ederdi. */}
+        {biten && (
+          <span className="absolute -inset-1 rounded-full bg-destructive/20 blur-md animate-pulse motion-reduce:animate-none" />
+        )}
+        <SpoolDisk
+          colorHex={cip.colorHex}
+          count={cip.sealed}
+          size={48}
+          hollow={cip.sealed === 0}
+          countClassName="text-[15px]"
+          className="relative group-hover:scale-105 motion-reduce:group-hover:scale-100"
+        />
+      </span>
+      <span className="w-full truncate text-[11px] font-medium leading-tight">{cip.colorName}</span>
+      {/* Durum etiketi TEK KELİME: iki kelimeye taşınca satır kayıyor ve çip komşularından
+          uzun kalıyordu, ızgara tırtıklı görünüyordu. */}
+      <span
+        className={cn(
+          "text-[9px] font-semibold uppercase tracking-wide whitespace-nowrap",
+          biten && "text-destructive",
+          azalan && "text-amber-400",
+          !biten && !azalan && "font-normal text-muted-foreground"
+        )}
+      >
+        {biten ? (cip.group ? "bitti" : "yok") : azalan ? "azalıyor" : "makara"}
+      </span>
+    </button>
   );
 }
 
@@ -622,7 +466,8 @@ function ThresholdControl({ value, onChange }: { value: number; onChange: (v: nu
               </p>
               <div className="flex items-center gap-2">
                 <Button size="icon" variant="outline" className="h-8 w-8"
-                  onClick={() => onChange(Math.max(0, value - 1))}>
+                  disabled={value <= MIN_LOW_SPOOL_COUNT}
+                  onClick={() => onChange(Math.max(MIN_LOW_SPOOL_COUNT, value - 1))}>
                   <Minus className="h-3.5 w-3.5" />
                 </Button>
                 <span className="flex-1 text-center text-lg font-bold tabular-nums">
@@ -642,263 +487,6 @@ function ThresholdControl({ value, onChange }: { value: number; onChange: (v: nu
     </div>
   );
 }
-
-function statusBadge(g: FilamentGroup, threshold: number) {
-  if (g.sealedCount === 0 && g.openCount === 0)
-    return { label: "Bitti", cls: "bg-destructive/15 text-destructive border-destructive/30" };
-  if (g.sealedCount === 0)
-    return { label: "Son makara açık", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
-  if (g.sealedCount <= threshold)
-    return { label: "Azaldı", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30" };
-  return { label: "Yeterli", cls: "bg-green-500/15 text-green-400 border-green-500/30" };
-}
-
-function GroupCard({
-  group: g, index, threshold, muted, alerted, onOpenDetail, onAdd, onOpenSpool, onToggleMute,
-}: {
-  group: FilamentGroup; index: number; threshold: number; muted: boolean; alerted: boolean;
-  onOpenDetail: () => void; onAdd: () => void; onOpenSpool: (s: SpoolLike) => void; onToggleMute: () => void;
-}) {
-  const badge = statusBadge(g, threshold);
-  const sealedSpools = g.spools.filter((s) => isSealed(s));
-  const hasCostGap = g.spools.some((s) => costGapOf(s) !== null);
-
-  return (
-    <Card
-      className={cn(
-        "transition-all duration-200 hover:shadow-md hover:-translate-y-0.5",
-        "animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300",
-        alerted && !muted && "border-amber-500/40",
-        muted && "opacity-60"
-      )}
-      style={{ animationDelay: `${Math.min(index, 12) * 40}ms` }}
-    >
-      <CardContent className="p-4 space-y-3">
-        <div className="flex items-start gap-3">
-          <button onClick={onOpenDetail} className="shrink-0 transition-transform hover:scale-105 active:scale-95" title="Detayları aç">
-            <SpoolDisk colorHex={g.colorHex} count={g.sealedCount} />
-          </button>
-          <div className="min-w-0 flex-1">
-            <button onClick={onOpenDetail} className="text-left w-full group/title">
-              <p className="font-semibold leading-tight truncate transition-colors group-hover/title:text-primary">
-                {g.label}
-              </p>
-              <p className="text-xs text-muted-foreground truncate mt-0.5">
-                {g.brands.length ? g.brands.join(" · ") : "marka girilmemiş"}
-              </p>
-            </button>
-            <div className="mt-2">
-              <SpoolPips sealed={g.sealedCount} open={g.openCount} empty={g.emptyCount} colorHex={g.colorHex} />
-            </div>
-          </div>
-          <span className={cn("text-[11px] px-1.5 py-0.5 rounded border shrink-0", badge.cls)}>
-            {badge.label}
-          </span>
-        </div>
-
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>
-            <b className="text-foreground tabular-nums">
-              <AnimatedNumber value={g.sealedCount} format={(n) => formatNumber(n, 0)} /> kapalı
-            </b>
-            {g.openCount > 0 && ` · ${formatNumber(g.openCount, 0)} açık`}
-            {g.emptyCount > 0 && ` · ${formatNumber(g.emptyCount, 0)} bitti`}
-          </span>
-          <span className="opacity-70 tabular-nums">
-            ~<AnimatedNumber value={g.remainingGrams / 1000} format={(n) => formatNumber(n, 1)} /> kg
-          </span>
-        </div>
-
-        {hasCostGap && (
-          <p className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground animate-in fade-in duration-500">
-            <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-400" />
-            <span>
-              Makara fiyatı maliyet tablosundan farklı.{" "}
-              <Link
-                href="/cost-templates"
-                className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline"
-              >
-                Maliyet ayarları <ArrowRight className="h-3 w-3" />
-              </Link>
-            </span>
-          </p>
-        )}
-
-        <div className="flex items-center gap-1.5">
-          <Button size="sm" variant="outline" className="flex-1 gap-1.5 h-8" onClick={onAdd}>
-            <Plus className="h-3.5 w-3.5" /> Makara
-          </Button>
-          <Button
-            size="sm" variant="outline" className="flex-1 gap-1.5 h-8"
-            disabled={sealedSpools.length === 0}
-            onClick={() => sealedSpools[0] && onOpenSpool(sealedSpools[0])}
-            title={sealedSpools.length ? "Bir kapalı makarayı aç" : "Açılacak kapalı makara yok"}
-          >
-            <PackageOpen className="h-3.5 w-3.5" /> Aç
-          </Button>
-          <Button
-            size="icon" variant="ghost" className="h-8 w-8 shrink-0"
-            onClick={onToggleMute}
-            title={muted ? "Uyarıları aç" : "Bu grubu sustur"}
-          >
-            {muted ? <BellOff className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-/* ─────────────────────────── tüketim geçmişi ─────────────────────────── */
-
-function UsageHistory({
-  spoolId, remainingGrams, colorHex,
-}: { spoolId: string; remainingGrams: number; colorHex: string }) {
-  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ["spool-usage", spoolId],
-    queryFn: ({ pageParam }) =>
-      fetchJson<UsagePage>(
-        `/api/spools/${spoolId}/usage?limit=${USAGE_PAGE_SIZE}` +
-          (pageParam ? `&cursor=${encodeURIComponent(pageParam)}` : "")
-      ),
-    initialPageParam: null as string | null,
-    getNextPageParam: (lastPage) => lastPage.nextCursor,
-    staleTime: 60_000,
-  });
-
-  const entries = useMemo(() => (data?.pages ?? []).flatMap((p) => p.items), [data]);
-  const firstPage = data?.pages?.[0];
-  const pace = firstPage?.pace ?? null;
-  const now = firstPage?.now ?? 0;
-
-  if (isLoading) {
-    return (
-      <div className="space-y-2">
-        <Skeleton className="h-8 w-full rounded-md" />
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-6 w-full rounded-md" />
-        ))}
-      </div>
-    );
-  }
-
-  if (isError) {
-    return <p className="text-[11px] text-muted-foreground">Geçmiş şu an açılamadı, birazdan tekrar dene.</p>;
-  }
-
-  if (entries.length === 0) {
-    return (
-      <EmptyState
-        icon={History}
-        title="Henüz düşüm yok"
-        description="Bu makaradan filament düştükçe burada tarih tarih listelenir."
-        className="py-6"
-      />
-    );
-  }
-
-  return (
-    <div className="space-y-2.5">
-      <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Tüketim geçmişi</p>
-
-      <RunOutEstimate remainingGrams={remainingGrams} pace={pace} now={now} />
-
-      <ul className="space-y-2">
-        {entries.map((entry, i) => (
-          <li
-            key={entry.id}
-            className="relative pl-4 animate-in fade-in slide-in-from-left-1 fill-mode-both duration-300"
-            style={{ animationDelay: `${Math.min(i, 9) * 35}ms` }}
-            title={formatDateTime(entry.createdAt)}
-          >
-            <span
-              className="absolute left-0 top-1.5 h-1.5 w-1.5 rounded-full ring-2 ring-background"
-              style={{ background: colorHex }}
-            />
-            {i < entries.length - 1 && (
-              <span className="absolute left-[2.5px] top-3.5 bottom-[-8px] w-px bg-border" />
-            )}
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-xs truncate">{entry.productName ?? "Elle düşüldü"}</span>
-              <span className="text-xs font-semibold tabular-nums shrink-0">
-                -{formatNumber(entry.grams, 0)} g
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[10px] text-muted-foreground truncate">{entry.note ?? ""}</span>
-              <span className="text-[10px] text-muted-foreground shrink-0">
-                {formatRelativeTime(entry.createdAt, now > 0 ? now : undefined)}
-              </span>
-            </div>
-          </li>
-        ))}
-      </ul>
-
-      {hasNextPage && (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 w-full gap-1 text-[11px]"
-          disabled={isFetchingNextPage}
-          onClick={() => fetchNextPage()}
-        >
-          {isFetchingNextPage ? (
-            "Yükleniyor…"
-          ) : (
-            <>
-              <ChevronDown className="h-3.5 w-3.5" /> Daha eskisini göster
-            </>
-          )}
-        </Button>
-      )}
-    </div>
-  );
-}
-
-/**
- * "Tahminen N gün sonra biter". Hız yoksa (yeterli geçmiş yok) HİÇBİR ŞEY gösterilmez —
- * iki baskılık veriden çıkan tahmin yanıltıcı olur.
- */
-function RunOutEstimate({
-  remainingGrams,
-  pace,
-  now,
-}: {
-  remainingGrams: number;
-  pace: UsagePace | null;
-  now: number;
-}) {
-  if (!pace || !(pace.gramsPerDay > 0) || remainingGrams <= 0 || !(now > 0)) return null;
-
-  const days = remainingGrams / pace.gramsPerDay;
-  const perDay = `günde ~${formatNumber(pace.gramsPerDay, pace.gramsPerDay < 10 ? 1 : 0)} g`;
-
-  let headline: React.ReactNode;
-  if (days > 180) {
-    headline = <>Bu hızla 6 aydan uzun süre yeter</>;
-  } else if (days < 1) {
-    headline = <>Bu hızla bugün bitebilir</>;
-  } else {
-    headline = (
-      <>
-        Tahminen <AnimatedNumber value={days} format={(n) => formatNumber(n, 0)} className="font-semibold" /> gün
-        sonra biter · {formatDate(now + days * DAY_MS)}
-      </>
-    );
-  }
-
-  return (
-    <div className="flex items-start gap-2 rounded-md bg-muted/60 px-2.5 py-2 animate-in fade-in duration-500">
-      <Hourglass className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
-      <div className="min-w-0">
-        <p className="text-[11px] font-medium leading-tight">{headline}</p>
-        <p className="text-[10px] text-muted-foreground mt-0.5">Son kullanıma göre {perDay}.</p>
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────── diyaloglar ─────────────────────────── */
 
 function Modal({
   title, onClose, children, wide,
@@ -1164,11 +752,11 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
 }
 
 function GroupDetailDialog({
-  group: g, threshold, generalThreshold, onSetThreshold, onClose, onEdit, onConsume, onDelete, onAdd,
+  group: g, threshold, generalThreshold, onSetThreshold, onClose, onEdit, onDelete, onAdd,
 }: {
   group: FilamentGroup; threshold: number; generalThreshold: number;
   onSetThreshold: (v: number | null) => void;
-  onClose: () => void; onEdit: (s: SpoolLike) => void; onConsume: (s: SpoolLike) => void;
+  onClose: () => void; onEdit: (s: SpoolLike) => void;
   onDelete: (s: SpoolLike) => void; onAdd: () => void;
 }) {
   const qc = useQueryClient();
@@ -1211,7 +799,8 @@ function GroupDetailDialog({
           </div>
           <div className="flex items-center gap-1.5">
             <Button size="icon" variant="outline" className="h-7 w-7"
-              onClick={() => onSetThreshold(Math.max(0, threshold - 1))}>
+              disabled={threshold <= MIN_LOW_SPOOL_COUNT}
+              onClick={() => onSetThreshold(Math.max(MIN_LOW_SPOOL_COUNT, threshold - 1))}>
               <Minus className="h-3 w-3" />
             </Button>
             <span className="w-6 text-center text-sm font-bold tabular-nums">
@@ -1250,7 +839,6 @@ function GroupDetailDialog({
                 groupColorHex={g.colorHex}
                 groupLabel={g.label}
                 onEdit={() => onEdit(s)}
-                onConsume={() => onConsume(s)}
                 onToggleOpen={(sealed) => toggleOpen.mutate({ id: s.id, sealed })}
                 onDelete={() => onDelete(s)}
               />
@@ -1303,19 +891,13 @@ function DeleteSpoolDialog({
 }
 
 function SpoolRow({
-  spool: s, index, groupColorHex, groupLabel, onEdit, onConsume, onToggleOpen, onDelete,
+  spool: s, index, groupColorHex, groupLabel, onEdit, onToggleOpen, onDelete,
 }: {
   spool: SpoolLike; index: number; groupColorHex: string; groupLabel: string;
-  onEdit: () => void; onConsume: () => void; onToggleOpen: (sealed: boolean) => void; onDelete: () => void;
+  onEdit: () => void; onToggleOpen: (sealed: boolean) => void; onDelete: () => void;
 }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
-  // Bir kez açıldıktan sonra içerik takılı kalır: kapanış animasyonu boş kutuya değil,
-  // gerçek listeye uygulanır (ve tekrar açınca veri anında hazır).
-  const [historyMounted, setHistoryMounted] = useState(false);
-
   const sealed = isSealed(s);
   const empty = isEmptySpool(s);
-  const gap = costGapOf(s);
   const colorHex = s.colorHex ?? groupColorHex;
 
   return (
@@ -1351,22 +933,6 @@ function SpoolRow({
             onClick={() => onToggleOpen(sealed)}>
             <PackageOpen className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-7 w-7" title="Filament düş"
-            onClick={onConsume}>
-            <ArrowDownToLine className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            size="icon" variant="ghost"
-            className={cn("h-7 w-7", historyOpen && "bg-muted text-foreground")}
-            title="Geçmiş"
-            aria-expanded={historyOpen}
-            onClick={() => {
-              setHistoryMounted(true);
-              setHistoryOpen((v) => !v);
-            }}
-          >
-            <History className="h-3.5 w-3.5" />
-          </Button>
           <Button size="icon" variant="ghost" className="h-7 w-7" title="Düzenle" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" />
           </Button>
@@ -1377,41 +943,6 @@ function SpoolRow({
         </div>
       </div>
 
-      {gap && (
-        <p className="flex items-start gap-1.5 px-3 pb-2 text-[11px] leading-snug text-muted-foreground">
-          <Coins className="h-3.5 w-3.5 shrink-0 mt-px text-amber-400" />
-          <span>
-            Bu makaranın gerçek maliyeti{" "}
-            <span className="font-semibold text-amber-400">
-              {formatCurrency(gap.actualPerGram)}/g
-            </span>
-            ; tabloda {formatCurrency(gap.tablePerGram)}/g yazıyor.{" "}
-            <Link
-              href="/cost-templates"
-              className="inline-flex items-center gap-0.5 font-medium text-primary underline-offset-2 hover:underline"
-            >
-              Maliyet ayarları <ArrowRight className="h-3 w-3" />
-            </Link>
-          </span>
-        </p>
-      )}
-
-      {/* Çekmece: grid satırını 0fr→1fr akıtmak, sabit bir max-height uydurmadan
-          içeriğe göre yumuşak açılma verir. */}
-      <div
-        className={cn(
-          "grid transition-[grid-template-rows] duration-300 ease-out",
-          historyOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        )}
-      >
-        <div className="overflow-hidden">
-          <div className="px-3 pb-3 pt-2 border-t">
-            {historyMounted && (
-              <UsageHistory spoolId={s.id} remainingGrams={s.remainingGrams} colorHex={colorHex} />
-            )}
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -1495,99 +1026,6 @@ function EditSpoolDialog({ spool, onClose }: { spool: Spool; onClose: () => void
         </p>
         <Button className="w-full" disabled={save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? "Kaydediliyor…" : "Kaydet"}
-        </Button>
-      </div>
-    </Modal>
-  );
-}
-
-function ConsumeDialog({ spool, onClose }: { spool: Spool; onClose: () => void }) {
-  const qc = useQueryClient();
-  const { data: products, isLoading: productsLoading } = useQuery<ProductLite[]>({
-    queryKey: ["products", "active"],
-    queryFn: () => fetchJson("/api/products?filter=active"),
-    staleTime: 60_000,
-  });
-
-  const [productId, setProductId] = useState("");
-  const [qty, setQty] = useState("1");
-  const [grams, setGrams] = useState("");
-  const [note, setNote] = useState("");
-  const productList = useMemo(() => (Array.isArray(products) ? products : []), [products]);
-
-  function recalc(id: string, q: string) {
-    const p = productList.find((x) => x.id === id);
-    const w = p?.cost?.filamentWeight ?? 0;
-    if (w > 0) setGrams(String(Math.round(w * (Number(q) || 1))));
-  }
-
-  const consume = useMutation({
-    mutationFn: () => {
-      const p = productList.find((x) => x.id === productId);
-      return fetch(`/api/spools/${spool.id}/consume`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          grams: Number(grams) || 0,
-          productId: productId || null,
-          productName: p?.name ?? null,
-          note: note || null,
-        }),
-      }).then((r) => { if (!r.ok) throw new Error("Düşülemedi"); return r.json(); });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["spools"] });
-      // Yeni düşüm kaydı geçmişte ve "ne zaman biter" tahmininde anında görünsün.
-      qc.invalidateQueries({ queryKey: ["spool-usage", spool.id] });
-      toast.success(`${formatNumber(Number(grams) || 0, 0)} g düşüldü — ${spool.name}`);
-      onClose();
-    },
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  return (
-    <Modal title={`Filament Düş — ${spool.name}`} onClose={onClose}>
-      <div className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          Kalan: <span className="font-medium text-foreground tabular-nums">{formatNumber(spool.remainingGrams, 0)} g</span>. Ürün
-          seçersen gramaj maliyet bilgisinden otomatik gelir. Gram düşülünce makara <b>açık</b> sayılır.
-        </p>
-        <div>
-          <Label className="text-xs">Ürün (opsiyonel)</Label>
-          {productsLoading ? (
-            <Skeleton className="h-9 w-full rounded-md" />
-          ) : (
-            <select
-              value={productId}
-              onChange={(e) => { setProductId(e.target.value); recalc(e.target.value, qty); }}
-              className="w-full h-9 rounded-md border bg-background px-3 text-sm transition-colors hover:bg-muted/40"
-            >
-              <option value="">Seçilmedi (manuel gram gir)</option>
-              {productList.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}{p.cost?.filamentWeight ? ` (${formatNumber(p.cost.filamentWeight, 0)}g)` : ""}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <Label className="text-xs">Adet</Label>
-            <Input type="number" min="1" value={qty}
-              onChange={(e) => { setQty(e.target.value); recalc(productId, e.target.value); }} />
-          </div>
-          <div>
-            <Label className="text-xs">Düşülecek gram</Label>
-            <Input type="number" min="0" value={grams} onChange={(e) => setGrams(e.target.value)} placeholder="45" />
-          </div>
-        </div>
-        <div>
-          <Label className="text-xs">Not (opsiyonel)</Label>
-          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="sipariş #1234" />
-        </div>
-        <Button className="w-full" disabled={consume.isPending || !(Number(grams) > 0)} onClick={() => consume.mutate()}>
-          {consume.isPending ? "Düşülüyor…" : `${formatNumber(Number(grams) || 0, 0)} g Düş`}
         </Button>
       </div>
     </Modal>

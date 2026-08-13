@@ -369,10 +369,12 @@ export interface FilamentAlertOptions {
 }
 
 function thresholdFor(groupKey: string, opts: FilamentAlertOptions): number {
+  // Renge özel eşikler de en az 1'dir; gerekçe `parseThreshold` üstünde.
   const per = opts.groupThresholds?.[groupKey];
-  if (typeof per === "number" && isFinite(per) && per >= 0) return per;
+  if (typeof per === "number" && isFinite(per) && per >= 0) return Math.max(MIN_LOW_SPOOL_COUNT, per);
   const general = opts.threshold;
-  if (typeof general === "number" && isFinite(general) && general >= 0) return general;
+  if (typeof general === "number" && isFinite(general) && general >= 0)
+    return Math.max(MIN_LOW_SPOOL_COUNT, general);
   return DEFAULT_LOW_SPOOL_COUNT;
 }
 
@@ -454,12 +456,20 @@ export function buildFilamentAlerts(
 /**
  * AppSetting metninden güvenli eşik. BOŞ değer varsayılana düşer — `Number("")` 0 döndüğü için
  * naif bir dönüşüm eşiği sessizce 0 yapar ve "azaldı" uyarıları hiç çıkmazdı (testle yakalandı).
+ *
+ * EN DÜŞÜK EŞİK 1'dir. Eşik 0 iken "azaldı" diye bir durum kalmaz: bir renk ya vardır ya
+ * bitmiştir. Kullanıcı bunu bilerek yapıyordu — yalnız bitenleri görmek için eşiği 0'a
+ * çekiyordu — ama bunun bedeli, son makaraya düştüğünde hiç uyarı almamaktı. Artık "yalnız
+ * bitenler" filtreyle seçiliyor, eşik de asıl işine döndü. Kayıtlı 0 değerleri sessizce 1
+ * sayılır; kimsenin ayarı elle düzeltmesi gerekmez.
  */
+export const MIN_LOW_SPOOL_COUNT = 1;
+
 export function parseThreshold(raw: string | null | undefined, fallback = DEFAULT_LOW_SPOOL_COUNT): number {
   const text = String(raw ?? "").trim();
   if (!text) return fallback;
   const n = Number(text);
-  return isFinite(n) && n >= 0 ? Math.floor(n) : fallback;
+  return isFinite(n) && n >= 0 ? Math.max(MIN_LOW_SPOOL_COUNT, Math.floor(n)) : fallback;
 }
 
 /** AppSetting JSON dizisi → string[] (bozuksa boş dizi; uyarı sistemi çökmez). */
