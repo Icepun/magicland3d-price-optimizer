@@ -99,7 +99,8 @@ function candidatePorts(configured: number): number[] {
 
 /** Önbellekteki çalışan port (yoksa yapılandırılan) ile temel URL. */
 export function moonrakerBase(host: string, port: number): string {
-  const p = portCache.get(host) ?? port ?? 7125;
+  // Kayıtlı port sahada yanlış olabiliyor → önce önbellek, sonra SON ÇALIŞAN, en son kayıtlı.
+  const p = portCache.get(host) ?? lastGoodPort.get(host) ?? port ?? 7125;
   return `http://${host}:${p}`;
 }
 
@@ -136,11 +137,52 @@ const PORT_PROBE_COOLDOWN_MS = 30_000;
 /** Kayıtlı port bu kadar ardışık istekte düşerse unutulur (yeniden keşif). */
 const PORT_FAILS_BEFORE_REDISCOVER = 3;
 
+/**
+ * SON ÇALIŞTIĞI BİLİNEN port — `portCache` temizlense bile kalır.
+ *
+ * ⚠️ NEDEN AYRI: keşif başarısız olunca eskiden `configured` porta dönülüyordu ve o port
+ * SAHADA BOZUKTU (üç yazıcı da 7125 kayıtlı, üçü de yalnız 80'de yanıt veriyor). Sonuç:
+ * keşfin düştüğü her 30 saniyelik pencerede TÜM istekler garanti başarısız oluyordu —
+ * kullanıcının gördüğü "sürekli yazıcıya ulaşılamıyor" buydu.
+ * Ölçüldü (13 Ağu): port 80 → 30/30 başarı · port 7125 → Elegoo'larda 0/10 (bağlantı
+ * reddedildi), Snapmaker'da 6/10 ve 3 saniyeye kadar gecikme.
+ */
+const lastGoodPort = new Map<string, number>();
+
+/** Kalıcı yazma denemesi bir kez yapılır; her keşifte veritabanına gitmeyelim. */
+const portPersisted = new Set<string>();
+
+/**
+ * Keşfedilen portu YAPILANDIRMAYA yaz — yapılandırma bir kez kendini onarsın.
+ *
+ * Bu olmadan her uygulama açılışında aynı keşif tekrar ediliyor ve keşfin düştüğü ilk anda
+ * sistem yine bozuk porta dönüyordu. Yazma başarısız olursa sessiz geçilir: çalışma anındaki
+ * önbellek zaten doğru portu tutuyor, kalıcılık bir iyileştirmedir, zorunluluk değil.
+ */
+async function persistPort(host: string, port: number): Promise<void> {
+  if (portPersisted.has(host)) return;
+  portPersisted.add(host);
+  try {
+    const { prisma } = await import("@/lib/prisma");
+    const updated = await prisma.printerConfig.updateMany({
+      where: { host, port: { not: port } },
+      data: { port },
+    });
+    if (updated.count > 0) {
+      console.log(`[moonraker] ${host}: kayıtlı port ${port} olarak düzeltildi`);
+    }
+  } catch {
+    /* yazılamadıysa çalışma anı önbelleği yeterli */
+  }
+}
+
 /** Portu ÖĞRENDİK: ardışık hata sayacı ve tarama yasağı sıfırlanır. */
 function rememberPort(host: string, port: number): void {
   portCache.set(host, port);
+  lastGoodPort.set(host, port);
   portFails.delete(host);
   portProbeCooldown.delete(host);
+  void persistPort(host, port);
 }
 
 function notePortOk(host: string, port: number): void {
@@ -192,12 +234,19 @@ function discoverMoonrakerPort(host: string, configured: number): Promise<number
   return p;
 }
 
-/** İstek göndermeden önce kullanılacak port. Önbellek doluysa AĞA ÇIKMAZ. */
+/**
+ * İstek göndermeden önce kullanılacak port. Önbellek doluysa AĞA ÇIKMAZ.
+ *
+ * ⚠️ Keşif yapılamadığında `configured`'a DEĞİL, son çalıştığı bilinen porta düşülür.
+ * Kayıtlı port sahada yanlış olabiliyor (bkz. `lastGoodPort`); ona dönmek 30 saniyelik
+ * garanti-başarısız pencereler üretiyordu.
+ */
 export async function resolveMoonrakerPort(host: string, configured: number): Promise<number> {
   const known = portCache.get(host);
   if (known != null) return known;
-  if ((portProbeCooldown.get(host) ?? 0) > Date.now()) return configured;
-  return (await discoverMoonrakerPort(host, configured)) ?? configured;
+  const enIyiTahmin = lastGoodPort.get(host) ?? configured;
+  if ((portProbeCooldown.get(host) ?? 0) > Date.now()) return enIyiTahmin;
+  return (await discoverMoonrakerPort(host, configured)) ?? enIyiTahmin;
 }
 
 /** Çözülmüş portla temel URL (birden çok istek yapan yerler için). */
@@ -226,13 +275,18 @@ async function mreq(
 
 /** Yazıcının adresi değişti / yazıcı silindi → keşfedilen portu unut. */
 export function clearMoonrakerPort(host?: string): void {
+  // Adres/port GERÇEKTEN değiştiyse son-çalışan tahmini de geçersizdir.
   if (host) {
     portCache.delete(host);
+    lastGoodPort.delete(host);
+    portPersisted.delete(host);
     portFails.delete(host);
     portProbeCooldown.delete(host);
     return;
   }
   portCache.clear();
+  lastGoodPort.clear();
+  portPersisted.clear();
   portFails.clear();
   portProbeCooldown.clear();
 }

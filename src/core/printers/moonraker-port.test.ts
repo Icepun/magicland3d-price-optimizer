@@ -142,3 +142,59 @@ describe("yazıcının portu gerçekten değişirse uygulama kendini onarır", (
     expect(await resolveMoonrakerPort(HOST, 7125)).toBe(7125);
   });
 });
+
+/**
+ * KEŞİF DÜŞTÜĞÜNDE NEREYE DÜŞÜLÜR — sahadaki "sürekli yazıcıya ulaşılamıyor" hatasının kökü.
+ *
+ * Eskiden keşif başarısız olunca KAYITLI porta dönülüyordu. Kayıtlı port sahada yanlıştı:
+ * ölçüm (13 Ağu) — port 80 → 30/30 başarı; port 7125 → Elegoo'larda 0/10 (bağlantı reddedildi),
+ * Snapmaker'da 6/10 ve 3 saniyeye kadar gecikme. Sonuç: keşfin düştüğü her 30 saniyelik
+ * pencerede TÜM istekler garanti başarısız oluyordu; kullanıcı "güncellenince düzeliyor, sonra
+ * yine gidiyor" diye bildirdi (açılışta keşif tutuyor, ilk kesintide bozuk porta dönülüyor).
+ */
+describe("keşif düşerse SON ÇALIŞAN porta düşülür", () => {
+  it("kısa kesintiden sonra kayıtlı (bozuk) porta DÖNMEZ", async () => {
+    // 1) Normal keşif: 80 bulunur ve öğrenilir.
+    expect(await resolveMoonrakerPort(HOST, 7125)).toBe(80);
+
+    // 2) Yazıcı kısa süre tamamen sessiz — keşif de düşer.
+    openPorts = [];
+    clearMoonrakerPort(HOST);
+    // (clearMoonrakerPort son-çalışanı da siler; gerçek senaryoda port ardışık hatayla
+    // unutulur ama son-çalışan KALIR. Onu taklit et: önce öğren, sonra yalnız aktif önbelleği
+    // düşür.)
+    openPorts = [80];
+    expect(await resolveMoonrakerPort(HOST, 7125)).toBe(80);
+
+    // 3) Şimdi yazıcı sessiz ve keşif düşecek — ama son çalışan 80 hatırlanmalı.
+    openPorts = [];
+    const oncekiCagri = calls.length;
+    // Ardışık hatalarla aktif önbellek düşene kadar istek at.
+    for (let i = 0; i < 4; i++) {
+      await fetchMoonrakerStatus(HOST, 7125).catch(() => null);
+    }
+    openPorts = [];
+    const port = await resolveMoonrakerPort(HOST, 7125);
+
+    expect(calls.length).toBeGreaterThan(oncekiCagri);
+    // ⚠️ ASIL İDDİA: 7125'e (kayıtlı, bozuk) DEĞİL, 80'e (son çalışan) düşülür.
+    expect(port).toBe(80);
+  });
+
+  it("adres gerçekten değişince son-çalışan tahmini de unutulur", async () => {
+    expect(await resolveMoonrakerPort(HOST, 7125)).toBe(80);
+    // Kullanıcı yazıcının adresini/portunu değiştirdi → eski tahmin geçersiz.
+    clearMoonrakerPort(HOST);
+    openPorts = [7125];
+    expect(await resolveMoonrakerPort(HOST, 7125)).toBe(7125);
+  });
+
+  it("port bir kez öğrenildikten sonra her istek TEK çağrı eder", async () => {
+    await resolveMoonrakerPort(HOST, 7125);
+    calls = [];
+    await fetchMoonrakerStatus(HOST, 7125);
+    // Keşif tekrar etmemeli: yalnız durum sorgusu (ve varsa onun ek okumaları) gitmeli.
+    expect(calls.every((c) => c.port === 80)).toBe(true);
+    expect(calls.some((c) => c.port === 7125)).toBe(false);
+  });
+});

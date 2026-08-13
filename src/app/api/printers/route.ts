@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
@@ -12,6 +12,7 @@ import { printJobDisplayName } from "@/lib/print-job-name";
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached, getPrintFileMatches,
   getMoonrakerExtrasCached, getBambuSlotsCached, getMatchedProducts, getEnabledPrinterConfigs,
+  bumpMoonrakerStatus, bumpBambuStatus,
 } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
@@ -263,8 +264,25 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
 
 // ─────────────────────────────────── GET ───────────────────────────────────
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   await ensureRuntimeSchema();
+
+  /**
+   * `?fresh=1` — SAYFA AÇILIŞI: önbelleği ve çevrimdışı geri çekilmesini ATLA.
+   *
+   * Yazıcı durumu saniyesi saniyesine doğru olmalı ("buranın hep çok güncel olması
+   * gerekiyor"). İki şey buna engeldi: 4 saniyelik durum önbelleği ve çevrimdışı damgalanmış
+   * yazıcıda 120 saniyeye kadar çıkan yeniden-deneme beklemesi. İkincisi daha kötüydü: kısa
+   * bir kesintiden sonra sayfayı açtığında yazıcı dakikalarca "ulaşılamadı" kalabiliyordu.
+   * Bu bayrak yalnız MOUNT'ta gönderilir; 5 saniyelik düzenli yoklama önbelleği kullanmaya
+   * devam eder (yazıcılar boşuna yorulmasın).
+   */
+  if (req.nextUrl.searchParams.get("fresh") === "1") {
+    for (const c of await getEnabledPrinterConfigs()) {
+      if (c.brand === "bambu") bumpBambuStatus(c.host, c.serial ?? "");
+      else bumpMoonrakerStatus(c.host, c.port);
+    }
+  }
 
   // MADDE 20: yapılandırma satırları neredeyse hiç değişmez ama panel 5sn'de bir buluta
   // sorguluyordu (uzak-HTTP libSQL'de her sorgu ~96ms ve SIRALI). 15sn önbellek.

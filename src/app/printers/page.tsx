@@ -253,11 +253,25 @@ export default function PrintersPage() {
   // henüz-değişmemiş gerçekle EZİLİYOR, kart iki kez zıplıyordu (Moonraker iptali 65sn sürebilir).
   const [pendingMap, setPendingMap] = useState<PendingMap<ActionKind>>(NO_PENDING);
   const commandInFlight = anyPending(pendingMap);
+  /** Bu mount'taki İLK çekim mi? Yalnız o istek sunucu önbelleğini atlar. */
+  const ilkCekimRef = useRef(true);
   const { data, dataUpdatedAt, isLoading, refetch } = useQuery<PrintersResponse>({
     queryKey: ["printers"],
-    queryFn: () => fetchJson<PrintersResponse>("/api/printers"),
+    // İlk çekimde `?fresh=1`: sunucudaki 4 saniyelik önbelleği ve çevrimdışı geri çekilmesini
+    // atlar. Düzenli 5 saniyelik yoklama önbelleği kullanmaya devam eder — yazıcıları boşuna
+    // yormamak için sadece MOUNT'ta taze isteniyor.
+    queryFn: ({ signal }) =>
+      fetchJson<PrintersResponse>(ilkCekimRef.current ? "/api/printers?fresh=1" : "/api/printers", { signal })
+        .finally(() => { ilkCekimRef.current = false; }),
     refetchInterval: commandInFlight ? false : 5000,
     staleTime: 0,
+    // ⚠️ Uygulamanın GENEL ayarı `refetchOnMount: false` (ekranlar arası geçiş önbellekten
+    // anında gelsin diye). Bu sayfa için YANLIŞ: sayfayı açtığında son önbellek gösteriliyor
+    // ve ilk tazeleme ancak 5 saniyelik sayaç dolunca geliyordu — kullanıcı "ekranı açıyorum,
+    // son açık haliyle görüyorum, 5 saniye sonra kendine geliyor" dedi. Yazıcı durumu
+    // saniyesi saniyesine doğru olmalı: burada genel ayar bilerek geçersiz kılınıyor.
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 
   // Canlı geri sayım (now) saniyede bir güncellenir → tüm yazıcı kartları o sıklıkta render olur.
