@@ -56,7 +56,6 @@ export default function ModelsPage() {
     queryKey: ["models"],
     queryFn: () => fetchJson("/api/models"),
     staleTime: 60_000,
-    placeholderData: (prev) => prev,
   });
   const [q, setQ] = useState("");
   const [onlyMissing, setOnlyMissing] = useState(false);
@@ -183,62 +182,88 @@ export default function ModelsPage() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-[76px] w-full rounded-xl" />)}</div>
+        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[172px] w-full rounded-xl" />)}
+        </div>
       ) : printers.length === 0 ? (
         <EmptyHint title="Önce yazıcı ekle" desc="Yazıcılar → Yönet'ten yazıcılarını ekledikten sonra ürünlere baskı dosyası yükleyebilirsin." />
       ) : products.length === 0 ? (
         <EmptyHint title="Henüz model yok" desc="Bir ürünün detay sayfasındaki 'Baskı Dosyaları' kartından parça parça dosya yükle; hepsi burada toplanır." />
       ) : (
-        <div className="space-y-2">
-          {products.map((p, i) => (
-            <Card
-              key={p.productId}
-              className="group transition-all hover:border-primary/30 hover:shadow-[0_4px_20px_oklch(0.66_0.2_278_/_8%)] animate-in fade-in slide-in-from-bottom-1"
-              style={{ animationDelay: `${Math.min(i, 12) * 35}ms`, animationFillMode: "both" }}
-            >
-              <CardContent className="p-3 flex flex-wrap items-center gap-3">
-                <div className="h-12 w-12 shrink-0 rounded-lg border bg-muted flex items-center justify-center overflow-hidden">
-                  {p.imageUrl ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-5 w-5 text-muted-foreground/40" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <Link href={`/products/${p.productId}`} className="font-medium text-sm hover:underline truncate block" title={p.name}>{p.name}</Link>
-                  <p className="text-[11px] text-muted-foreground tabular-nums">
-                    {p.files.length} parça
-                    {p.totalBytes > 0 && <span className="text-muted-foreground/60"> · {fmtSize(p.totalBytes)}</span>}
-                    {/* Ürün adı eşleşmediyse hangi PARÇA yüzünden listede olduğunu söyle. */}
-                    {(eslesmeler.get(p.productId)?.length ?? 0) > 0 && (
-                      <span className="text-primary/80"> · {eslesmeler.get(p.productId)!.length} parça eşleşti</span>
-                    )}
-                  </p>
-                </div>
-                {/* Dar ekranda alt satıra düşer; geniş ekranda sağa yaslanır. */}
-                <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto sm:max-w-[58%] sm:justify-end">
-                  {printers.map((pr) => {
-                    const cnt = p.files.filter((f) => f.printerConfigId === pr.id).length;
-                    const has = cnt > 0;
-                    return (
-                      <button
-                        key={pr.id}
-                        disabled={!has}
-                        onClick={() => { if (has) setParts({ product: p, printer: pr }); }}
-                        className={cn(
-                          "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors",
-                          has
-                            ? "border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20 cursor-pointer"
-                            : "border-dashed border-border text-muted-foreground/45"
-                        )}
-                        title={has ? `${pr.name}: parçaları gör & bas` : `${pr.name}: dosya yok`}
+        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+          {products.map((p, i) => {
+            const eslesenParca = eslesmeler.get(p.productId)?.length ?? 0;
+            return (
+              <Card
+                key={p.productId}
+                className="group flex flex-col overflow-hidden transition-all hover:border-primary/30 hover:shadow-[0_6px_24px_oklch(0.66_0.2_278_/_10%)] animate-in fade-in slide-in-from-bottom-1"
+                style={{ animationDelay: `${Math.min(i, 12) * 30}ms`, animationFillMode: "both" }}
+              >
+                <CardContent className="flex flex-1 flex-col gap-3 p-3">
+                  <div className="flex items-start gap-3">
+                    <div className="h-16 w-16 shrink-0 rounded-lg border bg-muted/60 flex items-center justify-center overflow-hidden">
+                      {p.imageUrl
+                        ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" />
+                        : <Package className="h-6 w-6 text-muted-foreground/35" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        href={`/products/${p.productId}`}
+                        className="block text-[15px] font-semibold leading-snug hover:underline line-clamp-2"
+                        title={p.name}
                       >
-                        {has && <Play className="h-3 w-3" />}
-                        {pr.name}
-                        {has && <span className="ml-0.5 tabular-nums opacity-80">·{cnt}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                        {p.name}
+                      </Link>
+                      {/* Sayılar mono + tabular: bu sayfa bir makine göstergesi gibi okunmalı. */}
+                      <p className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        {p.files.length} parça
+                        {p.totalBytes > 0 && <span className="text-muted-foreground/60"> · {fmtSize(p.totalBytes)}</span>}
+                      </p>
+                      {eslesenParca > 0 && (
+                        <p className="mt-0.5 font-mono text-[11px] text-primary/80">{eslesenParca} parça eşleşti</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/*
+                    MAKİNE ŞERİDİ — bu sayfanın imzası.
+                    Dört bölme, HER KARTTA AYNI SIRADA. Dolu = o yazıcının dosyası var (adet
+                    yazılı), kesikli = eksik. Sıra sabit olduğu için kartları yukarıdan aşağı
+                    tarayıp kapsama boşluklarını tek bakışta görürsün — eski satır düzeninde
+                    rozetler sağa sıkıştığı ve sırası kaydığı için bu imkânsızdı.
+                  */}
+                  <div className="mt-auto grid grid-cols-4 gap-1.5">
+                    {printers.map((pr) => {
+                      const cnt = p.files.filter((f) => f.printerConfigId === pr.id).length;
+                      const has = cnt > 0;
+                      return (
+                        <button
+                          key={pr.id}
+                          disabled={!has}
+                          onClick={() => { if (has) setParts({ product: p, printer: pr }); }}
+                          title={has ? `${pr.name} · ${cnt} parça — parçaları gör ve bas` : `${pr.name}: dosya yok`}
+                          className={cn(
+                            "flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 transition-colors",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            has
+                              ? "border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 cursor-pointer"
+                              : "border-dashed border-border/70 text-muted-foreground/40"
+                          )}
+                        >
+                          <span className="w-full truncate text-center text-[9px] font-semibold uppercase tracking-wide">
+                            {shortPrinter(pr.name)}
+                          </span>
+                          <span className="font-mono text-[11px] leading-none tabular-nums">
+                            {has ? cnt : "—"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
@@ -252,6 +277,24 @@ export default function ModelsPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Makine şeridi için kısa ad. Şerit dört eşit bölmeye ayrıldığı için tam ad sığmaz;
+ * kullanıcının makineyi tanıdığı ayırt edici parçayı bırakırız ("Neptune 4 Pro" → "N4 PRO").
+ * Tam ad her bölmenin ipucunda duruyor.
+ */
+function shortPrinter(name: string): string {
+  const n = name.trim();
+  // "Neptune 4 Pro" → "N4 PRO" · "Neptune 4 Plus" → "N4 PLUS"
+  const neptune = /neptune\s*(\d+)\s*(pro|plus|max)?/i.exec(n);
+  if (neptune) {
+    return `N${neptune[1]}${neptune[2] ? ` ${neptune[2]}` : ""}`.toLocaleUpperCase("tr-TR");
+  }
+  // "Bambu Lab A1 Combo" → "A1" · "Snapmaker U1" → "U1"
+  const model = /(?:^|\s)([a-z]\d[a-z0-9]*)(?:\s|$)/i.exec(n);
+  if (model) return model[1].toLocaleUpperCase("tr-TR");
+  return n.slice(0, 7).toLocaleUpperCase("tr-TR");
 }
 
 function FilterChip({
