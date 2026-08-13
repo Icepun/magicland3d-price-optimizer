@@ -705,9 +705,17 @@ export default function ReportsPage() {
                 : "Trendyol komisyonları henüz alınmadı."}
             </p>
           )}
+          {/*
+            ⚠️ "HENÜZ güncellenmedi" DEME. Bu siparişlerin komisyonu kâra HİÇ işlenemez:
+            `applyActualCommissionToProfit` maliyeti eksik olan ya da ödeme tutarı sipariş
+            tutarından %1'den fazla sapan siparişlerde gerçek komisyonu bilerek reddediyor —
+            tutmayan bir ödemeyi işlemek yanlış kâr üretirdi. 2026-08-13'te dört ayın tamamı
+            yeniden hesaplandı ve bu sayı 89'da KALDI; "henüz" demek tutulmayacak bir söz.
+          */}
           {(commission?.pending ?? 0) > 0 && (
             <p className="text-xs text-muted-foreground">
-              {commission?.pending} siparişin komisyonu geldi, kârı henüz güncellenmedi.
+              {commission?.pending} siparişte komisyon kaydı var ama kâra işlenemiyor —
+              maliyeti eksik ya da ödeme tutarı siparişle tutmuyor.
             </p>
           )}
         </div>

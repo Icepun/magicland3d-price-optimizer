@@ -13,7 +13,7 @@ import { readFinanceRecalcReadiness } from "@/lib/finance-recalc-readiness";
 import {
   financeRecalcState,
   FinanceRecalcBusyError,
-  startFinanceMonthRecalc,
+  startFinanceRecalc,
 } from "@/lib/order-finance-snapshots";
 import { bustFinanceCaches } from "@/lib/cache-busting";
 import { swr } from "@/lib/route-cache";
@@ -222,17 +222,34 @@ export async function GET(req: NextRequest) {
  * bir sonraki okumada görünsün.
  */
 export async function POST(req: NextRequest) {
-  const month = req.nextUrl.searchParams.get("month") ?? "";
-  if (!MONTH_PATTERN.test(month)) {
+  // Tek ay (`?month=2026-08`) ya da birden çok ay (`?months=2026-05,2026-06`).
+  // `?dryRun=1` PROVA turudur: hesap yapılır, kaç siparişin değişeceği ve kâr farkı
+  // raporlanır, veritabanına HİÇBİR ŞEY yazılmaz.
+  //
+  // ⚠️ NEDEN PROVA VAR: bu işlem KAYITLI KÂR RAKAMLARINI değiştiriyor. Kullanıcı neyin
+  // değişeceğini görmeden onaylamamalı — "önce göster, sonra yaz" bu ekranın kuralı.
+  const params = req.nextUrl.searchParams;
+  const raw = params.get("months") ?? params.get("month") ?? "";
+  const months = raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (months.length === 0 || !months.every((month) => MONTH_PATTERN.test(month))) {
     return NextResponse.json(
       { error: "Hangi ayın yeniden hesaplanacağı anlaşılmadı." },
       { status: 400 }
     );
   }
+  const dryRun = params.get("dryRun") === "1";
   await ensureRuntimeSchema();
   let state;
   try {
-    state = startFinanceMonthRecalc(month, { onDone: () => bustFinanceCaches() });
+    state = startFinanceRecalc(months, {
+      dryRun,
+      // Prova hiçbir şey yazmadığı için önbelleği düşürmenin anlamı yok; düşürmek yalnız
+      // bir sonraki isteği boşuna yeniden hesaplatırdı (uzak-HTTP'de her sorgu ~96ms).
+      onDone: dryRun ? undefined : () => bustFinanceCaches(),
+    });
   } catch (error) {
     // Başka kapsamda/türde bir tur sürüyorsa onun durumunu bu isteğin sonucu gibi
     // DÖNDÜRMEYİZ: kullanıcı hiç yazılmamış bir turu "bitti" sanardı.
