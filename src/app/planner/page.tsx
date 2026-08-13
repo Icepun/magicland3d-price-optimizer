@@ -471,7 +471,7 @@ export default function PlannerPage() {
         : null;
 
   return (
-    <div className="p-6 space-y-5 max-w-4xl">
+    <div className="p-6 space-y-5 max-w-6xl">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -485,8 +485,10 @@ export default function PlannerPage() {
           </p>
         </div>
         <div className="shrink-0 flex items-end gap-2">
-          <div>
-            <Label className="text-[11px] text-muted-foreground">
+          {/* Etiket "Hedef stok" ↔ "En fazla" arasında değişiyor; genişlik sabitlenmezse
+              mod değiştirildiğinde yanındaki Yenile düğmesi de kayıyor. */}
+          <div className="w-[84px]">
+            <Label className="text-[11px] text-muted-foreground whitespace-nowrap">
               {mod === "talep" ? "En fazla" : "Hedef stok"}
             </Label>
             <Input
@@ -678,17 +680,24 @@ export default function PlannerPage() {
           }
         >
           <Snowflake className="h-3.5 w-3.5" />
-          {insights?.deadStockDays ?? 90} gündür satmayanları gizle
+          {/* Süre ancak satış geçmişi okununca bilinir. Önce "90" yazıp sonra "21"e dönmek
+              düğmenin genişliğini değiştirip komşularını oynatıyordu. */}
+          {insights ? `${insights.deadStockDays} gündür satmayanları gizle` : "Satmayanları gizle"}
           {deadStockReady && deadStockCount > 0 && (
             <span className="ml-0.5 rounded-full bg-foreground/10 px-1.5 text-[11px] font-semibold tabular-nums">
               {deadStockCount}
             </span>
           )}
         </Button>
+      </div>
 
+      {/* İpucu KENDİ satırında ve yeri hep ayrılmış duruyor.
+          Öncelik düğmeleriyle aynı satırdayken, mod değiştirince beliren metin satırı
+          taşırıp altındaki bütün listeyi aşağı kaydırıyordu. */}
+      <div className="min-h-[24px] -mt-2">
         {hint && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground animate-in fade-in duration-300">
-            <Info className="h-3.5 w-3.5 shrink-0" />
+          <span className="inline-flex items-start gap-1.5 text-[11px] text-muted-foreground animate-in fade-in duration-300">
+            <Info className="h-3.5 w-3.5 shrink-0 mt-px" />
             {hint}
           </span>
         )}
@@ -712,6 +721,88 @@ export default function PlannerPage() {
         />
       ) : (
         <>
+          {/* Filament yetmezliği — LİSTE görünümünde de görünür.
+              Eskiden yalnız kuyruk sekmesindeydi; varsayılan sekme liste olduğu için
+              "69 kg filament" yazısı, elde 34 kg varken uyarısız duruyordu. */}
+          {visibleQueue && !visibleQueue.enough && (
+            <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+              <CardContent className="py-2.5 flex items-center gap-2 text-sm">
+                <Disc3 className="h-4 w-4 text-amber-400 shrink-0" />
+                <span>
+                  Bu plan ~{formatNumber(visibleQueue.neededGrams / 1000, 1)} kg filament ister,
+                  makaralarda ~{formatNumber(visibleQueue.remainingGrams / 1000, 1)} kg kaldı.
+                </span>
+                <Link
+                  href="/spools"
+                  className="ml-auto shrink-0 text-xs font-medium text-primary hover:underline"
+                >
+                  Makaralar
+                </Link>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Özet — SABİT DÖRT SÜTUN.
+              Eskiden `flex-wrap` idi: sayılar 0'dan hedefe akarken metin genişliği her karede
+              değişiyor, öğeler satır atlayıp yerinden oynuyordu (kullanıcı "yazıların yerleri
+              değişiyor" diye bildirdi). Izgarada her rakam kendi hücresinde büyür; komşusunu
+              itmez. Dördüncü hücre kuyruk verisi gelmeden de DURUR, yalnız içi sonra dolar —
+              yoksa kart yükseklik değiştirip altındaki listeyi aşağı kaydırıyordu. */}
+          <Card className="border-primary/30 bg-primary/5">
+            <CardContent className="py-3 grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3 text-sm">
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Factory className="h-3.5 w-3.5 text-primary shrink-0" /> Basılacak ürün
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums leading-none">
+                  <AnimatedNumber value={plan.length} />
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Package className="h-3.5 w-3.5 shrink-0" /> Toplam baskı
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums leading-none">
+                  <AnimatedNumber value={totalPrints} />
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Disc3 className="h-3.5 w-3.5 shrink-0" /> Filament
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums leading-none">
+                  ~
+                  <AnimatedNumber
+                    value={totalFilament / 1000}
+                    format={(n) => formatNumber(n, 1)}
+                  />{" "}
+                  <span className="text-sm font-normal text-muted-foreground">kg</span>
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <Clock className="h-3.5 w-3.5 shrink-0" /> Baskı süresi
+                </p>
+                <p className="mt-0.5 text-lg font-bold tabular-nums leading-none">
+                  {visibleQueue && visibleQueue.hours > 0 ? (
+                    <>
+                      ~<AnimatedNumber value={visibleQueue.hours} format={hoursText} />
+                      {/* Saat rakamı tek başına büyüklüğü anlatmıyor: elindeki makine
+                          sayısına bölününce plan gerçek boyutunu gösteriyor. */}
+                      {makineGunu != null && (
+                        <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+                          ≈{formatNumber(makineGunu, makineGunu < 10 ? 1 : 0)} gün
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground/50">—</span>
+                  )}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
           {/* Boştaki yazıcılar — listenin de kuyruğun da üstünde, tek tıkla başlat. */}
           {bostaOneriler.length > 0 && (
             <Card className="border-green-500/35 bg-green-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
@@ -760,70 +851,6 @@ export default function PlannerPage() {
               </CardContent>
             </Card>
           )}
-
-          {/* Filament yetmezliği — LİSTE görünümünde de görünür.
-              Eskiden yalnız kuyruk sekmesindeydi; varsayılan sekme liste olduğu için
-              "69 kg filament" yazısı, elde 34 kg varken uyarısız duruyordu. */}
-          {visibleQueue && !visibleQueue.enough && (
-            <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
-              <CardContent className="py-2.5 flex items-center gap-2 text-sm">
-                <Disc3 className="h-4 w-4 text-amber-400 shrink-0" />
-                <span>
-                  Bu plan ~{formatNumber(visibleQueue.neededGrams / 1000, 1)} kg filament ister,
-                  makaralarda ~{formatNumber(visibleQueue.remainingGrams / 1000, 1)} kg kaldı.
-                </span>
-                <Link
-                  href="/spools"
-                  className="ml-auto shrink-0 text-xs font-medium text-primary hover:underline"
-                >
-                  Makaralar
-                </Link>
-              </CardContent>
-            </Card>
-          )}
-
-          <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-              <span className="inline-flex items-center gap-1.5">
-                <Factory className="h-4 w-4 text-primary" />
-                <AnimatedNumber value={plan.length} className="font-bold tabular-nums" /> ürün basılmalı
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <Package className="h-4 w-4" />
-                toplam{" "}
-                <AnimatedNumber value={totalPrints} className="text-foreground font-bold tabular-nums" /> baskı
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <Disc3 className="h-4 w-4" />
-                ~
-                <AnimatedNumber
-                  value={totalFilament / 1000}
-                  format={(n) => formatNumber(n, 2)}
-                  className="text-foreground font-bold tabular-nums"
-                />{" "}
-                kg filament
-              </span>
-              {visibleQueue && visibleQueue.hours > 0 && (
-                <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                  <Clock className="h-4 w-4" />~
-                  <AnimatedNumber
-                    value={visibleQueue.hours}
-                    format={hoursText}
-                    className="text-foreground font-bold tabular-nums"
-                  />{" "}
-                  baskı süresi
-                  {/* Saat rakamı tek başına büyüklüğü anlatmıyor: 2400 saat "çok" ama ne kadar?
-                      Elindeki makine sayısına bölünce plan gerçek boyutunu gösteriyor. */}
-                  {makineGunu != null && (
-                    <span className="text-foreground/70">
-                      (≈{formatNumber(makineGunu, makineGunu < 10 ? 1 : 0)} gün
-                      {" "}tüm yazıcılar)
-                    </span>
-                  )}
-                </span>
-              )}
-            </CardContent>
-          </Card>
 
           {view === "queue" ? (
             <QueueView
