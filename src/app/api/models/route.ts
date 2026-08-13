@@ -23,6 +23,14 @@ interface LibFile {
   hasThumbnail: boolean;
   /** `vizKeyForModel` bunu kullanıyor — aynı içerik farklı kayıtlarda tek önbelleğe düşsün. */
   contentMd5: string | null;
+  /**
+   * Bu dosyayı KAÇ kayıt paylaşıyor (aynı bulut nesnesi).
+   *
+   * "Varyantlara uygula" aynı dosyayı birden çok ürüne bağlar; bulutta tek nesne durur.
+   * Silme onayı bunu SÖYLEMELİ — kullanıcı bir üründen silerken diğerlerinden de kalktığını
+   * bilmezse sessiz veri kaybı olur. Ölçüldü: 2,81 GB böyle paylaşılıyor.
+   */
+  sharedWith: number;
 }
 interface LibRow {
   productId: string;
@@ -111,6 +119,12 @@ async function computeModels() {
     }),
   ]);
 
+  // Aynı bulut nesnesini kaç kayıt gösteriyor — silme onayı bunu söyleyecek.
+  const paylasim = new Map<string, number>();
+  for (const f of files) {
+    if (f.r2Key) paylasim.set(f.r2Key, (paylasim.get(f.r2Key) ?? 0) + 1);
+  }
+
   const map = new Map<string, LibRow>();
   for (const f of files) {
     if (!f.product) continue; // ürünü silinmiş yetim dosya → atla (crash guard)
@@ -129,6 +143,7 @@ async function computeModels() {
       fileType: f.fileType,
       hasThumbnail: Boolean(f.thumbnail),
       contentMd5: f.contentMd5 ?? null,
+      sharedWith: f.r2Key ? (paylasim.get(f.r2Key) ?? 1) : 1,
     });
     row.totalBytes += f.sizeBytes ?? 0;
   }

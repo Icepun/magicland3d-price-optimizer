@@ -6,7 +6,7 @@ import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Boxes, Search, Package, Play, Loader2, Layers, FileBox } from "lucide-react";
+import { Boxes, Search, Package, Play, Loader2, Layers, FileBox, Pencil, Trash2, Check, X } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ const GcodeViewerDialog = dynamic(
 );
 
 interface LibPrinter { id: string; name: string; brand: string; type: string }
-interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null }
+interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number }
 interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number }
 interface LibStorage {
   /** Buluttaki GERÇEK kullanım (aynı dosya varyantlarda paylaşılıyorsa bir kez sayılır). */
@@ -337,6 +337,49 @@ function PartsModal({
   const [picked, setPicked] = useState<LibFile | null>(null);
   /** 3B izleyicide açık parça — basmakla ilgisi yok, yalnız inceleme. */
   const [viewer, setViewer] = useState<LibFile | null>(null);
+  /** Yeniden adlandırılan parça (id) ve yazılan metin. */
+  const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+  /** Silme onayı bekleyen parça — onay penceresi neyin gideceğini gösterir. */
+  const [deleting, setDeleting] = useState<LibFile | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const renameSave = async () => {
+    if (!renaming) return;
+    const label = renaming.value.trim();
+    setBusy(true);
+    try {
+      await fetchJson(`/api/models/${renaming.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        // Boş bırakılırsa etiket kaldırılır → dosyanın kendi adı görünür.
+        body: JSON.stringify({ label: label || null }),
+      });
+      setRenaming(null);
+      await qc.invalidateQueries({ queryKey: ["models"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Kaydedilemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setBusy(true);
+    try {
+      // Paylaşılan dosyada TÜM kayıtlar silinir (kullanıcı onay penceresinde bunu gördü);
+      // bulut nesnesi zaten yalnız son referans kalkınca siliniyor.
+      const allVariants = deleting.sharedWith > 1 ? "?allVariants=1" : "";
+      await fetchJson(`/api/models/${deleting.id}${allVariants}`, { method: "DELETE" });
+      toast.success("Dosya silindi");
+      setDeleting(null);
+      await qc.invalidateQueries({ queryKey: ["models"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Silinemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
     setPrinting(true);
@@ -460,11 +503,58 @@ function PartsModal({
               </button>
               <span className="flex items-center justify-center h-7 w-7 rounded bg-primary/10 text-primary text-xs font-bold tabular-nums shrink-0">{i + 1}</span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
-                <p className="text-[10px] text-muted-foreground/70 truncate flex items-center gap-1.5">
-                  <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}{part.gramaj ? ` · ${part.gramaj} gr` : ""}
-                </p>
+                {renaming?.id === part.id ? (
+                  <div className="flex items-center gap-1">
+                    <Input
+                      autoFocus
+                      value={renaming.value}
+                      onChange={(e) => setRenaming({ id: part.id, value: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void renameSave();
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                      placeholder={part.originalName}
+                      className="h-7 text-sm"
+                    />
+                    <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" disabled={busy} onClick={() => void renameSave()} title="Kaydet">
+                      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => setRenaming(null)} title="Vazgeç">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
+                    <p className="text-[10px] text-muted-foreground/70 truncate flex items-center gap-1.5">
+                      <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}{part.gramaj ? ` · ${part.gramaj} gr` : ""}
+                      {part.sharedWith > 1 && (
+                        <span className="text-amber-400/80" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
+                          · {part.sharedWith} üründe
+                        </span>
+                      )}
+                    </p>
+                  </>
+                )}
               </div>
+              {renaming?.id !== part.id && (
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <Button
+                    size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    title="Adını değiştir"
+                    onClick={() => setRenaming({ id: part.id, value: part.label ?? "" })}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    title="Sil"
+                    onClick={() => setDeleting(part)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
               <Button size="sm" className="h-8 gap-1.5 shrink-0" disabled={printing} onClick={() => startPart(part)}>
                 {printing && progress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {multiColor ? "Renk seç" : "Bas"}
               </Button>
@@ -482,6 +572,40 @@ function PartsModal({
           sıranın ne olduğunu gösterir.
         </p>
       </DialogContent>
+      {/*
+        SİLME ONAYI — neyin gideceğini SÖYLER. Paylaşılan dosyada uyarı şart: kullanıcı bir
+        üründen silerken diğer varyantlardan da kalktığını bilmezse sessiz veri kaybı olur.
+      */}
+      {deleting && (
+        <Dialog open onOpenChange={(o) => !o && !busy && setDeleting(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle className="text-destructive">Bu dosya silinsin mi?</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-2 text-sm">
+              <p className="font-medium break-words">{deleting.label || deleting.originalName}</p>
+              <p className="text-xs text-muted-foreground">
+                {printer.name} · {fmtSize(deleting.sizeBytes)}
+                {deleting.gramaj ? ` · ${deleting.gramaj} gr` : ""}
+              </p>
+              {deleting.sharedWith > 1 && (
+                <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-300">
+                  Bu dosya {deleting.sharedWith} üründe kullanılıyor. Silersen hepsinden kalkar.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">Bu işlem geri alınamaz.</p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" size="sm" onClick={() => setDeleting(null)} disabled={busy}>
+                Vazgeç
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => void confirmDelete()} disabled={busy}>
+                {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
       {viewer && (
         // `liveLayer` verilmiyor: burada basılan bir iş yok, sadece inceleme. İzleyici o zaman
         // "canlı olmayan" kipte açılır (katman kilidi ve "Canlıya dön" düğmesi çıkmaz).
