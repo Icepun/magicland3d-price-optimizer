@@ -7,7 +7,10 @@
  * makineye yönlendirilir. Testler bunu kilitliyor.
  */
 import { describe, expect, it } from "vitest";
-import { gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
+import {
+  foldTr, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
+  searchProduct, sortProducts,
+} from "./models-view";
 
 const P = { snap: "snapmaker", bambu: "bambu", nep: "neptune" };
 
@@ -92,5 +95,88 @@ describe("yazıcı başına filament", () => {
       { id: "c", gramaj: null },
     ]);
     expect(eksik.map((f) => f.id)).toEqual(["b", "c"]);
+  });
+});
+
+describe("arama", () => {
+  const urun = {
+    name: "Ahtapot Figürlü Şarap Tutacağı",
+    files: [
+      { id: "a", label: null, originalName: "Ahtapot Şarap 20s10dk.gcode" },
+      { id: "b", label: "Gövde", originalName: "body.gcode" },
+    ],
+  };
+
+  it("Türkçe büyük I/İ doğru katlanır", () => {
+    // `toLowerCase()` "İ" için "i̇" üretir ve eşleşme kaçar; tr-TR şart.
+    expect(foldTr("İSTASYON")).toBe(foldTr("istasyon"));
+    expect(foldTr("IRMAK")).toBe(foldTr("ırmak"));
+  });
+
+  it("diakritiksiz yazılan arama da bulur", () => {
+    expect(searchProduct(urun, "sarap").matches).toBe(true);
+    expect(searchProduct(urun, "figurlu").matches).toBe(true);
+  });
+
+  it("PARÇA adından eşleşir ve hangi parça olduğunu söyler (asıl eksik)", () => {
+    const hit = searchProduct(urun, "20s10");
+    expect(hit.matches).toBe(true);
+    expect(hit.nameMatched).toBe(false);
+    expect(hit.matchedFileIds).toEqual(["a"]);
+  });
+
+  it("parça ETİKETİNDEN de eşleşir", () => {
+    expect(searchProduct(urun, "gövde").matchedFileIds).toEqual(["b"]);
+  });
+
+  it("boş sorgu her ürünü geçirir", () => {
+    const hit = searchProduct(urun, "   ");
+    expect(hit.matches).toBe(true);
+    expect(hit.matchedFileIds).toEqual([]);
+  });
+
+  it("eşleşmeyen sorgu ürünü eler", () => {
+    expect(searchProduct(urun, "bisiklet").matches).toBe(false);
+  });
+});
+
+describe("sıralama", () => {
+  const list = [
+    { name: "Bardak", files: [{ id: "1" }], totalBytes: 900 },
+    { name: "Ahtapot", files: [{ id: "2" }, { id: "3" }], totalBytes: 100 },
+    { name: "Çanta", files: [{ id: "4" }], totalBytes: 500 },
+  ];
+
+  it("ada göre Türkçe sıralar (Ç, A'dan sonra B'den sonra)", () => {
+    expect(sortProducts(list, "name").map((p) => p.name)).toEqual(["Ahtapot", "Bardak", "Çanta"]);
+  });
+
+  it("parça sayısına göre", () => {
+    expect(sortProducts(list, "parts")[0].name).toBe("Ahtapot");
+  });
+
+  it("boyuta göre — temizlik bunun için", () => {
+    expect(sortProducts(list, "size").map((p) => p.name)).toEqual(["Bardak", "Çanta", "Ahtapot"]);
+  });
+
+  it("girdi dizisini DEĞİŞTİRMEZ", () => {
+    const kopya = [...list];
+    sortProducts(list, "size");
+    expect(list).toEqual(kopya);
+  });
+});
+
+describe("eksik dosya filtresi", () => {
+  const urun = { files: [{ printerConfigId: "snap" }, { printerConfigId: "bambu" }] };
+  const hepsi = ["snap", "bambu", "nep"];
+
+  it("SEÇİLEN yazıcıya göre süzer", () => {
+    expect(missingFiles(urun, hepsi, "nep")).toBe(true);
+    expect(missingFiles(urun, hepsi, "snap")).toBe(false);
+  });
+
+  it("yazıcı seçilmezse herhangi birinde eksik olması yeter (eski davranış)", () => {
+    expect(missingFiles(urun, hepsi)).toBe(true);
+    expect(missingFiles(urun, ["snap", "bambu"])).toBe(false);
   });
 });

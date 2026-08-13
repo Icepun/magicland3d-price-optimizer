@@ -20,7 +20,10 @@ import {
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
-import { gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
+import {
+  gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
+  searchProduct, sortProducts, type SortMode,
+} from "./models-view";
 
 // three.js ilk pakete girmesin — izleyici yalnız açıldığında iner.
 const GcodeViewerDialog = dynamic(
@@ -47,13 +50,19 @@ function fmtSize(b: number) {
 }
 
 export default function ModelsPage() {
+  // Elde doğru veri varken ekranı gri kutulara çevirmiyoruz: önbellek gösterilir, tazeleme
+  // arka planda olur. (Eskiden `staleTime: 0` yüzünden her girişte tüm liste yeniden iniyordu.)
   const { data, isLoading } = useQuery<{ products: LibProduct[]; printers: LibPrinter[]; storage?: LibStorage }>({
     queryKey: ["models"],
     queryFn: () => fetchJson("/api/models"),
-    staleTime: 0,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
   });
   const [q, setQ] = useState("");
   const [onlyMissing, setOnlyMissing] = useState(false);
+  /** Eksik filtresi hangi yazıcı için? null = herhangi biri (eski, kaba davranış). */
+  const [missingPrinter, setMissingPrinter] = useState<string | null>(null);
+  const [sortMode, setSortMode] = useState<SortMode>("name");
   const [parts, setParts] = useState<{ product: LibProduct; printer: LibPrinter } | null>(null);
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
@@ -61,15 +70,25 @@ export default function ModelsPage() {
   const storage = data?.storage;
   const totalParts = useMemo(() => allProducts.reduce((s, p) => s + p.files.length, 0), [allProducts]);
 
-  const products = useMemo(() => {
-    let list = allProducts;
-    const query = q.trim().toLocaleLowerCase("tr-TR");
-    if (query) list = list.filter((p) => p.name.toLocaleLowerCase("tr-TR").includes(query));
-    if (onlyMissing && printers.length) {
-      list = list.filter((p) => printers.some((pr) => !p.files.some((f) => f.printerConfigId === pr.id)));
+  const printerIds = useMemo(() => printers.map((p) => p.id), [printers]);
+
+  /** Arama sonucu: hangi ürün kalacak + hangi PARÇA eşleşti (kullanıcı nedenini görsün). */
+  const eslesmeler = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const p of allProducts) {
+      const hit = searchProduct(p, q);
+      if (hit.matches) map.set(p.productId, hit.nameMatched ? [] : hit.matchedFileIds);
     }
-    return list;
-  }, [allProducts, q, onlyMissing, printers]);
+    return map;
+  }, [allProducts, q]);
+
+  const products = useMemo(() => {
+    let list = allProducts.filter((p) => eslesmeler.has(p.productId));
+    if (onlyMissing && printerIds.length) {
+      list = list.filter((p) => missingFiles(p, printerIds, missingPrinter));
+    }
+    return sortProducts(list, sortMode);
+  }, [allProducts, eslesmeler, onlyMissing, missingPrinter, printerIds, sortMode]);
 
   return (
     <div className="p-6 space-y-5 max-w-6xl">
@@ -115,13 +134,52 @@ export default function ModelsPage() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 max-w-sm">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Ürün ara…" value={q} onChange={(e) => setQ(e.target.value)} className="pl-9" />
+          {/* Arama artık parça adlarında da çalışıyor — 470 parçanın adı arama dışındaydı. */}
+          <Input placeholder="Ürün veya parça ara…" value={q} onChange={(e) => setQ(e.target.value)} className="pl-9" />
         </div>
+
         <Button variant={onlyMissing ? "default" : "outline"} size="sm" onClick={() => setOnlyMissing((v) => !v)}>
           Eksik dosyası olanlar
         </Button>
+        {/*
+          Yazıcı seçilebilir: dört yazıcıdan HERHANGİ birinde eksik olan neredeyse her ürün
+          olduğu için (kapsama 95/89/75/70 · 110) genel filtre işe yaramıyordu.
+        */}
+        {onlyMissing && printers.length > 1 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <FilterChip active={missingPrinter === null} onClick={() => setMissingPrinter(null)}>
+              herhangi biri
+            </FilterChip>
+            {printers.map((pr) => {
+              const kapsam = allProducts.filter((p) => p.files.some((f) => f.printerConfigId === pr.id)).length;
+              return (
+                <FilterChip
+                  key={pr.id}
+                  active={missingPrinter === pr.id}
+                  onClick={() => setMissingPrinter((v) => (v === pr.id ? null : pr.id))}
+                  title={`${kapsam}/${allProducts.length} üründe dosyası var`}
+                >
+                  {pr.name}
+                </FilterChip>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          <span className="text-[11px] text-muted-foreground">Sırala</span>
+          {([
+            ["name", "Ad"],
+            ["parts", "Parça"],
+            ["size", "Boyut"],
+          ] as Array<[SortMode, string]>).map(([mode, label]) => (
+            <FilterChip key={mode} active={sortMode === mode} onClick={() => setSortMode(mode)}>
+              {label}
+            </FilterChip>
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
@@ -138,7 +196,7 @@ export default function ModelsPage() {
               className="group transition-all hover:border-primary/30 hover:shadow-[0_4px_20px_oklch(0.66_0.2_278_/_8%)] animate-in fade-in slide-in-from-bottom-1"
               style={{ animationDelay: `${Math.min(i, 12) * 35}ms`, animationFillMode: "both" }}
             >
-              <CardContent className="p-3 flex items-center gap-3">
+              <CardContent className="p-3 flex flex-wrap items-center gap-3">
                 <div className="h-12 w-12 shrink-0 rounded-lg border bg-muted flex items-center justify-center overflow-hidden">
                   {p.imageUrl ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-5 w-5 text-muted-foreground/40" />}
                 </div>
@@ -147,9 +205,14 @@ export default function ModelsPage() {
                   <p className="text-[11px] text-muted-foreground tabular-nums">
                     {p.files.length} parça
                     {p.totalBytes > 0 && <span className="text-muted-foreground/60"> · {fmtSize(p.totalBytes)}</span>}
+                    {/* Ürün adı eşleşmediyse hangi PARÇA yüzünden listede olduğunu söyle. */}
+                    {(eslesmeler.get(p.productId)?.length ?? 0) > 0 && (
+                      <span className="text-primary/80"> · {eslesmeler.get(p.productId)!.length} parça eşleşti</span>
+                    )}
                   </p>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap justify-end max-w-[58%]">
+                {/* Dar ekranda alt satıra düşer; geniş ekranda sağa yaslanır. */}
+                <div className="flex items-center gap-1.5 flex-wrap w-full sm:w-auto sm:max-w-[58%] sm:justify-end">
                   {printers.map((pr) => {
                     const cnt = p.files.filter((f) => f.printerConfigId === pr.id).length;
                     const has = cnt > 0;
@@ -188,6 +251,27 @@ export default function ModelsPage() {
         />
       )}
     </div>
+  );
+}
+
+function FilterChip({
+  active, onClick, title, children,
+}: { active: boolean; onClick: () => void; title?: string; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        "rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active
+          ? "border-primary/40 bg-primary/12 text-primary"
+          : "border-border text-muted-foreground hover:bg-muted"
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
