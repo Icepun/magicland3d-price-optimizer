@@ -8,6 +8,22 @@
 
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { dbEpochMs } from "@/lib/sqlite-date";
+import {
+  DAY_MS,
+  EXCLUDED_STATUS,
+  SALES_WINDOW_DAYS,
+  coverageStart,
+  toInt,
+} from "@/lib/planner-insights";
+import {
+  VARSAYILAN_KAPSAM_GUN,
+  basilacakAdet,
+  gunlukSatis,
+  hedefStok,
+  type HedefAyari,
+  type HedefModu,
+} from "@/core/planner-target";
 /**
  * ÜRETİM PLANI → BASKI KUYRUĞU.
  *
@@ -49,6 +65,11 @@ export interface QueueProductRow {
   printTimeHours: number | null;
   /** Adet başına filament (gram) — ProductCost.filamentWeight. */
   filamentWeight: number | null;
+  /**
+   * Bu ürün için hedef stok. Sabit modda hepsi aynı; talep modunda satış hızına göre
+   * ürün ürün değişir ve satmayan üründe 0 olur (bkz. `@/core/planner-target`).
+   */
+  target: number;
 }
 
 export interface QueueModelFileRow {
@@ -185,9 +206,10 @@ export function buildPrintQueue(input: QueueInput): QueuePayload {
   }
 
   // 2) İşler — hedefin altındaki her ürün için "kaç adet basılmalı".
+  // Hedef ÜRÜN BAŞINA gelir: talep modunda satış hızına göre değişir, satmayan üründe 0'dır.
   const jobs: QueueJob[] = [];
   for (const product of input.products) {
-    const quantity = targetStock - product.stock;
+    const quantity = basilacakAdet(product.target, product.stock);
     if (quantity <= 0) continue;
     const hoursPerUnit = positive(product.printTimeHours);
     const gramsPerUnit = positive(product.filamentWeight);
@@ -340,13 +362,74 @@ async function readTargetSetting(): Promise<number> {
   return parsed ?? DEFAULT_TARGET_STOCK;
 }
 
-export async function computeQueue(target: number | null): Promise<QueuePayload> {
+/**
+ * Ürün başına GÜNLÜK satış adedi — talep modunun girdisi.
+ *
+ * Sayım Üretim Planı'nın satış hızı ucuyla AYNI kuralları izler, yoksa kuyruk ile liste farklı
+ * hedefler hesaplar ve ekranda iki ayrı gerçek belirir:
+ *   • iptal satırları sayılmaz,
+ *   • tarih karşılaştırması `dbEpochMs()` ile normalize edilir (kolonda hem epoch-ms tamsayı
+ *     hem ISO metin bulunabiliyor; düz `>= ?` bir grubu SESSİZCE elerdi — bkz. sqlite-date.ts),
+ *   • bölen ÖLÇÜLEN gün: pencereye bölmek 21 günlük veriyi 90'a yayıp herkesi "satmıyor" yapardı.
+ */
+async function readGunlukSatis(): Promise<Map<string, number>> {
+  const now = Date.now();
+  const since = now - SALES_WINDOW_DAYS * DAY_MS;
+  const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT 0 AS "kind","productId", SUM("quantity") AS "adet", NULL AS "bas"
+       FROM "OrderItemSnapshot"
+      WHERE "productId" IS NOT NULL
+        AND "statusKind" <> ?
+        AND ${dbEpochMs("orderedAt")} >= ?
+      GROUP BY "productId"
+     UNION ALL
+     SELECT 1 AS "kind", NULL AS "productId", NULL AS "adet",
+            MIN(${dbEpochMs("orderedAt")}) AS "bas"
+       FROM "OrderItemSnapshot"
+      GROUP BY "platform"`,
+    EXCLUDED_STATUS,
+    since
+  );
+
+  const kapsamBasi = coverageStart(
+    rows.filter((r) => Number(r.kind) === 1).map((r) => toInt(r.bas))
+  );
+  const gecmisGun = kapsamBasi == null ? 0 : Math.floor((now - kapsamBasi) / DAY_MS);
+  const olculenGun = Math.max(1, Math.min(gecmisGun, SALES_WINDOW_DAYS));
+
+  const out = new Map<string, number>();
+  for (const row of rows) {
+    if (Number(row.kind) !== 0) continue;
+    const id = row.productId == null ? "" : String(row.productId);
+    if (!id) continue;
+    out.set(id, gunlukSatis(toInt(row.adet), olculenGun));
+  }
+  return out;
+}
+
+export async function computeQueue(
+  target: number | null,
+  hedefAyari?: { mod: HedefModu; kapsamGun: number }
+): Promise<QueuePayload> {
   await ensureRuntimeSchema();
   const targetStock = target ?? (await readTargetSetting());
+  const ayar: HedefAyari = {
+    mod: hedefAyari?.mod ?? "sabit",
+    tavan: targetStock,
+    kapsamGun: hedefAyari?.kapsamGun ?? VARSAYILAN_KAPSAM_GUN,
+  };
+
+  // Talep modunda ürün başına hedef satış hızından çıkar → hız verisi gerekli.
+  // Sabit modda okumaya GEREK YOK: uzak veritabanında her sorgu sıraya girdiği için
+  // gereksiz bir tur, sayfanın açılışına doğrudan gecikme olarak yansırdı.
+  const gunlukSatisById =
+    ayar.mod === "talep" ? await readGunlukSatis() : new Map<string, number>();
 
   const [products, modelFiles, printers, snapshots, spools] = await Promise.all([
     prisma.product.findMany({
       // "Sipariş üzerine üretilir" ürünler stok tutmaz → plana girmez (Üretim Planı ile aynı kural).
+      // Süzgeç TAVANA göre: talep modunda ürün başına hedef daha düşük olabilir, fazlası
+      // aşağıda `basilacakAdet` ile elenir. Tavanın üstündeki stok her hâlükârda yeterlidir.
       where: { isActive: true, hidden: false, madeToOrder: false, stock: { lt: targetStock } },
       select: {
         id: true,
@@ -388,6 +471,7 @@ export async function computeQueue(target: number | null): Promise<QueuePayload>
       stock: p.stock,
       printTimeHours: p.cost?.printTimeHours ?? null,
       filamentWeight: p.cost?.filamentWeight ?? null,
+      target: hedefStok(ayar, gunlukSatisById.get(p.id) ?? 0),
     })),
     modelFiles,
     printers,

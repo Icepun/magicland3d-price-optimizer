@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jsonError } from "@/lib/api-error";
 import { swr } from "@/lib/route-cache";
 import { computeQueue, parseTarget } from "@/lib/print-queue";
+import { parseHedefModu, parseKapsamGun } from "@/core/planner-target";
 
 export const dynamic = "force-dynamic";
 
@@ -11,10 +12,17 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(req: NextRequest) {
   try {
-    const target = parseTarget(new URL(req.url).searchParams.get("target"));
+    const params = new URL(req.url).searchParams;
+    const target = parseTarget(params.get("target"));
+    const mod = parseHedefModu(params.get("mod"));
+    const kapsamGun = parseKapsamGun(params.get("kapsam"));
     // Kısa ömürlü önbellek: ekran açık kalırken tekrar tekrar aynı sorguları yaptırmasın.
-    const data = await swr(`planner-queue:v1:${target ?? "auto"}`, 20_000, () =>
-      computeQueue(target)
+    // ⚠️ Anahtar hedef kuralının TAMAMINI taşımalı: mod/kapsam anahtara girmezse mod
+    // değiştirildiğinde eski kuralla hesaplanmış kuyruk servis edilir ve ekran yalan söyler.
+    const data = await swr(
+      `planner-queue:v2:${target ?? "auto"}:${mod}:${kapsamGun}`,
+      20_000,
+      () => computeQueue(target, { mod, kapsamGun })
     );
     return NextResponse.json(data);
   } catch (error) {

@@ -23,9 +23,11 @@ function urun(
   id: string,
   stock: number,
   printTimeHours: number | null = 1,
-  filamentWeight: number | null = 100
+  filamentWeight: number | null = 100,
+  /** Ürün başına hedef; testlerin çoğu sabit hedefi (5) varsayar. */
+  target = 5
 ) {
-  return { id, name: `Ürün ${id}`, imageUrl: null, stock, printTimeHours, filamentWeight };
+  return { id, name: `Ürün ${id}`, imageUrl: null, stock, printTimeHours, filamentWeight, target };
 }
 
 function girdi(over: Partial<KuyrukGirdisi> = {}): KuyrukGirdisi {

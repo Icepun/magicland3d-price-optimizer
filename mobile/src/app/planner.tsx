@@ -8,9 +8,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ScreenHeader } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
+import { getSatisHizi } from "@/lib/db/sales-rate";
 import { thumbUrl } from "@/lib/image";
 import { getSettingsMap } from "@/lib/db/rules";
 import { updateSetting } from "@/lib/db/rule-crud";
+import {
+  basilacakAdet, hedefStok, parseHedefModu, parseKapsamGun, type HedefAyari,
+} from "@/core/planner-target";
 import { ML, radius } from "@/theme/colors";
 
 interface PlanItem {
@@ -44,12 +48,37 @@ export default function PlannerScreen() {
     saveTarget.mutate(next);
   };
 
+  /**
+   * Hedef kuralı masaüstüyle ORTAK ayardan gelir (`plannerTargetMode`).
+   *
+   * Aynı kural iki uygulamada farklı çalışırsa aynı ürün için iki ayrı "kaç adet basmalı"
+   * görünür. Kuralın kendisi `@/core/planner-target` içinde — masaüstü de onu çağırıyor.
+   */
+  const mod = parseHedefModu(settings?.plannerTargetMode);
+  const kapsamGun = parseKapsamGun(settings?.plannerCoverDays);
+
+  // Satış hızı yalnız "satışa göre" modunda gerekli — sabit modda sorgu hiç açılmaz.
+  const { data: hiz } = useQuery({
+    queryKey: ["sales-rate"],
+    queryFn: getSatisHizi,
+    enabled: mod === "talep",
+    staleTime: 5 * 60_000,
+  });
+
   const plan = useMemo<PlanItem[]>(() => {
     if (!data) return [];
+    // Hız verisi henüz gelmediyse SABİT hedefe düş: yarım veriyle hesaplanmış bir plan
+    // göstermektense bilinen davranışı göstermek daha doğru.
+    const ayar: HedefAyari =
+      mod === "talep" && hiz
+        ? { mod: "talep", tavan: t, kapsamGun }
+        : { mod: "sabit", tavan: t, kapsamGun };
+
     return data
-      .filter((p) => !p.madeToOrder && p.stock < t)
+      .filter((p) => !p.madeToOrder)
       .map((p) => {
-        const printQty = Math.max(1, t - p.stock);
+        const hedef = hedefStok(ayar, hiz?.gunlukById.get(p.id) ?? 0);
+        const printQty = basilacakAdet(hedef, p.stock);
         return {
           id: p.id,
           name: p.name,
@@ -59,8 +88,9 @@ export default function PlannerScreen() {
           filament: printQty * (p.cost?.filamentWeight ?? 0),
         };
       })
+      .filter((p) => p.printQty > 0)
       .sort((a, b) => a.stock - b.stock);
-  }, [data, t]);
+  }, [data, t, mod, kapsamGun, hiz]);
 
   const totalPrints = plan.reduce((s, p) => s + p.printQty, 0);
   const totalFilament = plan.reduce((s, p) => s + p.filament, 0);
@@ -69,7 +99,7 @@ export default function PlannerScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScreenHeader title="Üretim Planlayıcı" />
       <View style={styles.targetRow}>
-        <Text style={styles.targetLabel}>Hedef stok</Text>
+        <Text style={styles.targetLabel}>{mod === "talep" ? "En fazla" : "Hedef stok"}</Text>
         <View style={styles.stepper}>
           <Pressable
             onPress={() => changeTarget(-1)}

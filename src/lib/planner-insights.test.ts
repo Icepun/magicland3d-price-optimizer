@@ -46,20 +46,40 @@ describe("yetersiz geçmişte rakam uydurulmaz", () => {
     expect(sonuc.historyDays).toBe(5);
     expect(sonuc.ready).toBe(false);
     expect(sonuc.readyInDays).toBe(MIN_HISTORY_DAYS - 5);
-    expect(sonuc.deadStockInDays).toBe(DEAD_STOCK_DAYS - 5);
+    expect(sonuc.deadStockInDays).toBe(MIN_HISTORY_DAYS - 5);
   });
 
-  it("eşik dolunca hız açılır, ölü stok hâlâ 90 günü bekler", () => {
+  it("eşik dolunca hız ve 'satmıyor' süzgeci BİRLİKTE açılır", () => {
+    // Eskiden süzgeç 90 günlük geçmiş isterdi. Ölçüldü (13 Ağu 2026): elde 21 günlük geçmiş
+    // vardı, yani süzgeç ~69 gün daha kapalı kalacaktı — tam da plandaki 129 ürünün 67'si
+    // hiç satmamışken. 21 gün "ayda 3 satıyor" demeye yetiyorsa "21 gündür hiç satmadı"
+    // demeye de yeter; yeter ki ekranda 90 yazmasın.
     const sonuc = deriveSalesInsights([satir("a", 3)], gunOnce(MIN_HISTORY_DAYS), SIMDI);
     expect(sonuc.ready).toBe(true);
     expect(sonuc.readyInDays).toBe(0);
-    expect(sonuc.deadStockReady).toBe(false);
-  });
-
-  it("90 günlük geçmiş birikince ölü stok ölçülebilir olur", () => {
-    const sonuc = deriveSalesInsights([satir("a", 3)], gunOnce(DEAD_STOCK_DAYS), SIMDI);
     expect(sonuc.deadStockReady).toBe(true);
     expect(sonuc.deadStockInDays).toBe(0);
+  });
+
+  it("eşik GERÇEKTEN ölçülen süredir — 90 yazıp 21 günlük veriye dayanmaz", () => {
+    const kisa = deriveSalesInsights([satir("a", 3)], gunOnce(MIN_HISTORY_DAYS), SIMDI);
+    expect(kisa.deadStockDays).toBe(MIN_HISTORY_DAYS);
+    expect(kisa.measuredDays).toBe(MIN_HISTORY_DAYS);
+
+    // Geçmiş birikince istenen 90 güne çıkar ve orada durur.
+    const uzun = deriveSalesInsights([satir("a", 3)], gunOnce(DEAD_STOCK_DAYS), SIMDI);
+    expect(uzun.deadStockDays).toBe(DEAD_STOCK_DAYS);
+    const cokUzun = deriveSalesInsights([satir("a", 3)], gunOnce(400), SIMDI);
+    expect(cokUzun.deadStockDays).toBe(DEAD_STOCK_DAYS);
+  });
+
+  it("ölçülebilen süre boyunca satmayan ürün 'satmıyor' işaretlenir", () => {
+    // 30 günlük geçmiş, ürün 25 gün önce satmış → 30 günlük eşiğin altında, satmıyor DEĞİL.
+    const yeni = deriveSalesInsights([satir("a", 25)], gunOnce(30), SIMDI);
+    expect(yeni.items[0].deadStock).toBe(false);
+    // Aynı geçmiş, ürün 40 gün önce satmış → eşiği geçti.
+    const eski = deriveSalesInsights([satir("a", 40)], gunOnce(30), SIMDI);
+    expect(eski.items[0].deadStock).toBe(true);
   });
 });
 

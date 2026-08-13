@@ -34,6 +34,11 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { cn } from "@/lib/utils";
 import { thumbUrl } from "@/lib/image";
+import {
+  KAPSAM_SECENEKLERI, basilacakAdet, gunlukSatis, hedefStok,
+  parseHedefModu, parseKapsamGun, parseTavan,
+  type HedefAyari, type HedefModu,
+} from "@/core/planner-target";
 
 interface ProductRow {
   id: string;
@@ -59,8 +64,11 @@ interface SalesInsight {
 interface SalesInsights {
   windowDays: number;
   recentDays: number;
+  /** "Bu kadar gündür satmadı" derken kullanılan GERÇEK süre (geçmiş kısaysa küçülür). */
   deadStockDays: number;
   historyDays: number;
+  /** Günlük satış hızının böleni — talep hedefi buna dayanır. */
+  measuredDays: number;
   ready: boolean;
   readyInDays: number;
   deadStockReady: boolean;
@@ -244,9 +252,27 @@ export default function PlannerPage() {
     queryFn: () => fetchJson("/api/settings"),
     staleTime: 60_000,
   });
-  const savedTarget = Math.max(1, Number(settings?.plannerTargetStock) || 5);
+  const savedTarget = parseTavan(settings?.plannerTargetStock);
   const [override, setOverride] = useState<number | null>(null);
   const target = override ?? savedTarget;
+
+  /**
+   * Hedef modu — sabit mi, satış hızına göre mi.
+   *
+   * Sabit hedef ölçülebilir biçimde uygulanamaz bir plan üretiyordu: 129 ürün, 69 kg filament
+   * (elde 34 kg) ve 4 yazıcıda 25 gün kesintisiz baskı. Talep modunda aynı veriyle plan
+   * 51 ürün / 24 kg'a iniyor ve ölçülen dönemde hiç satmayan 67 ürün plana hiç girmiyor.
+   */
+  const savedMod = parseHedefModu(settings?.plannerTargetMode);
+  const savedKapsam = parseKapsamGun(settings?.plannerCoverDays);
+  const [modOverride, setModOverride] = useState<HedefModu | null>(null);
+  const [kapsamOverride, setKapsamOverride] = useState<number | null>(null);
+  const mod = modOverride ?? savedMod;
+  const kapsamGun = kapsamOverride ?? savedKapsam;
+  const hedefAyari: HedefAyari = useMemo(
+    () => ({ mod, tavan: target, kapsamGun }),
+    [mod, target, kapsamGun]
+  );
 
   // Sıra ve süzgeç kullanıcının seçimi — varsayılan MEVCUT davranıştır (kâr/saat, hepsi görünür).
   const [priority, setPriority] = useState<PriorityMode>("profit");
@@ -256,10 +282,15 @@ export default function PlannerPage() {
   // Yazıcı kuyruğu yalnız o görünüm açılınca çekilir — her sorgu süreç genelinde sıraya
   // girdiği için listeye bakan kullanıcıya ek yük bindirmeyelim.
   const { data: queue, isLoading: queueLoading } = useQuery<QueuePayload>({
-    queryKey: ["planner-queue", target],
-    queryFn: () => fetchJson(`/api/planner/queue?target=${target}`),
+    // Anahtar hedef kuralının TAMAMINI taşır: mod ya da kapsam değişince kuyruk yeniden
+    // çekilmeli, yoksa ekranda eski kuralla hesaplanmış iş listesi kalır.
+    queryKey: ["planner-queue", target, mod, kapsamGun],
+    queryFn: () =>
+      fetchJson(`/api/planner/queue?target=${target}&mod=${mod}&kapsam=${kapsamGun}`),
     staleTime: 60_000,
-    enabled: view === "queue",
+    // Görünümden BAĞIMSIZ çekiliyor: "boştaki yazıcıya ne basayım" önerisi sayfanın en
+    // üstünde, liste görünümünde de duruyor. Sunucuda 20 sn'lik önbelleği var, ayrı sorgu
+    // olduğu için ürün listesini bekletmez.
   });
 
   // Yenile: stok/maliyet başka bir cihazda veya senkronla değişmiş olabilir → listeyi tazele.
@@ -290,47 +321,54 @@ export default function PlannerPage() {
   // Baskı modalı — Ürünler sayfasındakiyle AYNI akış (yazıcı seçimi + Snapmaker/Bambu renk + başlat).
   const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
   const saveTarget = useMutation({
-    mutationFn: (v: number) =>
+    mutationFn: (body: Record<string, string>) =>
       fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plannerTargetStock: String(v) }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
 
-  const plan = useMemo(() => {
-    const rows = products
+  /** Süzgeçten ÖNCEKİ plan satırları — rozet sayıları buradan çıkar. */
+  const planRows = useMemo(() => {
+    const olculenGun = insights?.measuredDays ?? 0;
+    return products
       // "Sipariş üzerine üretilir" ürünler stok tutmaz → üretim planına girmez.
-      .filter((p) => !p.madeToOrder && p.stock < target)
+      .filter((p) => !p.madeToOrder)
       .map((p) => {
-        const printQty = Math.max(1, target - p.stock);
-        const gramPer = p.cost?.filamentWeight ?? 0;
         const sales = insightById.get(p.id) ?? null;
+        // Hedef ürün başına: talep modunda satış hızından çıkar, satmayan üründe 0 olur.
+        // Kuyruk ucu AYNI kuralı sunucuda uyguluyor (`@/core/planner-target`) — iki ekran
+        // farklı hedef hesaplarsa aynı ürün için iki ayrı "kaç adet basmalı" görünürdü.
+        const hedef = hedefStok(hedefAyari, gunlukSatis(sales?.soldInWindow ?? 0, olculenGun));
+        const printQty = basilacakAdet(hedef, p.stock);
+        const gramPer = p.cost?.filamentWeight ?? 0;
         // Satış listesinde hiç görünmeyen ürün, pencerede hiç satmamış demektir. Bunu ancak
         // elimizde o kadar geçmiş varsa "ölü stok" saymaya hakkımız var.
         const deadStock = deadStockReady && (sales == null || sales.deadStock);
-        return { ...p, printQty, filament: printQty * gramPer, gramPer, sales, deadStock };
-      });
+        return { ...p, hedef, printQty, filament: printQty * gramPer, gramPer, sales, deadStock };
+      })
+      // Hedefine ulaşmış (ya da talep modunda hedefi 0 olan) ürün plana girmez.
+      .filter((p) => p.printQty > 0);
+  }, [products, insights, insightById, hedefAyari, deadStockReady]);
 
-    const visible = hideDeadStock ? rows.filter((p) => !p.deadStock) : rows;
+  const plan = useMemo(() => {
+    const visible = hideDeadStock ? planRows.filter((p) => !p.deadStock) : planRows;
     const mode = priority === "velocity" && !velocityReady ? "profit" : priority;
     return [...visible].sort((a, b) => comparePriority(mode, a, b));
-  }, [products, target, insightById, deadStockReady, hideDeadStock, priority, velocityReady]);
+  }, [planRows, hideDeadStock, priority, velocityReady]);
 
   const totalFilament = plan.reduce((s, p) => s + p.filament, 0);
   const totalPrints = plan.reduce((s, p) => s + p.printQty, 0);
+  /**
+   * Süzgeç açılınca listeden düşecek ürün sayısı.
+   * SÜZÜLMEMİŞ satırlardan sayılır — süzgeç açıkken `plan` bunları zaten elediği için
+   * oradan sayılsa rozet hep 0 gösterirdi.
+   */
   const deadStockCount = useMemo(
-    () =>
-      deadStockReady
-        ? products.filter(
-            (p) =>
-              !p.madeToOrder &&
-              p.stock < target &&
-              (insightById.get(p.id)?.deadStock ?? true)
-          ).length
-        : 0,
-    [products, target, insightById, deadStockReady]
+    () => (deadStockReady ? planRows.filter((p) => p.deadStock).length : 0),
+    [planRows, deadStockReady]
   );
 
   // Kuyruk satırları kâr/saat ve satış hızını ürün listesinden ödünç alır → aynı sıralama
@@ -381,13 +419,55 @@ export default function PlannerPage() {
     };
   }, [queue, hideDeadStock, plan, sortJobs]);
 
-  // Tek satırlık ipucu — geçmiş yeterli değilken rakam yerine bunu gösteririz.
+  /**
+   * BOŞTA BEKLEYEN YAZICILAR — sayfanın asıl günlük sorusu.
+   *
+   * Ekran "129 ürünün eksik" diyordu; oysa masa başındaki soru "yazıcı boşaldı, ne basayım".
+   * Burada her boş yazıcı için, O YAZICIDA basılabilen (dosyası olan) en öncelikli iş tek
+   * satırda öneriliyor. Sıra kullanıcının seçtiği önceliğe göre — kuyruk zaten öyle sıralı.
+   *
+   * "Boş" = bağlı VE baskı yapmıyor. Bağlı olmayan yazıcı için öneri vermek anlamsız:
+   * kullanıcı gidip elle başlatamaz.
+   */
+  /**
+   * Plan kaç GÜN makine zamanı ister — tüm yazıcılar kesintisiz çalışsa.
+   *
+   * "2400 saat" rakamı tek başına büyüklüğü anlatmıyordu. Dört yazıcıya bölününce 25 gün
+   * çıkıyor ve planın uygulanabilir olup olmadığı bir bakışta görülüyor.
+   * Süresi girilmemiş işler toplama girmediği için bu bir ALT SINIR.
+   */
+  const makineGunu = useMemo(() => {
+    const yaziciSayisi = visibleQueue?.printers.length ?? 0;
+    if (!visibleQueue || yaziciSayisi === 0 || visibleQueue.hours <= 0) return null;
+    return visibleQueue.hours / (yaziciSayisi * 24);
+  }, [visibleQueue]);
+
+  /** Baskı dosyası olmayan ürünler — liste görünümünde de rozetle görünsünler. */
+  const dosyasizIds = useMemo(
+    () => new Set((queue?.unassigned ?? []).map((job) => job.productId)),
+    [queue]
+  );
+
+  const bostaOneriler = useMemo(() => {
+    if (!visibleQueue) return [];
+    return visibleQueue.printers
+      .filter((p) => p.online && !p.busy && p.jobs.length > 0)
+      .map((p) => ({ printer: p, job: p.jobs[0] }));
+  }, [visibleQueue]);
+
+  /**
+   * Tek satırlık ipucu.
+   *
+   * Geçmiş yetersizken rakam uydurmak yerine bunu gösteririz. Talep modunda ise kuralın
+   * neye dayandığını söyler: plan bir anda küçüldüğünde "ürünlerim nereye gitti" sorusunun
+   * cevabı ekranda olsun.
+   */
   const hint = !insights
     ? null
     : !insights.ready
       ? `Satış hızı için yeterli satış geçmişi yok — yaklaşık ${insights.readyInDays} gün sonra kullanılabilir.`
-      : !insights.deadStockReady
-        ? `Satmayan ürün listesi ${insights.deadStockInDays} gün sonra hazır olacak.`
+      : mod === "talep"
+        ? `Son ${insights.measuredDays} günün satışına göre ${kapsamGun} günlük stok hedefleniyor; bu sürede hiç satmayan ürün plana girmiyor.`
         : null;
 
   return (
@@ -406,7 +486,9 @@ export default function PlannerPage() {
         </div>
         <div className="shrink-0 flex items-end gap-2">
           <div>
-            <Label className="text-[11px] text-muted-foreground">Hedef stok</Label>
+            <Label className="text-[11px] text-muted-foreground">
+              {mod === "talep" ? "En fazla" : "Hedef stok"}
+            </Label>
             <Input
               type="number"
               min="1"
@@ -414,9 +496,14 @@ export default function PlannerPage() {
               onChange={(e) => {
                 const v = Math.max(1, Number(e.target.value) || 1);
                 setOverride(v);
-                saveTarget.mutate(v);
+                saveTarget.mutate({ plannerTargetStock: String(v) });
               }}
               className="h-9 w-20"
+              title={
+                mod === "talep"
+                  ? "Hızlı satan üründe bile stok bu sayıyı geçmez"
+                  : "Her ürün için hedeflenen stok"
+              }
             />
           </div>
           <Button
@@ -444,25 +531,88 @@ export default function PlannerPage() {
       )}
 
       {/* Görünüm: düz liste ↔ yazıcı kuyruğu */}
-      <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 w-fit">
-        {([
-          { id: "list" as const, icon: List, label: "Liste" },
-          { id: "queue" as const, icon: Layers, label: "Yazıcı kuyruğu" },
-        ]).map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setView(tab.id)}
-            className={cn(
-              "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-sm transition-all active:scale-[0.97]",
-              view === tab.id
-                ? "bg-background shadow-sm text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <tab.icon className="h-3.5 w-3.5" /> {tab.label}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 w-fit">
+          {([
+            { id: "list" as const, icon: List, label: "Liste" },
+            { id: "queue" as const, icon: Layers, label: "Yazıcı kuyruğu" },
+          ]).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setView(tab.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-sm transition-all active:scale-[0.97]",
+                view === tab.id
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <tab.icon className="h-3.5 w-3.5" /> {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Hedef kuralı: herkese aynı sayı mı, satış hızına göre mi. */}
+        <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 w-fit">
+          {([
+            { id: "sabit" as const, label: "Sabit hedef", hint: "Her ürün için aynı sayı" },
+            {
+              id: "talep" as const,
+              label: "Satışa göre",
+              hint: velocityReady
+                ? "Hızlı satana çok, yavaş satana az; satmayana hiç"
+                : "Yeterli satış geçmişi birikince açılır",
+            },
+          ]).map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              disabled={option.id === "talep" && !velocityReady}
+              onClick={() => {
+                setModOverride(option.id);
+                saveTarget.mutate({ plannerTargetMode: option.id });
+              }}
+              title={option.hint}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-sm transition-all active:scale-[0.97]",
+                mod === option.id
+                  ? "bg-background shadow-sm text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+                option.id === "talep" && !velocityReady && "opacity-40 cursor-not-allowed"
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Talep modunda tek ayar: kaç günlük satışı stokta tutalım. */}
+        {mod === "talep" && (
+          <div className="flex items-center gap-1.5 animate-in fade-in slide-in-from-left-1 duration-200">
+            <span className="text-[11px] text-muted-foreground">Kaç günlük satış:</span>
+            <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5">
+              {KAPSAM_SECENEKLERI.map((gun) => (
+                <button
+                  key={gun}
+                  type="button"
+                  onClick={() => {
+                    setKapsamOverride(gun);
+                    saveTarget.mutate({ plannerCoverDays: String(gun) });
+                  }}
+                  className={cn(
+                    "px-2.5 py-1 text-xs font-medium rounded-sm tabular-nums transition-all active:scale-[0.97]",
+                    kapsamGun === gun
+                      ? "bg-background shadow-sm text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {gun} gün
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Sıra + satmayan ürün süzgeci — ikisi de kullanıcının seçimi, varsayılan hiçbir şeyi değiştirmez. */}
@@ -562,6 +712,76 @@ export default function PlannerPage() {
         />
       ) : (
         <>
+          {/* Boştaki yazıcılar — listenin de kuyruğun da üstünde, tek tıkla başlat. */}
+          {bostaOneriler.length > 0 && (
+            <Card className="border-green-500/35 bg-green-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+              <CardContent className="py-3 space-y-2">
+                <p className="text-sm font-semibold flex items-center gap-1.5">
+                  <Printer className="h-4 w-4 text-green-400" />
+                  Boşta bekleyen yazıcı
+                  <span className="rounded-full bg-foreground/10 px-1.5 text-[11px] font-semibold tabular-nums">
+                    {bostaOneriler.length}
+                  </span>
+                </p>
+                {bostaOneriler.map(({ printer, job }, i) => (
+                  <div
+                    key={printer.id}
+                    className="flex items-center gap-2.5 rounded-lg border bg-background/60 p-2 animate-in fade-in slide-in-from-left-1 fill-mode-both duration-300"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  >
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: printer.accent ?? "var(--primary)" }}
+                      aria-hidden
+                    />
+                    <span className="text-xs font-medium shrink-0">{printer.name}</span>
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        href={`/products/${job.productId}`}
+                        className="text-sm font-medium hover:underline line-clamp-1"
+                      >
+                        {job.name}
+                      </Link>
+                      <p className="text-[11px] text-muted-foreground tabular-nums">
+                        {job.quantity} baskı
+                        {job.hoursPerUnit != null && ` · ${hoursText(job.hoursPerUnit)}/adet`}
+                        {job.stock === 0 && " · stok bitti"}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      className="h-8 shrink-0 gap-1.5"
+                      onClick={() => setPrintTarget({ id: job.productId, name: job.name })}
+                    >
+                      <Printer className="h-3.5 w-3.5" /> Bas
+                    </Button>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Filament yetmezliği — LİSTE görünümünde de görünür.
+              Eskiden yalnız kuyruk sekmesindeydi; varsayılan sekme liste olduğu için
+              "69 kg filament" yazısı, elde 34 kg varken uyarısız duruyordu. */}
+          {visibleQueue && !visibleQueue.enough && (
+            <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+              <CardContent className="py-2.5 flex items-center gap-2 text-sm">
+                <Disc3 className="h-4 w-4 text-amber-400 shrink-0" />
+                <span>
+                  Bu plan ~{formatNumber(visibleQueue.neededGrams / 1000, 1)} kg filament ister,
+                  makaralarda ~{formatNumber(visibleQueue.remainingGrams / 1000, 1)} kg kaldı.
+                </span>
+                <Link
+                  href="/spools"
+                  className="ml-auto shrink-0 text-xs font-medium text-primary hover:underline"
+                >
+                  Makaralar
+                </Link>
+              </CardContent>
+            </Card>
+          )}
+
           <Card className="border-primary/30 bg-primary/5">
             <CardContent className="py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
               <span className="inline-flex items-center gap-1.5">
@@ -583,7 +803,7 @@ export default function PlannerPage() {
                 />{" "}
                 kg filament
               </span>
-              {view === "queue" && visibleQueue && visibleQueue.hours > 0 && (
+              {visibleQueue && visibleQueue.hours > 0 && (
                 <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                   <Clock className="h-4 w-4" />~
                   <AnimatedNumber
@@ -592,6 +812,14 @@ export default function PlannerPage() {
                     className="text-foreground font-bold tabular-nums"
                   />{" "}
                   baskı süresi
+                  {/* Saat rakamı tek başına büyüklüğü anlatmıyor: 2400 saat "çok" ama ne kadar?
+                      Elindeki makine sayısına bölünce plan gerçek boyutunu gösteriyor. */}
+                  {makineGunu != null && (
+                    <span className="text-foreground/70">
+                      (≈{formatNumber(makineGunu, makineGunu < 10 ? 1 : 0)} gün
+                      {" "}tüm yazıcılar)
+                    </span>
+                  )}
                 </span>
               )}
             </CardContent>
@@ -656,6 +884,27 @@ export default function PlannerPage() {
                             <Timer className="h-3 w-3" />
                             {formatCurrency(p.profitPerHour, { decimals: 0 })}/saat
                           </span>
+                        )}
+                        {/* Eksik veri rozetleri — bu ürün planda ama BASILAMAZ ya da
+                            süresi bilinmediği için sıralamada ve toplamlarda eksik kalıyor.
+                            Eskiden bu yalnız kuyruk sekmesinde belliydi. */}
+                        {dosyasizIds.has(p.id) && (
+                          <Link
+                            href="/models"
+                            className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full border bg-muted text-muted-foreground border-border hover:text-foreground transition-colors"
+                            title="Bu ürün için baskı dosyası yüklenmemiş — hiçbir yazıcıya atanamıyor"
+                          >
+                            <FileBox className="h-3 w-3" /> dosya yok
+                          </Link>
+                        )}
+                        {p.profitPerHour == null && (
+                          <Link
+                            href={`/products/${p.id}`}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full border bg-muted text-muted-foreground border-border hover:text-foreground transition-colors"
+                            title="Baskı süresi girilmemiş — süre ve filament toplamlarına girmiyor"
+                          >
+                            <Timer className="h-3 w-3" /> süre girilmemiş
+                          </Link>
                         )}
                         {/* Satış hızı rozetleri — yalnız geçmiş yeterliyken. */}
                         {p.deadStock ? (
@@ -770,22 +1019,8 @@ function QueueView({
 
   return (
     <div className="space-y-3">
-      {/* Tek satır filament uyarısı — otomatik düşüm yok, sadece "yetecek mi?" */}
-      {!queue.enough && (
-        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-bottom-1 duration-300">
-          <CardContent className="py-2.5 flex items-center gap-2 text-sm">
-            <Disc3 className="h-4 w-4 text-amber-400 shrink-0" />
-            <span>
-              Bu plan ~{formatNumber(queue.neededGrams / 1000, 2)} kg filament ister, makaralarda ~
-              {formatNumber(queue.remainingGrams / 1000, 2)} kg kaldı.
-            </span>
-            <Link href="/spools" className="ml-auto shrink-0 text-xs font-medium text-primary hover:underline">
-              Makaralar
-            </Link>
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Filament uyarısı sayfanın üstünde, her iki görünümde birden duruyor — burada
+          tekrarlanmıyor ki aynı uyarı kuyruk sekmesinde iki kez görünmesin. */}
       {queued.map((printer, i) => (
         <PrinterQueueCard
           key={printer.id}
