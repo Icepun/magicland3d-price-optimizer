@@ -2,6 +2,7 @@ import { prisma, remotePrisma } from "./prisma";
 import { matchByPriority, uniqueIndex } from "./listing-index";
 import { pushToAllDevices } from "./push-notify";
 import { ensureRuntimeSchema } from "./runtime-schema";
+import { toDbDate } from "./sqlite-date";
 import { buildFilamentAlerts, groupSpools, type SpoolLike } from "@/core/filament-groups";
 import { loadFilamentSettings } from "@/lib/filament-settings";
 import { ShopifyClient } from "@/services/shopify-client";
@@ -522,13 +523,25 @@ async function persistNotifications(rows: WatchNotification[]): Promise<void> {
   const fresh = rows.filter((r) => !known.has(r.id));
   if (fresh.length === 0) return;
 
+  // createdAt AÇIKÇA yazılır: kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP değeri
+  // giriyor ("2026-08-13 07:00:00"). Prisma'nın yazdığı ISO biçimden farklı bir metin ve metin
+  // sıralamasında boşluk 'T'den küçük → bu satırlar zil listesinin en dibine düşüyordu.
+  const simdi = toDbDate(new Date());
   for (let i = 0; i < fresh.length; i += 50) {
     const chunk = fresh.slice(i, i + 50);
-    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-    const params = chunk.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href]);
+    const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const params = chunk.flatMap((n) => [
+      n.id,
+      n.type,
+      n.severity,
+      n.title,
+      n.body,
+      n.href,
+      simdi,
+    ]);
     await prisma
       .$executeRawUnsafe(
-        `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
+        `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES ${placeholders}`,
         ...params
       )
       .catch(() => 0);

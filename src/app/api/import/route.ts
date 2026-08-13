@@ -5,6 +5,7 @@ import { bustProductCaches } from "@/lib/cache-busting";
 import { batchWrite } from "@/lib/libsql-batch";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { toDbDate } from "@/lib/sqlite-date";
 
 /**
  * CSV ürün içe aktarma.
@@ -240,7 +241,10 @@ export async function POST(req: NextRequest) {
     // --- 3) Yazımları planla; değişmeyen satırı HİÇ yazma --------------------------
     const jobs: Job[] = [];
     let unchanged = 0;
-    const now = Date.now(); // Prisma SQLite'ta DateTime = epoch ms (int) olarak saklar
+    // Tarih damgası HER ZAMAN `toDbDate()` ile üretilir: uzak Turso'da Prisma ISO METİN,
+    // klasik yerel motorda epoch-ms TAMSAYI yazar. Buraya ham `Date.now()` bağlamak kolonu
+    // karışık biçime düşürüyor ve "en son güncellenen" sıralaması sessizce bozuluyordu.
+    const now = toDbDate(new Date());
 
     const COST_SQL = `INSERT INTO ProductCost (id, productId, costMode, manualCost, packagingCost, totalCost, updatedAt)
        VALUES (?, ?, ?, ?, ?, ?, ?)

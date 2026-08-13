@@ -23,9 +23,12 @@ delete process.env.TURSO_AUTH_TOKEN;
 
 let persist: typeof import("./order-finance-snapshots").persistOrderFinanceSnapshots;
 let recalculate: typeof import("./order-finance-snapshots").recalculateFinanceMonth;
+let recalculateMany: typeof import("./order-finance-snapshots").recalculateFinanceMonths;
 let startRecalc: typeof import("./order-finance-snapshots").startFinanceMonthRecalc;
+let startManyRecalc: typeof import("./order-finance-snapshots").startFinanceRecalc;
 let flushRecalc: typeof import("./order-finance-snapshots").flushFinanceMonthRecalc;
 let recalcState: typeof import("./order-finance-snapshots").financeRecalcState;
+let BusyError: typeof import("./order-finance-snapshots").FinanceRecalcBusyError;
 let db: typeof import("@/lib/prisma").prisma;
 
 const MONTH = "2026-07";
@@ -68,9 +71,12 @@ beforeAll(async () => {
   ({
     persistOrderFinanceSnapshots: persist,
     recalculateFinanceMonth: recalculate,
+    recalculateFinanceMonths: recalculateMany,
     startFinanceMonthRecalc: startRecalc,
+    startFinanceRecalc: startManyRecalc,
     flushFinanceMonthRecalc: flushRecalc,
     financeRecalcState: recalcState,
+    FinanceRecalcBusyError: BusyError,
   } = await import("./order-finance-snapshots"));
   ({ prisma: db } = await import("@/lib/prisma"));
   await ensureRuntimeSchema();
@@ -277,5 +283,131 @@ describe("arka plan turu ve ilerleme", () => {
     expect(state?.phase).toBe("done");
     expect(state?.result?.month).toBe(MONTH);
     expect(state?.finishedAt).toBeTruthy();
+  });
+});
+
+/**
+ * "Bu ayı yeniden hesapla" boşa çalışıyordu: uyarı "18 sipariş eski hesaplamayla kayıtlı"
+ * diyor, düğmeye basınca HİÇBİR ŞEY değişmiyordu — çünkü o siparişlerin ürün geçmişi kayıtlı
+ * değil ve ASLA yeniden hesaplanamazlar. Arayüzün dürüst konuşabilmesi için "asla
+ * düzeltilemez" ile "şimdi düzeltilemedi ama düzelebilir" çekirdekte AYRILMALI.
+ */
+describe("dokunulmayan siparişlerin SEBEBİ ayrışır", () => {
+  it("ürün geçmişi olmayan sipariş 'asla düzeltilemez' sayılır", async () => {
+    const result = await recalculate(MONTH);
+
+    // ty-r2 kalemsiz kaydedilmişti (yukarıdaki kapsam testinde).
+    expect(result.blockedOrders).toBeGreaterThanOrEqual(1);
+    expect(result.protectedOrders).toBe(0);
+    expect(result.skippedOrders).toBe(result.blockedOrders + result.protectedOrders);
+  });
+
+  it("maliyeti artık okunamayan sipariş KORUNUR (kârı silinmez), ayrı sayılır", async () => {
+    // Kalemi katalogda OLMAYAN bir ürüne işaret ediyor → yeni hesap "maliyet bilinmiyor" der.
+    await persist(
+      [order({ id: "ty-r4", orderNumber: "R4", total: 200, profit: 66 })],
+      new Map([
+        ["ty-r4", [{ productId: "p-yok", productName: "Silinmiş Ürün", quantity: 1, unitPrice: 200 }]],
+      ])
+    );
+    const before = await snapshotOf("ty-r4");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const result = await recalculate(MONTH);
+
+    const after = await snapshotOf("ty-r4");
+    expect(result.protectedOrders).toBe(1);
+    expect(after.profitKurus).toBe(6_600); // ← kayıtlı kâr korundu
+    expect(after.syncedAt.getTime()).toBe(before.syncedAt.getTime());
+  });
+});
+
+/**
+ * TOPLU DÜZELTME HAZIRLIĞI. Uzak-HTTP'de her sorgu ~96ms ve hepsi SIRALI; ay başına ayrı tur
+ * açmak kuralları/ayarları/ürünleri ay sayısı kadar yeniden okur. Ayrıca kullanıcı geçmişi
+ * değiştirmeden önce "kaç sipariş oynayacak" rakamını görmeli — bunun için PROVA turu var.
+ */
+describe("çok aylı yeniden hesap ve PROVA turu", () => {
+  it("prova turu hiçbir şey YAZMAZ ama değişecek sipariş sayısını söyler", async () => {
+    await setProductCost(150); // rakam değişsin
+    const before = await snapshotOf("ty-r1");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const dry = await recalculateMany([MONTH], { dryRun: true });
+
+    expect(dry.dryRun).toBe(true);
+    expect(dry.changedOrders).toBe(1);
+    expect(dry.profitDeltaKurus).not.toBe(0);
+    const after = await snapshotOf("ty-r1");
+    expect(after.syncedAt.getTime()).toBe(before.syncedAt.getTime()); // ← hiç yazılmadı
+    expect(after.profitKurus).toBe(before.profitKurus);
+  });
+
+  it("prova ile gerçek tur AYNI sayıyı ve AYNI farkı bildirir", async () => {
+    const dry = await recalculateMany([MONTH], { dryRun: true });
+    const real = await recalculateMany([MONTH]);
+
+    expect(real.dryRun).toBe(false);
+    expect(real.changedOrders).toBe(dry.changedOrders);
+    expect(real.profitDeltaKurus).toBe(dry.profitDeltaKurus);
+  });
+
+  it("iki ayı TEK turda hesaplar ve kapsamı adlandırır", async () => {
+    await setProductCost(60); // iki aydaki siparişler de oynasın
+    const result = await recalculateMany(["2026-06", MONTH]);
+
+    expect(result.month).toBe(`2026-06…${MONTH}`);
+    // Haziran'daki ty-r3 + Temmuz'daki ty-r1 aynı turda yeniden hesaplandı.
+    expect(result.totalOrders).toBeGreaterThanOrEqual(4);
+    expect(result.recalculatedOrders).toBeGreaterThanOrEqual(2);
+    expect((await snapshotOf("ty-r3")).profitKurus).not.toBe(7_700);
+  });
+
+  it("çok aylı tur da idempotent", async () => {
+    const again = await recalculateMany(["2026-06", MONTH]);
+    expect(again.changedOrders).toBe(0);
+    expect(again.profitDeltaKurus).toBe(0);
+  });
+
+  it("arka plan turu kapsamı ve prova bayrağını durumda taşır", async () => {
+    const started = startManyRecalc(["2026-06", MONTH], { dryRun: true });
+    expect(started.months).toEqual(["2026-06", MONTH]);
+    expect(started.dryRun).toBe(true);
+
+    await flushRecalc();
+
+    const state = recalcState();
+    expect(state?.phase).toBe("done");
+    expect(state?.result?.dryRun).toBe(true);
+  });
+
+  it("ay verilmezse reddeder", async () => {
+    await expect(recalculateMany([])).rejects.toThrow();
+  });
+
+  it("PROVA sürerken istenen GERÇEK tur prova durumunu döndürmez, açıkça reddeder", async () => {
+    // 🔴 DENETİMDE BULUNDU: süren tur varsa `dryRun` bayrağına BAKILMADAN mevcut durum
+    // dönüyordu. Kullanıcı Prova'ya basıp beklemeden "Uygula"ya bastığında gerçek tur hiç
+    // açılmıyor, prova durumu geri geliyordu: arayüz `phase:"done"` + `changedOrders:N`
+    // görüp "N sipariş düzeltildi" derdi — veritabanına tek satır yazılmamışken.
+    const prova = startManyRecalc([MONTH], { dryRun: true });
+    expect(prova.dryRun).toBe(true);
+
+    let hata: unknown = null;
+    try {
+      startManyRecalc([MONTH], { dryRun: false });
+    } catch (error) {
+      hata = error;
+    }
+    expect(hata).toBeInstanceOf(BusyError);
+    expect((hata as InstanceType<typeof BusyError>).running.dryRun).toBe(true);
+
+    // Farklı KAPSAM da sessizce başkasının durumunu almaz.
+    expect(() => startManyRecalc(["2026-06"], { dryRun: true })).toThrow(BusyError);
+
+    // AYNI istek yeniden gelirse (arayüzün yeniden yoklaması) mevcut durum döner.
+    expect(startManyRecalc([MONTH], { dryRun: true })).toBe(recalcState());
+
+    await flushRecalc();
   });
 });

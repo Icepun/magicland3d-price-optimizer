@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart,
@@ -17,8 +18,11 @@ import {
 } from "recharts";
 import {
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
   BarChart3,
   CalendarRange,
+  Coins,
   Package,
   Receipt,
   RefreshCw,
@@ -37,6 +41,18 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
 import { toast } from "sonner";
+import {
+  blockedRecalcText,
+  deltaTone,
+  missingCostCount,
+  monthReadiness,
+  profitWarningLabel,
+  soldUnitsBadge,
+  statDelta,
+  windowRecalcSummary,
+  type FinanceResponse,
+  type ProductSalesRow,
+} from "./reports-view";
 
 interface SummaryBucket {
   revenue: number;
@@ -51,6 +67,8 @@ interface OrdersResp {
     items: { name: string; quantity: number; image?: string | null }[];
     total: number;
   }[];
+  /** Son çekimde HER kaynak yanıt verdi mi. Eski bir gövdede yok olabilir. */
+  dataComplete?: boolean;
   summary: {
     days: number;
     shopify: SummaryBucket;
@@ -58,14 +76,26 @@ interface OrdersResp {
     hepsiburada: SummaryBucket;
     manual?: SummaryBucket;
     total: SummaryBucket;
+    quality?: { missingSources?: string[] };
   };
   financeHistory?: {
     ok: boolean;
     syncedOrders: number;
     syncDays: number;
+    /** Finans geçmişi yazımı şu an arka planda sürüyor mu. */
+    pending?: boolean;
     error?: string;
   };
 }
+
+/**
+ * Sipariş yanıtının damgası MODÜL düzeyinde tutulur.
+ *
+ * Sayfadan çıkıp geri girmek bileşeni yeniden kurar; damga bileşenle birlikte sıfırlanınca
+ * her girişte önbellekteki AYNI yanıt "yeni" sanılıyor ve boşuna bir finans isteği daha
+ * atılıyordu (uzak veritabanında her sorgu ~96 ms ve sıralı).
+ */
+let sonSiparisDamgasi = 0;
 
 interface ProductRow {
   id: string;
@@ -74,24 +104,6 @@ interface ProductRow {
   currentNetProfit: number | null;
   currentProfitMargin: number | null;
   hasCost: boolean;
-}
-
-interface FinanceBucket {
-  month: string;
-  label: string;
-  revenue: number;
-  orderProfit: number;
-  expenses: number;
-  netProfit: number;
-  orderCount: number;
-  incompleteOrders: number;
-  partialProfitOrders: number;
-  missingProfitOrders: number;
-  excludedOrders: number;
-  unsupportedCurrencyOrders: number;
-  /** Eski hesapla kaydedilmiş sipariş sayısı — "yeniden hesapla" uyarısı için. */
-  outdatedOrders?: number;
-  byPlatform: Record<string, unknown>;
 }
 
 /** Yeniden hesap turunun anlık durumu. */
@@ -128,35 +140,6 @@ function recalcPercent(state: RecalcState | null): number {
   return 8;
 }
 
-interface FinanceTotals {
-  revenue: number;
-  orderProfit: number;
-  expenses: number;
-  netProfit: number;
-  orderCount: number;
-}
-
-interface FinanceQuality {
-  incompleteOrders: number;
-  partialProfitOrders: number;
-  missingProfitOrders: number;
-  excludedOrders: number;
-  unsupportedCurrencyOrders: number;
-}
-
-interface FinanceResponse {
-  currency: "TRY";
-  timeZone: string;
-  generatedAt: string;
-  dataFrom: string | null;
-  lastOrderSyncAt: string | null;
-  actualCommissionOrders: number;
-  lastActualCommissionSyncAt: string | null;
-  totals: FinanceTotals;
-  months: FinanceBucket[];
-  quality: FinanceQuality;
-}
-
 interface TrendyolCommissionSyncResponse {
   fetchedTransactions: number;
   storedOrders: number;
@@ -164,6 +147,18 @@ interface TrendyolCommissionSyncResponse {
   days: number;
   syncedAt: string;
 }
+
+/**
+ * "En çok satanlar" çubukları sıfırdan dolar.
+ *
+ * Dolgu JS/rAF ile değil CSS ile yapılır ve `fill-mode` VERİLMEZ: animasyon hiç başlamasa
+ * bile (gizli pencere) çubuk kendi gerçek genişliğinde durur, sıfırda donmaz.
+ */
+const BAR_GROW_CSS = `
+@keyframes ml-bar-grow { from { width: 0 } }
+.ml-bar { animation: ml-bar-grow 700ms cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) { .ml-bar { animation: none } }
+`;
 
 function MiniThumb({
   src,
@@ -203,6 +198,7 @@ const LOSS = "oklch(0.63 0.22 25)";
 
 /** Özet kartları: kuruş göstermeye gerek yok, ondalıksız daha okunaklı. */
 const fmtK = (value: number) => formatCurrency(value, { decimals: 0 });
+const fmtCount = (value: number) => formatNumber(Math.round(value));
 
 function formatHistoryDate(value: string) {
   const date = new Date(value);
@@ -218,6 +214,7 @@ function formatHistoryDate(value: string) {
 
 export default function ReportsPage() {
   const queryClient = useQueryClient();
+
   const ordersQuery = useQuery<OrdersResp>({
     queryKey: ["orders"],
     queryFn: () => fetchJson<OrdersResp>("/api/orders", { cache: "no-store" }),
@@ -229,16 +226,47 @@ export default function ReportsPage() {
     queryFn: () => fetchJson<ProductRow[]>("/api/products?filter=active"),
     staleTime: 60_000,
   });
+  /**
+   * Aylık finans — SİPARİŞ ÇEKİMİNDEN BAĞIMSIZ.
+   *
+   * ⚠️ Eskiden bu sorgu `enabled: ordersQuery.isSuccess` ile pazaryeri çekimine bağlıydı:
+   * Trendyol/Shopify yanıt vermediğinde ekran "henüz satış verisi yok" diyordu, oysa yüzlerce
+   * siparişlik geçmiş veritabanında duruyordu. Kayıtlı geçmiş her zaman gösterilir; çekim
+   * bittiğinde (aşağıdaki etki) yalnızca tazelenir.
+   */
   const financeQuery = useQuery<FinanceResponse>({
-    queryKey: ["finance-monthly", 12, ordersQuery.dataUpdatedAt],
+    queryKey: ["finance-monthly", 12],
     queryFn: () =>
       fetchJson<FinanceResponse>("/api/finance/monthly?months=12", {
         cache: "no-store",
       }),
-    enabled: ordersQuery.isSuccess && !ordersQuery.isFetching,
     staleTime: 0,
     refetchOnMount: "always",
   });
+
+  /**
+   * Sipariş çekimi bitince finansı TAZELE.
+   *
+   * Sunucu sipariş yazımından sonra kendi önbelleğini düşürüyor; üçüncü katman burada. Bu
+   * olmadan sunucu taze rakamı hazırlar ama ekran eski sayıyı göstermeye devam eder.
+   */
+  const ordersHistory = ordersQuery.data?.financeHistory;
+  useEffect(() => {
+    const stamp = ordersQuery.dataUpdatedAt;
+    if (!stamp || sonSiparisDamgasi === stamp) return;
+    sonSiparisDamgasi = stamp;
+    // Yeni bir şey yazılmadıysa yeniden çekmenin anlamı yok (her sorgu ~96ms ve sıralı).
+    if (!ordersHistory?.ok || ordersHistory.syncedOrders <= 0) return;
+    void queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
+    // Yazım hâlâ sürüyorsa şu an okunan rakam yeni siparişleri İÇERMEZ; yazım bitince
+    // ekranın eski sayıda kalmaması için kısa bir süre sonra bir kez daha tazelenir.
+    if (!ordersHistory.pending) return;
+    const timer = setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
+    }, 5_000);
+    return () => clearTimeout(timer);
+  }, [ordersQuery.dataUpdatedAt, ordersHistory, queryClient]);
+
   const trendyolCommissionSync = useMutation({
     mutationFn: () =>
       fetchJson<TrendyolCommissionSyncResponse>(
@@ -343,45 +371,69 @@ export default function ReportsPage() {
   }, [recalc, queryClient]);
 
   const summary = ordersQuery.data?.summary;
-  const orders = useMemo(() => ordersQuery.data?.orders ?? [], [ordersQuery.data]);
+  const finance = financeQuery.data;
   const productList = useMemo(
     () => (Array.isArray(productsQuery.data) ? productsQuery.data : []),
     [productsQuery.data]
   );
   const financeMonths = useMemo(
-    () => (Array.isArray(financeQuery.data?.months) ? financeQuery.data.months : []),
-    [financeQuery.data]
+    () => (Array.isArray(finance?.months) ? finance.months : []),
+    [finance]
   );
   const currentMonth = financeMonths.at(-1);
+  const previousMonth = financeMonths.at(-2);
+  const sales = finance?.products;
+  const commission = finance?.commission;
+  const readiness = finance?.recalcReadiness;
+
+  /**
+   * Kaynak sağlığı ÖNCE canlı sipariş yanıtından okunur.
+   *
+   * Finans yanıtındaki blok sipariş çekiminin önbelleğine bakıyor ve damga bayatsa hiçbir şey
+   * iddia etmiyor; finans sorgusu çekimden çok önce döndüğü için uyarı tam da hedeflediği
+   * durumda (pazaryeri yanıt vermiyor) hiç görünmüyordu. Sipariş yanıtı bu bilgiyi kendi
+   * içinde taze taşır.
+   */
+  const ordersData = ordersQuery.data;
+  const ordersMissingSources = ordersData?.summary?.quality?.missingSources;
+  const sources = ordersData
+    ? {
+        complete:
+          typeof ordersData.dataComplete === "boolean"
+            ? ordersData.dataComplete
+            : Array.isArray(ordersMissingSources)
+              ? ordersMissingSources.length === 0
+              : null,
+        missing: Array.isArray(ordersMissingSources) ? ordersMissingSources : [],
+      }
+    : finance?.sources;
+
   // Kullanıcı bir ay seçmediyse "bu ay" — düzeltmeler en sık içinde bulunulan ayda yapılıyor.
   const selectedRecalcMonth =
     financeMonths.some((month) => month.month === recalcMonth)
       ? recalcMonth
       : currentMonth?.month ?? "";
-  const selectedRecalcBucket = financeMonths.find(
+  const selectedReadiness = monthReadiness(readiness, selectedRecalcMonth);
+  const recalcSummary = useMemo(
+    () => windowRecalcSummary(readiness, financeMonths),
+    [readiness, financeMonths]
+  );
+  // Hazırlık dökümü gelmediyse ham "eski hesapla kayıtlı" sayısına düşülür — uyarı büsbütün
+  // kaybolmasın (bir tur boyunca tam bu oldu: sayfa gösterebildiği tek uyarıyı yitirdi).
+  const recalcWarnCount = recalcSummary.recalculable ?? recalcSummary.outdated;
+  const selectedMonthBucket = financeMonths.find(
     (month) => month.month === selectedRecalcMonth
   );
+  const selectedWarnCount =
+    selectedReadiness?.recalculableOrders ?? selectedMonthBucket?.outdatedOrders ?? 0;
+  const blockedTotalText = blockedRecalcText(recalcSummary.blocked);
+  const blockedMonthText = blockedRecalcText(selectedReadiness);
 
-  const topSellers = useMemo(() => {
-    const sellers = new Map<string, { qty: number; image: string | null }>();
-    for (const order of orders) {
-      if (order.statusKind === "cancelled") continue;
-      for (const item of order.items) {
-        const current = sellers.get(item.name);
-        if (current) {
-          current.qty += item.quantity;
-          if (!current.image && item.image) current.image = item.image;
-        } else {
-          sellers.set(item.name, { qty: item.quantity, image: item.image ?? null });
-        }
-      }
-    }
-    return [...sellers.entries()]
-      .map(([name, value]) => ({ name, qty: value.qty, image: value.image }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 8);
-  }, [orders]);
-  const topSellerMax = topSellers[0]?.qty ?? 1;
+  // ── En çok satanlar: ürün KİMLİĞİNE göre (ilan başlığına göre değil) ────────────────────
+  const topSellers: ProductSalesRow[] = useMemo(() => sales?.topSellers ?? [], [sales]);
+  const topSellerMax = topSellers[0]?.quantity || 1;
+
+  const earners: ProductSalesRow[] = sales?.profitLeaders ?? [];
 
   const profitLeaders = useMemo(
     () =>
@@ -402,6 +454,7 @@ export default function ReportsPage() {
         .slice(0, 6),
     [productList]
   );
+  const noCostProducts = useMemo(() => missingCostCount(productList), [productList]);
 
   const platformChart = useMemo(
     () =>
@@ -443,16 +496,16 @@ export default function ReportsPage() {
       month.revenue !== 0 ||
       month.orderProfit !== 0
   );
-  const incompleteCount = financeQuery.data?.quality.incompleteOrders ?? 0;
-  const financeReady = ordersQuery.isSuccess && !ordersQuery.isFetching;
-  const loading =
-    ordersQuery.isLoading ||
-    productsQuery.isLoading ||
-    (!financeReady && !financeQuery.data && !ordersQuery.isError) ||
-    financeQuery.isLoading;
+  const incompleteTotal = finance?.quality.incompleteOrders ?? 0;
+  // Kayıtlı geçmiş sipariş çekimine bağlı değil: yalnız finans ilk kez yüklenirken iskelet.
+  const loading = financeQuery.isLoading && !finance;
+
+  const recentCoverage = sales?.recentCoverage;
+  const recentUnmatched = sales?.recentUnmatched;
 
   return (
     <div className="p-4 sm:p-6 space-y-5 max-w-6xl">
+      <style>{BAR_GROW_CSS}</style>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -461,11 +514,16 @@ export default function ReportsPage() {
           <p className="text-sm text-muted-foreground mt-0.5">
             Aylık ciro, net kâr ve satış performansının tek görünümü.
           </p>
-          {financeQuery.data && (
+          {finance && (
             <p className="text-xs text-muted-foreground mt-1">
-              {financeQuery.data.actualCommissionOrders > 0
-                ? `${financeQuery.data.actualCommissionOrders} Trendyol siparişinde gerçek komisyon kullanılıyor.`
+              {(commission?.applied ?? finance.actualCommissionOrders) > 0
+                ? `${commission?.applied ?? finance.actualCommissionOrders} Trendyol siparişinde gerçek komisyon kullanılıyor.`
                 : "Trendyol komisyonları henüz alınmadı."}
+            </p>
+          )}
+          {(commission?.pending ?? 0) > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {commission?.pending} siparişin komisyonu geldi, kârı henüz güncellenmedi.
             </p>
           )}
         </div>
@@ -497,11 +555,28 @@ export default function ReportsPage() {
         </div>
       ) : (
         <>
+          {financeQuery.isError && (
+            <Card className="border-destructive/40">
+              <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">
+                  Aylık rapor alınamadı.
+                </p>
+                <button
+                  type="button"
+                  className="text-sm font-medium text-primary hover:underline self-start"
+                  onClick={() => financeQuery.refetch()}
+                >
+                  Yeniden dene
+                </button>
+              </CardContent>
+            </Card>
+          )}
+
           {ordersQuery.isError && (
             <Card className="border-destructive/40">
               <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-destructive">
-                  Siparişler yenilenemedi. Finans grafiği yeni siparişlerle güncellenmedi.
+                  Yeni siparişler alınamadı. Aşağıdaki rakamlar kayıtlı geçmişten geliyor.
                 </p>
                 <button
                   type="button"
@@ -514,19 +589,21 @@ export default function ReportsPage() {
             </Card>
           )}
 
-          {financeQuery.isError && (
-            <Card className="border-destructive/40">
-              <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-destructive">
-                  Aylık finans verisi alınamadı. Sipariş özeti yine de aşağıda gösteriliyor.
-                </p>
-                <button
-                  type="button"
-                  className="text-sm font-medium text-primary hover:underline self-start"
-                  onClick={() => financeQuery.refetch()}
-                >
-                  Yeniden dene
-                </button>
+          {/* Kaynak sağlığı: `complete === null` iken HİÇBİR iddia yok, uyarı basılmaz. */}
+          {sources?.complete === false && (
+            <Card className="border-amber-500/40 bg-amber-500/5">
+              <CardContent className="p-4 flex gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                <div className="text-sm min-w-0">
+                  <p className="font-medium">
+                    {sources.missing.length > 0
+                      ? `${sources.missing.join(", ")} verisi alınamadı.`
+                      : "Bazı satış kaynaklarının verisi alınamadı."}
+                  </p>
+                  <p className="text-muted-foreground mt-0.5">
+                    O satışlar bu rakamlara girmemiş olabilir.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -558,18 +635,25 @@ export default function ReportsPage() {
             )}
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {/* BİLİNMEYEN ≠ SIFIR: hiç veri yokken kartlar ₺0 değil "—" gösterir; sunucu 12
+                boş kova döndürdüğünde grafik "veri yok" derken kartların 0 yazması iki
+                çelişkili iddia demekti. */}
             <Stat
               label="Ciro (bu ay)"
-              value={currentMonth ? currentMonth.revenue : null}
+              value={hasMonthlyData && currentMonth ? currentMonth.revenue : null}
+              previous={hasMonthlyData && previousMonth ? previousMonth.revenue : null}
               format={fmtK}
+              higherIsBetter
               color={PRIMARY}
               icon={ShoppingCart}
               delay={0}
             />
             <Stat
               label="Net kâr (bu ay)"
-              value={currentMonth ? currentMonth.netProfit : null}
+              value={hasMonthlyData && currentMonth ? currentMonth.netProfit : null}
+              previous={hasMonthlyData && previousMonth ? previousMonth.netProfit : null}
               format={fmtK}
+              higherIsBetter
               color={
                 currentMonth && currentMonth.netProfit < 0
                   ? LOSS
@@ -580,49 +664,57 @@ export default function ReportsPage() {
             />
             <Stat
               label="Gider ödemesi (bu ay)"
-              value={currentMonth ? currentMonth.expenses : null}
+              value={hasMonthlyData && currentMonth ? currentMonth.expenses : null}
+              previous={hasMonthlyData && previousMonth ? previousMonth.expenses : null}
               format={fmtK}
+              /* Giderde ARTIŞ kötüdür — rengi ters döner. */
+              higherIsBetter={false}
               color="oklch(0.70 0.16 60)"
               icon={Receipt}
               delay={140}
             />
             <Stat
               label="Sipariş (bu ay)"
-              value={currentMonth?.orderCount ?? 0}
-              format={(n) => formatNumber(Math.round(n))}
+              value={hasMonthlyData && currentMonth ? currentMonth.orderCount : null}
+              previous={hasMonthlyData && previousMonth ? previousMonth.orderCount : null}
+              format={fmtCount}
+              higherIsBetter
               color={PRIMARY}
               icon={Trophy}
               delay={210}
             />
-
           </div>
 
-          {incompleteCount > 0 && (
+          {incompleteTotal > 0 && (
             <Card className="border-amber-500/40 bg-amber-500/5">
               <CardContent className="p-4 flex gap-3">
                 <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">
-                    {incompleteCount} siparişin kâr hesabı tam değil.
+                    Son 12 ayda {incompleteTotal} siparişin kâr hesabı tam değil.
+                  </p>
+                  {/* Bu ay temizse üç sıfırlı bir cümle yazmak yerine 12 aylık döküm verilir. */}
+                  <p className="text-muted-foreground mt-0.5">
+                    {currentMonth && currentMonth.incompleteOrders > 0
+                      ? `Bu ay ${currentMonth.incompleteOrders} sipariş: ${currentMonth.missingProfitOrders} tanesinde maliyet eksik, ${currentMonth.partialProfitOrders} tanesinde kâr kısmi.`
+                      : `${finance?.quality.missingProfitOrders ?? 0} siparişte maliyet eksik, ${finance?.quality.partialProfitOrders ?? 0} siparişte kâr kısmi.`}
                   </p>
                   <p className="text-muted-foreground mt-0.5">
-                    {financeQuery.data?.quality.missingProfitOrders ?? 0} siparişte maliyet
-                    eksik, {financeQuery.data?.quality.partialProfitOrders ?? 0} siparişte
-                    kâr kısmi. Bu dönemin net kârı bu nedenle kesin değil.
+                    Bu siparişlerin cirosu toplamda var, kârda yok.
                   </p>
                 </div>
               </CardContent>
             </Card>
           )}
 
-          {(financeQuery.data?.quality.unsupportedCurrencyOrders ?? 0) > 0 && (
+          {(finance?.quality.unsupportedCurrencyOrders ?? 0) > 0 && (
             <Card className="border-amber-500/40 bg-amber-500/5">
               <CardContent className="p-4 flex gap-3">
                 <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">
-                    {financeQuery.data?.quality.unsupportedCurrencyOrders} sipariş farklı
-                    para biriminde olduğu için toplama katılmadı.
+                    {finance?.quality.unsupportedCurrencyOrders} sipariş farklı para
+                    biriminde olduğu için toplama katılmadı.
                   </p>
                   <p className="text-muted-foreground mt-0.5">
                     Bu siparişler TL toplamlarına eklenmedi.
@@ -707,8 +799,11 @@ export default function ReportsPage() {
               ) : (
                 <div className="py-10 text-center">
                   <CalendarRange className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+                  {/* "Veri yok" ile "alınamadı" AYRI cümleler — ikisi aynı şey değil. */}
                   <p className="text-sm text-muted-foreground">
-                    Grafik için henüz satış veya gider verisi yok.
+                    {financeQuery.isError
+                      ? "Aylık rapor şu an alınamadı."
+                      : "Henüz satış veya gider verisi yok."}
                   </p>
                 </div>
               )}
@@ -721,6 +816,22 @@ export default function ReportsPage() {
                 </p>
               )}
               <div className="mt-3 border-t border-border/50 pt-3 space-y-2">
+                {/* Toplam üstte — ay ay dökümü aşağıda. İki cümle de KAPSAMINI söyler. */}
+                {recalcWarnCount > 0 && (
+                  <p className="flex items-start gap-1.5 text-xs text-amber-500 animate-in fade-in duration-500">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
+                    <span>
+                      Son 12 ayda {recalcWarnCount} siparişin kârı eski hesaplamayla kayıtlı —
+                      ayı seçip yeniden hesapla.
+                    </span>
+                  </p>
+                )}
+                {blockedTotalText && (
+                  <p className="text-xs text-muted-foreground">Son 12 ayda {blockedTotalText}</p>
+                )}
+
+                {/* Düğme HER ZAMAN durur: "maliyeti düzelttim, geçmiş ayı güncelle" en sık
+                    kullanılan yol ve o durumda güncellenecek eski kayıt sayısı 0'dır. */}
                 <div className="flex flex-wrap items-center gap-2">
                   <select
                     value={selectedRecalcMonth}
@@ -750,14 +861,16 @@ export default function ReportsPage() {
                     />
                     {recalcRunning ? "Yeniden hesaplanıyor..." : "Bu ayı yeniden hesapla"}
                   </Button>
-                  {!recalcRunning && (selectedRecalcBucket?.outdatedOrders ?? 0) > 0 && (
+                  {!recalcRunning && selectedWarnCount > 0 && (
                     <span className="inline-flex items-center gap-1.5 text-xs text-amber-500 animate-in fade-in duration-500">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                      Bu ayda {selectedRecalcBucket?.outdatedOrders} siparişin kârı eski
-                      hesaplamayla kayıtlı — güncellemek için yeniden hesapla.
+                      Bu ayda {selectedWarnCount} sipariş güncellenebilir.
                     </span>
                   )}
                 </div>
+                {!recalcRunning && blockedMonthText && (
+                  <p className="text-xs text-muted-foreground">Bu ayda {blockedMonthText}</p>
+                )}
 
                 {recalc && (recalcRunning || recalcJustFinished) && (
                   <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-300">
@@ -782,9 +895,9 @@ export default function ReportsPage() {
                   Maliyet, komisyon veya kargoyu düzelttiysen o ayı yeniden hesapla.
                 </p>
 
-                {financeQuery.data?.dataFrom && (
+                {finance?.dataFrom && (
                   <p className="text-xs text-muted-foreground">
-                    Grafik {formatHistoryDate(financeQuery.data.dataFrom)} tarihinden bu yana
+                    Grafik {formatHistoryDate(finance.dataFrom)} tarihinden bu yana
                     toplanan verilerle çiziliyor.
                   </p>
                 )}
@@ -800,7 +913,9 @@ export default function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-4">
-              {platformChart.length > 0 && summary && summary.total.orderCount > 0 ? (
+              {ordersQuery.isLoading ? (
+                <Skeleton className="h-56 w-full rounded-lg" />
+              ) : platformChart.length > 0 && summary && summary.total.orderCount > 0 ? (
                 <div className="h-56 w-full text-muted-foreground">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart
@@ -853,97 +968,296 @@ export default function ReportsPage() {
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground py-6 text-center">
-                  Son 30 günde sipariş verisi yok.
+                  {ordersQuery.isError
+                    ? "Sipariş verisi şu an alınamadı."
+                    : "Son 30 günde sipariş yok."}
                 </p>
               )}
             </CardContent>
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
+            {/* ── En çok satanlar: adet sırasına göre, ürün KİMLİĞİYLE gruplanmış ────────── */}
             <Card>
               <CardHeader className="pb-2 border-b border-border/50">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-amber-500" /> En Çok Satanlar (30g)
+                  <Trophy className="h-4 w-4 text-amber-500" /> En Çok Satanlar
                 </CardTitle>
+                <p className="text-xs text-muted-foreground">Son 30 gün, satış adedine göre.</p>
               </CardHeader>
               <CardContent className="pt-3">
                 {topSellers.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">Veri yok.</p>
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    {/* "Gelmedi" ile "yok" AYRI: satış özeti bu yanıtta hiç yoksa
+                        "satış yok" demek düpedüz yanlış bilgi olur. */}
+                    {financeQuery.isError || !sales
+                      ? "Satış listesi alınamadı."
+                      : "Son 30 günde satış yok."}
+                  </p>
                 ) : (
                   <div className="space-y-2">
                     {topSellers.map((seller, index) => (
-                      <div key={seller.name} className="space-y-1">
+                      <Link
+                        key={seller.productId}
+                        href={`/products/${seller.productId}`}
+                        className="group block space-y-1 rounded-md px-1 -mx-1 py-0.5 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300"
+                        style={{
+                          animationDelay: `${index * 40}ms`,
+                          animationFillMode: "both",
+                        }}
+                      >
                         <div className="flex items-center gap-2 text-xs">
                           <span className="text-muted-foreground tabular-nums w-4 shrink-0">
                             {index + 1}.
                           </span>
-                          <MiniThumb src={seller.image} />
-                          <span className="truncate flex-1 min-w-0">{seller.name}</span>
-                          <span className="font-semibold tabular-nums ml-2 shrink-0">
-                            {seller.qty} adet
+                          <MiniThumb src={seller.imageUrl} />
+                          <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
+                            {seller.name}
+                          </span>
+                          <span className="text-muted-foreground tabular-nums shrink-0">
+                            {formatCurrency(seller.revenue, { decimals: 0 })}
+                          </span>
+                          <span className="font-semibold tabular-nums ml-1 shrink-0">
+                            {seller.quantity} adet
                           </span>
                         </div>
                         <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                           <div
-                            className="h-full rounded-full bg-primary"
-                            style={{ width: `${(seller.qty / topSellerMax) * 100}%` }}
+                            className="ml-bar h-full rounded-full bg-primary"
+                            style={{
+                              width: `${(seller.quantity / topSellerMax) * 100}%`,
+                            }}
                           />
                         </div>
-                      </div>
+                      </Link>
                     ))}
                   </div>
+                )}
+                {(recentUnmatched?.lines ?? 0) > 0 && (
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Ürüne bağlanmamış {recentUnmatched?.quantity} satış bu listede yok (
+                    {formatCurrency(recentUnmatched?.revenue)}).
+                  </p>
+                )}
+                {(recentCoverage?.ordersWithoutItems ?? 0) > 0 && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {recentCoverage?.ordersWithoutItems} siparişin ürün dökümü yok (
+                    {formatCurrency(recentCoverage?.revenueWithoutItems)} ciro) — bu liste
+                    onları saymıyor.
+                  </p>
+                )}
+                {/* Elle eklenen siparişlerin kalem geçmişi tutulmuyor; liste onları
+                    içermiyor ve bunu söylemezsek kullanıcı listeyi "satışın tamamı" sanıyor. */}
+                {(summary?.manual?.orderCount ?? 0) > 0 && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Elle eklediğin {summary?.manual?.orderCount} sipariş bu listede yok (
+                    {formatCurrency(summary?.manual?.revenue)} ciro).
+                  </p>
                 )}
               </CardContent>
             </Card>
 
+            {/* ── Gerçekleşen kâr: satılan üründen kalan para ───────────────────────────── */}
             <Card>
               <CardHeader className="pb-2 border-b border-border/50">
-                <CardTitle className="text-sm">
-                  Ürün Kârlılığı (mevcut fiyatla)
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Coins className="h-4 w-4 text-emerald-500" /> En Çok Para Getirenler
                 </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Son 12 ayda gerçekten satılan üründen kalan kâr.
+                </p>
               </CardHeader>
-              <CardContent className="pt-3 space-y-3">
-                <div>
-                  <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                    <TrendingUp className="h-3.5 w-3.5 text-green-500" /> En kârlı
+              <CardContent className="pt-3">
+                {earners.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    {financeQuery.isError || !sales
+                      ? "Liste alınamadı."
+                      : "Kârı hesaplanmış satış yok."}
                   </p>
-                  {profitLeaders.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">Maliyetli ürün yok.</p>
-                  ) : (
-                    profitLeaders.map((product) => (
-                      <div key={product.id} className="flex items-center gap-2 text-xs py-0.5">
-                        <MiniThumb src={product.imageUrl} />
-                        <span className="truncate flex-1 min-w-0">{product.name}</span>
-                        <span className="tabular-nums font-medium text-green-500 ml-2 shrink-0">
-                          {formatCurrency(product.currentNetProfit ?? 0)}
-                          <span className="text-muted-foreground font-normal ml-1">
-                            ({formatPercent(product.currentProfitMargin ?? 0)})
+                ) : (
+                  <div className="space-y-1">
+                    {earners.map((row, index) => {
+                      const warning = profitWarningLabel(row);
+                      return (
+                      <Link
+                        key={row.productId}
+                        href={`/products/${row.productId}`}
+                        className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300"
+                        style={{
+                          animationDelay: `${index * 40}ms`,
+                          animationFillMode: "both",
+                        }}
+                      >
+                        <MiniThumb src={row.imageUrl} />
+                        <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
+                          {row.name}
+                        </span>
+                        <span className="text-muted-foreground tabular-nums shrink-0">
+                          {row.quantity} adet
+                        </span>
+                        {/* Zararına satılan ürün de bu listeye girebiliyor; renk İŞARETE göre. */}
+                        <span
+                          className={cn(
+                            "tabular-nums font-medium ml-1 shrink-0",
+                            (row.profit ?? 0) < 0 ? "text-destructive" : "text-emerald-500"
+                          )}
+                        >
+                          {formatCurrency(row.profit)}
+                        </span>
+                        {warning && (
+                          <span
+                            role="img"
+                            title={warning}
+                            aria-label={warning}
+                            className="inline-flex shrink-0"
+                          >
+                            <AlertTriangle
+                              className="h-3 w-3 text-amber-500"
+                              aria-hidden="true"
+                            />
                           </span>
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-                {lossMakers.length > 0 && (
-                  <div className="border-t border-border/40 pt-2">
-                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
-                      <TrendingDown className="h-3.5 w-3.5 text-destructive" /> Zarar
-                      edenler
-                    </p>
-                    {lossMakers.map((product) => (
-                      <div key={product.id} className="flex items-center gap-2 text-xs py-0.5">
-                        <MiniThumb src={product.imageUrl} />
-                        <span className="truncate flex-1 min-w-0">{product.name}</span>
-                        <span className="tabular-nums font-medium text-destructive ml-2 shrink-0">
-                          {formatCurrency(product.currentNetProfit ?? 0)}
-                        </span>
-                      </div>
-                    ))}
+                        )}
+                      </Link>
+                      );
+                    })}
                   </div>
+                )}
+                {(sales?.coverage?.ordersWithoutItems ?? 0) > 0 && (
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    {sales?.coverage.ordersWithoutItems} siparişin ürün dökümü yok (
+                    {formatCurrency(sales?.coverage.revenueWithoutItems)} ciro) — bu
+                    satışların kârı listede yok.
+                  </p>
                 )}
               </CardContent>
             </Card>
           </div>
+
+          {/* ── Teorik kârlılık: bugünkü fiyat ve maliyetle ──────────────────────────────── */}
+          <Card>
+            <CardHeader className="pb-2 border-b border-border/50">
+              <CardTitle className="text-sm">Ürün Kârlılığı</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Bugünkü fiyat ve maliyetle bir adet satılsa ne kalır — satış adedinden bağımsız.
+              </p>
+            </CardHeader>
+            <CardContent className="pt-3 space-y-3">
+              {productsQuery.isLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, index) => (
+                    <Skeleton key={index} className="h-5 w-full rounded" />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                      <TrendingUp className="h-3.5 w-3.5 text-green-500" /> En kârlı
+                    </p>
+                    {profitLeaders.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        {productsQuery.isError
+                          ? "Ürün listesi alınamadı."
+                          : "Maliyeti girilmiş ürün yok."}
+                      </p>
+                    ) : (
+                      profitLeaders.map((product) => {
+                        const sold = soldUnitsBadge(
+                          sales?.soldUnits,
+                          product.id,
+                          sales?.coverage.ordersWithoutItems ?? 0
+                        );
+                        return (
+                          <Link
+                            key={product.id}
+                            href={`/products/${product.id}`}
+                            className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40"
+                          >
+                            <MiniThumb src={product.imageUrl} />
+                            <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
+                              {product.name}
+                            </span>
+                            {sold && (
+                              <span
+                                className={cn(
+                                  "shrink-0 rounded-full px-1.5 py-px text-[10px] tabular-nums",
+                                  sold.sold
+                                    ? "bg-primary/15 text-primary"
+                                    : "bg-muted text-muted-foreground"
+                                )}
+                              >
+                                {sold.text}
+                              </span>
+                            )}
+                            <span className="tabular-nums font-medium text-green-500 ml-1 shrink-0">
+                              {formatCurrency(product.currentNetProfit)}
+                              <span className="text-muted-foreground font-normal ml-1">
+                                ({formatPercent(product.currentProfitMargin)})
+                              </span>
+                            </span>
+                          </Link>
+                        );
+                      })
+                    )}
+                  </div>
+                  {lossMakers.length > 0 && (
+                    <div className="border-t border-border/40 pt-2">
+                      <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1">
+                        <TrendingDown className="h-3.5 w-3.5 text-destructive" /> Zarar
+                        edenler
+                      </p>
+                      {lossMakers.map((product) => {
+                        const sold = soldUnitsBadge(
+                          sales?.soldUnits,
+                          product.id,
+                          sales?.coverage.ordersWithoutItems ?? 0
+                        );
+                        return (
+                          <Link
+                            key={product.id}
+                            href={`/products/${product.id}`}
+                            className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40"
+                          >
+                            <MiniThumb src={product.imageUrl} />
+                            <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
+                              {product.name}
+                            </span>
+                            {sold && (
+                              <span
+                                className={cn(
+                                  "shrink-0 rounded-full px-1.5 py-px text-[10px] tabular-nums",
+                                  sold.sold
+                                    ? "bg-destructive/15 text-destructive"
+                                    : "bg-muted text-muted-foreground"
+                                )}
+                              >
+                                {sold.text}
+                              </span>
+                            )}
+                            <span className="tabular-nums font-medium text-destructive ml-1 shrink-0">
+                              {formatCurrency(product.currentNetProfit)}
+                            </span>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {noCostProducts > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {noCostProducts} ürünün maliyeti girilmemiş, bu listede yok.
+                    </p>
+                  )}
+                  {/* Satış rozeti bu siparişleri göremiyor — düzeltici bilgi burada da dursun. */}
+                  {(sales?.coverage?.ordersWithoutItems ?? 0) > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {sales?.coverage.ordersWithoutItems} siparişin ürün dökümü yok, satış
+                      rozetleri onları saymıyor.
+                    </p>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
@@ -954,22 +1268,39 @@ export default function ReportsPage() {
  * Özet kartı. Rakam SNAP ETMEZ, akar (AnimatedNumber) — kartlar da sırayla belirir.
  * Veri henüz yokken `value` null verilir ve animasyon yerine "—" gösterilir; 0'dan 0'a
  * anlamsız bir sayaç dönmesin.
+ *
+ * Gizli pencerede rakamın 0'da donması `AnimatedNumber`'ın içinde çözülür — düzeltme orada
+ * durunca aynı sayacı kullanan bütün ekranlar (Panel, Siparişler, Planlayıcı…) payını alır.
  */
 function Stat({
   label,
   value,
+  previous,
   format,
+  higherIsBetter,
   color,
   icon: Icon,
   delay = 0,
 }: {
   label: string;
   value: number | null;
+  previous?: number | null;
   format: (n: number) => string;
+  higherIsBetter: boolean;
   color: string;
   icon: React.ElementType;
   delay?: number;
 }) {
+  const delta = statDelta(value, previous);
+  const tone = delta ? deltaTone(delta.diff, higherIsBetter) : "neutral";
+  const toneClass =
+    tone === "good"
+      ? "text-emerald-500"
+      : tone === "bad"
+        ? "text-destructive"
+        : "text-muted-foreground";
+  const Arrow = delta && delta.diff > 0 ? ArrowUpRight : ArrowDownRight;
+
   return (
     <Card
       className="overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 transition-transform hover:-translate-y-0.5"
@@ -987,6 +1318,28 @@ function Stat({
         <div className="text-xl font-bold tabular-nums mt-1" style={{ color }}>
           {value === null ? "—" : <AnimatedNumber value={value} format={format} />}
         </div>
+        {delta && (
+          <div
+            className="mt-1 flex items-center gap-1 text-[11px] animate-in fade-in duration-500"
+            style={{ animationDelay: `${delay + 260}ms`, animationFillMode: "both" }}
+          >
+            {delta.diff === 0 ? (
+              <span className="text-muted-foreground">Geçen ayın tamamıyla aynı</span>
+            ) : (
+              <>
+                <Arrow className={cn("h-3 w-3 shrink-0", toneClass)} />
+                <span className={cn("tabular-nums font-medium", toneClass)}>
+                  {delta.diff > 0 ? "+" : "−"}
+                  {format(Math.abs(delta.diff))}
+                  {delta.ratio != null && ` · ${formatPercent(Math.abs(delta.ratio), 0)}`}
+                </span>
+                {/* Bu ay HENÜZ SÜRÜYOR; kıyas geçen ayın TAMAMINA karşı yapılıyor. Ayın
+                    başında büyük bir düşüş görünmesi bundandır — cümle bunu söyler. */}
+                <span className="text-muted-foreground truncate">geçen ayın tamamına göre</span>
+              </>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

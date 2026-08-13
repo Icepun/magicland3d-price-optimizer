@@ -125,25 +125,42 @@ type SnapshotWriteData = {
  *  "en son ne zaman bakıldı" damgası; tek başına değişmesi yeniden yazmayı haklı çıkarmaz.) */
 type SnapshotComparable = Omit<SnapshotWriteData, "syncedAt">;
 
-function snapshotDiffers(
+/**
+ * DEĞİŞEN alanların adları (boş dizi = yazmaya gerek yok).
+ *
+ * NEDEN alan ADI dönüyoruz: "değişen-only" kuralı çalışırken bile bir tur 414 satır
+ * yazabiliyor ve tur sonucu yalnız SAYIYI söylediği için hangi alanın oynadığı hiçbir yerden
+ * okunamıyordu — sebebi bulmak elle veritabanı arkeolojisi gerektirdi. Artık her tur
+ * "hangi alan yüzünden kaç satır yazıldı" bilgisini taşır; aynı sorun bir daha çıkarsa
+ * TEK yenilemede görünür.
+ */
+export function snapshotChangedFields(
   existing: SnapshotComparable,
   next: SnapshotComparable
-): boolean {
-  return (
-    existing.orderNumber !== next.orderNumber ||
-    existing.orderedAt.getTime() !== next.orderedAt.getTime() ||
-    existing.revenueKurus !== next.revenueKurus ||
-    existing.profitKurus !== next.profitKurus ||
-    existing.profitPartial !== next.profitPartial ||
-    existing.profitSource !== next.profitSource ||
-    existing.estimatedCommissionKurus !== next.estimatedCommissionKurus ||
-    existing.actualCommissionKurus !== next.actualCommissionKurus ||
-    existing.outputVatKurus !== next.outputVatKurus ||
-    existing.inputVatCreditKurus !== next.inputVatCreditKurus ||
-    existing.statusKind !== next.statusKind ||
-    existing.currency !== next.currency ||
-    existing.calculationVersion !== next.calculationVersion
-  );
+): string[] {
+  const changed: string[] = [];
+  if (existing.orderNumber !== next.orderNumber) changed.push("orderNumber");
+  if (existing.orderedAt.getTime() !== next.orderedAt.getTime()) changed.push("orderedAt");
+  if (existing.revenueKurus !== next.revenueKurus) changed.push("revenueKurus");
+  if (existing.profitKurus !== next.profitKurus) changed.push("profitKurus");
+  if (existing.profitPartial !== next.profitPartial) changed.push("profitPartial");
+  if (existing.profitSource !== next.profitSource) changed.push("profitSource");
+  if (existing.estimatedCommissionKurus !== next.estimatedCommissionKurus) {
+    changed.push("estimatedCommissionKurus");
+  }
+  if (existing.actualCommissionKurus !== next.actualCommissionKurus) {
+    changed.push("actualCommissionKurus");
+  }
+  if (existing.outputVatKurus !== next.outputVatKurus) changed.push("outputVatKurus");
+  if (existing.inputVatCreditKurus !== next.inputVatCreditKurus) {
+    changed.push("inputVatCreditKurus");
+  }
+  if (existing.statusKind !== next.statusKind) changed.push("statusKind");
+  if (existing.currency !== next.currency) changed.push("currency");
+  if (existing.calculationVersion !== next.calculationVersion) {
+    changed.push("calculationVersion");
+  }
+  return changed;
 }
 
 /** Kalem satırına yazılan alanlar (syncedAt hariç — o yalnız damga). */
@@ -162,18 +179,18 @@ type ExistingItemRow = ItemWriteData & { lineIndex: number };
 
 type WriteStatement = { sql: string; args: unknown[] };
 
-/** Kalem satırında yazmayı gerektiren bir alan değişmiş mi? */
-function itemDiffers(existing: ExistingItemRow, next: ItemWriteData): boolean {
-  return (
-    existing.orderedAt.getTime() !== next.orderedAt.getTime() ||
-    existing.productId !== next.productId ||
-    existing.productName !== next.productName ||
-    existing.quantity !== next.quantity ||
-    existing.unitPriceKurus !== next.unitPriceKurus ||
-    existing.lineRevenueKurus !== next.lineRevenueKurus ||
-    existing.statusKind !== next.statusKind ||
-    existing.currency !== next.currency
-  );
+/** Kalem satırında DEĞİŞEN alanların adları (boş dizi = yazmaya gerek yok). */
+function itemChangedFields(existing: ExistingItemRow, next: ItemWriteData): string[] {
+  const changed: string[] = [];
+  if (existing.orderedAt.getTime() !== next.orderedAt.getTime()) changed.push("orderedAt");
+  if (existing.productId !== next.productId) changed.push("productId");
+  if (existing.productName !== next.productName) changed.push("productName");
+  if (existing.quantity !== next.quantity) changed.push("quantity");
+  if (existing.unitPriceKurus !== next.unitPriceKurus) changed.push("unitPriceKurus");
+  if (existing.lineRevenueKurus !== next.lineRevenueKurus) changed.push("lineRevenueKurus");
+  if (existing.statusKind !== next.statusKind) changed.push("statusKind");
+  if (existing.currency !== next.currency) changed.push("currency");
+  return changed;
 }
 
 // ⚠️ TARİHLER `toDbDate()` İLE YAZILIR — bu süreçteki Prisma motorunun kolona yazacağı değerin
@@ -292,7 +309,14 @@ async function flushWrites(statements: WriteStatement[]): Promise<void> {
   }
 }
 
-/** Bir yazma turunun sonucu — arka planda çalışırken de ölçülebilsin diye döner. */
+/**
+ * Bir yazma turunun sonucu — arka planda çalışırken de ölçülebilsin diye döner.
+ *
+ * `writeReasons` / `itemWriteReasons`: hangi alan yüzünden kaç satır yazıldı.
+ * "new" = satır ilk kez oluştu, "trim" = küçülen siparişin fazla kalemleri silindi.
+ * Sağlıklı bir yenilemede ikisi de boştur; dolu çıkıyorsa hangi alanın oynadığı
+ * doğrudan görünür (eskiden bu bilgi hiçbir yerde yoktu).
+ */
 export interface FinanceSnapshotWriteResult {
   /** Kaydedilmeye uygun (manuel olmayan, tarihi olan) sipariş sayısı. */
   eligibleOrders: number;
@@ -300,6 +324,25 @@ export interface FinanceSnapshotWriteResult {
   writtenOrders: number;
   /** Gerçekten yazılan/silinen kalem ifadesi sayısı. */
   writtenItems: number;
+  /** Alan adı → o alan değiştiği için yazılan sipariş özeti sayısı. */
+  writeReasons: Record<string, number>;
+  /** Alan adı → o alan değiştiği için yazılan kalem satırı sayısı. */
+  itemWriteReasons: Record<string, number>;
+}
+
+/** Boş bir yazma sonucu (hata/erken çıkış yollarında tek kaynak). */
+function emptyWriteResult(eligibleOrders = 0): FinanceSnapshotWriteResult {
+  return {
+    eligibleOrders,
+    writtenOrders: 0,
+    writtenItems: 0,
+    writeReasons: {},
+    itemWriteReasons: {},
+  };
+}
+
+function countReason(into: Record<string, number>, keys: string[]): void {
+  for (const key of keys) into[key] = (into[key] ?? 0) + 1;
 }
 
 /** Ham sorgu sonucu tamsayıları sürücüye göre BigInt gelebilir — karşılaştırmadan önce sadeleştir. */
@@ -358,6 +401,77 @@ export interface PersistOrderFinanceSnapshotsOptions {
   replaceCapturedProfit?: boolean;
 }
 
+/** Kayıtlı satırın karşılaştırmaya giren hâli (yalnız gerekli alanlar). */
+export type ExistingSnapshotRow = SnapshotComparable;
+
+/** Siparişin kuruşa çevrilmiş hâli — TL→kuruş dönüşümü TEK yerde kalsın diye ayrı. */
+function toIncomingSnapshot(order: FinanceSnapshotOrder) {
+  return {
+    revenueKurus: tlToKurus(order.total),
+    profitKurus: order.profit == null ? null : tlToKurus(order.profit),
+    profitPartial: order.profitPartial,
+    profitSource: order.profitSource ?? "calculated",
+    estimatedCommissionKurus:
+      order.estimatedCommission == null ? null : tlToKurus(order.estimatedCommission),
+    actualCommissionKurus:
+      order.actualCommission == null ? null : tlToKurus(order.actualCommission),
+    // KDV motorun çıktısından AYNEN taşınır; verilmediyse "bilinmiyor" (null) kalır.
+    outputVatKurus: order.outputVat == null ? null : tlToKurus(order.outputVat),
+    inputVatCreditKurus:
+      order.inputVatCredit == null ? null : tlToKurus(order.inputVatCredit),
+  };
+}
+
+/**
+ * Kayıtlı satır + gelen sipariş → satıra YAZILACAK son hâl.
+ *
+ * TEK KAYNAK: hem gerçek yazım hem de "yazsaydık ne değişirdi" provası (kuru tur) bunu
+ * çağırır. İki yerde ayrı ayrı kurulursa prova ile gerçek tur sessizce ayrışır ve
+ * kullanıcıya yanlış bir "şu kadar sipariş değişecek" sayısı gösterilir.
+ */
+export function resolveSnapshotWriteData(
+  existing: ExistingSnapshotRow | null,
+  order: FinanceSnapshotOrder,
+  orderedAt: Date,
+  options: PersistOrderFinanceSnapshotsOptions = {}
+): SnapshotComparable {
+  const incoming = toIncomingSnapshot(order);
+  const replaceProfit =
+    options.replaceCapturedProfit === true ||
+    shouldReplaceCapturedProfit(existing, incoming);
+  return {
+    orderNumber: order.orderNumber,
+    orderedAt,
+    revenueKurus: incoming.revenueKurus,
+    profitKurus: replaceProfit ? incoming.profitKurus : existing?.profitKurus ?? null,
+    profitPartial: replaceProfit
+      ? incoming.profitPartial
+      : existing?.profitPartial ?? incoming.profitPartial,
+    profitSource: replaceProfit
+      ? incoming.profitSource
+      : existing?.profitSource ?? incoming.profitSource,
+    estimatedCommissionKurus: replaceProfit
+      ? incoming.estimatedCommissionKurus
+      : existing?.estimatedCommissionKurus ?? incoming.estimatedCommissionKurus,
+    actualCommissionKurus: replaceProfit
+      ? incoming.actualCommissionKurus
+      : existing?.actualCommissionKurus ?? incoming.actualCommissionKurus,
+    // Bilinen bir KDV değerini "bilinmiyor" ile EZME: değeri taşımayan bir çağrı yeri
+    // kayıtlı geçmişi silmemeli. Yeni değer varsa (yenileme/yeniden hesap) o kazanır.
+    outputVatKurus: replaceProfit
+      ? incoming.outputVatKurus ?? existing?.outputVatKurus ?? null
+      : existing?.outputVatKurus ?? incoming.outputVatKurus,
+    inputVatCreditKurus: replaceProfit
+      ? incoming.inputVatCreditKurus ?? existing?.inputVatCreditKurus ?? null
+      : existing?.inputVatCreditKurus ?? incoming.inputVatCreditKurus,
+    statusKind: order.statusKind,
+    currency: order.currency || "TRY",
+    calculationVersion: replaceProfit
+      ? FINANCE_CALCULATION_VERSION
+      : existing?.calculationVersion ?? FINANCE_CALCULATION_VERSION,
+  };
+}
+
 export async function persistOrderFinanceSnapshots(
   orders: FinanceSnapshotOrder[],
   /** Sipariş kimliği → kalemler. Verilmeyen siparişin kalem geçmişine DOKUNULMAZ. */
@@ -375,9 +489,7 @@ export async function persistOrderFinanceSnapshots(
     return [{ order, orderedAt, externalOrderId }];
   });
 
-  if (valid.length === 0) {
-    return { eligibleOrders: 0, writtenOrders: 0, writtenItems: 0 };
-  }
+  if (valid.length === 0) return emptyWriteResult();
 
   const syncedAt = new Date();
 
@@ -437,60 +549,16 @@ export async function persistOrderFinanceSnapshots(
     externalOrderId: string;
     data: SnapshotWriteData;
   }> = [];
+  const writeReasons: Record<string, number> = {};
 
   for (const { order, orderedAt, externalOrderId } of valid) {
     const existing = existingByKey.get(snapshotKey(order.platform, externalOrderId)) ?? null;
-    const incoming = {
-      revenueKurus: tlToKurus(order.total),
-      profitKurus: order.profit == null ? null : tlToKurus(order.profit),
-      profitPartial: order.profitPartial,
-      profitSource: order.profitSource ?? "calculated",
-      estimatedCommissionKurus:
-        order.estimatedCommission == null ? null : tlToKurus(order.estimatedCommission),
-      actualCommissionKurus:
-        order.actualCommission == null ? null : tlToKurus(order.actualCommission),
-      // KDV motorun çıktısından AYNEN taşınır; verilmediyse "bilinmiyor" (null) kalır.
-      outputVatKurus: order.outputVat == null ? null : tlToKurus(order.outputVat),
-      inputVatCreditKurus:
-        order.inputVatCredit == null ? null : tlToKurus(order.inputVatCredit),
-    };
-    const replaceProfit =
-      options.replaceCapturedProfit === true ||
-      shouldReplaceCapturedProfit(existing, incoming);
-    const data = {
-      orderNumber: order.orderNumber,
-      orderedAt,
-      revenueKurus: incoming.revenueKurus,
-      profitKurus: replaceProfit ? incoming.profitKurus : existing?.profitKurus ?? null,
-      profitPartial: replaceProfit
-        ? incoming.profitPartial
-        : existing?.profitPartial ?? incoming.profitPartial,
-      profitSource: replaceProfit
-        ? incoming.profitSource
-        : existing?.profitSource ?? incoming.profitSource,
-      estimatedCommissionKurus: replaceProfit
-        ? incoming.estimatedCommissionKurus
-        : existing?.estimatedCommissionKurus ?? incoming.estimatedCommissionKurus,
-      actualCommissionKurus: replaceProfit
-        ? incoming.actualCommissionKurus
-        : existing?.actualCommissionKurus ?? incoming.actualCommissionKurus,
-      // Bilinen bir KDV değerini "bilinmiyor" ile EZME: değeri taşımayan bir çağrı yeri
-      // kayıtlı geçmişi silmemeli. Yeni değer varsa (yenileme/yeniden hesap) o kazanır.
-      outputVatKurus: replaceProfit
-        ? incoming.outputVatKurus ?? existing?.outputVatKurus ?? null
-        : existing?.outputVatKurus ?? incoming.outputVatKurus,
-      inputVatCreditKurus: replaceProfit
-        ? incoming.inputVatCreditKurus ?? existing?.inputVatCreditKurus ?? null
-        : existing?.inputVatCreditKurus ?? incoming.inputVatCreditKurus,
-      statusKind: order.statusKind,
-      currency: order.currency || "TRY",
-      calculationVersion: replaceProfit
-        ? FINANCE_CALCULATION_VERSION
-        : existing?.calculationVersion ?? FINANCE_CALCULATION_VERSION,
-    };
+    const data = resolveSnapshotWriteData(existing, order, orderedAt, options);
 
     // Satır zaten birebir aynıysa yazma (syncedAt damgası tek başına yazmayı haklı çıkarmaz).
-    if (existing && !snapshotDiffers(existing, data)) continue;
+    const changed = existing ? snapshotChangedFields(existing, data) : ["new"];
+    if (changed.length === 0) continue;
+    countReason(writeReasons, changed);
 
     pending.push({
       platform: order.platform,
@@ -536,6 +604,7 @@ export async function persistOrderFinanceSnapshots(
   }
 
   const itemStatements: WriteStatement[] = [];
+  const itemWriteReasons: Record<string, number> = {};
   if (itemPlans.length > 0) {
     const existingItems = await readExistingItems([
       ...new Set(itemPlans.map((plan) => plan.externalOrderId)),
@@ -546,7 +615,9 @@ export async function persistOrderFinanceSnapshots(
       plan.rows.forEach((row, lineIndex) => {
         const existing = storedByIndex.get(lineIndex);
         // Değişmeyen satıra HİÇ yazma (yenilemelerin çoğunda hiçbir şey değişmez).
-        if (existing && !itemDiffers(existing, row)) return;
+        const changed = existing ? itemChangedFields(existing, row) : ["new"];
+        if (changed.length === 0) return;
+        countReason(itemWriteReasons, changed);
         itemStatements.push(
           itemStatement(plan.platform, plan.externalOrderId, lineIndex, row, syncedAt)
         );
@@ -555,6 +626,7 @@ export async function persistOrderFinanceSnapshots(
       // Kalem sayısı azaldıysa fazlalığı sil. Ama TÜM kalemleri silmeyiz: satırların geçici olarak
       // hiç gelmemesi (pazaryeri yanıtı eksik döndü) kalıcı geçmişi yok etmemeli.
       if (plan.rows.length > 0 && maxStoredIndex >= plan.rows.length) {
+        countReason(itemWriteReasons, ["trim"]);
         itemStatements.push(
           itemTrimStatement(plan.platform, plan.externalOrderId, plan.rows.length)
         );
@@ -570,10 +642,23 @@ export async function persistOrderFinanceSnapshots(
     ...itemStatements,
   ]);
 
+  // Sağlıklı bir yenilemede burası hiç çalışmaz. Çalışıyorsa sebebi TEK satırda görünsün:
+  // "hangi alan yüzünden kaç satır" bilgisi olmadan bu sorunun kaynağını bulmak elle
+  // veritabanı arkeolojisi gerektiriyordu.
+  if (pending.length > 0 || itemStatements.length > 0) {
+    console.info(
+      `[finance-snapshot] ${valid.length} siparişten ${pending.length} özet + ` +
+        `${itemStatements.length} kalem yazıldı. Sipariş sebepleri: ` +
+        `${JSON.stringify(writeReasons)} · Kalem sebepleri: ${JSON.stringify(itemWriteReasons)}`
+    );
+  }
+
   return {
     eligibleOrders: valid.length,
     writtenOrders: pending.length,
     writtenItems: itemStatements.length,
+    writeReasons,
+    itemWriteReasons,
   };
 }
 
@@ -607,6 +692,18 @@ let running: Promise<void> | null = null;
 let lastStatus: FinanceSnapshotWriteStatus | null = null;
 let droppedJobs = 0;
 
+/**
+ * Süreç ömrü boyunca ARTAN yazım sayaçları.
+ *
+ * ⚠️ NEDEN SAYAÇ, NEDEN "son tur durumu" DEĞİL: her tur `lastStatus`'ü EZER. Önbellek
+ * düşürücü son duruma bakıp karar verdiğinde, aynı örnekleme aralığında biten iki turdan
+ * yalnız sonuncusu görülüyordu — "A turu 12 satır yazdı, B turu 0 yazdı" durumunda düşürme
+ * sessizce kaçıyordu (kullanıcı yeni siparişi listede görüyor, "Ciro (bu ay)" kartı eski
+ * rakamda kalıyordu). Sayaç monotonik olduğu için hiçbir tur kaçmaz: çağıran başta okur,
+ * sonda karşılaştırır.
+ */
+let writeTotals = { orders: 0, items: 0, rounds: 0 };
+
 async function drainQueue(): Promise<void> {
   while (queue.length > 0) {
     const job = queue.shift()!;
@@ -614,6 +711,11 @@ async function drainQueue(): Promise<void> {
     try {
       const result = await persistOrderFinanceSnapshots(job.orders, job.itemsByOrderId);
       const finishedAt = new Date();
+      writeTotals = {
+        orders: writeTotals.orders + result.writtenOrders,
+        items: writeTotals.items + result.writtenItems,
+        rounds: writeTotals.rounds + 1,
+      };
       lastStatus = {
         ok: true,
         ...result,
@@ -623,13 +725,14 @@ async function drainQueue(): Promise<void> {
       };
     } catch (error) {
       const finishedAt = new Date();
+      // Tur bitti sayılır ama HİÇBİR yazım sayılmaz: yarım kalmış bir turu "yazdı" saymak
+      // önbelleği yarım veriyle tazelerdi.
+      writeTotals = { ...writeTotals, rounds: writeTotals.rounds + 1 };
       // Hata YUTULMAZ: hem günlüğe düşer hem de son durum olarak saklanır.
       console.error("[finance-snapshot] Arka plan yazımı başarısız:", error);
       lastStatus = {
         ok: false,
-        eligibleOrders: job.orders.length,
-        writtenOrders: 0,
-        writtenItems: 0,
+        ...emptyWriteResult(job.orders.length),
         error:
           error instanceof Error
             ? error.message
@@ -686,6 +789,21 @@ export function lastOrderFinanceSnapshotWrite(): FinanceSnapshotWriteStatus | nu
   return lastStatus;
 }
 
+/**
+ * Süreç açıldığından beri yazılan TOPLAM özet/kalem sayısı ve biten tur sayısı.
+ *
+ * Önbellek düşürücü bunu kullanır: başta okur, yazım bitince yeniden okur. Aradaki fark
+ * "bu bekleyiş boyunca gerçekten satır yazıldı mı" sorusunu KAÇIRMADAN yanıtlar — turların
+ * arasına sıkışmış bir yazımı örnekleme yöntemi görmüyordu.
+ */
+export function orderFinanceSnapshotWriteTotals(): {
+  orders: number;
+  items: number;
+  rounds: number;
+} {
+  return writeTotals;
+}
+
 /** Arka planda yazım sürüyor mu? */
 export function orderFinanceSnapshotWriteInFlight(): boolean {
   return running !== null;
@@ -714,18 +832,35 @@ export function droppedOrderFinanceSnapshotJobs(): number {
 
 /** Yeniden hesap turunun sonucu. */
 export interface FinanceMonthRecalcResult {
-  /** "YYYY-MM". */
+  /** "YYYY-MM". Çok aylı turda TÜM kapsam için "YYYY-MM…YYYY-MM" biçiminde olabilir. */
   month: string;
   /** Ayda bulunan (manuel olmayan) sipariş sayısı. */
   totalOrders: number;
   /** Yeniden hesaplanabilen sipariş sayısı. */
   recalculatedOrders: number;
-  /** Kalem geçmişi olmadığı (veya maliyeti artık okunamadığı) için DOKUNULMAYAN sipariş sayısı. */
+  /**
+   * DOKUNULMAYAN sipariş sayısı = `blockedOrders + protectedOrders`.
+   * (Eski alan adı korunuyor; ayrıntı aşağıdaki iki alanda.)
+   */
   skippedOrders: number;
-  /** Rakamı gerçekten değiştiği için yazılan sipariş sayısı. */
+  /**
+   * ÜRÜN GEÇMİŞİ KAYITLI OLMADIĞI için ASLA yeniden hesaplanamayacak sipariş sayısı.
+   * Bu siparişler pazaryeri penceresi kapandıktan sonra kalem geçmişi olmadan kalmış;
+   * "yeniden hesapla" onlar için hiçbir zaman bir şey değiştiremez. Arayüz uyarıyı ve
+   * düğmeyi buna göre kurmalı — yoksa düğme basılıyor ve HİÇBİR ŞEY olmuyor.
+   */
+  blockedOrders: number;
+  /**
+   * Yeniden hesap "maliyet bilinmiyor" dediği için KORUNAN (eski rakamı silinmeyen) sipariş
+   * sayısı. Genelde ürün katalogdan silinmiştir; ürün geri gelirse düzelebilir.
+   */
+  protectedOrders: number;
+  /** Rakamı gerçekten değiştiği için yazılan sipariş sayısı (kuru turda: değişecek sayısı). */
   changedOrders: number;
   /** Ayın toplam kâr farkı — kuruş. */
   profitDeltaKurus: number;
+  /** Bu tur veritabanına hiç yazmadı mı? (prova turu) */
+  dryRun: boolean;
 }
 
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -735,6 +870,8 @@ const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
  * Kesin ayıklama monthKey ile yapılır — ay sınırı saat dilimine bağlı ve o bilgi TEK yerde.
  */
 
+// Kayıtlı satırın TAMAMI okunur: kuru tur (prova) "yazsaydık ne değişirdi" sorusunu ancak
+// gerçek yazımla AYNI alanları karşılaştırarak dürüstçe yanıtlayabilir.
 type RecalcSnapshotRow = {
   platform: string;
   externalOrderId: string;
@@ -743,6 +880,12 @@ type RecalcSnapshotRow = {
   revenueKurus: number;
   profitKurus: number | null;
   profitPartial: boolean;
+  profitSource: string;
+  estimatedCommissionKurus: number | null;
+  actualCommissionKurus: number | null;
+  outputVatKurus: number | null;
+  inputVatCreditKurus: number | null;
+  calculationVersion: number;
   statusKind: string;
   currency: string;
 };
@@ -877,15 +1020,67 @@ type RecalcProgress = (phase: FinanceRecalcPhase, processed: number, total: numb
 /** Hesap turu arada nefes alsın: durum sorgusu bekleyen istemci donmuş görünmemeli. */
 const RECALC_CHUNK = 25;
 
+export interface FinanceRecalcOptions {
+  /** İlerleme bildirimi (arayüz X/Y gösterebilsin diye). */
+  onProgress?: RecalcProgress;
+  /**
+   * PROVA turu: hesap yapılır, sonuç raporlanır ama VERİTABANINA HİÇ YAZILMAZ.
+   * Toplu (çok aylı) düzeltmeden önce "kaç sipariş değişecek, net kâr ne kadar oynayacak"
+   * sorusunu yazmadan yanıtlamak için. Kullanıcı rakamı görmeden geçmişi değiştirmemeli.
+   */
+  dryRun?: boolean;
+}
+
+function emptyRecalcResult(month: string, dryRun: boolean): FinanceMonthRecalcResult {
+  return {
+    month,
+    totalOrders: 0,
+    recalculatedOrders: 0,
+    skippedOrders: 0,
+    blockedOrders: 0,
+    protectedOrders: 0,
+    changedOrders: 0,
+    profitDeltaKurus: 0,
+    dryRun,
+  };
+}
+
+/** TEK ay — mevcut çağrı yerlerinin (Raporlar'daki "Bu ayı yeniden hesapla") imzası. */
 export async function recalculateFinanceMonth(
   month: string,
   onProgress?: RecalcProgress
 ): Promise<FinanceMonthRecalcResult> {
-  if (!MONTH_PATTERN.test(month)) throw new Error("Geçersiz ay.");
+  return recalculateFinanceMonths([month], { onProgress });
+}
+
+/**
+ * BİR VEYA DAHA ÇOK ayı yeniden hesapla.
+ *
+ * NEDEN çok aylı tek tur: her ay için ayrı tur açmak kuralları, ayarları, ürünleri ve
+ * komisyon kayıtlarını ay sayısı kadar yeniden okur. Uzak-HTTP'de her sorgu ~96ms ve HEPSİ
+ * süreç genelinde SIRALI — 4 aylık bir düzeltme yalnız okuma yüzünden onlarca saniye
+ * uygulamayı kilitlerdi. Burada ortak veriler BİR KEZ okunur, yazım tek `batchWrite()`
+ * turunda gider.
+ *
+ * İdempotent: ikinci kez çalıştırmak hiçbir şey yazmaz (değişen-only kuralı).
+ */
+export async function recalculateFinanceMonths(
+  months: string[],
+  options: FinanceRecalcOptions = {}
+): Promise<FinanceMonthRecalcResult> {
+  const wanted = [...new Set(months)].sort();
+  if (wanted.length === 0) throw new Error("Yeniden hesaplanacak ay verilmedi.");
+  for (const month of wanted) {
+    if (!MONTH_PATTERN.test(month)) throw new Error("Geçersiz ay.");
+  }
+  const dryRun = options.dryRun === true;
+  const scope =
+    wanted.length === 1 ? wanted[0] : `${wanted[0]}…${wanted[wanted.length - 1]}`;
   const report: RecalcProgress = (phase, processed, total) =>
-    onProgress?.(phase, processed, total);
+    options.onProgress?.(phase, processed, total);
 
   report("reading", 0, 0);
+  const wantedSet = new Set(wanted);
   const rows: RecalcSnapshotRow[] = (
     await prisma.orderFinanceSnapshot.findMany({
       // Manuel siparişin finansı ManualOrder satırında DONDURULMUŞTUR (kendi KDV oranı ve kalem
@@ -903,23 +1098,21 @@ export async function recalculateFinanceMonth(
         revenueKurus: true,
         profitKurus: true,
         profitPartial: true,
+        profitSource: true,
+        estimatedCommissionKurus: true,
+        actualCommissionKurus: true,
+        outputVatKurus: true,
+        inputVatCreditKurus: true,
+        calculationVersion: true,
         statusKind: true,
         currency: true,
       },
     })
-  ).filter((row) => monthKey(row.orderedAt) === month);
+  ).filter((row) => wantedSet.has(monthKey(row.orderedAt)));
 
-  const empty: FinanceMonthRecalcResult = {
-    month,
-    totalOrders: 0,
-    recalculatedOrders: 0,
-    skippedOrders: 0,
-    changedOrders: 0,
-    profitDeltaKurus: 0,
-  };
   if (rows.length === 0) {
     report("done", 0, 0);
-    return empty;
+    return emptyRecalcResult(scope, dryRun);
   }
   report("reading", 0, rows.length);
 
@@ -944,8 +1137,11 @@ export async function recalculateFinanceMonth(
   const financialByOrder = await readRecalcFinancials(rows);
 
   const updates: FinanceSnapshotOrder[] = [];
+  /** Kuru turda "yazsaydık değişirdi" sayımı için: güncelleme ↔ kayıtlı satır eşlemesi. */
+  const existingByUpdateKey = new Map<string, RecalcSnapshotRow>();
   let recalculatedOrders = 0;
-  let skippedOrders = 0;
+  let blockedOrders = 0;
+  let protectedOrders = 0;
   let profitDeltaKurus = 0;
   let processed = 0;
 
@@ -956,8 +1152,11 @@ export async function recalculateFinanceMonth(
         .slice()
         .sort((a, b) => a.lineIndex - b.lineIndex);
       // Kalem geçmişi yoksa siparişin neyden oluştuğunu bilmiyoruz → kayıtlı rakama DOKUNMA.
+      // Bu siparişler ASLA yeniden hesaplanamaz: pazaryeri penceresi kapandı, ürün geçmişi
+      // hiç kaydedilmemiş. Ayrı sayılır ki arayüz "düğmeye bas, hiçbir şey olmaz" tuzağına
+      // düşmesin (uyarı 18 sipariş diyordu, düğme hiçbirini düzeltemiyordu).
       if (lines.length === 0) {
-        skippedOrders++;
+        blockedOrders++;
         continue;
       }
       const profitLines: OrderProfitLine[] = lines.map((line) => {
@@ -994,13 +1193,14 @@ export async function recalculateFinanceMonth(
       // Ürün katalogdan silinmişse yeni hesap "maliyet bilinmiyor" der. Daha önce yakalanmış
       // gerçek bir kârı bu yüzden SİLMEYİZ — yeniden hesap bilgi kaybettirmemeli.
       if (resolved.profit == null && row.profitKurus != null) {
-        skippedOrders++;
+        protectedOrders++;
         continue;
       }
 
       recalculatedOrders++;
       profitDeltaKurus +=
         (resolved.profit == null ? 0 : tlToKurus(resolved.profit)) - (row.profitKurus ?? 0);
+      existingByUpdateKey.set(key, row);
       updates.push({
         platform: row.platform,
         id: row.externalOrderId,
@@ -1031,35 +1231,89 @@ export async function recalculateFinanceMonth(
   }
 
   report("writing", rows.length, rows.length);
-  const write = await persistOrderFinanceSnapshots(updates, undefined, {
-    replaceCapturedProfit: true,
-  });
+  // PROVA turu hiçbir şey yazmaz; "kaç satır değişirdi" sorusunu gerçek yazımla AYNI
+  // karşılaştırmayı (resolveSnapshotWriteData + snapshotChangedFields) kullanarak yanıtlar.
+  const changedOrders = dryRun
+    ? countDryRunChanges(updates, existingByUpdateKey)
+    : (
+        await persistOrderFinanceSnapshots(updates, undefined, {
+          replaceCapturedProfit: true,
+        })
+      ).writtenOrders;
   report("done", rows.length, rows.length);
 
   return {
-    month,
+    month: scope,
     totalOrders: rows.length,
     recalculatedOrders,
-    skippedOrders,
-    changedOrders: write.writtenOrders,
+    skippedOrders: blockedOrders + protectedOrders,
+    blockedOrders,
+    protectedOrders,
+    changedOrders,
     profitDeltaKurus,
+    dryRun,
   };
+}
+
+/** Kuru tur: hiçbir şey yazmadan "kaç sipariş özeti değişirdi" sayısını üretir. */
+function countDryRunChanges(
+  updates: FinanceSnapshotOrder[],
+  existingByKey: ReadonlyMap<string, RecalcSnapshotRow>
+): number {
+  let changed = 0;
+  for (const order of updates) {
+    const externalOrderId = canonicalFinanceOrderId(order.platform, order.id);
+    const existing = existingByKey.get(snapshotKey(order.platform, externalOrderId));
+    if (!existing) {
+      changed++;
+      continue;
+    }
+    const next = resolveSnapshotWriteData(existing, order, existing.orderedAt, {
+      replaceCapturedProfit: true,
+    });
+    if (snapshotChangedFields(existing, next).length > 0) changed++;
+  }
+  return changed;
 }
 
 /** Arayüzün yokladığı ilerleme durumu (JSON'a olduğu gibi konur). */
 export interface FinanceRecalcState {
+  /** Tur kapsamı, tek satırlık gösterim için ("2026-08" ya da "2026-05…2026-08"). */
   month: string;
+  /** Kapsamdaki ayların tamamı — arayüz "4 ay" diyebilsin diye. */
+  months: string[];
   phase: FinanceRecalcPhase;
   processed: number;
   total: number;
   startedAt: string;
   finishedAt: string | null;
   result: FinanceMonthRecalcResult | null;
+  /** Bu tur PROVA mı? (hiçbir şey yazılmaz) */
+  dryRun: boolean;
   error: string | null;
 }
 
 let recalcState: FinanceRecalcState | null = null;
 let recalcRunning: Promise<void> | null = null;
+
+/**
+ * "Şu an başka bir tur sürüyor" hatası.
+ *
+ * ⚠️ NEDEN AYRI BİR HATA: eskiden süren tur varsa İSTENEN turun bayrağına bakılmadan mevcut
+ * durum dönüyordu. Kullanıcı Prova'ya basıp beklemeden "Uygula"ya bastığında gerçek tur hiç
+ * açılmıyor, PROVA durumu geri dönüyordu: arayüz `phase:"done"` + `changedOrders:245` görüp
+ * "245 sipariş düzeltildi" diyordu — oysa veritabanına tek satır yazılmamıştı.
+ */
+export class FinanceRecalcBusyError extends Error {
+  constructor(readonly running: FinanceRecalcState) {
+    super(
+      running.dryRun
+        ? "Prova hesabı sürüyor; bitmesini bekleyin."
+        : "Yeniden hesaplama sürüyor; bitmesini bekleyin."
+    );
+    this.name = "FinanceRecalcBusyError";
+  }
+}
 
 /** Son (veya süren) yeniden hesap turunun durumu. */
 export function financeRecalcState(): FinanceRecalcState | null {
@@ -1079,23 +1333,54 @@ export function startFinanceMonthRecalc(
   month: string,
   options: { onDone?: () => void } = {}
 ): FinanceRecalcState {
-  if (recalcRunning && recalcState) return recalcState;
+  return startFinanceRecalc([month], options);
+}
+
+/**
+ * Çok aylı (ya da tek aylı) yeniden hesabı başlat.
+ *
+ * `dryRun: true` ile PROVA turu açılır: rakamlar hesaplanır, sonuç durumdan okunur ve
+ * veritabanına HİÇBİR ŞEY yazılmaz. Toplu düzeltmede kullanıcıya "şu kadar sipariş
+ * değişecek, net kâr şu kadar oynayacak" demeden geçmişi değiştirmeyiz.
+ */
+export function startFinanceRecalc(
+  months: string[],
+  options: { onDone?: () => void; dryRun?: boolean } = {}
+): FinanceRecalcState {
+  const scope = [...new Set(months)].sort();
+  if (scope.length === 0) throw new Error("Yeniden hesaplanacak ay verilmedi.");
+  const dryRun = options.dryRun === true;
+  if (recalcRunning && recalcState) {
+    // AYNI istek yeniden geldiyse (arayüz yeniden yoklamış olabilir) mevcut durum döner.
+    // FARKLI bir istek — özellikle prova sürerken gelen GERÇEK tur — sessizce başkasının
+    // durumunu almamalı; yoksa hiç yazılmamış bir tur "bitti" sanılır.
+    const ayniKapsam =
+      recalcState.months.length === scope.length &&
+      recalcState.months.every((month, index) => month === scope[index]);
+    if (ayniKapsam && recalcState.dryRun === dryRun) return recalcState;
+    throw new FinanceRecalcBusyError(recalcState);
+  }
   const startedAt = new Date().toISOString();
   recalcState = {
-    month,
+    month: scope.length === 1 ? scope[0] : `${scope[0]}…${scope[scope.length - 1]}`,
+    months: scope,
     phase: "reading",
     processed: 0,
     total: 0,
     startedAt,
     finishedAt: null,
     result: null,
+    dryRun,
     error: null,
   };
   recalcRunning = (async () => {
     try {
-      const result = await recalculateFinanceMonth(month, (phase, processed, total) => {
-        if (!recalcState) return;
-        recalcState = { ...recalcState, phase, processed, total };
+      const result = await recalculateFinanceMonths(scope, {
+        dryRun,
+        onProgress: (phase, processed, total) => {
+          if (!recalcState) return;
+          recalcState = { ...recalcState, phase, processed, total };
+        },
       });
       recalcState = {
         ...recalcState!,

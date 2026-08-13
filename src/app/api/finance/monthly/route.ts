@@ -9,13 +9,26 @@ import {
   monthlyFinanceWindowStart,
 } from "@/lib/monthly-finance";
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
+import { readFinanceRecalcReadiness } from "@/lib/finance-recalc-readiness";
 import {
   financeRecalcState,
+  FinanceRecalcBusyError,
   startFinanceMonthRecalc,
 } from "@/lib/order-finance-snapshots";
 import { bustFinanceCaches } from "@/lib/cache-busting";
 import { swr } from "@/lib/route-cache";
 import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
+import {
+  aggregateProductSales,
+  parseProductSalesItems,
+  productSalesItemsSql,
+  type ProductSalesOrder,
+} from "@/lib/finance-product-sales";
+import {
+  parseTrendyolCommissionStats,
+  readFinanceSourceHealth,
+  trendyolCommissionStatsSql,
+} from "@/lib/finance-report-meta";
 
 /**
  * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
@@ -65,6 +78,8 @@ function toNullableInt(value: unknown): number | null {
 
 type SnapshotRow = {
   platform: string;
+  /** Kalem geçmişini (OrderItemSnapshot) siparişe bağlayan anahtar — ürün bazlı kâr için. */
+  externalOrderId: string;
   orderedAt: Date;
   revenueKurus: number;
   profitKurus: number | null;
@@ -79,7 +94,7 @@ type SnapshotRow = {
 /** Pencere içindeki (manuel olmayan) sipariş özetleri — tarih tipi ne olursa olsun. */
 async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
   const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT "platform","orderedAt","revenueKurus","profitKurus","profitPartial",
+    `SELECT "platform","externalOrderId","orderedAt","revenueKurus","profitKurus","profitPartial",
             "statusKind","currency","outputVatKurus","inputVatCreditKurus","calculationVersion"
        FROM "OrderFinanceSnapshot"
       WHERE "platform" <> 'manual'
@@ -93,6 +108,7 @@ async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
     if (!orderedAt) continue;
     snapshots.push({
       platform: String(row.platform ?? ""),
+      externalOrderId: String(row.externalOrderId ?? ""),
       orderedAt,
       revenueKurus: toInt(row.revenueKurus),
       profitKurus: toNullableInt(row.profitKurus),
@@ -152,15 +168,23 @@ export async function GET(req: NextRequest) {
   // döndürüyordu. Raporlar "veri alınamadı" yazıyor, sebep ise hiçbir yere yazılmıyordu —
   // teşhis için uygulamayı çalışır hâlde tek tek uç yoklamak gerekti. Diğer uçların hepsi
   // `jsonError` kullanıyor; bu da artık kullanıyor.
+  //
+  // v7: KDV özeti yanıttan çıkarıldı (arayüzde kart yok), ürün bazlı satış özeti ve gerçek
+  // komisyon sayıları eklendi. Anahtar artmazsa diskteki ESKİ gövde 30 güne kadar taze sayılır
+  // ve yeni alanlar hiç görünmezdi.
   try {
     const data = await swr(
-      `finance-monthly:v6:${monthCount}`,
+      `finance-monthly:v7:${monthCount}`,
       60_000,
       () => computeMonthlyFinance(monthCount)
     );
-    return NextResponse.json(data, {
-      headers: { "Cache-Control": "no-store" },
-    });
+    // Kaynak sağlığı ÖNBELLEĞİN DIŞINDA okunur: 60 saniyelik bayat bir "her şey yolunda"
+    // damgası, tam o sırada yanıt vermemiş bir pazaryerini gizlerdi. Okuma diskten/RAM'den
+    // yapılır — ne veritabanı ne ağ maliyeti var.
+    return NextResponse.json(
+      { ...data, sources: readFinanceSourceHealth() },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (error) {
     return jsonError(error);
   }
@@ -182,7 +206,20 @@ export async function POST(req: NextRequest) {
     );
   }
   await ensureRuntimeSchema();
-  const state = startFinanceMonthRecalc(month, { onDone: () => bustFinanceCaches() });
+  let state;
+  try {
+    state = startFinanceMonthRecalc(month, { onDone: () => bustFinanceCaches() });
+  } catch (error) {
+    // Başka kapsamda/türde bir tur sürüyorsa onun durumunu bu isteğin sonucu gibi
+    // DÖNDÜRMEYİZ: kullanıcı hiç yazılmamış bir turu "bitti" sanardı.
+    if (error instanceof FinanceRecalcBusyError) {
+      return NextResponse.json(
+        { error: error.message, recalc: error.running },
+        { status: 409, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+    throw error;
+  }
   return NextResponse.json(
     { recalc: state },
     { headers: { "Cache-Control": "no-store" } }
@@ -201,10 +238,11 @@ async function computeMonthlyFinance(monthCount: number) {
     snapshots,
     manualOrders,
     expenses,
-    actualCommissionCount,
+    commissionStatRows,
     lastCommissionSync,
     snapshotBounds,
     firstManualOrder,
+    itemRows,
   ] = await Promise.all([
     // Yalnız gösterilen ay aralığı okunur (satır sayısı sabit kalır); dışarıdaki satırlar
     // zaten hiçbir aya düşmüyordu. Tarih karşılaştırması tip-bağımsız (bkz. dosya başı).
@@ -227,7 +265,10 @@ async function computeMonthlyFinance(monthCount: number) {
       where: { paidAt: { gte: windowStart } },
       select: { paidAt: true, amountKurus: true },
     }),
-    prisma.platformOrderFinancial.count({ where: { platform: "trendyol" } }),
+    // Başlıktaki sayı "indirilen komisyon KAYDI" değil, "gerçek komisyonla HESAPLANMIŞ sipariş"
+    // olmalı — ikisi aynı değil (canlı: 193 kayıt, 101 uygulanmış sipariş). Gerekçe ve ölçüm:
+    // `src/lib/finance-report-meta.ts`.
+    prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(trendyolCommissionStatsSql()),
     // ⚠️ TARİH alanında `aggregate({_min/_max})` KULLANMA — bkz. dosya başındaki uyarı.
     // "Geçmiş şu tarihten beri" ve "son senkron" TÜM geçmişi kapsar; satırları çekmeden
     // uçtaki tek satır okunur (LIMIT 1 + index) — maliyeti aggregate ile aynı.
@@ -243,6 +284,12 @@ async function computeMonthlyFinance(monthCount: number) {
       orderBy: { orderedAt: "asc" },
       select: { orderedAt: true },
     }),
+    // Ürün bazlı satış geçmişi. Aylık pencerenin tamamı okunur (birkaç yüz satır); "en çok
+    // satanlar" penceresi bunun içinden ayrılır, ikinci bir sorgu gerekmez.
+    prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      productSalesItemsSql(),
+      windowStart.getTime()
+    ),
   ]);
 
   // Eski hesap sürümüyle yazılmış siparişler ay ay sayılır: kullanıcı hangi ayın yeniden
@@ -255,6 +302,9 @@ async function computeMonthlyFinance(monthCount: number) {
     outdatedByMonth.set(key, (outdatedByMonth.get(key) ?? 0) + 1);
   }
 
+  // KDV özeti hesaplanır ama YANITA KONMAZ: Raporlar'da KDV kartı yok (kullanıcı istemedi) ve
+  // gönderilen bölüm sayfada bir kez bile okunmuyordu. Kayıtlı `outputVatKurus` /
+  // `inputVatCreditKurus` alanları YERİNDE DURUYOR — Siparişler ve dışa aktarma onları kullanıyor.
   const months = aggregateMonthlyFinance({
     snapshots,
     manualOrders,
@@ -262,10 +312,11 @@ async function computeMonthlyFinance(monthCount: number) {
     monthCount,
     now,
     timeZone: FINANCE_TIME_ZONE,
-  }).map((month) => ({
-    ...month,
-    outdatedOrders: outdatedByMonth.get(month.month) ?? 0,
-  }));
+  }).map((full) => {
+    const { vat, ...month } = full;
+    void vat; // hesaplanır, yanıta konmaz (bkz. üstteki not)
+    return { ...month, outdatedOrders: outdatedByMonth.get(month.month) ?? 0 };
+  });
   const totals = months.reduce(
     (sum, month) => ({
       revenue: Number((sum.revenue + month.revenue).toFixed(2)),
@@ -293,43 +344,63 @@ async function computeMonthlyFinance(monthCount: number) {
       unsupportedCurrencyOrders: 0,
     }
   );
-  // KDV toplamı ay ay toplanır (ay içindeki kuruş yuvarlaması tek kaynakta kalsın diye
-  // ayrıca hesaplanmaz, aylık çıktılar üst üste eklenir).
-  const vat = months.reduce(
-    (sum, month) => ({
-      outputVat: Number((sum.outputVat + month.vat.outputVat).toFixed(2)),
-      inputVatCredit: Number((sum.inputVatCredit + month.vat.inputVatCredit).toFixed(2)),
-      payable: Number((sum.payable + month.vat.payable).toFixed(2)),
-      knownOrders: sum.knownOrders + month.vat.knownOrders,
-      partialOrders: sum.partialOrders + month.vat.partialOrders,
-      unknownOrders: sum.unknownOrders + month.vat.unknownOrders,
-      unknownRevenue: Number((sum.unknownRevenue + month.vat.unknownRevenue).toFixed(2)),
-    }),
-    {
-      outputVat: 0,
-      inputVatCredit: 0,
-      payable: 0,
-      knownOrders: 0,
-      partialOrders: 0,
-      unknownOrders: 0,
-      unknownRevenue: 0,
-    }
-  );
   const quality = {
     incompleteOrders: totals.incompleteOrders,
     partialProfitOrders: totals.partialProfitOrders,
     missingProfitOrders: totals.missingProfitOrders,
     excludedOrders: totals.excludedOrders,
     unsupportedCurrencyOrders: totals.unsupportedCurrencyOrders,
-    // KDV kapsamı AÇIKÇA bildirilir: özet kaç siparişi kapsamıyor ve o siparişlerin cirosu ne?
-    vatUnknownOrders: vat.unknownOrders,
-    vatUnknownRevenue: vat.unknownRevenue,
-    vatPartialOrders: vat.partialOrders,
   };
   const lastOrderSyncAt = snapshotBounds.lastSyncedAt;
   const firstOrderedAt = [snapshotBounds.firstOrderedAt, firstManualOrder?.orderedAt]
     .filter((value): value is Date => value != null)
     .sort((a, b) => a.getTime() - b.getTime())[0];
+
+  const commission = parseTrendyolCommissionStats(commissionStatRows);
+
+  // ── Ürün bazlı satış özeti ────────────────────────────────────────────────────────────────
+  // Manuel siparişin kalem geçmişi tutulmuyor; kâr paylaştırması yalnız pazaryeri siparişleri
+  // üzerinden yapılır (aynı satırlar aylık toplamlarda da bu şekilde sayılıyor).
+  const salesOrders: ProductSalesOrder[] = snapshots.map((snapshot) => ({
+    platform: snapshot.platform,
+    externalOrderId: snapshot.externalOrderId,
+    orderedAt: snapshot.orderedAt,
+    revenueKurus: snapshot.revenueKurus,
+    profitKurus: snapshot.profitKurus,
+    profitPartial: snapshot.profitPartial,
+    statusKind: snapshot.statusKind,
+    currency: snapshot.currency,
+  }));
+  const items = parseProductSalesItems(itemRows);
+  const soldProductIds = [
+    ...new Set(items.map((item) => item.productId).filter((id): id is string => id != null)),
+  ];
+  // Ad ve görsel yalnız SATIŞ GÖRMÜŞ ürünler için okunur (canlıda 372 aktif ürünün ~107'si).
+  // IN(...) parametre sayısı SQLite'ın 999 sınırına dayanmasın diye dilimlenir; satış hacmi
+  // büyüdükçe 12 aylık pencerede bu sayı aşılabilir ve sorgu tümden patlardı.
+  const productInfo: Array<{ id: string; name: string; imageUrl: string | null }> = [];
+  for (let offset = 0; offset < soldProductIds.length; offset += 500) {
+    productInfo.push(
+      ...(await prisma.product.findMany({
+        where: { id: { in: soldProductIds.slice(offset, offset + 500) } },
+        select: { id: true, name: true, imageUrl: true },
+      }))
+    );
+  }
+  const products = aggregateProductSales({
+    items,
+    orders: salesOrders,
+    productInfo,
+    rangeFrom: windowStart,
+    now,
+  });
+
+  // Tek sorgu (OrderFinanceSnapshot LEFT JOIN DISTINCT OrderItemSnapshot). Pencere aynı
+  // tutulur ki sayfadaki toplam ile ay kartlarındaki sayılar aynı kümeden gelsin.
+  const recalcReadiness = await readFinanceRecalcReadiness({
+    since: windowStart,
+    timeZone: FINANCE_TIME_ZONE,
+  });
 
   return {
     currency: "TRY",
@@ -337,10 +408,18 @@ async function computeMonthlyFinance(monthCount: number) {
     generatedAt: now.toISOString(),
     dataFrom: firstOrderedAt?.toISOString() ?? null,
     lastOrderSyncAt: lastOrderSyncAt?.toISOString() ?? null,
-    actualCommissionOrders: actualCommissionCount,
+    // Eski alan adı korunur ama artık DOĞRU sayıyı taşır: kârı gerçek komisyonla hesaplanmış
+    // sipariş sayısı (indirilen kayıt sayısı değil).
+    actualCommissionOrders: commission.applied,
     lastActualCommissionSyncAt: lastCommissionSync?.syncedAt?.toISOString() ?? null,
-    totals: { ...totals, vat },
+    commission,
+    totals,
     months,
     quality,
+    products,
+    // "Kaç siparişin kârı eski hesaplamayla kayıtlı ve kaçı GERÇEKTEN düzeltilebilir?"
+    // Ürün dökümü olmayan sipariş yeniden hesaplanamaz; bu ayrım olmadan sayfa 18 sipariş
+    // için düğme gösteriyor ve düğmeye basılınca hiçbir şey değişmiyordu.
+    recalcReadiness,
   };
 }

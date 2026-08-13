@@ -71,6 +71,78 @@ export function bustFinanceCaches(): void {
   bustCache("finance-monthly:");
 }
 
+/**
+ * Trendyol'un GERÇEK (fatura edilmiş) komisyonları indi.
+ *
+ * Tahmini komisyon yerine gerçeği geçtiği için hem sipariş kârı hem aylık finans gövdesi
+ * eskir. Ürün görünümleri BİLEREK dışarıda: komisyon oranı kuralı değişmedi, yalnız geçmiş
+ * siparişlerin gerçek kesintisi doldu — `products:`/`dashboard:` gövdelerini de düşürmek
+ * pahalı hesabı boşuna baştan koşturur.
+ */
+export function bustActualCommissionCaches(): void {
+  invalidateOrdersCache();
+  bustFinanceCaches();
+}
+
+/**
+ * Sipariş senkronunun ARKA PLAN finans yazımı bitince önbelleği düşür.
+ *
+ * SORUN (ölçüldü): sipariş özetleri (`OrderFinanceSnapshot`) yanıt yolundan çıkarılıp arka
+ * plana alındı, ama yazım bitince kimse finans önbelleğini düşürmüyordu. Yeni sipariş
+ * listede görünüyor, "Ciro (bu ay)" ve "Net kâr (bu ay)" kartları ESKİ rakamda kalıyordu;
+ * sayfadan çıkıp geri gelince düzeliyordu. Düşürme yalnız gider/manuel sipariş/yeniden hesap
+ * yollarından çağrılıyordu — sipariş senkronundan HİÇ.
+ *
+ * ⚠️ KOŞULSUZ DÜŞÜRMEK YANLIŞ OLURDU: Siparişler ekranı 60 saniyede bir arka planda tazeleniyor
+ * ve turların çoğunda HİÇBİR ŞEY değişmiyor (yazım tarafı satırları diff'liyor). Her turda
+ * düşürmek aylık finans gövdesini sürekli baştan hesaplatır — uzak-HTTP tek mutex'inde bu,
+ * önbelleğin varlık sebebini yok eder. Bu yüzden yalnız GERÇEKTEN satır yazıldıysa düşürülür.
+ *
+ * Beklemez, hata fırlatmaz: çağıran `void` ile ateşleyip yoluna devam eder.
+ */
+export async function bustFinanceCachesAfterOrderSnapshots(
+  options: { pollMs?: number; timeoutMs?: number } = {}
+): Promise<boolean> {
+  const pollMs = options.pollMs ?? 200;
+  const timeoutMs = options.timeoutMs ?? 120_000;
+  try {
+    // Dinamik import: bu modül ~20 rotadan çekiliyor, finans yazım modülünü (prisma + kâr
+    // çekirdeği) hepsinin paketine sokmanın anlamı yok.
+    //
+    // ⚠️ Çağıran, yazımı ZATEN başlatmış olmalı (aynı modülü statik import eden rota). O
+    // durumda bu import modül önbelleğinden mikro-görevde döner; yazım turu ise setTimeout(0)
+    // ile makro-görevde başlar → başlangıç sayacı hep yazımdan ÖNCE okunur.
+    const mod = await import("@/lib/order-finance-snapshots");
+
+    // ⚠️ NEDEN SADECE "bitince son duruma bak" DEĞİL: yazım kuyruğunda birden çok tur olabilir
+    // ve her turun sonucu bir öncekini EZER. "A turu 10 satır yazdı, B turu 0 yazdı" durumunda
+    // sona bakmak 0 görür ve düşürmeyi KAÇIRIRDI.
+    //
+    // ⚠️ ÖRNEKLEME DE YETMEZ: bekleme boyunca her 200 ms'de bir son duruma bakan bir tur, aynı
+    // aralıkta biten iki turdan yalnız SONUNCUSUNU görür (paketlenmiş uygulamada sorgular
+    // gömülü replikadan gelir, alt-milisaniye sürer). Aradaki turun yazdığı satırlar hiç fark
+    // edilmez ve "Ciro (bu ay)" kartı yine 60 saniye eski kalırdı. Bu yüzden SÜREÇ ÖMRÜ BOYUNCA
+    // ARTAN sayaçlar okunur: başlangıç ile bitiş farkı hiçbir turu kaçırmaz.
+    const baslangic = mod.orderFinanceSnapshotWriteTotals();
+
+    const sonAn = Date.now() + timeoutMs;
+    while (mod.orderFinanceSnapshotWriteInFlight() && Date.now() < sonAn) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
+
+    const bitis = mod.orderFinanceSnapshotWriteTotals();
+    const yazildi =
+      bitis.orders > baslangic.orders || bitis.items > baslangic.items;
+
+    if (!yazildi) return false;
+    bustFinanceCaches();
+    return true;
+  } catch {
+    // Önbellek tazeliği bir kolaylık; başarısızlığı sipariş akışını ASLA bozmamalı.
+    return false;
+  }
+}
+
 /** Model dosyaları değişti (yükleme/silme). */
 export function bustModelCaches(): void {
   bustCache("models:");

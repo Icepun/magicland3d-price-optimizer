@@ -9,6 +9,7 @@ import { getShopifyCredentials } from "@/services/shopify-settings";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
+import { nowDbDateSql } from "@/lib/sqlite-date";
 
 /**
  * Shopify ürün senkronu — 3 mod:
@@ -66,23 +67,43 @@ async function stampSync() {
   });
 }
 
-const PRODUCT_SQL = `INSERT INTO Product (id, barcode, sku, name, categoryName, currentSalePrice, stock, imageUrl, isActive, source, createdAt, updatedAt)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'shopify', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
-const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-   VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
-const LISTING_PRICE_SQL = `UPDATE Listing SET salePrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
-const PRODUCT_PRICE_SQL = `UPDATE Product SET currentSalePrice = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
-const PRODUCT_IMAGE_SQL = `UPDATE Product SET imageUrl = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
 /**
- * Yalnız İLAN stoğu. Ürünün GERÇEK stoğu uygulamada elle tutuluyor ve buradan ASLA ezilmez.
- * Bu değerin tek amacı "sitede stok bitmiş mi?" uyarısını besleyebilmek — mağaza sayfası
- * satışa kapanmışsa kullanıcı bunu fark etmeden öğrensin.
+ * Yazma ifadeleri İSTEK ANINDA kurulur, modül yüklenirken DEĞİL.
+ *
+ * `nowDbDateSql()` aktif motora göre biçim seçer (ISO metin / epoch-ms). Modül üstünde sabit
+ * olarak hesaplansaydı biçim, ortam değişkenleri okunmadan önceki değere kilitlenebilir ve o
+ * dosya sessizce karışık biçim yazmaya başlardı — göç tam bunu temizliyor.
  */
-const LISTING_STOCK_SQL = `UPDATE Listing SET stock = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`;
+function sqlSablonlari() {
+  const simdi = nowDbDateSql();
+  return {
+    PRODUCT_SQL: `INSERT INTO Product (id, barcode, sku, name, categoryName, currentSalePrice, stock, imageUrl, isActive, source, createdAt, updatedAt)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'shopify', ${simdi}, ${simdi})`,
+    LISTING_SQL: `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
+   VALUES (?, ?, 'shopify', ?, ?, ?, ?, 1, ${simdi}, ${simdi}, ${simdi})`,
+    LISTING_PRICE_SQL: `UPDATE Listing SET salePrice = ?, lastSyncedAt = ${simdi}, updatedAt = ${simdi} WHERE id = ?`,
+    PRODUCT_PRICE_SQL: `UPDATE Product SET currentSalePrice = ?, updatedAt = ${simdi} WHERE id = ?`,
+    PRODUCT_IMAGE_SQL: `UPDATE Product SET imageUrl = ?, updatedAt = ${simdi} WHERE id = ?`,
+    /**
+     * Yalnız İLAN stoğu. Ürünün GERÇEK stoğu uygulamada elle tutuluyor ve buradan ASLA ezilmez.
+     * Bu değerin tek amacı "sitede stok bitmiş mi?" uyarısını besleyebilmek — mağaza sayfası
+     * satışa kapanmışsa kullanıcı bunu fark etmeden öğrensin.
+     */
+    LISTING_STOCK_SQL: `UPDATE Listing SET stock = ?, lastSyncedAt = ${simdi}, updatedAt = ${simdi} WHERE id = ?`,
+  };
+}
 
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
+    const {
+      PRODUCT_SQL,
+      LISTING_SQL,
+      LISTING_PRICE_SQL,
+      PRODUCT_PRICE_SQL,
+      PRODUCT_IMAGE_SQL,
+      LISTING_STOCK_SQL,
+    } = sqlSablonlari();
     const { mode } = Schema.parse(await req.json().catch(() => ({})));
     const credentials = await getShopifyCredentials();
     const client = new ShopifyClient(credentials);

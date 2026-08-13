@@ -33,7 +33,9 @@ import {
   scheduleOrderFinanceSnapshots,
   type FinanceSnapshotItem,
 } from "@/lib/order-finance-snapshots";
+import { bustFinanceCachesAfterOrderSnapshots } from "@/lib/cache-busting";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
+import { toDbDate } from "@/lib/sqlite-date";
 // Eşleştirme anahtarı sadeleştirmesi TEK yerde: hızlı bildirim taraması da aynısını kullanır,
 // iki taraf ayrı kural yazarsa aynı sipariş burada eşleşip orada eşleşmez.
 import { normalizeMatchKey } from "@/lib/order-watch";
@@ -1557,10 +1559,15 @@ async function computeOrdersBodyInner(
         const known = new Set(existing.map((e) => e.id));
         const fresh = notifs.filter((n) => !known.has(n.id));
         if (fresh.length === 0) return;
-        const placeholders = fresh.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-        const params = fresh.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href]);
+        // createdAt AÇIKÇA yazılır. Kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP
+        // değeri giriyordu: "2026-08-13 07:00:00" — Prisma'nın yazdığı ISO biçimden FARKLI bir
+        // metin. Metin sıralamasında boşluk 'T'den küçük olduğu için karışık kolonda zil
+        // sıralaması ve tarih filtreleri sessizce yanlış sonuç veriyordu (ölçüm: 734 satır).
+        const simdi = toDbDate(new Date());
+        const placeholders = fresh.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+        const params = fresh.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href, simdi]);
         await prisma.$executeRawUnsafe(
-          `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES ${placeholders}`,
+          `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES ${placeholders}`,
           ...params
         );
         // Telefona yalnız SİPARİŞ olayları düşer (kullanıcı kararı: stok/filament uyarıları
@@ -1619,6 +1626,11 @@ async function computeOrdersBodyInner(
     // yüzlerce satır yazılıyor ve uzak-HTTP tek mutex'inde uygulama yarım dakika kilitleniyordu.
     // "Ateşle ve unut" — çağıran beklemez, hata fırlatmaz, aynı anda tek tur çalışır.
     scheduleOrderFinanceSnapshots(persistableOrders, snapshotItemsByOrderId);
+    // Yazım bitince finans önbelleğini düşür → yeni sipariş "Ciro (bu ay)" ve "Net kâr (bu ay)"
+    // kartlarına AYNI görüntülemede yansısın (eskiden sayfadan çıkıp girmek gerekiyordu).
+    // Beklemiyoruz: yanıt anında gider, düşürme yazım tamamlanınca arkada olur. Hiçbir şey
+    // yazılmadıysa (turların çoğu) önbellek KORUNUR — ayrıntı: lib/cache-busting.ts.
+    void bustFinanceCachesAfterOrderSnapshots();
     // 🔴 UYARI HİÇ ÇIKAMIYORDU: yazım arka plana alındığından bu blok her zaman "başarılı"
     // diyordu ve "Finans geçmişi kaydedilemedi" uyarısı hiçbir koşulda görünmüyordu. Artık
     // SON TAMAMLANAN turun gerçek sonucu taşınır (yazım sürüyorsa "pending").

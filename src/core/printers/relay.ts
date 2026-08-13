@@ -32,6 +32,7 @@ import {
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
+import { toDbDate } from "@/lib/sqlite-date";
 
 const TICK_MS = 10_000;
 /** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
@@ -304,13 +305,18 @@ async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
   //    id (zaman damgalı) → her tamamlanma için bir kez (statik id'li eski uyarı tekrar atmıyordu).
   try {
     await prisma.$executeRawUnsafe(
-      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES (?,?,?,?,?,?)`,
+      // createdAt AÇIKÇA yazılır: kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP
+      // değeri giriyor ("2026-08-13 07:00:00"). Prisma'nın yazdığı ISO biçimden FARKLI bir
+      // metin ve sıralamada boşluk 'T'den küçük → yazıcı bildirimi zilin en dibine düşüyor,
+      // liste 100 satırı aşınca hiç görünmüyordu.
+      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES (?,?,?,?,?,?,?)`,
       `printer-done:${c.id}:${Date.now()}`,
       "printer-done",
       "success",
       title,
       body,
-      "/printers"
+      "/printers",
+      toDbDate(new Date())
     );
   } catch {
     /* Notification tablosu yoksa sessiz geç */
@@ -329,13 +335,18 @@ async function notifyPrintFault(c: Cfg, snap: SnapFields): Promise<void> {
   const body = `${c.name}${job}${snap.statusMessage ? ` · ${snap.statusMessage}` : ""}`;
   try {
     await prisma.$executeRawUnsafe(
-      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href") VALUES (?,?,?,?,?,?)`,
+      // createdAt AÇIKÇA yazılır: kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP
+      // değeri giriyor ("2026-08-13 07:00:00"). Prisma'nın yazdığı ISO biçimden FARKLI bir
+      // metin ve sıralamada boşluk 'T'den küçük → yazıcı bildirimi zilin en dibine düşüyor,
+      // liste 100 satırı aşınca hiç görünmüyordu.
+      `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES (?,?,?,?,?,?,?)`,
       `printer-fault:${c.id}:${Date.now()}`,
       isError ? "printer-error" : "printer-paused",
       "critical",
       title,
       body,
-      "/printers"
+      "/printers",
+      toDbDate(new Date())
     );
   } catch {
     /* Notification tablosu yoksa sessiz geç */

@@ -8,6 +8,7 @@ import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { jsonError } from "@/lib/api-error";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { nowDbDateSql } from "@/lib/sqlite-date";
 
 /**
  * Hepsiburada ürün/listing senkronu (Shopify ana ürün kaynağı):
@@ -137,7 +138,7 @@ export async function POST(req: NextRequest) {
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({ productId: row.productId, oldPrice: row.salePrice, newPrice: f.price, changeSource: "hepsiburada_sync" });
         await prisma.$executeRawUnsafe(
-          `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+          `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`,
           f.price, f.stock, row.listingId
         );
         changed++;
@@ -161,12 +162,12 @@ export async function POST(req: NextRequest) {
       // tek tek yeniden yazılıyordu: ~96ms × 258 ≈ 25sn, üstelik global DB kilidini tutarak.
       const writes: { sql: string; args: unknown[] }[] = [];
       const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, NULL, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+               VALUES (?, ?, 'hepsiburada', ?, ?, ?, ?, NULL, ?, 1, ${nowDbDateSql()}, ${nowDbDateSql()}, ${nowDbDateSql()})`;
       const UNMATCHED_SQL = `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
-             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, NULL, ${nowDbDateSql()}, ${nowDbDateSql()})
              ON CONFLICT(platform, externalId) DO UPDATE SET
                externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
-               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock, lastSeenAt=CURRENT_TIMESTAMP`;
+               categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock, lastSeenAt=${nowDbDateSql()}`;
 
       for (const f of fetched.values()) {
         // HB barkodu VEYA merchantSku ürünün barcode/sku'suyla tutarsa otomatik bağla; tutmazsa havuz.

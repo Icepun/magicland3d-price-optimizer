@@ -1,5 +1,11 @@
 import { prisma } from "@/lib/prisma";
-import { repairDateColumnSql } from "@/lib/sqlite-date";
+import {
+  canonicalDateSql,
+  dbDateStorage,
+  repairDateColumnSql,
+  toDbDate,
+  type DbDateStorage,
+} from "@/lib/sqlite-date";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -44,9 +50,19 @@ let schemaReady: Promise<void> | null = null;
 //      göstermiyordu). Yazma yolları tek biçime çekildi; bu göç MEVCUT veriyi onarır.
 //      Onarım BİLEREK her tam göçte yeniden koşar (idempotent): güncellenmemiş bir cihaz
 //      araya tamsayı damga yazarsa bir sonraki sürüm bunu tekrar düzeltir.
+// v41: Tarih onarımı GERÇEKTEN koşsun + kapsamı genişledi. v40 sahada hiç tamamlanmadı:
+//      onarımın introspection sorgusu o sürümde geçersiz SQL üretiyordu, her açılışta düşüyordu
+//      (perf.log'da beş açılış). Ayrıca v40'ın "bozuk" tanımı yalnız TAMSAYI/metin ayrımına
+//      bakıyordu; METİN İÇİNDEKİ iki biçim (`2026-08-13 07:00:00` ile `…T07:00:00.000+00:00`)
+//      aynı sayılıyordu. Metin sıralamasında boşluk 'T'den küçük olduğu için karışık kolonda
+//      `>= '…T…'` filtresi bir grubu KOMPLE eliyor. ÖLÇÜLDÜ (canlı Turso, 13 Ağu 2026):
+//      47 tarih kolonunun 8'inde toplam 2.922 satır bu durumda (Product.updatedAt,
+//      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
+//      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
+//      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "40";
+const CURRENT_SCHEMA_VERSION = "41";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -408,9 +424,13 @@ async function migrateTrendyolProductsToListings() {
 
   for (const p of products) {
     const id = `listing_${p.id}_trendyol`;
+    // Tarihler toDbDate ile: SQLite'ın CURRENT_TIMESTAMP değeri ("2026-08-13 07:00:00")
+    // Prisma'nın yazdığı ISO metinden FARKLI biçimde ve aynı kolonda ikisi karışınca
+    // sıralama/filtre sessizce bozuluyor (bkz. sqlite-date.ts).
+    const simdi = toDbDate(new Date());
     await prisma.$executeRawUnsafe(
       `INSERT INTO Listing (id, productId, platform, externalId, externalSku, salePrice, listPrice, stock, commissionRate, isActive, createdAt, updatedAt)
-       VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+       VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       id,
       p.id,
       p.trendyolId,
@@ -418,7 +438,9 @@ async function migrateTrendyolProductsToListings() {
       p.currentSalePrice,
       p.listPrice,
       p.stock,
-      p.commissionRate
+      p.commissionRate,
+      simdi,
+      simdi
     );
   }
 
@@ -444,69 +466,249 @@ async function migrateTrendyolProductsToListings() {
  * Bilerek her tam göçte yeniden koşar — eski sürümde kalmış bir cihaz araya yanlış biçim
  * yazarsa bir sonraki sürüm bunu tekrar düzeltir.
  */
-async function normalizeDateColumns(): Promise<boolean> {
-  let dateColumns: Array<{ table: string; column: string }> = [];
+/**
+ * Tarih kolonlarını bulan introspection SQL'i — TEK gidiş-dönüş (tablo-değerli PRAGMA).
+ *
+ * ⚠️ SABİT OLARAK DIŞA AÇILIYOR ÇÜNKÜ TESTİ BUNU ÇALIŞTIRIR. Önceki turda test SQL'in
+ * bir KOPYASINI koşuyordu; kod ile kopya ayrışınca test yeşil kalıp uygulama patladı.
+ * Kopyalama yok: `runtime-schema-sql.test.ts` bu sabiti gerçek libSQL'e gönderir.
+ *
+ * ÖLÇÜM (13 Ağu 2026, canlı Turso — uzak HTTP): çalışıyor, 47 tarih kolonu, ~80ms.
+ * Yani tablo-değerli PRAGMA uzak motorda DESTEKLENİYOR; sahadaki "Raw query failed.
+ * Code: 1" hatası bu sorgudan değil, bir sürüm önceki `ESCAPE '\'` yazım hatasından
+ * geliyordu (e07a28a ile düzeldi). Yine de yedek yol duruyor (aşağıda).
+ */
+export const DATE_COLUMN_INTROSPECTION_SQL = `SELECT m.name AS tbl, p.name AS col
+     FROM sqlite_master m
+     JOIN pragma_table_info(m.name) p
+    WHERE m.type = 'table'
+      AND m.name NOT LIKE 'sqlite_%'
+      AND substr(m.name, 1, 1) <> '_'
+      AND m.name <> 'Recommendation'
+      AND UPPER(p.type) = 'DATETIME'`;
+
+/** Yedek yolun tablo listesi — tablo-değerli PRAGMA çalışmazsa tablolar tek tek gezilir. */
+export const DATE_COLUMN_TABLE_LIST_SQL = `SELECT name FROM sqlite_master
+    WHERE type = 'table'
+      AND name NOT LIKE 'sqlite_%'
+      AND substr(name, 1, 1) <> '_'
+      AND name <> 'Recommendation'`;
+
+function q(identifier: string): string {
+  return `"${identifier.replace(/"/g, "")}"`;
+}
+
+/**
+ * Kanonik OLMAYAN (onarım kapsamındaki) satırları seçen WHERE koşulu.
+ *
+ * ⚠️ "Kanonik mi?" koşulu `sqlite-date.ts`'ten İÇE AKTARILIR, burada KOPYALANMAZ. Bir tur
+ * boyunca burada bir kopya yaşadı; iki taraf ayrışınca kolonlar her göçte "bozuk" bulunup
+ * hiçbir satıra dokunulmadan "onarıldı" raporlandı. Biçim bilgisi tek dosyada durur.
+ */
+export function nonCanonicalDateWhereSql(column: string, storage: DbDateStorage): string {
+  return `${q(column)} IS NOT NULL AND NOT (${canonicalDateSql(column, storage)})`;
+}
+
+/** "Bu kolonda kanonik olmayan satır VAR MI?" — ucuz ön eleme (kolonların çoğu temiz). */
+export function nonCanonicalDateProbeSql(
+  table: string,
+  column: string,
+  storage: DbDateStorage
+): string {
+  return `SELECT EXISTS(SELECT 1 FROM ${q(table)} WHERE ${nonCanonicalDateWhereSql(column, storage)}) AS v`;
+}
+
+/** Onarımın kaç satıra dokunacağı — yalnız bozuk kolonlar için sorulur (raporlama). */
+export function nonCanonicalDateCountSql(
+  table: string,
+  column: string,
+  storage: DbDateStorage
+): string {
+  return `SELECT COUNT(*) AS n FROM ${q(table)} WHERE ${nonCanonicalDateWhereSql(column, storage)}`;
+}
+
+/**
+ * Tarih kolonlarını bul. Önce tek sorguluk tablo-değerli PRAGMA; o motor tarafından
+ * desteklenmiyorsa tabloları tek tek `PRAGMA table_info` ile gez.
+ *
+ * Yedek yol pahalı DEĞİL: yalnız sürüm yükseltmesindeki göç anında koşar ve varsa toplu
+ * batch okumasıyla tek gidiş-dönüşe iner (loadSchemaSnapshot'ta kanıtlanmış yol).
+ */
+async function findDateColumns(): Promise<Array<{ table: string; column: string }> | null> {
   try {
     const rows = await prisma.$queryRawUnsafe<Array<{ tbl: string; col: string }>>(
-      `SELECT m.name AS tbl, p.name AS col
-         FROM sqlite_master m
-         JOIN pragma_table_info(m.name) p
-        WHERE m.type = 'table'
-          AND m.name NOT LIKE 'sqlite_%'
-          AND substr(m.name, 1, 1) <> '_'
-          AND m.name <> 'Recommendation'
-          AND UPPER(p.type) = 'DATETIME'`
+      DATE_COLUMN_INTROSPECTION_SQL
     );
-    dateColumns = rows.map((row) => ({ table: String(row.tbl), column: String(row.col) }));
+    return rows.map((row) => ({ table: String(row.tbl), column: String(row.col) }));
   } catch (error) {
-    // Tablo-değerli PRAGMA desteklenmiyorsa onarım atlanır; okuma tarafındaki normalizasyon
-    // (dbEpochMs) raporları yine doğru gösterir.
-    logPerf(`normalizeDateColumns introspection failed (${String(error).slice(0, 120)})`);
-    return false;
+    logPerf(`normalizeDateColumns: tablo-değerli PRAGMA çalışmadı, yedek yola geçiliyor (${String(error).slice(0, 120)})`);
   }
-  if (dateColumns.length === 0) return true;
+  try {
+    const tables = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+      DATE_COLUMN_TABLE_LIST_SQL
+    );
+    const out: Array<{ table: string; column: string }> = [];
+    const client = await getBatchClient();
+    if (client && tables.length > 0) {
+      // ⚠️ KENDİ try/catch'i ŞART: batch atomiktir, tek bir okunamayan tablo (ya da PRAGMA'yı
+      // kabul etmeyen bir sürücü) hepsini düşürür. Eskiden istisna dıştaki catch'e düşüyor,
+      // fonksiyon `null` dönüyor ve hemen aşağıdaki SIRALI yol HİÇ denenmiyordu — yani
+      // "yedeğin yedeği" ölü koddu ve o cihazda onarım komple atlanıyordu.
+      try {
+        const res = await client.batch(
+          tables.map((t) => `PRAGMA table_info(${q(t.name)})`),
+          "read"
+        );
+        tables.forEach((t, i) => {
+          for (const row of res[i]?.rows ?? []) {
+            if (String(row.type ?? "").toUpperCase() === "DATETIME") {
+              out.push({ table: t.name, column: String(row.name) });
+            }
+          }
+        });
+        return out;
+      } catch (error) {
+        out.length = 0;
+        logPerf(
+          `normalizeDateColumns: PRAGMA batch'i düştü, sıralı yola geçiliyor (${String(error).slice(0, 80)})`
+        );
+      }
+    }
+    for (const t of tables) {
+      const cols = await prisma.$queryRawUnsafe<Array<{ name: string; type: string }>>(
+        `PRAGMA table_info(${q(t.name)})`
+      );
+      for (const col of cols) {
+        if (String(col.type ?? "").toUpperCase() === "DATETIME") {
+          out.push({ table: t.name, column: String(col.name) });
+        }
+      }
+    }
+    return out;
+  } catch (error) {
+    logPerf(`normalizeDateColumns introspection failed (${String(error).slice(0, 120)})`);
+    return null;
+  }
+}
 
-  // ÖN KONTROL: yalnız GERÇEKTEN karışık tipli kolonlar onarılır.
-  // Gömülü replica modunda toplu yazım kapalı olduğu için her onarım AYRI bir uzak yazma
-  // demek; 49 kolonu koşulsuz güncellemek açılışı saniyelerce uzatıyordu. Ucuz bir EXISTS
-  // sorgusu kolonların neredeyse tamamını eler.
-  const bozuk: Array<{ table: string; column: string }> = [];
-  for (const { table, column } of dateColumns) {
+/** Ön eleme sorgularını TEK batch ile sor; batch yoksa/patlarsa sırayla sor. */
+async function probeNonCanonicalColumns(
+  dateColumns: Array<{ table: string; column: string }>,
+  storage: DbDateStorage
+): Promise<Array<{ table: string; column: string }>> {
+  const stmts = dateColumns.map((d) => nonCanonicalDateProbeSql(d.table, d.column, storage));
+  const client = await getBatchClient();
+  if (client) {
+    try {
+      const res = await client.batch(stmts, "read");
+      return dateColumns.filter((_, i) => Number(res[i]?.rows?.[0]?.v ?? 0) === 1);
+    } catch (error) {
+      // Batch atomiktir: tek bir okunamayan tablo hepsini düşürür → sıralı yola geç.
+      logPerf(`normalizeDateColumns: ön eleme batch'i düştü, sıralı yola geçiliyor (${String(error).slice(0, 80)})`);
+    }
+  }
+  const out: Array<{ table: string; column: string }> = [];
+  for (const d of dateColumns) {
     try {
       const [row] = await prisma.$queryRawUnsafe<Array<{ v: number }>>(
-        `SELECT EXISTS(
-           SELECT 1 FROM "${table}"
-            WHERE "${column}" IS NOT NULL
-              AND (
-                typeof("${column}") IN ('integer','real')
-                -- "YYYY-MM-DD HH:MM:SS" (SQLite CURRENT_TIMESTAMP): metin ama kanonik değil.
-                -- Metin sıralamasında boşluk 'T'den küçük olduğu için bu satırlar da
-                -- yanlış sıralanır; onarım kapsamına girmeli.
-                OR (typeof("${column}") = 'text' AND instr("${column}", 'T') = 0)
-              )
-         ) AS v`
+        nonCanonicalDateProbeSql(d.table, d.column, storage)
       );
-      if (Number(row?.v) === 1) bozuk.push({ table, column });
+      if (Number(row?.v) === 1) out.push(d);
     } catch {
       // Okunamayan tabloyu atla; onarım zorunlu değil, okuma tarafı zaten tip-bağımsız.
     }
   }
+  return out;
+}
+
+/**
+ * Onarılacak satır sayısı — YALNIZ günlük metni için.
+ *
+ * ⚠️ Zorunlu açılış yolunda KOŞMAZ: bozuk kolonların her birinde ikinci bir TAM TABLO
+ * taraması demek ve tablolar büyüdükçe (Notification, Listing, OrderItemSnapshot) doğrudan
+ * açılış süresine biniyor. "İsteğe bağlı adım zorunlu hızlı yolu bloklamamalı" dersinin küçük
+ * hâli: bir günlük satırı için açılış süresi ödenmez. Tanı gerekince valfle açılır.
+ */
+async function countNonCanonicalRows(
+  bozuk: Array<{ table: string; column: string }>,
+  storage: DbDateStorage
+): Promise<number | null> {
+  try {
+    const stmts = bozuk.map((d) => nonCanonicalDateCountSql(d.table, d.column, storage));
+    const client = await getBatchClient();
+    if (client) {
+      const res = await client.batch(stmts, "read");
+      return res.reduce((sum, r) => sum + Number(r?.rows?.[0]?.n ?? 0), 0);
+    }
+    let sum = 0;
+    for (const s of stmts) {
+      const [row] = await prisma.$queryRawUnsafe<Array<{ n: number }>>(s);
+      sum += Number(row?.n ?? 0);
+    }
+    return sum;
+  } catch {
+    return null; // sayım yalnız günlük içindir; başarısızlığı onarımı engellemez
+  }
+}
+
+async function normalizeDateColumns(): Promise<boolean> {
+  const storage = dbDateStorage();
+  const dateColumns = await findDateColumns();
+  if (dateColumns === null) return false;
+  if (dateColumns.length === 0) return true;
+
+  // ÖN KONTROL: yalnız GERÇEKTEN kanonik olmayan kolonlar onarılır. Her onarım uzak bir
+  // yazma demek; 47 kolonu koşulsuz güncellemek açılışı saniyelerce uzatıyordu. Ucuz bir
+  // EXISTS sorgusu kolonların neredeyse tamamını eler (ölçüm: 47 ifade tek batch'te ~420ms).
+  const bozuk = await probeNonCanonicalColumns(dateColumns, storage);
   if (bozuk.length === 0) {
-    logPerf("normalizeDateColumns: onarılacak kolon yok");
+    logPerf(`normalizeDateColumns: ${dateColumns.length} kolon tarandı, onarılacak kolon yok`);
     return true;
   }
+  // Satır sayısı yalnız tanı valfi açıkken ölçülür (yukarıdaki nota bak).
+  const satirSayisi = process.env.MLHUB_SCHEMA_VERBOSE
+    ? await countNonCanonicalRows(bozuk, storage)
+    : null;
+
+  // TEK ifade yeter: `repairDateColumnSql` hem TAMSAYI→ISO hem METİN→METİN durumunu kapsıyor.
+  // Yanına konan ikinci UPDATE hiçbir satırla eşleşemiyor, yalnız kolon başına boş bir uzak
+  // yazma ekliyordu — ve biçim bilgisini ikinci bir dosyada yaşatıyordu.
   for (const { table, column } of bozuk) {
-    _ddlBuf.push(repairDateColumnSql(table, column));
+    _ddlBuf.push(repairDateColumnSql(table, column, storage));
   }
   try {
+    // YAZMA SÜRESİ AYRI ÖLÇÜLÜR: bu adım şema kilidi elde tutulurken koşuyor ve onu bekleyen
+    // her istek bloklu. Kilit 180 sn'de bayat sayıldığı için süre oraya yaklaşırsa ikinci bir
+    // eşzamanlı göç başlayabilir — riski görmek için ölçüm günlüğe ayrı alan olarak düşer.
+    const yazmaT0 = Date.now();
     await flushSchemaBuffer();
-    logPerf(`normalizeDateColumns repaired ${bozuk.length} column(s)`);
+    const yazmaMs = Date.now() - yazmaT0;
+
+    // ⚠️ DOĞRULAMA TURU YALNIZ TANI VALFİYLE KOŞAR: onarım başarılıysa kolonlar temiz olduğu
+    // için `EXISTS` erken çıkamaz ve onarılan her tabloyu (Notification, Listing,
+    // OrderItemSnapshot) BAŞTAN SONA tarar — hem de şema kilidi elde tutulurken, bekleyen her
+    // istek bloklu. Bu, `countNonCanonicalRows`'un valf arkasına alınma gerekçesinin ta
+    // kendisi: bir günlük satırı için açılış süresi ödenmez. Sonucu zaten hiçbir karara
+    // girmiyor — teşhis gerekince `MLHUB_SCHEMA_VERBOSE` ile açılır.
+    const kalan = process.env.MLHUB_SCHEMA_VERBOSE
+      ? await probeNonCanonicalColumns(bozuk, storage)
+      : null;
+    const kalanMetni =
+      kalan == null
+        ? "doğrulama kapalı"
+        : kalan.length === 0
+          ? "kalan yok"
+          : `KALAN ${kalan.length} kolon: ${kalan.map((k) => `${k.table}.${k.column}`).join(", ")}`;
+    logPerf(
+      `normalizeDateColumns: ${dateColumns.length} kolon tarandı, ${bozuk.length} kolon onarıldı` +
+        `${satirSayisi == null ? "" : `, ${satirSayisi} satır`} (${storage}, yazım ${yazmaMs}ms)` +
+        ` — ${bozuk.map((b) => `${b.table}.${b.column}`).join(", ")} · ${kalanMetni}`
+    );
     return true;
   } catch (error) {
-    // Onarım başarısızsa göç DÜŞMEZ (uygulama açılır, okuma tarafı tip-bağımsız) ama
-    // BAŞARISIZ olduğunu bildirir: sürüm damgalanmaz, böylece sonraki açılış YENİDEN dener.
-    // Damgalansaydı veritabanı "onarıldı" sayılır ve bir sonraki sürüme kadar bir daha
-    // denenmezdi — Siparişler ve fiyat kartı sessizce eksik veri okumaya devam ederdi.
+    // Onarım başarısızsa göç DÜŞMEZ (uygulama açılır, okuma tarafı tip-bağımsız).
+    // ⚠️ Sürüm YİNE DE damgalanır — bkz. ensureRuntimeSchema sonundaki uzun not: bunu
+    // damgaya bağlamak uygulamayı her açılışta 205 saniye bekletmişti.
     _ddlBuf = [];
     logPerf(`normalizeDateColumns failed (${String(error).slice(0, 120)})`);
     return false;
@@ -563,11 +765,14 @@ async function migrateParentVariantsToGroups() {
     if (prow[0].variantGroupId) continue; // zaten gruplu
     const groupId = `vg_${parentProductId}`;
     const groupName = prow[0].name || "Varyant Grubu";
+    const simdi = toDbDate(new Date()); // CURRENT_TIMESTAMP karışık biçim üretiyor (yukarıdaki nota bak)
     await prisma.$executeRawUnsafe(
       `INSERT OR IGNORE INTO "VariantGroup" (id, name, createdAt, updatedAt)
-       VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+       VALUES (?, ?, ?, ?)`,
       groupId,
-      groupName
+      groupName,
+      simdi,
+      simdi
     );
     // Ana ürünü + tüm çocuklarını gruba bağla (hepsi eşit üye)
     await prisma.$executeRawUnsafe(

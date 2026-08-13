@@ -36,6 +36,15 @@ Notifications.setNotificationHandler({
   }),
 });
 
+/**
+ * Veritabanına yazılacak tarih damgası — masaüstünün kanonik biçimiyle BİREBİR aynı
+ * ("2026-08-13T07:00:00.000+00:00"). Aynı kolona iki farklı biçim yazılırsa sıralama ve
+ * tarih filtreleri sessizce yanlış sonuç veriyor.
+ */
+function simdiKanonik(): string {
+  return new Date().toISOString().replace(/Z$/, "+00:00");
+}
+
 const EXPO_PROJECT_ID =
   (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId ??
   "94ecc654-9a9e-41b2-974f-a9d3aa090696";
@@ -206,10 +215,16 @@ export async function registerForPush(zorla = false): Promise<PushKayitDurumu> {
 
     try {
       // Masaüstü bu tabloyu okuyup push gönderir. Aynı cihaz tekrar açılınca ON CONFLICT ile tazelenir.
+      //
+      // ⚠️ `createdAt` AÇIKÇA yazılır: kolonun tablo varsayılanı `CURRENT_TIMESTAMP` ve o değer
+      // "2026-08-13 07:00:00" (boşluklu) biçiminde. Metin sıralamasında boşluk 'T'den küçük
+      // olduğu için o satırlar sıralamanın ve tarih filtrelerinin dışına düşüyor; masaüstünün
+      // açılış onarımı kolonu tek biçime çekiyor, bu yazım onu bozuyordu.
+      const damga = simdiKanonik();
       const sonuc = await execute(
-        `INSERT INTO PushToken (token, platform, updatedAt) VALUES (?, ?, ?)
+        `INSERT INTO PushToken (token, platform, createdAt, updatedAt) VALUES (?, ?, ?, ?)
          ON CONFLICT(token) DO UPDATE SET platform = excluded.platform, updatedAt = excluded.updatedAt`,
-        [token, Platform.OS, new Date().toISOString()]
+        [token, Platform.OS, damga, damga]
       );
       if (!sonuc || sonuc.rowsAffected < 1) {
         // Yazma sessizce boş döndüyse kayıt YOK demektir; başarı sayma.

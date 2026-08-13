@@ -8,6 +8,7 @@ import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { jsonError } from "@/lib/api-error";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
+import { nowDbDateSql } from "@/lib/sqlite-date";
 
 /**
  * Trendyol ürün senkronu — 3 mod (Shopify ana ürün kaynağı, Trendyol eşleşen listing):
@@ -168,7 +169,7 @@ export async function POST(req: NextRequest) {
           changeSource: "trendyol_sync",
         });
         await prisma.$executeRawUnsafe(
-          `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP WHERE id = ?`,
+          `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`,
           f.price,
           f.listPrice,
           row.listingId
@@ -215,13 +216,13 @@ export async function POST(req: NextRequest) {
       // → ~96ms × 225 ≈ 22sn ve bu süre boyunca uygulamanın tamamı DB kilidinde bekliyordu.
       const writes: { sql: string; args: unknown[] }[] = [];
       const LISTING_SQL = `INSERT INTO Listing (id, productId, platform, externalId, externalSku, barcode, salePrice, listPrice, stock, isActive, lastSyncedAt, createdAt, updatedAt)
-               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`;
+               VALUES (?, ?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ${nowDbDateSql()}, ${nowDbDateSql()}, ${nowDbDateSql()})`;
       const UNMATCHED_SQL = `INSERT INTO UnmatchedListing (id, platform, externalId, externalSku, barcode, name, categoryName, price, stock, imageUrl, lastSeenAt, createdAt)
-             VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+             VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?, ${nowDbDateSql()}, ${nowDbDateSql()})
              ON CONFLICT(platform, externalId) DO UPDATE SET
                externalSku=excluded.externalSku, barcode=excluded.barcode, name=excluded.name,
                categoryName=excluded.categoryName, price=excluded.price, stock=excluded.stock,
-               imageUrl=excluded.imageUrl, lastSeenAt=CURRENT_TIMESTAMP`;
+               imageUrl=excluded.imageUrl, lastSeenAt=${nowDbDateSql()}`;
 
       for (const [barcode, f] of fetched) {
         const productId = barcodeToProductId.get(barcode);
@@ -275,7 +276,7 @@ export async function POST(req: NextRequest) {
       // Değişmeyenlerin damgası: tek tek değil, gruplar hâlinde tazelenir.
       for (const chunk of chunkIds(touchIds)) {
         writes.push({
-          sql: `UPDATE UnmatchedListing SET lastSeenAt = CURRENT_TIMESTAMP
+          sql: `UPDATE UnmatchedListing SET lastSeenAt = ${nowDbDateSql()}
                 WHERE id IN (${chunk.map(() => "?").join(",")})`,
           args: chunk,
         });

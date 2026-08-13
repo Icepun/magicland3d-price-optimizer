@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
-import { bustCache } from "@/lib/route-cache";
+import { bustActualCommissionCaches } from "@/lib/cache-busting";
 import { syncTrendyolActualCommissions } from "@/lib/trendyol-finance";
 
 let activeSync: Promise<Awaited<
@@ -20,8 +19,7 @@ export async function POST(req: NextRequest) {
       });
     }
     const result = await activeSync;
-    invalidateOrdersCache();
-    bustCache("finance-monthly:");
+    bustActualCommissionCaches();
 
     return NextResponse.json(result, {
       headers: { "Cache-Control": "no-store" },
