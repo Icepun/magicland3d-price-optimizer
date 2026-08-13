@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
 import { KATEGORI_RENKLERI } from "@/lib/expense-admin-shared";
+import { uretilecekler } from "@/lib/recurring-expense";
 
 /**
  * Gider Ödemeleri sayfasının yönetim ekranları: kategoriler ve tekrarlayan sabit giderler.
@@ -14,6 +15,23 @@ import { KATEGORI_RENKLERI } from "@/lib/expense-admin-shared";
 const ALAN =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm outline-none " +
   "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50";
+
+const AY_ADLARI = [
+  "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
+  "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık",
+];
+
+/** "2026-08" → "Ağustos 2026". */
+function ayEtiketi(periodKey: string): string {
+  const [yil, ay] = periodKey.split("-");
+  return `${AY_ADLARI[Number(ay) - 1] ?? ay} ${yil}`;
+}
+
+/** Bulunulan ayın 1'i, `<input type="date">` biçiminde (Türkiye takvimi). */
+function ayBasiInput(nowMs: number): string {
+  const d = new Date(nowMs + 3 * 60 * 60 * 1000);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
 
 export interface KategoriKaydi {
   id: string;
@@ -136,18 +154,25 @@ export interface TekrarKaydi {
 export function SabitGiderYonetimi({
   kayitlar,
   kategoriler,
+  varOlanDonemler,
+  bugun,
   pending,
   onEkle,
   onSil,
 }: {
   kayitlar: TekrarKaydi[];
   kategoriler: KategoriKaydi[];
+  /** Girilmiş giderlerin "ad → dönemler" haritası — çakışma uyarısı buradan çıkar. */
+  varOlanDonemler: Map<string, Set<string>>;
+  /** "Bugün" dışarıdan gelir: render saf kalsın (React Compiler `Date.now()`e izin vermiyor). */
+  bugun: number;
   pending: boolean;
   onEkle: (v: {
     name: string;
     category: string | null;
     amount: number;
     dayOfMonth: number;
+    startsAt: string;
   }) => void;
   onSil: (id: string) => void;
 }) {
@@ -155,8 +180,42 @@ export function SabitGiderYonetimi({
   const [tutar, setTutar] = useState("");
   const [gun, setGun] = useState("1");
   const [kategori, setKategori] = useState("");
+  const [baslangic, setBaslangic] = useState(() => ayBasiInput(bugun));
   const tutarSayi = Number(tutar);
   const gecerli = ad.trim().length > 0 && Number.isFinite(tutarSayi) && tutarSayi > 0;
+
+  /**
+   * ÖNİZLEME — kaydetmeden önce "hangi aylar açılacak" sorusunun cevabı.
+   *
+   * Geçmiş bir başlangıç seçmek, o ayların net kârını geriye dönük değiştirir. Üstelik o
+   * ayı ELLE girmiş olabilirsin: mükerrer koruması yalnız aynı kuralın aynı ayını engelliyor,
+   * elle girilmiş kaydı tanımıyor. Bu yüzden çakışma ihtimali olan aylar ayrıca uyarılıyor.
+   */
+  const onizleme = useMemo(() => {
+    const baslangicMs = Date.parse(`${baslangic}T00:00:00+03:00`);
+    if (!gecerli || !Number.isFinite(baslangicMs)) return null;
+    const donemler = uretilecekler(
+      {
+        id: "onizleme",
+        name: ad.trim(),
+        category: kategori || null,
+        amountKurus: Math.round(tutarSayi * 100),
+        dayOfMonth: Math.min(31, Math.max(1, Number(gun) || 1)),
+        startsAtMs: baslangicMs,
+        endsAtMs: null,
+        isActive: true,
+        note: null,
+      },
+      [],
+      bugun
+    );
+    const eldekiler = varOlanDonemler.get(ad.trim().toLocaleLowerCase("tr-TR")) ?? new Set<string>();
+    return {
+      donemler,
+      toplam: donemler.length * tutarSayi,
+      cakisanlar: donemler.filter((d) => eldekiler.has(d.periodKey)).map((d) => d.periodKey),
+    };
+  }, [ad, tutarSayi, gun, kategori, baslangic, gecerli, bugun, varOlanDonemler]);
 
   return (
     <div className="space-y-4">
@@ -195,7 +254,7 @@ export function SabitGiderYonetimi({
             className={ALAN}
           />
         </div>
-        <div className="sm:col-span-2">
+        <div>
           <label className="text-[11px] text-muted-foreground">Kategori</label>
           <select
             value={kategori}
@@ -210,7 +269,53 @@ export function SabitGiderYonetimi({
             ))}
           </select>
         </div>
+        <div>
+          <label className="text-[11px] text-muted-foreground">Ne zamandan beri</label>
+          <input
+            value={baslangic}
+            type="date"
+            onChange={(e) => setBaslangic(e.target.value)}
+            className={ALAN}
+          />
+        </div>
       </div>
+
+      {/* Kaydetmeden önce ne olacağını göster: geçmiş bir tarih seçmek o ayların
+          net kârını geriye dönük değiştirir. */}
+      {onizleme && (
+        <div
+          className={cn(
+            "rounded-lg border p-2.5 text-xs space-y-1",
+            onizleme.cakisanlar.length > 0
+              ? "border-amber-500/45 bg-amber-500/5"
+              : "border-border bg-muted/30"
+          )}
+        >
+          {onizleme.donemler.length === 0 ? (
+            <p className="text-muted-foreground">
+              Şimdilik kayıt açılmayacak; ilk ödeme günü gelince eklenecek.
+            </p>
+          ) : (
+            <p>
+              <b className="tabular-nums">{onizleme.donemler.length}</b> ay için kayıt açılacak
+              {" — toplam "}
+              <b className="tabular-nums">{formatCurrency(onizleme.toplam)}</b>
+              <span className="text-muted-foreground">
+                {" ("}
+                {onizleme.donemler.map((d) => ayEtiketi(d.periodKey)).join(", ")}
+                {")"}
+              </span>
+            </p>
+          )}
+          {onizleme.cakisanlar.length > 0 && (
+            <p className="text-amber-400">
+              {onizleme.cakisanlar.map(ayEtiketi).join(", ")} için aynı adla girilmiş ödeme
+              zaten var — bu aylar iki kez sayılır.
+            </p>
+          )}
+        </div>
+      )}
+
       <Button
         size="sm"
         className="w-full"
@@ -221,6 +326,7 @@ export function SabitGiderYonetimi({
             category: kategori || null,
             amount: tutarSayi,
             dayOfMonth: Math.min(31, Math.max(1, Number(gun) || 1)),
+            startsAt: `${baslangic}T00:00:00+03:00`,
           });
           setAd("");
           setTutar("");

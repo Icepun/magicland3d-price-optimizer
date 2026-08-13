@@ -25,6 +25,7 @@ import {
   araliktakiler, aylaraGore, donemOzeti, kategoriAdi, kategoriDagilimi, periyotAraligi,
   type PeriyotTipi,
 } from "@/lib/expense-view";
+import { donemAnahtari } from "@/lib/recurring-expense";
 import { KategoriGrafigi, OzetSerit, PeriyotSecici } from "./expense-ui";
 import {
   KategoriYonetimi,
@@ -292,6 +293,26 @@ export default function ExpensesPage() {
   );
   const aylar = useMemo(() => aylaraGore(gorunenler), [gorunenler]);
 
+  /**
+   * Girilmiş ödemelerin "gider adı → hangi aylar" haritası.
+   *
+   * Sabit gider kuralına geçmiş bir başlangıç seçildiğinde çakışma uyarısı buradan çıkar:
+   * veritabanındaki mükerrer koruması yalnız AYNI KURALIN aynı ayını engelliyor, elle
+   * girilmiş bir kaydı tanımıyor. O ay iki kez sayılırsa net kâr sessizce düşerdi.
+   */
+  const girilmisDonemler = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const g of expenses) {
+      const ms = Date.parse(g.paidAt);
+      if (!Number.isFinite(ms)) continue;
+      const ad = g.name.trim().toLocaleLowerCase("tr-TR");
+      const set = map.get(ad) ?? new Set<string>();
+      set.add(donemAnahtari(ms));
+      map.set(ad, set);
+    }
+    return map;
+  }, [expenses]);
+
   function payload(form: ExpenseFormState) {
     return {
       name: form.name.trim(),
@@ -556,15 +577,10 @@ export default function ExpensesPage() {
           <SabitGiderYonetimi
             kayitlar={tekrarQuery.data ?? []}
             kategoriler={categories}
+            varOlanDonemler={girilmisDonemler}
+            bugun={nowMs}
             pending={tekrarMutation.isPending}
-            onEkle={(v) =>
-              tekrarMutation.mutate({
-                method: "POST",
-                // Başlangıç BU AY: kural kurulmadan önceki aylar geriye dönük yazılmasın,
-                // yoksa geçmiş ayların net kârı sonradan değişirdi.
-                body: { ...v, startsAt: new Date().toISOString() },
-              })
-            }
+            onEkle={(v) => tekrarMutation.mutate({ method: "POST", body: v })}
             onSil={(id) => tekrarMutation.mutate({ method: "DELETE", id })}
           />
         </DialogContent>
