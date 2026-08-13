@@ -22,7 +22,8 @@ import {
 } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
-import { padTrendyolWindow, trendyolDateToIso } from "@/core/trendyol-date";
+import { trendyolDateToIso } from "@/core/trendyol-date";
+import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
@@ -721,29 +722,20 @@ async function computeOrdersBodyInner(
     // ⏱️ Dilimler BİRBİRİNDEN BAĞIMSIZ: eskiden 60 gün = 5 dilim SIRAYLA çekiliyordu, yani beş ayrı
     // bekleme. Artık aynı anda (sınırlı sayıda) çekiliyorlar; toplam bekleme en yavaş dilime iner.
     // Eşzamanlılık sınırı Trendyol servis limitine takılmamak için bilinçli olarak düşük.
-    const CHUNK = 14 * 86_400_000;
     const TY_WINDOW_CONCURRENCY = 3;
-    const tyWindows: Array<{ start: number; end: number }> = [];
-    for (let chunkEnd = Date.now(); chunkEnd > historyCutoff; chunkEnd -= CHUNK) {
-      tyWindows.push({ start: Math.max(historyCutoff, chunkEnd - CHUNK), end: chunkEnd });
-    }
+    // Dilim boyu `trendyol-windows.ts`'te hesaplanıyor: saat dilimi payı iki uçtan eklendiği
+    // için dilim 14 GÜN OLAMAZ — açıklık sınırı aşar ve Trendyol pencerenin en yeni ucunu
+    // sessizce kırpar (bkz. o dosyadaki olay kaydı).
+    const tyWindows = buildTrendyolWindows(Date.now(), historyCutoff);
     // Sonuçlar dilim sırasında toplanır (yeni → eski): eşzamanlı çekim listenin sırasını bozmasın.
     const tyByWindow: TrendyolOrder[][] = tyWindows.map(() => []);
     await mapLimit(
       tyWindows.map((_, index) => index),
       TY_WINDOW_CONCURRENCY,
       async (index) => {
-        const { start, end } = tyWindows[index];
+        const { startDate, endDate } = tyWindows[index];
         for (let pageNo = 0; pageNo < 50; pageNo++) {
-          const page = await client.listOrders({
-            page: pageNo,
-            size: 100,
-            // Trendyol sınırları da duvar saati düzleminde yorumluyorsa gerçek UTC
-            // göndermek pencereyi kaydırır ve en yeni siparişler listeye hiç girmez.
-            // İki uçtan da genişletiyoruz; fazlası aşağıdaki kırpmayla zaten eleniyor.
-            startDate: padTrendyolWindow(start, "start"),
-            endDate: padTrendyolWindow(end, "end"),
-          });
+          const page = await client.listOrders({ page: pageNo, size: 100, startDate, endDate });
           const content = page.content ?? [];
           for (const order of content) tyByWindow[index].push(order);
           if (content.length < 100) break; // son sayfa

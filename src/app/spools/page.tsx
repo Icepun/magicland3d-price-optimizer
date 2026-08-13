@@ -23,7 +23,7 @@ import {
   type FilamentGroup, type SpoolLike,
 } from "@/core/filament-groups";
 import {
-  alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_AILELER,
+  alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_RENKLER,
   type RenkCip, type StokFiltre,
 } from "./spools-view";
 
@@ -127,10 +127,9 @@ export default function SpoolsPage() {
         groups,
         (g) => groupThresholds[g.key] ?? threshold,
         threshold,
-        // Her aileden yalnız ana ton: "Gri" evet, "Koyu Gri"/"Gümüş" hayır.
-        FILAMENT_COLORS.filter(
-          (c) => c.key === c.family && (TEMEL_AILELER as readonly string[]).includes(c.family)
-        ),
+        // Tam olarak Siyah / Gri / Beyaz. Aileyle seçilseydi "Mermer", "Fildişi", "Gümüş"
+        // gibi tonlar da üst bölüme sızardı.
+        FILAMENT_COLORS.filter((c) => (TEMEL_RENKLER as readonly string[]).includes(c.key)),
         watchedGroups
       ),
     [groups, groupThresholds, threshold, watchedGroups]
@@ -759,17 +758,6 @@ function GroupDetailDialog({
   onClose: () => void; onEdit: (s: SpoolLike) => void;
   onDelete: (s: SpoolLike) => void; onAdd: () => void;
 }) {
-  const qc = useQueryClient();
-  const toggleOpen = useMutation({
-    mutationFn: ({ id, sealed }: { id: string; sealed: boolean }) =>
-      fetch(`/api/spools/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sealed ? { openedAt: new Date().toISOString() } : { openedAt: null }),
-      }).then((r) => r.json()),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["spools"] }),
-  });
-
   const custom = threshold !== generalThreshold;
 
   return (
@@ -839,7 +827,6 @@ function GroupDetailDialog({
                 groupColorHex={g.colorHex}
                 groupLabel={g.label}
                 onEdit={() => onEdit(s)}
-                onToggleOpen={(sealed) => toggleOpen.mutate({ id: s.id, sealed })}
                 onDelete={() => onDelete(s)}
               />
             ))
@@ -891,10 +878,10 @@ function DeleteSpoolDialog({
 }
 
 function SpoolRow({
-  spool: s, index, groupColorHex, groupLabel, onEdit, onToggleOpen, onDelete,
+  spool: s, index, groupColorHex, groupLabel, onEdit, onDelete,
 }: {
   spool: SpoolLike; index: number; groupColorHex: string; groupLabel: string;
-  onEdit: () => void; onToggleOpen: (sealed: boolean) => void; onDelete: () => void;
+  onEdit: () => void; onDelete: () => void;
 }) {
   const sealed = isSealed(s);
   const empty = isEmptySpool(s);
@@ -928,11 +915,8 @@ function SpoolRow({
           {empty ? "Bitti" : sealed ? "Kapalı" : "Açık"}
         </span>
         <div className="flex items-center gap-0.5 shrink-0">
-          <Button size="icon" variant="ghost" className="h-7 w-7"
-            title={sealed ? "Aç" : "Dolu (kapalı) işaretle"}
-            onClick={() => onToggleOpen(sealed)}>
-            <PackageOpen className="h-3.5 w-3.5" />
-          </Button>
+          {/* "Aç" işareti kaldırıldı: filament ya vardır ya yoktur, kullanılan makara doğrudan
+              siliniyor. Ara bir "açık" durumu tutmak sayımı karıştırmaktan başka işe yaramıyordu. */}
           <Button size="icon" variant="ghost" className="h-7 w-7" title="Düzenle" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" />
           </Button>

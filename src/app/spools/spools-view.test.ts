@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import type { FilamentGroup } from "@/core/filament-groups";
 import {
-  alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_AILELER,
+  acikligi, alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_RENKLER,
 } from "./spools-view";
 
 const TEMEL = [
@@ -61,20 +61,21 @@ describe("renkCipleri — temel renkler", () => {
       [grup({ colorKey: "beyaz", colorFamily: "beyaz", sealedCount: 4 })],
       esikSabit(1), 1, TEMEL
     );
-    expect(cipler.filter((c) => c.colorFamily === "beyaz")).toHaveLength(1);
-    expect(cipler.find((c) => c.colorFamily === "beyaz")!.sealed).toBe(4);
+    expect(cipler.filter((c) => c.colorKey === "beyaz")).toHaveLength(1);
+    expect(cipler.find((c) => c.colorKey === "beyaz")!.sealed).toBe(4);
   });
 
-  it("aynı aileden birden çok ton verilse de tek çip çizilir", () => {
-    // "Gri", "Koyu Gri" ve "Gümüş" üçü de `gri` ailesindendir; stok yokken üç boş çip çıkmamalı.
-    const griTonlari = [
-      { key: "gri", name: "Gri", hex: "#9ca3af", family: "gri" },
-      { key: "koyu-gri", name: "Koyu Gri", hex: "#4b5563", family: "gri" },
-      { key: "gumus", name: "Gümüş", hex: "#c0c5ce", family: "gri" },
-    ];
-    const cipler = renkCipleri([], esikSabit(1), 1, griTonlari);
-    expect(cipler).toHaveLength(1);
-    expect(cipler[0].colorName).toBe("Gri");
+  it("aynı AİLEDEN başka bir ton, temel rengin yerini TUTMAZ", () => {
+    // "Mermer" ve "Fildişi" açık tonlu oldukları için `beyaz` ailesine düşüyor. Aile
+    // karşılaştırılsaydı elde mermer varken beyaz "var" sayılır ve beyazın bittiği gizlenirdi.
+    const cipler = renkCipleri(
+      [grup({ colorKey: "mermer", colorName: "Mermer", colorFamily: "beyaz", sealedCount: 2 })],
+      esikSabit(1), 1, TEMEL
+    );
+    const beyaz = cipler.find((c) => c.colorKey === "beyaz");
+    expect(beyaz).toBeDefined();
+    expect(beyaz!.sealed).toBe(0);
+    expect(beyaz!.durum).toBe("biten");
   });
 });
 
@@ -177,24 +178,70 @@ describe("bolumlere", () => {
     );
     const bolumler = bolumlere(cipler);
     expect(bolumler[0].baslik).toBe("Temel renkler");
-    expect(bolumler[0].cipler.every((c) => (TEMEL_AILELER as readonly string[]).includes(c.colorFamily))).toBe(true);
+    expect(bolumler[0].cipler.every((c) => (TEMEL_RENKLER as readonly string[]).includes(c.colorKey))).toBe(true);
     expect(bolumler[1].baslik).toBe("Diğer renkler");
   });
 
-  it("her bölümde en kritik önce gelir", () => {
+  it("aile eşleşen ton üst bölüme SIZMAZ", () => {
+    // Mermer beyaz ailesinden ama beyaz DEĞİL; yeri "Diğer renkler".
+    const cipler = renkCipleri(
+      [grup({ colorKey: "mermer", colorName: "Mermer", colorFamily: "beyaz", sealedCount: 2 })],
+      esikSabit(1), 1, TEMEL
+    );
+    const bolumler = bolumlere(cipler);
+    expect(bolumler[0].cipler.map((c) => c.colorName)).not.toContain("Mermer");
+    expect(bolumler[1].cipler.map((c) => c.colorName)).toContain("Mermer");
+  });
+
+  it("çipler AÇIKTAN KOYUYA sıralanır", () => {
     const cipler = renkCipleri(
       [
-        grup({ colorKey: "a", colorName: "Bol", sealedCount: 9 }),
-        grup({ colorKey: "b", colorName: "Bitti", sealedCount: 0 }),
-        grup({ colorKey: "c", colorName: "Azaldı", sealedCount: 1 }),
+        grup({ colorKey: "a", colorName: "Koyu", colorHex: "#111827", sealedCount: 5 }),
+        grup({ colorKey: "b", colorName: "Açık", colorHex: "#f9fafb", sealedCount: 5 }),
+        grup({ colorKey: "c", colorName: "Orta", colorHex: "#9ca3af", sealedCount: 5 }),
       ],
       esikSabit(1), 1, []
     );
-    expect(bolumlere(cipler)[0].cipler.map((c) => c.colorName)).toEqual(["Bitti", "Azaldı", "Bol"]);
+    expect(bolumlere(cipler)[0].cipler.map((c) => c.colorName)).toEqual(["Açık", "Orta", "Koyu"]);
+  });
+
+  it("sıralama stok durumuna göre DEĞİŞMEZ", () => {
+    // Kritiklik sırası kullanılsaydı bir makara eklenip çıktıkça çipler yer değiştirir,
+    // kullanıcı aradığı rengi her açılışta başka yerde bulurdu.
+    const yap = (koyuAdet: number, acikAdet: number) =>
+      bolumlere(
+        renkCipleri(
+          [
+            grup({ colorKey: "a", colorName: "Koyu", colorHex: "#111827", sealedCount: koyuAdet }),
+            grup({ colorKey: "b", colorName: "Açık", colorHex: "#f9fafb", sealedCount: acikAdet }),
+          ],
+          esikSabit(1), 1, []
+        )
+      )[0].cipler.map((c) => c.colorName);
+    expect(yap(5, 5)).toEqual(["Açık", "Koyu"]);
+    expect(yap(0, 5)).toEqual(["Açık", "Koyu"]); // koyu bitti ama yeri değişmedi
+    expect(yap(5, 0)).toEqual(["Açık", "Koyu"]);
   });
 
   it("boş çip listesi bölüm üretmez", () => {
     expect(bolumlere([])).toEqual([]);
+  });
+});
+
+describe("acikligi", () => {
+  it("beyaz en yüksek, siyah en düşük", () => {
+    expect(acikligi("#ffffff")).toBeCloseTo(1, 3);
+    expect(acikligi("#000000")).toBeCloseTo(0, 3);
+  });
+
+  it("göz duyarlılığını hesaba katar — sarı maviden AÇIKTIR", () => {
+    // Ham RGB ortalamasıyla sıralansaydı ikisi de 0.33 çıkar, sıra rastgeleleşirdi.
+    expect(acikligi("#facc15")).toBeGreaterThan(acikligi("#2563eb"));
+  });
+
+  it("bozuk renk kodu listeyi uçlara savurmaz", () => {
+    expect(acikligi("bozuk")).toBe(0.5);
+    expect(acikligi("")).toBe(0.5);
   });
 });
 

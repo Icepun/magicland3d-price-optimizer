@@ -10,8 +10,15 @@ import {
   type FilamentGroup, type WatchedGroup,
 } from "@/core/filament-groups";
 
-/** Kullanıcının en çok kullandığı renkler — stok sıfır olsa bile GÖRÜNÜR. */
-export const TEMEL_AILELER = ["siyah", "gri", "beyaz"] as const;
+/**
+ * Kullanıcının en çok kullandığı renkler — stok sıfır olsa bile GÖRÜNÜR.
+ *
+ * AİLEYE değil, RENK ANAHTARINA bakılır. Aile eşleşmesi çok geniş: "Mermer" ve "Fildişi"
+ * açık tonlu oldukları için `beyaz` ailesine düşüyor ve üst bölüme sızıyorlardı. Daha
+ * sinsi ikinci etkisi: elinde Mermer varken aile "dolu" sayılıp GERÇEK beyaz çipi
+ * gizleniyordu — yani beyazı bittiğinde haber alamayacaktın.
+ */
+export const TEMEL_RENKLER = ["siyah", "gri", "beyaz"] as const;
 
 export type StokFiltre = "hepsi" | "azalan" | "biten";
 
@@ -44,16 +51,46 @@ function durumOf(sealed: number, esik: number): RenkCip["durum"] {
 }
 
 function temelMi(c: RenkCip): boolean {
-  return (TEMEL_AILELER as readonly string[]).includes(c.colorFamily);
+  return (TEMEL_RENKLER as readonly string[]).includes(c.colorKey);
 }
 
-/** En kritik önce: bitenler, sonra azalanlar, sonra sayıya göre artan. Tek sıralama kuralı. */
+/** En kritik önce: bitenler, sonra azalanlar, sonra sayıya göre artan. */
 function sirali(cipler: RenkCip[]): RenkCip[] {
   const oncelik = { biten: 0, azalan: 1, yeterli: 2 } as const;
   return [...cipler].sort(
     (a, b) =>
       oncelik[a.durum] - oncelik[b.durum] ||
       a.sealed - b.sealed ||
+      a.colorName.localeCompare(b.colorName, "tr-TR")
+  );
+}
+
+/**
+ * Rengin göz tarafından algılanan açıklığı (0 = siyah, 1 = beyaz).
+ *
+ * Ham RGB ortalaması YETMEZ: göz yeşili kırmızıdan çok daha parlak görür, ortalamayla
+ * sıralarsan sarı ile mavi yan yana düşer ve "açıktan koyuya" hissi bozulur. Bu yüzden
+ * sRGB doğrusallaştırması + göz duyarlılık ağırlıkları kullanılıyor.
+ */
+export function acikligi(hex: string): number {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? "").trim());
+  if (!m) return 0.5; // bilinmeyen renk ortada dursun, listeyi uçlara savurmasın
+  const n = parseInt(m[1], 16);
+  const kanal = (v: number) => {
+    const s = v / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const r = kanal((n >> 16) & 255);
+  const g = kanal((n >> 8) & 255);
+  const b = kanal(n & 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Ekran sırası: AÇIKTAN KOYUYA. Göz bir gradyanı takip ettiği için renk aramak kolaylaşır. */
+function tonSirali(cipler: RenkCip[]): RenkCip[] {
+  return [...cipler].sort(
+    (a, b) =>
+      acikligi(b.colorHex) - acikligi(a.colorHex) ||
       a.colorName.localeCompare(b.colorName, "tr-TR")
   );
 }
@@ -90,13 +127,13 @@ export function renkCipleri(
     };
   });
 
-  // Temel ailelerden hiç kaydı olmayanları "0" olarak ekle.
-  const varOlanAileler = new Set(cipler.map((c) => c.colorFamily));
+  // Temel renklerden hiç kaydı olmayanları "0" olarak ekle.
+  // Karşılaştırma RENK ANAHTARIYLA: aileyle bakılırsa elindeki "Mermer" beyaz ailesini dolu
+  // gösterip gerçek beyazın bittiğini gizler.
+  const varOlanRenkAnahtarlari = new Set(cipler.map((c) => c.colorKey));
   for (const renk of temelRenkler) {
-    if (varOlanAileler.has(renk.family)) continue;
-    // Aynı aileden ikinci bir ton gelirse tekrar eklenmesin ("Gri", "Koyu Gri", "Gümüş" hepsi
-    // "gri" ailesindendir; stok yokken üç ayrı boş çip çizilirdi).
-    varOlanAileler.add(renk.family);
+    if (varOlanRenkAnahtarlari.has(renk.key)) continue;
+    varOlanRenkAnahtarlari.add(renk.key);
     cipler.push({
       key: `yok:${renk.key}`,
       colorName: renk.name,
@@ -150,12 +187,16 @@ export function filtrele(cipler: RenkCip[], filtre: StokFiltre, arama: string): 
 }
 
 /**
- * Bölümlere ayır: TEMEL renkler üstte, gerisi altta. Her bölümde en kritik önce
- * (önce bitenler, sonra azalanlar, sonra sayıya göre artan).
+ * Bölümlere ayır: TEMEL renkler üstte, gerisi altta. Her bölüm AÇIKTAN KOYUYA sıralı.
+ *
+ * Sıralama kritikliğe göre DEĞİL: "neyim bitiyor" sorusunu zaten üst şeritteki sayaçlar,
+ * Biten/Azalan filtreleri ve çipin kendi rengi cevaplıyor. Izgaranın işi bir rengi hızlı
+ * bulmak, o da sabit ve tahmin edilebilir bir sırayla olur — kritiklik sırası her stok
+ * değişiminde çipleri yerinden oynatıyordu.
  */
 export function bolumlere(cipler: RenkCip[]): RenkBolumu[] {
-  const temel = sirali(cipler.filter((c) => temelMi(c)));
-  const diger = sirali(cipler.filter((c) => !temelMi(c)));
+  const temel = tonSirali(cipler.filter((c) => temelMi(c)));
+  const diger = tonSirali(cipler.filter((c) => !temelMi(c)));
 
   const bolumler: RenkBolumu[] = [];
   if (temel.length) {

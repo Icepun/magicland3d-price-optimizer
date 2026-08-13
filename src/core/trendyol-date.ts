@@ -55,3 +55,12 @@ export function trendyolDateToIso(value: number | string | null | undefined): st
 export function padTrendyolWindow(bound: number, edge: "start" | "end"): number {
   return edge === "start" ? bound - TR_OFFSET_MS : bound + TR_OFFSET_MS;
 }
+
+/**
+ * Bir uçtan eklenen pay. Pencere kuran taraf bunu bilmek ZORUNDA: Trendyol'un aralık
+ * limiti sert (≤2 hafta) ve pay iki uçtan da eklendiği için açıklığı 6 saat büyütür.
+ */
+export const TRENDYOL_WINDOW_PAD_MS = TR_OFFSET_MS;
+
+/** Trendyol'un startDate/endDate aralığı için sert üst sınır. Aşılırsa sorgu kırpılır. */
+export const TRENDYOL_MAX_WINDOW_MS = 14 * 86_400_000;
