@@ -224,7 +224,8 @@ function gcodeThumbnail(text: string): string | null {
   return best ? `data:image/png;base64,${best.b64}` : null;
 }
 
-function gcodeMeta(text: string): ModelMeta {
+/** Gcode başlık/altbilgi metninden meta çıkar — aralıklı okumayla beslenebilsin diye dışa açık. */
+export function gcodeMeta(text: string): ModelMeta {
   let grams: number | null = null;
   const tot = headerValue(text, "total filament used \\[g\\]");
   if (tot) { const g = parseFloat(tot); if (Number.isFinite(g)) grams = Math.round(g * 10) / 10; }

@@ -20,6 +20,7 @@ import {
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
+import { gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
 
 // three.js ilk pakete girmesin — izleyici yalnız açıldığında iner.
 const GcodeViewerDialog = dynamic(
@@ -31,7 +32,10 @@ interface LibPrinter { id: string; name: string; brand: string; type: string }
 interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null }
 interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number }
 interface LibStorage {
+  /** Buluttaki GERÇEK kullanım (aynı dosya varyantlarda paylaşılıyorsa bir kez sayılır). */
   totalBytes: number;
+  rowBytes: number;
+  sharedBytes: number;
   fileCount: number;
   byPrinter: Array<{ printerConfigId: string; bytes: number; files: number }>;
   largest: Array<{ id: string; productId: string; productName: string; printerConfigId: string; name: string; sizeBytes: number }>;
@@ -90,8 +94,22 @@ export default function ModelsPage() {
             <Stat value={allProducts.length} label="ürün" />
             <Stat value={totalParts} label="parça" />
             <Stat value={printers.length} label="yazıcı" />
-            {/* Kütüphanenin yer kaplaması hiçbir ekranda yazmıyordu; ölçüldü: 8,6 GB. */}
-            {storage && <Stat text={fmtSize(storage.totalBytes)} label="yer" />}
+            {/*
+              Buluttaki GERÇEK kullanım. Satırları toplamak yanlış olurdu: aynı dosya varyant
+              ürünlerde paylaşılıyor ve bulutta bir kez duruyor (ölçüldü: satır toplamı 8,39 GB,
+              gerçek 5,59 GB).
+            */}
+            {storage && (
+              <Stat
+                text={fmtSize(storage.totalBytes)}
+                label="yer"
+                title={
+                  storage.sharedBytes > 0
+                    ? `${fmtSize(storage.sharedBytes)} varyantlar arasında paylaşılıyor — bir kez sayıldı`
+                    : undefined
+                }
+              />
+            )}
           </div>
         </div>
       </div>
@@ -165,6 +183,7 @@ export default function ModelsPage() {
         <PartsModal
           product={parts.product}
           printer={parts.printer}
+          printers={printers}
           onClose={() => setParts(null)}
         />
       )}
@@ -172,9 +191,9 @@ export default function ModelsPage() {
   );
 }
 
-function Stat({ value, text, label }: { value?: number; text?: string; label: string }) {
+function Stat({ value, text, label, title }: { value?: number; text?: string; label: string; title?: string }) {
   return (
-    <div>
+    <div title={title}>
       <p className="text-xl font-bold tabular-nums leading-none">{text ?? value}</p>
       <p className="text-[10px] uppercase tracking-wider text-muted-foreground mt-1">{label}</p>
     </div>
@@ -191,10 +210,43 @@ function EmptyHint({ title, desc }: { title: string; desc: string }) {
   );
 }
 
-function PartsModal({ product, printer, onClose }: { product: LibProduct; printer: LibPrinter; onClose: () => void }) {
+function PartsModal({
+  product, printer, printers, onClose,
+}: { product: LibProduct; printer: LibPrinter; printers: LibPrinter[]; onClose: () => void }) {
   const qc = useQueryClient();
   const parts = product.files.filter((f) => f.printerConfigId === printer.id);
   const multiColor = printer.brand === "bambu" || printer.brand === "snapmaker";
+
+  // ── Yazıcılar arası filament karşılaştırması ────────────────────────────────────────
+  // Aynı ürünün dört yazıcı için ayrı dosyaları farklı miktarda filament harcıyor (destek,
+  // dolgu, dilimleyici ayarı). Bu fark hiçbir yerde görünmüyordu.
+  // ⚠️ Bu gramaj ÜRÜN MALİYETİNDEN tamamen ayrı bir alan — maliyeti etkilemez.
+  const [gramajlar, setGramajlar] = useState<Record<string, number | null>>({});
+  const [okuma, setOkuma] = useState<{ done: number; total: number } | null>(null);
+  const dosyalar = useMemo(
+    () => product.files.map((f) => ({ ...f, gramaj: gramajlar[f.id] ?? f.gramaj })),
+    [product.files, gramajlar]
+  );
+  const printerIds = useMemo(() => printers.map((p) => p.id), [printers]);
+  const karsilastirma = useMemo(() => gramajByPrinter(dosyalar, printerIds), [dosyalar, printerIds]);
+  const karsilastirmaMetni = useMemo(() => gramajCompareText(karsilastirma), [karsilastirma]);
+  const eksikler = useMemo(() => missingGramajFiles(dosyalar), [dosyalar]);
+
+  const gramajlariOku = async () => {
+    setOkuma({ done: 0, total: eksikler.length });
+    for (const [i, f] of eksikler.entries()) {
+      try {
+        const r = await fetchJson<{ gramaj: number | null }>(`/api/models/${f.id}/gramaj`, { method: "POST" });
+        setGramajlar((prev) => ({ ...prev, [f.id]: r.gramaj }));
+      } catch {
+        // Tek dosya okunamazsa diğerleri devam etsin; sonuç zaten "—" kalır.
+        setGramajlar((prev) => ({ ...prev, [f.id]: null }));
+      }
+      setOkuma({ done: i + 1, total: eksikler.length });
+    }
+    setOkuma(null);
+    qc.invalidateQueries({ queryKey: ["models"] });
+  };
 
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState<PrintProg | null>(null);
@@ -241,6 +293,59 @@ function PartsModal({ product, printer, onClose }: { product: LibProduct; printe
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> {product.name}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. {multiColor ? "Parçaya bas → renkleri seç → baskı başlar." : "Bir parçaya bas → yazıcıya yüklenip baskı başlar."}</p>
         </DialogHeader>
+
+        {/* Hangi makine bu ürünü daha az filamentle basıyor? */}
+        {karsilastirma.length > 1 && (
+          <div className="rounded-lg border bg-muted/30 p-2.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-medium text-muted-foreground">Filament tüketimi</p>
+              {eksikler.length > 0 && !okuma && (
+                <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2" onClick={gramajlariOku}>
+                  {eksikler.length} parçayı ölç
+                </Button>
+              )}
+              {okuma && (
+                <span className="text-[11px] text-muted-foreground tabular-nums">
+                  Ölçülüyor {okuma.done}/{okuma.total}
+                </span>
+              )}
+            </div>
+            {okuma && (
+              <div className="h-1 rounded-full bg-border overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-[width] duration-300"
+                  style={{ width: `${okuma.total ? (okuma.done / okuma.total) * 100 : 0}%` }}
+                />
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {karsilastirma.map((row) => {
+                const pr = printers.find((p) => p.id === row.printerConfigId);
+                const eksikVar = row.known < row.total;
+                return (
+                  <span
+                    key={row.printerConfigId}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] tabular-nums",
+                      row.lowest
+                        ? "border-green-500/40 bg-green-500/10 text-green-400 font-medium"
+                        : "border-border text-muted-foreground"
+                    )}
+                    title={eksikVar ? `${row.total} parçanın ${row.known} tanesi ölçüldü` : undefined}
+                  >
+                    {pr?.name ?? "Yazıcı"}
+                    {/* BİLİNMEYEN ≠ SIFIR: okunmamış gramaj "0 gr" değil "—". */}
+                    <b className="font-semibold">{row.grams == null ? "—" : `${row.grams} gr`}</b>
+                    {eksikVar && row.grams != null && <span className="opacity-60">·eksik</span>}
+                  </span>
+                );
+              })}
+            </div>
+            {karsilastirmaMetni && (
+              <p className="text-[11px] text-muted-foreground/80">{karsilastirmaMetni}</p>
+            )}
+          </div>
+        )}
         <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {parts.map((part, i) => (
             <div key={part.id} className="flex items-center gap-2.5 rounded-lg border p-2">

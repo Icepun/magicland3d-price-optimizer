@@ -74,6 +74,36 @@ export async function presignPutUrl(key: string, cfg: R2Config): Promise<string>
   });
 }
 
+/**
+ * Nesnenin YALNIZ bir aralığını çek.
+ *
+ * ⚠️ NEDEN VAR: gcode'un gramajı başlıkta ve altbilgide yazılı — ilgili kısım baş/son 400 KB.
+ * Kütüphanedeki 470 dosya 8,4 GB tutuyor; gramajları doldurmak için hepsini indirmek
+ * kabul edilemezdi. Aralıkla okuyunca dosya başına ~800 KB iniyor (178 MB'lık dosyada
+ * bile), yani toplam ~370 MB yerine 8,4 GB.
+ *
+ * `end` DAHİLDİR (HTTP Range semantiği). Dosya sonundan okurken `end` dosya boyunu aşabilir;
+ * S3/R2 bunu sorun etmez, eldeki kadarını döner.
+ */
+export async function getObjectRange(
+  key: string,
+  cfg: R2Config,
+  start: number,
+  end: number
+): Promise<Buffer> {
+  const res = await client(cfg).send(
+    new GetObjectCommand({ Bucket: cfg.bucket, Key: key, Range: `bytes=${start}-${end}` })
+  );
+  if (!res.Body) throw new Error("R2: boş yanıt");
+  return Buffer.from(await res.Body.transformToByteArray());
+}
+
+/** Nesnenin boyutu — aralık okumasında sonu bulmak için (gövde indirilmez). */
+export async function getObjectSize(key: string, cfg: R2Config): Promise<number> {
+  const res = await client(cfg).send(new HeadObjectCommand({ Bucket: cfg.bucket, Key: key }));
+  return Number(res.ContentLength) || 0;
+}
+
 /** R2'den nesne baytlarını çek (baskı anında, sunucu tarafı). */
 export async function getObjectBytes(key: string, cfg: R2Config): Promise<Buffer> {
   const res = await client(cfg).send(new GetObjectCommand({ Bucket: cfg.bucket, Key: key }));
