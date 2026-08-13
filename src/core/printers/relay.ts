@@ -32,7 +32,7 @@ import {
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
-import { toDbDate } from "@/lib/sqlite-date";
+import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
 
 const TICK_MS = 10_000;
 /** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
@@ -296,11 +296,59 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
   }
 }
 
+/**
+ * Aynı bildirim son 30 dakikada zaten yazılmış mı?
+ *
+ * ⚠️ NEDEN VERİTABANINDAN SORUYORUZ: tekilleştirme yalnız BELLEKTEKİ `lastDoneNotify` /
+ * `lastFaultNotify` haritalarına bakıyordu ve o haritalar SÜRECE ait. Aynı veritabanına bakan
+ * ikinci bir süreç (ikinci pencere, geliştirme sunucusu, yeniden başlatma) kendi boş
+ * haritasıyla AYNI bildirimi bir daha yazıyordu. Satır id'si `…:${Date.now()}` olduğu için
+ * `INSERT OR IGNORE` de hiçbir şeyi engellemiyordu — id her seferinde farklı.
+ * Sahada görüldü: tek baskı bitişi için üç "Baskı tamamlandı" satırı, 4 saniye içinde.
+ *
+ * Zaman penceresi kullanılıyor, sabit id DEĞİL: aynı dosya saatler sonra yeniden basılırsa
+ * bildirim YİNE düşmeli. (Sabit id bir zamanlar denenmiş ve tekrarlayan baskıları sessize
+ * almıştı — bu yüzden id zaman damgalı yapılmış, ama o da tekilleştirmeyi tamamen kaldırmış.)
+ */
+export const NOTIFY_DEDUPE_MS = 30 * 60_000;
+
+/**
+ * Mükerrer kontrolünün SQL'i — testten AYNI dizeyi koşturabilmek için dışa açık.
+ * (Dize içindeki SQL'i `tsc`, `eslint` ve `next build` GÖREMEZ; bu projede geçersiz bir göç
+ * sorgusu tam bu yüzden fark edilmeden yayınlanmış ve uygulamayı 205 saniye açtırmamıştı.)
+ *
+ * `dbEpochMs` ile karşılaştırılır: `createdAt` sahada İKİ biçimde bulunabiliyor
+ * ("2026-08-13 09:13:21" ve "2026-08-13T09:13:21.620+00:00"). Düz metin karşılaştırması
+ * biçimlerden birini tümüyle ıskalar ve koruma sessizce çalışmaz.
+ */
+export function recentNotificationSql(): string {
+  return `SELECT COUNT(*) AS n FROM "Notification"
+           WHERE "type" = ? AND "body" = ? AND ${dbEpochMs("createdAt")} >= ?`;
+}
+
+async function bildirimZatenVar(type: string, body: string): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRawUnsafe<Array<{ n: number | bigint }>>(
+      recentNotificationSql(),
+      type,
+      body,
+      Date.now() - NOTIFY_DEDUPE_MS
+    );
+    const n = rows[0]?.n;
+    return (typeof n === "bigint" ? Number(n) : Number(n ?? 0)) > 0;
+  } catch {
+    // Sorgu düşerse bildirimi ENGELLEME — mükerrer bildirim, kaçan bildirimden iyidir.
+    return false;
+  }
+}
+
 /** Baskı tamamlandı → kalıcı Notification (masaüstü zili + OS bildirimi) + mobil push (telefona düşer). */
 async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
   const job = snap.productName ? ` — ${snap.productName}` : "";
   const title = "Baskı tamamlandı 🎉";
   const body = `${c.name}${job}`;
+  // Süreçler arası koruma: mobil push da buradan geçtiği için telefon da tek bildirim alır.
+  if (await bildirimZatenVar("printer-done", body)) return;
   // 1) Kalıcı bildirim — /api/notifications okur; masaüstü zili gösterir + OS bildirimi atar. Benzersiz
   //    id (zaman damgalı) → her tamamlanma için bir kez (statik id'li eski uyarı tekrar atmıyordu).
   try {
@@ -333,6 +381,8 @@ async function notifyPrintFault(c: Cfg, snap: SnapFields): Promise<void> {
   const title = isError ? "Baskı hatayla durdu ⚠️" : "Baskı duraklatıldı ⏸";
   // statusMessage yazıcıdan gelen nedeni taşır (hata kodu vb.); yoksa yazıcı adıyla yetin.
   const body = `${c.name}${job}${snap.statusMessage ? ` · ${snap.statusMessage}` : ""}`;
+  // "Baskı duraklatıldı" da aynı şekilde üçleniyordu (sahada 08:44'te üç satır).
+  if (await bildirimZatenVar(isError ? "printer-error" : "printer-paused", body)) return;
   try {
     await prisma.$executeRawUnsafe(
       // createdAt AÇIKÇA yazılır: kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP
