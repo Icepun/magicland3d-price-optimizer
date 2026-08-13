@@ -214,7 +214,8 @@ function printerStatusLabel(printer: QueuePrinter): { label: string; cls: string
 
 export default function PlannerPage() {
   const { data, isLoading } = useQuery<ProductRow[]>({
-    // Aktif ürünler (~442KB) — Ürünler/Raporlar/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
+    // Aktif ürünler (~442KB) — Ürünler/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
+    // (Raporlar bu gövdeyi ARTIK paylaşmıyor; kendi küçük kârlılık uçtan noktasını çekiyor.)
     queryKey: ["products", "active"],
     queryFn: () => fetchJson("/api/products?filter=active"),
     staleTime: 60_000,

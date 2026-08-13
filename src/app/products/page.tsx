@@ -1095,7 +1095,8 @@ export default function ProductsPage() {
    * listeye dokunulmadığı için gereksiz ağır çekim de olmaz.
    */
   /**
-   * Listenin sorgu anahtarı — Planlayıcı / Raporlar / Makaralar ile AYNI gövdeyi paylaşır.
+   * Listenin sorgu anahtarı — Planlayıcı / Makaralar ile AYNI gövdeyi paylaşır. (Raporlar
+   * ayrıldı: kendi küçük kârlılık gövdesini çekiyor, yalnız `["products"]` düşürmelerine takılır.)
    * (Daha önce Ürünler tek başına 3 parçalı bir anahtar kullandığı için aynı ~450 KB'lık liste
    * iki kez indiriliyordu.)
    */

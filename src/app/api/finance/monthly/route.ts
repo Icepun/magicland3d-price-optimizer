@@ -29,6 +29,7 @@ import {
   readFinanceSourceHealth,
   trendyolCommissionStatsSql,
 } from "@/lib/finance-report-meta";
+import { readProductProfitability } from "@/lib/finance-product-profitability";
 
 /**
  * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
@@ -154,6 +155,29 @@ export async function GET(req: NextRequest) {
       { recalc: financeRecalcState() },
       { headers: { "Cache-Control": "no-store" } }
     );
+  }
+
+  /**
+   * Teorik ürün kârlılığı AYRI bir bölüm olarak istenir.
+   *
+   * NEDEN AYNI GÖVDEDE DEĞİL: aylık toplamlar sayfanın omurgası, bu kart ise en alttaki bir
+   * liste. Aynı gövdeye konsaydı beş ek okuma (ürünler + kurallar + ayarlar) bitene kadar TÜM
+   * sayfa beklerdi. Ayrı bölüm olarak kart kendi küçük yükleme durumunda bekler, sayfanın
+   * geri kalanı anında çizilir.
+   *
+   * Anahtar `products:` ile başlar — maliyet/komisyon/kargo/fiyat değişince mevcut ürün
+   * önbelleği düşürücüleri (bustProductCaches / bustProfitInputCaches) bunu da düşürür.
+   */
+  if (req.nextUrl.searchParams.get("section") === "profitability") {
+    try {
+      await ensureRuntimeSchema();
+      const data = await swr("products:profitability:v1", 2 * 60_000, () =>
+        readProductProfitability()
+      );
+      return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      return jsonError(error);
+    }
   }
 
   const requested = Number(req.nextUrl.searchParams.get("months") ?? 12);

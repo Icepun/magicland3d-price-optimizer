@@ -1,7 +1,13 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -38,20 +44,33 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatCompactCurrency, formatCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { AnimatedNumber } from "@/components/ui/animated-number";
+import { usePageHidden, usePrefersReducedMotion } from "@/lib/client-state";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
 import { toast } from "sonner";
 import {
   blockedRecalcText,
+  chartMonths,
+  chartScopeText,
   deltaTone,
-  missingCostCount,
+  freshnessLine,
+  isMonthRangeKey,
+  monthKeyOf,
+  monthPeriodLabel,
+  monthProgress,
+  monthProjection,
   monthReadiness,
+  monthsWithData,
   profitWarningLabel,
   soldUnitsBadge,
   statDelta,
+  visibleRangeOptions,
   windowRecalcSummary,
   type FinanceResponse,
+  type MonthRangeKey,
+  type ProductProfitability,
   type ProductSalesRow,
+  type ProfitabilityRow,
 } from "./reports-view";
 
 interface SummaryBucket {
@@ -97,13 +116,49 @@ interface OrdersResp {
  */
 let sonSiparisDamgasi = 0;
 
-interface ProductRow {
-  id: string;
-  name: string;
-  imageUrl: string | null;
-  currentNetProfit: number | null;
-  currentProfitMargin: number | null;
-  hasCost: boolean;
+/**
+ * Grafik aralığı seçimi OTURUM BOYUNCA hatırlanır: kullanıcı "3 ay"a geçip başka bir ekrana
+ * gidip döndüğünde seçimi duruyor olmalı. `sessionStorage` uygulama yeniden yüklense de tutar.
+ *
+ * Seçim React'in harici-store sözleşmesiyle okunur: sunucu çizimi her zaman varsayılanı görür,
+ * kayıtlı değer istemciye geçilince uygulanır — böylece iki çizim ayrışmaz.
+ */
+const RANGE_STORAGE_KEY = "mlhub.reports.range";
+const aralikDinleyiciler = new Set<() => void>();
+let hatirlananAralik: MonthRangeKey | null = null;
+
+function aralikAbone(onChange: () => void): () => void {
+  aralikDinleyiciler.add(onChange);
+  return () => {
+    aralikDinleyiciler.delete(onChange);
+  };
+}
+
+function aralikSnapshot(): MonthRangeKey {
+  if (hatirlananAralik == null) {
+    let saved: string | null = null;
+    try {
+      saved = window.sessionStorage.getItem(RANGE_STORAGE_KEY);
+    } catch {
+      // Depolama kapalı olabilir → varsayılan aralık kullanılır.
+    }
+    // Varsayılan "Tümü": 12 aylık pencerede "12 ay" düğmesi hiç görünmediği için varsayılan
+    // olarak yazılması sessizce "Tümü"ye düşen ölü bir seçim demekti.
+    hatirlananAralik = isMonthRangeKey(saved) ? saved : "all";
+  }
+  return hatirlananAralik;
+}
+
+const aralikSunucuSnapshot = (): MonthRangeKey => "all";
+
+function aralikYaz(next: MonthRangeKey): void {
+  hatirlananAralik = next;
+  try {
+    window.sessionStorage.setItem(RANGE_STORAGE_KEY, next);
+  } catch {
+    // Depolama kapalı → seçim yine de bu oturum boyunca bellekte durur.
+  }
+  for (const listener of aralikDinleyiciler) listener();
 }
 
 /** Yeniden hesap turunun anlık durumu. */
@@ -149,16 +204,39 @@ interface TrendyolCommissionSyncResponse {
 }
 
 /**
- * "En çok satanlar" çubukları sıfırdan dolar.
+ * "En çok satanlar" çubukları sıfırdan dolar; kademeli giriş SATIRIN kendi soluk geçişinden
+ * gelir, çubuğun genişliğinden değil.
  *
- * Dolgu JS/rAF ile değil CSS ile yapılır ve `fill-mode` VERİLMEZ: animasyon hiç başlamasa
- * bile (gizli pencere) çubuk kendi gerçek genişliğinde durur, sıfırda donmaz.
+ * ⚠️ `animation-delay` ve `fill-mode` VERİLMEZ. Gerekçe ÖLÇÜLDÜ (gizli pencerede,
+ * `getComputedStyle` ile): pencere gizliyken CSS animasyon saati 0'da duruyor ve çubuk
+ * fill-mode olsun olmasın 0 genişlikte hesaplanıyor — yani fill-mode'un koruyuculuğu YOK.
+ * Pencere öne gelince saat baştan işliyor ve çubuk doğru genişliğe büyüyor, dolayısıyla
+ * kullanıcı hiçbir zaman sıfır çubuk görmüyor. Gecikme ve fill-mode yine de yazılmaz: satır
+ * zaten kademeli giriyor, çubuğu ikinci kez geciktirmenin bir karşılığı yok.
+ *
+ * `transition` arka plan tazelemesi içindir: adetler değişince React aynı ögeyi yeniden
+ * kullanır, mount animasyonu tekrar çalışmaz ve çubuk yeni genişliğine ZIPLARDI.
  */
 const BAR_GROW_CSS = `
 @keyframes ml-bar-grow { from { width: 0 } }
-.ml-bar { animation: ml-bar-grow 700ms cubic-bezier(0.16, 1, 0.3, 1); }
-@media (prefers-reduced-motion: reduce) { .ml-bar { animation: none } }
+.ml-bar {
+  animation: ml-bar-grow 700ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: width 500ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ml-bar { animation: none; transition: none }
+}
 `;
+
+/**
+ * Listelerdeki tıklanabilir satırın ortak odak/hover geri bildirimi.
+ *
+ * ⚠️ `outline-hidden`, `outline-none` DEĞİL: Tailwind v4'te ikincisi outline'ı tümden
+ * kaldırıyor ve Yüksek Kontrast kipinde halka (box-shadow) çizilmediği için odak GÖRÜNMEZ
+ * oluyordu. Kaydırma rengi kart zeminidir — bu satırların hepsi bir kartın içinde durur.
+ */
+const ROW_FOCUS =
+  "outline-hidden focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-card";
 
 function MiniThumb({
   src,
@@ -188,10 +266,6 @@ function MiniThumb({
   );
 }
 
-const SHOPIFY = "oklch(0.60 0.16 152)";
-const TRENDYOL = "oklch(0.72 0.17 60)";
-const HEPSIBURADA = "oklch(0.66 0.19 38)";
-const MANUAL = "oklch(0.64 0.19 285)";
 const PRIMARY = "oklch(0.62 0.20 278)";
 const PROFIT = "oklch(0.68 0.17 145)";
 const LOSS = "oklch(0.63 0.22 25)";
@@ -212,19 +286,45 @@ function formatHistoryDate(value: string) {
       }).format(date);
 }
 
+const TOOLTIP_STYLE = {
+  background: "oklch(0.2 0.02 278)",
+  border: "1px solid oklch(1 0 0 / 12%)",
+  borderRadius: 8,
+  fontSize: 12,
+  color: "oklch(0.95 0 0)",
+} as const;
+
 export default function ReportsPage() {
   const queryClient = useQueryClient();
+  const reduceMotion = usePrefersReducedMotion();
+  /**
+   * Grafik çubukları gizli pencerede animasyonsuz çizilir.
+   *
+   * Recharts çubuğu `requestAnimationFrame` ile 0'dan büyütüyor; pencere arka plandayken o
+   * kare hiç gelmiyor ve çubuklar sıfır yükseklikte kalıyor. Sayaçlarda aynı sınıf hata bu
+   * projede ÖLÇÜLDÜ ve KALICI çıkmıştı (bkz. `AnimatedNumber`), bu yüzden aynı korumayı
+   * grafiğe de takıyoruz: gizliyken çubuklar son hâlleriyle çizilir.
+   */
+  const sayfaGizli = usePageHidden();
+  const grafikAnimasyonu = !reduceMotion && !sayfaGizli;
+
+  /**
+   * "Şimdi" tek yerden gelir ve dakikada iki kez ilerler: tazelik satırı ("12 dakika önce")
+   * ve devam eden ayın kaçıncı gününde olduğumuz buradan hesaplanır.
+   */
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const ordersQuery = useQuery<OrdersResp>({
     queryKey: ["orders"],
     queryFn: () => fetchJson<OrdersResp>("/api/orders", { cache: "no-store" }),
     staleTime: 30_000,
-    refetchOnMount: "always",
-  });
-  const productsQuery = useQuery<ProductRow[]>({
-    queryKey: ["products", "active"],
-    queryFn: () => fetchJson<ProductRow[]>("/api/products?filter=active"),
-    staleTime: 60_000,
+    // "always" her girişte pazaryeri çekimini yeniden tetikliyordu; elde 30 saniyeden taze
+    // yanıt varken beklemenin karşılığı yok.
+    refetchOnMount: true,
   });
   /**
    * Aylık finans — SİPARİŞ ÇEKİMİNDEN BAĞIMSIZ.
@@ -233,6 +333,11 @@ export default function ReportsPage() {
    * Trendyol/Shopify yanıt vermediğinde ekran "henüz satış verisi yok" diyordu, oysa yüzlerce
    * siparişlik geçmiş veritabanında duruyordu. Kayıtlı geçmiş her zaman gösterilir; çekim
    * bittiğinde (aşağıdaki etki) yalnızca tazelenir.
+   *
+   * ⚠️ ÖNBELLEK EKRANDA KALIR: `staleTime: 0` + `refetchOnMount: "always"` her girişte gereksiz
+   * bir istek atıyordu; iskelet yalnız SOĞUK açılışta (uygulama yeniden başladığında ya da
+   * önbellek toplandıktan sonra) çıkıyordu. Kazanç o fazladan isteğin kalkması; artık elde veri
+   * varken tazeleme ARKA PLANDA olur ve ekrandaki rakamlar yerinde durur.
    */
   const financeQuery = useQuery<FinanceResponse>({
     queryKey: ["finance-monthly", 12],
@@ -240,8 +345,38 @@ export default function ReportsPage() {
       fetchJson<FinanceResponse>("/api/finance/monthly?months=12", {
         cache: "no-store",
       }),
-    staleTime: 0,
-    refetchOnMount: "always",
+    staleTime: 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnMount: true,
+  });
+
+  /**
+   * Teorik ürün kârlılığı — SAYFAYI BEKLETMEZ.
+   *
+   * Eskiden bu kart `/api/products?filter=active` ile besleniyordu: 372 ürünün tam kaydı
+   * (536.058 bayt) iniyor, ekrana ~4 KB'lık 12 satır çıkıyordu. Artık yalnız o satırlar gelir
+   * ve kart kendi küçük yükleme durumunda bekler.
+   *
+   * ⚠️ ÖLÇÜM DÜRÜSTLÜĞÜ: kazanç İNDİRİLEN BAYTTADIR. Sunucudaki beş okuma + ürün başına
+   * simülasyon aynı kaldı; üstelik ürün listesi gövdesiyle paylaşılmadığı için kâr girdisi
+   * değişince o hesap iki ayrı önbellek için iki kez yapılır.
+   *
+   * ⚠️ ANAHTAR `["products", …]` OLMAK ZORUNDA. Maliyet/komisyon/kargo/fiyat değiştiren ~20
+   * yer `invalidateQueries({ queryKey: ["products"] })` çağırıyor; ön ek eşleşmesi bu kartı da
+   * kapsasın diye anahtar o ailenin altında durur. `refetchOnMount` da ZORUNLU: genel
+   * varsayılan `false` (QueryProvider) olduğu için mount'ta bayatlık hiç sorulmaz ve
+   * düşürülen sorgu ekrana eski rakamla geri gelirdi.
+   *
+   * Gövde bir ürün DİZİSİ değil; ürün listelerini yamalayan iyimser güncellemeler
+   * `Array.isArray(old)` süzgeciyle bu girdiye dokunmaz.
+   */
+  const profitabilityQuery = useQuery<ProductProfitability>({
+    queryKey: ["products", "profitability"],
+    queryFn: () =>
+      fetchJson<ProductProfitability>("/api/finance/monthly?section=profitability"),
+    staleTime: 2 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnMount: true,
   });
 
   /**
@@ -372,10 +507,7 @@ export default function ReportsPage() {
 
   const summary = ordersQuery.data?.summary;
   const finance = financeQuery.data;
-  const productList = useMemo(
-    () => (Array.isArray(productsQuery.data) ? productsQuery.data : []),
-    [productsQuery.data]
-  );
+  const timeZone = finance?.timeZone || "Europe/Istanbul";
   const financeMonths = useMemo(
     () => (Array.isArray(finance?.months) ? finance.months : []),
     [finance]
@@ -385,6 +517,50 @@ export default function ReportsPage() {
   const sales = finance?.products;
   const commission = finance?.commission;
   const readiness = finance?.recalcReadiness;
+
+  // ── Grafik aralığı ──────────────────────────────────────────────────────────────────────
+  const range = useSyncExternalStore(
+    aralikAbone,
+    aralikSnapshot,
+    aralikSunucuSnapshot
+  );
+
+  // Veri BAŞLAMADAN önceki boş aylar hem grafikten hem ay listesinden düşer.
+  const dataMonths = useMemo(
+    () => monthsWithData(financeMonths, finance?.dataFrom, timeZone),
+    [financeMonths, finance?.dataFrom, timeZone]
+  );
+  const rangeOptions = useMemo(
+    () => visibleRangeOptions(dataMonths.length),
+    [dataMonths.length]
+  );
+  const activeRange: MonthRangeKey = rangeOptions.some((option) => option.key === range)
+    ? range
+    : "all";
+
+  const currentProgress = currentMonth
+    ? monthProgress(currentMonth.month, nowMs, timeZone)
+    : null;
+  const periodLabel = currentMonth
+    ? monthPeriodLabel(currentMonth.month, currentProgress)
+    : null;
+  const previousPeriodLabel = previousMonth
+    ? monthPeriodLabel(previousMonth.month, null)
+    : null;
+  const ongoingKey = monthKeyOf(new Date(nowMs).toISOString(), timeZone);
+
+  const chartData = useMemo(
+    () =>
+      chartMonths(financeMonths, finance?.dataFrom, activeRange, timeZone).map((month) => ({
+        ...month,
+        ongoing: month.month === ongoingKey,
+      })),
+    [financeMonths, finance?.dataFrom, activeRange, timeZone, ongoingKey]
+  );
+  const showsOngoing = chartData.some((month) => month.ongoing);
+  const showsLoss = chartData.some((month) => month.netProfit < 0);
+  // Grafik daraltıldıysa altındaki cümle bunu SÖYLER; tamamı çiziliyorsa ilk veri tarihini yazar.
+  const chartScope = chartScopeText(chartData.length, dataMonths.length);
 
   /**
    * Kaynak sağlığı ÖNCE canlı sipariş yanıtından okunur.
@@ -410,7 +586,7 @@ export default function ReportsPage() {
 
   // Kullanıcı bir ay seçmediyse "bu ay" — düzeltmeler en sık içinde bulunulan ayda yapılıyor.
   const selectedRecalcMonth =
-    financeMonths.some((month) => month.month === recalcMonth)
+    dataMonths.some((month) => month.month === recalcMonth)
       ? recalcMonth
       : currentMonth?.month ?? "";
   const selectedReadiness = monthReadiness(readiness, selectedRecalcMonth);
@@ -435,26 +611,11 @@ export default function ReportsPage() {
 
   const earners: ProductSalesRow[] = sales?.profitLeaders ?? [];
 
-  const profitLeaders = useMemo(
-    () =>
-      productList
-        .filter((product) => product.hasCost && product.currentNetProfit != null)
-        .sort((a, b) => (b.currentNetProfit ?? 0) - (a.currentNetProfit ?? 0))
-        .slice(0, 6),
-    [productList]
-  );
-  const lossMakers = useMemo(
-    () =>
-      productList
-        .filter(
-          (product) =>
-            product.currentNetProfit != null && (product.currentNetProfit ?? 0) < 0
-        )
-        .sort((a, b) => (a.currentNetProfit ?? 0) - (b.currentNetProfit ?? 0))
-        .slice(0, 6),
-    [productList]
-  );
-  const noCostProducts = useMemo(() => missingCostCount(productList), [productList]);
+  const profitability = profitabilityQuery.data;
+  const profitLeaders: ProfitabilityRow[] = profitability?.leaders ?? [];
+  const lossMakers: ProfitabilityRow[] = profitability?.losers ?? [];
+  const noCostProducts = profitability?.missingCostProducts ?? 0;
+  const countedProducts = profitability?.countedProducts ?? 0;
 
   const platformChart = useMemo(
     () =>
@@ -464,25 +625,21 @@ export default function ReportsPage() {
               platform: "Shopify",
               Ciro: Math.round(summary.shopify.revenue),
               Kâr: Math.round(summary.shopify.profit),
-              color: SHOPIFY,
             },
             {
               platform: "Trendyol",
               Ciro: Math.round(summary.trendyol.revenue),
               Kâr: Math.round(summary.trendyol.profit),
-              color: TRENDYOL,
             },
             {
               platform: "Hepsiburada",
               Ciro: Math.round(summary.hepsiburada.revenue),
               Kâr: Math.round(summary.hepsiburada.profit),
-              color: HEPSIBURADA,
             },
             {
               platform: "Manuel",
               Ciro: Math.round(summary.manual?.revenue ?? 0),
               Kâr: Math.round(summary.manual?.profit ?? 0),
-              color: MANUAL,
             },
           ]
         : [],
@@ -497,23 +654,50 @@ export default function ReportsPage() {
       month.orderProfit !== 0
   );
   const incompleteTotal = finance?.quality.incompleteOrders ?? 0;
-  // Kayıtlı geçmiş sipariş çekimine bağlı değil: yalnız finans ilk kez yüklenirken iskelet.
-  const loading = financeQuery.isLoading && !finance;
+  // Kayıtlı geçmiş sipariş çekimine bağlı değil: iskelet YALNIZ gerçekten hiç veri yokken.
+  // ⚠️ `isPending` DEĞİL `isLoading`: ağ kopukken sorgu duraklatılır ve `isPending` sonsuza
+  // kadar true kalır — ekran kalıcı olarak gri kutularda donardı.
+  const loading = !finance && financeQuery.isLoading;
+  // Elde veri varken tazeleme sessizce arka planda döner; kullanıcı yine de görsün.
+  const refreshing = Boolean(finance) && financeQuery.isFetching;
+  /**
+   * Rakamlar GELMEDİ mi (hata ya da ağ yok), yoksa gelip GERÇEKTEN boş mu?
+   *
+   * ⚠️ Ağ kopukken sorgu duraklar: `isError` false, `isFetching` false. Bu ayrım olmadan ekran
+   * yüzlerce siparişi olan kullanıcıya "Henüz satış veya gider verisi yok" diyor ve yeniden
+   * deneme yolu da göstermiyordu. "Veri yok" cümlesi YALNIZ yanıt eldeyken basılır.
+   */
+  const financeUnavailable =
+    !finance && (financeQuery.isError || financeQuery.fetchStatus === "paused");
 
-  const recentCoverage = sales?.recentCoverage;
-  const recentUnmatched = sales?.recentUnmatched;
+  const freshness = finance
+    ? freshnessLine(finance.generatedAt, finance.lastOrderSyncAt, nowMs)
+    : null;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-6xl">
+    <div className="p-4 sm:p-6 space-y-5 max-w-6xl min-w-0">
       <style>{BAR_GROW_CSS}</style>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <BarChart3 className="h-6 w-6 text-primary" /> Raporlar
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Aylık ciro, net kâr ve satış performansının tek görünümü.
           </p>
+          {freshness && (
+            <p
+              /* Arka plan tazelemesinin başladığı/bittiği ekran okuyucuya da duyurulur. */
+              aria-live="polite"
+              className={cn(
+                "text-xs mt-1 flex items-center gap-1.5 animate-in fade-in duration-500",
+                freshness.stale ? "text-amber-500" : "text-muted-foreground"
+              )}
+            >
+              {refreshing && <RefreshCw className="h-3 w-3 shrink-0 animate-spin" aria-hidden="true" />}
+              <span>{refreshing ? "Rakamlar tazeleniyor..." : freshness.text}</span>
+            </p>
+          )}
           {finance && (
             <p className="text-xs text-muted-foreground mt-1">
               {(commission?.applied ?? finance.actualCommissionOrders) > 0
@@ -531,7 +715,7 @@ export default function ReportsPage() {
           type="button"
           variant="outline"
           size="sm"
-          className="gap-2 self-start"
+          className="gap-2 self-start transition-transform active:scale-[0.97]"
           disabled={trendyolCommissionSync.isPending}
           onClick={() => trendyolCommissionSync.mutate()}
         >
@@ -548,14 +732,10 @@ export default function ReportsPage() {
       </div>
 
       {loading ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {Array.from({ length: 6 }).map((_, index) => (
-            <Skeleton key={index} className="h-40 w-full rounded-xl" />
-          ))}
-        </div>
+        <ReportsSkeleton />
       ) : (
         <>
-          {financeQuery.isError && (
+          {(financeQuery.isError || financeUnavailable) && (
             <Card className="border-destructive/40">
               <CardContent className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-destructive">
@@ -563,7 +743,10 @@ export default function ReportsPage() {
                 </p>
                 <button
                   type="button"
-                  className="text-sm font-medium text-primary hover:underline self-start"
+                  className={cn(
+                    "text-sm font-medium text-primary hover:underline self-start rounded-md px-1",
+                    ROW_FOCUS
+                  )}
                   onClick={() => financeQuery.refetch()}
                 >
                   Yeniden dene
@@ -580,7 +763,10 @@ export default function ReportsPage() {
                 </p>
                 <button
                   type="button"
-                  className="text-sm font-medium text-primary hover:underline self-start"
+                  className={cn(
+                    "text-sm font-medium text-primary hover:underline self-start rounded-md px-1",
+                    ROW_FOCUS
+                  )}
                   onClick={() => ordersQuery.refetch()}
                 >
                   Yeniden dene
@@ -621,7 +807,12 @@ export default function ReportsPage() {
                     {/* Cihazın/servisin ham hata metni kullanıcıya hitap etmiyor → istenirse açılır. */}
                     {ordersQuery.data.financeHistory.error && (
                       <details className="group mt-1">
-                        <summary className="cursor-pointer select-none text-xs text-muted-foreground/70 hover:text-foreground transition-colors">
+                        <summary
+                          className={cn(
+                            "cursor-pointer select-none text-xs text-muted-foreground/70 hover:text-foreground transition-colors rounded",
+                            ROW_FOCUS
+                          )}
+                        >
                           Ayrıntı
                         </summary>
                         <p className="mt-1 text-xs text-muted-foreground break-words">
@@ -639,9 +830,19 @@ export default function ReportsPage() {
                 boş kova döndürdüğünde grafik "veri yok" derken kartların 0 yazması iki
                 çelişkili iddia demekti. */}
             <Stat
-              label="Ciro (bu ay)"
+              label="Ciro"
+              period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.revenue : null}
               previous={hasMonthlyData && previousMonth ? previousMonth.revenue : null}
+              previousPeriod={previousPeriodLabel}
+              /* Ay sonu tahmini YALNIZ günü gününe biriken ölçülerde: ciro ve sipariş adedi.
+                 Gider toplu ödeniyor (kira bir günde düşer) → giderde ve ona bağlı net kârda
+                 günlük ortalamayla ay sonu çıkarmak yanlış rakam üretir. */
+              projection={
+                hasMonthlyData && currentMonth
+                  ? monthProjection(currentMonth.revenue, currentProgress)
+                  : null
+              }
               format={fmtK}
               higherIsBetter
               color={PRIMARY}
@@ -649,9 +850,11 @@ export default function ReportsPage() {
               delay={0}
             />
             <Stat
-              label="Net kâr (bu ay)"
+              label="Net kâr"
+              period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.netProfit : null}
               previous={hasMonthlyData && previousMonth ? previousMonth.netProfit : null}
+              previousPeriod={previousPeriodLabel}
               format={fmtK}
               higherIsBetter
               color={
@@ -663,9 +866,11 @@ export default function ReportsPage() {
               delay={70}
             />
             <Stat
-              label="Gider ödemesi (bu ay)"
+              label="Gider ödemesi"
+              period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.expenses : null}
               previous={hasMonthlyData && previousMonth ? previousMonth.expenses : null}
+              previousPeriod={previousPeriodLabel}
               format={fmtK}
               /* Giderde ARTIŞ kötüdür — rengi ters döner. */
               higherIsBetter={false}
@@ -674,9 +879,16 @@ export default function ReportsPage() {
               delay={140}
             />
             <Stat
-              label="Sipariş (bu ay)"
+              label="Sipariş"
+              period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.orderCount : null}
               previous={hasMonthlyData && previousMonth ? previousMonth.orderCount : null}
+              previousPeriod={previousPeriodLabel}
+              projection={
+                hasMonthlyData && currentMonth
+                  ? monthProjection(currentMonth.orderCount, currentProgress)
+                  : null
+              }
               format={fmtCount}
               higherIsBetter
               color={PRIMARY}
@@ -726,89 +938,146 @@ export default function ReportsPage() {
 
           <Card>
             <CardHeader className="pb-2 border-b border-border/50">
-              <CardTitle className="text-sm flex items-center gap-2">
-                <CalendarRange className="h-4 w-4 text-primary" />
-                Aydan Aya Ciro ve Net Kâr
-              </CardTitle>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <CalendarRange className="h-4 w-4 text-primary" />
+                  Aydan Aya Ciro ve Net Kâr
+                </CardTitle>
+                {rangeOptions.length > 0 && (
+                  <div
+                    role="group"
+                    aria-label="Grafik aralığı"
+                    className="flex items-center gap-0.5 rounded-lg border border-border/60 bg-muted/25 p-0.5"
+                  >
+                    {rangeOptions.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        aria-pressed={activeRange === option.key}
+                        onClick={() => aralikYaz(option.key)}
+                        className={cn(
+                          "h-7 rounded-md px-2.5 text-xs font-medium transition-all duration-200 active:scale-[0.96]",
+                          ROW_FOCUS,
+                          activeRange === option.key
+                            ? "bg-primary/15 text-primary"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </CardHeader>
             <CardContent className="pt-4">
-              {hasMonthlyData ? (
-                <div className="h-72 w-full text-muted-foreground">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={financeMonths}
-                      margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="currentColor"
-                        strokeOpacity={0.12}
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="label"
-                        tick={{ fontSize: 11, fill: "currentColor" }}
-                        tickLine={false}
-                        axisLine={{ stroke: "currentColor", strokeOpacity: 0.15 }}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 10, fill: "currentColor" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={58}
-                        tickFormatter={(value) => formatCompactCurrency(Number(value))}
-                      />
-                      <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
-                      <RTooltip
-                        contentStyle={{
-                          background: "oklch(0.2 0.02 278)",
-                          border: "1px solid oklch(1 0 0 / 12%)",
-                          borderRadius: 8,
-                          fontSize: 12,
-                          color: "oklch(0.95 0 0)",
-                        }}
-                        formatter={(value: number, name: string) => [
-                          formatCurrency(Number(value)),
-                          name,
-                        ]}
-                      />
-                      <Legend wrapperStyle={{ fontSize: 12 }} />
-                      <Bar
-                        dataKey="revenue"
-                        name="Ciro"
-                        fill={PRIMARY}
-                        fillOpacity={0.75}
-                        radius={[4, 4, 0, 0]}
-                      />
-                      <Bar
-                        dataKey="netProfit"
-                        name="Net kâr"
-                        fill={PROFIT}
-                        radius={[4, 4, 0, 0]}
+              {hasMonthlyData && chartData.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <div className="h-72 min-w-[480px] text-muted-foreground">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={chartData}
+                        margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
                       >
-                        {financeMonths.map((month) => (
-                          <Cell
-                            key={month.month}
-                            fill={month.netProfit < 0 ? LOSS : PROFIT}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke="currentColor"
+                          strokeOpacity={0.12}
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fontSize: 11, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={{ stroke: "currentColor", strokeOpacity: 0.15 }}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 10, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={58}
+                          tickFormatter={(value) => formatCompactCurrency(Number(value))}
+                        />
+                        <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
+                        <RTooltip
+                          contentStyle={TOOLTIP_STYLE}
+                          cursor={{ fill: "currentColor", fillOpacity: 0.06 }}
+                          formatter={(value: number, name: string) => [
+                            formatCurrency(Number(value)),
+                            name,
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Bar
+                          dataKey="revenue"
+                          name="Ciro"
+                          fill={PRIMARY}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={grafikAnimasyonu}
+                        >
+                          {chartData.map((month) => (
+                            <Cell
+                              key={month.month}
+                              fill={PRIMARY}
+                              /* Süren ay ekrandaki EN ÖNEMLİ ay; ayrımı asıl kesikli kenar
+                                 taşır. Dolgu çok düşürülünce koyu zeminde çubuk kayboluyordu. */
+                              fillOpacity={month.ongoing ? 0.5 : 0.75}
+                              stroke={PRIMARY}
+                              strokeOpacity={month.ongoing ? 0.9 : 0}
+                              strokeDasharray={month.ongoing ? "4 3" : undefined}
+                            />
+                          ))}
+                        </Bar>
+                        <Bar
+                          dataKey="netProfit"
+                          name="Net kâr"
+                          fill={PROFIT}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={grafikAnimasyonu}
+                        >
+                          {chartData.map((month) => {
+                            const color = month.netProfit < 0 ? LOSS : PROFIT;
+                            return (
+                              <Cell
+                                key={month.month}
+                                fill={color}
+                                fillOpacity={month.ongoing ? 0.55 : 1}
+                                stroke={color}
+                                strokeOpacity={month.ongoing ? 0.9 : 0}
+                                strokeDasharray={month.ongoing ? "4 3" : undefined}
+                              />
+                            );
+                          })}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               ) : (
                 <div className="py-10 text-center">
                   <CalendarRange className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
                   {/* "Veri yok" ile "alınamadı" AYRI cümleler — ikisi aynı şey değil. */}
                   <p className="text-sm text-muted-foreground">
-                    {financeQuery.isError
+                    {financeQuery.isError || financeUnavailable
                       ? "Aylık rapor şu an alınamadı."
                       : "Henüz satış veya gider verisi yok."}
                   </p>
                 </div>
               )}
-              {hasMonthlyData && (
+              {hasMonthlyData && showsOngoing && (
                 <p className="mt-3 text-xs text-muted-foreground animate-in fade-in duration-500">
+                  Kesikli çubuk {periodLabel ?? "bu ay"} — ay henüz bitmedi, çubuk büyümeye
+                  devam edecek.
+                </p>
+              )}
+              {/* Renk tek başına anlam taşıyordu: efsanede yalnız yeşil kutucuk var. */}
+              {hasMonthlyData && showsLoss && (
+                <p className="mt-2 text-xs text-muted-foreground animate-in fade-in duration-500">
+                  Kırmızı çubuk o ayın zararda olduğunu gösterir.
+                </p>
+              )}
+              {hasMonthlyData && (
+                <p className="mt-2 text-xs text-muted-foreground animate-in fade-in duration-500">
                   Shopify, Trendyol, Hepsiburada ve elle eklediğin siparişler dahil; iptal,
                   iade ve TL dışı siparişler sayılmaz. Net kâr = sipariş kârı (maliyet, komisyon
                   ve kargo düşülmüş) eksi o ay ödediğin giderler. Maliyeti girilmemiş ürünler
@@ -822,7 +1091,7 @@ export default function ReportsPage() {
                     <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
                     <span>
                       Son 12 ayda {recalcWarnCount} siparişin kârı eski hesaplamayla kayıtlı —
-                      ayı seçip yeniden hesapla.
+                      aşağıdan ayı seçip yeniden hesapla.
                     </span>
                   </p>
                 )}
@@ -830,76 +1099,90 @@ export default function ReportsPage() {
                   <p className="text-xs text-muted-foreground">Son 12 ayda {blockedTotalText}</p>
                 )}
 
-                {/* Düğme HER ZAMAN durur: "maliyeti düzelttim, geçmiş ayı güncelle" en sık
-                    kullanılan yol ve o durumda güncellenecek eski kayıt sayısı 0'dır. */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <select
-                    value={selectedRecalcMonth}
-                    onChange={(event) => setRecalcMonth(event.target.value)}
-                    disabled={recalcRunning || financeMonths.length === 0}
-                    className="h-8 rounded-md border bg-background px-2 text-xs disabled:opacity-60"
-                    title="Yeniden hesaplanacak ay"
-                  >
-                    {financeMonths.map((month) => (
-                      <option key={month.month} value={month.month}>
-                        {month.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 gap-2"
-                    disabled={
-                      recalcRunning || startRecalc.isPending || !selectedRecalcMonth
-                    }
-                    onClick={() => startRecalc.mutate(selectedRecalcMonth)}
-                  >
-                    <RefreshCw
-                      className={cn("h-4 w-4", recalcRunning && "animate-spin")}
-                    />
-                    {recalcRunning ? "Yeniden hesaplanıyor..." : "Bu ayı yeniden hesapla"}
-                  </Button>
-                  {!recalcRunning && selectedWarnCount > 0 && (
-                    <span className="inline-flex items-center gap-1.5 text-xs text-amber-500 animate-in fade-in duration-500">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                      Bu ayda {selectedWarnCount} sipariş güncellenebilir.
-                    </span>
-                  )}
-                </div>
-                {!recalcRunning && blockedMonthText && (
-                  <p className="text-xs text-muted-foreground">Bu ayda {blockedMonthText}</p>
-                )}
-
-                {recalc && (recalcRunning || recalcJustFinished) && (
-                  <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-300">
-                    <Progress value={recalcPercent(recalc)} className="h-1.5" />
-                    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                      <span>
-                        {recalc.phase === "reading" && "Satış geçmişi okunuyor"}
-                        {recalc.phase === "calculating" &&
-                          `${recalc.processed}/${recalc.total} sipariş yeniden hesaplanıyor`}
-                        {recalc.phase === "writing" && "Yeni rakamlar kaydediliyor"}
-                        {recalc.phase === "done" &&
-                          `${recalc.result?.changedOrders ?? 0} siparişin kârı güncellendi`}
+                {/* Ay seçici düğmenin KENDİ kutusunda durur: seçim yalnız bu işlemi ilgilendirir,
+                    sayfanın geri kalanı her zaman içinde bulunulan ayı gösterir. */}
+                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-2">
+                  <p className="text-xs font-medium">Bir ayı yeniden hesapla</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select
+                      value={selectedRecalcMonth}
+                      onChange={(event) => setRecalcMonth(event.target.value)}
+                      disabled={recalcRunning || dataMonths.length === 0}
+                      aria-label="Yeniden hesaplanacak ay"
+                      className={cn(
+                        "h-8 rounded-md border bg-background px-2 text-xs transition-colors hover:border-primary/40 disabled:opacity-60",
+                        ROW_FOCUS
+                      )}
+                    >
+                      {dataMonths.map((month) => (
+                        <option key={month.month} value={month.month}>
+                          {month.label}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-2 transition-transform active:scale-[0.97]"
+                      disabled={
+                        recalcRunning || startRecalc.isPending || !selectedRecalcMonth
+                      }
+                      onClick={() => startRecalc.mutate(selectedRecalcMonth)}
+                    >
+                      <RefreshCw
+                        className={cn("h-4 w-4", recalcRunning && "animate-spin")}
+                      />
+                      {recalcRunning ? "Yeniden hesaplanıyor..." : "Yeniden hesapla"}
+                    </Button>
+                    {!recalcRunning && selectedWarnCount > 0 && (
+                      <span className="inline-flex items-center gap-1.5 text-xs text-amber-500 animate-in fade-in duration-500">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        Seçili ayda {selectedWarnCount} sipariş güncellenebilir.
                       </span>
-                      <span className="tabular-nums">
-                        {Math.round(recalcPercent(recalc))}%
-                      </span>
-                    </div>
+                    )}
                   </div>
-                )}
+                  {!recalcRunning && blockedMonthText && (
+                    <p className="text-xs text-muted-foreground">
+                      Seçili ayda {blockedMonthText}
+                    </p>
+                  )}
 
-                <p className="text-xs text-muted-foreground">
-                  Maliyet, komisyon veya kargoyu düzelttiysen o ayı yeniden hesapla.
-                </p>
+                  {recalc && (recalcRunning || recalcJustFinished) && (
+                    <div className="space-y-1.5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+                      <Progress value={recalcPercent(recalc)} className="h-1.5" />
+                      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                        <span>
+                          {recalc.phase === "reading" && "Satış geçmişi okunuyor"}
+                          {recalc.phase === "calculating" &&
+                            `${recalc.processed}/${recalc.total} sipariş yeniden hesaplanıyor`}
+                          {recalc.phase === "writing" && "Yeni rakamlar kaydediliyor"}
+                          {recalc.phase === "done" &&
+                            `${recalc.result?.changedOrders ?? 0} siparişin kârı güncellendi`}
+                        </span>
+                        <span className="tabular-nums">
+                          {Math.round(recalcPercent(recalc))}%
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
-                {finance?.dataFrom && (
                   <p className="text-xs text-muted-foreground">
-                    Grafik {formatHistoryDate(finance.dataFrom)} tarihinden bu yana
-                    toplanan verilerle çiziliyor.
+                    Maliyet, komisyon veya kargoyu düzelttiysen o ayı yeniden hesapla.
                   </p>
+                </div>
+
+                {chartScope ? (
+                  <p className="text-xs text-muted-foreground animate-in fade-in duration-300">
+                    {chartScope}
+                  </p>
+                ) : (
+                  finance?.dataFrom && (
+                    <p className="text-xs text-muted-foreground">
+                      Grafik {formatHistoryDate(finance.dataFrom)} tarihinden bu yana
+                      toplanan verilerle çiziliyor.
+                    </p>
+                  )
                 )}
               </div>
             </CardContent>
@@ -913,58 +1196,78 @@ export default function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-4">
-              {ordersQuery.isLoading ? (
+              {ordersQuery.isLoading && !summary ? (
                 <Skeleton className="h-56 w-full rounded-lg" />
               ) : platformChart.length > 0 && summary && summary.total.orderCount > 0 ? (
-                <div className="h-56 w-full text-muted-foreground">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={platformChart}
-                      margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="currentColor"
-                        strokeOpacity={0.12}
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="platform"
-                        tick={{ fontSize: 12, fill: "currentColor" }}
-                        tickLine={false}
-                        axisLine={{ stroke: "currentColor", strokeOpacity: 0.15 }}
-                      />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: "currentColor" }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={56}
-                        tickFormatter={(value) => formatCompactCurrency(Number(value))}
-                      />
-                      <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
-                      <RTooltip
-                        contentStyle={{
-                          background: "oklch(0.2 0.02 278)",
-                          border: "1px solid oklch(1 0 0 / 12%)",
-                          borderRadius: 8,
-                          fontSize: 12,
-                          color: "oklch(0.95 0 0)",
-                        }}
-                        formatter={(value: number) => formatCurrency(Number(value))}
-                      />
-                      <Bar dataKey="Ciro" radius={[4, 4, 0, 0]}>
-                        {platformChart.map((item, index) => (
-                          <Cell key={index} fill={item.color} />
-                        ))}
-                      </Bar>
-                      <Bar
-                        dataKey="Kâr"
-                        radius={[4, 4, 0, 0]}
-                        fill={PRIMARY}
-                        fillOpacity={0.55}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div className="overflow-x-auto">
+                  <div className="h-56 min-w-[420px] text-muted-foreground">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart
+                        data={platformChart}
+                        margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
+                      >
+                        <CartesianGrid
+                          strokeDasharray="3 3"
+                          stroke="currentColor"
+                          strokeOpacity={0.12}
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="platform"
+                          tick={{ fontSize: 12, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={{ stroke: "currentColor", strokeOpacity: 0.15 }}
+                        />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: "currentColor" }}
+                          tickLine={false}
+                          axisLine={false}
+                          width={56}
+                          tickFormatter={(value) => formatCompactCurrency(Number(value))}
+                        />
+                        <ReferenceLine y={0} stroke="currentColor" strokeOpacity={0.4} />
+                        <RTooltip
+                          contentStyle={TOOLTIP_STYLE}
+                          cursor={{ fill: "currentColor", fillOpacity: 0.06 }}
+                          formatter={(value: number, name: string) => [
+                            formatCurrency(Number(value)),
+                            name,
+                          ]}
+                        />
+                        {/* Hangi çubuğun ciro hangisinin kâr olduğu ancak açıklamayla anlaşılır;
+                            renkler aydan aya grafiğiyle AYNI dili konuşur (mor = ciro, yeşil = kâr). */}
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Bar
+                          dataKey="Ciro"
+                          name="Ciro"
+                          fill={PRIMARY}
+                          fillOpacity={0.75}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={grafikAnimasyonu}
+                        />
+                        <Bar
+                          dataKey="Kâr"
+                          name="Sipariş kârı"
+                          fill={PROFIT}
+                          radius={[4, 4, 0, 0]}
+                          isAnimationActive={grafikAnimasyonu}
+                        >
+                          {platformChart.map((item) => (
+                            <Cell
+                              key={item.platform}
+                              fill={item.Kâr < 0 ? LOSS : PROFIT}
+                            />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  {/* Renk tek başına anlam taşıyordu: efsanede yalnız yeşil kutucuk var. */}
+                  {platformChart.some((item) => item.Kâr < 0) && (
+                    <p className="mt-3 text-xs text-muted-foreground animate-in fade-in duration-500">
+                      Kırmızı çubuk o platformun zararda olduğunu gösterir.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground py-6 text-center">
@@ -1000,7 +1303,10 @@ export default function ReportsPage() {
                       <Link
                         key={seller.productId}
                         href={`/products/${seller.productId}`}
-                        className="group block space-y-1 rounded-md px-1 -mx-1 py-0.5 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300"
+                        className={cn(
+                          "group block space-y-1 rounded-md px-1 -mx-1 py-0.5 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300",
+                          ROW_FOCUS
+                        )}
                         style={{
                           animationDelay: `${index * 40}ms`,
                           animationFillMode: "both",
@@ -1024,25 +1330,23 @@ export default function ReportsPage() {
                         <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
                           <div
                             className="ml-bar h-full rounded-full bg-primary"
-                            style={{
-                              width: `${(seller.quantity / topSellerMax) * 100}%`,
-                            }}
+                            style={{ width: `${(seller.quantity / topSellerMax) * 100}%` }}
                           />
                         </div>
                       </Link>
                     ))}
                   </div>
                 )}
-                {(recentUnmatched?.lines ?? 0) > 0 && (
+                {(sales?.recentUnmatched?.lines ?? 0) > 0 && (
                   <p className="mt-3 text-[11px] text-muted-foreground">
-                    Ürüne bağlanmamış {recentUnmatched?.quantity} satış bu listede yok (
-                    {formatCurrency(recentUnmatched?.revenue)}).
+                    Ürüne bağlanmamış {sales?.recentUnmatched.quantity} satış bu listede yok (
+                    {formatCurrency(sales?.recentUnmatched.revenue)}).
                   </p>
                 )}
-                {(recentCoverage?.ordersWithoutItems ?? 0) > 0 && (
+                {(sales?.recentCoverage?.ordersWithoutItems ?? 0) > 0 && (
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    {recentCoverage?.ordersWithoutItems} siparişin ürün dökümü yok (
-                    {formatCurrency(recentCoverage?.revenueWithoutItems)} ciro) — bu liste
+                    {sales?.recentCoverage.ordersWithoutItems} siparişin ürün dökümü yok (
+                    {formatCurrency(sales?.recentCoverage.revenueWithoutItems)} ciro) — bu liste
                     onları saymıyor.
                   </p>
                 )}
@@ -1082,7 +1386,10 @@ export default function ReportsPage() {
                       <Link
                         key={row.productId}
                         href={`/products/${row.productId}`}
-                        className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300"
+                        className={cn(
+                          "group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300",
+                          ROW_FOCUS
+                        )}
                         style={{
                           animationDelay: `${index * 40}ms`,
                           animationFillMode: "both",
@@ -1136,18 +1443,53 @@ export default function ReportsPage() {
           {/* ── Teorik kârlılık: bugünkü fiyat ve maliyetle ──────────────────────────────── */}
           <Card>
             <CardHeader className="pb-2 border-b border-border/50">
-              <CardTitle className="text-sm">Ürün Kârlılığı</CardTitle>
+              <CardTitle className="text-sm flex items-center gap-2">
+                Ürün Kârlılığı
+                {profitabilityQuery.isFetching && profitability && (
+                  <RefreshCw className="h-3 w-3 text-muted-foreground animate-spin" />
+                )}
+              </CardTitle>
               <p className="text-xs text-muted-foreground">
                 Bugünkü fiyat ve maliyetle bir adet satılsa ne kalır — satış adedinden bağımsız.
               </p>
             </CardHeader>
             <CardContent className="pt-3 space-y-3">
-              {productsQuery.isLoading ? (
-                <div className="space-y-2">
-                  {Array.from({ length: 4 }).map((_, index) => (
-                    <Skeleton key={index} className="h-5 w-full rounded" />
-                  ))}
-                </div>
+              {!profitability ? (
+                /* Beklerken ÖLÜ EKRAN YOK: ya "hesaplanıyor" satırları döner, ya da çekim
+                   durmuşsa (hata / bağlantı yok) elle yeniden deneme çıkar. */
+                profitabilityQuery.isFetching ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      Ürün kârlılığı hesaplanıyor...
+                    </p>
+                    {/* Soluk giriş DIŞ kutuda: `Skeleton` kendi `animate-pulse`ını taşıyor ve
+                        iki sınıf aynı `animation` kısayolunu yazınca kademeli giriş hiç
+                        çalışmıyordu. */}
+                    {Array.from({ length: 5 }).map((_, index) => (
+                      <div
+                        key={index}
+                        className="animate-in fade-in duration-300"
+                        style={{ animationDelay: `${index * 50}ms`, animationFillMode: "both" }}
+                      >
+                        <Skeleton className="h-5 w-full rounded" />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 py-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-muted-foreground">Ürün listesi alınamadı.</p>
+                    <button
+                      type="button"
+                      className={cn(
+                        "text-xs font-medium text-primary hover:underline self-start rounded-md px-1",
+                        ROW_FOCUS
+                      )}
+                      onClick={() => profitabilityQuery.refetch()}
+                    >
+                      Yeniden dene
+                    </button>
+                  </div>
+                )
               ) : (
                 <>
                   <div>
@@ -1156,12 +1498,10 @@ export default function ReportsPage() {
                     </p>
                     {profitLeaders.length === 0 ? (
                       <p className="text-xs text-muted-foreground">
-                        {productsQuery.isError
-                          ? "Ürün listesi alınamadı."
-                          : "Maliyeti girilmiş ürün yok."}
+                        Maliyeti girilmiş ürün yok.
                       </p>
                     ) : (
-                      profitLeaders.map((product) => {
+                      profitLeaders.map((product, index) => {
                         const sold = soldUnitsBadge(
                           sales?.soldUnits,
                           product.id,
@@ -1171,7 +1511,14 @@ export default function ReportsPage() {
                           <Link
                             key={product.id}
                             href={`/products/${product.id}`}
-                            className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40"
+                            className={cn(
+                              "group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300",
+                              ROW_FOCUS
+                            )}
+                            style={{
+                              animationDelay: `${index * 40}ms`,
+                              animationFillMode: "both",
+                            }}
                           >
                             <MiniThumb src={product.imageUrl} />
                             <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
@@ -1190,9 +1537,9 @@ export default function ReportsPage() {
                               </span>
                             )}
                             <span className="tabular-nums font-medium text-green-500 ml-1 shrink-0">
-                              {formatCurrency(product.currentNetProfit)}
+                              {formatCurrency(product.netProfit)}
                               <span className="text-muted-foreground font-normal ml-1">
-                                ({formatPercent(product.currentProfitMargin)})
+                                ({formatPercent(product.profitMargin)})
                               </span>
                             </span>
                           </Link>
@@ -1206,7 +1553,7 @@ export default function ReportsPage() {
                         <TrendingDown className="h-3.5 w-3.5 text-destructive" /> Zarar
                         edenler
                       </p>
-                      {lossMakers.map((product) => {
+                      {lossMakers.map((product, index) => {
                         const sold = soldUnitsBadge(
                           sales?.soldUnits,
                           product.id,
@@ -1216,7 +1563,14 @@ export default function ReportsPage() {
                           <Link
                             key={product.id}
                             href={`/products/${product.id}`}
-                            className="group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40"
+                            className={cn(
+                              "group flex items-center gap-2 text-xs py-0.5 rounded-md px-1 -mx-1 transition-colors hover:bg-muted/40 animate-in fade-in slide-in-from-left-1 duration-300",
+                              ROW_FOCUS
+                            )}
+                            style={{
+                              animationDelay: `${index * 40}ms`,
+                              animationFillMode: "both",
+                            }}
                           >
                             <MiniThumb src={product.imageUrl} />
                             <span className="truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
@@ -1235,12 +1589,17 @@ export default function ReportsPage() {
                               </span>
                             )}
                             <span className="tabular-nums font-medium text-destructive ml-1 shrink-0">
-                              {formatCurrency(product.currentNetProfit)}
+                              {formatCurrency(product.netProfit)}
                             </span>
                           </Link>
                         );
                       })}
                     </div>
+                  )}
+                  {countedProducts > 0 && (
+                    <p className="text-[11px] text-muted-foreground">
+                      {countedProducts} ürünün kârı hesaplandı.
+                    </p>
                   )}
                   {noCostProducts > 0 && (
                     <p className="text-[11px] text-muted-foreground">
@@ -1265,6 +1624,121 @@ export default function ReportsPage() {
 }
 
 /**
+ * Yükleme iskeleti GERÇEK düzeni taklit eder.
+ *
+ * Eskiden altı eşit gri kutu (~512 piksel) basılıyordu; gerçek sayfa çok daha uzun olduğu için
+ * veri gelince içerik aşağı ZIPLIYORDU. Aynı sıradaki aynı yükseklikteki kutular bu sıçramayı
+ * bitirir.
+ */
+function SkeletonRows({ count, bar = false }: { count: number; bar?: boolean }) {
+  return (
+    <>
+      {Array.from({ length: count }).map((_, index) => (
+        <div key={index} className={bar ? "space-y-1 py-0.5" : "py-1"}>
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-6 w-6 rounded-md shrink-0" />
+            <Skeleton className="h-3 flex-1 rounded" />
+            <Skeleton className="h-3 w-14 rounded shrink-0" />
+          </div>
+          {bar && <Skeleton className="h-1.5 w-full rounded-full" />}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function ReportsSkeleton() {
+  return (
+    /* Ekran okuyucu için sayfanın hazırlandığı DUYURULUR; gri kutuların kendisi gizlenir. */
+    <div role="status" aria-busy="true">
+      <span className="sr-only">Rapor hazırlanıyor…</span>
+      <div className="space-y-5" aria-hidden="true">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <Card
+              key={index}
+              className="overflow-hidden animate-in fade-in duration-500"
+              style={{ animationDelay: `${index * 60}ms`, animationFillMode: "both" }}
+            >
+              <CardContent className="p-3.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="space-y-1">
+                    <Skeleton className="h-3 w-16 rounded" />
+                    <Skeleton className="h-2.5 w-20 rounded" />
+                  </div>
+                  <Skeleton className="h-4 w-4 rounded" />
+                </div>
+                <Skeleton className="h-6 w-28 rounded mt-2" />
+                <Skeleton className="h-3 w-32 rounded mt-2" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <Card className="animate-in fade-in duration-500">
+          <CardHeader className="pb-2 border-b border-border/50">
+            <div className="flex items-center justify-between gap-2">
+              <Skeleton className="h-4 w-52 rounded" />
+              <Skeleton className="h-8 w-40 rounded-lg" />
+            </div>
+          </CardHeader>
+          <CardContent className="pt-4">
+            <Skeleton className="h-72 w-full rounded-lg" />
+            <Skeleton className="h-3 w-3/4 rounded mt-3" />
+            <Skeleton className="h-3 w-full rounded mt-2" />
+            <Skeleton className="h-3 w-5/6 rounded mt-1" />
+            <div className="mt-3 border-t border-border/50 pt-3 space-y-2">
+              <Skeleton className="h-[104px] w-full rounded-lg" />
+              <Skeleton className="h-3 w-64 rounded" />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="animate-in fade-in duration-500">
+          <CardHeader className="pb-2 border-b border-border/50">
+            <Skeleton className="h-4 w-72 rounded" />
+          </CardHeader>
+          <CardContent className="pt-4">
+            <Skeleton className="h-56 w-full rounded-lg" />
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[true, false].map((withBar) => (
+            <Card key={String(withBar)} className="animate-in fade-in duration-500">
+              <CardHeader className="pb-2 border-b border-border/50">
+                <Skeleton className="h-4 w-40 rounded" />
+                <Skeleton className="h-3 w-52 rounded mt-1" />
+              </CardHeader>
+              <CardContent className="pt-3">
+                <SkeletonRows count={withBar ? 6 : 8} bar={withBar} />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <Card className="animate-in fade-in duration-500">
+          <CardHeader className="pb-2 border-b border-border/50">
+            <Skeleton className="h-4 w-32 rounded" />
+            <Skeleton className="h-3 w-80 max-w-full rounded mt-1" />
+          </CardHeader>
+          <CardContent className="pt-3 space-y-3">
+            <div>
+              <Skeleton className="h-2.5 w-20 rounded mb-1.5" />
+              <SkeletonRows count={6} />
+            </div>
+            <div className="border-t border-border/40 pt-2">
+              <Skeleton className="h-2.5 w-24 rounded mb-1.5" />
+              <SkeletonRows count={3} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Özet kartı. Rakam SNAP ETMEZ, akar (AnimatedNumber) — kartlar da sırayla belirir.
  * Veri henüz yokken `value` null verilir ve animasyon yerine "—" gösterilir; 0'dan 0'a
  * anlamsız bir sayaç dönmesin.
@@ -1274,8 +1748,11 @@ export default function ReportsPage() {
  */
 function Stat({
   label,
+  period,
   value,
   previous,
+  previousPeriod,
+  projection,
   format,
   higherIsBetter,
   color,
@@ -1283,8 +1760,14 @@ function Stat({
   delay = 0,
 }: {
   label: string;
+  /** "1–13 Ağustos" gibi — kartın hangi dönemi anlattığı. */
+  period?: string | null;
   value: number | null;
   previous?: number | null;
+  /** Kıyaslanan ayın adı. */
+  previousPeriod?: string | null;
+  /** Ay sonu tahmini — yalnız süren ayda ve günü gününe biriken ölçülerde. */
+  projection?: number | null;
   format: (n: number) => string;
   higherIsBetter: boolean;
   color: string;
@@ -1311,9 +1794,16 @@ function Stat({
       }}
     >
       <CardContent className="p-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">{label}</span>
-          <Icon className="h-4 w-4 shrink-0" style={{ color }} />
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <span className="block text-xs text-muted-foreground truncate">{label}</span>
+            {period && (
+              <span className="block text-[10px] text-muted-foreground/70 truncate">
+                {period}
+              </span>
+            )}
+          </div>
+          <Icon className="h-4 w-4 shrink-0 mt-0.5" style={{ color }} />
         </div>
         <div className="text-xl font-bold tabular-nums mt-1" style={{ color }}>
           {value === null ? "—" : <AnimatedNumber value={value} format={format} />}
@@ -1324,7 +1814,9 @@ function Stat({
             style={{ animationDelay: `${delay + 260}ms`, animationFillMode: "both" }}
           >
             {delta.diff === 0 ? (
-              <span className="text-muted-foreground">Geçen ayın tamamıyla aynı</span>
+              <span className="text-muted-foreground truncate">
+                {previousPeriod ? `${previousPeriod} ayıyla aynı` : "Geçen ayın tamamıyla aynı"}
+              </span>
             ) : (
               <>
                 <Arrow className={cn("h-3 w-3 shrink-0", toneClass)} />
@@ -1335,9 +1827,20 @@ function Stat({
                 </span>
                 {/* Bu ay HENÜZ SÜRÜYOR; kıyas geçen ayın TAMAMINA karşı yapılıyor. Ayın
                     başında büyük bir düşüş görünmesi bundandır — cümle bunu söyler. */}
-                <span className="text-muted-foreground truncate">geçen ayın tamamına göre</span>
+                <span className="text-muted-foreground truncate">
+                  {previousPeriod ? `${previousPeriod} ayının tamamına göre` : "geçen ayın tamamına göre"}
+                </span>
               </>
             )}
+          </div>
+        )}
+        {projection != null && (
+          <div
+            className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground/70 animate-in fade-in duration-500"
+            style={{ animationDelay: `${delay + 360}ms`, animationFillMode: "both" }}
+          >
+            <span className="tabular-nums">≈ {format(projection)}</span>
+            <span className="truncate">ay sonu tahmini</span>
           </div>
         )}
       </CardContent>

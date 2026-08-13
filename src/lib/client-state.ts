@@ -29,3 +29,28 @@ export function usePrefersReducedMotion(): boolean {
     getServerSnapshot,
   );
 }
+
+function subscribePageHidden(onChange: () => void): () => void {
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+function getPageHiddenSnapshot(): boolean {
+  return document.hidden;
+}
+
+/**
+ * Pencere şu an gizli mi (arka planda / küçültülmüş)?
+ *
+ * ⚠️ NEDEN GEREKLİ — ÖLÇÜLDÜ: gizli pencerede tarayıcı `requestAnimationFrame` karesi HİÇ
+ * vermez. rAF ile sürülen her animasyon başlangıç değerinde donar: sayaçlar 0'da kalmıştı
+ * (bkz. `AnimatedNumber`), grafik çubukları da sıfır yükseklikte çizilir. Böyle yerlerde
+ * animasyon KAPATILIR ve sonuç doğrudan çizilir; pencere öne gelince zaten doğru durur.
+ */
+export function usePageHidden(): boolean {
+  return useSyncExternalStore(
+    subscribePageHidden,
+    getPageHiddenSnapshot,
+    getServerSnapshot,
+  );
+}

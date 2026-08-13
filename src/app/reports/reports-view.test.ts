@@ -4,12 +4,22 @@ import { describe, expect, it } from "vitest";
 import {
   RECALC_BLOCK_LABELS,
   blockedRecalcText,
+  chartMonths,
+  chartScopeText,
   deltaTone,
-  missingCostCount,
+  freshnessLine,
+  isMonthRangeKey,
+  monthKeyOf,
+  monthPeriodLabel,
+  monthProgress,
+  monthProjection,
   monthReadiness,
+  monthsWithData,
   profitWarningLabel,
+  relativeAge,
   soldUnitsBadge,
   statDelta,
+  visibleRangeOptions,
   windowRecalcSummary,
   type RecalcReadiness,
 } from "./reports-view";
@@ -103,18 +113,6 @@ describe("profitWarningLabel", () => {
   it("her şey hesaplanmışsa uyarı yok", () => {
     expect(profitWarningLabel({ profitPartial: false, profitUnknownLines: 0 })).toBeNull();
     expect(profitWarningLabel({ profitPartial: false })).toBeNull();
-  });
-});
-
-describe("missingCostCount", () => {
-  it("maliyeti girilmemiş ürünleri sayar", () => {
-    expect(
-      missingCostCount([{ hasCost: true }, { hasCost: false }, { hasCost: false }])
-    ).toBe(2);
-  });
-
-  it("boş listede 0", () => {
-    expect(missingCostCount([])).toBe(0);
   });
 });
 
@@ -263,6 +261,248 @@ describe("windowRecalcSummary", () => {
   });
 });
 
+describe("grafik penceresi", () => {
+  const TZ = "Europe/Istanbul";
+  // Sunucu HER ZAMAN 12 kova döndürür; iş 24 Mayıs 2026'da başladı → 8'i bomboş.
+  const months = [
+    "2025-09",
+    "2025-10",
+    "2025-11",
+    "2025-12",
+    "2026-01",
+    "2026-02",
+    "2026-03",
+    "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
+    "2026-08",
+  ].map((month) => ({ month }));
+  const dataFrom = "2026-05-24T07:00:00.000Z";
+
+  it("veri başlamadan önceki boş aylar atılır", () => {
+    expect(monthsWithData(months, dataFrom, TZ).map((m) => m.month)).toEqual([
+      "2026-05",
+      "2026-06",
+      "2026-07",
+      "2026-08",
+    ]);
+  });
+
+  it("ilk sipariş tarihi bilinmiyorsa hiçbir ay atılmaz", () => {
+    expect(monthsWithData(months, null, TZ)).toHaveLength(12);
+    expect(monthsWithData(months, "bozuk-tarih", TZ)).toHaveLength(12);
+  });
+
+  it("ay listesi dizi değilse ÇÖKMEZ", () => {
+    expect(monthsWithData(undefined, dataFrom, TZ)).toEqual([]);
+  });
+
+  it("İLK SİPARİŞTEN ÖNCE ödenmiş gider ayı KESİLMEZ", () => {
+    // `dataFrom` yalnız sipariş tarihlerinden kurulur; gider ödemesi o hesaba girmez.
+    // Nisan'da ₺5.000 kira ödendiyse o ay zarar çubuğuyla doludur, sessizce düşmemeli.
+    const giderli = months.map((bucket) =>
+      bucket.month === "2026-04" ? { ...bucket, expenses: 5_000 } : bucket
+    );
+    expect(monthsWithData(giderli, dataFrom, TZ).map((m) => m.month)).toEqual([
+      "2026-04",
+      "2026-05",
+      "2026-06",
+      "2026-07",
+      "2026-08",
+    ]);
+  });
+
+  it("sıfır kovalar 'veri' saymaz — kesme yine ilk sipariş ayından olur", () => {
+    const bosKovalar = months.map((bucket) => ({
+      ...bucket,
+      revenue: 0,
+      expenses: 0,
+      orderCount: 0,
+      orderProfit: 0,
+    }));
+    expect(monthsWithData(bosKovalar, dataFrom, TZ)).toHaveLength(4);
+  });
+
+  it("aralık seçimi veri aylarının SONUNDAN kesilir", () => {
+    expect(chartMonths(months, dataFrom, "3", TZ).map((m) => m.month)).toEqual([
+      "2026-06",
+      "2026-07",
+      "2026-08",
+    ]);
+    expect(chartMonths(months, dataFrom, "all", TZ)).toHaveLength(4);
+    // Veriden uzun bir aralık istenirse veri ne kadarsa o kadar çizilir (boş ay eklenmez).
+    expect(chartMonths(months, dataFrom, "12", TZ)).toHaveLength(4);
+  });
+
+  it("ay sınırı Europe/Istanbul: 30 Nisan 22:00 UTC zaten MAYIS'tır", () => {
+    // UTC'ye göre nisan, İstanbul'a göre 1 Mayıs 01:00 → veri mayısta başlamış sayılır.
+    expect(monthKeyOf("2026-04-30T22:00:00.000Z", TZ)).toBe("2026-05");
+  });
+
+  it("aynı grafiği çizen aralık düğmesi basılmaz", () => {
+    // 4 aylık geçmişte "6 ay", "12 ay" ve "Tümü" birebir aynı grafik demek.
+    expect(visibleRangeOptions(4).map((option) => option.key)).toEqual(["3", "all"]);
+    expect(visibleRangeOptions(12).map((option) => option.key)).toEqual(["3", "6", "all"]);
+    // Tek seçenek kalıyorsa grup hiç gösterilmez.
+    expect(visibleRangeOptions(1)).toEqual([]);
+    expect(visibleRangeOptions(0)).toEqual([]);
+  });
+
+  it("hatırlanan aralık tanınmayan bir değerse kabul edilmez", () => {
+    expect(isMonthRangeKey("6")).toBe(true);
+    expect(isMonthRangeKey("all")).toBe(true);
+    expect(isMonthRangeKey("9")).toBe(false);
+    expect(isMonthRangeKey(null)).toBe(false);
+  });
+
+  it("kapsam cümlesi ARALIK DARALTILDIĞINDA bunu söyler", () => {
+    // 4 veri ayından 3'ü çiziliyorsa "ilk veri tarihinden bu yana" demek YALAN olurdu.
+    expect(chartScopeText(3, 4)).toBe("Grafikte son 3 ay var — tamamı için Tümü'ne bas.");
+  });
+
+  it("tamamı çiziliyorsa daraltma cümlesi basılmaz", () => {
+    expect(chartScopeText(4, 4)).toBeNull();
+    expect(chartScopeText(12, 4)).toBeNull();
+    expect(chartScopeText(0, 4)).toBeNull();
+  });
+});
+
+describe("devam eden ay", () => {
+  const TZ = "Europe/Istanbul";
+  const AGUSTOS_13 = Date.parse("2026-08-13T09:00:00+03:00");
+
+  it("süren ayın kaç günü geçtiğini sayar", () => {
+    expect(monthProgress("2026-08", AGUSTOS_13, TZ)).toEqual({
+      ongoing: true,
+      elapsedDays: 13,
+      // 13'ünün saat 09:00'ı: 12 tam gün + günün 3/8'i geçti.
+      elapsed: 12.375,
+      totalDays: 31,
+    });
+  });
+
+  it("BAŞLAMIŞ gün tam gün SAYILMAZ", () => {
+    // Ayın 2'sinde saat 00:30 → gerçekte ~1,02 gün geçti; 2 saymak tahmini yarıya indiriyordu.
+    const gece = monthProgress("2026-08", Date.parse("2026-08-02T00:30:00+03:00"), TZ);
+    expect(gece?.elapsedDays).toBe(2);
+    expect(gece?.elapsed).toBeCloseTo(1.0208, 3);
+  });
+
+  it("bitmiş ay ayın TAMAMIDIR", () => {
+    expect(monthProgress("2026-07", AGUSTOS_13, TZ)).toEqual({
+      ongoing: false,
+      elapsedDays: 31,
+      elapsed: 31,
+      totalDays: 31,
+    });
+    expect(monthProgress("2026-02", AGUSTOS_13, TZ)?.totalDays).toBe(28);
+  });
+
+  it("gün sınırı Europe/Istanbul: 21:30 UTC ertesi gündür", () => {
+    const gece = Date.parse("2026-08-13T21:30:00.000Z"); // İstanbul'da 14 Ağustos 00:30
+    expect(monthProgress("2026-08", gece, TZ)?.elapsedDays).toBe(14);
+  });
+
+  it("bozuk ay anahtarında hiçbir şey iddia etmez", () => {
+    expect(monthProgress("2026-13", AGUSTOS_13, TZ)).toBeNull();
+    expect(monthProgress("", AGUSTOS_13, TZ)).toBeNull();
+  });
+
+  it("ay sonu tahmini GERÇEKTEN geçen süreden çıkar", () => {
+    const progress = monthProgress("2026-08", AGUSTOS_13, TZ);
+    // 12,375 günde ₺70.174 → günde ₺5.671 → 31 günde ~₺175.789.
+    expect(Math.round(monthProjection(70_174, progress) ?? 0)).toBe(175_789);
+  });
+
+  it("AYIN İLK GÜNLERİNDE tahmin ÜRETİLMEZ", () => {
+    // Bir-iki günlük satıştan ay çıkarmak saçma bir rakam verir.
+    const ilkGun = monthProgress("2026-08", Date.parse("2026-08-01T10:00:00+03:00"), TZ);
+    expect(monthProjection(5_000, ilkGun)).toBeNull();
+    const ikinciGun = monthProgress("2026-08", Date.parse("2026-08-02T01:00:00+03:00"), TZ);
+    expect(monthProjection(1_200, ikinciGun)).toBeNull();
+    // Üç tam gün dolduğunda tahmin başlar.
+    const dorduncuGun = monthProgress("2026-08", Date.parse("2026-08-04T12:00:00+03:00"), TZ);
+    expect(monthProjection(1_200, dorduncuGun)).not.toBeNull();
+  });
+
+  it("HENÜZ HAREKET YOKKEN tahmin ÜRETİLMEZ", () => {
+    // "≈ ₺0 ay sonu tahmini" veri yokluğunu "ay sıfırla kapanacak" iddiasına çeviriyordu.
+    const suren = monthProgress("2026-08", AGUSTOS_13, TZ);
+    expect(monthProjection(0, suren)).toBeNull();
+  });
+
+  it("bitmiş ayda ve bilinmeyen değerde tahmin yok", () => {
+    const bitmis = monthProgress("2026-07", AGUSTOS_13, TZ);
+    expect(monthProjection(70_000, bitmis)).toBeNull();
+    const suren = monthProgress("2026-08", AGUSTOS_13, TZ);
+    expect(monthProjection(null, suren)).toBeNull();
+    expect(monthProjection(Number.NaN, suren)).toBeNull();
+  });
+
+  it("ayın SON gününde tahmin yok (gerçek rakam zaten elde)", () => {
+    const sonGun = monthProgress("2026-08", Date.parse("2026-08-31T18:00:00+03:00"), TZ);
+    expect(monthProjection(150_000, sonGun)).toBeNull();
+  });
+
+  it("kart etiketi süren ayda aralık, bitmiş ayda ay adıdır", () => {
+    expect(monthPeriodLabel("2026-08", monthProgress("2026-08", AGUSTOS_13, TZ))).toBe(
+      "1–13 Ağustos"
+    );
+    expect(monthPeriodLabel("2026-07", monthProgress("2026-07", AGUSTOS_13, TZ))).toBe(
+      "Temmuz"
+    );
+    expect(monthPeriodLabel("2026-07", null)).toBe("Temmuz");
+    expect(monthPeriodLabel("bozuk", null)).toBeNull();
+  });
+
+  it("ayın ilk gününde etiket aralık yazmaz", () => {
+    const ilkGun = monthProgress("2026-08", Date.parse("2026-08-01T10:00:00+03:00"), TZ);
+    expect(monthPeriodLabel("2026-08", ilkGun)).toBe("1 Ağustos");
+  });
+});
+
+describe("tazelik satırı", () => {
+  it("süreyi sade Türkçe yazar", () => {
+    expect(relativeAge(20_000)).toBe("az önce");
+    expect(relativeAge(12 * 60_000)).toBe("12 dakika önce");
+    expect(relativeAge(3 * 60 * 60_000)).toBe("3 saat önce");
+    expect(relativeAge(25 * 60 * 60_000)).toBe("dün");
+    expect(relativeAge(4 * 24 * 60 * 60_000)).toBe("4 gün önce");
+  });
+
+  it("ileri damgayı 'gelecek' gibi göstermez", () => {
+    // Cihaz saati birkaç saniye geride olabilir; negatif fark "az önce"dir.
+    expect(relativeAge(-5_000)).toBe("az önce");
+  });
+
+  it("rakamın ne zamanki olduğunu ve son sipariş çekimini tek satırda yazar", () => {
+    const now = Date.parse("2026-08-13T12:00:00.000Z");
+    expect(
+      freshnessLine(
+        new Date(now - 12 * 60_000).toISOString(),
+        new Date(now - 3 * 60 * 60_000).toISOString(),
+        now
+      )
+    ).toEqual({
+      text: "Rakamlar 12 dakika önce güncellendi · son siparişler 3 saat önce alındı.",
+      stale: false,
+    });
+  });
+
+  it("bir saatten eski rakam vurgulanır", () => {
+    const now = Date.parse("2026-08-13T12:00:00.000Z");
+    const line = freshnessLine(new Date(now - 95 * 60_000).toISOString(), null, now);
+    expect(line?.stale).toBe(true);
+    expect(line?.text).toBe("Rakamlar 2 saat önce güncellendi.");
+  });
+
+  it("damga yoksa satır basılmaz", () => {
+    expect(freshnessLine(null, null, Date.now())).toBeNull();
+    expect(freshnessLine("bozuk", null, Date.now())).toBeNull();
+  });
+});
+
 describe("engel metni sunucudaki sabitle aynı kalır", () => {
   it("FINANCE_RECALC_BLOCK_LABELS ile ayrışmaz", () => {
     // Sunucu modülü `@/lib/prisma`'yı içe aktardığı için içe aktarılamaz; metin kaynaktan okunur.
@@ -273,5 +513,53 @@ describe("engel metni sunucudaki sabitle aynı kalır", () => {
     for (const [key, label] of Object.entries(RECALC_BLOCK_LABELS)) {
       expect(source).toContain(`"${key}": "${label}"`);
     }
+  });
+});
+
+/**
+ * Raporlar sayfası bir istemci bileşeni; bu kurallar TİPLE değil davranışla korunuyor, bu
+ * yüzden kaynak metninden doğrulanır. Hepsi bir kez GERÇEKTEN bozuldu.
+ */
+describe("Raporlar sayfası sözleşmeleri", () => {
+  const source = readFileSync(
+    path.join(process.cwd(), "src/app/reports/page.tsx"),
+    "utf8"
+  );
+
+  it("kârlılık sorgusu ÜRÜN ailesinin altında durur ve mount'ta bayatlığı sorar", () => {
+    // `["products"]` düşürmeleri (~20 mutasyon) ön ek eşleşmesiyle bu kartı da kapsasın diye.
+    expect(source).toContain('queryKey: ["products", "profitability"]');
+    // QueryProvider varsayılanı `refetchOnMount: false`; bu olmadan düşürme mount'ta işe yaramaz.
+    const blok = source.slice(source.indexOf('queryKey: ["products", "profitability"]'));
+    expect(blok.slice(0, 420)).toContain("refetchOnMount: true");
+  });
+
+  it("çubuk arka plan tazelemesinde ZIPLAMAZ", () => {
+    // Adetler değişince React aynı ögeyi yeniden kullanır; mount animasyonu tekrar çalışmaz,
+    // geçiş olmadan satır içi `width` anında yeni değerine atlıyordu.
+    const kural = source.slice(
+      source.indexOf(".ml-bar {"),
+      source.indexOf("@media (prefers-reduced-motion")
+    );
+    expect(kural).toContain("transition: width");
+    // Gecikme + fill-mode ikilisi kademeli girişi çubuğa yüklüyordu; giriş SATIRIN işi.
+    expect(kural).not.toContain("backwards");
+  });
+
+  it("grafik animasyonu gizli pencerede kapanır", () => {
+    // Recharts çubuğu rAF ile büyütüyor; gizli pencerede kare gelmeyince sıfır yükseklikte kalır.
+    expect(source).toContain("const grafikAnimasyonu = !reduceMotion && !sayfaGizli;");
+    expect(source).not.toContain("isAnimationActive={!reduceMotion}");
+  });
+
+  it("odak halkası Yüksek Kontrast kipinde de görünür", () => {
+    // Tailwind v4'te `outline-none` outline'ı tümden kaldırır; forced-colors'ta box-shadow çizilmez.
+    expect(source).not.toContain("outline-none focus-visible:ring-2");
+    expect(source).toContain("outline-hidden focus-visible:ring-2");
+  });
+
+  it("ağ kopukken 'veri yok' DENMEZ", () => {
+    // Duraklamış sorguda isError de isFetching de false; bu ayrım olmadan ekran yalan söylüyordu.
+    expect(source).toContain('financeQuery.fetchStatus === "paused"');
   });
 });
