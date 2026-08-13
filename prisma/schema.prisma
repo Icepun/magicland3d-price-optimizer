@@ -291,7 +291,48 @@ model ActualExpense {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  /// Bu kayıt hangi tekrarlayan gider kuralından doğdu (elle girilenlerde boş).
+  recurringId String?
+  /// Kuralın hangi dönemi için üretildi ("2026-08"). Aynı dönem iki kez eklenmesin diye.
+  periodKey   String?
+
+  @@unique([recurringId, periodKey])
   @@index([paidAt])
+  @@index([category])
+}
+
+/// Her ay aynı tarihte tekrarlayan sabit gider (muhasebe, abonelik, kira…).
+/// Vakti gelince `ActualExpense` satırı OTOMATİK açılır; kullanıcı sonradan düzenleyebilir/silebilir.
+model RecurringExpense {
+  id          String    @id @default(cuid())
+  name        String
+  category    String?
+  amountKurus Int
+  /// Ayın kaçında ödeniyor (1-31). Ay o güne sahip değilse ayın son gününe düşer.
+  dayOfMonth  Int
+  /// İlk hangi aydan itibaren üretilsin.
+  startsAt    DateTime
+  /// Bittiği ay (boşsa süresiz).
+  endsAt      DateTime?
+  isActive    Boolean   @default(true)
+  note        String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isActive])
+}
+
+/// Kullanıcının kendi belirlediği gider kategorileri — grafikteki renk buradan gelir.
+model ExpenseCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  /// Grafik rengi (CSS değeri). Boşsa sıraya göre otomatik atanır.
+  color     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
 }
 
 /**

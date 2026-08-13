@@ -62,7 +62,12 @@ let schemaReady: Promise<void> | null = null;
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
-const CURRENT_SCHEMA_VERSION = "41";
+// v42: Gider Ödemeleri — tekrarlayan sabit giderler (`RecurringExpense`), kullanıcının kendi
+//      kategori listesi (`ExpenseCategory`) ve `ActualExpense`'e `recurringId`/`periodKey`.
+//      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
+//      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
+//      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
+const CURRENT_SCHEMA_VERSION = "42";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -968,6 +973,56 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ActualExpense_paidAt_idx" ON "ActualExpense"("paidAt")`
+    );
+    // v42: Tekrarlayan sabit giderler + kullanıcının kendi kategori listesi.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "RecurringExpense" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "category" TEXT,
+        "amountKurus" INTEGER NOT NULL,
+        "dayOfMonth" INTEGER NOT NULL DEFAULT 1,
+        "startsAt" DATETIME NOT NULL,
+        "endsAt" DATETIME,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "note" TEXT,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "RecurringExpense_isActive_idx" ON "RecurringExpense"("isActive")`
+    );
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "ExpenseCategory" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "name" TEXT NOT NULL,
+        "color" TEXT,
+        "sortOrder" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ExpenseCategory_name_key" ON "ExpenseCategory"("name")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "ExpenseCategory_sortOrder_idx" ON "ExpenseCategory"("sortOrder")`
+    );
+    // Mevcut ActualExpense satırlarına yeni kolonlar.
+    await ensureColumn("ActualExpense", "recurringId", "TEXT");
+    await ensureColumn("ActualExpense", "periodKey", "TEXT");
+    // ⚠️ Mükerrer koruması: aynı kural + aynı dönem için İKİNCİ satır açılamasın.
+    // Otomatik üretim her açılışta çalıştığı için bu indeks olmadan her açılış bir kopya
+    // daha ekler ve o ayın gideri sessizce katlanır. Kısmi indeks: elle girilen satırlarda
+    // iki alan da NULL olur ve UNIQUE onları kapsamamalı.
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "ActualExpense_recurring_period_key"
+         ON "ActualExpense"("recurringId","periodKey")
+       WHERE "recurringId" IS NOT NULL AND "periodKey" IS NOT NULL`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "ActualExpense_category_idx" ON "ActualExpense"("category")`
     );
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "OrderFinanceSnapshot" (

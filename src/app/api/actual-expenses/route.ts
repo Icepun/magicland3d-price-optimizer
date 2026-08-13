@@ -7,15 +7,28 @@ import {
   ActualExpenseInput,
   actualExpenseResponse,
   actualExpenseValidationError,
+  expenseRowResponse,
   optionalExpenseText,
 } from "@/lib/actual-expenses";
+import { ensureRecurringExpenses } from "@/lib/recurring-expense-run";
+import { dbEpochMs } from "@/lib/sqlite-date";
 
 export async function GET() {
   await ensureRuntimeSchema();
-  const expenses = await remotePrisma.actualExpense.findMany({
-    orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
-  });
-  return NextResponse.json(expenses.map(actualExpenseResponse), {
+  // Vakti gelen sabit giderler burada gerçek kayda dönüşür. Sayfayı açmak bu yüzden yeterli;
+  // ayrı bir "oluştur" adımı yok. Yazılacak bir şey yoksa iki sorguda çıkar.
+  await ensureRecurringExpenses();
+  // HAM SQL: `recurringId` bu sürümde eklendi ve üretilmiş Prisma istemcisi onu henüz
+  // tanımıyor. Arayüz hangi kaydın otomatik geldiğini bu alandan biliyor.
+  // Sıralama `dbEpochMs` ile: kolonda hem epoch-ms tamsayı hem ISO metin bulunabiliyor ve
+  // düz sıralamada tamsayı her zaman metinden küçük sayılır (bkz. src/lib/sqlite-date.ts).
+  const rows = await remotePrisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT "id","name","category","amountKurus","paidAt","note","recurringId",
+            "createdAt","updatedAt"
+       FROM "ActualExpense"
+      ORDER BY ${dbEpochMs("paidAt")} DESC, ${dbEpochMs("createdAt")} DESC`
+  );
+  return NextResponse.json(rows.map(expenseRowResponse), {
     headers: { "Cache-Control": "no-store" },
   });
 }

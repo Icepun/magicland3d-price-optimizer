@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { kurusToTl } from "./monthly-finance";
+import { parseDbDate } from "./sqlite-date";
 
 export const ActualExpenseInput = z.object({
   name: z.string().trim().min(1, "Gider adı boş olamaz").max(120),
@@ -31,6 +32,27 @@ export function actualExpenseResponse(expense: {
 }) {
   const { amountKurus, ...rest } = expense;
   return { ...rest, amount: kurusToTl(amountKurus) };
+}
+
+/**
+ * Ham SQL satırını arayüzün beklediği gövdeye çevirir.
+ *
+ * `recurringId` dolu olan satır TEKRARLAYAN KURALDAN otomatik açılmıştır; arayüz bunu
+ * rozetle gösteriyor ki kullanıcı "bunu ben mi girdim" diye tereddüt etmesin.
+ */
+export function expenseRowResponse(row: Record<string, unknown>) {
+  const kurus = typeof row.amountKurus === "bigint" ? Number(row.amountKurus) : Number(row.amountKurus ?? 0);
+  return {
+    id: String(row.id ?? ""),
+    name: String(row.name ?? ""),
+    category: row.category == null ? null : String(row.category),
+    amount: kurusToTl(kurus),
+    paidAt: parseDbDate(row.paidAt)?.toISOString() ?? null,
+    note: row.note == null ? null : String(row.note),
+    recurringId: row.recurringId == null ? null : String(row.recurringId),
+    createdAt: parseDbDate(row.createdAt)?.toISOString() ?? null,
+    updatedAt: parseDbDate(row.updatedAt)?.toISOString() ?? null,
+  };
 }
 
 export function actualExpenseValidationError(error: unknown) {
