@@ -15,6 +15,9 @@ let server;
 let isQuittingForUpdate = false;
 /** Güncelleme yeniden-denemesi sürüyor mu — ara denemelerin hatası ekrana yansıtılmaz. */
 let updaterRetrying = false;
+/** Sunucu "çok fazla istek" dedikten sonra tekrar denemeyeceğimiz an (epoch ms). */
+let rateLimitedUntil = 0;
+const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000; // sunucunun istediği en uzun bekleme
 // Tepsi (tray) modu: pencere X'i uygulamayı KAPATMAZ, arka plana alır — relay + sipariş izleyici
 // çalışmaya devam eder → bildirimler uygulama "kapalıyken" de zamanında düşer.
 let tray = null;
@@ -23,8 +26,8 @@ let quitRequested = false; // tepsiden "Çık" → gerçek kapanış niyeti
 let updateState = {
   status: "idle",
   message: app.isPackaged
-    ? "Guncelleme kontrolu hazir"
-    : "Guncelleme sadece paketlenmis uygulamada calisir",
+    ? "Güncelleme kontrolü hazır"
+    : "Güncelleme sadece kurulu uygulamada çalışır",
   version: app.getVersion(),
   percent: 0,
 };
@@ -215,16 +218,32 @@ async function gracefulShutdown(reason) {
  * Bu, kullanıcıya uygulama bozulmuş hissi veriyor; oysa geçici bir ağ dalgalanması ve bir sonraki
  * denemede geçiyor. Ağ kaynaklı hatalar sakin bir metne çevriliyor; diğer hatalar aynen kalıyor.
  */
+/** Sunucu "çok fazla istek" diyorsa yeniden denemek yasağı UZATIR — tanıyıp geri çekilmeliyiz. */
+function isRateLimited(error) {
+  const raw = String(error?.message || error || "");
+  return /\b429\b|Too Many Requests|secondary rate limit|rate limit/i.test(raw);
+}
+
 function friendlyUpdateError(error) {
   const raw = String(error?.message || error || "");
+
+  if (isRateLimited(raw)) {
+    return "Güncelleme sunucusu şu an yoğun. Bir süre sonra kendiliğinden tekrar denenecek.";
+  }
+
   const networkish =
     /ERR_HTTP2|ERR_CONNECTION|ERR_NETWORK|ERR_TIMED_OUT|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|Empty reply/i.test(
       raw
     );
   if (networkish) {
-    return "Sunucuya ulasilamadi (gecici ag sorunu). Birazdan tekrar deneyin.";
+    return "Sunucuya ulaşılamadı. Birazdan tekrar deneyin.";
   }
-  return raw || "Guncelleme kontrolu basarisiz";
+
+  // HAM HATA METNİ EKRANA ÇIKMAZ. Sunucu hata sayfası döndürdüğünde `raw` KOCA BİR HTML
+  // BELGESİ oluyordu ve kullanıcının karşısına o dökülüyordu (sahada görüldü: 429 yanıtının
+  // tüm HTML gövdesi güncelleme kartına basıldı). Tanımadığımız hatada sade bir cümle yaz,
+  // ayrıntı log'a düşsün.
+  return "Güncelleme kontrolü şu an yapılamadı. Birazdan tekrar deneyin.";
 }
 
 function setupAutoUpdater() {
@@ -249,7 +268,7 @@ function setupAutoUpdater() {
   autoUpdater.logger = { info: writeLog, warn: writeLog, error: writeLog, debug: writeLog };
 
   autoUpdater.on("checking-for-update", () => {
-    setUpdateState({ status: "checking", message: "Guncelleme kontrol ediliyor", percent: 0 });
+    setUpdateState({ status: "checking", message: "Güncelleme kontrol ediliyor", percent: 0 });
   });
   autoUpdater.on("update-available", (info) => {
     setUpdateState({
@@ -260,12 +279,12 @@ function setupAutoUpdater() {
     });
   });
   autoUpdater.on("update-not-available", () => {
-    setUpdateState({ status: "not-available", message: "Uygulama guncel", percent: 0 });
+    setUpdateState({ status: "not-available", message: "Uygulama güncel", percent: 0 });
   });
   autoUpdater.on("download-progress", (progress) => {
     setUpdateState({
       status: "downloading",
-      message: "Guncelleme indiriliyor",
+      message: "Güncelleme indiriliyor",
       percent: Math.round(progress.percent || 0),
       transferred: progress.transferred || 0,
       total: progress.total || 0,
@@ -275,13 +294,13 @@ function setupAutoUpdater() {
   autoUpdater.on("update-downloaded", (info) => {
     setUpdateState({
       status: "downloaded",
-      message: "Guncelleme indirildi",
+      message: "Güncelleme indirildi",
       availableVersion: info.version,
       percent: 100,
     });
   });
   autoUpdater.on("error", (error) => {
-    const fullMsg = error?.stack || error?.message || "Guncelleme kontrolu basarisiz";
+    const fullMsg = error?.stack || error?.message || "Güncelleme kontrolü başarısız";
     writeLog("error event:", fullMsg);
     // Yeniden deneme sürerken hatayı EKRANA yansıtma: kullanıcı geçici ağ dalgalanmasını
     // arıza sanıyordu. Denemeler biter de hâlâ başarısızsa çağıran taraf durumu yazar.
@@ -299,7 +318,18 @@ function setupAutoUpdater() {
     if (!app.isPackaged) {
       setUpdateState({
         status: "not-available",
-        message: "Guncelleme sadece paketlenmis uygulamada calisir",
+        message: "Güncelleme sadece kurulu uygulamada çalışır",
+      });
+      return updateState;
+    }
+    // Sunucu bizi yavaşlattıysa süresi dolmadan İSTEK ATMA. Otomatik kontrol (açılış + zamanlayıcı)
+    // bu pencerede sessizce geçilir; kullanıcı düğmeye basarsa neden beklediğini görür.
+    if (Date.now() < rateLimitedUntil) {
+      writeLog("kontrol atlandi — sunucu yogunluk beklemesi surüyor");
+      setUpdateState({
+        status: "error",
+        message: "Güncelleme sunucusu şu an yoğun. Bir süre sonra kendiliğinden tekrar denenecek.",
+        percent: 0,
       });
       return updateState;
     }
@@ -317,14 +347,26 @@ function setupAutoUpdater() {
           return updateState;
         } catch (e) {
           writeLog(`kontrol denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+          // ⚠️ "Çok fazla istek"te YENİDEN DENEME YASAĞI UZATIR. Sunucu birkaç dakika, bazen bir
+          // saat beklememizi istiyor; beş isteği on beş saniyeye sıkıştırmak tam tersini yapar.
+          // Sahada birebir bu yaşandı. Böyle bir yanıtta hemen dur ve bir sonraki kontrolü ertele.
+          if (isRateLimited(e)) {
+            updaterRetrying = false;
+            rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+            writeLog("cok fazla istek — kontrol 1 saat ertelendi");
+            setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
+            break;
+          }
           if (i === denemeler) {
             updaterRetrying = false;
             setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
             break;
           }
+          // Kullanıcıya kaçıncı denemede olduğumuzu YAZMA — bu bir iç mekanizma, onun için
+          // anlamı yok. Ekranda tek bir sakin "kontrol ediliyor" kalır; denemeler log'a düşer.
           setUpdateState({
             status: "checking",
-            message: `Guncelleme kontrol ediliyor (${i + 1}. deneme)`,
+            message: "Güncelleme kontrol ediliyor",
             percent: 0,
           });
           await new Promise((r) => setTimeout(r, Math.min(8000, 1000 * 2 ** (i - 1))));
@@ -349,14 +391,23 @@ function setupAutoUpdater() {
             return;
           } catch (e) {
             writeLog(`indirme denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+            // Kontrolde olduğu gibi: "çok fazla istek"te ısrar yasağı uzatır — hemen dur.
+            if (isRateLimited(e)) {
+              updaterRetrying = false;
+              rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+              writeLog("cok fazla istek — indirme 1 saat ertelendi");
+              setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
+              return;
+            }
             if (i === denemeler) {
               updaterRetrying = false;
               setUpdateState({ status: "error", message: friendlyUpdateError(e), percent: 0 });
               return;
             }
+            // Kaçıncı denemede olduğumuz kullanıcıyı ilgilendirmez; log'da duruyor.
             setUpdateState({
               status: "downloading",
-              message: `Baglanti dalgali — tekrar deneniyor (${i + 1}/${denemeler})`,
+              message: "Bağlantı dalgalı — tekrar deneniyor",
               percent: 0,
             });
             await new Promise((r) => setTimeout(r, Math.min(10000, 2000 * i)));
