@@ -21,6 +21,7 @@ import {
 import { bambuControl, mapBambuState } from "./bambu";
 import { fileMatchKey } from "./file-match";
 import { pickProgress, resolveEta } from "./eta";
+import { etaHafizasiOku, etaHafizasiYaz } from "./eta-memory";
 import { printJobDisplayName } from "@/lib/print-job-name";
 import { tryAcquirePrintLock, releasePrintLock } from "./print-lock";
 // Panel API ile PAYLAŞILAN yoklayıcı — aynı yazıcı 5sn (panel) + 10sn (relay) ayrı ayrı
@@ -232,12 +233,17 @@ async function buildSnapshot(
     if (!productImage && matched?.imageUrl) productImage = matched.imageUrl;
     // MADDE 1: kalan süre panelle AYNI hesap (src/core/printers/eta.ts) — telefon ve masaüstü
     // artık farklı rakam göstermez.
-    etaSec = resolveEta({
+    // Panelle AYNI dondurulmuş hız: telefon ve masaüstü aynı rakamı göstermeli. Hafıza
+    // yazıcı kimliğine bağlı; panel de aynı anahtarı kullanıyor (tek süreç, tek kayıt).
+    const eta = resolveEta({
       progress: st.progress,
       elapsedSec: st.printDurationSec,
       slicerEstimateSec: meta?.estimatedTimeSec ?? null,
       printerRemainingSec: null,
-    }).remainingSec;
+      prev: etaHafizasiOku(c.id, st.filename),
+    });
+    etaHafizasiYaz(c.id, st.filename, st.progress, eta.totalSec);
+    etaSec = eta.remainingSec;
   }
   return {
     name: baseName, brand: c.brand, status, online: true,

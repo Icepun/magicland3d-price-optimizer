@@ -5,6 +5,7 @@ import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonrake
 import { mapBambuState, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
 import { fileMatchKey } from "@/core/printers/file-match";
 import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
+import { etaHafizasiOku, etaHafizasiYaz } from "@/core/printers/eta-memory";
 import { SPEED_PRESETS_PCT, type PrinterControlCaps } from "@/core/printers/controls";
 import { printJobDisplayName } from "@/lib/print-job-name";
 // Canlı yoklama yerine PAYLAŞILAN önbellek: relay ile tek yoklayıcı, çevrimdışı yazıcıya üstel
@@ -108,8 +109,9 @@ export interface PanelPrinter {
     level: number | null;
   };
   light: { supported: boolean; readable: boolean; on: boolean | null };
-  /** Ayarlı "şu katmanda duraklat" değeri (yoksa null). */
+  /** Mantıksal takım → fiziksel kafa (U1 extruder_map_table). Yoksa kimlik varsayılır. */
   toolMap?: number[];
+  /** Ayarlı "şu katmanda duraklat" değeri (yoksa null). */
   pauseAtLayer: number | null;
   /** Spagetti / kirli tabla gözetimi (yalnız destekleyen yazıcıda). */
   defectWatch: { supported: boolean; enabled: boolean; spaghetti: boolean; cleanBed: boolean } | null;
@@ -432,7 +434,10 @@ export async function GET(req: NextRequest) {
           elapsedSec: st.printDurationSec,
           slicerEstimateSec: meta?.estimatedTimeSec ?? null,
           printerRemainingSec: null,
+          // Hız yalnız ilerleme İLERLEYİNCE tazelenir; arada geri sayım düzgün akar.
+          prev: etaHafizasiOku(c.id, st.filename),
         });
+        etaHafizasiYaz(c.id, st.filename, st.progress, eta.totalSec);
         const remainingSec = eta.remainingSec ?? 0;
         const startMs = nowMs - st.printDurationSec * 1000;
         const endMs = nowMs + remainingSec * 1000;

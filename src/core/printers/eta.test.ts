@@ -105,3 +105,78 @@ describe("kalan süre", () => {
     expect(r.elapsedSec).toBe(1200);
   });
 });
+
+/**
+ * GERİ SAYIM ZIPLAMASI — kullanıcı "baskının bitiş süresi tahmini çok değişken" dedi.
+ *
+ * Sebep ölçüldü: ilerleme M73'ten %1'lik ADIMLARLA gelir, süre ise sürekli akar. İki adım
+ * arasında payda sabitken `geçen/ilerleme` şişer, yani KALAN SÜRE ARTAR; sonraki adımda geri
+ * düşer. İki saatlik baskının benzetiminde kalan süre 1149 kez artıyor, toplam 157 dakika
+ * yanlış yöne gidiyor, en büyük tek sıçrama 448 saniyeydi.
+ */
+describe("geri sayım düzgün akar (dondurulmuş hız)", () => {
+  /** Gerçek koşul: %1 adımlı ilerleme, 5 saniyede bir örnek. */
+  function kosu(donmusHizKullan: boolean) {
+    const TOPLAM = 2 * 3600;
+    let hafiza: { progress: number; totalSec: number } | null = null;
+    let onceki: number | null = null;
+    let artis = 0;
+    let enBuyukSicrama = 0;
+    for (let t = 0; t <= TOPLAM; t += 5) {
+      const progress = Math.floor((t / TOPLAM) * 100) / 100;
+      const r = resolveEta({
+        progress, elapsedSec: t, slicerEstimateSec: TOPLAM,
+        prev: donmusHizKullan ? hafiza : null,
+      });
+      if (r.totalSec != null) hafiza = { progress, totalSec: r.totalSec };
+      if (r.remainingSec == null) continue;
+      if (onceki != null) {
+        const fark = r.remainingSec - onceki;
+        if (fark > 0) artis++;
+        enBuyukSicrama = Math.max(enBuyukSicrama, Math.abs(fark + 5));
+      }
+      onceki = r.remainingSec;
+    }
+    return { artis, enBuyukSicrama };
+  }
+
+  it("dondurulmuş hız ZIPLAMAYI neredeyse tamamen bitirir", () => {
+    const eski = kosu(false);
+    const yeni = kosu(true);
+    // Ölçülen: 1149 → 19 artış, 448sn → 19sn en büyük sıçrama.
+    expect(eski.artis).toBeGreaterThan(500);
+    expect(yeni.artis).toBeLessThan(50);
+    expect(yeni.enBuyukSicrama).toBeLessThan(60);
+    expect(yeni.artis).toBeLessThan(eski.artis / 10);
+  });
+
+  it("ilerleme İLERLEYİNCE hız yeniden ölçülür (donmuş değer yapışmaz)", () => {
+    // %20'de (harman bölgesinin üstünde) ölçüm esastır: 1800sn / 0,20 = 9000sn.
+    const ilk = resolveEta({ progress: 0.2, elapsedSec: 1800, slicerEstimateSec: 6000 });
+    expect(ilk.totalSec).toBe(9000);
+    // İlerleme arttı → YENİ ölçüm esas alınır, donmuş toplam yapışmaz: 3000 / 0,30 = 10000.
+    const sonra = resolveEta({
+      progress: 0.3, elapsedSec: 3000, slicerEstimateSec: 6000,
+      prev: { progress: 0.2, totalSec: 9000 },
+    });
+    expect(sonra.totalSec).toBe(10000);
+  });
+
+  it("ilerleme GERİ giderse (yeni dosya) donmuş hız BIRAKILIR", () => {
+    const r = resolveEta({
+      progress: 0.02, elapsedSec: 60, slicerEstimateSec: 3600,
+      prev: { progress: 0.9, totalSec: 20000 },
+    });
+    // 0,02 ile 0,9 arası fark çok büyük → eski hız taşınmamalı.
+    expect(r.totalSec).not.toBe(20000);
+  });
+
+  it("yazıcının KENDİ kalan süresi varsa donmuş hız devreye girmez (Bambu)", () => {
+    const r = resolveEta({
+      progress: 0.5, elapsedSec: 1800, printerRemainingSec: 1200,
+      prev: { progress: 0.5, totalSec: 99999 },
+    });
+    expect(r.source).toBe("printer");
+    expect(r.remainingSec).toBe(1200);
+  });
+});

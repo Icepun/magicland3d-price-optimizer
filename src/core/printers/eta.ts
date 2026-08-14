@@ -73,6 +73,19 @@ export interface EtaInput {
   slicerEstimateSec?: number | null;
   /** Yazıcının KENDİ bildirdiği kalan süre (Bambu `mc_remaining_time`, saniyeye çevrilmiş). */
   printerRemainingSec?: number | null;
+  /**
+   * Bir önceki hesabın DONDURULMUŞ hızı — geri sayımın zıplamasını engeller.
+   *
+   * ÖLÇÜLEN SORUN (14 Ağu 2026): ilerleme M73'ten %1'lik ADIMLARLA gelir, süre ise sürekli
+   * akar. İki adım arasında `geçen/ilerleme` payda sabitken şişer, yani KALAN SÜRE ARTAR;
+   * sonraki adımda geri düşer. İki saatlik baskının benzetimi: kalan süre 1149 kez ARTIYOR,
+   * toplam 157 dakika yanlış yöne gidiyor, en büyük tek sıçrama 448 saniye.
+   *
+   * Çözüm: hız yalnız İLERLEME DEĞİŞTİĞİNDE yeniden hesaplanır; arada donmuş toplamdan
+   * geçen süre düşülür → geri sayım düzgün akar. Çağıran son sonucu saklayıp buraya verir.
+   * Verilmezse davranış eskisi gibidir (saf fonksiyon, durum tutmaz).
+   */
+  prev?: { progress: number; totalSec: number } | null;
 }
 
 export interface EtaResult {
@@ -120,6 +133,26 @@ export function resolveEta(input: EtaInput): EtaResult {
       totalSec: total != null ? Math.round(total) : null,
       elapsedSec: elapsed ?? (total != null ? Math.round(total - printerRemaining) : null),
       source: "printer",
+    };
+  }
+
+  // DONDURULMUŞ HIZ: ilerleme ilerlemediyse yeni ölçüm YOK — eski toplamı koru ve yalnız
+  // geçen süreyi düş. Böylece geri sayım adımlar arasında şişmez, düzgün akar.
+  // İlerleme geri giderse (yeni dosya / yeniden başlatma) dondurma bırakılır.
+  if (
+    input.prev &&
+    elapsed != null &&
+    progress >= MEASURE_MIN_PROGRESS &&
+    progress <= input.prev.progress &&
+    progress >= input.prev.progress - 0.02 &&
+    input.prev.totalSec > 0
+  ) {
+    const donmus = input.prev.totalSec;
+    return {
+      remainingSec: Math.max(0, Math.round(donmus - elapsed)),
+      totalSec: Math.round(donmus),
+      elapsedSec: Math.round(elapsed),
+      source: "measured",
     };
   }
 
