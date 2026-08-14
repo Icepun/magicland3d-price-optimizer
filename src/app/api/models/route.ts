@@ -111,7 +111,17 @@ async function computeModels() {
       // "__custom__" = özel baskı dosyaları (ürüne bağlı değil) → kütüphanede gösterme.
       // Bu sentinel'in Product kaydı yoktur → include null döner → eskiden f.product.name patlıyordu.
       where: { NOT: { productId: "__custom__" } },
-      include: { product: { select: { id: true, name: true, imageUrl: true } } },
+      // KOLONLAR TEK TEK. `include` bütün tabloyu satır satır çekiyordu; `thumbnail` kolonunda
+      // gömülü önizleme görselleri var. ÖLÇÜLDÜ (14 Ağu 2026): 694 satır = 19,76 MB thumbnail,
+      // ve bu rota 2 dakikada bir tazeleniyor → uzak veritabanından sürekli 20 MB çekiliyordu.
+      // Aşağıda `thumbnail`ın yalnız VAR/YOK bilgisi kullanılıyor; onu ayrı ve ucuz bir sorgu
+      // veriyor (thumbIds). Yeni alan eklersen BURAYA da ekle.
+      select: {
+        id: true, productId: true, printerConfigId: true, label: true,
+        originalName: true, sizeBytes: true, gramaj: true, estPrintMin: true,
+        fileType: true, contentMd5: true, r2Key: true,
+        product: { select: { id: true, name: true, imageUrl: true } },
+      },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
     prisma.printerConfig.findMany({
@@ -120,6 +130,15 @@ async function computeModels() {
       select: { id: true, name: true, brand: true, type: true },
     }),
   ]);
+
+  // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler döner (içerik değil, ~20 MB fark).
+  const thumbIds = new Set(
+    (
+      await prisma.$queryRawUnsafe<{ id: string }[]>(
+        `SELECT id FROM ProductModelFile WHERE thumbnail IS NOT NULL AND thumbnail <> ''`,
+      )
+    ).map((r) => r.id),
+  );
 
   // Aynı bulut nesnesini kaç kayıt gösteriyor — silme onayı bunu söyleyecek.
   const paylasim = new Map<string, number>();
@@ -144,7 +163,7 @@ async function computeModels() {
       gramaj: f.gramaj,
       estPrintMin: f.estPrintMin,
       fileType: f.fileType,
-      hasThumbnail: Boolean(f.thumbnail),
+      hasThumbnail: thumbIds.has(f.id),
       contentMd5: f.contentMd5 ?? null,
       sharedWith: f.r2Key ? (paylasim.get(f.r2Key) ?? 1) : 1,
     });

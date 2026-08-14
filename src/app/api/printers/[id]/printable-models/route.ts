@@ -16,7 +16,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const files = await prisma.productModelFile.findMany({
       // "__custom__" = özel baskı dosyaları (ürüne bağlı değil) → ürün listesinde gösterme.
       where: { printerConfigId: id, NOT: { productId: "__custom__" } },
-      include: {
+      // KOLONLAR TEK TEK SEÇİLİR — `include` bütün satırı çekiyordu ve `thumbnail` kolonunda
+      // dilimleyicinin gömdüğü önizleme görselleri (data URL) duruyor. ÖLÇÜLDÜ (14 Ağu 2026):
+      // bu yazıcı için 102 satır = 4,55 MB thumbnail, oysa aşağıda kullanılan alanların toplamı
+      // 0,01 MB — 455 kat fazlası boşuna çekiliyordu. Uzak-HTTP libSQL'de sorgular SIRALI
+      // olduğu için bu tek istek arkasındaki her sorguyu bekletiyor, "Baskı Başlat" açılmıyor
+      // ve uygulama kilitleniyordu. Yeni alan eklersen BURAYA da ekle.
+      select: {
+        id: true, productId: true, label: true, originalName: true,
+        sizeBytes: true, gramaj: true, r2Key: true, storedPath: true,
         product: {
           select: {
             id: true, name: true, imageUrl: true, alias: true,
