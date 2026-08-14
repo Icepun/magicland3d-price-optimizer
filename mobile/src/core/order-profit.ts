@@ -71,6 +71,18 @@ export interface OrderProfitInput {
   cargoRules: CargoRuleInput[];
   expenseRules: ExpenseRuleInput[];
   settings: Record<string, string | undefined>;
+  /**
+   * Siparişin verildiği an — kargo kuralı BU tarihe göre seçilir.
+   *
+   * ⚠️ NEDEN ŞART: kargo tarifeleri dönem dönem değişiyor ve kural tablosunda `validFrom` /
+   * `validTo` alanları zaten var. Bu tarih geçilmezse arama `new Date()` ile, yani HEP BUGÜNLE
+   * yapılır: tarife değiştiği anda GEÇMİŞ siparişlerin kargo maliyeti ve kârı da yeni fiyata
+   * göre yeniden hesaplanır. Aynı şey barem düğmesi için de geçerliydi — düğmeyi çevirmek
+   * tüm geçmişi anında değiştiriyordu.
+   *
+   * Boş bırakılırsa bugüne düşer (eski davranış) — çağıranların hepsi geçmeli.
+   */
+  orderedAt?: Date | null;
 }
 
 export interface OrderProfitResult {
@@ -109,6 +121,8 @@ export interface OrderProfitResult {
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const { platform, orderTotal, lines, commissionRules, cargoRules, expenseRules, settings } = input;
+  // Kural seçimi siparişin KENDİ tarihine göre; geçilmediyse bugün (eski davranış).
+  const kuralTarihi = input.orderedAt ?? new Date();
   const vatRate = vatRateOf(settings);
   // Bir maliyetin içindeki KDV payı (indirilecek KDV) — kargo/gider için aynı formül.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
@@ -315,7 +329,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     ? null
     : categories
         .map((categoryName) =>
-          findCargoRule(platCargo, orderTotal, categoryName, totalDesi || 1)
+          findCargoRule(platCargo, orderTotal, categoryName, totalDesi || 1, kuralTarihi)
         )
         .filter((rule): rule is CargoRuleInput => rule != null)
         .reduce<CargoRuleInput | null>((selected, rule) => {

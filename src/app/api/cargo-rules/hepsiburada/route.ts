@@ -43,7 +43,10 @@ export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
     const { mode } = Body.parse(await req.json());
-    await prisma.cargoRule.deleteMany({ where: { platform: "hepsiburada" } });
+    // ⚠️ Yalnız YÜRÜRLÜKTEKİ kurallar silinir (validTo boş olanlar).
+    // Süresi dolmuş kurallar geçmiş siparişlerin kargo maliyetini belirliyor; hepsi
+    // silinseydi moda her geçişte geçmiş aylar kuralsız kalır ve kârları sessizce değişirdi.
+    await prisma.cargoRule.deleteMany({ where: { platform: "hepsiburada", validTo: null } });
     const rules = buildHepsiburadaCargoRules(mode);
     await prisma.cargoRule.createMany({ data: rules });
     await prisma.appSetting.upsert({

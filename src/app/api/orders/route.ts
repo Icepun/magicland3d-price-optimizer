@@ -1412,6 +1412,9 @@ async function computeOrdersBodyInner(
         cargoRules,
         expenseRules,
         settings: settingsMap,
+        // Kargo kuralı siparişin KENDİ tarihine göre seçilsin: tarife değişince geçmiş
+        // siparişlerin kârı yeni fiyata kaymasın.
+        orderedAt: r.date ? new Date(r.date) : null,
       },
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),

@@ -8,6 +8,7 @@ import {
 } from "@/lib/sqlite-date";
 import fs from "node:fs";
 import path from "node:path";
+import { migrateTexTariff2026Agustos } from "@/lib/runtime-schema-tex";
 
 let schemaReady: Promise<void> | null = null;
 
@@ -67,7 +68,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "42";
+const CURRENT_SCHEMA_VERSION = "43";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1506,6 +1507,8 @@ export function ensureRuntimeSchema(): Promise<void> {
     await cleanupPdfCommissionRules();
     await migrateTrendyolProductsToListings();
     await migrateParentVariantsToGroups();
+    // v43: TEX kargo tarifesi 1 Ağu 2026 zammı — eskiler validTo ile kapanır, yeniler validFrom ile başlar.
+    await migrateTexTariff2026Agustos();
     // v40: karışık tipli tarih damgalarını tek biçime çek (Raporlar'daki kayıp siparişler).
     const tarihOnarimiTamam = await normalizeDateColumns();
 

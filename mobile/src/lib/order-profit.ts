@@ -193,6 +193,9 @@ export function computeOrderProfit(
       cargoRules: rules.cargo,
       expenseRules: rules.expense,
       settings,
+      // Kargo kuralı siparişin KENDİ tarihine göre — masaüstüyle aynı. Geçilmezse tarife
+      // değiştiği anda telefon geçmiş siparişleri yeni fiyatla gösterirdi.
+      orderedAt: order.date != null ? new Date(order.date) : null,
     },
     {
       forceProfitPartial: !!order.financialPartial,

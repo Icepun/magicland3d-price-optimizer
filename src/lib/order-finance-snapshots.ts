@@ -1183,6 +1183,8 @@ export async function recalculateFinanceMonths(
           cargoRules: cargoRules as CargoRuleInput[],
           expenseRules: expenseRules as ExpenseRuleInput[],
           settings,
+          // Yeniden hesapta da siparişin kendi tarihi: geçmiş özetler güncel tarifeye kaymasın.
+          orderedAt: row.orderedAt ?? null,
         },
         {
           statusKind: row.statusKind,

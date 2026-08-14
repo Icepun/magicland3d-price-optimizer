@@ -15,7 +15,19 @@ import { bustProfitInputCaches } from "@/lib/cache-busting";
  *  GET → mevcut mod (avantajlı kural aktifse "avantajli", değilse "standart").
  */
 const KEY = "trendyolCargoMode";
-const texWhere = { OR: [{ cargoProvider: { contains: "TEX" } }, { name: { contains: "TEX" } }] };
+/**
+ * Yalnız YÜRÜRLÜKTEKİ kurallar (validTo boş).
+ *
+ * ⚠️ Süresi dolmuş kurallara DOKUNULMAZ: onlar geçmiş siparişlerin kargo maliyetini
+ * belirliyor. Düğme hepsini çevirseydi, moda geçerken geçmiş aylardaki siparişler
+ * kuralsız kalır ve kârları sessizce değişirdi.
+ */
+const texWhere = {
+  AND: [
+    { OR: [{ cargoProvider: { contains: "TEX" } }, { name: { contains: "TEX" } }] },
+    { validTo: null },
+  ],
+};
 
 export async function GET() {
   await ensureRuntimeSchema();
