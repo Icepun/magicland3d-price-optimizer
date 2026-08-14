@@ -152,6 +152,10 @@ export function GcodeViewerDialog({
       renderer.setSize(w, h, false);
       viz.camera.aspect = w / h;
       viz.camera.updateProjectionMatrix();
+      // Kalın çizgi materyali kalınlığı çözünürlükle hesaplar — güncellenmezse çizgiler
+      // yeniden boyutlandırmadan sonra yanlış kalınlıkta kalır.
+      const dpr = renderer.getPixelRatio();
+      viz.setResolution(w * dpr, h * dpr);
     };
     resize();
     const ro = new ResizeObserver(resize);

@@ -1878,7 +1878,7 @@ function LiveStageTile({
   }, [pack, layerIndex, intraStep, minX, maxX, minY, maxY, accent]);
 
   return (
-    <div className="absolute bottom-1.5 right-1.5 h-[58px] w-[58px] rounded-md border bg-background/72 p-[3px] backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
+    <div className="absolute bottom-1.5 right-1.5 h-[72px] w-[72px] rounded-md border bg-background/72 p-[3px] backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
       <div className="relative h-full w-full flex items-center justify-center">
         <div
           className="relative rounded-[2px] border border-white/12"
@@ -1923,11 +1923,18 @@ function drawLayerTopView(
 
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  // 0: henüz basılmayan yollar (soluk) — 1: basılanlar (yazıcının kimlik renginde)
+  // GERÇEK EKSTRÜZYON GENİŞLİĞİ. Eskiden sabit 0,8-1,1px kıl çizgi çiziliyordu; 58px'lik
+  // karoda bu, parçanın kendisi değil makinenin yol karalamasıydı ("hareket çizgilerini
+  // görüyoruz"). Vuruş gerçek şerit kalınlığına ölçeklenince komşu yollar birleşir ve
+  // DOLU bir siluet çıkar. Küçük parçada (U1 gövdesi 13,8 mm) karoyu tamamen doldurmasın
+  // diye üst sınır karo genişliğinin %9'u.
+  const SERIT_MM = 0.42;
+  const kalinlik = Math.min(w * 0.09, Math.max(1.6, (w / spanX) * SERIT_MM));
+  // 0: henüz basılmayan yollar (hayalet) — 1: basılanlar (yazıcının kimlik renginde)
   for (const printedPass of [0, 1]) {
     ctx.beginPath();
-    ctx.strokeStyle = printedPass ? o.accent : "oklch(0.85 0 0 / 22%)";
-    ctx.lineWidth = printedPass ? 1.1 : 0.8;
+    ctx.strokeStyle = printedPass ? o.accent : "oklch(0.85 0 0 / 14%)";
+    ctx.lineWidth = printedPass ? kalinlik : Math.max(1, kalinlik * 0.55);
     for (let i = start; i < end; i++) {
       if (!o.isBody(pack.pathFeature[i])) continue;
       if ((i < cut ? 1 : 0) !== printedPass) continue;

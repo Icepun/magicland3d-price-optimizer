@@ -13,6 +13,9 @@
  *    baskı boyunca neredeyse değişmiyor ve ilerleme gözle ayırt edilemiyordu.
  */
 import * as THREE from "three";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { ParsedGcode } from "./viz-pack";
 import {
   FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SUPPORT, FEATURE_OTHER,
@@ -77,17 +80,51 @@ function hexToRgb(hex: string | null | undefined): [number, number, number] | nu
 }
 
 /**
- * Koyu zeminde görünürlük tabanı: siyah filament (#000000) koyu arka planda kaybolur.
- * Rengi tonunu koruyarak alt sınıra taşı — kullanıcı hâlâ "siyah parça"yı ayırt eder.
+ * Sahnenin GERÇEK zemini. Uygulama koyu temaya sabit (layout.tsx `className="dark"`), izleyici
+ * `--popover` üzerinde duruyor: oklch(0.225 0.022 265) ≈ #171C26 → bağıl parlaklık 0,0113.
  */
-function readable(c: [number, number, number]): [number, number, number] {
-  const lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-  // 0,45: gerçek dosyada model neredeyse tümüyle SİYAH filament (1,17 M segmentin 1,15 M'i).
-  // Daha düşük tabanla figür koyu zeminde okunmuyordu.
-  const FLOOR = 0.45;
-  if (lum >= FLOOR) return c;
-  const lift = FLOOR - lum;
-  return [Math.min(1, c[0] + lift), Math.min(1, c[1] + lift), Math.min(1, c[2] + lift)];
+const BG_LUM = 0.0113;
+/** Zemine karşı en az bu kontrast oranı (WCAG) sağlanır. */
+const MIN_CR = 3.0;
+
+/** sRGB bileşenini ışık şiddetine çevir (WCAG bağıl parlaklık için). */
+function dogrusal(v: number): number {
+  return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
+function bagilParlaklik(c: readonly [number, number, number]): number {
+  return 0.2126 * dogrusal(c[0]) + 0.7152 * dogrusal(c[1]) + 0.0722 * dogrusal(c[2]);
+}
+
+/**
+ * Rengi ZEMİNDE OKUNUR hale getirir — ama yalnız GEREKİYORSA.
+ *
+ * Eskiden sabit bir parlaklık tabanı (0,45) vardı ve rengin kontrastına bakmıyordu: gerçek
+ * kırmızı (#FF0000) ekranda pembeye (#FF3D3D), yazıcıdaki kırmızı (#E72F1D) #FF4D3B'ye
+ * kayıyordu — u1.gcode'da gövdenin %96,9'u yanlış renkti. Oysa kırmızının koyu zeminle
+ * kontrastı zaten 4,28:1, yani sorun yoktu; taban yalnız SİYAHI kurtarmak için konmuştu.
+ *
+ * Artık ölçüt kontrast: eşiği geçen renge DOKUNULMAZ, geçmeyen (siyah, çok koyu gri) tonunu
+ * koruyarak eşiğe kadar açılır. Kapı, FEATURE_SHADE çarpıldıktan SONRA uygulanmalı — yoksa
+ * eşiği geçen renk iç duvarda (shade 0,76) yine altına düşer.
+ */
+function gorunurYap(c: [number, number, number]): [number, number, number] {
+  const hedef = MIN_CR * (BG_LUM + 0.05) - 0.05;
+  let lo = 0;
+  let hi = 1;
+  if (bagilParlaklik(c) >= hedef) return c;
+  // Beyaza doğru en KÜÇÜK kaydırmayı ikili aramayla bul — ton korunur, gereksiz açılma olmaz.
+  for (let i = 0; i < 18; i++) {
+    const k = (lo + hi) / 2;
+    const deneme: [number, number, number] = [
+      c[0] + (1 - c[0]) * k,
+      c[1] + (1 - c[1]) * k,
+      c[2] + (1 - c[2]) * k,
+    ];
+    if (bagilParlaklik(deneme) >= hedef) hi = k;
+    else lo = k;
+  }
+  return [c[0] + (1 - c[0]) * hi, c[1] + (1 - c[1]) * hi, c[2] + (1 - c[2]) * hi];
 }
 
 /**
@@ -108,11 +145,18 @@ export function vizColorTable(g: ParsedGcode, opts: VizSceneOptions = {}): { rgb
     const base = fromPalette ?? fromFile;
     for (const f of features) {
       const shade = FEATURE_SHADE[f] ?? 0.8;
-      const c = base ? readable(base) : (FEATURE_COLORS[f] ?? FEATURE_COLORS[FEATURE_OTHER]);
+      // Kontrast kapısı gölge ÇARPILDIKTAN SONRA — yoksa eşiği geçen renk iç duvarda
+      // (shade 0,76) yeniden zeminde kaybolurdu. Yedek özellik renkleri zaten okunur seçilmiş.
+      const c = base
+        ? gorunurYap([base[0] * shade, base[1] * shade, base[2] * shade])
+        : ((): [number, number, number] => {
+            const y = FEATURE_COLORS[f] ?? FEATURE_COLORS[FEATURE_OTHER];
+            return [y[0] * shade, y[1] * shade, y[2] * shade];
+          })();
       const i = (f * toolCount + t) * 3;
-      rgb[i] = c[0] * shade;
-      rgb[i + 1] = c[1] * shade;
-      rgb[i + 2] = c[2] * shade;
+      rgb[i] = c[0];
+      rgb[i + 1] = c[1];
+      rgb[i + 2] = c[2];
       // Gövde dışı parçalar (dolgu/destek/etek/purge) VARSAYILAN olarak atılır: alfa 0 →
       // alphaTest eler → derinlik tamponuna da yazmaz. Yalnız kullanıcı açıkça isterse
       // %20 saydamlıkla çizilir.
@@ -180,8 +224,101 @@ export interface VizScene {
   setPalette: (palette: VizPalette) => void;
   /** Dolgu/destek/etek görünürlüğü — sahne yeniden kurulmadan anlık değişir. */
   setShowSupport: (goster: boolean) => void;
+  /**
+   * Tuval boyutu değişince ÇAĞRILMALI. Kalın çizgi materyali kalınlığı piksele çevirirken
+   * çözünürlüğü kullanır; güncellenmezse çizgiler yanlış kalınlıkta çizilir.
+   */
+  setResolution: (w: number, h: number) => void;
   layerCount: number;
   dispose: () => void;
+}
+
+/**
+ * Kalın çizgi BÜTÇESİ. `LineSegments2` her segmenti bir örnek (instance) olarak taşır ve
+ * fragment maliyeti kalınlıkla büyür. Gerçek 40 paketin gövde segmenti dağılımı ölçüldü:
+ * medyan 80.784, p75 244.148, p90 725.910, en büyük 2.146.023. 600 bin eşiğinde paketlerin
+ * ~%15'i ince yedeğe düşer — yani kalın çizgi dosyaların %85'inde devrede olur, ağır
+ * dosyalarda kare hızı korunur.
+ */
+const KALIN_SEGMENT_BUTCESI = 600_000;
+
+interface GovdeKatmani {
+  nesne: LineSegments2;
+  materyal: LineMaterial;
+  geometri: LineSegmentsGeometry;
+  /** Katman i'ye kadar (dahil) kaç GÖVDE segmenti var — setLayer bunu kullanır. */
+  katmanSonu: Uint32Array;
+  toplam: number;
+}
+
+/** Gövde segmentlerini ayıklayıp kalın çizgi nesnesi kurar. Bütçe aşılırsa null döner. */
+function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array): GovdeKatmani | null {
+  const n = g.totalSegments;
+  let govdeSayisi = 0;
+  for (let i = 0; i < n; i++) if (isBodyFeature(g.features[i])) govdeSayisi++;
+  if (govdeSayisi === 0 || govdeSayisi > KALIN_SEGMENT_BUTCESI) return null;
+
+  const pos = new Float32Array(govdeSayisi * 6);
+  const col = new Float32Array(govdeSayisi * 6);
+  const katmanSonu = new Uint32Array(g.layerRanges.length);
+  let j = 0;
+  let katman = 0;
+  for (let i = 0; i < n; i++) {
+    // Katman sınırlarını geçerken o ana kadarki gövde sayısını damgala.
+    while (katman < g.layerRanges.length && i >= g.layerRanges[katman].end) {
+      katmanSonu[katman] = j;
+      katman++;
+    }
+    if (!isBodyFeature(g.features[i])) continue;
+    pos.set(g.positions.subarray(i * 6, i * 6 + 6), j * 6);
+    const o = i * 8;
+    const r = colorBytes[o] / 255, gg = colorBytes[o + 1] / 255, b = colorBytes[o + 2] / 255;
+    col[j * 6] = r; col[j * 6 + 1] = gg; col[j * 6 + 2] = b;
+    col[j * 6 + 3] = r; col[j * 6 + 4] = gg; col[j * 6 + 5] = b;
+    j++;
+  }
+  while (katman < g.layerRanges.length) katmanSonu[katman++] = j;
+
+  const geometri = new LineSegmentsGeometry();
+  geometri.setPositions(pos);
+  geometri.setColors(col);
+
+  // Kalınlık DÜNYA BİRİMİNDE (mm) — gerçek şerit genişliği. Ekran birimli olsaydı
+  // yakınlaştırınca incelir, uzaklaşınca kalınlaşırdı; parça hiç katı görünmezdi.
+  const materyal = new LineMaterial({
+    worldUnits: true,
+    linewidth: 0.42,
+    vertexColors: true,
+    dashed: false,
+  });
+  const nesne = new LineSegments2(geometri, materyal);
+  nesne.computeLineDistances();
+  return { nesne, materyal, geometri, katmanSonu, toplam: govdeSayisi };
+}
+
+/** Kalın nesnenin renklerini `colorBytes`'tan tazeler (palet değişince). */
+function govdeRenkleriniTazele(govde: GovdeKatmani, g: ParsedGcode, colorBytes: Uint8Array): void {
+  const attr = govde.geometri.getAttribute("instanceColorStart") as THREE.InterleavedBufferAttribute;
+  const buf = attr.data.array as Float32Array;
+  let j = 0;
+  for (let i = 0; i < g.totalSegments; i++) {
+    if (!isBodyFeature(g.features[i])) continue;
+    const o = i * 8;
+    const r = colorBytes[o] / 255, gg = colorBytes[o + 1] / 255, b = colorBytes[o + 2] / 255;
+    buf[j * 6] = r; buf[j * 6 + 1] = gg; buf[j * 6 + 2] = b;
+    buf[j * 6 + 3] = r; buf[j * 6 + 4] = gg; buf[j * 6 + 5] = b;
+    j++;
+  }
+  attr.data.needsUpdate = true;
+}
+
+/** Gövde segmentlerinin alfasını ince nesnede sıfırlar — kalın nesne onları zaten çiziyor. */
+function govdeyiInceNesnedenGizle(g: ParsedGcode, colorBytes: Uint8Array): void {
+  for (let i = 0; i < g.totalSegments; i++) {
+    if (!isBodyFeature(g.features[i])) continue;
+    colorBytes[i * 8 + 3] = 0;
+    colorBytes[i * 8 + 7] = 0;
+  }
 }
 
 export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene {
@@ -216,12 +353,33 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
   });
   const lines = new THREE.LineSegments(geometry, material);
 
+  /**
+   * KALIN GÖVDE — modelin katı bir cisim gibi görünmesini sağlayan katman.
+   *
+   * `LineBasicMaterial` çizgileri her zaman 1px'dir (WebGL'de linewidth desteklenmez), bu
+   * yüzden model bir tel kafes / çizgi yumağı gibi duruyordu ("hala çok kötü durumda").
+   * `LineSegments2` dünya birimli kalınlık verir: vuruş gerçek şerit genişliğine ölçeklenince
+   * komşu yollar birleşir ve dolu bir yüzey çıkar.
+   *
+   * YALNIZ GÖVDE segmentleri buraya girer. Sebep teknik: `LineSegmentsGeometry.setColors`
+   * yalnız RGB taşır, alfa taşımaz — dolgu/destek/etek görünürlüğü alfayla yönetildiği için
+   * onlar eski ince nesnede kalır (alphaTest yolu aynen çalışır, derinlik sorunu doğmaz).
+   */
+  const govde = options.mode === "card" ? null : buildGovdeLines(g, colorBytes);
+
   const { minZ } = g.bounds;
   const rb = bodyXYBounds(g);
   const cx = (rb.minX + rb.maxX) / 2, cy = (rb.minY + rb.maxY) / 2;
   const group = new THREE.Group();
   lines.position.set(-cx, -cy, -minZ); // modeli GERÇEK merkezine göre ortala
   group.add(lines);
+  if (govde) {
+    govde.nesne.position.copy(lines.position);
+    group.add(govde.nesne);
+    // Gövde artık KALIN nesnede çiziliyor → ince nesnede SÖNDÜRÜLÜR (alfa 0, alphaTest eler).
+    // Yoksa aynı yollar iki kez çizilir, ince çizgi kalının üstünde tel kafes izi bırakırdı.
+    govdeyiInceNesnedenGizle(g, colorBytes);
+  }
   group.rotation.x = -Math.PI / 2;
   scene.add(group);
 
@@ -243,8 +401,11 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
   const setLayer = (layerIdx: number) => {
     if (layerIdx < 0 || layerIdx >= g.layerRanges.length) {
       geometry.setDrawRange(0, segCount * 2);
+      // LineSegments2 örneklenmiş geometridir: drawRange değil instanceCount ile kesilir.
+      if (govde) govde.geometri.instanceCount = govde.toplam;
     } else {
       geometry.setDrawRange(0, g.layerRanges[layerIdx].end * 2); // segment → 2 vertex
+      if (govde) govde.geometri.instanceCount = govde.katmanSonu[layerIdx];
     }
   };
 
@@ -258,6 +419,10 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
       palette: aktifPalet,
       showSupport: yardimcilarAcik,
     });
+    if (govde) {
+      govdeRenkleriniTazele(govde, g, colorBytes);
+      govdeyiInceNesnedenGizle(g, colorBytes);
+    }
     colorAttr.needsUpdate = true;
     // Saydam parçalar görünürken derinlik yazımı kapanmalı (bkz. materyal kurulumundaki not).
     material.depthWrite = !(options.mode !== "card" && yardimcilarAcik);
@@ -275,12 +440,18 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
     yenidenBoya();
   };
 
+  const setResolution = (w: number, h: number) => {
+    govde?.materyal.resolution.set(Math.max(1, w), Math.max(1, h));
+  };
+
   return {
-    scene, camera, lines, geometry, setLayer, setPalette, setShowSupport,
+    scene, camera, lines, geometry, setLayer, setPalette, setShowSupport, setResolution,
     layerCount: g.layerRanges.length,
     dispose: () => {
       geometry.dispose();
       material.dispose();
+      govde?.geometri.dispose();
+      govde?.materyal.dispose();
       (grid.material as THREE.Material).dispose();
       grid.geometry.dispose();
     },

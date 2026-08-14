@@ -11,7 +11,10 @@
 const DB_NAME = "mlhub-gcode-viz";
 // v3: geometri store'u paket store'una dönüştü (eski satırlar okunamaz) + kareler yeni renk/gövde
 // kuralıyla üretiliyor → iki store da sıfırlanır ve yeniden dolar.
-const DB_VER = 3;
+// v4: renk kuralı değişti — mutlak parlaklık tabanı yerine zemine karşı KONTRAST kapısı geldi
+// (kırmızı artık pembeye kaymıyor). Kayıtlı kareler ve küçük resimler PİŞMİŞ PİKSEL olduğu için
+// eski renkleri taşırlar; sürüm artmazsa kullanıcı düzelmeyi kartlarda GÖREMEZ.
+const DB_VER = 4;
 const GEOM = "geom";
 const SPRITES = "sprites";
 const MAX_GEOM = 16; // LRU üst sınırları (disk şişmesin)
