@@ -10,7 +10,7 @@ import {
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
-  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal,
+  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -1013,17 +1013,22 @@ function PrinterCardInner({
                 </p>
               )}
               {/* Desteklenmeyen yazıcıda tamamlanacak bir kurulum YOK → düğme de çizilmez. */}
-              {notice.action !== "none" && (
-                <Button
-                  size="sm" variant="outline" className="h-7 mt-2 gap-1.5 text-xs"
-                  disabled={notice.action === "retry" && retrying}
-                  onClick={notice.action === "manage" ? onManage : onRetry}
-                >
-                  {notice.action === "manage"
-                    ? <><Settings2 className="h-3.5 w-3.5" /> Yönet</>
-                    : <><RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} /> Tekrar dene</>}
-                </Button>
-              )}
+              <div className="flex flex-wrap items-center gap-2 mt-2">
+                {notice.action !== "none" && (
+                  <Button
+                    size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+                    disabled={notice.action === "retry" && retrying}
+                    onClick={notice.action === "manage" ? onManage : onRetry}
+                  >
+                    {notice.action === "manage"
+                      ? <><Settings2 className="h-3.5 w-3.5" /> Yönet</>
+                      : <><RefreshCw className={cn("h-3.5 w-3.5", retrying && "animate-spin")} /> Tekrar dene</>}
+                  </Button>
+                )}
+                {/* "Ulaşılamadı" tek cümlesi üç ayrı durumu birden anlatıyordu; test hangisi
+                    olduğunu söyler. Hiçbir şeyi değiştirmez, yalnız okur. */}
+                {isReal && <ConnectionTestButton printerId={printer.id} />}
+              </div>
             </div>
           </div>
         ) : job ? (
@@ -1293,6 +1298,122 @@ function CardBadges({ printer, speedView, className }: { printer: PanelPrinter; 
         </span>
       ))}
     </div>
+  );
+}
+
+// ── Bağlantı testi ─────────────────────────────────────────────────────────
+//
+// "Yazıcıya ulaşılamadı" tek cümlesi üç ayrı durumu birden anlatıyordu: kutu ağda yok /
+// kutu var ama yazılımı yanıt vermiyor / ikisi de çalışıyor ama isteğimiz düşüyor. Üçünün
+// çaresi farklı. Test katman katman ilerler ve nerede koptuğunu gösterir.
+
+interface TestAsamasi {
+  ad: string;
+  durum: "ok" | "hata" | "atlandi";
+  sureMs: number;
+  aciklama: string;
+}
+interface TestSonucu {
+  asamalar: TestAsamasi[];
+  sonuc: "calisiyor" | "yazilim-durmus" | "agda-yok" | "kismi";
+  baslik: string;
+  oneri: string;
+}
+
+function ConnectionTestButton({ printerId }: { printerId: string }) {
+  const [acik, setAcik] = useState(false);
+  const [sonuc, setSonuc] = useState<TestSonucu | null>(null);
+  const [calisiyor, setCalisiyor] = useState(false);
+
+  const testEt = async () => {
+    setCalisiyor(true);
+    setSonuc(null);
+    setAcik(true);
+    try {
+      const r = await fetch(`/api/printers/${printerId}/diagnose`, { method: "POST" });
+      setSonuc(await r.json());
+    } catch {
+      setSonuc({
+        asamalar: [],
+        sonuc: "agda-yok",
+        baslik: "Test yapılamadı",
+        oneri: "Uygulama yanıt vermedi.",
+      });
+    } finally {
+      setCalisiyor(false);
+    }
+  };
+
+  const renk =
+    sonuc?.sonuc === "calisiyor"
+      ? "var(--panel-green, oklch(0.72 0.16 155))"
+      : sonuc?.sonuc === "yazilim-durmus"
+        ? "var(--panel-amber)"
+        : "oklch(0.65 0.2 25)";
+
+  return (
+    <>
+      <Button
+        size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
+        disabled={calisiyor}
+        onClick={testEt}
+      >
+        {calisiyor
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <Activity className="h-3.5 w-3.5" />}
+        Bağlantıyı test et
+      </Button>
+
+      <Dialog open={acik} onOpenChange={(o) => !o && setAcik(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">Bağlantı testi</DialogTitle>
+          </DialogHeader>
+
+          {calisiyor && (
+            <div className="py-6 text-center">
+              <Loader2 className="h-5 w-5 mx-auto animate-spin text-muted-foreground" />
+              <p className="text-xs text-muted-foreground mt-2">Yazıcı deneniyor…</p>
+            </div>
+          )}
+
+          {sonuc && !calisiyor && (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                {sonuc.asamalar.map((a, i) => (
+                  <div
+                    key={a.ad}
+                    className="flex items-center gap-2 text-sm motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1"
+                    style={{ animationDelay: `${i * 70}ms`, animationFillMode: "backwards" }}
+                  >
+                    {a.durum === "ok"
+                      ? <Check className="h-4 w-4 shrink-0" style={{ color: "var(--panel-green, oklch(0.72 0.16 155))" }} />
+                      : <X className="h-4 w-4 shrink-0 text-destructive" />}
+                    <span className="flex-1 min-w-0 truncate">{a.ad}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">
+                      {a.aciklama} · {a.sureMs}ms
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                className="rounded-lg border p-2.5"
+                style={{ borderColor: `color-mix(in oklch, ${renk} 35%, var(--border))` }}
+              >
+                <p className="text-sm font-medium" style={{ color: renk }}>{sonuc.baslik}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{sonuc.oneri}</p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setAcik(false)}>Kapat</Button>
+            <Button size="sm" disabled={calisiyor} onClick={testEt}>Yeniden test et</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
