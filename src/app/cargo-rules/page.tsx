@@ -2,7 +2,7 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { CargoCoverageCard } from "./cargo-coverage-card";
 import {
   Dialog,
   DialogContent,
@@ -305,6 +306,7 @@ function CargoBaremView({
   desiBrackets,
   desiThreshold,
   loading,
+  maxDesi,
 }: {
   provider: string | null;
   vatNote?: string;
@@ -312,7 +314,33 @@ function CargoBaremView({
   desiBrackets: DesiBracket[];
   desiThreshold: number;
   loading?: boolean;
+  /** Ürünlerdeki en büyük desi — bunun üstündeki baremler katlanır. */
+  maxDesi?: number | null;
 }) {
+  const [hepsiniGoster, setHepsiniGoster] = useState(false);
+  /**
+   * Görünen baremler: ürünlerin en büyüğünü kapsayan barem DAHİL, üstü katlanır.
+   *
+   * Ölçüldü (14 Ağu 2026): en büyük ürün 6 desi, oysa tablolar 30-40 desiye kadar gidiyor.
+   * Kullanılmayan baremler tabloyu uzatıp taranmasını zorlaştırıyordu. Silinmiyorlar —
+   * yarın daha büyük bir ürün çıkarsa tarife hazır olsun.
+   *
+   * Sınır bilinmiyorsa (hiç desi girilmemiş) hepsi gösterilir: tahminle gizlemeyiz.
+   */
+  const { gorunenBaremler, gizliSayi } = useMemo(() => {
+    if (hepsiniGoster || maxDesi == null) {
+      return { gorunenBaremler: desiBrackets, gizliSayi: 0 };
+    }
+    const kapsayanIndeks = desiBrackets.findIndex((b) => b.toDesi >= maxDesi);
+    if (kapsayanIndeks < 0) return { gorunenBaremler: desiBrackets, gizliSayi: 0 };
+    // Kapsayan baremin bir üstünü de göster: sınırın hemen ötesi görünsün.
+    const kesim = Math.min(desiBrackets.length, kapsayanIndeks + 2);
+    return {
+      gorunenBaremler: desiBrackets.slice(0, kesim),
+      gizliSayi: desiBrackets.length - kesim,
+    };
+  }, [desiBrackets, maxDesi, hepsiniGoster]);
+
   if (loading) {
     return (
       <div className="space-y-2">
@@ -381,7 +409,7 @@ function CargoBaremView({
               </tr>
             </thead>
             <tbody>
-              {desiBrackets.map((b) => (
+              {gorunenBaremler.map((b) => (
                 <tr key={`${b.fromDesi}-${b.toDesi}`} className="border-t border-border/40">
                   <td className="px-3 py-1.5 tabular-nums">{desiLabel(b.fromDesi, b.toDesi)}</td>
                   <td className="px-3 py-1.5 text-right font-semibold text-primary tabular-nums">
@@ -389,6 +417,24 @@ function CargoBaremView({
                   </td>
                 </tr>
               ))}
+              {/* Ürünlerinin en büyüğünün ÜSTÜNDEKİ baremler katlanır: tabloyu uzatıp
+                  tarattırıyorlar ama pratikte hiç eşleşmiyorlar. Silinmiyorlar — yarın
+                  daha büyük bir ürün çıkarsa tarife hazır olsun. */}
+              {gizliSayi > 0 && (
+                <tr className="border-t border-border/40">
+                  <td colSpan={2} className="px-3 py-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setHepsiniGoster((v) => !v)}
+                      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {hepsiniGoster
+                        ? "Büyük desileri gizle"
+                        : `+${gizliSayi} barem daha (en büyük ürünün ${maxDesi} desi)`}
+                    </button>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -459,6 +505,15 @@ function AdvancedRules({
 
 export default function CargoRulesPage() {
   const [tab, setTab] = useState<Platform>("trendyol");
+  /**
+   * Kapsam bilgisi — ürünlerdeki en büyük desiyi buradan alıyoruz.
+   * Kart zaten aynı ucu çekiyor; TanStack aynı anahtarı paylaştığı için EK istek olmuyor.
+   */
+  const { data: kapsam } = useQuery<{ maxDesi: number | null }>({
+    queryKey: ["cargo-coverage"],
+    queryFn: () => fetchJson("/api/cargo-rules/coverage"),
+    staleTime: 5 * 60_000,
+  });
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<CargoRule | null>(null);
   const queryClient = useQueryClient();
@@ -600,13 +655,17 @@ export default function CargoRulesPage() {
   };
 
   return (
-    <div className="p-6 space-y-5 max-w-4xl">
+    <div className="p-6 space-y-5 max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Kargo Kuralları</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
           Her platformun kargo baremi ayrı. Kural yalnızca kendi platformunun siparişlerine uygulanır.
         </p>
       </div>
+
+      {/* Kurallar doğru olsa bile ürünün desisi yoksa kargo bedeli tahmin ediliyor —
+          sayfanın söylemediği en önemli şey buydu. */}
+      <CargoCoverageCard />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Platform)}>
         <TabsList>
@@ -620,6 +679,7 @@ export default function CargoRulesPage() {
           <Card>
             <CardContent className="pt-4 space-y-4">
               <CargoBaremView
+                maxDesi={kapsam?.maxDesi ?? null}
                 provider={shopifyBarem.provider}
                 vatNote={vatNote(shopifyRules)}
                 flatTiers={shopifyBarem.flat}
@@ -650,6 +710,7 @@ export default function CargoRulesPage() {
                 onChange={(m) => applyTrendyol.mutate(m)}
               />
               <CargoBaremView
+                maxDesi={kapsam?.maxDesi ?? null}
                 provider={trendyolBarem.provider}
                 vatNote={vatNote(trendyolRules)}
                 flatTiers={trendyolBarem.flat}
@@ -680,6 +741,7 @@ export default function CargoRulesPage() {
                 onChange={(m) => applyHb.mutate(m)}
               />
               <CargoBaremView
+                maxDesi={kapsam?.maxDesi ?? null}
                 provider="HepsiJet"
                 vatNote={`Fiyatlar KDV dahil (%20)${applyHb.isPending ? " · uygulanıyor…" : ""}`}
                 flatTiers={hepsiburadaBarem.flat}
