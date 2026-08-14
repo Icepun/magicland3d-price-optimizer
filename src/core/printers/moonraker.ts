@@ -1493,13 +1493,12 @@ export async function fetchMoonrakerCaps(host: string, port: number): Promise<Mo
       .filter((o) => /^output_pin\s+(caselight|chamber_?light|light|led)/i.test(o))
       .map((o) => o.replace(/^output_pin\s+/i, ""));
     const toggles = [...cmds].filter((k) => /^(MODLELIGHT|MODELLIGHT|FLASHLIGHT|CASELIGHT|LIGHT)_SWITCH$/.test(k));
-    // TEK hedef seçilir. Yazıcılarda birden çok bağımsız ışık var (Neptune 4 Plus:
-    // FLASHLIGHT + MODLELIGHT, Neptune 4 Pro: caselight + caselight1); hepsini birden sürmek
-    // tek düğmeyle iki ışığı değiştiriyor ve yazıcının kendi ekranından biri kapatılınca
-    // ikisi kalıcı olarak ters faza giriyordu.
-    if (leds.length && cmds.has("SET_LED")) { caps.lightKind = "led"; caps.lightTargets = [pickLightTarget(leds)]; }
-    else if (pins.length && cmds.has("SET_PIN")) { caps.lightKind = "pin"; caps.lightTargets = [pickLightTarget(pins)]; }
-    else if (toggles.length) { caps.lightKind = "toggle"; caps.lightTargets = [pickLightTarget(toggles)]; }
+    // TÜM ışıklar sürülür — kullanıcı "açtığımda ikisi de açılsın" dedi (bkz. allLightTargets).
+    // Mutlak kipte (led/pin) bu risksizdir; toggle kipinde faz kayması yazıcının kendi
+    // ekranından müdahale edilirse mümkündür ve okunamadığı için düzeltilemez.
+    if (leds.length && cmds.has("SET_LED")) { caps.lightKind = "led"; caps.lightTargets = allLightTargets(leds); }
+    else if (pins.length && cmds.has("SET_PIN")) { caps.lightKind = "pin"; caps.lightTargets = allLightTargets(pins); }
+    else if (toggles.length) { caps.lightKind = "toggle"; caps.lightTargets = allLightTargets(toggles); }
 
     caps.pauseAtLayer = cmds.has("SET_PAUSE_AT_LAYER");
     caps.filamentChange = cmds.has("M600");
@@ -1526,6 +1525,30 @@ export function pickLightTarget(targets: string[]): string {
     if (hit) return hit;
   }
   return targets.find((t) => !/flashlight/i.test(t)) ?? targets[0];
+}
+
+/**
+ * Yazıcının TÜM ışıkları — tercih sırasına göre dizili, tekrarsız.
+ *
+ * Kullanıcı: "ya açarım, ya kaparım. açtığımda ikisi de açılır." Yazıcılarda birden çok
+ * bağımsız ışık var (Neptune 4 Pro: `caselight` kabin + `caselight1` logo; Neptune 4 Plus:
+ * MODLELIGHT logo + FLASHLIGHT kafa) ve düğme yalnız BİRİNİ sürüyordu.
+ *
+ * MUTLAK kontrolde (pin/led) hepsini sürmek risksizdir: aynı değer yazılır, faz kayması
+ * imkânsızdır. DEĞİŞTİR (toggle) kipinde ise kayma mümkündür — yazıcının kendi ekranından
+ * biri kapatılırsa ikisi ters fazda kalır ve uygulama bunu göremez (durum okunamıyor;
+ * Neptune 4 Plus'ta ışıklar Klipper pini değil `sh /home/mks/sled*.sh` kabuk betiği ve betik
+ * hiçbir durum bildirmiyor — 14 Ağu 2026'da yazıcıya sorularak doğrulandı).
+ */
+export function allLightTargets(targets: string[]): string[] {
+  const sirali: string[] = [];
+  for (const re of LIGHT_PREFERENCE) {
+    for (const t of targets) {
+      if (re.test(t) && !/flashlight/i.test(t) && !sirali.includes(t)) sirali.push(t);
+    }
+  }
+  for (const t of targets) if (!sirali.includes(t)) sirali.push(t);
+  return sirali;
 }
 
 /** Test/relay için: keşfedilen yetenekleri unut (yazıcı ayarı değişti / firmware güncellendi). */

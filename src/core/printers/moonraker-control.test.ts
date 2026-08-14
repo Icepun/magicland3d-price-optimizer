@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   moonrakerControl, moonrakerChangeFilament, moonrakerSetSpeed,
-  moonrakerSetPauseAtLayer, clearMoonrakerCaps, pickLightTarget,
+  moonrakerSetPauseAtLayer, clearMoonrakerCaps, pickLightTarget, allLightTargets, fetchMoonrakerCaps,
 } from "./moonraker";
 
 /** Sahte Moonraker: URL kalıbına göre yanıt üretir, çağrıları kaydeder. */
@@ -172,5 +172,85 @@ describe("ışık hedefi TEK seçilir", () => {
 
   it("Snapmaker U1 kabin LED'i tanınır", () => {
     expect(pickLightTarget(["cavity_led"])).toBe("cavity_led");
+  });
+});
+
+/**
+ * TÜM IŞIKLAR — kullanıcı: "ya açarım, ya kaparım. açtığımda ikisi de açılır."
+ * Düğme yalnız BİR ışığı sürüyordu; yazıcılarda iki bağımsız ışık var.
+ *
+ * Nesne adları gerçek yazıcılardan okundu (14 Ağu 2026):
+ *   Neptune 4 Pro  → output_pin caselight, output_pin caselight1 (+ mutlak ON/OFF makroları)
+ *   Neptune 4 Plus → yalnız FLASHLIGHT_SWITCH, MODLELIGHT_SWITCH (kabuk betiği, durum okunamaz)
+ */
+describe("tüm ışıklar birlikte sürülür", () => {
+  it("Neptune 4 Pro: iki pin de listede, kabin ışığı ÖNCE", () => {
+    expect(allLightTargets(["caselight1", "caselight"])).toEqual(["caselight", "caselight1"]);
+  });
+
+  it("Neptune 4 Plus: logo ÖNCE, kafa ışığı da listede (eskiden düşüyordu)", () => {
+    const t = allLightTargets(["FLASHLIGHT_SWITCH", "MODLELIGHT_SWITCH"]);
+    expect(t[0]).toBe("MODLELIGHT_SWITCH");
+    expect(t).toContain("FLASHLIGHT_SWITCH");
+    expect(t).toHaveLength(2);
+  });
+
+  it("tek ışıklı yazıcıda davranış değişmez", () => {
+    expect(allLightTargets(["cavity_led"])).toEqual(["cavity_led"]);
+  });
+
+  it("aynı hedef iki kez listelenmez", () => {
+    const t = allLightTargets(["caselight", "caselight", "caselight1"]);
+    expect(t).toEqual(["caselight", "caselight1"]);
+  });
+
+  it("hiç ışık yoksa boş kalır", () => {
+    expect(allLightTargets([])).toEqual([]);
+  });
+});
+
+/**
+ * KEŞİF gerçekten TÜM ışıkları alıyor mu? Yukarıdaki testler yalnız yardımcı fonksiyonu
+ * deniyordu; `fetchMoonrakerCaps` onu KULLANMASA da geçiyorlardı (sabotajla görüldü).
+ * Bu blok bağlantının kendisini kilitler.
+ */
+describe("keşif: ışık hedefleri caps'e TAM yazılır", () => {
+  /** Gerçek Neptune 4 Pro nesne listesi (14 Ağu 2026, yazıcıdan okundu). */
+  function n4proSunucusu() {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/printer/objects/list")) {
+        return jsonRes({ result: { objects: ["print_stats", "output_pin caselight", "output_pin caselight1", "output_pin beeper"] } });
+      }
+      if (u.includes("/printer/gcode/help")) return jsonRes({ result: { SET_PIN: "pin" } });
+      if (u.includes("/printer/objects/query")) return jsonRes(statusPayload());
+      return jsonRes({ result: {} });
+    }));
+  }
+
+  it("Neptune 4 Pro'nun İKİ pini de sürülür", async () => {
+    clearMoonrakerCaps();
+    n4proSunucusu();
+    const caps = await fetchMoonrakerCaps("10.0.0.9", 80);
+    expect(caps.lightKind).toBe("pin");
+    expect(caps.lightTargets).toEqual(["caselight", "caselight1"]);
+  });
+
+  it("Neptune 4 Plus'ın İKİ değiştir makrosu da sürülür", async () => {
+    clearMoonrakerCaps();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.includes("/printer/objects/list")) {
+        return jsonRes({ result: { objects: ["print_stats", "gcode_macro FLASHLIGHT_SWITCH", "gcode_macro MODLELIGHT_SWITCH"] } });
+      }
+      if (u.includes("/printer/gcode/help")) {
+        return jsonRes({ result: { FLASHLIGHT_SWITCH: "hotend", MODLELIGHT_SWITCH: "logo" } });
+      }
+      if (u.includes("/printer/objects/query")) return jsonRes(statusPayload());
+      return jsonRes({ result: {} });
+    }));
+    const caps = await fetchMoonrakerCaps("10.0.0.8", 80);
+    expect(caps.lightKind).toBe("toggle");
+    expect(caps.lightTargets).toEqual(["MODLELIGHT_SWITCH", "FLASHLIGHT_SWITCH"]);
   });
 });
