@@ -100,6 +100,35 @@ describe("kalın gövde çizgisi", () => {
     viz.dispose();
   });
 
+  it("HAYALET: basılmamış kısım katman kesildiğinde görünür, bitince kapanır", () => {
+    const g = ornek();
+    const viz = buildVizScene(g, { mode: "viewer" });
+    const hayalet = (viz.scene.children as { children?: unknown[] }[])
+      .flatMap((o) => (o.children ?? []) as { visible: boolean; geometry: { drawRange: { start: number; count: number } } }[])
+      .find((o) => (o as { material?: { color?: unknown } }).material?.color !== undefined
+        && (o as { type?: string }).type === "LineSegments"
+        && (o as { material?: { vertexColors?: boolean } }).material?.vertexColors === false);
+    expect(hayalet).toBeDefined();
+
+    // Katman 0'da: 3 segment basıldı, 2 segment kaldı → hayalet görünür ve kalanı çizer.
+    viz.setLayer(0);
+    expect(hayalet!.visible).toBe(true);
+    expect(hayalet!.geometry.drawRange.start).toBe(3 * 2);
+    expect(hayalet!.geometry.drawRange.count).toBe(2 * 2);
+
+    // Son katman: kalan yok → hayalet kapanır (yoksa bitmiş baskının üstünde soluk iz kalırdı).
+    viz.setLayer(1);
+    expect(hayalet!.visible).toBe(false);
+
+    // "Hepsini göster" (-1) de kapatır. Önce AÇIK duruma getir — yoksa iddia boşa geçer
+    // (bir önceki setLayer zaten kapatmış olurdu ve sabotaj yakalanmazdı).
+    viz.setLayer(0);
+    expect(hayalet!.visible).toBe(true);
+    viz.setLayer(-1);
+    expect(hayalet!.visible).toBe(false);
+    viz.dispose();
+  });
+
   it("setResolution çağrılabilir — kalın nesne yokken de patlamaz", () => {
     const viz = buildVizScene(ornek(), { mode: "card" });
     expect(() => viz.setResolution(800, 600)).not.toThrow();

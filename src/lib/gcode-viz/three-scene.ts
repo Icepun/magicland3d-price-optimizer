@@ -380,6 +380,30 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
     // Yoksa aynı yollar iki kez çizilir, ince çizgi kalının üstünde tel kafes izi bırakırdı.
     govdeyiInceNesnedenGizle(g, colorBytes);
   }
+
+  /**
+   * HAYALET — henüz BASILMAMIŞ kısım. Kullanıcı "process'i iyi göstersin" dedi: eskiden
+   * geçerli katmanın üstü hiç çizilmiyordu, yani parçanın nereye varacağı görünmüyordu.
+   * Artık kalan kısım çok soluk bir taslak olarak duruyor; basılan yer dolu ve renkli,
+   * kalan yer hayalet → ilerleme tek bakışta okunuyor.
+   *
+   * Geometri PAYLAŞILIR (aynı BufferAttribute'lar) — yalnız `drawRange` ayrıdır, ek bellek yok.
+   * `vertexColors: false`: ince tampondaki gövde alfası söndürülmüş durumda, hayalet onu
+   * kullanmaz; düz ve nötr bir renkle çizilir.
+   */
+  const hayaletGeo = new THREE.BufferGeometry();
+  hayaletGeo.setAttribute("position", geometry.getAttribute("position"));
+  const hayaletMat = new THREE.LineBasicMaterial({
+    color: 0x8fa3c8,
+    transparent: true,
+    opacity: 0.1,
+    depthWrite: false,
+  });
+  const hayalet = new THREE.LineSegments(hayaletGeo, hayaletMat);
+  hayalet.position.copy(lines.position);
+  hayalet.visible = false; // yalnız katman kesildiğinde (canlı/oynatma) anlamlı
+  hayaletGeo.setDrawRange(0, 0);
+  if (options.mode !== "card") group.add(hayalet);
   group.rotation.x = -Math.PI / 2;
   scene.add(group);
 
@@ -403,9 +427,15 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
       geometry.setDrawRange(0, segCount * 2);
       // LineSegments2 örneklenmiş geometridir: drawRange değil instanceCount ile kesilir.
       if (govde) govde.geometri.instanceCount = govde.toplam;
+      hayalet.visible = false; // hepsi basılmış → gösterilecek "kalan" yok
     } else {
-      geometry.setDrawRange(0, g.layerRanges[layerIdx].end * 2); // segment → 2 vertex
+      const son = g.layerRanges[layerIdx].end;
+      geometry.setDrawRange(0, son * 2); // segment → 2 vertex
       if (govde) govde.geometri.instanceCount = govde.katmanSonu[layerIdx];
+      // Kalan kısım: bu katmanın sonundan dosyanın sonuna kadar.
+      const kalan = segCount - son;
+      hayalet.visible = kalan > 0;
+      hayaletGeo.setDrawRange(son * 2, kalan * 2);
     }
   };
 
@@ -452,6 +482,9 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
       material.dispose();
       govde?.geometri.dispose();
       govde?.materyal.dispose();
+      // hayaletGeo öznitelikleri PAYLAŞIYOR — dispose yalnız kendi kaydını siler, veriyi değil.
+      hayaletGeo.dispose();
+      hayaletMat.dispose();
       (grid.material as THREE.Material).dispose();
       grid.geometry.dispose();
     },
