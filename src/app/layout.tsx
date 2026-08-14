@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Plus_Jakarta_Sans, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { SplashScreen } from "@/components/layout/SplashScreen";
@@ -7,16 +7,28 @@ import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { CommandPalette } from "@/components/ui/command-palette";
 
-const plusJakartaSans = Plus_Jakarta_Sans({
+/**
+ * Yazı tipleri REPODAN gelir, derleme anında Google'dan indirilmez.
+ *
+ * NEDEN: `next/font/google` yazı tipini derleme sırasında ağdan çeker. macOS derleme
+ * koşucusu fonts.gstatic.com'a ulaşamayınca (14 Ağu 2026, v0.19.185) webpack "Failed to
+ * fetch font file" ile düştü — aynı commit Windows'ta sorunsuz derlendi. Yani sürüm
+ * yayınlamak GitHub'ın ağına bağlıydı; kod değişmeden bir dahaki sefere yine düşebilirdi.
+ *
+ * İki dosya da DEĞİŞKEN (variable) yazı tipi: tek dosya tüm ağırlıkları taşır
+ * (Jakarta 200–800, Mono 100–900) ve Türkçe karakterler doğrulandı.
+ */
+const plusJakartaSans = localFont({
+  src: "./fonts/PlusJakartaSans.ttf",
   variable: "--font-sans",
-  subsets: ["latin-ext"],
-  weight: ["400", "500", "600", "700", "800"],
+  weight: "200 800",
   display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "./fonts/GeistMono.ttf",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: "100 900",
   display: "swap",
 });
 
