@@ -41,7 +41,8 @@ interface CustomPrintRow {
   gramaj: number | null;
   estPrintMin: number | null;
   isCloud: boolean;
-  thumbnail: string | null;
+  /** Görselin KENDİSİ değil, VAR MI bilgisi — görsel `/api/models/<id>/preview` ucundan gelir. */
+  hasThumbnail: boolean;
   contentMd5: string | null;
   createdAt: string;
   printer: { id: string; name: string; brand: string; accent: string } | null;
@@ -216,7 +217,8 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
     const r = reprint.row;
     const model: PrintableModel = {
       fileId: r.id, productId: "__custom__", productName: r.originalName,
-      imageUrl: r.thumbnail, label: null, originalName: r.originalName, sizeBytes: r.sizeBytes, gramaj: r.gramaj,
+      imageUrl: r.hasThumbnail ? `/api/models/${r.id}/preview` : null,
+      label: null, originalName: r.originalName, sizeBytes: r.sizeBytes, gramaj: r.gramaj,
     };
     return (
       <SlotStep
@@ -367,9 +369,14 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                     {isSel && <Check className="h-3 w-3 text-primary-foreground" />}
                   </button>
                   <div className="flex items-center justify-center h-11 w-11 rounded-lg bg-background border shrink-0 overflow-hidden">
-                    {it.thumbnail ? (
+                    {it.hasThumbnail ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={it.thumbnail} alt="" className="h-full w-full object-cover" />
+                      <img
+                        src={`/api/models/${it.id}/preview`}
+                        alt=""
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
                     ) : (
                       <FileBox className="h-4 w-4 text-muted-foreground" />
                     )}

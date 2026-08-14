@@ -22,7 +22,7 @@ import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
-interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; thumbnail?: string | null }
+interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; hasThumbnail?: boolean }
 
 /**
  * Satırı ekranda GEREKEN alanlara indirger.
@@ -43,7 +43,7 @@ function hafifSatir(row: ModelFile): ModelFile {
     fileType: row.fileType,
     sortOrder: row.sortOrder,
     contentMd5: row.contentMd5 ?? null,
-    thumbnail: row.thumbnail ?? null,
+    hasThumbnail: row.hasThumbnail ?? false,
   };
 }
 
@@ -486,10 +486,10 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 title="3D önizleme"
                 className="relative flex items-center justify-center h-9 w-9 shrink-0 overflow-hidden rounded bg-primary/10 text-primary transition-transform hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {part.thumbnail ? (
+                {part.hasThumbnail ? (
                   /* eslint-disable-next-line @next/next/no-img-element */
                   <img
-                    src={part.thumbnail}
+                    src={`/api/models/${part.id}/preview`}
                     alt=""
                     loading="lazy"
                     decoding="async"
@@ -498,7 +498,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 ) : (
                   <span className="text-[11px] font-bold tabular-nums">{pi + 1}</span>
                 )}
-                {part.thumbnail && (
+                {part.hasThumbnail && (
                   <span className="absolute bottom-0 left-0 rounded-tr bg-background/85 px-1 text-[9px] font-bold leading-tight tabular-nums text-primary">
                     {pi + 1}
                   </span>

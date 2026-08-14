@@ -18,11 +18,28 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
+    // KOLONLAR TEK TEK. `thumbnail` kolonunda gömülü önizleme görselleri duruyor; ÖLÇÜLDÜ
+    // (14 Ağu 2026): en ağır üründe 24 satır = 2,08 MB. Kart görseli artık satır içinde
+    // gelmiyor, `/api/models/<id>/preview` ucundan (kalıcı önbellekli) çekiliyor.
     const files = await prisma.productModelFile.findMany({
       where: { productId: id },
+      select: {
+        id: true, productId: true, printerConfigId: true, label: true,
+        originalName: true, storedPath: true, r2Key: true, fileType: true,
+        sizeBytes: true, gramaj: true, estPrintMin: true, sliced: true,
+        contentMd5: true, sortOrder: true, createdAt: true,
+      },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     });
-    return NextResponse.json(files);
+    const thumbIds = new Set(
+      (
+        await prisma.$queryRawUnsafe<{ id: string }[]>(
+          `SELECT id FROM ProductModelFile WHERE productId = ? AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+          id,
+        )
+      ).map((r) => r.id),
+    );
+    return NextResponse.json(files.map((f) => ({ ...f, hasThumbnail: thumbIds.has(f.id) })));
   } catch (error) {
     return jsonError(error);
   }

@@ -17,10 +17,27 @@ const CUSTOM_PID = "__custom__";
 export async function GET() {
   try {
     await ensureRuntimeSchema();
+    // KOLONLAR TEK TEK. `thumbnail` kolonunda dilimleyicinin gömdüğü önizleme görselleri
+    // duruyor; ÖLÇÜLDÜ (14 Ağu 2026): 219 özel baskı satırı = 7,19 MB. Liste görseli artık
+    // satır içinde gelmiyor, `/api/models/<id>/preview` ucundan (kalıcı önbellekli) çekiliyor —
+    // burada yalnız VAR/YOK bilgisi taşınır. Yeni alan eklersen BURAYA da ekle.
     const files = await prisma.productModelFile.findMany({
       where: { productId: CUSTOM_PID },
+      select: {
+        id: true, printerConfigId: true, originalName: true, fileType: true,
+        sizeBytes: true, gramaj: true, estPrintMin: true, r2Key: true,
+        contentMd5: true, createdAt: true,
+      },
       orderBy: { createdAt: "desc" },
     });
+    const thumbIds = new Set(
+      (
+        await prisma.$queryRawUnsafe<{ id: string }[]>(
+          `SELECT id FROM ProductModelFile WHERE productId = ? AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+          CUSTOM_PID,
+        )
+      ).map((r) => r.id),
+    );
 
     const printerIds = [...new Set(files.map((f) => f.printerConfigId))];
     const printers = printerIds.length
@@ -50,7 +67,7 @@ export async function GET() {
         gramaj: f.gramaj,
         estPrintMin: f.estPrintMin,
         isCloud: !!f.r2Key,
-        thumbnail: f.thumbnail ?? null,
+        hasThumbnail: thumbIds.has(f.id),
         contentMd5: f.contentMd5 ?? null,
         createdAt: f.createdAt,
         printer: pmap.get(f.printerConfigId) ?? null,
