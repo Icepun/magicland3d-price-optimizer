@@ -470,9 +470,9 @@ function PartsModal({
 
   return (
     <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> {product.name}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2 min-w-0 pr-8"><Layers className="h-4 w-4 text-primary shrink-0" /> <span className="truncate">{product.name}</span></DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">{printer.name} · {parts.length} parça. {multiColor ? "Parçaya bas → renkleri seç → baskı başlar." : "Bir parçaya bas → yazıcıya yüklenip baskı başlar."}</p>
         </DialogHeader>
 

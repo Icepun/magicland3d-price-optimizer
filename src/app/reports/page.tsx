@@ -1828,7 +1828,7 @@ function Stat({
             ) : (
               <>
                 <Arrow className={cn("h-3 w-3 shrink-0", toneClass)} />
-                <span className={cn("tabular-nums font-medium", toneClass)}>
+                <span className={cn("tabular-nums font-medium whitespace-nowrap shrink-0", toneClass)}>
                   {delta.diff > 0 ? "+" : "−"}
                   {format(Math.abs(delta.diff))}
                   {delta.ratio != null && ` · ${formatPercent(Math.abs(delta.ratio), 0)}`}
@@ -1847,7 +1847,7 @@ function Stat({
             className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground/70 animate-in fade-in duration-500"
             style={{ animationDelay: `${delay + 360}ms`, animationFillMode: "both" }}
           >
-            <span className="tabular-nums">≈ {format(projection)}</span>
+            <span className="tabular-nums whitespace-nowrap shrink-0">≈ {format(projection)}</span>
             <span className="truncate">ay sonu tahmini</span>
           </div>
         )}
