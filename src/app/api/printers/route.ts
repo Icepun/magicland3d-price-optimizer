@@ -95,7 +95,8 @@ export interface PanelPrinter {
   /** Çalışan baskının ham gcode dosya adı (eşleştirme + kontrol için — KİMLİK, temizlenmez). */
   currentFilename: string | null;
   matchedProductId: string | null;
-  temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number };
+  /** `nozzles` YALNIZ çok kafalı yazıcıda (U1) dolu gelir; tek kafalıda yok. */
+  temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number; nozzles?: { index: number; temp: number; target: number; active: boolean }[] };
   /** Yazıcının desteklediği kontroller — düğmeler buna göre çizilir. */
   caps: PrinterControlCaps;
   /** Hız durumu ve izin verilen kademeler (SUNUCUDA zorlanır). */
@@ -513,7 +514,11 @@ export async function GET(req: NextRequest) {
         ],
         currentFilename: st.filename,
         matchedProductId: matchedId,
-        temps: { nozzle: st.nozzle, nozzleTarget: st.nozzleTarget, bed: st.bed, bedTarget: st.bedTarget },
+        temps: {
+          nozzle: st.nozzle, nozzleTarget: st.nozzleTarget, bed: st.bed, bedTarget: st.bedTarget,
+          // Tek kafalıda ek bilgi yok — diziyi boş bırakıp arayüzü kalabalıklaştırmayalım.
+          nozzles: st.nozzles.length > 1 ? st.nozzles : undefined,
+        },
         caps: {
           pauseResume: true,
           speed: extras.caps.speed,

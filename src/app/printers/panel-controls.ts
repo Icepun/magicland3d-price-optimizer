@@ -9,7 +9,11 @@
  * `filamentGrams` sadece "ne kadar filament harcandı" bilgisidir; hesaba girmez.
  */
 
-import { SPEED_MAX_STEP_PCT } from "@/core/printers/controls";
+import {
+  SPEED_MAX_STEP_PCT,
+  nearestSpeedStepLabel,
+  speedStepLabel,
+} from "@/core/printers/controls";
 import type { PanelPrinter, PanelSlot, PrinterJob } from "./panel-view";
 import { clamp01, formatRemaining } from "./panel-view";
 
@@ -110,7 +114,8 @@ export function resolveSpeedView(p: {
     const idx = sorted.findIndex((l) => l.level === level);
     return {
       kind: "level",
-      label: cur?.label ?? `Profil ${level}`,
+      // Ortak dil: Bambu profilinin yüzdesi en yakın kademe adına eşlenir ("Standart" → "Normal").
+      label: cur ? nearestSpeedStepLabel(cur.pct) : `Profil ${level}`,
       hint: cur ? `%${cur.pct}` : null,
       down: idx > 0 ? sorted[idx - 1].level : null,
       up: idx >= 0 && idx < sorted.length - 1 ? sorted[idx + 1].level : null,
@@ -129,7 +134,8 @@ export function resolveSpeedView(p: {
   const above = reachable.filter((v) => v > cur);
   return {
     kind: "percent",
-    label: `%${cur}`,
+    // Kademeye oturuyorsa ORTAK ad; yazıcı dışarıdan başka bir hıza çekilmişse ham yüzde.
+    label: speedStepLabel(cur) ?? `%${cur}`,
     hint: null,
     down: below.length ? below[below.length - 1] : null,
     up: above.length ? above[0] : null,

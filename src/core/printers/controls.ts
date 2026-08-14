@@ -14,8 +14,48 @@ export const SPEED_MIN_PCT = 50;
 export const SPEED_MAX_PCT = 200;
 /** Tek komutta izin verilen en büyük değişim (yüzde puanı). */
 export const SPEED_MAX_STEP_PCT = 25;
-/** Kullanıcıya sunulan kademeler — serbest sayı girişi YOK. */
-export const SPEED_PRESETS_PCT: readonly number[] = [50, 75, 100, 125, 150, 175, 200];
+/**
+ * Kullanıcıya sunulan kademeler — serbest sayı girişi YOK.
+ *
+ * BEŞ kademe: kullanıcı kararı (14 Ağu 2026). Eskiden %175 ve %200 de vardı; hiçbir baskıda
+ * kullanılmıyordu ve merdiveni uzatıp "hızlı/çok hızlı" ayrımını bulanıklaştırıyordu.
+ * Yazıcı yine de dışarıdan bu değerlere çekilebilir — o durumda arayüz ham yüzdeyi gösterir.
+ */
+export const SPEED_PRESETS_PCT: readonly number[] = [50, 75, 100, 125, 150];
+
+/**
+ * Kademelerin ORTAK ADLARI — üç marka aynı dili konuşsun diye.
+ *
+ * Bambu kendi profil setini kullanıyor (yazıcıya giden komut 1-4 seviye, yüzde değil) ama
+ * ekranda aynı adlar görünür: profilin yüzdesi en yakın kademeye eşlenir.
+ */
+export const SPEED_STEP_LABELS: Readonly<Record<number, string>> = {
+  50: "Çok yavaş",
+  75: "Yavaş",
+  100: "Normal",
+  125: "Hızlı",
+  150: "Çok hızlı",
+};
+
+/**
+ * Bir yüzdeye en yakın kademenin adı. Kademeye OTURMAYAN değerde null döner —
+ * çağıran ham yüzdeyi yazar ("%137"), uydurma bir ad koymaz.
+ */
+export function speedStepLabel(pct: number): string | null {
+  return SPEED_STEP_LABELS[Math.round(pct)] ?? null;
+}
+
+/**
+ * Bambu profilinin yüzdesini en yakın kademe adına çevirir (yalnız GÖSTERİM).
+ * Bambu'nun %124'ü "Hızlı", %166'sı "Çok hızlı" olur; ara değerde en yakını seçilir.
+ */
+export function nearestSpeedStepLabel(pct: number): string {
+  let best = SPEED_PRESETS_PCT[0];
+  for (const step of SPEED_PRESETS_PCT) {
+    if (Math.abs(step - pct) < Math.abs(best - pct)) best = step;
+  }
+  return SPEED_STEP_LABELS[best] ?? `%${Math.round(pct)}`;
+}
 
 export type Validated<T> = { ok: true; value: T } | { ok: false; error: string };
 

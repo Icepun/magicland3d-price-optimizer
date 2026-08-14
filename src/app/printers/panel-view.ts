@@ -74,7 +74,7 @@ export interface PanelPrinter {
   warnings: PanelWarning[];
   currentFilename: string | null;
   matchedProductId: string | null;
-  temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number };
+  temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number; nozzles?: { index: number; temp: number; target: number; active: boolean }[] };
   caps: PrinterControlCaps;
   speed: {
     percent: number | null;

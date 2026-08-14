@@ -61,8 +61,23 @@ export interface MoonrakerStatus {
   speedPercent: number | null;
   nozzle: number;
   nozzleTarget: number;
+  /**
+   * TÜM kafalar (Snapmaker U1'de dört tane). `nozzle`/`nozzleTarget` bunlardan AKTİF olanı;
+   * tek kafalı yazıcıda bu dizi tek elemanlıdır.
+   */
+  nozzles: NozzleTemp[];
   bed: number;
   bedTarget: number;
+}
+
+/** Tek bir kafanın sıcaklığı. */
+export interface NozzleTemp {
+  /** 0 tabanlı kafa indeksi — "extruder"=0, "extruder1"=1 … */
+  index: number;
+  temp: number;
+  target: number;
+  /** Şu an baskıyı yapan kafa mı (toolhead.extruder). */
+  active: boolean;
 }
 
 export interface MoonrakerMeta {
@@ -338,6 +353,20 @@ function parseStatus(status: any): MoonrakerStatus {
     (status[activeExName] && typeof status[activeExName] === "object"
       ? status[activeExName]
       : status.extruder) ?? {};
+  // Dört kafanın HEPSİ okunur: U1'de boştaki kafalar da ısıtılıp soğuyor, panelde tek sayı
+  // görünce hangisinin sıcak kaldığı bilinmiyordu. Yanıtta olmayan kafa listeye girmez.
+  const nozzles: NozzleTemp[] = [];
+  for (let i = 0; i < 4; i++) {
+    const key = i === 0 ? "extruder" : `extruder${i}`;
+    const e = status[key];
+    if (!e || typeof e !== "object" || typeof e.temperature !== "number") continue;
+    nozzles.push({
+      index: i,
+      temp: Math.round(e.temperature),
+      target: Math.round(e.target ?? 0),
+      active: key === activeExName,
+    });
+  }
   const hb = status.heater_bed ?? {};
   const gm = status.gcode_move ?? {};
   // İLERLEME KAYNAĞI: ÖNCE M73 (display_status), SONRA bayt oranı (virtual_sdcard).
@@ -374,6 +403,7 @@ function parseStatus(status: any): MoonrakerStatus {
     speedPercent: speedFactor != null && speedFactor > 0 ? Math.round(speedFactor * 100) : null,
     nozzle: Math.round(ex.temperature ?? 0),
     nozzleTarget: Math.round(ex.target ?? 0),
+    nozzles,
     bed: Math.round(hb.temperature ?? 0),
     bedTarget: Math.round(hb.target ?? 0),
   };
@@ -399,7 +429,7 @@ export async function fetchMoonrakerStatus(host: string, port: number): Promise<
     progress: 0, progressSource: "none", slicerProgress: null, byteProgress: null,
     filePosition: null, fileSize: null, printDurationSec: 0,
     currentLayer: null, totalLayer: null, zHeight: null, posX: null, posY: null,
-    speedPercent: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0,
+    speedPercent: null, nozzle: 0, nozzleTarget: 0, nozzles: [], bed: 0, bedTarget: 0,
   };
   const cached = portCache.get(host);
   // Bilinen çalışan port varsa SADECE onu dene — cihazın Moonraker portu sabittir (Elegoo 80, U1 7125).

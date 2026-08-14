@@ -27,7 +27,9 @@ describe("hız değişimi", () => {
 
   it("sınırların dışındaki kademe olamaz", () => {
     expect(SPEED_PRESETS_PCT[0]).toBe(50);
-    expect(SPEED_PRESETS_PCT[SPEED_PRESETS_PCT.length - 1]).toBe(200);
+    // BEŞ kademe (kullanıcı kararı): %175/%200 kaldırıldı — hiç kullanılmıyordu.
+    expect(SPEED_PRESETS_PCT).toEqual([50, 75, 100, 125, 150]);
+    expect(validateSpeedChange(175, 150).ok).toBe(false);
     expect(validateSpeedChange(225, 200).ok).toBe(false);
   });
 

@@ -6,6 +6,7 @@
  * yazıyordu, hangi yazıcının önce boşalacağını görmek için dört kartı okumak gerekiyordu.
  */
 import { describe, expect, it } from "vitest";
+import { SPEED_PRESETS_PCT } from "@/core/printers/controls";
 import {
   cancelSummary,
   clampLayerValue,
@@ -40,6 +41,9 @@ function job(over: Partial<PrinterJob> = {}): PrinterJob {
   };
 }
 
+/** Gerçek uygulamada kademeler her zaman SPEED_PRESETS_PCT — kurgu da onu kullansın. */
+const PRESETS = SPEED_PRESETS_PCT;
+
 function printer(over: Partial<PanelPrinter> = {}): PanelPrinter {
   return {
     id: "p1", name: "Snapmaker U1", brand: "snapmaker", model: "U1", accent: "#ff8800",
@@ -47,7 +51,7 @@ function printer(over: Partial<PanelPrinter> = {}): PanelPrinter {
     statusMessage: null, warnings: [], currentFilename: "a.gcode", matchedProductId: null,
     temps: { nozzle: 220, nozzleTarget: 220, bed: 60, bedTarget: 60 },
     caps: CAPS,
-    speed: { percent: 150, presets: [50, 75, 100, 125, 150, 175, 200], levels: null, level: null },
+    speed: { percent: 150, presets: PRESETS, levels: null, level: null },
     light: { supported: true, readable: true, on: false },
     pauseAtLayer: null, defectWatch: null, slots: [], job: job(),
     ...over,
@@ -91,26 +95,30 @@ describe("MADDE 6 — taşıma düğmeleri", () => {
 });
 
 describe("MADDE 10 — hız", () => {
-  it("Snapmaker %150'de: rozet yazar, komşu kademeler etkin", () => {
+  it("Snapmaker %150'de: ORTAK ad yazar, bir aşağı kademe etkin", () => {
+    // Kademeler beşe indi (%50-150) ve rozet yüzde yerine ortak adı gösteriyor:
+    // üç marka aynı dili konuşsun diye. %150 en üst kademe → yukarı yön ETKİSİZ.
     const v = resolveSpeedView({ caps: CAPS, speed: printer().speed });
     expect(v).not.toBeNull();
-    expect(v!.label).toBe("%150");
+    expect(v!.label).toBe("Çok hızlı");
     expect(v!.down).toBe(125);
-    expect(v!.up).toBe(175);
+    expect(v!.up).toBeNull();
   });
 
   it("uçlarda taşan yön ETKİSİZ", () => {
-    const at200 = resolveSpeedView({ caps: CAPS, speed: { percent: 200, presets: [50, 75, 100, 125, 150, 175, 200], levels: null, level: null } });
-    expect(at200!.up).toBeNull();
-    expect(at200!.down).toBe(175);
-    const at50 = resolveSpeedView({ caps: CAPS, speed: { percent: 50, presets: [50, 75, 100, 125, 150, 175, 200], levels: null, level: null } });
+    const at150 = resolveSpeedView({ caps: CAPS, speed: { percent: 150, presets: PRESETS, levels: null, level: null } });
+    expect(at150!.up).toBeNull();
+    expect(at150!.down).toBe(125);
+    const at50 = resolveSpeedView({ caps: CAPS, speed: { percent: 50, presets: PRESETS, levels: null, level: null } });
     expect(at50!.down).toBeNull();
   });
 
-  it("kademe dışı değerde yalnız ±%25 içindeki kademeler sunulur", () => {
-    const v = resolveSpeedView({ caps: CAPS, speed: { percent: 137, presets: [50, 75, 100, 125, 150, 175, 200], levels: null, level: null } });
+  it("kademe dışı değerde ham yüzde yazılır, yalnız ±%25 içindeki kademeler sunulur", () => {
+    // Yazıcı kendi ekranından %137'ye çekilmişse uydurma ad koyma, olduğu gibi yaz.
+    const v = resolveSpeedView({ caps: CAPS, speed: { percent: 137, presets: PRESETS, levels: null, level: null } });
+    expect(v!.label).toBe("%137");
     expect(v!.down).toBe(125);
-    expect(v!.up).toBe(150); // 175 tek adımda %38 olurdu → sunucu reddederdi
+    expect(v!.up).toBe(150);
   });
 
   it("Bambu'da yüzde değil profil gösterilir", () => {

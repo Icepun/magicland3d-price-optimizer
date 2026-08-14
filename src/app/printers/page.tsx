@@ -10,7 +10,7 @@ import {
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
-  Lightbulb, Gauge, Rotate3d, Minus, Repeat, Hourglass, Eye,
+  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -837,8 +837,6 @@ function PrinterCardInner({
   });
   const finishingNow = isPrinting && remainingView.known && remainingSec <= 0.5;
 
-  const nozzle = printer.temps.nozzle; // gerçek değer (5sn poll); sahte sn-bazlı titreme kaldırıldı
-  const bed = printer.temps.bed;
   const sv = resolveStatusVisual(printer);
   const warnings = orderWarnings(printer.warnings);
   const slotChips = buildSlotChips(printer.slots, job?.activeSlots, {
@@ -1057,17 +1055,11 @@ function PrinterCardInner({
                   <span className="inline-flex items-center gap-1"><Weight className="h-3.5 w-3.5" /> toplam {Math.round(job.filamentGrams)} g</span>
                 )}
               </div>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums">
-                {/* Nozzle rengi hedefe göre (eski `>60` soğuma sırasında da turuncu yakıyordu). */}
-                <span className="inline-flex items-center gap-1" style={{ color: printer.temps.nozzleTarget > 0 ? "oklch(0.65 0.2 35)" : undefined }}>
-                  <Flame className="h-3.5 w-3.5" /> {nozzle}°<span className="text-muted-foreground/60">/ {printer.temps.nozzleTarget || "—"}</span>
-                </span>
-                <span className="inline-flex items-center gap-1 text-muted-foreground">
-                  Tabla {bed}°{printer.temps.bedTarget > 0 ? <span className="text-muted-foreground/60">/ {printer.temps.bedTarget}</span> : null}
-                </span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <TempStrip temps={printer.temps} />
                 {/* MADDE 2: ısınma artık bilgileri gizlemez — küçük bir çip */}
                 {stage.heatingChip && (
-                  <span className="inline-flex items-center gap-1 font-medium motion-safe:animate-in motion-safe:fade-in duration-300" style={{ color: "var(--panel-amber)" }}>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium motion-safe:animate-in motion-safe:fade-in duration-300" style={{ color: "var(--panel-amber)" }}>
                     <Flame className="h-3 w-3 motion-safe:animate-pulse" /> Isınıyor
                   </span>
                 )}
@@ -1084,7 +1076,9 @@ function PrinterCardInner({
               <p className="text-xs mt-0.5">{isError ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
               <SlotStrip chips={slotChips} className="mt-2" />
               <CardBadges printer={printer} speedView={speedView} className="mt-2" />
-              <p className="text-[11px] mt-2 text-muted-foreground/70 tabular-nums">Nozul {nozzle}° · Tabla {bed}°</p>
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                <TempStrip temps={printer.temps} />
+              </div>
             </div>
           </div>
         )}
@@ -1210,7 +1204,7 @@ function PrinterCardInner({
                 />
               )}
 
-              {/* MADDE 17 — katmanda duraklat + filament değiştir.
+              {/* MADDE 17 — katmanda duraklat.
                   Kurulu duraklatma yazıcıda BASKIDAN BAĞIMSIZ kalıcı: baskı bitse de, katman
                   toplamı okunamasa da KALDIRILABİLMELİ (yoksa sonraki baskı yarıda duruyordu). */}
               {printer.caps.pauseAtLayer && (isPrinting || isPaused || printer.pauseAtLayer != null) && (
@@ -1222,22 +1216,17 @@ function PrinterCardInner({
                   onSet={(layer) => onCommand({ id: printer.id, action: "pauseAtLayer", layer })}
                 />
               )}
-              {printer.caps.filamentChange && isPrinting && (
-                <FilamentChangeControl
-                  busy={busy}
-                  pending={pending === "changeFilament"}
-                  onConfirm={() => onCommand({ id: printer.id, action: "changeFilament" })}
-                />
-              )}
             </div>
 
             {/* İkincil satır — yıkıcı eylem AYRI ve sağda, yanlış tıklama uzağında */}
-            {(job || transport.canCancel) && (
+            {((job && !printer.matchedProductId) || transport.canCancel) && (
               <div className="flex items-center gap-2">
-                {job && (
+                {/* Eşleştirme düğmesi YALNIZ eşleşme yokken. Eşleşen baskıda "Ürünü değiştir"
+                    hiç kullanılmıyordu; eşleştirme akışının kendisi (onMatch) yerinde duruyor. */}
+                {job && !printer.matchedProductId && (
                   <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={onMatch} title="Bu baskı hangi ürüne ait?">
                     <Link2 className="h-3.5 w-3.5" />
-                    {printer.matchedProductId ? "Ürünü değiştir" : "Ürünle eşleştir"}
+                    Ürünle eşleştir
                   </Button>
                 )}
                 {transport.canCancel && (
@@ -1282,7 +1271,12 @@ function CardBadges({ printer, speedView, className }: { printer: PanelPrinter; 
   const items: { key: string; icon: React.ElementType; text: string }[] = [];
   // Hız rozeti YALNIZ varsayılan dışındayken: Moonraker hızı boştayken de bildirdiği için
   // "Hız %100" dört kartta da hiç değişmeden durup gerçek rozetleri bastırıyordu.
-  if (speedView && !speedView.atDefault) items.push({ key: "speed", icon: Gauge, text: `Hız ${speedView.label}` });
+  // Etiket artık bir sözcük ("Çok hızlı"); başına "Hız" eklemek "Hız Çok hızlı" oluyordu.
+  // Ham yüzde durumunda ("%137") sözcük olmadığı için "Hız" öneki korunur.
+  if (speedView && !speedView.atDefault) {
+    const t = speedView.label;
+    items.push({ key: "speed", icon: Gauge, text: t.startsWith("%") ? `Hız ${t}` : t });
+  }
   if (printer.pauseAtLayer != null) items.push({ key: "layer", icon: Layers, text: `${printer.pauseAtLayer}. katmanda duracak` });
   // MADDE 22 — yalnız Snapmaker U1
   if (printer.defectWatch?.enabled) items.push({ key: "watch", icon: Eye, text: "Gözetim açık" });
@@ -1302,13 +1296,97 @@ function CardBadges({ printer, speedView, className }: { printer: PanelPrinter; 
   );
 }
 
+// ── Sıcaklık çipleri — nozul VE tabla aynı dilde ───────────────────────────
+//
+// Eskiden nozul ikonlu/renkliydi, tabla düz griydi; tablanın hedefe ulaşıp ulaşmadığı
+// tek bakışta görünmüyordu. Artık ikisi de aynı çip: ikon + değer + hedef, renk duruma göre.
+// Snapmaker U1'de dört kafanın hepsi ayrı çip olarak dizilir (aktif olan vurgulu).
+
+/** Sıcaklığın DURUMU — renk buradan gelir. */
+type TempPhase = "cold" | "heating" | "ready" | "cooling";
+
+function tempPhase(temp: number, target: number): TempPhase {
+  if (target > 0) return temp < target - 3 ? "heating" : "ready";
+  return temp > 45 ? "cooling" : "cold";
+}
+
+const PHASE_COLOR: Record<TempPhase, string | undefined> = {
+  heating: "var(--panel-amber)",
+  ready: "oklch(0.65 0.2 35)",
+  cooling: "oklch(0.62 0.09 40)",
+  cold: undefined,
+};
+
+function TempChip({
+  icon: Icon, label, temp, target, dim, active, title,
+}: {
+  icon: React.ElementType;
+  label?: string;
+  temp: number;
+  target: number;
+  dim?: boolean;
+  /** Şu an basan kafa — halkayla işaretlenir (U1'de iki kafa aynı anda sıcak olabiliyor). */
+  active?: boolean;
+  title?: string;
+}) {
+  const phase = tempPhase(temp, target);
+  const color = PHASE_COLOR[phase];
+  return (
+    <span
+      title={title}
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/40 px-1.5 py-0.5",
+        "text-[11px] font-medium tabular-nums transition-all duration-500",
+        "motion-safe:animate-in motion-safe:fade-in",
+        dim && "opacity-55",
+        active && "ring-1 ring-current/45 font-semibold",
+      )}
+      style={color ? { color, borderColor: `color-mix(in oklch, ${color} 35%, var(--border))` } : undefined}
+    >
+      <Icon className={cn("h-3.5 w-3.5 shrink-0", phase === "heating" && "motion-safe:animate-pulse")} />
+      {label && <span className="text-muted-foreground/80">{label}</span>}
+      <AnimatedNumber value={temp} durationMs={500} />°
+      {target > 0 && <span className="opacity-55">/ {target}</span>}
+    </span>
+  );
+}
+
+/** Kartın sıcaklık şeridi: kafa(lar) + tabla. */
+function TempStrip({ temps }: { temps: PanelPrinter["temps"] }) {
+  const heads = temps.nozzles ?? [];
+  return (
+    <>
+      {heads.length > 1 ? (
+        heads.map((n) => (
+          <TempChip
+            key={n.index}
+            icon={Flame}
+            label={`K${n.index + 1}`}
+            temp={n.temp}
+            target={n.target}
+            dim={!n.active && n.target === 0 && n.temp <= 45}
+            active={n.active}
+            title={n.active ? `Kafa ${n.index + 1} — şu an basıyor` : `Kafa ${n.index + 1}`}
+          />
+        ))
+      ) : (
+        <TempChip icon={Flame} temp={temps.nozzle} target={temps.nozzleTarget} title="Nozul" />
+      )}
+      <TempChip icon={RectangleHorizontal} label="Tabla" temp={temps.bed} target={temps.bedTarget} title="Tabla" />
+    </>
+  );
+}
+
 // ── MADDE 10 — hız kademesi ────────────────────────────────────────────────
 
 function SpeedControl({
   view, busy, pending, onPick,
 }: { view: SpeedView; busy: boolean; pending: boolean; onPick: (value: number) => void }) {
   return (
-    <div className="inline-flex items-center h-7 rounded-md border border-input overflow-hidden" title="Baskı hızı">
+    <div
+      className="inline-flex items-center h-7 rounded-md border border-input overflow-hidden"
+      title={view.hint ? `Baskı hızı · ${view.hint}` : "Baskı hızı"}
+    >
       <button
         className="h-full px-1.5 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-35 disabled:hover:bg-transparent transition-colors"
         disabled={busy || view.down == null}
@@ -1318,8 +1396,9 @@ function SpeedControl({
         <Minus className="h-3.5 w-3.5" />
       </button>
       {/* Beklerken de DEĞER görünür kalır: eskiden etiket tamamen dönen ikonla değişiyordu ve
-          hareket azaltma açıkken ortada hareketsiz bir daireden başka bir şey kalmıyordu. */}
-      <span className="px-1.5 text-xs font-semibold tabular-nums inline-flex items-center gap-1 min-w-[3.5rem] justify-center">
+          hareket azaltma açıkken ortada hareketsiz bir daireden başka bir şey kalmıyordu.
+          Genişlik "Çok yavaş"a göre sabit — kademe değişince +/− düğmeleri yerinden oynamasın. */}
+      <span className="px-1.5 text-xs font-semibold tabular-nums inline-flex items-center gap-1 min-w-[6rem] justify-center whitespace-nowrap">
         {pending
           ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
           : <Gauge className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -1458,40 +1537,6 @@ function PauseAtLayerControl({
           </DialogContent>
         </Dialog>
       )}
-    </>
-  );
-}
-
-// ── MADDE 17 — filament değiştir (baskıyı DURAKLATIR → onay ister) ─────────
-
-function FilamentChangeControl({ busy, pending, onConfirm }: { busy: boolean; pending: boolean; onConfirm: () => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <Button
-        size="sm" variant="outline" className="h-7 gap-1 text-xs"
-        disabled={busy} onClick={() => setOpen(true)}
-        title="Baskıyı duraklatıp filament değiştir"
-      >
-        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Repeat className="h-3.5 w-3.5" />}
-        Duraklat, filament değiştir
-      </Button>
-      <Dialog open={open} onOpenChange={(o) => !o && setOpen(false)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <Repeat className="h-4 w-4 text-primary" /> Filament değiştir
-            </DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Baskı duraklatılacak ve kafa filament değişimi için yana çekilecek. Değişimden sonra yazıcı ekranından devam ettir.
-          </p>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Vazgeç</Button>
-            <Button size="sm" disabled={busy} onClick={() => { onConfirm(); setOpen(false); }}>Duraklat ve değiştir</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </>
   );
 }
