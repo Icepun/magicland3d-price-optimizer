@@ -83,6 +83,8 @@ export interface PanelPrinter {
     level: number | null;
   };
   light: { supported: boolean; readable: boolean; on: boolean | null };
+  /** Mantıksal takım → fiziksel kafa (U1 extruder_map_table). Boş = eşleme bilinmiyor. */
+  toolMap?: number[];
   pauseAtLayer: number | null;
   defectWatch: { supported: boolean; enabled: boolean; spaghetti: boolean; cleanBed: boolean } | null;
   slots: PanelSlot[];

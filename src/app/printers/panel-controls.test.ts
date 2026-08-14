@@ -329,4 +329,36 @@ describe("MADDE 11 — izleyiciye gerçek filament renkleri", () => {
   it("slot yoksa boş dizi", () => {
     expect(slotToolColors(undefined)).toEqual([]);
   });
+
+  /**
+   * Gcode `T<n>` MANTIKSAL indeks yazar, yazıcının renkleri FİZİKSEL kafaya aittir. Eşleme
+   * uygulanmazsa 3B görünüm yanlış makaranın rengini boyar. Canlı U1 ölçümü (14 Ağu 2026):
+   * `extruder_map_table = [0,1,2,3,0,0,…]`, `filament_color_rgba` = kahve/kırmızı/siyah/beyaz.
+   */
+  const U1_SLOTLAR = [
+    { slot: 0, color: "#6F4C2F", type: "PLA", empty: false },
+    { slot: 1, color: "#E72F1D", type: "PLA", empty: false },
+    { slot: 2, color: "#000000", type: "PLA", empty: false },
+    { slot: 3, color: "#FFFFFF", type: "PLA", empty: false },
+  ];
+
+  it("eşleme KİMLİK ise renkler olduğu gibi kalır (gerçek U1 tablosu)", () => {
+    expect(slotToolColors(U1_SLOTLAR, [0, 1, 2, 3])).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
+  });
+
+  it("eşleme KAYDIRILMIŞSA mantıksal takım doğru kafanın rengini alır", () => {
+    // Dilimleyicinin 0. filamenti 3. kafaya, 1. filamenti 2. kafaya bağlanmış.
+    expect(slotToolColors(U1_SLOTLAR, [3, 2, 1, 0])).toEqual(["#FFFFFF", "#000000", "#E72F1D", "#6F4C2F"]);
+  });
+
+  it("firmware DOLGUSU (-1) kimliğe düşer, yanlış kafaya sapmaz", () => {
+    // Gerçek tablo 32 elemanlı; sonu geçersiz dolgu. Dolgu 0'a eşlenirse her fazladan
+    // mantıksal indeks 0. kafanın rengini alırdı — bu test onu engeller.
+    expect(slotToolColors(U1_SLOTLAR, [0, 1, -1, -1])).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
+  });
+
+  it("eşleme YOKSA (tek kafalı / okunamadı) eski davranış korunur", () => {
+    expect(slotToolColors(U1_SLOTLAR)).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
+    expect(slotToolColors(U1_SLOTLAR, [])).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
+  });
 });

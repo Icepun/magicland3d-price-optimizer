@@ -894,7 +894,7 @@ function PrinterCardInner({
   const badgeOverride = pendingBadgeLabel(
     pending === "pause" || pending === "resume" || pending === "cancel" ? pending : null,
   );
-  const toolColors = useMemo(() => slotToolColors(printer.slots), [printer.slots]);
+  const toolColors = useMemo(() => slotToolColors(printer.slots, printer.toolMap), [printer.slots, printer.toolMap]);
 
   // MADDE 11: süren baskının 3B görünümü karttan açılır (model dosyası varsa).
   // Açılışta model bilgisi KOPYALANIR: yazıcı bir yoklamada yanıt vermeyince dosya adı null

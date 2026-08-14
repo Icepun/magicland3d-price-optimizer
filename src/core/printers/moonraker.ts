@@ -1846,6 +1846,17 @@ export interface MoonrakerExtras {
   slots: { slot: number; color: string; type: string; empty: boolean }[];
   /** Bu baskıda kullanılan kafa/slot indeksleri (U1 `extruders_used`). */
   activeSlots: number[];
+  /**
+   * MANTIKSAL takım indeksi → FİZİKSEL kafa (U1 `print_task_config.extruder_map_table`).
+   *
+   * Gcode `T<n>` MANTIKSAL indeks yazar; yazıcının slot renkleri ise FİZİKSEL kafaya aittir.
+   * İkisi aynı olmak zorunda değil (kullanıcı dilimleyicide 2. filamenti 4. kafaya bağlayabilir).
+   * Bu tablo olmadan 3B görünüm yanlış makaranın rengini boyar.
+   *
+   * Canlı ölçüm (U1, 14 Ağu 2026): `[0,1,2,3,0,0,…]` — 32 elemanlı, sonu dolgu. Boşsa eşleme
+   * bilinmiyor demektir, çağıran kimliğe (identity) düşer.
+   */
+  toolMap: number[];
   pauseAtLayer: number | null;
   defectWatch: MoonrakerDefectWatch;
   /** Yazıcının bildirdiği aktif uyarılar (U1 `exception_manager`) — spagetti/kirli tabla tespiti
@@ -1860,6 +1871,7 @@ export function emptyMoonrakerExtras(): MoonrakerExtras {
     light: { supported: false, readable: false, on: null },
     slots: [],
     activeSlots: [],
+    toolMap: [],
     pauseAtLayer: null,
     defectWatch: { supported: false, enabled: false, spaghetti: false, cleanBed: false },
     alerts: [],
@@ -1915,6 +1927,19 @@ export async function fetchMoonrakerExtras(host: string, port: number): Promise<
     const ptc = status.print_task_config;
     const parsed = parsePrintTaskConfig(ptc);
     if (parsed) out.slots = parsed;
+    if (ptc && Array.isArray(ptc.extruder_map_table)) {
+      const ham: number[] = ptc.extruder_map_table.map((v: unknown) => {
+        const n = Number(v);
+        return Number.isInteger(n) && n >= 0 && n <= 3 ? n : -1;
+      });
+      // DOLGUYU KIRP. Firmware tabloyu 32 elemana sıfırla dolduruyor (canlı ölçüm:
+      // [0,1,2,3,0,0,…]) ve 0 aynı zamanda GEÇERLİ bir kafa numarası — ikisi dizinin kendisinden
+      // ayırt edilemez. Son sıfır-olmayan girdiden sonrasını atıyoruz; yanlış kırparsak sonuç
+      // kimliğe düşer (dosyanın kendi rengi kullanılır), yanlış RENK boyanmaz.
+      let son = 3;
+      for (let i = 0; i < ham.length; i++) if (ham[i] > 0) son = i;
+      out.toolMap = ham.slice(0, Math.min(ham.length, son + 1));
+    }
     if (ptc && Array.isArray(ptc.extruders_used)) {
       ptc.extruders_used.forEach((v: unknown, i: number) => { if (v === true) out.activeSlots.push(i); });
     }

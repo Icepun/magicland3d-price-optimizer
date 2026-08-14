@@ -109,6 +109,7 @@ export interface PanelPrinter {
   };
   light: { supported: boolean; readable: boolean; on: boolean | null };
   /** Ayarlı "şu katmanda duraklat" değeri (yoksa null). */
+  toolMap?: number[];
   pauseAtLayer: number | null;
   /** Spagetti / kirli tabla gözetimi (yalnız destekleyen yazıcıda). */
   defectWatch: { supported: boolean; enabled: boolean; spaghetti: boolean; cleanBed: boolean } | null;
@@ -533,6 +534,8 @@ export async function GET(req: NextRequest) {
         pauseAtLayer: extras.pauseAtLayer,
         defectWatch: extras.defectWatch.supported ? extras.defectWatch : null,
         slots: extras.slots,
+        // Boşsa GÖNDERME — arayüz eşleme yokken kimliğe düşer (tek kafalı yazıcılar).
+        toolMap: extras.toolMap.length ? extras.toolMap : undefined,
         job,
       };
     })
