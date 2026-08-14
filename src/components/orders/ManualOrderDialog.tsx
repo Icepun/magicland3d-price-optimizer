@@ -1379,7 +1379,10 @@ export function ManualOrderDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="flex h-[min(92vh,920px)] w-full max-w-[calc(100%-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+      {/* `sm:` öneki artık gereksiz: taban sınıf genişlik kısıtını `w-` katmanında tutuyor,
+          `max-w-` tamamen buraya ait (bkz. ui/dialog.tsx). Kendi `overflow-hidden`ı taban
+          `overflow-y-auto`yu ezer — bu pencere kendi içinde kaydırıyor. */}
+      <DialogContent className="flex h-[min(92vh,920px)] max-h-none w-[calc(100%-1rem)] max-w-5xl flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="border-b px-4 py-4 pr-12 sm:px-5">
           <DialogTitle className="flex items-center gap-2 text-lg">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/12 text-primary">

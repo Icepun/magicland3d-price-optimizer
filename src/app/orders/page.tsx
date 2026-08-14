@@ -743,7 +743,7 @@ export default function OrdersPage() {
     vItems.length > 0 ? Math.max(0, rowVirtualizer.getTotalSize() - vItems[vItems.length - 1].end) : 0;
 
   return (
-    <div className="p-6 space-y-5 max-w-5xl">
+    <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Başlık */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -809,7 +809,7 @@ export default function OrdersPage() {
       {/* İskelet gerçek düzenle aynı hücre sayısında: veri gelince sayfa zıplamaz. */}
       {isLoading && (
         <Card className="overflow-hidden">
-          <CardContent className="grid grid-cols-2 gap-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
+          <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="space-y-1.5">
                 <Skeleton className="h-3 w-16 rounded" />
@@ -825,7 +825,7 @@ export default function OrdersPage() {
           (yoksa "sipariş yok" ekranı, aslında alınamamış veriyi sıfır gibi gösteriyordu). */}
       {summary && (summary.total.orderCount > 0 || missingSources.length > 0) && (
         <Card className="overflow-hidden">
-          <CardContent className="grid grid-cols-2 gap-3 py-3 sm:grid-cols-3 lg:grid-cols-6">
+          <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
             <SummaryStat
               label={`${summary.total.orderCount} sipariş`}
               value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />}

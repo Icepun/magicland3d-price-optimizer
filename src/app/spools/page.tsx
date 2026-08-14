@@ -205,7 +205,7 @@ export default function SpoolsPage() {
   }
 
   return (
-    <div className="p-6 space-y-4 max-w-6xl">
+    <div className="p-6 space-y-4 mx-auto w-full max-w-[1600px]">
       {/* ── Üst şerit: ne kadar var, neyi sipariş etmeli ────────────────────────── */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
@@ -276,7 +276,7 @@ export default function SpoolsPage() {
       </div>
 
       {isLoading ? (
-        <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+        <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(140px,1fr))]">
           {Array.from({ length: 12 }).map((_, i) => (
             <Skeleton key={i} className="h-[104px] rounded-xl" />
           ))}
@@ -296,7 +296,7 @@ export default function SpoolsPage() {
               {bolum.cipler.length === 0 ? (
                 <p className="text-sm text-muted-foreground/70 py-2">Bu filtrede renk yok.</p>
               ) : (
-                <div className="grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+                <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(140px,1fr))]">
                   {bolum.cipler.map((cip, i) => (
                     <RenkCipi
                       key={cip.key}

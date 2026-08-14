@@ -53,7 +53,25 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          // ⚠️ GENİŞLİK SINIFI ÖNEKSİZ OLMAK ZORUNDA.
+          //
+          // Burada eskiden `sm:max-w-sm` yazıyordu ve bu, ÇAĞIRANIN yazdığı her `max-w-*`
+          // sınıfını sessizce eziyordu: `cn` (twMerge) farklı önekli sınıfları aynı grupta
+          // saymadığı için `sm:max-w-sm`'i silmiyor, derlenmiş CSS'te medya kuralı sonra
+          // geldiği için ≥640px'te o kazanıyordu. Uygulamanın EN DAR penceresi 1100px
+          // olduğundan pratikte HER diyalog 384px açılıyordu — `max-w-3xl` isteyen
+          // zaman atlamalı galerisi de, `max-w-2xl` isteyen G-code görüntüleyici de.
+          // Öneksiz yazıldığında twMerge çakışmayı görüp çağıranın sınıfını uyguluyor.
+          //
+          // Ekran kenarına yapışmayı önleyen kısıt `w-` katmanında duruyor, `max-w-` değil:
+          // ikisi de `max-w-*` olsaydı çağıranın sınıfı ya bu kısıtı ezer (dar pencerede
+          // taşma) ya da kısıt çağıranı ezerdi. Ayrı gruplar olduğu için twMerge ikisini
+          // birbirine karıştırmıyor: genişlik = min(pencere − 2rem, çağıranın max-w'si).
+          //
+          // `max-h` + `overflow-y-auto`: diyalog `fixed` olduğu için taşan içerik hiçbir
+          // yerden kaydırılamıyordu; 720px'lik minimum pencerede uzun formların üstü ve
+          // altı ekran dışında kalıyordu. Kendi `max-h`ini veren diyaloglar bunu ezer.
+          "fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-sm max-h-[calc(100dvh-4rem)] overflow-y-auto -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

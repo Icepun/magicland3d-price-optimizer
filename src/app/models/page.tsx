@@ -98,7 +98,7 @@ export default function ModelsPage() {
   }, [allProducts, eslesmeler, onlyMissing, missingPrinter, printerIds, sortMode]);
 
   return (
-    <div className="p-6 space-y-5 max-w-6xl">
+    <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Başlık — gradient şerit */}
       <div className="relative overflow-hidden rounded-2xl border bg-card p-5">
         <div className="pointer-events-none absolute -top-10 -right-10 h-40 w-40 rounded-full opacity-40 blur-2xl" style={{ background: "radial-gradient(circle, oklch(0.66 0.20 278 / 40%), transparent 70%)" }} />
@@ -190,7 +190,7 @@ export default function ModelsPage() {
       </div>
 
       {isLoading ? (
-        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[172px] w-full rounded-xl" />)}
         </div>
       ) : printers.length === 0 ? (
@@ -198,7 +198,7 @@ export default function ModelsPage() {
       ) : products.length === 0 ? (
         <EmptyHint title="Henüz model yok" desc="Bir ürünün detay sayfasındaki 'Baskı Dosyaları' kartından parça parça dosya yükle; hepsi burada toplanır." />
       ) : (
-        <div className="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
           {products.map((p, i) => {
             const eslesenParca = eslesmeler.get(p.productId)?.length ?? 0;
             return (

@@ -675,7 +675,7 @@ export default function ReportsPage() {
     : null;
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-6xl min-w-0">
+    <div className="p-4 sm:p-6 space-y-5 mx-auto w-full max-w-[1600px] min-w-0">
       <style>{BAR_GROW_CSS}</style>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
@@ -833,7 +833,7 @@ export default function ReportsPage() {
               </Card>
             )}
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             {/* BİLİNMEYEN ≠ SIFIR: hiç veri yokken kartlar ₺0 değil "—" gösterir; sunucu 12
                 boş kova döndürdüğünde grafik "veri yok" derken kartların 0 yazması iki
                 çelişkili iddia demekti. */}
@@ -1661,7 +1661,7 @@ function ReportsSkeleton() {
     <div role="status" aria-busy="true">
       <span className="sr-only">Rapor hazırlanıyor…</span>
       <div className="space-y-5" aria-hidden="true">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           {Array.from({ length: 4 }).map((_, index) => (
             <Card
               key={index}

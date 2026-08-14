@@ -242,7 +242,7 @@ export default function ExpenseRulesPage() {
   });
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-4 mx-auto w-full max-w-6xl">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">Satış Gider Kuralları</h1>

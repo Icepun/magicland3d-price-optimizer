@@ -427,7 +427,7 @@ export default function ExpensesPage() {
   });
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-5xl">
+    <div className="p-4 sm:p-6 space-y-5 mx-auto w-full max-w-[1400px]">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">

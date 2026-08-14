@@ -471,7 +471,7 @@ export default function PlannerPage() {
         : null;
 
   return (
-    <div className="p-6 space-y-5 max-w-6xl">
+    <div className="p-6 space-y-5 mx-auto w-full max-w-[1400px]">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">

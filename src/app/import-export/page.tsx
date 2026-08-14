@@ -101,7 +101,7 @@ export default function ImportExportPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 mx-auto w-full max-w-6xl">
       <h1 className="text-2xl font-bold">İçe / Dışa Aktarma</h1>
 
       <div className="grid gap-6 md:grid-cols-2">

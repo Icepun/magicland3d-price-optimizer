@@ -66,7 +66,7 @@ export default function SettingsPage() {
   });
 
   return (
-    <div className="p-6 space-y-6 max-w-xl">
+    <div className="p-6 space-y-6 mx-auto w-full max-w-3xl">
       <h1 className="text-2xl font-bold">Ayarlar</h1>
 
       <ImageMobileFixCard />

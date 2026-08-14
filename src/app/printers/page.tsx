@@ -373,7 +373,7 @@ export default function PrintersPage() {
   );
 
   return (
-    <div className="p-4 sm:p-6 space-y-5 max-w-6xl">
+    <div className="p-4 sm:p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Dar pencerede düğmeler EKRAN DIŞINA taşmasın: hem satır hem düğme grubu sarar,
           böylece yazıcı eklemenin tek yolu olan “Yönet” her genişlikte görünür kalır. */}
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
@@ -450,7 +450,7 @@ export default function PrintersPage() {
       {isLoading ? (
         // İskelet gerçek kart yüksekliğine yakın olmalı — 130 px kısa iskelet veri gelince
         // sayfayı zıplatıyordu.
-        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <div className="grid gap-4 grid-cols-1 xl:grid-cols-2 min-[1700px]:grid-cols-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-[392px] w-full rounded-xl" />
           ))}
@@ -465,7 +465,7 @@ export default function PrintersPage() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <div className="grid gap-4 grid-cols-1 xl:grid-cols-2 min-[1700px]:grid-cols-3">
           {printers.map((p, i) => (
             <PrinterCard
               key={p.id}
@@ -1045,7 +1045,7 @@ function PrinterCardInner({
               {/* MADDE 12: yüklü filamentler — bu baskıda kullanılanlar vurgulu */}
               <SlotStrip chips={slotChips} />
               <CardBadges printer={printer} speedView={speedView} />
-              <div className="flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
                 {!preparing && isPrinting && elapsedSec > 0 && (
                   <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {formatRemaining(elapsedSec)} geçti</span>
                 )}
@@ -1054,7 +1054,7 @@ function PrinterCardInner({
                   <span className="inline-flex items-center gap-1"><Weight className="h-3.5 w-3.5" /> toplam {Math.round(job.filamentGrams)} g</span>
                 )}
               </div>
-              <div className="flex items-center gap-3 text-[11px] tabular-nums">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums">
                 {/* Nozzle rengi hedefe göre (eski `>60` soğuma sırasında da turuncu yakıyordu). */}
                 <span className="inline-flex items-center gap-1" style={{ color: printer.temps.nozzleTarget > 0 ? "oklch(0.65 0.2 35)" : undefined }}>
                   <Flame className="h-3.5 w-3.5" /> {nozzle}°<span className="text-muted-foreground/60">/ {printer.temps.nozzleTarget || "—"}</span>

@@ -2092,15 +2092,18 @@ export default function ProductsPage() {
 
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
+    <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
+      {/* Başlık satırı SARMALI: seçim yapıldığında altı düğme çıkıyor (~1000px) ve düğmeler
+          `shrink-0 whitespace-nowrap` olduğu için ne daralıyor ne sarıyordu. 1100px'lik
+          minimum pencerede içerik alanı 812px olduğundan TÜM SAYFA yatay kayıyordu. */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Tüm ürünlerin fiyatı, maliyeti ve kârı · varyantlar tek satırda toplanır
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           {selectedCount > 0 && (
             <>
               <Button

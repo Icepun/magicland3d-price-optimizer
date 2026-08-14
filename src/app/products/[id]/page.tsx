@@ -678,7 +678,10 @@ export default function ProductDetailPage({
     // İskelet GERÇEK düzeni taklit eder (sol maliyet · sağda üç platform + Fiyat Laboratuvarı) →
     // veri gelince kartlar yer değiştirmez, sayfa zıplamaz.
     return (
-      <div className="p-6 space-y-6 max-w-7xl animate-in fade-in duration-300" aria-busy="true">
+      <div
+        className="p-6 space-y-6 mx-auto w-full max-w-[1600px] animate-in fade-in duration-300"
+        aria-busy="true"
+      >
         <div className="flex items-center gap-4">
           <Skeleton className="h-9 w-9 rounded-md" />
           <Skeleton className="h-16 w-16 rounded-lg" />
@@ -687,14 +690,14 @@ export default function ProductDetailPage({
             <Skeleton className="h-3 w-1/3" />
           </div>
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-          <Skeleton className="h-[560px] rounded-xl lg:col-span-1" />
-          <div className="lg:col-span-2 space-y-4">
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+          <Skeleton className="h-[560px] rounded-xl xl:col-span-1" />
+          <div className="xl:col-span-2 space-y-4">
             <div className="space-y-2">
               <Skeleton className="h-4 w-56" />
               <Skeleton className="h-3 w-80 max-w-full" />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
               {[0, 1, 2].map((i) => (
                 <Skeleton
                   key={i}
@@ -737,7 +740,7 @@ export default function ProductDetailPage({
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl">
+    <div className="p-6 space-y-6 mx-auto w-full max-w-[1600px]">
       {/* Header */}
       <div className="flex items-start gap-4">
         <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
@@ -859,9 +862,9 @@ export default function ProductDetailPage({
 
       {/* KARAR ÖNCE, AYRINTI SONRA: maliyet · her platformdaki kâr · kaça satmalı — hepsi tek ekranda.
           Fiyat Laboratuvarı sağ sütunun altındaki boşluğu doldurur (eskiden iki ekran aşağıdaydı). */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
         {/* Sol: Maliyet formu (izole — yazarken sadece bu kart render olur) */}
-        <div className="space-y-4 lg:col-span-1">
+        <div className="space-y-4 xl:col-span-1">
           <CostEditor
             key={id}
             productId={id}
@@ -879,7 +882,7 @@ export default function ProductDetailPage({
         </div>
 
         {/* Sağ: 3 Platform Yan Yana + hemen altında hedef fiyatlar */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="xl:col-span-2 space-y-4">
           <div className="animate-in fade-in duration-500">
             <h2 className="text-base font-semibold mb-1">Platform Kâr/Zarar Durumu</h2>
             <p className="text-xs text-muted-foreground">
@@ -887,7 +890,7 @@ export default function ProductDetailPage({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
             {(["shopify", "trendyol", "hepsiburada"] as const).map((platform, i) => {
               const listing = product.listings.find((l) => l.platform === platform);
               const platformPreview = preview?.platforms.find((p) => p.platform === platform);

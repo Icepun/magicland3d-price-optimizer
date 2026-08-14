@@ -189,7 +189,7 @@ export default function CommissionRulesPage() {
   }, [rules, search]);
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 space-y-4 mx-auto w-full max-w-6xl">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Komisyon Kuralları</h1>
         <Button onClick={() => setOpen(true)} size="sm">

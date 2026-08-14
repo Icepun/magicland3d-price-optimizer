@@ -655,7 +655,7 @@ export default function CargoRulesPage() {
   };
 
   return (
-    <div className="p-6 space-y-5 max-w-6xl">
+    <div className="p-6 space-y-5 mx-auto w-full max-w-6xl">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Kargo Kuralları</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
