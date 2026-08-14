@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, Pencil, Plus, Receipt, Repeat, Tags, Trash2, WalletCards } from "lucide-react";
+import { CalendarDays, Pencil, Plus, Receipt, RefreshCw, Repeat, Tags, Trash2, WalletCards } from "lucide-react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchJson } from "@/lib/fetch-json";
-import { formatCurrency } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { KATEGORI_RENKLERI } from "@/lib/expense-admin-shared";
 import {
   araliktakiler, aylaraGore, donemOzeti, kategoriAdi, kategoriDagilimi, periyotAraligi,
@@ -328,6 +328,27 @@ export default function ExpensesPage() {
     queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
   }
 
+  /**
+   * Yenile — başka bir cihazda (telefon) girilen gider ya da vakti gelen sabit gider
+   * bu ekrana düşsün. Gider listesi ucu aynı zamanda tekrarlayan giderleri de üretiyor,
+   * yani düğme "yeni ay geldiyse sabit giderimi de aç" işini de görüyor.
+   */
+  const [yenileniyor, setYenileniyor] = useState(false);
+  const yenile = async () => {
+    if (yenileniyor) return;
+    setYenileniyor(true);
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["actual-expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["expense-categories"] }),
+        queryClient.invalidateQueries({ queryKey: ["recurring-expenses"] }),
+        queryClient.invalidateQueries({ queryKey: ["finance-monthly"] }),
+      ]);
+    } finally {
+      setYenileniyor(false);
+    }
+  };
+
   /** Tekrarlayan sabit gider kuralları. */
   const tekrarQuery = useQuery<TekrarKaydi[]>({
     queryKey: ["recurring-expenses"],
@@ -417,6 +438,10 @@ export default function ExpensesPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => void yenile()} disabled={yenileniyor}>
+            <RefreshCw className={cn("h-4 w-4 mr-2", yenileniyor && "animate-spin")} />
+            {yenileniyor ? "Yenileniyor…" : "Yenile"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setTekrarOpen(true)}>
             <Repeat className="h-4 w-4 mr-2" /> Sabit Giderler
           </Button>
