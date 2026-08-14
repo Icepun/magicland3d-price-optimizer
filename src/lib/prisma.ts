@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaLibSQL } from "@prisma/adapter-libsql";
+import { withDbFetchTimeout } from "./db-fetch-timeout";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -198,7 +199,9 @@ function createPrisma(): PrismaClient {
       const adapter = new PrismaLibSQL({
         url: remoteTursoUrl!,
         authToken: tursoToken || undefined,
-      });
+        // Takılan istek 20'lik eşzamanlılık havuzunu kalıcı doldurmasın — bkz. db-fetch-timeout.ts.
+        fetch: withDbFetchTimeout(),
+      } as ConstructorParameters<typeof PrismaLibSQL>[0]);
       return new PrismaClient({ adapter, log: [...log] });
     }
 
@@ -243,7 +246,9 @@ function createRemotePrisma(): PrismaClient {
   const adapter = new PrismaLibSQL({
     url: remoteTursoUrl,
     authToken: tursoToken || undefined,
-  });
+    // Aynı kilit bu client'ta da olur (telefon relay'i) — o da zaman aşımlı olmalı.
+    fetch: withDbFetchTimeout(),
+  } as ConstructorParameters<typeof PrismaLibSQL>[0]);
   return new PrismaClient({ adapter, log: [...log] });
 }
 
