@@ -290,7 +290,12 @@ export function bedFrameFor(brand: string, model: string): StageFrame | null {
   if (key.includes("neptune 4 plus") || key.includes("n4 plus")) return size(320, 320);
   if (key.includes("neptune 4 pro") || key.includes("n4 pro")) return size(225, 225);
   if (key.includes("neptune 4") || key.includes("neptune4")) return size(225, 225);
-  if (key.includes("snapmaker") && key.includes("u1")) return size(200, 200);
+  // U1: 270×270. Eskiden 200 yazıyordu ve kafa konumunun %31'i çerçevenin DIŞINA düşüyordu →
+  // nokta gri ve kenara yapışık çiziliyor, katman karosu 1,35× şişip Y>200 kısmı kırpılıyordu.
+  // Yazıcıdan doğrulandı (14 Ağu 2026): bed_mesh 3..267 (3 mm pay) ve dosyanın dilimleyici
+  // altbilgisi `printable_area = 0.5x1,270.5x1,270.5x271,0.5x271`.
+  // ⚠️ `toolhead.axis_maximum` (U1'de 271×335) TABLA DEĞİL — kafa doklarını içeren hareket alanı.
+  if (key.includes("snapmaker") && key.includes("u1")) return size(270, 270);
   if (key.includes("a1 mini")) return size(180, 180);
   if (key.includes("bambu") || key.includes("a1") || key.includes("p1") || key.includes("x1")) return size(256, 256);
   return null;

@@ -1,14 +1,16 @@
 name: Mobile TestFlight
 
+# YALNIZ ELLE ÇALIŞIR.
+#
+# Eskiden `main`e her push'ta ve `src/core/**` her değiştiğinde tetikleniyordu. Masaüstü
+# tarafındaki işler de o klasöre dokunduğu için (yazıcı adaptörleri, süre hesabı, kontroller)
+# tek bir çalışma gününde 5 iOS derlemesi harcandı ve Expo ücretsiz planının aylık 15 hakkının
+# 12'si doldu — oysa mobil uygulamada değişen bir şey yoktu.
+#
+# Mobil sürüm masaüstünden BAĞIMSIZ ve seyrek yayınlanıyor. Derleme artık istendiğinde
+# alınır: GitHub → Actions → "Mobile TestFlight" → Run workflow.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "mobile/**"
-      - "src/core/**"
-      - ".github/workflows/mobile-testflight.yml"
 
 concurrency:
   group: mobile-testflight

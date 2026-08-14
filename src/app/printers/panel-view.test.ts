@@ -168,10 +168,18 @@ describe("MADDE 7 — katman rozeti ve nozul noktası", () => {
     expect(bedFrameFor("acme", "Bilinmeyen")).toBeNull();
   });
 
+  /**
+   * Ölçüler YAZICILARDAN doğrulandı (14 Ağu 2026, `bed_mesh` sorgusu):
+   *   U1      mesh 3..267      → 270  (eskiden 200 yazıyordu; kafa konumunun %31'i
+   *                                    çerçeve dışına düşüp nokta gri ve kenara yapışıyordu)
+   *   N4 Plus mesh 20..295/300 → 320
+   *   N4 Pro  mesh ..200/220   → 225
+   * ⚠️ `toolhead.axis_maximum` TABLA DEĞİLDİR (U1'de 271×335 — kafa doklarını kapsar).
+   */
   it("dört yazıcının tablası tanınır", () => {
     expect(bedFrameFor("elegoo", "Neptune 4 Pro")?.maxX).toBe(225);
     expect(bedFrameFor("elegoo", "Neptune 4 Plus")?.maxX).toBe(320);
-    expect(bedFrameFor("snapmaker", "U1")?.maxX).toBe(200);
+    expect(bedFrameFor("snapmaker", "U1")?.maxX).toBe(270);
     expect(bedFrameFor("bambu", "A1")?.maxX).toBe(256);
   });
 });
