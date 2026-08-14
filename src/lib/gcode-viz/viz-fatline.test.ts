@@ -62,10 +62,11 @@ describe("kalın gövde çizgisi", () => {
     const viz = buildVizScene(g, { mode: "viewer" });
     const fat = kalinNesne(viz.scene as never);
     expect(fat).not.toBeNull();
+    // İzleyicide DOLGU da katı sayılır → gövde 3 + dolgu 1 = 4.
     const govdeSayisi = [...g.features].filter((f) => isBodyFeature(f)).length;
     expect(govdeSayisi).toBe(3);
     viz.setLayer(-1);
-    expect(fat!.geometry.instanceCount).toBe(3);
+    expect(fat!.geometry.instanceCount).toBe(4);
     viz.dispose();
   });
 
@@ -73,12 +74,12 @@ describe("kalın gövde çizgisi", () => {
     const g = ornek();
     const viz = buildVizScene(g, { mode: "viewer" });
     const fat = kalinNesne(viz.scene as never)!;
-    // Katman 0'da gövde segmenti 0 ve 2 var (arada dolgu) → 2 tane.
+    // Katman 0: gövde 0, dolgu 1, gövde 2 → üçü de katı sayılır.
     viz.setLayer(0);
-    expect(fat.geometry.instanceCount).toBe(2);
-    // Katman 1 eklenince etek atlanır, bir gövde daha gelir → 3.
-    viz.setLayer(1);
     expect(fat.geometry.instanceCount).toBe(3);
+    // Katman 1: ETEK atlanır, bir gövde daha gelir → 4.
+    viz.setLayer(1);
+    expect(fat.geometry.instanceCount).toBe(4);
     viz.dispose();
   });
 

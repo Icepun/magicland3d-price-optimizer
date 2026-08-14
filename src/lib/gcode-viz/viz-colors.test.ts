@@ -79,17 +79,20 @@ describe("gövde baskınlığı", () => {
     expect(alpha[FEATURE_SKIRT]).toBe(0);
   });
 
-  it("izleyicide de dolgu/destek VARSAYILAN OLARAK çizilmez", () => {
+  it("izleyicide DOLGU artık katı gövdenin parçası, DESTEK/ETEK hâlâ çizilmez", () => {
     /**
-     * Eskiden %20 saydamlıkla çiziliyorlardı ve `depthWrite` açık olduğu için DERİNLİK
-     * TAMPONUNA yazıp arkalarındaki katı gövdeyi siliyorlardı — model "içi boş, hatları
-     * belirsiz" görünüyordu. Ölçüldü: kullanıcının dosyalarında segmentlerin %9-21'i
-     * yalnız etek/purge. Alfa 0 olunca alphaTest bunları eliyor, derinliğe hiç yazmıyorlar.
+     * DOLGU. Ölçüldü (kullanıcının ekran görüntüsündeki dosya, 14 Ağu 2026): 117.908
+     * segmentin 59.503'ü (%50,5) seyrek dolgu ve HİÇ ÇİZİLMİYORDU. Model bu yüzden içi boş
+     * bir kabuktu; arka duvar önden görünüyor, hiçbir açıdan katı durmuyordu. Artık KATI
+     * çizilir — iç hacim dolar, parça gerçekten katı görünür.
+     *
+     * DESTEK ve ETEK hâlâ dışarıda: onlar modelin eti değil, atılacak parçalar. Alfa 0
+     * olunca alphaTest bunları eliyor, derinlik tamponuna hiç yazmıyorlar.
      */
     const g = fakeGeom({ toolCount: 1, filamentColors: ["#FFAA00"] });
     const { alpha } = vizColorTable(g, { mode: "viewer" });
     expect(alpha[FEATURE_OUTER]).toBe(1);
-    expect(alpha[FEATURE_INFILL]).toBe(0);
+    expect(alpha[FEATURE_INFILL]).toBe(1);
     expect(alpha[FEATURE_SUPPORT]).toBe(0);
     expect(alpha[FEATURE_SKIRT]).toBe(0);
   });
@@ -98,8 +101,10 @@ describe("gövde baskınlığı", () => {
     const g = fakeGeom({ toolCount: 1, filamentColors: ["#FFAA00"] });
     const { alpha } = vizColorTable(g, { mode: "viewer", showSupport: true });
     expect(alpha[FEATURE_OUTER]).toBe(1);
-    expect(alpha[FEATURE_INFILL]).toBeGreaterThan(0);
-    expect(alpha[FEATURE_INFILL]).toBeLessThan(0.5);
+    // Dolgu artık zaten katı; bu anahtar DESTEK/ETEK için anlamlı.
+    expect(alpha[FEATURE_INFILL]).toBe(1);
+    expect(alpha[FEATURE_SUPPORT]).toBeGreaterThan(0);
+    expect(alpha[FEATURE_SUPPORT]).toBeLessThan(0.5);
   });
 
   it("kart kipinde `showSupport` AÇIK olsa bile çizilmezler", () => {

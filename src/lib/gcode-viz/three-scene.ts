@@ -161,8 +161,9 @@ export function vizColorTable(g: ParsedGcode, opts: VizSceneOptions = {}): { rgb
       // Gövde dışı parçalar (dolgu/destek/etek/purge) VARSAYILAN olarak atılır: alfa 0 →
       // alphaTest eler → derinlik tamponuna da yazmaz. Yalnız kullanıcı açıkça isterse
       // %20 saydamlıkla çizilir.
+      // Dolgu izleyicide artık KATI gövdenin parçası → tam alfa. Destek/etek eskisi gibi.
       alpha[f * toolCount + t] =
-        isBodyFeature(f) ? 1 : card || !opts.showSupport ? 0 : 0.2;
+        isBodyFeature(f) || (!card && f === FEATURE_INFILL) ? 1 : card || !opts.showSupport ? 0 : 0.2;
     }
   }
   return { rgb, alpha, toolCount };
@@ -252,11 +253,28 @@ interface GovdeKatmani {
   toplam: number;
 }
 
+/**
+ * KATI GÖRÜNEN NE? — izleyicide DOLGU da modelin etidir.
+ *
+ * ÖLÇÜLDÜ (kullanıcının ekran görüntüsündeki dosya, 14 Ağu 2026): 117.908 segmentin
+ * 59.503'ü (%50,5) seyrek dolgu ve hiç çizilmiyordu. Model bu yüzden içi boş bir kabuktu;
+ * arka duvar önden görünüyor, hiçbir açıdan katı durmuyordu ("slicerdaki gibi görünmüyorlar").
+ * Dolgu opak olarak çizilince iç hacim dolar ve parça gerçekten katı görünür.
+ *
+ * Destek ve etek/temizleme kulesi HÂLÂ dışarıda: onlar modelin eti değil, atılacak parçalar.
+ * Kart küçük resmi eski davranışta kalır — orada dolguyu çizmek baskı ilerlemesini gözle
+ * ayırt edilemez hâle getiriyordu (ölçülmüş gerileme).
+ */
+function katiSayilir(f: number, mod: VizMode): boolean {
+  if (isBodyFeature(f)) return true;
+  return mod !== "card" && f === FEATURE_INFILL;
+}
+
 /** Gövde segmentlerini ayıklayıp kalın çizgi nesnesi kurar. Bütçe aşılırsa null döner. */
-function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array): GovdeKatmani | null {
+function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array, mod: VizMode): GovdeKatmani | null {
   const n = g.totalSegments;
   let govdeSayisi = 0;
-  for (let i = 0; i < n; i++) if (isBodyFeature(g.features[i])) govdeSayisi++;
+  for (let i = 0; i < n; i++) if (katiSayilir(g.features[i], mod)) govdeSayisi++;
   if (govdeSayisi === 0 || govdeSayisi > KALIN_SEGMENT_BUTCESI) return null;
 
   const pos = new Float32Array(govdeSayisi * 6);
@@ -270,7 +288,7 @@ function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array): GovdeKatmani |
       katmanSonu[katman] = j;
       katman++;
     }
-    if (!isBodyFeature(g.features[i])) continue;
+    if (!katiSayilir(g.features[i], mod)) continue;
     pos.set(g.positions.subarray(i * 6, i * 6 + 6), j * 6);
     const o = i * 8;
     const r = colorBytes[o] / 255, gg = colorBytes[o + 1] / 255, b = colorBytes[o + 2] / 255;
@@ -299,12 +317,12 @@ function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array): GovdeKatmani |
 }
 
 /** Kalın nesnenin renklerini `colorBytes`'tan tazeler (palet değişince). */
-function govdeRenkleriniTazele(govde: GovdeKatmani, g: ParsedGcode, colorBytes: Uint8Array): void {
+function govdeRenkleriniTazele(govde: GovdeKatmani, g: ParsedGcode, colorBytes: Uint8Array, mod: VizMode): void {
   const attr = govde.geometri.getAttribute("instanceColorStart") as THREE.InterleavedBufferAttribute;
   const buf = attr.data.array as Float32Array;
   let j = 0;
   for (let i = 0; i < g.totalSegments; i++) {
-    if (!isBodyFeature(g.features[i])) continue;
+    if (!katiSayilir(g.features[i], mod)) continue;
     const o = i * 8;
     const r = colorBytes[o] / 255, gg = colorBytes[o + 1] / 255, b = colorBytes[o + 2] / 255;
     buf[j * 6] = r; buf[j * 6 + 1] = gg; buf[j * 6 + 2] = b;
@@ -315,9 +333,9 @@ function govdeRenkleriniTazele(govde: GovdeKatmani, g: ParsedGcode, colorBytes: 
 }
 
 /** Gövde segmentlerinin alfasını ince nesnede sıfırlar — kalın nesne onları zaten çiziyor. */
-function govdeyiInceNesnedenGizle(g: ParsedGcode, colorBytes: Uint8Array): void {
+function govdeyiInceNesnedenGizle(g: ParsedGcode, colorBytes: Uint8Array, mod: VizMode): void {
   for (let i = 0; i < g.totalSegments; i++) {
-    if (!isBodyFeature(g.features[i])) continue;
+    if (!katiSayilir(g.features[i], mod)) continue;
     colorBytes[i * 8 + 3] = 0;
     colorBytes[i * 8 + 7] = 0;
   }
@@ -367,7 +385,7 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
    * yalnız RGB taşır, alfa taşımaz — dolgu/destek/etek görünürlüğü alfayla yönetildiği için
    * onlar eski ince nesnede kalır (alphaTest yolu aynen çalışır, derinlik sorunu doğmaz).
    */
-  const govde = buildGovdeLines(g, colorBytes);
+  const govde = buildGovdeLines(g, colorBytes, options.mode ?? "viewer");
 
   const { minZ } = g.bounds;
   const rb = bodyXYBounds(g);
@@ -380,7 +398,7 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
     group.add(govde.nesne);
     // Gövde artık KALIN nesnede çiziliyor → ince nesnede SÖNDÜRÜLÜR (alfa 0, alphaTest eler).
     // Yoksa aynı yollar iki kez çizilir, ince çizgi kalının üstünde tel kafes izi bırakırdı.
-    govdeyiInceNesnedenGizle(g, colorBytes);
+    govdeyiInceNesnedenGizle(g, colorBytes, options.mode ?? "viewer");
   }
 
   /**
@@ -452,8 +470,8 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
       showSupport: yardimcilarAcik,
     });
     if (govde) {
-      govdeRenkleriniTazele(govde, g, colorBytes);
-      govdeyiInceNesnedenGizle(g, colorBytes);
+      govdeRenkleriniTazele(govde, g, colorBytes, options.mode ?? "viewer");
+      govdeyiInceNesnedenGizle(g, colorBytes, options.mode ?? "viewer");
     }
     colorAttr.needsUpdate = true;
     // Saydam parçalar görünürken derinlik yazımı kapanmalı (bkz. materyal kurulumundaki not).

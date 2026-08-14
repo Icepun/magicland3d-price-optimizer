@@ -17,7 +17,8 @@ const DB_NAME = "mlhub-gcode-viz";
 // v5: gövde artık IŞIKLANDIRILMIŞ tüp olarak çiziliyor (tube-shading) ve kart küçük resimleri
 // de kalın gövdeyi kullanıyor. Kayıtlı kareler/küçük resimler pişmiş piksel — sürüm artmazsa
 // kullanıcı yeni görünümü kartlarda GÖREMEZ.
-const DB_VER = 5;
+// v6: izleyicide DOLGU da katı gövde olarak çiziliyor (model artık içi boş kabuk değil).
+const DB_VER = 6;
 const GEOM = "geom";
 const SPRITES = "sprites";
 const MAX_GEOM = 16; // LRU üst sınırları (disk şişmesin)
