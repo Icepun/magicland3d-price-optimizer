@@ -33,7 +33,13 @@ export function tupGibiIsiklandir(materyal: LineMaterial): void {
       /* glsl */ `
       #ifdef WORLD_UNITS
         // \`delta\` = fragmentin tüp ekseninden dışarı bakan vektörü → silindirik normal.
-        vec3 mlN = normalize( delta );
+        //
+        // ⚠️ SIFIR UZUNLUK KORUMASI. Fragment tam eksenin üstüne düşerse \`delta\` sıfır olur ve
+        // \`normalize\` NaN üretir. Windows'ta (D3D) bu genelde siyah bir piksel demektir, ama
+        // macOS'ta WebGL Metal üzerinden ANGLE ile çalışıyor ve NaN'ın davranışı aynı olmak
+        // zorunda değil. Uzunluk sıfıra yakınsa kameraya bakan sabit bir normale düşülür.
+        float mlLen = length( delta );
+        vec3 mlN = mlLen > 1e-6 ? delta / mlLen : vec3( 0.0, 0.0, 1.0 );
         vec3 mlL = normalize( ${ISIK} );
         float mlDiff = max( dot( mlN, mlL ), 0.0 );
         // Yarım-Lambert: gölge tarafı da tamamen ölmesin, hacim okunmaya devam etsin.

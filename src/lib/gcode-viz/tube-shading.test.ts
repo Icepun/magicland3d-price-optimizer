@@ -31,7 +31,19 @@ describe("tüp ışıklandırması", () => {
     const { once, sonra } = yamala();
     expect(once).not.toContain("mlN");
     expect(sonra).toContain("mlN");
-    expect(sonra).toContain("normalize( delta )");
+    expect(sonra).toContain("delta / mlLen");
+  });
+
+  /**
+   * SIFIR UZUNLUK KORUMASI — macOS için önemli. Fragment tam tüp ekseninin üstüne düşerse
+   * `delta` sıfır olur; çıplak `normalize` NaN üretir. Windows'ta (D3D) genelde siyah piksel
+   * demektir ama macOS WebGL'i Metal üzerinden ANGLE ile çalışıyor ve NaN davranışı aynı
+   * olmak zorunda değil. Bu test korumanın kaldırılmasını engeller.
+   */
+  it("sıfır uzunlukta NaN üretmez (macOS/Metal koruması)", () => {
+    const { sonra } = yamala();
+    expect(sonra).toContain("mlLen > 1e-6");
+    expect(sonra).not.toMatch(/vec3 mlN = normalize\( delta \)/);
   });
 
   it("ışıklandırma YALNIZ dünya-birimli kipte devreye girer", () => {

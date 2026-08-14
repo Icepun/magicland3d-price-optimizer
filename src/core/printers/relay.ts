@@ -564,6 +564,26 @@ async function processPendingCommands(configs: Cfg[]): Promise<void> {
       if (!c) throw new Error("Yazıcı bulunamadı");
       // configs yalnız etkinleri içerir; fallback'ten gelen kayıt devre dışı olabilir → uygulama.
       if ((c as { enabled?: boolean }).enabled === false) throw new Error("Yazıcı devre dışı");
+      /**
+       * ATOMİK SAHİPLENME — iki masaüstü aynı anda açıkken çift yürütmeyi engeller.
+       *
+       * `processedCmdIds` yalnız SÜREÇ İÇİ bir işaret; Berke hem Windows hem Mac'te
+       * çalıştığında iki relay de aynı bekleyen komutu görüyor ve ikisi de yürütüyordu
+       * (durum ancak yürütmeden SONRA "done" yazılıyor). Telefondan gönderilen tek bir
+       * "baskıyı başlat" iki kez gidebilirdi.
+       *
+       * `updateMany` koşullu güncellemedir: yalnız hâlâ "pending" olan satırı "running"
+       * yapar ve KAÇ satır güncellediğini söyler. 0 dönerse komutu başka bir makine
+       * kapmıştır → bu makine dokunmaz.
+       */
+      const kapildi = await remotePrisma.printCommand.updateMany({
+        where: { id: cmd.id, status: "pending" },
+        data: { status: "running" },
+      });
+      if (kapildi.count !== 1) {
+        processedCmdIds.add(cmd.id); // başka makine aldı — bir daha bakma
+        continue;
+      }
       processedCmdIds.add(cmd.id); // yürütmeden HEMEN önce işaretle — yazma hatasında bile tekrar yok
       await executeCommand(c, cmd);
       await remotePrisma.printCommand.update({ where: { id: cmd.id }, data: { status: "done", processedAt: new Date() } });
