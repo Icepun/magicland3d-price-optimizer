@@ -79,12 +79,35 @@ describe("gövde baskınlığı", () => {
     expect(alpha[FEATURE_SKIRT]).toBe(0);
   });
 
-  it("izleyicide dolgu/destek soluk kalır ama görünür", () => {
+  it("izleyicide de dolgu/destek VARSAYILAN OLARAK çizilmez", () => {
+    /**
+     * Eskiden %20 saydamlıkla çiziliyorlardı ve `depthWrite` açık olduğu için DERİNLİK
+     * TAMPONUNA yazıp arkalarındaki katı gövdeyi siliyorlardı — model "içi boş, hatları
+     * belirsiz" görünüyordu. Ölçüldü: kullanıcının dosyalarında segmentlerin %9-21'i
+     * yalnız etek/purge. Alfa 0 olunca alphaTest bunları eliyor, derinliğe hiç yazmıyorlar.
+     */
     const g = fakeGeom({ toolCount: 1, filamentColors: ["#FFAA00"] });
     const { alpha } = vizColorTable(g, { mode: "viewer" });
     expect(alpha[FEATURE_OUTER]).toBe(1);
+    expect(alpha[FEATURE_INFILL]).toBe(0);
+    expect(alpha[FEATURE_SUPPORT]).toBe(0);
+    expect(alpha[FEATURE_SKIRT]).toBe(0);
+  });
+
+  it("kullanıcı açıkça isterse soluk görünürler", () => {
+    const g = fakeGeom({ toolCount: 1, filamentColors: ["#FFAA00"] });
+    const { alpha } = vizColorTable(g, { mode: "viewer", showSupport: true });
+    expect(alpha[FEATURE_OUTER]).toBe(1);
     expect(alpha[FEATURE_INFILL]).toBeGreaterThan(0);
     expect(alpha[FEATURE_INFILL]).toBeLessThan(0.5);
+  });
+
+  it("kart kipinde `showSupport` AÇIK olsa bile çizilmezler", () => {
+    // Kart 168px; oraya dolgu/destek koymak siluetten başka bir şey bırakmıyor.
+    const g = fakeGeom({ toolCount: 1, filamentColors: ["#FFAA00"] });
+    const { alpha } = vizColorTable(g, { mode: "card", showSupport: true });
+    expect(alpha[FEATURE_INFILL]).toBe(0);
+    expect(alpha[FEATURE_SUPPORT]).toBe(0);
   });
 
   it("dış duvar iç duvardan parlaktır (siluet öne çıksın)", () => {

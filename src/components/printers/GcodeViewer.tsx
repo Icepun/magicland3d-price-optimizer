@@ -15,7 +15,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Play, Pause, Layers, Box, RotateCcw, Radio } from "lucide-react";
+import { Play, Pause, Layers, Box, RotateCcw, Radio, Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ParsedGcode } from "@/lib/gcode-viz/parse-gcode";
 import { loadGeometry, type VizProgress } from "@/lib/gcode-viz/viz-pipeline";
@@ -59,6 +59,11 @@ export function GcodeViewerDialog({
   const [layer, setLayer] = useState(-1); // -1 = tamamı
   const [playing, setPlaying] = useState(false);
   const [following, setFollowing] = useState(liveLayer != null);
+  /**
+   * Dolgu/destek/etek görünür mü — VARSAYILAN KAPALI.
+   * Açıkken bu parçalar saydam çizilip arkalarındaki gövdeyi siliyordu; hatlar belirsizleşiyordu.
+   */
+  const [showSupport, setShowSupport] = useState(false);
   const reduceMotion = usePrefersReducedMotion();
 
   const vizRef = useRef<VizScene | null>(null);
@@ -194,6 +199,12 @@ export function GcodeViewerDialog({
     vizRef.current?.setPalette({ toolColors: stableColors });
   }, [stableColors, geom]);
 
+  // Görünürlük anahtarı sahneyi YENİDEN KURMAZ (WebGL bağlamı pahalı) — yalnız renk
+  // tamponunu ve derinlik yazımını tazeler, geçiş anlık olur.
+  useEffect(() => {
+    vizRef.current?.setShowSupport(showSupport);
+  }, [showSupport, geom]);
+
   // CANLI KİLİT: takip açıkken yazıcının katmanına yapış.
   useEffect(() => {
     if (!following || liveIdx == null || !vizRef.current) return;
@@ -260,6 +271,28 @@ export function GcodeViewerDialog({
               <Radio className={cn("h-3 w-3", !reduceMotion && "animate-pulse")} />
               Şu an burada
             </div>
+          )}
+          {/* Dolgu/destek/etek varsayılan olarak GİZLİ: çizildiklerinde saydamlıkları
+              arkadaki gövdeyi siliyor ve model belirsizleşiyor. İsteyen açabilsin. */}
+          {geom && (
+            <button
+              type="button"
+              onClick={() => setShowSupport((v) => !v)}
+              title={
+                showSupport
+                  ? "Dolgu ve desteği gizle — model hatları netleşir"
+                  : "Dolgu ve desteği göster"
+              }
+              className={cn(
+                "absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] backdrop-blur transition-colors",
+                showSupport
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border bg-background/80 text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {showSupport ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+              Dolgu ve destek
+            </button>
           )}
         </div>
 

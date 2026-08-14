@@ -53,6 +53,18 @@ export interface VizSceneOptions {
   palette?: VizPalette;
   /** "card": yalnız gövde çizilir (siluet dolumu gözle görülür). "viewer": dolgu/destek soluk. */
   mode?: VizMode;
+  /**
+   * Dolgu / destek / etek / temizleme kulesi çizilsin mi (yalnız "viewer" modunda anlamlı).
+   *
+   * ⚠️ VARSAYILAN KAPALI. Açıkken bu parçalar %20 saydamlıkla çiziliyordu ve `depthWrite`
+   * açık olduğu için DERİNLİK TAMPONUNA yazıp arkalarındaki GÖVDEYİ siliyorlardı: model
+   * "içi görünüyor, hatlar belirsiz" hâle geliyordu. Ölçüldü — kullanıcının dosyalarında
+   * segmentlerin %9-21'i yalnız etek/purge.
+   *
+   * Açıldığında materyal `depthWrite: false`'a düşer; saydam parçalar artık gövdeyi silmez,
+   * yalnız üstüne biner.
+   */
+  showSupport?: boolean;
 }
 
 /** "#RRGGBB" → [r,g,b] 0-1. Tanınmazsa null. */
@@ -101,7 +113,11 @@ export function vizColorTable(g: ParsedGcode, opts: VizSceneOptions = {}): { rgb
       rgb[i] = c[0] * shade;
       rgb[i + 1] = c[1] * shade;
       rgb[i + 2] = c[2] * shade;
-      alpha[f * toolCount + t] = isBodyFeature(f) ? 1 : card ? 0 : 0.2;
+      // Gövde dışı parçalar (dolgu/destek/etek/purge) VARSAYILAN olarak atılır: alfa 0 →
+      // alphaTest eler → derinlik tamponuna da yazmaz. Yalnız kullanıcı açıkça isterse
+      // %20 saydamlıkla çizilir.
+      alpha[f * toolCount + t] =
+        isBodyFeature(f) ? 1 : card || !opts.showSupport ? 0 : 0.2;
     }
   }
   return { rgb, alpha, toolCount };
@@ -162,6 +178,8 @@ export interface VizScene {
   setLayer: (layerIdx: number) => void;
   /** Gerçek filament renkleri sonradan gelirse (API) paleti değiştir. */
   setPalette: (palette: VizPalette) => void;
+  /** Dolgu/destek/etek görünürlüğü — sahne yeniden kurulmadan anlık değişir. */
+  setShowSupport: (goster: boolean) => void;
   layerCount: number;
   dispose: () => void;
 }
@@ -182,10 +200,19 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
 
   // alphaTest: alfası 0 olan (kartta dolgu/destek) parçalar TAMAMEN atılır — derinlik tamponuna da
   // yazmaz, yoksa görünmez çizgiler gövdeyi kapatırdı.
+  // ⚠️ depthWrite: saydam yardımcı parçalar AÇIKKEN kapatılır.
+  //
+  // Açık bırakılırsa %20 alfalı bir dolgu/destek çizgisi DERİNLİK TAMPONUNA yazıyor ve
+  // arkasındaki KATI gövdeyi siliyor: model "içi boş, hatları belirsiz" görünüyordu.
+  // Ölçülen ana sebep buydu. Kapalıyken (varsayılan) o parçalar zaten alphaTest ile
+  // eleniyor, dolayısıyla derinlik yazımı gövde için AÇIK kalabiliyor — gövdenin kendi
+  // arka duvarları öne geçmiyor.
+  const saydamYardimcilar = options.mode !== "card" && options.showSupport === true;
   const material = new THREE.LineBasicMaterial({
     vertexColors: true,
     transparent: options.mode !== "card",
     alphaTest: 0.02,
+    depthWrite: !saydamYardimcilar,
   });
   const lines = new THREE.LineSegments(geometry, material);
 
@@ -221,13 +248,35 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
     }
   };
 
-  const setPalette = (palette: VizPalette) => {
-    fillColors(colorBytes, g, { ...options, palette });
+  /** Palet ve yardımcı-parça görünürlüğü AYNI yoldan tazelenir: sahne yeniden kurulmaz. */
+  let aktifPalet: VizPalette | undefined = options.palette;
+  let yardimcilarAcik = options.showSupport === true;
+
+  const yenidenBoya = () => {
+    fillColors(colorBytes, g, {
+      ...options,
+      palette: aktifPalet,
+      showSupport: yardimcilarAcik,
+    });
     colorAttr.needsUpdate = true;
+    // Saydam parçalar görünürken derinlik yazımı kapanmalı (bkz. materyal kurulumundaki not).
+    material.depthWrite = !(options.mode !== "card" && yardimcilarAcik);
+    material.needsUpdate = true;
+  };
+
+  const setPalette = (palette: VizPalette) => {
+    aktifPalet = palette;
+    yenidenBoya();
+  };
+
+  const setShowSupport = (goster: boolean) => {
+    if (yardimcilarAcik === goster) return;
+    yardimcilarAcik = goster;
+    yenidenBoya();
   };
 
   return {
-    scene, camera, lines, geometry, setLayer, setPalette,
+    scene, camera, lines, geometry, setLayer, setPalette, setShowSupport,
     layerCount: g.layerRanges.length,
     dispose: () => {
       geometry.dispose();

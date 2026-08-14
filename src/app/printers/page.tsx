@@ -36,6 +36,9 @@ import {
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
 import type { VizPack } from "@/lib/gcode-viz/viz-pack";
+// Ürün görselleri KÜÇÜK hâliyle çekilir: ham dosyalar 1,33 MB, küçüğü 21 KB (62 kat).
+// Baskı Başlat seçicisinde 67 görsel var → ~89 MB yerine ~1,4 MB.
+import { thumbUrl } from "@/lib/image";
 // Kart görünümünün SAF kararları (durum tonu, kare seçimi, katman rozeti, nozul ölçeği…)
 // test edilebilir tek yerde. Tipler API sözleşmesinin aynası — sapma testte tsc ile yakalanır.
 import {
@@ -2396,7 +2399,7 @@ function MatchModal({ target, onClose }: { target: { id: string; filename: strin
             list.map((p) => (
               <button key={p.id} onClick={() => match.mutate(p.id)} disabled={match.isPending} className="w-full flex items-center gap-2.5 p-1.5 rounded-lg hover:bg-muted text-left disabled:opacity-50">
                 <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
-                  {p.imageUrl ? <img src={p.imageUrl} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
+                  {p.imageUrl ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
                 </div>
                 <span className="flex-1 min-w-0 text-sm truncate">{p.name}</span>
                 <span className="text-xs text-muted-foreground tabular-nums shrink-0">{formatCurrency(p.currentSalePrice)}</span>
@@ -2469,7 +2472,7 @@ function NodeRow({ node, disabled, onClick }: { node: PickNode; disabled: boolea
   return (
     <button onClick={onClick} disabled={disabled} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
       <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
-        {node.image ? <img src={node.image} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
+        {node.image ? <img src={thumbUrl(node.image) ?? undefined} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm truncate">{node.name}</p>
@@ -2611,7 +2614,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
               <button key={mem.productId} disabled={printing} onClick={() => setOpenVariant(mem.productId)}
                 className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
                 <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
-                  {mem.image ? <img src={mem.image} alt="" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
+                  {mem.image ? <img src={thumbUrl(mem.image) ?? undefined} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm truncate">{mem.label}</p>
