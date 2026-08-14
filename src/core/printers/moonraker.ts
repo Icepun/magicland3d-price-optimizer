@@ -68,6 +68,10 @@ export interface MoonrakerStatus {
   nozzles: NozzleTemp[];
   bed: number;
   bedTarget: number;
+  /** Yazıcının O AN bastığı nesnenin adı (exclude_object.current_object). Yoksa null. */
+  currentObject: string | null;
+  /** Şimdiye kadar hariç tutulmuş nesne adları. */
+  excludedObjects: string[];
 }
 
 /** Tek bir kafanın sıcaklığı. */
@@ -102,8 +106,11 @@ export interface MoonrakerFile {
 }
 
 // file_position/file_size ve speed_factor AYNI istekte gelir — ek ağ maliyeti yok.
+// exclude_object ALAN SEÇİMLİ istenir: çıplak hâli 3.770 bayt (%96'sı poligonlar), alan
+// seçimli hâli 145 bayt. Poligonlar 5 saniyelik sıcak yola BİNMEZ; ayrı ve tek seferlik
+// okunur (fetchMoonrakerExcludeObjects).
 const QUERY =
-  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor";
+  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&exclude_object=current_object,excluded_objects";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
 const portCache = new Map<string, number>();
@@ -367,6 +374,7 @@ function parseStatus(status: any): MoonrakerStatus {
       active: key === activeExName,
     });
   }
+  const eo = status.exclude_object ?? {};
   const hb = status.heater_bed ?? {};
   const gm = status.gcode_move ?? {};
   // İLERLEME KAYNAĞI: ÖNCE M73 (display_status), SONRA bayt oranı (virtual_sdcard).
@@ -406,6 +414,10 @@ function parseStatus(status: any): MoonrakerStatus {
     nozzles,
     bed: Math.round(hb.temperature ?? 0),
     bedTarget: Math.round(hb.target ?? 0),
+    currentObject: typeof eo.current_object === "string" && eo.current_object ? eo.current_object : null,
+    excludedObjects: Array.isArray(eo.excluded_objects)
+      ? eo.excluded_objects.filter((x: unknown): x is string => typeof x === "string")
+      : [],
   };
 }
 
@@ -430,6 +442,7 @@ export async function fetchMoonrakerStatus(host: string, port: number): Promise<
     filePosition: null, fileSize: null, printDurationSec: 0,
     currentLayer: null, totalLayer: null, zHeight: null, posX: null, posY: null,
     speedPercent: null, nozzle: 0, nozzleTarget: 0, nozzles: [], bed: 0, bedTarget: 0,
+    currentObject: null, excludedObjects: [],
   };
   const cached = portCache.get(host);
   // Bilinen çalışan port varsa SADECE onu dene — cihazın Moonraker portu sabittir (Elegoo 80, U1 7125).
@@ -2069,4 +2082,155 @@ export async function moonrakerTimelapseList(
   }
   // En yeni önce (modified yoksa en sona).
   return out.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
+}
+
+// ── PARÇA İPTALİ (exclude_object) ──────────────────────────────────────────
+//
+// Tablada bozulan tek bir parçanın baskısını atlar; diğerleri devam eder.
+// GERİ ALINAMAZ SAYILIR (geri alma yalnız SONRAKİ katmanları kurtarır), o yüzden burada
+// üç koruma var ve üçü de ölçülmüş bir tuzağa karşılık geliyor.
+
+/** Tablada duran tek bir nesne — adı, merkezi ve tepeden görünüş poligonu (tabla mm). */
+export interface MoonrakerObject {
+  name: string;
+  center: [number, number];
+  polygon: [number, number][];
+}
+
+/**
+ * Klipper parametre değerini GÜVENLE kaçışla.
+ *
+ * ⚠️ ÖLÇÜLDÜ: Klipper parametreleri shlex ile (posix, commenters="#;") ayrıştırıyor.
+ *   NAME=part#1        → sessizce "part"a KIRPILIR → YANLIŞ NESNE iptal edilir, hata YOK
+ *   NAME=Max's Shroud  → "Malformed command" (OrcaSlicer #2027 tam bu)
+ * Bu yüzden ad, boşluk/kesme/tırnak/kare/noktalı virgül/eşittir/ters bölü içeriyorsa
+ * çift tırnağa alınır; ters bölü ve çift tırnak ayrıca kaçırılır.
+ *
+ * ⚠️ Ad ASLA büyütülmez, kırpılmaz, boşlukları değiştirilmez — Moonraker'ın verdiği dizge
+ * neyse o gider. (Büyütme ayrıca Türkçe tuzağı taşır: toLocaleUpperCase("tr") "Çiçeği"yi
+ * "ÇİÇEĞİ" yapar, Python upper() ise "ÇIÇEĞI" — eşleşme kaybolur.)
+ */
+export function klipperParamKacisla(deger: string): string {
+  if (!/[\s'"#;=\\]/.test(deger)) return deger;
+  return `"${deger.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+/** Nesne listesi — YALNIZ poligonu ve merkezi olanlar. */
+export function gecerliNesneler(ham: unknown): MoonrakerObject[] {
+  if (!Array.isArray(ham)) return [];
+  const out: MoonrakerObject[] = [];
+  for (const o of ham) {
+    if (!o || typeof o !== "object") continue;
+    const r = o as { name?: unknown; center?: unknown; polygon?: unknown };
+    if (typeof r.name !== "string" || !r.name) continue;
+    // Klipper, tanımsız bir adla EXCLUDE_OBJECT_START görürse nesneyi YALNIZ isimle listeye
+    // ekliyor (poligonsuz). Öyle bir kayıt haritada çizilemez → elenir.
+    if (!Array.isArray(r.polygon) || r.polygon.length < 3) continue;
+    if (!Array.isArray(r.center) || r.center.length < 2) continue;
+    const poly: [number, number][] = [];
+    for (const p of r.polygon) {
+      if (Array.isArray(p) && typeof p[0] === "number" && typeof p[1] === "number") {
+        poly.push([p[0], p[1]]);
+      }
+    }
+    if (poly.length < 3) continue;
+    out.push({
+      name: r.name,
+      center: [Number(r.center[0]), Number(r.center[1])],
+      polygon: poly,
+    });
+  }
+  return out;
+}
+
+/**
+ * Tabladaki nesneleri TEK SEFER oku (poligonlar dahil, ~3,8 KB). Baskı boyunca değişmez,
+ * o yüzden sıcak yoklamaya değil yalnız diyalog açılışına bağlıdır.
+ */
+export async function fetchMoonrakerObjects(host: string, port: number): Promise<MoonrakerObject[]> {
+  try {
+    const res = await mreq(host, port, `/printer/objects/query?exclude_object`, undefined, 3000);
+    if (!res.ok) return [];
+    return gecerliNesneler(unwrap(await res.json())?.status?.exclude_object?.objects);
+  } catch {
+    return [];
+  }
+}
+
+/** Yazıcının o anki hariç-tutma durumu (ad doğrulaması ve teyit için). */
+async function excludeDurumu(
+  host: string,
+  port: number,
+): Promise<{ objects: string[]; excluded: string[] } | null> {
+  try {
+    const res = await mreq(
+      host, port,
+      `/printer/objects/query?exclude_object=objects,excluded_objects`,
+      undefined, 2500,
+    );
+    if (!res.ok) return null;
+    const eo = unwrap(await res.json())?.status?.exclude_object;
+    if (!eo) return null;
+    const objects: string[] = Array.isArray(eo.objects)
+      ? eo.objects.map((o: { name?: unknown }) => (typeof o?.name === "string" ? o.name : "")).filter(Boolean)
+      : [];
+    const excluded: string[] = Array.isArray(eo.excluded_objects)
+      ? eo.excluded_objects.filter((x: unknown): x is string => typeof x === "string")
+      : [];
+    return { objects, excluded };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bir parçanın baskısını atla.
+ *
+ * ⚠️ SESSİZ BAŞARISIZLIĞA KARŞI ÇİFT KORUMA. Klipper gönderilen adı KENDİ listesiyle
+ * karşılaştırmıyor: uydurma bir ad hatasız kabul edilir, "Excluding object X" yazar ve
+ * HİÇBİR ŞEY atlanmaz — kullanıcı iptal ettiğini sanırken parça basılmaya devam eder.
+ * Bu yüzden (1) göndermeden ÖNCE ad canlı listede aranır, (2) gönderdikten SONRA
+ * `excluded_objects` içinde belirmesi beklenir.
+ *
+ * ⚠️ CURRENT=1 HİÇ KULLANILMAZ. Nesne nöbeti ölçüldü: 15,87 sn; panelin verisi 5-9 sn bayat.
+ * "Şu an basılanı iptal et" iki denemeden birinde YANLIŞ parçayı öldürürdü.
+ */
+export async function moonrakerExcludeObject(host: string, port: number, name: string): Promise<void> {
+  const durum = await excludeDurumu(host, port);
+  if (!durum) throw new Error("Yazıcıdan parça listesi okunamadı.");
+  if (!durum.objects.includes(name)) {
+    throw new Error("Bu parça yazıcının listesinde yok. Sayfayı yenileyip tekrar dene.");
+  }
+  if (durum.excluded.includes(name)) return; // zaten iptal — sessizce başarılı say
+
+  await moonrakerGcodeScript(host, port, `EXCLUDE_OBJECT NAME=${klipperParamKacisla(name)}`, {
+    timeoutMs: 10_000,
+    failMessage: "Parça iptal edilemedi.",
+  });
+
+  // TEYİT: komut kabul edilmiş olabilir ama hiçbir şey atlamamış olabilir.
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const son = await excludeDurumu(host, port);
+    if (son?.excluded.includes(name)) return;
+  }
+  throw new Error("Parça iptal edilemedi. Tekrar dene.");
+}
+
+/**
+ * Parça iptalini geri al — YALNIZ ADLA.
+ *
+ * ⚠️ ÇIPLAK `EXCLUDE_OBJECT RESET=1` ASLA GÖNDERİLMEZ: excluded_objects listesini komple
+ * boşaltır, yani saatler önce BİLEREK iptal edilmiş tüm parçalar dirilir ve nozul yarım
+ * kalmış kütüklerin üstüne dalar.
+ *
+ * Geri alma yalnız BUNDAN SONRAKİ katmanları kurtarır; atlanmış katmanlar geri gelmez.
+ */
+export async function moonrakerUnexcludeObject(host: string, port: number, name: string): Promise<void> {
+  if (!name) throw new Error("Parça adı gerekli.");
+  await moonrakerGcodeScript(
+    host, port,
+    `EXCLUDE_OBJECT RESET=1 NAME=${klipperParamKacisla(name)}`,
+    { timeoutMs: 10_000, failMessage: "Geri alınamadı." },
+  );
 }

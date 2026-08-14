@@ -111,6 +111,11 @@ export interface PanelPrinter {
   light: { supported: boolean; readable: boolean; on: boolean | null };
   /** Mantıksal takım → fiziksel kafa (U1 extruder_map_table). Yoksa kimlik varsayılır. */
   toolMap?: number[];
+  /**
+   * Parça iptali (exclude_object) durumu — YALNIZ dilimleyici nesneleri işaretlemişse gelir.
+   * Alan yoksa arayüz "Parça seç" düğmesini hiç çizmez.
+   */
+  parts?: { current: string | null; excluded: string[]; count: number };
   /** Ayarlı "şu katmanda duraklat" değeri (yoksa null). */
   pauseAtLayer: number | null;
   /** Spagetti / kirli tabla gözetimi (yalnız destekleyen yazıcıda). */
@@ -541,6 +546,10 @@ export async function GET(req: NextRequest) {
         slots: extras.slots,
         // Boşsa GÖNDERME — arayüz eşleme yokken kimliğe düşer (tek kafalı yazıcılar).
         toolMap: extras.toolMap.length ? extras.toolMap : undefined,
+        // Nesne tanımlı değilse alan HİÇ gönderilmez → arayüz düğmeyi çizmez.
+        parts: st.currentObject || st.excludedObjects.length
+          ? { current: st.currentObject, excluded: st.excludedObjects, count: 0 }
+          : undefined,
         job,
       };
     })

@@ -10,7 +10,7 @@ import {
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
-  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity,
+  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity, Scissors,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -65,6 +65,12 @@ import {
 const GcodeViewerDialog = dynamic(
   () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
   { ssr: false, loading: () => <ViewerLoadingShell /> },
+);
+
+/** Parça seçici de ayrı parça — yalnız gerektiğinde iner. */
+const PartCancelDialog = dynamic(
+  () => import("@/components/printers/PartCancelDialog").then((m) => m.PartCancelDialog),
+  { ssr: false },
 );
 
 /** 3B görünüm parçası inerken açılan kabuk — "ölü bekleme" olmasın. */
@@ -902,6 +908,8 @@ function PrinterCardInner({
   // yoklamada kendiliğinden geri açılıyordu.
   const viewer = live.viewer;
   const [viewerSnap, setViewerSnap] = useState<{ fileId: string; cacheKey: string; name: string } | null>(null);
+  const [partPicker, setPartPicker] = useState(false);
+  const kartQc = useQueryClient();
 
   return (
     <Card
@@ -1221,6 +1229,19 @@ function PrinterCardInner({
                   onSet={(layer) => onCommand({ id: printer.id, action: "pauseAtLayer", layer })}
                 />
               )}
+
+              {/* PARÇA İPTALİ — yalnız baskı sürerken ve dilimleyici parçaları işaretlemişse.
+                  `parts` alanı yoksa nesne tanımı da yoktur; düğme hiç çizilmez. */}
+              {isPrinting && printer.parts && bedFrame && printer.type === "moonraker" && (
+                <Button
+                  size="sm" variant="outline" className="h-7 gap-1 text-xs"
+                  disabled={busy}
+                  title="Bozulan parçayı atla"
+                  onClick={() => setPartPicker(true)}
+                >
+                  <Scissors className="h-3.5 w-3.5" /> Parça seç
+                </Button>
+              )}
             </div>
 
             {/* İkincil satır — yıkıcı eylem AYRI ve sağda, yanlış tıklama uzağında */}
@@ -1255,6 +1276,37 @@ function PrinterCardInner({
         {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
+
+      {partPicker && printer.parts && bedFrame && (
+        <PartCancelDialog
+          printerId={printer.id}
+          frame={bedFrame}
+          currentName={printer.parts.current}
+          excluded={printer.parts.excluded}
+          onClose={() => setPartPicker(false)}
+          fetchParts={async () => {
+            const r = await fetch(`/api/printers/${printer.id}/parts`);
+            if (!r.ok) throw new Error("Parça listesi alınamadı.");
+            return (await r.json()).parts ?? [];
+          }}
+          onExclude={async (name: string) => {
+            const r = await fetch(`/api/printers/${printer.id}/action`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "excludeObject", objectName: name }),
+            });
+            if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Parça iptal edilemedi.");
+            kartQc.invalidateQueries({ queryKey: ["printers"] });
+          }}
+          onUndo={async (name: string) => {
+            const r = await fetch(`/api/printers/${printer.id}/action`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "unexcludeObject", objectName: name }),
+            });
+            if (!r.ok) throw new Error("Geri alınamadı.");
+            kartQc.invalidateQueries({ queryKey: ["printers"] });
+          }}
+        />
+      )}
 
       {viewerSnap && (
         <GcodeViewerDialog

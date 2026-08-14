@@ -6,6 +6,7 @@ import { jsonError } from "@/lib/api-error";
 import {
   moonrakerControl, moonrakerStartExisting, moonrakerSetSpeed, moonrakerSetLight,
   moonrakerSetPauseAtLayer, moonrakerChangeFilament, fetchMoonrakerCaps, fetchMoonrakerStatus,
+  moonrakerExcludeObject, moonrakerUnexcludeObject,
 } from "@/core/printers/moonraker";
 import { bambuControl, bambuSetSpeedLevel, BAMBU_SPEED_LEVELS } from "@/core/printers/bambu";
 import { validateSpeedChange, validatePauseLayer } from "@/core/printers/controls";
@@ -18,7 +19,10 @@ const Schema = z.object({
   action: z.enum([
     "pause", "resume", "cancel", "start",
     "speed", "light", "pauseAtLayer", "changeFilament",
+    "excludeObject", "unexcludeObject",
   ]),
+  /** Parça iptali: yazıcının bildirdiği HAM nesne adı (istemci uydurmaz, listeden gelir). */
+  objectName: z.string().optional(),
   filename: z.string().optional(),
   /** speed: Moonraker'da yüzde (%50–200 kademeleri), Bambu'da profil (1–4). */
   speedPercent: z.number().optional(),
@@ -58,7 +62,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         bumpBambuStatus(cfg.host, cfg.serial);
         return NextResponse.json({ ok: true, speedLevel: applied });
       }
-      if (action === "light" || action === "pauseAtLayer" || action === "changeFilament") {
+      if (action === "light" || action === "pauseAtLayer" || action === "changeFilament"
+        || action === "excludeObject" || action === "unexcludeObject") {
         return NextResponse.json(
           { error: `${cfg.name} bu özelliği desteklemiyor — yazıcının kendi ekranından yapılabilir.` },
           { status: 400 },
@@ -143,6 +148,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         return NextResponse.json({ error: `${cfg.name} filament değişimini desteklemiyor.` }, { status: 400 });
       }
       await moonrakerChangeFilament(cfg.host, cfg.port);
+      bumpMoonrakerStatus(cfg.host, cfg.port);
+      return NextResponse.json({ ok: true });
+    }
+
+    /**
+     * PARÇA İPTALİ. Ad istemciden gelir ama SUNUCU da doğrular: `moonrakerExcludeObject`
+     * göndermeden önce adı yazıcının canlı listesinde arar, gönderdikten sonra gerçekten
+     * hariç tutulduğunu teyit eder. Klipper uydurma adı hatasız kabul ettiği için bu şart.
+     */
+    if (action === "excludeObject" || action === "unexcludeObject") {
+      const ad = (body.objectName ?? "").trim();
+      if (!ad) return NextResponse.json({ error: "Parça seçilmedi." }, { status: 400 });
+      if (action === "excludeObject") await moonrakerExcludeObject(cfg.host, cfg.port, ad);
+      else await moonrakerUnexcludeObject(cfg.host, cfg.port, ad);
       bumpMoonrakerStatus(cfg.host, cfg.port);
       return NextResponse.json({ ok: true });
     }
