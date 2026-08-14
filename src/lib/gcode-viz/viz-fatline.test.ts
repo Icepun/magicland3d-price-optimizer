@@ -94,9 +94,21 @@ describe("kalın gövde çizgisi", () => {
     viz.dispose();
   });
 
-  it("KART kipinde kalın nesne kurulmaz (küçük resim ince yoldan üretilir)", () => {
+  /**
+   * KART kipi de kalın gövdeyi KULLANIR. Eskiden kapalıydı ve kart küçük resimleri düz,
+   * ışıksız çizgi yumağı olarak üretiliyordu — kullanıcı "slicerdaki gibi görünmüyorlar"
+   * dedi. Küçük resim bir kez üretilip önbelleğe yazılıyor, yani kalite hızdan önemli.
+   */
+  it("KART kipinde de kalın gövde kurulur (küçük resimler de ışıklı çıksın)", () => {
     const viz = buildVizScene(ornek(), { mode: "card" });
-    expect(kalinNesne(viz.scene as never)).toBeNull();
+    expect(kalinNesne(viz.scene as never)).not.toBeNull();
+    viz.dispose();
+  });
+
+  it("HAYALET yalnız izleyicide — kart küçük resminde basılmamış kısım gösterilmez", () => {
+    const viz = buildVizScene(ornek(), { mode: "card" });
+    const hepsi = (viz.scene.children as { children?: unknown[] }[]).flatMap((o) => (o.children ?? []) as { material?: { vertexColors?: boolean }; type?: string }[]);
+    expect(hepsi.some((o) => o.type === "LineSegments" && o.material?.vertexColors === false)).toBe(false);
     viz.dispose();
   });
 

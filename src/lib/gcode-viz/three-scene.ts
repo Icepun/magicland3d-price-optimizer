@@ -16,6 +16,7 @@ import * as THREE from "three";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { tupGibiIsiklandir } from "./tube-shading";
 import type { ParsedGcode } from "./viz-pack";
 import {
   FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SUPPORT, FEATURE_OTHER,
@@ -291,6 +292,7 @@ function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array): GovdeKatmani |
     vertexColors: true,
     dashed: false,
   });
+  tupGibiIsiklandir(materyal);
   const nesne = new LineSegments2(geometri, materyal);
   nesne.computeLineDistances();
   return { nesne, materyal, geometri, katmanSonu, toplam: govdeSayisi };
@@ -365,7 +367,7 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
    * yalnız RGB taşır, alfa taşımaz — dolgu/destek/etek görünürlüğü alfayla yönetildiği için
    * onlar eski ince nesnede kalır (alphaTest yolu aynen çalışır, derinlik sorunu doğmaz).
    */
-  const govde = options.mode === "card" ? null : buildGovdeLines(g, colorBytes);
+  const govde = buildGovdeLines(g, colorBytes);
 
   const { minZ } = g.bounds;
   const rb = bodyXYBounds(g);
@@ -517,6 +519,8 @@ export function renderThumbnail(g: ParsedGcode, size = 512, palette?: VizPalette
   const viz = buildVizScene(g, { background: null, mode: "card", palette });
   viz.camera.aspect = 1;
   viz.camera.updateProjectionMatrix();
+  // Kalın çizgi kalınlığı çözünürlükle hesaplanır — küçük resimde de ayarlanmalı.
+  viz.setResolution(size, size);
   try {
     viz.setLayer(-1);
     renderer.render(viz.scene, viz.camera);
@@ -542,6 +546,7 @@ export async function renderBuildFrames(
   const viz = buildVizScene(g, { background: null, mode: "card", palette });
   viz.camera.aspect = 1;
   viz.camera.updateProjectionMatrix();
+  viz.setResolution(size, size); // kalın çizgi kalınlığı çözünürlükten hesaplanır
   try {
     const layers = Math.max(1, viz.layerCount);
     for (let k = 1; k <= frameCount; k++) {

@@ -14,7 +14,10 @@ const DB_NAME = "mlhub-gcode-viz";
 // v4: renk kuralı değişti — mutlak parlaklık tabanı yerine zemine karşı KONTRAST kapısı geldi
 // (kırmızı artık pembeye kaymıyor). Kayıtlı kareler ve küçük resimler PİŞMİŞ PİKSEL olduğu için
 // eski renkleri taşırlar; sürüm artmazsa kullanıcı düzelmeyi kartlarda GÖREMEZ.
-const DB_VER = 4;
+// v5: gövde artık IŞIKLANDIRILMIŞ tüp olarak çiziliyor (tube-shading) ve kart küçük resimleri
+// de kalın gövdeyi kullanıyor. Kayıtlı kareler/küçük resimler pişmiş piksel — sürüm artmazsa
+// kullanıcı yeni görünümü kartlarda GÖREMEZ.
+const DB_VER = 5;
 const GEOM = "geom";
 const SPRITES = "sprites";
 const MAX_GEOM = 16; // LRU üst sınırları (disk şişmesin)
