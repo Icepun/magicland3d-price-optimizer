@@ -11,6 +11,7 @@
  * Yalnızca Turso modunda anlamlıdır; Turso yoksa snapshot/komut tabloları yine çalışır
  * ama uzaktan erişim olmaz (sorun değil).
  */
+import { processSingleton } from "./process-singleton";
 import fs from "node:fs";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -50,21 +51,21 @@ const COMMAND_TTL_MS = 10 * 60_000;
 const START_TTL_MS = 3 * 60_000;
 /** Bu oturumda ZATEN yürütülen komutlar — durum-yazması (done/error) buluta gidemese bile aynı
  *  komut bir sonraki tick'te YENİDEN yürütülmez (çift baskı başlatma koruması). */
-const processedCmdIds = new Set<string>();
-let started = false;
-let capsWritten = false; // relay yetenek bildirimi (AppSetting) bir kez yazılır
-let ticking = false; // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
-let commandsRunning = false; // komut koşucusu guard'ı — tick'ten ayrık, tek koşucu
-let tickCount = 0; // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
-const lastKey = new Map<string, string>();
-const lastWriteAt = new Map<string, number>(); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
-const lastImage = new Map<string, string | null>(); // buluta EN SON yazılan görsel (aynıysa tekrar gönderilmez)
-const lastStatus = new Map<string, string>(); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
+const processedCmdIds = processSingleton("relay_processedCmdIds", () => new Set<string>());
+const startedKutu = processSingleton("relay_started", () => ({ v: false }));
+const capsWrittenKutu = processSingleton("relay_capsWritten", () => ({ v: false })); // relay yetenek bildirimi (AppSetting) bir kez yazılır
+const tickingKutu = processSingleton("relay_ticking", () => ({ v: false })); // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
+const commandsRunningKutu = processSingleton("relay_commandsRunning", () => ({ v: false })); // komut koşucusu guard'ı — tick'ten ayrık, tek koşucu
+const tickCountKutu = processSingleton("relay_tickCount", () => ({ v: 0 })); // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
+const lastKey = processSingleton("relay_lastKey", () => new Map<string, string>());
+const lastWriteAt = processSingleton("relay_lastWriteAt", () => new Map<string, number>()); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
+const lastImage = processSingleton("relay_lastImage", () => new Map<string, string | null>()); // buluta EN SON yazılan görsel (aynıysa tekrar gönderilmez)
+const lastStatus = processSingleton("relay_lastStatus", () => new Map<string, string>()); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
 // Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
 // snapshot'lar arasında uzantılı/uzantısız değişince sahte ikinci "finished" geçişi görülebiliyor).
-const lastDoneNotify = new Map<string, { key: string; at: number }>();
+const lastDoneNotify = processSingleton("relay_lastDoneNotify", () => new Map<string, { key: string; at: number }>());
 /** Hata/duraklama bildirimi için aynı mükerrer-koruma (yazıcı → son bildirilen durum+dosya). */
-const lastFaultNotify = new Map<string, { key: string; at: number }>();
+const lastFaultNotify = processSingleton("relay_lastFaultNotify", () => new Map<string, { key: string; at: number }>());
 
 /**
  * Baskı bildirimi hafızası KALICI tutulur (AppSetting).
@@ -144,8 +145,8 @@ async function saveNotifyState(): Promise<void> {
 }
 
 export function startPrinterRelay() {
-  if (started) return;
-  started = true;
+  if (startedKutu.v) return;
+  startedKutu.v = true;
   setTimeout(() => { void tick(); }, 5000);
   setInterval(() => { void tick(); }, TICK_MS);
 }
@@ -415,23 +416,23 @@ async function tick(): Promise<void> {
   // main.js powerMonitor bu globalThis flag'ini set eder. Aksi halde libSQL embedded-replica'nın
   // native ağ op'u ölü bağlantıda (timeout YOK) asılıp ana event-loop'u DONDURUYOR.
   if ((globalThis as { __MLHUB_DB_PAUSED__?: boolean }).__MLHUB_DB_PAUSED__) return;
-  if (ticking) return; // önceki tick hâlâ sürüyorsa atla — yavaş/çevrimdışı yazıcıda tick'ler üst üste binip birikmesin
-  ticking = true;
+  if (tickingKutu.v) return; // önceki tick hâlâ sürüyorsa atla — yavaş/çevrimdışı yazıcıda tick'ler üst üste binip birikmesin
+  tickingKutu.v = true;
   try {
     await ensureRuntimeSchema();
     // Kapalıyken biten/hataya düşen baskıyı yakalayabilmek için önceki oturumun durumu.
     await loadNotifyState();
-    tickCount++;
+    tickCountKutu.v++;
     // İlk-tick yan işleri (caps yazımı + depo hademesi) 3. tick'e (~t+25sn) ertelendi:
     // açılışın ilk saniyelerinde bulut yazması/R2 listelemesi ilk ekran sorgularıyla yarışmasın.
-    if (!capsWritten && tickCount >= 3) {
+    if (!capsWrittenKutu.v && tickCountKutu.v >= 3) {
       try {
         await remotePrisma.appSetting.upsert({
           where: { key: "printRelayCaps" },
           create: { key: "printRelayCaps", value: "r2start,heartbeat,cmdttl" },
           update: { value: "r2start,heartbeat,cmdttl" },
         });
-        capsWritten = true;
+        capsWrittenKutu.v = true;
       } catch { /* sonraki tick dener */ }
       // Depo hademesi — oturumda bir kez, arka planda (temp artıkları + R2 orphan'ları).
       void runStorageJanitor().catch(() => {});
@@ -522,14 +523,14 @@ async function tick(): Promise<void> {
     // 2) Bekleyen komutlar — tick'ten AYRIK (fire-and-forget + kendi guard'ı). Uzun bir komut
     // (R2 indirme + 180sn'lik yazıcıya upload) eskiden ticking=true'yu tutup snapshot/heartbeat'i
     // durduruyordu → telefon KENDİ komutu işlenirken "masaüstü kapalı" alarmı veriyordu.
-    if (!commandsRunning) {
-      commandsRunning = true;
+    if (!commandsRunningKutu.v) {
+      commandsRunningKutu.v = true;
       void processPendingCommands(configs)
         .catch(() => { /* komut döngüsü kendi hatasını komuta yazar */ })
-        .finally(() => { commandsRunning = false; });
+        .finally(() => { commandsRunningKutu.v = false; });
     }
   } finally {
-    ticking = false;
+    tickingKutu.v = false;
   }
 }
 

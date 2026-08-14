@@ -17,6 +17,7 @@
  * bazında önbelleğe alınır (sonraki isteklerde doğrudan kullanılır).
  */
 
+import { processSingleton } from "./process-singleton";
 import http from "node:http";
 import crypto from "node:crypto";
 import { pickProgress, type ProgressSource } from "./eta";
@@ -113,7 +114,7 @@ const QUERY =
   "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&exclude_object=current_object,excluded_objects";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
-const portCache = new Map<string, number>();
+const portCache = processSingleton("mr_portCache", () => new Map<string, number>());
 
 function candidatePorts(configured: number): number[] {
   return [...new Set([configured, 80, 7125].filter((p) => Number.isFinite(p) && p > 0))];
@@ -150,9 +151,9 @@ async function mfetch(url: string, init: RequestInit | undefined, timeoutMs: num
 //   • tarama da başarısızsa kısa süre (30sn) tekrar taranmaz — kapalı yazıcı paneli yavaşlatmaz,
 //   • kayıtlı portla üst üste birkaç istek düşerse port unutulur → sonraki istek yeniden keşfeder
 //     (yazıcının adresi/portu gerçekten değiştiyse uygulama kendini onarır).
-const portProbes = new Map<string, Promise<number | null>>();
-const portProbeCooldown = new Map<string, number>();
-const portFails = new Map<string, number>();
+const portProbes = processSingleton("mr_portProbes", () => new Map<string, Promise<number | null>>());
+const portProbeCooldown = processSingleton("mr_portProbeCooldown", () => new Map<string, number>());
+const portFails = processSingleton("mr_portFails", () => new Map<string, number>());
 
 const PORT_PROBE_TIMEOUT_MS = 1_500;
 const PORT_PROBE_COOLDOWN_MS = 30_000;
@@ -169,10 +170,10 @@ const PORT_FAILS_BEFORE_REDISCOVER = 3;
  * Ölçüldü (13 Ağu): port 80 → 30/30 başarı · port 7125 → Elegoo'larda 0/10 (bağlantı
  * reddedildi), Snapmaker'da 6/10 ve 3 saniyeye kadar gecikme.
  */
-const lastGoodPort = new Map<string, number>();
+const lastGoodPort = processSingleton("mr_lastGoodPort", () => new Map<string, number>());
 
 /** Kalıcı yazma denemesi bir kez yapılır; her keşifte veritabanına gitmeyelim. */
-const portPersisted = new Set<string>();
+const portPersisted = processSingleton("mr_portPersisted", () => new Set<string>());
 
 /**
  * Keşfedilen portu YAPILANDIRMAYA yaz — yapılandırma bir kez kendini onarsın.
@@ -1478,7 +1479,7 @@ const NO_CAPS: MoonrakerCaps = {
   filamentChange: false, defectDetection: false, speed: false, discovered: false,
 };
 
-const capsCache = new Map<string, { at: number; caps: MoonrakerCaps }>();
+const capsCache = processSingleton("mr_capsCache", () => new Map<string, { at: number; caps: MoonrakerCaps }>());
 /** Yetenekler firmware güncellemesi dışında değişmez → uzun önbellek (her kart açılışında sorma). */
 const CAPS_TTL_MS = 15 * 60_000;
 
@@ -1617,7 +1618,7 @@ export interface MoonrakerLightState {
  * kendi ayarından farklı bırakıyor ve yazıcı ekranından düzeltilene kadar öyle kalıyordu.
  * Işık AÇIKKEN görülen profil hatırlanır, tekrar açarken aynısı sürülür.
  */
-const ledOnProfile = new Map<string, number[]>();
+const ledOnProfile = processSingleton("mr_ledOnProfile", () => new Map<string, number[]>());
 
 function rememberLedProfile(host: string, led: string, data: unknown): void {
   if (!Array.isArray(data)) return;
@@ -1915,7 +1916,7 @@ export function emptyMoonrakerExtras(): MoonrakerExtras {
 }
 
 /** Bilinmeyen uyarı şeması gördüğümüzde BİR KEZ log'a düş — sonraki turda eşlemek için. */
-const loggedUnknownAlert = new Set<string>();
+const loggedUnknownAlert = processSingleton("mr_loggedUnknownAlert", () => new Set<string>());
 
 export async function fetchMoonrakerExtras(host: string, port: number): Promise<MoonrakerExtras> {
   const out = emptyMoonrakerExtras();

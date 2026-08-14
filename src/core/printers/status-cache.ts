@@ -14,6 +14,7 @@
  *   4) KONTROL KOMUTU SONRASI (MADDE 6): ilgili yazıcının önbelleği geçersiz kılınır ve kısa süre
  *      (10sn) daha sık yoklanır — kart eski duruma geri zıplamaz.
  */
+import { processSingleton } from "./process-singleton";
 import {
   fetchMoonrakerStatus, fetchMoonrakerMeta, moonrakerThumbUrl,
   fetchMoonrakerExtras, emptyMoonrakerExtras,
@@ -33,10 +34,10 @@ const BOOST_WINDOW_MS = 10_000;
 const BOOST_FRESH_MS = 700;
 
 interface Entry<T> { at: number; value: T; offline: boolean; suspect: boolean; fails: number }
-const statusCache = new Map<string, Entry<unknown>>();
-const inflight = new Map<string, Promise<unknown>>();
+const statusCache = processSingleton("sc_statusCache", () => new Map<string, Entry<unknown>>());
+const inflight = processSingleton("sc_inflight", () => new Map<string, Promise<unknown>>());
 /** Anahtar → hızlı-yoklama penceresinin bitiş zamanı. */
-const boostUntil = new Map<string, number>();
+const boostUntil = processSingleton("sc_boostUntil", () => new Map<string, number>());
 
 function moonrakerKey(host: string, port: number): string {
   return `m|${host}:${port}`;
@@ -152,8 +153,8 @@ export function resetPrinterStatusCache(): void {
 // Saniyede değişmeyen değerler; panel 5sn'de bir sorsa bile LAN'a 15sn'de bir gider.
 // Kontrol komutu sonrası (bumpPrinterStatus) sıfırlanır → ışık düğmesi anında doğru görünür.
 const EXTRAS_TTL_MS = 15_000;
-const extrasCache = new Map<string, { at: number; value: MoonrakerExtras }>();
-const extrasInflight = new Map<string, Promise<MoonrakerExtras>>();
+const extrasCache = processSingleton("sc_extrasCache", () => new Map<string, { at: number; value: MoonrakerExtras }>());
+const extrasInflight = processSingleton("sc_extrasInflight", () => new Map<string, Promise<MoonrakerExtras>>());
 
 export async function getMoonrakerExtrasCached(host: string, port: number): Promise<MoonrakerExtras> {
   const k = moonrakerKey(host, port);
@@ -182,8 +183,8 @@ export async function getMoonrakerExtrasCached(host: string, port: number): Prom
 
 /** Bambu AMS slotları — renk sık değişmez, dakikada bir yeter (MADDE 12). */
 const BAMBU_SLOTS_TTL_MS = 60_000;
-const bambuSlotsCache = new Map<string, { at: number; value: BambuSlot[] }>();
-const bambuSlotsInflight = new Map<string, Promise<BambuSlot[]>>();
+const bambuSlotsCache = processSingleton("sc_bambuSlotsCache", () => new Map<string, { at: number; value: BambuSlot[] }>());
+const bambuSlotsInflight = processSingleton("sc_bambuSlotsInflight", () => new Map<string, Promise<BambuSlot[]>>());
 
 export async function getBambuSlotsCached(host: string, accessCode: string, serial: string): Promise<BambuSlot[]> {
   const k = bambuKey(host, serial);
@@ -209,8 +210,8 @@ export async function getBambuSlotsCached(host: string, accessCode: string, seri
 
 // ── Moonraker dosya metası — dosya başına DEĞİŞMEZ, süresiz önbellek ─────────────────────────
 // Panel (5sn) + relay (10sn) baskı boyunca aynı filename için aynı HTTP çağrısını tekrarlıyordu.
-const metaCache = new Map<string, MoonrakerMeta>();
-const metaInflight = new Map<string, Promise<MoonrakerMeta | null>>();
+const metaCache = processSingleton("sc_metaCache", () => new Map<string, MoonrakerMeta>());
+const metaInflight = processSingleton("sc_metaInflight", () => new Map<string, Promise<MoonrakerMeta | null>>());
 
 export async function getMoonrakerMetaCached(host: string, port: number, filename: string): Promise<MoonrakerMeta | null> {
   const k = `${host}|${filename}`;
@@ -239,7 +240,7 @@ export async function getMoonrakerMetaCached(host: string, port: number, filenam
 // ── Moonraker thumbnail → data-URL (mobil snapshot için) ────────────────────────────────────
 // Snapshot'a yazıcının LAN IP'sine işaret eden URL yazılıyordu → telefon LAN dışındayken görsel
 // KIRIK. Küçük thumbnail bir kez indirilip data-URL olarak gömülür (dosya başına önbellekli).
-const thumbCache = new Map<string, string>();
+const thumbCache = processSingleton("sc_thumbCache", () => new Map<string, string>());
 
 /**
  * Snapshot satırına gömülecek görselin ÜST SINIRI (bayt).

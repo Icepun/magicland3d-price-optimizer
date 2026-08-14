@@ -6,7 +6,15 @@
  * upload + çift start yarışı. Başlatma akışının tamamı (upload + start + doğrulama) kilit
  * altında koşar; ikinci istek net "meşgul" hatası alır.
  */
-const active = new Set<string>();
+import { processSingleton } from "./process-singleton";
+
+/**
+ * Kilit kümesi SÜREÇ GENELİNDE tek (`globalThis`). Modül kapsamında tutulunca kilit tam da
+ * yukarıda sayılan "masaüstü + telefon relay komutu" durumunda ÇALIŞMIYORDU: relay ile API
+ * rotaları ayrı paketlere derleniyor, her paket kendi kümesini taşıyordu ve iki taraf
+ * birbirinin kilidini göremiyordu. Ayrıntı: `process-singleton.ts`.
+ */
+const active = processSingleton("printLock", () => new Set<string>());
 
 /** Kilidi almayı dene — alınamazsa false (çağıran "meşgul" hatası üretir). */
 export function tryAcquirePrintLock(printerConfigId: string): boolean {

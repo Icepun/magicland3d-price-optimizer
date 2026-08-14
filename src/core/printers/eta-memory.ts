@@ -7,6 +7,7 @@
  * Hafıza DOSYAYA bağlıdır: yazıcı başka bir dosyaya geçtiğinde (ya da aynı dosya yeniden
  * başlatıldığında ilerleme geri düştüğünde) eski hız taşınmaz.
  */
+import { processSingleton } from "./process-singleton";
 
 interface Kayit {
   dosya: string;
@@ -14,7 +15,9 @@ interface Kayit {
   totalSec: number;
 }
 
-const hafiza = new Map<string, Kayit>();
+// Süreç geneli tek örnek: relay ile API rotaları ayrı paketlere derleniyor; modül kapsamında
+// tutulsaydı iki ayrı hafıza oluşur ve donmuş hız yalnız bir tarafta bilinirdi.
+const hafiza = processSingleton("eta_hafiza", () => new Map<string, Kayit>());
 
 /** Bu yazıcı+dosya için saklanan hız. Eşleşme yoksa null (ilk hesap normal yoldan yapılır). */
 export function etaHafizasiOku(

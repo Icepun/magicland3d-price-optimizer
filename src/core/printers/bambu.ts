@@ -18,6 +18,7 @@
  */
 import mqtt, { type MqttClient } from "mqtt";
 import * as tls from "node:tls";
+import { processSingleton } from "./process-singleton";
 import * as net from "node:net";
 import crypto from "node:crypto";
 
@@ -102,7 +103,13 @@ interface Conn {
   lastPushallAt: number; // pushall istek sıklığı sınırı (A1 donanımı sık pushall sevmez)
 }
 
-const conns = new Map<string, Conn>();
+/**
+ * Bağlantı havuzu SÜREÇ GENELİNDE tektir (`globalThis`) — modül kapsamında DEĞİL.
+ * Sebebi ve ölçümü: `process-singleton.ts`. Kısaca: bu dosya iki ayrı pakete kopyalanıyordu,
+ * her kopya kendi havuzunu açıyordu ve yazıcıya iki MQTT istemcisi bağlanıyordu; Bambu yalnız
+ * son bağlanana veri gönderdiği için iki kopya birbirini susturup sonsuz gel-git yaratıyordu.
+ */
+const conns = processSingleton("bambuConns", () => new Map<string, Conn>());
 // accessCode anahtarın PARÇASI: kod değişince eski bağlantı (bayat şifreyle sonsuz reconnect
 // deneyen) kapatılıp yenisi kurulur. Eski davranış: yanlış/eski kod uygulama yeniden
 // başlatılana dek geçerli kalıyordu.
