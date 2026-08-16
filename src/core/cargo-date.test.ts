@@ -122,3 +122,44 @@ describe("sipariş kârı siparişin tarihindeki tarifeyi kullanır", () => {
     expect(sonuc.profit).not.toBeNull();
   });
 });
+
+/**
+ * BAREM DESİSİ YUVARLANIR — kesirli toplam barem boşluğuna düşmesin.
+ *
+ * Kullanıcı küçük ürünlere 0,1 desi giriyor (toplu siparişte desi şişmesin diye). Bu, sipariş
+ * toplamının kesirli çıkmasına yol açıyor: 41 anahtarlık = 4,1 desi. Shopify baremleri
+ * 0-4 / 5-10 diye tanımlı olduğu için 4,1 HİÇBİR barem'e uymuyor ve kargo sessizce 0 sayılıyordu.
+ * Kural (kullanıcı): en yakına yuvarla — 4,1 → 4, 4,5 → 5.
+ */
+describe("barem desisi yuvarlama", () => {
+  const SHOPIFY = [
+    { id: "s1", name: "0-4", platform: "shopify", cargoProvider: null, categoryName: null,
+      minPrice: 0, maxPrice: 999999, minDesi: 0, maxDesi: 4, cargoCost: 115,
+      vatIncluded: true, validFrom: null, validTo: null, priority: 10, isActive: true },
+    { id: "s2", name: "5-10", platform: "shopify", cargoProvider: null, categoryName: null,
+      minPrice: 0, maxPrice: 999999, minDesi: 5, maxDesi: 10, cargoCost: 145,
+      vatIncluded: true, validFrom: null, validTo: null, priority: 10, isActive: true },
+  ];
+  const bul = (desi: number) => findCargoRule(SHOPIFY, 500, "", desi)?.cargoCost ?? null;
+
+  it("YUVARLANMAMIŞ 4,1 hiçbir barem'e uymuyor (hatanın kendisi)", () => {
+    expect(bul(4.1)).toBeNull();
+  });
+
+  it("yuvarlanınca 4,1 → 4 → alt barem", () => {
+    expect(bul(Math.max(1, Math.round(4.1)))).toBe(115);
+  });
+
+  it("4,5 → 5 → üst barem", () => {
+    expect(bul(Math.max(1, Math.round(4.5)))).toBe(145);
+  });
+
+  it("tek 0,1 desilik ürün en az 1 sayılır — kargo bedava değildir", () => {
+    expect(Math.max(1, Math.round(0.1))).toBe(1);
+    expect(bul(Math.max(1, Math.round(0.1)))).toBe(115);
+  });
+
+  it("10 anahtarlık (1,0 desi) alt baremde kalır", () => {
+    expect(bul(Math.max(1, Math.round(1.0)))).toBe(115);
+  });
+});

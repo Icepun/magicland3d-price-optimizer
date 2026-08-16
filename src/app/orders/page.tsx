@@ -106,6 +106,10 @@ interface UnifiedOrder {
   cargoRuleMissing?: boolean;
   /** Bu siparişe düşen reklam payı (TL). */
   adCost?: number;
+  /** Siparişe düşen kargo bedeli (TL). */
+  cargoCost?: number;
+  /** Ürün + paketleme maliyeti (TL). */
+  productAndPackagingCost?: number;
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
@@ -365,6 +369,8 @@ function manualOrderRow(saved: ManualOrderSaveResult): UnifiedOrder {
     desiEstimated: false,
     cargoRuleMissing: false,
     adCost: 0,
+    cargoCost: 0,
+    productAndPackagingCost: 0,
     orderRevenueAdjustment: 0,
     trackingNumber: null,
     cargoProvider: null,
@@ -2253,6 +2259,36 @@ const OrderRow = memo(function OrderRow({
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
+                {/* MALİYET KALEMLERİ — "neye ne kadar gidiyor" tek bakışta görünsün.
+                    Kargo eskiden hiçbir yerde yazmıyordu; düşülüp düşülmediği anlaşılmıyordu. */}
+                {!isCancelled && (order.productAndPackagingCost ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Ürün + paketleme</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.productAndPackagingCost ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {!isCancelled && (order.cargoCost ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">
+                      Kargo
+                      {order.desiEstimated && (
+                        <span className="ml-1 text-amber-400/80">tahmini desi</span>
+                      )}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.cargoCost ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {/* Kargo kuralı bulunamadıysa 0 sayıldı — sessiz kalmasın, kâr yüksek görünüyor. */}
+                {!isCancelled && order.cargoRuleMissing && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-amber-400">Kargo</span>
+                    <span className="tabular-nums text-amber-400">kural yok → 0 sayıldı</span>
+                  </div>
+                )}
                 {/* Reklam payı: günlük bütçenin bu siparişin cirosuna düşen kısmı.
                     Bütçe yoksa 0 → satır çıkmaz. */}
                 {!isCancelled && (order.adCost ?? 0) > 0 && (

@@ -96,6 +96,10 @@ export interface OrderProfitResult {
   profit: number | null;
   /** Bu siparişe düşen reklam payı (brüt TL). 0 = reklam bütçesi yok. */
   adCost: number;
+  /** Siparişe düşen kargo bedeli (brüt TL) — dökümde satır olarak gösterilir. */
+  cargoCost: number;
+  /** Ürün + paketleme maliyeti toplamı (brüt TL) — dökümde satır olarak gösterilir. */
+  productAndPackagingCost: number;
   /** Kural/listing üzerinden siparişe düşülen brüt komisyon. */
   estimatedCommission: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
@@ -161,6 +165,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let missingDesiQty = 0;
   let totalDesi = 0;
   let soloCargo: number | null = null;
+  // Sipariş dökümünde gösterilecek kalem toplamı (kâr hesabına EKSTRA girmez — yalnız rapor).
+  let urunVePaketleme = 0;
   // İndirilecek KDV: kâra "+" olarak eklenen KDV paylarının aynısı, ayrıca toplanır.
   let inputVatCredit = 0;
   const matchedCategories = new Set<string>();
@@ -244,6 +250,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     });
     profit += sim.netProfit;
     inputVatCredit += sim.inputVatCredit;
+    // Döküm için: ürün + paketleme maliyeti (sipariş ölçeğinde).
+    urunVePaketleme += sim.productCost + sim.packagingCost;
     estimatedCommission += sim.commissionCost;
     matchedRevenueGross += lineGross;
     commissionRateRevenue +=
@@ -268,6 +276,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     return {
       profit: null,
       adCost: 0,
+      cargoCost: 0,
+      productAndPackagingCost: 0,
       estimatedCommission: 0,
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
@@ -334,6 +344,19 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   profit += sharedPackagingCost * vatFactor;
   inputVatCredit += sharedPackagingCost * vatFactor;
 
+  /**
+   * BAREM DESİSİ — barem araması TAM SAYIYA yuvarlanmış desiyle yapılır (4,1 → 4; 4,5 → 5).
+   *
+   * NEDEN (kullanıcı kararı): küçük ürünlere 0,1 gibi kesirli desi giriliyor ki toplu siparişte
+   * desi şişmesin. Ama bu, toplamın kesirli çıkmasına yol açıyor: 41 anahtarlık = 4,1 desi.
+   * Shopify baremleri 0-4 / 5-10 diye tanımlı, yani 4,1 HİÇBİR barem'e uymuyordu → kargo
+   * sessizce 0 sayılırdı. Yuvarlama bu boşluğu tamamen kapatır.
+   *
+   * Yuvarlama YUKARI değil, en yakına: kullanıcı "4,1 ise 4, 4,5 ise 5" dedi.
+   * Sonuç 0'a düşerse (tek 0,1 desilik ürün) en az 1 sayılır — kargo bedava değildir.
+   */
+  const baremDesi = Math.max(1, Math.round(totalDesi));
+
   // KARGO — siparişe BİR KEZ. Tek ürünlü ve eksiksiz siparişte listing'e ELLE girilen bedel kazanır
   // (Ürünler ekranı da onu kullanıyor → iki ekran aynı rakamı gösterir).
   const canUseSoloCargo =
@@ -345,7 +368,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     ? null
     : categories
         .map((categoryName) =>
-          findCargoRule(platCargo, orderTotal, categoryName, totalDesi || 1, kuralTarihi)
+          findCargoRule(platCargo, orderTotal, categoryName, baremDesi, kuralTarihi)
         )
         .filter((rule): rule is CargoRuleInput => rule != null)
         .reduce<CargoRuleInput | null>((selected, rule) => {
@@ -418,6 +441,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   return {
     profit,
     adCost,
+    cargoCost: cargo.gross,
+    productAndPackagingCost: urunVePaketleme + sharedPackagingCost,
     estimatedCommission,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo

@@ -69,6 +69,39 @@ export function AdBudgetCard() {
   const [tutar, setTutar] = useState("");
   const [baslangic, setBaslangic] = useState(bugunInput);
 
+  /** Mevcut dönemi YERİNDE düzelt — "yanlış girdim" durumu. Geçmişe de işler. */
+  const duzelt = useMutation({
+    mutationFn: ({ id }: { id: string }) =>
+      fetchJson(`/api/ad-budgets/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dailyAmount: Number(tutar.replace(",", ".")) || 0,
+          startsAt: `${baslangic}T00:00:00.000+03:00`,
+        }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
+      clearPricingQueryCache(queryClient);
+      toast.success("Reklam bütçesi güncellendi");
+      setAcikPlatform(null);
+      setTutar("");
+    },
+    onError: (e: Error) => toast.error(e.message || "Güncellenemedi"),
+  });
+
+  const kaldir = useMutation({
+    mutationFn: (id: string) => fetchJson(`/api/ad-budgets/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
+      clearPricingQueryCache(queryClient);
+      toast.success("Reklam bütçesi kaldırıldı");
+      setAcikPlatform(null);
+      setTutar("");
+    },
+    onError: (e: Error) => toast.error(e.message || "Kaldırılamadı"),
+  });
+
   const kaydet = useMutation({
     mutationFn: (platform: string) =>
       fetchJson("/api/ad-budgets", {
@@ -155,6 +188,10 @@ export function AdBudgetCard() {
                       onClick={() => {
                         setAcikPlatform(acik ? null : p.id);
                         setTutar(b ? String(b.dailyAmount) : "");
+                        // Mevcut dönemin tarihi forma gelsin — kullanıcı onu düzeltmek istiyor.
+                        if (b?.validFrom) {
+                          setBaslangic(new Date(b.validFrom).toISOString().slice(0, 10));
+                        }
                       }}
                     >
                       {acik ? "Vazgeç" : b ? "Değiştir" : "Bütçe gir"}
@@ -191,19 +228,52 @@ export function AdBudgetCard() {
                         </div>
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
-                        Bu tarihten sonraki siparişlerin kârı reklam payını içerir. Önceki
-                        dönem silinmez; o tarihe kadarki siparişler eski bütçeyle hesaplanmaya
-                        devam eder.
+                        {b
+                          ? "Düzelt: mevcut dönemi değiştirir, geçmiş siparişler de yeni tutara göre hesaplanır. Yeni dönem: bu tarihe kadarki siparişler eski bütçeyle kalır."
+                          : "Bu tarihten sonraki siparişlerin kârı reklam payını içerir."}
                       </p>
-                      <div className="flex justify-end mt-2">
-                        <Button
-                          size="sm"
-                          className="h-7 text-xs"
-                          disabled={kaydet.isPending || tutar.trim() === ""}
-                          onClick={() => kaydet.mutate(p.id)}
-                        >
-                          {kaydet.isPending ? "Kaydediliyor…" : "Kaydet"}
-                        </Button>
+                      <div className="flex items-center gap-1.5 mt-2">
+                        {b && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs text-destructive/80 hover:text-destructive mr-auto"
+                            disabled={kaldir.isPending}
+                            onClick={() => kaldir.mutate(b.id)}
+                          >
+                            {kaldir.isPending ? "Kaldırılıyor…" : "Kaldır"}
+                          </Button>
+                        )}
+                        {b ? (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              disabled={duzelt.isPending || tutar.trim() === ""}
+                              onClick={() => duzelt.mutate({ id: b.id })}
+                            >
+                              {duzelt.isPending ? "…" : "Düzelt"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs"
+                              disabled={kaydet.isPending || tutar.trim() === ""}
+                              onClick={() => kaydet.mutate(p.id)}
+                            >
+                              {kaydet.isPending ? "…" : "Yeni dönem başlat"}
+                            </Button>
+                          </>
+                        ) : (
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs ml-auto"
+                            disabled={kaydet.isPending || tutar.trim() === ""}
+                            onClick={() => kaydet.mutate(p.id)}
+                          >
+                            {kaydet.isPending ? "Kaydediliyor…" : "Kaydet"}
+                          </Button>
+                        )}
                       </div>
                     </div>
                   )}
