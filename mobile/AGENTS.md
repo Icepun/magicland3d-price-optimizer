@@ -42,3 +42,18 @@ Sonrasında CI işi yeniden çalıştırılır.
 iş akışı `--no-wait` ile kuyruğa atıp çıktığı için **EAS derlemesi düşse bile CI yeşildi**;
 hata ancak `--no-wait` kaldırılınca (10 Ağu 2026) görünür oldu. CI'nin yeşil olması, iOS
 derlemesinin gerçekten başarılı olduğu anlamına GELMİYORDU.
+
+# Yayın öncesi TÜM platformları derle (`npm run check-bundle`)
+
+`eas update` çıktıyı **platform=all** ile üretir; buna web de dahildir ve expo-router web
+çıktısını Node içinde çalıştırır (statik render). `expo export --platform ios` yeşil olsa
+bile web adımı düşerse **yayın tamamen düşer**.
+
+⚠️ Yaşandı: `offline-cache.ts` modül düzeyinde `new File(Paths.cache, …)` kuruyordu.
+iOS derlemesi sorunsuzdu; `eas update` ise `TypeError: this.validatePath is not a function`
+ile düştü, çünkü `expo-file-system`'in web karşılığı yapıcıda patlıyor.
+
+Kural: cihaz API'lerini modül yüklenirken DEĞİL, ilk kullanımda kur; web'de kısa devre yap
+(`Platform.OS === "web"`). Yayından önce:
+
+    cd mobile && npm run check-bundle

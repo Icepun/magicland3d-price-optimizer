@@ -1,5 +1,6 @@
 import { dehydrate, hydrate, type QueryClient } from "@tanstack/react-query";
 import { File, Paths } from "expo-file-system";
+import { Platform } from "react-native";
 
 import {
   ONBELLEK_BICIMI,
@@ -28,7 +29,21 @@ import {
 /** Diske yazma sıklığı: her sorgu değişiminde yazmak ana iş parçacığını meşgul eder. */
 const YAZMA_ARALIGI_MS = 4_000;
 
-const DOSYA = new File(Paths.cache, "mlhub-query-cache.json");
+/**
+ * Dosya nesnesi TEMBEL kurulur (modül yüklenirken DEĞİL).
+ *
+ * ⚠️ Modül düzeyinde `new File(...)` yazmak `eas update`'i düşürüyordu: yayın adımı web
+ * çıktısını da üretiyor ve expo-router'ı Node içinde çalıştırıyor; orada `expo-file-system`'in
+ * web karşılığı yapıcıda patlıyor ("validatePath is not a function"). iOS derlemesi sorunsuz
+ * geçtiği için hata ancak yayın anında görülüyordu. Tembel kurulum + web kısa devresi ikisini
+ * de kapatıyor: telefon dosyayı ilk kullanımda açar, web hiç açmaz.
+ */
+let dosya: File | null = null;
+function onbellekDosyasi(): File | null {
+  if (Platform.OS === "web") return null; // kalıcı önbellek yalnız cihazda
+  if (!dosya) dosya = new File(Paths.cache, "mlhub-query-cache.json");
+  return dosya;
+}
 
 interface KalicilikDosyasi {
   bicim: number;
@@ -41,6 +56,8 @@ interface KalicilikDosyasi {
  * Her hata sessizce yutulur: kalıcı önbellek bir kolaylık, açılışı engellemesi kabul edilemez.
  */
 export function loadOfflineCache(qc: QueryClient): void {
+  const DOSYA = onbellekDosyasi();
+  if (!DOSYA) return;
   try {
     if (!DOSYA.exists) return;
     const ham = DOSYA.textSync();
@@ -62,6 +79,8 @@ export function loadOfflineCache(qc: QueryClient): void {
 
 /** Diske yaz (senkron yazma ~1ms; dosya küçük ve tek seferde değiştirilir). */
 function diskeYaz(qc: QueryClient): void {
+  const DOSYA = onbellekDosyasi();
+  if (!DOSYA) return;
   try {
     const durum = dehydrate(qc, {
       shouldDehydrateQuery: (q) => kaliciSorguMu(q.queryKey) && q.state.status === "success",

@@ -102,6 +102,18 @@ describe("çevrimdışı önbellek kurulumu", () => {
     expect(provider).toContain('AppState.addEventListener("change"');
   });
 
+  /**
+   * ⚠️ SAHADA YAŞANDI: dosya nesnesi modül düzeyinde kuruluyordu ve `eas update` düştü.
+   * Yayın adımı WEB çıktısını da üretiyor, expo-router'ı Node içinde çalıştırıyor; orada
+   * `expo-file-system`'in web karşılığı yapıcıda patlıyor. `expo export --platform ios`
+   * sorunsuz geçtiği için hata ancak yayın anında görüldü.
+   */
+  it("dosya nesnesi TEMBEL kurulur — modül yüklenirken değil", () => {
+    const kaynak = oku("mobile/src/lib/offline-cache.ts");
+    expect(kaynak).not.toMatch(/^(const|let|var)\s+\w+\s*=\s*new File\(/m);
+    expect(kaynak).toContain('Platform.OS === "web"');
+  });
+
   it("bayat veri damgayla gösterilir — sessizce eski rakam gösterilmez", () => {
     const header = oku("mobile/src/components/AppHeader.tsx");
     expect(header).toContain("FreshnessStamp");
