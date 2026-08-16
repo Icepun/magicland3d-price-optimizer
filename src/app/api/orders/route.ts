@@ -25,6 +25,7 @@ import { resolveProductCost } from "@/core/product-cost";
 import { trendyolDateToIso } from "@/core/trendyol-date";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
 import { pushToAllDevices } from "@/lib/push-notify";
@@ -1080,6 +1081,7 @@ async function computeOrdersBodyInner(
   let productSkuIndex: KeyIndex = new Map();
   let anyKeyIndex: KeyIndex = new Map();
   let nameIndex: KeyIndex = new Map();
+  let adSnap: Awaited<ReturnType<typeof adRateSnapshot>> = { at: 0, oranlar: new Map(), butceler: [] };
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
@@ -1191,6 +1193,9 @@ async function computeOrdersBodyInner(
     commissionRules = cRules as CommissionRules;
     cargoRules = kRules as CargoRules;
     expenseRules = eRules as ExpenseRules;
+    // Reklam oranı: BİR KEZ (5dk önbellekli). Sipariş başına çağrılsaydı her sipariş için
+    // ayrı sorgu açılırdı — uzak Turso'da sorgular sıralı, 235 sipariş ~22 saniye ederdi.
+    adSnap = await adRateSnapshot();
     for (const financial of platformFinancials) {
       financialByExternalId.set(financial.externalOrderId, financial);
       const rows = financialByOrderNumber.get(financial.orderNumber) ?? [];
@@ -1417,6 +1422,9 @@ async function computeOrdersBodyInner(
         // Kargo kuralı siparişin KENDİ tarihine göre seçilsin: tarife değişince geçmiş
         // siparişlerin kârı yeni fiyata kaymasın.
         orderedAt: r.date ? new Date(r.date) : null,
+        // Reklam payı: platformun bütçesi, siparişin KENDİ tarihindeki dönemden.
+        adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
+        adVatIncluded: true,
       },
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),

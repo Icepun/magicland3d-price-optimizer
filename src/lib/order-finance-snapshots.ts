@@ -1,3 +1,4 @@
+import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import { prisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
 import {
@@ -1126,6 +1127,9 @@ export async function recalculateFinanceMonths(
 
   // Kurallar ve ayarlar sipariş listesi hattıyla AYNI kaynaktan okunur (aktif olanlar).
   // Sorgular sırayla gider: uzak bağlantıda hepsi zaten süreç genelinde sıralanıyor.
+  // Reklam oranı BİR KEZ okunur (5dk önbellekli) — sipariş başına çağrılsaydı yeniden
+  // hesap turu yüzlerce ek sorgu açardı.
+  const adSnap = await adRateSnapshot();
   const commissionRules = await prisma.commissionRule.findMany({ where: { isActive: true } });
   const cargoRules = await prisma.cargoRule.findMany({ where: { isActive: true } });
   const expenseRules = await prisma.expenseRule.findMany({ where: { isActive: true } });
@@ -1185,6 +1189,9 @@ export async function recalculateFinanceMonths(
           settings,
           // Yeniden hesapta da siparişin kendi tarihi: geçmiş özetler güncel tarifeye kaymasın.
           orderedAt: row.orderedAt ?? null,
+          // Reklam payı — Siparişler ekranıyla AYNI kaynak; yoksa Raporlar farklı kâr gösterirdi.
+          adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
+          adVatIncluded: true,
         },
         {
           statusKind: row.statusKind,

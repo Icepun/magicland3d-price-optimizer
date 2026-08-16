@@ -1,5 +1,6 @@
 "use client";
 
+import { AdBudgetCard } from "./ad-budget-card";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -477,6 +478,9 @@ export default function ExpensesPage() {
           onSec={setKategoriSuzgeci}
         />
       )}
+
+      {/* Reklam bütçesi: gider LİSTESİNE girmez, ürün maliyetine yedirilir. */}
+      <AdBudgetCard />
 
       {query.isLoading ? (
         <div className="grid gap-3">

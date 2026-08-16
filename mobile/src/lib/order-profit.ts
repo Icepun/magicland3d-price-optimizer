@@ -1,3 +1,4 @@
+import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
 
@@ -196,6 +197,15 @@ export function computeOrderProfit(
       // Kargo kuralı siparişin KENDİ tarihine göre — masaüstüyle aynı. Geçilmezse tarife
       // değiştiği anda telefon geçmiş siparişleri yeni fiyatla gösterirdi.
       orderedAt: order.date != null ? new Date(order.date) : null,
+      // Reklam payı — masaüstüyle AYNI çekirdek fonksiyonundan.
+      adRate: reklamOraniIcin(
+        rules.adBudgets ?? [],
+        rules.adRates ?? new Map(),
+        order.platform,
+        order.date != null ? new Date(order.date).getTime() : Date.now(),
+        Date.now()
+      ),
+      adVatIncluded: true,
     },
     {
       forceProfitPartial: !!order.financialPartial,

@@ -266,6 +266,32 @@ model CargoRule {
   isActive      Boolean   @default(true)
 }
 
+/**
+ * REKLAM BÜTÇESİ — platform başına GÜNLÜK reklam harcaması.
+ *
+ * Bu tutar doğrudan bir "birim maliyet" değildir; ciroya ORANLANARAK ürün/sipariş maliyetine
+ * yedirilir (bkz. `core/ad-cost.ts`). Günlük tutarı o günün sipariş sayısına bölmek
+ * KULLANILMAZ: ölçüldüğünde aynı ürün, sakin/yoğun güne göre 15 kat farklı pay taşıyordu.
+ *
+ * Kargo tarifeleri gibi DÖNEMLİDİR: bütçe değişince eski kayıt silinmez, `validTo` ile kapanır.
+ * Sipariş kendi tarihindeki bütçeyi, ürün ekranı bugünkü bütçeyi kullanır.
+ */
+model AdBudget {
+  id          String    @id @default(cuid())
+  /** "trendyol" | "shopify" | "hepsiburada" — reklam bütçesi platform başına ayrı girilir. */
+  platform    String
+  /** Günlük reklam harcaması (TL). */
+  dailyAmount Float
+  /** false ise tutarın üstüne KDV eklenir ve indirilecek KDV olarak ayrılır. */
+  vatIncluded Boolean   @default(true)
+  validFrom   DateTime
+  validTo     DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  @@index([platform, validFrom])
+}
+
 model ExpenseRule {
   id           String  @id @default(cuid())
   name         String

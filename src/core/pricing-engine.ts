@@ -207,13 +207,22 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   const oVariable = variableExpenses * qty;
   const oFilament = (vatableProductCost || 0) * qty; // KDV'li malzeme payı (per-unit × qty)
   const orderRevenueExVat = salePriceExVat * qty;
-  const totalCost = oProduct + oPackaging + oCommission + cargoCost + fixedExpenses + oVariable;
+  /**
+   * REKLAM PAYI — ciroya orantılı (bkz. `core/ad-cost.ts`). Ürün ekranında "bu fiyattan
+   * satarsam reklam bana ne kadara mal oluyor" sorusunun cevabı. Adet başına ciroyla
+   * orantılı olduğu için sipariş toplamı üzerinden alınır.
+   */
+  const adRate = Number.isFinite(input.adRate) ? Math.max(0, input.adRate ?? 0) : 0;
+  // TABAN BRÜT: oran, brüt ciroya (reklam harcaması / brüt ciro) göre kuruluyor — burada da
+  // brüt tutar kullanılmalı, yoksa ürün ekranı sipariş kârından KDV oranı kadar sapardı.
+  const adCost = adRate > 0 ? effectiveSalePrice * qty * adRate : 0;
+  const totalCost = oProduct + oPackaging + oCommission + cargoCost + fixedExpenses + oVariable + adCost;
 
   // İNDİRİLECEK KDV İADESİ: komisyon + kargo + gider + filament malzemesinin İÇİNDEKİ KDV,
   // devlete ödenecek (hesaplanan) KDV'den düşülür → kâra ARTI yansır (KDV mükellefi). vatRate=0 → 0.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
   const inputVatCredit =
-    (oPackaging + oCommission + fixedExpenses + oVariable + oFilament) * vatFactor +
+    (oPackaging + oCommission + fixedExpenses + oVariable + oFilament + adCost) * vatFactor +
     cargoAmounts.inputVat;
 
   // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler + indirilecek KDV iadesi
@@ -232,6 +241,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     commissionCost: oCommission,
     cargoCost,
     fixedExpenses,
+    adCost,
     variableExpenses: oVariable,
     totalCost,
     inputVatCredit,

@@ -83,11 +83,21 @@ export interface OrderProfitInput {
    * Boş bırakılırsa bugüne düşer (eski davranış) — çağıranların hepsi geçmeli.
    */
   orderedAt?: Date | null;
+  /**
+   * Reklam payı oranı (0.1871 = ciro'nun %18,71'i). Çağıran, siparişin platformu ve KENDİ
+   * tarihine göre geçerli reklam bütçesinden hesaplayıp geçer (`core/ad-cost.ts`).
+   * Geçilmezse 0 — reklam bütçesi olmayan dönem/platform etkilenmez.
+   */
+  adRate?: number;
+  /** Reklam tutarı KDV dahil mi (varsayılan: evet). */
+  adVatIncluded?: boolean;
 }
 
 export interface OrderProfitResult {
   /** null = hiçbir satırın maliyeti bilinmiyor → kâr gösterilmemeli. */
   profit: number | null;
+  /** Bu siparişe düşen reklam payı (brüt TL). 0 = reklam bütçesi yok. */
+  adCost: number;
   /** Kural/listing üzerinden siparişe düşülen brüt komisyon. */
   estimatedCommission: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
@@ -259,6 +269,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   if (matchedLines === 0) {
     return {
       profit: null,
+      adCost: 0,
       estimatedCommission: 0,
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
@@ -384,8 +395,29 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   profit += cargo.inputVat;
   inputVatCredit += cargo.inputVat;
 
+  /**
+   * REKLAM PAYI — dönem gideri olan reklam bütçesinin bu siparişe düşen kısmı.
+   *
+   * Ciroya ORANTILI dağıtılır (`core/ad-cost.ts` gerekçeyi anlatıyor: günlük tutarı gün içi
+   * sipariş sayısına bölmek ölçüldüğünde 15 kat dalgalanma üretiyordu).
+   *
+   * ⚠️ TABAN: `matchedRevenueGross` — yani maliyeti BİLİNEN satırların cirosu. Kâr zaten yalnız
+   * o satırlar üzerinden hesaplanıyor; reklam payını tüm ciroya uygulasaydık, kâra hiç girmemiş
+   * bir satırın reklam maliyeti kârdan düşülür ve rakam tutarsız olurdu.
+   *
+   * Oran çağıran tarafından geçilir (platform + siparişin KENDİ tarihi ile seçilmiş bütçeden).
+   * Geçilmezse 0 — reklam bütçesi tanımlanmamış dönemler ve platformlar etkilenmez.
+   */
+  const adRate = Number.isFinite(input.adRate) ? Math.max(0, input.adRate ?? 0) : 0;
+  const adGross = adRate > 0 ? matchedRevenueGross * adRate : 0;
+  const ad = resolveVatableCost(adGross, input.adVatIncluded !== false, vatRate);
+  profit -= ad.gross;
+  profit += ad.inputVat;
+  inputVatCredit += ad.inputVat;
+
   return {
     profit,
+    adCost: ad.gross,
     estimatedCommission,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo

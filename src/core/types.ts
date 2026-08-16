@@ -124,6 +124,11 @@ export interface SimulationInput {
    * sipariş/gönderi paketlemesi, KARGO ve sabit gider tek kez. netProfit = N-adetlik sipariş kârı.
    */
   minOrderQty?: number;
+  /**
+   * Reklam payı oranı (ciroya oran). Ürün ekranı BUGÜNKÜ bütçeden hesaplar; sipariş kârı
+   * siparişin kendi dönemindekini kullanır. Geçilmezse 0 — reklam bütçesi yoksa etki yok.
+   */
+  adRate?: number;
 }
 
 export interface SimulationResult {
@@ -142,6 +147,11 @@ export interface SimulationResult {
   cargoCost: number;
   fixedExpenses: number;
   variableExpenses: number;
+  /**
+   * Bu ürüne düşen REKLAM PAYI (TL). Günlük reklam bütçesinin ciroya oranı kadar
+   * (bkz. `core/ad-cost.ts`). Reklam bütçesi yoksa 0.
+   */
+  adCost: number;
   totalCost: number;
   /**
    * İndirilecek KDV iadesi (TL): komisyon + kargo + gider + filament malzemesinin İÇİNDEKİ,

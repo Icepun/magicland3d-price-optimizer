@@ -63,6 +63,9 @@ let schemaReady: Promise<void> | null = null;
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
+// v45: Reklam bütçesi (`AdBudget`) — platform başına günlük reklam harcaması, dönemli.
+//      Ciroya oranlanarak ürün/sipariş maliyetine yedirilir; günlük tutarı gün içi sipariş
+//      sayısına bölmek 15 kat dalgalanma ürettiği için KULLANILMAZ (ölçüldü).
 // v44: TEX kargo tarifesinin kapanış anı 23:59:59.000 → .999. Eski kapanışla yeni tarifenin
 //      başlangıcı arasında 999 ms'lik kuralsız boşluk vardı; o ana düşen siparişin kargo
 //      maliyeti bulunamıyordu. Veri düzeltmesi: `fixTexSinirBoslugu`.
@@ -71,7 +74,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "44";
+const CURRENT_SCHEMA_VERSION = "45";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -996,6 +999,22 @@ export function ensureRuntimeSchema(): Promise<void> {
     `);
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "RecurringExpense_isActive_idx" ON "RecurringExpense"("isActive")`
+    );
+    // v45: Reklam bütçesi — platform başına günlük tutar, dönemli (kargo tarifeleri gibi).
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "AdBudget" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "dailyAmount" REAL NOT NULL,
+        "vatIncluded" BOOLEAN NOT NULL DEFAULT true,
+        "validFrom" DATETIME NOT NULL,
+        "validTo" DATETIME,
+        "isActive" BOOLEAN NOT NULL DEFAULT true,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "AdBudget_platform_validFrom_idx" ON "AdBudget"("platform", "validFrom")`
     );
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "ExpenseCategory" (
