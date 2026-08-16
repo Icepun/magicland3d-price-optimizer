@@ -3,7 +3,6 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -14,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonForm } from "@/components/ui";
 import { PrimaryButton, ScreenHeader } from "@/components/form";
 import {
   createExpenseRule,
@@ -56,7 +56,7 @@ export default function ExpenseEditScreen() {
         <ScreenHeader title="Gider Düzenle" />
         <View style={styles.center}>
           {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
-            <ActivityIndicator color={ML.accent} size="large" />
+            <SkeletonForm rows={5} />
           ) : (
             <>
               <Text style={styles.message}>

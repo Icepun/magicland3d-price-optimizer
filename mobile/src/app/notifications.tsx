@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { SkeletonList } from "@/components/ui";
 import { FadeInView } from "@/components/fade-in";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
@@ -72,9 +72,7 @@ export default function NotificationsScreen() {
            hata veren yazıcı da orada duruyor olabilir. */
         <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
       ) : isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonList count={5} />
       ) : (
         <FlatList
           data={data?.alerts ?? []}

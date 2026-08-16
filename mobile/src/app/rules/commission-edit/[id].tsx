@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonForm } from "@/components/ui";
 import { DeleteButton, Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
 import {
   createCommissionRule,
@@ -35,7 +36,7 @@ export default function CommissionEditScreen() {
         <ScreenHeader title="Komisyon Düzenle" />
         <View style={styles.center}>
           {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
-            <ActivityIndicator color={ML.accent} size="large" />
+            <SkeletonForm rows={5} />
           ) : (
             <>
               <Text style={styles.message}>

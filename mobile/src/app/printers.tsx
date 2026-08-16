@@ -3,9 +3,10 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
   getPrinterSnapshots,
@@ -181,7 +182,7 @@ export default function PrintersScreen() {
       ) : null}
 
       {isLoading ? (
-        <View style={styles.center}><ActivityIndicator color={ML.accent} /></View>
+        <SkeletonList count={3} height={120} />
       ) : snapshots.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emptyTitle}>Henüz veri yok</Text>

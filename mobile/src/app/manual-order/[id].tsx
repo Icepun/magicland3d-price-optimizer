@@ -5,7 +5,6 @@ import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -30,6 +29,7 @@ import {
 import { resolveProductCost } from "@core/product-cost";
 import type { ExpenseRuleInput } from "@core/types";
 
+import { SkeletonForm } from "@/components/ui";
 import { FadeInView } from "@/components/fade-in";
 import {
   DeleteButton,
@@ -254,9 +254,7 @@ export default function ManualOrderEditScreen() {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <ScreenHeader title={isNew ? "Yeni Manuel Sipariş" : "Manuel Sipariş"} />
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonForm rows={5} />
       </SafeAreaView>
     );
   }

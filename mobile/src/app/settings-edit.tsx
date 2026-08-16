@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonForm } from "@/components/ui";
 import { Field, PrimaryButton, ScreenHeader, TextField } from "@/components/form";
 import { getSettingsMap } from "@/lib/db/rules";
 import { updateSettings } from "@/lib/db/rule-crud";
@@ -35,7 +36,7 @@ export default function SettingsEditScreen() {
         <ScreenHeader title="Genel Ayarlar" />
         <View style={styles.center}>
           {settingsQuery.isPending || settingsQuery.isFetching || !settingsQuery.isFetchedAfterMount ? (
-            <ActivityIndicator color={ML.accent} size="large" />
+            <SkeletonForm rows={6} />
           ) : (
             <>
               <Text style={styles.message}>

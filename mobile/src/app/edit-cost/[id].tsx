@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
+import { SkeletonForm } from "@/components/ui";
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
@@ -457,9 +458,7 @@ export default function EditCostScreen() {
     return (
       <SafeAreaView style={styles.safe}>
         <Header />
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonForm rows={6} />
       </SafeAreaView>
     );
   }

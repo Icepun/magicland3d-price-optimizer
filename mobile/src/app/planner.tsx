@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonList } from "@/components/ui";
 import { ConnectionError } from "@/components/ConnectionError";
 import { ScreenHeader } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
@@ -123,9 +124,7 @@ export default function PlannerScreen() {
         /* Ağ koptuğunda "Üretim gerekmiyor" YALANI yerine dürüst hata. */
         <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
       ) : isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonList count={4} />
       ) : plan.length === 0 ? (
         <View style={styles.center}>
           <Text style={styles.emoji}>🎉</Text>

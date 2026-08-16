@@ -1,6 +1,7 @@
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 
+import { Skeleton, SkeletonCard } from "@/components/fade-in";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { ML, elevation, radius, space, tabular, type } from "@/theme/colors";
 
@@ -210,3 +211,34 @@ const styles = StyleSheet.create({
   },
   emptyBtnText: { ...type.body, color: ML.text, fontWeight: "700" },
 });
+
+/**
+ * LİSTE YÜKLENİYOR — tam sayfa dönen çark yerine içeriğin İSKELETİ.
+ *
+ * NEDEN: 13 ekran boş bir çarkla açılıyordu. Çark "bir şey oluyor" der ama NE geleceğini
+ * söylemez; iskelet sayfanın şeklini önceden gösterir, bu yüzden bekleme daha kısa hissedilir
+ * ve içerik gelince sayfa zıplamaz. Kademeli gecikme, satırların sırayla belirmesini sağlar.
+ */
+export function SkeletonList({ count = 6, height = 84 }: { count?: number; height?: number }) {
+  return (
+    <View style={{ padding: space.lg, gap: space.md }}>
+      {Array.from({ length: count }, (_, i) => (
+        <SkeletonCard key={i} height={height} delay={i * 70} />
+      ))}
+    </View>
+  );
+}
+
+/** FORM YÜKLENİYOR — etiket + alan çiftleri. Düzenleme ekranlarının şekli listeden farklı. */
+export function SkeletonForm({ rows = 5 }: { rows?: number }) {
+  return (
+    <View style={{ padding: space.lg, gap: space.xl }}>
+      {Array.from({ length: rows }, (_, i) => (
+        <View key={i} style={{ gap: space.sm }}>
+          <Skeleton width="35%" height={11} delay={i * 70} />
+          <Skeleton width="100%" height={44} radius={radius.sm} delay={i * 70 + 60} />
+        </View>
+      ))}
+    </View>
+  );
+}

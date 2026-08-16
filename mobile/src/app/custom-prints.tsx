@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
   getCustomPrints,
@@ -148,9 +149,7 @@ export default function CustomPrintsScreen() {
       ) : null}
 
       {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} />
-        </View>
+        <SkeletonList count={5} />
       ) : items.length === 0 ? (
         <View style={styles.center}>
           <SymbolView name="tray.fill" tintColor={ML.textFaint} style={{ width: 40, height: 40 }} />

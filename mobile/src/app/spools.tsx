@@ -1,3 +1,4 @@
+import { SkeletonList } from "@/components/ui";
 import { slugifyTr } from "@/core/filament-groups";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
@@ -5,7 +6,6 @@ import { FlashList } from "@shopify/flash-list";
 import { useState } from "react";
 import {
   Alert,
-  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -101,9 +101,7 @@ export default function SpoolsScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScreenHeader title="Filament Makaralar" />
       {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonList count={6} />
       ) : error && !data ? (
         /* Ağ koptuğunda "Henüz makara yok" YALANI yerine dürüst hata (atölyede
            "filamentim var mı" sorusuna yanlış cevap vermek en kötüsü). */

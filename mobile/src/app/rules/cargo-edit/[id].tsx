@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -20,6 +20,7 @@ import {
   updateCargoRule,
   type CargoRuleFull,
 } from "@/lib/db/rule-crud";
+import { SkeletonForm } from "@/components/ui";
 import { parseTrNumber } from "@/lib/number";
 import { ML } from "@/theme/colors";
 
@@ -49,7 +50,7 @@ export default function CargoEditScreen() {
         <ScreenHeader title="Kargo Düzenle" />
         <View style={styles.center}>
           {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
-            <ActivityIndicator color={ML.accent} size="large" />
+            <SkeletonForm rows={5} />
           ) : (
             <>
               <Text style={styles.message}>

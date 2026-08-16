@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
   createActualExpense,
@@ -253,9 +254,7 @@ export default function ExpensesScreen() {
         )}
 
         {expensesQuery.isLoading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={ML.accent} size="large" />
-          </View>
+          <SkeletonList count={6} />
         ) : expensesQuery.error ? (
           <View style={styles.empty}>
             <Text style={styles.errorText}>

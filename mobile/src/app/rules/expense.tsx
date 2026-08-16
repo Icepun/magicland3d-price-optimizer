@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,6 +15,7 @@ import {
   setExpenseRuleActive,
   type ExpenseRuleFull,
 } from "@/lib/db/rule-crud";
+import { SkeletonList } from "@/components/ui";
 import { ConnectionError } from "@/components/ConnectionError";
 import { ML, radius } from "@/theme/colors";
 
@@ -71,9 +71,7 @@ export default function ExpenseRulesScreen() {
            kurallar kâr hesabının temeli. Dürüst hata + tekrar dene. */
         <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
       ) : isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <SkeletonList count={5} />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.note}>
