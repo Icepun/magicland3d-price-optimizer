@@ -1,3 +1,4 @@
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { slugifyTr } from "@/core/filament-groups";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +10,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -139,12 +139,12 @@ export default function SpoolsScreen() {
       )}
 
       {/* Ekle (FAB) */}
-      <Pressable
+      <PressableScale
         onPress={() => setFormTarget("new")}
         style={({ pressed }) => [styles.fab, pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] }]}
       >
         <SymbolView name="plus" tintColor="#fff" style={{ width: 26, height: 26 }} />
-      </Pressable>
+      </PressableScale>
 
       {consumeTarget ? (
         <ConsumeModal
@@ -178,9 +178,9 @@ function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onCon
   return (
     <View style={styles.card}>
       <View style={[styles.stripe, { backgroundColor: spool.colorHex }]} />
-      <Pressable onPress={onEdit} hitSlop={6} style={styles.editIcon}>
+      <PressableScale onPress={onEdit} hitSlop={6} style={styles.editIcon}>
         <SymbolView name="pencil" tintColor={ML.textFaint} style={{ width: 16, height: 16 }} />
-      </Pressable>
+      </PressableScale>
       <View style={styles.cardBody}>
         <Text style={styles.name} numberOfLines={1}>{spool.name}</Text>
         <Text style={styles.meta} numberOfLines={1}>
@@ -199,12 +199,12 @@ function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onCon
           </View>
         </View>
         <View style={styles.actions}>
-          <Pressable style={({ pressed }) => [styles.btn, pressed && { opacity: 0.7 }]} onPress={onConsume}>
+          <PressableScale style={({ pressed }) => [styles.btn, pressed && { opacity: 0.7 }]} onPress={onConsume}>
             <Text style={styles.btnText}>Düş</Text>
-          </Pressable>
-          <Pressable style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.7 }]} onPress={onRefill}>
+          </PressableScale>
+          <PressableScale style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.7 }]} onPress={onRefill}>
             <Text style={styles.btnGhostText}>Dolu</Text>
-          </Pressable>
+          </PressableScale>
         </View>
       </View>
     </View>
@@ -225,17 +225,17 @@ function ConsumeModal({ spool, onClose, onConsume }: { spool: Spool; onClose: ()
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.modalWrap}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <PressableScale style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modal}>
           <Text style={styles.modalTitle}>{spool.name} — gram düş</Text>
           <Text style={styles.modalSub}>Kalan: {Math.round(spool.remainingGrams)}g</Text>
           <TextInput value={grams} onChangeText={setGrams} keyboardType="decimal-pad" placeholder="Kaç gram?" placeholderTextColor={ML.textFaint} style={styles.input} autoFocus />
           <TextInput value={note} onChangeText={setNote} placeholder="Not (opsiyonel)" placeholderTextColor={ML.textFaint} style={styles.input} />
           <View style={styles.modalActions}>
-            <Pressable style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></Pressable>
-            <Pressable style={[styles.modalBtn, !valid && { opacity: 0.4 }]} onPress={submit} disabled={!valid}>
+            <PressableScale style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></PressableScale>
+            <PressableScale style={[styles.modalBtn, !valid && { opacity: 0.4 }]} onPress={submit} disabled={!valid}>
               <Text style={styles.btnText}>Düş</Text>
-            </Pressable>
+            </PressableScale>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -313,9 +313,9 @@ function SpoolFormModal({
             <Field label="Materyal">
               <View style={styles.chipRow}>
                 {MATERIALS.map((m) => (
-                  <Pressable key={m} onPress={() => setMaterial(m)} style={[styles.chip, material === m && styles.chipOn]}>
+                  <PressableScale key={m} onPress={() => setMaterial(m)} style={[styles.chip, material === m && styles.chipOn]}>
                     <Text style={[styles.chipText, material === m && { color: "#fff", fontWeight: "700" }]}>{m}</Text>
-                  </Pressable>
+                  </PressableScale>
                 ))}
               </View>
             </Field>
@@ -338,7 +338,7 @@ function SpoolFormModal({
               </View>
               <View style={[styles.chipRow, { marginTop: 8 }]}>
                 {SWATCHES.map((c) => (
-                  <Pressable
+                  <PressableScale
                     key={c}
                     onPress={() => setColorHex(c)}
                     style={[
@@ -379,16 +379,16 @@ function SpoolFormModal({
               </Field>
             </View>
             {editing && (
-              <Pressable onPress={remove} disabled={busy} style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}>
+              <PressableScale onPress={remove} disabled={busy} style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.7 }]}>
                 <Text style={styles.deleteText}>Makarayı Sil</Text>
-              </Pressable>
+              </PressableScale>
             )}
           </ScrollView>
           <View style={styles.modalActions}>
-            <Pressable style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></Pressable>
-            <Pressable style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]} onPress={submit} disabled={!valid || busy}>
+            <PressableScale style={styles.modalBtnGhost} onPress={onClose}><Text style={styles.btnGhostText}>İptal</Text></PressableScale>
+            <PressableScale style={[styles.modalBtn, (!valid || busy) && { opacity: 0.4 }]} onPress={submit} disabled={!valid || busy}>
               <Text style={styles.btnText}>{busy ? "..." : "Kaydet"}</Text>
-            </Pressable>
+            </PressableScale>
           </View>
         </View>
       </KeyboardAvoidingView>

@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { AnimatedBar, AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { useMemo } from "react";
 import {
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -101,7 +101,7 @@ export default function DashboardScreen() {
           <Text style={styles.title}>Panel</Text>
           <Text style={styles.subtitle}>Pazaryerleri + manuel satışlar</Text>
         </View>
-        <Pressable onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
+        <PressableScale onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
           <SymbolView name="bell.fill" tintColor={ML.textDim} style={{ width: 24, height: 24 }} />
           {notif && notif.counts.total > 0 ? (
             <View
@@ -115,16 +115,16 @@ export default function DashboardScreen() {
               </Text>
             </View>
           ) : null}
-        </Pressable>
+        </PressableScale>
       </View>
 
       {isError ? (
         <View style={styles.center}>
           <Text style={styles.errorTitle}>Veriler alınamadı</Text>
           <Text style={styles.subtitle}>{friendlyError(error)}</Text>
-          <Pressable onPress={() => refetchProducts()} style={styles.retryBtn}>
+          <PressableScale onPress={() => refetchProducts()} style={styles.retryBtn}>
             <Text style={styles.retryText}>Tekrar dene</Text>
-          </Pressable>
+          </PressableScale>
         </View>
       ) : isLoading || !summary ? (
         <DashboardSkeleton />
@@ -291,7 +291,7 @@ function Stat({
   const color = { accent: ML.accent, green: ML.green, red: ML.red, orange: ML.orange }[tone];
   return (
     <FadeInView index={index} style={[wide && styles.statWide, !wide && styles.statHalf]}>
-      <Pressable
+      <PressableScale
         onPress={onPress}
         style={({ pressed }) => [styles.stat, pressed && onPress ? { opacity: 0.7 } : null]}
       >
@@ -302,7 +302,7 @@ function Stat({
           style={[styles.statValue, { color }]}
         />
         {onPress ? <Text style={styles.statChevron}>›</Text> : null}
-      </Pressable>
+      </PressableScale>
     </FadeInView>
   );
 }

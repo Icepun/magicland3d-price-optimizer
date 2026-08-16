@@ -4,7 +4,6 @@ import { router, useLocalSearchParams } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
 import { useDeferredValue, useMemo, useState } from "react";
 import {
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeProductProfitMemo } from "@/lib/profit";
@@ -218,13 +218,13 @@ export default function ProductsScreen() {
         {FILTERS.map((f) => {
           const on = f.key === filter;
           return (
-            <Pressable
+            <PressableScale
               key={f.key}
               onPress={() => router.setParams({ filter: f.key })}
               style={[styles.chip, on && styles.chipOn]}
             >
               <Text style={[styles.chipText, on && { color: "#fff", fontWeight: "700" }]}>{f.label}</Text>
-            </Pressable>
+            </PressableScale>
           );
         })}
       </ScrollView>
@@ -235,9 +235,9 @@ export default function ProductsScreen() {
         <View style={styles.center}>
           <Text style={styles.errorTitle}>Ürünler alınamadı</Text>
           <Text style={styles.dim}>{friendlyError(error)}</Text>
-          <Pressable onPress={() => refetch()} style={styles.retryBtn}>
+          <PressableScale onPress={() => refetch()} style={styles.retryBtn}>
             <Text style={styles.retryText}>Tekrar dene</Text>
-          </Pressable>
+          </PressableScale>
         </View>
       ) : (
         <FlashList
@@ -303,7 +303,7 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
   const madeToOrder = Boolean(item.madeToOrder);
   const out = item.stock <= 0 && !madeToOrder;
   return (
-    <Pressable
+    <PressableScale
       onPress={() => router.push(`/product/${item.id}`)}
       style={({ pressed }) => [styles.card, member && styles.memberCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
@@ -371,7 +371,7 @@ function ProductCard({ item, member }: { item: ListItem; member?: boolean }) {
           <Text style={styles.noCost}>maliyet yok</Text>
         )}
       </View>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -387,7 +387,7 @@ function GroupHeader({
   const totalStock = row.members.reduce((s, m) => s + m.stock, 0);
   const img = row.members.find((m) => m.imageUrl)?.imageUrl ?? null;
   return (
-    <Pressable
+    <PressableScale
       onPress={onToggle}
       style={({ pressed }) => [styles.card, styles.groupCard, pressed && { backgroundColor: ML.cardElevated }]}
     >
@@ -417,7 +417,7 @@ function GroupHeader({
         </View>
       </View>
       <Text style={[styles.chevron, open && { transform: [{ rotate: "90deg" }] }]}>›</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 

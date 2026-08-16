@@ -37,7 +37,12 @@ export function PressableScale({
   onPress,
   ...rest
 }: Omit<PressableProps, "style"> & {
-  style?: StyleProp<ViewStyle>;
+  /**
+   * Hem düz stil hem `({ pressed }) => …` fonksiyon stili kabul edilir.
+   * Mevcut ekranların çoğu fonksiyon stiliyle "basılıyken saydamlık" yapıyordu; bileşen bunu
+   * desteklemeseydi 16 dosyayı elle yeniden yazmak gerekirdi (ve o dönüşümde JSX bozulmuştu).
+   */
+  style?: StyleProp<ViewStyle> | ((state: { pressed: boolean }) => StyleProp<ViewStyle>);
   /** Titreşim şiddeti — yıkıcı/önemli aksiyonlarda "orta". */
   haptic?: HapticStyle;
   scaleTo?: number;
@@ -75,7 +80,7 @@ export function PressableScale({
         onPress?.(e);
       }}
       style={({ pressed }) => [
-        style,
+        typeof style === "function" ? style({ pressed }) : style,
         animatedStyle,
         // Hareket azaltılmışsa ölçek yok → geri bildirim saydamlıkla verilir.
         reduceMotion && pressed && { opacity: 0.7 },
