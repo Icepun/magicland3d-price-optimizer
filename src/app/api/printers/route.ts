@@ -12,6 +12,7 @@ import { printJobDisplayName } from "@/lib/print-job-name";
 // backoff + arka planda tazeleme → çevrimdışı yazıcı 5sn'lik paneli HİÇ geciktirmez.
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached, getPrintFileMatches,
+  getModelFilesForPreview,
   getMoonrakerExtrasCached, getBambuSlotsCached, getMatchedProducts, getEnabledPrinterConfigs,
   bumpMoonrakerStatus, bumpBambuStatus,
 } from "@/core/printers/status-cache";
@@ -306,6 +307,9 @@ export async function GET(req: NextRequest) {
   // Ürün eşleştirmeleri (printerConfigId::filename → productId) — 30sn TTL önbellek
   // (eskiden her 5sn'de sınırsız findMany; tablo baskı geçmişiyle büyüyor).
   const matches = await getPrintFileMatches();
+  // Plan D: kart görseli slicer'ın gömülü render'ı. Yazıcıdan gelmiyorsa KENDİ
+  // kütüphanemizdeki dosyadan çıkarılır (Bambu'da tek yol bu).
+  const modelFileMap = await getModelFilesForPreview();
   const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
   const productMap = await getMatchedProducts();
 
@@ -362,10 +366,18 @@ export async function GET(req: NextRequest) {
           const matched = bMatchedId ? productMap.get(bMatchedId) : undefined;
           const activeSlots = bs.activeTray != null ? [bs.activeTray] : [];
           const activeSlot = bs.activeTray != null ? slots.find((s) => s.slot === bs.activeTray) : undefined;
+          /**
+           * PLAN D — model görseli slicer'ın kendi render'ı.
+           * Bambu 3MF yazıyor ve önizleme zip'in İÇİNDE; yazıcıdan alınamıyor. Eşleşen ürünün
+           * bu yazıcıya ait dosyasından çıkarılır (uzun önbellekli ayrı uç — JSON'a gömülmez).
+           */
+          const bModelId = bMatchedId ? modelFileMap.get(`${bMatchedId}|${c.id}`) : null;
+          const bPlateUrl = bModelId ? `/api/models/${bModelId}/slicer-preview` : null;
           bJob = {
             ...emptyJobExtras(),
             productName: matched?.name || cleanFilename(bs.filename),
-            productImage: matched?.imageUrl || null,
+            productImage: bPlateUrl || matched?.imageUrl || null,
+            plateThumbnail: bPlateUrl,
             storeImage: matched?.imageUrl ?? null,
             startedAt: new Date(startMs).toISOString(),
             endsAt: new Date(endMs).toISOString(),
@@ -463,11 +475,20 @@ export async function GET(req: NextRequest) {
         // olduğunu görmeli. Moonraker'ın ürettiği .thumbs varsa o, yoksa gcode'a gömülü blok.
         // Gcode'a gömülü blok 800×800 olabiliyor (~130 KB) — 5sn'de bir JSON'a gömmek yerine
         // küçük bir URL veriyoruz; görsel ayrı, uzun önbellekli uçtan gelir.
+        /**
+         * PLAN D sırası: (1) yazıcının ürettiği .thumbs, (2) gcode'a gömülü blok,
+         * (3) KENDİ kütüphanemizdeki dosyadan çıkarılan slicer render'ı.
+         * Üçüncüsü olmadan görsel üretmeyen kurulumlarda (ölçüldü: Snapmaker U1) kart
+         * görselsiz kalıyordu.
+         */
+        const kutuphaneModelId = matchedId ? modelFileMap.get(`${matchedId}|${c.id}`) : null;
         const plateThumb = meta?.thumbnailRelPath
           ? moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)
           : meta?.thumbnailDataUrl
             ? `/api/printers/${c.id}/plate-thumbnail?f=${encodeURIComponent(st.filename)}`
-            : null;
+            : kutuphaneModelId
+              ? `/api/models/${kutuphaneModelId}/slicer-preview`
+              : null;
         // MADDE 12: baskıda kullanılan slot(lar)ın rengi. Tek kafalı yazıcıda dilimleyicinin
         // yazdığı renk kullanılır (yazıcıda slot kavramı yok).
         const activeSlots = extras.activeSlots;

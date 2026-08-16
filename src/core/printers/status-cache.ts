@@ -341,3 +341,32 @@ export async function getEnabledPrinterConfigs(): Promise<CachedPrinterConfig[]>
 export function invalidatePrinterConfigs(): void {
   configsCache = null;
 }
+
+// ── Ürün+yazıcı → model dosyası (slicer önizlemesi için) ────────────────────────────────────
+/**
+ * Kartta gösterilecek model görseli, slicer'ın dosyaya GÖMDÜĞÜ render'dan geliyor
+ * (bkz. `lib/slicer-preview.ts`). Moonraker yazıcılarda görsel doğrudan yazıcıdan alınabiliyor
+ * ama Bambu'da ve bazı Moonraker kurulumlarında alınamıyor; o zaman KENDİ kütüphanemizdeki
+ * dosyadan çıkarılır. Bu harita "hangi ürünün hangi yazıcıya ait dosyası" sorusunu cevaplar.
+ *
+ * Önbellekli: panel 5 saniyede bir yenileniyor ve uzak-HTTP libSQL'de her sorgu ~96ms + SIRALI.
+ */
+type ModelFileRow = { id: string; productId: string; printerConfigId: string | null };
+let modelFilesCache: { at: number; rows: ModelFileRow[] } | null = null;
+
+export async function getModelFilesForPreview(): Promise<Map<string, string>> {
+  if (!modelFilesCache || Date.now() - modelFilesCache.at >= MATCHES_TTL_MS) {
+    const rows = await prisma.productModelFile.findMany({
+      select: { id: true, productId: true, printerConfigId: true },
+    });
+    modelFilesCache = { at: Date.now(), rows };
+  }
+  const harita = new Map<string, string>();
+  for (const r of modelFilesCache.rows) {
+    if (!r.printerConfigId) continue;
+    const anahtar = `${r.productId}|${r.printerConfigId}`;
+    // İlk kayıt yeter — aynı ürün+yazıcı için birden çok parça varsa ilki temsil eder.
+    if (!harita.has(anahtar)) harita.set(anahtar, r.id);
+  }
+  return harita;
+}

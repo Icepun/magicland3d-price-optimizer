@@ -2,36 +2,27 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { getR2Config, getObjectHead } from "@/lib/r2";
+import { getR2Config, getObjectRange, getObjectSize, getObjectHead } from "@/lib/r2";
+import {
+  gcodeOnizlemesi,
+  zip3mfOnizlemesi,
+  type AralikOkuyucu,
+} from "@/lib/slicer-preview";
 
 /**
- * SLICER'IN KENDİ ÖNİZLEMESİ — gcode dosyasının başına gömülü PNG.
+ * SLICER'IN KENDİ ÖNİZLEMESİ — doğrudan PNG döner.
  *
- * OrcaSlicer/PrusaSlicer dosyanın başına render'ının base64 PNG'sini yazıyor
- * (`; thumbnail begin 800x800 …`). Kullanıcının "slicerda gördüğüm gibi" dediği görüntü
- * BİREBİR budur — biz yeniden çizmeye çalışmak yerine hazır olanı kullanabiliriz.
+ * Kartlardaki model görseli artık bu: kendi çizimimiz baskı yollarını çiziyordu ve model
+ * beyaz bir siluetten ibaret kalıyordu; slicer ise gerçek yüzeyi ışıklandırılmış hâlde
+ * dosyaya gömüyor (bkz. `lib/slicer-preview.ts`).
  *
- * Not: bu uç yalnız karşılaştırma laboratuvarı ve ileride kart görseli için. Dosyanın
- * TAMAMI okunmaz — başlıktaki birkaç yüz KB yeterli (dosyalar 140 MB olabiliyor).
+ * ⚠️ Dosyanın TAMAMI okunmaz. Gcode'da ilk 2 MB, 3MF'te zip dizini + yalnız ilgili girdi.
+ *
+ * Önbellek: model dosyası içeriğiyle birlikte değişmez (id içerik md5'ine bağlı), bu yüzden
+ * `immutable` verilebilir — kart her açılışta yeniden indirmez.
  */
 
-/** Başlıkta gömülü tüm önizlemeleri bul; en büyüğünü döndür. */
-function enBuyukOnizleme(bas: string): { genislik: number; yukseklik: number; base64: string } | null {
-  const re = /; thumbnail(?:_JPG|_QOI)? begin (\d+)[ x](\d+) \d+\r?\n([\s\S]*?); thumbnail(?:_JPG|_QOI)? end/gi;
-  let m: RegExpExecArray | null;
-  let en: { genislik: number; yukseklik: number; base64: string } | null = null;
-  while ((m = re.exec(bas)) !== null) {
-    const genislik = Number(m[1]);
-    const yukseklik = Number(m[2]);
-    // Gövde her satırın başında "; " ile yazılmış — temizle.
-    const base64 = m[3].replace(/^;\s?/gm, "").replace(/\s+/g, "");
-    if (!base64) continue;
-    if (!en || genislik * yukseklik > en.genislik * en.yukseklik) {
-      en = { genislik, yukseklik, base64 };
-    }
-  }
-  return en;
-}
+const KAFA = 2 * 1024 * 1024;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   await ensureRuntimeSchema();
@@ -40,35 +31,54 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ error: "Model dosyası yok" }, { status: 404 });
 
-    // Başlıktan 2 MB yeterli: gömülü önizlemeler dosyanın en başında. Dosyalar 140 MB
-    // olabildiği için TAMAMI asla okunmaz.
-    const KAFA = 2 * 1024 * 1024;
-    let bas = "";
+    const ad = (mf.originalName || mf.storedPath || "").toLowerCase();
+    const uc3mf = ad.endsWith(".3mf");
+
+    let png: Buffer | null = null;
+
     if (!mf.r2Key && fs.existsSync(mf.storedPath)) {
       const fh = await fs.promises.open(mf.storedPath, "r");
       try {
-        const buf = Buffer.alloc(KAFA);
-        const { bytesRead } = await fh.read(buf, 0, KAFA, 0);
-        bas = buf.subarray(0, bytesRead).toString("latin1");
+        const oku: AralikOkuyucu = async (a, b) => {
+          const uz = b - a + 1;
+          const buf = Buffer.alloc(uz);
+          const { bytesRead } = await fh.read(buf, 0, uz, a);
+          return buf.subarray(0, bytesRead);
+        };
+        if (uc3mf) {
+          const boy = (await fs.promises.stat(mf.storedPath)).size;
+          png = (await zip3mfOnizlemesi(oku, boy))?.png ?? null;
+        } else {
+          const bas = (await oku(0, KAFA - 1)).toString("latin1");
+          png = gcodeOnizlemesi(bas)?.png ?? null;
+        }
       } finally {
         await fh.close();
       }
     } else if (mf.r2Key) {
       const cfg = await getR2Config();
       if (!cfg) return NextResponse.json({ error: "Bulut depolama ayarlı değil" }, { status: 400 });
-      bas = (await getObjectHead(mf.r2Key, cfg, KAFA)).toString("latin1");
+      if (uc3mf) {
+        const boy = await getObjectSize(mf.r2Key, cfg);
+        const oku: AralikOkuyucu = (a, b) => getObjectRange(mf.r2Key!, cfg, a, b);
+        png = (await zip3mfOnizlemesi(oku, boy))?.png ?? null;
+      } else {
+        const bas = (await getObjectHead(mf.r2Key, cfg, KAFA)).toString("latin1");
+        png = gcodeOnizlemesi(bas)?.png ?? null;
+      }
     }
-    if (!bas) return NextResponse.json({ error: "Dosya bu cihazda yok" }, { status: 404 });
 
-    const onizleme = enBuyukOnizleme(bas);
-    if (!onizleme) {
+    if (!png) {
       return NextResponse.json({ error: "Bu dosyada gömülü slicer önizlemesi yok" }, { status: 404 });
     }
 
-    return NextResponse.json({
-      genislik: onizleme.genislik,
-      yukseklik: onizleme.yukseklik,
-      dataUrl: `data:image/png;base64,${onizleme.base64}`,
+    return new Response(new Uint8Array(png), {
+      headers: {
+        "Content-Type": "image/png",
+        "Content-Length": String(png.length),
+        // Dosya içeriği değişmez → görsel de değişmez.
+        "Cache-Control": "public, max-age=31536000, immutable",
+      },
     });
   } catch (error) {
     return NextResponse.json(

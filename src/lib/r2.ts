@@ -190,3 +190,4 @@ export async function getObjectHead(key: string, cfg: R2Config, bytes: number): 
   if (!res.Body) throw new Error("R2: boş yanıt");
   return Buffer.from(await res.Body.transformToByteArray());
 }
+
