@@ -563,3 +563,39 @@ export async function getMonthlyFinanceSummary(
       }, null),
   };
 }
+
+/**
+ * Gider kategorisi önerileri — kullanıcının MASAÜSTÜNDE tanımladığı kategoriler + halihazırda
+ * kullandıkları, birleşik ve tekrarsız.
+ *
+ * NEDEN: telefonda kategori serbest metindi. "Yazılım" / "yazilim" / "yazılm" ayrı kategoriler
+ * sayılıyor, Raporlar'daki gider kırılımı üçe bölünüyordu — masaüstünde kategori listesi varken.
+ * Yazmak yerine dokunmak hem hızlı hem tutarlı.
+ */
+export async function getExpenseCategories(): Promise<string[]> {
+  await ensureFinanceSchema();
+  const adlar = new Set<string>();
+  try {
+    const tanimli = await query<{ name: string }>(
+      `SELECT name FROM "ExpenseCategory" ORDER BY sortOrder ASC, name ASC`
+    );
+    for (const r of tanimli as unknown as { name: string }[]) {
+      const ad = String(r.name ?? "").trim();
+      if (ad) adlar.add(ad);
+    }
+  } catch {
+    // Tablo yoksa yalnız kullanılanlardan öner.
+  }
+  try {
+    const kullanilan = await query<{ category: string | null }>(
+      `SELECT DISTINCT category FROM "ActualExpense" WHERE category IS NOT NULL AND category <> ''`
+    );
+    for (const r of kullanilan as unknown as { category: string | null }[]) {
+      const ad = String(r.category ?? "").trim();
+      if (ad) adlar.add(ad);
+    }
+  } catch {
+    /* okunamadı → öneri yok, serbest metin çalışmaya devam eder */
+  }
+  return [...adlar];
+}

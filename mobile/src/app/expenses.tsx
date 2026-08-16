@@ -13,12 +13,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { PressableScale } from "@/components/ui/PressableScale";
-import { SkeletonList } from "@/components/ui";
+import { Chip, SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
   createActualExpense,
   deleteActualExpense,
   getActualExpenses,
+  getExpenseCategories,
   tlToKurus,
   updateActualExpense,
   type ActualExpense,
@@ -98,6 +99,12 @@ function paidDateIso(value: string): string | null {
 export default function ExpensesScreen() {
   const qc = useQueryClient();
   const [draft, setDraft] = useState<Draft | null>(null);
+  // Kategori önerileri: masaüstünde tanımlılar + zaten kullanılanlar.
+  const { data: kategoriler = [] } = useQuery({
+    queryKey: ["expense-categories"],
+    queryFn: getExpenseCategories,
+    staleTime: 10 * 60_000,
+  });
   const expensesQuery = useQuery({
     queryKey: ["actual-expenses"],
     queryFn: getActualExpenses,
@@ -105,6 +112,7 @@ export default function ExpensesScreen() {
 
   const refreshFinance = () => {
     qc.invalidateQueries({ queryKey: ["actual-expenses"] });
+      void qc.invalidateQueries({ queryKey: ["expense-categories"] });
     qc.invalidateQueries({ queryKey: ["monthly-finance"] });
   };
 
@@ -218,6 +226,30 @@ export default function ExpensesScreen() {
                 style={styles.input}
                 maxLength={60}
               />
+              {/* Var olan kategoriler — yazım farkı ("yazılım"/"yazilim") gider kırılımını
+                  ikiye bölüyordu. Dokunmak hem hızlı hem tutarlı. */}
+              {kategoriler.length > 0 ? (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={styles.katChips}
+                >
+                  {kategoriler.map((k) => (
+                    <Chip
+                      key={k}
+                      label={k}
+                      selected={draft.category.trim().toLocaleLowerCase("tr") === k.toLocaleLowerCase("tr")}
+                      onPress={() =>
+                        setDraft({
+                          ...draft,
+                          category: draft.category.trim() === k ? "" : k,
+                        })
+                      }
+                    />
+                  ))}
+                </ScrollView>
+              ) : null}
             </Field>
             <Field label="NOT (opsiyonel)">
               <TextInput
@@ -337,6 +369,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 const styles = StyleSheet.create({
+  katChips: { flexDirection: "row", gap: 6, paddingTop: 8, paddingRight: 4 },
   safe: { flex: 1, backgroundColor: ML.bg },
   content: { padding: 16, gap: 10, paddingBottom: 48 },
   center: { paddingVertical: 50, alignItems: "center" },
