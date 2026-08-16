@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
@@ -219,7 +220,7 @@ export default function CustomPrintsScreen() {
                     </View>
                   </View>
                 </View>
-                <Pressable
+                <PressableScale
                   onPress={() => canPrint && doReprint(it)}
                   disabled={!canPrint}
                   style={({ pressed }) => [
@@ -236,7 +237,7 @@ export default function CustomPrintsScreen() {
                   <Text style={[styles.basText, { color: canPrint ? ML.accent : ML.textFaint }]}>
                     {canPrint ? "Bas" : reason}
                   </Text>
-                </Pressable>
+                </PressableScale>
               </View>
             );
           })}

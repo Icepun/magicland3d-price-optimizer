@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { ScreenHeader } from "@/components/form";
 import { thumbUrl } from "@/lib/image";
@@ -62,13 +63,13 @@ export default function OrderDetailScreen() {
         <ScreenHeader title="Sipariş" />
         <View style={[styles.center, styles.errorState]}>
           <Text style={styles.dim}>{message}</Text>
-          <Pressable
+          <PressableScale
             onPress={() => refetch()}
             disabled={isRefetching}
             style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.8 }]}
           >
             <Text style={styles.retryText}>{isRefetching ? "Yenileniyor…" : "Tekrar dene"}</Text>
-          </Pressable>
+          </PressableScale>
         </View>
       </SafeAreaView>
     );
@@ -101,12 +102,12 @@ export default function OrderDetailScreen() {
           {order.customer ?? "—"} · {formatDate(order.date)}
         </Text>
         {order.isManual && order.editHref ? (
-          <Pressable
+          <PressableScale
             onPress={() => router.push(order.editHref as never)}
             style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.75 }]}
           >
             <Text style={styles.editButtonText}>Manuel siparişi düzenle</Text>
-          </Pressable>
+          </PressableScale>
         ) : null}
 
         {/* Kâr/ciro */}

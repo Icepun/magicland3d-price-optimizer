@@ -8,7 +8,6 @@ import {
   Alert,
   FlatList,
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -29,6 +28,7 @@ import {
 import { resolveProductCost } from "@core/product-cost";
 import type { ExpenseRuleInput } from "@core/types";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonForm } from "@/components/ui";
 import { FadeInView } from "@/components/fade-in";
 import {
@@ -722,7 +722,7 @@ function ManualOrderForm({
               {STATUSES.map((status) => {
                 const selected = statusKind === status.key;
                 return (
-                  <Pressable
+                  <PressableScale
                     key={status.key}
                     onPress={() => {
                       void Haptics.selectionAsync();
@@ -737,7 +737,7 @@ function ManualOrderForm({
                     <Text style={[styles.statusChipText, selected && styles.statusChipTextOn]}>
                       {status.label}
                     </Text>
-                  </Pressable>
+                  </PressableScale>
                 );
               })}
             </View>
@@ -844,7 +844,7 @@ function ManualOrderForm({
               return (
                 <FadeInView key={expense.id} index={index}>
                   <View style={styles.expenseCard}>
-                    <Pressable
+                    <PressableScale
                       onPress={() => {
                         void Haptics.selectionAsync();
                         toggleExpense(expense);
@@ -861,7 +861,7 @@ function ManualOrderForm({
                         <Text style={styles.expenseName}>{expense.name}</Text>
                         <Text style={styles.help}>{valueLabel}</Text>
                       </View>
-                    </Pressable>
+                    </PressableScale>
                     {selected ? (
                       <InvoiceToggle
                         value={selected.hasVatInvoice}
@@ -1108,7 +1108,7 @@ function AnimatedMoney({
 
 function OutlineButton({ label, onPress }: { label: string; onPress: () => void }) {
   return (
-    <Pressable
+    <PressableScale
       onPress={() => {
         void Haptics.selectionAsync();
         onPress();
@@ -1119,19 +1119,19 @@ function OutlineButton({ label, onPress }: { label: string; onPress: () => void 
       ]}
     >
       <Text style={styles.outlineButtonText}>{label}</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 
 function RemoveButton({ onPress }: { onPress: () => void }) {
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
       hitSlop={8}
       style={({ pressed }) => pressed && { opacity: 0.6 }}
     >
       <Text style={styles.removeText}>Sil</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -1144,7 +1144,7 @@ function QuantityControl({
 }) {
   return (
     <View style={styles.quantity}>
-      <Pressable
+      <PressableScale
         onPress={() => {
           void Haptics.selectionAsync();
           onChange(value - 1);
@@ -1152,9 +1152,9 @@ function QuantityControl({
         style={({ pressed }) => [styles.quantityButton, pressed && { opacity: 0.6 }]}
       >
         <Text style={styles.quantityButtonText}>−</Text>
-      </Pressable>
+      </PressableScale>
       <Text style={styles.quantityValue}>{value}</Text>
-      <Pressable
+      <PressableScale
         onPress={() => {
           void Haptics.selectionAsync();
           onChange(value + 1);
@@ -1162,7 +1162,7 @@ function QuantityControl({
         style={({ pressed }) => [styles.quantityButton, pressed && { opacity: 0.6 }]}
       >
         <Text style={styles.quantityButtonText}>+</Text>
-      </Pressable>
+      </PressableScale>
     </View>
   );
 }
@@ -1230,7 +1230,7 @@ function FilamentPicker({
       {filaments.map((filament) => {
         const selected = filament.id === selectedId;
         return (
-          <Pressable
+          <PressableScale
             key={filament.id}
             onPress={() => {
               void Haptics.selectionAsync();
@@ -1248,7 +1248,7 @@ function FilamentPicker({
             >
               {filament.name}
             </Text>
-          </Pressable>
+          </PressableScale>
         );
       })}
     </ScrollView>
@@ -1553,9 +1553,9 @@ function ProductPicker({
       <SafeAreaView style={styles.pickerSafe} edges={["top", "bottom"]}>
         <View style={styles.pickerHeader}>
           <Text style={styles.pickerTitle}>Ürün seç</Text>
-          <Pressable onPress={onClose} hitSlop={10}>
+          <PressableScale onPress={onClose} hitSlop={10}>
             <Text style={styles.pickerClose}>Kapat</Text>
-          </Pressable>
+          </PressableScale>
         </View>
         <TextInput
           value={search}
@@ -1571,7 +1571,7 @@ function ProductPicker({
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.pickerList}
           renderItem={({ item }) => (
-            <Pressable
+            <PressableScale
               onPress={() => onPick(item)}
               style={({ pressed }) => [
                 styles.pickerItem,
@@ -1595,7 +1595,7 @@ function ProductPicker({
                   {item.sku} · {item.categoryName}
                 </Text>
               </View>
-            </Pressable>
+            </PressableScale>
           )}
           ListEmptyComponent={<Text style={styles.pickerEmpty}>Ürün bulunamadı.</Text>}
         />

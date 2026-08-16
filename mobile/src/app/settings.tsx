@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, type Href } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { getSettingsMap } from "@/lib/db/rules";
 import { ML, radius } from "@/theme/colors";
 
@@ -32,9 +33,9 @@ export default function SettingsScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Text style={styles.backText}>‹</Text>
-        </Pressable>
+        </PressableScale>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Ayarlar</Text>
           <Text style={styles.subtitle}>Masaüstüyle aynı veritabanı</Text>
@@ -50,7 +51,7 @@ export default function SettingsScreen() {
 
         <Text style={styles.sectionLabel}>FİNANS</Text>
         <View style={styles.card}>
-          <Pressable
+          <PressableScale
             onPress={() => router.push("/expenses")}
             style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
           >
@@ -59,13 +60,13 @@ export default function SettingsScreen() {
               <Text style={styles.rowHint}>Ödediğin genel giderler</Text>
             </View>
             <Text style={[styles.rowValue, { color: ML.accent }]}>›</Text>
-          </Pressable>
+          </PressableScale>
         </View>
 
         <Text style={styles.sectionLabel}>KURALLAR</Text>
         <View style={styles.card}>
           {NAV.map((n, i) => (
-            <Pressable
+            <PressableScale
               key={n.label}
               onPress={() => n.ready && router.push(n.href)}
               style={({ pressed }) => [
@@ -78,15 +79,15 @@ export default function SettingsScreen() {
               <Text style={[styles.rowValue, { color: n.ready ? ML.accent : ML.textFaint }]}>
                 {n.ready ? "›" : "yakında"}
               </Text>
-            </Pressable>
+            </PressableScale>
           ))}
         </View>
 
         <View style={styles.paramHead}>
           <Text style={styles.sectionLabel}>HESAP PARAMETRELERİ</Text>
-          <Pressable onPress={() => router.push("/settings-edit")} hitSlop={8}>
+          <PressableScale onPress={() => router.push("/settings-edit")} hitSlop={8}>
             <Text style={styles.editLink}>Düzenle</Text>
-          </Pressable>
+          </PressableScale>
         </View>
         <View style={styles.card}>
           {rows.map((r, i) => (

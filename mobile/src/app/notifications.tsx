@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { FadeInView } from "@/components/fade-in";
 import {
   FlatList,
-  Pressable,
   RefreshControl,
   StyleSheet,
   Text,
@@ -59,13 +59,13 @@ export default function NotificationsScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScreenHeader title="Bildirimler" />
       {hasPersistent ? (
-        <Pressable
+        <PressableScale
           onPress={() => ackAll.mutate()}
           style={({ pressed }) => [styles.ackAll, pressed && { opacity: 0.6 }]}
         >
           <SymbolView name="checkmark.circle" tintColor={ML.accent} style={{ width: 15, height: 15 }} />
           <Text style={styles.ackAllText}>Tümünü okundu işaretle</Text>
-        </Pressable>
+        </PressableScale>
       ) : null}
       {error && !data ? (
         /* Ağ koptuğunda "0 uyarı" YALANI yerine dürüst hata: stoğu biten ürün de,
@@ -126,7 +126,7 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
         ? "printer.fill"
         : "circle.dashed";
   return (
-    <Pressable
+    <PressableScale
       onPress={() => alert.productId && router.push(`/product/${alert.productId}`)}
       style={({ pressed }) => [styles.row, pressed && alert.productId ? { opacity: 0.7 } : null]}
     >
@@ -141,17 +141,17 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
         {alert.createdAt ? <Text style={styles.time}>{fmtAgo(alert.createdAt)}</Text> : null}
       </View>
       {onAck ? (
-        <Pressable
+        <PressableScale
           onPress={onAck}
           hitSlop={10}
           style={({ pressed }) => [styles.ackBtn, pressed && { backgroundColor: ML.cardElevated }]}
         >
           <SymbolView name="xmark" tintColor={ML.textFaint} style={{ width: 13, height: 13 }} />
-        </Pressable>
+        </PressableScale>
       ) : alert.productId ? (
         <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 14, height: 14 }} />
       ) : null}
-    </Pressable>
+    </PressableScale>
   );
 }
 

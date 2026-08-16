@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import {
-  Pressable,
   ScrollView,
   StyleSheet,
   Switch,
@@ -15,6 +14,7 @@ import {
   setExpenseRuleActive,
   type ExpenseRuleFull,
 } from "@/lib/db/rule-crud";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ConnectionError } from "@/components/ConnectionError";
 import { ML, radius } from "@/theme/colors";
@@ -57,13 +57,13 @@ export default function ExpenseRulesScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Text style={styles.backText}>‹</Text>
-        </Pressable>
+        </PressableScale>
         <Text style={styles.headerTitle}>Sipariş Gider Kuralları</Text>
-        <Pressable onPress={() => router.push("/rules/expense-edit/new")} hitSlop={12}>
+        <PressableScale onPress={() => router.push("/rules/expense-edit/new")} hitSlop={12}>
           <Text style={styles.add}>+ Ekle</Text>
-        </Pressable>
+        </PressableScale>
       </View>
 
       {error && !rules ? (
@@ -79,7 +79,7 @@ export default function ExpenseRulesScreen() {
             Ödediğin genel giderleri Gider Ödemeleri ekranına kaydet.
           </Text>
           {(rules ?? []).map((r) => (
-            <Pressable
+            <PressableScale
               key={r.id}
               onPress={() => router.push(`/rules/expense-edit/${r.id}`)}
               style={({ pressed }) => [styles.card, pressed && { backgroundColor: ML.cardElevated }]}
@@ -103,7 +103,7 @@ export default function ExpenseRulesScreen() {
                 trackColor={{ true: ML.accent, false: ML.border }}
                 thumbColor="#fff"
               />
-            </Pressable>
+            </PressableScale>
           ))}
           {(rules ?? []).length === 0 && (
             <Text style={[styles.note, { textAlign: "center", marginTop: 40 }]}>

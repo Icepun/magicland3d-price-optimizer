@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { FadeInView } from "@/components/fade-in";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { getNotifications } from "@/lib/db/notifications";
@@ -79,7 +80,7 @@ export default function MoreScreen() {
       <ScrollView contentContainerStyle={styles.list}>
         {items.map((it, i) => (
           <FadeInView key={it.href} index={i} step={30}>
-            <Pressable
+            <PressableScale
               onPress={() => router.push(it.href as never)}
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: ML.cardElevated }]}
             >
@@ -96,7 +97,7 @@ export default function MoreScreen() {
                 </View>
               ) : null}
               <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 14, height: 14 }} />
-            </Pressable>
+            </PressableScale>
           </FadeInView>
         ))}
       </ScrollView>

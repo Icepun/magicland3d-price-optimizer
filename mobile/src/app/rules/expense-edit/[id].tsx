@@ -4,7 +4,6 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import {
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonForm } from "@/components/ui";
 import { PrimaryButton, ScreenHeader } from "@/components/form";
 import {
@@ -155,9 +155,9 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
           <Text style={styles.backText}>‹</Text>
-        </Pressable>
+        </PressableScale>
         <Text style={styles.headerTitle}>{isNew ? "Yeni Gider" : "Gider Düzenle"}</Text>
         <View style={{ width: 32 }} />
       </View>
@@ -227,16 +227,16 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
           </View>
         </View>
 
-        <Pressable
+        <PressableScale
           onPress={() => save.mutate()}
           disabled={save.isPending}
           style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }]}
         >
           <Text style={styles.saveText}>{isNew ? "Oluştur" : "Kaydet"}</Text>
-        </Pressable>
+        </PressableScale>
 
         {!isNew && (
-          <Pressable
+          <PressableScale
             onPress={() =>
               Alert.alert("Kuralı sil?", existing?.name ?? "", [
                 { text: "Vazgeç", style: "cancel" },
@@ -246,7 +246,7 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
             style={styles.deleteBtn}
           >
             <Text style={styles.deleteText}>Sil</Text>
-          </Pressable>
+          </PressableScale>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -276,7 +276,7 @@ function Segmented({
       {items.map((it) => {
         const on = it.key === selected;
         return (
-          <Pressable
+          <PressableScale
             key={it.key}
             onPress={() => {
               Haptics.selectionAsync();
@@ -287,7 +287,7 @@ function Segmented({
             <Text style={[styles.segmentText, on && { color: "#fff", fontWeight: "700" }]}>
               {it.label}
             </Text>
-          </Pressable>
+          </PressableScale>
         );
       })}
     </View>

@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,6 +16,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonForm } from "@/components/ui";
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
@@ -471,7 +471,7 @@ export default function EditCostScreen() {
           <Text style={styles.errorText}>
             {productError instanceof Error ? productError.message : "Ürün yüklenemedi."}
           </Text>
-          <Pressable
+          <PressableScale
             onPress={() => void refetchProduct()}
             disabled={productRefetching}
             style={styles.retryButton}
@@ -479,7 +479,7 @@ export default function EditCostScreen() {
             <Text style={styles.retryButtonText}>
               {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
             </Text>
-          </Pressable>
+          </PressableScale>
         </View>
       </SafeAreaView>
     );
@@ -572,7 +572,7 @@ export default function EditCostScreen() {
         )}
 
         {variantGroup && variantGroup.members.length > 1 ? (
-          <Pressable
+          <PressableScale
             onPress={() => {
               Haptics.selectionAsync();
               setApplyAll((v) => !v);
@@ -585,7 +585,7 @@ export default function EditCostScreen() {
             <Text style={styles.applyAllText}>
               Bu maliyeti tüm varyantlara uygula ({variantGroup.members.length} ürün)
             </Text>
-          </Pressable>
+          </PressableScale>
         ) : null}
 
         <View style={styles.statusRow}>
@@ -602,9 +602,9 @@ export default function EditCostScreen() {
                 ⚠ {saveError ?? parsedForm.error ?? "Kaydetme başarısız."}
               </Text>
               {saveError && currentPayload ? (
-                <Pressable onPress={() => enqueueSave(currentPayload)} hitSlop={8}>
+                <PressableScale onPress={() => enqueueSave(currentPayload)} hitSlop={8}>
                   <Text style={styles.statusRetry}>Tekrar dene</Text>
-                </Pressable>
+                </PressableScale>
               ) : null}
             </>
           ) : (
@@ -634,7 +634,7 @@ function ChipRow({
       {items.map((it) => {
         const on = it.key === selected;
         return (
-          <Pressable
+          <PressableScale
             key={it.key}
             onPress={() => {
               Haptics.selectionAsync();
@@ -645,7 +645,7 @@ function ChipRow({
             <Text style={[styles.chipText, on && { color: "#fff", fontWeight: "700" }]}>
               {it.label}
             </Text>
-          </Pressable>
+          </PressableScale>
         );
       })}
     </ScrollView>
@@ -666,7 +666,7 @@ function Segmented({
       {items.map((it) => {
         const on = it.key === selected;
         return (
-          <Pressable
+          <PressableScale
             key={it.key}
             onPress={() => {
               Haptics.selectionAsync();
@@ -677,7 +677,7 @@ function Segmented({
             <Text style={[styles.segmentText, on && { color: "#fff", fontWeight: "700" }]}>
               {it.label}
             </Text>
-          </Pressable>
+          </PressableScale>
         );
       })}
     </View>
@@ -715,9 +715,9 @@ function Label({ text }: { text: string }) {
 function Header({ onBack }: { onBack?: () => void }) {
   return (
     <View style={styles.header}>
-      <Pressable onPress={onBack ?? (() => router.back())} hitSlop={12} style={styles.back}>
+      <PressableScale onPress={onBack ?? (() => router.back())} hitSlop={12} style={styles.back}>
         <Text style={styles.backText}>‹</Text>
-      </Pressable>
+      </PressableScale>
       <Text style={styles.headerTitle}>Maliyet Düzenle</Text>
       <View style={{ width: 32 }} />
     </View>

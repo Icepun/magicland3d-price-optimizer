@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ConnectionError } from "@/components/ConnectionError";
 import { ScreenHeader } from "@/components/form";
@@ -103,20 +104,20 @@ export default function PlannerScreen() {
       <View style={styles.targetRow}>
         <Text style={styles.targetLabel}>{mod === "talep" ? "En fazla" : "Hedef stok"}</Text>
         <View style={styles.stepper}>
-          <Pressable
+          <PressableScale
             onPress={() => changeTarget(-1)}
             disabled={t <= 1}
             style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }, t <= 1 && { opacity: 0.3 }]}
           >
             <Text style={styles.stepBtnText}>−</Text>
-          </Pressable>
+          </PressableScale>
           <Text style={styles.stepValue}>{t}</Text>
-          <Pressable
+          <PressableScale
             onPress={() => changeTarget(1)}
             style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.6 }]}
           >
             <Text style={styles.stepBtnText}>+</Text>
-          </Pressable>
+          </PressableScale>
         </View>
       </View>
 
@@ -144,7 +145,7 @@ export default function PlannerScreen() {
           }
           ItemSeparatorComponent={RowGap}
           renderItem={({ item }) => (
-            <Pressable
+            <PressableScale
               onPress={() => router.push(`/product/${item.id}`)}
               style={({ pressed }) => [styles.row, pressed && { backgroundColor: ML.cardElevated }]}
             >
@@ -180,7 +181,7 @@ export default function PlannerScreen() {
                 <Text style={styles.qty}>{item.printQty}×</Text>
                 <Text style={styles.gram}>{Math.round(item.filament)}g</Text>
               </View>
-            </Pressable>
+            </PressableScale>
           )}
         />
       )}

@@ -4,7 +4,6 @@ import { router } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
 import { useMemo } from "react";
 import {
-  Pressable,
   RefreshControl,
   StyleSheet,
   Text,
@@ -12,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
@@ -77,12 +77,12 @@ export default function OrdersScreen() {
               : "yükleniyor…"}
           </Text>
         </View>
-        <Pressable
+        <PressableScale
           onPress={() => router.push("/manual-order/new")}
           style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
         >
           <Text style={styles.addButtonText}>+ Ekle</Text>
-        </Pressable>
+        </PressableScale>
       </View>
 
       {isLoading ? (
@@ -199,7 +199,7 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
   const st = statusInfo(order);
   const first = order.items[0];
   return (
-    <Pressable
+    <PressableScale
       onPress={() => router.push(`/order/${order.id}`)}
       style={({ pressed }) => [styles.card, pressed && { backgroundColor: ML.cardElevated }]}
     >
@@ -238,7 +238,7 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
           </Text>
         ) : null}
       </View>
-    </Pressable>
+    </PressableScale>
   );
 }
 

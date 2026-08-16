@@ -2,11 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
+import { PressableScale } from "@/components/ui/PressableScale";
 import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { useMemo, useState } from "react";
 import {
   Modal,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -139,7 +139,7 @@ export default function ProductDetailScreen() {
         <Header title="Ürün" />
         <View style={[styles.center, styles.errorBox]}>
           <Text style={styles.errorText}>{friendlyError(productError, "Ürün yüklenemedi.")}</Text>
-          <Pressable
+          <PressableScale
             onPress={() => void refetchProduct()}
             disabled={productRefetching}
             style={styles.retryButton}
@@ -147,7 +147,7 @@ export default function ProductDetailScreen() {
             <Text style={styles.retryButtonText}>
               {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
             </Text>
-          </Pressable>
+          </PressableScale>
         </View>
       </SafeAreaView>
     );
@@ -174,7 +174,7 @@ export default function ProductDetailScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.name}>{product.name}</Text>
             <Text style={styles.sku}>{product.sku}</Text>
-            <Pressable
+            <PressableScale
               onPress={() => {
                 setAliasDraft(product.alias ?? "");
                 setAliasOpen(true);
@@ -184,7 +184,7 @@ export default function ProductDetailScreen() {
               <Text style={styles.alias}>
                 {product.alias ? `✎ "${product.alias}"` : "✎ takma ad ekle"}
               </Text>
-            </Pressable>
+            </PressableScale>
           </View>
         </View>
 
@@ -195,7 +195,7 @@ export default function ProductDetailScreen() {
             {variantGroup.members.map((m) => {
               const isCurrent = m.id === product.id;
               return (
-                <Pressable
+                <PressableScale
                   key={m.id}
                   disabled={isCurrent}
                   onPress={() => router.push(`/product/${m.id}`)}
@@ -230,7 +230,7 @@ export default function ProductDetailScreen() {
                   ) : (
                     <Text style={styles.variantChevron}>›</Text>
                   )}
-                </Pressable>
+                </PressableScale>
               );
             })}
           </View>
@@ -267,9 +267,9 @@ export default function ProductDetailScreen() {
           <View style={styles.section}>
             <View style={styles.cardHeadRow}>
               <Text style={styles.sectionLabel}>MALİYET</Text>
-              <Pressable onPress={() => router.push(`/edit-cost/${product.id}`)} hitSlop={8}>
+              <PressableScale onPress={() => router.push(`/edit-cost/${product.id}`)} hitSlop={8}>
                 <Text style={styles.editLink}>Düzenle</Text>
-              </Pressable>
+              </PressableScale>
             </View>
             <Row label="Üretim" value={formatCurrency(profit.productionCost)} />
             <Row label="Paketleme" value={formatCurrency(profit.packagingCost)} />
@@ -277,12 +277,12 @@ export default function ProductDetailScreen() {
             <Row label="Toplam Maliyet" value={formatCurrency(profit.totalCost)} bold />
           </View>
         ) : (
-          <Pressable
+          <PressableScale
             onPress={() => router.push(`/edit-cost/${product.id}`)}
             style={({ pressed }) => [styles.addCostBtn, pressed && { opacity: 0.85 }]}
           >
             <Text style={styles.addCostText}>+ Maliyet Ekle</Text>
-          </Pressable>
+          </PressableScale>
         )}
 
         {/* Platform kâr/zarar */}
@@ -400,8 +400,8 @@ export default function ProductDetailScreen() {
         animationType="fade"
         onRequestClose={() => setAliasOpen(false)}
       >
-        <Pressable style={styles.aliasBackdrop} onPress={() => setAliasOpen(false)}>
-          <Pressable style={styles.aliasCard} onPress={() => {}}>
+        <PressableScale style={styles.aliasBackdrop} onPress={() => setAliasOpen(false)}>
+          <PressableScale style={styles.aliasCard} onPress={() => {}}>
             <Text style={styles.aliasModalTitle}>Takma ad</Text>
             <Text style={styles.aliasModalHint}>Liste ve aramada görünen kısa ad.</Text>
             <TextInput
@@ -418,10 +418,10 @@ export default function ProductDetailScreen() {
               }}
             />
             <View style={styles.aliasBtns}>
-              <Pressable onPress={() => setAliasOpen(false)} hitSlop={8}>
+              <PressableScale onPress={() => setAliasOpen(false)} hitSlop={8}>
                 <Text style={styles.aliasCancel}>İptal</Text>
-              </Pressable>
-              <Pressable
+              </PressableScale>
+              <PressableScale
                 onPress={() => {
                   aliasMutation.mutate(aliasDraft);
                   setAliasOpen(false);
@@ -429,10 +429,10 @@ export default function ProductDetailScreen() {
                 hitSlop={8}
               >
                 <Text style={styles.aliasSave}>Kaydet</Text>
-              </Pressable>
+              </PressableScale>
             </View>
-          </Pressable>
-        </Pressable>
+          </PressableScale>
+        </PressableScale>
       </Modal>
     </SafeAreaView>
   );
@@ -546,7 +546,7 @@ function StockButton({
   disabled?: boolean;
 }) {
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -556,7 +556,7 @@ function StockButton({
       ]}
     >
       <Text style={styles.stockBtnText}>{label}</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 
@@ -581,9 +581,9 @@ function ProductDetailSkeleton() {
 function Header({ title }: { title: string }) {
   return (
     <View style={styles.header}>
-      <Pressable onPress={() => router.back()} hitSlop={12} style={styles.back}>
+      <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
         <Text style={styles.backText}>‹</Text>
-      </Pressable>
+      </PressableScale>
       <Text style={styles.headerTitle} numberOfLines={1}>
         {title}
       </Text>

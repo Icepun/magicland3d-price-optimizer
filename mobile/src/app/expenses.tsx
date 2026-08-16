@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
@@ -231,10 +231,10 @@ export default function ExpensesScreen() {
               />
             </Field>
             <View style={styles.formActions}>
-              <Pressable onPress={() => setDraft(null)} style={styles.cancelBtn}>
+              <PressableScale onPress={() => setDraft(null)} style={styles.cancelBtn}>
                 <Text style={styles.cancelText}>Vazgeç</Text>
-              </Pressable>
-              <Pressable
+              </PressableScale>
+              <PressableScale
                 onPress={() => save.mutate(draft)}
                 disabled={save.isPending}
                 style={({ pressed }) => [
@@ -248,7 +248,7 @@ export default function ExpensesScreen() {
                 ) : (
                   <Text style={styles.saveText}>Kaydet</Text>
                 )}
-              </Pressable>
+              </PressableScale>
             </View>
           </View>
         )}
@@ -262,9 +262,9 @@ export default function ExpensesScreen() {
                 ? expensesQuery.error.message
                 : "Giderler yüklenemedi."}
             </Text>
-            <Pressable onPress={() => void expensesQuery.refetch()}>
+            <PressableScale onPress={() => void expensesQuery.refetch()}>
               <Text style={styles.retryText}>Tekrar dene</Text>
-            </Pressable>
+            </PressableScale>
           </View>
         ) : (expensesQuery.data?.length ?? 0) === 0 ? (
           <View style={styles.empty}>
@@ -273,7 +273,7 @@ export default function ExpensesScreen() {
           </View>
         ) : (
           (expensesQuery.data ?? []).map((expense) => (
-            <Pressable
+            <PressableScale
               key={expense.id}
               onPress={() => setDraft(expenseDraft(expense))}
               style={({ pressed }) => [
@@ -302,7 +302,7 @@ export default function ExpensesScreen() {
                 <Text style={styles.expenseAmount}>
                   {formatCurrency(expense.amountKurus / 100)}
                 </Text>
-                <Pressable
+                <PressableScale
                   hitSlop={10}
                   onPress={(event) => {
                     event.stopPropagation();
@@ -317,9 +317,9 @@ export default function ExpensesScreen() {
                   }}
                 >
                   <Text style={styles.deleteText}>Sil</Text>
-                </Pressable>
+                </PressableScale>
               </View>
-            </Pressable>
+            </PressableScale>
           ))
         )}
       </ScrollView>

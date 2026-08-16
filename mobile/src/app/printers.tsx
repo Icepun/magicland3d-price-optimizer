@@ -3,9 +3,10 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
 import {
@@ -135,14 +136,14 @@ export default function PrintersScreen() {
         <Chip text={`${printing} yazdırıyor`} color={ML.accent} />
       </View>
 
-      <Pressable
+      <PressableScale
         onPress={() => router.push("/custom-prints" as never)}
         style={({ pressed }) => [styles.archiveLink, pressed && { backgroundColor: ML.cardElevated }]}
       >
         <SymbolView name="tray.full.fill" tintColor={ML.accent} style={{ width: 17, height: 17 }} />
         <Text style={styles.archiveText}>Özel Baskılar Arşivi</Text>
         <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 13, height: 13 }} />
-      </Pressable>
+      </PressableScale>
 
       {snapshots.length > 0 ? (
         <View style={styles.liveBar}>
@@ -309,7 +310,7 @@ function CtrlBtn({
   onPress: () => void;
 }) {
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -320,7 +321,7 @@ function CtrlBtn({
     >
       <SymbolView name={icon} tintColor={color} style={{ width: 13, height: 13 }} />
       <Text style={[styles.ctrlText, { color }]}>{label}</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 
