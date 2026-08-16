@@ -18,7 +18,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Settings2, ChevronDown } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -42,6 +42,13 @@ interface CargoRule {
   vatIncluded: boolean;
   priority: number;
   isActive: boolean;
+  /**
+   * Geçerlilik penceresi. API bunları hep gönderiyordu ama bu tipte YOKTU — arayüz de
+   * göremediği için süresi dolmuş baremleri güncel olanlarla aynı tabloda çiziyordu.
+   * Kullanıcının gördüğü "her barem iki kez, iki farklı fiyat" bundan kaynaklanıyordu.
+   */
+  validFrom: string | null;
+  validTo: string | null;
 }
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
@@ -179,11 +186,13 @@ function RuleForm({
 /** Bir platformun kargo kurallarını ham tablo halinde gösterir (gelişmiş düzenleme). */
 function RulesTable({
   rules,
+  simdiMs,
   onEdit,
   onDelete,
   onToggle,
 }: {
   rules: CargoRule[];
+  simdiMs: number;
   onEdit: (r: CargoRule) => void;
   onDelete: (id: string) => void;
   onToggle: (r: CargoRule, v: boolean) => void;
@@ -210,11 +219,23 @@ function RulesTable({
         </thead>
         <tbody>
           {rules.map((r) => (
-            <tr key={r.id} className={cn("border-t border-border/60", !r.isActive && "opacity-45")}>
+            <tr
+              key={r.id}
+              className={cn(
+                "border-t border-border/60 transition-colors",
+                !r.isActive && "opacity-45",
+                !yururlukteMi(r, simdiMs) && "bg-muted/30"
+              )}
+            >
               <td className="px-3 py-2">
                 <div className="font-medium leading-tight">{r.name}</div>
                 {r.cargoProvider && (
                   <div className="text-[10px] text-muted-foreground">{r.cargoProvider}</div>
+                )}
+                {!yururlukteMi(r, simdiMs) && r.validTo && (
+                  <div className="text-[10px] text-amber-500/80">
+                    süresi doldu · {kisaTarih(r.validTo)}
+                  </div>
                 )}
               </td>
               <td className="text-right px-3 py-2 tabular-nums whitespace-nowrap">
@@ -443,14 +464,42 @@ function CargoBaremView({
   );
 }
 
-/** Aktif kurallardan temiz barem türet: düz tutar kademeleri (desi-bağımsız) + desi tablosu. */
-function deriveBarem(rules: CargoRule[]): {
+/**
+ * Bir kural verilen anda YÜRÜRLÜKTE mi?
+ *
+ * Kargo tarifeleri dönem dönem değişiyor ve eski kurallar SİLİNMİYOR — `validTo` ile kapanıyor,
+ * çünkü geçmiş siparişler kendi dönemlerinin fiyatıyla hesaplanmaya devam etmeli
+ * (`core/order-profit.ts → orderedAt`). Bu yüzden "hangi barem şu an geçerli" sorusu
+ * `isActive`'e değil, tarih penceresine bakar.
+ */
+function yururlukteMi(r: CargoRule, simdiMs: number): boolean {
+  if (r.validFrom && new Date(r.validFrom).getTime() > simdiMs) return false;
+  if (r.validTo && new Date(r.validTo).getTime() < simdiMs) return false;
+  return true;
+}
+
+/** Süresi dolmuş kuralları kapanış tarihine göre grupla (en yeni dönem üstte). */
+function gecmisDonemler(rules: CargoRule[], simdiMs: number): { bitis: string; kurallar: CargoRule[] }[] {
+  const gruplar = new Map<string, CargoRule[]>();
+  for (const r of rules) {
+    if (yururlukteMi(r, simdiMs) || !r.validTo) continue;
+    const anahtar = r.validTo;
+    const mevcut = gruplar.get(anahtar);
+    if (mevcut) mevcut.push(r);
+    else gruplar.set(anahtar, [r]);
+  }
+  return [...gruplar.entries()]
+    .map(([bitis, kurallar]) => ({ bitis, kurallar }))
+    .sort((a, b) => new Date(b.bitis).getTime() - new Date(a.bitis).getTime());
+}
+
+/** Verilen kural setinden temiz barem kur: düz tutar kademeleri (desi-bağımsız) + desi tablosu. */
+function baremKur(active: CargoRule[]): {
   flat: FlatTier[];
   desi: DesiBracket[];
   desiThreshold: number;
   provider: string | null;
 } {
-  const active = rules.filter((r) => r.isActive);
   // Düz tutar = desi-bağımsız (tüm desi aralığını kapsar: minDesi 0 → maxDesi 999). Desi baremi = alt-aralık.
   // (HB'nin son baremi 19.01–999 desi; minDesi>0 olduğu için düz değil, doğru şekilde desi sayılır.)
   const isFlat = (r: CargoRule) => r.minDesi <= 0 && r.maxDesi >= 999;
@@ -463,21 +512,116 @@ function deriveBarem(rules: CargoRule[]): {
     .map((r) => ({ fromDesi: r.minDesi, toDesi: r.maxDesi, cost: r.cargoCost }))
     .sort((a, b) => a.fromDesi - b.fromDesi);
   const desiThreshold = desiRules.length > 0 ? Math.min(...desiRules.map((r) => r.minPrice)) : 0;
-  const provider = rules.find((r) => r.cargoProvider)?.cargoProvider ?? null;
+  const provider = active.find((r) => r.cargoProvider)?.cargoProvider ?? null;
   return { flat, desi, desiThreshold, provider };
+}
+
+/**
+ * Sayfanın gösterdiği barem: yalnız BUGÜN yürürlükte olan ve açık kurallar.
+ *
+ * Eskiden yalnız `isActive`'e bakılıyordu; süresi dolmuş tarife de aynı tabloya giriyor ve
+ * her barem iki kez, iki farklı fiyatla görünüyordu. Eski kurallar silinmez — aşağıdaki
+ * "Geçmiş tarifeler" bölümünde durur.
+ */
+function deriveBarem(rules: CargoRule[], simdiMs: number) {
+  return baremKur(rules.filter((r) => r.isActive && yururlukteMi(r, simdiMs)));
 }
 
 const isTex = (r: CargoRule) => /tex/i.test(r.cargoProvider ?? "") || /tex/i.test(r.name);
 
+/** "31 Tem 2026" — Türkiye saatiyle kısa tarih. */
+function kisaTarih(iso: string): string {
+  return new Date(iso).toLocaleDateString("tr-TR", {
+    day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Istanbul",
+  });
+}
+
+/**
+ * GEÇMİŞ TARİFELER — süresi dolmuş baremler.
+ *
+ * Silinmiyorlar: o dönemde verilen siparişlerin kargo maliyeti hâlâ bunlardan hesaplanıyor
+ * (`core/order-profit.ts` siparişin KENDİ tarihine göre kural seçer). Silinseydi geçmiş
+ * ayların kâr rakamları sessizce değişirdi. Burada katlanmış duruyorlar ki güncel barem
+ * tablosu tek ve net kalsın.
+ */
+function GecmisTarifeler({ rules, simdiMs }: { rules: CargoRule[]; simdiMs: number }) {
+  const [acik, setAcik] = useState(false);
+  const donemler = useMemo(() => gecmisDonemler(rules, simdiMs), [rules, simdiMs]);
+  if (donemler.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setAcik((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-muted/40"
+      >
+        <ChevronRight
+          className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform duration-200", acik && "rotate-90")}
+        />
+        <span className="text-xs font-medium">Geçmiş tarifeler</span>
+        <span className="text-[11px] text-muted-foreground">
+          {donemler.length === 1
+            ? `${kisaTarih(donemler[0].bitis)} tarihine kadar geçerliydi`
+            : `${donemler.length} eski dönem`}
+        </span>
+      </button>
+
+      {acik && (
+        <div className="px-3 pb-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Bu fiyatlar artık kullanılmıyor. O tarihlerde verilmiş siparişlerin kârı hâlâ bunlara
+            göre hesaplandığı için duruyorlar.
+          </p>
+          {donemler.map((d) => {
+            const barem = baremKur(d.kurallar.filter((r) => r.isActive));
+            return (
+              <div key={d.bitis} className="space-y-1.5">
+                <div className="text-[11px] font-medium text-muted-foreground">
+                  {kisaTarih(d.bitis)} tarihine kadar
+                </div>
+                <div className="rounded-md border border-border/50 overflow-hidden opacity-75">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {barem.flat.map((t) => (
+                        <tr key={`f-${t.minPrice}-${t.maxPrice}`} className="border-b border-border/40 last:border-0">
+                          <td className="px-2.5 py-1.5 text-muted-foreground tabular-nums">
+                            {t.minPrice} – {priceLabel(t.maxPrice)} ₺
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right tabular-nums">{formatCurrency(t.cost)}</td>
+                        </tr>
+                      ))}
+                      {barem.desi.map((b) => (
+                        <tr key={`d-${b.fromDesi}-${b.toDesi}`} className="border-b border-border/40 last:border-0">
+                          <td className="px-2.5 py-1.5 text-muted-foreground tabular-nums">
+                            {desiLabel(b.fromDesi, b.toDesi)} desi
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right tabular-nums">{formatCurrency(b.cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Gelişmiş: ham kuralları düzenle (katlanır). */
 function AdvancedRules({
   rules,
+  simdiMs,
   onAdd,
   onEdit,
   onDelete,
   onToggle,
 }: {
   rules: CargoRule[];
+  simdiMs: number;
   onAdd: () => void;
   onEdit: (r: CargoRule) => void;
   onDelete: (id: string) => void;
@@ -497,7 +641,7 @@ function AdvancedRules({
             <Plus className="h-4 w-4 mr-2" /> Kural Ekle
           </Button>
         </div>
-        <RulesTable rules={rules} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
+        <RulesTable rules={rules} simdiMs={simdiMs} onEdit={onEdit} onDelete={onDelete} onToggle={onToggle} />
       </div>
     </details>
   );
@@ -505,6 +649,12 @@ function AdvancedRules({
 
 export default function CargoRulesPage() {
   const [tab, setTab] = useState<Platform>("trendyol");
+  /**
+   * Geçerlilik penceresi için TEK bir "şimdi" — sayfa açıkken sabit kalır.
+   * Her render'da yeniden okunsaydı hesap saf olmazdı; tarifeler zaten aylık ölçekte değişiyor,
+   * sayfa açıkken donmuş bir an yeterli.
+   */
+  const [simdiMs] = useState(() => Date.now());
   /**
    * Kapsam bilgisi — ürünlerdeki en büyük desiyi buradan alıyoruz.
    * Kart zaten aynı ucu çekiyor; TanStack aynı anahtarı paylaştığı için EK istek olmuyor.
@@ -559,7 +709,11 @@ export default function CargoRulesPage() {
   // ── Platform bazlı kural setleri (TEX = Trendyol; kalan platform-bazlı/eski null kurallar Shopify) ──
   const trendyolRules = rules.filter((r) => r.platform === "trendyol" || isTex(r));
   const shopifyRules = rules.filter((r) => r.platform === "shopify" || (!r.platform && !isTex(r)));
-  const trendyolMode: CargoMode = trendyolRules.some((r) => /avantaj/i.test(r.name) && r.isActive)
+  // Mod YÜRÜRLÜKTEKİ kurallardan okunur: süresi dolmuş bir "Avantajlı" kural açık kalmışsa
+  // düğme yanlış tarafta görünürdü (sunucu tarafı zaten yalnız yürürlüktekini çeviriyor).
+  const trendyolMode: CargoMode = trendyolRules.some(
+    (r) => /avantaj/i.test(r.name) && r.isActive && yururlukteMi(r, simdiMs)
+  )
     ? "avantajli"
     : "standart";
 
@@ -577,7 +731,9 @@ export default function CargoRulesPage() {
       queryClient.setQueryData<CargoRule[]>(["cargo-rules"], (old) =>
         Array.isArray(old)
           ? old.map((r) => {
-              if (!isTex(r)) return r;
+              // Süresi dolmuş kurallara DOKUNMA — sunucu da dokunmuyor (`validTo: null` şartı).
+              // Yoksa önizleme geçmiş tarifeyi de çevirmiş gibi gösterir, sonra geri döner.
+              if (!isTex(r) || !yururlukteMi(r, simdiMs)) return r;
               if (/avantaj/i.test(r.name)) return { ...r, isActive: mode === "avantajli" };
               if (/standart/i.test(r.name)) return { ...r, isActive: mode === "standart" };
               return r;
@@ -642,12 +798,12 @@ export default function CargoRulesPage() {
   const onToggleRule = (r: CargoRule, v: boolean) =>
     updateMutation.mutate({ id: r.id, data: { isActive: v } as Partial<FormData> as FormData });
 
-  const trendyolBarem = deriveBarem(trendyolRules);
-  const shopifyBarem = deriveBarem(shopifyRules);
+  const trendyolBarem = deriveBarem(trendyolRules, simdiMs);
+  const shopifyBarem = deriveBarem(shopifyRules, simdiMs);
   const hepsiburadaRules = rules.filter((r) => r.platform === "hepsiburada");
-  const hepsiburadaBarem = deriveBarem(hepsiburadaRules);
+  const hepsiburadaBarem = deriveBarem(hepsiburadaRules, simdiMs);
   const vatNote = (platformRules: CargoRule[]) => {
-    const active = platformRules.filter((rule) => rule.isActive);
+    const active = platformRules.filter((rule) => rule.isActive && yururlukteMi(rule, simdiMs));
     if (active.length === 0) return undefined;
     if (active.every((rule) => rule.vatIncluded)) return "Fiyatlar KDV dahil";
     if (active.every((rule) => !rule.vatIncluded)) return "Fiyatlar KDV hariç";
@@ -687,9 +843,11 @@ export default function CargoRulesPage() {
                 desiThreshold={shopifyBarem.desiThreshold}
                 loading={isLoading}
               />
+              {!isLoading && <GecmisTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
               {!isLoading && (
                 <AdvancedRules
                   rules={shopifyRules}
+                  simdiMs={simdiMs}
                   onAdd={() => setOpen(true)}
                   onEdit={setEditing}
                   onDelete={(id) => deleteMutation.mutate(id)}
@@ -718,9 +876,11 @@ export default function CargoRulesPage() {
                 desiThreshold={trendyolBarem.desiThreshold}
                 loading={isLoading}
               />
+              {!isLoading && <GecmisTarifeler rules={trendyolRules} simdiMs={simdiMs} />}
               {!isLoading && (
                 <AdvancedRules
                   rules={trendyolRules}
+                  simdiMs={simdiMs}
                   onAdd={() => setOpen(true)}
                   onEdit={setEditing}
                   onDelete={(id) => deleteMutation.mutate(id)}
@@ -754,8 +914,10 @@ export default function CargoRulesPage() {
                   <p className="text-[10px] text-muted-foreground">
                     Kargo fiyatı değişince buradan güncelle. Üstteki desteği açıp kapatmak baremi resmi tarifeye sıfırlar.
                   </p>
+                  {!isLoading && <GecmisTarifeler rules={hepsiburadaRules} simdiMs={simdiMs} />}
                   <AdvancedRules
                     rules={hepsiburadaRules}
+                    simdiMs={simdiMs}
                     onAdd={() => setOpen(true)}
                     onEdit={setEditing}
                     onDelete={(id) => deleteMutation.mutate(id)}

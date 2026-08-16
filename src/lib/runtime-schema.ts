@@ -8,7 +8,7 @@ import {
 } from "@/lib/sqlite-date";
 import fs from "node:fs";
 import path from "node:path";
-import { migrateTexTariff2026Agustos } from "@/lib/runtime-schema-tex";
+import { migrateTexTariff2026Agustos, fixTexSinirBoslugu } from "@/lib/runtime-schema-tex";
 
 let schemaReady: Promise<void> | null = null;
 
@@ -63,12 +63,15 @@ let schemaReady: Promise<void> | null = null;
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
+// v44: TEX kargo tarifesinin kapanış anı 23:59:59.000 → .999. Eski kapanışla yeni tarifenin
+//      başlangıcı arasında 999 ms'lik kuralsız boşluk vardı; o ana düşen siparişin kargo
+//      maliyeti bulunamıyordu. Veri düzeltmesi: `fixTexSinirBoslugu`.
 // v42: Gider Ödemeleri — tekrarlayan sabit giderler (`RecurringExpense`), kullanıcının kendi
 //      kategori listesi (`ExpenseCategory`) ve `ActualExpense`'e `recurringId`/`periodKey`.
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "43";
+const CURRENT_SCHEMA_VERSION = "44";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1509,6 +1512,9 @@ export function ensureRuntimeSchema(): Promise<void> {
     await migrateParentVariantsToGroups();
     // v43: TEX kargo tarifesi 1 Ağu 2026 zammı — eskiler validTo ile kapanır, yeniler validFrom ile başlar.
     await migrateTexTariff2026Agustos();
+    // v44: TEX sınır boşluğu — eski tarifenin kapanışı .000 idi, yeni tarife .000'da başlıyordu;
+    // aradaki 999 ms'ye düşen siparişe hiçbir kural uymuyordu. Kapanış .999'a çekiliyor.
+    await fixTexSinirBoslugu();
     // v40: karışık tipli tarih damgalarını tek biçime çek (Raporlar'daki kayıp siparişler).
     const tarihOnarimiTamam = await normalizeDateColumns();
 

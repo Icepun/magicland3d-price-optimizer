@@ -154,6 +154,33 @@ export interface CargoRuleFull {
   vatIncluded: number;
   priority: number;
   isActive: number;
+  /**
+   * Geçerlilik penceresi. Kargo tarifeleri dönem dönem değişiyor; eski kurallar SİLİNMİYOR,
+   * `validTo` ile kapanıyor (geçmiş siparişler kendi dönemlerinin fiyatıyla hesaplanmalı).
+   * Bu kolonlar okunmadığı için telefon süresi dolmuş baremleri güncel olanlarla yan yana
+   * listeliyordu — her barem iki kez, iki farklı fiyatla.
+   *
+   * Tip `unknown`: kolon bazı kayıtlarda epoch-ms sayı, bazılarında ISO metin olabiliyor.
+   */
+  validFrom: unknown;
+  validTo: unknown;
+}
+
+/** Epoch-ms sayı da ISO metin de olabilen tarih kolonunu ms'e çevirir. */
+export function kuralTarihMs(deger: unknown): number | null {
+  if (deger == null) return null;
+  if (typeof deger === "number") return Number.isFinite(deger) ? deger : null;
+  const t = Date.parse(String(deger));
+  return Number.isNaN(t) ? null : t;
+}
+
+/** Kural verilen anda yürürlükte mi? */
+export function kuralYururlukte(r: CargoRuleFull, simdiMs: number): boolean {
+  const bas = kuralTarihMs(r.validFrom);
+  const bit = kuralTarihMs(r.validTo);
+  if (bas != null && simdiMs < bas) return false;
+  if (bit != null && simdiMs > bit) return false;
+  return true;
 }
 
 export interface CargoDraft {
@@ -171,7 +198,7 @@ export interface CargoDraft {
 export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
   await ensureCargoVatSchema();
   return query<CargoRuleFull>(
-    `SELECT id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, priority, isActive
+    `SELECT id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, priority, isActive, validFrom, validTo
        FROM CargoRule ORDER BY platform, minDesi ASC`
   );
 }

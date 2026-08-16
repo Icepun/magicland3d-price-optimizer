@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import {
   TEX_ESKI_TARIFE_BITIS,
+  TEX_ESKI_TARIFE_BITIS_BOSLUKLU,
   TEX_YENI_TARIFE_BASLANGIC,
   buildTexCargoRules,
 } from "@/core/tex-tariff";
@@ -53,6 +54,28 @@ export async function migrateTexTariff2026Agustos(): Promise<boolean> {
     return true;
   } catch {
     // Göç isteğe bağlıdır: başarısız olursa açılış BLOKLANMAZ (bkz. optional-step-must-not-block).
+    return false;
+  }
+}
+
+/**
+ * SINIR BOŞLUĞU ONARIMI — eski tarifenin kapanışı `23:59:59.000` yazılmıştı.
+ *
+ * Kural eşleşmesi kapsayıcı (`date > validTo` ise elenir), yeni tarife ise `00:00:00.000`'da
+ * başlıyor. Aradaki 999 milisaniyeye düşen bir siparişe HİÇBİR kural uymuyordu: eski bitmiş,
+ * yeni başlamamış. Kapanış `.999`'a çekilerek boşluk tamamen kapanır.
+ *
+ * Hiçbir siparişin sonucu DEĞİŞMEZ: eklenen aralık yalnızca daha önce kuralsız kalan
+ * milisaniyeleri kapsar, mevcut eşleşmelerin hiçbirine dokunmaz.
+ */
+export async function fixTexSinirBoslugu(): Promise<boolean> {
+  try {
+    await prisma.cargoRule.updateMany({
+      where: { platform: "trendyol", validTo: new Date(TEX_ESKI_TARIFE_BITIS_BOSLUKLU) },
+      data: { validTo: new Date(TEX_ESKI_TARIFE_BITIS) },
+    });
+    return true;
+  } catch {
     return false;
   }
 }

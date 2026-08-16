@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { RuleList } from "@/components/RuleList";
-import { getAllCargoRules, setCargoRuleActive } from "@/lib/db/rule-crud";
+import { getAllCargoRules, kuralYururlukte, setCargoRuleActive } from "@/lib/db/rule-crud";
 
 function platformLabel(p: string | null): string {
   if (!p) return "Tümü";
@@ -26,7 +26,18 @@ export default function CargoRulesScreen() {
     },
   });
 
-  const items = data?.map((r) => ({
+  /**
+   * Yalnız BUGÜN yürürlükte olan baremler listelenir.
+   *
+   * Kargo tarifeleri dönem dönem değişiyor ve eski kurallar silinmiyor — `validTo` ile
+   * kapanıyor, çünkü o dönemde verilen siparişlerin kârı hâlâ onlardan hesaplanıyor.
+   * Hepsi listelenince her barem iki kez, iki farklı fiyatla görünüyordu.
+   */
+  const simdiMs = Date.now();
+  const yururlukteOlanlar = data?.filter((r) => kuralYururlukte(r, simdiMs));
+  const gizlenen = (data?.length ?? 0) - (yururlukteOlanlar?.length ?? 0);
+
+  const items = yururlukteOlanlar?.map((r) => ({
     id: r.id,
     name: r.name,
     badge: platformLabel(r.platform),
@@ -37,7 +48,11 @@ export default function CargoRulesScreen() {
   return (
     <RuleList
       title="Kargo Kuralları"
-      note="Platform + desi aralığına göre kargo bareni."
+      note={
+        gizlenen > 0
+          ? `Platform + desi aralığına göre kargo baremi. ${gizlenen} eski barem gizli — geçmiş siparişler için duruyor.`
+          : "Platform + desi aralığına göre kargo baremi."
+      }
       addHref="/rules/cargo-edit/new"
       editHrefBase="/rules/cargo-edit"
       items={items}
