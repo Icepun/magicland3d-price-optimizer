@@ -112,7 +112,6 @@ export default function MoreScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   list: { padding: 16, gap: 10 },
   row: {
     flexDirection: "row",

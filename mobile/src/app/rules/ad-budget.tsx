@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router } from "expo-router";
-import { SymbolView } from "expo-symbols";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConnectionError } from "@/components/ConnectionError";
+import { ScreenHeader } from "@/components/form";
 import { Card, Chip, Pill, SectionLabel, SkeletonList } from "@/components/ui";
 import { PressableScale } from "@/components/ui/PressableScale";
 import {
@@ -88,15 +87,8 @@ export default function AdBudgetScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
-          <SymbolView name="chevron.left" size={18} tintColor={ML.accent} />
-        </PressableScale>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Reklam Bütçesi</Text>
-          <Text style={styles.subtitle}>Günlük harcama · kâra doğrudan yansır</Text>
-        </View>
-      </View>
+      {/* Diğer tüm alt ekranlarla aynı başlık çubuğu. */}
+      <ScreenHeader title="Reklam Bütçesi" />
 
       {butceler.error ? (
         <ConnectionError
@@ -134,7 +126,7 @@ export default function AdBudgetScreen() {
               <Text style={styles.perDay}>/gün</Text>
             </View>
             <Text style={styles.hint}>
-              Bugünden itibaren geçerli olur. Aynı platformun yürürlükteki bütçesi kapanır — eski
+              Günlük harcama kâra doğrudan yansır. Bugünden itibaren geçerli olur. Aynı platformun yürürlükteki bütçesi kapanır — eski
               dönem silinmez, geçmiş siparişlerin kârı ona bağlıdır.
             </Text>
             <PressableScale
@@ -205,17 +197,6 @@ export default function AdBudgetScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.md,
-  },
-  back: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  title: { ...type.title, color: ML.text },
-  subtitle: { ...type.small, color: ML.textDim, marginTop: 2 },
   content: { padding: space.lg, paddingTop: 0, gap: space.md, paddingBottom: space.xxl },
   form: { gap: space.md },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },

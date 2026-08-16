@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { SymbolView } from "expo-symbols";
 import { FlashList } from "@shopify/flash-list";
 import { useMemo, useState } from "react";
 import {
@@ -21,8 +20,6 @@ import { AppHeader } from "@/components/AppHeader";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
-import { getPrepDone } from "@/lib/db/prep";
-import { prepItemsFromOrders } from "@/lib/prep";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
@@ -103,17 +100,6 @@ export default function OrdersScreen() {
     return { active, cancelled: gorunur.length - active };
   }, [data, gorunur]);
 
-  /**
-   * Başlıktaki hazırlık rozeti: kaç ÜRÜN satırı hâlâ toplanmayı bekliyor.
-   * İşaretler masaüstüyle ortak (`PrepDone`) — orada işaretlenen burada da düşer.
-   */
-  const { data: prepDone } = useQuery({ queryKey: ["prep-done"], queryFn: getPrepDone });
-  const prepKalan = useMemo(() => {
-    if (!data) return 0;
-    const isaretli = new Set(prepDone ?? []);
-    return prepItemsFromOrders(gorunur, products).filter((i) => !isaretli.has(i.key)).length;
-  }, [data, gorunur, products, prepDone]);
-
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <AppHeader
@@ -126,28 +112,17 @@ export default function OrdersScreen() {
               : `${counts.active} sipariş · son 30`
             : "yükleniyor…"
         }
+        // ⚠️ Başlığa YALNIZ bir düğme sığıyor. Bir tur "Hazırlık" düğmesi de buradaydı:
+        // + Ekle (~74pt) + hazırlık (~58) + zil (40) + boşluklar (36) = ~208pt; iPhone SE'de
+        // başlık sütununa 127pt kalıyor ve "Siparişler" (32pt, ~168pt) kırpılıyordu.
+        // Hazırlık kısayolu Atölye sekmesine taşındı — paketleme zaten orada yapılıyor.
         right={
-          <>
-            {/* HAZIRLIK — paketleme rafın önünde yapılıyor; liste bir dokunuş uzakta olsun.
-                Rozet "kaç ürün kaldı"yı söyler, işaretler masaüstüyle ortaktır. */}
-            <PressableScale
-              onPress={() => router.push("/hazirlik")}
-              style={styles.prepButton}
-              accessibilityRole="button"
-              accessibilityLabel={
-                prepKalan > 0 ? `Hazırlık listesi, ${prepKalan} ürün kaldı` : "Hazırlık listesi"
-              }
-            >
-              <SymbolView name="shippingbox.fill" size={16} tintColor={ML.orange} />
-              {prepKalan > 0 ? <Text style={styles.prepCount}>{prepKalan}</Text> : null}
-            </PressableScale>
-            <PressableScale
-              onPress={() => router.push("/manual-order/new")}
-              style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
-            >
-              <Text style={styles.addButtonText}>+ Ekle</Text>
-            </PressableScale>
-          </>
+          <PressableScale
+            onPress={() => router.push("/manual-order/new")}
+            style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
+          >
+            <Text style={styles.addButtonText}>+ Ekle</Text>
+          </PressableScale>
         }
       />
 
@@ -361,20 +336,6 @@ const styles = StyleSheet.create({
   },
   chips: { gap: 8, paddingRight: 16 },
   safe: { flex: 1, backgroundColor: ML.bg },
-  prepButton: {
-    minWidth: 44,
-    height: 40,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    backgroundColor: ML.card,
-  },
-  prepCount: { color: ML.orange, fontSize: 14, fontWeight: "800", fontVariant: ["tabular-nums"] },
   addButton: {
     backgroundColor: ML.accentSoft,
     borderRadius: radius.md,

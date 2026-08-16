@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
-import { Stack, router } from "expo-router";
+import { Stack } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useMemo } from "react";
 import { Alert, StyleSheet, Text, View } from "react-native";
@@ -10,6 +10,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { PrepItem } from "@core/prep-list";
 import { AnimatedBar, FadeInView } from "@/components/fade-in";
 import { ConnectionError } from "@/components/ConnectionError";
+import { ScreenHeader } from "@/components/form";
 import { EmptyState, Pill, SkeletonList } from "@/components/ui";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
@@ -142,25 +143,18 @@ export default function HazirlikScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={styles.header}>
-        <PressableScale
-          onPress={() => router.back()}
-          style={styles.back}
-          accessibilityRole="button"
-          accessibilityLabel="Geri"
-        >
-          <SymbolView name="chevron.left" size={18} tintColor={ML.accent} />
-        </PressableScale>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Hazırlık</Text>
-          <Text style={styles.subtitle}>
-            {yukleniyor
-              ? "yükleniyor…"
-              : items.length === 0
-                ? "hazırlanacak sipariş yok"
-                : `${kalan.length} ürün · ${toplamAdet} adet kaldı`}
-          </Text>
-        </View>
+      {/* Başlık çubuğu diğer TÜM alt ekranlarla aynı (ScreenHeader): geri oku solda, ad ortada.
+          Kendi başlığını yazan tek ekran olmak, uygulamayı derme çatma gösteriyordu. */}
+      <ScreenHeader title="Hazırlık" />
+
+      <View style={styles.durum}>
+        <Text style={styles.durumText}>
+          {yukleniyor
+            ? "yükleniyor…"
+            : items.length === 0
+              ? "hazırlanacak sipariş yok"
+              : `${kalan.length} ürün · ${toplamAdet} adet kaldı`}
+        </Text>
         {doneSet.size > 0 ? (
           <PressableScale
             onPress={() =>
@@ -174,7 +168,8 @@ export default function HazirlikScreen() {
             accessibilityRole="button"
             accessibilityLabel="İşaretleri sıfırla"
           >
-            <SymbolView name="arrow.counterclockwise" size={16} tintColor={ML.textDim} />
+            <SymbolView name="arrow.counterclockwise" size={15} tintColor={ML.textDim} />
+            <Text style={styles.resetText}>Sıfırla</Text>
           </PressableScale>
         ) : null}
       </View>
@@ -225,21 +220,29 @@ export default function HazirlikScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: {
+  durum: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: space.sm,
-    paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.md,
+    paddingHorizontal: 20,
+    paddingTop: space.xs,
+    paddingBottom: space.sm,
   },
-  back: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  headerText: { flex: 1 },
-  reset: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  title: { ...type.title, color: ML.text },
-  subtitle: { ...type.small, color: ML.textDim, marginTop: 2 },
-  progress: { paddingHorizontal: space.lg, paddingBottom: space.md },
-  list: { paddingHorizontal: space.lg, paddingBottom: space.xl },
+  durumText: { ...type.body, color: ML.textDim, flex: 1 },
+  reset: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+  },
+  resetText: { ...type.small, color: ML.textDim, fontWeight: "700" },
+  progress: { paddingHorizontal: 20, paddingBottom: space.md },
+  list: { paddingHorizontal: 20, paddingBottom: space.xl },
   row: {
     flexDirection: "row",
     alignItems: "center",

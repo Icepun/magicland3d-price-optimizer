@@ -66,8 +66,14 @@ export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
  * 12 punto soluk gri, gün ışığında okunmuyordu.
  */
 export const type = {
-  /** Ekran başlığı */
-  title: { fontSize: 26, fontWeight: "800" },
+  /**
+   * Ekran başlığı.
+   *
+   * ⚠️ 32 — 26 DEĞİL. Sekmelerin kendi başlıkları hep 32/-0.5 idi; ortak `AppHeader`'a
+   * geçerken buradaki 26'ya bağlanınca Panel, Siparişler, Ürünler ve Daha'nın başlığı bir
+   * anda küçüldü ve uygulama "bozulmuş" göründü. Ölçek, var olan tasarımı takip eder.
+   */
+  title: { fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   /** Kart/bölüm başlığı */
   heading: { fontSize: 18, fontWeight: "700" },
   /** Gövde */

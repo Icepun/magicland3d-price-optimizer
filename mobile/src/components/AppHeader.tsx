@@ -43,14 +43,23 @@ export function AppHeader({
         <Text style={styles.title} numberOfLines={1}>
           {title}
         </Text>
-        {typeof subtitle === "string" ? (
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        ) : (
-          subtitle
-        )}
-        {updatedAt ? <FreshnessStamp updatedAt={updatedAt} style={styles.stamp} /> : null}
+        {/* Alt başlık ve tazelik damgası AYNI SATIRDA: damga kendi satırını alsaydı başlık üç
+            satır olur, gövde aşağı kayar ve her sekme birden uzardı. */}
+        <View style={styles.subRow}>
+          {typeof subtitle === "string" ? (
+            <Text style={styles.subtitle} numberOfLines={1}>
+              {subtitle}
+            </Text>
+          ) : (
+            subtitle
+          )}
+          {updatedAt ? (
+            <>
+              <Text style={styles.ayrac}>·</Text>
+              <FreshnessStamp updatedAt={updatedAt} />
+            </>
+          ) : null}
+        </View>
       </View>
       {right}
       {bell ? <NotificationBell /> : null}
@@ -90,19 +99,26 @@ export function NotificationBell() {
 }
 
 const styles = StyleSheet.create({
+  /**
+   * ⚠️ ÖLÇÜLER SEKMELERİN ESKİ BAŞLIĞIYLA AYNI (20 / 8 / 4).
+   * Bir tur boyunca ölçek jetonlarına (space.lg = 16, space.md = 12) bağlıydı: başlık içeriden
+   * başlıyor, altındaki listeyle hizası kayıyor ve gövde 8px aşağı itiliyordu. Jeton "daha
+   * düzenli" diye var olan tasarımı değiştirmek için bahane değil.
+   */
   header: {
     flexDirection: "row",
     alignItems: "center",
-    gap: space.sm,
-    paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.md,
-    minHeight: 56, // sekme değişince başlık zıplamasın
+    gap: space.md,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
   textCol: { flex: 1 },
   title: { ...type.title, color: ML.text },
-  subtitle: { ...type.small, color: ML.textDim, marginTop: 2 },
-  stamp: { marginTop: 2 },
+  // 14 — type.small (13) değil: sekme alt başlıkları hep 14'tü.
+  subtitle: { color: ML.textDim, fontSize: 14 },
+  subRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2 },
+  ayrac: { color: ML.textFaint, fontSize: 12 },
   bell: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   badge: {
     position: "absolute",

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -10,7 +11,11 @@ import { AppHeader } from "@/components/AppHeader";
 import { ConnectionError } from "@/components/ConnectionError";
 import { Card, Pill, SectionLabel, SkeletonList } from "@/components/ui";
 import { PressableScale } from "@/components/ui/PressableScale";
+import { getAllOrders, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
+import { getOrderMatchProducts } from "@/lib/db/dashboard";
+import { getPrepDone } from "@/lib/db/prep";
 import { getPrinterSnapshots } from "@/lib/db/printers";
+import { prepItemsFromOrders } from "@/lib/prep";
 import { getSpools } from "@/lib/db/spools";
 import { useManualRefresh } from "@/lib/use-refresh";
 import { ML, radius, space, tabular, type } from "@/theme/colors";
@@ -40,23 +45,31 @@ function Kisayol({
   label,
   href,
   tint,
+  count,
 }: {
   icon: SymbolViewProps["name"];
   label: string;
   href: string;
   tint: string;
+  /** Bekleyen iş sayısı (hazırlık listesi) — 0/undefined ise rozet çizilmez. */
+  count?: number;
 }) {
   return (
     <PressableScale
       onPress={() => router.push(href as never)}
       style={styles.shortcut}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={count ? `${label}, ${count} bekliyor` : label}
     >
       <SymbolView name={icon} size={22} tintColor={tint} />
       <Text style={styles.shortcutText} numberOfLines={1}>
         {label}
       </Text>
+      {count ? (
+        <View style={[styles.shortcutBadge, { backgroundColor: tint }]}>
+          <Text style={styles.shortcutBadgeText}>{count > 99 ? "99+" : count}</Text>
+        </View>
+      ) : null}
     </PressableScale>
   );
 }
@@ -75,6 +88,18 @@ export default function AtolyeScreen() {
   // Filament uyarıları ortak çekirdekten — zil ve Filament ekranıyla AYNI kural.
   const gruplar = groupSpools(spools.data ?? []);
   const uyarilar = buildFilamentAlerts(gruplar);
+
+  /** Hazırlık rozeti: kaç ürün satırı toplanmayı bekliyor (işaretler masaüstüyle ortak). */
+  const orders = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
+  const urunler = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
+  const prepDone = useQuery({ queryKey: ["prep-done"], queryFn: getPrepDone });
+  const prepKalan = useMemo(() => {
+    if (!orders.data) return 0;
+    const isaretli = new Set(prepDone.data ?? []);
+    return prepItemsFromOrders(visibleOrders(orders.data.orders), urunler.data).filter(
+      (i) => !isaretli.has(i.key)
+    ).length;
+  }, [orders.data, urunler.data, prepDone.data]);
 
   const hata = printers.error ?? spools.error;
   const yukleniyor = printers.isLoading || spools.isLoading;
@@ -174,6 +199,16 @@ export default function AtolyeScreen() {
 
           <SectionLabel>Kısayollar</SectionLabel>
           <View style={styles.shortcuts}>
+            {/* HAZIRLIK en başta: paketleme atölyede yapılıyor ve rozet "kaç ürün toplanacak"
+                sorusunu ekranı açmadan cevaplıyor. (Siparişler başlığındaydı; orada + Ekle ve
+                zille birlikte başlığı kırpıyordu.) */}
+            <Kisayol
+              icon="shippingbox.fill"
+              label="Hazırlık"
+              href="/hazirlik"
+              tint={ML.orange}
+              count={prepKalan}
+            />
             <Kisayol icon="printer.fill" label="Yazıcılar" href="/printers" tint={ML.accent} />
             <Kisayol icon="circle.grid.cross.fill" label="Makaralar" href="/spools" tint={ML.green} />
             <Kisayol icon="list.bullet.rectangle" label="Üretim" href="/planner" tint={ML.orange} />
@@ -210,5 +245,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ML.borderSoft,
   },
-  shortcutText: { ...type.body, color: ML.text, fontWeight: "700" },
+  shortcutText: { ...type.body, color: ML.text, fontWeight: "700", flexShrink: 1 },
+  shortcutBadge: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: "auto",
+  },
+  shortcutBadgeText: { color: ML.bg, fontSize: 12, fontWeight: "800" },
 });
