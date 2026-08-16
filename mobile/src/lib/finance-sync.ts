@@ -49,6 +49,15 @@ export function buildFinanceSnapshots(
       profitSource: op.profitSource,
       estimatedCommission: op.estimatedCommission,
       actualCommission: op.actualCommission,
+      // KALEMLER: ürün bazlı satış geçmişi (`OrderItemSnapshot`). Telefonla çalışılan günlerde
+      // masaüstü kapalıysa bu satırlar hiç yazılmıyordu; pazaryeri penceresi kayınca o gün bir
+      // daha geri gelmiyor ve "satış hızı" ile ürün kırılımı eksik kalıyordu.
+      items: o.items.map((it) => ({
+        productId: it.productId ?? null,
+        productName: it.name,
+        quantity: it.quantity,
+        unitPrice: it.unitPrice,
+      })),
     });
   }
   return out;

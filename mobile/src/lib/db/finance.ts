@@ -1,6 +1,7 @@
 import { batch, execute, query } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
+import { dbEpochMs } from "@core/sqlite-date";
 
 const ISTANBUL_TZ = "Europe/Istanbul";
 
@@ -18,6 +19,22 @@ export interface OrderFinanceSnapshotInput {
   profitSource?: "calculated" | "platform";
   estimatedCommission?: number;
   actualCommission?: number | null;
+  /**
+   * Siparişin KALEMLERİ — ürün bazlı satış geçmişinin tek kaynağı (`OrderItemSnapshot`).
+   *
+   * ⚠️ Eskiden mobil yalnız sipariş TOPLAMINI yazıyordu. Telefonla çalışılan günlerde
+   * (masaüstü kapalıyken) kalem geçmişinde delik oluşuyor; "satış hızı" (planner) ve ürün
+   * bazlı ciro kırılımı o günleri sıfır sayıyordu — pazaryeri penceresi kayınca o veri BİR
+   * DAHA geri gelmiyor. Boş bırakılırsa kalem yazılmaz (eski davranış).
+   */
+  items?: OrderItemSnapshotInput[];
+}
+
+export interface OrderItemSnapshotInput {
+  productId: string | null;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
 }
 
 export interface ActualExpense {
@@ -244,7 +261,34 @@ export async function syncOrderFinanceSnapshots(
       e.act !== (s.actualCommission == null ? null : tlToKurus(s.actualCommission))
     );
   });
-  if (changed.length === 0) return;
+  /**
+   * KALEMİ HİÇ YAZILMAMIŞ siparişler — finansal değerleri değişmese bile kalemleri yazılmalı.
+   * Mobil eskiden kalem yazmıyordu; o dönemde telefonun yazdığı siparişlerin ürün kırılımı boş
+   * kaldı ve pazaryeri penceresi kayınca bir daha türetilemez. Bu okuma o deliği kapatır.
+   */
+  const kalemliSiparisler = new Set<string>();
+  try {
+    // Yalnız ELDEKİ siparişlerin penceresi okunur: `OrderItemSnapshot` kalıcı bir geçmiş
+    // (yıllarca birikir), tamamını her senkronda çekmek boşuna ağ ve bellek olurdu.
+    const enEski = Math.min(
+      ...snapshots.map((s) => asDate(s.orderedAt).getTime()).filter((n) => Number.isFinite(n))
+    );
+    const rows = await query<{ platform: string; externalOrderId: string }>(
+      `SELECT DISTINCT platform, externalOrderId FROM "OrderItemSnapshot"
+        WHERE ${dbEpochMs("orderedAt")} >= ?`,
+      [Number.isFinite(enEski) ? enEski : 0]
+    );
+    for (const r of rows) kalemliSiparisler.add(`${r.platform}\u0000${r.externalOrderId}`);
+  } catch {
+    // Tablo yoksa/okunamıyorsa kalemleri yazmayı dene — en kötü ihtimalle yazma da düşer.
+  }
+  const kalemiEksik = snapshots.filter(
+    (s) =>
+      (s.items?.length ?? 0) > 0 &&
+      !kalemliSiparisler.has(`${s.platform}\u0000${s.externalOrderId}`)
+  );
+
+  if (changed.length === 0 && kalemiEksik.length === 0) return;
 
   const now = new Date().toISOString();
   const statements = changed
@@ -301,8 +345,56 @@ export async function syncOrderFinanceSnapshots(
         snapshot.actualCommission == null ? null : tlToKurus(snapshot.actualCommission),
       ],
     }));
-  for (let offset = 0; offset < statements.length; offset += 50) {
-    await batch(statements.slice(offset, offset + 50));
+  /**
+   * KALEMLER — sipariş toplamıyla AYNI turda yazılır (masaüstü order-finance-snapshots.ts ile
+   * birebir kolon düzeni ve aynı `item:<platform>:<id>:<sıra>` kimliği). Kimlik aynı olduğu
+   * için iki cihaz aynı satırı günceller, kopya oluşmaz.
+   */
+  const kalemYazilacak = [
+    ...changed,
+    ...kalemiEksik.filter((s) => !changed.includes(s)),
+  ];
+  const itemStatements = kalemYazilacak
+    .filter((s) => s.platform !== "manual" && (s.items?.length ?? 0) > 0)
+    .filter((s) => Number.isFinite(asDate(s.orderedAt).getTime()))
+    .flatMap((snapshot) =>
+      (snapshot.items ?? []).map((item, lineIndex) => ({
+        sql: `INSERT INTO "OrderItemSnapshot" (
+                "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
+                "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt"
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+              ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
+                "orderedAt" = excluded."orderedAt",
+                "productId" = excluded."productId",
+                "productName" = excluded."productName",
+                "quantity" = excluded."quantity",
+                "unitPriceKurus" = excluded."unitPriceKurus",
+                "lineRevenueKurus" = excluded."lineRevenueKurus",
+                "statusKind" = excluded."statusKind",
+                "currency" = excluded."currency",
+                "syncedAt" = excluded."syncedAt"`,
+        args: [
+          `item:${snapshot.platform}:${snapshot.externalOrderId}:${lineIndex}`,
+          snapshot.platform,
+          snapshot.externalOrderId,
+          lineIndex,
+          // Tarih biçimi sipariş satırıyla AYNI olmak zorunda (ISO metin) — bkz. yukarıdaki not.
+          asDate(snapshot.orderedAt).toISOString(),
+          item.productId,
+          item.productName,
+          item.quantity,
+          tlToKurus(item.unitPrice),
+          tlToKurus(item.unitPrice * item.quantity),
+          snapshot.statusKind,
+          snapshot.currency ?? "TRY",
+          now,
+        ],
+      }))
+    );
+
+  const hepsi = [...statements, ...itemStatements];
+  for (let offset = 0; offset < hepsi.length; offset += 50) {
+    await batch(hepsi.slice(offset, offset + 50));
   }
 }
 
