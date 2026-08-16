@@ -1,8 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
+import { Chip } from "@/components/ui";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { AnimatedBar, AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   RefreshControl,
   ScrollView,
@@ -13,7 +14,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { SymbolView } from "expo-symbols";
 
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -30,9 +31,11 @@ export default function DashboardScreen() {
     queryFn: getDashboardData,
   });
   // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  /** Panel dönemi: 7 / 30 / 60 gün. Kaynak sorgu zaten 60 gün, ek ağ isteği YOK. */
+  const [donem, setDonem] = useState<7 | 30 | 60>(30);
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
-  const { data: ordersData, refetch: refetchOrders } = useQuery({
+  const { data: ordersData, refetch: refetchOrders, dataUpdatedAt: ordersAt } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
     staleTime: ORDERS_STALE_MS,
@@ -74,8 +77,13 @@ export default function DashboardScreen() {
     let total = 0;
     let profit = 0;
     let count = 0;
-    // Kaynak sorgu 60 gün (Raporlar ile paylaşılıyor) → Panel'in gösterdiği 30 güne kırp.
-    for (const o of visibleOrders(ordersData.orders)) {
+    /**
+     * DÖNEM SÜZGECİ — kaynak sorgu 60 gün getiriyor; kullanıcı 7/30/60 arasında seçiyor.
+     * "Şimdi" olarak sorgunun ÇEKİLDİĞİ an kullanılır (`dataUpdatedAt`): render sırasında
+     * `Date.now()` çağırmak React Compiler hatası veriyor ve mobil lint adımını düşürüyor.
+     */
+    const kesim = ordersAt ? ordersAt - donem * 86_400_000 : 0;
+    for (const o of ordersData.orders.filter((o) => o.date == null || o.date >= kesim)) {
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
       if (isCancelledOrder(o)) continue;
       // Döviz çevrimi yapılmadan farklı para birimlerini TL toplamına eklemek yanlış sonuç verir
@@ -92,7 +100,7 @@ export default function DashboardScreen() {
       count++;
     }
     return { total, profit, byPlat, count };
-  }, [ordersData, matchProducts, rules, settings]);
+  }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -137,7 +145,14 @@ export default function DashboardScreen() {
         >
           {/* Son 30 gün ciro/kâr */}
           <FadeInView style={styles.revCard}>
-            <Text style={styles.revLabel}>SON 30 GÜN</Text>
+            <View style={styles.revHead}>
+              <Text style={styles.revLabel}>SON {donem} GÜN</Text>
+              <View style={styles.periodChips}>
+                {([7, 30, 60] as const).map((d) => (
+                  <Chip key={d} label={`${d}g`} selected={donem === d} onPress={() => setDonem(d)} />
+                ))}
+              </View>
+            </View>
             <View style={styles.revTopRow}>
               <View>
                 <Text style={styles.revCiroLabel}>Ciro</Text>
@@ -347,6 +362,8 @@ function DashboardSkeleton() {
 }
 
 const styles = StyleSheet.create({
+  revHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
+  periodChips: { flexDirection: "row", gap: 6 },
   safe: { flex: 1, backgroundColor: ML.bg },
   header: {
     flexDirection: "row",
