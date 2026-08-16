@@ -4,6 +4,7 @@ import { SymbolView } from "expo-symbols";
 import type { ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
+import { FreshnessStamp } from "@/components/FreshnessStamp";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getNotifications } from "@/lib/db/notifications";
 import { ML, radius, space, type } from "@/theme/colors";
@@ -21,9 +22,16 @@ export function AppHeader({
   subtitle,
   right,
   bell = true,
+  updatedAt,
 }: {
   title: string;
   subtitle?: ReactNode;
+  /**
+   * Ekrandaki ana verinin çekilme anı (React Query `dataUpdatedAt`).
+   * ÇEVRİMDIŞI ÖNBELLEK açıldığından beri ekranda BAYAT veri olabiliyor; damga bunu söyler.
+   * Sessizce eski rakam göstermek, hiç göstermemekten daha tehlikeli.
+   */
+  updatedAt?: number;
   /** Sağdaki ekrana özel düğmeler (zilin SOLUNDA durur). */
   right?: ReactNode;
   /** Zili gizlemek için (kendi bildirim ekranında anlamsız). */
@@ -42,6 +50,7 @@ export function AppHeader({
         ) : (
           subtitle
         )}
+        {updatedAt ? <FreshnessStamp updatedAt={updatedAt} style={styles.stamp} /> : null}
       </View>
       {right}
       {bell ? <NotificationBell /> : null}
@@ -93,6 +102,7 @@ const styles = StyleSheet.create({
   textCol: { flex: 1 },
   title: { ...type.title, color: ML.text },
   subtitle: { ...type.small, color: ML.textDim, marginTop: 2 },
+  stamp: { marginTop: 2 },
   bell: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   badge: {
     position: "absolute",

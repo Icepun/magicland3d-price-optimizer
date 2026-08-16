@@ -42,7 +42,7 @@ const TONE: Record<StatusTone, string> = {
 const RowGap = () => <View style={{ height: 10 }} />;
 
 export default function OrdersScreen() {
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
     staleTime: ORDERS_STALE_MS,
@@ -118,6 +118,7 @@ export default function OrdersScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <AppHeader
         title="Siparişler"
+        updatedAt={dataUpdatedAt}
         subtitle={
           counts
             ? counts.cancelled > 0

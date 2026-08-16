@@ -97,7 +97,11 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <AppHeader title="Panel" subtitle="Pazaryerleri + manuel satışlar" />
+      <AppHeader
+        title="Panel"
+        subtitle="Pazaryerleri + manuel satışlar"
+        updatedAt={ordersAt}
+      />
 
       {isError ? (
         <View style={styles.center}>

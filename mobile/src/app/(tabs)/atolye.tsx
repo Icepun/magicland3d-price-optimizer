@@ -83,6 +83,7 @@ export default function AtolyeScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <AppHeader
         title="Atölye"
+        updatedAt={printers.dataUpdatedAt}
         subtitle={
           snaps.length > 0
             ? `${basanlar.length} baskı sürüyor · ${snaps.length} yazıcı`

@@ -95,7 +95,7 @@ export default function ProductsScreen() {
       return next;
     });
 
-  const { data: products, isLoading, isError, error, refetch } = useQuery({
+  const { data: products, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
@@ -187,6 +187,7 @@ export default function ProductsScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <AppHeader
         title="Ürünler"
+        updatedAt={dataUpdatedAt}
         subtitle={
           products ? (
             <AnimatedNumber
