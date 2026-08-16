@@ -1,3 +1,5 @@
+import type { TextStyle } from "react-native";
+
 /** Magicland 3D Hub — koyu tema paleti (masaüstüyle uyumlu, #1B1E2A taban). */
 export const ML = {
   bg: "#16181F",
@@ -8,8 +10,10 @@ export const ML = {
   borderSoft: "#272C3E",
 
   text: "#FFFFFF",
-  textDim: "#9AA0B4",
-  textFaint: "#6B7185",
+  /** ⚠️ İkisi de bir ton AÇILDI (atölye okunurluğu): eski #9AA0B4/#6B7185 koyu zeminde ve
+   *  gün ışığında, hele 12-13 puntoda okunmuyordu. Hiyerarşi korunuyor, kontrast artıyor. */
+  textDim: "#A8AEC2",
+  textFaint: "#7C8399",
 
   accent: "#7C5CFF",
   accentSoft: "rgba(124,92,255,0.16)",
@@ -46,4 +50,59 @@ export const motion = {
   number: 620,
   /** Bar/çubuk dolumu. */
   bar: 620,
+} as const;
+
+/**
+ * BOŞLUK ÖLÇEĞİ — 4'ün katları. Ekranlarda 5, 6, 7, 9, 11, 13 gibi elle uydurulmuş boşluklar
+ * vardı; göz bunu "dağınık" olarak okuyor. Yeni/dokunulan her yer buradan beslenir.
+ */
+export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
+
+/**
+ * PUNTO ÖLÇEĞİ — uygulamada 18 farklı punto elle yazılmıştı.
+ *
+ * ⚠️ Gövde puntosu bilinçli olarak bir kademe BÜYÜK (15): telefon atölyede, kol mesafesinde ve
+ * bazen eldivenle kullanılıyor. `dim` metin de bir ton açıldı (bkz. ML.textDim) — koyu zeminde
+ * 12 punto soluk gri, gün ışığında okunmuyordu.
+ */
+export const type = {
+  /** Ekran başlığı */
+  title: { fontSize: 26, fontWeight: "800" },
+  /** Kart/bölüm başlığı */
+  heading: { fontSize: 18, fontWeight: "700" },
+  /** Gövde */
+  body: { fontSize: 15, fontWeight: "500" },
+  /** İkincil bilgi */
+  small: { fontSize: 13, fontWeight: "500" },
+  /** Rozet/etiket */
+  label: { fontSize: 12, fontWeight: "700" },
+  /** Büyük rakam (özet kartları) */
+  stat: { fontSize: 28, fontWeight: "800" },
+} as const;
+
+/**
+ * RAKAMLAR SABİT GENİŞLİKTE. Sayı akarken (count-up) her hane farklı genişlikte olduğu için
+ * kart genişliği titriyordu; `fontVariant: ["tabular-nums"]` bunu tamamen bitirir.
+ * Para/adet/yüzde gösteren HER metin bunu almalı.
+ */
+export const tabular: TextStyle = { fontVariant: ["tabular-nums"] };
+
+/**
+ * YÜKSEKLİK KATMANLARI — gölge değerleri ekranlara dağılmıştı; üç katman yeter.
+ * (iOS'ta gölge pahalı; liste HÜCRELERİNDE kullanılmaz, yalnız duran yüzeylerde.)
+ */
+export const elevation = {
+  flat: {},
+  card: {
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  sheet: {
+    shadowColor: "#000",
+    shadowOpacity: 0.3,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 10 },
+  },
 } as const;
