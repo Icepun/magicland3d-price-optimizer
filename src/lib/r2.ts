@@ -176,3 +176,17 @@ export async function listModelObjects(cfg: R2Config): Promise<{ key: string; la
   } while (token && out.length < 20_000);
   return out;
 }
+
+/**
+ * Nesnenin YALNIZ İLK N BAYTI (HTTP Range).
+ *
+ * Slicer'ın gömülü önizlemesi dosyanın en başında; 140 MB'lık gcode'u tamamen indirmek
+ * hem yavaş hem gereksiz. R2 aralık isteğini destekliyor.
+ */
+export async function getObjectHead(key: string, cfg: R2Config, bytes: number): Promise<Buffer> {
+  const res = await client(cfg).send(
+    new GetObjectCommand({ Bucket: cfg.bucket, Key: key, Range: `bytes=0-${Math.max(0, bytes - 1)}` })
+  );
+  if (!res.Body) throw new Error("R2: boş yanıt");
+  return Buffer.from(await res.Body.transformToByteArray());
+}
