@@ -33,10 +33,14 @@ export async function getPrepDone(): Promise<string[]> {
 export async function setPrepDone(key: string, done: boolean): Promise<void> {
   await ensurePrepSchema();
   if (done) {
+    // ⚠️ TARİH ISO METİN — `CURRENT_TIMESTAMP` DEĞİL. SQLite'ın kendi damgası "YYYY-MM-DD HH:MM:SS"
+    // biçiminde (T'siz, UTC ama öyle görünmüyor); okurken yerel sanılırsa 3 saat kayıyor.
+    // Masaüstü Prisma üzerinden ISO yazıyor; iki cihazın aynı kolona iki biçim yazması,
+    // projedeki en pahalı hataların kaynağıydı.
     await execute(
-      `INSERT INTO "PrepDone" ("key", "doneAt") VALUES (?, CURRENT_TIMESTAMP)
-       ON CONFLICT("key") DO UPDATE SET "doneAt" = CURRENT_TIMESTAMP`,
-      [key]
+      `INSERT INTO "PrepDone" ("key", "doneAt") VALUES (?, ?)
+       ON CONFLICT("key") DO UPDATE SET "doneAt" = excluded."doneAt"`,
+      [key, new Date().toISOString()]
     );
   } else {
     await execute(`DELETE FROM "PrepDone" WHERE "key" = ?`, [key]);

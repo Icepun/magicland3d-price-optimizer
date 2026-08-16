@@ -73,14 +73,16 @@ let sonImza = "";
 /**
  * Önbellekteki veriyle finans geçmişini yaz. Ağ isteği AÇMAZ, veri yoksa sessizce çıkar.
  * `zorla` yalnız Raporlar ekranı için: kullanıcı oradayken beklemesin.
+ * `zorlaKarYaz` reklam bütçesi değiştiğinde: donmuş kârlar yeni reklam payıyla yeniden yazılır,
+ * yoksa Raporlar eski (reklamsız, yüksek) kârı göstermeye devam eder.
  */
 export async function syncFinanceFromCache(
   qc: QueryClient,
-  { zorla = false }: { zorla?: boolean } = {}
+  { zorla = false, zorlaKarYaz = false }: { zorla?: boolean; zorlaKarYaz?: boolean } = {}
 ): Promise<void> {
   if (calisiyor) return;
   const simdi = Date.now();
-  if (!zorla && simdi - sonCalisma < MIN_ARALIK_MS) return;
+  if (!zorla && !zorlaKarYaz && simdi - sonCalisma < MIN_ARALIK_MS) return;
 
   const orders = qc.getQueryData<OrdersResult>(["orders"]);
   const products = qc.getQueryData<ProductDetail[]>(["match-products"]);
@@ -93,14 +95,14 @@ export async function syncFinanceFromCache(
 
   // Aynı sonuç tekrar yazılmasın: sipariş sayısı + kâr toplamı yeterli bir parmak izi.
   const imza = `${snapshots.length}:${snapshots.reduce((t, s) => t + (s.profit ?? 0), 0).toFixed(2)}`;
-  if (!zorla && imza === sonImza) {
+  if (!zorla && !zorlaKarYaz && imza === sonImza) {
     sonCalisma = simdi;
     return;
   }
 
   calisiyor = true;
   try {
-    await syncOrderFinanceSnapshots(snapshots);
+    await syncOrderFinanceSnapshots(snapshots, { zorlaKarYaz });
     sonCalisma = Date.now();
     sonImza = imza;
     void qc.invalidateQueries({ queryKey: ["monthly-finance"] });

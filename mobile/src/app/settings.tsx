@@ -11,6 +11,8 @@ const NAV: { label: string; href: Href; ready: boolean }[] = [
   { label: "Komisyon Kuralları", href: "/rules/commission", ready: true },
   { label: "Kargo Kuralları", href: "/rules/cargo", ready: true },
   { label: "Sipariş Gider Kuralları", href: "/rules/expense", ready: true },
+  // Reklam bütçesi TÜM kâr rakamını etkiliyor; eskiden yalnız masaüstünden girilebiliyordu.
+  { label: "Reklam Bütçesi", href: "/rules/ad-budget", ready: true },
 ];
 
 export default function SettingsScreen() {

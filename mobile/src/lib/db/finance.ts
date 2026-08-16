@@ -212,9 +212,25 @@ const REPLACE_PROFIT_SQL = `
   OR COALESCE("OrderFinanceSnapshot"."calculationVersion", 0) < ${FINANCE_CALCULATION_VERSION}
 `;
 
+/**
+ * ZORLA YENİDEN YAZMA — reklam bütçesi girildiğinde kullanılır.
+ *
+ * Bütçe değişince kâr değişir ama yukarıdaki beş maddenin hiçbiri tetiklenmez (gelir aynı,
+ * sürüm aynı) → Raporlar reklamsız eski kârı göstermeye devam ederdi; Siparişler ekranı ise
+ * anında yeni kârı gösterirdi. İki ekranın birbirini tutmaması, kullanıcının hangi rakama
+ * güveneceğini bilememesi demek.
+ *
+ * Platform GERÇEK komisyonuyla düzeltilmiş satırlara DOKUNULMAZ: onlar Trendyol'un kendi
+ * rakamı, bizim hesabımızdan daha doğru.
+ */
+const FORCE_PROFIT_SQL = `
+  COALESCE("OrderFinanceSnapshot"."profitSource", 'calculated') <> 'platform'
+`;
+
 /** Erişilebilen platform verisini kuruş cinsinden kalıcı finans geçmişine işler. */
 export async function syncOrderFinanceSnapshots(
-  snapshots: OrderFinanceSnapshotInput[]
+  snapshots: OrderFinanceSnapshotInput[],
+  { zorlaKarYaz = false }: { zorlaKarYaz?: boolean } = {}
 ): Promise<void> {
   await ensureFinanceSchema();
   if (snapshots.length === 0) return;
@@ -250,6 +266,9 @@ export async function syncOrderFinanceSnapshots(
   const changed = snapshots.filter((s) => {
     const e = existing.get(`${s.platform}\u0000${s.externalOrderId}`);
     if (!e) return true;
+    // Reklam bütçesi değiştiğinde kâr değişir ama yukarıdaki dört koşulun HİÇBİRİNE girmez;
+    // yeniden yazılmazsa Raporlar (donmuş kâr) eski, reklamsız rakamı göstermeye devam eder.
+    if (zorlaKarYaz) return true;
     return (
       e.rev !== tlToKurus(s.revenue) ||
       e.profit !== (s.profit == null ? null : tlToKurus(s.profit)) ||
@@ -291,6 +310,8 @@ export async function syncOrderFinanceSnapshots(
   if (changed.length === 0 && kalemiEksik.length === 0) return;
 
   const now = new Date().toISOString();
+  // Zorlama açıkken koşul genişler; kapalıyken ifade birebir eski haliyle kalır.
+  const replaceSql = zorlaKarYaz ? `(${REPLACE_PROFIT_SQL}) OR (${FORCE_PROFIT_SQL})` : REPLACE_PROFIT_SQL;
   const statements = changed
     .filter((snapshot) => snapshot.platform !== "manual")
     .filter((snapshot) => Number.isFinite(asDate(snapshot.orderedAt).getTime()))
@@ -308,17 +329,17 @@ export async function syncOrderFinanceSnapshots(
             ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
               "orderNumber" = excluded."orderNumber",
               "orderedAt" = excluded."orderedAt",
-              "profitKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "profitKurus" = CASE WHEN ${replaceSql}
                 THEN excluded."profitKurus" ELSE "OrderFinanceSnapshot"."profitKurus" END,
-              "profitPartial" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "profitPartial" = CASE WHEN ${replaceSql}
                 THEN excluded."profitPartial" ELSE "OrderFinanceSnapshot"."profitPartial" END,
-              "calculationVersion" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "calculationVersion" = CASE WHEN ${replaceSql}
                 THEN excluded."calculationVersion" ELSE "OrderFinanceSnapshot"."calculationVersion" END,
-              "profitSource" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "profitSource" = CASE WHEN ${replaceSql}
                 THEN excluded."profitSource" ELSE "OrderFinanceSnapshot"."profitSource" END,
-              "estimatedCommissionKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "estimatedCommissionKurus" = CASE WHEN ${replaceSql}
                 THEN excluded."estimatedCommissionKurus" ELSE "OrderFinanceSnapshot"."estimatedCommissionKurus" END,
-              "actualCommissionKurus" = CASE WHEN ${REPLACE_PROFIT_SQL}
+              "actualCommissionKurus" = CASE WHEN ${replaceSql}
                 THEN excluded."actualCommissionKurus" ELSE "OrderFinanceSnapshot"."actualCommissionKurus" END,
               "revenueKurus" = excluded."revenueKurus",
               "statusKind" = excluded."statusKind",
