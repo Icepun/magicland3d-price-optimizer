@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  PREP_DONE_KEY,
   buildPrepItems,
+  clearPrepDone,
   loadPrepDone,
   savePrepDone,
   type PrepSourceOrder,
@@ -112,32 +112,62 @@ describe("hazırlık listesi toplaması", () => {
   });
 });
 
-describe("işaretlerin oturum boyunca saklanması", () => {
-  beforeEach(() => {
-    const kayit = new Map<string, string>();
-    vi.stubGlobal("sessionStorage", {
-      getItem: (key: string) => kayit.get(key) ?? null,
-      setItem: (key: string, value: string) => void kayit.set(key, value),
-      removeItem: (key: string) => void kayit.delete(key),
+describe("işaretlerin cihazlar arası paylaşılması", () => {
+  /**
+   * İşaretler artık veritabanında (`/api/prep-done`): masaüstünde başlanan paketleme
+   * telefonda bitirilebiliyor. Buradaki testler ağ hatasının paketlemeyi DURDURMADIĞINI
+   * garanti eder — hata durumunda liste işaretsiz ama çalışır halde açılmalı.
+   */
+  let cagrilar: { url: string; init?: RequestInit }[] = [];
+
+  const fetchYanit = (yanit: unknown, ok = true) => {
+    cagrilar = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      cagrilar.push({ url, init });
+      return Promise.resolve({ ok, json: () => Promise.resolve(yanit) } as Response);
     });
+  };
+
+  beforeEach(() => {
+    cagrilar = [];
   });
 
-  it("işaretlenenler yazılıp geri okunur", () => {
-    savePrepDone(["id:p1", "ad:vazo"]);
-    expect(loadPrepDone()).toEqual(["id:p1", "ad:vazo"]);
+  it("sunucudaki işaretleri okur", async () => {
+    fetchYanit({ keys: ["id:p1", "ad:vazo"] });
+    await expect(loadPrepDone()).resolves.toEqual(["id:p1", "ad:vazo"]);
   });
 
-  it("hiç kayıt yoksa boş liste döner", () => {
-    expect(loadPrepDone()).toEqual([]);
+  it("beklenmeyen içerik süzülür", async () => {
+    fetchYanit({ keys: ["id:p1", 42, null] });
+    await expect(loadPrepDone()).resolves.toEqual(["id:p1"]);
   });
 
-  it("bozuk kayıt sayfayı kırmaz", () => {
-    sessionStorage.setItem(PREP_DONE_KEY, "{bozuk");
-    expect(loadPrepDone()).toEqual([]);
+  it("sunucu hata dönerse liste işaretsiz açılır", async () => {
+    fetchYanit({ error: "patladı" }, false);
+    await expect(loadPrepDone()).resolves.toEqual([]);
   });
 
-  it("beklenmeyen içerik süzülür", () => {
-    sessionStorage.setItem(PREP_DONE_KEY, JSON.stringify(["id:p1", 42, null]));
-    expect(loadPrepDone()).toEqual(["id:p1"]);
+  it("ağ yoksa sayfa kırılmaz", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("ağ yok")));
+    await expect(loadPrepDone()).resolves.toEqual([]);
+    await expect(savePrepDone("id:p1", true)).resolves.toBeUndefined();
+    await expect(clearPrepDone()).resolves.toBeUndefined();
+  });
+
+  it("işaret ve işaret kaldırma aynı uca yazılır", async () => {
+    fetchYanit({ ok: true });
+    await savePrepDone("id:p1", true);
+    await savePrepDone("id:p1", false);
+    expect(cagrilar).toHaveLength(2);
+    expect(cagrilar[0].url).toBe("/api/prep-done");
+    expect(JSON.parse(String(cagrilar[0].init?.body))).toEqual({ key: "id:p1", done: true });
+    expect(JSON.parse(String(cagrilar[1].init?.body))).toEqual({ key: "id:p1", done: false });
+  });
+
+  it("sıfırlama tek istekle yapılır", async () => {
+    fetchYanit({ ok: true });
+    await clearPrepDone();
+    expect(cagrilar).toHaveLength(1);
+    expect(cagrilar[0].init?.method).toBe("DELETE");
   });
 });

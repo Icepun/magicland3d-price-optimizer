@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/command-palette";
 import {
   buildPrepItems,
+  clearPrepDone,
   loadPrepDone,
   savePrepDone,
   type PrepItem,
@@ -477,24 +478,30 @@ export default function OrdersPage() {
     return () => window.removeEventListener(ORDERS_REQUEST_EVENT, onRequest);
   }, []);
 
-  // Hazırlıkta işaretlenenler — oturum boyunca saklanır, açılışta geri yüklenir.
+  // Hazırlıkta işaretlenenler — VERİTABANINDA, telefonla ortak (bkz. hazirlik.ts).
+  // Ekran yazmayı BEKLEMEZ: kutucuk anında dolar, kayıt arkada gider. Paketleme sırasında
+  // ağ turu kadar duraklamak, elinde ürünle bekleyen kullanıcı için kabul edilemez.
   const [prepDone, setPrepDone] = useState<string[]>([]);
   useEffect(() => {
-    setPrepDone(loadPrepDone());
+    let iptal = false;
+    void loadPrepDone().then((keys) => {
+      if (!iptal) setPrepDone(keys);
+    });
+    return () => {
+      iptal = true;
+    };
   }, []);
   const prepDoneSet = useMemo(() => new Set(prepDone), [prepDone]);
   const togglePrepDone = (key: string) => {
     setPrepDone((current) => {
-      const next = current.includes(key)
-        ? current.filter((k) => k !== key)
-        : [...current, key];
-      savePrepDone(next);
-      return next;
+      const isaretli = current.includes(key);
+      void savePrepDone(key, !isaretli);
+      return isaretli ? current.filter((k) => k !== key) : [...current, key];
     });
   };
   const resetPrepDone = () => {
     setPrepDone([]);
-    savePrepDone([]);
+    void clearPrepDone();
   };
 
   const orders = useMemo(() => data?.orders ?? [], [data]);

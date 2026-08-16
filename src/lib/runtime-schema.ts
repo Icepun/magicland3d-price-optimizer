@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v46: `PrepDone` — paketleme "hazırlandı" işaretleri artık MASAÜSTÜ VE TELEFON ORTAK.
+//      Kullanıcı kararı: masaüstünde başlayıp telefonda bitirebilmek. Eskiden işaret tarayıcının
+//      oturum deposundaydı (yalnız o cihaz, yalnız o oturum). Tablo tek kolonlu ve NULLABLE
+//      olmayan tek alanı varsayılanlı → eski sürüm cihazlar etkilenmez.
 // ⚠️ ensureColumn/CREATE değiştirince BURAYI ARTIR — yoksa fast-path migration'ı atlar,
 //     yeni kolon eklenmez ve Prisma "no such column" ile TÜM sorguları patlatır.
 // v45: Reklam bütçesi (`AdBudget`) — platform başına günlük reklam harcaması, dönemli.
@@ -74,7 +78,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "45";
+const CURRENT_SCHEMA_VERSION = "46";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1002,7 +1006,13 @@ export function ensureRuntimeSchema(): Promise<void> {
     );
     // v45: Reklam bütçesi — platform başına günlük tutar, dönemli (kargo tarifeleri gibi).
     await bufDDL(`
-      CREATE TABLE IF NOT EXISTS "AdBudget" (
+      CREATE TABLE IF NOT EXISTS "PrepDone" (
+        "key" TEXT NOT NULL PRIMARY KEY,
+        "doneAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(`
+CREATE TABLE IF NOT EXISTS "AdBudget" (
         "id" TEXT NOT NULL PRIMARY KEY,
         "platform" TEXT NOT NULL,
         "dailyAmount" REAL NOT NULL,

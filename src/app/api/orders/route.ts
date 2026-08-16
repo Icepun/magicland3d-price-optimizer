@@ -1,5 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
+import {
+  HEPSIBURADA_STATUS_KINDS,
+  MANUAL_STATUS_KINDS,
+  TRENDYOL_STATUS_KINDS,
+  type OrderStatusKind,
+} from "@/core/order-status-kind";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
@@ -54,13 +60,7 @@ const WINDOW_DAYS = 30;
 // read_orders erişimi son 60 günle sınırlı olduğundan güvenli ortak sınır 60 gündür.
 const HISTORY_SYNC_DAYS = 60;
 
-export type OrderStatusKind =
-  | "pending"
-  | "processing"
-  | "shipped"
-  | "delivered"
-  | "cancelled"
-  | "other";
+export type { OrderStatusKind };
 
 export interface UnifiedOrderItem {
   name: string;
@@ -185,24 +185,8 @@ function normalizedCurrency(currency: string | null | undefined): string {
   return currency?.trim().toUpperCase() || "TRY";
 }
 
-const TRENDYOL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
-  Created: { kind: "pending", label: "Yeni Sipariş" },
-  Awaiting: { kind: "pending", label: "Onay Bekliyor" },
-  Picking: { kind: "processing", label: "Hazırlanıyor" },
-  Invoiced: { kind: "processing", label: "Faturalandı" },
-  Shipped: { kind: "shipped", label: "Kargoda" },
-  AtCollectionPoint: { kind: "shipped", label: "Teslim Noktasında" },
-  Delivered: { kind: "delivered", label: "Teslim Edildi" },
-  Cancelled: { kind: "cancelled", label: "İptal" },
-  UnDelivered: { kind: "cancelled", label: "Teslim Edilemedi" },
-  UnDeliveredAndReturned: { kind: "cancelled", label: "İade" },
-  // "Paket Bölündü" bir İPTAL DEĞİL: sipariş birden çok pakete ayrılıyor, satış duruyor.
-  // İptal kovasında olması hem ciroyu düşürüyor hem satır bazlı iade sayacını yanıltıyordu.
-  UnPacked: { kind: "processing", label: "Paket Bölündü" },
-  Repack: { kind: "processing", label: "Yeniden Paketleniyor" },
-  Returned: { kind: "cancelled", label: "İade" },
-  UnSupplied: { kind: "cancelled", label: "Tedarik Edilemedi" },
-};
+/** Durum tablosu ORTAK ÇEKİRDEKTE — telefon da aynı kovaları kullanır (core/order-status-kind.ts). */
+const TRENDYOL_STATUS = TRENDYOL_STATUS_KINDS;
 
 /**
  * Tanımadığımız durum "Diğer" olur ve `unknown` işaretini taşır.
@@ -250,22 +234,7 @@ function isReturnedLineStatus(status?: string): boolean {
 }
 
 // ── Hepsiburada yardımcıları (yanıt şekli Test'le doğrulanana dek defansif) ──
-const HB_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
-  Open: { kind: "pending", label: "Yeni Sipariş" },
-  New: { kind: "pending", label: "Yeni Sipariş" },
-  Packaged: { kind: "processing", label: "Paketlendi" },
-  ReadyToShip: { kind: "processing", label: "Kargoya Hazır" },
-  Shipped: { kind: "shipped", label: "Kargoda" },
-  // Aynı duruma iki ad verilmesin: "Yolda" da kargodaki siparişti, ekranda iki farklı
-  // isim görünüyordu.
-  InTransit: { kind: "shipped", label: "Kargoda" },
-  Delivered: { kind: "delivered", label: "Teslim Edildi" },
-  UnDelivered: { kind: "cancelled", label: "Teslim Edilemedi" },
-  Cancelled: { kind: "cancelled", label: "İptal" },
-  CancelledByMerchant: { kind: "cancelled", label: "İptal (Satıcı)" },
-  CancelledByCustomer: { kind: "cancelled", label: "İptal (Müşteri)" },
-  Returned: { kind: "cancelled", label: "İade" },
-};
+const HB_STATUS = HEPSIBURADA_STATUS_KINDS;
 function hbStatus(s: string): {
   kind: OrderStatusKind;
   label: string;
@@ -282,13 +251,7 @@ function hbStatus(s: string): {
 // kendi eliyle girdi; onu "belki iadedir" diye ciro dışına almak kendi satışını gizlerdi.
 // ⚠️ Etiketler manuel sipariş penceresindeki durum listesiyle AYNI olmak zorunda
 // (components/orders/ManualOrderDialog.tsx): kullanıcı orada seçtiği adı burada aynen görmeli.
-const MANUAL_STATUS: Record<string, { kind: OrderStatusKind; label: string }> = {
-  pending: { kind: "pending", label: "Bekleyen" },
-  processing: { kind: "processing", label: "Hazırlanıyor" },
-  shipped: { kind: "shipped", label: "Gönderildi" },
-  delivered: { kind: "delivered", label: "Teslim Edildi" },
-  cancelled: { kind: "cancelled", label: "İptal" },
-};
+const MANUAL_STATUS = MANUAL_STATUS_KINDS;
 function manualStatus(s: string): { kind: OrderStatusKind; label: string } {
   return MANUAL_STATUS[s] ?? { kind: "other", label: "Diğer" };
 }

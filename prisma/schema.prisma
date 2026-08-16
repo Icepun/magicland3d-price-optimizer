@@ -659,3 +659,16 @@ model PushToken {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+/**
+ * Paketleme sırasında "hazırlandı" işaretleri — MASAÜSTÜ VE TELEFON ORTAK.
+ *
+ * Kullanıcı kararı: masaüstünde başlayıp telefonda bitirebilmek. Eskiden işaret tarayıcının
+ * oturum deposundaydı, yani yalnız o cihazda ve o oturumda yaşıyordu.
+ * `key` hazırlık satırının kimliği (`id:<productId>` ya da `ad:<ürün adı>`) — gruplama kuralı
+ * ortak çekirdekte (src/core/prep-list.ts), iki cihaz aynı anahtarı üretir.
+ */
+model PrepDone {
+  key    String   @id
+  doneAt DateTime @default(now())
+}

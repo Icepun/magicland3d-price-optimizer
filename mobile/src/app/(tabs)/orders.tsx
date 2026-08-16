@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
+import { SymbolView } from "expo-symbols";
 import { FlashList } from "@shopify/flash-list";
 import { useMemo, useState } from "react";
 import {
@@ -19,6 +20,8 @@ import { PLATFORM_LABEL, type OrderPlatform } from "@/lib/platforms";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
+import { getPrepDone } from "@/lib/db/prep";
+import { prepItemsFromOrders } from "@/lib/prep";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit, type OrderProfit } from "@/lib/order-profit";
@@ -99,6 +102,17 @@ export default function OrdersScreen() {
     return { active, cancelled: gorunur.length - active };
   }, [data, gorunur]);
 
+  /**
+   * Başlıktaki hazırlık rozeti: kaç ÜRÜN satırı hâlâ toplanmayı bekliyor.
+   * İşaretler masaüstüyle ortak (`PrepDone`) — orada işaretlenen burada da düşer.
+   */
+  const { data: prepDone } = useQuery({ queryKey: ["prep-done"], queryFn: getPrepDone });
+  const prepKalan = useMemo(() => {
+    if (!data) return 0;
+    const isaretli = new Set(prepDone ?? []);
+    return prepItemsFromOrders(gorunur, products).filter((i) => !isaretli.has(i.key)).length;
+  }, [data, gorunur, products, prepDone]);
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
@@ -112,6 +126,19 @@ export default function OrdersScreen() {
               : "yükleniyor…"}
           </Text>
         </View>
+        {/* HAZIRLIK — paketleme rafın önünde yapılıyor; liste bir dokunuş uzakta olsun.
+            Rozet "kaç ürün kaldı"yı söyler, işaretler masaüstüyle ortaktır. */}
+        <PressableScale
+          onPress={() => router.push("/hazirlik")}
+          style={styles.prepButton}
+          accessibilityRole="button"
+          accessibilityLabel={
+            prepKalan > 0 ? `Hazırlık listesi, ${prepKalan} ürün kaldı` : "Hazırlık listesi"
+          }
+        >
+          <SymbolView name="shippingbox.fill" size={16} tintColor={ML.orange} />
+          {prepKalan > 0 ? <Text style={styles.prepCount}>{prepKalan}</Text> : null}
+        </PressableScale>
         <PressableScale
           onPress={() => router.push("/manual-order/new")}
           style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
@@ -340,6 +367,20 @@ const styles = StyleSheet.create({
   },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
+  prepButton: {
+    minWidth: 44,
+    height: 40,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    backgroundColor: ML.card,
+  },
+  prepCount: { color: ML.orange, fontSize: 14, fontWeight: "800", fontVariant: ["tabular-nums"] },
   addButton: {
     backgroundColor: ML.accentSoft,
     borderRadius: radius.md,
