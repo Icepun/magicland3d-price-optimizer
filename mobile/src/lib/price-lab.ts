@@ -1,3 +1,4 @@
+import { reklamOraniIcin } from "@core/ad-cost";
 import { simulatePrice } from "@core/pricing-engine";
 import { vatRateOf } from "@core/vat";
 import {
@@ -67,8 +68,16 @@ export function computePriceLab(
   // Listing olmayan platformda masaüstü null-listing ile simüle eder (route:66-68) — aynı şekil.
   type LabListing = Pick<ListingRow, "platform" | "commissionRate" | "commissionFixed" | "cargoCost">;
 
+  /**
+   * REKLAM PAYI Fiyat Lab'a da girmeli: hedef marjı reklam gideri düşülMEDEN hesaplarsak
+   * önerilen fiyat o marjı GERÇEKTE tutturmaz (reklam payı kadar eksik kalır). Ürün ekranı ve
+   * sipariş kârıyla aynı oran, aynı kaynak — üçü ayrışmasın.
+   */
+  const simdi = Date.now();
+
   const simFor = (listing: LabListing, salePrice: number, discountBuffer = 0) =>
     simulatePrice({
+      adRate: reklamOraniIcin(rules.adBudgets ?? [], listing.platform, simdi),
       salePrice,
       productCost,
       packagingCost,

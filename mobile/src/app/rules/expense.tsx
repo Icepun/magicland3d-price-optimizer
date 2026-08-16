@@ -16,6 +16,7 @@ import {
   setExpenseRuleActive,
   type ExpenseRuleFull,
 } from "@/lib/db/rule-crud";
+import { ConnectionError } from "@/components/ConnectionError";
 import { ML, radius } from "@/theme/colors";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -39,7 +40,7 @@ function valueLabel(r: ExpenseRuleFull): string {
 
 export default function ExpenseRulesScreen() {
   const qc = useQueryClient();
-  const { data: rules, isLoading } = useQuery({
+  const { data: rules, isLoading, refetch, error, isFetching } = useQuery({
     queryKey: ["expense-rules-all"],
     queryFn: getAllExpenseRules,
   });
@@ -65,7 +66,11 @@ export default function ExpenseRulesScreen() {
         </Pressable>
       </View>
 
-      {isLoading ? (
+      {error && !rules ? (
+        /* Ağ koptuğunda boş kural listesi göstermek "gider kuralın yok" demektir — oysa bu
+           kurallar kâr hesabının temeli. Dürüst hata + tekrar dene. */
+        <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>

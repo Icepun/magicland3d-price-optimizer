@@ -24,7 +24,23 @@
  * biçimde değişirse artır. Değiştirip artırmazsan Raporlar o ayları "yeniden hesapla" diye
  * HİÇ işaretlemez ve eski rakamlar kalıcı olur.
  */
-export const FINANCE_CALCULATION_VERSION = 3;
+/**
+ * v4 (2026-08-16) — ARTIRILDI: telefonun yazdığı kârlar REKLAM PAYI DÜŞÜLMEDEN kaydedilmişti.
+ *
+ * Mobil, reklam oranının paydasını ham milisaniye ile sorguluyordu; kolon ISO metin olduğu için
+ * koşul hiçbir satırı tutmadı → oran hep 0 → telefonun yazdığı her `OrderFinanceSnapshot` satırı
+ * reklam payı kadar YÜKSEK kâr taşıyor (canlı veride ~%14). Masaüstünün yazdığı satırlar doğru.
+ *
+ * Neden sürüm artışı ŞART: "yakalanmış kârın üzerine yaz" koruması yalnız dört durumda tetikleniyor
+ * (gelir değişti / kâr ilk kez hesaplandı / gerçek komisyon geldi / kısmi tamamlandı). Reklam payı
+ * düzeltmesi bunların HİÇBİRİNE girmiyor, yani yanlış satırlar kendiliğinden ASLA düzelmezdi.
+ * Sürüm damgası + aşağıdaki beşinci koşul ("kayıt eski sürümle yazılmış") bir kereye mahsus
+ * yeniden yazmayı açar; sonra sistem yine sabitlenir.
+ *
+ * ⚠️ Masaüstü ve mobil bu sürümü BİRLİKTE yayınlamalı. Biri 3'te kalırsa iki cihaz birbirinin
+ * damgasını ileri-geri yazar ve her açılışta gereksiz yeniden hesap koşar.
+ */
+export const FINANCE_CALCULATION_VERSION = 4;
 
 /**
  * Bu satır GÜNCEL hesapla mı yazılmış?

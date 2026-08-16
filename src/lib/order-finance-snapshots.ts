@@ -19,6 +19,8 @@ import {
   monthKey,
   tlToKurus,
 } from "./monthly-finance";
+// "Bu satır güncel hesapla mı yazılmış?" — karşılaştırma TEK yerde (bkz. core/finance-version.ts).
+import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 
 /**
  * Siparişin TEK BİR kaleminin kalıcı geçmişe yazılan hâli.
@@ -70,6 +72,8 @@ export function shouldReplaceCapturedProfit(
     profitPartial: boolean;
     profitSource?: string;
     actualCommissionKurus?: number | null;
+    /** Satırın yazıldığı hesap sürümü — eskiyse formül/girdi değişmiş demektir. */
+    calculationVersion?: number;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -84,6 +88,15 @@ export function shouldReplaceCapturedProfit(
   // daha sonra tamamlanırsa yeni değeri kabul ederiz.
   if (!existing || existing.revenueKurus !== incoming.revenueKurus) return true;
   if (existing.profitKurus == null && incoming.profitKurus != null) return true;
+  /**
+   * ESKİ HESAP SÜRÜMÜYLE yazılmış satır → yeniden hesapla.
+   *
+   * Diğer dört madde yalnız VERİ değişince tetikleniyor; hesabın KENDİSİ düzeltildiğinde
+   * hiçbiri ateşlenmiyordu. Telefonun reklam payı düşülmeden kaydettiği kârlar bu yüzden
+   * kalıcı olacaktı (bkz. core/finance-version.ts v4 notu). Sürüm damgası tek seferlik
+   * düzeltmeyi açar; damga güncellendikten sonra bu koşul bir daha tetiklenmez.
+   */
+  if (isFinanceSnapshotOutdated(existing.calculationVersion ?? 0)) return true;
   // Platformun gerçek komisyonu sonradan oluşur (genelde teslimden sonra). Bu bilgi
   // hesaplanan değerden daha güçlüdür ve tutar değişirse geçmiş snapshot da yenilenmelidir.
   if (

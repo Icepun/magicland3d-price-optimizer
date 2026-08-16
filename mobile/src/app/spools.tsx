@@ -19,6 +19,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ConnectionError } from "@/components/ConnectionError";
 import { FadeInView } from "@/components/fade-in";
 import { ScreenHeader } from "@/components/form";
 import {
@@ -53,7 +54,7 @@ const SWATCHES = [
 
 export default function SpoolsScreen() {
   const qc = useQueryClient();
-  const { data, isLoading, refetch } = useQuery({ queryKey: ["spools"], queryFn: getSpools });
+  const { data, isLoading, refetch, error, isFetching } = useQuery({ queryKey: ["spools"], queryFn: getSpools });
   const { refreshing, onRefresh } = useManualRefresh(refetch);
   const [consumeTarget, setConsumeTarget] = useState<Spool | null>(null);
   const [formTarget, setFormTarget] = useState<Spool | "new" | null>(null);
@@ -103,6 +104,10 @@ export default function SpoolsScreen() {
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>
+      ) : error && !data ? (
+        /* Ağ koptuğunda "Henüz makara yok" YALANI yerine dürüst hata (atölyede
+           "filamentim var mı" sorusuna yanlış cevap vermek en kötüsü). */
+        <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
       ) : (
         <FlashList
           data={data ?? []}

@@ -1,4 +1,4 @@
-import type { DonemliButce } from "@core/ad-cost";
+import { reklamOraniIcin, type DonemliButce } from "@core/ad-cost";
 import { simulatePrice } from "@core/pricing-engine";
 import { vatRateOf } from "@core/vat";
 import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules";
@@ -107,8 +107,20 @@ export function computeProductProfit(
 
   const productRules = withProductCommissionRule(detail, rules.commission);
 
+  /**
+   * REKLAM PAYI — ürün ekranı da sipariş kârıyla AYNI oranı kullanmalı.
+   *
+   * Sipariş kârı (`order-profit.ts`) bunu zaten geçiyordu ama ürün ekranı ve Fiyat Lab HİÇ
+   * geçmiyordu: aynı ürün, "Siparişler"de reklam payı düşülmüş kârla, "Ürünler"de düşülmemiş
+   * kârla görünüyordu. Ürün ekranında sipariş tarihi yok → masaüstüyle aynı şekilde BUGÜNÜN
+   * yürürlükteki bütçesi kullanılır.
+   */
+  const simdi = Date.now();
+  const adRateOf = (platform: string) => reklamOraniIcin(rules.adBudgets ?? [], platform, simdi);
+
   const platforms: PlatformProfit[] = detail.listings.map((listing) => {
     const result = simulatePrice({
+      adRate: adRateOf(listing.platform),
       salePrice: listing.salePrice,
       productCost,
       packagingCost,
@@ -161,6 +173,7 @@ export function computeProductProfit(
           ? detail.source
           : "shopify";
       const sim = simulatePrice({
+        adRate: adRateOf(fallbackPlatform), // ilan yoksa da reklam payı düşülür (parite)
         salePrice: detail.currentSalePrice,
         productCost,
         packagingCost,

@@ -178,6 +178,9 @@ function isoOrNull(value: string | number | undefined): string | null {
  *   2) kâr ilk kez hesaplanabildi (NULL → değer)
  *   3) platform GERÇEK komisyonu geldi ya da tutarı değişti  ← mobilde EKSİKTİ
  *   4) kısmi hesap tamamlandı
+ *   5) satır ESKİ hesap sürümüyle yazılmış — v4: telefonun reklam payı DÜŞÜLMEDEN kaydettiği
+ *      kârlar yukarıdaki dört koşulun hiçbirine girmediği için asla düzelmiyordu
+ *      (bkz. core/finance-version.ts). Tek seferlik yeniden yazmayı bu madde açar.
  * Değiştirirken masaüstü karşılığını da güncelle; parite testi ikisini karşılaştırır.
  */
 const REPLACE_PROFIT_SQL = `
@@ -189,6 +192,7 @@ const REPLACE_PROFIT_SQL = `
   OR ("OrderFinanceSnapshot"."profitPartial" = 1
       AND excluded."profitPartial" = 0
       AND excluded."profitKurus" IS NOT NULL)
+  OR COALESCE("OrderFinanceSnapshot"."calculationVersion", 0) < ${FINANCE_CALCULATION_VERSION}
 `;
 
 /** Erişilebilen platform verisini kuruş cinsinden kalıcı finans geçmişine işler. */

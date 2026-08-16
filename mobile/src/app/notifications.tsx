@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ConnectionError } from "@/components/ConnectionError";
 import { ScreenHeader } from "@/components/form";
 import {
   ackAllNotifications,
@@ -25,7 +26,7 @@ import { ML, radius } from "@/theme/colors";
 
 export default function NotificationsScreen() {
   const qc = useQueryClient();
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const { data, isLoading, refetch, isRefetching, error, isFetching } = useQuery({
     queryKey: ["notifications"],
     queryFn: getNotifications,
     refetchInterval: 60_000,
@@ -66,7 +67,11 @@ export default function NotificationsScreen() {
           <Text style={styles.ackAllText}>Tümünü okundu işaretle</Text>
         </Pressable>
       ) : null}
-      {isLoading ? (
+      {error && !data ? (
+        /* Ağ koptuğunda "0 uyarı" YALANI yerine dürüst hata: stoğu biten ürün de,
+           hata veren yazıcı da orada duruyor olabilir. */
+        <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>

@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ConnectionError } from "@/components/ConnectionError";
 import { ScreenHeader } from "@/components/form";
 import { ML, radius } from "@/theme/colors";
 
@@ -29,6 +30,9 @@ export function RuleList({
   items,
   isLoading,
   onToggle,
+  error,
+  onRetry,
+  retrying = false,
 }: {
   title: string;
   note: string;
@@ -37,11 +41,20 @@ export function RuleList({
   items: RuleListItem[] | undefined;
   isLoading: boolean;
   onToggle: (id: string, active: boolean) => void;
+  /** Sorgu hatası — verilirse boş liste yerine dürüst "bağlantı yok" gösterilir. */
+  error?: unknown;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
   return (
     <SafeAreaView style={s.safe} edges={["top"]}>
       <ScreenHeader title={title} onAdd={() => router.push(addHref)} />
-      {isLoading ? (
+      {error && !items ? (
+        /* Üç kural ekranı (komisyon/kargo/gider) bu bileşeni paylaşıyor; hata dalı burada
+           TEK yerde. Eskiden ağ koptuğunda üçü de boş liste gösterip "kural yok" izlenimi
+           veriyordu — oysa kurallar kâr hesabının temeli. */
+        <ConnectionError error={error} onRetry={onRetry ?? (() => {})} retrying={retrying} />
+      ) : isLoading ? (
         <View style={s.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>

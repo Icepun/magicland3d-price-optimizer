@@ -6,6 +6,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-nati
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ConnectionError } from "@/components/ConnectionError";
 import { ScreenHeader } from "@/components/form";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getSatisHizi } from "@/lib/db/sales-rate";
@@ -30,7 +31,7 @@ const RowGap = () => <View style={{ height: 8 }} />;
 
 export default function PlannerScreen() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
+  const { data, isLoading, refetch, error, isFetching } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   // Hedef stok DB'de (AppSetting) saklanır → masaüstü/telefon senkron, sayfa değişince sıfırlanmaz
@@ -118,7 +119,10 @@ export default function PlannerScreen() {
         </View>
       </View>
 
-      {isLoading ? (
+      {error && !data ? (
+        /* Ağ koptuğunda "Üretim gerekmiyor" YALANI yerine dürüst hata. */
+        <ConnectionError error={error} onRetry={() => void refetch()} retrying={isFetching} />
+      ) : isLoading ? (
         <View style={styles.center}>
           <ActivityIndicator color={ML.accent} size="large" />
         </View>

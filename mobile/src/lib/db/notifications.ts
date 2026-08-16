@@ -74,12 +74,16 @@ export async function getNotifications(): Promise<NotificationsResult> {
       sql: `SELECT printerConfigId, name, status, statusMessage, productName
               FROM PrinterSnapshot WHERE status IN ('error', 'paused')`,
     },
-  ]).catch(
-    () =>
-      [{ rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }, { rows: [] }] as {
-        rows: Record<string, unknown>[];
-      }[]
-  );
+  ]);
+  /**
+   * ⚠️ HATA ARTIK YUTULMUYOR (bilinçli değişiklik).
+   *
+   * Burada `.catch(() => boş satırlar)` vardı: ağ koptuğunda sorgu sessizce boş dönüyor ve ekran
+   * "0 uyarı" gösteriyordu. Kullanıcı bunu "her şey yolunda" diye okuyordu — oysa stoğu biten
+   * ürün de, hata veren yazıcı da orada duruyordu. Uyarı ekranının yalan söylemesi, hiç
+   * göstermemesinden daha kötü. Hata artık çağırana çıkıyor; ekran "Bağlantı yok — tekrar dene"
+   * gösteriyor (bkz. components/ConnectionError).
+   */
 
   const alerts: AppAlert[] = [];
 

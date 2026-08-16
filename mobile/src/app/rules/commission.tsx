@@ -5,7 +5,7 @@ import { getAllCommissionRules, setCommissionRuleActive } from "@/lib/db/rule-cr
 
 export default function CommissionRulesScreen() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, refetch, error, isFetching } = useQuery({
     queryKey: ["commission-rules-all"],
     queryFn: getAllCommissionRules,
   });
@@ -31,6 +31,9 @@ export default function CommissionRulesScreen() {
 
   return (
     <RuleList
+      error={error}
+      onRetry={() => void refetch()}
+      retrying={isFetching}
       title="Komisyon Kuralları"
       note="Kategori + fiyat aralığına göre platform komisyonu."
       addHref="/rules/commission-edit/new"

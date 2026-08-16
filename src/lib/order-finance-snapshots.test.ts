@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FINANCE_CALCULATION_VERSION } from "@/core/finance-version";
 import {
   canonicalFinanceOrderId,
   shouldReplaceCapturedProfit,
@@ -28,6 +29,9 @@ describe("finance snapshot order ids", () => {
       profitPartial: false,
       profitSource: "calculated",
       actualCommissionKurus: null,
+      // GÜNCEL sürümle yazılmış satır. Gerçek satırlar bu alanı her zaman taşır; eski sürümle
+      // yazılmışsa kâr bilerek YENİDEN hesaplanır (bkz. core/finance-version.ts v4).
+      calculationVersion: FINANCE_CALCULATION_VERSION,
     };
     expect(
       shouldReplaceCapturedProfit(captured, {
@@ -67,6 +71,7 @@ describe("finance snapshot order ids", () => {
       profitPartial: false,
       profitSource: "calculated",
       actualCommissionKurus: null,
+      calculationVersion: FINANCE_CALCULATION_VERSION,
     };
     const platform = {
       revenueKurus: 10_000,
@@ -74,6 +79,7 @@ describe("finance snapshot order ids", () => {
       profitPartial: false,
       profitSource: "platform",
       actualCommissionKurus: 1_800,
+      calculationVersion: FINANCE_CALCULATION_VERSION,
     };
 
     expect(shouldReplaceCapturedProfit(calculated, platform)).toBe(true);

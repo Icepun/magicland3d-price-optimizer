@@ -13,7 +13,7 @@ function platformLabel(p: string | null): string {
 
 export default function CargoRulesScreen() {
   const qc = useQueryClient();
-  const { data, isLoading, dataUpdatedAt } = useQuery({
+  const { data, isLoading, dataUpdatedAt, refetch, error, isFetching } = useQuery({
     queryKey: ["cargo-rules-all"],
     queryFn: getAllCargoRules,
   });
@@ -55,6 +55,9 @@ export default function CargoRulesScreen() {
 
   return (
     <RuleList
+      error={error}
+      onRetry={() => void refetch()}
+      retrying={isFetching}
       title="Kargo Kuralları"
       note={
         gizlenen > 0
