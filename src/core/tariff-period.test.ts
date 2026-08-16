@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { findCargoRule } from "./cargo-calculator";
-import { tarifeDonemSiniri } from "./tariff-period";
+import { tarifeDonemSiniri, yururluktekiDonemBaslangiciMs } from "./tariff-period";
 import type { CargoRuleInput } from "./types";
 
 const TABAN = {
@@ -92,5 +92,67 @@ describe("yeni tarife başlatma", () => {
     expect(yeniPasif).toBeDefined();
     expect(yeniPasif?.isActive).toBe(false);
     expect(yeniPasif?.cargoCost).toBe(96);
+  });
+});
+
+/**
+ * YENİ KURAL HANGİ DÖNEME KATILIR?
+ *
+ * `validFrom` verilmeden eklenen kural SINIRSIZ olur ve tüm GEÇMİŞE uygulanır: tarife
+ * dönemlendikten sonra eski dönemin kurallarıyla çakışır, aynı desi bandına iki kural uyar ve
+ * geçmiş siparişlerin kârı sessizce değişir. Bugüne barem eklemek geçmişi bozmamalı.
+ */
+describe("yeni kural hangi döneme katılır", () => {
+  const BUGUN = new Date("2026-08-16T12:00:00+03:00").getTime();
+  const AGU = new Date("2026-08-01T00:00:00+03:00").getTime();
+  const EYL = new Date("2026-09-01T00:00:00+03:00").getTime();
+  const TEM_SON = new Date("2026-07-31T23:59:59.999+03:00").getTime();
+
+  it("yürürlükteki dönemin başlangıcını verir", () => {
+    const kurallar = [
+      { validFrom: null, validTo: TEM_SON }, // kapanmış
+      { validFrom: AGU, validTo: null }, // yürürlükte
+    ];
+    expect(yururluktekiDonemBaslangiciMs(kurallar, BUGUN)).toBe(AGU);
+  });
+
+  it("YAKLAŞAN döneme katılmaz — bugün geçerli olana katılır", () => {
+    const kurallar = [
+      { validFrom: AGU, validTo: null }, // yürürlükte
+      { validFrom: EYL, validTo: null }, // henüz başlamadı
+    ];
+    expect(yururluktekiDonemBaslangiciMs(kurallar, BUGUN)).toBe(AGU);
+  });
+
+  it("bitişi GELECEKTE olan dönem hâlâ yürürlükte — kapanmış sayılmaz", () => {
+    // İleri tarihli tarife başlatılınca bugünkü dönem de validTo alır ama hâlâ geçerlidir.
+    // Kapanmış sayılsaydı yeni kural sessizce "sınırsız" doğar ve TÜM GEÇMİŞE uygulanırdı.
+    const EYL_SON = new Date("2026-09-30T23:59:59.999+03:00").getTime();
+    const kurallar = [
+      { validFrom: AGU, validTo: EYL_SON }, // bugün yürürlükte, bitişi gelecekte
+      { validFrom: new Date("2026-10-01T00:00:00+03:00").getTime(), validTo: null }, // yaklaşan
+    ];
+    expect(yururluktekiDonemBaslangiciMs(kurallar, BUGUN)).toBe(AGU);
+  });
+
+  it("kapanmış dönemler hiç sayılmaz", () => {
+    const kurallar = [{ validFrom: AGU, validTo: TEM_SON }];
+    expect(yururluktekiDonemBaslangiciMs(kurallar, BUGUN)).toBeNull();
+  });
+
+  it("henüz dönemlenmemiş platformda null döner (bugünkü Shopify) — davranış değişmez", () => {
+    const kurallar = [{ validFrom: null, validTo: null }];
+    expect(yururluktekiDonemBaslangiciMs(kurallar, BUGUN)).toBeNull();
+  });
+
+  it("epoch-ms ve ISO metin biçimlerinin ikisini de çözer (mobil ham SQL / masaüstü Prisma)", () => {
+    const iso = new Date(AGU).toISOString();
+    expect(yururluktekiDonemBaslangiciMs([{ validFrom: iso, validTo: null }], BUGUN)).toBe(AGU);
+    expect(yururluktekiDonemBaslangiciMs([{ validFrom: AGU, validTo: null }], BUGUN)).toBe(AGU);
+    expect(yururluktekiDonemBaslangiciMs([{ validFrom: new Date(AGU), validTo: null }], BUGUN)).toBe(AGU);
+  });
+
+  it("hiç kural yoksa null", () => {
+    expect(yururluktekiDonemBaslangiciMs([], BUGUN)).toBeNull();
   });
 });

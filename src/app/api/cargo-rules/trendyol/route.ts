@@ -16,25 +16,32 @@ import { bustProfitInputCaches } from "@/lib/cache-busting";
  */
 const KEY = "trendyolCargoMode";
 /**
- * Yalnız YÜRÜRLÜKTEKİ kurallar (validTo boş).
+ * SÜRESİ DOLMAMIŞ kurallar: yürürlükteki dönem + yaklaşan dönemler.
  *
  * ⚠️ Süresi dolmuş kurallara DOKUNULMAZ: onlar geçmiş siparişlerin kargo maliyetini
  * belirliyor. Düğme hepsini çevirseydi, moda geçerken geçmiş aylardaki siparişler
  * kuralsız kalır ve kârları sessizce değişirdi.
+ *
+ * ⚠️ `validTo: null` TEK BAŞINA YETMEZ: ileri tarihli bir tarife başlatıldığında bugünkü
+ * dönem de `validTo` alır (yeni tarifenin bir milisaniye öncesi). Yalnız `null` bakılsaydı
+ * düğme bugünkü tarifeyi ATLAR, sadece yaklaşanı çevirirdi — kullanıcı düğmeye basar,
+ * hiçbir şey değişmezdi.
  */
-const texWhere = {
-  AND: [
-    { OR: [{ cargoProvider: { contains: "TEX" } }, { name: { contains: "TEX" } }] },
-    { validTo: null },
-  ],
-};
+function texWhereFor(simdi: Date) {
+  return {
+    AND: [
+      { OR: [{ cargoProvider: { contains: "TEX" } }, { name: { contains: "TEX" } }] },
+      { OR: [{ validTo: null }, { validTo: { gte: simdi } }] },
+    ],
+  };
+}
 
 export async function GET() {
   await ensureRuntimeSchema();
   let mode: "standart" | "avantajli" = "standart";
   try {
     const avantajActive = await prisma.cargoRule.count({
-      where: { AND: [texWhere, { name: { contains: "Avantaj" } }, { isActive: true }] },
+      where: { AND: [texWhereFor(new Date()), { name: { contains: "Avantaj" } }, { isActive: true }] },
     });
     mode = avantajActive > 0 ? "avantajli" : "standart";
   } catch {
@@ -51,12 +58,12 @@ export async function POST(req: NextRequest) {
     const { mode } = Body.parse(await req.json());
     // Avantajlı düz barem
     await prisma.cargoRule.updateMany({
-      where: { AND: [texWhere, { name: { contains: "Avantaj" } }] },
+      where: { AND: [texWhereFor(new Date()), { name: { contains: "Avantaj" } }] },
       data: { isActive: mode === "avantajli" },
     });
     // Standart düz barem
     await prisma.cargoRule.updateMany({
-      where: { AND: [texWhere, { name: { contains: "Standart" } }] },
+      where: { AND: [texWhereFor(new Date()), { name: { contains: "Standart" } }] },
       data: { isActive: mode === "standart" },
     });
     await prisma.appSetting.upsert({

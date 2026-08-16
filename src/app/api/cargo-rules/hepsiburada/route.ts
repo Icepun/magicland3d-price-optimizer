@@ -43,12 +43,58 @@ export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
     const { mode } = Body.parse(await req.json());
-    // ⚠️ Yalnız YÜRÜRLÜKTEKİ kurallar silinir (validTo boş olanlar).
-    // Süresi dolmuş kurallar geçmiş siparişlerin kargo maliyetini belirliyor; hepsi
-    // silinseydi moda her geçişte geçmiş aylar kuralsız kalır ve kârları sessizce değişirdi.
-    await prisma.cargoRule.deleteMany({ where: { platform: "hepsiburada", validTo: null } });
+    /**
+     * ⚠️ DÖNEM SINIRLARI KORUNUR.
+     *
+     * Süresi dolmuş kurallara hiç dokunulmaz: onlar geçmiş siparişlerin kargo maliyetini
+     * belirliyor (`core/order-profit.ts` kuralı siparişin KENDİ tarihine göre seçer).
+     *
+     * Kapanmamış kurallar (validTo boş) ise DÖNEMİNE GÖRE gruplanır ve her grup KENDİ
+     * `validFrom`'uyla yeniden yazılır. Eskiden hepsi silinip tek seferde `validFrom = null`
+     * ile geri yazılıyordu; bu, tarife dönemlendikten sonra moda her geçişte:
+     *   • yürürlükteki tarifenin başlangıç tarihini SİLİP onu tüm geçmişe uygular,
+     *   • ileri tarihli (yaklaşan) bir tarife varsa onu da bugünkü dönemle BİRLEŞTİRİRDİ.
+     * Bugün HB'de tek ve tarihsiz dönem var, o yüzden davranış birebir aynı kalıyor; tarife
+     * dönemlendiğinde de doğru çalışacak.
+     */
+    const simdi = new Date();
+    /**
+     * SÜRESİ DOLMAMIŞ tüm dönemler: yürürlükteki + yaklaşan.
+     *
+     * ⚠️ `validTo: null` YETMEZ: ileri tarihli bir tarife başlatıldığında bugünkü dönem de
+     * `validTo` alır (yeni tarifenin bir milisaniye öncesi). Yalnız `null` bakılsaydı düğme
+     * bugünkü tarifeyi ATLAR, sadece yaklaşan dönemi çevirirdi — kullanıcı düğmeye basar,
+     * hiçbir şey değişmezdi.
+     */
+    const mevcut = await prisma.cargoRule.findMany({
+      where: {
+        platform: "hepsiburada",
+        OR: [{ validTo: null }, { validTo: { gte: simdi } }],
+      },
+      select: { id: true, validFrom: true, validTo: true },
+    });
+
+    // Dönem anahtarı: (validFrom, validTo) çifti — her dönem KENDİ sınırlarıyla yeniden yazılır.
+    const donemler = new Map<string, { validFrom: Date | null; validTo: Date | null }>();
+    for (const r of mevcut) {
+      const anahtar = `${r.validFrom?.toISOString() ?? ""}|${r.validTo?.toISOString() ?? ""}`;
+      if (!donemler.has(anahtar)) {
+        donemler.set(anahtar, { validFrom: r.validFrom ?? null, validTo: r.validTo ?? null });
+      }
+    }
+    // Hiç kural yoksa tek bir tarihsiz dönem kur (ilk kurulum).
+    if (donemler.size === 0) donemler.set("|", { validFrom: null, validTo: null });
+
+    await prisma.cargoRule.deleteMany({
+      where: { id: { in: mevcut.map((r) => r.id) } },
+    });
+
     const rules = buildHepsiburadaCargoRules(mode);
-    await prisma.cargoRule.createMany({ data: rules });
+    for (const { validFrom, validTo } of donemler.values()) {
+      await prisma.cargoRule.createMany({
+        data: rules.map((r) => ({ ...r, validFrom, validTo })),
+      });
+    }
     await prisma.appSetting.upsert({
       where: { key: KEY },
       create: { key: KEY, value: mode },

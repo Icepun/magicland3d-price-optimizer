@@ -1,3 +1,4 @@
+import { yururluktekiDonemBaslangiciMs } from "@core/tariff-period";
 import { batch, execute, query } from "@/lib/turso";
 import { ensureCargoVatSchema } from "@/lib/db/schema";
 
@@ -203,12 +204,27 @@ export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
   );
 }
 
+/**
+ * Yeni kuralın katılacağı dönemin başlangıcı — karar çekirdekte, masaüstüyle AYNI tanım.
+ */
+async function yururluktekiDonemBaslangici(platform: string | null): Promise<number | null> {
+  if (!platform) return null;
+  // Ham SQL kolonu sayı da metin de olabiliyor; çekirdek ikisini de çözüyor.
+  const satirlar = await query<{ validFrom: string | number | null; validTo: string | number | null }>(
+    `SELECT validFrom, validTo FROM CargoRule
+      WHERE platform = ? AND (validTo IS NULL OR validTo >= ?)`,
+    [platform, Date.now()]
+  );
+  return yururluktekiDonemBaslangiciMs(satirlar, Date.now());
+}
+
 export async function createCargoRule(d: CargoDraft): Promise<void> {
   await ensureCargoVatSchema();
+  const validFrom = await yururluktekiDonemBaslangici(d.platform);
   await execute(
-    `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, priority, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
-    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0]
+    `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, validFrom, priority, isActive)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
+    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0, validFrom]
   );
 }
 
