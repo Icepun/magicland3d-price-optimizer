@@ -104,6 +104,8 @@ export interface UnifiedOrder {
   desiEstimated?: boolean;
   /** true = bu siparişin desi/tutarına uyan kargo kuralı yok; kargo 0 sayıldı, kâr yüksek görünüyor. */
   cargoRuleMissing?: boolean;
+  /** Bu siparişe düşen reklam payı (TL). 0 = reklam bütçesi yok. */
+  adCost?: number;
   orderRevenueAdjustment?: number;
   /** Satıştan doğan (hesaplanan) KDV — kalıcı finans geçmişine taşınır. */
   outputVat?: number | null;
@@ -1461,6 +1463,7 @@ async function computeOrdersBodyInner(
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
       cargoRuleMissing: pr.cargoRuleMissing,
+      adCost: pr.adCost,
       orderRevenueAdjustment: pr.orderRevenueAdjustment,
       // KDV motorun çıktısından aynen taşınır — snapshot'a yazılıp aylık özete girer.
       outputVat: pr.outputVat,
@@ -1528,6 +1531,7 @@ async function computeOrdersBodyInner(
         missingDesiCount: 0,
         desiEstimated: false,
         cargoRuleMissing: false,
+        adCost: 0,
         orderRevenueAdjustment: 0,
         trackingNumber: null,
         cargoProvider: null,

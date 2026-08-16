@@ -104,6 +104,8 @@ interface UnifiedOrder {
   desiEstimated?: boolean;
   /** Bu siparişin desi/tutarına uyan kargo kuralı yok → kargo 0 sayıldı, kâr yüksek görünüyor. */
   cargoRuleMissing?: boolean;
+  /** Bu siparişe düşen reklam payı (TL). */
+  adCost?: number;
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
@@ -362,6 +364,7 @@ function manualOrderRow(saved: ManualOrderSaveResult): UnifiedOrder {
     missingDesiCount: 0,
     desiEstimated: false,
     cargoRuleMissing: false,
+    adCost: 0,
     orderRevenueAdjustment: 0,
     trackingNumber: null,
     cargoProvider: null,
@@ -2250,6 +2253,16 @@ const OrderRow = memo(function OrderRow({
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
+                {/* Reklam payı: günlük bütçenin bu siparişin cirosuna düşen kısmı.
+                    Bütçe yoksa 0 → satır çıkmaz. */}
+                {!isCancelled && (order.adCost ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Reklam payı</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.adCost ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
                 {/* İptal/iade siparişte kâr ayrıntısı yanıltıcı olur — hiçbir toplama girmiyor. */}
                 {!isCancelled && Math.abs(order.orderRevenueAdjustment ?? 0) >= 0.01 && (
                   <div className="flex items-center justify-between text-[10px]">

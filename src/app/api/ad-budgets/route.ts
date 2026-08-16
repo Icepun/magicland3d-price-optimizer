@@ -5,6 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { bustProfitInputCaches } from "@/lib/cache-busting";
 import { tarifeDonemSiniri } from "@/core/tariff-period";
 import { adRateSnapshot, bustAdRateCache } from "@/lib/ad-rate";
+import { recalculateFinanceMonths } from "@/lib/order-finance-snapshots";
 import { REKLAM_PENCERE_GUN } from "@/core/ad-cost";
 
 /**
@@ -18,6 +19,23 @@ import { REKLAM_PENCERE_GUN } from "@/core/ad-cost";
  * ⚠️ Bu uç KÂR RAKAMINI DEĞİŞTİRİR: bütçe girildiği andan itibaren o platformun siparişleri
  * reklam payı taşımaya başlar.
  */
+
+
+/**
+ * Başlangıçtan bugüne kadarki ay anahtarları ("2026-08"). Reklam payı yalnız bu ayları
+ * etkiler; öncesi zaten pay taşımıyor.
+ */
+function etkilenenAylar(bas: Date, son: Date): string[] {
+  const aylar: string[] = [];
+  const d = new Date(Date.UTC(bas.getUTCFullYear(), bas.getUTCMonth(), 1));
+  const bitis = new Date(Date.UTC(son.getUTCFullYear(), son.getUTCMonth(), 1));
+  // Üst sınır: makul bir tavan (yanlış tarihte sonsuz döngü olmasın).
+  while (d <= bitis && aylar.length < 60) {
+    aylar.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+    d.setUTCMonth(d.getUTCMonth() + 1);
+  }
+  return aylar;
+}
 
 export async function GET() {
   await ensureRuntimeSchema();
@@ -97,7 +115,24 @@ export async function POST(req: NextRequest) {
     bustAdRateCache();
     bustProfitInputCaches(); // reklam payı değişti → sipariş kârı yeni oranla hesaplansın
 
-    return NextResponse.json({ ok: true, butce: yeni });
+    /**
+     * RAPORLARI YENİDEN HESAPLA — Raporlar DONMUŞ kâr okuyor (`OrderFinanceSnapshot.profitKurus`).
+     * Bütçe girildiğinde Siparişler ekranı anında yeni kârı gösterir ama Raporlar, biri
+     * "yeniden hesapla" diyene kadar ESKİ (reklamsız, yüksek) kârı göstermeye devam ederdi —
+     * iki ekran birbirini tutmaz, kullanıcı hangisine güveneceğini bilemezdi.
+     *
+     * Yalnız ETKİLENEN aylar: bütçenin başladığı aydan bugüne. Öncesi zaten reklam payı
+     * taşımıyor, dokunmaya gerek yok.
+     *
+     * Beklenmiyor (void): yeniden hesap yüzlerce satır yazabilir; isteği bekletmek arayüzü
+     * kilitlerdi. Hata olursa yutulur — kullanıcı istediğinde elle tetikleyebilir.
+     */
+    const aylar = etkilenenAylar(baslangic, new Date());
+    if (aylar.length > 0) {
+      void recalculateFinanceMonths(aylar).catch(() => {});
+    }
+
+    return NextResponse.json({ ok: true, butce: yeni, yenidenHesaplananAy: aylar.length });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Reklam bütçesi kaydedilemedi" },

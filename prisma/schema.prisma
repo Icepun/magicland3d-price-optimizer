@@ -285,8 +285,6 @@ model AdBudget {
   platform    String
   /** Günlük reklam harcaması (TL). */
   dailyAmount Float
-  /** false ise tutarın üstüne KDV eklenir ve indirilecek KDV olarak ayrılır. */
-  vatIncluded Boolean   @default(true)
   validFrom   DateTime
   validTo     DateTime?
   isActive    Boolean   @default(true)

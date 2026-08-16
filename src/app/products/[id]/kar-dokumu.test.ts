@@ -73,7 +73,7 @@ const GIDERLER: ExpenseRuleInput[] = [
   },
 ];
 
-function simule(minOrderQty: number) {
+function simule(minOrderQty: number, adRate = 0) {
   return simulatePrice({
     salePrice: 30,
     productCost: 10,
@@ -85,6 +85,7 @@ function simule(minOrderQty: number) {
     expenseRules: GIDERLER,
     vatRate: 20,
     minOrderQty,
+    adRate,
   });
 }
 
@@ -96,6 +97,7 @@ function dokumSatirlari(result: ReturnType<typeof simulatePrice>) {
     urunVePaketleme: result.productCost + result.packagingCost,
     komisyon: result.commissionCost,
     kargo: result.cargoCost,
+    reklam: result.adCost,
     giderler: result.appliedExpenseRules.map((exp) =>
       exp.type === "percentage" ? exp.amount * qty : exp.amount
     ),
@@ -104,6 +106,41 @@ function dokumSatirlari(result: ReturnType<typeof simulatePrice>) {
 }
 
 describe("kâr dökümünün toplamı net kâra eşittir", () => {
+  it("REKLAM PAYI da satır olarak düşülünce toplam net kârı verir", () => {
+    /**
+     * Reklam payı `totalCost`a giriyor; dökümde ayrı satır olarak gösterilmezse kartın
+     * satırları toplandığında net kâr ÇIKMAZ (kullanıcı "rakamlar tutmuyor" der).
+     * Bu test satırın varlığını kimlik üzerinden kilitler.
+     */
+    const result = simule(1, 0.1871); // ölçülen gerçek oran
+    expect(result.adCost).toBeGreaterThan(0);
+
+    const satir = dokumSatirlari(result);
+    const siparisCirosu = result.effectiveSalePrice * result.minOrderQty;
+    const toplam =
+      siparisCirosu -
+      satir.kdv -
+      satir.urunVePaketleme -
+      satir.komisyon -
+      satir.kargo -
+      satir.reklam -
+      satir.giderler.reduce((a, b) => a + b, 0) +
+      satir.kdvIadesi;
+
+    expect(toplam).toBeCloseTo(result.netProfit, 8);
+  });
+
+  it("reklam payı KDV İADESİNE girmez (yurt dışı fatura, Türk KDV'si yok)", () => {
+    const reklamsiz = simule(1, 0);
+    const reklamli = simule(1, 0.1871);
+    expect(reklamli.inputVatCredit).toBeCloseTo(reklamsiz.inputVatCredit, 8);
+  });
+
+  it("sayfa reklam payı satırını basıyor", () => {
+    expect(SAYFA).toContain("Reklam payı");
+    expect(SAYFA).toMatch(/result\.adCost/);
+  });
+
   for (const qty of [1, 4]) {
     it(`${qty} adetlik siparişte satırlar net kârı verir`, () => {
       const result = simule(qty);
@@ -117,6 +154,7 @@ describe("kâr dökümünün toplamı net kâra eşittir", () => {
         satir.urunVePaketleme -
         satir.komisyon -
         satir.kargo -
+        satir.reklam -
         satir.giderler.reduce((a, b) => a + b, 0) +
         satir.kdvIadesi;
 

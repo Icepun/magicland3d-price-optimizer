@@ -1494,6 +1494,19 @@ function PlatformProfitCardImpl({
                     <span>Kargo</span>
                     <span>−{formatCurrency(result.cargoCost)}</span>
                   </div>
+                  {/* Reklam payı: günlük reklam bütçesinin bu ürünün cirosuna düşen kısmı.
+                      Bütçe girilmemişse 0 → satır hiç görünmez. */}
+                  {result.adCost > 0 && (
+                    <div className="flex justify-between text-muted-foreground">
+                      <span>
+                        Reklam payı
+                        <span className="opacity-60 ml-1">
+                          (%{((result.adCost / (result.effectiveSalePrice * result.minOrderQty)) * 100).toFixed(1)})
+                        </span>
+                      </span>
+                      <span>−{formatCurrency(result.adCost)}</span>
+                    </div>
+                  )}
                   {result.appliedExpenseRules
                     .filter((exp) => exp.amount !== 0)
                     .map((exp) => (
