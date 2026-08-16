@@ -240,6 +240,13 @@ export default function ProductDetailPage({
     queryFn: () => fetchJson("/api/cargo-rules"),
     staleTime: 5 * 60_000,
   });
+  // Reklam payı oranı (platform → oran). Ürün ekranı ileriye dönük baktığı için BUGÜNKÜ bütçe.
+  const { data: adBudgetData } = useQuery<{ oranlar: Record<string, { oran: number }> }>({
+    queryKey: ["ad-budgets"],
+    queryFn: () => fetchJson("/api/ad-budgets"),
+    staleTime: 5 * 60_000,
+  });
+
   const { data: expenseRules, isError: expenseRulesFailed } = useQuery<ExpenseRuleInput[]>({
     queryKey: ["expense-rules"],
     queryFn: () => fetchJson("/api/expense-rules"),
@@ -547,9 +554,12 @@ export default function ProductDetailPage({
       settings: globalSettings,
       commissionRules,
       cargoRules,
+      adRates: Object.fromEntries(
+        Object.entries(adBudgetData?.oranlar ?? {}).map(([p, o]) => [p, o.oran])
+      ),
       expenseRules,
     });
-  }, [product, costValues, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
+  }, [product, costValues, filaments, globalSettings, commissionRules, cargoRules, expenseRules, adBudgetData]);
 
   // Kâr hangi VARSAYIMLARLA çıktı? Fiyatı bu ekranda belirlediğimiz için eksik girdiyi burada
   // söylemek şart: desi boşken kargo 1 desi kabul edilir, ürüne uyan kargo fiyatı yoksa kargo 0₺

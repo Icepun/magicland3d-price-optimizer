@@ -121,6 +121,11 @@ export interface ClientPricingInput {
   commissionRules: CommissionRuleInput[];
   cargoRules: CargoRuleInput[];
   expenseRules: ExpenseRuleInput[];
+  /**
+   * Platform → BUGÜNKÜ reklam payı oranı (ciroya oran). Ürün ekranı ileriye dönük baktığı için
+   * bugünkü bütçe kullanılır. Boşsa reklam payı 0 — bütçe girilmemiş demektir.
+   */
+  adRates?: Record<string, number>;
 }
 
 /** Hem önizleme hem Fiyat Lab'ın paylaştığı çözülmüş taban — kurallar platform başına TEK kez süzülür. */
@@ -138,6 +143,7 @@ interface PricingBase {
   productRules: CommissionRuleInput[];
   desi: number;
   /** Platform → o platforma süzülmüş kargo/gider kuralları (yeniden-süzme yok). */
+  adRates: Record<string, number>;
   cargoByPlatform: Record<string, CargoRuleInput[]>;
   expenseByPlatform: Record<string, ExpenseRuleInput[]>;
 }
@@ -204,6 +210,7 @@ function buildBase(input: ClientPricingInput): PricingBase {
     activeListings,
     productRules,
     desi,
+    adRates: input.adRates ?? {},
     cargoByPlatform,
     expenseByPlatform,
   };
@@ -223,6 +230,7 @@ function previewFromBase(b: PricingBase): ProfitPreview {
       desi: b.desi,
       commissionRules: b.productRules,
       cargoRules: b.cargoByPlatform[listing.platform] ?? [],
+      adRate: b.adRates[listing.platform] ?? 0,
       expenseRules: b.expenseByPlatform[listing.platform] ?? [],
       vatRate: b.vatRate,
       ...resolveListingCommissionOverride(listing, b.settings),
@@ -261,6 +269,7 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       desi: b.desi,
       commissionRules: b.productRules,
       cargoRules: b.cargoByPlatform[platform] ?? [],
+      adRate: b.adRates[platform] ?? 0,
       expenseRules: b.expenseByPlatform[platform] ?? [],
       vatRate: b.vatRate,
       discountBuffer,
