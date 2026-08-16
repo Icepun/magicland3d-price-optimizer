@@ -7,6 +7,7 @@ import {
   KALICI_SORGULAR,
   ONBELLEK_BICIMI,
   ONBELLEK_MAKSIMUM_YAS_MS,
+  jsonGuvenliMi,
   kaliciSorguMu,
   onbellekGecerliMi,
 } from "../../mobile/src/lib/offline-cache-policy";
@@ -58,7 +59,7 @@ describe("önbellek geçerlilik kuralı", () => {
 
 describe("hangi sorgular diske yazılır", () => {
   it("açılışta gösterilen ağır veriler yazılır", () => {
-    for (const k of ["orders", "dashboard-data", "match-products", "rules", "settings"]) {
+    for (const k of ["orders", "dashboard-data", "match-products", "settings"]) {
       expect(kaliciSorguMu([k])).toBe(true);
     }
   });
@@ -68,6 +69,18 @@ describe("hangi sorgular diske yazılır", () => {
     expect(KALICI_SORGULAR).not.toContain("printer-snapshots");
   });
 
+  /**
+   * ⚠️ UYGULAMAYI AÇILIŞTA ÇÖKERTTİ (17 Ağu 2026). `["rules"]` listedeydi; `getRules()`
+   * içindeki `financialByExternalId`/`financialByOrderNumber` birer `Map` ve
+   * `JSON.stringify(new Map())` → `{}`. Geri yüklenen düz nesnede `.get()` olmadığı için
+   * ilk render "get is not a function" ile patlıyor, uygulama hiç açılmıyordu. Dosya diske
+   * yazıldığı için hata İKİNCİ açılışta ortaya çıktı — ilk turda her şey normal görünüyordu.
+   */
+  it("Map içeren kurallar sorgusu YAZILMAZ", () => {
+    expect(KALICI_SORGULAR).not.toContain("rules");
+    expect(kaliciSorguMu(["rules"])).toBe(false);
+  });
+
   it("tanımadığımız sorgu yazılmaz (liste açık uçlu değil)", () => {
     expect(kaliciSorguMu(["rastgele-sorgu"])).toBe(false);
     expect(kaliciSorguMu([])).toBe(false);
@@ -75,7 +88,67 @@ describe("hangi sorgular diske yazılır", () => {
   });
 });
 
+describe("JSON güvenlik süzgeci (ikinci savunma)", () => {
+  it("düz veri geçer", () => {
+    expect(jsonGuvenliMi({ a: 1, b: "x", c: [1, 2, { d: null }] })).toBe(true);
+    expect(jsonGuvenliMi([])).toBe(true);
+    expect(jsonGuvenliMi(null)).toBe(true);
+  });
+
+  it("Map/Set/Date geçmez — sessizce {} olarak yazılıp geri yüklerken patlarlar", () => {
+    expect(jsonGuvenliMi(new Map([["a", 1]]))).toBe(false);
+    expect(jsonGuvenliMi(new Set([1]))).toBe(false);
+    expect(jsonGuvenliMi(new Date())).toBe(false);
+  });
+
+  it("derinde gizlenmiş Map de yakalanır", () => {
+    expect(jsonGuvenliMi({ rules: { financialByExternalId: new Map() } })).toBe(false);
+    expect(jsonGuvenliMi([{ liste: [{ x: new Map() }] }])).toBe(false);
+  });
+
+  it("gerçek getRules() çıktısının şekli reddedilir", () => {
+    const rulesBenzeri = {
+      commission: [],
+      cargo: [],
+      expense: [],
+      financialByExternalId: new Map(),
+      financialByOrderNumber: new Map(),
+      adBudgets: [],
+    };
+    expect(jsonGuvenliMi(rulesBenzeri)).toBe(false);
+  });
+
+  it("süzgeç dehydrate çağrısına gerçekten bağlı", () => {
+    expect(oku("mobile/src/lib/offline-cache.ts")).toContain("jsonGuvenliMi(q.state.data)");
+  });
+});
+
 describe("çevrimdışı önbellek kurulumu", () => {
+  /**
+   * Zehirli dosyalar telefonlarda DURUYOR. Biçim sürümü artmazsa uygulama o dosyayı yükleyip
+   * çökmeye devam eder — düzeltmenin kullanıcıya ulaşmasının tek yolu sürüm artışı.
+   */
+  it("biçim sürümü zehirli dosyaları atacak kadar ileri (>= 3)", () => {
+    expect(ONBELLEK_BICIMI).toBeGreaterThanOrEqual(3);
+  });
+
+  /**
+   * `loadOfflineCache` ilk render'dan ÖNCE, useState başlatıcısında çalışıyor: buradan fırlayan
+   * her hata açılış çökmesidir. Dosya nesnesinin kurulumu bile try içinde olmalı.
+   */
+  it("açılış yolunda try dışında hiçbir iş yok", () => {
+    const kaynak = oku("mobile/src/lib/offline-cache.ts");
+    const govde = kaynak.slice(
+      kaynak.indexOf("export function loadOfflineCache"),
+      kaynak.indexOf("function diskeYaz")
+    );
+    const tryIndex = govde.indexOf("try {");
+    // `onbellekDosyasi()` çağrısı try bloğundan SONRA gelmeli (yani içinde).
+    expect(govde.indexOf("DOSYA = onbellekDosyasi()")).toBeGreaterThan(tryIndex);
+    expect(govde.indexOf("DOSYA.textSync()")).toBeGreaterThan(tryIndex);
+    expect(govde.indexOf("hydrate(qc")).toBeGreaterThan(tryIndex);
+  });
+
   it("yeni native paket EKLENMEDİ — parmak izi korunur, OTA kanalı kesilmez", () => {
     const pkg = JSON.parse(oku("mobile/package.json")) as { dependencies: Record<string, string> };
     // async-storage/mmkv/sqlite gibi bir depo paketi eklenirse çalışma parmak izi değişir ve

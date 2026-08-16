@@ -4,6 +4,7 @@ import { Platform } from "react-native";
 
 import {
   ONBELLEK_BICIMI,
+  jsonGuvenliMi,
   kaliciSorguMu,
   onbellekGecerliMi,
 } from "@/lib/offline-cache-policy";
@@ -56,21 +57,28 @@ interface KalicilikDosyasi {
  * Her hata sessizce yutulur: kalıcı önbellek bir kolaylık, açılışı engellemesi kabul edilemez.
  */
 export function loadOfflineCache(qc: QueryClient): void {
-  const DOSYA = onbellekDosyasi();
-  if (!DOSYA) return;
+  /**
+   * ⚠️ HER ŞEY TEK `try` İÇİNDE — dosya nesnesinin KURULUMU dahil.
+   *
+   * Bu fonksiyon `useState` başlatıcısında, ilk render'dan önce çalışıyor; buradan fırlayan
+   * herhangi bir hata uygulamayı açılışta kapatır. Bir tur `onbellekDosyasi()` çağrısı try'ın
+   * DIŞINDAYDI: native tarafta beklenmedik bir durumda uygulama hiç açılmazdı. Kalıcı önbellek
+   * bir kolaylıktır; açılışı riske atma hakkı yok.
+   */
+  let DOSYA: File | null = null;
   try {
-    if (!DOSYA.exists) return;
-    const ham = DOSYA.textSync();
-    const dosya = JSON.parse(ham) as KalicilikDosyasi;
+    DOSYA = onbellekDosyasi();
+    if (!DOSYA || !DOSYA.exists) return;
+    const dosya = JSON.parse(DOSYA.textSync()) as KalicilikDosyasi;
     if (!onbellekGecerliMi(dosya, Date.now())) {
       DOSYA.delete(); // eski biçim ya da bayat → temizle, uygulama boş açılsın
       return;
     }
     hydrate(qc, dosya.durum);
   } catch {
-    // Bozuk/yarım yazılmış dosya → at, uygulama normal (boş) açılsın.
+    // Bozuk/yarım yazılmış dosya ya da geri yükleme hatası → at, uygulama boş ama ÇALIŞIR açılsın.
     try {
-      DOSYA.delete();
+      DOSYA?.delete();
     } catch {
       /* dosya silinemedi; bir sonraki yazma üzerine yazacak */
     }
@@ -79,11 +87,16 @@ export function loadOfflineCache(qc: QueryClient): void {
 
 /** Diske yaz (senkron yazma ~1ms; dosya küçük ve tek seferde değiştirilir). */
 function diskeYaz(qc: QueryClient): void {
-  const DOSYA = onbellekDosyasi();
-  if (!DOSYA) return;
   try {
+    const DOSYA = onbellekDosyasi(); // kurulum da try içinde — bkz. loadOfflineCache notu
+    if (!DOSYA) return;
     const durum = dehydrate(qc, {
-      shouldDehydrateQuery: (q) => kaliciSorguMu(q.queryKey) && q.state.status === "success",
+      shouldDehydrateQuery: (q) =>
+        kaliciSorguMu(q.queryKey) &&
+        q.state.status === "success" &&
+        // İKİNCİ SAVUNMA: `Map`/`Set` sessizce `{}` yazılır ve ancak geri yüklenirken,
+        // kullanıcının telefonunda, açılış çökmesi olarak patlar. Zehirli veri diske inmesin.
+        jsonGuvenliMi(q.state.data),
     });
     if (durum.queries.length === 0) return; // yazacak bir şey yok; var olanı silme
     const govde: KalicilikDosyasi = { bicim: ONBELLEK_BICIMI, yazilma: Date.now(), durum };

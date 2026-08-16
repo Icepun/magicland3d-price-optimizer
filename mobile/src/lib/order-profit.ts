@@ -176,12 +176,22 @@ export function computeOrderProfit(
 
   // Trendyol GERÇEK komisyonu (settlement) — masaüstüyle AYNI iki anahtar: önce dış sipariş
   // kimliği, olmazsa sipariş numarası TEKİLSE fallback. Yoksa kural-tabanlı kâr aynen kalır.
+  //
+  // ⚠️ `?.` YETMİYOR, `instanceof Map` ŞART. Bu iki alan birer `Map`; kurallar bir tur
+  // çevrimdışı önbelleğe yazıldı ve `JSON.stringify(new Map())` → `{}` olduğu için geri
+  // yüklendiğinde DÜZ NESNE oldu. `{}` truthy olduğundan `?.` devreye girmedi ve
+  // ".get is not a function" fırladı — Panel ilk render'da patlıyor, UYGULAMA HİÇ AÇILMIYORDU.
+  // Kurallar artık diske yazılmıyor; bu kontrol ikinci savunma: en kötü ihtimalle Trendyol'un
+  // gerçek komisyonu o tur kullanılamaz, uygulama çalışmaya devam eder.
+  const disKimlikHaritasi =
+    rules.financialByExternalId instanceof Map ? rules.financialByExternalId : null;
+  const siparisNoHaritasi =
+    rules.financialByOrderNumber instanceof Map ? rules.financialByOrderNumber : null;
+
   let financial =
-    order.platform === "trendyol"
-      ? rules.financialByExternalId?.get(order.id) ?? null
-      : null;
+    order.platform === "trendyol" ? disKimlikHaritasi?.get(order.id) ?? null : null;
   if (!financial && order.platform === "trendyol") {
-    const candidates = rules.financialByOrderNumber?.get(order.orderNumber) ?? [];
+    const candidates = siparisNoHaritasi?.get(order.orderNumber) ?? [];
     if (candidates.length === 1) financial = candidates[0];
   }
 
