@@ -1923,13 +1923,15 @@ interface StageProps {
  * yönü gerçeğe uyuyor. Oran değiştiğinde clip-path tween'liyor — kesme sıçramıyor.
  */
 function BuildReveal({
-  src, alt, ratio, accent, reduceMotion,
+  src, alt, ratio, accent, reduceMotion, onError,
 }: {
   src: string;
   alt: string;
   ratio: number;
   accent: string;
   reduceMotion: boolean;
+  /** Görsel yüklenemezse kart eski yola döner (kırık resim gösterme). */
+  onError: () => void;
 }) {
   const yuzde = Math.max(0, Math.min(100, ratio * 100));
   const basladi = yuzde > 0.5;
@@ -1940,6 +1942,7 @@ function BuildReveal({
       <img
         src={src}
         alt={alt}
+        onError={onError}
         className="absolute inset-0 h-full w-full object-contain p-2 opacity-[0.22] saturate-0"
       />
       {/* Basılan kısım */}
@@ -1992,7 +1995,10 @@ function JobVisual({
   const list = frames ?? [];
   // Slicer'ın render'ı varsa O gösterilir. Kendi ürettiğimiz kareler baskı YOLLARINI üst üste
   // bindirdiği için model beyaz bir siluete dönüşüyor; render gölgeli ve net.
-  const plate = plateSrc?.trim() || null;
+  // Önizleme üretilemeyen dosyalarda uç nokta boş döner; o kaynağı işaretleyip eski yola düş.
+  const [plateFailed, setPlateFailed] = useState<string | null>(null);
+  const plateAday = plateSrc?.trim() || null;
+  const plate = plateAday && plateAday !== plateFailed ? plateAday : null;
   const hasFrames = !plate && list.length > 0;
   // ÇAPRAZ GEÇİŞ: yeni kare üsttte belirirken ÖNCEKİ kare altta duruyor. Eskiden yalnız yeni kare
   // vardı ve her kare değişiminde bir an boşluğa göz kırpıyordu.
@@ -2018,7 +2024,14 @@ function JobVisual({
       }}
     >
       {plate ? (
-        <BuildReveal src={plate} alt={productName} ratio={ratio} accent={accent} reduceMotion={reduceMotion} />
+        <BuildReveal
+          src={plate}
+          alt={productName}
+          ratio={ratio}
+          accent={accent}
+          reduceMotion={reduceMotion}
+          onError={() => setPlateFailed(plate)}
+        />
       ) : hasFrames ? (
         <>
           {prevIndex !== frameIndex && list[prevIndex] && (

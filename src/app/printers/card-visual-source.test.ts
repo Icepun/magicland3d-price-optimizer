@@ -32,6 +32,13 @@ describe("kart görseli kaynağı", () => {
     expect(KART).toMatch(/clipPath: `inset\(\$\{100 - yuzde\}% 0 0 0\)`/);
   });
 
+  it("görsel yüklenemezse eski yola döner — kırık resim kalmaz", () => {
+    // Uç nokta gömülü render bulunmayan dosyalarda boş dönebiliyor. Ham <img> hatayı
+    // kendi başına yutmaz; işaretlenip aday listeden düşürülmeli.
+    expect(KART).toMatch(/const plate = plateAday && plateAday !== plateFailed \? plateAday : null/);
+    expect(KART).toMatch(/onError=\{\(\) => setPlateFailed\(plate\)\}/);
+  });
+
   it("hareket azaltma isteğine uyar", () => {
     // Açılım ve düzlem çizgisi geçişleri reduceMotion'da kapanmalı.
     const bolum = KART.slice(KART.indexOf("function BuildReveal"), KART.indexOf("function JobVisual"));
