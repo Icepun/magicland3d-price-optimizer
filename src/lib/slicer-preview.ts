@@ -32,8 +32,13 @@ export type AralikOkuyucu = (start: number, end: number) => Promise<Buffer>;
  * Gövde her satırın başında "; " ile yazılır; base64 birleştirilirken temizlenir.
  */
 export function gcodeOnizlemesi(bas: string): GomuluOnizleme | null {
+  /**
+   * Satır sonu `[\r\n]+` — Cura'nın Elegoo eklentisi bloğu SALT-CR ile yazıyor ve `\r?\n`
+   * beklersen o dosyalarda görsel hiç çıkmıyor (ölçüldü: 354 dosyanın 4'ü).
+   * Ölçü ayracı hem `800x800` hem `32 32` biçiminde gelebiliyor.
+   */
   const re =
-    /; thumbnail(?:_JPG|_QOI)? begin (\d+)[ x](\d+) \d+\r?\n([\s\S]*?); thumbnail(?:_JPG|_QOI)? end/gi;
+    /; thumbnail(?:_JPG|_QOI)? begin (\d+)[ x](\d+) \d+[\r\n]+([\s\S]*?); thumbnail(?:_JPG|_QOI)? end/gi;
   let m: RegExpExecArray | null;
   let en: GomuluOnizleme | null = null;
   while ((m = re.exec(bas)) !== null) {
@@ -119,13 +124,20 @@ export async function zip3mfOnizlemesi(
   const girdiler = merkeziAyristir(merkez);
 
   /**
-   * Bambu birden çok plaka görseli koyabiliyor. Tercih sırası: küçük/no-light varyantlar
-   * DEĞİL, asıl plaka render'ı. `plate_1.png` en yaygın; yoksa ilk uygun PNG.
+   * HANGİ PLAKA? Dosyada projedeki BÜTÜN plakaların görseli duruyor, ama basılacak gcode
+   * yalnız BİRİNDEN var. Körü körüne `plate_1.png` seçmek, gerçek dosyalarda 157 baskının
+   * 21'inde (ölçüldü, 16 Ağu 2026) BAŞKA BİR PARÇANIN resmini gösteriyordu — örneğin
+   * "Delorean Arka Tampon" plate_5'i basarken kartta plate_1 görünüyordu.
+   * Doğru sıra: önce gcode hangi plakaya aitse onun görselini ara.
    */
-  const adaylar = girdiler.filter(
-    (g) => /^metadata\/plate_\d+\.png$/i.test(g.ad) || /^metadata\/plate_\d+_small\.png$/i.test(g.ad)
-  );
+  const plakaNo = girdiler
+    .map((g) => /^metadata\/plate_(\d+)\.gcode$/i.exec(g.ad)?.[1])
+    .find((x): x is string => !!x);
+
+  const adaylar = girdiler.filter((g) => /^metadata\/plate_\d+(_small)?\.png$/i.test(g.ad));
+  const tam = (no: string) => new RegExp(`^metadata/plate_${no}\\.png$`, "i");
   const secilen =
+    (plakaNo ? adaylar.find((g) => tam(plakaNo).test(g.ad)) : undefined) ??
     adaylar.find((g) => /^metadata\/plate_1\.png$/i.test(g.ad)) ??
     adaylar.find((g) => !/small/i.test(g.ad)) ??
     adaylar[0];

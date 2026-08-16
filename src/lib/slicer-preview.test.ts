@@ -58,43 +58,76 @@ describe("gcode gömülü önizlemesi", () => {
   it("bozuk/boş blok hesabı patlatmaz", () => {
     expect(gcodeOnizlemesi("; thumbnail begin 100x100 0\n; thumbnail end\n")).toBeNull();
   });
+
+  it("SALT-CR satır sonlu blok da okunur", () => {
+    // Cura'nın Elegoo eklentisi bloğu \r ile yazıyor; \r?\n bekleyen okuyucu bu dosyalarda
+    // görsel bulamıyordu (ölçüldü: 354 dosyanın 4'ü).
+    const png = pngOlcuyle(32, 32);
+    const b64 = png.toString("base64");
+    const blok = `; thumbnail begin 32 32 ${png.length}\r; ${b64}\r; thumbnail end\r`;
+    const r = gcodeOnizlemesi(blok);
+    expect(r).not.toBeNull();
+    expect(r!.genislik).toBe(32);
+  });
+
+  it("ölçü ayracı boşluk da olabilir (32 32)", () => {
+    const png = pngOlcuyle(64, 64);
+    const b64 = png.toString("base64");
+    const r = gcodeOnizlemesi(`; thumbnail begin 64 64 ${png.length}\n; ${b64}\n; thumbnail end\n`);
+    expect(r!.genislik).toBe(64);
+  });
 });
 
 // ───────────────────────── 3MF (zip) ─────────────────────────
 
-/** Tek girdili gerçek bir zip kur (saklanmış ya da deflate). */
-function zipKur(ad: string, icerik: Buffer, deflate: boolean): Buffer {
-  const adB = Buffer.from(ad, "utf8");
-  const veri = deflate ? zlib.deflateRawSync(icerik) : icerik;
+/** Çok girdili gerçek bir zip kur (saklanmış ya da deflate). */
+function zipCoklu(girdiler: { ad: string; icerik: Buffer }[], deflate: boolean): Buffer {
   const yontem = deflate ? 8 : 0;
+  const yereller: Buffer[] = [];
+  const merkezler: Buffer[] = [];
+  let ofset = 0;
 
-  const yerel = Buffer.alloc(30);
-  yerel.writeUInt32LE(0x04034b50, 0);
-  yerel.writeUInt16LE(yontem, 8);
-  yerel.writeUInt32LE(veri.length, 18);
-  yerel.writeUInt32LE(icerik.length, 22);
-  yerel.writeUInt16LE(adB.length, 26);
-  yerel.writeUInt16LE(0, 28);
+  for (const g of girdiler) {
+    const adB = Buffer.from(g.ad, "utf8");
+    const veri = deflate ? zlib.deflateRawSync(g.icerik) : g.icerik;
 
-  const yerelTam = Buffer.concat([yerel, adB, veri]);
+    const yerel = Buffer.alloc(30);
+    yerel.writeUInt32LE(0x04034b50, 0);
+    yerel.writeUInt16LE(yontem, 8);
+    yerel.writeUInt32LE(veri.length, 18);
+    yerel.writeUInt32LE(g.icerik.length, 22);
+    yerel.writeUInt16LE(adB.length, 26);
+    yerel.writeUInt16LE(0, 28);
+    const yerelTam = Buffer.concat([yerel, adB, veri]);
+    yereller.push(yerelTam);
 
-  const merkez = Buffer.alloc(46);
-  merkez.writeUInt32LE(0x02014b50, 0);
-  merkez.writeUInt16LE(yontem, 10);
-  merkez.writeUInt32LE(veri.length, 20);
-  merkez.writeUInt32LE(icerik.length, 24);
-  merkez.writeUInt16LE(adB.length, 28);
-  merkez.writeUInt32LE(0, 42); // yerel başlık ofseti
-  const merkezTam = Buffer.concat([merkez, adB]);
+    const merkez = Buffer.alloc(46);
+    merkez.writeUInt32LE(0x02014b50, 0);
+    merkez.writeUInt16LE(yontem, 10);
+    merkez.writeUInt32LE(veri.length, 20);
+    merkez.writeUInt32LE(g.icerik.length, 24);
+    merkez.writeUInt16LE(adB.length, 28);
+    merkez.writeUInt32LE(ofset, 42);
+    merkezler.push(Buffer.concat([merkez, adB]));
 
+    ofset += yerelTam.length;
+  }
+
+  const yerelBlok = Buffer.concat(yereller);
+  const merkezBlok = Buffer.concat(merkezler);
   const eocd = Buffer.alloc(22);
   eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(1, 8);
-  eocd.writeUInt16LE(1, 10);
-  eocd.writeUInt32LE(merkezTam.length, 12);
-  eocd.writeUInt32LE(yerelTam.length, 16);
+  eocd.writeUInt16LE(girdiler.length, 8);
+  eocd.writeUInt16LE(girdiler.length, 10);
+  eocd.writeUInt32LE(merkezBlok.length, 12);
+  eocd.writeUInt32LE(yerelBlok.length, 16);
 
-  return Buffer.concat([yerelTam, merkezTam, eocd]);
+  return Buffer.concat([yerelBlok, merkezBlok, eocd]);
+}
+
+/** Tek girdili kısayol. */
+function zipKur(ad: string, icerik: Buffer, deflate: boolean): Buffer {
+  return zipCoklu([{ ad, icerik }], deflate);
 }
 
 function okuyucu(buf: Buffer): AralikOkuyucu {
@@ -116,6 +149,39 @@ describe("3MF zip önizlemesi", () => {
     const zip = zipKur("Metadata/plate_1.png", png, true);
     const r = await zip3mfOnizlemesi(okuyucu(zip), zip.length);
     expect(r!.genislik).toBe(256);
+  });
+
+  it("GCODE HANGİ PLAKADANSA O plakanın görseli seçilir", async () => {
+    /**
+     * Gerçek dosyalarda 157 baskının 21'i plate_1 DEĞİL. Körü körüne plate_1 seçmek
+     * kartta bambaşka bir parçayı gösteriyordu ("Delorean Arka Tampon" plate_5 basarken
+     * plate_1 görünüyordu). Basılacak plakayı gcode belirler.
+     */
+    const yanlis = pngOlcuyle(111, 111); // plate_1 — bu GÖSTERİLMEMELİ
+    const dogru = pngOlcuyle(512, 512); // plate_5 — gcode bundan
+    const zip = zipCoklu(
+      [
+        { ad: "Metadata/plate_1.png", icerik: yanlis },
+        { ad: "Metadata/plate_5.png", icerik: dogru },
+        { ad: "Metadata/plate_5.gcode", icerik: Buffer.from("G1 X0\n") },
+      ],
+      false
+    );
+    const r = await zip3mfOnizlemesi(okuyucu(zip), zip.length);
+    expect(r).not.toBeNull();
+    expect(r!.genislik).toBe(512);
+  });
+
+  it("gcode plakası okunamazsa eski davranışa (plate_1) döner", async () => {
+    const zip = zipCoklu(
+      [
+        { ad: "Metadata/plate_1.png", icerik: pngOlcuyle(300, 300) },
+        { ad: "Metadata/plate_2.png", icerik: pngOlcuyle(400, 400) },
+      ],
+      false
+    );
+    const r = await zip3mfOnizlemesi(okuyucu(zip), zip.length);
+    expect(r!.genislik).toBe(300);
   });
 
   it("plaka görseli yoksa null", async () => {

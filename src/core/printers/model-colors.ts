@@ -268,7 +268,18 @@ function meta3mf(buf: Buffer): ModelMeta {
 
   const pngKeys = Object.keys(files).filter((k) => /Metadata\/.*\.png$/i.test(k));
   if (pngKeys.length) {
-    const key = pngKeys.find((k) => /plate_1\.png$/i.test(k)) || pngKeys.sort((a, b) => files[b].length - files[a].length)[0];
+    /**
+     * Dosyada projedeki BÜTÜN plakaların görseli var, ama basılacak gcode yalnız birinden.
+     * `plate_1` sabiti gerçek dosyalarda 157 baskının 21'inde başka bir parçanın resmini
+     * getiriyordu. Önce gcode'un plakasını bul.
+     */
+    const plakaNo = Object.keys(files)
+      .map((k) => /Metadata\/plate_(\d+)\.gcode$/i.exec(k)?.[1])
+      .find((x): x is string => !!x);
+    const key =
+      (plakaNo ? pngKeys.find((k) => new RegExp(`plate_${plakaNo}\\.png$`, "i").test(k)) : undefined) ||
+      pngKeys.find((k) => /plate_1\.png$/i.test(k)) ||
+      pngKeys.sort((a, b) => files[b].length - files[a].length)[0];
     thumbnail = `data:image/png;base64,${Buffer.from(files[key]).toString("base64")}`;
   }
 
