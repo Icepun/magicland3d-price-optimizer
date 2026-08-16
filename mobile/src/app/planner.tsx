@@ -6,6 +6,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AnimatedNumber } from "@/components/fade-in";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ConnectionError } from "@/components/ConnectionError";
@@ -18,7 +19,7 @@ import { updateSetting } from "@/lib/db/rule-crud";
 import {
   basilacakAdet, hedefStok, parseHedefModu, parseKapsamGun, type HedefAyari,
 } from "@/core/planner-target";
-import { ML, radius } from "@/theme/colors";
+import { ML, radius, tabular } from "@/theme/colors";
 
 interface PlanItem {
   id: string;
@@ -138,9 +139,9 @@ export default function PlannerScreen() {
           contentContainerStyle={styles.list}
           ListHeaderComponent={
             <View style={styles.summary}>
-              <Summary value={String(plan.length)} label="ürün" />
-              <Summary value={String(totalPrints)} label="baskı" />
-              <Summary value={`${(totalFilament / 1000).toFixed(2)} kg`} label="filament" />
+              <Summary value={plan.length} label="ürün" />
+              <Summary value={totalPrints} label="baskı" />
+              <Summary value={totalFilament / 1000} label="filament" suffix=" kg" decimals={2} />
             </View>
           }
           ItemSeparatorComponent={RowGap}
@@ -189,10 +190,29 @@ export default function PlannerScreen() {
   );
 }
 
-function Summary({ value, label }: { value: string; label: string }) {
+/**
+ * Özet hücresi — hedef stok +/- basıldıkça üç sayı da AKARAK değişir.
+ * Eskiden metin olarak anında zıplıyordu; akış, hangi sayının ne kadar değiştiğini gösteriyor.
+ * Rakamlar sabit genişlikte (tabular) → akarken hücre genişliği titremiyor.
+ */
+function Summary({
+  value,
+  label,
+  suffix = "",
+  decimals = 0,
+}: {
+  value: number;
+  label: string;
+  suffix?: string;
+  decimals?: number;
+}) {
   return (
     <View style={styles.sumCell}>
-      <Text style={styles.sumValue}>{value}</Text>
+      <AnimatedNumber
+        value={value}
+        format={(n) => `${n.toFixed(decimals)}${suffix}`}
+        style={[styles.sumValue, tabular]}
+      />
       <Text style={styles.sumLabel}>{label}</Text>
     </View>
   );

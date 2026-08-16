@@ -20,7 +20,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ConnectionError } from "@/components/ConnectionError";
-import { FadeInView } from "@/components/fade-in";
+import { FadeInView, AnimatedBar } from "@/components/fade-in";
 import { ScreenHeader } from "@/components/form";
 import {
   consumeSpool,
@@ -186,9 +186,8 @@ function SpoolCard({ spool, onConsume, onRefill, onEdit }: { spool: Spool; onCon
         <Text style={styles.meta} numberOfLines={1}>
           {spool.material}{spool.brand ? ` · ${spool.brand}` : ""}
         </Text>
-        <View style={styles.barTrack}>
-          <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: st.color }]} />
-        </View>
+        {/* Doluluk AKARAK değişir — gram düşünce çubuk zıplamadan iniyor. */}
+        <AnimatedBar percent={pct} color={st.color} height={8} style={{ marginTop: 4 }} />
         <View style={styles.gramRow}>
           <Text style={styles.gram}>
             {Math.round(spool.remainingGrams)}

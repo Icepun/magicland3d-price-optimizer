@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AnimatedBar, AnimatedNumber } from "@/components/fade-in";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { SkeletonList } from "@/components/ui";
 import { ScreenHeader } from "@/components/form";
@@ -17,7 +18,7 @@ import {
   type PrinterSnapshot,
 } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
-import { ML, radius } from "@/theme/colors";
+import { ML, radius, tabular } from "@/theme/colors";
 
 function brandColor(brand: string): string {
   if (brand === "bambu") return "#2DD4A7";
@@ -263,14 +264,20 @@ function PrinterCard({
             )}
             <View style={{ flex: 1, gap: 4 }}>
               <Text style={styles.product} numberOfLines={2}>{s.productName ?? s.currentFilename ?? "Baskı"}</Text>
-              <Text style={styles.temp}>🌡 {s.nozzle}° / {s.bed}°</Text>
+              <Text style={[styles.temp, tabular]}>
+                🌡 <AnimatedNumber value={s.nozzle} format={(n) => `${Math.round(n)}°`} style={styles.temp} /> / <AnimatedNumber value={s.bed} format={(n) => `${Math.round(n)}°`} style={styles.temp} />
+              </Text>
               <Text style={styles.eta}>{s.status === "finished" ? "Tamamlandı 🎉" : `~${fmtRemaining(s.etaSec)} kaldı`}</Text>
             </View>
           </View>
-          <View style={styles.barTrack}>
-            <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: accent }]} />
-          </View>
-          <Text style={[styles.pct, { color: accent }]}>%{pct}</Text>
+          {/* İlerleme AKARAK değişir: aktarıcı 4 saniyede bir yazdığı için çubuk ve yüzde
+              zıplıyordu; artık iki değer de aynı ritimde (motion.bar) yumuşak ilerliyor. */}
+          <AnimatedBar percent={pct} color={accent} height={8} />
+          <AnimatedNumber
+            value={pct}
+            format={(n) => `%${Math.round(n)}`}
+            style={[styles.pct, tabular, { color: accent }]}
+          />
         </>
       ) : (
         <View style={styles.body}>
