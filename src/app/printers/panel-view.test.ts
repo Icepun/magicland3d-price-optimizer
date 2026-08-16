@@ -91,6 +91,24 @@ describe("MADDE 4 — inşa karesi seçimi", () => {
   it("kare yokken çökmez", () => {
     expect(pickBuildFrame({ frameCount: 0, layerCurrent: 5, layerTotal: 10, progress: 0.5 }).index).toBe(0);
   });
+
+  it("KARE OLMASA DA oran hesaplanır — görsel açılımı buna bağlı", () => {
+    // Kart artık slicer render'ını alttan yukarı açıyor; kare üretilmemiş olması
+    // açılımı durdurmamalı (eskiden erken çıkışta oran hiç hesaplanmıyordu).
+    const p = pickBuildFrame({ frameCount: 0, layerCurrent: 5, layerTotal: 10, progress: 0.9 });
+    expect(p.ratio).toBeCloseTo(0.5);
+    expect(p.source).toBe("layer");
+  });
+
+  it("oran katmandan gelir, bayt ilerlemesinden değil", () => {
+    expect(pickBuildFrame({ frameCount: 32, layerCurrent: 665, layerTotal: 1000, progress: 0.9 }).ratio)
+      .toBeCloseTo(0.665);
+  });
+
+  it("oran 0..1 aralığını aşmaz", () => {
+    expect(pickBuildFrame({ frameCount: 8, layerCurrent: 2000, layerTotal: 1333, progress: 2 }).ratio).toBe(1);
+    expect(pickBuildFrame({ frameCount: 8, layerCurrent: null, layerTotal: 0, progress: -1 }).ratio).toBe(0);
+  });
 });
 
 describe("MADDE 5 — durum rengi kimlik renginden bağımsız", () => {

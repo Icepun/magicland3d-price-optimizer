@@ -215,6 +215,8 @@ export function resolveStage(p: {
 // çok daha dolu gösteriyordu. Kare seçimi artık katman oranından; katman yoksa ilerlemeye düşer.
 
 export interface FramePick {
+  /** 0..1 — baskının tamamlanan kısmı. Kare olmasa da hesaplanır (görsel açılımı bunu kullanır). */
+  ratio: number;
   index: number;
   source: "layer" | "progress";
 }
@@ -225,13 +227,15 @@ export function pickBuildFrame(p: {
   layerTotal: number;
   progress: number;
 }): FramePick {
-  if (p.frameCount <= 0) return { index: 0, source: "progress" };
   const layerKnown = p.layerCurrent != null && p.layerCurrent > 0 && p.layerTotal > 0;
   const ratio = layerKnown
     ? clamp01(p.layerCurrent! / p.layerTotal)
     : clamp01(p.progress);
+  const source = layerKnown ? "layer" : "progress";
+  // Kare yoksa da oran geçerli: görsel açılımı karelere ihtiyaç duymuyor.
+  if (p.frameCount <= 0) return { index: 0, source, ratio };
   const index = Math.min(p.frameCount - 1, Math.max(0, Math.floor(ratio * p.frameCount)));
-  return { index, source: layerKnown ? "layer" : "progress" };
+  return { index, source, ratio };
 }
 
 // ── MADDE 7: canlı aşama — katman rozeti, katman indeksi, nozul noktası ────

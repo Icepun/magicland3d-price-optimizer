@@ -1045,6 +1045,8 @@ function PrinterCardInner({
             <JobVisual
               frames={buildFrames}
               frameIndex={framePick.index}
+              plateSrc={job.plateThumbnail}
+              ratio={framePick.ratio}
               images={jobImageCandidates(job, live.thumbnail)}
               productName={job.productName}
               accent={accent}
@@ -1913,11 +1915,70 @@ interface StageProps {
   frame: StageFrame;
 }
 
+/**
+ * BASILAN KISIM AÇILIR — model alttan yukarı doğru renklenir.
+ *
+ * Görselin tamamı soluk duruyor; tamamlanan yüksekliğe kadar olan kısım tam renkli açılıyor
+ * ve sınırda ince bir baskı düzlemi çizgisi duruyor. FDM alttan yukarı bastığı için açılım
+ * yönü gerçeğe uyuyor. Oran değiştiğinde clip-path tween'liyor — kesme sıçramıyor.
+ */
+function BuildReveal({
+  src, alt, ratio, accent, reduceMotion,
+}: {
+  src: string;
+  alt: string;
+  ratio: number;
+  accent: string;
+  reduceMotion: boolean;
+}) {
+  const yuzde = Math.max(0, Math.min(100, ratio * 100));
+  const basladi = yuzde > 0.5;
+  const bitti = yuzde > 99.5;
+  return (
+    <>
+      {/* Henüz basılmamış kısım — şeklin nereye gittiği görünsün diye soluk duruyor */}
+      <img
+        src={src}
+        alt={alt}
+        className="absolute inset-0 h-full w-full object-contain p-2 opacity-[0.22] saturate-0"
+      />
+      {/* Basılan kısım */}
+      <div
+        className={cn(
+          "absolute inset-0",
+          !reduceMotion && "transition-[clip-path] duration-700 ease-out",
+        )}
+        style={{ clipPath: `inset(${100 - yuzde}% 0 0 0)` }}
+      >
+        <img src={src} alt="" aria-hidden className="absolute inset-0 h-full w-full object-contain p-2" />
+      </div>
+      {/* Baskı düzlemi — nozulun bulunduğu yükseklik */}
+      {basladi && !bitti && (
+        <div
+          className={cn(
+            "absolute left-1 right-1 h-px",
+            !reduceMotion && "transition-[bottom] duration-700 ease-out",
+          )}
+          style={{
+            bottom: `${yuzde}%`,
+            background: `linear-gradient(90deg, transparent, ${alpha(accent, 90)}, transparent)`,
+            boxShadow: `0 0 8px ${alpha(accent, 60)}`,
+          }}
+        />
+      )}
+    </>
+  );
+}
+
 function JobVisual({
-  frames, frameIndex, images, productName, accent, badge, stage, reduceMotion, onOpen3d,
+  frames, frameIndex, plateSrc, ratio, images, productName, accent, badge, stage, reduceMotion, onOpen3d,
 }: {
   frames: string[] | null;
   frameIndex: number;
+  /** Slicer'ın kendi render'ı — varsa kart görseli budur (kareler baskı yollarını çiziyor). */
+  plateSrc: string | null;
+  /** 0..1 — görsel bu orana kadar alttan yukarı açılır. */
+  ratio: number;
   /** Öncelik sırası — biri yüklenemezse sıradakine düşülür. */
   images: string[];
   productName: string;
@@ -1929,7 +1990,10 @@ function JobVisual({
   onOpen3d?: (() => void) | null;
 }) {
   const list = frames ?? [];
-  const hasFrames = list.length > 0;
+  // Slicer'ın render'ı varsa O gösterilir. Kendi ürettiğimiz kareler baskı YOLLARINI üst üste
+  // bindirdiği için model beyaz bir siluete dönüşüyor; render gölgeli ve net.
+  const plate = plateSrc?.trim() || null;
+  const hasFrames = !plate && list.length > 0;
   // ÇAPRAZ GEÇİŞ: yeni kare üsttte belirirken ÖNCEKİ kare altta duruyor. Eskiden yalnız yeni kare
   // vardı ve her kare değişiminde bir an boşluğa göz kırpıyordu.
   const [prevIndex, setPrevIndex] = useState(frameIndex);
@@ -1953,7 +2017,9 @@ function JobVisual({
         borderColor: alpha(accent, 26),
       }}
     >
-      {hasFrames ? (
+      {plate ? (
+        <BuildReveal src={plate} alt={productName} ratio={ratio} accent={accent} reduceMotion={reduceMotion} />
+      ) : hasFrames ? (
         <>
           {prevIndex !== frameIndex && list[prevIndex] && (
             <img key={`prev-${prevIndex}`} src={list[prevIndex]} alt="" className="absolute inset-0 h-full w-full object-contain" />
