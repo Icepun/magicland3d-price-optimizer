@@ -2,15 +2,20 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { FlashList } from "@shopify/flash-list";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   RefreshControl,
+  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { slugifyTr } from "@core/filament-groups";
+import { Chip } from "@/components/ui";
+import { PLATFORM_LABEL, type OrderPlatform } from "@/lib/platforms";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
@@ -47,7 +52,37 @@ export default function OrdersScreen() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   // Kaynak sorgu 60 gün (Raporlar ile paylaşılıyor) → bu ekran son 30 günü gösterir.
-  const shown = useMemo(() => (data ? visibleOrders(data.orders) : []), [data]);
+  const [arama, setArama] = useState("");
+  const [platform, setPlatform] = useState<"hepsi" | OrderPlatform>("hepsi");
+
+  const gorunur = useMemo(() => (data ? visibleOrders(data.orders) : []), [data]);
+
+  /** Platform başına sayı — çiplerde gösterilir, kullanıcı hangi kanalda kaç sipariş var görsün. */
+  const platformSayilari = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of gorunur) m.set(o.platform, (m.get(o.platform) ?? 0) + 1);
+    return m;
+  }, [gorunur]);
+
+  /**
+   * ARAMA — sipariş no, müşteri ve ÜRÜN ADI üzerinde.
+   * 60 günlük liste düz akıyordu ve aranan sipariş elle kaydırılarak bulunuyordu; sahada
+   * "şu müşterinin siparişi hangisiydi" en sık sorulan şey. Türkçe karakter duyarsız
+   * (ortak `slugifyTr`) → "Şeyhmus" yazarken "seyhmus" da bulur.
+   */
+  const shown = useMemo(() => {
+    let liste = gorunur;
+    if (platform !== "hepsi") liste = liste.filter((o) => o.platform === platform);
+    const q = slugifyTr(arama.trim());
+    if (q.length > 0) {
+      liste = liste.filter((o) => {
+        if (slugifyTr(o.orderNumber).includes(q)) return true;
+        if (o.customer && slugifyTr(o.customer).includes(q)) return true;
+        return o.items.some((it) => slugifyTr(it.name ?? "").includes(q));
+      });
+    }
+    return liste;
+  }, [gorunur, platform, arama]);
 
   const profitOf = useMemo(() => {
     const map = new Map<string, OrderProfit>();
@@ -60,9 +95,9 @@ export default function OrdersScreen() {
   // Başlık sayısı masaüstü özetiyle aynı: iptal/iade hariç "aktif" sipariş. Liste yine hepsini gösterir.
   const counts = useMemo(() => {
     if (!data) return null;
-    const active = shown.filter((o) => !isCancelledOrder(o)).length;
-    return { active, cancelled: shown.length - active };
-  }, [data, shown]);
+    const active = gorunur.filter((o) => !isCancelledOrder(o)).length;
+    return { active, cancelled: gorunur.length - active };
+  }, [data, gorunur]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -83,6 +118,41 @@ export default function OrdersScreen() {
         >
           <Text style={styles.addButtonText}>+ Ekle</Text>
         </PressableScale>
+      </View>
+
+      {/* ARAMA + PLATFORM ÇİPLERİ — 60 günlük listede aranan siparişi elle kaydırmak zorunda
+          kalmamak için. Çipler hangi kanalda kaç sipariş olduğunu da gösterir. */}
+      <View style={styles.filterBar}>
+        <TextInput
+          value={arama}
+          onChangeText={setArama}
+          placeholder="Sipariş no, müşteri veya ürün ara"
+          placeholderTextColor={ML.textFaint}
+          style={styles.search}
+          clearButtonMode="while-editing"
+          autoCorrect={false}
+          returnKeyType="search"
+          accessibilityLabel="Siparişlerde ara"
+        />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chips}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Chip label="Hepsi" selected={platform === "hepsi"} onPress={() => setPlatform("hepsi")} count={gorunur.length} />
+          {(["shopify", "trendyol", "hepsiburada", "manual"] as const).map((p) =>
+            platformSayilari.get(p) ? (
+              <Chip
+                key={p}
+                label={p === "manual" ? "Manuel" : PLATFORM_LABEL[p]}
+                selected={platform === p}
+                onPress={() => setPlatform(p)}
+                count={platformSayilari.get(p)}
+              />
+            ) : null
+          )}
+        </ScrollView>
       </View>
 
       {isLoading ? (
@@ -115,7 +185,11 @@ export default function OrdersScreen() {
             );
           }}
           ListEmptyComponent={
-            <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>Sipariş yok</Text>
+            <Text style={[styles.dim, { textAlign: "center", marginTop: 40 }]}>
+              {arama.trim() || platform !== "hepsi"
+                ? "Aramanla eşleşen sipariş yok"
+                : "Sipariş yok"}
+            </Text>
           }
           ItemSeparatorComponent={RowGap}
         />
@@ -243,6 +317,18 @@ function OrderCard({ order, profit }: { order: UnifiedOrder; profit?: OrderProfi
 }
 
 const styles = StyleSheet.create({
+  filterBar: { paddingHorizontal: 16, paddingBottom: 8, gap: 8 },
+  search: {
+    minHeight: 44,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    backgroundColor: ML.card,
+    borderWidth: 1,
+    borderColor: ML.borderSoft,
+    color: ML.text,
+    fontSize: 15,
+  },
+  chips: { gap: 8, paddingRight: 16 },
   safe: { flex: 1, backgroundColor: ML.bg },
   header: {
     flexDirection: "row",
