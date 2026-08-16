@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { Chip } from "@/components/ui";
+import { AppHeader } from "@/components/AppHeader";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { AnimatedBar, AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
 import { useMemo, useState } from "react";
@@ -12,10 +13,8 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { SymbolView } from "expo-symbols";
 
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
-import { getNotifications } from "@/lib/db/notifications";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
@@ -40,12 +39,6 @@ export default function DashboardScreen() {
     queryFn: getAllOrders,
     staleTime: ORDERS_STALE_MS,
   });
-  const { data: notif } = useQuery({
-    queryKey: ["notifications"],
-    queryFn: getNotifications,
-    refetchInterval: 60_000,
-  });
-
   const summary = useMemo(
     () => (products && rules && settings ? computeDashboard(products, rules, settings) : null),
     [products, rules, settings]
@@ -104,27 +97,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Panel</Text>
-          <Text style={styles.subtitle}>Pazaryerleri + manuel satışlar</Text>
-        </View>
-        <PressableScale onPress={() => router.push("/notifications" as never)} hitSlop={12} style={styles.bell}>
-          <SymbolView name="bell.fill" tintColor={ML.textDim} style={{ width: 24, height: 24 }} />
-          {notif && notif.counts.total > 0 ? (
-            <View
-              style={[
-                styles.bellBadge,
-                { backgroundColor: notif.counts.critical > 0 ? ML.red : ML.orange },
-              ]}
-            >
-              <Text style={styles.bellBadgeText}>
-                {notif.counts.total > 9 ? "9+" : notif.counts.total}
-              </Text>
-            </View>
-          ) : null}
-        </PressableScale>
-      </View>
+      <AppHeader title="Panel" subtitle="Pazaryerleri + manuel satışlar" />
 
       {isError ? (
         <View style={styles.center}>
@@ -365,29 +338,6 @@ const styles = StyleSheet.create({
   revHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   periodChips: { flexDirection: "row", gap: 6 },
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  bell: { padding: 6 },
-  bellBadge: {
-    position: "absolute",
-    top: -2,
-    right: -2,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 999,
-    paddingHorizontal: 4,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: ML.bg,
-  },
-  bellBadgeText: { color: "#fff", fontSize: 10, fontWeight: "800" },
-  title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 12, paddingBottom: 24 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24 },

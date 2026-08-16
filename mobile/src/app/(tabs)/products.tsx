@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { AppHeader } from "@/components/AppHeader";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -184,18 +185,20 @@ export default function ProductsScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Ürünler</Text>
-        {products ? (
-          <AnimatedNumber
-            value={filtered.length}
-            format={(n) => `${formatNumber(Math.round(n))} ürün`}
-            style={styles.subtitle}
-          />
-        ) : (
-          <Text style={styles.subtitle}>yükleniyor…</Text>
-        )}
-      </View>
+      <AppHeader
+        title="Ürünler"
+        subtitle={
+          products ? (
+            <AnimatedNumber
+              value={filtered.length}
+              format={(n) => `${formatNumber(Math.round(n))} ürün`}
+              style={styles.subtitle}
+            />
+          ) : (
+            "yükleniyor…"
+          )
+        }
+      />
 
       <View style={styles.searchWrap}>
         <TextInput
@@ -423,8 +426,6 @@ function GroupHeader({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
-  title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   searchWrap: { paddingHorizontal: 20, paddingVertical: 10 },
   search: {

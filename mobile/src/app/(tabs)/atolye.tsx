@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { buildFilamentAlerts, groupSpools } from "@core/filament-groups";
 import { AnimatedBar, AnimatedNumber, FadeInView } from "@/components/fade-in";
+import { AppHeader } from "@/components/AppHeader";
 import { ConnectionError } from "@/components/ConnectionError";
 import { Card, Pill, SectionLabel, SkeletonList } from "@/components/ui";
 import { PressableScale } from "@/components/ui/PressableScale";
@@ -80,16 +81,16 @@ export default function AtolyeScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Atölye</Text>
-        <Text style={styles.subtitle}>
-          {snaps.length > 0
+      <AppHeader
+        title="Atölye"
+        subtitle={
+          snaps.length > 0
             ? `${basanlar.length} baskı sürüyor · ${snaps.length} yazıcı`
             : yukleniyor
               ? "yükleniyor…"
-              : "yazıcı yok"}
-        </Text>
-      </View>
+              : "yazıcı yok"
+        }
+      />
 
       {hata && !printers.data && !spools.data ? (
         <ConnectionError
@@ -185,9 +186,6 @@ export default function AtolyeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.md },
-  title: { ...type.title, color: ML.text },
-  subtitle: { ...type.small, color: ML.textDim, marginTop: 2 },
   content: { padding: space.lg, paddingTop: 0, gap: space.md },
   card: { gap: space.sm },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },

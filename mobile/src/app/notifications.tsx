@@ -124,11 +124,19 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
       ? "shippingbox.fill"
       : alert.type === "print"
         ? "printer.fill"
-        : "circle.dashed";
+        : alert.type === "filament"
+          ? "circle.grid.cross.fill"
+          : "circle.dashed";
   return (
     <PressableScale
-      onPress={() => alert.productId && router.push(`/product/${alert.productId}`)}
-      style={({ pressed }) => [styles.row, pressed && alert.productId ? { opacity: 0.7 } : null]}
+      // DERİN BAĞLANTI: uyarı hangi ekranı anlatıyorsa oraya götürür (stok→ürün, filament→
+      // makaralar, baskı→yazıcılar). Eskiden yalnız ürünlü satırlar tıklanıyordu; "yazıcı hata
+      // veriyor" bildirimine dokunan kullanıcı hiçbir yere gidemiyor, menüden aramak zorunda
+      // kalıyordu.
+      onPress={() => alert.route && router.push(alert.route as never)}
+      disabled={!alert.route}
+      style={({ pressed }) => [styles.row, pressed && alert.route ? { opacity: 0.7 } : null]}
+      accessibilityRole={alert.route ? "button" : "text"}
     >
       <View style={[styles.iconWrap, { backgroundColor: soft }]}>
         <SymbolView name={icon} tintColor={color} style={{ width: 20, height: 20 }} />
@@ -148,7 +156,7 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
         >
           <SymbolView name="xmark" tintColor={ML.textFaint} style={{ width: 13, height: 13 }} />
         </PressableScale>
-      ) : alert.productId ? (
+      ) : alert.route ? (
         <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 14, height: 14 }} />
       ) : null}
     </PressableScale>

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import { AppHeader } from "@/components/AppHeader";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { FadeInView } from "@/components/fade-in";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
@@ -80,10 +81,7 @@ export default function MoreScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Daha</Text>
-        <Text style={styles.subtitle}>Araçlar ve ayarlar</Text>
-      </View>
+      <AppHeader title="Daha" subtitle="Araçlar ve ayarlar" />
       <ScrollView contentContainerStyle={styles.list}>
         {items.map((it, i) => (
           <FadeInView key={it.href} index={i} step={30}>
@@ -114,8 +112,6 @@ export default function MoreScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
-  title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   list: { padding: 16, gap: 10 },
   row: {

@@ -16,6 +16,12 @@ export interface AppAlert {
   title: string;
   body: string;
   productId: string | null; // tıklanınca ürün detayına gitmek için
+  /**
+   * Dokununca gidilecek MOBİL rota. Kalıcı bildirimler masaüstünün yolunu (`href`) taşıyor
+   * (`/products/<id>`, `/spools?g=…`); anlık uyarılarda türe göre türetilir. Rota
+   * çözülemezse null → satır dokunulamaz kalır (yanlış ekrana atmaktan iyidir).
+   */
+  route: string | null;
   /** Kalıcı Notification tablosundan mı (ack'lenebilir) yoksa anlık hesaplanan mı? */
   persistent: boolean;
   /** Kalıcı bildirimin oluşturulma zamanı (epoch ms) — anlık uyarılarda null. */
@@ -108,6 +114,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
       title: raw.title,
       body: raw.body,
       productId: raw.href?.match(/^\/products\/(.+)$/)?.[1] ?? null,
+      route: mobileRoute(raw.href),
       persistent: true,
       createdAt: parseDbDate(raw.createdAt),
     });
@@ -123,6 +130,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
       title: crit ? "Stok bitti" : "Stok kritik",
       body: `${p.name} — ${crit ? "0" : p.stock} adet`,
       productId: p.id,
+      route: `/product/${p.id}`,
       persistent: false,
       createdAt: null,
     });
@@ -163,6 +171,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
         title: a.title,
         body: a.body,
         productId: null,
+        route: "/spools",
         persistent: false,
         createdAt: null,
       });
@@ -189,6 +198,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
       title: err ? "Baskı hatası" : "Baskı duraklatıldı",
       body: detail ? `${pr.name} — ${detail}` : pr.name,
       productId: null,
+      route: "/printers",
       persistent: false,
       createdAt: null,
     });
@@ -201,6 +211,26 @@ export async function getNotifications(): Promise<NotificationsResult> {
     alerts,
     counts: { total: alerts.length, critical, warning: alerts.length - critical - success },
   };
+}
+
+/**
+ * Masaüstü bildirim yolunu MOBİL rotaya çevir.
+ *
+ * Kalıcı bildirimler masaüstü tarafından yazılıyor ve masaüstü yollarını taşıyor
+ * (`/products/<id>`, `/spools?g=pla__siyah`, `/printers`). Telefonda rota adları farklı;
+ * çeviremediğimiz yol için null döneriz — bildirimi yanlış ekrana götürmektense
+ * dokunulamaz bırakmak daha dürüst.
+ */
+export function mobileRoute(href: string | null | undefined): string | null {
+  if (!href) return null;
+  const yol = href.split("?")[0];
+  const urun = yol.match(/^\/products\/(.+)$/);
+  if (urun) return `/product/${urun[1]}`;
+  if (yol.startsWith("/spools")) return "/spools";
+  if (yol.startsWith("/printers")) return "/printers";
+  if (yol.startsWith("/orders")) return "/orders";
+  if (yol.startsWith("/planner")) return "/planner";
+  return null;
 }
 
 /** Kalıcı bildirimi "okundu" işaretle — masaüstü ziliyle AYNI tablo, iki cihazda birden düşer. */

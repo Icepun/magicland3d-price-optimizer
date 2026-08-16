@@ -17,6 +17,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { slugifyTr } from "@core/filament-groups";
 import { Chip } from "@/components/ui";
 import { PLATFORM_LABEL, type OrderPlatform } from "@/lib/platforms";
+import { AppHeader } from "@/components/AppHeader";
 import { PressableScale } from "@/components/ui/PressableScale";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS, statusInfo, visibleOrders, type StatusTone, type UnifiedOrder } from "@/lib/api/orders";
 import { thumbUrl } from "@/lib/image";
@@ -115,37 +116,39 @@ export default function OrdersScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Siparişler</Text>
-          <Text style={styles.subtitle}>
-            {counts
-              ? counts.cancelled > 0
-                ? `${counts.active} sipariş · ${counts.cancelled} iptal · son 30`
-                : `${counts.active} sipariş · son 30`
-              : "yükleniyor…"}
-          </Text>
-        </View>
-        {/* HAZIRLIK — paketleme rafın önünde yapılıyor; liste bir dokunuş uzakta olsun.
-            Rozet "kaç ürün kaldı"yı söyler, işaretler masaüstüyle ortaktır. */}
-        <PressableScale
-          onPress={() => router.push("/hazirlik")}
-          style={styles.prepButton}
-          accessibilityRole="button"
-          accessibilityLabel={
-            prepKalan > 0 ? `Hazırlık listesi, ${prepKalan} ürün kaldı` : "Hazırlık listesi"
-          }
-        >
-          <SymbolView name="shippingbox.fill" size={16} tintColor={ML.orange} />
-          {prepKalan > 0 ? <Text style={styles.prepCount}>{prepKalan}</Text> : null}
-        </PressableScale>
-        <PressableScale
-          onPress={() => router.push("/manual-order/new")}
-          style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
-        >
-          <Text style={styles.addButtonText}>+ Ekle</Text>
-        </PressableScale>
-      </View>
+      <AppHeader
+        title="Siparişler"
+        subtitle={
+          counts
+            ? counts.cancelled > 0
+              ? `${counts.active} sipariş · ${counts.cancelled} iptal · son 30`
+              : `${counts.active} sipariş · son 30`
+            : "yükleniyor…"
+        }
+        right={
+          <>
+            {/* HAZIRLIK — paketleme rafın önünde yapılıyor; liste bir dokunuş uzakta olsun.
+                Rozet "kaç ürün kaldı"yı söyler, işaretler masaüstüyle ortaktır. */}
+            <PressableScale
+              onPress={() => router.push("/hazirlik")}
+              style={styles.prepButton}
+              accessibilityRole="button"
+              accessibilityLabel={
+                prepKalan > 0 ? `Hazırlık listesi, ${prepKalan} ürün kaldı` : "Hazırlık listesi"
+              }
+            >
+              <SymbolView name="shippingbox.fill" size={16} tintColor={ML.orange} />
+              {prepKalan > 0 ? <Text style={styles.prepCount}>{prepKalan}</Text> : null}
+            </PressableScale>
+            <PressableScale
+              onPress={() => router.push("/manual-order/new")}
+              style={({ pressed }) => [styles.addButton, pressed && { opacity: 0.75 }]}
+            >
+              <Text style={styles.addButtonText}>+ Ekle</Text>
+            </PressableScale>
+          </>
+        }
+      />
 
       {/* ARAMA + PLATFORM ÇİPLERİ — 60 günlük listede aranan siparişi elle kaydırmak zorunda
           kalmamak için. Çipler hangi kanalda kaç sipariş olduğunu da gösterir. */}
@@ -357,16 +360,6 @@ const styles = StyleSheet.create({
   },
   chips: { gap: 8, paddingRight: 16 },
   safe: { flex: 1, backgroundColor: ML.bg },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 4,
-  },
-  title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
-  subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   prepButton: {
     minWidth: 44,
     height: 40,
