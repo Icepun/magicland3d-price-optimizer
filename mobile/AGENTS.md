@@ -43,7 +43,7 @@ iş akışı `--no-wait` ile kuyruğa atıp çıktığı için **EAS derlemesi d
 hata ancak `--no-wait` kaldırılınca (10 Ağu 2026) görünür oldu. CI'nin yeşil olması, iOS
 derlemesinin gerçekten başarılı olduğu anlamına GELMİYORDU.
 
-# Yayın öncesi TÜM platformları derle (`npm run check-bundle`)
+# Yayın öncesi TÜM platformları derle
 
 `eas update` çıktıyı **platform=all** ile üretir; buna web de dahildir ve expo-router web
 çıktısını Node içinde çalıştırır (statik render). `expo export --platform ios` yeşil olsa
@@ -56,4 +56,9 @@ ile düştü, çünkü `expo-file-system`'in web karşılığı yapıcıda patl�
 Kural: cihaz API'lerini modül yüklenirken DEĞİL, ilk kullanımda kur; web'de kısa devre yap
 (`Platform.OS === "web"`). Yayından önce:
 
-    cd mobile && npm run check-bundle
+    cd mobile && npx expo export --platform all --output-dir /tmp/mlhub-bundle-check --clear
+
+⚠️ Bunu `package.json` betiği YAPMA: `packageJson:scripts` çalışma parmak izine giriyor.
+Yeni bir betik eklemek parmak izini değiştirir → yayın YENİ bir çalışma sürümüne gider ve
+telefondaki uygulama güncellemeyi HİÇ görmez (28 Tem 2026 tuzağının aynısı, bu kez sessiz).
+Ölçüldü: betik eklendiğinde iOS parmak izi 05bc725f… → 66cbc9ec… oldu.

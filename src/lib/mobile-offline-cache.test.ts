@@ -114,6 +114,28 @@ describe("çevrimdışı önbellek kurulumu", () => {
     expect(kaynak).toContain('Platform.OS === "web"');
   });
 
+  /**
+   * ⚠️ SAHADA YAŞANDI (aynı gün, ikinci tuzak): yayın öncesi kontrolü kolaylaştırmak için
+   * `package.json`'a `check-bundle` betiği eklendi ve iOS parmak izi 05bc725f… → 66cbc9ec…
+   * oldu. `packageJson:scripts` çalışma parmak izinin BİR KAYNAĞI: betik eklemek yayını YENİ
+   * bir çalışma sürümüne gönderir, telefondaki uygulama güncellemeyi HİÇ görmez. Sessiz kopma;
+   * ancak "neden güncelleme gelmiyor" diye bakınca fark edilir.
+   */
+  it("mobil betik listesi sabit — parmak izi kaynağı", () => {
+    const pkg = JSON.parse(oku("mobile/package.json")) as { scripts: Record<string, string> };
+    expect(Object.keys(pkg.scripts).sort()).toEqual([
+      "android",
+      "check-core",
+      "deploy:testflight",
+      "ios",
+      "lint",
+      "reset-project",
+      "start",
+      "sync-core",
+      "web",
+    ]);
+  });
+
   it("bayat veri damgayla gösterilir — sessizce eski rakam gösterilmez", () => {
     const header = oku("mobile/src/components/AppHeader.tsx");
     expect(header).toContain("FreshnessStamp");

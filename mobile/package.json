@@ -47,8 +47,7 @@
     "lint": "expo lint",
     "deploy:testflight": "eas build --platform ios --profile production --auto-submit --non-interactive --wait",
     "sync-core": "rm -rf src/core && cp -R ../src/core src/core && rm -rf src/core/printers && rm -f src/core/*.test.ts",
-    "check-core": "diff -rq ../src/core src/core -x printers -x '*.test.ts' && echo 'core senkron OK' || (echo 'CORE DRIFT: masaustu src/core degisti — npm run sync-core calistir!' && exit 1)",
-    "check-bundle": "expo export --platform all --output-dir /tmp/mlhub-bundle-check --clear"
+    "check-core": "diff -rq ../src/core src/core -x printers -x '*.test.ts' && echo 'core senkron OK' || (echo 'CORE DRIFT: masaustu src/core degisti — npm run sync-core calistir!' && exit 1)"
   },
   "private": true
 }
