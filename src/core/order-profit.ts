@@ -92,6 +92,11 @@ export interface OrderProfitResult {
   estimatedCommission: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
+  /**
+   * true = bu siparişin desi/tutarına uyan bir kargo kuralı YOK; kargo 0 sayıldı.
+   * Kâr bu yüzden olduğundan yüksek. Arayüz kısmi kâr uyarısını buna da bakarak gösterir.
+   */
+  cargoRuleMissing: boolean;
   matchedLines: number;
   unmatchedLines: number;
   unmatchedQty: number;
@@ -256,6 +261,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       profit: null,
       estimatedCommission: 0,
       partial: false,
+      // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
+      cargoRuleMissing: false,
       matchedLines: 0,
       unmatchedLines,
       unmatchedQty,
@@ -349,6 +356,21 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
             ? rule
             : selected;
         }, null);
+  /**
+   * KARGO KURALI BULUNAMADI — sessizce 0 sayma.
+   *
+   * Eskiden eşleşme yoksa `?? 0` ile kargo sıfır kabul ediliyordu: sipariş başına 77-94 ₺
+   * gider düşülmüyor, kâr o kadar YÜKSEK görünüyordu ve hiçbir uyarı çıkmıyordu. "Bilinmeyen
+   * sıfır değildir" kuralının uygulanmadığı tek yer burasıydı.
+   *
+   * Artık kâr KISMİ işaretlenir; arayüz zaten kısmi kârı ayrı gösteriyor. Rakam yine 0 kargoyla
+   * hesaplanır (elde başka veri yok) ama artık "bu rakam eksik" bilgisi taşınır.
+   *
+   * Bugün pratikte hiç tetiklenmemeli: Trendyol ve Hepsiburada baremleri 0-999 desiyi kesintisiz
+   * kapsıyor, Shopify'da ise ölçüldüğünde 40 hesaplanabilir siparişin hiçbiri bant boşluğuna
+   * düşmüyordu. Bu bir emniyet ağı: tarife değişip bir bant açıkta kalırsa sessiz kalmasın.
+   */
+  const cargoRuleMissing = !canUseSoloCargo && appliedCargoRule == null;
   const rawCargoCost =
     canUseSoloCargo
       ? (soloCargo ?? 0)
@@ -365,7 +387,11 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   return {
     profit,
     estimatedCommission,
+    // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
+    // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
+    // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.
     partial: unmatchedLines > 0,
+    cargoRuleMissing,
     matchedLines,
     unmatchedLines,
     unmatchedQty,

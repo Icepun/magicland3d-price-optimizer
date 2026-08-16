@@ -102,6 +102,8 @@ interface UnifiedOrder {
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
+  /** Bu siparişin desi/tutarına uyan kargo kuralı yok → kargo 0 sayıldı, kâr yüksek görünüyor. */
+  cargoRuleMissing?: boolean;
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
@@ -359,6 +361,7 @@ function manualOrderRow(saved: ManualOrderSaveResult): UnifiedOrder {
     unmatchedCount: saved.breakdown?.missingCostItems ?? 0,
     missingDesiCount: 0,
     desiEstimated: false,
+    cargoRuleMissing: false,
     orderRevenueAdjustment: 0,
     trackingNumber: null,
     cargoProvider: null,
@@ -2061,7 +2064,7 @@ const OrderRow = memo(function OrderRow({
                   {fmtMoney2(order.profit, orderCurrency)}
                 </span>
                 {/* Sarı işaretin anlamı eskiden yalnız fareyle üstüne gelince görünüyordu. */}
-                {(order.profitPartial || order.desiEstimated) && (
+                {(order.profitPartial || order.desiEstimated || order.cargoRuleMissing) && (
                   <span className="flex items-center gap-1 text-[10px] font-medium text-amber-400">
                     <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
                     {/* İki uyarı BİRBİRİNİ DIŞLAMAZ: hem maliyeti eksik hem desisi eksik bir
@@ -2070,6 +2073,9 @@ const OrderRow = memo(function OrderRow({
                     {[
                       order.profitPartial ? `${order.unmatchedCount ?? 1} üründe maliyet yok` : null,
                       order.desiEstimated ? "kargo tahmini" : null,
+                      // Kargo kuralı bulunamadıysa kargo SIFIR sayıldı; kâr olduğundan yüksek.
+                      // Eskiden bu durum hiçbir iz bırakmadan geçiyordu.
+                      order.cargoRuleMissing ? "kargo kuralı yok" : null,
                     ]
                       .filter(Boolean)
                       .join(" · ")}

@@ -7,12 +7,13 @@
  * JS bu karşılaştırmada iki tarafı da sayıya çevirir: metin `NaN` olur ve NaN ile yapılan
  * HER karşılaştırma `false` döner → süzgeç hiç elemez → SÜRESİ DOLMUŞ tarife hâlâ aday kalır.
  *
- * Bu dosya davranışı BELGELER (henüz düzeltilmedi — maliyet/kâr rakamını değiştireceği için
- * kullanıcı onayı bekleniyor). Düzeltilince "metin" senaryosu da doğru sonucu vermeli ve
- * buradaki beklentiler güncellenmeli.
+ * ÇÖZÜM: kural listesi motora girmeden önce `reviveRuleDates`'ten geçer (`core/rule-dates.ts`),
+ * `lib/client-pricing.ts` bunu uyguluyor. Motorun kendisi hâlâ metinle çalışmaz — bu bilinçli:
+ * motor saf kalır, tip sözleşmesi `Date` der. Aşağıdaki testler hem tuzağı hem çözümü kilitler.
  */
 import { describe, expect, it } from "vitest";
 import { findCargoRule } from "./cargo-calculator";
+import { reviveRuleDates } from "./rule-dates";
 import type { CargoRuleInput } from "./types";
 
 const ESKI_KAPANIS = "2026-07-31T20:59:59.999Z"; // = 31 Tem 23:59:59.999 +03
@@ -47,10 +48,31 @@ describe("kargo kuralında tarih tipi", () => {
     expect(findCargoRule(kurallar("date"), 500, "", 1, BUGUN)?.cargoCost).toBe(81.95);
   });
 
-  it("METİN ile: süzgeç elemiyor ve ESKİ fiyat kazanıyor (bilinen kusur)", () => {
-    // Bu, ürün/fiyat-lab ekranlarının bugünkü davranışı: kargo 4,41 ₺ eksik hesaplanıyor,
-    // dolayısıyla o ekranlardaki kâr olduğundan yüksek görünüyor.
+  it("METİN ile DOĞRUDAN motora verilirse: süzgeç ölür, ESKİ fiyat kazanır (tuzak)", () => {
+    // Ürün/Fiyat Lab ekranlarının ESKİ davranışı buydu: kargo 4,41 ₺ eksik hesaplanıyor,
+    // dolayısıyla o ekranlardaki kâr olduğundan yüksek görünüyordu.
     expect(findCargoRule(kurallar("metin"), 500, "", 1, BUGUN)?.cargoCost).toBe(77.54);
+  });
+
+  it("METİN + reviveRuleDates: süzgeç ÇALIŞIR, güncel fiyat gelir (çözüm)", () => {
+    const canli = reviveRuleDates(kurallar("metin"));
+    expect(findCargoRule(canli, 500, "", 1, BUGUN)?.cargoCost).toBe(81.95);
+  });
+
+  it("reviveRuleDates epoch-ms sayıyı da çözer (mobil ham SQL bu biçimde döner)", () => {
+    const msKurallar = kurallar("date").map((r) => ({
+      ...r,
+      validFrom: (r.validFrom ? r.validFrom.getTime() : null) as unknown as Date | null,
+      validTo: (r.validTo ? r.validTo.getTime() : null) as unknown as Date | null,
+    }));
+    const canli = reviveRuleDates(msKurallar);
+    expect(findCargoRule(canli, 500, "", 1, BUGUN)?.cargoCost).toBe(81.95);
+  });
+
+  it("GEÇMİŞ bir tarihte hâlâ eski tarife gelir — düzeltme geçmişi bozmadı", () => {
+    const temmuz = new Date("2026-07-20T12:00:00+03:00");
+    const canli = reviveRuleDates(kurallar("metin"));
+    expect(findCargoRule(canli, 500, "", 1, temmuz)?.cargoCost).toBe(77.54);
   });
 
   it("kusurun sebebi: metinle karşılaştırma HER ZAMAN false", () => {

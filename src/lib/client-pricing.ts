@@ -1,3 +1,4 @@
+import { reviveRuleDates } from "../core/rule-dates";
 import { simulatePrice } from "../core/pricing-engine";
 import {
   belowShopifyMinBasket,
@@ -147,8 +148,11 @@ function buildBase(input: ClientPricingInput): PricingBase {
 
   // Sunucu route'ları kuralları isActive:true ile çeker; liste endpoint'i hepsini döner → birebir
   // parite için BURADA süz (bir kez).
-  const commissionRules = (input.commissionRules ?? []).filter((r) => r.isActive);
-  const cargoRules = (input.cargoRules ?? []).filter((r) => r.isActive);
+  // ⚠️ `reviveRuleDates` ŞART: bu kurallar istemciye ham JSON olarak geliyor, yani
+  // validFrom/validTo METİN. Motorların tarih süzgeci metinle sessizce ölür (NaN karşılaştırması
+  // her zaman false) ve süresi dolmuş tarife hâlâ kazanır. Ayrıntı: `core/rule-dates.ts`.
+  const commissionRules = reviveRuleDates(input.commissionRules ?? []).filter((r) => r.isActive);
+  const cargoRules = reviveRuleDates(input.cargoRules ?? []).filter((r) => r.isActive);
   const expenseRules = (input.expenseRules ?? []).filter((r) => r.isActive);
 
   const filamentCostPerGram =

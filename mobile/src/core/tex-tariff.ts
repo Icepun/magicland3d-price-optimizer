@@ -19,8 +19,17 @@
 
 /** Yeni tarifenin yürürlük anı — Türkiye saatiyle 1 Ağustos 2026 00:00. */
 export const TEX_YENI_TARIFE_BASLANGIC = "2026-08-01T00:00:00.000+03:00";
-/** Eski tarifenin kapanış anı — bir saniye öncesi. */
-export const TEX_ESKI_TARIFE_BITIS = "2026-07-31T23:59:59.000+03:00";
+/**
+ * Eski tarifenin kapanış anı — yeni tarifenin başlangıcından bir MİLİSANİYE öncesi.
+ *
+ * ⚠️ NEDEN .999: kural eşleşmesi kapsayıcı (`date > validTo` ise elenir). Kapanış `.000` iken
+ * 23:59:59.001–23:59:59.999 arasına düşen bir siparişe HİÇBİR kural uymuyordu (eski bitmiş,
+ * yeni başlamamış) — kargo maliyeti sessizce bulunamazdı. Milisaniye çözünürlüğünde .999,
+ * boşluğu tamamen kapatır ve tek bir siparişin sonucunu bile değiştirmez.
+ */
+export const TEX_ESKI_TARIFE_BITIS = "2026-07-31T23:59:59.999+03:00";
+/** Sahadaki veritabanlarına yazılmış ESKİ (boşluklu) kapanış anı — göç bunu arar. */
+export const TEX_ESKI_TARIFE_BITIS_BOSLUKLU = "2026-07-31T23:59:59.000+03:00";
 
 /**
  * 350 TL ve üzeri gönderilerde uygulanan desi tablosu (KDV hariç).

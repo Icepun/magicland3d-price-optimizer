@@ -485,13 +485,20 @@ function ManualOrderForm({
     };
     // Ürünsüz siparişte maliyet ve kargo, kayıt yolundaki ile AYNI yardımcıyla çözülür →
     // ekranda gördüğün rakam kaydedilen rakamdır.
-    return mode === "freeform" ? applyFreeformResolution(base, costContext) : base;
+    const onizlemeTarihi = orderDateIso(dateValue, timeValue);
+    return mode === "freeform"
+      ? applyFreeformResolution(base, costContext, onizlemeTarihi ? new Date(onizlemeTarihi) : null)
+      : base;
   }, [
     cargoAmount,
     cargoVat,
     commissionAmount,
     commissionVat,
     costContext,
+    // Tarih/saat de bağımlılık: kargo tarifesi siparişin tarihine göre seçiliyor, tarihi
+    // değiştirince önizlemedeki kargo da güncellenmeli.
+    dateValue,
+    timeValue,
     existing?.draft.vatRate,
     includePackaging,
     includeProductCost,

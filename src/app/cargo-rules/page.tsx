@@ -18,7 +18,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight, CalendarClock } from "lucide-react";
+import { NewTariffDialog } from "./new-tariff-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -478,6 +479,26 @@ function yururlukteMi(r: CargoRule, simdiMs: number): boolean {
   return true;
 }
 
+/**
+ * HENÜZ BAŞLAMAMIŞ tarifeleri başlangıç tarihine göre grupla (en yakın olan üstte).
+ *
+ * İleri tarihli bir tarife başlatıldığında bu kurallar ne yürürlüktedir ne de süresi dolmuştur;
+ * gösterilmezse kullanıcı işlemin başarısız olduğunu sanır.
+ */
+function gelecekDonemler(rules: CargoRule[], simdiMs: number): { baslangic: string; kurallar: CargoRule[] }[] {
+  const gruplar = new Map<string, CargoRule[]>();
+  for (const r of rules) {
+    if (!r.validFrom) continue;
+    if (new Date(r.validFrom).getTime() <= simdiMs) continue;
+    const mevcut = gruplar.get(r.validFrom);
+    if (mevcut) mevcut.push(r);
+    else gruplar.set(r.validFrom, [r]);
+  }
+  return [...gruplar.entries()]
+    .map(([baslangic, kurallar]) => ({ baslangic, kurallar }))
+    .sort((a, b) => new Date(a.baslangic).getTime() - new Date(b.baslangic).getTime());
+}
+
 /** Süresi dolmuş kuralları kapanış tarihine göre grupla (en yeni dönem üstte). */
 function gecmisDonemler(rules: CargoRule[], simdiMs: number): { bitis: string; kurallar: CargoRule[] }[] {
   const gruplar = new Map<string, CargoRule[]>();
@@ -534,6 +555,99 @@ function kisaTarih(iso: string): string {
   return new Date(iso).toLocaleDateString("tr-TR", {
     day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Istanbul",
   });
+}
+
+/**
+ * Yeni tarife başlatma düğmesi + diyaloğu (platform başına).
+ *
+ * Kargo zamları dönem dönem geliyor; eskiden yeni tarife girmek KOD değişikliği gerektiriyordu.
+ * Diyalog yürürlükteki tarifenin kopyasıyla açılır, kaydedince eski dönem kapanır ve yenisi başlar.
+ */
+function YeniTarifeAksiyonu({
+  platform,
+  platformAdi,
+  rules,
+  simdiMs,
+}: {
+  platform: "trendyol" | "shopify" | "hepsiburada";
+  platformAdi: string;
+  rules: CargoRule[];
+  simdiMs: number;
+}) {
+  const [acik, setAcik] = useState(false);
+  // Pasif baremler de taşınır — barem modu (Avantajlı/Standart) yeni dönemde de çalışsın.
+  const yururlukte = rules.filter((r) => yururlukteMi(r, simdiMs));
+  if (yururlukte.length === 0) return null;
+  return (
+    <>
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" className="gap-1.5 h-7 text-xs" onClick={() => setAcik(true)}>
+          <CalendarClock className="h-3.5 w-3.5" />
+          Yeni tarife başlat
+        </Button>
+      </div>
+      <NewTariffDialog
+        open={acik}
+        onOpenChange={setAcik}
+        platform={platform}
+        platformAdi={platformAdi}
+        yururluktekiKurallar={yururlukte}
+      />
+    </>
+  );
+}
+
+/**
+ * YAKLAŞAN TARİFE — başlangıcı geleceğe kurulmuş barem.
+ *
+ * Yürürlükte değil (henüz başlamadı) ve süresi de dolmadı; gösterilmezse hiçbir yerde
+ * görünmez ve kullanıcı "tarife başlat" işleminin çalışmadığını sanır. Ayrıca o tarih
+ * geldiğinde fiyatların değişeceğini önceden görmek işin doğası.
+ */
+function YaklasanTarifeler({ rules, simdiMs }: { rules: CargoRule[]; simdiMs: number }) {
+  const donemler = useMemo(() => gelecekDonemler(rules, simdiMs), [rules, simdiMs]);
+  if (donemler.length === 0) return null;
+
+  return (
+    <div className="space-y-2.5 animate-in fade-in slide-in-from-bottom-1 duration-300">
+      {donemler.map((d) => {
+        const barem = baremKur(d.kurallar.filter((r) => r.isActive));
+        return (
+          <div key={d.baslangic} className="rounded-lg border border-primary/30 bg-primary/5 overflow-hidden">
+            <div className="px-3 py-2 flex items-center gap-2">
+              <CalendarClock className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span className="text-xs font-medium">{kisaTarih(d.baslangic)} tarihinde başlayacak</span>
+              <span className="text-[11px] text-muted-foreground">yeni tarife hazır</span>
+            </div>
+            <div className="px-3 pb-3">
+              <div className="rounded-md border border-border/50 overflow-hidden bg-background/40">
+                <table className="w-full text-xs">
+                  <tbody>
+                    {barem.flat.map((t) => (
+                      <tr key={`f-${t.minPrice}-${t.maxPrice}`} className="border-b border-border/40 last:border-0">
+                        <td className="px-2.5 py-1.5 text-muted-foreground tabular-nums">
+                          {t.minPrice} – {priceLabel(t.maxPrice)} ₺
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right tabular-nums font-medium">{formatCurrency(t.cost)}</td>
+                      </tr>
+                    ))}
+                    {barem.desi.map((b) => (
+                      <tr key={`d-${b.fromDesi}-${b.toDesi}`} className="border-b border-border/40 last:border-0">
+                        <td className="px-2.5 py-1.5 text-muted-foreground tabular-nums">
+                          {desiLabel(b.fromDesi, b.toDesi)} desi
+                        </td>
+                        <td className="px-2.5 py-1.5 text-right tabular-nums font-medium">{formatCurrency(b.cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /**
@@ -843,6 +957,10 @@ export default function CargoRulesPage() {
                 desiThreshold={shopifyBarem.desiThreshold}
                 loading={isLoading}
               />
+              {!isLoading && (
+                <YeniTarifeAksiyonu platform="shopify" platformAdi="Shopify" rules={shopifyRules} simdiMs={simdiMs} />
+              )}
+              {!isLoading && <YaklasanTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
               {!isLoading && <GecmisTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
               {!isLoading && (
                 <AdvancedRules
@@ -876,6 +994,10 @@ export default function CargoRulesPage() {
                 desiThreshold={trendyolBarem.desiThreshold}
                 loading={isLoading}
               />
+              {!isLoading && (
+                <YeniTarifeAksiyonu platform="trendyol" platformAdi="Trendyol" rules={trendyolRules} simdiMs={simdiMs} />
+              )}
+              {!isLoading && <YaklasanTarifeler rules={trendyolRules} simdiMs={simdiMs} />}
               {!isLoading && <GecmisTarifeler rules={trendyolRules} simdiMs={simdiMs} />}
               {!isLoading && (
                 <AdvancedRules
@@ -914,6 +1036,10 @@ export default function CargoRulesPage() {
                   <p className="text-[10px] text-muted-foreground">
                     Kargo fiyatı değişince buradan güncelle. Üstteki desteği açıp kapatmak baremi resmi tarifeye sıfırlar.
                   </p>
+                  {!isLoading && (
+                    <YeniTarifeAksiyonu platform="hepsiburada" platformAdi="Hepsiburada" rules={hepsiburadaRules} simdiMs={simdiMs} />
+                  )}
+                  {!isLoading && <YaklasanTarifeler rules={hepsiburadaRules} simdiMs={simdiMs} />}
                   {!isLoading && <GecmisTarifeler rules={hepsiburadaRules} simdiMs={simdiMs} />}
                   <AdvancedRules
                     rules={hepsiburadaRules}

@@ -982,11 +982,15 @@ export function ManualOrderDialog({
       validTo: rule.validTo ? new Date(rule.validTo) : null,
       isActive: true,
     }));
+    // Önizleme de siparişin GİRİLEN tarihini kullanır — kaydedince çıkacak rakamla birebir
+    // aynı olsun diye (sunucu tarafı da `input.orderedAt` ile arıyor). Eski tarihli bir sipariş
+    // girerken önizlemede bugünün tarifesini göstermek yanıltıcıydı.
     const matched = findCargoRule(
       shopifyRules,
       saleTotal,
       "",
-      freeformTotalDesi || 1
+      freeformTotalDesi || 1,
+      new Date(orderedAtPayload(form.orderedAt))
     );
     const resolved = matched
       ? resolveVatableCost(
@@ -1006,6 +1010,8 @@ export function ManualOrderDialog({
   }, [
     calculationVatRate,
     cargoRulesQuery.data,
+    // Kargo tarifesi siparişin tarihine göre seçiliyor → tarih değişince önizleme yenilenmeli.
+    form.orderedAt,
     cargoRulesQuery.isError,
     form.mode,
     freeformTotalDesi,

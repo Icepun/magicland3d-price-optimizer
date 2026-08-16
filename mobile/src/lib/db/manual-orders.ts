@@ -303,7 +303,9 @@ export function resolveFreeformCargo(
   items: ManualOrderItem[],
   saleTotal: number,
   vatRate: number,
-  cargoRules: CargoRuleInput[]
+  cargoRules: CargoRuleInput[],
+  /** Siparişin KENDİ tarihi — kargo tarifesi buna göre seçilir (masaüstüyle aynı davranış). */
+  orderedAt?: Date | null
 ): { cargo: ManualOrderMoneyCost; cargoDesi: number; cargoRuleMissing: boolean } {
   let totalDesi = 0;
   for (const item of items) {
@@ -316,7 +318,8 @@ export function resolveFreeformCargo(
     filterRulesByPlatform(cargoRules, "shopify"),
     Math.max(0, saleTotal),
     "",
-    totalDesi || 1
+    totalDesi || 1,
+    orderedAt ?? undefined
   );
   const resolved = rule
     ? resolveVatableCost(rule.cargoCost, rule.vatIncluded !== false, vatRate)
@@ -334,7 +337,9 @@ export function resolveFreeformCargo(
  */
 export function applyFreeformResolution(
   draft: ManualOrderDraft,
-  context: FreeformCostContext
+  context: FreeformCostContext,
+  /** Siparişin KENDİ tarihi — kargo tarifesi buna göre seçilir. Boşsa bugüne düşer. */
+  orderedAt?: Date | null
 ): ManualOrderDraft {
   if (draft.mode !== "freeform") return draft;
 
@@ -384,7 +389,8 @@ export function applyFreeformResolution(
     items,
     draft.saleTotal,
     draft.vatRate,
-    context.cargoRules
+    context.cargoRules,
+    orderedAt ?? null
   );
   return {
     ...draft,
@@ -541,7 +547,7 @@ async function normalizedWrite(input: ManualOrderWriteInput) {
   // Serbest siparişte maliyet ve kargo, yazmadan hemen önce güncel ayar/barem ile çözülür.
   const resolvedDraft =
     input.draft.mode === "freeform"
-      ? applyFreeformResolution(input.draft, await getFreeformCostContext())
+      ? applyFreeformResolution(input.draft, await getFreeformCostContext(), new Date(orderedAt))
       : input.draft;
   const storedItems: ManualOrderItem[] = resolvedDraft.items.map((item) => ({
     ...item,
