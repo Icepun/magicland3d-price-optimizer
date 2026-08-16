@@ -1,4 +1,4 @@
-import type { DonemliButce, ReklamOrani } from "@core/ad-cost";
+import type { DonemliButce } from "@core/ad-cost";
 import { simulatePrice } from "@core/pricing-engine";
 import { vatRateOf } from "@core/vat";
 import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules";
@@ -53,7 +53,6 @@ export interface Rules {
    * farklı kâr gösterirdi.
    */
   adBudgets?: DonemliButce[];
-  adRates?: Map<string, ReklamOrani>;
   /**
    * Trendyol settlement kayıtları (gerçek komisyon) — dış sipariş kimliğine göre.
    * Masaüstü bunu kâra uyguluyordu, mobil uygulamıyordu → aynı sipariş iki cihazda farklı

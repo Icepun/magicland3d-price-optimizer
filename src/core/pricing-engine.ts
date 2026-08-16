@@ -208,7 +208,9 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   const oFilament = (vatableProductCost || 0) * qty; // KDV'li malzeme payı (per-unit × qty)
   const orderRevenueExVat = salePriceExVat * qty;
   /**
-   * REKLAM PAYI — ciroya orantılı (bkz. `core/ad-cost.ts`). Ürün ekranında "bu fiyattan
+   * REKLAM PAYI — ciroya orantılı (bkz. `core/ad-cost.ts`). KDV İNDİRİMİNE GİRMEZ:
+   * reklam yurt dışından alınıyor, faturada Türk KDV'si yok (kullanıcı teyidi).
+   * Ürün ekranında "bu fiyattan
    * satarsam reklam bana ne kadara mal oluyor" sorusunun cevabı. Adet başına ciroyla
    * orantılı olduğu için sipariş toplamı üzerinden alınır.
    */
@@ -222,7 +224,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   // devlete ödenecek (hesaplanan) KDV'den düşülür → kâra ARTI yansır (KDV mükellefi). vatRate=0 → 0.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
   const inputVatCredit =
-    (oPackaging + oCommission + fixedExpenses + oVariable + oFilament + adCost) * vatFactor +
+    (oPackaging + oCommission + fixedExpenses + oVariable + oFilament) * vatFactor +
     cargoAmounts.inputVat;
 
   // Net kâr — N-adetlik siparişin KDV hariç geliri − tüm maliyetler + indirilecek KDV iadesi

@@ -77,7 +77,6 @@ export function AdBudgetCard() {
         body: JSON.stringify({
           platform,
           dailyAmount: Number(tutar.replace(",", ".")) || 0,
-          vatIncluded: true,
           startsAt: `${baslangic}T00:00:00.000+03:00`,
         }),
       }),

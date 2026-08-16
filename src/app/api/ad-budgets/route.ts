@@ -27,7 +27,7 @@ export async function GET() {
     });
     const snap = await adRateSnapshot();
     const oranlar = Object.fromEntries(
-      [...snap.oranlar.entries()].map(([platform, o]) => [
+      [...snap.bugun.entries()].map(([platform, o]) => [
         platform,
         {
           oran: o.oran,
@@ -48,7 +48,6 @@ const Body = z.object({
   platform: z.enum(["trendyol", "shopify", "hepsiburada"]),
   /** Günlük reklam harcaması (TL). 0 = reklamı durdur (dönem kapanır, yenisi 0 ile açılır). */
   dailyAmount: z.coerce.number().min(0),
-  vatIncluded: z.boolean().default(true),
   /** Bu andan itibaren geçerli (ISO). */
   startsAt: z.string().datetime({ offset: true }),
 });
@@ -56,7 +55,7 @@ const Body = z.object({
 export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
-    const { platform, dailyAmount, vatIncluded, startsAt } = Body.parse(await req.json());
+    const { platform, dailyAmount, startsAt } = Body.parse(await req.json());
 
     const baslangic = new Date(startsAt);
     if (Number.isNaN(baslangic.getTime())) {
@@ -92,7 +91,7 @@ export async function POST(req: NextRequest) {
     });
 
     const yeni = await prisma.adBudget.create({
-      data: { platform, dailyAmount, vatIncluded, validFrom: baslangic, validTo: null, isActive: true },
+      data: { platform, dailyAmount, validFrom: baslangic, validTo: null, isActive: true },
     });
 
     bustAdRateCache();

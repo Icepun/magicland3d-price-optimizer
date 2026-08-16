@@ -1,40 +1,45 @@
 import { prisma } from "@/lib/prisma";
 import {
-  REKLAM_PENCERE_GUN,
   reklamOrani,
-  gecerliButce,
   reklamOraniIcin,
-  type ReklamOrani,
+  donemGunSayisi,
   type DonemliButce,
 } from "@/core/ad-cost";
 import { toDbDate } from "@/lib/sqlite-date";
 
 /**
- * REKLAM ORANI SERVİSİ — bütçeyi platformun GERÇEK cirosuna oranlar.
+ * REKLAM ORANI SERVİSİ — her bütçe DÖNEMİNİ kendi cirosuna oranlar.
  *
  * Çekirdek (`core/ad-cost.ts`) saf matematiktir; ciroyu bilmez. Burası ciroyu veritabanından
- * okur ve oranı kurar.
+ * okur ve her dönemin oranını o dönemin kaydına yazar.
  *
- * ⚠️ ÖNBELLEK ŞART: uzak Turso'da her sorgu ~96ms ve süreç genelinde SIRALI. Oran, sipariş
- * listesinde HER SİPARİŞ için gerekiyor; önbelleksiz 235 sipariş = 235 sorgu = ~22 saniye.
- * Oran gün içinde anlamlı ölçüde değişmediği için 5 dakikalık önbellek fazlasıyla yeterli.
+ * ⚠️ NEDEN DÖNEM BAŞINA: önce tek bir "son 30 gün" oranı hesaplanıp geçmiş dönemler ona göre
+ * ölçekleniyordu. Pencere her gün kaydığı için GEÇMİŞ siparişlerin kârı da her gün kayıyordu
+ * (ölçüldü: aynı Ağustos siparişi, bugünkü ciro seviyesine göre 120 ₺ ya da 300 ₺ reklam payı
+ * — 2,5 kat fark). Artık kapanmış dönemin oranı sabittir: kendi başlangıç–bitişi arasındaki
+ * gerçek ciroya bölünür ve bir daha oynamaz.
+ *
+ * ⚠️ ÖNBELLEK ŞART: uzak Turso'da her sorgu ~96ms ve süreç genelinde SIRALI. Oran sipariş
+ * listesinde her sipariş için gerekiyor; önbelleksiz yüzlerce sorgu ederdi.
  */
 
 const TTL_MS = 5 * 60_000;
 
-interface Kayit {
+export interface AdSnapshot {
   at: number;
-  oranlar: Map<string, ReklamOrani>;
+  /** Oranı doldurulmuş bütçe kayıtları. */
   butceler: DonemliButce[];
+  /** Arayüz önizlemesi için platform → bugünkü dönemin oran bilgisi. */
+  bugun: Map<string, { oran: number; toplamHarcama: number; guvenilir: boolean; cirodanBuyuk: boolean }>;
 }
 
 // Süreç geneli: instrumentation (relay) ile rotalar ayrı paketlere derleniyor; modül
 // kapsamında tutulsaydı iki ayrı önbellek doğar ve sorgu iki katına çıkardı.
 const g = globalThis as unknown as Record<string, unknown>;
-function kayit(): { v: Kayit | null } {
+function kayit(): { v: AdSnapshot | null } {
   const anahtar = "__mlhub_adRateCache";
   if (!(anahtar in g)) g[anahtar] = { v: null };
-  return g[anahtar] as { v: Kayit | null };
+  return g[anahtar] as { v: AdSnapshot | null };
 }
 
 /** Önbelleği at — bütçe eklenince/değişince çağrılır. */
@@ -42,82 +47,78 @@ export function bustAdRateCache(): void {
   kayit().v = null;
 }
 
-/**
- * Platform → reklam oranı (bugünkü bütçeye göre) + tüm bütçe kayıtları.
- *
- * Oran penceresi son `REKLAM_PENCERE_GUN` gün. Kısa pencere seçilmedi: sipariş sayısı günlük
- * 1-15 arasında oynuyor, 7 günlük pencere oranı zıplatırdı.
- */
-export async function adRateSnapshot(): Promise<Kayit> {
+const BOS = (at: number): AdSnapshot => ({ at, butceler: [], bugun: new Map() });
+
+export async function adRateSnapshot(): Promise<AdSnapshot> {
   const k = kayit();
   const simdi = Date.now();
   if (k.v && simdi - k.v.at < TTL_MS) return k.v;
 
-  const bos: Kayit = { at: simdi, oranlar: new Map(), butceler: [] };
   try {
-    const butceler = (await prisma.adBudget.findMany({
-      where: { isActive: true },
-    })) as unknown as DonemliButce[];
-
-    if (butceler.length === 0) {
-      k.v = { ...bos, butceler: [] };
+    const kayitlar = await prisma.adBudget.findMany({ where: { isActive: true } });
+    if (kayitlar.length === 0) {
+      k.v = BOS(simdi);
       return k.v;
     }
 
-    // Pencere cirosu: iptal/iade siparişler HARİÇ (ciro getirmediler, reklam payı da taşımazlar).
-    const baslangic = new Date(simdi - REKLAM_PENCERE_GUN * 24 * 60 * 60_000);
-    const satirlar = await prisma.$queryRawUnsafe<{ platform: string; ciro: number }[]>(
-      `SELECT platform, COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
-         FROM OrderFinanceSnapshot
-        WHERE orderedAt >= ?
-          AND (statusKind IS NULL OR statusKind <> 'cancelled')
-        GROUP BY platform`,
-      toDbDate(baslangic)
-    );
+    const butceler: DonemliButce[] = [];
+    const bugun: AdSnapshot["bugun"] = new Map();
 
-    const ciroOf = new Map<string, number>();
-    for (const s of satirlar) ciroOf.set(String(s.platform), Number(s.ciro) || 0);
-
-    const oranlar = new Map<string, ReklamOrani>();
-    for (const b of butceler) {
-      const bugunku = gecerliButce(butceler, b.platform, simdi);
-      if (!bugunku) continue;
-      oranlar.set(
+    for (const b of kayitlar) {
+      const bas = b.validFrom;
+      const bit = b.validTo ?? new Date(simdi);
+      // Dönemin KENDİ cirosu — iptal/iade hariç (ciro getirmediler, pay da taşımazlar).
+      const satir = await prisma.$queryRawUnsafe<{ ciro: number }[]>(
+        `SELECT COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
+           FROM OrderFinanceSnapshot
+          WHERE platform = ?
+            AND orderedAt >= ? AND orderedAt <= ?
+            AND (statusKind IS NULL OR statusKind <> 'cancelled')`,
         b.platform,
-        reklamOrani({
-          gunlukTutar: bugunku.dailyAmount,
-          gunSayisi: REKLAM_PENCERE_GUN,
-          pencereCirosu: ciroOf.get(b.platform) ?? 0,
-        })
+        toDbDate(bas),
+        toDbDate(bit)
       );
+      const ciro = Number(satir?.[0]?.ciro) || 0;
+      const gun = donemGunSayisi(bas, b.validTo, simdi);
+      const o = reklamOrani({ gunlukTutar: b.dailyAmount, gunSayisi: gun, pencereCirosu: ciro });
+
+      butceler.push({
+        platform: b.platform,
+        dailyAmount: b.dailyAmount,
+        validFrom: b.validFrom,
+        validTo: b.validTo,
+        isActive: b.isActive,
+        oran: o.oran,
+      });
+
+      // Bugün yürürlükte olan dönem → arayüz önizlemesi.
+      const basMs = new Date(bas).getTime();
+      const bitMs = b.validTo ? new Date(b.validTo).getTime() : Infinity;
+      if (simdi >= basMs && simdi <= bitMs) {
+        bugun.set(b.platform, {
+          oran: o.oran,
+          toplamHarcama: o.toplamHarcama,
+          guvenilir: o.guvenilir,
+          cirodanBuyuk: o.cirodanBuyuk,
+        });
+      }
     }
 
-    k.v = { at: simdi, oranlar, butceler };
+    k.v = { at: simdi, butceler, bugun };
     return k.v;
   } catch {
     // Reklam oranı İSTEĞE BAĞLI bir zenginleştirmedir: hesaplanamazsa kâr eskisi gibi
     // (reklamsız) hesaplanır — sipariş listesi asla bu yüzden düşmemeli.
-    k.v = bos;
-    return bos;
+    k.v = BOS(simdi);
+    return k.v;
   }
 }
 
-/**
- * Bir siparişin taşıyacağı reklam oranı — platformu ve KENDİ tarihi ile.
- *
- * ⚠️ Tarih ŞART: bütçe dönemlidir. Geçilmezse bugünün bütçesi tüm geçmişe uygulanır ve
- * bütçe her değiştiğinde geçmiş siparişlerin kârı kayar (kargo tarifelerindeki hata).
- */
+/** Bir siparişin reklam oranı — platformu ve KENDİ tarihiyle (çekirdek karar verir). */
 export function adRateFor(
-  snapshot: Kayit,
+  snapshot: AdSnapshot,
   platform: string,
   orderedAt: Date | null | undefined
 ): number {
-  return reklamOraniIcin(
-    snapshot.butceler,
-    snapshot.oranlar,
-    platform,
-    orderedAt ? orderedAt.getTime() : Date.now(),
-    Date.now()
-  );
+  return reklamOraniIcin(snapshot.butceler, platform, orderedAt ? orderedAt.getTime() : Date.now());
 }

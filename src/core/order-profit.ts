@@ -89,8 +89,6 @@ export interface OrderProfitInput {
    * Geçilmezse 0 — reklam bütçesi olmayan dönem/platform etkilenmez.
    */
   adRate?: number;
-  /** Reklam tutarı KDV dahil mi (varsayılan: evet). */
-  adVatIncluded?: boolean;
 }
 
 export interface OrderProfitResult {
@@ -409,15 +407,17 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
    * Geçilmezse 0 — reklam bütçesi tanımlanmamış dönemler ve platformlar etkilenmez.
    */
   const adRate = Number.isFinite(input.adRate) ? Math.max(0, input.adRate ?? 0) : 0;
-  const adGross = adRate > 0 ? matchedRevenueGross * adRate : 0;
-  const ad = resolveVatableCost(adGross, input.adVatIncluded !== false, vatRate);
-  profit -= ad.gross;
-  profit += ad.inputVat;
-  inputVatCredit += ad.inputVat;
+  const adCost = adRate > 0 ? matchedRevenueGross * adRate : 0;
+  //
+  // ⚠️ REKLAMDA KDV İNDİRİMİ YOK (kullanıcı teyidi): reklam yurt dışından alınıyor
+  // (Meta/Google), faturada Türk KDV'si yok → indirilecek KDV'ye HİÇ girmez. Diğer
+  // maliyet kalemlerinden (kargo, komisyon, paketleme) ayrıldığı tek nokta budur; oradaki
+  // deseni kopyalayıp KDV eklemek kârı yapay olarak yükseltirdi.
+  profit -= adCost;
 
   return {
     profit,
-    adCost: ad.gross,
+    adCost,
     estimatedCommission,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo

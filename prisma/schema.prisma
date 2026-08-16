@@ -273,6 +273,9 @@ model CargoRule {
  * yedirilir (bkz. `core/ad-cost.ts`). Günlük tutarı o günün sipariş sayısına bölmek
  * KULLANILMAZ: ölçüldüğünde aynı ürün, sakin/yoğun güne göre 15 kat farklı pay taşıyordu.
  *
+ * ⚠️ KDV ALANI YOK: reklam yurt dışından alınıyor (Meta/Google), faturada Türk KDV'si
+ * bulunmuyor → indirilecek KDV'ye hiç girmez (kullanıcı teyidi).
+ *
  * Kargo tarifeleri gibi DÖNEMLİDİR: bütçe değişince eski kayıt silinmez, `validTo` ile kapanır.
  * Sipariş kendi tarihindeki bütçeyi, ürün ekranı bugünkü bütçeyi kullanır.
  */

@@ -200,12 +200,9 @@ export function computeOrderProfit(
       // Reklam payı — masaüstüyle AYNI çekirdek fonksiyonundan.
       adRate: reklamOraniIcin(
         rules.adBudgets ?? [],
-        rules.adRates ?? new Map(),
         order.platform,
-        order.date != null ? new Date(order.date).getTime() : Date.now(),
-        Date.now()
+        order.date != null ? new Date(order.date).getTime() : Date.now()
       ),
-      adVatIncluded: true,
     },
     {
       forceProfitPartial: !!order.financialPartial,

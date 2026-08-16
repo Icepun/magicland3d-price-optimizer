@@ -82,27 +82,34 @@ export function reklamPayi(ciro: number, oran: number): number {
  * Masaüstü ve mobil AYNI bu fonksiyonu çağırır; ayrı yazılsalardı aynı sipariş iki cihazda
  * farklı kâr gösterirdi (daha önce gerçek komisyonda yaşanan hata).
  *
- * Oran BUGÜNKÜ ciro penceresinden gelir — geçmiş her gün için ayrı pencere hesaplamak hem
- * pahalı hem oynak olurdu. Siparişin dönemindeki bütçe bugünkünden farklıysa oran o
- * orantıda ölçeklenir: bütçe iki katına çıktıysa o dönemin payı da iki katıdır.
+ * ⚠️ ORAN DÖNEMİN KENDİSİNDEN GELİR. Önce "bugünkü oran × (dönem bütçesi / bugünkü bütçe)"
+ * diye ölçekleniyordu; oran son 30 günün cirosundan türetildiği için pencere her gün kayıyor
+ * ve GEÇMİŞ siparişlerin kârı da onunla kayıyordu (ölçüldü: aynı Ağustos siparişi, bugünkü
+ * ciro seviyesine göre 120 ₺ ya da 300 ₺ pay — 2,5 kat). Artık her dönemin oranı KENDİ
+ * dönemindeki ciroyla hesaplanıp bütçe kaydına yazılır; kapanmış dönem bir daha oynamaz.
  */
 export function reklamOraniIcin(
   butceler: readonly DonemliButce[],
-  bugunkuOranlar: ReadonlyMap<string, ReklamOrani>,
   platform: string,
-  anMs: number,
+  anMs: number
+): number {
+  const butce = gecerliButce(butceler, platform, anMs);
+  if (!butce) return 0; // o tarihte o platformda reklam yoktu
+  const oran = butce.oran;
+  return Number.isFinite(oran) && oran != null && oran > 0 ? oran : 0;
+}
+
+/** Dönemin şu ana kadar kaç gün sürdüğü (en az 1) — oranın payını kurar. */
+export function donemGunSayisi(
+  validFrom: Date | string | number | null | undefined,
+  validTo: Date | string | number | null | undefined,
   simdiMs: number
 ): number {
-  const donemButcesi = gecerliButce(butceler, platform, anMs);
-  if (!donemButcesi || donemButcesi.dailyAmount <= 0) return 0; // o tarihte reklam yoktu
-
-  const bugunku = bugunkuOranlar.get(platform);
-  if (!bugunku || !bugunku.guvenilir || bugunku.oran <= 0) return 0;
-
-  const bugunkuButce = gecerliButce(butceler, platform, simdiMs);
-  if (!bugunkuButce || bugunkuButce.dailyAmount <= 0) return 0;
-
-  return bugunku.oran * (donemButcesi.dailyAmount / bugunkuButce.dailyAmount);
+  const bas = msDeger(validFrom);
+  if (bas == null) return 0; // tarihsiz dönem — gün sayısı bilinmez
+  const bit = Math.min(msDeger(validTo) ?? simdiMs, simdiMs);
+  const gun = (bit - bas) / (24 * 60 * 60_000);
+  return gun > 0 ? Math.max(1, gun) : 0;
 }
 
 /** Bütçe kaydının en az alanı — dönem seçimi için. */
@@ -113,9 +120,11 @@ export interface DonemliButce {
   validFrom?: Date | string | number | null;
   validTo?: Date | string | number | null;
   isActive?: boolean;
+  /** Bu DÖNEMİN kendi cirosundan hesaplanmış oranı — servis doldurur. */
+  oran?: number;
 }
 
-function ms(deger: DonemliButce["validFrom"]): number | null {
+function msDeger(deger: DonemliButce["validFrom"]): number | null {
   if (deger == null) return null;
   if (deger instanceof Date) return Number.isNaN(deger.getTime()) ? null : deger.getTime();
   if (typeof deger === "number") return Number.isFinite(deger) ? deger : null;
@@ -140,8 +149,8 @@ export function gecerliButce(
   for (const b of butceler) {
     if (b.isActive === false) continue;
     if (b.platform !== platform) continue;
-    const bas = ms(b.validFrom);
-    const bit = ms(b.validTo);
+    const bas = msDeger(b.validFrom);
+    const bit = msDeger(b.validTo);
     if (bas != null && anMs < bas) continue;
     if (bit != null && anMs > bit) continue;
     const sira = bas ?? -Infinity;

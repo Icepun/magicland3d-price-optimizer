@@ -1191,7 +1191,6 @@ export async function recalculateFinanceMonths(
           orderedAt: row.orderedAt ?? null,
           // Reklam payı — Siparişler ekranıyla AYNI kaynak; yoksa Raporlar farklı kâr gösterirdi.
           adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
-          adVatIncluded: true,
         },
         {
           statusKind: row.statusKind,

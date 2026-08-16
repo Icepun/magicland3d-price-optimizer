@@ -1081,7 +1081,7 @@ async function computeOrdersBodyInner(
   let productSkuIndex: KeyIndex = new Map();
   let anyKeyIndex: KeyIndex = new Map();
   let nameIndex: KeyIndex = new Map();
-  let adSnap: Awaited<ReturnType<typeof adRateSnapshot>> = { at: 0, oranlar: new Map(), butceler: [] };
+  let adSnap: Awaited<ReturnType<typeof adRateSnapshot>> = { at: 0, butceler: [], bugun: new Map() };
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
   let expenseRules: ExpenseRules = [];
@@ -1424,7 +1424,6 @@ async function computeOrdersBodyInner(
         orderedAt: r.date ? new Date(r.date) : null,
         // Reklam payı: platformun bütçesi, siparişin KENDİ tarihindeki dönemden.
         adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
-        adVatIncluded: true,
       },
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),

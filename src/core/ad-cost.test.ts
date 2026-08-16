@@ -6,7 +6,7 @@
  * bütçeyi kullandığı (yoksa bütçe değişince geçmiş kârlar da kayardı).
  */
 import { describe, expect, it } from "vitest";
-import { reklamOrani, reklamPayi, gecerliButce, reklamOraniIcin, REKLAM_PENCERE_GUN } from "./ad-cost";
+import { reklamOrani, reklamPayi, gecerliButce, reklamOraniIcin, donemGunSayisi, REKLAM_PENCERE_GUN } from "./ad-cost";
 
 describe("reklam oranı", () => {
   it("bütçeyi ciroya oranlar — gerçek ölçümle aynı sonuç", () => {
@@ -116,37 +116,71 @@ describe("sipariş için oran seçimi", () => {
   const EYL = new Date("2026-09-01T00:00:00+03:00");
   const SIMDI = new Date("2026-09-15T12:00:00+03:00").getTime();
 
+  // Her dönemin oranı KENDİ cirosundan hesaplanıp kayda yazılır (servis doldurur).
   const butceler = [
-    { platform: "trendyol", dailyAmount: 800, validFrom: AGU, validTo: new Date(EYL.getTime() - 1) },
-    { platform: "trendyol", dailyAmount: 1600, validFrom: EYL, validTo: null },
+    { platform: "trendyol", dailyAmount: 800, validFrom: AGU, validTo: new Date(EYL.getTime() - 1), oran: 0.1 },
+    { platform: "trendyol", dailyAmount: 1600, validFrom: EYL, validTo: null, oran: 0.2 },
   ];
-  // Bugünkü (Eylül, 1600 ₺) bütçeye göre hesaplanmış oran: %20
-  const oranlar = new Map([
-    ["trendyol", { oran: 0.2, toplamHarcama: 48_000, guvenilir: true, cirodanBuyuk: false }],
-  ]);
 
-  it("BUGÜNKÜ sipariş bugünkü oranı alır", () => {
-    expect(reklamOraniIcin(butceler, oranlar, "trendyol", SIMDI, SIMDI)).toBeCloseTo(0.2, 6);
+  it("BUGÜNKÜ sipariş bugünkü dönemin oranını alır", () => {
+    expect(reklamOraniIcin(butceler, "trendyol", SIMDI)).toBeCloseTo(0.2, 6);
   });
 
-  it("AĞUSTOS siparişi, o dönemin bütçesi oranında ÖLÇEKLENİR (800/1600 = yarısı)", () => {
-    const agustos = new Date("2026-08-15T12:00:00+03:00").getTime();
-    expect(reklamOraniIcin(butceler, oranlar, "trendyol", agustos, SIMDI)).toBeCloseTo(0.1, 6);
+  it("AĞUSTOS siparişi AĞUSTOS döneminin oranını alır", () => {
+    const agustos = new Date("2026-08-10T12:00:00+03:00").getTime();
+    expect(reklamOraniIcin(butceler, "trendyol", agustos)).toBeCloseTo(0.1, 6);
+  });
+
+  it("KAPANMIŞ dönemin oranı SABİT — bugünkü ciro değişse de oynamaz", () => {
+    /**
+     * Bu, özelliğin İLK sürümündeki gerçek hataydı: oran son 30 günün cirosundan
+     * türetiliyordu ve pencere her gün kaydığı için geçmiş siparişlerin payı da kayıyordu
+     * (ölçüldü: aynı Ağustos siparişi 120 ₺ ya da 300 ₺ — 2,5 kat). Oran artık kaydın
+     * kendisinde; bugünkü pencereye hiç bakılmıyor.
+     */
+    const agustos = new Date("2026-08-10T12:00:00+03:00").getTime();
+    expect(reklamOraniIcin(butceler, "trendyol", agustos)).toBe(butceler[0].oran);
   });
 
   it("BÜTÇE ÖNCESİ sipariş reklam payı taşımaz", () => {
     const temmuz = new Date("2026-07-15T12:00:00+03:00").getTime();
-    expect(reklamOraniIcin(butceler, oranlar, "trendyol", temmuz, SIMDI)).toBe(0);
+    expect(reklamOraniIcin(butceler, "trendyol", temmuz)).toBe(0);
   });
 
   it("bütçesi olmayan platform 0 — Trendyol reklamı Shopify'a yüklenmez", () => {
-    expect(reklamOraniIcin(butceler, oranlar, "shopify", SIMDI, SIMDI)).toBe(0);
+    expect(reklamOraniIcin(butceler, "shopify", SIMDI)).toBe(0);
   });
 
-  it("oran güvenilmezse (ciro yok) 0 — uydurma pay bindirilmez", () => {
-    const guvensiz = new Map([
-      ["trendyol", { oran: 0, toplamHarcama: 48_000, guvenilir: false, cirodanBuyuk: false }],
-    ]);
-    expect(reklamOraniIcin(butceler, guvensiz, "trendyol", SIMDI, SIMDI)).toBe(0);
+  it("oran hesaplanamamışsa (ciro yok → 0) pay bindirilmez", () => {
+    const ciroSuz = [{ platform: "trendyol", dailyAmount: 800, validFrom: AGU, validTo: null, oran: 0 }];
+    expect(reklamOraniIcin(ciroSuz, "trendyol", SIMDI)).toBe(0);
+  });
+});
+
+describe("dönem gün sayısı", () => {
+  it("kapanmış dönem: başlangıç–bitiş arası", () => {
+    const bas = new Date("2026-08-01T00:00:00+03:00");
+    const bit = new Date("2026-08-31T00:00:00+03:00");
+    // "Şimdi" dönemin BİTİŞİNDEN sonra: dönem tamamlanmış, tam 30 gün sayılır.
+    const simdi = new Date("2026-10-01T00:00:00+03:00").getTime();
+    expect(donemGunSayisi(bas, bit, simdi)).toBeCloseTo(30, 1);
+  });
+
+  it("HENÜZ BİTMEMİŞ dönem ileriye saymaz — bugüne kadar sayar", () => {
+    // Bitişi gelecekte olan dönemde gelecek günleri saymak, oranı yapay olarak şişirirdi.
+    const bas = new Date("2026-08-01T00:00:00+03:00");
+    const bit = new Date("2026-08-31T00:00:00+03:00");
+    const simdi = new Date("2026-08-11T00:00:00+03:00").getTime();
+    expect(donemGunSayisi(bas, bit, simdi)).toBeCloseTo(10, 1);
+  });
+
+  it("açık dönem: başlangıçtan BUGÜNE (ileriye saymaz)", () => {
+    const bas = new Date("2026-08-01T00:00:00+03:00");
+    const simdi = new Date("2026-08-11T00:00:00+03:00").getTime();
+    expect(donemGunSayisi(bas, null, simdi)).toBeCloseTo(10, 1);
+  });
+
+  it("tarihsiz dönem 0 — gün sayısı bilinmez, oran kurulamaz", () => {
+    expect(donemGunSayisi(null, null, Date.now())).toBe(0);
   });
 });

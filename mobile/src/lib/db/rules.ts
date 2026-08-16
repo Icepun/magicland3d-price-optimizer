@@ -1,4 +1,4 @@
-import { REKLAM_PENCERE_GUN, reklamOrani, gecerliButce, type DonemliButce, type ReklamOrani } from "@core/ad-cost";
+import { reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
 import { batch, query } from "@/lib/turso";
 import type {
   CommissionRuleInput,
@@ -33,6 +33,14 @@ function normalizeRuleDates<T extends CommissionRuleInput | CargoRuleInput>(row:
  * Üç kural setini TEK round-trip'te getir (batch). Ekranlardaki ["rules"] sorgusu bunu kullanır —
  * eski hali 3 ARDIŞIK round-trip'ti (~100-400ms boşa; açılışın kritik yolunda).
  */
+/** Ham SQL tarih kolonu (epoch-ms sayı ya da ISO metin) → ms. */
+function ruleMs(v: unknown): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const t = Date.parse(String(v));
+  return Number.isNaN(t) ? null : t;
+}
+
 export async function getRules(): Promise<Rules> {
   await ensureCargoVatSchema();
   const [c, k, e, f] = await batch([
@@ -86,41 +94,44 @@ export async function getRules(): Promise<Rules> {
   }
 
   // --- REKLAM PAYI ---
-  // Bütçeler + son ${REKLAM_PENCERE_GUN} günün platform bazlı cirosu → oran. Masaüstüyle aynı çekirdek.
+  // Her bütçe DÖNEMİNİN oranı KENDİ cirosundan hesaplanır ve kayda yazılır. Tek bir
+  // "son 30 gün" oranı kullanılsaydı pencere her gün kayacağı için GEÇMİŞ siparişlerin
+  // payı da her gün değişirdi (masaüstünde ölçüldü: 2,5 kat fark).
   let adBudgets: DonemliButce[] = [];
-  const adRates = new Map<string, ReklamOrani>();
   try {
     const b = await query<Record<string, unknown>>(
-      `SELECT platform, dailyAmount, vatIncluded, validFrom, validTo, isActive
+      `SELECT platform, dailyAmount, validFrom, validTo, isActive
          FROM AdBudget WHERE isActive = 1`
     );
-    adBudgets = b as unknown as DonemliButce[];
-    if (adBudgets.length > 0) {
-      const bas = Date.now() - REKLAM_PENCERE_GUN * 24 * 60 * 60_000;
-      const ciro = await query<{ platform: string; ciro: number }>(
-        `SELECT platform, COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
+    const simdi = Date.now();
+    adBudgets = [];
+    for (const row of b as unknown as { platform: string; dailyAmount: number; validFrom: unknown; validTo: unknown; isActive: unknown }[]) {
+      const basMs = ruleMs(row.validFrom);
+      const bitMs = ruleMs(row.validTo) ?? simdi;
+      const ciro = await query<{ ciro: number }>(
+        `SELECT COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
            FROM OrderFinanceSnapshot
-          WHERE orderedAt >= ? AND (statusKind IS NULL OR statusKind <> 'cancelled')
-          GROUP BY platform`,
-        [bas]
+          WHERE platform = ? AND orderedAt >= ? AND orderedAt <= ?
+            AND (statusKind IS NULL OR statusKind <> 'cancelled')`,
+        [row.platform, basMs ?? 0, bitMs]
       );
-      const ciroOf = new Map(ciro.map((r) => [String(r.platform), Number(r.ciro) || 0]));
-      const simdi = Date.now();
-      for (const bu of adBudgets) {
-        const bugunku = gecerliButce(adBudgets, bu.platform, simdi);
-        if (!bugunku) continue;
-        adRates.set(
-          bu.platform,
-          reklamOrani({
-            gunlukTutar: bugunku.dailyAmount,
-            gunSayisi: REKLAM_PENCERE_GUN,
-            pencereCirosu: ciroOf.get(bu.platform) ?? 0,
-          })
-        );
-      }
+      const o = reklamOrani({
+        gunlukTutar: Number(row.dailyAmount) || 0,
+        gunSayisi: donemGunSayisi(basMs, ruleMs(row.validTo), simdi),
+        pencereCirosu: Number(ciro?.[0]?.ciro) || 0,
+      });
+      adBudgets.push({
+        platform: row.platform,
+        dailyAmount: Number(row.dailyAmount) || 0,
+        validFrom: basMs,
+        validTo: ruleMs(row.validTo),
+        isActive: true,
+        oran: o.oran,
+      });
     }
   } catch {
     // Reklam payı isteğe bağlı: tablo yoksa/okunamazsa kâr eskisi gibi (reklamsız) hesaplanır.
+    adBudgets = [];
   }
 
   return {
@@ -130,7 +141,6 @@ export async function getRules(): Promise<Rules> {
     financialByExternalId,
     financialByOrderNumber,
     adBudgets,
-    adRates,
   };
 }
 
