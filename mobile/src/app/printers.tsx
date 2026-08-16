@@ -233,6 +233,17 @@ function PrinterCard({
         </View>
       </View>
 
+      {/* Hata/duraklama NEDENİ — atölyede telefona bakmanın asıl sebebi "neden durdu".
+          Aktarıcı bu alanı yazıyordu ama telefon şimdiye kadar hiç göstermiyordu. */}
+      {s.statusMessage && (s.status === "error" || s.status === "paused") ? (
+        <Text
+          style={[styles.reason, { color: info.color }]}
+          numberOfLines={2}
+        >
+          {s.statusMessage}
+        </Text>
+      ) : null}
+
       {!offline && (s.status === "printing" || s.status === "paused" || s.status === "finished") ? (
         <>
           <View style={styles.body}>
@@ -373,6 +384,8 @@ const styles = StyleSheet.create({
   pName: { color: ML.text, fontSize: 15, fontWeight: "700", flex: 1 },
   pill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
   pillText: { fontSize: 12, fontWeight: "700" },
+  /** Hata/duraklama nedeni — rozetin hemen altında, rozetle aynı renkte. */
+  reason: { fontSize: 12, fontWeight: "600", marginTop: -2, marginBottom: 2 },
   body: { flexDirection: "row", gap: 12, alignItems: "center" },
   thumb: { width: 56, height: 56, borderRadius: radius.md, backgroundColor: ML.cardElevated },
   thumbEmpty: { borderWidth: 1, borderColor: ML.border },

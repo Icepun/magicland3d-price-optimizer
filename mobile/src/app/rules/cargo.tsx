@@ -13,7 +13,7 @@ function platformLabel(p: string | null): string {
 
 export default function CargoRulesScreen() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ["cargo-rules-all"],
     queryFn: getAllCargoRules,
   });
@@ -33,7 +33,15 @@ export default function CargoRulesScreen() {
    * kapanıyor, çünkü o dönemde verilen siparişlerin kârı hâlâ onlardan hesaplanıyor.
    * Hepsi listelenince her barem iki kez, iki farklı fiyatla görünüyordu.
    */
-  const simdiMs = Date.now();
+  /**
+   * "Şimdi" olarak verinin ÇEKİLDİĞİ an kullanılır (react-query `dataUpdatedAt`).
+   *
+   * Burada doğrudan `Date.now()` çağrılıyordu; React Compiler bunu "render sırasında saf
+   * olmayan çağrı" diye HATA sayıyor ve `npm run lint` düşüyordu — yani mobil CI'nın lint
+   * adımı kırıktı ve TestFlight derlemesi/teslimat bu yüzden bloke oluyordu. `dataUpdatedAt`
+   * saf bir değer; liste zaten her veri tazelenmesinde yeniden hesaplanıyor, davranış aynı.
+   */
+  const simdiMs = dataUpdatedAt || 0;
   const yururlukteOlanlar = data?.filter((r) => kuralYururlukte(r, simdiMs));
   const gizlenen = (data?.length ?? 0) - (yururlukteOlanlar?.length ?? 0);
 

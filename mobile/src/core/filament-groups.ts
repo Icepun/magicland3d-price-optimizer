@@ -82,7 +82,7 @@ export const FILAMENT_COLORS: FilamentColorDef[] = [
 ];
 
 /** Renk ailesi tespiti için anahtar kelimeler (slug halinde aranır). UZUN olan ÖNCE. */
-const COLOR_FAMILY_KEYWORDS: Array<[string, string]> = [
+const COLOR_FAMILY_KEYWORDS: [string, string][] = [
   ["kahverengi", "kahverengi"], ["kahve", "kahverengi"], ["bej", "kahverengi"], ["krem", "kahverengi"],
   ["lacivert", "mavi"], ["turkuaz", "mavi"], ["mavi", "mavi"], ["petrol", "mavi"],
   ["fistik", "yesil"], ["yesil", "yesil"], ["haki", "yesil"], ["mint", "yesil"],

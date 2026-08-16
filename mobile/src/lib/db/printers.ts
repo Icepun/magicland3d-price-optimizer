@@ -6,6 +6,8 @@ export interface PrinterSnapshot {
   name: string;
   brand: string;
   status: string; // printing | paused | finished | idle | error | offline
+  /** Hata/duraklama nedeni — yalnız error/paused durumunda dolar (aktarıcı yazar). */
+  statusMessage: string | null;
   online: number; // 0/1
   productName: string | null;
   productImage: string | null;
@@ -19,7 +21,10 @@ export interface PrinterSnapshot {
 
 export async function getPrinterSnapshots(): Promise<PrinterSnapshot[]> {
   return query<PrinterSnapshot>(
-    `SELECT s.printerConfigId, s.name, s.brand, s.status, s.online, s.productName, s.productImage,
+    // statusMessage: hata/duraklama NEDENİ. Masaüstü aktarıcısı bu kolonu yazıyor ama mobil
+    // sorgusu okumuyordu — oysa atölyede telefona bakmanın tek sebebi "neden durdu" sorusu.
+    `SELECT s.printerConfigId, s.name, s.brand, s.status, s.statusMessage, s.online,
+            s.productName, s.productImage,
             s.progress, s.nozzle, s.bed, s.currentFilename, s.etaSec, s.updatedAt
        FROM PrinterSnapshot s
        JOIN PrinterConfig c ON c.id = s.printerConfigId AND c.enabled = 1

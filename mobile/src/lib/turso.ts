@@ -6,8 +6,18 @@
  * Not: 2 özel cihaz için token bundle'a gömülür (masaüstündeki gibi). Public değil.
  */
 
+import { setDbDateStorage } from "@core/sqlite-date";
+
 const URL = process.env.EXPO_PUBLIC_TURSO_URL;
 const TOKEN = process.env.EXPO_PUBLIC_TURSO_TOKEN;
+
+/**
+ * Tarih biçimini SABİTLE — telefon her zaman libSQL/HTTP üzerinden konuşur, yani kolonlara
+ * ISO METİN yazılır. Ortak çekirdekteki otomatik tespit `process.env.TURSO_DATABASE_URL`'e bakar;
+ * React Native'de o değişken YOKTUR ve varsayılan yanlış tarafa ("epoch-ms") düşerdi.
+ * (Karşılaştırma yapan sorgular ayrıca `dbEpochMs()` ile biçimden bağımsızdır.)
+ */
+setDbDateStorage("iso-text");
 
 export type SqlValue = string | number | boolean | null | undefined;
 

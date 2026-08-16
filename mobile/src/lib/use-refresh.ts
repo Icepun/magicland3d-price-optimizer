@@ -11,6 +11,13 @@ export function useManualRefresh(refetch: () => Promise<unknown>) {
     setRefreshing(true);
     try {
       await refetch();
+    } catch {
+      /**
+       * catch ŞART — catch'siz try/finally React Compiler'ı bu bileşende (ve onu kullanan
+       * neredeyse tüm ekranlarda) sessizce KAPATIYOR, yani otomatik hafızalama devre dışı
+       * kalıyordu. Hatanın kendisi zaten çağıran ekranın sorgu durumunda görünüyor; burada
+       * yutmak yalnız "aşağı çek" göstergesini kapatmak içindir.
+       */
     } finally {
       setRefreshing(false);
     }

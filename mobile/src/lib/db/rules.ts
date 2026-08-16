@@ -1,5 +1,7 @@
 import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
-import { batch, query } from "@/lib/turso";
+// Tarih biçimi bilgisi TEK yerde (ortak çekirdek) — karşılaştırmalar biçimden bağımsız olsun diye.
+import { dbEpochMs } from "@core/sqlite-date";
+import { batch, query, type SqlValue } from "@/lib/turso";
 import type {
   CommissionRuleInput,
   CargoRuleInput,
@@ -105,38 +107,71 @@ export async function getRules(): Promise<Rules> {
     );
     const simdi = Date.now();
     adBudgets = [];
-    for (const row of b as unknown as { platform: string; dailyAmount: number; validFrom: unknown; validTo: unknown; isActive: unknown }[]) {
-      const basMs = ruleMs(row.validFrom);
-      const bitMs = ruleMs(row.validTo) ?? simdi;
+    const satirlar = b as unknown as {
+      platform: string; dailyAmount: number; validFrom: unknown; validTo: unknown; isActive: unknown;
+    }[];
+
+    /**
+     * ⚠️ TARİH KARŞILAŞTIRMASI `dbEpochMs()` ÜZERİNDEN YAPILIR.
+     *
+     * Eskiden pencere sınırları ham MİLİSANİYE olarak bağlanıyordu; kolon ise ISO METİN.
+     * SQLite'ta tamsayı DAİMA metinden küçüktür → `orderedAt <= <sayı>` hiçbir satırı tutmadı,
+     * ciro 0 çıktı, reklam oranı 0 oldu ve telefon her ürünü/siparişi masaüstünden DAHA KÂRLI
+     * gösterdi (Fiyat Lab'ın önerdiği fiyat da hedef marjı tutturmadı). `dbEpochMs()` kolonu
+     * hangi biçimde yazılmışsa olsun sayıya çevirir → karışık kayıtlarda bile doğru çalışır.
+     *
+     * N+1 KALKTI: her bütçe için ayrı ağ turu atılıyordu (7 ekranın açılışını yavaşlatıyordu).
+     * Tüm dönemler TEK sorguda toplanıyor; satırlar sıra numarasıyla eşleşiyor.
+     */
+    const donemler = satirlar.map((row) => ({
+      row,
+      basMs: ruleMs(row.validFrom) ?? 0,
+      bitMs: ruleMs(row.validTo) ?? simdi,
+      tumu: row.platform === TUM_PLATFORMLAR,
+    }));
+
+    let cirolar: number[] = [];
+    if (donemler.length > 0) {
+      const ms = dbEpochMs("orderedAt");
+      const parcalar = donemler.map((d, i) =>
+        `SELECT ${i} AS i, COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
+           FROM OrderFinanceSnapshot
+          WHERE ${ms} >= ? AND ${ms} <= ?
+            AND (statusKind IS NULL OR statusKind <> 'cancelled')
+            ${d.tumu ? "" : "AND platform = ?"}`
+      );
+      const args: SqlValue[] = [];
+      for (const d of donemler) {
+        args.push(d.basMs, d.bitMs);
+        if (!d.tumu) args.push(d.row.platform);
+      }
+      const sonuc = await query<{ i: number; ciro: number }>(parcalar.join(" UNION ALL "), args);
+      cirolar = donemler.map((_, i) => {
+        const bulunan = (sonuc as unknown as { i: number; ciro: number }[]).find((r) => Number(r.i) === i);
+        return Number(bulunan?.ciro) || 0;
+      });
+    }
+
+    donemler.forEach((d, i) => {
       /**
        * PAYDA masaüstüyle AYNI olmalı: "tüm platformlar" bütçesinde TOPLAM ciro, platform
-       * bütçesinde o platformun cirosu. Burada da `platform = 'all'` diye sorsaydık hiçbir
-       * satır eşleşmez, ciro 0 çıkar ve telefon reklam payını HİÇ göstermezdi — aynı sipariş
-       * iki cihazda farklı kâr gösterirdi.
+       * bütçesinde o platformun cirosu. Marka reklamı tüm satışları beslediği için paydasını
+       * tek kanala daraltmak o kanalı haksız yere ezerdi.
        */
-      const tumu = row.platform === TUM_PLATFORMLAR;
-      const ciro = await query<{ ciro: number }>(
-        `SELECT COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
-           FROM OrderFinanceSnapshot
-          WHERE orderedAt >= ? AND orderedAt <= ?
-            AND (statusKind IS NULL OR statusKind <> 'cancelled')
-            ${tumu ? "" : "AND platform = ?"}`,
-        tumu ? [basMs ?? 0, bitMs] : [basMs ?? 0, bitMs, row.platform]
-      );
       const o = reklamOrani({
-        gunlukTutar: Number(row.dailyAmount) || 0,
-        gunSayisi: donemGunSayisi(basMs, ruleMs(row.validTo), simdi),
-        pencereCirosu: Number(ciro?.[0]?.ciro) || 0,
+        gunlukTutar: Number(d.row.dailyAmount) || 0,
+        gunSayisi: donemGunSayisi(ruleMs(d.row.validFrom), ruleMs(d.row.validTo), simdi),
+        pencereCirosu: cirolar[i] ?? 0,
       });
       adBudgets.push({
-        platform: row.platform,
-        dailyAmount: Number(row.dailyAmount) || 0,
-        validFrom: basMs,
-        validTo: ruleMs(row.validTo),
+        platform: d.row.platform,
+        dailyAmount: Number(d.row.dailyAmount) || 0,
+        validFrom: ruleMs(d.row.validFrom),
+        validTo: ruleMs(d.row.validTo),
         isActive: true,
         oran: o.oran,
       });
-    }
+    });
   } catch {
     // Reklam payı isteğe bağlı: tablo yoksa/okunamazsa kâr eskisi gibi (reklamsız) hesaplanır.
     adBudgets = [];
