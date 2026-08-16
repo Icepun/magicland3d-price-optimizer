@@ -1,4 +1,4 @@
-import { reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
+import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
 import { batch, query } from "@/lib/turso";
 import type {
   CommissionRuleInput,
@@ -108,12 +108,20 @@ export async function getRules(): Promise<Rules> {
     for (const row of b as unknown as { platform: string; dailyAmount: number; validFrom: unknown; validTo: unknown; isActive: unknown }[]) {
       const basMs = ruleMs(row.validFrom);
       const bitMs = ruleMs(row.validTo) ?? simdi;
+      /**
+       * PAYDA masaüstüyle AYNI olmalı: "tüm platformlar" bütçesinde TOPLAM ciro, platform
+       * bütçesinde o platformun cirosu. Burada da `platform = 'all'` diye sorsaydık hiçbir
+       * satır eşleşmez, ciro 0 çıkar ve telefon reklam payını HİÇ göstermezdi — aynı sipariş
+       * iki cihazda farklı kâr gösterirdi.
+       */
+      const tumu = row.platform === TUM_PLATFORMLAR;
       const ciro = await query<{ ciro: number }>(
         `SELECT COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
            FROM OrderFinanceSnapshot
-          WHERE platform = ? AND orderedAt >= ? AND orderedAt <= ?
-            AND (statusKind IS NULL OR statusKind <> 'cancelled')`,
-        [row.platform, basMs ?? 0, bitMs]
+          WHERE orderedAt >= ? AND orderedAt <= ?
+            AND (statusKind IS NULL OR statusKind <> 'cancelled')
+            ${tumu ? "" : "AND platform = ?"}`,
+        tumu ? [basMs ?? 0, bitMs] : [basMs ?? 0, bitMs, row.platform]
       );
       const o = reklamOrani({
         gunlukTutar: Number(row.dailyAmount) || 0,

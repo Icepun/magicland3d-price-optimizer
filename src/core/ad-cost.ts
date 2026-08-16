@@ -26,6 +26,15 @@
 /** Oranın hesaplandığı pencere. Kısa pencere oynak, uzun pencere geç tepki verir. */
 export const REKLAM_PENCERE_GUN = 30;
 
+/**
+ * "Tüm platformlar" bütçesinin platform anahtarı.
+ *
+ * Marka reklamı tek kanala yüklenemez: reklamı görüp mağazaya giren müşteri Trendyol'dan da
+ * alabilir. Bu bütçenin paydası TOPLAM cirodur, yani pay her platformun siparişine aynı
+ * oranda biner.
+ */
+export const TUM_PLATFORMLAR = "all";
+
 export interface ReklamOraniGirdi {
   /** Platformun günlük reklam bütçesi (TL). */
   gunlukTutar: number;
@@ -93,10 +102,25 @@ export function reklamOraniIcin(
   platform: string,
   anMs: number
 ): number {
-  const butce = gecerliButce(butceler, platform, anMs);
-  if (!butce) return 0; // o tarihte o platformda reklam yoktu
-  const oran = butce.oran;
-  return Number.isFinite(oran) && oran != null && oran > 0 ? oran : 0;
+  /**
+   * TOPLAM + PLATFORM bütçeleri TOPLANIR.
+   *
+   * Kullanıcı kararı: "mağazamızı reklamdan gören biri girip Trendyol'dan da alabilir" —
+   * yani marka reklamı tek bir kanala yüklenemez, TÜM cironun üstüne yayılır (`TUM_PLATFORMLAR`,
+   * paydası toplam ciro). Bunun yanında bir platforma AYRICA reklam verilirse (ör. Trendyol
+   * reklamı), o da gerçekten harcanan ayrı bir paradır ve kendi cirosuna oranlanıp ÜSTÜNE eklenir.
+   *
+   * Biri diğerini EZSEYDİ harcanan paranın bir kısmı hiçbir ürüne yansımaz, kâr olduğundan
+   * yüksek görünürdü. Aynı platform için aynı anda iki dönem olamayacağı için (dönemler
+   * birbirini kapatıyor) toplama çift sayıma yol açmaz.
+   */
+  let toplam = 0;
+  for (const anahtar of [TUM_PLATFORMLAR, platform]) {
+    const butce = gecerliButce(butceler, anahtar, anMs);
+    const oran = butce?.oran;
+    if (Number.isFinite(oran) && oran != null && oran > 0) toplam += oran;
+  }
+  return toplam;
 }
 
 /** Dönemin şu ana kadar kaç gün sürdüğü (en az 1) — oranın payını kurar. */

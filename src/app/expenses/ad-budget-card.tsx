@@ -23,7 +23,13 @@ import { cn, formatCurrency } from "@/lib/utils";
 import { fetchJson } from "@/lib/fetch-json";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
+/**
+ * "all" en üstte: marka reklamı tek kanala yüklenemez — reklamı görüp mağazaya giren müşteri
+ * Trendyol'dan da alabilir (kullanıcı kararı). Paydası TOPLAM ciro.
+ * Platform satırları isteğe bağlı: bir kanala AYRICA reklam verilirse üstüne eklenir.
+ */
 const PLATFORMLAR = [
+  { id: "all", ad: "Tüm platformlar", renk: "text-primary" },
   { id: "trendyol", ad: "Trendyol", renk: "text-orange-500" },
   { id: "shopify", ad: "Shopify", renk: "text-emerald-500" },
   { id: "hepsiburada", ad: "Hepsiburada", renk: "text-violet-500" },
@@ -136,7 +142,8 @@ export function AdBudgetCard() {
             <h2 className="text-sm font-semibold leading-tight">Reklam Bütçesi</h2>
             <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
               Günlük reklam harcaman ürünlerin maliyetine dağıtılır; kâr rakamları buna göre
-              görünür. Giderler listesine ayrıca eklenmez.
+              görünür. Giderler listesine ayrıca eklenmez. Marka reklamı için &quot;Tüm
+              platformlar&quot; kullan — pay tüm satışlara yayılır.
             </p>
           </div>
         </div>
@@ -170,7 +177,7 @@ export function AdBudgetCard() {
                           "text-[11px] tabular-nums px-1.5 py-0.5 rounded",
                           o.cirodanBuyuk ? "bg-destructive/15 text-destructive" : "bg-primary/10 text-primary"
                         )}
-                        title={`Son ${data?.pencereGun} günün cirosuna oranlandı`}
+                        title={p.id === "all" ? "Toplam ciroya oranlandı" : `Yalnız ${p.ad} cirosuna oranlandı`}
                       >
                         ciro payı %{o.yuzde.toFixed(1)}
                       </span>

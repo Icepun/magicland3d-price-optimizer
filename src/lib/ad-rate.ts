@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import {
+  TUM_PLATFORMLAR,
   reklamOrani,
   reklamOraniIcin,
   donemGunSayisi,
@@ -68,15 +69,20 @@ export async function adRateSnapshot(): Promise<AdSnapshot> {
       const bas = b.validFrom;
       const bit = b.validTo ?? new Date(simdi);
       // Dönemin KENDİ cirosu — iptal/iade hariç (ciro getirmediler, pay da taşımazlar).
+      /**
+       * PAYDA: "tüm platformlar" bütçesinde TOPLAM ciro, platform bütçesinde o platformun
+       * cirosu. Marka reklamı tüm satışları besliyor; paydasını tek kanala daraltmak o kanalı
+       * haksız yere ezerdi (ölçüldü: yalnız Shopify'a yüklenince oran %39,9, tümüne
+       * yayılınca %18,1).
+       */
+      const tumu = b.platform === TUM_PLATFORMLAR;
       const satir = await prisma.$queryRawUnsafe<{ ciro: number }[]>(
         `SELECT COALESCE(SUM(revenueKurus), 0) / 100.0 AS ciro
            FROM OrderFinanceSnapshot
-          WHERE platform = ?
-            AND orderedAt >= ? AND orderedAt <= ?
-            AND (statusKind IS NULL OR statusKind <> 'cancelled')`,
-        b.platform,
-        toDbDate(bas),
-        toDbDate(bit)
+          WHERE orderedAt >= ? AND orderedAt <= ?
+            AND (statusKind IS NULL OR statusKind <> 'cancelled')
+            ${tumu ? "" : "AND platform = ?"}`,
+        ...(tumu ? [toDbDate(bas), toDbDate(bit)] : [toDbDate(bas), toDbDate(bit), b.platform])
       );
       const ciro = Number(satir?.[0]?.ciro) || 0;
       const gun = donemGunSayisi(bas, b.validTo, simdi);

@@ -6,7 +6,7 @@
  * bütçeyi kullandığı (yoksa bütçe değişince geçmiş kârlar da kayardı).
  */
 import { describe, expect, it } from "vitest";
-import { reklamOrani, reklamPayi, gecerliButce, reklamOraniIcin, donemGunSayisi, REKLAM_PENCERE_GUN } from "./ad-cost";
+import { reklamOrani, reklamPayi, gecerliButce, reklamOraniIcin, donemGunSayisi, TUM_PLATFORMLAR, REKLAM_PENCERE_GUN } from "./ad-cost";
 
 describe("reklam oranı", () => {
   it("bütçeyi ciroya oranlar — gerçek ölçümle aynı sonuç", () => {
@@ -182,5 +182,51 @@ describe("dönem gün sayısı", () => {
 
   it("tarihsiz dönem 0 — gün sayısı bilinmez, oran kurulamaz", () => {
     expect(donemGunSayisi(null, null, Date.now())).toBe(0);
+  });
+});
+
+/**
+ * TOPLAM (marka) BÜTÇESİ + PLATFORM BÜTÇESİ birlikte.
+ *
+ * Kullanıcı kararı: "mağazamızı reklamdan gören biri girip Trendyol'dan da alabilir" → marka
+ * reklamı TÜM cironun üstüne yayılır. Bir kanala AYRICA reklam verilirse o da gerçekten
+ * harcanmış ayrı bir paradır; biri diğerini ezerse harcanan paranın bir kısmı hiçbir ürüne
+ * yansımaz ve kâr olduğundan yüksek görünür.
+ */
+describe("toplam + platform bütçesi", () => {
+  const AGU = new Date("2026-08-01T00:00:00+03:00");
+  const SIMDI = new Date("2026-08-20T12:00:00+03:00").getTime();
+
+  it("yalnız TOPLAM bütçe varsa her platform aynı oranı taşır", () => {
+    const b = [{ platform: TUM_PLATFORMLAR, dailyAmount: 800, validFrom: AGU, validTo: null, oran: 0.18 }];
+    expect(reklamOraniIcin(b, "trendyol", SIMDI)).toBeCloseTo(0.18, 6);
+    expect(reklamOraniIcin(b, "shopify", SIMDI)).toBeCloseTo(0.18, 6);
+    expect(reklamOraniIcin(b, "hepsiburada", SIMDI)).toBeCloseTo(0.18, 6);
+  });
+
+  it("TOPLAM + platform bütçesi TOPLANIR (biri diğerini ezmez)", () => {
+    const b = [
+      { platform: TUM_PLATFORMLAR, dailyAmount: 800, validFrom: AGU, validTo: null, oran: 0.18 },
+      { platform: "trendyol", dailyAmount: 300, validFrom: AGU, validTo: null, oran: 0.05 },
+    ];
+    // Trendyol hem markanın hem kendi reklamının payını taşır.
+    expect(reklamOraniIcin(b, "trendyol", SIMDI)).toBeCloseTo(0.23, 6);
+    // Shopify yalnız marka payını taşır — Trendyol'un reklamı ona yüklenmez.
+    expect(reklamOraniIcin(b, "shopify", SIMDI)).toBeCloseTo(0.18, 6);
+  });
+
+  it("TOPLAM bütçe DÖNEMLİDİR — başlangıcından önce pay yok", () => {
+    const b = [{ platform: TUM_PLATFORMLAR, dailyAmount: 800, validFrom: AGU, validTo: null, oran: 0.18 }];
+    const temmuz = new Date("2026-07-20T12:00:00+03:00").getTime();
+    expect(reklamOraniIcin(b, "trendyol", temmuz)).toBe(0);
+  });
+
+  it("bilinmeyen bir platform da TOPLAM payını taşır (manuel sipariş dahil)", () => {
+    const b = [{ platform: TUM_PLATFORMLAR, dailyAmount: 800, validFrom: AGU, validTo: null, oran: 0.18 }];
+    expect(reklamOraniIcin(b, "manual", SIMDI)).toBeCloseTo(0.18, 6);
+  });
+
+  it("bütçe yoksa oran 0 — hiçbir sipariş pay taşımaz", () => {
+    expect(reklamOraniIcin([], "trendyol", SIMDI)).toBe(0);
   });
 });
