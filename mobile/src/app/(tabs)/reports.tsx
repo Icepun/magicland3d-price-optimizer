@@ -9,6 +9,7 @@ import {
   ORDERS_STALE_MS,
 } from "@/lib/api/orders";
 import { orderWindowCutoff } from "@/lib/api/window";
+import { syncFinanceFromCache } from "@/lib/finance-sync";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
@@ -25,7 +26,6 @@ import { ML, motion, radius } from "@/theme/colors";
 import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 import {
   getMonthlyFinanceSummary,
-  syncOrderFinanceSnapshots,
 } from "@/lib/db/finance";
 
 export default function ReportsScreen() {
@@ -60,7 +60,6 @@ export default function ReportsScreen() {
     let unknownProfitOrders = 0;
     let partialProfitOrders = 0;
     let unsupportedCurrencyOrders = 0;
-    const snapshots: Parameters<typeof syncOrderFinanceSnapshots>[0] = [];
     if (!orders || !matchProducts || !rules || !settings) {
       return {
         total,
@@ -70,30 +69,12 @@ export default function ReportsScreen() {
         unknownProfitOrders,
         partialProfitOrders,
         unsupportedCurrencyOrders,
-        snapshots,
       };
     }
     const pm = getProductMap(matchProducts);
     const visibleCutoff = orderWindowCutoff();
     for (const o of orders.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
-      if (o.date != null && o.platform !== "manual") {
-        snapshots.push({
-          platform: o.platform,
-          externalOrderId: o.id,
-          orderNumber: o.orderNumber,
-          orderedAt: o.date,
-          revenue: op.revenue,
-          profit: op.profit,
-          profitPartial: op.partial,
-          statusKind: isCancelledOrder(o) ? "cancelled" : "active",
-          currency: o.currency ?? "TRY",
-          // Gerçek komisyon bilgisini de yaz — masaüstünün "platform kaynaklı" kârı korunur.
-          profitSource: op.profitSource,
-          estimatedCommission: op.estimatedCommission,
-          actualCommission: op.actualCommission,
-        });
-      }
       // Finans geçmişi 60 gün çekilir; kullanıcıya gösterilen üst kartlar yine son 30 gündür.
       if (o.date != null && o.date < visibleCutoff) continue;
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez
@@ -122,19 +103,20 @@ export default function ReportsScreen() {
       unknownProfitOrders,
       partialProfitOrders,
       unsupportedCurrencyOrders,
-      snapshots,
     };
   }, [orders, matchProducts, rules, settings]);
 
   useEffect(() => {
-    if (rev.snapshots.length === 0) return;
+    if (!orders || orders.orders.length === 0) return;
     let active = true;
-    void syncOrderFinanceSnapshots(rev.snapshots)
+    /**
+     * Ekran açıkken BEKLETMEDEN yaz (`zorla`) — ama yazma mantığı artık ORTAK modülde
+     * (lib/finance-sync). Kök bekçisi de aynı fonksiyonu çağırıyor; iki ayrı kopya olsaydı
+     * biri güncellenmeyi unutulduğunda iki cihaz farklı geçmiş yazardı.
+     */
+    void syncFinanceFromCache(qc, { zorla: true })
       .then(() => {
-        if (active) {
-          setSnapshotError(null);
-          void qc.invalidateQueries({ queryKey: ["monthly-finance"] });
-        }
+        if (active) setSnapshotError(null);
       })
       .catch(() => {
         // Teknik ayrıntı ekrana basılmaz; kullanıcıya tek satır bilgi yeter.
@@ -143,7 +125,7 @@ export default function ReportsScreen() {
     return () => {
       active = false;
     };
-  }, [qc, rev.snapshots]);
+  }, [qc, orders]);
 
   const topSellers = useMemo(() => {
     if (!orders) return [];

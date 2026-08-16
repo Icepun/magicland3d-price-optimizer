@@ -27,6 +27,13 @@ export default function MoreScreen() {
 
   const items: Item[] = [
     {
+      icon: "chart.pie.fill",
+      title: "Raporlar",
+      subtitle: "Aylık ciro, kâr ve ürün kırılımı",
+      href: "/reports",
+      tint: ML.accent,
+    },
+    {
       icon: "bell.fill",
       title: "Bildirimler",
       subtitle: "Stok & filament uyarıları",

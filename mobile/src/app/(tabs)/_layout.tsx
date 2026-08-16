@@ -71,10 +71,16 @@ export default function TabsLayout() {
         options={{ title: "Ürünler", tabBarIcon: tabIcon("shippingbox.fill") }}
       />
       <Tabs.Screen name="orders" options={{ title: "Siparişler", tabBarIcon: tabIcon("bag.fill") }} />
+      {/* ATÖLYE — Raporlar'ın yerine. Kullanıcı Raporlar'a nadiren, masa başında bakıyor;
+          sahada bakılan Yazıcılar/Makaralar/Plan ise "Daha" içinde 2-3 dokunuş derindeydi.
+          Raporlar kaybolmadı: "Daha" ekranından açılıyor ve aylık geçmişi yazan senkron artık
+          o ekrana bağlı değil (lib/finance-sync.ts, kökte aralıklı çalışıyor). */}
       <Tabs.Screen
-        name="reports"
-        options={{ title: "Raporlar", tabBarIcon: tabIcon("chart.pie.fill") }}
+        name="atolye"
+        options={{ title: "Atölye", tabBarIcon: tabIcon("wrench.and.screwdriver.fill") }}
       />
+      {/* Raporlar sekme çubuğunda GÖRÜNMEZ ama rota olarak durur (Daha'dan açılır). */}
+      <Tabs.Screen name="reports" options={{ href: null }} />
       <Tabs.Screen name="more" options={{ title: "Daha", tabBarIcon: tabIcon("ellipsis.circle.fill") }} />
     </Tabs>
   );

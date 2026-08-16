@@ -3,11 +3,13 @@ import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
+import { AppState } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { AppQueryProvider } from "@/lib/query";
 import { UpdateGate } from "@/components/UpdateGate";
 import { getDashboardData } from "@/lib/db/dashboard";
+import { syncFinanceFromCache } from "@/lib/finance-sync";
 import { startPushRegistration } from "@/lib/push";
 import { ML } from "@/theme/colors";
 
@@ -43,6 +45,32 @@ function SplashGate() {
   return null;
 }
 
+/**
+ * FİNANS GEÇMİŞİ BEKÇİSİ — Raporlar ekranından bağımsız.
+ *
+ * Geçmişi yazan tek tetikleyici o ekranın açılmasıydı; Raporlar sekme çubuğundan çıkacağı için
+ * (kullanıcı ona nadiren, masa başında bakıyor) geçmiş sessizce eksik kalırdı. Buradaki bekçi
+ * ÖNBELLEKTEKİ veriyle çalışır — kendi başına ağ isteği açmaz, açılışı yavaşlatmaz.
+ */
+function FinanceSyncGate() {
+  const qc = useQueryClient();
+  useEffect(() => {
+    // İlk deneme açılıştan biraz sonra: Panel'in verisi önbelleğe insin.
+    const ilk = setTimeout(() => void syncFinanceFromCache(qc), 8000);
+    const periyot = setInterval(() => void syncFinanceFromCache(qc), 10 * 60_000);
+    // Uygulama öne geldiğinde de dene (arka planda geçen sürede yeni sipariş gelmiş olabilir).
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") void syncFinanceFromCache(qc);
+    });
+    return () => {
+      clearTimeout(ilk);
+      clearInterval(periyot);
+      sub.remove();
+    };
+  }, [qc]);
+  return null;
+}
+
 export default function RootLayout() {
   // Push kaydı: açılışta bir kez DEĞİL — uygulama her öne geldiğinde de denenir. İlk açılışta ağ
   // yoksa veya izin sonradan verilirse tek deneme sessizce kayboluyordu, bildirim hiç gelmiyordu.
@@ -52,6 +80,7 @@ export default function RootLayout() {
       <AppQueryProvider>
         <StatusBar style="light" />
         <SplashGate />
+        <FinanceSyncGate />
         <Stack
           screenOptions={{
             headerShown: false,
