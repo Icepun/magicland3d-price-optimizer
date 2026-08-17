@@ -21,6 +21,7 @@ import {
   type MoonrakerStatus, type MoonrakerMeta, type MoonrakerExtras,
 } from "./moonraker";
 import { mergeMoonrakerExtras } from "./extras-merge";
+import { fileMatchKey, deepFileMatchKey } from "./file-match";
 import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } from "./bambu";
 import { prisma } from "@/lib/prisma";
 
@@ -351,22 +352,52 @@ export function invalidatePrinterConfigs(): void {
  *
  * Önbellekli: panel 5 saniyede bir yenileniyor ve uzak-HTTP libSQL'de her sorgu ~96ms + SIRALI.
  */
-type ModelFileRow = { id: string; productId: string; printerConfigId: string | null };
+type ModelFileRow = { id: string; productId: string; printerConfigId: string | null; originalName: string };
 let modelFilesCache: { at: number; rows: ModelFileRow[] } | null = null;
 
-export async function getModelFilesForPreview(): Promise<Map<string, string>> {
+/**
+ * ⚠️ ÜRÜNE GÖRE SEÇMEK YETMEZ. Bir ürünün aynı yazıcıda birden çok parçası olabiliyor
+ * ("gövde", "kapak", …). Önceki sürüm ürünün İLK dosyasını alıyordu; çok parçalı üründe
+ * hangi parça basılırsa basılsın kartta hep aynı resim görünüyordu (sahada görüldü:
+ * Bambu / "All versions ams Mercedes"). Doğru eşleşme BASILAN DOSYA ADIYLA kurulur.
+ */
+export interface OnizlemeDosyalari {
+  /** `yazıcıId::dosyaAnahtarı` → model dosyası kimliği. Doğru parçayı bu verir. */
+  dosyaya: Map<string, string>;
+  /**
+   * `ürünId|yazıcıId` → tek dosya kimliği. YALNIZ o ürün+yazıcı için TEK dosya varsa dolu;
+   * çok parçalıysa boş bırakılır — yanlış parçayı göstermektense hiç göstermemek doğru.
+   */
+  urune: Map<string, string>;
+}
+
+export async function getModelFilesForPreview(): Promise<OnizlemeDosyalari> {
   if (!modelFilesCache || Date.now() - modelFilesCache.at >= MATCHES_TTL_MS) {
     const rows = await prisma.productModelFile.findMany({
-      select: { id: true, productId: true, printerConfigId: true },
+      select: { id: true, productId: true, printerConfigId: true, originalName: true },
     });
     modelFilesCache = { at: Date.now(), rows };
   }
-  const harita = new Map<string, string>();
+
+  const dosyaya = new Map<string, string>();
+  const sayac = new Map<string, { id: string; adet: number }>();
   for (const r of modelFilesCache.rows) {
     if (!r.printerConfigId) continue;
-    const anahtar = `${r.productId}|${r.printerConfigId}`;
-    // İlk kayıt yeter — aynı ürün+yazıcı için birden çok parça varsa ilki temsil eder.
-    if (!harita.has(anahtar)) harita.set(anahtar, r.id);
+    if (r.originalName) {
+      // İki anahtar da yazılır: Bambu dosyaları `Parça.gcode.3mf` adlanıyor ve yazıcı bazen
+      // tek bazen çift uzantıyla bildiriyor.
+      for (const k of [fileMatchKey(r.originalName), deepFileMatchKey(r.originalName)]) {
+        const anahtar = `${r.printerConfigId}::${k}`;
+        if (!dosyaya.has(anahtar)) dosyaya.set(anahtar, r.id);
+      }
+    }
+    const urunAnahtar = `${r.productId}|${r.printerConfigId}`;
+    const mevcut = sayac.get(urunAnahtar);
+    if (mevcut) mevcut.adet++;
+    else sayac.set(urunAnahtar, { id: r.id, adet: 1 });
   }
-  return harita;
+
+  const urune = new Map<string, string>();
+  for (const [anahtar, v] of sayac) if (v.adet === 1) urune.set(anahtar, v.id);
+  return { dosyaya, urune };
 }

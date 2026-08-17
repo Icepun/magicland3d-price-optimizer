@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
 import { mapBambuState, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
-import { fileMatchKey } from "@/core/printers/file-match";
+import { fileMatchKey, deepFileMatchKey } from "@/core/printers/file-match";
 import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
 import { etaHafizasiOku, etaHafizasiYaz } from "@/core/printers/eta-memory";
 import { SPEED_PRESETS_PCT, type PrinterControlCaps } from "@/core/printers/controls";
@@ -371,7 +371,16 @@ export async function GET(req: NextRequest) {
            * Bambu 3MF yazıyor ve önizleme zip'in İÇİNDE; yazıcıdan alınamıyor. Eşleşen ürünün
            * bu yazıcıya ait dosyasından çıkarılır (uzun önbellekli ayrı uç — JSON'a gömülmez).
            */
-          const bModelId = bMatchedId ? modelFileMap.get(`${bMatchedId}|${c.id}`) : null;
+          /**
+           * DOĞRU PARÇA. Bir üründe aynı yazıcıya ait birden çok dosya olabiliyor; ürüne göre
+           * seçmek çok parçalı üründe hep aynı resmi gösteriyordu. Önce BASILAN dosya adıyla
+           * eşleştir; ürüne göre geri düşüş yalnız tek dosyalı üründe geçerli.
+           */
+          const bModelId =
+            modelFileMap.dosyaya.get(`${c.id}::${fileMatchKey(bs.filename)}`) ??
+            modelFileMap.dosyaya.get(`${c.id}::${deepFileMatchKey(bs.filename)}`) ??
+            (bMatchedId ? modelFileMap.urune.get(`${bMatchedId}|${c.id}`) : undefined) ??
+            null;
           const bPlateUrl = bModelId ? `/api/models/${bModelId}/slicer-preview` : null;
           bJob = {
             ...emptyJobExtras(),
@@ -481,7 +490,11 @@ export async function GET(req: NextRequest) {
          * Üçüncüsü olmadan görsel üretmeyen kurulumlarda (ölçüldü: Snapmaker U1) kart
          * görselsiz kalıyordu.
          */
-        const kutuphaneModelId = matchedId ? modelFileMap.get(`${matchedId}|${c.id}`) : null;
+        const kutuphaneModelId =
+          modelFileMap.dosyaya.get(`${c.id}::${fileMatchKey(st.filename)}`) ??
+          modelFileMap.dosyaya.get(`${c.id}::${deepFileMatchKey(st.filename)}`) ??
+          (matchedId ? modelFileMap.urune.get(`${matchedId}|${c.id}`) : undefined) ??
+          null;
         const plateThumb = meta?.thumbnailRelPath
           ? moonrakerThumbUrl(c.host, c.port, st.filename, meta.thumbnailRelPath)
           : meta?.thumbnailDataUrl

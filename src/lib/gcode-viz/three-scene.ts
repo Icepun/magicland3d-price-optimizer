@@ -237,12 +237,46 @@ export interface VizScene {
 
 /**
  * Kalın çizgi BÜTÇESİ. `LineSegments2` her segmenti bir örnek (instance) olarak taşır ve
- * fragment maliyeti kalınlıkla büyür. Gerçek 40 paketin gövde segmenti dağılımı ölçüldü:
- * medyan 80.784, p75 244.148, p90 725.910, en büyük 2.146.023. 600 bin eşiğinde paketlerin
- * ~%15'i ince yedeğe düşer — yani kalın çizgi dosyaların %85'inde devrede olur, ağır
- * dosyalarda kare hızı korunur.
+ * fragment maliyeti kalınlıkla büyür. Bütçe aşılırsa ince yedeğe düşülür — ama ince yedek
+ * `LineBasicMaterial` olduğu için 1 piksel kalınlığında ve IŞIK ALMAZ: model o dosyalarda
+ * hacimsiz, soluk bir çizgi yumağı gibi görünür.
+ *
+ * Eski eşik 600 bindi ve ÖLÇÜLMEDEN konmuştu; paketlerin ~%15'i (en ağır dosyalar, yani en
+ * çok bakılanlar) ışıksız kalıyordu. 17 Ağu 2026'da gerçek dosyayla ölçüldü:
+ *
+ *   47.831 segment  → 0,7 ms/kare (1471 fps)
+ *   2.498.001 segment → 6 ms/kare (166 fps), ilk çizim 44 ms
+ *
+ * 2,5 milyon segment 60 fps'in ~2,8 katını veriyor. Ölçülen en büyük paket 2.146.023 gövde
+ * segmenti; 3 milyon eşiği hepsini kapsar, yani kalın çizgi artık HER dosyada devrede.
+ * (Ölçüm bu makinede, gerçek GPU ile yapıldı.)
  */
-const KALIN_SEGMENT_BUTCESI = 600_000;
+const KALIN_SEGMENT_BUTCESI = 3_000_000;
+
+/**
+ * GPU YOKSA eski düşük eşikte kal. Yazılımsal çizicide (SwiftShader/llvmpipe — GPU sürücüsü
+ * yoksa Chromium buna düşer) kalın çizginin fragment maliyeti kaldırılamaz.
+ */
+const KALIN_SEGMENT_BUTCESI_YAZILIMSAL = 600_000;
+
+let yazilimsalCizici: boolean | null = null;
+function yazilimsalMi(): boolean {
+  if (yazilimsalCizici !== null) return yazilimsalCizici;
+  try {
+    const c = document.createElement("canvas");
+    const gl = (c.getContext("webgl2") ?? c.getContext("webgl")) as WebGLRenderingContext | null;
+    const ext = gl?.getExtension("WEBGL_debug_renderer_info");
+    const ad = ext && gl ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
+    yazilimsalCizici = /swiftshader|llvmpipe|software|basic render/i.test(ad);
+  } catch {
+    yazilimsalCizici = false; // tespit edemedik → normal davran
+  }
+  return yazilimsalCizici;
+}
+
+function kalinSegmentButcesi(): number {
+  return yazilimsalMi() ? KALIN_SEGMENT_BUTCESI_YAZILIMSAL : KALIN_SEGMENT_BUTCESI;
+}
 
 interface GovdeKatmani {
   nesne: LineSegments2;
@@ -275,7 +309,7 @@ function buildGovdeLines(g: ParsedGcode, colorBytes: Uint8Array, mod: VizMode): 
   const n = g.totalSegments;
   let govdeSayisi = 0;
   for (let i = 0; i < n; i++) if (katiSayilir(g.features[i], mod)) govdeSayisi++;
-  if (govdeSayisi === 0 || govdeSayisi > KALIN_SEGMENT_BUTCESI) return null;
+  if (govdeSayisi === 0 || govdeSayisi > kalinSegmentButcesi()) return null;
 
   const pos = new Float32Array(govdeSayisi * 6);
   const col = new Float32Array(govdeSayisi * 6);

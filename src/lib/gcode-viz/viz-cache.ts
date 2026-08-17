@@ -120,8 +120,10 @@ export function vizKeyFromFilename(filename: string | null | undefined): string 
  * pahalı tarama paketi (`getPack`) aynı anahtarda kalır, 155 MB'lık dosya yeniden taranmaz.
  *
  * v2 (16 Ağu 2026): tüp ışıklandırmasında yüzey normali düzeltildi.
+ * v3 (17 Ağu 2026): kalın çizgi bütçesi 600 bin → 3 milyon; en ağır dosyalar da artık ışık
+ *                   alıyor, eski kareleri o dosyalarda ışıksız üretilmişti.
  */
-export const KARE_SURUMU = 2;
+export const KARE_SURUMU = 3;
 
 /** Karelerin saklandığı anahtar — paket anahtarından AYRI sürümlenir. */
 export function kareAnahtari(vizKey: string): string {
