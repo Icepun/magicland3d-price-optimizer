@@ -19,10 +19,11 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
+import { MeshAttachButton } from "./MeshAttachButton";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
-interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; hasThumbnail?: boolean }
+interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; hasThumbnail?: boolean; meshR2Key?: string | null; meshName?: string | null; meshSizeBytes?: number | null }
 
 /**
  * Satırı ekranda GEREKEN alanlara indirger.
@@ -44,6 +45,11 @@ function hafifSatir(row: ModelFile): ModelFile {
     sortOrder: row.sortOrder,
     contentMd5: row.contentMd5 ?? null,
     hasThumbnail: row.hasThumbnail ?? false,
+    // Kaynak model: yalnız "bağlı mı" ve adı çiziliyor — anahtar da lazım çünkü satır
+    // yükleme sonrası yerinde yamalanıyor (yeniden sorgu atılmıyor).
+    meshR2Key: row.meshR2Key ?? null,
+    meshName: row.meshName ?? null,
+    meshSizeBytes: row.meshSizeBytes ?? null,
   };
 }
 
@@ -514,9 +520,20 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
                 />
                 <p className="text-[10px] text-muted-foreground/70 truncate px-1">{part.originalName} · {fmtSize(part.sizeBytes)}</p>
               </div>
+              <MeshAttachButton
+                fileId={part.id}
+                meshName={part.meshName ?? null}
+                onDegisti={(yeni) => {
+                  // Yerinde yama — `invalidateQueries` burada uygulamayı saniyelerce dondurur
+                  // (yazma sonrası okuma; uzak-HTTP libSQL'de her sorgu ~96 ms ve SIRALI).
+                  qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
+                    (eski ?? []).map((r) => (r.id === part.id ? { ...r, ...yeni } : r)),
+                  );
+                }}
+              />
               <Button
                 size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground transition-transform hover:text-primary active:scale-90"
-                title="Katman katman izle"
+                title={part.meshName ? "3B modeli izle" : "Katman katman izle"}
                 onClick={() => setViewer(part)}
               >
                 <Box className="h-3.5 w-3.5" />

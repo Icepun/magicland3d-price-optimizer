@@ -569,6 +569,18 @@ model ProductModelFile {
   /** Dosya içeriğinin MD5'i (hex) — yazıcıda "zaten var" tespiti için kimlik. Yükleme adına
       gömülür (stem-md5ilk10.ext); ad+boyut eşleşmesi = kesin aynı içerik (isim tahmini değil). */
   contentMd5      String?
+  /** KAYNAK MODEL — görüntüleme için, baskıya gönderilmez.
+      Bu parçanın gerçek 3B modeli (STL / OBJ / proje .3mf). Varsa kartta ve izleyicide
+      dilimleyicideki gibi gölgeli YÜZEY çizilir, ilerleme Z kırpmasıyla gösterilir.
+      Yoksa dilimleyicinin gömülü PNG'si + statik ilerleme kullanılır (bugünkü davranış).
+      Dilimlenmiş baskı dosyalarında geometri SİLİNMİŞ oluyor (ölçüldü: 157/157 dosyada
+      sıfır üçgen), o yüzden ayrı bir dosya şart. */
+  meshR2Key       String?
+  /** Kaynak modelin kullanıcıdaki dosya adı. */
+  meshName        String?
+  /** "stl" | "obj" | "3mf" */
+  meshType        String?
+  meshSizeBytes   Int?
   /** Parça sıralaması (aynı ürün+yazıcı içinde). */
   sortOrder       Int      @default(0)
   createdAt       DateTime @default(now())

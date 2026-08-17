@@ -38,18 +38,31 @@ export async function runStorageJanitor(): Promise<void> {
   try {
     const cfg = await getR2Config();
     if (!cfg) return;
-    const objects = await listModelObjects(cfg);
-    if (!objects.length) return;
-    const rows = await prisma.productModelFile.findMany({
-      where: { r2Key: { not: null } },
-      select: { r2Key: true },
-    });
-    const referenced = new Set(rows.map((r) => r.r2Key));
     const cutoff = Date.now() - 24 * 60 * 60_000;
-    for (const o of objects) {
-      if (referenced.has(o.key)) continue;
-      if (!o.lastModified || o.lastModified.getTime() > cutoff) continue; // taze — confirm gelebilir
-      await deleteObject(o.key, cfg).catch(() => {});
-    }
+
+    /**
+     * İKİ ÖNEK, İKİ AYRI KOLON — karıştırılırsa VERİ SİLİNİR.
+     * Baskı dosyaları "models/" altında ve `r2Key`'den, kaynak modeller "meshes/" altında ve
+     * `meshR2Key`'den referans alıyor. Bir önek yanlış kolonla taranırsa tüm nesneleri
+     * sahipsiz sanılır ve silinir.
+     */
+    const supur = async (
+      prefix: "models/" | "meshes/",
+      referanslar: Set<string>,
+    ): Promise<void> => {
+      const objects = await listModelObjects(cfg, prefix);
+      for (const o of objects) {
+        if (referanslar.has(o.key)) continue;
+        if (!o.lastModified || o.lastModified.getTime() > cutoff) continue; // taze — confirm gelebilir
+        await deleteObject(o.key, cfg).catch(() => {});
+      }
+    };
+
+    const rows = await prisma.productModelFile.findMany({
+      where: { OR: [{ r2Key: { not: null } }, { meshR2Key: { not: null } }] },
+      select: { r2Key: true, meshR2Key: true },
+    });
+    await supur("models/", new Set(rows.map((r) => r.r2Key).filter((k): k is string => !!k)));
+    await supur("meshes/", new Set(rows.map((r) => r.meshR2Key).filter((k): k is string => !!k)));
   } catch { /* ağ/kimlik hatası — bir sonraki açılışta yeniden denenir */ }
 }

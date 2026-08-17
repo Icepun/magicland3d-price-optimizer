@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v47: Parça başına KAYNAK MODEL (`ProductModelFile.meshR2Key/meshName/meshType/meshSizeBytes`).
+//      Baskı dosyaları dilimlenmiş olduğu için içlerinde geometri YOK (ölçüldü: 157/157 dosyada
+//      sıfır üçgen) — modeli dilimleyicideki gibi gölgeli çizebilmek için ayrı bir STL/OBJ/proje
+//      .3mf gerekiyor. Hepsi NULLABLE ve yalnız görüntüleme için; eski sürüm cihazlar etkilenmez.
 // v46: `PrepDone` — paketleme "hazırlandı" işaretleri artık MASAÜSTÜ VE TELEFON ORTAK.
 //      Kullanıcı kararı: masaüstünde başlayıp telefonda bitirebilmek. Eskiden işaret tarayıcının
 //      oturum deposundaydı (yalnız o cihaz, yalnız o oturum). Tablo tek kolonlu ve NULLABLE
@@ -78,7 +82,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "46";
+const CURRENT_SCHEMA_VERSION = "47";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1459,6 +1463,11 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // v29: dilimleyici önizleme görseli (Özel Baskılar arşivi)
     await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
     await ensureColumn("ProductModelFile", "contentMd5", "TEXT"); // v30: içerik kimliği (reuse)
+    // v47: parça başına KAYNAK MODEL (görüntüleme için; baskıya gönderilmez).
+    await ensureColumn("ProductModelFile", "meshR2Key", "TEXT");
+    await ensureColumn("ProductModelFile", "meshName", "TEXT");
+    await ensureColumn("ProductModelFile", "meshType", "TEXT");
+    await ensureColumn("ProductModelFile", "meshSizeBytes", "INTEGER");
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

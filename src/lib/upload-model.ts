@@ -63,6 +63,43 @@ function errFromText(text: string, fallback: string): string {
   return fallback;
 }
 
+/**
+ * PARÇAYA KAYNAK MODEL BAĞLA — görüntüleme için (baskıya gönderilmez).
+ *
+ * Baskı dosyalarından AYRI bir önekte ("meshes/") saklanır; süpürücü iki öneki ayrı
+ * kolonlara göre tarıyor, karıştırılırsa veri silinir.
+ */
+export async function uploadPartMesh(opts: {
+  fileId: string;
+  file: File;
+  onProgress?: (p: UploadProgress) => void;
+}): Promise<{ tur: string; boyut: number }> {
+  const { fileId, file, onProgress } = opts;
+
+  const pres = await fetch("/api/storage/presign", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ originalName: file.name, kind: "mesh" }),
+  });
+  const presJson = (await pres.json().catch(() => ({}))) as { mode?: string; key?: string; uploadUrl?: string; error?: string };
+  if (!pres.ok) throw new Error(presJson.error || "Yükleme başlatılamadı");
+  if (presJson.mode !== "r2" || !presJson.key || !presJson.uploadUrl) {
+    // Kaynak model yalnız bulutta anlamlı: yerel diskteki dosyaya diğer cihazlar erişemez.
+    throw new Error("Bulut depolama kapalı — kaynak model eklenemiyor");
+  }
+
+  await putToR2(presJson.uploadUrl, file, onProgress);
+
+  const onay = await fetch(`/api/models/${fileId}/mesh`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: presJson.key, name: file.name, sizeBytes: file.size }),
+  });
+  const onayJson = (await onay.json().catch(() => ({}))) as { tur?: string; boyut?: number; error?: string };
+  if (!onay.ok) throw new Error(onayJson.error || "Model kaydedilemedi");
+  return { tur: onayJson.tur || "", boyut: onayJson.boyut || file.size };
+}
+
 async function presign(originalName: string): Promise<PresignResp> {
   const r = await fetch("/api/storage/presign", {
     method: "POST",

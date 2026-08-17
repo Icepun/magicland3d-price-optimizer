@@ -59,6 +59,21 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       await prisma.productModelFile.delete({ where: { id } });
     }
 
+    /**
+     * KAYNAK MODEL de aynı kuralla temizlenir: parça silindiyse ona bağlı görüntüleme dosyası
+     * da gitmeli, ama başka satır (varyant) hâlâ referans veriyorsa DOKUNULMAZ.
+     * Eklenmezse R2'de sahipsiz nesne kalır; hademe 24 saat sonra toplar ama gereksiz durur.
+     */
+    if (mf.meshR2Key) {
+      const meshKullanan = await prisma.productModelFile.count({ where: { meshR2Key: mf.meshR2Key } });
+      if (meshKullanan === 0) {
+        const cfg = await getR2Config();
+        if (cfg) {
+          try { await deleteObject(mf.meshR2Key, cfg); } catch { /* R2 silme kritik değil */ }
+        }
+      }
+    }
+
     // Dosyayı (R2 objesi / disk) YALNIZCA hiç referans kalmayınca sil.
     if (mf.r2Key) {
       const stillUsed = await prisma.productModelFile.count({ where: { r2Key: mf.r2Key } });

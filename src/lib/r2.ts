@@ -66,6 +66,22 @@ export function makeModelKey(originalName: string): string {
   return `models/${crypto.randomUUID()}.${ext || "bin"}`;
 }
 
+/**
+ * KAYNAK MODEL (görüntüleme) anahtarı — baskı dosyalarından AYRI önekte.
+ *
+ * ⚠️ Önek bilerek farklı: `storage-janitor` "models/" altında `ProductModelFile.r2Key`'in
+ * referans vermediği her nesneyi SİLİYOR. Mesh'ler oraya konsaydı, farklı bir kolondan
+ * referans verildikleri için sahipsiz sanılıp silinirlerdi.
+ */
+export function makeMeshKey(originalName: string): string {
+  const ext = (originalName.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
+  return `meshes/${crypto.randomUUID()}.${ext || "bin"}`;
+}
+
+export function isValidMeshKey(key: string): boolean {
+  return /^meshes\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-z0-9]{1,8}$/i.test(key);
+}
+
 /** Tarayıcının DOĞRUDAN R2'ye PUT edebileceği imzalı URL (1 saat geçerli). */
 export async function presignPutUrl(key: string, cfg: R2Config): Promise<string> {
   // ContentType İMZALANMAZ → tarayıcı herhangi bir Content-Type (veya hiç) gönderebilir, imza bozulmaz.
@@ -162,12 +178,16 @@ export async function headObjectSize(key: string, cfg: R2Config): Promise<number
 }
 
 /** "models/" önekindeki nesneleri listele (orphan süpürücü için). */
-export async function listModelObjects(cfg: R2Config): Promise<{ key: string; lastModified: Date | null; size: number }[]> {
+export async function listModelObjects(
+  cfg: R2Config,
+  /** Hangi önek taranacak. Varsayılan baskı dosyaları; kaynak modeller "meshes/" altında. */
+  prefix: "models/" | "meshes/" = "models/",
+): Promise<{ key: string; lastModified: Date | null; size: number }[]> {
   const out: { key: string; lastModified: Date | null; size: number }[] = [];
   let token: string | undefined;
   do {
     const res = await client(cfg).send(
-      new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: "models/", ContinuationToken: token, MaxKeys: 1000 })
+      new ListObjectsV2Command({ Bucket: cfg.bucket, Prefix: prefix, ContinuationToken: token, MaxKeys: 1000 })
     );
     for (const o of res.Contents ?? []) {
       if (o.Key) out.push({ key: o.Key, lastModified: o.LastModified ?? null, size: Number(o.Size) || 0 });

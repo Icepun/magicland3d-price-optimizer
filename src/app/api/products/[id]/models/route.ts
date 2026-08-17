@@ -28,6 +28,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         originalName: true, storedPath: true, r2Key: true, fileType: true,
         sizeBytes: true, gramaj: true, estPrintMin: true, sliced: true,
         contentMd5: true, sortOrder: true, createdAt: true,
+        // Kaynak model — ürün ekranı "model bağlı mı" işaretini bundan çiziyor.
+        // Aynı sorgudan geliyor: uzak-HTTP libSQL'de her ek sorgu ~96 ms ve SIRALI.
+        meshR2Key: true, meshName: true, meshSizeBytes: true,
       },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     });

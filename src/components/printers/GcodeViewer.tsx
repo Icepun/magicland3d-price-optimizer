@@ -21,6 +21,7 @@ import type { ParsedGcode } from "@/lib/gcode-viz/parse-gcode";
 import { loadGeometry, type VizProgress } from "@/lib/gcode-viz/viz-pipeline";
 import { buildVizScene, type VizScene } from "@/lib/gcode-viz/three-scene";
 import { usePrefersReducedMotion } from "@/lib/client-state";
+import { MeshViewerDialog } from "./MeshViewer";
 
 export interface GcodeViewerProps {
   fileId: string;
@@ -49,7 +50,7 @@ function overallFraction(p: VizProgress): number {
   return 0.05 + 0.7 * p.fraction;
 }
 
-export function GcodeViewerDialog({
+function YolIzleyiciDialog({
   fileId, cacheKey, name, onClose, liveLayer, toolColors,
 }: GcodeViewerProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -364,4 +365,64 @@ export function GcodeViewerDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/**
+ * İZLEYİCİ SEÇİCİ — parçaya kaynak model bağlıysa GERÇEK MODELİ, yoksa baskı yollarını gösterir.
+ *
+ * Neden burada: izleyici dört ayrı yerden açılıyor ve hepsi yalnız `fileId` geçiyor. Seçim
+ * burada yapılınca o dört çağrı yerinin hiçbirine dokunmak gerekmiyor.
+ *
+ * Yol çizen izleyici model ölçeğinde yüzey gösteremiyor (bir şerit 1 pikselden ince kalıyor,
+ * tüm yüzey aynı açıyla ışık alıyor). Kaynak model varsa dilimleyicideki görüntünün aynısı
+ * çizilir; yoksa eski davranış korunur.
+ */
+export function GcodeViewerDialog(props: GcodeViewerProps & { layerTotal?: number | null }) {
+  const [meshVar, setMeshVar] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    // Burada senkron `setMeshVar(null)` YOK: React derleyicisi efekt içinde basamaklı render
+    // uyarısı veriyor. Başlangıç değeri zaten null ve iletişim kutusu her açılışta yeniden
+    // monte ediliyor, bayat değer kalmıyor.
+    fetch(`/api/models/${props.fileId}/mesh?bilgi=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { var?: boolean } | null) => { if (alive) setMeshVar(!!j?.var); })
+      .catch(() => { if (alive) setMeshVar(false); });
+    return () => { alive = false; };
+  }, [props.fileId]);
+
+  // Karar gelene kadar yol izleyicisini kurma: iki sahne birden açılmasın (ikisi de WebGL
+  // bağlamı alıyor ve tarayıcı bağlam sayısını sınırlıyor).
+  if (meshVar === null) {
+    return (
+      <Dialog open onOpenChange={(a) => { if (!a) props.onClose(); }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Box className="h-4 w-4 text-primary" /> 3D Önizleme — {props.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex h-[420px] items-center justify-center rounded-xl border bg-popover">
+            <p className="text-sm text-muted-foreground">Model açılıyor…</p>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  if (meshVar) {
+    return (
+      <MeshViewerDialog
+        fileId={props.fileId}
+        name={props.name}
+        onClose={props.onClose}
+        liveLayer={props.liveLayer}
+        layerTotal={props.layerTotal}
+        renk={props.toolColors?.find((c) => !!c) ?? null}
+      />
+    );
+  }
+
+  return <YolIzleyiciDialog {...props} />;
 }
