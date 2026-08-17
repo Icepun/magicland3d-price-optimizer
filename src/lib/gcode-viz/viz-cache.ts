@@ -111,6 +111,23 @@ export function vizKeyFromFilename(filename: string | null | undefined): string 
   return m ? `md5:${m[1].toLowerCase()}` : null;
 }
 
+/**
+ * KARE SÜRÜMÜ — çizim kodu (ışıklandırma/geometri) her değiştiğinde ARTIR.
+ *
+ * Kareler diskte içerik hash'iyle saklanıyor; dosya değişmediği sürece anahtar da değişmiyor.
+ * Bu yüzden çizimi iyileştirdiğimizde kullanıcı ESKİ kareleri görmeye devam ediyordu — iki kez
+ * yaşandı, tsc/eslint/test hiçbiri yakalamıyor. Sürümü artırmak yalnız KARELERİ tazeler;
+ * pahalı tarama paketi (`getPack`) aynı anahtarda kalır, 155 MB'lık dosya yeniden taranmaz.
+ *
+ * v2 (16 Ağu 2026): tüp ışıklandırmasında yüzey normali düzeltildi.
+ */
+export const KARE_SURUMU = 2;
+
+/** Karelerin saklandığı anahtar — paket anahtarından AYRI sürümlenir. */
+export function kareAnahtari(vizKey: string): string {
+  return `${vizKey}#k${KARE_SURUMU}`;
+}
+
 /** Model kaydından önbellek anahtarı (md5 varsa onun ilk 10 hex'i — dosya adı ekiyle aynı). */
 export function vizKeyForModel(mf: { id: string; contentMd5?: string | null; sizeBytes?: number | null }): string {
   if (mf.contentMd5 && /^[0-9a-f]{32}$/i.test(mf.contentMd5)) return `md5:${mf.contentMd5.slice(0, 10).toLowerCase()}`;

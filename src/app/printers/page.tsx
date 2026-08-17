@@ -25,7 +25,7 @@ import { usePrefersReducedMotion } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
-import { vizKeyForModel, getSprites, getPack } from "@/lib/gcode-viz/viz-cache";
+import { vizKeyForModel, getSprites, getPack, kareAnahtari } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 // Görselleştirme boru hattı three (~539KB) çeker → DİNAMİK yükle (Yazıcılar initial bundle'ında değil).
 const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
@@ -1837,7 +1837,7 @@ function useLiveBuildModel(
       setLoadedFrames({ key: frameSourceKey, urls: created });
     };
     const load = async () => {
-      const set = await getSprites(vizKey).catch(() => null);
+      const set = await getSprites(kareAnahtari(vizKey)).catch(() => null);
       if (set && set.frames.length) { show(set); return; }
       // Kareler yok → arka planda KİBARCA üret (seri + boşta + yüklemede bekler), sonra yokla.
       void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {});
@@ -1845,7 +1845,7 @@ function useLiveBuildModel(
       let tries = 0;
       const iv = setInterval(async () => {
         if (!alive || tries++ > 24) { clearInterval(iv); return; }
-        const s = await getSprites(vizKey).catch(() => null);
+        const s = await getSprites(kareAnahtari(vizKey)).catch(() => null);
         if (s && s.frames.length) { clearInterval(iv); show(s); return; }
         void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {}); // takıldıysa yeniden dene (iç dedupe)
       }, 5000);

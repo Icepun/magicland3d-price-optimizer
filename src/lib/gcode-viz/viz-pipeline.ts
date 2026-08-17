@@ -4,7 +4,7 @@
  * sunucuya thumbnail + IDB'ye inşa kareleri. Aynı dosya için eşzamanlı istekler tekilleştirilir.
  */
 import type { ParsedGcode } from "./parse-gcode";
-import { getPack, putPack, getSprites, putSprites } from "./viz-cache";
+import { getPack, putPack, getSprites, putSprites, kareAnahtari } from "./viz-cache";
 import { renderThumbnail, renderBuildFrames } from "./three-scene";
 // Yükleme sayacı three İÇERMEYEN ayrı modülde (tek kaynak) — bkz. viz-uploads.ts.
 import { waitUploadsIdle } from "./viz-uploads";
@@ -173,7 +173,9 @@ export function ensureVizAssets(opts: { fileId: string; cacheKey: string; thumbn
 }
 
 async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: boolean): Promise<boolean> {
-  const haveSprites = await getSprites(cacheKey);
+  // Kareler AYRI sürümlenir: çizim iyileşince tazelensinler ama pahalı tarama paketi kalsın.
+  const kareKey = kareAnahtari(cacheKey);
+  const haveSprites = await getSprites(kareKey);
   if (haveSprites && !thumbnailMissing) return true;
   await waitUploadsIdle();
   await idle();
@@ -198,7 +200,7 @@ async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: b
     // daha çok ara kare geçişi akıcılaştırır. (Kart kaç kare olduğunu kendi okur.)
     const frames = await renderBuildFrames(g, 32, 240, idle); // her kareden sonra boşta bekle
     if (!frames.length) return false;
-    await putSprites({ key: cacheKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
+    await putSprites({ key: kareKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
   }
   return true;
 }
