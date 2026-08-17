@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import { useState } from "react";
 import { Pressable, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
 import Reanimated, {
   useAnimatedStyle,
@@ -54,6 +55,19 @@ export function PressableScale({
   // Reanimated 4 bu erişimciler için tasarlandı; davranış aynı.
   const scale = useSharedValue(1);
 
+  /**
+   * ⚠️ BASILI DURUMU KENDİMİZ TUTUYORUZ — `style={({ pressed }) => …}` KULLANILAMAZ.
+   *
+   * Reanimated'in animated bileşeni FONKSİYON STİLİNİ ÇÖZEMİYOR ve stilin TAMAMINI sessizce
+   * düşürüyor. Bir tur bu bileşen fonksiyon stili veriyordu; sonuç: uygulamadaki HER dokunulabilir
+   * yüzey (kartlar, liste satırları, çipler, düğmeler, zil) stilsiz kaldı — arka planlar,
+   * kenarlıklar ve ölçüler kayboldu. Ekranda "her şey bozuk" görünmesinin sebebi buydu ve
+   * derleme/lint/test hiçbiri yakalayamaz.
+   *
+   * Basılı durumu `useState` ile tutup DÜZ DİZİ stil veriyoruz. Ek render yalnız dokunma anında.
+   */
+  const [pressed, setPressed] = useState(false);
+
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.get() }],
   }));
@@ -63,10 +77,12 @@ export function PressableScale({
       {...rest}
       disabled={disabled}
       onPressIn={(e) => {
+        setPressed(true);
         if (!disabled && !reduceMotion) scale.set(withSpring(scaleTo, SPRING));
         rest.onPressIn?.(e);
       }}
       onPressOut={(e) => {
+        setPressed(false);
         scale.set(withSpring(1, SPRING));
         rest.onPressOut?.(e);
       }}
@@ -79,12 +95,12 @@ export function PressableScale({
         }
         onPress?.(e);
       }}
-      style={({ pressed }) => [
+      style={[
         typeof style === "function" ? style({ pressed }) : style,
         animatedStyle,
         // Hareket azaltılmışsa ölçek yok → geri bildirim saydamlıkla verilir.
-        reduceMotion && pressed && { opacity: 0.7 },
-        disabled && { opacity: 0.5 },
+        reduceMotion && pressed ? { opacity: 0.7 } : null,
+        disabled ? { opacity: 0.5 } : null,
       ]}
     >
       {children}

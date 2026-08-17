@@ -6,6 +6,8 @@ import {
 } from "@core/order-status-kind";
 import { buildPrepItems, type PrepItem, type PrepSourceOrder, type PrepStatusKind } from "@core/prep-list";
 import type { UnifiedOrder } from "@/lib/api/orders";
+import { getProductMap, matchOrderLine } from "@/lib/order-profit";
+import type { ProductDetail } from "@/lib/db/product-detail";
 
 /**
  * Telefonun hazırlık listesi — masaüstündeki "Hazırlık" sekmesinin AYNISI.
@@ -25,30 +27,35 @@ export function orderPrepKind(o: UnifiedOrder): PrepStatusKind {
 
 /**
  * Siparişleri hazırlık satırlarına çevir.
- * `urunler`: ürün id → görsel eşlemesi. Sipariş kaleminin kendi görseli yoksa ürün kartındaki
- * fotoğraf kullanılır — rafta ürünü ada göre değil, GÖRSELE bakarak buluyoruz.
+ *
+ * ⚠️ ÜRÜN EŞLEŞTİRME `matchOrderLine` İLE — sadece `productId` ile DEĞİL.
+ * Pazaryeri kalemlerinin çoğunda `productId` boş; eşleşme barkod/SKU/liste kimliği üzerinden
+ * kuruluyor (Siparişler ekranı da bunu kullanıyor). Yalnız `productId`'ye bakıldığında hazırlık
+ * listesinde HİÇBİR ürünün fotoğrafı çıkmıyordu — oysa rafta ürün ada göre değil GÖRSELE
+ * bakarak bulunuyor; listenin asıl faydası o. Aynı eşleşme "sipariş üzerine üretilir"
+ * bilgisini de getiriyor.
  */
 export function prepItemsFromOrders(
   orders: UnifiedOrder[],
-  urunler?: { id: string; imageUrl?: string | null; madeToOrder?: number }[]
+  urunler?: ProductDetail[]
 ): PrepItem[] {
-  const gorsel = new Map<string, string | null>();
-  const siparisUzerine = new Set<string>();
-  for (const p of urunler ?? []) {
-    gorsel.set(p.id, p.imageUrl ?? null);
-    if (p.madeToOrder) siparisUzerine.add(p.id);
-  }
+  const pm = urunler && urunler.length > 0 ? getProductMap(urunler) : null;
 
   const kaynak: PrepSourceOrder[] = orders.map((o) => ({
     orderNumber: o.orderNumber,
     statusKind: orderPrepKind(o),
-    items: o.items.map((it) => ({
-      name: it.name,
-      quantity: it.quantity,
-      image: it.image ?? (it.productId ? (gorsel.get(it.productId) ?? null) : null),
-      productId: it.productId ?? null,
-      madeToOrder: it.productId ? siparisUzerine.has(it.productId) : false,
-    })),
+    items: o.items.map((it) => {
+      const urun = pm ? matchOrderLine(it, o.platform, pm) : undefined;
+      return {
+        name: it.name,
+        quantity: it.quantity,
+        image: it.image ?? urun?.imageUrl ?? null,
+        // Gruplama anahtarı: eşleşen ürünün kimliği. Böylece aynı ürün farklı pazaryerlerinden
+        // gelse de TEK satırda toplanıyor (eskiden ada göre ayrı satırlara bölünüyordu).
+        productId: it.productId ?? urun?.id ?? null,
+        madeToOrder: Boolean(urun?.madeToOrder),
+      };
+    }),
   }));
   return buildPrepItems(kaynak);
 }

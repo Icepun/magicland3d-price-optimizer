@@ -53,14 +53,14 @@ function PrepRow({
       accessibilityLabel={`${item.name}, ${item.quantity} adet`}
     >
       <View style={[styles.check, done && styles.checkOn]}>
-        {done ? <SymbolView name="checkmark" size={15} tintColor={ML.bg} /> : null}
+        {done ? <SymbolView name="checkmark" style={{ width: 15, height: 15 }} tintColor={ML.bg} /> : null}
       </View>
 
       {gorsel ? (
         <Image source={{ uri: gorsel }} style={styles.photo} contentFit="cover" transition={150} />
       ) : (
         <View style={[styles.photo, styles.photoBos]}>
-          <SymbolView name="cube.box" size={18} tintColor={ML.textFaint} />
+          <SymbolView name="cube.box" style={{ width: 18, height: 18 }} tintColor={ML.textFaint} />
         </View>
       )}
 
@@ -168,7 +168,7 @@ export default function HazirlikScreen() {
             accessibilityRole="button"
             accessibilityLabel="İşaretleri sıfırla"
           >
-            <SymbolView name="arrow.counterclockwise" size={15} tintColor={ML.textDim} />
+            <SymbolView name="arrow.counterclockwise" style={{ width: 15, height: 15 }} tintColor={ML.textDim} />
             <Text style={styles.resetText}>Sıfırla</Text>
           </PressableScale>
         ) : null}

@@ -61,7 +61,7 @@ function Kisayol({
       accessibilityRole="button"
       accessibilityLabel={count ? `${label}, ${count} bekliyor` : label}
     >
-      <SymbolView name={icon} size={22} tintColor={tint} />
+      <SymbolView name={icon} tintColor={tint} style={{ width: 22, height: 22 }} />
       <Text style={styles.shortcutText} numberOfLines={1}>
         {label}
       </Text>
@@ -222,7 +222,8 @@ export default function AtolyeScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: ML.bg },
-  content: { padding: space.lg, paddingTop: 0, gap: space.md },
+  // Başlık 4px alt boşluk bırakıyor; eski Atölye başlığı 12 bırakıyordu → farkı burada kapat.
+  content: { padding: 20, paddingTop: space.sm, gap: space.md },
   card: { gap: space.sm },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
   printerName: { ...type.heading, color: ML.text, flex: 1 },

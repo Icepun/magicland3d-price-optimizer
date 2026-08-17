@@ -44,7 +44,10 @@ export function AppHeader({
           {title}
         </Text>
         {/* Alt başlık ve tazelik damgası AYNI SATIRDA: damga kendi satırını alsaydı başlık üç
-            satır olur, gövde aşağı kayar ve her sekme birden uzardı. */}
+            satır olur, gövde aşağı kayar ve her sekme birden uzardı.
+            ⚠️ Sağda ekrana özel düğme VARSA damga gösterilmez: Siparişler'de
+            "239 sipariş · 10 iptal · son 30" + damga sığmıyor ve asıl bilgi olan sipariş
+            sayısı kırpılıyordu. Yer darsa sayı kalır, damga gider. */}
         <View style={styles.subRow}>
           {typeof subtitle === "string" ? (
             <Text style={styles.subtitle} numberOfLines={1}>
@@ -53,10 +56,10 @@ export function AppHeader({
           ) : (
             subtitle
           )}
-          {updatedAt ? (
+          {updatedAt && !right ? (
             <>
               <Text style={styles.ayrac}>·</Text>
-              <FreshnessStamp updatedAt={updatedAt} />
+              <FreshnessStamp updatedAt={updatedAt} suffix={false} />
             </>
           ) : null}
         </View>
@@ -81,6 +84,8 @@ export function NotificationBell() {
   const kritik = (data?.counts.critical ?? 0) > 0;
 
   return (
+    // ⚠️ SymbolView'a `size` YETMEZ: punto boyutunu verir ama görünüme ÖLÇÜ vermez;
+    // stil olmadan 0x0 yerleşir ve ikon GÖRÜNMEZ olur. Her çağrıda style ile ölçü verilir.
     <PressableScale
       onPress={() => router.push("/notifications" as never)}
       hitSlop={12}
@@ -88,7 +93,11 @@ export function NotificationBell() {
       accessibilityRole="button"
       accessibilityLabel={toplam > 0 ? `Bildirimler, ${toplam} uyarı` : "Bildirimler"}
     >
-      <SymbolView name="bell.fill" size={22} tintColor={toplam > 0 ? ML.text : ML.textDim} />
+      <SymbolView
+        name="bell.fill"
+        tintColor={toplam > 0 ? ML.text : ML.textDim}
+        style={{ width: 22, height: 22 }}
+      />
       {toplam > 0 ? (
         <View style={[styles.badge, { backgroundColor: kritik ? ML.red : ML.orange }]}>
           <Text style={styles.badgeText}>{toplam > 9 ? "9+" : toplam}</Text>
@@ -113,11 +122,14 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
   },
-  textCol: { flex: 1 },
+  // `flex: 1` TEK BAŞINA yetmez: içerideki uzun satır kutuyu şişirip sağdaki düğmenin
+  // ALTINA taşıyordu (Siparişler'de "239 sipariş · 10 iptal · son 30 · az önce güncellendi"
+  // + Ekle düğmesinin altından geçiyordu). `minWidth: 0` daralmaya izin verir.
+  textCol: { flex: 1, minWidth: 0 },
   title: { ...type.title, color: ML.text },
   // 14 — type.small (13) değil: sekme alt başlıkları hep 14'tü.
-  subtitle: { color: ML.textDim, fontSize: 14 },
-  subRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2 },
+  subtitle: { color: ML.textDim, fontSize: 14, flexShrink: 1 },
+  subRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2, minWidth: 0 },
   ayrac: { color: ML.textFaint, fontSize: 12 },
   bell: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   badge: {

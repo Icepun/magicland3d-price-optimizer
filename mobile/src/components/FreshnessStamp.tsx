@@ -21,11 +21,18 @@ export function FreshnessStamp({
   updatedAt,
   staleAfterMs = 5 * 60_000,
   style,
+  suffix = true,
 }: {
   /** Verinin çekildiği an (epoch ms). 0/undefined → hiç yüklenmemiş, damga gösterilmez. */
   updatedAt: number | undefined;
   staleAfterMs?: number;
   style?: object;
+  /**
+   * "güncellendi" ekini gösterme. Başlık satırında yer dar: ek yüzünden asıl bilgi
+   * ("4 baskı sürüyor · 4 yazıcı") kırpılıyordu. Yanındaki alt başlık zaten neyin
+   * güncellendiğini söylüyor.
+   */
+  suffix?: boolean;
 }) {
   // Başlangıç değeri prop'tan gelir (saf); gerçek saat yalnız efekt içinde okunur.
   const [now, setNow] = useState(updatedAt ?? 0);
@@ -49,7 +56,8 @@ export function FreshnessStamp({
   return (
     <Text style={[styles.text, bayat && styles.stale, style]} numberOfLines={1}>
       {bayat ? "⚠ " : ""}
-      {formatRelativeTime(new Date(updatedAt), now || undefined)} güncellendi
+      {formatRelativeTime(new Date(updatedAt), now || undefined)}
+      {suffix ? " güncellendi" : ""}
     </Text>
   );
 }

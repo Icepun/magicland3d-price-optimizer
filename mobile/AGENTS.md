@@ -62,3 +62,38 @@ Kural: cihaz API'lerini modül yüklenirken DEĞİL, ilk kullanımda kur; web'de
 Yeni bir betik eklemek parmak izini değiştirir → yayın YENİ bir çalışma sürümüne gider ve
 telefondaki uygulama güncellemeyi HİÇ görmez (28 Tem 2026 tuzağının aynısı, bu kez sessiz).
 Ölçüldü: betik eklendiğinde iOS parmak izi 05bc725f… → 66cbc9ec… oldu.
+
+# UI değişikliğini SİMÜLATÖRDE GÖR — derleme yeşilliği yetmez
+
+17 Ağu 2026: `PressableScale` bileşeni `style={({ pressed }) => …}` fonksiyon stili veriyordu.
+Reanimated'in animated bileşeni fonksiyon stilini ÇÖZEMİYOR ve stilin TAMAMINI sessizce
+düşürüyor → uygulamadaki HER dokunulabilir yüzey (kartlar, satırlar, çipler, düğmeler, zil)
+arka planını, kenarlığını ve ölçüsünü kaybetti. `tsc`, eslint, `expo export` ve 1450 test
+tamamen yeşildi. Bu sınıf hatanın tek savunması ekrana bakmak.
+
+## Simülatörde çalıştırma (çalışan yol)
+
+1. `npx expo prebuild --clean --platform ios` — `ios/Pods` node_modules'a göre eskirse
+   ReactCodegen "Cannot find module '@react-native/codegen/package.json'" ile düşer.
+   CocoaPods Ruby 4 ile patlıyorsa: `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` ile çalıştır.
+2. Derlemeyi **`mobile/ios` içinden** yap; codegen betiği `require.resolve`'u ÇALIŞMA
+   DİZİNİNDEN çözüyor, başka bir DerivedData kökünden çalıştırılırsa bulamıyor:
+
+       cd mobile/ios && xcodebuild -workspace Magicland3DHub.xcworkspace \
+         -scheme Magicland3DHub -configuration Debug -sdk iphonesimulator \
+         -destination 'id=<UDID>' -derivedDataPath ./build-sim build
+
+3. `xcrun simctl install <UDID> ios/build-sim/Build/Products/Debug-iphonesimulator/Magicland3DHub.app`
+4. ⚠️ **Yerel derlemede OTA'yı KAPAT**, yoksa uygulama ilk açılıştan sonra yayındaki paketi
+   indirip onu çalıştırır ve yaptığın değişiklikleri HİÇ görmezsin:
+
+       plutil -replace EXUpdatesEnabled -bool false ios/Magicland3DHub/Supporting/Expo.plist
+       plutil -replace EXUpdatesCheckOnLaunch -string NEVER ios/Magicland3DHub/Supporting/Expo.plist
+
+   (Sonra geri aç. `ios/` git dışında ve parmak izine katkısı yok — kaynak hash'i `null`.)
+5. `npx expo start` + `xcrun simctl launch <UDID> com.magicland3d.hub`
+
+# SymbolView: ölçüyü `style` verir
+
+`size` propu yalnız sembolün puntosunu ayarlar. Ölçü `style={{ width, height }}` ile verilir;
+verilmezse ikon 0x0 yerleşip görünmez olur. Uygulamadaki tüm çağrılar style kullanır.

@@ -151,7 +151,7 @@ export function EmptyState({
 }) {
   return (
     <View style={styles.empty}>
-      <SymbolView name={icon} size={44} tintColor={ML.textFaint} />
+      <SymbolView name={icon} tintColor={ML.textFaint} style={{ width: 44, height: 44 }} />
       <Text style={styles.emptyTitle}>{title}</Text>
       {hint ? <Text style={styles.emptyHint}>{hint}</Text> : null}
       {actionLabel && onAction ? (
