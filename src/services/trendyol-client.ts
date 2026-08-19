@@ -29,6 +29,104 @@ export interface TrendyolProduct {
   images?: Array<{ url?: string }>;
 }
 
+/**
+ * ÜRÜN V2 GÖVDESİ — `content[]` altında `variants[]`.
+ * İki uç iki farklı biçim veriyor; ikisi de burada tanımlı.
+ */
+export interface TrendyolV2Page<T> {
+  totalElements?: number;
+  totalPages?: number;
+  page?: number;
+  size?: number;
+  nextPageToken?: string;
+  content?: T[];
+}
+
+interface TrendyolV2Variant {
+  variantId?: number;
+  barcode?: string;
+  stockCode?: string;
+  onSale?: boolean;
+  archived?: boolean;
+  blacklisted?: boolean;
+  locked?: boolean;
+  price?: { salePrice?: number; listPrice?: number; priceSeenByCustomer?: number };
+  stock?: { quantity?: number };
+}
+
+export interface TrendyolV2Content {
+  contentId?: number;
+  productMainId?: string;
+  title?: string;
+  category?: { name?: string };
+  images?: Array<{ url?: string }>;
+  variants?: TrendyolV2Variant[];
+}
+
+/** Hafif uçta fiyat/stok DÜZ duruyor (price./stock. sarmalayıcısı yok). */
+export interface TrendyolV2StokFiyat {
+  contentId?: number;
+  productMainId?: string;
+  variants?: Array<{
+    variantId?: number;
+    barcode?: string;
+    stockCode?: string;
+    salePrice?: number;
+    listPrice?: number;
+    quantity?: number;
+  }>;
+}
+
+/**
+ * v2 "onaylı ürün" → eski (v1) düz ürün biçimi.
+ *
+ * `id` alanı v2'de yok; eşleştirme `externalId` üzerinden yapıldığı için varyant kimliği
+ * oraya konuyor — barkod zaten ayrıca taşınıyor ve eşleştirme öncelik sırasında barkoda da
+ * bakıyor, yani kimlik biçimi değişse bile eşleşme barkoddan kurtarılabiliyor.
+ */
+function duzlestirOnayli(c: TrendyolV2Content): TrendyolProduct[] {
+  const ortak = {
+    title: c.title,
+    categoryName: c.category?.name,
+    productMainId: c.productMainId,
+    images: c.images,
+  };
+  return (c.variants ?? [])
+    .filter((v) => !!v.barcode)
+    .map((v) => ({
+      ...ortak,
+      id: v.variantId != null ? String(v.variantId) : undefined,
+      barcode: String(v.barcode),
+      stockCode: v.stockCode,
+      salePrice: v.price?.salePrice,
+      listPrice: v.price?.listPrice,
+      quantity: v.stock?.quantity,
+      onSale: v.onSale,
+      archived: v.archived,
+      blacklisted: v.blacklisted,
+      // v2'nin onaylı ucunda "rejected" yok — reddedilenler ayrı uçta. Onaylı liste
+      // tanımı gereği reddedilmemiş olduğu için sabit false doğru.
+      rejected: false,
+      approved: true,
+    }));
+}
+
+/** v2 "stok ve fiyat" → eski düz biçim. Buradaki alanlar zaten düz. */
+function duzlestirStokFiyat(c: TrendyolV2StokFiyat): TrendyolProduct[] {
+  return (c.variants ?? [])
+    .filter((v) => !!v.barcode)
+    .map((v) => ({
+      id: v.variantId != null ? String(v.variantId) : undefined,
+      barcode: String(v.barcode),
+      stockCode: v.stockCode,
+      productMainId: c.productMainId,
+      salePrice: v.salePrice,
+      listPrice: v.listPrice,
+      quantity: v.quantity,
+      approved: true,
+    }));
+}
+
 export interface TrendyolProductPage {
   totalElements?: number;
   totalPages?: number;
@@ -223,39 +321,89 @@ export class TrendyolClient {
 
     if (!response.ok) {
       const message = this.extractErrorMessage(response.status, body, response.statusText);
+      /**
+       * PLANLI BAKIM (brownout) — kullanıcıya ham API metni gösterme.
+       *
+       * Trendyol eski uçları kapatmadan önce gün içinde birkaç kez kısa süreli (10–15 dk)
+       * kapatıyor ve İngilizce bir göç uyarısı döndürüyor. Kullanıcı bunu "bazen çalışıyor,
+       * bazen çalışmıyor" olarak yaşıyor. Durum kodu dokümanda garanti edilmediği için
+       * gövdedeki metne de bakılıyor.
+       */
+      const ham = `${message} ${typeof body === "string" ? body : JSON.stringify(body ?? "")}`.toLowerCase();
+      if (response.status === 426 || ham.includes("brownout") || ham.includes("product v2")) {
+        throw new TrendyolApiError(
+          response.status,
+          "Trendyol tarafında kısa süreli bakım var, birkaç dakika sonra tekrar deneyin.",
+          body
+        );
+      }
       throw new TrendyolApiError(response.status, `Trendyol API ${response.status}: ${message}`, body);
     }
 
     return body as T;
   }
 
-  async listProducts(params: {
-    page?: number;
-    size?: number;
-    approved?: boolean;
-    archived?: boolean;
-    barcode?: string;
-  } = {}): Promise<TrendyolProductPage> {
-    const searchParams = new URLSearchParams();
-    if (params.approved !== undefined) {
-      searchParams.set("approved", String(params.approved));
-    }
-    searchParams.set("page", String(params.page ?? 0));
-    searchParams.set("size", String(params.size ?? 100));
-    if (params.barcode) searchParams.set("barcode", params.barcode);
+  /**
+   * ÜRÜN V2 GÖÇÜ (15 Eylül 2026'da eski uç kapanıyor; o tarihe kadar günde 3×15 dk brownout).
+   *
+   * Eski tek uç (`/products` + `approved` parametresi) DÖRDE bölündü. Bizim kullandıklarımız:
+   *   • `/products/approved`                      → onaylı ürünler (başlık, görsel, kategori)
+   *   • `/products/approved/inventory-and-price`  → yalnız stok+fiyat (çok daha hafif)
+   *
+   * Yanıt yapısı KÖKTEN değişti: `content[]` artık düz ürün değil, altında `variants[]` olan
+   * bir "içerik". Fiyat/stok varyantta. Çağıranların hiçbiri değişmesin diye burada eski
+   * (v1) biçime DÜZLEŞTİRİLİYOR — göçün yüzey alanı tek dosyada kalıyor.
+   */
+  async listApprovedProducts(params: { page?: number; size?: number; barcode?: string } = {}): Promise<TrendyolProductPage> {
+    const sp = new URLSearchParams();
+    sp.set("page", String(params.page ?? 0));
+    sp.set("size", String(Math.min(100, params.size ?? 100)));
+    if (params.barcode) sp.set("barcode", params.barcode);
 
-    const result = await this.request<TrendyolProductPage>(
-      `/integration/product/sellers/${this.credentials.sellerId}/products?${searchParams.toString()}`
+    const raw = await this.request<TrendyolV2Page<TrendyolV2Content>>(
+      `/integration/product/sellers/${this.credentials.sellerId}/products/approved?${sp.toString()}`
     );
-    if (typeof result !== "object" || result === null || !("content" in result)) {
+    this.assertV2(raw, "onaylı ürün");
+    return {
+      totalElements: raw.totalElements,
+      totalPages: raw.totalPages,
+      page: raw.page,
+      size: raw.size,
+      content: (raw.content ?? []).flatMap((c) => duzlestirOnayli(c)),
+    };
+  }
+
+  /**
+   * Fiyat yenilemesi için HAFİF uç. Dikkat: burada `salePrice`/`listPrice`/`quantity`
+   * varyantın ALTINDA DÜZ duruyor (onaylı üründeki `price.` / `stock.` sarmalayıcısı YOK).
+   * Bu yüzden ayrı bir düzleştirici gerekiyor.
+   */
+  async listApprovedInventoryAndPrice(params: { page?: number; size?: number } = {}): Promise<TrendyolProductPage> {
+    const sp = new URLSearchParams();
+    sp.set("page", String(params.page ?? 0));
+    sp.set("size", String(Math.min(100, params.size ?? 100)));
+
+    const raw = await this.request<TrendyolV2Page<TrendyolV2StokFiyat>>(
+      `/integration/product/sellers/${this.credentials.sellerId}/products/approved/inventory-and-price?${sp.toString()}`
+    );
+    this.assertV2(raw, "stok ve fiyat");
+    return {
+      totalElements: raw.totalElements,
+      totalPages: raw.totalPages,
+      page: raw.page,
+      size: raw.size,
+      content: (raw.content ?? []).flatMap((c) => duzlestirStokFiyat(c)),
+    };
+  }
+
+  private assertV2(raw: unknown, ne: string): void {
+    if (typeof raw !== "object" || raw === null || !("content" in raw)) {
       throw new TrendyolApiError(
         502,
-        "Trendyol urun listesi beklenen formatta donmedi. API bilgileri ve ortam secimini kontrol edin.",
-        result
+        `Trendyol ${ne} listesi beklenen formatta dönmedi. API bilgilerini ve ortam seçimini kontrol edin.`,
+        raw
       );
     }
-
-    return result;
   }
 
   async getBatchRequestResult(batchRequestId: string): Promise<unknown> {
@@ -304,7 +452,7 @@ export class TrendyolClient {
     if (params.endDate) searchParams.set("endDate", String(params.endDate));
 
     return this.request<TrendyolOrderPage>(
-      `/integration/order/sellers/${this.credentials.sellerId}/orders?${searchParams.toString()}`
+      `/integration/order/sellers/${this.credentials.sellerId}/v2/orders?${searchParams.toString()}`
     );
   }
 }

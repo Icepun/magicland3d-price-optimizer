@@ -7,7 +7,8 @@ export async function POST() {
   try {
     const credentials = await getTrendyolCredentials();
     const client = new TrendyolClient(credentials);
-    const result = await client.listProducts({ page: 0, size: 1, approved: true });
+    // Ürün v2: onay durumu artık parametre değil, UÇ seçimi.
+    const result = await client.listApprovedProducts({ page: 0, size: 1 });
 
     return NextResponse.json({
       ok: true,

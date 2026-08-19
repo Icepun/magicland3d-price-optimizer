@@ -19,12 +19,19 @@ import { nowDbDateSql } from "@/lib/sqlite-date";
  *
  * Turso'da okuma bedava, yazma pahalı → bol oku, yalnızca gerekeni yaz.
  */
-const Schema = z.object({
-  mode: z.enum(["full", "add-new", "refresh-prices"]).default("full"),
-  approved: z.boolean().default(true),
-  maxPages: z.coerce.number().int().min(1).max(100).default(50),
-  size: z.coerce.number().int().min(1).max(100).default(100),
-});
+const Schema = z
+  .object({
+    mode: z.enum(["full", "add-new", "refresh-prices"]).default("full"),
+    maxPages: z.coerce.number().int().min(1).max(100).default(50),
+    size: z.coerce.number().int().min(1).max(100).default(100),
+  })
+  /**
+   * ÜRÜN V2 sert sınırı: sayfa × boyut çarpımı 10.000'i geçemez (v1'de böyle bir sınır yoktu).
+   * Aşan istekte son sayfalar reddedilir ve senkron sessizce eksik kalır.
+   */
+  .refine((v) => v.maxPages * v.size <= 10_000, {
+    message: "Sayfa sayısı × sayfa boyutu 10.000'i geçemez (Trendyol Ürün v2 sınırı).",
+  });
 
 interface FetchedTrendyol {
   barcode: string;
@@ -113,14 +120,23 @@ export async function POST(req: NextRequest) {
     // Tüm sayfaları çek → barcode -> veri
     const fetched = new Map<string, FetchedTrendyol>();
     let totalElements = 0;
+    /**
+     * ÜRÜN V2: tek uç dörde bölündü. Yalnız fiyat yenileyeceksek HAFİF uç yeter —
+     * başlık/görsel/kategori taşımadığı için aynı sayfa sayısında çok daha az veri iner.
+     * Yeni ürün eklemede o alanlar gerektiği için onaylı ürün ucu kullanılır.
+     */
+    const yalnizFiyat = input.mode === "refresh-prices";
     for (let page = 0; page < input.maxPages; page += 1) {
-      const res = await client.listProducts({ page, size: input.size, approved: input.approved });
+      const res = yalnizFiyat
+        ? await client.listApprovedInventoryAndPrice({ page, size: input.size })
+        : await client.listApprovedProducts({ page, size: input.size });
       const products = res.content ?? [];
       totalElements = res.totalElements ?? totalElements;
       if (products.length === 0) break;
       for (const tp of products) {
         if (!tp.barcode?.trim()) continue;
-        if (!isActiveTrendyolProduct(tp)) continue; // sadece AKTİF (satışta + tükenen)
+        // Hafif uç durum bayraklarını taşımıyor; zaten yalnız onaylı ürünleri döndürüyor.
+        if (!yalnizFiyat && !isActiveTrendyolProduct(tp)) continue; // sadece AKTİF (satışta + tükenen)
         const data = mapProduct(tp);
         if (!fetched.has(data.barcode)) fetched.set(data.barcode, data);
       }
@@ -153,6 +169,8 @@ export async function POST(req: NextRequest) {
       const bySku = uniqueIndex(fetched.values(), (f) => f.sku);
       let changed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
+      const writes: { sql: string; args: unknown[] }[] = [];
+      let atlananSifir = 0;
       for (const row of rows) {
         const f = matchByPriority<FetchedTrendyol>([
           [row.externalId, byExternalId],
@@ -161,6 +179,13 @@ export async function POST(req: NextRequest) {
           [row.productBarcode, fetched], // eski satırlar: ilan barkodu yazılmadan önce eklenmişler
         ]);
         if (!f) continue;
+        /**
+         * SIFIR FİYAT KORUMASI — Ürün v2 göçünün en pahalı hatası buydu.
+         * Yanıt yapısı değiştiği için bir alan adı kayarsa `price` sessizce 0 gelir; kod
+         * derlenir, hata çıkmaz, ama tüm ilanlara 0 TL yazılır ve fiyat geçmişi kalıcı olarak
+         * bozulur. Geçersiz fiyat ASLA yazılmaz.
+         */
+        if (!Number.isFinite(f.price) || f.price <= 0) { atlananSifir++; continue; }
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({
           productId: row.productId,
@@ -168,13 +193,36 @@ export async function POST(req: NextRequest) {
           newPrice: f.price,
           changeSource: "trendyol_sync",
         });
-        await prisma.$executeRawUnsafe(
-          `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`,
-          f.price,
-          f.listPrice,
-          row.listingId
-        );
+        /**
+         * ⚠️ DÖNGÜ İÇİNDE YAZMA YOK. Uzak-HTTP libSQL'de her sorgu ~96 ms ve TÜM sorgular
+         * süreç genelinde SIRALI. Satır satır UPDATE atmak 100 fiyat değişiminde ~10 saniye
+         * demekti ve kullanıcı bunu "yenileme çok uzun sürüyor" olarak yaşıyordu.
+         * İfadeler biriktirilip tek istekte gönderiliyor (aynı dosyadaki `addNew` da böyle).
+         */
+        writes.push({
+          sql: `UPDATE Listing SET salePrice = ?, listPrice = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`,
+          args: [f.price, f.listPrice, row.listingId],
+        });
         changed++;
+      }
+
+      /**
+       * TOPLU BOZULMA FRENİ: eşleşen satırların çoğunda fiyat geçersiz geldiyse sorun tek bir
+       * üründe değil, yanıt biçimindedir (alan adı kaymış). Sessizce "0 değişiklik" demek
+       * yerine durup haber ver — aksi hâlde bozuk göç fark edilmeden günlerce sürebilir.
+       */
+      const eslesen = atlananSifir + changed;
+      if (eslesen >= 10 && atlananSifir > eslesen * 0.9) {
+        throw new Error(
+          "Trendyol'dan gelen fiyatların neredeyse tamamı geçersiz. Fiyatlar güncellenmedi — entegrasyon güncellemesi gerekiyor."
+        );
+      }
+
+      // Tek istekte gönder; mod uygun değilse (embedded replica) sıralı yola düş.
+      if (writes.length && !(await batchWrite(writes))) {
+        for (const w of writes) {
+          await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
+        }
       }
       // Fiyat geçmişi — yalnızca değişenler, tek round-trip.
       if (history.length) await prisma.priceHistory.createMany({ data: history });

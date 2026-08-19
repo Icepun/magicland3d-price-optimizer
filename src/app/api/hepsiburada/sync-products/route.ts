@@ -132,16 +132,23 @@ export async function POST(req: NextRequest) {
       for (const f of fetched.values()) byBarcode.set(f.hbBarcode, f);
       let changed = 0;
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
+      /**
+       * ⚠️ DÖNGÜ İÇİNDE YAZMA YOK. Uzak-HTTP libSQL'de her sorgu ~96 ms ve SIRALI; satır satır
+       * UPDATE atmak yenilemeyi kullanıcının şikâyet ettiği süreye çıkarıyordu. Aynı dosyadaki
+       * `addNew` bu dersi zaten almış (258 kayıt ≈ 25 sn), yenileme yolu atlanmış.
+       */
+      const writes: { sql: string; args: unknown[] }[] = [];
+      const FIYAT_SQL = `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`;
       for (const row of rows) {
         const f = (row.externalSku && fetched.get(row.externalSku)) || (row.barcode && byBarcode.get(row.barcode)) || null;
         if (!f) continue;
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({ productId: row.productId, oldPrice: row.salePrice, newPrice: f.price, changeSource: "hepsiburada_sync" });
-        await prisma.$executeRawUnsafe(
-          `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`,
-          f.price, f.stock, row.listingId
-        );
+        writes.push({ sql: FIYAT_SQL, args: [f.price, f.stock, row.listingId] });
         changed++;
+      }
+      if (writes.length && !(await batchWrite(writes))) {
+        for (const w of writes) await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
       }
       if (history.length) await prisma.priceHistory.createMany({ data: history });
       return { checked: rows.length, changed };
