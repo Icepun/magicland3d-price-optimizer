@@ -11,9 +11,11 @@ export function clearPricingQueryCache(queryClient: QueryClient): void {
     "orders",
     "dashboard",
     "price-changes",
-    "product-profit",
-    "profit-preview",
-    "price-lab",
+    // ⚠️ ÜRÜN DETAYI da düşürülmeli: `["products"]` (liste) öneki `["product", id]` (detay)
+    // ile EŞLEŞMEZ. Eksikken kargo/komisyon/gider/reklam/maliyet/paketleme değişiklikleri
+    // detayda eski kârı göstermeye devam ediyordu — yedi akış birden.
+    "product",
+    "price-history",
   ]) {
     queryClient.removeQueries({ queryKey: [queryKey] });
   }

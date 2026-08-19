@@ -1634,15 +1634,18 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ["price-changes"] }),
       queryClient.invalidateQueries({ queryKey: ["unmatched-listings"] }),
       /**
-       * ÜRÜN DETAYI da tazelenmeli. React Query önek eşleştirir ama `["products"]` ile
-       * `["product", id]` FARKLI anahtarlardır — çoğul olanı geçersiz kılmak detayı
-       * tazelemiyordu ve kullanıcı sayfayı elle yenilemek zorunda kalıyordu.
-       * Fiyata bağlı üç anahtarın üçü de burada: kayıt, kâr önizlemesi ve fiyat laboratuvarı.
+       * ÜRÜN DETAYI: `invalidateQueries` BURADA İŞE YARAMAZ.
+       *
+       * QueryProvider'da `refetchOnMount: false` global olarak açık (ekranlar arası geçiş
+       * önbellekten anında gelsin diye). Bu yüzden geçersiz kılmak yalnız "bayat" bayrağı
+       * basıyor; kullanıcı fiyatları yeniledikten sonra detayı açtığında sorgu mount olurken
+       * yeniden çekilmiyor ve ESKİ fiyat gösteriliyor — sahadaki şikâyet buydu.
+       *
+       * `removeQueries` kaydı tamamen siler, sonraki açılış sunucudan gelmek zorunda kalır.
+       * Detay o an ekranda olmadığı için titreme olmaz.
        */
-      queryClient.invalidateQueries({ queryKey: ["product"] }),
-      queryClient.invalidateQueries({ queryKey: ["profit-preview"] }),
-      queryClient.invalidateQueries({ queryKey: ["price-lab"] }),
-      queryClient.invalidateQueries({ queryKey: ["price-history"] }),
+      queryClient.removeQueries({ queryKey: ["product"] }),
+      queryClient.removeQueries({ queryKey: ["price-history"] }),
     ]);
     done += 1;
     setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
