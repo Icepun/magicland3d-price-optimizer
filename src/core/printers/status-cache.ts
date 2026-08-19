@@ -25,11 +25,25 @@ import { fileMatchKey, deepFileMatchKey } from "./file-match";
 import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } from "./bambu";
 import { prisma } from "@/lib/prisma";
 
-const FRESH_MS = 4_000;          // çevrimiçi sonuç bu kadar süre taze sayılır (panel 5sn + relay 10sn paylaşır)
+/**
+ * ⚠️ 4000 DEĞİL — panel 5 saniyede bir yokluyor, tazelik penceresi ondan KÜÇÜKSE önbellek
+ * paneli hiç beslemez ve her tick yeni bir istek doğurur. Üstelik 4000 tam olarak undici'nin
+ * keep-alive duvarı: iki istek arası 4 sn'yi geçerse TCP bağlantısı yeniden kurulur.
+ * Gerçek yazıcılarda ölçüldü — 5000 ms aralık: 6 istek = 6 yeni TCP; 3000 ms: 6 istek = 1 TCP.
+ * Neptune 4 Plus'ta bağlantı kurmanın %3,3'ü SYN kaybına düşüyor ve sabit +1000 ms ekliyor,
+ * yani her yoklamada o riski yeniden alıyorduk.
+ */
+const FRESH_MS = 6_000;
 const GRACE_MS = 25_000;         // son-iyi durumun "tek kaçak" için geçerli kalma penceresi
 /** Çevrimdışı yeniden deneme: ilk aralık, sonra her başarısızlıkta iki katı. */
-const OFFLINE_BASE_MS = 8_000;
-const OFFLINE_MAX_MS = 120_000;
+const OFFLINE_BASE_MS = 5_000;
+/**
+ * ⚠️ TAVAN DÜŞÜRÜLDÜ (120 sn → 20 sn). Ekranda görülen "kopukluk" süresini yazıcının linki
+ * değil BU sayı belirliyordu: 20 saniyelik bir link titremesi, geri çekilme yüzünden 2 dakika
+ * boyunca "Bağlantı yok" olarak kalıyordu. Yazıcılar LAN'da; 20 saniyede bir denemek ne
+ * yazıcıyı yorar ne de kullanıcıyı bekletir.
+ */
+const OFFLINE_MAX_MS = 20_000;
 /** Kontrol komutundan sonra hızlı yoklama penceresi ve o penceredeki tazelik eşiği. */
 const BOOST_WINDOW_MS = 10_000;
 const BOOST_FRESH_MS = 700;

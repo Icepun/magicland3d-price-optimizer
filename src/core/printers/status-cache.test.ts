@@ -88,20 +88,22 @@ describe("MADDE 20 — çevrimdışı yazıcı diğerlerini yavaşlatmaz", () =>
     await getMoonrakerStatusCached("10.0.0.9", 7125);
     expect(h.probe).toHaveBeenCalledTimes(1);
 
-    vi.setSystemTime(Date.now() + 5_000); // ilk geri çekilme aralığı 8sn
+    // İlk geri çekilme aralığı 5 sn (eskiden 8'di; ekranda görülen kopukluk süresini bu
+    // sayı belirlediği için kısaltıldı — yazıcılar LAN'da, sık denemek maliyetsiz).
+    vi.setSystemTime(Date.now() + 3_000);
     await getMoonrakerStatusCached("10.0.0.9", 7125);
     expect(h.probe).toHaveBeenCalledTimes(1);
   });
 
   it("geri çekilme aralığı her başarısızlıkta İKİ KATINA çıkar", async () => {
     h.probe.mockResolvedValue(OFFLINE);
-    await getMoonrakerStatusCached("10.0.0.9", 7125); // 1. başarısızlık → 8sn
-    vi.setSystemTime(Date.now() + 9_000);
-    await getMoonrakerStatusCached("10.0.0.9", 7125); // arka plan yoklaması (2. başarısızlık) → 16sn
+    await getMoonrakerStatusCached("10.0.0.9", 7125); // 1. başarısızlık → 5sn
+    vi.setSystemTime(Date.now() + 6_000);
+    await getMoonrakerStatusCached("10.0.0.9", 7125); // arka plan yoklaması (2. başarısızlık) → 10sn
     await vi.advanceTimersByTimeAsync(0);
     expect(h.probe).toHaveBeenCalledTimes(2);
 
-    vi.setSystemTime(Date.now() + 9_000); // 16sn dolmadı
+    vi.setSystemTime(Date.now() + 6_000); // 10sn dolmadı
     await getMoonrakerStatusCached("10.0.0.9", 7125);
     await vi.advanceTimersByTimeAsync(0);
     expect(h.probe).toHaveBeenCalledTimes(2);

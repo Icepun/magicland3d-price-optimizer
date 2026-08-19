@@ -315,8 +315,40 @@ export async function GET(req: NextRequest) {
 
   const nowMs = Date.now();
 
+  /** Beklenmedik hata alan yazıcı için güvenli kart — diğer kartlar etkilenmesin. */
+  function cevrimdisiKart(c: (typeof configs)[number], accent: string): PanelPrinter {
+    return {
+      id: c.id, name: c.name, brand: c.brand, model: c.model || "",
+      accent, type: (c.type === "bambu" ? "bambu" : "moonraker"),
+      status: "idle", online: false, note: null, connection: "offline",
+      statusMessage: null, warnings: [],
+      currentFilename: null, matchedProductId: null,
+      temps: { nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0 },
+      caps: NO_CAPS_PANEL,
+      speed: { percent: null, presets: SPEED_PRESETS_PCT, levels: null, level: null },
+      light: { supported: false, readable: false, on: null },
+      pauseAtLayer: null, defectWatch: null, slots: [], job: null,
+    };
+  }
+
   const printers: PanelPrinter[] = await Promise.all(
     configs.map(async (c, i): Promise<PanelPrinter> => {
+      /**
+       * HER YAZICI KENDİ BAŞINA. `Promise.all` içinde tek bir istisna TÜM kartları
+       * düşürüyordu: bir yazıcı beklenmedik bir yanıt verdiğinde panel dördünü birden
+       * kaybediyor, kullanıcı "hepsi koptu" görüyordu. Artık hata veren yazıcı çevrimdışı
+       * kartına düşer, diğerleri etkilenmez.
+       */
+      try {
+        return await tekYazici(c, i);
+      } catch {
+        return cevrimdisiKart(c, c.accent || ACCENTS[i % ACCENTS.length]);
+      }
+    })
+  );
+
+  async function tekYazici(c: (typeof configs)[number], i: number): Promise<PanelPrinter> {
+    {
       const accent = c.accent || ACCENTS[i % ACCENTS.length];
       const base: PanelPrinter = {
         id: c.id, name: c.name, brand: c.brand, model: c.model || "",
@@ -586,8 +618,8 @@ export async function GET(req: NextRequest) {
           : undefined,
         job,
       };
-    })
-  );
+    }
+  }
 
   return NextResponse.json({ printers, simulated: false, configured: true });
 }

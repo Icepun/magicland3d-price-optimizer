@@ -127,14 +127,66 @@ export function moonrakerBase(host: string, port: number): string {
   return `http://${host}:${p}`;
 }
 
-async function mfetch(url: string, init: RequestInit | undefined, timeoutMs: number) {
+/**
+ * ⚠️ ZAMAN AŞIMI GÖVDEYİ DE KAPSAMALI — yoksa uygulama donar.
+ *
+ * ESKİ HÂLİ: sayaç `finally` içinde temizleniyordu, yani `fetch()` çözülür çözülmez —
+ * ki bu YALNIZ BAŞLIKLAR geldiğinde olur. AbortController orada silahsızlanıyor ve gövde
+ * okuması sınırsız kalıyordu; ölçüldü: başlıklar 12-23 ms'de geliyor, gövde asılı kalıyor,
+ * sert tavan undici'nin varsayılanı olan **305 saniye**.
+ *
+ * Zincir uçtan uca doğrulandı: asılı istek `status-cache` içindeki inflight tekilleştirmesi
+ * yüzünden TÜM çağıranlara aynı sözü veriyor → `/api/printers` hiç dönmüyor (panel donuyor)
+ * → relay'in re-entrancy koruması tick'i durduruyor → 30 sn'lik heartbeat kesiliyor →
+ * telefon "masaüstü kapalı" alarmı veriyor. Tek bir yavaş gövde bunun için yeterli.
+ *
+ * Artık sayaç çağıranın gövdeyi okuması bitene kadar yaşıyor; `sonlandir()` ile kapatılır.
+ */
+function mfetchZamanli(url: string, init: RequestInit | undefined, timeoutMs: number) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
-  } finally {
-    clearTimeout(t);
+  const dis = init?.signal;
+  if (dis) {
+    if (dis.aborted) ctrl.abort();
+    else dis.addEventListener("abort", () => ctrl.abort(), { once: true });
   }
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const yanit = fetch(url, { ...init, signal: ctrl.signal, cache: "no-store" });
+  return { yanit, sonlandir: () => clearTimeout(t) };
+}
+
+async function mfetch(url: string, init: RequestInit | undefined, timeoutMs: number) {
+  const { yanit, sonlandir } = mfetchZamanli(url, init, timeoutMs);
+  let res: Response;
+  try {
+    res = await yanit;
+  } catch (e) {
+    sonlandir();
+    throw e;
+  }
+  /**
+   * Sayaç, gövde tüketilene kadar açık kalır. Gövdeyi okumayan çağıranlar için (örn.
+   * `if (!res.ok) return null`) soket havuzda asılı kalmasın diye burada da iptal edilir.
+   */
+  const orijinal = res;
+  const bitir = () => sonlandir();
+  const sarmalanmis = new Proxy(orijinal, {
+    get(hedef, ad, alici) {
+      if (ad === "json" || ad === "text" || ad === "arrayBuffer" || ad === "blob") {
+        const f = Reflect.get(hedef, ad, hedef) as () => Promise<unknown>;
+        return async () => {
+          try {
+            return await f.call(hedef);
+          } finally {
+            bitir();
+          }
+        };
+      }
+      const v = Reflect.get(hedef, ad, alici);
+      return typeof v === "function" ? v.bind(hedef) : v;
+    },
+  });
+  // Gövdesi hiç okunmayan yanıtlar için güvenlik ağı: sayaç zaten iptal edecek.
+  return sarmalanmis as Response;
 }
 
 // ── PORT ÇÖZÜMLEME — kayıtlı port yanlışsa kendi kendini onarır ──────────────────────────────
@@ -424,9 +476,15 @@ function parseStatus(status: any): MoonrakerStatus {
 
 async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus | null> {
   try {
-    // LAN yazıcısı sağlıklıysa <500ms yanıt verir; 1500ms bol marj. Daha uzun timeout, ÇEVRİMDIŞI
-    // yazıcıda boş yere ana-süreci meşgul ediyordu (relay + panel her tick'te yokluyor).
-    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 1500);
+    /**
+     * ⚠️ 1500 DEĞİL. Eski yorum "sağlıklı LAN yazıcısı <500 ms yanıt verir" diyordu; gerçek
+     * ölçüm (baskı sürerken, 20 Ağu 2026): Pro p50 210-256 ms / p99 ~298 ms, ama Plus
+     * p50 193-269 ms / **p99 514-609 ms**. Üstüne Plus'ta bağlantıların %3,3'ü SYN kaybına
+     * düşüp sabit +1000 ms ekliyor → ~1250 ms, 1500 ms bütçeye karşı yalnız 250 ms pay.
+     * Yani sağlıklı bir yazıcı, yavaş bir ana yüzünden "çevrimdışı" sayılıyordu.
+     * 4000 ms hâlâ çevrimdışı yazıcıyı hızlı eler ama yavaş cevabı kopma saymaz.
+     */
+    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 4000);
     if (!res.ok) return null;
     const status = unwrap(await res.json())?.status;
     if (!status) return null;
