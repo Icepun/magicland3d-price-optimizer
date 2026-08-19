@@ -74,3 +74,26 @@ describe("tek yazıcı hatası diğerlerini düşürmüyor", () => {
     expect(ROTA).toMatch(/try \{\s*return await tekYazici\(c, i\);/);
   });
 });
+
+describe("başarısız denemeler yazıcıyı dövmüyor", () => {
+  it("meta hatası kısa süre hatırlanıyor", () => {
+    /**
+     * Elegoo'nun Moonraker'ı gcode'u taramıyor; her meta denemesi dosyanın ilk 256 KB'ını
+     * Range ile çekiyor. Sonuç null kalınca bu HER YOKLAMADA tekrarlanıyordu. Ölçüldü:
+     * yazıcıya 4 eşzamanlı istek bindiğinde durum sorgusu 359 ms → 4025 ms.
+     */
+    expect(CACHE).toContain("META_HATA_TTL_MS");
+    expect(CACHE).toContain("metaHata");
+  });
+
+  it("yetenek keşfi hatası da hatırlanıyor", () => {
+    // Başarı 15 dk önbellekliydi ama başarısızlık hiç → iki ağır istek 15 sn'de bir.
+    expect(MOONRAKER).toContain("CAPS_HATA_TTL_MS");
+    expect(MOONRAKER).toContain("capsHata");
+  });
+
+  it("başarı gelince hata damgası SİLİNİYOR", () => {
+    // Silinmezse yazıcı düzeldiğinde bile 60 sn boyunca yeteneksiz görünürdü.
+    expect(CACHE).toContain("metaHata.delete");
+  });
+});

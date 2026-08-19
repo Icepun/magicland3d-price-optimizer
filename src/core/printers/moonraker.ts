@@ -1547,9 +1547,22 @@ const capsCache = processSingleton("mr_capsCache", () => new Map<string, { at: n
 const CAPS_TTL_MS = 15 * 60_000;
 
 /** Yazıcının desteklediği kontroller — iki salt-okunur istekle keşfedilir, uzun önbellekli. */
+/**
+ * BAŞARISIZ keşif de kısa süre hatırlanır.
+ *
+ * Yetenek keşfi iki AĞIR istek atıyor (`/printer/objects/list` + `/printer/gcode/help`).
+ * Başarı 15 dakika önbellekleniyordu ama BAŞARISIZLIK hiç — yazıcı meşgulken (baskı sırasında
+ * sık) bu iki istek her 15 saniyede bir tekrarlanıyordu, yani 60 kat fark. Yazıcının zorlandığı
+ * anda üstüne binen yükün bir kısmı buydu.
+ */
+const CAPS_HATA_TTL_MS = 60_000;
+const capsHata = processSingleton("mr_capsHata", () => new Map<string, number>());
+
 export async function fetchMoonrakerCaps(host: string, port: number): Promise<MoonrakerCaps> {
   const hit = capsCache.get(host);
   if (hit && Date.now() - hit.at < CAPS_TTL_MS) return hit.caps;
+  const sonHata = capsHata.get(host);
+  if (sonHata != null && Date.now() - sonHata < CAPS_HATA_TTL_MS) return NO_CAPS;
 
   const caps: MoonrakerCaps = { ...NO_CAPS };
   try {
@@ -1559,10 +1572,10 @@ export async function fetchMoonrakerCaps(host: string, port: number): Promise<Mo
     ]);
     // İKİSİ de başarılı olmalı: biri düşerse tablo YARIM olur (help boşsa M600/katman duraklatma
     // "yok" görünür, objects boşsa ışık kaybolur) ve 15 dakika boyunca o yarım tablo servis edilirdi.
-    if (!objsRes.ok || !helpRes.ok) return NO_CAPS;
+    if (!objsRes.ok || !helpRes.ok) { capsHata.set(host, Date.now()); return NO_CAPS; }
     const objects: string[] = (unwrap(await objsRes.json())?.objects as string[]) ?? [];
     const help: Record<string, string> = (unwrap(await helpRes.json()) as Record<string, string>) ?? {};
-    if (!objects.length && !Object.keys(help).length) return NO_CAPS; // yazıcı yanıt vermedi → önbellekleme
+    if (!objects.length && !Object.keys(help).length) { capsHata.set(host, Date.now()); return NO_CAPS; } // yazıcı yanıt vermedi
     const cmds = new Set(Object.keys(help).map((k) => k.toUpperCase()));
 
     const leds = objects.filter((o) => /^led\s+\S/i.test(o)).map((o) => o.replace(/^led\s+/i, ""));
@@ -1584,6 +1597,8 @@ export async function fetchMoonrakerCaps(host: string, port: number): Promise<Mo
     caps.discovered = true;
     capsCache.set(host, { at: Date.now(), caps });
   } catch {
+    // Ağ hatası da damgalanır: yazıcı meşgulken bu iki ağır istek 15 sn'de bir tekrarlanıyordu.
+    capsHata.set(host, Date.now());
     return NO_CAPS; // keşif başarısızsa hiçbir kontrolü "var" gösterme
   }
   return caps;

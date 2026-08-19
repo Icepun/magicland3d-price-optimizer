@@ -183,6 +183,7 @@ export function resetPrinterStatusCache(): void {
   extrasInflight.clear();
   bambuSlotsCache.clear();
   bambuSlotsInflight.clear();
+  metaHata.clear();
 }
 
 // ── Yan bilgiler (ışık, slot renkleri, katman duraklatması, gözetim) ────────────────────────
@@ -249,10 +250,24 @@ export async function getBambuSlotsCached(host: string, accessCode: string, seri
 const metaCache = processSingleton("sc_metaCache", () => new Map<string, MoonrakerMeta>());
 const metaInflight = processSingleton("sc_metaInflight", () => new Map<string, Promise<MoonrakerMeta | null>>());
 
+/**
+ * BAŞARISIZ meta denemesi de önbelleklenir (kısa süreli).
+ *
+ * Elegoo'nun Moonraker'ı gcode'u taramıyor ve `/server/files/metadata` boş dönüyor; bu yüzden
+ * her denemede dosyanın ilk 256 KB'ı + kuyruğu Range ile çekiliyor. Sonuç null kalırsa —
+ * ki Elegoo'da sık oluyor — bu ağır okuma HER YOKLAMADA tekrarlanıyordu. Ölçüldü: yazıcıya
+ * aynı anda 4 istek bindiğinde durum sorgusu 359 ms'den 4025 ms'ye çıkıyor, yani kopmaların
+ * bir kısmını doğrudan biz üretiyoruz. Negatif sonucu 60 sn tutmak bu döngüyü kırar.
+ */
+const META_HATA_TTL_MS = 60_000;
+const metaHata = processSingleton("sc_metaHata", () => new Map<string, number>());
+
 export async function getMoonrakerMetaCached(host: string, port: number, filename: string): Promise<MoonrakerMeta | null> {
   const k = `${host}|${filename}`;
   const hit = metaCache.get(k);
   if (hit) return hit;
+  const sonHata = metaHata.get(k);
+  if (sonHata != null && Date.now() - sonHata < META_HATA_TTL_MS) return null;
   // Meta taraması artık gcode'un ilk 256 KB'ını da çekiyor (küçük resim). Aynı dosya için
   // eşzamanlı iki istek bu indirmeyi İKİ KEZ yapmasın.
   const running = metaInflight.get(k);
@@ -263,8 +278,13 @@ export async function getMoonrakerMetaCached(host: string, port: number, filenam
       if (m) {
         if (metaCache.size > 300) metaCache.clear(); // basit üst sınır — pratikte dolmaz
         metaCache.set(k, m);
+        metaHata.delete(k);
+      } else {
+        // Taraması gecikmiş olabilir → kalıcı değil, 60 sn sonra yeniden denenir.
+        if (metaHata.size > 300) metaHata.clear();
+        metaHata.set(k, Date.now());
       }
-      return m; // null önbelleklenmez (metadata taraması gecikmiş olabilir → sonra tekrar dene)
+      return m;
     } finally {
       metaInflight.delete(k);
     }
