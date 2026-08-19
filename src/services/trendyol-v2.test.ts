@@ -85,12 +85,21 @@ describe("v2 düzleştiricileri doğru alanları okuyor", () => {
     expect(onayli).toContain("c.category?.name");
   });
 
-  it("HAFİF uçta fiyat/stok DÜZ okunuyor (sarmalayıcı yok)", () => {
-    // İki ucun biçimi farklı; hafif uca `price.` eklemek fiyatı 0 yapardı.
-    expect(stokFiyat).toContain("v.salePrice");
-    expect(stokFiyat).toContain("v.quantity");
-    expect(stokFiyat).not.toContain("v.price?.");
-    expect(stokFiyat).not.toContain("v.stock?.");
+  it("HAFİF uçta İKİ BİÇİM DE okunuyor", () => {
+    /**
+     * ⚠️ DOKÜMAN YANLIŞTI. Trendyol'un hafif uç dokümanı fiyatı DÜZ gösteriyor
+     * (`variants[].salePrice`), sahada ise İÇ İÇE geldi (`variants[].price.salePrice`).
+     * Sonuç: tüm fiyatlar geçersiz sayıldı ve senkron durdu (17 Ağu 2026, kullanıcının
+     * hesabında görüldü). Artık hangi biçim gelirse gelsin okunuyor — biçim yine
+     * değişirse fiyat sessizce 0 olmasın.
+     */
+    expect(stokFiyat).toContain("v.price?.salePrice ?? v.salePrice");
+    expect(stokFiyat).toContain("v.stock?.quantity ?? v.quantity");
+  });
+
+  it("AĞIR uçta da tolerans var (simetrik)", () => {
+    expect(onayli).toContain("v.price?.salePrice ??");
+    expect(onayli).toContain("v.stock?.quantity ??");
   });
 
   it("barkodsuz varyant elenmiş", () => {

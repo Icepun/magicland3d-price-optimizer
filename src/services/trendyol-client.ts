@@ -74,9 +74,13 @@ export interface TrendyolV2StokFiyat {
     variantId?: number;
     barcode?: string;
     stockCode?: string;
+    /** Düz biçim (dokümanda böyle yazıyor). */
     salePrice?: number;
     listPrice?: number;
     quantity?: number;
+    /** İÇ İÇE biçim — sahada gerçekte bu geldi. */
+    price?: { salePrice?: number; listPrice?: number };
+    stock?: { quantity?: number };
   }>;
 }
 
@@ -101,9 +105,10 @@ function duzlestirOnayli(c: TrendyolV2Content): TrendyolProduct[] {
       id: v.variantId != null ? String(v.variantId) : undefined,
       barcode: String(v.barcode),
       stockCode: v.stockCode,
-      salePrice: v.price?.salePrice,
-      listPrice: v.price?.listPrice,
-      quantity: v.stock?.quantity,
+      // Simetrik tolerans: bu uçta da biçim değişirse fiyat sessizce 0 olmasın.
+      salePrice: v.price?.salePrice ?? (v as { salePrice?: number }).salePrice,
+      listPrice: v.price?.listPrice ?? (v as { listPrice?: number }).listPrice,
+      quantity: v.stock?.quantity ?? (v as { quantity?: number }).quantity,
       commission: v.commission,
       onSale: v.onSale,
       archived: v.archived,
@@ -124,9 +129,12 @@ function duzlestirStokFiyat(c: TrendyolV2StokFiyat): TrendyolProduct[] {
       barcode: String(v.barcode),
       stockCode: v.stockCode,
       productMainId: c.productMainId,
-      salePrice: v.salePrice,
-      listPrice: v.listPrice,
-      quantity: v.quantity,
+      // İKİ BİÇİM DE KABUL EDİLİR. Doküman bu uçta fiyatı DÜZ gösteriyor ama sahada
+      // İÇ İÇE geldi (17 Ağu 2026, kullanıcının hesabında ölçüldü) ve tüm fiyatlar
+      // geçersiz sayıldı. Hangi biçim gelirse gelsin okunuyor.
+      salePrice: v.price?.salePrice ?? v.salePrice,
+      listPrice: v.price?.listPrice ?? v.listPrice,
+      quantity: v.stock?.quantity ?? v.quantity,
       approved: true,
     }));
 }
