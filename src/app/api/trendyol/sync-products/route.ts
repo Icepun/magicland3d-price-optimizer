@@ -45,6 +45,20 @@ interface FetchedTrendyol {
   trendyolId: string;
   productMainId: string | null;
   isActive: boolean;
+  /** Trendyol'un bildirdiği komisyon oranı — KESİR (0.21). Gelmezse null. */
+  commissionRate: number | null;
+}
+
+/**
+ * Trendyol komisyonu YÜZDE olarak geliyor (örn. 21.0); bizim hesabımız KESİR kullanıyor
+ * (`salePrice * commissionRate`). Saçma değerler (0, negatif, %100 üstü) yok sayılır —
+ * yanlış bir oran kâr rakamını sessizce bozar.
+ */
+function komisyonKesri(v: number | undefined): number | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const kesir = v > 1 ? v / 100 : v;
+  if (kesir <= 0 || kesir >= 1) return null;
+  return Math.round(kesir * 10000) / 10000;
 }
 
 function mapProduct(p: TrendyolProduct): FetchedTrendyol {
@@ -61,6 +75,7 @@ function mapProduct(p: TrendyolProduct): FetchedTrendyol {
     trendyolId: String(p.id ?? p.productCode ?? ""),
     productMainId: p.productMainId ?? null,
     isActive: !p.archived,
+    commissionRate: komisyonKesri(p.commission),
   };
 }
 
@@ -231,9 +246,9 @@ export async function POST(req: NextRequest) {
 
     // ── add-new: eşleşeni bağla, kalanı UnmatchedListing'e ────────────────────
     async function addNew() {
-      const prods = await prisma.$queryRawUnsafe<Array<{ id: string; barcode: string }>>(
-        `SELECT id, barcode FROM Product`
-      );
+      const prods = await prisma.$queryRawUnsafe<
+        Array<{ id: string; barcode: string; commissionRate: number | null; commissionSource: string | null }>
+      >(`SELECT id, barcode, commissionRate, commissionSource FROM Product`);
       const barcodeToProductId = new Map(prods.map((p) => [p.barcode, p.id]));
       const listed = await prisma.$queryRawUnsafe<Array<{ productId: string }>>(
         `SELECT productId FROM Listing WHERE platform = 'trendyol'`
@@ -351,7 +366,34 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      return { linked, unmatched, removed: staleIds.length };
+      /**
+       * TRENDYOL'UN KENDİ KOMİSYON ORANI (Ürün v2 ile geldi).
+       *
+       * Bugüne kadar komisyon kategori kurallarından TAHMİN ediliyordu; artık Trendyol
+       * ürün bazında bildiriyor. `Product.commissionRate` alanı bunun için açılmış ama
+       * hiçbir yer yazmıyordu — `withProductCommissionRule` onu zaten tüm kategori
+       * kurallarının önüne koyuyor, yani yazmak yeterli.
+       *
+       * ELLE GİRİLEN EZİLMEZ: ilan bazlı override (`Listing.commissionRate`) zaten daha
+       * üstte; ürün bazında da yalnız kaynağı boş ya da 'trendyol' olan satırlar güncellenir.
+       */
+      const komisyonYazma: { sql: string; args: unknown[] }[] = [];
+      const KOMISYON_SQL =
+        `UPDATE Product SET commissionRate = ?, commissionSource = 'trendyol', ` +
+        `commissionUpdatedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`;
+      for (const pr of prods) {
+        if (pr.commissionSource && pr.commissionSource !== "trendyol") continue; // başka kaynak → dokunma
+        const f = fetched.get(pr.barcode);
+        const yeniOran = f?.commissionRate ?? null;
+        if (yeniOran == null) continue;
+        if (pr.commissionRate != null && Math.abs(pr.commissionRate - yeniOran) < 0.0001) continue;
+        komisyonYazma.push({ sql: KOMISYON_SQL, args: [yeniOran, pr.id] });
+      }
+      if (komisyonYazma.length && !(await batchWrite(komisyonYazma))) {
+        for (const w of komisyonYazma) await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
+      }
+
+      return { linked, unmatched, removed: staleIds.length, commission: komisyonYazma.length };
     }
 
     let result: Record<string, number> = {};

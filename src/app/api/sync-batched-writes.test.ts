@@ -58,7 +58,13 @@ describe("senkron rotaları toplu yazıyor", () => {
     const kaynak = readFileSync(join(process.cwd(), yol), "utf8");
 
     it(`${yol} — döngü içinde tek tek UPDATE yok`, () => {
-      const gercek = donguIcindeYazma(kaynak).filter((b) => !b.baslik.includes("of writes"));
+      /**
+       * MEŞRU İSTİSNA: batch reddedilince (embedded replica) devreye giren kurtarma döngüsü.
+       * Biçimi sabit — `for (const w of <dizi>)` + gövdede `w.sql`. Sadece dizi adına bakmak
+       * yetmiyordu; her toplu yazma kendi dizisini adlandırıyor.
+       */
+      const kurtarma = (b: Bulgu) => /^for \(const w of \w+\)/.test(b.baslik) && b.metin.includes("w.sql");
+      const gercek = donguIcindeYazma(kaynak).filter((b) => !kurtarma(b));
       expect(
         gercek.map((b) => `satır ${b.satir}: ${b.metin}`),
         "döngü içinde tek tek yazma var; toplu yazmaya (batchWrite) çevrilmeli",
@@ -90,6 +96,7 @@ describe("dedektör gerçekten çalışıyor", () => {
     const kurtarma = ["for (const w of writes) {", "  await prisma.$executeRawUnsafe(w.sql);", "}"].join("\n");
     const hepsi = donguIcindeYazma(kurtarma);
     expect(hepsi).toHaveLength(1);
-    expect(hepsi.filter((b) => !b.baslik.includes("of writes"))).toHaveLength(0);
+    const meshru = (b: Bulgu) => /^for \(const w of \w+\)/.test(b.baslik) && b.metin.includes("w.sql");
+    expect(hepsi.filter((b) => !meshru(b))).toHaveLength(0);
   });
 });

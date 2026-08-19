@@ -27,6 +27,8 @@ export interface TrendyolProduct {
   dimensionalWeight?: number;
   productMainId?: string;
   images?: Array<{ url?: string }>;
+  /** Trendyol'un bildirdiği komisyon oranı (v2). Biçimi yüzde (örn. 21.0) — kesire ÇEVRİLİR. */
+  commission?: number;
 }
 
 /**
@@ -50,6 +52,7 @@ interface TrendyolV2Variant {
   archived?: boolean;
   blacklisted?: boolean;
   locked?: boolean;
+  commission?: number;
   price?: { salePrice?: number; listPrice?: number; priceSeenByCustomer?: number };
   stock?: { quantity?: number };
 }
@@ -101,6 +104,7 @@ function duzlestirOnayli(c: TrendyolV2Content): TrendyolProduct[] {
       salePrice: v.price?.salePrice,
       listPrice: v.price?.listPrice,
       quantity: v.stock?.quantity,
+      commission: v.commission,
       onSale: v.onSale,
       archived: v.archived,
       blacklisted: v.blacklisted,

@@ -16,6 +16,10 @@ export function clearPricingQueryCache(queryClient: QueryClient): void {
     // detayda eski kârı göstermeye devam ediyordu — yedi akış birden.
     "product",
     "price-history",
+    // KDV oranı da bir fiyatlama girdisi. Detay sayfası kâr önizlemesini bu gövdeden
+    // İSTEMCİDE hesaplıyor; düşürülmezse yeni oran sunucuda geçerli olduğu hâlde ekranda
+    // 10 dakikaya kadar ESKİ oranla kâr gösteriliyordu.
+    "app-settings",
   ]) {
     queryClient.removeQueries({ queryKey: [queryKey] });
   }
