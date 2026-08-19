@@ -1,6 +1,6 @@
 {
   "name": "trendyol-price-optimizer",
-  "version": "0.19.206",
+  "version": "0.19.207",
   "description": "Magicland 3D Hub — Shopify + Trendyol price and net-profit tracker (desktop)",
   "author": "Magicland 3D",
   "private": true,
@@ -54,6 +54,7 @@
     "fflate": "^0.8.3",
     "lucide-react": "^0.469.0",
     "mqtt": "^5.15.1",
+    "ws": "^8.21.0",
     "next": "16.2.4",
     "papaparse": "^5.4.1",
     "react": "19.2.4",

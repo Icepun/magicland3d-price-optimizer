@@ -26,6 +26,8 @@ const nextConfig: NextConfig = {
     "mqtt",
     // basic-ftp (Bambu SD'ye 3MF yükleme) — net/tls; webpack bundle etmesin.
     "basic-ftp",
+    // ws (Moonraker kalıcı bağlantısı) — net/tls + isteğe bağlı native eklentiler içerir.
+    "ws",
   ],
 };
 

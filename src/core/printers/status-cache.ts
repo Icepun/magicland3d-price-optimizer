@@ -20,6 +20,8 @@ import {
   fetchMoonrakerExtras, emptyMoonrakerExtras,
   type MoonrakerStatus, type MoonrakerMeta, type MoonrakerExtras,
 } from "./moonraker";
+import { parseStatus } from "./moonraker";
+import { wsBaslat, wsDurumAl } from "./moonraker-ws";
 import { mergeMoonrakerExtras } from "./extras-merge";
 import { fileMatchKey, deepFileMatchKey } from "./file-match";
 import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } from "./bambu";
@@ -126,6 +128,25 @@ async function withCache<T>(
 }
 
 export function getMoonrakerStatusCached(host: string, port: number): Promise<MoonrakerStatus> {
+  /**
+   * HIZLI YOL — KALICI BAĞLANTI. Açıksa ve akış tazeyse durum zaten elimizde: sıfır HTTP
+   * isteği, sıfır TCP kurulumu. Kullanıcının Fluidd'de sorunsuz çalışmasının sebebi bu;
+   * bizdeki kopmaların büyük kısmı her turda yeni bağlantı açmaktan geliyordu (Neptune 4
+   * Plus'ta bağlantı kurmanın %3,3'ü SYN kaybına düşüp sabit +1000 ms ekliyor).
+   *
+   * Bağlantı yoksa/bayatsa `wsDurumAl` null döner ve aşağıdaki HTTP yolu aynen çalışır —
+   * yani en kötü ihtimalde eski davranış korunur.
+   */
+  wsBaslat(host, port);
+  const canli = wsDurumAl(host, port);
+  if (canli) {
+    const durum = parseStatus(canli);
+    // Önbelleği de besle: HTTP yoluna düşülen anlarda "son bilinen durum" taze kalsın.
+    statusCache.set(moonrakerKey(host, port), {
+      at: Date.now(), value: durum, offline: !durum.online, suspect: false, fails: 0,
+    });
+    return Promise.resolve(durum);
+  }
   return withCache(moonrakerKey(host, port), () => fetchMoonrakerStatus(host, port), (v) => !v.online);
 }
 

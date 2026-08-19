@@ -401,7 +401,12 @@ function exceptionText(exc: any): string | null {
   return raw;
 }
 
-function parseStatus(status: any): MoonrakerStatus {
+/**
+ * Ham Moonraker `status` gövdesini karta çevirir.
+ * DIŞA AÇIK: kalıcı WebSocket bağlantısı da aynı gövdeyi getiriyor ve aynı yorumdan geçmeli —
+ * iki ayrı ayrıştırıcı olsaydı iki yol farklı sonuç üretirdi.
+ */
+export function parseStatus(status: any): MoonrakerStatus {
   const ps = status.print_stats ?? {};
   const vs = status.virtual_sdcard ?? {};
   const ds = status.display_status ?? {};
