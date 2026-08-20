@@ -17,7 +17,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await ensureRuntimeSchema();
     const { id } = await params; // ProductModelFile id
-    const mf = await prisma.productModelFile.findUnique({ where: { id } });
+    // Yalnız gereken kolonlar: `thumbnail` 12-33 KB'lık bir data URL ve bu uçta hiç
+    // kullanılmıyor — her renk ekranı açılışında boşuna taşınıyordu.
+    const mf = await prisma.productModelFile.findUnique({
+      where: { id },
+      select: { id: true, colorsJson: true, originalName: true, r2Key: true, storedPath: true, fileType: true },
+    });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
 
     // Hızlı yol: yüklemede/ilk açılışta saklanan sonuç.

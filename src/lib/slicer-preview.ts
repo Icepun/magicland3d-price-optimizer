@@ -61,7 +61,7 @@ export function gcodeOnizlemesi(bas: string): GomuluOnizleme | null {
 const EOCD_IMZA = 0x06054b50;
 const MERKEZ_IMZA = 0x02014b50;
 
-interface ZipGirdi {
+export interface ZipGirdi {
   ad: string;
   yontem: number;
   sikisikBoyut: number;
@@ -110,18 +110,81 @@ function pngOlcu(png: Buffer): { genislik: number; yukseklik: number } | null {
  * Dosyanın TAMAMI okunmaz: önce son 64 KB (zip dizini nerede), sonra dizin, sonra yalnız
  * ilgili girdi. 65 MB'lık bir 3MF'te bile birkaç yüz KB okunur.
  */
-export async function zip3mfOnizlemesi(
-  oku: AralikOkuyucu,
-  toplamBoyut: number
-): Promise<GomuluOnizleme | null> {
+/**
+ * Zip'in İÇİNDEKİLER LİSTESİ — dosyanın tamamı okunmadan.
+ *
+ * Önce son 64 KB (dizin nerede), sonra yalnız dizin okunur. 140 MB'lık bir dosyada bile
+ * birkaç yüz KB. Adlar bilinince "içinde gcode var mı", "hangi plaka" gibi soruların yanıtı
+ * hiçbir şey açılmadan verilebilir.
+ */
+export async function zipDizini(oku: AralikOkuyucu, toplamBoyut: number): Promise<ZipGirdi[] | null> {
   if (toplamBoyut <= 0) return null;
   const kuyrukBoy = Math.min(65_536, toplamBoyut);
   const kuyruk = await oku(toplamBoyut - kuyrukBoy, toplamBoyut - 1);
   const eocd = eocdBul(kuyruk);
   if (!eocd || eocd.merkezBoyut <= 0) return null;
-
   const merkez = await oku(eocd.merkezOfset, eocd.merkezOfset + eocd.merkezBoyut - 1);
-  const girdiler = merkeziAyristir(merkez);
+  return merkeziAyristir(merkez);
+}
+
+/**
+ * TEK bir zip girdisinin içeriği (yalnız o girdinin baytları okunur).
+ *
+ * `enFazlaCikti` verilirse akış hâlinde çözülür ve o kadar bayt üretilince kesilir — dev
+ * gcode'un başlığını okumak için tamamını çözmek gerekmiyor.
+ */
+export async function zipGirdiVerisi(
+  oku: AralikOkuyucu,
+  g: ZipGirdi,
+  enFazlaCikti?: number
+): Promise<Buffer | null> {
+  // Yerel başlık değişken uzunlukta → başlığı okuyup gerçek veri başlangıcını bul.
+  const yerelBas = await oku(g.yerelOfset, g.yerelOfset + 29);
+  if (yerelBas.length < 30) return null;
+  const adUz = yerelBas.readUInt16LE(26);
+  const ekUz = yerelBas.readUInt16LE(28);
+  const veriBas = g.yerelOfset + 30 + adUz + ekUz;
+
+  // Çıktı sınırı varsa, o kadarını üretecek kadar sıkışık bayt yeter (gcode ~5x sıkışır).
+  const okunacak =
+    enFazlaCikti != null
+      ? Math.min(g.sikisikBoyut, Math.max(64 * 1024, Math.ceil(enFazlaCikti / 3)))
+      : g.sikisikBoyut;
+  const ham = await oku(veriBas, veriBas + okunacak - 1);
+
+  if (g.yontem === 0) return enFazlaCikti != null ? ham.subarray(0, enFazlaCikti) : ham;
+  if (g.yontem !== 8) return null;
+  if (enFazlaCikti == null) return zlib.inflateRawSync(ham);
+
+  // Kısmi veri: akış çözücü sonunu göremeyince hata verir, elde ettiğimiz kadarı işimizi görür.
+  return await new Promise<Buffer | null>((coz) => {
+    const parcalar: Buffer[] = [];
+    let uzunluk = 0;
+    let bitti = false;
+    const akis = zlib.createInflateRaw();
+    const kapat = () => {
+      if (bitti) return;
+      bitti = true;
+      try { akis.destroy(); } catch { /* zaten kapalı */ }
+      coz(parcalar.length ? Buffer.concat(parcalar).subarray(0, enFazlaCikti) : null);
+    };
+    akis.on("data", (p: Buffer) => {
+      parcalar.push(p);
+      uzunluk += p.length;
+      if (uzunluk >= enFazlaCikti) kapat();
+    });
+    akis.on("end", kapat);
+    akis.on("error", kapat); // kırpılmış akışta beklenen
+    akis.end(ham);
+  });
+}
+
+export async function zip3mfOnizlemesi(
+  oku: AralikOkuyucu,
+  toplamBoyut: number
+): Promise<GomuluOnizleme | null> {
+  const girdiler = await zipDizini(oku, toplamBoyut);
+  if (!girdiler) return null;
 
   /**
    * HANGİ PLAKA? Dosyada projedeki BÜTÜN plakaların görseli duruyor, ama basılacak gcode
@@ -143,18 +206,8 @@ export async function zip3mfOnizlemesi(
     adaylar[0];
   if (!secilen) return null;
 
-  // Yerel başlık değişken uzunlukta → başlığı okuyup gerçek veri başlangıcını bul.
-  const yerelBas = await oku(secilen.yerelOfset, secilen.yerelOfset + 29);
-  if (yerelBas.length < 30) return null;
-  const adUz = yerelBas.readUInt16LE(26);
-  const ekUz = yerelBas.readUInt16LE(28);
-  const veriBas = secilen.yerelOfset + 30 + adUz + ekUz;
-  const ham = await oku(veriBas, veriBas + secilen.sikisikBoyut - 1);
-
-  let png: Buffer;
-  if (secilen.yontem === 0) png = ham; // saklanmış
-  else if (secilen.yontem === 8) png = zlib.inflateRawSync(ham); // deflate
-  else return null;
+  const png = await zipGirdiVerisi(oku, secilen);
+  if (!png) return null;
 
   const olcu = pngOlcu(png);
   if (!olcu) return null;

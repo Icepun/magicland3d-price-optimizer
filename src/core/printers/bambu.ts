@@ -528,6 +528,33 @@ export async function bambuSetSpeedLevel(
   throw new Error("Hız komutu gönderildi ama yazıcı yeni değeri uygulamadı.");
 }
 
+/**
+ * Yazıcının bir SONRAKİ raporunu bekler (en fazla `tavanMs`).
+ *
+ * Baskı doğrulaması eskiden her turda körlemesine 1600 ms uyuyordu; A1 saniyede bir rapor
+ * bastığı için bu, hiçbir işe yaramadan garanti gecikme demekti. Şimdi rapor gelir gelmez
+ * devam ediliyor. Damga karşılaştırması korunuyor: komuttan ÖNCEKİ (bayat) durum okunursa
+ * döngü "yazıcı reddetti" diye yanlış alarm veriyordu.
+ *
+ * Bağlantı yoksa/rapor gelmezse tavana kadar bekler — yani en kötü ihtimalde eski davranış.
+ */
+export async function bambuRaporBekle(
+  host: string,
+  accessCode: string,
+  serial: string,
+  sonrasi: number,
+  tavanMs: number,
+): Promise<number> {
+  const conn = ensureConn(host, accessCode, serial);
+  const bitis = Date.now() + tavanMs;
+  while (Date.now() < bitis) {
+    if (conn.lastMessageAt > sonrasi) return conn.lastMessageAt;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  return conn.lastMessageAt;
+}
+
+
 export interface BambuSlot { slot: number; color: string; type: string; remain: number | null; empty: boolean }
 
 function hexFromBambu(c?: unknown): string {
@@ -638,6 +665,7 @@ async function bambuFtpUpload(
   let dataPlain: net.Socket | null = null;
   let data: tls.TLSSocket | null = null;
   let inbuf = "";
+  let ctrlUyandir: (() => boolean) | null = null;
   let ctrlErr: Error | null = null;
   let dataErr: Error | null = null;
   let stage = "connect";
@@ -645,19 +673,32 @@ async function bambuFtpUpload(
   // Kontrol yanıtını oku (FTP final satırı: "NNN <metin>"; çok satırlı yanıtta öncekiler atılır).
   const nextReply = (timeoutMs = 20000): Promise<{ code: number; text: string }> =>
     new Promise((resolve, reject) => {
-      const deadline = Date.now() + timeoutMs;
-      const tick = setInterval(() => {
-        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+      /**
+       * ⚠️ 40 ms'lik yoklama DEĞİL, olay tabanlı. Ölçüldü (20 Ağu 2026): yanıt başına 42-48 ms,
+       * oysa yazıcıya gidiş-dönüş 3-5 ms — aradaki fark tamamen yoklama aralığıydı. Bir yükleme
+       * yedi yanıt bekliyor, yani her baskıda boşa giden ~0,3 sn.
+       */
+      let zamanlayici: ReturnType<typeof setTimeout> | null = null;
+      const bitir = () => {
+        if (zamanlayici) clearTimeout(zamanlayici);
+        ctrlUyandir = null;
+      };
+      const dene = (): boolean => {
+        if (ctrlErr) { bitir(); reject(ctrlErr); return true; }
         const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
-        if (m) {
-          clearInterval(tick);
-          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
-          resolve({ code: parseInt(m[1], 10), text: m[2] });
-        } else if (Date.now() > deadline) {
-          clearInterval(tick);
-          reject(new Error("kontrol yanıtı zaman aşımı"));
-        }
-      }, 40);
+        if (!m) return false;
+        bitir();
+        inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+        resolve({ code: parseInt(m[1], 10), text: m[2] });
+        return true;
+      };
+      // Veri zaten tampondaysa beklemeden dön; değilse soket olayı uyandırsın.
+      if (dene()) return;
+      zamanlayici = setTimeout(() => {
+        bitir();
+        reject(new Error("kontrol yanıtı zaman aşımı"));
+      }, timeoutMs);
+      ctrlUyandir = dene;
     });
 
   const cmd = async (line: string, label?: string): Promise<{ code: number; text: string }> => {
@@ -671,7 +712,7 @@ async function bambuFtpUpload(
   try {
     ctrl = tls.connect({ ...baseTls, host, port: 990 });
     ctrl.on("error", (e: Error) => { ctrlErr = e; });
-    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); ctrlUyandir?.(); });
     await onceEvt(ctrl, "secureConnect", 15000, "kontrol TLS");
     ctrl.setTimeout(0);
     await nextReply(); // 220 karşılama
@@ -706,12 +747,20 @@ async function bambuFtpUpload(
     trace.push(`STOR»${r150.code}`);
     if (r150.code >= 400) throw new Error(`STOR reddedildi (${r150.code})`);
     stage = "upload";
-    const CHUNK = 256 * 1024;
+    /**
+     * Ölçüldü: Bambu'nun FTP'si 183 KB/sn veriyor — yazıcının kendi sınırı, hızlandıramayız.
+     * Ama 256 KB'lık parçalarla ilerleme çubuğu 1,6 MB'lık dosyada yalnız 7 kez sıçrıyordu.
+     * Küçük parça hızı değiştirmez, çubuğu akıtır. Yüzde DEĞİŞMEDİKÇE olay gönderilmez —
+     * dev dosyada binlerce gereksiz mesaj birikmesin.
+     */
+    const CHUNK = 32 * 1024;
+    let sonPct = -1;
     for (let off = 0; off < total; off += CHUNK) {
       if (dataErr) throw dataErr;
       const chunk = fileBuf.subarray(off, Math.min(off + CHUNK, total));
       if (!data.write(chunk)) await onceEvt(data, "drain", 30000, "veri akış");
-      onProgress?.(Math.min(99, Math.round(((off + chunk.length) / total) * 100)));
+      const pct = Math.min(99, Math.round(((off + chunk.length) / total) * 100));
+      if (pct !== sonPct) { sonPct = pct; onProgress?.(pct); }
     }
     data.end();
     await onceEvt(data, "close", 30000, "veri kapanış");
@@ -756,23 +805,37 @@ async function bambuFtpQuery<T>(
   let dataPlain: net.Socket | null = null;
   let data: tls.TLSSocket | null = null;
   let inbuf = "";
+  let ctrlUyandir: (() => boolean) | null = null;
   let ctrlErr: Error | null = null;
 
   const nextReply = (timeoutMs = 15000): Promise<{ code: number; text: string }> =>
     new Promise((resolve, reject) => {
-      const deadline = Date.now() + timeoutMs;
-      const tick = setInterval(() => {
-        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+      /**
+       * ⚠️ 40 ms'lik yoklama DEĞİL, olay tabanlı. Ölçüldü (20 Ağu 2026): yanıt başına 42-48 ms,
+       * oysa yazıcıya gidiş-dönüş 3-5 ms — aradaki fark tamamen yoklama aralığıydı. Bir yükleme
+       * yedi yanıt bekliyor, yani her baskıda boşa giden ~0,3 sn.
+       */
+      let zamanlayici: ReturnType<typeof setTimeout> | null = null;
+      const bitir = () => {
+        if (zamanlayici) clearTimeout(zamanlayici);
+        ctrlUyandir = null;
+      };
+      const dene = (): boolean => {
+        if (ctrlErr) { bitir(); reject(ctrlErr); return true; }
         const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
-        if (m) {
-          clearInterval(tick);
-          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
-          resolve({ code: parseInt(m[1], 10), text: m[2] });
-        } else if (Date.now() > deadline) {
-          clearInterval(tick);
-          reject(new Error("FTP yanıtı zaman aşımı"));
-        }
-      }, 40);
+        if (!m) return false;
+        bitir();
+        inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+        resolve({ code: parseInt(m[1], 10), text: m[2] });
+        return true;
+      };
+      // Veri zaten tampondaysa beklemeden dön; değilse soket olayı uyandırsın.
+      if (dene()) return;
+      zamanlayici = setTimeout(() => {
+        bitir();
+        reject(new Error("FTP yanıtı zaman aşımı"));
+      }, timeoutMs);
+      ctrlUyandir = dene;
     });
 
   const cmd = async (line: string): Promise<{ code: number; text: string }> => {
@@ -810,7 +873,7 @@ async function bambuFtpQuery<T>(
   try {
     ctrl = tls.connect({ ...baseTls, host, port: 990 });
     ctrl.on("error", (e: Error) => { ctrlErr = e; });
-    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+    ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); ctrlUyandir?.(); });
     await onceEvt(ctrl, "secureConnect", 10000, "kontrol TLS");
     ctrl.setTimeout(0);
     await nextReply(); // 220
@@ -1102,23 +1165,40 @@ export async function bambuStreamTimelapse(
     rejectUnauthorized: false, minVersion: "TLSv1.2", maxVersion: "TLSv1.2", servername: host,
   };
   let inbuf = "";
+  let ctrlUyandir: (() => boolean) | null = null;
   let ctrlErr: Error | null = null;
   const ctrl = tls.connect({ ...baseTls, host, port: 990 });
   ctrl.on("error", (e: Error) => { ctrlErr = e; });
-  ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); });
+  ctrl.on("data", (d: Buffer) => { inbuf += d.toString("latin1"); ctrlUyandir?.(); });
 
   const nextReply = (timeoutMs = 15000): Promise<{ code: number; text: string }> =>
     new Promise((resolve, reject) => {
-      const deadline = Date.now() + timeoutMs;
-      const tick = setInterval(() => {
-        if (ctrlErr) { clearInterval(tick); reject(ctrlErr); return; }
+      /**
+       * ⚠️ 40 ms'lik yoklama DEĞİL, olay tabanlı. Ölçüldü (20 Ağu 2026): yanıt başına 42-48 ms,
+       * oysa yazıcıya gidiş-dönüş 3-5 ms — aradaki fark tamamen yoklama aralığıydı. Bir yükleme
+       * yedi yanıt bekliyor, yani her baskıda boşa giden ~0,3 sn.
+       */
+      let zamanlayici: ReturnType<typeof setTimeout> | null = null;
+      const bitir = () => {
+        if (zamanlayici) clearTimeout(zamanlayici);
+        ctrlUyandir = null;
+      };
+      const dene = (): boolean => {
+        if (ctrlErr) { bitir(); reject(ctrlErr); return true; }
         const m = inbuf.match(/^(\d{3}) ([^\r\n]*)\r?\n/m);
-        if (m) {
-          clearInterval(tick);
-          inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
-          resolve({ code: parseInt(m[1], 10), text: m[2] });
-        } else if (Date.now() > deadline) { clearInterval(tick); reject(new Error("FTP yanıtı zaman aşımı")); }
-      }, 40);
+        if (!m) return false;
+        bitir();
+        inbuf = inbuf.slice(inbuf.indexOf(m[0]) + m[0].length);
+        resolve({ code: parseInt(m[1], 10), text: m[2] });
+        return true;
+      };
+      // Veri zaten tampondaysa beklemeden dön; değilse soket olayı uyandırsın.
+      if (dene()) return;
+      zamanlayici = setTimeout(() => {
+        bitir();
+        reject(new Error("FTP yanıtı zaman aşımı"));
+      }, timeoutMs);
+      ctrlUyandir = dene;
     });
   const cmd = async (line: string) => { ctrl.write(line + "\r\n"); return nextReply(); };
 

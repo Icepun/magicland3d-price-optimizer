@@ -439,7 +439,10 @@ async function tick(): Promise<void> {
     }
     // TÜM yazıcılar devre dışıyken de devam et — komut kuyruğu yine işlenmeli (yoksa pending
     // komutlar ne uygulanır ne TTL ile düşer; sonsuza dek "bekliyor" kalırdı).
-    const configs = (await prisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
+    // ARKA PLAN ŞERİDİ: relay 10 saniyede bir dönüyor. Ana istemci uzak-HTTP libSQL'de
+    // TEK mutex kullandığı için bu turlar, kullanıcının açtığı sayfanın sorgularının
+    // önüne geçiyordu. Relay'in birkaç yüz ms geç kalması kimseyi etkilemez.
+    const configs = (await remotePrisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
 
     // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için). Anahtar NORMALİZE (fileMatchKey):
     // print rotası eşleştirmeyi uzantısız kaydediyor, yazıcı ham adla raporluyor — ham anahtarla
@@ -448,7 +451,7 @@ async function tick(): Promise<void> {
     const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
     const pids = [...new Set(matches.map((m) => m.productId))];
     const products = pids.length
-      ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
+      ? await remotePrisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
       : [];
     const productMap = new Map(products.map((p) => [p.id, { name: p.name, imageUrl: p.imageUrl }]));
 

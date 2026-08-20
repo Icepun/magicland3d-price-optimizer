@@ -8,7 +8,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
 import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize } from "@/core/printers/moonraker";
-import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsSlots, mapBambuState } from "@/core/printers/bambu";
+import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsSlots, mapBambuState, bambuRaporBekle } from "@/core/printers/bambu";
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
@@ -285,8 +285,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           let confirmed = !isBambu; // Moonraker: upload+start senkron zaten doğrulandı
           if (isBambu) {
             const deadline = Date.now() + 25000;
+            // Komuttan ÖNCEKİ son rapor damgası: doğrulama yalnız bundan sonrakilere bakar.
+            let sonRapor = Date.now();
             while (Date.now() < deadline) {
-              await new Promise((r) => setTimeout(r, 1600));
+              // Sabit 1600 ms uyku yerine yazıcının bir sonraki raporunu bekle — A1 saniyede
+              // bir rapor bastığı için tipik bekleme 1,6 sn'den ~0,3-1,0 sn'ye iniyor.
+              sonRapor = await bambuRaporBekle(printer.host, printer.accessCode!, printer.serial!, sonRapor, 1600);
               const s = await getBambuStatus(printer.host, printer.accessCode!, printer.serial!);
               if (s.printError && s.printError !== 0) {
                 const hex = `0x${(s.printError >>> 0).toString(16).toUpperCase()}`;

@@ -6,9 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
-import { readModelColors, readModelMeta, is3mfSliced } from "@/core/printers/model-colors";
-import { resolveModelFileLocal } from "@/lib/model-files";
-import { getR2Config, isValidModelKey, headObjectSize } from "@/lib/r2";
+import { readModelBundle, readModelBundleAralikli } from "@/core/printers/model-colors";
+import { printerCfgCached } from "@/core/printers/config-cache";
+import { getR2Config, isValidModelKey, headObjectSize, getObjectRange } from "@/lib/r2";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
     let sizeBytes = 0;
     let fileType = "gcode";
     let readPath = "";
-    let cleanup: () => void = () => {};
+    let paket: Awaited<ReturnType<typeof readModelBundleAralikli>> | null = null;
 
     if (ct.includes("application/json")) {
       // ── R2 CONFIRM ──
@@ -58,15 +58,26 @@ export async function POST(req: NextRequest) {
         if (realSize == null) return NextResponse.json({ error: "Dosya buluta ulaşmamış — yüklemeyi tekrar dene" }, { status: 400 });
         sizeBytes = realSize;
       }
-      const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
+      const printer = await printerCfgCached(printerConfigId);
       if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
       fileType = (originalName.split(".").pop() || "gcode").toLowerCase();
       if (!ALLOWED.includes(fileType)) {
         return NextResponse.json({ error: `Desteklenmeyen tür: .${fileType} (gcode / 3mf)` }, { status: 400 });
       }
-      const local = await resolveModelFileLocal({ r2Key, storedPath: "", fileType });
-      readPath = local.path;
-      cleanup = local.cleanup;
+      /**
+       * ⚠️ DOSYA GERİ İNDİRİLMİYOR. Tarayıcı dosyayı buluta yeni yükledi; sunucunun aynı
+       * baytları geri çekmesi 25-140 MB'lık gcode'da kullanıcının beklediği sürenin
+       * neredeyse tamamıydı. Gereken tek şey gcode'un baş/son kısmı ya da 3MF'in dizini +
+       * iki küçük config: birkaç yüz KB.
+       */
+      const cfgAralik = r2cfgCheck ?? (await getR2Config());
+      if (!cfgAralik) return NextResponse.json({ error: "Bulut depolama ayarlı değil" }, { status: 400 });
+      const anahtar = r2Key;
+      paket = await readModelBundleAralikli(
+        (a, b) => getObjectRange(anahtar, cfgAralik, a, b),
+        sizeBytes,
+        fileType,
+      );
     } else {
       // ── YEREL (R2 kapalı / fallback) ──
       const form = await req.formData();
@@ -74,7 +85,7 @@ export async function POST(req: NextRequest) {
       printerConfigId = String(form.get("printerConfigId") || "");
       if (!(file instanceof File)) return NextResponse.json({ error: "Dosya gerekli" }, { status: 400 });
       if (!printerConfigId) return NextResponse.json({ error: "Yazıcı seçilmedi" }, { status: 400 });
-      const printer = await prisma.printerConfig.findUnique({ where: { id: printerConfigId } });
+      const printer = await printerCfgCached(printerConfigId);
       if (!printer) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
       fileType = (file.name.split(".").pop() || "gcode").toLowerCase();
       if (!ALLOWED.includes(fileType)) {
@@ -86,15 +97,16 @@ export async function POST(req: NextRequest) {
       readPath = storedPath;
       originalName = file.name;
       sizeBytes = buf.length;
+      paket = readModelBundle(readPath);
     }
 
-    try {
-      const meta = readModelMeta(readPath);
-      const colors = readModelColors(readPath);
+    {
       // Meta yüklemede zaten parse ediliyordu ama SAKLANMIYORDU → renk-eşleme/baskı dosyayı
       // (R2'den indirip) yeniden açıyordu. Artık bir kez parse edilir, kalıcı olur.
-      let sliced: boolean | null = null;
-      try { sliced = fileType === "3mf" ? is3mfSliced(readPath) : true; } catch { /* lazy yol devrede */ }
+      // ⚠️ TEK OKUMA: bu üç bilgi eskiden dosyayı üç kez açıyordu (ölçüm: 25 MB'ta 1030 ms
+      // boyunca sunucunun olay döngüsü kapalı).
+      const { meta, colors, sliced: slicedOku } = paket;
+      const sliced: boolean | null = fileType === "3mf" ? slicedOku : true;
       const saved = await prisma.productModelFile.create({
         data: {
           productId: CUSTOM_PID,
@@ -123,8 +135,6 @@ export async function POST(req: NextRequest) {
         thumbnail: meta.thumbnail,
         colorCount: colors.colors.length,
       });
-    } finally {
-      cleanup();
     }
   } catch (error) {
     return jsonError(error);

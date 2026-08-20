@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { printerCfgCached } from "@/core/printers/config-cache";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { fetchMoonrakerObjects } from "@/core/printers/moonraker";
@@ -17,10 +17,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const cfg = await prisma.printerConfig.findUnique({
-      where: { id },
-      select: { host: true, port: true, type: true, brand: true },
-    });
+    // Panel bu ucu 5 sn'de bir çağırıyor; yapılandırma neredeyse hiç değişmiyor →
+    // kısa ömürlü önbellek (ayar kaydedilince temizlenir).
+    const cfg = await printerCfgCached<{ host: string; port: number; type: string; brand: string | null }>(id);
     if (!cfg?.host) return NextResponse.json({ parts: [] });
     // Parça iptali YALNIZ Klipper/Moonraker yazıcılarda var; Bambu kapsam dışı.
     if (cfg.type === "bambu" || cfg.brand === "bambu") return NextResponse.json({ parts: [] });

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { printerCfgCached } from "@/core/printers/config-cache";
+import { remotePrisma as arkaPrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { fetchMoonrakerSlots, fetchMoonrakerSlotDebug } from "@/core/printers/moonraker";
@@ -21,11 +22,20 @@ function padSlots(read: Slot[], ensure: number): Slot[] {
   return out;
 }
 
-/** Son-bilinen slotlar (yazıcı çevrimdışıyken gösterilir). CANLI başarılı okumada yazılır. */
+/**
+ * Son-bilinen slotlar (yazıcı çevrimdışıyken gösterilir). CANLI başarılı okumada yazılır.
+ *
+ * ARKA PLAN ŞERİDİ: bu uç panel açıkken 5 saniyede bir çağrılıyor. Ana Prisma istemcisi
+ * uzak-HTTP libSQL'de TEK bir mutex kullanıyor — yani buradan atılan her sorgu, kullanıcının
+ * açmaya çalıştığı sayfanın sorgularının önüne geçiyordu. Snapshot gecikse de kimse fark etmez.
+ */
+const sonYazilan = new Map<string, string>();
+
 async function readSlotSnapshot(id: string): Promise<Slot[] | null> {
   try {
-    const row = await prisma.appSetting.findUnique({ where: { key: `slotSnapshot:${id}` } });
+    const row = await arkaPrisma.appSetting.findUnique({ where: { key: `slotSnapshot:${id}` } });
     if (!row?.value) return null;
+    sonYazilan.set(id, row.value);
     const parsed = JSON.parse(row.value);
     return Array.isArray(parsed) ? (parsed as Slot[]) : null;
   } catch {
@@ -36,13 +46,17 @@ async function readSlotSnapshot(id: string): Promise<Slot[] | null> {
 function writeSlotSnapshot(id: string, slots: Slot[]): void {
   if (!slots.length) return; // boş okumayı snapshot'a yazma (son iyi renkleri koru)
   const value = JSON.stringify(slots);
-  void prisma.appSetting
+  // Renkler değişmediyse yazma. Değişmeyen veriyi 5 saniyede bir yazmak, tek yazma şeridini
+  // boşuna meşgul ediyordu.
+  if (sonYazilan.get(id) === value) return;
+  sonYazilan.set(id, value);
+  void arkaPrisma.appSetting
     .upsert({
       where: { key: `slotSnapshot:${id}` },
       create: { key: `slotSnapshot:${id}`, value },
       update: { value },
     })
-    .catch(() => {});
+    .catch(() => { sonYazilan.delete(id); }); // yazılamadıysa bir dahakine tekrar denensin
 }
 
 /** Yazıcının yüklü slotları — HER ZAMAN CANLI okunur (Bambu AMS / Snapmaker CFS).
@@ -53,7 +67,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const cfg = await prisma.printerConfig.findUnique({ where: { id } });
+    // Panel bu ucu 5 sn'de bir çağırıyor; yapılandırma neredeyse hiç değişmiyor →
+    // kısa ömürlü önbellek (ayar kaydedilince temizlenir).
+    const cfg = await printerCfgCached<NonNullable<Awaited<ReturnType<typeof arkaPrisma.printerConfig.findUnique>>>>(id);
     if (!cfg) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
 
     if (cfg.type === "bambu") {

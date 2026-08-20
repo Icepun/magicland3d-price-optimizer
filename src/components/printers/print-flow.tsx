@@ -165,7 +165,9 @@ export function SlotStep({
     // Çevrimiçi: 5sn canlı yenileme (makinede renk değişince çipler güncellenir).
     // Çevrimdışı (snapshot yanıtı): yazıcıyı boşuna hızlı yoklama — 30sn'de bir dene ki
     // fişi geri takınca dialog açıkken kendiliğinden toparlansın (kurtarma kaçağı yok).
-    refetchInterval: (q) => (q.state.data?.fromSnapshot ? 30_000 : 5000),
+    // Kullanıcı renk seçerken makinedeki filament değişmiyor; 5 sn'lik yoklama hem
+    // yazıcıyı hem veritabanı şeridini boşuna meşgul ediyordu.
+    refetchInterval: (q) => (q.state.data?.fromSnapshot ? 30_000 : 15_000),
   });
   const colorsQ = useQuery<ColorInfo>({
     queryKey: ["model-colors", model.fileId],

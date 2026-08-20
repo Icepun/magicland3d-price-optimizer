@@ -18,6 +18,7 @@
  */
 import fs from "node:fs";
 import { unzipSync, strFromU8 } from "fflate";
+import { zipDizini, zipGirdiVerisi, type AralikOkuyucu } from "@/lib/slicer-preview";
 
 export interface ModelColor {
   index: number; // dilimleyicideki 0-tabanlı filament sırası (T-index)
@@ -89,16 +90,63 @@ export function parseGcodeText(text: string): ModelColor[] {
   return out;
 }
 
-function parse3mf(buf: Buffer): { colors: ModelColor[]; source: ColorSource } {
-  let files: Record<string, Uint8Array>;
+
+/**
+ * 3MF'i açar ama GCODE'U AÇMAZ.
+ *
+ * Eski filtre yorumunda "dev plate gcode'unu açma" yazıyordu, oysa regex tam tersini yapıyor
+ * ve 1,6 MB'lık bir zip'ten 7,5 MB gcode şişiriyordu — hem de dosya başına üç kez. Oysa gcode
+ * yalnız SON ÇARE: renk/gramaj `.config` dosyalarından çıkmazsa bakılıyor. Artık `gcodeMetni()`
+ * çağrılırsa açılır; tipik Bambu/Orca dosyasında hiç çağrılmaz.
+ *
+ * `adlar` her girdinin adını taşır (filtre her girdi için çağrılır) — plaka numarasını bulmak
+ * ve "dilimlenmiş mi" sorusunu yanıtlamak için içeriğe gerek yok, isim yeter.
+ */
+interface Acilmis {
+  files: Record<string, Uint8Array>;
+  adlar: string[];
+  gcodeMetni: () => string | null;
+}
+
+function ac3mf(buf: Buffer): Acilmis {
+  const adlar: string[] = [];
+  let files: Record<string, Uint8Array> = {};
   try {
     files = unzipSync(new Uint8Array(buf), {
-      // Sadece küçük metadata dosyalarını aç (dev plate gcode'unu açma → hız/bellek)
-      filter: (f) => /\.config$/i.test(f.name) || /Metadata\/.*\.gcode$/i.test(f.name),
+      filter: (f) => {
+        adlar.push(f.name);
+        return /\.config$/i.test(f.name) || /Metadata\/.*\.png$/i.test(f.name);
+      },
     });
-  } catch {
-    return { colors: [], source: "none" };
-  }
+  } catch { /* bozuk zip → boş küme, çağıranlar null döner */ }
+
+  let gcodeCozuldu = false;
+  let gcodeMetin: string | null = null;
+  const gcodeMetni = (): string | null => {
+    if (gcodeCozuldu) return gcodeMetin;
+    gcodeCozuldu = true;
+    const gad =
+      adlar.find((k) => /Metadata\/.*plate.*\.gcode$/i.test(k)) ||
+      adlar.find((k) => /\.gcode$/i.test(k));
+    if (!gad) return null;
+    try {
+      const g = unzipSync(new Uint8Array(buf), { filter: (f) => f.name === gad });
+      // Başlık ve altbilgi yeter; tamamını metne çevirmek büyük dosyada boşuna yük.
+      if (g[gad]) gcodeMetin = strFromU8(g[gad]).slice(0, 400_000);
+    } catch { /* açılamadı → null */ }
+    return gcodeMetin;
+  };
+
+  return { files, adlar, gcodeMetni };
+}
+
+/** Zip içinde gcode var mı? (içerik açılmaz) */
+function acikDilimli(a: Acilmis): boolean {
+  return a.adlar.some((k) => /Metadata\/.*plate.*\.gcode$/i.test(k) || /\.gcode$/i.test(k));
+}
+
+function parse3mfAcik(a: Acilmis): { colors: ModelColor[]; source: ColorSource } {
+  const files = a.files;
   const readByRx = (rx: RegExp): string | null => {
     const key = Object.keys(files).find((k) => rx.test(k));
     return key ? strFromU8(files[key]) : null;
@@ -142,12 +190,10 @@ function parse3mf(buf: Buffer): { colors: ModelColor[]; source: ColorSource } {
     } catch { /* yoksay */ }
   }
 
-  // 3) gömülü plate gcode başlığı
-  const gkey =
-    Object.keys(files).find((k) => /Metadata\/.*plate.*\.gcode$/i.test(k)) ||
-    Object.keys(files).find((k) => /\.gcode$/i.test(k));
-  if (gkey) {
-    const colors = parseGcodeText(strFromU8(files[gkey]).slice(0, 400_000));
+  // 3) gömülü plate gcode başlığı — BURADA açılır, daha önce değil
+  const gmetin = a.gcodeMetni();
+  if (gmetin) {
+    const colors = parseGcodeText(gmetin);
     if (colors.length) return { colors, source: "3mf-gcode" };
   }
 
@@ -175,13 +221,173 @@ function readHeadTail(filePath: string, n: number): string {
 }
 
 /** Bir model dosyasının (gcode/3mf) kullandığı filament renklerini oku. */
+/**
+ * TEK OKUMA, TEK AÇMA — yükleme yolunda aynı dosya ÜÇ KEZ okunup ÜÇ KEZ açılıyordu.
+ *
+ * Ölçüldü (20 Ağu 2026): 1,9 MB'ta 104 ms, 25 MB'ta 1030 ms — ve bu süre boyunca Next
+ * sunucusunun olay döngüsü tamamen duruyor, yani o an akan yazıcı yoklaması da yükleme
+ * ilerlemesi de donuyor. Üç iş de aynı tampondan çözülebiliyor.
+ */
+export function readModelBundle(filePath: string): {
+  colors: ModelColorInfo;
+  meta: ModelMeta;
+  sliced: boolean | null;
+} {
+  const lower = filePath.toLowerCase();
+  const is3mf = lower.endsWith(".3mf");
+  if (!is3mf) {
+    // gcode yolunda zaten yalnız baş/kuyruk okunuyor — dosya belleğe alınmıyor.
+    return { colors: readModelColors(filePath), meta: readModelMeta(filePath), sliced: true };
+  }
+  let buf: Buffer;
+  try {
+    buf = fs.readFileSync(filePath);
+  } catch {
+    return {
+      colors: { colors: [], source: "none", fileKind: "3mf" },
+      meta: { grams: null, estPrintMin: null, thumbnail: null },
+      sliced: null,
+    };
+  }
+  const a = ac3mf(buf); // TEK açma — üç sonuç da bundan çıkar
+  let colors: ModelColorInfo;
+  try {
+    const r = parse3mfAcik(a);
+    colors = { colors: r.colors, source: r.source, fileKind: "3mf" };
+  } catch {
+    colors = { colors: [], source: "none", fileKind: "3mf" };
+  }
+  let meta: ModelMeta;
+  try {
+    meta = meta3mfAcik(a);
+  } catch {
+    meta = { grams: null, estPrintMin: null, thumbnail: null };
+  }
+  let sliced: boolean | null = null;
+  try { sliced = acikDilimli(a); } catch { /* bilinmiyor → null, çağıran tembel yola düşer */ }
+  return { colors, meta, sliced };
+}
+
+/**
+ * ARALIKLI OKUMA — dosyayı İNDİRMEDEN meta/renk çıkarır.
+ *
+ * Özel baskıda tarayıcı dosyayı doğrudan buluta yüklüyor, sonra sunucu aynı dosyanın TAMAMINI
+ * geri indirip sadece gramaj/süre/renk okuyordu. 25-140 MB'lık bir gcode'da bu, kullanıcının
+ * "başlıyor…" ekranında beklediği onlarca saniyenin ta kendisiydi.
+ *
+ * Gerçekte gereken: gcode'un ilk/son birkaç yüz KB'ı, ya da 3MF'in dizini + iki küçük config.
+ */
+export async function readModelBundleAralikli(
+  oku: AralikOkuyucu,
+  toplamBoyut: number,
+  fileType: string,
+): Promise<{ colors: ModelColorInfo; meta: ModelMeta; sliced: boolean | null }> {
+  const bos = {
+    colors: { colors: [], source: "none", fileKind: "other" } as ModelColorInfo,
+    meta: { grams: null, estPrintMin: null, thumbnail: null } as ModelMeta,
+    sliced: null as boolean | null,
+  };
+  if (toplamBoyut <= 0) return bos;
+
+  if (fileType !== "3mf") {
+    // Ham gcode: başlık + altbilgi yeter (yerel `readHeadTail` ile aynı mantık).
+    const N = 400_000;
+    let metin: string;
+    if (toplamBoyut <= N * 2) {
+      metin = (await oku(0, toplamBoyut - 1)).toString("latin1");
+    } else {
+      const [bas, son] = await Promise.all([
+        oku(0, N - 1),
+        oku(toplamBoyut - N, toplamBoyut - 1),
+      ]);
+      metin = `${bas.toString("latin1")}\n${son.toString("latin1")}`;
+    }
+    const colors = parseGcodeText(metin);
+    return {
+      colors: { colors, source: colors.length ? "gcode" : "none", fileKind: "gcode" },
+      meta: gcodeMeta(metin),
+      sliced: true,
+    };
+  }
+
+  const girdiler = await zipDizini(oku, toplamBoyut);
+  if (!girdiler) return { ...bos, colors: { colors: [], source: "none", fileKind: "3mf" } };
+
+  const adlar = girdiler.map((g) => g.ad);
+  const files: Record<string, Uint8Array> = {};
+
+  // Küçük config dosyaları — renk ve gramajın asıl kaynağı.
+  for (const g of girdiler) {
+    if (!/\.config$/i.test(g.ad)) continue;
+    const v = await zipGirdiVerisi(oku, g);
+    if (v) files[g.ad] = new Uint8Array(v);
+  }
+
+  // Önizleme: yalnız BASILACAK plakanın görseli indirilir, hepsi değil.
+  const plakaNo = adlar.map((k) => /Metadata\/plate_(\d+)\.gcode$/i.exec(k)?.[1]).find((x): x is string => !!x);
+  const pngler = girdiler.filter((g) => /Metadata\/.*\.png$/i.test(g.ad));
+  const secilenPng =
+    (plakaNo ? pngler.find((g) => new RegExp(`plate_${plakaNo}\.png$`, "i").test(g.ad)) : undefined) ||
+    pngler.find((g) => /plate_1\.png$/i.test(g.ad)) ||
+    pngler.filter((g) => !/small/i.test(g.ad)).sort((a, b) => b.sikisikBoyut - a.sikisikBoyut)[0] ||
+    pngler[0];
+  if (secilenPng) {
+    const v = await zipGirdiVerisi(oku, secilenPng);
+    if (v) files[secilenPng.ad] = new Uint8Array(v);
+  }
+
+  // Gcode SON ÇARE: config'ler yanıt vermezse, o zaman da yalnız başlığı çözülür.
+  let gcodeCozuldu = false;
+  let gcodeMetin: string | null = null;
+  const gcodeMetni = (): string | null => {
+    if (gcodeCozuldu) return gcodeMetin;
+    gcodeCozuldu = true;
+    const g =
+      girdiler.find((x) => /Metadata\/.*plate.*\.gcode$/i.test(x.ad)) ||
+      girdiler.find((x) => /\.gcode$/i.test(x.ad));
+    if (!g) return null;
+    /**
+     * ⚠️ SENKRON DEĞİL: aralıklı okuma ağ gerektiriyor, oysa `parse3mfAcik`/`meta3mfAcik`
+     * senkron bir `gcodeMetni()` bekliyor. Bu yüzden gcode aşağıda ÖNDEN çözülüyor ve burada
+     * yalnız hazır metin döndürülüyor.
+     */
+    return gcodeMetin;
+  };
+
+  const a: Acilmis = { files, adlar, gcodeMetni };
+  let sonuc = { colors: parse3mfAcik(a), meta: meta3mfAcik(a) };
+
+  // Config'ler yetmediyse gcode başlığını da çek ve BİR KEZ daha çöz.
+  const eksik =
+    !sonuc.colors.colors.length || sonuc.meta.grams == null || sonuc.meta.estPrintMin == null;
+  if (eksik) {
+    const g =
+      girdiler.find((x) => /Metadata\/.*plate.*\.gcode$/i.test(x.ad)) ||
+      girdiler.find((x) => /\.gcode$/i.test(x.ad));
+    if (g) {
+      const v = await zipGirdiVerisi(oku, g, 400_000);
+      if (v) {
+        gcodeMetin = v.toString("latin1");
+        gcodeCozuldu = true;
+        sonuc = { colors: parse3mfAcik(a), meta: meta3mfAcik(a) };
+      }
+    }
+  }
+
+  return {
+    colors: { colors: sonuc.colors.colors, source: sonuc.colors.source, fileKind: "3mf" },
+    meta: sonuc.meta,
+    sliced: adlar.some((k) => /Metadata\/.*plate.*\.gcode$/i.test(k) || /\.gcode$/i.test(k)),
+  };
+}
+
 export function readModelColors(filePath: string): ModelColorInfo {
   const lower = filePath.toLowerCase();
   const is3mf = lower.endsWith(".3mf"); // .gcode.3mf dahil
   const isGcode = !is3mf && /\.(gcode|gco|g)$/i.test(lower);
   try {
     if (is3mf) {
-      const r = parse3mf(fs.readFileSync(filePath));
+      const r = parse3mfAcik(ac3mf(fs.readFileSync(filePath)));
       return { colors: r.colors, source: r.source, fileKind: "3mf" };
     }
     if (isGcode) {
@@ -244,15 +450,8 @@ export function gcodeMeta(text: string): ModelMeta {
   return { grams, estPrintMin: t ? parseTimeToMin(t) : null, thumbnail: gcodeThumbnail(text) };
 }
 
-function meta3mf(buf: Buffer): ModelMeta {
-  let files: Record<string, Uint8Array>;
-  try {
-    files = unzipSync(new Uint8Array(buf), {
-      filter: (f) => /\.config$/i.test(f.name) || /Metadata\/.*\.(png|gcode)$/i.test(f.name),
-    });
-  } catch {
-    return { grams: null, estPrintMin: null, thumbnail: null };
-  }
+function meta3mfAcik(a: Acilmis): ModelMeta {
+  const files = a.files;
   let grams: number | null = null;
   let estPrintMin: number | null = null;
   let thumbnail: string | null = null;
@@ -273,7 +472,7 @@ function meta3mf(buf: Buffer): ModelMeta {
      * `plate_1` sabiti gerçek dosyalarda 157 baskının 21'inde başka bir parçanın resmini
      * getiriyordu. Önce gcode'un plakasını bul.
      */
-    const plakaNo = Object.keys(files)
+    const plakaNo = a.adlar
       .map((k) => /Metadata\/plate_(\d+)\.gcode$/i.exec(k)?.[1])
       .find((x): x is string => !!x);
     const key =
@@ -284,11 +483,9 @@ function meta3mf(buf: Buffer): ModelMeta {
   }
 
   if (estPrintMin == null || grams == null) {
-    const gkey =
-      Object.keys(files).find((k) => /Metadata\/.*plate.*\.gcode$/i.test(k)) ||
-      Object.keys(files).find((k) => /\.gcode$/i.test(k));
-    if (gkey) {
-      const gm = gcodeMeta(strFromU8(files[gkey]).slice(0, 400_000));
+    const gmetin = a.gcodeMetni(); // ancak burada açılır
+    if (gmetin) {
+      const gm = gcodeMeta(gmetin);
       estPrintMin = estPrintMin ?? gm.estPrintMin;
       grams = grams ?? gm.grams;
     }
@@ -342,7 +539,7 @@ export function readModelMeta(filePath: string): ModelMeta {
   const is3mf = lower.endsWith(".3mf");
   const isGcode = !is3mf && /\.(gcode|gco|g)$/i.test(lower);
   try {
-    if (is3mf) return meta3mf(fs.readFileSync(filePath));
+    if (is3mf) return meta3mfAcik(ac3mf(fs.readFileSync(filePath)));
     if (isGcode) return gcodeMeta(readHeadTail(filePath, 400_000));
   } catch { /* boş döner */ }
   return { grams: null, estPrintMin: null, thumbnail: null };
@@ -357,10 +554,8 @@ export function is3mfSliced(filePath: string): boolean {
   if (/\.(gcode|gco|g)$/.test(low) && !low.endsWith(".3mf")) return true; // ham gcode = dilimli
   if (!low.endsWith(".3mf")) return false; // .stl/.obj vb. dilimli değil
   try {
-    const files = unzipSync(new Uint8Array(fs.readFileSync(filePath)), {
-      filter: (f) => /\.gcode$/i.test(f.name),
-    });
-    return Object.keys(files).some((k) => /Metadata\/.*plate.*\.gcode$/i.test(k) || /\.gcode$/i.test(k));
+    // Yalnız "içinde gcode VAR MI" sorusu — içerik açılmaz.
+    return acikDilimli(ac3mf(fs.readFileSync(filePath)));
   } catch {
     return false;
   }

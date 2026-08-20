@@ -15,6 +15,7 @@
  *      (10sn) daha sık yoklanır — kart eski duruma geri zıplamaz.
  */
 import { processSingleton } from "./process-singleton";
+import { printerCfgCacheClear } from "./config-cache";
 import {
   fetchMoonrakerStatus, fetchMoonrakerMeta, moonrakerThumbUrl,
   fetchMoonrakerExtras, emptyMoonrakerExtras,
@@ -408,6 +409,7 @@ export async function getEnabledPrinterConfigs(): Promise<CachedPrinterConfig[]>
 /** Yazıcı ekleme/düzenleme/silme sonrası çağrılmalı — panel yeni yapılandırmayı ANINDA görür. */
 export function invalidatePrinterConfigs(): void {
   configsCache = null;
+  printerCfgCacheClear(); // tek-yazıcı önbelleği de burada düşer — ayrı çağrı yeri unutulmasın
 }
 
 // ── Ürün+yazıcı → model dosyası (slicer önizlemesi için) ────────────────────────────────────
