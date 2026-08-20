@@ -4,6 +4,7 @@ import { bustProfitInputCaches, bustInventoryAlertCaches } from "@/lib/cache-bus
 import { settingsBodyAffectsProfit } from "@/lib/pricing-inputs";
 import { FILAMENT_SETTING_PREFIX } from "@/lib/filament-settings";
 import { bustCache, swr } from "@/lib/route-cache";
+import { invalidateR2Config } from "@/lib/r2";
 
 export async function GET() {
   const data = await swr("settings:v1", 60_000, computeSettings);
@@ -53,6 +54,8 @@ export async function POST(req: NextRequest) {
   if (Object.keys(body).some((key) => key.startsWith(FILAMENT_SETTING_PREFIX))) {
     bustInventoryAlertCaches();
   }
+  // R2 anahtarları değişmiş olabilir → önbelleği düşür, yeni ayar ANINDA geçerli olsun
+  invalidateR2Config();
   bustCache("settings:");
   return NextResponse.json({ ok: true });
 }

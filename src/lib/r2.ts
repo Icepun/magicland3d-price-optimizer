@@ -32,8 +32,30 @@ export interface R2Config {
 
 const KEYS = ["r2AccountId", "r2Bucket", "r2AccessKeyId", "r2SecretKey"] as const;
 
+/**
+ * R2 AYARI ÖNBELLEĞİ — her çağrı bir veritabanı turuydu.
+ *
+ * Bu fonksiyon yükleme akışında en az DÖRT kez çağrılıyor (imzalı URL, doğrulama, dosyayı
+ * okuma, yazıcıya gönderme) ve her seferi uzak Turso'ya gidiyordu: en iyi ihtimalle ~80 ms,
+ * veritabanı takılıyken saniyeler. Kullanıcının "başlıyor… %0" ekranında beklediği süre
+ * büyük ölçüde buydu — dosya daha yola çıkmadan önce ayar sorgusu bekleniyordu.
+ *
+ * ⚠️ YALNIZ DOLU sonuç önbelleklenir. R2 kurulu değilken önbellek tutulsaydı, kullanıcı
+ * ayarları yeni girdiğinde bir dakika boyunca "bulut kapalı" görürdü. Kurulumdan sonra
+ * ilk çağrı zaten anında dolar.
+ */
+const R2_TTL_MS = 60_000;
+let r2Onbellek: { at: number; cfg: R2Config } | null = null;
+
+/** Ayarlar kaydedilince çağrılır — yeni anahtarlar anında geçerli olsun. */
+export function invalidateR2Config(): void {
+  r2Onbellek = null;
+  s3Onbellek = null;
+}
+
 /** Ayarlardan R2 yapılandırmasını oku. Hepsi dolu değilse null (R2 kapalı → yerel diske düş). */
 export async function getR2Config(): Promise<R2Config | null> {
+  if (r2Onbellek && Date.now() - r2Onbellek.at < R2_TTL_MS) return r2Onbellek.cfg;
   const rows = await prisma.appSetting.findMany({ where: { key: { in: KEYS as unknown as string[] } } });
   const m: Record<string, string> = {};
   for (const r of rows) m[r.key] = (r.value ?? "").trim();
@@ -42,10 +64,26 @@ export async function getR2Config(): Promise<R2Config | null> {
   const accessKeyId = m.r2AccessKeyId;
   const secretAccessKey = m.r2SecretKey;
   if (!accountId || !bucket || !accessKeyId || !secretAccessKey) return null;
-  return { accountId, bucket, accessKeyId, secretAccessKey };
+  const cfg = { accountId, bucket, accessKeyId, secretAccessKey };
+  r2Onbellek = { at: Date.now(), cfg };
+  return cfg;
 }
 
+/**
+ * S3 istemcisi de yeniden kullanılır. Her çağrıda yeni istemci kurmak imzalama zincirini ve
+ * bağlantı havuzunu sıfırdan yaratıyordu; aynı ayarla aynı istemci güvenle paylaşılır.
+ */
+let s3Onbellek: { anahtar: string; istemci: S3Client } | null = null;
+
 function client(cfg: R2Config): S3Client {
+  const anahtar = `${cfg.accountId}|${cfg.bucket}|${cfg.accessKeyId}`;
+  if (s3Onbellek && s3Onbellek.anahtar === anahtar) return s3Onbellek.istemci;
+  const istemci = yeniIstemci(cfg);
+  s3Onbellek = { anahtar, istemci };
+  return istemci;
+}
+
+function yeniIstemci(cfg: R2Config): S3Client {
   return new S3Client({
     region: "auto",
     endpoint: `https://${cfg.accountId}.r2.cloudflarestorage.com`,
