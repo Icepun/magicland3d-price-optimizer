@@ -31,7 +31,12 @@ export interface PrintableModel {
   shareKey?: string;
 }
 export interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
-export type PrintProg = { stage: "download" | "status" | "upload" | "start" | "confirm" | "done"; pct: number | null };
+export type PrintProg = {
+  stage: "download" | "status" | "upload" | "start" | "confirm" | "done";
+  pct: number | null;
+  /** Bu aşamanın tahmini kalan süresi (sn). Hesaplanamıyorsa null — o zaman hiç gösterilmez. */
+  kalanSn?: number | null;
+};
 export type PrintPrefs = { timelapse: boolean; bedLeveling: boolean; flowCali: boolean };
 interface FileColor { index: number; hex: string; type: string; grams: number | null }
 interface ColorInfo { colors: FileColor[]; source: string; fileKind: "gcode" | "3mf" | "other"; originalName?: string; missing?: boolean }
@@ -69,6 +74,29 @@ export async function runPrintStream(
   let buf = "";
   let errMsg: string | null = null;
   let ok = false;
+
+  /**
+   * KALAN SÜRE burada hesaplanır, bileşende değil.
+   *
+   * Yazıcıya aktarım Bambu'nun FTP hızıyla sınırlı (ölçüldü: 183 KB/sn) ve büyük dosyada
+   * dakikaları bulabiliyor; hızlandıramadığımız bir bekleme en azından ne kadar süreceğini
+   * söylemeli. Zamanı akışın kendisi biliyor — React'e taşımak efekt içinde setState
+   * gerektirirdi ve o da zincirleme render demek.
+   */
+  let asama = "";
+  let asamaT0 = 0;
+  const ilerle = (stage: PrintProg["stage"], pct: number | null): void => {
+    if (stage !== asama) { asama = stage; asamaT0 = Date.now(); }
+    let kalanSn: number | null = null;
+    if (pct != null && pct >= 5 && pct < 100) {
+      const gecen = (Date.now() - asamaT0) / 1000;
+      if (gecen >= 1.5) { // ilk saniyede tahmin savruluyor
+        const kalan = (gecen * (100 - pct)) / pct;
+        if (kalan > 2 && kalan < 3600) kalanSn = Math.round(kalan);
+      }
+    }
+    onProgress({ stage, pct, kalanSn });
+  };
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
@@ -82,20 +110,27 @@ export async function runPrintStream(
       try { ev = JSON.parse(line); } catch { continue; }
       if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
       else if (ev.stage === "done") ok = true;
-      else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") onProgress({ stage: ev.stage, pct: null });
-      else if (ev.stage === "download") onProgress({ stage: "download", pct: ev.pct ?? null }); // R2 → sunucu (gerçek %)
-      else onProgress({ stage: "upload", pct: ev.pct ?? null });
+      else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") ilerle(ev.stage, null);
+      else if (ev.stage === "download") ilerle("download", ev.pct ?? null); // R2 → sunucu (gerçek %)
+      else ilerle("upload", ev.pct ?? null);
     }
   }
   if (errMsg) throw new Error(errMsg);
   if (!ok) throw new Error("Baskı başlatılamadı — tekrar dene");
-  onProgress({ stage: "done", pct: 100 });
+  onProgress({ stage: "done", pct: 100, kalanSn: null });
   // Baskı başladı → arka planda görselleştirme varlıkları (inşa kareleri, md5 anahtarıyla) —
   // yazıcı kartındaki "canlı dolan model" bu baskıda ve sonrakilerde hazır olsun. Dinamik import:
   // three.js ancak burada (arka planda) yüklenir; baskı akışının kendisini asla etkilemez.
   void import("@/lib/gcode-viz/viz-pipeline")
     .then((m) => m.ensureVizAssetsAfterPrint(fileId))
     .catch(() => { /* görselleştirme opsiyonel */ });
+}
+
+/** Kalan süreyi kısa ve okunur yaz. */
+function kalanMetni(sn: number): string {
+  if (sn < 60) return `~${sn} sn kaldı`;
+  const dk = Math.round(sn / 60);
+  return `~${dk} dk kaldı`;
 }
 
 export function PrintProgress({ p }: { p: PrintProg }) {
@@ -113,7 +148,14 @@ export function PrintProgress({ p }: { p: PrintProg }) {
         <span className="text-muted-foreground flex items-center gap-1.5">
           {p.stage !== "done" && <Loader2 className="h-3 w-3 animate-spin" />}{label}
         </span>
-        {showPct && <span className="tabular-nums font-semibold">{p.pct}%</span>}
+        {showPct && (
+          <span className="flex items-center gap-2 tabular-nums">
+            {p.kalanSn != null && (
+              <span className="text-muted-foreground/80 text-[10px]">{kalanMetni(p.kalanSn)}</span>
+            )}
+            <span className="font-semibold">{p.pct}%</span>
+          </span>
+        )}
       </div>
       <div className="h-2 rounded-full bg-muted overflow-hidden">
         {showPct ? (
