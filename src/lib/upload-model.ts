@@ -43,6 +43,12 @@ function xhrSend(
         speed = speed > 0 ? speed * 0.65 + inst * 0.35 : inst; // EMA → zıplamayı yumuşat
         lastT = now;
         lastLoaded = e.loaded;
+      } else if (speed === 0 && e.loaded > 0) {
+        // Küçük dosyada 0,12 sn'lik pencere hiç dolmuyor, hız 0 kalıyor ve ekranda
+        // "başlıyor…" yükleme bitene kadar duruyordu. İlk olayda baştan beri geçen süreyle
+        // dürüst bir ortalama ver — kullanıcı ilerlemenin aktığını görsün.
+        const gecen = (now - t0) / 1000;
+        if (gecen >= 0.03) speed = e.loaded / gecen;
       }
       onProgress({ loaded: e.loaded, total: e.total, bytesPerSec: speed });
     };

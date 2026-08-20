@@ -7,8 +7,8 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { createModelRows } from "@/lib/model-files";
-import { getR2Config, isValidModelKey, headObjectSize } from "@/lib/r2";
-import { readModelColors, is3mfSliced } from "@/core/printers/model-colors";
+import { getR2Config, isValidModelKey, headObjectSize, getObjectRange } from "@/lib/r2";
+import { readModelColors, is3mfSliced, readModelBundleAralikli } from "@/core/printers/model-colors";
 
 export const dynamic = "force-dynamic";
 
@@ -83,9 +83,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (!r2cfg) return NextResponse.json({ error: "Bulut depolama ayarlı değil" }, { status: 400 });
       const realSize = await headObjectSize(r2Key, r2cfg);
       if (realSize == null) return NextResponse.json({ error: "Dosya buluta ulaşmamış — yüklemeyi tekrar dene" }, { status: 400 });
+      /**
+       * Renkler ve "dilimlenmiş mi" bilgisi burada okunmuyordu; sonuç olarak renk-eşleme
+       * ekranı ve baskı yolu dosyayı R2'den İNDİRİP açmak zorunda kalıyordu. Aralıklı okuma
+       * birkaç yüz KB'a mal oluyor — gramaj/süreye DOKUNULMUYOR, onlar kullanıcının girdiği
+       * değerler olarak kalır.
+       */
+      let colorsJson: string | null = null;
+      let sliced: boolean | null = null;
+      try {
+        const paket = await readModelBundleAralikli(
+          (a, c) => getObjectRange(r2Key, r2cfg, a, c),
+          realSize,
+          ext,
+        );
+        colorsJson = JSON.stringify(paket.colors);
+        sliced = ext === "3mf" ? paket.sliced : true;
+      } catch { /* okunamazsa eski (tembel) yol devrede kalır */ }
+
       const mine = await createModelRows({
         productId: id,
         applyToVariants: b.applyToVariants === true,
+        colorsJson,
+        sliced,
         printerConfigId,
         originalName,
         fileType: ext,
