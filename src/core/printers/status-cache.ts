@@ -25,7 +25,19 @@ import { wsBaslat, wsDurumAl } from "./moonraker-ws";
 import { mergeMoonrakerExtras } from "./extras-merge";
 import { fileMatchKey, deepFileMatchKey } from "./file-match";
 import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } from "./bambu";
-import { prisma } from "@/lib/prisma";
+/**
+  * ⚠️ ARKA PLAN ŞERİDİ — bilerek `remotePrisma`.
+  *
+  * Prisma'nın libSQL adaptörü her sorgu için bir mutex alıyor ve istek bitene kadar tutuyor;
+  * mutex ADAPTÖR ÖRNEĞİ başına. Yani ikinci bir client = ikinci kuyruk. Ölçüldü (20 Ağu 2026):
+  * ana istemci 13.767 ms donmuşken AYNI süreçte `remotePrisma` 26 örnek boyunca 82-88 ms verdi.
+  *
+  * Yazıcı paneli 5 saniyede bir, relay 10 saniyede bir çalışıyor. Bu okumalar ana şeritte
+  * kaldığı sürece kullanıcının açtığı sayfa onların arkasına diziliyordu. İkisi de aynı uzak
+  * Turso'ya HTTP ile gidiyor (paketli uygulamada yerel replika kapalı) → tazelik farkı YOK,
+  * yalnız ayrı soket ve ayrı kuyruk.
+  */
+import { remotePrisma as prisma } from "@/lib/prisma";
 
 /**
  * ⚠️ 4000 DEĞİL — panel 5 saniyede bir yokluyor, tazelik penceresi ondan KÜÇÜKSE önbellek
