@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { printerCfgCached } from "@/core/printers/config-cache";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
@@ -32,7 +33,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const cfg = await prisma.printerConfig.findUnique({ where: { id } });
+    // Kardeş uçların hepsi böyle okuyor (slots/storage/parts/plate-thumbnail/files).
+    // Bu rota salt-okuma → kısa ömürlü önbellek güvenli.
+    const cfg = await printerCfgCached<NonNullable<Awaited<ReturnType<typeof prisma.printerConfig.findUnique>>>>(id);
     if (!cfg) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
 
     if (cfg.type === "bambu") {

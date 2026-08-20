@@ -52,8 +52,20 @@ export interface DbOlay {
   ms: number;
   tur: "yavas" | "iptal" | "yeniden-denendi" | "yeniden-deneme-basarili";
 }
-const OLAY_TAVANI = 200;
-const olaylar: DbOlay[] = [];
+const OLAY_TAVANI = 500;
+/**
+ * ⚠️ `globalThis` ŞART — modül kapsamındaki dizi TEŞHİSİ KÖR EDİYORDU.
+ *
+ * Next, `instrumentation.ts`'i (relay) rotalardan AYRI paketlere derliyor. Veritabanı
+ * istemcisini ilk yaratan katman hangisiyse olaylar ONUN kopyasına yazılıyor; `/api/diag/db`
+ * ise rota katmanındaki kopyayı okuyor. Sonuç: uç, gerçekte ne olursa olsun HER ZAMAN
+ * "sıfır yavaş, sıfır iptal" döndürüyordu — yani "veritabanı temiz" çıkarımı yapısal olarak
+ * anlamsızdı. Aynı tuzak Bambu'da iki MQTT istemcisi doğurmuştu.
+ *
+ * Tavan 200 → 500: artık tüm paketlerin ortak kuyruğu.
+ */
+const olaylar: DbOlay[] = ((globalThis as unknown as { __mlhub_db_olaylar?: DbOlay[] })
+  .__mlhub_db_olaylar ??= []);
 
 function olayEkle(tur: DbOlay["tur"], ms: number): void {
   olaylar.push({ at: Date.now(), ms: Math.round(ms), tur });

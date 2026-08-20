@@ -182,8 +182,15 @@ function YolIzleyiciDialog({
           viz.setLayer(next);
         }
       }
-      controls.update();
-      renderer.render(viz.scene, viz.camera);
+      /**
+       * BOŞTA ÇİZME. `OrbitControls.update()` kamera hâlâ hareket ediyorsa (sönümleme dahil)
+       * true döner; sahne değişikliklerini de sahnenin kendi bayrağı bildiriyor. İkisi de
+       * yoksa çizilecek YENİ bir şey yok — eskiden birebir aynı kare saniyede 60 kez
+       * çiziliyordu. Electron'da `backgroundThrottling: false` olduğu için pencere tepsiye
+       * alınsa bile bu devam ediyordu; tarayıcının doğal freni burada yok.
+       */
+      const hareket = controls.update();
+      if (hareket || viz.kirliMi()) renderer.render(viz.scene, viz.camera);
     };
     raf = requestAnimationFrame(loop);
 
@@ -403,8 +410,14 @@ export function GcodeViewerDialog(props: GcodeViewerProps & { layerTotal?: numbe
               <Box className="h-4 w-4 text-primary" /> 3D Önizleme — {props.name}
             </DialogTitle>
           </DialogHeader>
-          <div className="flex h-[420px] items-center justify-center rounded-xl border bg-popover">
+          <div className="flex h-[420px] flex-col items-center justify-center gap-3 rounded-xl border bg-popover">
             <p className="text-sm text-muted-foreground">Model açılıyor…</p>
+            <div className="relative h-1.5 w-44 overflow-hidden rounded-full bg-muted">
+              <div
+                className="absolute inset-y-0 h-full w-1/3 rounded-full bg-primary"
+                style={{ animation: "indeterminate-bar 1.4s ease-in-out infinite" }}
+              />
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -21,7 +21,7 @@ import {
   fetchMoonrakerExtras, emptyMoonrakerExtras,
   type MoonrakerStatus, type MoonrakerMeta, type MoonrakerExtras,
 } from "./moonraker";
-import { parseStatus } from "./moonraker";
+import { parseStatus, moonrakerPortu } from "./moonraker";
 import { wsBaslat, wsDurumAl } from "./moonraker-ws";
 import { mergeMoonrakerExtras } from "./extras-merge";
 import { fileMatchKey, deepFileMatchKey } from "./file-match";
@@ -150,8 +150,14 @@ export function getMoonrakerStatusCached(host: string, port: number): Promise<Mo
    * Bağlantı yoksa/bayatsa `wsDurumAl` null döner ve aşağıdaki HTTP yolu aynen çalışır —
    * yani en kötü ihtimalde eski davranış korunur.
    */
-  wsBaslat(host, port);
-  const canli = wsDurumAl(host, port);
+  /**
+   * ÇÖZÜLMÜŞ PORT. Yapılandırmadaki port sahada yanlış olabiliyor (HTTP yolu bu yüzden
+   * `portCache`/`lastGoodPort` tutuyor). Kalıcı bağlantıyı ham yapılandırma portuyla açmak,
+   * port farklıysa WebSocket'in hiç kurulamamasına ve her turun HTTP'ye düşmesine yol açar.
+   */
+  const wsPort = moonrakerPortu(host, port);
+  wsBaslat(host, wsPort);
+  const canli = wsDurumAl(host, wsPort);
   if (canli) {
     const durum = parseStatus(canli);
     // Önbelleği de besle: HTTP yoluna düşülen anlarda "son bilinen durum" taze kalsın.
@@ -179,6 +185,30 @@ export function bumpPrinterStatus(key: string): void {
   boostUntil.set(key, Date.now() + BOOST_WINDOW_MS);
 }
 
+/**
+ * SAYFA AÇILIŞI İÇİN HAFİF SÜRÜM — yalnız DURUM önbelleğini düşürür.
+ *
+ * `?fresh=1`ın amacı bayat durumu ve çevrimdışı geri çekilmesini kırmak. Ama tam sıfırlama
+ * yan önbellekleri de siliyordu ve onların ikisi de isabet yoksa yanıtı BEKLETİYOR
+ * (extras ve Bambu slotları). Ölçüldü (20 Ağu 2026): fresh mount 0,263/0,371/0,285 sn,
+ * düz tur 0,0069/0,0063/0,0076 sn — aradaki farkın tamamı bu.
+ *
+ * Yan bilgiler (ışık ≤15 sn, Bambu slot renkleri ≤60 sn) arka planda tazelenip bir sonraki
+ * yoklamada düzeliyor; yazıcının DURUMU etkilenmiyor.
+ */
+export function bumpStatusOnly(key: string): void {
+  statusCache.delete(key);
+  boostUntil.set(key, Date.now() + BOOST_WINDOW_MS);
+}
+
+export function bumpMoonrakerStatusOnly(host: string, port: number): void {
+  bumpStatusOnly(moonrakerKey(host, port));
+}
+
+export function bumpBambuStatusOnly(host: string, serial: string): void {
+  bumpStatusOnly(bambuKey(host, serial));
+}
+
 export function bumpMoonrakerStatus(host: string, port: number): void {
   bumpPrinterStatus(moonrakerKey(host, port));
 }
@@ -197,6 +227,8 @@ export function resetPrinterStatusCache(): void {
   bambuSlotsCache.clear();
   bambuSlotsInflight.clear();
   metaHata.clear();
+  matchesKutu.v = null;
+  matchedProductsKutu.v = null;
 }
 
 // ── Yan bilgiler (ışık, slot renkleri, katman duraklatması, gözetim) ────────────────────────
@@ -349,31 +381,49 @@ export async function getMoonrakerThumbDataUrl(
 
 // ── PrintFileProduct eşleştirmeleri — 30sn TTL (panelde her 5sn sınırsız findMany yerine) ─────
 type MatchRow = { printerConfigId: string; filename: string; productId: string };
-let matchesCache: { at: number; rows: MatchRow[] } | null = null;
-const MATCHES_TTL_MS = 30_000;
+/**
+ * ⚠️ KUTU + `processSingleton` ŞART. Next, relay'i (instrumentation) rotalardan AYRI paketlere
+ * derliyor; modül kapsamındaki `let` İKİ kopya oluyor ve `invalidatePrintFileMatches()` yalnız
+ * kendi kopyasını temizliyordu. Relay bu yüzden eski eşleştirmelerle snapshot yazıp telefonda
+ * ürün adı yerine DOSYA ADI gösterebiliyordu. Değer `null` olabildiği için tekil nesne bir
+ * kutu içinde tutuluyor (Map/Set değil).
+ *
+ * Bu kutulama, aşağıdaki TTL yükseltmesinin ÖN KOŞULU: paylaşım olmadan 30 → 120 sn
+ * yapmak o pencereyi dört katına çıkarırdı.
+ */
+const matchesKutu = processSingleton("sc_matchesCache", () => ({
+  v: null as { at: number; rows: MatchRow[] } | null,
+}));
+/** Panel 5 sn'de bir çağırıyor; tablo yalnız eşleştirme yazıldığında değişiyor ve o yol
+ *  `invalidatePrintFileMatches()` çağırıyor → uzun TTL güvenli. */
+const MATCHES_TTL_MS = 120_000;
 
 export async function getPrintFileMatches(): Promise<MatchRow[]> {
+  const matchesCache = matchesKutu.v;
   if (matchesCache && Date.now() - matchesCache.at < MATCHES_TTL_MS) return matchesCache.rows;
   const rows = await prisma.printFileProduct.findMany({
     select: { printerConfigId: true, filename: true, productId: true },
   });
-  matchesCache = { at: Date.now(), rows };
+  matchesKutu.v = { at: Date.now(), rows };
   return rows;
 }
 
 /** Eşleştirme yazan herkes çağırır (match modalı / baskı başlatma) → panel yeni eşleşmeyi ANINDA görür. */
 export function invalidatePrintFileMatches(): void {
-  matchesCache = null;
-  matchedProductsCache = null;
+  matchesKutu.v = null;
+  matchedProductsKutu.v = null;
 }
 
 // ── Eşleşen ürünler (ad + görsel) — panelin İKİNCİ bulut sorgusu ────────────────────────────
 // MADDE 20: panel 5sn'de bir hem eşleştirmeleri hem ürünleri sorguluyordu. Uzak-HTTP libSQL'de
 // her sorgu ~96ms ve SIRALI → boşta duran panel bile dakikada 24 gereksiz bulut sorgusu üretiyordu.
 type MatchedProduct = { id: string; name: string; imageUrl: string | null };
-let matchedProductsCache: { at: number; rows: MatchedProduct[] } | null = null;
+const matchedProductsKutu = processSingleton("sc_matchedProductsCache", () => ({
+  v: null as { at: number; rows: MatchedProduct[] } | null,
+}));
 
 export async function getMatchedProducts(): Promise<Map<string, MatchedProduct>> {
+  const matchedProductsCache = matchedProductsKutu.v;
   if (matchedProductsCache && Date.now() - matchedProductsCache.at < MATCHES_TTL_MS) {
     return new Map(matchedProductsCache.rows.map((p) => [p.id, p]));
   }
@@ -382,11 +432,11 @@ export async function getMatchedProducts(): Promise<Map<string, MatchedProduct>>
   const rows = pids.length
     ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
     : [];
-  matchedProductsCache = { at: Date.now(), rows };
+  matchedProductsKutu.v = { at: Date.now(), rows };
   return new Map(rows.map((p) => [p.id, p]));
 }
 
-// ── Yazıcı yapılandırmaları — 15sn TTL ───────────────────────────────────────────────────────
+// ── Yazıcı yapılandırmaları — 60sn TTL ───────────────────────────────────────────────────────
 // Panel her 5sn'de PrinterConfig tablosunu buluttan çekiyordu; bu satırlar neredeyse hiç değişmez.
 export type CachedPrinterConfig = {
   id: string; name: string; brand: string; model: string | null; type: string;
@@ -394,7 +444,9 @@ export type CachedPrinterConfig = {
   accent: string | null; enabled: boolean; sortOrder: number; createdAt: Date;
 };
 let configsCache: { at: number; rows: CachedPrinterConfig[] } | null = null;
-const CONFIGS_TTL_MS = 15_000;
+/** Yazıcı satırları neredeyse hiç değişmiyor ve her değişiklik `invalidatePrinterConfigs()`
+ *  çağırıyor. Relay bu fonksiyonu HİÇ çağırmıyor → iki-paket bayatlığı riski yok. */
+const CONFIGS_TTL_MS = 60_000;
 
 export async function getEnabledPrinterConfigs(): Promise<CachedPrinterConfig[]> {
   if (configsCache && Date.now() - configsCache.at < CONFIGS_TTL_MS) return configsCache.rows;
@@ -422,6 +474,12 @@ export function invalidatePrinterConfigs(): void {
  * Önbellekli: panel 5 saniyede bir yenileniyor ve uzak-HTTP libSQL'de her sorgu ~96ms + SIRALI.
  */
 type ModelFileRow = { id: string; productId: string; printerConfigId: string | null; originalName: string };
+/**
+ * ⚠️ TTL'i `MATCHES_TTL_MS`'ten AYRI. Bu önbelleğin geçersiz kılma fonksiyonu YOK — süre
+ * dolması tek tazelenme yolu. Eşleştirme TTL'i 120 sn'ye çıkarken bunu da çıkarmak, yeni
+ * yüklenen bir model dosyasının kart görselini iki dakika geciktirirdi.
+ */
+const MODEL_FILES_TTL_MS = 30_000;
 let modelFilesCache: { at: number; rows: ModelFileRow[] } | null = null;
 
 /**
@@ -441,7 +499,7 @@ export interface OnizlemeDosyalari {
 }
 
 export async function getModelFilesForPreview(): Promise<OnizlemeDosyalari> {
-  if (!modelFilesCache || Date.now() - modelFilesCache.at >= MATCHES_TTL_MS) {
+  if (!modelFilesCache || Date.now() - modelFilesCache.at >= MODEL_FILES_TTL_MS) {
     const rows = await prisma.productModelFile.findMany({
       select: { id: true, productId: true, printerConfigId: true, originalName: true },
     });

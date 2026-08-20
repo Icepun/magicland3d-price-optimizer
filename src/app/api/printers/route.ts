@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { asamaOlcer } from "@/lib/server-perf-log";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
@@ -14,7 +15,8 @@ import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached, getPrintFileMatches,
   getModelFilesForPreview,
   getMoonrakerExtrasCached, getBambuSlotsCached, getMatchedProducts, getEnabledPrinterConfigs,
-  bumpMoonrakerStatus, bumpBambuStatus,
+  bumpBambuStatusOnly,
+  bumpMoonrakerStatusOnly,
 } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
@@ -275,7 +277,17 @@ function buildSim(pool: { name: string; image: string | null }[]): PanelPrinter[
 // ─────────────────────────────────── GET ───────────────────────────────────
 
 export async function GET(req: NextRequest) {
+  /**
+   * AŞAMA ÖLÇER — 128 saniyeyi yakalamak için.
+   *
+   * 20 Ağu 2026: açılıştan sonraki İLK istek 128 sn sürdü, ikincisi 11 ms. Sıradaki bütün
+   * adaylar ölçümle elendi (modül yükleme, yazıcı I/O, şema göçü, veritabanı zaman aşımı),
+   * yani süre bilinmeyen bir bekleme noktasında geçiyor. Yalnız 3 saniyeyi aşan istekler
+   * `perf.log`'a yazılır — normal turlar (6-32 ms) hiçbir iz bırakmaz.
+   */
+  const olcer = asamaOlcer("GET /api/printers");
   await ensureRuntimeSchema();
+  olcer.damga("sema");
 
   /**
    * `?fresh=1` — SAYFA AÇILIŞI: önbelleği ve çevrimdışı geri çekilmesini ATLA.
@@ -287,16 +299,21 @@ export async function GET(req: NextRequest) {
    * Bu bayrak yalnız MOUNT'ta gönderilir; 5 saniyelik düzenli yoklama önbelleği kullanmaya
    * devam eder (yazıcılar boşuna yorulmasın).
    */
-  if (req.nextUrl.searchParams.get("fresh") === "1") {
+  const fresh = req.nextUrl.searchParams.get("fresh") === "1";
+  if (fresh) {
     for (const c of await getEnabledPrinterConfigs()) {
-      if (c.brand === "bambu") bumpBambuStatus(c.host, c.serial ?? "");
-      else bumpMoonrakerStatus(c.host, c.port);
+      // Hafif sürüm: yan önbellekleri (extras / Bambu slotları) SÜPÜRME — onlar isabet
+      // yoksa yanıtı bekletiyor ve mount maliyetinin tamamı oradan geliyordu.
+      if (c.brand === "bambu") bumpBambuStatusOnly(c.host, c.serial ?? "");
+      else bumpMoonrakerStatusOnly(c.host, c.port);
     }
+    olcer.damga("fresh-bump");
   }
 
   // MADDE 20: yapılandırma satırları neredeyse hiç değişmez ama panel 5sn'de bir buluta
   // sorguluyordu (uzak-HTTP libSQL'de her sorgu ~96ms ve SIRALI). 15sn önbellek.
   const configs = await getEnabledPrinterConfigs();
+  olcer.damga("configs");
 
   // Hiç yazıcı yapılandırılmamış → DEMO
   if (configs.length === 0) {
@@ -307,11 +324,14 @@ export async function GET(req: NextRequest) {
   // Ürün eşleştirmeleri (printerConfigId::filename → productId) — 30sn TTL önbellek
   // (eskiden her 5sn'de sınırsız findMany; tablo baskı geçmişiyle büyüyor).
   const matches = await getPrintFileMatches();
+  olcer.damga("matches");
   // Plan D: kart görseli slicer'ın gömülü render'ı. Yazıcıdan gelmiyorsa KENDİ
   // kütüphanemizdeki dosyadan çıkarılır (Bambu'da tek yol bu).
   const modelFileMap = await getModelFilesForPreview();
+  olcer.damga("modelFiles");
   const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
   const productMap = await getMatchedProducts();
+  olcer.damga("products");
 
   const nowMs = Date.now();
 
@@ -621,5 +641,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  olcer.damga("yazicilar");
+  olcer.bitir(`yazici=${configs.length} fresh=${fresh ? 1 : 0}`);
   return NextResponse.json({ printers, simulated: false, configured: true });
 }

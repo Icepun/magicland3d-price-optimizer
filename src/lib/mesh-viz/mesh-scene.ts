@@ -27,6 +27,17 @@ export interface MeshSahne {
   yaricap: number;
   /** 0..1 — baskının tamamlanan kısmı; model alttan yukarı açılır. */
   ilerlemeAyarla: (oran: number) => void;
+  /**
+   * Filament rengini sahne YENİDEN KURULMADAN değiştir.
+   *
+   * Renk kurulum efektinin bağımlılığı olduğu sürece, panelin tek bir yoklamada rengi boş
+   * bırakması renderer + kontroller + sahnenin yıkılıp yeniden kurulmasına yol açıyordu:
+   * kullanıcının çevirdiği kamera açısı zıplıyor, üstelik three `dispose()` WebGL bağlamını
+   * kapatmadığı için her seferinde bir bağlam boşa gidiyordu (tarayıcı sayıyı sınırlıyor).
+   */
+  renkAyarla: (renk: string | null | undefined) => void;
+  /** Son okumadan beri sahne değişti mi — boşta çizim yapmamak için. */
+  kirliMi: () => boolean;
   serbestBirak: () => void;
 }
 
@@ -90,12 +101,21 @@ export function buildMeshSahne(
 
   const yaricap = Math.max(olcu.x, olcu.y, olcu.z) * 0.5 || 1;
 
+  let kirli = true; // ilk kare her zaman çizilmeli
+
   return {
     sahne,
     mesh,
+    renkAyarla: (renk: string | null | undefined) => {
+      materyal.color.set(modelRengi(renk));
+      materyal.needsUpdate = true;
+      kirli = true;
+    },
+    kirliMi: () => { const k = kirli; kirli = false; return k; },
     yukseklik,
     yaricap,
     ilerlemeAyarla: (oran: number) => {
+      kirli = true;
       const o = Math.max(0, Math.min(1, oran));
       // Geometri merkezlendiği için taban -h/2'de.
       kirpma.constant = -yukseklik / 2 + yukseklik * o;

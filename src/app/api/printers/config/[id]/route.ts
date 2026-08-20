@@ -6,6 +6,7 @@ import { jsonError } from "@/lib/api-error";
 import { dropBambuConns } from "@/core/printers/bambu";
 import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
 import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
+import { wsHostKapat } from "@/core/printers/moonraker-ws";
 
 const UpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -42,7 +43,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       clearMoonrakerCaps(updated.host);
       clearMoonrakerPort(before.host);
       clearMoonrakerPort(updated.host);
+      // Kalıcı WebSocket de adrese bağlı: kapatılmazsa eski adrese sonsuza dek yeniden
+      // bağlanmaya çalışır ve yeni adres için ikinci bir bağlantı açılır.
+      wsHostKapat(before.host);
+      wsHostKapat(updated.host);
     }
+    // Yazıcı devre dışı bırakıldıysa da bağlantıyı bırak.
+    if (data.enabled === false && updated.type !== "bambu") wsHostKapat(updated.host);
     if (before?.serial) dropBambuConns(before.host, before.serial);
     if (updated.type === "bambu" && updated.serial && (data.enabled === false || before?.host !== updated.host || before?.serial !== updated.serial || before?.accessCode !== updated.accessCode)) {
       dropBambuConns(updated.host, updated.serial);
@@ -67,6 +74,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     if (cfg?.host) {
       clearMoonrakerCaps(cfg.host);
       clearMoonrakerPort(cfg.host);
+      wsHostKapat(cfg.host); // silinen yazıcıya yeniden bağlanma denemesi kalmasın
     }
     // Silinen Bambu'nun MQTT bağlantısı zombie reconnect yapmasın.
     if (cfg?.type === "bambu" && cfg.serial) dropBambuConns(cfg.host, cfg.serial);

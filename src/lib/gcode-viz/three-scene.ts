@@ -232,6 +232,14 @@ export interface VizScene {
    */
   setResolution: (w: number, h: number) => void;
   layerCount: number;
+  /**
+   * Son `kirliMi()` çağrısından beri sahne DEĞİŞTİ mi?
+   *
+   * Bayrak bileşende değil SAHNEDE duruyor: sahneyi değiştiren tek kapı buradaki
+   * `setLayer/setPalette/setShowSupport/setResolution`. Çağrı yerinde "kirlet" demeyi
+   * unutmak böylece yapısal olarak imkânsız. Okuyunca sıfırlanır (tek tüketici: çizim döngüsü).
+   */
+  kirliMi: () => boolean;
   dispose: () => void;
 }
 
@@ -476,7 +484,11 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
   camera.position.set(radius * 1.5, radius * 1.25, radius * 1.5);
   camera.lookAt(0, spanZ * 0.32, 0);
 
+  /** Sahneyi değiştiren her kapı bunu işaretler (bkz. `kirliMi`). */
+  let kirli = true; // ilk kare her zaman çizilmeli
+
   const setLayer = (layerIdx: number) => {
+    kirli = true;
     if (layerIdx < 0 || layerIdx >= g.layerRanges.length) {
       geometry.setDrawRange(0, segCount * 2);
       // LineSegments2 örneklenmiş geometridir: drawRange değil instanceCount ile kesilir.
@@ -498,6 +510,7 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
   let yardimcilarAcik = options.showSupport === true;
 
   const yenidenBoya = () => {
+    kirli = true;
     fillColors(colorBytes, g, {
       ...options,
       palette: aktifPalet,
@@ -525,12 +538,14 @@ export function buildVizScene(g: ParsedGcode, opts?: VizSceneOptions): VizScene 
   };
 
   const setResolution = (w: number, h: number) => {
+    kirli = true;
     govde?.materyal.resolution.set(Math.max(1, w), Math.max(1, h));
   };
 
   return {
     scene, camera, lines, geometry, setLayer, setPalette, setShowSupport, setResolution,
     layerCount: g.layerRanges.length,
+    kirliMi: () => { const k = kirli; kirli = false; return k; },
     dispose: () => {
       geometry.dispose();
       material.dispose();

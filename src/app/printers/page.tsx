@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { TimelapseStrip } from "@/components/printers/TimelapseGallery";
+import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -72,21 +73,6 @@ const PartCancelDialog = dynamic(
   () => import("@/components/printers/PartCancelDialog").then((m) => m.PartCancelDialog),
   { ssr: false },
 );
-
-/** 3B görünüm parçası inerken açılan kabuk — "ölü bekleme" olmasın. */
-function ViewerLoadingShell() {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-200">
-      <div className="flex flex-col items-center gap-3 rounded-xl border bg-card px-8 py-7 shadow-xl">
-        <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        <p className="text-sm font-medium">3B görünüm hazırlanıyor…</p>
-        <div className="relative h-1.5 w-44 overflow-hidden rounded-full bg-muted">
-          <div className="absolute inset-y-0 h-full w-1/3 rounded-full bg-primary" style={{ animation: "indeterminate-bar 1.4s ease-in-out infinite" }} />
-        </div>
-      </div>
-    </div>
-  );
-}
 
 interface PrintersResponse {
   printers: PanelPrinter[];
@@ -272,7 +258,18 @@ export default function PrintersPage() {
     queryFn: ({ signal }) =>
       fetchJson<PrintersResponse>(ilkCekimRef.current ? "/api/printers?fresh=1" : "/api/printers", { signal })
         .finally(() => { ilkCekimRef.current = false; }),
-    refetchInterval: commandInFlight ? false : 5000,
+    /**
+     * Aktif baskı varken daha SIK, boştayken daha SEYREK.
+     *
+     * Isınmış istek 6-32 ms (ölçüldü) — basarken 2 saniye ucuz ve tazelik doğrudan
+     * hissediliyor. Boştaki yazıcıda gösterilecek bir değişiklik yok, 15 saniye yeter:
+     * her tur yazıcıya sorgu, ürün eşleştirmesi ve panel işi demek.
+     */
+    refetchInterval: (q) => {
+      if (commandInFlight) return false;
+      const basan = (q.state.data?.printers ?? []).some((p) => p.status === "printing" || p.status === "paused");
+      return basan ? 2000 : 15000;
+    },
     staleTime: 0,
     // ⚠️ Uygulamanın GENEL ayarı `refetchOnMount: false` (ekranlar arası geçiş önbellekten
     // anında gelsin diye). Bu sayfa için YANLIŞ: sayfayı açtığında son önbellek gösteriliyor
@@ -1788,7 +1785,13 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
 }
 
 // ── Canlı dolan model: baskı kartında modelin katman katman inşası ──────────
-interface PrintModelInfo { id: string; contentMd5: string | null; sizeBytes: number | null; thumbnail?: string | null }
+interface PrintModelInfo {
+  id: string;
+  contentMd5: string | null;
+  sizeBytes: number | null;
+  /** Görselin KENDİSİ değil, var olup olmadığı — 285 KB'lık data-URL her yoklamada taşınıyordu. */
+  thumbnailVar?: boolean;
+}
 
 /** Canlı aşama çizimi için gereken paket + yardımcıları (görselleştirme modülü DİNAMİK yüklenir). */
 interface LivePack {
@@ -1840,15 +1843,22 @@ function useLiveBuildModel(
       const set = await getSprites(kareAnahtari(vizKey)).catch(() => null);
       if (set && set.frames.length) { show(set); return; }
       // Kareler yok → arka planda KİBARCA üret (seri + boşta + yüklemede bekler), sonra yokla.
-      void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {});
-      // Üretim bitene dek periyodik bak (baskı uzun sürer; ~5sn'de bir, en çok ~2dk).
+      void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnailVar })).catch(() => {});
+      /**
+       * Üretim bitene dek periyodik bak. Eskiden 5 saniyede bir, 24 kez: kare üretimi kalıcı
+       * olarak başarısızsa (dosya çözülemiyor, WebGL bağlamı yok) aynı ağır iş iki dakika
+       * boyunca 24 kez tekrarlanıyordu. Şimdi 15 saniyede bir, 6 kez.
+       *
+       * ⚠️ Kalıcı "başarısız" işareti KOYULMUYOR: başarısızlık geçici olabiliyor (bağlam
+       * kaybı, `toBlob` null) ve kalıcı işaretlenirse kart o oturumda bir daha dolmaz.
+       */
       let tries = 0;
       const iv = setInterval(async () => {
-        if (!alive || tries++ > 24) { clearInterval(iv); return; }
+        if (!alive || tries++ > 6) { clearInterval(iv); return; }
         const s = await getSprites(kareAnahtari(vizKey)).catch(() => null);
         if (s && s.frames.length) { clearInterval(iv); show(s); return; }
-        void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnail })).catch(() => {}); // takıldıysa yeniden dene (iç dedupe)
-      }, 5000);
+        void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnailVar })).catch(() => {}); // takıldıysa yeniden dene (iç dedupe)
+      }, 15000);
       // temizlikte durdur
       cleanup.push(() => clearInterval(iv));
     };
@@ -1899,7 +1909,8 @@ function useLiveBuildModel(
 
   return {
     frames: urls,
-    thumbnail: model?.thumbnail ?? null,
+    // Görselin URL'i — gövdeye gömülü data-URL yerine bir yıllık önbellekli uç.
+    thumbnail: model?.thumbnailVar ? `/api/models/${model.id}/preview` : null,
     pack,
     viewer: model && vizKey ? { fileId: model.id, cacheKey: vizKey } : null,
   };

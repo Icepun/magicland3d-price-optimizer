@@ -131,8 +131,14 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
     let id = 0;
     const dongu = () => {
       id = requestAnimationFrame(dongu);
-      kontrol.update();
-      renderer.render(sahne.sahne, kamera);
+      /**
+       * BOŞTA ÇİZME. `OrbitControls.update()` kamera hâlâ hareket ediyorsa true döner;
+       * sahne değişikliklerini sahnenin kendi bayrağı bildiriyor. İkisi de yoksa birebir
+       * aynı kareyi saniyede 60 kez çizmenin anlamı yok — üstelik Electron'da
+       * `backgroundThrottling: false`, yani pencere tepsideyken bile duruyordu.
+       */
+      const hareket = kontrol.update();
+      if (hareket || sahne.kirliMi()) renderer.render(sahne.sahne, kamera);
     };
     dongu();
 
@@ -146,7 +152,16 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
       sahneRef.current = null;
       rendererRef.current = null;
     };
-  }, [geometri, renk]);
+    // ⚠️ `renk` BİLEREK bağımlılık DEĞİL: rengin değişmesi sahnenin yeniden kurulmasını
+    // gerektirmiyor, aşağıdaki ayrı efekt onu yerinde uyguluyor. Bağımlılığa eklenirse
+    // panelin tek bir boş yoklaması kamerayı sıfırlar ve bir WebGL bağlamı harcanır.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geometri]);
+
+  // Renk sahneye YERİNDE uygulanır (sahne kurulumundan bağımsız).
+  useEffect(() => {
+    sahneRef.current?.renkAyarla(renk);
+  }, [renk]);
 
   /**
    * CANLI KİLİT türetilmiş değerdir, durum değil. Efekt içinde `setState` çağırmak React

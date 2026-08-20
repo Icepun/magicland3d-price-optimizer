@@ -15,7 +15,12 @@
  * ⚠️ Durum `globalThis` üzerinde tutulur: Next, instrumentation ile rotaları ayrı paketlere
  * derliyor ve modül kapsamındaki değişken İKİ kopya oluyor.
  */
-import { prisma } from "@/lib/prisma";
+/**
+ * ARKA PLAN ŞERİDİ: tüm tüketiciler salt-okuma. Yazma yapan yollar (action, diagnose,
+ * config kaydetme) zaten TAZE ana-istemci okuması yapıyor, onlar etkilenmiyor.
+ * Turso yapılandırılmamışsa `remotePrisma === prisma` → değişiklik etkisiz.
+ */
+import { remotePrisma as prisma } from "@/lib/prisma";
 import { processSingleton } from "./process-singleton";
 
 /** Bu süre içinde aynı yazıcı tekrar sorulursa veritabanına gidilmez. */

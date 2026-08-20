@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -13,7 +14,10 @@ import {
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 
 // three.js yalnız izleyici açılınca yüklensin.
-const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
+const GcodeViewerDialog = dynamic(
+  () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
+  { ssr: false, loading: () => <ViewerLoadingShell /> },
+);
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {

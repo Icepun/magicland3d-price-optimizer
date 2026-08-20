@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import { fetchJson } from "@/lib/fetch-json";
+import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -28,7 +29,8 @@ import {
 // three.js ilk pakete girmesin — izleyici yalnız açıldığında iner.
 const GcodeViewerDialog = dynamic(
   () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
-  { ssr: false }
+  // Parça inerken ekran BOŞ kalmasın: tıklamanın işe yaradığı anında görünsün.
+  { ssr: false, loading: () => <ViewerLoadingShell /> }
 );
 
 interface LibPrinter { id: string; name: string; brand: string; type: string }

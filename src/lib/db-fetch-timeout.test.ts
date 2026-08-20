@@ -137,3 +137,37 @@ describe("iptal edilen istek yeniden denenir — ama YALNIZ okumada", () => {
     expect(dbOlaylari().olaylar.length).toBeGreaterThanOrEqual(0);
   });
 });
+
+/**
+ * TEŞHİS KÖRLÜĞÜ — sahada YANLIŞ CEVAP VEREN bir ölçüm aleti.
+ *
+ * Next, `instrumentation.ts`'i (relay) rotalardan AYRI paketlere derliyor. Olay dizisi modül
+ * kapsamındayken kaydı tutan kopya ile `/api/diag/db`'nin okuduğu kopya farklı oluyordu ve uç
+ * gerçekte ne olursa olsun HER ZAMAN "sıfır yavaş, sıfır iptal" döndürüyordu. 20 Ağu 2026'da
+ * bu yüzden "veritabanı temiz" diye yanlış bir sonuca varıldı.
+ *
+ * `vi.resetModules()` ikinci bir modül örneği doğurur — Next'in iki paketinin taklidi.
+ */
+describe("olay kuyruğu paketler arasında PAYLAŞILIYOR", () => {
+  it("ayrı modül örneğine yazılan olay, diğerinden okunabiliyor", async () => {
+    const birinci = await import("./db-fetch-timeout");
+    birinci.dbOlaylariSifirla();
+
+    // Yazan taraf: yavaş bir istek kaydettir.
+    // Varsayılan eşik 1000 ms, tabanı 300 ms — env ile tabana indirilip gerçekten bekleniyor.
+    process.env.MLHUB_DB_SLOW_MS = "300";
+    const yavas = async () => { await new Promise((r) => setTimeout(r, 340)); return { ok: true }; };
+    await birinci.withDbFetchTimeout(yavas, 5_000)("http://x", { body: "SELECT 1" });
+    delete process.env.MLHUB_DB_SLOW_MS;
+    expect(birinci.dbOlaylari().ozet.yavas).toBeGreaterThan(0);
+
+    // Okuyan taraf: TAMAMEN AYRI bir modül örneği (teşhis ucunun durumu).
+    vi.resetModules();
+    const ikinci = await import("./db-fetch-timeout");
+    expect(ikinci).not.toBe(birinci);
+    expect(ikinci.dbOlaylari().ozet.yavas).toBeGreaterThan(0);
+
+    ikinci.dbOlaylariSifirla();
+    expect(birinci.dbOlaylari().olaylar.length).toBe(0); // sıfırlama da ortak
+  });
+});

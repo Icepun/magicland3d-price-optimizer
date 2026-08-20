@@ -62,16 +62,27 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const hit = match.hit;
     if (!hit) return NextResponse.json({ model: null });
 
-    // Önizleme görseli SADECE eşleşen kayıt için.
-    const preview = await prisma.productModelFile.findUnique({
-      where: { id: hit.id },
-      select: { thumbnail: true },
-    });
+    /**
+     * ÖNİZLEME GÖRSELİNİN KENDİSİ TAŞINMIYOR — yalnız var olup olmadığı.
+     *
+     * Ölçüldü (20 Ağu 2026): dört kartın bu uçtan çektiği toplam 374.523 bayt (en büyüğü
+     * 285.111 B) ve bu, panel açık kaldıkça React Query önbelleğinde duruyordu. Görselin
+     * kendisi zaten `/api/models/<id>/preview` ucundan bir yıllık `immutable` önbellekle
+     * servis ediliyor — tarayıcı ikinci kez hiç istemiyor.
+     *
+     * ⚠️ `select: { thumbnail: true }` YETMEZ: o da 285 KB'ı Turso'dan çeker (ve her sorgu
+     * tek mutex'te sıralı). Bu yüzden ham SQL ile yalnız boolean okunuyor.
+     */
+    const satir = await prisma.$queryRaw<{ var_mi: number }[]>`
+      SELECT (thumbnail IS NOT NULL AND thumbnail != '') AS var_mi
+      FROM ProductModelFile WHERE id = ${hit.id} LIMIT 1
+    `;
+    const thumbnailVar = Number(satir?.[0]?.var_mi ?? 0) === 1;
     return NextResponse.json({
       model: {
         id: hit.id,
         contentMd5: hit.contentMd5,
-        thumbnail: preview?.thumbnail ?? null,
+        thumbnailVar,
         sizeBytes: hit.sizeBytes,
       },
     });

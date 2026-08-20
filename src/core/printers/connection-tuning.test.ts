@@ -29,9 +29,25 @@ function sayi(kaynak: string, ad: string): number {
 describe("durum sorgusu zaman aşımı", () => {
   it("ölçülen p99 + SYN kaybını KARŞILIYOR", () => {
     // p99 ~609 ms + 1000 ms SYN yeniden iletimi ≈ 1,6 sn → 1500 ms yetmiyordu.
-    const m = /objects\/query\?\$\{QUERY\}`, undefined, (\d+)\)/.exec(MOONRAKER);
+    // Bütçe artık parametre (ikinci deneme kısa bütçeyle çağrılıyor); kilitlenen şey
+    // VARSAYILAN değer — İLK denemenin ödediği süre odur.
+    const m = /tryStatusAt\(host: string, port: number, butceMs = (\d+)\)/.exec(MOONRAKER);
     expect(m, "durum sorgusu zaman aşımı bulunamadı").not.toBeNull();
     expect(Number(m![1])).toBeGreaterThanOrEqual(3000);
+    // İstek gerçekten o bütçeyle gidiyor mu?
+    expect(MOONRAKER).toContain("objects/query?${QUERY}`, undefined, butceMs)");
+  });
+
+  it("İKİNCİ deneme kısa bütçeli — kapalı yazıcı paneli iki tam bütçe bekletmesin", () => {
+    /**
+     * Ölçüldü (20 Ağu 2026): cevap vermeyen LAN adresine istek 4008/4007 ms'de düşüyor,
+     * yani hızlı ARP/ICMP reddi yok. İki deneme SIRALI olduğu için eskiden bedel 8 saniyeydi.
+     * İkinci denemenin işi "tek düşen yanıtı elemek" — o iş kısa bütçede görülür.
+     */
+    const m = /tryStatusAt\(host, cached\)\) \?\? \(await tryStatusAt\(host, cached, (\d+)\)/.exec(MOONRAKER);
+    expect(m, "ikinci denemenin bütçesi bulunamadı").not.toBeNull();
+    expect(Number(m![1])).toBeLessThan(3000);
+    expect(Number(m![1])).toBeGreaterThanOrEqual(1000); // tek gecikmiş yanıtı elemeye yetmeli
   });
 });
 

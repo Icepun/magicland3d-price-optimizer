@@ -232,6 +232,22 @@ export function wsKapat(host: string, port: number): void {
   baglantilar.delete(k);
 }
 
+/**
+ * Bir HOST'un tüm bağlantılarını kapat — port fark etmeksizin.
+ *
+ * Yazıcı silindiğinde ya da adresi değiştiğinde eski kayıt kapatılmıyordu: `wsKapat` üretimde
+ * HİÇ çağrılmıyordu (tek çağıran testlerdi). Sonuç, artık var olmayan bir yazıcıya süreç
+ * bitene kadar 30 saniyede bir yeniden bağlanma denemesi. Port çözümü zaman içinde
+ * değişebildiği için kapatma anahtarı porta bağlanamaz — bu yüzden host bazlı.
+ */
+export function wsHostKapat(host: string): void {
+  for (const k of [...baglantilar.keys()]) {
+    if (k.slice(0, k.lastIndexOf(":")) !== host) continue;
+    const port = Number(k.slice(k.lastIndexOf(":") + 1));
+    wsKapat(host, port);
+  }
+}
+
 /** Testler için: tüm bağlantıları bırak. */
 export function wsHepsiniKapat(): void {
   for (const k of [...baglantilar.keys()]) {

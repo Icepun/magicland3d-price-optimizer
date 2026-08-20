@@ -12,7 +12,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ probe: vi.fn() }));
+const h = vi.hoisted(() => ({
+  probe: vi.fn(),
+  // `mergeMoonrakerExtras` GERÇEK kod ve `next.caps`/`next.read` okuyor; boş nesne
+  // fırlatıyor ve extras önbelleği hiç dolmuyordu (test sessizce yanlış şeyi ölçerdi).
+  extras: vi.fn(async () => ({ caps: { discovered: true }, read: true })),
+}));
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
@@ -26,8 +31,12 @@ vi.mock("./moonraker", () => ({
   fetchMoonrakerStatus: (host: string, port: number) => h.probe(host, port),
   fetchMoonrakerMeta: vi.fn(async () => null),
   moonrakerThumbUrl: vi.fn(() => ""),
-  fetchMoonrakerExtras: vi.fn(async () => ({})),
+  fetchMoonrakerExtras: () => h.extras(),
   emptyMoonrakerExtras: () => ({}),
+  // Kalıcı WebSocket hızlı yolu bu ikisini çağırıyor; taklitte YOKSA modül `undefined`
+  // döndürür ve durum önbelleğinin tamamı patlar.
+  parseStatus: vi.fn(() => ({ online: true })),
+  moonrakerPortu: (_host: string, port: number) => port,
 }));
 
 vi.mock("./bambu", () => ({
@@ -122,5 +131,39 @@ describe("MADDE 20 — çevrimdışı yazıcı diğerlerini yavaşlatmaz", () =>
     const second = await getMoonrakerStatusCached("10.0.0.9", 7125);
     expect(second).toEqual(OFFLINE);
     expect(h.probe).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * SAYFA AÇILIŞI (`?fresh=1`) yan önbellekleri SÜPÜRMEMELİ.
+ *
+ * Ölçüldü (20 Ağu 2026): fresh mount 0,263/0,371/0,285 sn ↔ düz tur 0,0069/0,0063/0,0076 sn.
+ * Aradaki farkın tamamı, tam sıfırlamanın extras ve Bambu slot önbelleklerini de silmesinden
+ * geliyordu — o ikisi isabet yoksa yanıtı BEKLETİYOR. Fresh'in asıl işi bayat DURUMU ve
+ * çevrimdışı geri çekilmesini kırmak; yan bilgiler (ışık ≤15 sn, slot renkleri ≤60 sn)
+ * arka planda tazelenip bir sonraki yoklamada düzeliyor.
+ */
+describe("fresh mount hafif olmalı", () => {
+  it("bumpStatusOnly yan önbellekleri SİLMEZ, tam sürüm siler", async () => {
+    // ⚠️ Anahtarı ELLE kurma: biçim tutmazsa silme sessizce hiçbir şey yapmaz ve test
+    // "önbellek korundu" diye YANLIŞ yere yeşil yanar. Dışa açık yardımcılar kullanılıyor.
+    const { getMoonrakerExtrasCached, bumpMoonrakerStatusOnly, bumpMoonrakerStatus } =
+      await import("./status-cache");
+
+    // Extras önbelleğini doldur (ilk çağrı ağa gider, ikincisi isabet).
+    await getMoonrakerExtrasCached("10.0.0.5", 7125);
+    const ilk = h.extras.mock.calls.length;
+    await getMoonrakerExtrasCached("10.0.0.5", 7125);
+    expect(h.extras.mock.calls.length, "ikinci çağrı önbellekten gelmeli").toBe(ilk);
+
+    // Hafif bump: extras KORUNUR.
+    bumpMoonrakerStatusOnly("10.0.0.5", 7125);
+    await getMoonrakerExtrasCached("10.0.0.5", 7125);
+    expect(h.extras.mock.calls.length, "hafif bump extras'ı düşürmemeli").toBe(ilk);
+
+    // Tam bump: extras düşer → yeniden çekilir.
+    bumpMoonrakerStatus("10.0.0.5", 7125);
+    await getMoonrakerExtrasCached("10.0.0.5", 7125);
+    expect(h.extras.mock.calls.length, "tam bump extras'ı düşürmeli").toBeGreaterThan(ilk);
   });
 });

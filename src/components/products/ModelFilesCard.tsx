@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
+import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw } from "lucide-react";
@@ -9,7 +10,10 @@ import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 import { usePrefersReducedMotion } from "@/lib/client-state";
 
 // three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
-const GcodeViewerDialog = dynamic(() => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog), { ssr: false });
+const GcodeViewerDialog = dynamic(
+  () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
+  { ssr: false, loading: () => <ViewerLoadingShell /> },
+);
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

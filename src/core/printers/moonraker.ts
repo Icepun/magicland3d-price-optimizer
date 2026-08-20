@@ -120,6 +120,16 @@ function candidatePorts(configured: number): number[] {
   return [...new Set([configured, 80, 7125].filter((p) => Number.isFinite(p) && p > 0))];
 }
 
+/**
+ * SENKRON port çözümü — `moonrakerBase`'in zaten yaptığı arama, dışa açık hâli.
+ *
+ * ⚠️ `resolveMoonrakerPort` DEĞİL: o async ve içinde 1500 ms'lik ağ yoklaması var; kalıcı
+ * WebSocket'i onunla beslemek çevrimdışı yazıcının "anında dön" garantisini bozardı.
+ */
+export function moonrakerPortu(host: string, port: number): number {
+  return portCache.get(host) ?? lastGoodPort.get(host) ?? port ?? 7125;
+}
+
 /** Önbellekteki çalışan port (yoksa yapılandırılan) ile temel URL. */
 export function moonrakerBase(host: string, port: number): string {
   // Kayıtlı port sahada yanlış olabiliyor → önce önbellek, sonra SON ÇALIŞAN, en son kayıtlı.
@@ -479,7 +489,7 @@ export function parseStatus(status: any): MoonrakerStatus {
   };
 }
 
-async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus | null> {
+async function tryStatusAt(host: string, port: number, butceMs = 4000): Promise<MoonrakerStatus | null> {
   try {
     /**
      * ⚠️ 1500 DEĞİL. Eski yorum "sağlıklı LAN yazıcısı <500 ms yanıt verir" diyordu; gerçek
@@ -489,7 +499,7 @@ async function tryStatusAt(host: string, port: number): Promise<MoonrakerStatus 
      * Yani sağlıklı bir yazıcı, yavaş bir ana yüzünden "çevrimdışı" sayılıyordu.
      * 4000 ms hâlâ çevrimdışı yazıcıyı hızlı eler ama yavaş cevabı kopma saymaz.
      */
-    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, 4000);
+    const res = await mfetch(`http://${host}:${port}/printer/objects/query?${QUERY}`, undefined, butceMs);
     if (!res.ok) return null;
     const status = unwrap(await res.json())?.status;
     if (!status) return null;
@@ -519,7 +529,14 @@ export async function fetchMoonrakerStatus(host: string, port: number): Promise<
     // bloke) kartı "Bağlantı yok"a düşürüyordu — üstelik status-cache çevrimdışıyı 30sn
     // önbelleklediği için hata 30 saniye ekranda kalıyordu. İkinci bir deneme bu sınıf sahte
     // çevrimdışıyı ucuza eler (gerçekten kapalı yazıcıda maliyet 30sn'de bir ~1.5sn fazladan).
-    const st = (await tryStatusAt(host, cached)) ?? (await tryStatusAt(host, cached));
+    /**
+     * İKİNCİ DENEME KISA BÜTÇELİ. Eskiden ikisi de 4000 ms bütçe ödüyordu ve SIRALI
+     * çalıştığı için gerçekten kapalı bir yazıcı paneli 8 saniye bekletiyordu (ölçüldü:
+     * cevap vermeyen LAN adresine istek 4008/4007 ms'de düşüyor — hızlı ARP/ICMP reddi yok).
+     * İkinci denemenin işi "tek düşen yanıtı elemek"; o iş 1500 ms'de görülür. BİRİNCİ
+     * denemenin 4000 ms'i ölçüme dayalı, dokunulmadı (bkz. yukarıdaki not).
+     */
+    const st = (await tryStatusAt(host, cached)) ?? (await tryStatusAt(host, cached, 1500));
     if (st) notePortOk(host, cached);
     else notePortFailure(host, cached); // üst üste düşerse port unutulur → yeniden keşif
     return st ?? offline;
