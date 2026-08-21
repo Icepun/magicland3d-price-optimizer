@@ -1167,6 +1167,26 @@ function buildSnapmakerStartScript(
  * alanını doğrular (bozuk aktarım = HTTP 422); Elegoo'nun eski Moonraker'ı alanı yok sayar.
  * Zaman aşımı dosya boyutuyla ölçeklenir (eski sabit 180sn büyük dosyada yetmeyebiliyordu).
  */
+/**
+ * AKTARIM HIZ SINIRI (KB/sn) — 0 / verilmezse sınırsız.
+ *
+ * ÖLÇÜLDÜ (21 Ağu 2026): Snapmaker U1'e tam hızda dosya yüklenirken kart ağdan TAMAMEN
+ * düşüyor (ICMP yok, 7125/80/22 üçü de zaman aşımı — "reddedildi" bile değil), aktarım
+ * iptal oluyor ve cihaz elle kapatılıp açılana kadar dönmüyor. Düşüş yüzdesi sabit değil
+ * (%5, %24, %40-50) → boyut eşiği değil, hattı doldurmanın kendisi.
+ *
+ * Karşılaştırma: Bambu'nun FTP'si 183 KB/sn veriyor ve hiç düşmüyor. Yani düşük hız
+ * kullanılabilir bir çalışma noktası.
+ *
+ * `MLHUB_UPLOAD_KBPS` ile sürüm çıkmadan ayarlanabilir (0 = sınırsız).
+ */
+function yuklemeHizSiniriKbps(marka?: string): number {
+  const env = Number(process.env.MLHUB_UPLOAD_KBPS);
+  if (Number.isFinite(env) && env >= 0) return env;
+  // Yalnız sorunu YAŞAYAN markada sınır var; diğerleri tam hızda kalsın.
+  return (marka || "").toLowerCase() === "snapmaker" ? 1024 : 0;
+}
+
 async function moonrakerUploadStream(
   host: string,
   port: number,
@@ -1174,6 +1194,7 @@ async function moonrakerUploadStream(
   filename: string,
   print: boolean,
   onProgress?: (pct: number) => void,
+  hizKbps = 0,
 ): Promise<unknown> {
   const p = await resolveMoonrakerPort(host, port);
   const boundary = `----mlhub${crypto.randomUUID().replace(/-/g, "")}`;
@@ -1234,7 +1255,13 @@ async function moonrakerUploadStream(
     req.on("error", (e) => { bitir(); reject(new Error(`Yükleme hatası: ${e.message}`)); });
 
     req.write(head);
-    const CHUNK = 256 * 1024;
+    /**
+     * Parça 256 KB değil 64 KB: hız sınırı uygulanacaksa duraklamalar sık ve kısa olmalı,
+     * yoksa aktarım "yaz-bekle-yaz" diye kesikli akar ve ilerleme çubuğu sıçrar.
+     */
+    const CHUNK = 64 * 1024;
+    const baytSaniye = hizKbps > 0 ? hizKbps * 1024 : 0;
+    const basladi = Date.now();
     let off = 0;
     let lastPct = -1;
     const writeNext = () => {
@@ -1247,6 +1274,15 @@ async function moonrakerUploadStream(
           // çağıran katman (done aşaması) söyler, bar "bitti ama bitmedi" yalanı söylemez.
           const pct = Math.min(99, Math.floor((off / fileBuf.length) * 100));
           if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
+        }
+        if (baytSaniye > 0) {
+          // Planlanan süreye göre öndeysek bekle — kartın WiFi'ına nefes aldır.
+          const olmasiGereken = (off / baytSaniye) * 1000;
+          const gecen = Date.now() - basladi;
+          if (olmasiGereken - gecen > 4) {
+            setTimeout(writeNext, Math.ceil(olmasiGereken - gecen));
+            return;
+          }
         }
         if (!ok) { req.once("drain", writeNext); return; }
       }
@@ -1286,7 +1322,9 @@ export async function moonrakerUploadAndPrint(
   }
   // Upload — GERÇEK yüzde ilerlemeli akış. Snapmaker: print=false (başlatma ayrı, parametreli);
   // diğer: print=true (atomik).
-  const uploadResp = await moonrakerUploadStream(host, port, body, filename, !isSnapmaker, opts.onProgress);
+  const uploadResp = await moonrakerUploadStream(
+    host, port, body, filename, !isSnapmaker, opts.onProgress, yuklemeHizSiniriKbps(opts.brand),
+  );
   if (!isSnapmaker) {
     // Elegoo (print=true): Moonraker dosyayı alıp BASMAMIŞ olabilir (meşgul/hazır değil) —
     // yanıt HTTP 2xx gelir ama print_started:false taşır. Açıkça false ise hata fırlat.
