@@ -18,6 +18,7 @@
  */
 
 import { processSingleton } from "./process-singleton";
+import { aktarimBasladi, aktarimBitti } from "./transfer-state";
 import http from "node:http";
 import crypto from "node:crypto";
 import { pickProgress, type ProgressSource } from "./eta";
@@ -1190,6 +1191,15 @@ async function moonrakerUploadStream(
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
   const timeoutMs = Math.max(180_000, Math.ceil(fileBuf.length / (200 * 1024)) * 1000); // ≥180sn, ~200KB/sn tabanı
 
+  /**
+   * Aktarım boyunca durum yoklamasını sustur. Ölçüldü (21 Ağu 2026): U1 büyük dosya
+   * alırken ağdan tamamen düşüyor; biz de tam o sırada panelden ve relay'den durum
+   * sorgusu bindiriyorduk. Yükü kaldırmak düşme sebeplerinden birini ortadan kaldırıyor,
+   * ayrıca kart "ulaşılamadı" yalanını söylemiyor.
+   */
+  aktarimBasladi(host);
+  const bitir = () => aktarimBitti(host);
+
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -1206,6 +1216,7 @@ async function moonrakerUploadStream(
         let data = "";
         res.on("data", (c) => { data += c; });
         res.on("end", () => {
+          bitir();
           const code = res.statusCode ?? 0;
           if (code >= 200 && code < 300) {
             try { resolve(unwrap(JSON.parse(data))); } catch { resolve(null); }
@@ -1220,7 +1231,7 @@ async function moonrakerUploadStream(
       }
     );
     req.setTimeout(timeoutMs, () => req.destroy(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor")));
-    req.on("error", (e) => reject(new Error(`Yükleme hatası: ${e.message}`)));
+    req.on("error", (e) => { bitir(); reject(new Error(`Yükleme hatası: ${e.message}`)); });
 
     req.write(head);
     const CHUNK = 256 * 1024;

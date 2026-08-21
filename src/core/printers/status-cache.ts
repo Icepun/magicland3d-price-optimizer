@@ -15,6 +15,7 @@
  *      (10sn) daha sık yoklanır — kart eski duruma geri zıplamaz.
  */
 import { processSingleton } from "./process-singleton";
+import { aktarimSuruyor } from "./transfer-state";
 import { printerCfgCacheClear } from "./config-cache";
 import {
   fetchMoonrakerStatus, fetchMoonrakerMeta, moonrakerThumbUrl,
@@ -155,6 +156,22 @@ export function getMoonrakerStatusCached(host: string, port: number): Promise<Mo
    * `portCache`/`lastGoodPort` tutuyor). Kalıcı bağlantıyı ham yapılandırma portuyla açmak,
    * port farklıysa WebSocket'in hiç kurulamamasına ve her turun HTTP'ye düşmesine yol açar.
    */
+  /**
+   * AKTARIM SÜRERKEN YOKLAMA YOK. Yazıcıya dosya gönderirken kart zaten doymuş durumda;
+   * üstüne durum sorgusu bindirmek U1'i ağdan düşürebiliyor (ölçüldü 21 Ağu 2026) ve
+   * sorgu düştüğünde kart "Yazıcıya ulaşılamadı" diyerek YALAN söylüyor — oysa aktarım
+   * o sırada sürüyor. Son bilinen durum aynen verilir; ilerleme zaten ayrı gösteriliyor.
+   */
+  if (aktarimSuruyor(host)) {
+    const eldeki = statusCache.get(moonrakerKey(host, port)) as
+      | { at: number; value: MoonrakerStatus }
+      | undefined;
+    if (eldeki) {
+      eldeki.at = Date.now(); // aktarım boyunca bayatlamasın
+      return Promise.resolve(eldeki.value);
+    }
+  }
+
   const wsPort = moonrakerPortu(host, port);
   wsBaslat(host, wsPort);
   const canli = wsDurumAl(host, wsPort);
