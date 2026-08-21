@@ -259,6 +259,12 @@ export async function getMoonrakerExtrasCached(host: string, port: number): Prom
   const k = moonrakerKey(host, port);
   const hit = extrasCache.get(k);
   if (hit && Date.now() - hit.at < EXTRAS_TTL_MS) return hit.value;
+  /**
+   * AKTARIM SÜRERKEN YAZICIYA GİTME. Durum yolu susturulmuştu ama bu yol açık kalmıştı:
+   * yan bilgiler 15 saniyede bir sorgulanıyor ve tam dosya gönderirken kartın üstüne
+   * biniyordu. Elde ne varsa o gösterilir; yoksa boş küme (rozet çizilmez, yalan yok).
+   */
+  if (aktarimSuruyor(host)) return hit?.value ?? emptyMoonrakerExtras();
   const running = extrasInflight.get(k);
   const p = running ?? (async () => {
     try {
@@ -325,6 +331,8 @@ const META_HATA_TTL_MS = 60_000;
 const metaHata = processSingleton("sc_metaHata", () => new Map<string, number>());
 
 export async function getMoonrakerMetaCached(host: string, port: number, filename: string): Promise<MoonrakerMeta | null> {
+  // Aktarım sürerken dosya metası için yazıcıyı meşgul etme (kart görseli bekleyebilir).
+  if (aktarimSuruyor(host)) return null;
   const k = `${host}|${filename}`;
   const hit = metaCache.get(k);
   if (hit) return hit;

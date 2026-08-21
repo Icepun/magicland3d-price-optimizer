@@ -1183,8 +1183,19 @@ function buildSnapmakerStartScript(
 function yuklemeHizSiniriKbps(marka?: string): number {
   const env = Number(process.env.MLHUB_UPLOAD_KBPS);
   if (Number.isFinite(env) && env >= 0) return env;
-  // Yalnız sorunu YAŞAYAN markada sınır var; diğerleri tam hızda kalsın.
-  return (marka || "").toLowerCase() === "snapmaker" ? 1024 : 0;
+  /**
+   * VARSAYILAN SINIRSIZ.
+   *
+   * Bir ara Snapmaker'a sınır konmuştu; kullanıcı bunun yanlış teşhis olduğunu bildirdi:
+   * aynı boyuttaki dosyalar aylardır sorunsuz yükleniyordu, yavaşlatmak yeni bir şey
+   * kazandırmıyor. Sorun aktarım hızı değil, aktarım SIRASINDA yazıcıya bindirdiğimiz
+   * ek yük (durum, yan bilgiler, meta ve slot sorguları) — o yollar artık susturuluyor.
+   *
+   * Ayar yine de duruyor: eşiği sahada aramamız gerekirse `MLHUB_UPLOAD_KBPS` ile
+   * yeni derleme beklemeden denenebilir.
+   */
+  void marka;
+  return 0;
 }
 
 async function moonrakerUploadStream(
@@ -1252,7 +1263,20 @@ async function moonrakerUploadStream(
       }
     );
     req.setTimeout(timeoutMs, () => req.destroy(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor")));
-    req.on("error", (e) => { bitir(); reject(new Error(`Yükleme hatası: ${e.message}`)); });
+    req.on("error", (e) => {
+      bitir();
+      /**
+       * Ham soket hatası kullanıcıya gösterilmez: "read ECONNRESET" hiçbir şey anlatmıyor.
+       * Bu hatalar sahada TEK bir şey demek — yazıcının ağ bağlantısı aktarımı taşıyamadı.
+       */
+      const kod = (e as NodeJS.ErrnoException).code || "";
+      const agKoptu = ["ECONNRESET", "EPIPE", "ETIMEDOUT", "ECONNABORTED", "EHOSTUNREACH"].includes(kod);
+      reject(new Error(
+        agKoptu
+          ? "Yazıcıyla bağlantı aktarım sırasında koptu. Yazıcının kablosuz bağlantısı zayıf olabilir — modeme yaklaştırmayı ya da kabloyla bağlamayı dene."
+          : `Yükleme hatası: ${e.message}`
+      ));
+    });
 
     req.write(head);
     /**

@@ -14,6 +14,8 @@
  *  2) Kart "Yazıcıya ulaşılamadı" yalanını söylemez — son bilinen durum döner.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 
 const h = vi.hoisted(() => ({ probe: vi.fn(), extras: vi.fn(async () => ({ caps: { discovered: true }, read: true })) }));
 
@@ -118,5 +120,30 @@ describe("durum önbelleği aktarım sırasında", () => {
     aktarimBasladi("10.0.0.9");
     await getMoonrakerStatusCached("10.0.0.9", 7125);
     expect(h.probe.mock.calls.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * SUSTURMA TÜM YOLLARI KAPSAMALI.
+ *
+ * İlk denemede yalnız DURUM yolu susturulmuştu ve sorun sürdü: yazıcıya giden üç yol daha
+ * açıktı — yan bilgiler (15 sn'de bir), dosya metası ve renk-eşleme ekranının slot sorgusu.
+ * Baskı başlatma akışında o ekran açık kaldığı için, tam dosya gönderirken karta ayrıca
+ * yükleniyorduk. Bir yol açık kalırsa düzeltmenin tamamı işe yaramıyor — bu yüzden test
+ * kaynağı tarayıp hepsinin korunduğunu doğruluyor.
+ */
+describe("aktarım susturması bütün yolları kapsıyor", () => {
+  const oku = (yol: string) =>
+    fs.readFileSync(path.join(process.cwd(), yol), "utf8");
+
+  it("durum, yan bilgiler ve meta yolları korunuyor", () => {
+    const kaynak = oku("src/core/printers/status-cache.ts");
+    const korumalar = kaynak.split("aktarimSuruyor(host)").length - 1;
+    expect(korumalar, "status-cache içinde üç koruma bekleniyor").toBeGreaterThanOrEqual(3);
+  });
+
+  it("slot/renk ucu da korunuyor", () => {
+    const kaynak = oku("src/app/api/printers/[id]/slots/route.ts");
+    expect(kaynak).toContain("aktarimSuruyor(cfg.host)");
   });
 });

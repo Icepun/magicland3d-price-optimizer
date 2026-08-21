@@ -36,12 +36,14 @@ afterEach(() => {
 });
 
 describe("yükleme hız sınırı", () => {
-  it("Snapmaker sınırlı — düşen marka bu", () => {
-    expect(hizSiniri("snapmaker")).toBeGreaterThan(0);
-    expect(hizSiniri("Snapmaker")).toBeGreaterThan(0);
-  });
-
-  it("diğer markalar TAM HIZDA kalır — onlarda sorun yok", () => {
+  it("VARSAYILAN SINIRSIZ — hiçbir marka yavaşlatılmaz", () => {
+    /**
+     * Bir ara Snapmaker'a sınır konmuştu. Kullanıcı bunun yanlış teşhis olduğunu bildirdi:
+     * aynı boyuttaki dosyalar aylardır sorunsuz yükleniyordu. Sorun aktarım hızı değil,
+     * aktarım SIRASINDA yazıcıya bindirdiğimiz ek sorgular — onlar susturuldu.
+     * Sessizce geri gelmesin diye burada kilitli.
+     */
+    expect(hizSiniri("snapmaker")).toBe(0);
     expect(hizSiniri("elegoo")).toBe(0);
     expect(hizSiniri("bambu")).toBe(0);
     expect(hizSiniri(undefined)).toBe(0);
@@ -55,11 +57,11 @@ describe("yükleme hız sınırı", () => {
     expect(hizSiniri("snapmaker")).toBe(0);
   });
 
-  it("geçersiz env değeri yok sayılır (yanlışlıkla sınırsız kalmasın)", () => {
+  it("geçersiz env değeri yok sayılır — varsayılana düşer", () => {
     process.env.MLHUB_UPLOAD_KBPS = "abc";
-    expect(hizSiniri("snapmaker")).toBeGreaterThan(0);
+    expect(hizSiniri("snapmaker")).toBe(0);
     process.env.MLHUB_UPLOAD_KBPS = "-5";
-    expect(hizSiniri("snapmaker")).toBeGreaterThan(0);
+    expect(hizSiniri("snapmaker")).toBe(0);
   });
 });
 
@@ -76,5 +78,14 @@ describe("yazma döngüsü", () => {
   it("bekleme planlanan süreye göre hesaplanıyor — sabit uyku DEĞİL", () => {
     // Sabit uyku, hızlı ağda gereksiz yavaşlatır; plan-tabanlı bekleme hedef hızı tutturur.
     expect(KAYNAK).toContain("const olmasiGereken = (off / baytSaniye) * 1000;");
+  });
+});
+
+describe("hata mesajı", () => {
+  it("ham soket hatası kullanıcıya GÖSTERİLMEZ", () => {
+    // "read ECONNRESET" son kullanıcıya hiçbir şey anlatmıyor; ne yapacağını söyleyen bir
+    // cümle gerekiyor. (Berke'nin kalıcı kuralı: arayüz metni geliştiriciye değil kullanıcıya.)
+    expect(KAYNAK).toContain("ECONNRESET");
+    expect(KAYNAK).toContain("kablosuz bağlantısı zayıf olabilir");
   });
 });

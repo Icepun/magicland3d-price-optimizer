@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { aktarimSuruyor } from "@/core/printers/transfer-state";
 import { printerCfgCached } from "@/core/printers/config-cache";
 import { remotePrisma as arkaPrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -92,6 +93,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       const debug = await fetchMoonrakerSlotDebug(cfg.host, cfg.port);
       const read = await fetchMoonrakerSlots(cfg.host, cfg.port);
       return NextResponse.json({ type: "moonraker", slots: padSlots(read, 4), debug });
+    }
+    /**
+     * AKTARIM SÜRERKEN CANLI OKUMA YOK. Baskı başlatma akışında bu ekran açık kalıyor ve
+     * 15 saniyede bir yazıcıya slot sorgusu atıyor — tam dosya gönderirken. Renkler zaten
+     * o sırada değişmiyor; son bilinen değerler gösterilir.
+     */
+    if (aktarimSuruyor(cfg.host)) {
+      const snap = await readSlotSnapshot(id);
+      return NextResponse.json({ type: "moonraker", slots: padSlots(snap ?? [], 4), fromSnapshot: true });
     }
     // Çevrimdışıysa 14sn'lik fallback zincirine hiç girme → son-bilinen slotları anında dön.
     const mst = await getMoonrakerStatusCached(cfg.host, cfg.port);
