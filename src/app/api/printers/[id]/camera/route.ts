@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { snapmakerKameraVar, snapmakerKameraAkisi } from "@/core/printers/snapmaker-camera";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { printerCfgCached } from "@/core/printers/config-cache";
@@ -33,6 +34,12 @@ async function moonrakerKameraVar(host: string, port: number): Promise<boolean> 
   const k = `${host}:${port}`;
   const hit = moonrakerKameraOnbellek.get(k);
   if (hit && Date.now() - hit.at < KAMERA_TTL_MS) return hit.var;
+
+  // ÖNCE Snapmaker yolu: U1'in kamerası `/webcam/`de değil, Moonraker'ın dosya yolunda.
+  if (await snapmakerKameraVar(host, port)) {
+    moonrakerKameraOnbellek.set(k, { at: Date.now(), var: true });
+    return true;
+  }
 
   const ctrl = new AbortController();
   const zaman = setTimeout(() => ctrl.abort(), 2500);
@@ -97,7 +104,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       const varMi = await moonrakerKameraVar(cfg.host, cfg.port);
       return NextResponse.json({
         var: varMi,
-        neden: varMi ? null : "Bu yazıcı ağ üzerinden kamera görüntüsü paylaşmıyor.",
+        neden: varMi ? null : "Bu yazıcıda kamera bulunamadı.",
       });
     }
 
@@ -141,7 +148,36 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       return new Response(akis, { headers: mjpegBasliklari() });
     }
 
-    // ── Moonraker: yazıcının kendi MJPEG akışını aynen geçir ──
+    // ── Snapmaker U1: kamerayı uyanık tutup kareleri biz birleştiriyoruz ──
+    if (await snapmakerKameraVar(cfg.host, cfg.port)) {
+      const host = cfg.host;
+      const port = cfg.port;
+      const akis = new ReadableStream<Uint8Array>({
+        start(kontrol) {
+          let kapandi = false;
+          const kapat = () => {
+            if (kapandi) return;
+            kapandi = true;
+            try { kamera.durdur(); } catch { /* zaten kapalı */ }
+            try { kontrol.close(); } catch { /* zaten kapalı */ }
+          };
+          const kamera = snapmakerKameraAkisi(
+            host,
+            port,
+            (jpeg) => {
+              if (kapandi) return;
+              try { kontrol.enqueue(parca(jpeg)); } catch { kapat(); }
+            },
+            () => kapat(),
+          );
+          // Pencere kapanınca uyandırma da durur → kamera uykuya döner, yazıcı serbest kalır.
+          req.signal.addEventListener("abort", kapat, { once: true });
+        },
+      });
+      return new Response(akis, { headers: mjpegBasliklari() });
+    }
+
+    // ── Diğer Moonraker yazıcılar: kendi MJPEG akışını aynen geçir ──
     const yukari = await fetch(`${moonrakerBase(cfg.host, cfg.port)}/webcam/?action=stream`, {
       signal: req.signal,
     }).catch(() => null);
