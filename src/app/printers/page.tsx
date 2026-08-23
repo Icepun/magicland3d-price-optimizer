@@ -11,7 +11,7 @@ import {
   RefreshCw, Settings2, Plus, Trash2, Pause, Play, Ban, Pencil, WifiOff,
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
-  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity, Scissors,
+  Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity, Scissors, Camera,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -1216,6 +1216,9 @@ function PrinterCardInner({
                 />
               )}
 
+              {/* KAMERA — yalnız gerçekten kamerası olan yazıcıda çizilir. */}
+              <CameraButton printerId={printer.id} printerName={printer.name} />
+
               {/* MADDE 17 — katmanda duraklat.
                   Kurulu duraklatma yazıcıda BASKIDAN BAĞIMSIZ kalıcı: baskı bitse de, katman
                   toplamı okunamasa da KALDIRILABİLMELİ (yoksa sonraki baskı yarıda duruyordu). */}
@@ -1610,6 +1613,50 @@ function LightControl({
         : <Lightbulb className="h-3.5 w-3.5 transition-colors" style={on ? { color: accent } : undefined} />}
       {light.readable ? (on ? "Işık açık" : "Işık kapalı") : "Işığı değiştir"}
     </Button>
+  );
+}
+
+// ── KAMERA ─────────────────────────────────────────────────────────────────
+
+/**
+ * Kamera düğmesi + canlı pencere.
+ *
+ * Düğme YALNIZ kamerası olan yazıcıda çizilir: Bambu'da erişim kodu varsa, Moonraker'da ise
+ * yazıcıya sorulup öğrenilir (U1'de kamera servisi baskı yokken kapalı olabiliyor — o zaman
+ * düğme hiç görünmez, tıklayıp boş pencere açmaktansa hiç göstermemek dürüst olanı).
+ *
+ * Ağır pencere dinamik yükleniyor: kamera açılmadıkça hiçbir maliyeti yok.
+ */
+const CameraDialog = dynamic(
+  () => import("@/components/printers/CameraDialog").then((m) => m.CameraDialog),
+  { ssr: false },
+);
+
+function CameraButton({ printerId, printerName }: { printerId: string; printerName: string }) {
+  const [acik, setAcik] = useState(false);
+  const { data } = useQuery({
+    queryKey: ["camera-var", printerId],
+    queryFn: () => fetchJson<{ var: boolean }>(`/api/printers/${printerId}/camera?bilgi=1`),
+    // Kamera var/yok bilgisi sık değişmez; yazıcıyı boşuna yormayalım.
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+
+  if (!data?.var) return null;
+  return (
+    <>
+      <Button
+        size="sm" variant="outline" className="h-7 gap-1 text-xs"
+        onClick={() => setAcik(true)}
+        title="Canlı kamera"
+      >
+        <Camera className="h-3.5 w-3.5" />
+        Kamera
+      </Button>
+      {acik && (
+        <CameraDialog printerId={printerId} printerName={printerName} onClose={() => setAcik(false)} />
+      )}
+    </>
   );
 }
 
