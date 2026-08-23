@@ -1634,23 +1634,31 @@ const CameraDialog = dynamic(
 
 function CameraButton({ printerId, printerName }: { printerId: string; printerName: string }) {
   const [acik, setAcik] = useState(false);
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["camera-var", printerId],
-    queryFn: () => fetchJson<{ var: boolean }>(`/api/printers/${printerId}/camera?bilgi=1`),
+    queryFn: () => fetchJson<{ var: boolean; neden?: string | null }>(`/api/printers/${printerId}/camera?bilgi=1`),
     // Kamera var/yok bilgisi sık değişmez; yazıcıyı boşuna yormayalım.
     staleTime: 5 * 60_000,
     retry: false,
   });
 
-  if (!data?.var) return null;
+  /**
+   * Düğme HER ZAMAN çizilir; kamera yoksa sönük durur ve üzerine gelince nedenini söyler.
+   * (Kullanıcının isteği: "kamera butonu hep olmalı, baskı yokken inaktif olabilir.")
+   * Yeri sabit kaldığı için kartlar arası geçişte düğmeler de zıplamıyor.
+   */
+  const kullanilabilir = data?.var === true;
   return (
     <>
       <Button
         size="sm" variant="outline" className="h-7 gap-1 text-xs"
+        disabled={!kullanilabilir}
         onClick={() => setAcik(true)}
-        title="Canlı kamera"
+        title={kullanilabilir ? "Canlı kamera" : (data?.neden || "Kamera kontrol ediliyor…")}
       >
-        <Camera className="h-3.5 w-3.5" />
+        {isLoading
+          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          : <Camera className="h-3.5 w-3.5" />}
         Kamera
       </Button>
       {acik && (

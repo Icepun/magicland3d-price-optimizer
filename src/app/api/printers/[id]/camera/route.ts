@@ -82,10 +82,23 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const bilgi = req.nextUrl.searchParams.get("bilgi") === "1";
 
     if (bilgi) {
-      const varMi = bambu
-        ? !!(cfg.accessCode && cfg.serial)
-        : await moonrakerKameraVar(cfg.host, cfg.port);
-      return NextResponse.json({ var: varMi });
+      /**
+       * Düğme HER ZAMAN çiziliyor; kamera yoksa sönük duruyor. O yüzden "yok" cevabı yetmez,
+       * kullanıcıya NEDEN olmadığını da söylemeliyiz — sönük bir düğmeye tıklayıp hiçbir şey
+       * olmaması en sinir bozucu hâli.
+       */
+      if (bambu) {
+        const varMi = !!(cfg.accessCode && cfg.serial);
+        return NextResponse.json({
+          var: varMi,
+          neden: varMi ? null : "Bu yazıcı için erişim kodu girilmemiş.",
+        });
+      }
+      const varMi = await moonrakerKameraVar(cfg.host, cfg.port);
+      return NextResponse.json({
+        var: varMi,
+        neden: varMi ? null : "Bu yazıcı ağ üzerinden kamera görüntüsü paylaşmıyor.",
+      });
     }
 
     // Dosya aktarımı sürerken kamera açma — yazıcıyı o an meşgul etmemek öğrenilmiş bir ders.
