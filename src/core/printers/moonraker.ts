@@ -18,6 +18,10 @@
  */
 
 import { processSingleton } from "./process-singleton";
+import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
+// Kaçışlama `exclude-object.ts`e taşındı (dosya üretimi de aynı kuralı kullanıyor);
+// eski içe aktarmalar kırılmasın diye buradan yeniden dışa açılıyor.
+export { klipperParamKacisla } from "./exclude-object";
 import { aktarimBasladi, aktarimBitti } from "./transfer-state";
 import http from "node:http";
 import crypto from "node:crypto";
@@ -1344,6 +1348,29 @@ export async function moonrakerUploadAndPrint(
       }
     }
   }
+  /**
+   * PARÇA İPTALİNİ ÇALIŞIR HÂLE GETİR.
+   *
+   * Dilimleyicilerin "Label objects" ayarı yalnız `; printing object …` YORUMU yazıyor;
+   * Klipper'ın parça iptali ise EXCLUDE_OBJECT KOMUTLARINI istiyor ve o ayrı bir seçenek
+   * ("Exclude objects"). Ölçüldü (25 Ağu 2026, kullanıcının U1'inde basılan gerçek dosya):
+   * yorumlar vardı, komut sayısı SIFIRDI → panelde parça iptali hiç açılamıyordu.
+   *
+   * Eksik komutları burada ekliyoruz; dilimleyici ayarı ne olursa olsun çalışır. Yorumlar
+   * korunur, dosyanın kalanı bayt bayt aynı kalır. Komutlar zaten varsa DOKUNULMAZ.
+   *
+   * Maliyet ölçüldü: 81 MB'lık dosyada ~700 ms, dosya %0,9 büyüyor — dakikalarca süren
+   * aktarımın yanında görünmez.
+   */
+  if (isGcode) {
+    try {
+      const eklendi = excludeObjectEkle(body);
+      if (eklendi) body = eklendi.cikti;
+    } catch {
+      // Dönüşüm başarısızsa ÖZGÜN dosya gönderilir — baskıyı riske atmaktansa özellik kapalı kalsın.
+    }
+  }
+
   // Upload — GERÇEK yüzde ilerlemeli akış. Snapmaker: print=false (başlatma ayrı, parametreli);
   // diğer: print=true (atomik).
   const uploadResp = await moonrakerUploadStream(
@@ -2266,23 +2293,6 @@ export interface MoonrakerObject {
   polygon: [number, number][];
 }
 
-/**
- * Klipper parametre değerini GÜVENLE kaçışla.
- *
- * ⚠️ ÖLÇÜLDÜ: Klipper parametreleri shlex ile (posix, commenters="#;") ayrıştırıyor.
- *   NAME=part#1        → sessizce "part"a KIRPILIR → YANLIŞ NESNE iptal edilir, hata YOK
- *   NAME=Max's Shroud  → "Malformed command" (OrcaSlicer #2027 tam bu)
- * Bu yüzden ad, boşluk/kesme/tırnak/kare/noktalı virgül/eşittir/ters bölü içeriyorsa
- * çift tırnağa alınır; ters bölü ve çift tırnak ayrıca kaçırılır.
- *
- * ⚠️ Ad ASLA büyütülmez, kırpılmaz, boşlukları değiştirilmez — Moonraker'ın verdiği dizge
- * neyse o gider. (Büyütme ayrıca Türkçe tuzağı taşır: toLocaleUpperCase("tr") "Çiçeği"yi
- * "ÇİÇEĞİ" yapar, Python upper() ise "ÇIÇEĞI" — eşleşme kaybolur.)
- */
-export function klipperParamKacisla(deger: string): string {
-  if (!/[\s'"#;=\\]/.test(deger)) return deger;
-  return `"${deger.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
 
 /** Nesne listesi — YALNIZ poligonu ve merkezi olanlar. */
 export function gecerliNesneler(ham: unknown): MoonrakerObject[] {
