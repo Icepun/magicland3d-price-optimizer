@@ -371,3 +371,45 @@ export function slotToolColors(
   for (let i = toolMap.length; i < fiziksel.length; i++) out.push(fiziksel[i] ?? null);
   return out;
 }
+
+// ── PARÇA İPTALİ — düğme neden kullanılamıyor? ─────────────────────────────
+
+export interface ParcaIptalDurumu {
+  /** Düğme tıklanabilir mi? */
+  acik: boolean;
+  /** Üzerine gelince gösterilecek kısa açıklama (kapalıysa NEDENİ). */
+  ipucu: string;
+}
+
+/**
+ * Parça iptali Klipper'ın `exclude_object` özelliğine dayanır ve iki şey gerektirir:
+ * yazıcının desteklemesi VE dilimleyicinin g-code'a nesne etiketi gömmesi.
+ *
+ * ÖLÇÜLDÜ (23 Ağu 2026, kullanıcının üç yazıcısı): Pro, Plus ve U1'in ÜÇÜNDE de
+ * `exclude_object` var — yani yazıcı tarafında engel yok. Ama o an basılan dosyalarda
+ * etiketli parça sayısı Plus'ta 1, Pro ve U1'de 0'dı. Yani fark yazıcıdan değil, dosyanın
+ * nasıl dilimlendiğinden geliyordu.
+ *
+ * Eskiden düğme bu durumda HİÇ çizilmiyordu; kullanıcı da "sadece Plus'ta var" sanıyordu.
+ * Artık görünür kalıp nedenini söylüyor — eksikliğin giderilebilir olduğu ancak böyle
+ * anlaşılıyor.
+ */
+export function parcaIptalDurumu(input: {
+  tip: string;
+  basiyor: boolean;
+  parcaVar: boolean;
+}): ParcaIptalDurumu {
+  if (input.tip !== "moonraker") {
+    return { acik: false, ipucu: "Bu yazıcı parça iptalini desteklemiyor." };
+  }
+  if (!input.basiyor) {
+    return { acik: false, ipucu: "Baskı sürerken kullanılabilir." };
+  }
+  if (!input.parcaVar) {
+    return {
+      acik: false,
+      ipucu: "Bu baskıda parça etiketi yok. Dilimleyicide nesne etiketlemeyi açıp yeniden dilimle.",
+    };
+  }
+  return { acik: true, ipucu: "Bozulan parçayı atla" };
+}

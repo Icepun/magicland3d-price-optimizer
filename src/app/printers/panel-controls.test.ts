@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { SPEED_PRESETS_PCT } from "@/core/printers/controls";
 import {
   cancelSummary,
+  parcaIptalDurumu,
   clampLayerValue,
   layerStepTarget,
   nextFinishing,
@@ -360,5 +361,52 @@ describe("MADDE 11 — izleyiciye gerçek filament renkleri", () => {
   it("eşleme YOKSA (tek kafalı / okunamadı) eski davranış korunur", () => {
     expect(slotToolColors(U1_SLOTLAR)).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
     expect(slotToolColors(U1_SLOTLAR, [])).toEqual(["#6F4C2F", "#E72F1D", "#000000", "#FFFFFF"]);
+  });
+});
+
+/**
+ * PARÇA İPTALİ DÜĞMESİ — neden kapalı?
+ *
+ * ÖLÇÜLDÜ (23 Ağu 2026, kullanıcının üç yazıcısı): Neptune 4 Pro, Neptune 4 Plus ve
+ * Snapmaker U1'in ÜÇÜNDE de Klipper'ın `exclude_object` nesnesi var. Ama o an basılan
+ * dosyalarda etiketli parça sayısı Plus'ta 1, diğer ikisinde 0'dı. Yani "sadece Plus'ta
+ * çalışıyor" görüntüsü YAZICIDAN değil, dosyanın nasıl dilimlendiğinden geliyordu.
+ *
+ * Düğme eskiden bu durumda hiç çizilmiyordu; kullanıcı da özelliğin o yazıcılarda
+ * olmadığını sanıyordu. Artık görünür kalıp nedenini söylüyor.
+ */
+describe("parcaIptalDurumu", () => {
+  it("Moonraker + basıyor + etiketli parça var → AÇIK", () => {
+    const d = parcaIptalDurumu({ tip: "moonraker", basiyor: true, parcaVar: true });
+    expect(d.acik).toBe(true);
+  });
+
+  it("etiket yoksa kapalı ve NE YAPILACAĞINI söylüyor", () => {
+    const d = parcaIptalDurumu({ tip: "moonraker", basiyor: true, parcaVar: false });
+    expect(d.acik).toBe(false);
+    // Kullanıcı "neden yok" değil "ne yapmalıyım" cevabını almalı.
+    expect(d.ipucu).toMatch(/dilimley/i);
+  });
+
+  it("baskı yokken kapalı", () => {
+    const d = parcaIptalDurumu({ tip: "moonraker", basiyor: false, parcaVar: true });
+    expect(d.acik).toBe(false);
+    expect(d.ipucu).toMatch(/baskı/i);
+  });
+
+  it("Bambu'da desteklenmiyor — ama düğme yine de bir şey söylüyor", () => {
+    const d = parcaIptalDurumu({ tip: "bambu", basiyor: true, parcaVar: true });
+    expect(d.acik).toBe(false);
+    expect(d.ipucu.length).toBeGreaterThan(0);
+  });
+
+  it("hiçbir durumda boş ipucu dönmez", () => {
+    for (const tip of ["moonraker", "bambu"]) {
+      for (const basiyor of [true, false]) {
+        for (const parcaVar of [true, false]) {
+          expect(parcaIptalDurumu({ tip, basiyor, parcaVar }).ipucu.trim().length).toBeGreaterThan(0);
+        }
+      }
+    }
   });
 });

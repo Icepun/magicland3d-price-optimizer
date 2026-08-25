@@ -54,7 +54,8 @@ import {
 import {
   PENDING_LABEL, cancelSummary, clampLayerValue, layerStepTarget, nextFinishing, pauseLayerRange,
   pausedReminder, pendingBadgeLabel, resolveSpeedView, slotToolColors, transportControls,
-  troubleList, type CancelSummary, type LayerRange, type SpeedView, type TroubleItem,
+  troubleList, parcaIptalDurumu,
+  type CancelSummary, type LayerRange, type SpeedView, type TroubleItem,
 } from "./panel-controls";
 // Komut durumu YAZICI BAŞINA tutulur — tek mutation gözlemcisi eşzamanlı komutları karıştırıyordu.
 import {
@@ -1232,18 +1233,27 @@ function PrinterCardInner({
                 />
               )}
 
-              {/* PARÇA İPTALİ — yalnız baskı sürerken ve dilimleyici parçaları işaretlemişse.
-                  `parts` alanı yoksa nesne tanımı da yoktur; düğme hiç çizilmez. */}
-              {isPrinting && printer.parts && bedFrame && printer.type === "moonraker" && (
-                <Button
-                  size="sm" variant="outline" className="h-7 gap-1 text-xs"
-                  disabled={busy}
-                  title="Bozulan parçayı atla"
-                  onClick={() => setPartPicker(true)}
-                >
-                  <Scissors className="h-3.5 w-3.5" /> Parça seç
-                </Button>
-              )}
+              {/* PARÇA İPTALİ — baskı sürerken HER ZAMAN görünür; kullanılamıyorsa sönük
+                  ve nedenini söyler. Eskiden hiç çizilmiyordu ve özellik "sadece bir
+                  yazıcıda var" gibi görünüyordu; oysa üç Moonraker yazıcının üçü de
+                  destekliyor, eksik olan dilimleyicinin nesne etiketi. */}
+              {(isPrinting || isPaused) && bedFrame && (() => {
+                const pd = parcaIptalDurumu({
+                  tip: printer.type,
+                  basiyor: isPrinting || isPaused,
+                  parcaVar: !!printer.parts,
+                });
+                return (
+                  <Button
+                    size="sm" variant="outline" className="h-7 gap-1 text-xs"
+                    disabled={busy || !pd.acik}
+                    title={pd.ipucu}
+                    onClick={() => pd.acik && setPartPicker(true)}
+                  >
+                    <Scissors className="h-3.5 w-3.5" /> Parça seç
+                  </Button>
+                );
+              })()}
             </div>
 
             {/* İkincil satır — yıkıcı eylem AYRI ve sağda, yanlış tıklama uzağında */}
