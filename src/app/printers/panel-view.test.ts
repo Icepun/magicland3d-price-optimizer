@@ -30,6 +30,7 @@ import {
   resolveStatusVisual,
   type PanelPrinter,
   type PrinterJob,
+  baskiYeniBittiMi,
 } from "./panel-view";
 
 // ── Sözleşme kilidi ────────────────────────────────────────────────────────
@@ -353,5 +354,47 @@ describe("MADDE 3 — görsel zinciri: biri düşerse sıradakine geçilir", () 
     expect(pickImage(list, list)).toBeNull();
     expect(jobImageCandidates(null, null)).toEqual([]);
     expect(jobImageCandidates({ plateThumbnail: "  ", productImage: null, storeImage: "" }, null)).toEqual([]);
+  });
+});
+
+/**
+ * TIMELAPSE VİDEOSU EKRANA GELMİYORDU.
+ *
+ * Kullanıcı: "baskı bitiyor ama video düşmüyor; Hub'ı kapatıp açınca düşüyor."
+ * Sebep: video listesi 5 dakikalık `staleTime` ile duruyordu ve uygulamanın genel ayarı
+ * `refetchOnMount: false` — yani listeyi yeniden çekecek HİÇBİR ŞEY yoktu. Uygulamayı
+ * kapatıp açmak önbelleği sıfırladığı için o zaman görünüyordu.
+ *
+ * Çözüm baskının bittiği ANI yakalamak. Bu karar sessizce bozulursa kimse fark etmez —
+ * bu yüzden burada kilitli.
+ */
+describe("baskiYeniBittiMi", () => {
+  it("basıyordu → bitti: YAKALANIR", () => {
+    expect(baskiYeniBittiMi("printing", "finished")).toBe(true);
+    expect(baskiYeniBittiMi("printing", "idle")).toBe(true);
+  });
+
+  it("DURAKLATMA bitiş değildir — video da oluşmaz", () => {
+    expect(baskiYeniBittiMi("printing", "paused")).toBe(false);
+    expect(baskiYeniBittiMi("paused", "printing")).toBe(false);
+  });
+
+  it("duraklatılmışken iptal edilirse yine bitiştir", () => {
+    expect(baskiYeniBittiMi("paused", "idle")).toBe(true);
+  });
+
+  it("basmıyordu → basmıyor: tetiklenmez (her turda boşuna istek atmayalım)", () => {
+    expect(baskiYeniBittiMi("idle", "idle")).toBe(false);
+    expect(baskiYeniBittiMi("finished", "idle")).toBe(false);
+  });
+
+  it("İLK tur (önceki durum yok) tetiklemez", () => {
+    // Uygulama açılışında her yazıcı için bir kez boşuna tazeleme yapılmasın.
+    expect(baskiYeniBittiMi(undefined, "idle")).toBe(false);
+    expect(baskiYeniBittiMi(undefined, "printing")).toBe(false);
+  });
+
+  it("baskı başlaması tetiklemez", () => {
+    expect(baskiYeniBittiMi("idle", "printing")).toBe(false);
   });
 });

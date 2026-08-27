@@ -44,6 +44,7 @@ import { thumbUrl } from "@/lib/image";
 // test edilebilir tek yerde. Tipler API sözleşmesinin aynası — sapma testte tsc ile yakalanır.
 import {
   bedFrameFor, buildSlotChips, connectionNotice, formatRemaining, intraLayerFraction,
+  baskiYeniBittiMi,
   jobImageCandidates, layerBadgeText, nozzleDot, orderWarnings, pickBuildFrame, pickImage,
   resolvePackLayerIndex, resolveRemaining, resolveStage, resolveStatusVisual, slotLabel,
   type NozzleDot, type PanelPrinter, type PrinterJob, type PrinterStatus, type SlotChip,
@@ -296,6 +297,34 @@ export default function PrintersPage() {
   // Yeni baskı uzun bir boşluktan sonra başlarsa önceki baskıdan kalmış saati bir kare bile
   // kullanma; son veri zamanını alt sınır yap, 1 sn'lik sayaç oradan devam etsin.
   const clockNow = anyActive ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
+
+  /**
+   * BASKI BİTİNCE TIMELAPSE LİSTESİNİ TAZELE.
+   *
+   * Video listesi 5 dakikalık `staleTime` ile duruyor ve uygulamanın genel ayarı
+   * `refetchOnMount: false` — yani bir kez çekildikten sonra onu yeniden çekecek HİÇBİR ŞEY
+   * yoktu. Kullanıcı yeni videoyu ancak Hub'ı kapatıp açınca görüyordu (önbellek sıfırlanınca).
+   *
+   * ⚠️ Video baskı biter bitmez HAZIR OLMUYOR: yazıcı kareleri birleştirip dosyayı yazana
+   * kadar birkaç saniye geçiyor. Tek seferlik tazeleme çoğu zaman boş dönerdi; bu yüzden
+   * kısa aralıklarla birkaç kez deneniyor.
+   */
+  const oncekiDurum = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    const liste = data?.printers ?? [];
+    const zamanlayicilar: ReturnType<typeof setTimeout>[] = [];
+    for (const p of liste) {
+      const onceki = oncekiDurum.current.get(p.id);
+      oncekiDurum.current.set(p.id, p.status);
+      if (!baskiYeniBittiMi(onceki, p.status)) continue;
+      // Şerit ekranda MONTELİ olduğu için `invalidateQueries` onu yeniden çeker
+      // (pasif sorguda `removeQueries` gerekirdi — bkz. fiyat önbelleği dersi).
+      const tazele = () => qc.invalidateQueries({ queryKey: ["timelapse", p.id] });
+      tazele();
+      for (const gecikme of [8_000, 30_000, 90_000]) zamanlayicilar.push(setTimeout(tazele, gecikme));
+    }
+    return () => { for (const z of zamanlayicilar) clearTimeout(z); };
+  }, [data, qc]);
 
   const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
   const retryNow = () => { setManualRefresh(true); refetch().finally(() => setManualRefresh(false)); };

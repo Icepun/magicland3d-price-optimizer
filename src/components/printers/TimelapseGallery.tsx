@@ -9,7 +9,7 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Film, Download, Play, X, Loader2, Maximize2 } from "lucide-react";
+import { Film, Download, Play, X, Loader2, Maximize2, RefreshCw } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -87,6 +87,9 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
     queryFn: () => fetchJson(`/api/printers/${printerId}/timelapse`),
     staleTime: 5 * 60_000,
   });
+  // Baskı bitince liste kendiliğinden tazeleniyor; bu düğme "şimdi bak" diyebilmek için —
+  // yazıcı videoyu geç yazarsa kullanıcı uygulamayı kapatıp açmak zorunda kalmasın.
+  const yenile = () => { void q.refetch(); };
   const [playing, setPlaying] = useState<TimelapseItem | null>(null);
   const items = q.data?.items ?? [];
 
@@ -101,6 +104,14 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
                 {items.length} video
               </span>
             )}
+            <button
+              onClick={yenile}
+              disabled={q.isFetching}
+              title="Listeyi yenile"
+              className="ml-auto mr-6 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", q.isFetching && "animate-spin")} />
+            </button>
           </DialogTitle>
         </DialogHeader>
 

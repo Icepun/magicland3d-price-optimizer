@@ -524,3 +524,18 @@ export function connectionNotice(
   }
   return null;
 }
+
+/**
+ * Bu yazıcı ŞU AN mı baskıyı bitirdi? (önceki tur basıyordu, bu tur basmıyor)
+ *
+ * NEDEN AYRI FONKSİYON: timelapse listesi 5 dakikalık `staleTime` ile duruyor ve uygulamanın
+ * genel ayarı `refetchOnMount: false` — yani onu yeniden çekecek hiçbir şey yoktu. Kullanıcı
+ * yeni videoyu ancak Hub'ı kapatıp açınca görüyordu. Artık bu geçiş yakalanınca liste
+ * tazeleniyor; karar burada saf ve test edilebilir dursun ki sessizce bozulmasın.
+ *
+ * Duraklatılmış baskı da "basıyor" sayılır: duraklatma bitiş değildir, video da oluşmaz.
+ */
+export function baskiYeniBittiMi(onceki: string | undefined, simdiki: string): boolean {
+  const basiyor = (d: string | undefined) => d === "printing" || d === "paused";
+  return basiyor(onceki) && !basiyor(simdiki);
+}
