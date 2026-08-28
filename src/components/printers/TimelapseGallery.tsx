@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { fetchJson } from "@/lib/fetch-json";
 import { cn } from "@/lib/utils";
+import { timelapseAdiCozumle } from "@/core/printers/timelapse-name";
 
 interface TimelapseItem {
   name: string;
@@ -116,9 +117,9 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
         </DialogHeader>
 
         {q.isLoading ? (
-          <div className="grid grid-cols-2 gap-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 w-full rounded-lg" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="aspect-[4/3] w-full rounded-lg" />
             ))}
           </div>
         ) : q.isError ? (
@@ -130,7 +131,7 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
             description="Yazıcıda timelapse açıkken bir baskı tamamlandığında videolar burada görünür."
           />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto pr-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[62vh] overflow-y-auto pr-1">
             {items.map((it, i) => (
               <TimelapseCard
                 key={it.name}
@@ -150,16 +151,19 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
 
 function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: number; onPlay: () => void }) {
   const [zoom, setZoom] = useState(false);
+  const cozum = timelapseAdiCozumle(item.name);
   return (
     <div
-      className="rounded-lg border bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500"
+      className="rounded-lg border bg-card overflow-hidden transition-shadow hover:shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-500"
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       <button
         onClick={item.playable ? onPlay : item.thumbUrl ? () => setZoom(true) : undefined}
         disabled={!item.playable && !item.thumbUrl}
         className={cn(
-          "relative block w-full h-28 bg-muted overflow-hidden group",
+          // Kare değil 16:9: video zaten o oranda; kareye kırpmak görüntünün %44'ünü atardı.
+          // Altındaki bilgi şeridiyle birlikte kart yaklaşık kare duruyor.
+          "relative block w-full aspect-video bg-muted overflow-hidden group",
           (item.playable || item.thumbUrl) && "cursor-pointer"
         )}
         title={item.playable ? "Oynat" : item.thumbUrl ? "Kapağı büyüt" : undefined}
@@ -171,6 +175,11 @@ function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: nu
           <div className="w-full h-full flex items-center justify-center">
             <Film className="h-8 w-8 text-muted-foreground/30" />
           </div>
+        )}
+        {cozum.sure && (
+          <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums">
+            {cozum.sure}
+          </span>
         )}
         {item.playable ? (
           <span className="absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -193,11 +202,13 @@ function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: nu
         </div>
       )}
       <div className="p-2.5 space-y-1.5">
-        <div className="text-xs font-medium line-clamp-1" title={item.name}>{item.name}</div>
+        {/* Ham dosya adı yerine baskının adı — hash ve zaman damgası okunurluğu bozuyordu. */}
+        <div className="text-xs font-medium line-clamp-1" title={item.name}>{cozum.ad}</div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-muted-foreground tabular-nums">
-            {fmtSize(item.size)}
-            {item.modified ? ` · ${fmtDate(item.modified)}` : ""}
+          <span className="text-[10px] text-muted-foreground tabular-nums truncate">
+            {item.modified ? fmtDate(item.modified) : ""}
+            {cozum.sure ? ` · ${cozum.sure}` : ""}
+            {` · ${fmtSize(item.size)}`}
           </span>
           <DownloadButton item={item} />
         </div>
