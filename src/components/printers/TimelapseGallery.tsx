@@ -26,6 +26,8 @@ interface TimelapseItem {
   playable: boolean;
   url: string;
   thumbUrl: string | null;
+  /** Snapmaker U1'in video klasörü salt-okunur → silme düğmesi kapalı gösterilir. */
+  canDelete?: boolean;
 }
 interface TimelapseResponse {
   items: TimelapseItem[];
@@ -134,9 +136,16 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
         </DialogHeader>
 
         {q.isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid auto-rows-max grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* Yükleme iskeleti kartın gerçek biçimini taklit eder → liste gelince zıplama olmaz. */}
             {Array.from({ length: 6 }).map((_, i) => (
-              <Skeleton key={i} className="aspect-[4/3] w-full rounded-lg" />
+              <div key={i} className="rounded-lg border overflow-hidden">
+                <Skeleton className="aspect-video w-full rounded-none" />
+                <div className="p-2.5 space-y-1.5">
+                  <Skeleton className="h-3 w-2/3" />
+                  <Skeleton className="h-2.5 w-full" />
+                </div>
+              </div>
             ))}
           </div>
         ) : q.isError ? (
@@ -148,7 +157,19 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
             description="Yazıcıda timelapse açıkken bir baskı tamamlandığında videolar burada görünür."
           />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[62vh] overflow-y-auto pr-1">
+          /**
+           * `auto-rows-max` ŞART — yoksa kartlar EZİLİR.
+           *
+           * ÖLÇÜLDÜ (29 Ağu 2026, çalışan uygulama): `max-h-[62vh]` bu ızgaraya KESİN bir
+           * yükseklik veriyor. Satırlar oraya sığmayınca tarayıcı `auto` satırları
+           * min-content'e kadar küçültüyor — 8 satır 45'er piksele indi. Kart
+           * `overflow-hidden` olduğu için görselin üst şeridi dışında her şey (ad, tarih,
+           * İndir, Sil) kırpıldı. 23 videolu U1'de görünüyordu, 4 videolu Bambu'da (2 satır
+           * sığdığı için) görünmüyordu — "bambuda düzgün, snapmakerda garip" bundandı.
+           *
+           * `auto-rows-max` satırı içeriğin gerçek boyunda tutar, taşan kısım kaydırılır.
+           */
+          <div className="grid auto-rows-max content-start grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[62vh] overflow-y-auto pr-1">
             {items.map((it, i) => (
               <TimelapseCard
                 key={it.name}
@@ -252,8 +273,10 @@ function TimelapseCard({
               </div>
             ) : (
               <Button
-                size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                title="Videoyu sil"
+                size="sm" variant="ghost"
+                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                disabled={item.canDelete === false}
+                title={item.canDelete === false ? "Bu yazıcı video silmeye izin vermiyor" : "Videoyu sil"}
                 onClick={() => setOnay(true)}
               >
                 <Trash2 className="h-3.5 w-3.5" />

@@ -20,6 +20,8 @@ export interface TimelapseItem {
    *  Bambu: uygulamamız üzerinden proxy (FTPS ile çekilir). */
   url: string;
   thumbUrl: string | null;
+  /** Bu video yazıcıdan silinebilir mi? Snapmaker U1'in video klasörü salt-okunur → false. */
+  canDelete: boolean;
 }
 
 /**
@@ -53,6 +55,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         url: `/api/printers/${id}/timelapse/download?name=${encodeURIComponent(r.name)}`,
         // Bambu her videonun yanına /timelapse/thumbnail/<ad>.jpg yazıyor → indirmeden önizleme.
         thumbUrl: `/api/printers/${id}/timelapse/download?kind=thumb&name=${encodeURIComponent(r.name)}`,
+        canDelete: true, // FTPS ile siliniyor
       }));
       return NextResponse.json({ items, offline: false });
     }
@@ -67,6 +70,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       playable: /\.(mp4|webm)$/i.test(r.name),
       url: r.url, // doğrudan yazıcıdan — Range destekli, seek çalışır
       thumbUrl: r.thumbUrl,
+      canDelete: r.deletable,
     }));
     return NextResponse.json({ items, offline: false });
   } catch (error) {
@@ -102,8 +106,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       return NextResponse.json({ ok: true });
     }
 
-    const ok = await moonrakerTimelapseSil(cfg.host, cfg.port, name);
-    if (!ok) return NextResponse.json({ error: "Video silinemedi — yazıcı meşgul olabilir." }, { status: 502 });
+    const r = await moonrakerTimelapseSil(cfg.host, cfg.port, name);
+    if (!r.ok) return NextResponse.json({ error: r.neden ?? "Video silinemedi" }, { status: 502 });
     return NextResponse.json({ ok: true });
   } catch (error) {
     return jsonError(error);

@@ -2237,6 +2237,42 @@ export interface MoonrakerTimelapse {
   url: string;
   /** Aynı adlı kapak görseli varsa (U1 video ile birlikte .jpg yazıyor). */
   thumbUrl: string | null;
+  /** Bu video silinebilir mi? Kökün Moonraker'daki yazma izninden gelir — bkz. `koklerdenIzin`. */
+  deletable: boolean;
+}
+
+/**
+ * KÖK İZİNLERİ — hangi klasörde silme/yazma yapılabilir?
+ *
+ * ÖLÇÜLDÜ (29 Ağu 2026, gerçek cihazlar):
+ *   Snapmaker U1 → camera kökü `"permissions": "r"`  → DELETE 405 "Path not available"
+ *   Elegoo N4 Pro/Plus → `/server/files/roots` ucu YOK (eski Moonraker, 404)
+ *
+ * Yani U1'de timelapse videoları ağ üzerinden silinemiyor; bunu kullanıcıya "silinemedi"
+ * diye hata verdikten SONRA değil, düğmeyi kapatarak ÖNCEDEN söylemek gerekiyor.
+ *
+ * Uç yoksa null döner → çağıran iyimser davranır (eski davranış korunur).
+ */
+export function koklerdenIzin(ham: unknown): Map<string, string> | null {
+  if (!Array.isArray(ham)) return null;
+  const m = new Map<string, string>();
+  for (const k of ham) {
+    if (!k || typeof k !== "object") continue;
+    const r = k as { name?: unknown; permissions?: unknown };
+    if (typeof r.name === "string" && typeof r.permissions === "string") m.set(r.name, r.permissions);
+  }
+  return m.size ? m : null;
+}
+
+/** `/server/files/roots` → kök adı → izinler ("r" / "rw"). Uç yoksa/hata varsa null. */
+async function moonrakerKokIzinleri(host: string, port: number): Promise<Map<string, string> | null> {
+  try {
+    const res = await mreq(host, port, "/server/files/roots", undefined, 6000);
+    if (!res.ok) return null; // eski Moonraker → 404
+    return koklerdenIzin(unwrap(await res.json()));
+  } catch {
+    return null;
+  }
 }
 
 /** Yazıcıdaki timelapse videoları (+ varsa kapak görseli). Kök yoksa boş dizi döner. */
@@ -2245,8 +2281,12 @@ export async function moonrakerTimelapseList(
   port: number
 ): Promise<MoonrakerTimelapse[]> {
   const base = await moonrakerBaseFor(host, port);
+  const izinler = await moonrakerKokIzinleri(host, port);
   const out: MoonrakerTimelapse[] = [];
   for (const root of TIMELAPSE_ROOTS) {
+    // Kök listesi elimizdeyse kayıtlı olmayan kökü hiç sormayalım (boşuna istek = yazıcıya yük).
+    if (izinler && !izinler.has(root)) continue;
+    const silinebilir = izinler ? (izinler.get(root) ?? "").includes("w") : true;
     let rows: { path: string; size: number; modified: number | null }[] = [];
     try {
       const res = await mreq(host, port, `/server/files/list?root=${root}`, undefined, 8000);
@@ -2276,6 +2316,7 @@ export async function moonrakerTimelapseList(
           const kapak = timelapseKapakSec(stem, images);
           return kapak ? `${base}/server/files/${root}/${encodeURIComponent(kapak)}` : null;
         })(),
+        deletable: silinebilir,
       });
     }
   }
@@ -2294,11 +2335,17 @@ export async function moonrakerTimelapseSil(
   host: string,
   port: number,
   name: string,
-): Promise<boolean> {
-  if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) return false;
+): Promise<{ ok: boolean; neden?: string }> {
+  if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) {
+    return { ok: false, neden: "Geçersiz dosya adı" };
+  }
+  const izinler = await moonrakerKokIzinleri(host, port);
   const stem = name.replace(/\.[^.]+$/, "");
   let videoSilindi = false;
+  let yazilabilirKokVar = false;
   for (const root of TIMELAPSE_ROOTS) {
+    if (izinler && !(izinler.get(root) ?? "").includes("w")) continue; // salt-okunur → denemeye değmez
+    yazilabilirKokVar = true;
     for (const dosya of [name, `${stem}.jpg`, `${stem}_cover.jpg`]) {
       try {
         const res = await mreq(
@@ -2311,7 +2358,10 @@ export async function moonrakerTimelapseSil(
     }
     if (videoSilindi) break; // doğru kökü bulduk
   }
-  return videoSilindi;
+  if (videoSilindi) return { ok: true };
+  // U1'de tek durak burası: video klasörü salt-okunur, silme isteği 405 dönüyor.
+  if (!yazilabilirKokVar) return { ok: false, neden: "Bu yazıcı video silmeye izin vermiyor." };
+  return { ok: false, neden: "Video silinemedi — yazıcı meşgul olabilir." };
 }
 
 // ── PARÇA İPTALİ (exclude_object) ──────────────────────────────────────────
