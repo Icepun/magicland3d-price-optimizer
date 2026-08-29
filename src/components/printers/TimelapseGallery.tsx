@@ -26,8 +26,10 @@ interface TimelapseItem {
   playable: boolean;
   url: string;
   thumbUrl: string | null;
-  /** Snapmaker U1'in video klasörü salt-okunur → silme düğmesi kapalı gösterilir. */
+  /** Snapmaker U1'in video klasörü salt-okunur → silmek yerine listeden kaldırılır. */
   canDelete?: boolean;
+  /** Kullanıcı listeden kaldırmış — dosya yazıcıda duruyor, galeride gizli. */
+  hidden?: boolean;
 }
 interface TimelapseResponse {
   items: TimelapseItem[];
@@ -57,7 +59,8 @@ export function TimelapseStrip({ printerId, accent }: { printerId: string; accen
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const count = q.data?.items.length ?? 0;
+  // Listeden kaldırılanlar sayılmaz — yoksa şerit "24 video" derken galeri 23 gösterirdi.
+  const count = q.data?.items.filter((i) => !i.hidden).length ?? 0;
 
   // Hiç video yoksa ve yazıcı çevrimiçiyse şeridi gösterme (kartı gereksiz kalabalıklaştırmasın).
   if (!q.isLoading && !q.isError && count === 0) return null;
@@ -110,8 +113,37 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
     toast.success("Video silindi");
     await q.refetch();
   };
+  /**
+   * Listeden kaldır / geri getir — Snapmaker U1 videoların silinmesine izin vermediği için
+   * tek çare bu. Dosya yazıcıda kalır, işlem geri alınabilir.
+   */
+  const gizle = async (name: string, gizli: boolean) => {
+    const r = await fetch(`/api/printers/${printerId}/timelapse`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, hidden: gizli }),
+    });
+    if (!r.ok) {
+      toast.error(gizli ? "Kaldırılamadı" : "Geri alınamadı");
+      return;
+    }
+    await q.refetch();
+    if (gizli) {
+      toast.success("Listeden kaldırıldı", {
+        description: "Video yazıcıda duruyor.",
+        action: { label: "Geri al", onClick: () => void gizle(name, false) },
+      });
+    }
+  };
+
   const [playing, setPlaying] = useState<TimelapseItem | null>(null);
-  const items = q.data?.items ?? [];
+  const [gizliGoster, setGizliGoster] = useState(false);
+  const tumu = q.data?.items ?? [];
+  const gizliler = tumu.filter((i) => i.hidden);
+  // Son gizli video geri alınınca "kaldırılanlar" görünümü boşalır ve geri dönüş düğmesi de
+  // kaybolurdu — kullanıcı boş ekranda kalıyordu. Liste boşsa kendiliğinden ana listeye dön.
+  const gizliModu = gizliGoster && gizliler.length > 0;
+  const items = gizliModu ? gizliler : tumu.filter((i) => !i.hidden);
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -123,6 +155,19 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
               <span className="text-xs font-normal text-muted-foreground tabular-nums">
                 {items.length} video
               </span>
+            )}
+            {gizliler.length > 0 && (
+              <button
+                onClick={() => setGizliGoster((v) => !v)}
+                className={cn(
+                  "rounded-md px-2 py-0.5 text-[11px] font-normal transition-colors",
+                  gizliModu
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                {gizliModu ? "Listeye dön" : `${gizliler.length} kaldırılan`}
+              </button>
             )}
             <button
               onClick={yenile}
@@ -153,8 +198,12 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
         ) : items.length === 0 ? (
           <EmptyState
             icon={Film}
-            title="Henüz timelapse yok"
-            description="Yazıcıda timelapse açıkken bir baskı tamamlandığında videolar burada görünür."
+            title={gizliler.length > 0 ? "Listede video kalmadı" : "Henüz timelapse yok"}
+            description={
+              gizliler.length > 0
+                ? "Kaldırdıklarını yukarıdaki düğmeden geri getirebilirsin."
+                : "Yazıcıda timelapse açıkken bir baskı tamamlandığında videolar burada görünür."
+            }
           />
         ) : (
           /**
@@ -177,6 +226,7 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
                 delay={i * 40}
                 onPlay={() => setPlaying(it)}
                 onSil={() => sil(it.name)}
+                onGizle={(gizli) => gizle(it.name, gizli)}
               />
             ))}
           </div>
@@ -189,17 +239,25 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
 }
 
 function TimelapseCard({
-  item, delay, onPlay, onSil,
+  item, delay, onPlay, onSil, onGizle,
 }: {
-  item: TimelapseItem; delay: number; onPlay: () => void; onSil: () => Promise<void>;
+  item: TimelapseItem; delay: number; onPlay: () => void;
+  onSil: () => Promise<void>; onGizle: (gizli: boolean) => Promise<void>;
 }) {
   const [zoom, setZoom] = useState(false);
   const [onay, setOnay] = useState(false);
   const [siliniyor, setSiliniyor] = useState(false);
   const cozum = timelapseAdiCozumle(item.name);
+  // Silinemeyen yazıcıda (Snapmaker U1) düğme videoyu listeden kaldırır. Geri alınabilir
+  // olduğu için onay adımı yok — silme ise geri alınamaz, orada iki adım kalıyor.
+  const silinebilir = item.canDelete !== false;
   return (
     <div
-      className="rounded-lg border bg-card overflow-hidden transition-shadow hover:shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-500"
+      className={cn(
+        "rounded-lg border bg-card overflow-hidden transition-all hover:shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-500",
+        // Kaldırılanlar listesinde olduğunu tek bakışta belli et.
+        item.hidden && "opacity-60 hover:opacity-100 border-dashed"
+      )}
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       <button
@@ -258,7 +316,24 @@ function TimelapseCard({
           <div className="flex items-center gap-1">
             <DownloadButton item={item} />
             {/* GERİ ALINAMAZ: dosya yazıcının deposundan silinir. Bu yüzden iki adım. */}
-            {onay ? (
+            {item.hidden ? (
+              <Button
+                size="sm" variant="ghost" className="h-7 px-2 text-[10px]"
+                disabled={siliniyor}
+                onClick={async () => { setSiliniyor(true); try { await onGizle(false); } finally { setSiliniyor(false); } }}
+              >
+                {siliniyor ? <Loader2 className="h-3 w-3 animate-spin" /> : "Geri al"}
+              </Button>
+            ) : !silinebilir ? (
+              <Button
+                size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                disabled={siliniyor}
+                title="Listeden kaldır — video yazıcıda kalır"
+                onClick={async () => { setSiliniyor(true); try { await onGizle(true); } finally { setSiliniyor(false); } }}
+              >
+                {siliniyor ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              </Button>
+            ) : onay ? (
               <div className="flex items-center gap-1">
                 <Button
                   size="sm" variant="destructive" className="h-7 px-2 text-[10px]"
@@ -273,10 +348,8 @@ function TimelapseCard({
               </div>
             ) : (
               <Button
-                size="sm" variant="ghost"
-                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive disabled:opacity-40"
-                disabled={item.canDelete === false}
-                title={item.canDelete === false ? "Bu yazıcı video silmeye izin vermiyor" : "Videoyu sil"}
+                size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                title="Videoyu sil"
                 onClick={() => setOnay(true)}
               >
                 <Trash2 className="h-3.5 w-3.5" />

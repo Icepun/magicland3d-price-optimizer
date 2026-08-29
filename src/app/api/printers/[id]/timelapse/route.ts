@@ -6,6 +6,7 @@ import { jsonError } from "@/lib/api-error";
 import { moonrakerTimelapseList, moonrakerTimelapseSil } from "@/core/printers/moonraker";
 import { bambuTimelapseList, bambuTimelapseSil } from "@/core/printers/bambu";
 import { getBambuStatusCached, getMoonrakerStatusCached } from "@/core/printers/status-cache";
+import { gizlenenAdlar, gizliligiDegistir } from "@/core/printers/timelapse-hidden";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,8 @@ export interface TimelapseItem {
   thumbUrl: string | null;
   /** Bu video yazıcıdan silinebilir mi? Snapmaker U1'in video klasörü salt-okunur → false. */
   canDelete: boolean;
+  /** Kullanıcı listeden kaldırmış mı? Dosya yazıcıda durur, yalnız galeride gizlenir. */
+  hidden?: boolean;
 }
 
 /**
@@ -63,6 +66,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const st = await getMoonrakerStatusCached(cfg.host, cfg.port);
     if (!st.online) return NextResponse.json({ items: [], offline: true });
     const rows = await moonrakerTimelapseList(cfg.host, cfg.port);
+    // Gizlenenler yalnız video varsa okunuyor — videosuz yazıcı için boşuna sorgu atmayalım.
+    const gizli = rows.length ? await gizlenenAdlar(id) : new Set<string>();
     const items: TimelapseItem[] = rows.map((r) => ({
       name: r.name,
       size: r.size,
@@ -71,6 +76,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       url: r.url, // doğrudan yazıcıdan — Range destekli, seek çalışır
       thumbUrl: r.thumbUrl,
       canDelete: r.deletable,
+      hidden: gizli.has(r.name),
     }));
     return NextResponse.json({ items, offline: false });
   } catch (error) {
@@ -108,6 +114,27 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
     const r = await moonrakerTimelapseSil(cfg.host, cfg.port, name);
     if (!r.ok) return NextResponse.json({ error: r.neden ?? "Video silinemedi" }, { status: 502 });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+/**
+ * Videoyu listeden kaldır / geri getir.
+ *
+ * Snapmaker U1 videoların silinmesine izin vermiyor (video klasörü salt-okunur). Kullanıcı
+ * yine de gereksiz videoları gözünün önünden kaldırabilsin diye galeride gizleniyor —
+ * dosya yazıcıda kalır, işlem her zaman geri alınabilir.
+ */
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await ensureRuntimeSchema();
+    const { id } = await params;
+    const govde = (await req.json().catch(() => ({}))) as { name?: unknown; hidden?: unknown };
+    const name = typeof govde.name === "string" ? govde.name.trim() : "";
+    if (!name) return NextResponse.json({ error: "Geçersiz dosya adı" }, { status: 400 });
+    await gizliligiDegistir(id, name, govde.hidden !== false);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return jsonError(error);
