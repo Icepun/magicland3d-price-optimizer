@@ -1106,6 +1106,29 @@ export interface BambuTimelapse {
   modifiedText: string | null;
 }
 
+/**
+ * Timelapse videosunu SİL — küçük resmiyle birlikte.
+ *
+ * Bambu videoların küçük resmini `timelapse/thumbnail/<ad>.jpg` olarak yazıyor; video
+ * silinip o kalırsa yazıcıda yetim dosyalar birikir. Küçük resmin silinememesi hata
+ * sayılmaz (her videonun kapağı olmayabilir).
+ */
+export async function bambuTimelapseSil(
+  host: string,
+  accessCode: string,
+  name: string,
+): Promise<boolean> {
+  // Yalnız düz dosya adı — dizin geçişine izin verme.
+  if (!name || name.includes("/") || name.includes("\\") || name.startsWith(".")) return false;
+  return bambuFtpQuery(host, accessCode, async ({ cmd }) => {
+    const r = await cmd(`DELE ${BAMBU_TIMELAPSE_DIR}/${name}`);
+    if (r.code >= 400) return false;
+    const kapak = name.replace(/\.[^.]+$/, ".jpg");
+    try { await cmd(`DELE ${BAMBU_TIMELAPSE_DIR}/thumbnail/${kapak}`); } catch { /* kapak yoksa sorun değil */ }
+    return true;
+  });
+}
+
 /** Yazıcıdaki timelapse videoları (yalnız /timelapse; klasörler ve kamera kayıtları hariç). */
 export async function bambuTimelapseList(
   host: string,

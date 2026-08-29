@@ -18,6 +18,7 @@
  */
 
 import { processSingleton } from "./process-singleton";
+import { timelapseKapakSec } from "./timelapse-name";
 import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
 // Kaçışlama `exclude-object.ts`e taşındı (dosya üretimi de aynı kuralı kullanıyor);
 // eski içe aktarmalar kırılmasın diye buradan yeniden dışa açılıyor.
@@ -2270,14 +2271,47 @@ export async function moonrakerTimelapseList(
         size: r.size,
         modified: r.modified,
         url: `${base}/server/files/${root}/${encodeURIComponent(r.path)}`,
-        thumbUrl: images.has(stem)
-          ? `${base}/server/files/${root}/${encodeURIComponent(`${stem}.jpg`)}`
-          : null,
+        // Hangi kapak? Gerekçesi `timelapseKapakSec` içinde (iki jpg yazılıyor, büyüğü doğru).
+        thumbUrl: (() => {
+          const kapak = timelapseKapakSec(stem, images);
+          return kapak ? `${base}/server/files/${root}/${encodeURIComponent(kapak)}` : null;
+        })(),
       });
     }
   }
   // En yeni önce (modified yoksa en sona).
   return out.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0));
+}
+
+/**
+ * Timelapse videosunu SİL — yanındaki kapak dosyalarıyla birlikte.
+ *
+ * Video silinip kapakları kalırsa yazıcının deposunda yetim dosyalar birikir; üstelik
+ * liste kapağa bakarak eşleştirme yaptığı için kafa karıştırıcı kayıtlar oluşur.
+ * Kapak yoksa hata sayılmaz (her videoda ikisi birden olmayabilir).
+ */
+export async function moonrakerTimelapseSil(
+  host: string,
+  port: number,
+  name: string,
+): Promise<boolean> {
+  if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) return false;
+  const stem = name.replace(/\.[^.]+$/, "");
+  let videoSilindi = false;
+  for (const root of TIMELAPSE_ROOTS) {
+    for (const dosya of [name, `${stem}.jpg`, `${stem}_cover.jpg`]) {
+      try {
+        const res = await mreq(
+          host, port,
+          `/server/files/${root}/${encodeURIComponent(dosya)}`,
+          { method: "DELETE" }, 10000,
+        );
+        if (res.ok && dosya === name) videoSilindi = true;
+      } catch { /* sıradaki dosya/kök */ }
+    }
+    if (videoSilindi) break; // doğru kökü bulduk
+  }
+  return videoSilindi;
 }
 
 // ── PARÇA İPTALİ (exclude_object) ──────────────────────────────────────────

@@ -10,7 +10,7 @@
  * Bu yüzden en önemli test, TANIMADIĞIMIZ adın kartı boş bırakmaması.
  */
 import { describe, expect, it } from "vitest";
-import { timelapseAdiCozumle } from "./timelapse-name";
+import { timelapseAdiCozumle, timelapseKapakSec } from "./timelapse-name";
 
 describe("gerçek U1 adları", () => {
   it("baskı adı, süre ve gürültü ayrılıyor", () => {
@@ -65,5 +65,28 @@ describe("tanınmayan adlar KARTI BOŞ BIRAKMAZ", () => {
 
   it("uzantısız ad patlamaz", () => {
     expect(timelapseAdiCozumle("Parça 1s5dk").ad).toBe("Parça");
+  });
+});
+
+describe("kapak seçimi", () => {
+  /**
+   * ÖLÇÜLDÜ (29 Ağu 2026, U1): her video için iki jpg yazılıyor — 120x90 (3 KB) ve
+   * 880x495 (35 KB, tam 16:9). Küçük olan seçilince kart bulanık ve kırpık görünüyordu.
+   */
+  it("_cover varsa O seçilir", () => {
+    const mevcut = new Set(["Parça_20260828", "Parça_20260828_cover"]);
+    expect(timelapseKapakSec("Parça_20260828", mevcut)).toBe("Parça_20260828_cover.jpg");
+  });
+
+  it("_cover yoksa küçük kapağa düşülür", () => {
+    expect(timelapseKapakSec("Parça", new Set(["Parça"]))).toBe("Parça.jpg");
+  });
+
+  it("hiç kapak yoksa null — kartta yer tutucu çizilir", () => {
+    expect(timelapseKapakSec("Parça", new Set())).toBeNull();
+  });
+
+  it("başka videonun kapağı yanlışlıkla seçilmez", () => {
+    expect(timelapseKapakSec("Parça_A", new Set(["Parça_B", "Parça_B_cover"]))).toBeNull();
   });
 });

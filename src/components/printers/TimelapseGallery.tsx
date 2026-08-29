@@ -9,12 +9,13 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Film, Download, Play, X, Loader2, Maximize2, RefreshCw } from "lucide-react";
+import { Film, Download, Play, X, Loader2, Maximize2, RefreshCw, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { fetchJson } from "@/lib/fetch-json";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { timelapseAdiCozumle } from "@/core/printers/timelapse-name";
 
@@ -91,6 +92,22 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
   // Baskı bitince liste kendiliğinden tazeleniyor; bu düğme "şimdi bak" diyebilmek için —
   // yazıcı videoyu geç yazarsa kullanıcı uygulamayı kapatıp açmak zorunda kalmasın.
   const yenile = () => { void q.refetch(); };
+
+  /** Videoyu yazıcıdan sil, sonra listeyi tazele (silinen kart kendiliğinden düşsün). */
+  const sil = async (name: string) => {
+    const r = await fetch(`/api/printers/${printerId}/timelapse`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      toast.error(j.error || "Video silinemedi");
+      return;
+    }
+    toast.success("Video silindi");
+    await q.refetch();
+  };
   const [playing, setPlaying] = useState<TimelapseItem | null>(null);
   const items = q.data?.items ?? [];
 
@@ -138,6 +155,7 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
                 item={it}
                 delay={i * 40}
                 onPlay={() => setPlaying(it)}
+                onSil={() => sil(it.name)}
               />
             ))}
           </div>
@@ -149,8 +167,14 @@ function TimelapseDialog({ printerId, onClose }: { printerId: string; onClose: (
   );
 }
 
-function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: number; onPlay: () => void }) {
+function TimelapseCard({
+  item, delay, onPlay, onSil,
+}: {
+  item: TimelapseItem; delay: number; onPlay: () => void; onSil: () => Promise<void>;
+}) {
   const [zoom, setZoom] = useState(false);
+  const [onay, setOnay] = useState(false);
+  const [siliniyor, setSiliniyor] = useState(false);
   const cozum = timelapseAdiCozumle(item.name);
   return (
     <div
@@ -210,7 +234,32 @@ function TimelapseCard({ item, delay, onPlay }: { item: TimelapseItem; delay: nu
             {cozum.sure ? ` · ${cozum.sure}` : ""}
             {` · ${fmtSize(item.size)}`}
           </span>
-          <DownloadButton item={item} />
+          <div className="flex items-center gap-1">
+            <DownloadButton item={item} />
+            {/* GERİ ALINAMAZ: dosya yazıcının deposundan silinir. Bu yüzden iki adım. */}
+            {onay ? (
+              <div className="flex items-center gap-1">
+                <Button
+                  size="sm" variant="destructive" className="h-7 px-2 text-[10px]"
+                  disabled={siliniyor}
+                  onClick={async () => { setSiliniyor(true); try { await onSil(); } finally { setSiliniyor(false); setOnay(false); } }}
+                >
+                  {siliniyor ? <Loader2 className="h-3 w-3 animate-spin" /> : "Sil"}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-[10px]" disabled={siliniyor} onClick={() => setOnay(false)}>
+                  Vazgeç
+                </Button>
+              </div>
+            ) : (
+              <Button
+                size="sm" variant="ghost" className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                title="Videoyu sil"
+                onClick={() => setOnay(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

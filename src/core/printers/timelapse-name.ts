@@ -54,3 +54,21 @@ export function timelapseAdiCozumle(dosyaAdi: string): TimelapseAdi {
   // Ad tamamen eriyip gittiyse ham adı göster — boş başlıklı bir kart işe yaramaz.
   return { ad: ad || dosyaAdi.replace(/\.[a-z0-9]{2,4}$/i, ""), sure };
 }
+
+/**
+ * Bir video için hangi kapak dosyası kullanılmalı?
+ *
+ * ⚠️ SNAPMAKER U1 HER VİDEO İÇİN İKİ JPG YAZIYOR (ölçüldü 29 Ağu 2026, gerçek cihaz):
+ *   <ad>.jpg        → 120x90,  3 KB  — küçük önizleme, 4:3
+ *   <ad>_cover.jpg  → 880x495, 35 KB — tam kapak, TAM 16:9
+ *
+ * Küçük olan kullanılınca galeri kartı hem bulanıklaşıyor hem de 16:9 kutuda üstten alttan
+ * kırpılıyordu ("snapmakerda böyle garip"). Büyük kapak galerinin oranıyla birebir uyuyor.
+ *
+ * `mevcut` = klasördeki görsellerin uzantısız adları.
+ */
+export function timelapseKapakSec(stem: string, mevcut: ReadonlySet<string>): string | null {
+  if (mevcut.has(`${stem}_cover`)) return `${stem}_cover.jpg`;
+  if (mevcut.has(stem)) return `${stem}.jpg`;
+  return null;
+}

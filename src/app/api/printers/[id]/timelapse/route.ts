@@ -3,8 +3,8 @@ import { printerCfgCached } from "@/core/printers/config-cache";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { moonrakerTimelapseList } from "@/core/printers/moonraker";
-import { bambuTimelapseList } from "@/core/printers/bambu";
+import { moonrakerTimelapseList, moonrakerTimelapseSil } from "@/core/printers/moonraker";
+import { bambuTimelapseList, bambuTimelapseSil } from "@/core/printers/bambu";
 import { getBambuStatusCached, getMoonrakerStatusCached } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
@@ -69,6 +69,42 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       thumbUrl: r.thumbUrl,
     }));
     return NextResponse.json({ items, offline: false });
+  } catch (error) {
+    return jsonError(error);
+  }
+}
+
+/**
+ * Timelapse videosunu sil.
+ *
+ * GERİ ALINAMAZ: dosya yazıcının kendi deposundan silinir, çöp kutusu yok. Bu yüzden
+ * arayüzde tek tıkla değil onayla siliniyor.
+ *
+ * Video adı gövdede gelir; yol geçişine izin verilmez (yalnız düz dosya adı).
+ */
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    await ensureRuntimeSchema();
+    const { id } = await params;
+    const cfg = await printerCfgCached<NonNullable<Awaited<ReturnType<typeof prisma.printerConfig.findUnique>>>>(id);
+    if (!cfg) return NextResponse.json({ error: "Yazıcı bulunamadı" }, { status: 404 });
+
+    const govde = (await req.json().catch(() => ({}))) as { name?: unknown };
+    const name = typeof govde.name === "string" ? govde.name.trim() : "";
+    if (!name || name.includes("..") || name.includes("/") || name.includes("\\")) {
+      return NextResponse.json({ error: "Geçersiz dosya adı" }, { status: 400 });
+    }
+
+    if (cfg.type === "bambu") {
+      if (!cfg.accessCode) return NextResponse.json({ error: "Erişim kodu girilmemiş" }, { status: 400 });
+      const ok = await bambuTimelapseSil(cfg.host, cfg.accessCode, name);
+      if (!ok) return NextResponse.json({ error: "Video silinemedi — yazıcı meşgul olabilir." }, { status: 502 });
+      return NextResponse.json({ ok: true });
+    }
+
+    const ok = await moonrakerTimelapseSil(cfg.host, cfg.port, name);
+    if (!ok) return NextResponse.json({ error: "Video silinemedi — yazıcı meşgul olabilir." }, { status: 502 });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return jsonError(error);
   }
