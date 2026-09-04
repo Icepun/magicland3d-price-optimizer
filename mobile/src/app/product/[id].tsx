@@ -2,29 +2,42 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
-import { PressableScale } from "@/components/ui/PressableScale";
-import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
+import { SymbolView } from "expo-symbols";
 import { useMemo, useState } from "react";
-import {
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Modal, Pressable, StyleSheet, View } from "react-native";
 
+import { Pill } from "@/components/kit/Chip";
+import {
+  Button,
+  Count,
+  ErrorState,
+  FadeInView,
+  Glass,
+  IconButton,
+  Input,
+  Money,
+  Ring,
+  Screen,
+  Shimmer,
+  ShimmerCard,
+  SubHeader,
+  Tint,
+  Txt,
+} from "@/components/kit";
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
-import { thumbUrl } from "@/lib/image";
 import { adjustProductStock, getPriceHistory, setProductAlias, type PriceChange } from "@/lib/db/products";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
-import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
+import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
+import { thumbUrl } from "@/lib/image";
+import { PLATFORM_COLOR, PLATFORM_LABEL } from "@/lib/platforms";
 import { computePriceLab } from "@/lib/price-lab";
-import { formatCurrency, formatDate, formatNumber, formatPercent, friendlyError } from "@/lib/format";
-import { ML, radius } from "@/theme/colors";
-import { PLATFORM_LABEL } from "@/lib/platforms";
+import { computeProductProfit, type PlatformProfit } from "@/lib/profit";
+import { color, radius, space } from "@/theme/tokens";
 
+/**
+ * ÜRÜN DETAYI — stok ±, maliyet, platform kâr/zarar (dökümüyle), Fiyat Laboratuvarı, kampanya
+ * simülatörü, fiyat geçmişi, takma ad. Veri ve iyimser güncellemeler öncekiyle aynı.
+ */
 export default function ProductDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const qc = useQueryClient();
@@ -36,35 +49,21 @@ export default function ProductDetailScreen() {
     isError: productFailed,
     isRefetching: productRefetching,
     refetch: refetchProduct,
-  } = useQuery({
-    queryKey: ["product", id],
-    queryFn: () => getProductDetail(id),
-  });
-
-  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
+  } = useQuery({ queryKey: ["product", id], queryFn: () => getProductDetail(id) });
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
-
-  const { data: settings } = useQuery({
-    queryKey: ["settings"],
-    queryFn: getSettingsMap,
-  });
-
-  const { data: priceHistory } = useQuery({
-    queryKey: ["price-history", id],
-    queryFn: () => getPriceHistory(id),
-  });
-
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const { data: priceHistory } = useQuery({ queryKey: ["price-history", id], queryFn: () => getPriceHistory(id) });
   const { data: variantGroup } = useQuery({
     queryKey: ["variant-group", product?.variantGroupId],
     queryFn: () => getVariantGroup(product!.variantGroupId!),
     enabled: !!product?.variantGroupId,
   });
 
-  // Optimistic: UI anında değişir, DB yazımı arka planda; hata olursa geri al.
+  // İyimser stok: UI anında değişir, DB yazımı arkada; hata olursa geri al.
   const stockMutation = useMutation({
     mutationFn: (delta: number) => adjustProductStock(id, delta),
     onMutate: async (delta: number) => {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       await Promise.all([
         qc.cancelQueries({ queryKey: ["product", id] }),
         qc.cancelQueries({ queryKey: ["dashboard-data"] }),
@@ -72,11 +71,9 @@ export default function ProductDetailScreen() {
       const prevProduct = qc.getQueryData<ProductDetail>(["product", id]);
       const prevDashboard = qc.getQueryData<ProductDetail[]>(["dashboard-data"]);
       const optimisticStock = Math.max(0, (prevProduct?.stock ?? 0) + delta);
-      qc.setQueryData<ProductDetail>(["product", id], (o) =>
-        o ? { ...o, stock: optimisticStock } : o,
-      );
+      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock: optimisticStock } : o));
       qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
-        o ? o.map((p) => (p.id === id ? { ...p, stock: optimisticStock } : p)) : o,
+        o ? o.map((p) => (p.id === id ? { ...p, stock: optimisticStock } : p)) : o
       );
       return { prevProduct, prevDashboard };
     },
@@ -87,7 +84,7 @@ export default function ProductDetailScreen() {
     onSuccess: (stock) => {
       qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock } : o));
       qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
-        o ? o.map((p) => (p.id === id ? { ...p, stock } : p)) : o,
+        o ? o.map((p) => (p.id === id ? { ...p, stock } : p)) : o
       );
     },
     onSettled: () => {
@@ -97,7 +94,7 @@ export default function ProductDetailScreen() {
     },
   });
 
-  // Alias (takma ad) — optimistic düzenleme.
+  // Takma ad — iyimser düzenleme.
   const [aliasOpen, setAliasOpen] = useState(false);
   const [aliasDraft, setAliasDraft] = useState("");
   const aliasMutation = useMutation({
@@ -114,11 +111,7 @@ export default function ProductDetailScreen() {
     },
   });
 
-  const profit =
-    product && rules && settings
-      ? computeProductProfit(product, rules, settings)
-      : null;
-
+  const profit = product && rules && settings ? computeProductProfit(product, rules, settings) : null;
   const priceLab = useMemo(
     () => (product && rules && settings ? computePriceLab(product, rules, settings) : null),
     [product, rules, settings]
@@ -126,631 +119,454 @@ export default function ProductDetailScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <Header title="" />
-        <ProductDetailSkeleton />
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Ürün" />}>
+        <View style={styles.titleRow}>
+          <Shimmer width={72} height={72} radius={radius.md} />
+          <View style={{ flex: 1, gap: space.sm }}>
+            <Shimmer width="80%" height={20} delay={60} />
+            <Shimmer width="45%" height={12} delay={110} />
+          </View>
+        </View>
+        <ShimmerCard height={120} delay={180} />
+        <ShimmerCard height={110} delay={260} />
+        <ShimmerCard height={180} delay={340} />
+      </Screen>
     );
   }
 
   if (productFailed || !product) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <Header title="Ürün" />
-        <View style={[styles.center, styles.errorBox]}>
-          <Text style={styles.errorText}>{friendlyError(productError, "Ürün yüklenemedi.")}</Text>
-          <PressableScale
-            onPress={() => void refetchProduct()}
-            disabled={productRefetching}
-            style={styles.retryButton}
-          >
-            <Text style={styles.retryButtonText}>
-              {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
-            </Text>
-          </PressableScale>
-        </View>
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Ürün" />}>
+        <ErrorState
+          title="Ürün yüklenemedi"
+          error={productError ?? new Error("Ürün bulunamadı.")}
+          onRetry={() => void refetchProduct()}
+          retrying={productRefetching}
+        />
+      </Screen>
     );
   }
 
   const stock = product.stock;
+  const kaydetAlias = () => {
+    aliasMutation.mutate(aliasDraft);
+    setAliasOpen(false);
+  };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Header title={product.categoryName} />
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Ürün başlığı */}
+    <Screen header={<SubHeader title="Ürün" subtitle={product.categoryName} />}>
+      {/* Başlık */}
+      <FadeInView index={0}>
         <View style={styles.titleRow}>
           {product.imageUrl ? (
-            <Image
-              source={{ uri: thumbUrl(product.imageUrl, 200)! }}
-              alt={product.name}
-              style={styles.thumb}
-              contentFit="cover"
-            />
+            <Image source={{ uri: thumbUrl(product.imageUrl, 200)! }} alt={product.name} style={styles.thumb} contentFit="cover" />
           ) : (
-            <View style={[styles.thumb, styles.thumbEmpty]} />
+            <View style={[styles.thumb, styles.thumbEmpty]}>
+              <SymbolView name="cube.box" tintColor={color.textFaint} style={{ width: 26, height: 26 }} />
+            </View>
           )}
-          <View style={{ flex: 1 }}>
-            <Text style={styles.name}>{product.name}</Text>
-            <Text style={styles.sku}>{product.sku}</Text>
-            <PressableScale
+          <View style={{ flex: 1, gap: 3 }}>
+            <Txt v="heading" numberOfLines={3}>
+              {product.name}
+            </Txt>
+            <Txt v="small" tone="faint" numberOfLines={1}>
+              {product.sku}
+            </Txt>
+            <Pressable
               onPress={() => {
                 setAliasDraft(product.alias ?? "");
                 setAliasOpen(true);
               }}
               hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Takma adı düzenle"
             >
-              <Text style={styles.alias}>
+              <Txt v="smallStrong" tone="accent" numberOfLines={1}>
                 {product.alias ? `✎ "${product.alias}"` : "✎ takma ad ekle"}
-              </Text>
-            </PressableScale>
+              </Txt>
+            </Pressable>
           </View>
         </View>
+      </FadeInView>
 
-        {/* Varyant grubu */}
-        {variantGroup && variantGroup.members.length > 1 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionLabel}>VARYANT GRUBU · {variantGroup.name.toUpperCase()}</Text>
+      {/* Varyant grubu */}
+      {variantGroup && variantGroup.members.length > 1 ? (
+        <FadeInView index={1}>
+          <Tint strong padded={false} style={styles.section}>
+            <Txt v="label" tone="faint" style={styles.kicker}>
+              VARYANT GRUBU · {variantGroup.name.toLocaleUpperCase("tr-TR")}
+            </Txt>
             {variantGroup.members.map((m) => {
               const isCurrent = m.id === product.id;
               return (
-                <PressableScale
+                <Pressable
                   key={m.id}
                   disabled={isCurrent}
                   onPress={() => router.push(`/product/${m.id}`)}
-                  style={({ pressed }) => [
-                    styles.variantRow,
-                    pressed && !isCurrent && { opacity: 0.6 },
-                  ]}
+                  style={({ pressed }) => [styles.variantRow, pressed && !isCurrent ? { opacity: 0.6 } : null]}
+                  accessibilityRole="button"
                 >
                   {m.imageUrl ? (
-                    <Image
-                      source={{ uri: thumbUrl(m.imageUrl, 120)! }}
-                      alt={m.variantLabel || m.name}
-                      style={styles.variantThumb}
-                      contentFit="cover"
-                      recyclingKey={m.id}
-                    />
+                    <Image source={{ uri: thumbUrl(m.imageUrl, 120)! }} alt={m.variantLabel || m.name} style={styles.variantThumb} contentFit="cover" recyclingKey={m.id} />
                   ) : (
                     <View style={[styles.variantThumb, styles.thumbEmpty]} />
                   )}
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.variantLabel} numberOfLines={1}>
+                    <Txt v="bodyStrong" numberOfLines={1}>
                       {m.variantLabel || m.name}
-                    </Text>
-                    <Text style={styles.variantMeta}>
+                    </Txt>
+                    <Txt v="small" tone="faint" num>
                       {m.stock} adet · {formatCurrency(m.currentSalePrice)}
-                    </Text>
+                    </Txt>
                   </View>
                   {isCurrent ? (
-                    <View style={styles.curBadge}>
-                      <Text style={styles.curBadgeText}>bu ürün</Text>
-                    </View>
+                    <Pill>bu ürün</Pill>
                   ) : (
-                    <Text style={styles.variantChevron}>›</Text>
+                    <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
                   )}
-                </PressableScale>
+                </Pressable>
               );
             })}
-          </View>
-        )}
+          </Tint>
+        </FadeInView>
+      ) : null}
 
-        {/* Stok editörü */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>STOK</Text>
+      {/* Stok */}
+      <FadeInView index={2}>
+        <Glass>
+          <View style={styles.rowBetween}>
+            <Txt v="label" tone="faint" style={styles.kicker}>
+              STOK
+            </Txt>
+            {product.madeToOrder ? <Pill color={color.manual}>Siparişle üretilir</Pill> : null}
+          </View>
           <View style={styles.stockRow}>
-            <StockButton
-              label="−"
+            <IconButton
+              icon="minus"
+              size={56}
               onPress={() => stockMutation.mutate(-1)}
-              disabled={stock <= 0 || stockMutation.isPending}
+              accessibilityLabel="Stoğu bir azalt"
+              style={stock <= 0 ? { opacity: 0.4 } : null}
             />
-            <View style={styles.stockValue}>
-              <AnimatedNumber
-                value={stock}
-                format={(n) => formatNumber(Math.round(n))}
-                durationMs={280}
-                style={styles.stockNumber}
-              />
-              <Text style={styles.stockUnit}>adet</Text>
+            <View style={{ alignItems: "center" }}>
+              <Count value={stock} v="hero" tone={stock <= 0 && !product.madeToOrder ? "bad" : "default"} />
+              <Txt v="small" tone="faint">
+                adet
+              </Txt>
             </View>
-            <StockButton
-              label="+"
-              onPress={() => stockMutation.mutate(1)}
-              disabled={stockMutation.isPending}
-            />
+            <IconButton icon="plus" size={56} accent onPress={() => stockMutation.mutate(1)} accessibilityLabel="Stoğu bir artır" />
           </View>
-        </View>
+        </Glass>
+      </FadeInView>
 
-        {/* Maliyet özeti */}
+      {/* Maliyet */}
+      <FadeInView index={3}>
         {profit?.hasCost ? (
-          <View style={styles.section}>
-            <View style={styles.cardHeadRow}>
-              <Text style={styles.sectionLabel}>MALİYET</Text>
-              <PressableScale onPress={() => router.push(`/edit-cost/${product.id}`)} hitSlop={8}>
-                <Text style={styles.editLink}>Düzenle</Text>
-              </PressableScale>
+          <Tint strong style={styles.section}>
+            <View style={styles.rowBetween}>
+              <Txt v="label" tone="faint" style={styles.kicker}>
+                MALİYET
+              </Txt>
+              <Button label="Düzenle" icon="pencil" size="sm" variant="secondary" onPress={() => router.push(`/edit-cost/${product.id}`)} />
             </View>
-            <Row label="Üretim" value={formatCurrency(profit.productionCost)} />
-            <Row label="Paketleme" value={formatCurrency(profit.packagingCost)} />
+            <Satir label="Üretim" value={formatCurrency(profit.productionCost)} />
+            <Satir label="Paketleme" value={formatCurrency(profit.packagingCost)} />
             <View style={styles.divider} />
-            <Row label="Toplam Maliyet" value={formatCurrency(profit.totalCost)} bold />
-          </View>
+            <Satir label="Toplam maliyet" value={formatCurrency(profit.totalCost)} bold />
+          </Tint>
         ) : (
-          <PressableScale
-            onPress={() => router.push(`/edit-cost/${product.id}`)}
-            style={({ pressed }) => [styles.addCostBtn, pressed && { opacity: 0.85 }]}
-          >
-            <Text style={styles.addCostText}>+ Maliyet Ekle</Text>
-          </PressableScale>
+          <Button label="Maliyet ekle" icon="plus" onPress={() => router.push(`/edit-cost/${product.id}`)} />
         )}
+      </FadeInView>
 
-        {/* Platform kâr/zarar */}
-        <Text style={[styles.sectionLabel, { marginTop: 8, marginLeft: 4 }]}>
-          PLATFORM KÂR / ZARAR
-        </Text>
-        {profit?.hasCost && profit.platforms.length > 0 ? (
-          profit.platforms.map((p, i) => <PlatformCard key={p.listingId} p={p} index={i} />)
-        ) : (
-          <View style={styles.section}>
-            <Text style={styles.dim}>
-              {profit?.hasCost
-                ? "Bu ürünün platform listing'i yok."
-                : "Maliyet girilmemiş — kâr hesaplanamıyor."}
-            </Text>
-          </View>
-        )}
+      {/* Platform kâr / zarar */}
+      <Txt v="label" tone="faint" style={styles.sectionTitle}>
+        PLATFORM KÂR / ZARAR
+      </Txt>
+      {profit?.hasCost && profit.platforms.length > 0 ? (
+        profit.platforms.map((p, i) => (
+          <FadeInView key={p.listingId} index={i + 4}>
+            <PlatformCard p={p} />
+          </FadeInView>
+        ))
+      ) : (
+        <Tint style={styles.section}>
+          <Txt v="body" tone="dim">
+            {profit?.hasCost ? "Bu ürünün platform listing'i yok." : "Maliyet girilmemiş — kâr hesaplanamıyor."}
+          </Txt>
+        </Tint>
+      )}
 
-        {/* Fiyat Laboratuvarı */}
-        {priceLab?.hasCost && (
-          <>
-            <Text style={[styles.sectionLabel, { marginTop: 8, marginLeft: 4 }]}>
-              FİYAT LABORATUVARI
-            </Text>
-            {priceLab.targets.map((t) => {
-              const accent = ML[t.platform];
-              return (
-                <View key={t.platform} style={styles.section}>
-                  <View style={styles.platformHead}>
-                    <View style={[styles.dot, { backgroundColor: accent }]} />
-                    <Text style={[styles.platformName, { color: accent }]}>
-                      {PLATFORM_LABEL[t.platform]}
-                    </Text>
-                    <Text style={styles.salePrice}>{formatPercent(t.currentMargin)}</Text>
-                  </View>
-                  <Text style={styles.plHint}>Hedef marj için satış fiyatı (KDV dahil)</Text>
-                  <View style={styles.plGrid}>
-                    {t.rows.map((r) => (
-                      <View key={r.margin} style={styles.plCell}>
-                        <Text style={styles.plMargin}>%{r.margin}</Text>
-                        <Text style={styles.plPrice}>
-                          {r.price == null ? "—" : formatCurrency(r.price)}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
+      {/* Fiyat laboratuvarı */}
+      {priceLab?.hasCost ? (
+        <>
+          <Txt v="label" tone="faint" style={styles.sectionTitle}>
+            FİYAT LABORATUVARI
+          </Txt>
+          {priceLab.targets.map((t) => {
+            const marka = PLATFORM_COLOR[t.platform];
+            return (
+              <Tint key={t.platform} strong style={styles.section}>
+                <View style={styles.platformHead}>
+                  <View style={[styles.dot, { backgroundColor: marka }]} />
+                  <Txt v="heading" style={{ color: marka, flex: 1 }}>
+                    {PLATFORM_LABEL[t.platform]}
+                  </Txt>
+                  <Txt v="bodyStrong" num>
+                    {formatPercent(t.currentMargin)}
+                  </Txt>
                 </View>
-              );
-            })}
-            {priceLab.campaign && (
-              <View style={styles.section}>
-                <Text style={[styles.sectionLabel, { marginBottom: 8 }]}>
-                  SHOPIFY KAMPANYA SİMÜLATÖRÜ
-                </Text>
-                <View style={styles.campHead}>
-                  <Text style={[styles.campH, { flex: 1 }]}>İndirim</Text>
-                  <Text style={[styles.campH, { width: 80, textAlign: "right" }]}>Fiyat</Text>
-                  <Text style={[styles.campH, { width: 80, textAlign: "right" }]}>Net kâr</Text>
-                  <Text style={[styles.campH, { width: 48, textAlign: "right" }]}>Marj</Text>
+                <Txt v="small" tone="faint">
+                  Hedef marj için satış fiyatı (KDV dahil)
+                </Txt>
+                <View style={styles.plGrid}>
+                  {t.rows.map((r) => (
+                    <View key={r.margin} style={styles.plCell}>
+                      <Txt v="label" tone="faint" num>
+                        %{r.margin}
+                      </Txt>
+                      <Txt v="smallStrong" num>
+                        {r.price == null ? "—" : formatCurrency(r.price)}
+                      </Txt>
+                    </View>
+                  ))}
                 </View>
-                {priceLab.campaign.rows.map((r) => (
-                  <View
-                    key={r.discount}
-                    style={[styles.campRow, r.profit < 0 && { backgroundColor: ML.redSoft }]}
-                  >
-                    <Text style={[styles.campVal, { flex: 1, fontWeight: "700" }]}>%{r.discount}</Text>
-                    <Text style={[styles.campVal, { width: 80, textAlign: "right" }]}>
-                      {formatCurrency(r.effectivePrice)}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.campVal,
-                        { width: 80, textAlign: "right", color: r.profit < 0 ? ML.red : ML.green },
-                      ]}
-                    >
-                      {formatCurrency(r.profit)}
-                    </Text>
-                    <Text style={[styles.campVal, { width: 48, textAlign: "right" }]}>
-                      {formatPercent(r.margin)}
-                    </Text>
-                  </View>
-                ))}
-                <Text style={styles.plHint}>Kırmızı satır = o indirimde zarara geçiyorsun</Text>
+              </Tint>
+            );
+          })}
+          {priceLab.campaign ? (
+            <Tint strong style={styles.section}>
+              <Txt v="label" tone="faint" style={styles.kicker}>
+                SHOPIFY KAMPANYA SİMÜLATÖRÜ
+              </Txt>
+              <View style={styles.campHead}>
+                <Txt v="label" tone="faint" style={{ flex: 1 }}>
+                  İndirim
+                </Txt>
+                <Txt v="label" tone="faint" style={styles.campCol}>
+                  Fiyat
+                </Txt>
+                <Txt v="label" tone="faint" style={styles.campCol}>
+                  Net kâr
+                </Txt>
+                <Txt v="label" tone="faint" style={styles.campColS}>
+                  Marj
+                </Txt>
               </View>
-            )}
-          </>
-        )}
-
-        {/* Fiyat geçmişi */}
-        {priceHistory && priceHistory.length > 0 && (
-          <>
-            <Text style={[styles.sectionLabel, { marginTop: 8, marginLeft: 4 }]}>
-              FİYAT GEÇMİŞİ
-            </Text>
-            <View style={styles.section}>
-              {priceHistory.map((h: PriceChange, i) => (
-                <View key={h.id} style={[styles.histRow, i > 0 && styles.histBorder]}>
-                  <View>
-                    <Text style={styles.histPrice}>
-                      {formatCurrency(h.oldPrice)} → {formatCurrency(h.newPrice)}
-                    </Text>
-                    <Text style={styles.histSource}>{h.changeSource}</Text>
-                  </View>
-                  <Text style={styles.histDate}>{formatDate(h.changedAt)}</Text>
+              {priceLab.campaign.rows.map((r) => (
+                <View key={r.discount} style={[styles.campRow, r.profit < 0 ? { backgroundColor: color.badSoft } : null]}>
+                  <Txt v="smallStrong" num style={{ flex: 1 }}>
+                    %{r.discount}
+                  </Txt>
+                  <Txt v="small" tone="dim" num style={styles.campCol}>
+                    {formatCurrency(r.effectivePrice)}
+                  </Txt>
+                  <Txt v="smallStrong" tone={r.profit < 0 ? "bad" : "good"} num style={styles.campCol}>
+                    {formatCurrency(r.profit)}
+                  </Txt>
+                  <Txt v="small" tone="dim" num style={styles.campColS}>
+                    {formatPercent(r.margin)}
+                  </Txt>
                 </View>
               ))}
-            </View>
-          </>
-        )}
-      </ScrollView>
+              <Txt v="small" tone="faint">
+                Kırmızı satır = o indirimde zarara geçiyorsun
+              </Txt>
+            </Tint>
+          ) : null}
+        </>
+      ) : null}
 
-      <Modal
-        visible={aliasOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setAliasOpen(false)}
-      >
-        <PressableScale style={styles.aliasBackdrop} onPress={() => setAliasOpen(false)}>
-          <PressableScale style={styles.aliasCard} onPress={() => {}}>
-            <Text style={styles.aliasModalTitle}>Takma ad</Text>
-            <Text style={styles.aliasModalHint}>Liste ve aramada görünen kısa ad.</Text>
-            <TextInput
-              value={aliasDraft}
-              onChangeText={setAliasDraft}
-              placeholder="örn. Kırmızı Kedi Figürü"
-              placeholderTextColor={ML.textFaint}
-              style={styles.aliasInput}
-              autoFocus
-              returnKeyType="done"
-              onSubmitEditing={() => {
-                aliasMutation.mutate(aliasDraft);
-                setAliasOpen(false);
-              }}
-            />
-            <View style={styles.aliasBtns}>
-              <PressableScale onPress={() => setAliasOpen(false)} hitSlop={8}>
-                <Text style={styles.aliasCancel}>İptal</Text>
-              </PressableScale>
-              <PressableScale
-                onPress={() => {
-                  aliasMutation.mutate(aliasDraft);
-                  setAliasOpen(false);
-                }}
-                hitSlop={8}
-              >
-                <Text style={styles.aliasSave}>Kaydet</Text>
-              </PressableScale>
-            </View>
-          </PressableScale>
-        </PressableScale>
+      {/* Fiyat geçmişi */}
+      {priceHistory && priceHistory.length > 0 ? (
+        <>
+          <Txt v="label" tone="faint" style={styles.sectionTitle}>
+            FİYAT GEÇMİŞİ
+          </Txt>
+          <Tint strong padded={false} style={styles.section}>
+            {priceHistory.map((h: PriceChange, i) => (
+              <View key={h.id} style={[styles.histRow, i > 0 ? styles.histBorder : null]}>
+                <View style={{ flex: 1 }}>
+                  <Txt v="bodyStrong" num>
+                    {formatCurrency(h.oldPrice)} → {formatCurrency(h.newPrice)}
+                  </Txt>
+                  <Txt v="small" tone="faint">
+                    {h.changeSource}
+                  </Txt>
+                </View>
+                <Txt v="small" tone="dim" num>
+                  {formatDate(h.changedAt)}
+                </Txt>
+              </View>
+            ))}
+          </Tint>
+        </>
+      ) : null}
+
+      {/* Takma ad */}
+      <Modal visible={aliasOpen} transparent animationType="fade" onRequestClose={() => setAliasOpen(false)}>
+        <Pressable style={styles.aliasBackdrop} onPress={() => setAliasOpen(false)}>
+          <Pressable onPress={() => {}} style={{ width: "100%" }}>
+            <Glass strong>
+              <Txt v="heading">Takma ad</Txt>
+              <Txt v="small" tone="dim" style={{ marginBottom: space.md }}>
+                Liste ve aramada görünen kısa ad.
+              </Txt>
+              <Input
+                value={aliasDraft}
+                onChangeText={setAliasDraft}
+                placeholder="örn. Kırmızı Kedi Figürü"
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={kaydetAlias}
+              />
+              <View style={styles.aliasBtns}>
+                <Button label="İptal" variant="ghost" size="sm" onPress={() => setAliasOpen(false)} />
+                <Button label="Kaydet" size="sm" onPress={kaydetAlias} />
+              </View>
+            </Glass>
+          </Pressable>
+        </Pressable>
       </Modal>
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-function PlatformCard({ p, index }: { p: PlatformProfit; index: number }) {
+function PlatformCard({ p }: { p: PlatformProfit }) {
   const r = p.result;
   const loss = r.netProfit < 0;
-  const accent = ML[p.platform];
+  const marka = PLATFORM_COLOR[p.platform];
+  const marj = Number.isFinite(r.profitMargin) ? r.profitMargin : 0;
   return (
-    <FadeInView duration={340} baseDelay={80} step={90} index={index} style={styles.section}>
+    <Glass style={styles.section}>
       <View style={styles.platformHead}>
-        <View style={[styles.dot, { backgroundColor: accent }]} />
-        <Text style={[styles.platformName, { color: accent }]}>
+        <View style={[styles.dot, { backgroundColor: marka }]} />
+        <Txt v="heading" style={{ color: marka, flex: 1 }} numberOfLines={1}>
           {PLATFORM_LABEL[p.platform]}
-        </Text>
-        {p.minOrderQty > 1 ? (
-          <Text style={{ color: ML.orange, fontSize: 11, fontWeight: "700" }}>
-            ×{p.minOrderQty} sipariş
-          </Text>
-        ) : null}
-        <AnimatedNumber
-          value={p.salePrice}
-          format={(n) => formatCurrency(n)}
-          style={styles.salePrice}
-        />
+        </Txt>
+        {p.minOrderQty > 1 ? <Pill color={color.warn}>×{p.minOrderQty} sipariş</Pill> : null}
+        <Money value={p.salePrice} v="heading" />
       </View>
 
       <View style={styles.kpiRow}>
-        <View>
-          <Text style={styles.kpiLabel}>NET KÂR</Text>
-          <AnimatedNumber
-            value={r.netProfit}
-            format={(n) => formatCurrency(n)}
-            style={[styles.kpiValue, { color: loss ? ML.red : ML.green }]}
-          />
+        <View style={{ flex: 1 }}>
+          <Txt v="label" tone="faint" style={styles.kicker}>
+            NET KÂR
+          </Txt>
+          <Money value={r.netProfit} v="title" tone={loss ? "bad" : "good"} />
         </View>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={styles.kpiLabel}>MARJ</Text>
-          <AnimatedNumber
-            value={r.profitMargin}
-            format={(n) => formatPercent(n)}
-            style={styles.kpiValue}
-          />
+        <View style={{ alignItems: "center", gap: 2 }}>
+          <Ring value={marj} size={64} stroke={7} color={loss ? color.bad : marj < 0.2 ? color.warn : color.good}>
+            <Txt v="label" num>
+              {formatPercent(marj, 0)}
+            </Txt>
+          </Ring>
+          <Txt v="label" tone="faint">
+            MARJ
+          </Txt>
         </View>
       </View>
 
       {p.commissionMissing ? (
-        <View style={styles.commWarn}>
-          <Text style={styles.commWarnText}>
+        <View style={styles.warnBox}>
+          <SymbolView name="exclamationmark.triangle.fill" tintColor={color.bad} style={{ width: 16, height: 16 }} />
+          <Txt v="small" tone="bad" style={{ flex: 1 }}>
             {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş — kâr olduğundan yüksek görünüyor.
-          </Text>
+          </Txt>
         </View>
       ) : null}
 
       <View style={styles.divider} />
-      <BreakdownRow label={`KDV (%${r.vatRate})`} value={r.vatAmount} />
-      <BreakdownRow label="Ürün + Paketleme" value={r.productCost + r.packagingCost} />
-      <BreakdownRow label="Komisyon" value={r.commissionCost} />
-      <BreakdownRow label="Kargo" value={r.cargoCost} />
+      <Dokum label={`KDV (%${r.vatRate})`} value={r.vatAmount} />
+      <Dokum label="Ürün + paketleme" value={r.productCost + r.packagingCost} />
+      <Dokum label="Komisyon" value={r.commissionCost} />
+      <Dokum label="Kargo" value={r.cargoCost} />
       {r.appliedExpenseRules
         .filter((e) => e.amount !== 0)
         .map((e) => (
-          <BreakdownRow key={e.id} label={e.name} value={e.amount} />
+          <Dokum key={e.id} label={e.name} value={e.amount} />
         ))}
-      {r.inputVatCredit > 0 ? (
-        <BreakdownRow label="KDV İadesi" value={r.inputVatCredit} positive />
-      ) : null}
-    </FadeInView>
+      {r.inputVatCredit > 0 ? <Dokum label="KDV iadesi" value={r.inputVatCredit} positive /> : null}
+    </Glass>
   );
 }
 
-function BreakdownRow({
-  label,
-  value,
-  positive,
-}: {
-  label: string;
-  value: number;
-  positive?: boolean;
-}) {
+function Dokum({ label, value, positive }: { label: string; value: number; positive?: boolean }) {
   return (
     <View style={styles.breakRow}>
-      <Text style={styles.breakLabel}>{label}</Text>
-      <Text style={[styles.breakValue, positive ? { color: ML.green, fontWeight: "700" } : null]}>
+      <Txt v="small" tone="dim">
+        {label}
+      </Txt>
+      <Txt v={positive ? "smallStrong" : "small"} tone={positive ? "good" : "dim"} num>
         {positive ? "+" : "−"}
         {formatCurrency(value)}
-      </Text>
+      </Txt>
     </View>
   );
 }
 
-function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+function Satir({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
     <View style={styles.breakRow}>
-      <Text style={[styles.breakLabel, bold && { color: ML.text, fontWeight: "700" }]}>
+      <Txt v={bold ? "bodyStrong" : "small"} tone={bold ? "default" : "dim"}>
         {label}
-      </Text>
-      <Text style={[styles.breakValue, bold && { fontWeight: "800" }]}>{value}</Text>
-    </View>
-  );
-}
-
-function StockButton({
-  label,
-  onPress,
-  disabled,
-}: {
-  label: string;
-  onPress: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <PressableScale
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.stockBtn,
-        pressed && { backgroundColor: ML.accent, transform: [{ scale: 0.94 }] },
-        disabled && { opacity: 0.4 },
-      ]}
-    >
-      <Text style={styles.stockBtnText}>{label}</Text>
-    </PressableScale>
-  );
-}
-
-/** Ürün detayı açılırken kartların yerini tutan iskelet. */
-function ProductDetailSkeleton() {
-  return (
-    <View style={styles.content}>
-      <View style={styles.titleRow}>
-        <Skeleton width={64} height={64} radius={14} />
-        <View style={{ flex: 1, gap: 8 }}>
-          <Skeleton width="80%" height={20} delay={60} />
-          <Skeleton width="45%" height={12} delay={110} />
-        </View>
-      </View>
-      <SkeletonCard height={110} delay={180} />
-      <SkeletonCard height={96} delay={260} />
-      <SkeletonCard height={140} delay={340} />
-    </View>
-  );
-}
-
-function Header({ title }: { title: string }) {
-  return (
-    <View style={styles.header}>
-      <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
-        <Text style={styles.backText}>‹</Text>
-      </PressableScale>
-      <Text style={styles.headerTitle} numberOfLines={1}>
-        {title}
-      </Text>
-      <View style={{ width: 32 }} />
+      </Txt>
+      <Txt v={bold ? "bodyStrong" : "small"} tone={bold ? "default" : "dim"} num>
+        {value}
+      </Txt>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.textDim, fontSize: 15, textAlign: "center" },
-  content: { padding: 16, gap: 14, paddingBottom: 48 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  errorBox: { padding: 24, gap: 14 },
-  errorText: { color: ML.textDim, fontSize: 14, textAlign: "center" },
-  retryButton: {
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-  },
-  retryButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
-  titleRow: { flexDirection: "row", gap: 14, alignItems: "center" },
-  thumb: { width: 64, height: 64, borderRadius: radius.md, backgroundColor: ML.card },
-  thumbEmpty: { borderWidth: 1, borderColor: ML.border },
-  name: { color: ML.text, fontSize: 20, fontWeight: "800", letterSpacing: -0.3 },
-  sku: { color: ML.textFaint, fontSize: 13, marginTop: 4 },
-  section: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 16,
-    gap: 6,
-  },
-  sectionLabel: {
-    color: ML.textFaint,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
-  stockRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  stockBtn: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.md,
-    backgroundColor: ML.cardElevated,
-    borderWidth: 1,
-    borderColor: ML.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  stockBtnText: { color: ML.text, fontSize: 28, fontWeight: "600" },
-  stockValue: { alignItems: "center" },
-  stockNumber: { color: ML.text, fontSize: 40, fontWeight: "800" },
-  stockUnit: { color: ML.textFaint, fontSize: 13, marginTop: -2 },
-  divider: { height: 1, backgroundColor: ML.border, marginVertical: 8 },
-  commWarn: { backgroundColor: ML.red + "18", borderWidth: 1, borderColor: ML.red + "44", borderRadius: radius.md, paddingHorizontal: 10, paddingVertical: 8, marginTop: 8 },
-  commWarnText: { color: ML.red, fontSize: 12, fontWeight: "600", lineHeight: 17 },
-  platformHead: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 },
+  titleRow: { flexDirection: "row", gap: space.md, alignItems: "center" },
+  thumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: color.tintStrong },
+  thumbEmpty: { alignItems: "center", justifyContent: "center" },
+  section: { gap: 6, padding: space.lg },
+  sectionTitle: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  kicker: { letterSpacing: 1 },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+  stockRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: space.sm },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.lineStrong, marginVertical: space.sm },
+  platformHead: { flexDirection: "row", alignItems: "center", gap: space.sm },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  platformName: { fontSize: 16, fontWeight: "700", flex: 1 },
-  alias: { color: ML.accent, fontSize: 12, fontWeight: "600", marginTop: 3 },
-  aliasBackdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    justifyContent: "center",
-    padding: 28,
-  },
-  aliasCard: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: ML.border,
-  },
-  aliasModalTitle: { color: ML.text, fontSize: 17, fontWeight: "800", marginBottom: 4 },
-  aliasModalHint: { color: ML.textFaint, fontSize: 12, marginBottom: 12 },
-  aliasInput: {
-    backgroundColor: ML.bg,
-    borderWidth: 1,
-    borderColor: ML.border,
-    borderRadius: radius.md,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: ML.text,
-    fontSize: 15,
-  },
-  aliasBtns: { flexDirection: "row", justifyContent: "flex-end", gap: 22, marginTop: 16 },
-  aliasCancel: { color: ML.textDim, fontSize: 15, fontWeight: "600" },
-  aliasSave: { color: ML.accent, fontSize: 15, fontWeight: "800" },
-  salePrice: { color: ML.text, fontSize: 18, fontWeight: "800" },
-  kpiRow: { flexDirection: "row", justifyContent: "space-between", marginVertical: 4 },
-  kpiLabel: { color: ML.textFaint, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
-  kpiValue: { color: ML.text, fontSize: 22, fontWeight: "800", marginTop: 2 },
-  breakRow: {
+  kpiRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: space.xs },
+  warnBox: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 3,
-  },
-  breakLabel: { color: ML.textDim, fontSize: 13 },
-  breakValue: { color: ML.textDim, fontSize: 13, fontVariant: ["tabular-nums"] },
-  dim: { color: ML.textDim, fontSize: 14 },
-  cardHeadRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  editLink: { color: ML.accent, fontSize: 14, fontWeight: "700" },
-  addCostBtn: {
-    backgroundColor: ML.accentSoft,
-    borderWidth: 1,
-    borderColor: ML.accent,
-    borderRadius: radius.lg,
-    paddingVertical: 16,
     alignItems: "center",
+    gap: space.sm,
+    backgroundColor: color.badSoft,
+    borderRadius: radius.sm,
+    padding: space.sm,
+    marginTop: space.xs,
   },
-  addCostText: { color: ML.accent, fontSize: 16, fontWeight: "700" },
-  histRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 10,
-  },
-  histBorder: { borderTopWidth: 1, borderTopColor: ML.borderSoft },
-  histPrice: { color: ML.text, fontSize: 14, fontWeight: "600" },
-  histSource: { color: ML.textFaint, fontSize: 12, marginTop: 2 },
-  histDate: { color: ML.textDim, fontSize: 12 },
-  plHint: { color: ML.textFaint, fontSize: 11, marginTop: 4 },
-  plGrid: { flexDirection: "row", gap: 8, marginTop: 8 },
+  breakRow: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 3 },
+  plGrid: { flexDirection: "row", gap: space.sm, marginTop: space.sm },
   plCell: {
     flex: 1,
-    backgroundColor: ML.bg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    paddingVertical: 8,
+    backgroundColor: color.tint,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.line,
+    paddingVertical: space.sm,
     alignItems: "center",
+    gap: 2,
   },
-  plMargin: { color: ML.textFaint, fontSize: 11, fontWeight: "700" },
-  plPrice: { color: ML.text, fontSize: 13, fontWeight: "700", marginTop: 2, fontVariant: ["tabular-nums"] },
-  campHead: { flexDirection: "row", alignItems: "center", paddingBottom: 4 },
-  campH: { color: ML.textFaint, fontSize: 11, fontWeight: "700" },
+  campHead: { flexDirection: "row", alignItems: "center", paddingBottom: 4, marginTop: space.xs },
+  campCol: { width: 84, textAlign: "right" },
+  campColS: { width: 52, textAlign: "right" },
   campRow: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 7,
     paddingHorizontal: 6,
     marginHorizontal: -6,
-    borderRadius: radius.sm,
+    borderRadius: radius.xs,
   },
-  campVal: { color: ML.textDim, fontSize: 13, fontVariant: ["tabular-nums"] },
-  variantRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 8,
-  },
-  variantThumb: { width: 40, height: 40, borderRadius: radius.sm, backgroundColor: ML.cardElevated },
-  variantLabel: { color: ML.text, fontSize: 14, fontWeight: "600" },
-  variantMeta: { color: ML.textFaint, fontSize: 12, marginTop: 2 },
-  curBadge: { backgroundColor: ML.accentSoft, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  curBadgeText: { color: ML.accent, fontSize: 11, fontWeight: "700" },
-  variantChevron: { color: ML.textFaint, fontSize: 22 },
+  histRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: space.sm, gap: space.sm },
+  histBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.line },
+  variantRow: { flexDirection: "row", alignItems: "center", gap: space.md, paddingVertical: space.sm },
+  variantThumb: { width: 40, height: 40, borderRadius: radius.xs, backgroundColor: color.tintStrong },
+  aliasBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: space.xl },
+  aliasBtns: { flexDirection: "row", justifyContent: "flex-end", gap: space.sm, marginTop: space.lg },
 });

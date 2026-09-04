@@ -1,38 +1,44 @@
 import type { TextStyle } from "react-native";
 
-/** Magicland 3D Hub — koyu tema paleti (masaüstüyle uyumlu, #1B1E2A taban). */
+/**
+ * ESKİ PALET (ML) — UYUMLULUK KATMANI.
+ *
+ * Değerler artık `theme/tokens.ts`'ten (koyu cam + Magicland moru) türetiliyor: henüz yeniden
+ * yazılmamış ekranlar da aynı zemin, aynı saydam kart ve aynı vurgu rengini alır; uygulama iki
+ * dilli görünmez. Ekranlar kit'e taşındıkça bu dosyaya bağımlılık azalır ve sonunda silinir.
+ * ⚠️ Yeni/dokunulan ekranda ML KULLANMA — `@/components/kit` + `@/theme/tokens`.
+ */
+import { color as T } from "@/theme/tokens";
+
 export const ML = {
-  bg: "#16181F",
-  bgGradientTop: "#1B1E2A",
-  card: "#222637",
-  cardElevated: "#2A2F44",
-  border: "#313752",
-  borderSoft: "#272C3E",
+  bg: T.bg0,
+  bgGradientTop: T.bg1,
+  card: T.tintStrong,
+  cardElevated: "rgba(255, 255, 255, 0.14)",
+  border: T.lineStrong,
+  borderSoft: T.line,
 
-  text: "#FFFFFF",
-  /** ⚠️ İkisi de bir ton AÇILDI (atölye okunurluğu): eski #9AA0B4/#6B7185 koyu zeminde ve
-   *  gün ışığında, hele 12-13 puntoda okunmuyordu. Hiyerarşi korunuyor, kontrast artıyor. */
-  textDim: "#A8AEC2",
-  textFaint: "#7C8399",
+  text: T.text,
+  textDim: T.textDim,
+  textFaint: T.textFaint,
 
-  accent: "#7C5CFF",
-  accentSoft: "rgba(124,92,255,0.16)",
+  accent: T.accent,
+  accentSoft: T.accentSoft,
 
-  green: "#4ADE80",
-  greenSoft: "rgba(74,222,128,0.14)",
-  red: "#F87171",
-  redSoft: "rgba(248,113,113,0.14)",
-  orange: "#FB923C",
-  orangeSoft: "rgba(251,146,60,0.14)",
+  green: T.good,
+  greenSoft: T.goodSoft,
+  red: T.bad,
+  redSoft: T.badSoft,
+  orange: T.warn,
+  orangeSoft: T.warnSoft,
 
-  shopify: "#4FBF67",
-  trendyol: "#F27A1A",
-  hepsiburada: "#FF6000",
-  manual: "#A78BFA",
+  shopify: T.shopify,
+  trendyol: T.trendyol,
+  hepsiburada: T.hepsiburada,
+  manual: T.manual,
 
-  /** İskelet (yükleniyor) blokları — kart zemininden bir ton açık, nabız bunun üstünde atar. */
-  skeleton: "#282D40",
-  skeletonHigh: "#333A52",
+  skeleton: T.skeleton,
+  skeletonHigh: T.skeletonHigh,
 } as const;
 
 export const radius = { sm: 10, md: 14, lg: 20, xl: 28 } as const;
