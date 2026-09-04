@@ -210,7 +210,7 @@ describe("çevrimdışı önbellek kurulumu", () => {
   });
 
   it("bayat veri damgayla gösterilir — sessizce eski rakam gösterilmez", () => {
-    const header = oku("mobile/src/components/AppHeader.tsx");
+    const header = oku("mobile/src/components/kit/Header.tsx");
     expect(header).toContain("FreshnessStamp");
     for (const ekran of ["index", "orders", "products", "atolye"]) {
       expect(oku(`mobile/src/app/(tabs)/${ekran}.tsx`), `${ekran} damgası`).toContain("updatedAt=");
