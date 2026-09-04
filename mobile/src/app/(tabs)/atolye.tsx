@@ -1,76 +1,89 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useMemo } from "react";
+import { StyleSheet, View } from "react-native";
 
 import { buildFilamentAlerts, groupSpools } from "@core/filament-groups";
-import { AnimatedBar, AnimatedNumber, FadeInView } from "@/components/fade-in";
-import { AppHeader } from "@/components/AppHeader";
-import { ConnectionError } from "@/components/ConnectionError";
-import { Card, Pill, SectionLabel, SkeletonList } from "@/components/ui";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { Pill } from "@/components/kit/Chip";
+import {
+  Count,
+  ErrorState,
+  FadeInView,
+  Glass,
+  Header,
+  Progress,
+  Ring,
+  Screen,
+  ShimmerCard,
+  Tint,
+  Txt,
+} from "@/components/kit";
 import { getAllOrders, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getPrepDone } from "@/lib/db/prep";
 import { getPrinterSnapshots } from "@/lib/db/printers";
-import { prepItemsFromOrders } from "@/lib/prep";
 import { getSpools } from "@/lib/db/spools";
+import { formatNumber } from "@/lib/format";
+import { prepItemsFromOrders } from "@/lib/prep";
 import { useManualRefresh } from "@/lib/use-refresh";
-import { ML, radius, space, tabular, type } from "@/theme/colors";
+import { color, radius, space } from "@/theme/tokens";
 
 /**
- * ATÖLYE — sahada en çok bakılan şeyler TEK sekmede.
- *
- * NEDEN VAR: Yazıcılar, Makaralar, Plan ve Özel Baskılar "Daha" ekranının içinde 2-3 dokunuş
- * derindeydi; masa başı işi olan Raporlar ise tam bir sekme tutuyordu. Kullanıcı telefona gün
- * içinde 20 kez bakıyor ve baktığı şey "ne basılıyor, filamentim var mı" — bu ekran o iki
- * soruyu ilk 3 saniyede cevaplıyor, altındaki kısayollar da derinliği bir dokunuşa indiriyor.
- * (Raporlar sekmeden çıktı ama KAYBOLMADI: "Daha" ekranından açılıyor. Aylık geçmişi yazan
- * senkron da o ekrandan ayrılıp uygulama köküne taşındı — bkz. lib/finance-sync.ts.)
+ * ATÖLYE — sahada en çok bakılan şeyler tek sekmede: hangi yazıcı ne basıyor, filament var mı,
+ * kaç ürün toplanacak. Kısayollar bir dokunuş derinde. Veri katmanı öncekiyle aynı.
  */
 
 const DURUM: Record<string, { label: string; color: string }> = {
-  printing: { label: "Yazdırıyor", color: ML.green },
-  paused: { label: "Duraklatıldı", color: ML.orange },
-  error: { label: "Hata", color: ML.red },
-  finished: { label: "Bitti", color: ML.accent },
-  idle: { label: "Boşta", color: ML.textDim },
-  offline: { label: "Çevrimdışı", color: ML.textFaint },
+  printing: { label: "Yazdırıyor", color: color.good },
+  paused: { label: "Duraklatıldı", color: color.warn },
+  error: { label: "Hata", color: color.bad },
+  finished: { label: "Bitti", color: color.accentBright },
+  idle: { label: "Boşta", color: color.textDim },
+  offline: { label: "Çevrimdışı", color: color.textFaint },
 };
 
 function Kisayol({
   icon,
   label,
+  hint,
   href,
   tint,
   count,
 }: {
   icon: SymbolViewProps["name"];
   label: string;
+  hint: string;
   href: string;
   tint: string;
-  /** Bekleyen iş sayısı (hazırlık listesi) — 0/undefined ise rozet çizilmez. */
   count?: number;
 }) {
   return (
-    <PressableScale
+    <Tint
+      strong
       onPress={() => router.push(href as never)}
       style={styles.shortcut}
-      accessibilityRole="button"
       accessibilityLabel={count ? `${label}, ${count} bekliyor` : label}
     >
-      <SymbolView name={icon} tintColor={tint} style={{ width: 22, height: 22 }} />
-      <Text style={styles.shortcutText} numberOfLines={1}>
-        {label}
-      </Text>
-      {count ? (
-        <View style={[styles.shortcutBadge, { backgroundColor: tint }]}>
-          <Text style={styles.shortcutBadgeText}>{count > 99 ? "99+" : count}</Text>
+      <View style={styles.shortcutHead}>
+        <View style={[styles.shortcutIcon, { backgroundColor: tint + "26" }]}>
+          <SymbolView name={icon} tintColor={tint} style={{ width: 20, height: 20 }} />
         </View>
-      ) : null}
-    </PressableScale>
+        {count ? (
+          <View style={[styles.badge, { backgroundColor: tint }]}>
+            <Txt v="label" style={{ color: color.bg0 }} num>
+              {count > 99 ? "99+" : count}
+            </Txt>
+          </View>
+        ) : null}
+      </View>
+      <Txt v="bodyStrong" numberOfLines={1}>
+        {label}
+      </Txt>
+      <Txt v="small" tone="faint" numberOfLines={1}>
+        {hint}
+      </Txt>
+    </Tint>
   );
 }
 
@@ -84,6 +97,7 @@ export default function AtolyeScreen() {
   const snaps = printers.data ?? [];
   const basanlar = snaps.filter((s) => s.status === "printing" || s.status === "paused");
   const sorunlu = snaps.filter((s) => s.status === "error");
+  const cevrimici = snaps.filter((s) => s.online).length;
 
   // Filament uyarıları ortak çekirdekten — zil ve Filament ekranıyla AYNI kural.
   const gruplar = groupSpools(spools.data ?? []);
@@ -96,30 +110,32 @@ export default function AtolyeScreen() {
   const prepKalan = useMemo(() => {
     if (!orders.data) return 0;
     const isaretli = new Set(prepDone.data ?? []);
-    return prepItemsFromOrders(visibleOrders(orders.data.orders), urunler.data).filter(
-      (i) => !isaretli.has(i.key)
-    ).length;
+    return prepItemsFromOrders(visibleOrders(orders.data.orders), urunler.data).filter((i) => !isaretli.has(i.key)).length;
   }, [orders.data, urunler.data, prepDone.data]);
 
   const hata = printers.error ?? spools.error;
   const yukleniyor = printers.isLoading || spools.isLoading;
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <AppHeader
-        title="Atölye"
-        updatedAt={printers.dataUpdatedAt}
-        subtitle={
-          snaps.length > 0
-            ? `${basanlar.length} baskı sürüyor · ${snaps.length} yazıcı`
-            : yukleniyor
-              ? "yükleniyor…"
-              : "yazıcı yok"
-        }
-      />
-
+    <Screen
+      header={
+        <Header
+          title="Atölye"
+          updatedAt={printers.dataUpdatedAt}
+          subtitle={
+            snaps.length > 0
+              ? `${basanlar.length} baskı sürüyor · ${cevrimici}/${snaps.length} yazıcı çevrimiçi`
+              : yukleniyor
+                ? "yükleniyor…"
+                : "yazıcı yok"
+          }
+        />
+      }
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+    >
       {hata && !printers.data && !spools.data ? (
-        <ConnectionError
+        <ErrorState
           error={hata}
           onRetry={() => {
             void printers.refetch();
@@ -128,133 +144,127 @@ export default function AtolyeScreen() {
           retrying={printers.isFetching || spools.isFetching}
         />
       ) : yukleniyor ? (
-        <SkeletonList count={4} height={92} />
+        <>
+          <ShimmerCard height={104} />
+          <ShimmerCard height={104} delay={80} />
+          <View style={styles.grid}>
+            <ShimmerCard height={112} delay={160} style={{ flex: 1 }} />
+            <ShimmerCard height={112} delay={220} style={{ flex: 1 }} />
+          </View>
+        </>
       ) : (
-        <ScrollView
-          contentContainerStyle={styles.content}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
-          }
-        >
+        <>
           {/* HATA VEREN YAZICI EN ÜSTTE — atölyede en acil bilgi bu. */}
           {sorunlu.map((s, i) => (
             <FadeInView key={s.printerConfigId} index={i}>
-              <Card accent={ML.red} onPress={() => router.push("/printers")} style={styles.card}>
+              <Glass strong onPress={() => router.push("/printers")} style={styles.card}>
                 <View style={styles.rowBetween}>
-                  <Text style={styles.printerName}>{s.name}</Text>
-                  <Pill color={ML.red}>Hata</Pill>
+                  <View style={styles.rowGap}>
+                    <View style={[styles.statusDot, { backgroundColor: color.bad }]} />
+                    <Txt v="heading" numberOfLines={1} style={{ flexShrink: 1 }}>
+                      {s.name}
+                    </Txt>
+                  </View>
+                  <Pill color={color.bad}>Hata</Pill>
                 </View>
                 {s.statusMessage ? (
-                  <Text style={styles.reason} numberOfLines={2}>
+                  <Txt v="small" tone="bad" numberOfLines={2}>
                     {s.statusMessage}
-                  </Text>
+                  </Txt>
                 ) : null}
-              </Card>
+              </Glass>
             </FadeInView>
           ))}
 
-          {basanlar.length > 0 ? <SectionLabel>Süren baskılar</SectionLabel> : null}
+          {basanlar.length > 0 ? (
+            <Txt v="label" tone="faint" style={styles.section}>
+              SÜREN BASKILAR
+            </Txt>
+          ) : null}
           {basanlar.map((s, i) => {
             const info = DURUM[s.status] ?? DURUM.idle;
-            const pct = Math.round((s.progress || 0) * 100);
+            const oran = Math.max(0, Math.min(1, s.progress || 0));
             return (
               <FadeInView key={s.printerConfigId} index={i + sorunlu.length}>
-                <Card onPress={() => router.push("/printers")} style={styles.card}>
-                  <View style={styles.rowBetween}>
-                    <Text style={styles.printerName} numberOfLines={1}>
-                      {s.name}
-                    </Text>
-                    <Pill color={info.color}>{info.label}</Pill>
+                <Glass onPress={() => router.push("/printers")} style={styles.printCard}>
+                  <Ring value={oran} size={64} stroke={7} color={info.color}>
+                    <Count value={oran * 100} v="label" format={(n) => `%${Math.round(n)}`} />
+                  </Ring>
+                  <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+                    <View style={styles.rowBetween}>
+                      <Txt v="heading" numberOfLines={1} style={{ flexShrink: 1 }}>
+                        {s.name}
+                      </Txt>
+                      <Pill color={info.color}>{info.label}</Pill>
+                    </View>
+                    <Txt v="small" tone="dim" numberOfLines={1}>
+                      {s.productName ?? s.currentFilename ?? "Baskı"}
+                    </Txt>
+                    <Progress value={oran} color={info.color} height={5} style={{ marginTop: 2 }} />
                   </View>
-                  <Text style={styles.job} numberOfLines={1}>
-                    {s.productName ?? s.currentFilename ?? "Baskı"}
-                  </Text>
-                  <AnimatedBar percent={pct} color={info.color} height={6} />
-                  <AnimatedNumber
-                    value={pct}
-                    format={(n) => `%${Math.round(n)}`}
-                    style={[styles.pct, tabular, { color: info.color }]}
-                  />
-                </Card>
+                </Glass>
               </FadeInView>
             );
           })}
 
           {/* FİLAMENT UYARILARI — "bu baskıyı bitirecek filamentim var mı" sorusu. */}
           {uyarilar.length > 0 ? (
-            <>
-              <SectionLabel>Filament uyarıları</SectionLabel>
-              <Card accent={ML.orange} onPress={() => router.push("/spools")} style={styles.card}>
+            <FadeInView index={basanlar.length + sorunlu.length}>
+              <Tint strong onPress={() => router.push("/spools")} style={styles.card} accessibilityLabel="Filament uyarıları">
+                <View style={styles.rowBetween}>
+                  <View style={styles.rowGap}>
+                    <SymbolView name="exclamationmark.triangle.fill" tintColor={color.warn} style={{ width: 16, height: 16 }} />
+                    <Txt v="label" tone="warn" style={{ letterSpacing: 1 }}>
+                      FİLAMENT UYARILARI
+                    </Txt>
+                  </View>
+                  <Pill color={color.warn}>{formatNumber(uyarilar.length)}</Pill>
+                </View>
                 {uyarilar.slice(0, 4).map((a) => (
-                  <Text key={a.id} style={styles.alert} numberOfLines={1}>
+                  <Txt key={a.id} v="body" numberOfLines={1}>
                     • {a.body}
-                  </Text>
+                  </Txt>
                 ))}
                 {uyarilar.length > 4 ? (
-                  <Text style={styles.more}>+{uyarilar.length - 4} tane daha</Text>
+                  <Txt v="small" tone="faint">
+                    +{uyarilar.length - 4} tane daha
+                  </Txt>
                 ) : null}
-              </Card>
-            </>
+              </Tint>
+            </FadeInView>
           ) : null}
 
-          <SectionLabel>Kısayollar</SectionLabel>
-          <View style={styles.shortcuts}>
-            {/* HAZIRLIK en başta: paketleme atölyede yapılıyor ve rozet "kaç ürün toplanacak"
-                sorusunu ekranı açmadan cevaplıyor. (Siparişler başlığındaydı; orada + Ekle ve
-                zille birlikte başlığı kırpıyordu.) */}
-            <Kisayol
-              icon="shippingbox.fill"
-              label="Hazırlık"
-              href="/hazirlik"
-              tint={ML.orange}
-              count={prepKalan}
-            />
-            <Kisayol icon="printer.fill" label="Yazıcılar" href="/printers" tint={ML.accent} />
-            <Kisayol icon="circle.grid.cross.fill" label="Makaralar" href="/spools" tint={ML.green} />
-            <Kisayol icon="list.bullet.rectangle" label="Üretim" href="/planner" tint={ML.orange} />
-            <Kisayol icon="tray.full.fill" label="Özel Baskı" href="/custom-prints" tint={ML.manual} />
+          <Txt v="label" tone="faint" style={styles.section}>
+            KISAYOLLAR
+          </Txt>
+          <View style={styles.grid}>
+            <Kisayol icon="shippingbox.fill" label="Hazırlık" hint="Toplanacak ürünler" href="/hazirlik" tint={color.warn} count={prepKalan} />
+            <Kisayol icon="printer.fill" label="Yazıcılar" hint="Canlı durum · kontrol" href="/printers" tint={color.accentBright} />
           </View>
-        </ScrollView>
+          <View style={styles.grid}>
+            <Kisayol icon="circle.grid.cross.fill" label="Makaralar" hint="Filament stoğu" href="/spools" tint={color.good} />
+            <Kisayol icon="list.bullet.rectangle" label="Üretim" hint="Baskı planı" href="/planner" tint={color.info} />
+          </View>
+          <View style={styles.grid}>
+            <Kisayol icon="tray.full.fill" label="Özel baskı" hint="Yüklenen dosyalar" href="/custom-prints" tint={color.manual} />
+            <Kisayol icon="creditcard.fill" label="Giderler" hint="Gider ödemeleri" href="/expenses" tint={color.textDim} />
+          </View>
+        </>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
-  // Başlık 4px alt boşluk bırakıyor; eski Atölye başlığı 12 bırakıyordu → farkı burada kapat.
-  content: { padding: 20, paddingTop: space.sm, gap: space.md },
   card: { gap: space.sm },
+  printCard: { flexDirection: "row", alignItems: "center", gap: space.md },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
-  printerName: { ...type.heading, color: ML.text, flex: 1 },
-  job: { ...type.small, color: ML.textDim },
-  pct: { ...type.label, alignSelf: "flex-end" },
-  reason: { ...type.small, color: ML.red },
-  alert: { ...type.body, color: ML.text },
-  more: { ...type.small, color: ML.textFaint },
-  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-  shortcut: {
-    flexGrow: 1,
-    flexBasis: "47%",
-    minHeight: 56, // eldivenli dokunma hedefi
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    paddingHorizontal: space.lg,
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-  },
-  shortcutText: { ...type.body, color: ML.text, fontWeight: "700", flexShrink: 1 },
-  shortcutBadge: {
-    minWidth: 22,
-    height: 22,
-    paddingHorizontal: 6,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    marginLeft: "auto",
-  },
-  shortcutBadgeText: { color: ML.bg, fontSize: 12, fontWeight: "800" },
+  rowGap: { flexDirection: "row", alignItems: "center", gap: space.sm, flexShrink: 1 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  grid: { flexDirection: "row", gap: space.sm },
+  shortcut: { flex: 1, gap: 2, padding: space.md, minHeight: 104 },
+  shortcutHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm },
+  shortcutIcon: { width: 38, height: 38, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  badge: { minWidth: 24, height: 24, paddingHorizontal: 6, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
 });
