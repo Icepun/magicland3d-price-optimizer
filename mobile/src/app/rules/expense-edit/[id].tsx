@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -284,7 +285,7 @@ function Segmented({
             }}
             style={[styles.segment, on && styles.segmentOn]}
           >
-            <Text style={[styles.segmentText, on && { color: "#fff", fontWeight: "700" }]}>
+            <Text style={[styles.segmentText, on && { color: "#fff", fontFamily: font.bold }]}>
               {it.label}
             </Text>
           </PressableScale>
@@ -297,14 +298,14 @@ function Segmented({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  message: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
   back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
+  backText: { color: ML.text, fontFamily: font.medium, fontSize: 34, marginTop: -4 },
+  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontFamily: font.bold, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },
   priceRow: { flexDirection: "row", gap: 12 },
-  label: { color: ML.textFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
+  label: { color: ML.textFaint, fontSize: 11, fontFamily: font.bold, letterSpacing: 1 },
   input: {
     backgroundColor: ML.card,
     borderRadius: radius.md,
@@ -313,7 +314,7 @@ const styles = StyleSheet.create({
     color: ML.text,
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontSize: 16,
+    fontFamily: font.medium, fontSize: 16,
   },
   segmented: {
     flexDirection: "row",
@@ -326,7 +327,7 @@ const styles = StyleSheet.create({
   },
   segment: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
   segmentOn: { backgroundColor: ML.accent },
-  segmentText: { color: ML.textDim, fontSize: 14 },
+  segmentText: { color: ML.textDim, fontFamily: font.medium, fontSize: 14 },
   saveBtn: {
     backgroundColor: ML.accent,
     borderRadius: radius.lg,
@@ -334,7 +335,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 8,
   },
-  saveText: { color: "#fff", fontSize: 17, fontWeight: "800" },
+  saveText: { color: "#fff", fontSize: 17, fontFamily: font.extrabold },
   deleteBtn: { paddingVertical: 14, alignItems: "center" },
-  deleteText: { color: ML.red, fontSize: 16, fontWeight: "700" },
+  deleteText: { color: ML.red, fontSize: 16, fontFamily: font.bold },
 });

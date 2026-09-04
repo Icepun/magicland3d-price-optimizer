@@ -1,4 +1,5 @@
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import { font } from "@/theme/tokens";
 import { StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 
 import { Skeleton, SkeletonCard } from "@/components/fade-in";
@@ -191,7 +192,7 @@ const styles = StyleSheet.create({
   },
   chipOn: { backgroundColor: ML.accentSoft, borderColor: ML.accent },
   chipText: { ...type.small, color: ML.textDim },
-  chipTextOn: { color: ML.text, fontWeight: "700" },
+  chipTextOn: { color: ML.text, fontFamily: font.bold },
   stat: { gap: 2, flex: 1 },
   statLabel: { ...type.label, color: ML.textFaint },
   statValue: { ...type.stat },
@@ -209,7 +210,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ML.accent + "66",
   },
-  emptyBtnText: { ...type.body, color: ML.text, fontWeight: "700" },
+  emptyBtnText: { ...type.body, color: ML.text, fontFamily: font.bold },
 });
 
 /**

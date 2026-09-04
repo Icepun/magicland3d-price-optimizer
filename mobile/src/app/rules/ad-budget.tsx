@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import { useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -207,7 +208,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     color: ML.text,
     fontSize: 20,
-    fontWeight: "700",
+    fontFamily: font.bold,
     paddingHorizontal: space.sm,
     backgroundColor: ML.bg,
     borderRadius: radius.sm,
@@ -225,13 +226,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   saveBtnOff: { opacity: 0.4 },
-  saveText: { color: ML.bg, fontWeight: "800", fontSize: 16 },
+  saveText: { color: ML.bg, fontFamily: font.extrabold, fontSize: 16 },
   row: { gap: 4 },
   rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   platform: { ...type.heading, color: ML.text },
   amount: { ...type.title, color: ML.accent },
   period: { ...type.small, color: ML.textDim },
-  rate: { ...type.small, color: ML.orange, fontWeight: "700" },
+  rate: { ...type.small, color: ML.orange, fontFamily: font.bold },
   stopBtn: {
     marginTop: space.sm,
     minHeight: 44,
@@ -241,6 +242,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: ML.red,
   },
-  stopText: { color: ML.red, fontWeight: "700" },
+  stopText: { color: ML.red, fontFamily: font.bold },
   empty: { ...type.small, color: ML.textFaint, textAlign: "center", paddingVertical: space.lg },
 });

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
@@ -193,7 +194,7 @@ function CommissionEditForm({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  message: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },
   row: { flexDirection: "row", gap: 12 },
 });

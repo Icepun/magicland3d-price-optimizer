@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { font } from "@/theme/tokens";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Updates from "expo-updates";
 
@@ -108,9 +109,9 @@ const styles = StyleSheet.create({
     borderColor: ML.border,
     alignItems: "center",
   },
-  emoji: { fontSize: 34, marginBottom: 6 },
-  title: { color: ML.text, fontSize: 18, fontWeight: "800", marginBottom: 6 },
-  hint: { color: ML.textDim, fontSize: 14, textAlign: "center", marginBottom: 16, lineHeight: 20 },
+  emoji: { fontFamily: font.medium, fontSize: 34, marginBottom: 6 },
+  title: { color: ML.text, fontSize: 18, fontFamily: font.extrabold, marginBottom: 6 },
+  hint: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center", marginBottom: 16, lineHeight: 20 },
   track: {
     width: "100%",
     height: 8,
@@ -120,14 +121,14 @@ const styles = StyleSheet.create({
   },
   fill: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
   pctRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
-  pct: { color: ML.textDim, fontSize: 13, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  pct: { color: ML.textDim, fontSize: 13, fontFamily: font.bold, fontVariant: ["tabular-nums"] },
   btns: { flexDirection: "row", alignItems: "center", gap: 24 },
-  later: { color: ML.textDim, fontSize: 15, fontWeight: "600" },
+  later: { color: ML.textDim, fontSize: 15, fontFamily: font.semibold },
   updateBtn: {
     backgroundColor: ML.accent,
     paddingHorizontal: 22,
     paddingVertical: 11,
     borderRadius: radius.md,
   },
-  updateTxt: { color: "#fff", fontSize: 15, fontWeight: "800" },
+  updateTxt: { color: "#fff", fontSize: 15, fontFamily: font.extrabold },
 });

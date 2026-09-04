@@ -1,4 +1,5 @@
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { font } from "@/theme/tokens";
 
 import { ML } from "@/theme/colors";
 import { friendlyError } from "@/lib/format";
@@ -51,9 +52,9 @@ export function ConnectionError({
 
 const styles = StyleSheet.create({
   wrap: { alignItems: "center", justifyContent: "center", paddingVertical: 48, paddingHorizontal: 24, gap: 8 },
-  icon: { fontSize: 32 },
-  title: { color: ML.text, fontSize: 16, fontWeight: "700" },
-  detail: { color: ML.textDim, fontSize: 13, textAlign: "center", lineHeight: 18 },
+  icon: { fontFamily: font.medium, fontSize: 32 },
+  title: { color: ML.text, fontSize: 16, fontFamily: font.bold },
+  detail: { color: ML.textDim, fontFamily: font.medium, fontSize: 13, textAlign: "center", lineHeight: 18 },
   button: {
     marginTop: 12,
     minWidth: 140,
@@ -68,5 +69,5 @@ const styles = StyleSheet.create({
   },
   buttonPressed: { opacity: 0.7 },
   buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: ML.text, fontSize: 15, fontWeight: "700" },
+  buttonText: { color: ML.text, fontSize: 15, fontFamily: font.bold },
 });

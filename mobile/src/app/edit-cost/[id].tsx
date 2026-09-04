@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -642,7 +643,7 @@ function ChipRow({
             }}
             style={[styles.chip, on && styles.chipOn]}
           >
-            <Text style={[styles.chipText, on && { color: "#fff", fontWeight: "700" }]}>
+            <Text style={[styles.chipText, on && { color: "#fff", fontFamily: font.bold }]}>
               {it.label}
             </Text>
           </PressableScale>
@@ -674,7 +675,7 @@ function Segmented({
             }}
             style={[styles.segment, on && styles.segmentOn]}
           >
-            <Text style={[styles.segmentText, on && { color: "#fff", fontWeight: "700" }]}>
+            <Text style={[styles.segmentText, on && { color: "#fff", fontFamily: font.bold }]}>
               {it.label}
             </Text>
           </PressableScale>
@@ -728,20 +729,20 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
   back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
+  backText: { color: ML.text, fontFamily: font.medium, fontSize: 34, marginTop: -4 },
+  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontFamily: font.bold, textAlign: "center" },
   content: { padding: 16, gap: 8, paddingBottom: 60 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   errorBox: { padding: 24, gap: 14 },
-  errorText: { color: ML.textDim, fontSize: 14, textAlign: "center" },
+  errorText: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center" },
   retryButton: {
     backgroundColor: ML.accent,
     borderRadius: radius.md,
     paddingHorizontal: 18,
     paddingVertical: 10,
   },
-  retryButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
-  productName: { color: ML.textDim, fontSize: 15, marginBottom: 4 },
+  retryButtonText: { color: "#fff", fontSize: 14, fontFamily: font.bold },
+  productName: { color: ML.textDim, fontFamily: font.medium, fontSize: 15, marginBottom: 4 },
   preview: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -753,13 +754,13 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 8,
   },
-  previewLabel: { color: ML.accent, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
-  previewValue: { color: ML.text, fontSize: 30, fontWeight: "800", marginTop: 2 },
-  previewSub: { color: ML.textDim, fontSize: 13 },
+  previewLabel: { color: ML.accent, fontSize: 11, fontFamily: font.bold, letterSpacing: 1 },
+  previewValue: { color: ML.text, fontSize: 30, fontFamily: font.extrabold, marginTop: 2 },
+  previewSub: { color: ML.textDim, fontFamily: font.medium, fontSize: 13 },
   label: {
     color: ML.textFaint,
     fontSize: 11,
-    fontWeight: "700",
+    fontFamily: font.bold,
     letterSpacing: 1,
     marginTop: 14,
     marginBottom: 2,
@@ -774,9 +775,9 @@ const styles = StyleSheet.create({
     borderColor: ML.border,
   },
   chipOn: { backgroundColor: ML.accent, borderColor: ML.accent },
-  chipText: { color: ML.textDim, fontSize: 14 },
+  chipText: { color: ML.textDim, fontFamily: font.medium, fontSize: 14 },
   fieldRow: { flexDirection: "row", gap: 12, marginTop: 6 },
-  fieldLabel: { color: ML.textFaint, fontSize: 12, marginBottom: 6 },
+  fieldLabel: { color: ML.textFaint, fontFamily: font.medium, fontSize: 12, marginBottom: 6 },
   field: {
     backgroundColor: ML.card,
     borderRadius: radius.md,
@@ -786,7 +787,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 17,
-    fontWeight: "600",
+    fontFamily: font.semibold,
   },
   segmented: {
     flexDirection: "row",
@@ -799,7 +800,7 @@ const styles = StyleSheet.create({
   },
   segment: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
   segmentOn: { backgroundColor: ML.accent },
-  segmentText: { color: ML.textDim, fontSize: 15 },
+  segmentText: { color: ML.textDim, fontFamily: font.medium, fontSize: 15 },
   applyAllRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 22, paddingVertical: 4 },
   checkbox: {
     width: 24,
@@ -811,8 +812,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   checkboxOn: { backgroundColor: ML.accent, borderColor: ML.accent },
-  checkboxTick: { color: "#fff", fontSize: 15, fontWeight: "900" },
-  applyAllText: { color: ML.text, fontSize: 14, fontWeight: "600", flex: 1 },
+  checkboxTick: { color: "#fff", fontSize: 15, fontFamily: font.extrabold },
+  applyAllText: { color: ML.text, fontSize: 14, fontFamily: font.semibold, flex: 1 },
   statusRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -822,7 +823,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     minHeight: 22,
   },
-  statusText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
-  statusError: { color: ML.red, fontSize: 13, fontWeight: "600", textAlign: "center" },
-  statusRetry: { color: ML.accent, fontSize: 13, fontWeight: "800" },
+  statusText: { color: ML.textDim, fontSize: 13, fontFamily: font.semibold },
+  statusError: { color: ML.red, fontSize: 13, fontFamily: font.semibold, textAlign: "center" },
+  statusRetry: { color: ML.accent, fontSize: 13, fontFamily: font.extrabold },
 });

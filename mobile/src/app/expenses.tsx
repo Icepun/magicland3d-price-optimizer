@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
 import {
@@ -383,10 +384,10 @@ const styles = StyleSheet.create({
     borderColor: ML.borderSoft,
     padding: 16,
   },
-  summaryLabel: { color: ML.textFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
-  summaryValue: { color: ML.orange, fontSize: 26, fontWeight: "800", marginTop: 4 },
-  summaryCount: { color: ML.textDim, fontSize: 13 },
-  note: { color: ML.textFaint, fontSize: 12, lineHeight: 18, paddingHorizontal: 4 },
+  summaryLabel: { color: ML.textFaint, fontSize: 11, fontFamily: font.bold, letterSpacing: 1 },
+  summaryValue: { color: ML.orange, fontSize: 26, fontFamily: font.extrabold, marginTop: 4 },
+  summaryCount: { color: ML.textDim, fontFamily: font.medium, fontSize: 13 },
+  note: { color: ML.textFaint, fontFamily: font.medium, fontSize: 12, lineHeight: 18, paddingHorizontal: 4 },
   form: {
     backgroundColor: ML.card,
     borderRadius: radius.lg,
@@ -395,8 +396,8 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 14,
   },
-  formTitle: { color: ML.text, fontSize: 18, fontWeight: "800" },
-  fieldLabel: { color: ML.textFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
+  formTitle: { color: ML.text, fontSize: 18, fontFamily: font.extrabold },
+  fieldLabel: { color: ML.textFaint, fontSize: 11, fontFamily: font.bold, letterSpacing: 1 },
   input: {
     backgroundColor: ML.bg,
     borderRadius: radius.md,
@@ -405,7 +406,7 @@ const styles = StyleSheet.create({
     color: ML.text,
     paddingHorizontal: 13,
     paddingVertical: 12,
-    fontSize: 15,
+    fontFamily: font.medium, fontSize: 15,
   },
   noteInput: { minHeight: 72, textAlignVertical: "top" },
   twoCol: { flexDirection: "row", gap: 10 },
@@ -419,7 +420,7 @@ const styles = StyleSheet.create({
     borderColor: ML.border,
     paddingVertical: 13,
   },
-  cancelText: { color: ML.textDim, fontSize: 15, fontWeight: "700" },
+  cancelText: { color: ML.textDim, fontSize: 15, fontFamily: font.bold },
   saveBtn: {
     flex: 1,
     alignItems: "center",
@@ -428,17 +429,17 @@ const styles = StyleSheet.create({
     backgroundColor: ML.accent,
     paddingVertical: 13,
   },
-  saveText: { color: "#fff", fontSize: 15, fontWeight: "800" },
+  saveText: { color: "#fff", fontSize: 15, fontFamily: font.extrabold },
   empty: {
     alignItems: "center",
     gap: 8,
     paddingVertical: 42,
     paddingHorizontal: 20,
   },
-  emptyTitle: { color: ML.text, fontSize: 17, fontWeight: "700" },
-  emptyText: { color: ML.textDim, fontSize: 13, textAlign: "center" },
-  errorText: { color: ML.red, fontSize: 13, textAlign: "center" },
-  retryText: { color: ML.accent, fontSize: 14, fontWeight: "700" },
+  emptyTitle: { color: ML.text, fontSize: 17, fontFamily: font.bold },
+  emptyText: { color: ML.textDim, fontFamily: font.medium, fontSize: 13, textAlign: "center" },
+  errorText: { color: ML.red, fontFamily: font.medium, fontSize: 13, textAlign: "center" },
+  retryText: { color: ML.accent, fontSize: 14, fontFamily: font.bold },
   card: {
     flexDirection: "row",
     alignItems: "center",
@@ -449,10 +450,10 @@ const styles = StyleSheet.create({
     borderColor: ML.borderSoft,
     padding: 15,
   },
-  expenseName: { color: ML.text, fontSize: 16, fontWeight: "700" },
-  expenseMeta: { color: ML.textDim, fontSize: 12, marginTop: 4 },
-  expenseNote: { color: ML.textFaint, fontSize: 12, marginTop: 4 },
+  expenseName: { color: ML.text, fontSize: 16, fontFamily: font.bold },
+  expenseMeta: { color: ML.textDim, fontFamily: font.medium, fontSize: 12, marginTop: 4 },
+  expenseNote: { color: ML.textFaint, fontFamily: font.medium, fontSize: 12, marginTop: 4 },
   cardRight: { alignItems: "flex-end", gap: 8 },
-  expenseAmount: { color: ML.orange, fontSize: 16, fontWeight: "800" },
-  deleteText: { color: ML.red, fontSize: 12, fontWeight: "700" },
+  expenseAmount: { color: ML.orange, fontSize: 16, fontFamily: font.extrabold },
+  deleteText: { color: ML.red, fontSize: 12, fontFamily: font.bold },
 });

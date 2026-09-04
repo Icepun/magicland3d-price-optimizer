@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { font } from "@/theme/tokens";
 import { StyleSheet, Text } from "react-native";
 
 import { ML } from "@/theme/colors";
@@ -63,6 +64,6 @@ export function FreshnessStamp({
 }
 
 const styles = StyleSheet.create({
-  text: { color: ML.textFaint, fontSize: 11, fontWeight: "600" },
+  text: { color: ML.textFaint, fontSize: 11, fontFamily: font.semibold },
   stale: { color: ML.orange },
 });

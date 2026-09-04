@@ -8,7 +8,7 @@ import type { TextStyle } from "react-native";
  * dilli görünmez. Ekranlar kit'e taşındıkça bu dosyaya bağımlılık azalır ve sonunda silinir.
  * ⚠️ Yeni/dokunulan ekranda ML KULLANMA — `@/components/kit` + `@/theme/tokens`.
  */
-import { color as T } from "@/theme/tokens";
+import { color as T, font } from "@/theme/tokens";
 
 export const ML = {
   bg: T.bg0,
@@ -72,24 +72,13 @@ export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 } as const;
  * 12 punto soluk gri, gün ışığında okunmuyordu.
  */
 export const type = {
-  /**
-   * Ekran başlığı.
-   *
-   * ⚠️ 32 — 26 DEĞİL. Sekmelerin kendi başlıkları hep 32/-0.5 idi; ortak `AppHeader`'a
-   * geçerken buradaki 26'ya bağlanınca Panel, Siparişler, Ürünler ve Daha'nın başlığı bir
-   * anda küçüldü ve uygulama "bozulmuş" göründü. Ölçek, var olan tasarımı takip eder.
-   */
-  title: { fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
-  /** Kart/bölüm başlığı */
-  heading: { fontSize: 18, fontWeight: "700" },
-  /** Gövde */
-  body: { fontSize: 15, fontWeight: "500" },
-  /** İkincil bilgi */
-  small: { fontSize: 13, fontWeight: "500" },
-  /** Rozet/etiket */
-  label: { fontSize: 12, fontWeight: "700" },
-  /** Büyük rakam (özet kartları) */
-  stat: { fontSize: 28, fontWeight: "800" },
+  /** Ekran başlığı (eski ekranlar; yeni ekranlar tokens.type kullanır). Ağırlık = aile, fontWeight YOK. */
+  title: { fontFamily: font.extrabold, fontSize: 32, letterSpacing: -0.5 },
+  heading: { fontFamily: font.bold, fontSize: 18 },
+  body: { fontFamily: font.medium, fontSize: 15 },
+  small: { fontFamily: font.medium, fontSize: 13 },
+  label: { fontFamily: font.bold, fontSize: 12 },
+  stat: { fontFamily: font.extrabold, fontSize: 28 },
 } as const;
 
 /**

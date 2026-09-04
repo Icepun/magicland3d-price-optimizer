@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { font } from "@/theme/tokens";
 import { router } from "expo-router";
 import {
   ScrollView,
@@ -120,12 +121,12 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
   back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
-  add: { color: ML.accent, fontSize: 16, fontWeight: "700" },
+  backText: { color: ML.text, fontFamily: font.medium, fontSize: 34, marginTop: -4 },
+  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontFamily: font.bold, textAlign: "center" },
+  add: { color: ML.accent, fontSize: 16, fontFamily: font.bold },
   content: { padding: 16, gap: 10 },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  note: { color: ML.textFaint, fontSize: 13, paddingHorizontal: 4, marginBottom: 4 },
+  note: { color: ML.textFaint, fontFamily: font.medium, fontSize: 13, paddingHorizontal: 4, marginBottom: 4 },
   card: {
     flexDirection: "row",
     alignItems: "center",
@@ -143,7 +144,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
-  platformText: { color: ML.accent, fontSize: 11, fontWeight: "700" },
-  ruleName: { color: ML.text, fontSize: 16, fontWeight: "600", flex: 1 },
-  ruleMeta: { color: ML.textDim, fontSize: 13, marginTop: 6 },
+  platformText: { color: ML.accent, fontSize: 11, fontFamily: font.bold },
+  ruleName: { color: ML.text, fontSize: 16, fontFamily: font.semibold, flex: 1 },
+  ruleMeta: { color: ML.textDim, fontFamily: font.medium, fontSize: 13, marginTop: 6 },
 });
