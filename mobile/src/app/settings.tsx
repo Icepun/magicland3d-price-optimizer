@@ -1,18 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { router, type Href } from "expo-router";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import { StyleSheet, View } from "react-native";
 
-import { PressableScale } from "@/components/ui/PressableScale";
+import { FadeInView, Screen, SubHeader, Tint, Txt } from "@/components/kit";
 import { getSettingsMap } from "@/lib/db/rules";
-import { ML, radius } from "@/theme/colors";
+import { color, radius, space } from "@/theme/tokens";
 
-const NAV: { label: string; href: Href; ready: boolean }[] = [
-  { label: "Komisyon Kuralları", href: "/rules/commission", ready: true },
-  { label: "Kargo Kuralları", href: "/rules/cargo", ready: true },
-  { label: "Sipariş Gider Kuralları", href: "/rules/expense", ready: true },
-  // Reklam bütçesi TÜM kâr rakamını etkiliyor; eskiden yalnız masaüstünden girilebiliyordu.
-  { label: "Reklam Bütçesi", href: "/rules/ad-budget", ready: true },
+/**
+ * KURALLAR — komisyon, kargo, gider kuralları ve reklam bütçesi (menüden açılır).
+ * Genel ayarlar (KDV, saatlik maliyetler) telefonda YALNIZ görüntülenir; düzenleme masaüstünde
+ * (kullanıcı kararı, Eylül 2026: "ayarlar sekmesine gerek yok").
+ */
+const NAV: { label: string; hint: string; href: Href; icon: SymbolViewProps["name"]; tint: string }[] = [
+  { label: "Komisyon kuralları", hint: "Platform ve kategori komisyonları", href: "/rules/commission", icon: "percent", tint: color.accentBright },
+  { label: "Kargo kuralları", hint: "Desi baremleri ve tarife dönemleri", href: "/rules/cargo", icon: "shippingbox.fill", tint: color.info },
+  { label: "Sipariş gider kuralları", hint: "Hizmet bedeli, paketleme, sabit giderler", href: "/rules/expense", icon: "list.bullet.rectangle", tint: color.warn },
+  { label: "Reklam bütçesi", hint: "Platform bazlı, dönemli reklam payı", href: "/rules/ad-budget", icon: "megaphone.fill", tint: color.manual },
 ];
 
 export default function SettingsScreen() {
@@ -24,129 +28,78 @@ export default function SettingsScreen() {
     { label: "İndirim payı", value: `%${settings?.discountBuffer ?? "0"}` },
     {
       label: "Elektrik / saat",
-      value:
-        settings?.costElectricityIncluded === "true"
-          ? `₺${settings?.costElectricityPerHour ?? "0"} · dahil`
-          : "Dahil değil",
+      value: settings?.costElectricityIncluded === "true" ? `₺${settings?.costElectricityPerHour ?? "0"} · dahil` : "Dahil değil",
     },
     { label: "İşçilik / saat", value: `₺${settings?.costLaborPerHour ?? "0"}` },
   ];
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
-          <Text style={styles.backText}>‹</Text>
-        </PressableScale>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Ayarlar</Text>
-          <Text style={styles.subtitle}>Masaüstüyle aynı veritabanı</Text>
+    <Screen header={<SubHeader title="Kurallar" subtitle="Masaüstüyle aynı veritabanı" />}>
+      <FadeInView index={0}>
+        <View style={{ gap: space.sm }}>
+          {NAV.map((n) => (
+            <Tint key={n.label} strong onPress={() => router.push(n.href)} style={styles.row} accessibilityLabel={n.label}>
+              <View style={[styles.icon, { backgroundColor: n.tint + "26" }]}>
+                <SymbolView name={n.icon} tintColor={n.tint} style={{ width: 20, height: 20 }} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Txt v="bodyStrong" numberOfLines={1}>
+                  {n.label}
+                </Txt>
+                <Txt v="small" tone="dim" numberOfLines={1}>
+                  {n.hint}
+                </Txt>
+              </View>
+              <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
+            </Tint>
+          ))}
         </View>
-      </View>
-      <ScrollView contentContainerStyle={styles.content}>
-        <View style={styles.card}>
-          <View style={[styles.row, styles.statusRow]}>
-            <View style={[styles.dot, { backgroundColor: ML.green }]} />
-            <Text style={styles.statusText}>Turso bağlı</Text>
+      </FadeInView>
+
+      <Txt v="label" tone="faint" style={styles.section}>
+        FİNANS
+      </Txt>
+      <FadeInView index={1}>
+        <Tint strong onPress={() => router.push("/expenses")} style={styles.row} accessibilityLabel="Gider ödemeleri">
+          <View style={[styles.icon, { backgroundColor: color.good + "26" }]}>
+            <SymbolView name="creditcard.fill" tintColor={color.good} style={{ width: 20, height: 20 }} />
           </View>
-        </View>
+          <View style={{ flex: 1 }}>
+            <Txt v="bodyStrong">Gider ödemeleri</Txt>
+            <Txt v="small" tone="dim">
+              Ödediğin genel giderler
+            </Txt>
+          </View>
+          <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
+        </Tint>
+      </FadeInView>
 
-        <Text style={styles.sectionLabel}>FİNANS</Text>
-        <View style={styles.card}>
-          <PressableScale
-            onPress={() => router.push("/expenses")}
-            style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
-          >
-            <View>
-              <Text style={styles.rowLabel}>Gider Ödemeleri</Text>
-              <Text style={styles.rowHint}>Ödediğin genel giderler</Text>
-            </View>
-            <Text style={[styles.rowValue, { color: ML.accent }]}>›</Text>
-          </PressableScale>
-        </View>
-
-        <Text style={styles.sectionLabel}>KURALLAR</Text>
-        <View style={styles.card}>
-          {NAV.map((n, i) => (
-            <PressableScale
-              key={n.label}
-              onPress={() => n.ready && router.push(n.href)}
-              style={({ pressed }) => [
-                styles.row,
-                i < NAV.length - 1 && styles.rowBorder,
-                pressed && n.ready && { opacity: 0.6 },
-              ]}
-            >
-              <Text style={[styles.rowLabel, !n.ready && { color: ML.textFaint }]}>{n.label}</Text>
-              <Text style={[styles.rowValue, { color: n.ready ? ML.accent : ML.textFaint }]}>
-                {n.ready ? "›" : "yakında"}
-              </Text>
-            </PressableScale>
-          ))}
-        </View>
-
-        <View style={styles.paramHead}>
-          <Text style={styles.sectionLabel}>HESAP PARAMETRELERİ</Text>
-          <PressableScale onPress={() => router.push("/settings-edit")} hitSlop={8}>
-            <Text style={styles.editLink}>Düzenle</Text>
-          </PressableScale>
-        </View>
-        <View style={styles.card}>
+      <Txt v="label" tone="faint" style={styles.section}>
+        HESAP PARAMETRELERİ · MASAÜSTÜNDEN DÜZENLENİR
+      </Txt>
+      <FadeInView index={2}>
+        <Tint strong padded={false} style={styles.paramCard}>
           {rows.map((r, i) => (
-            <View key={r.label} style={[styles.row, i < rows.length - 1 && styles.rowBorder]}>
-              <Text style={styles.rowLabel}>{r.label}</Text>
-              <Text style={styles.rowValue}>{r.value}</Text>
+            <View key={r.label} style={[styles.param, i > 0 ? styles.paramBorder : null]}>
+              <Txt v="body" tone="dim">
+                {r.label}
+              </Txt>
+              <Txt v="bodyStrong" num>
+                {r.value}
+              </Txt>
             </View>
           ))}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+        </Tint>
+      </FadeInView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
-  header: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4 },
-  back: { width: 36, height: 40, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 36, marginTop: -6 },
-  title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
-  subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
-  content: { padding: 16, gap: 8, paddingBottom: 24 },
-  card: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    paddingHorizontal: 16,
-  },
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 14,
-  },
-  rowBorder: { borderBottomWidth: 1, borderBottomColor: ML.borderSoft },
-  rowLabel: { color: ML.textDim, fontSize: 15 },
-  rowHint: { color: ML.textFaint, fontSize: 11, marginTop: 3 },
-  rowValue: { color: ML.text, fontSize: 15, fontWeight: "700" },
-  statusRow: { gap: 10 },
-  dot: { width: 9, height: 9, borderRadius: 5 },
-  statusText: { color: ML.text, fontSize: 15, fontWeight: "600" },
-  sectionLabel: {
-    color: ML.textFaint,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: 12,
-    marginLeft: 4,
-    marginBottom: 2,
-  },
-  paramHead: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-    paddingRight: 4,
-  },
-  editLink: { color: ML.accent, fontSize: 14, fontWeight: "700" },
-  note: { color: ML.textFaint, fontSize: 12, textAlign: "center", marginTop: 16, paddingHorizontal: 20 },
+  row: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
+  icon: { width: 40, height: 40, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  paramCard: { paddingHorizontal: space.lg },
+  param: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: space.md, gap: space.sm },
+  paramBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.line },
 });

@@ -4,8 +4,8 @@ import { TabBar } from "@/components/kit/TabBar";
 
 /**
  * SEKME ÇUBUĞU kit/TabBar'da: cam zemin, yayla kayan mor kapsül, SF Symbol + yeni yazı tipi.
- * Dört sekme: Panel · Ürünler · Siparişler · Atölye. "Daha" ve Raporlar rota olarak durur
- * (href: null → çubukta görünmez); Raporlar/Bildirimler/Kurallar başlıktaki menüden açılır.
+ * Dört sekme: Panel · Ürünler · Siparişler · Atölye. Raporlar rota olarak durur (href: null →
+ * çubukta görünmez); Raporlar/Bildirimler/Kurallar başlıktaki menüden açılır. "Daha" SİLİNDİ.
  */
 export default function TabsLayout() {
   return (
@@ -22,7 +22,6 @@ export default function TabsLayout() {
       <Tabs.Screen name="orders" options={{ title: "Siparişler" }} />
       <Tabs.Screen name="atolye" options={{ title: "Atölye" }} />
       <Tabs.Screen name="reports" options={{ href: null }} />
-      <Tabs.Screen name="more" options={{ href: null }} />
     </Tabs>
   );
 }

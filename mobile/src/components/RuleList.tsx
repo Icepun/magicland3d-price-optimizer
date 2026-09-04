@@ -1,18 +1,9 @@
 import { router, type Href } from "expo-router";
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { StyleSheet, Switch, View } from "react-native";
 
-import { ConnectionError } from "@/components/ConnectionError";
-import { ScreenHeader } from "@/components/form";
-import { ML, radius } from "@/theme/colors";
+import { Pill } from "@/components/kit/Chip";
+import { Button, EmptyState, ErrorState, FadeInView, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
+import { color, space } from "@/theme/tokens";
 
 export interface RuleListItem {
   id: string;
@@ -22,6 +13,11 @@ export interface RuleListItem {
   isActive: boolean;
 }
 
+/**
+ * KURAL LİSTESİ — komisyon / kargo / gider ekranları bu bileşeni paylaşır: başlıkta Ekle,
+ * satırda ad + açıklama + rozet + aç/kapa anahtarı. Hata dalı tek yerde (ağ koptuğunda
+ * "kural yok" izlenimi verilmez).
+ */
 export function RuleList({
   title,
   note,
@@ -41,84 +37,63 @@ export function RuleList({
   items: RuleListItem[] | undefined;
   isLoading: boolean;
   onToggle: (id: string, active: boolean) => void;
-  /** Sorgu hatası — verilirse boş liste yerine dürüst "bağlantı yok" gösterilir. */
   error?: unknown;
   onRetry?: () => void;
   retrying?: boolean;
 }) {
   return (
-    <SafeAreaView style={s.safe} edges={["top"]}>
-      <ScreenHeader title={title} onAdd={() => router.push(addHref)} />
+    <Screen
+      header={
+        <SubHeader
+          title={title}
+          subtitle={items ? `${items.length} kural · ${items.filter((r) => r.isActive).length} aktif` : undefined}
+          right={<Button label="Ekle" icon="plus" size="sm" variant="secondary" onPress={() => router.push(addHref)} />}
+        />
+      }
+    >
       {error && !items ? (
-        /* Üç kural ekranı (komisyon/kargo/gider) bu bileşeni paylaşıyor; hata dalı burada
-           TEK yerde. Eskiden ağ koptuğunda üçü de boş liste gösterip "kural yok" izlenimi
-           veriyordu — oysa kurallar kâr hesabının temeli. */
-        <ConnectionError error={error} onRetry={onRetry ?? (() => {})} retrying={retrying} />
+        <ErrorState error={error} onRetry={onRetry ?? (() => {})} retrying={retrying} />
       ) : isLoading ? (
-        <View style={s.center}>
-          <ActivityIndicator color={ML.accent} size="large" />
-        </View>
+        <ShimmerList count={5} height={80} />
       ) : (
-        <ScrollView contentContainerStyle={s.content}>
-          <Text style={s.note}>{note}</Text>
-          {(items ?? []).map((r) => (
-            <Pressable
-              key={r.id}
-              onPress={() => router.push(`${editHrefBase}/${r.id}` as Href)}
-              style={({ pressed }) => [s.card, pressed && { backgroundColor: ML.cardElevated }]}
-            >
-              <View style={{ flex: 1 }}>
-                <View style={s.top}>
-                  {r.badge ? (
-                    <View style={s.badge}>
-                      <Text style={s.badgeText}>{r.badge}</Text>
-                    </View>
-                  ) : null}
-                  <Text style={s.name} numberOfLines={1}>
-                    {r.name}
-                  </Text>
+        <>
+          <Txt v="small" tone="faint" style={{ marginHorizontal: space.xs }}>
+            {note}
+          </Txt>
+          {(items ?? []).map((r, i) => (
+            <FadeInView key={r.id} index={i}>
+              <Tint strong onPress={() => router.push(`${editHrefBase}/${r.id}` as Href)} style={styles.row} accessibilityLabel={r.name}>
+                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                  <View style={styles.top}>
+                    {r.badge ? <Pill>{r.badge}</Pill> : null}
+                    <Txt v="bodyStrong" numberOfLines={1} style={{ flexShrink: 1 }}>
+                      {r.name}
+                    </Txt>
+                  </View>
+                  <Txt v="small" tone="dim" numberOfLines={1}>
+                    {r.subtitle}
+                  </Txt>
                 </View>
-                <Text style={s.subtitle} numberOfLines={1}>
-                  {r.subtitle}
-                </Text>
-              </View>
-              <Switch
-                value={r.isActive}
-                onValueChange={(v) => onToggle(r.id, v)}
-                trackColor={{ true: ML.accent, false: ML.border }}
-                thumbColor="#fff"
-              />
-            </Pressable>
+                <Switch
+                  value={r.isActive}
+                  onValueChange={(v) => onToggle(r.id, v)}
+                  trackColor={{ true: color.accent, false: color.tintStrong }}
+                  thumbColor="#fff"
+                  ios_backgroundColor={color.tintStrong}
+                />
+              </Tint>
+            </FadeInView>
           ))}
-          {(items ?? []).length === 0 && (
-            <Text style={[s.note, { textAlign: "center", marginTop: 40 }]}>
-              Henüz kural yok. + Ekle ile oluştur.
-            </Text>
-          )}
-        </ScrollView>
+          {(items ?? []).length === 0 ? (
+            <EmptyState icon="slider.horizontal.3" title="Henüz kural yok" hint="Sağ üstteki Ekle ile oluştur." actionLabel="Kural ekle" onAction={() => router.push(addHref)} />
+          ) : null}
+        </>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  content: { padding: 16, gap: 10, paddingBottom: 40 },
-  note: { color: ML.textFaint, fontSize: 13, paddingHorizontal: 4, marginBottom: 4 },
-  card: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 16,
-  },
-  top: { flexDirection: "row", alignItems: "center", gap: 8 },
-  badge: { backgroundColor: ML.accentSoft, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2 },
-  badgeText: { color: ML.accent, fontSize: 11, fontWeight: "700" },
-  name: { color: ML.text, fontSize: 16, fontWeight: "600", flex: 1 },
-  subtitle: { color: ML.textDim, fontSize: 13, marginTop: 6 },
+const styles = StyleSheet.create({
+  row: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
+  top: { flexDirection: "row", alignItems: "center", gap: space.sm },
 });
