@@ -4,7 +4,7 @@ import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 
 import { EmptyState, ErrorState, FadeInView, IconButton, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { PressableScale } from "@/components/kit/PressableScale";
 import { ackAllNotifications, ackNotification, getNotifications, type AppAlert, type NotificationsResult } from "@/lib/db/notifications";
 import { formatNumber } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";

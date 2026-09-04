@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { color as C, motion, radius } from "@/theme/tokens";
 
 /**

@@ -3,7 +3,7 @@ import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "re
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Rect } from "react-native-svg";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { color as C, motion } from "@/theme/tokens";
 
 /**

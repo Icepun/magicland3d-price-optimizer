@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { View, type StyleProp, type TextStyle, type ViewStyle } from "react-native";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { Txt, type TxtTone, type TxtVariant } from "@/components/kit/Txt";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { motion } from "@/theme/tokens";
@@ -50,6 +50,7 @@ export function Money({
   v = "stat",
   tone = "default",
   animate = true,
+  durationMs = motion.number,
   compact = false,
   style,
   unitStyle,
@@ -58,12 +59,14 @@ export function Money({
   v?: TxtVariant;
   tone?: TxtTone;
   animate?: boolean;
+  /** Akış süresi — formlarda her tuşta değişen rakamlar için kısa (ör. 340). */
+  durationMs?: number;
   /** Kuruşu gizle (özet satırları). */
   compact?: boolean;
   style?: StyleProp<ViewStyle>;
   unitStyle?: StyleProp<TextStyle>;
 }) {
-  const shown = useCountUp(value, animate ? motion.number : 0);
+  const shown = useCountUp(value, animate ? durationMs : 0);
   const text = formatCurrency(shown);
   const virgul = text.lastIndexOf(",");
   const tam = virgul >= 0 ? text.slice(0, virgul) : text;
@@ -89,6 +92,7 @@ export function Count({
   v = "stat",
   tone = "default",
   animate = true,
+  durationMs = motion.number,
   style,
 }: {
   value: number;
@@ -96,9 +100,10 @@ export function Count({
   v?: TxtVariant;
   tone?: TxtTone;
   animate?: boolean;
+  durationMs?: number;
   style?: StyleProp<TextStyle>;
 }) {
-  const shown = useCountUp(value, animate ? motion.number : 0);
+  const shown = useCountUp(value, animate ? durationMs : 0);
   return (
     <Txt v={v} tone={tone} num numberOfLines={1} style={style}>
       {format ? format(shown) : formatNumber(Math.round(shown))}

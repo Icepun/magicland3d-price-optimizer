@@ -3,7 +3,7 @@ import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedProps, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle } from "react-native-svg";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { color as C, motion } from "@/theme/tokens";
 
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);

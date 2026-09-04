@@ -2,7 +2,7 @@ import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
 import { Txt } from "@/components/kit/Txt";
-import { PressableScale, type HapticStyle } from "@/components/ui/PressableScale";
+import { PressableScale, type HapticStyle } from "@/components/kit/PressableScale";
 import { color, radius } from "@/theme/tokens";
 
 /**

@@ -2,7 +2,7 @@ import { BlurView } from "expo-blur";
 import type { ReactNode } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
-import { PressableScale, type HapticStyle } from "@/components/ui/PressableScale";
+import { PressableScale, type HapticStyle } from "@/components/kit/PressableScale";
 import { blur, color, radius, space } from "@/theme/tokens";
 
 /**

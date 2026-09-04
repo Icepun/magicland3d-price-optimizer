@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { Txt } from "@/components/kit/Txt";
 import { blur, color, font, motion, radius } from "@/theme/tokens";
 

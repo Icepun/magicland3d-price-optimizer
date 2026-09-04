@@ -1,35 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, StyleSheet, View } from "react-native";
 
-import {
-  DeleteButton,
-  Field,
-  PrimaryButton,
-  ScreenHeader,
-  Segmented,
-  TextField,
-} from "@/components/form";
-import {
-  createCargoRule,
-  deleteCargoRule,
-  getAllCargoRules,
-  updateCargoRule,
-  type CargoRuleFull,
-} from "@/lib/db/rule-crud";
-import { SkeletonForm } from "@/components/ui";
+import { DeleteButton, Field, PrimaryButton, Segmented, TextField } from "@/components/form";
+import { ErrorState, Screen, SubHeader, Tint } from "@/components/kit";
+import { FormShimmer } from "@/components/kit/FormShimmer";
+import { createCargoRule, deleteCargoRule, getAllCargoRules, updateCargoRule, type CargoRuleFull } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
-import { ML } from "@/theme/colors";
+import { space } from "@/theme/tokens";
 
 const PLATFORMS = [
   { key: "all", label: "Tümü" },
   { key: "shopify", label: "Shopify" },
   { key: "trendyol", label: "Trendyol" },
-  { key: "hepsiburada", label: "Hepsiburada" },
+  { key: "hepsiburada", label: "HB" },
 ];
 
 export default function CargoEditScreen() {
@@ -47,27 +33,18 @@ export default function CargoEditScreen() {
 
   if (!isNew && (!hasFreshData || !existing)) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ScreenHeader title="Kargo Düzenle" />
-        <View style={styles.center}>
-          {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
-            <SkeletonForm rows={5} />
-          ) : (
-            <>
-              <Text style={styles.message}>
-                {rulesQuery.error instanceof Error
-                  ? rulesQuery.error.message
-                  : "Kargo kuralı bulunamadı."}
-              </Text>
-              <PrimaryButton
-                label="Tekrar dene"
-                onPress={() => void rulesQuery.refetch()}
-                loading={rulesQuery.isFetching}
-              />
-            </>
-          )}
-        </View>
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Kargo kuralı" />}>
+        {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
+          <FormShimmer rows={6} />
+        ) : (
+          <ErrorState
+            title="Kural yüklenemedi"
+            error={rulesQuery.error ?? new Error("Kargo kuralı bulunamadı.")}
+            onRetry={() => void rulesQuery.refetch()}
+            retrying={rulesQuery.isFetching}
+          />
+        )}
+      </Screen>
     );
   }
 
@@ -101,13 +78,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
       const parsedMaxPrice = parseTrNumber(maxPrice);
       const parsedCargoCost = parseTrNumber(cargoCost);
 
-      if (
-        parsedMinDesi === null ||
-        parsedMaxDesi === null ||
-        parsedMinPrice === null ||
-        parsedMaxPrice === null ||
-        parsedCargoCost === null
-      ) {
+      if (parsedMinDesi === null || parsedMaxDesi === null || parsedMinPrice === null || parsedMaxPrice === null || parsedCargoCost === null) {
         throw new Error("Lütfen tüm sayısal alanlara geçerli bir değer girin.");
       }
       if (parsedMinDesi < 0 || parsedMaxDesi < parsedMinDesi) {
@@ -151,46 +122,48 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
   });
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScreenHeader title={isNew ? "Yeni Kargo" : "Kargo Düzenle"} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Field label="KURAL ADI">
+    <Screen header={<SubHeader title={isNew ? "Yeni kargo kuralı" : "Kargo kuralı"} subtitle={existing?.name} />}>
+      <Tint strong style={styles.card}>
+        <Field label="Kural adı">
           <TextField value={name} onChange={setName} placeholder="Trendyol 0-1 Desi" />
         </Field>
-        <Field label="PLATFORM">
+        <Field label="Platform">
           <Segmented items={PLATFORMS} selected={platform} onSelect={setPlatform} />
         </Field>
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Field label="MİN DESİ">
+            <Field label="Min desi">
               <TextField value={minDesi} onChange={setMinDesi} numeric />
             </Field>
           </View>
           <View style={{ flex: 1 }}>
-            <Field label="MAX DESİ">
+            <Field label="Max desi">
               <TextField value={maxDesi} onChange={setMaxDesi} numeric />
             </Field>
           </View>
         </View>
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Field label="MİN FİYAT (₺)">
+            <Field label="Min fiyat (₺)">
               <TextField value={minPrice} onChange={setMinPrice} numeric />
             </Field>
           </View>
           <View style={{ flex: 1 }}>
-            <Field label="MAX FİYAT (₺)">
+            <Field label="Max fiyat (₺)">
               <TextField value={maxPrice} onChange={setMaxPrice} numeric />
             </Field>
           </View>
         </View>
-        <Field label="KATEGORİ (opsiyonel)">
+        <Field label="Kategori (isteğe bağlı)">
           <TextField value={category} onChange={setCategory} placeholder="Boş = tüm kategoriler" />
         </Field>
-        <Field label="KARGO ÜCRETİ (₺)">
+      </Tint>
+
+      <Tint strong style={styles.card}>
+        <Field label="Kargo ücreti (₺)">
           <TextField value={cargoCost} onChange={setCargoCost} placeholder="0" numeric />
         </Field>
-        <Field label="KDV DURUMU">
+        <Field label="KDV durumu">
           <Segmented
             items={[
               { key: "included", label: "KDV dahil" },
@@ -200,31 +173,24 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
             onSelect={setVatBasis}
           />
         </Field>
+      </Tint>
 
-        <PrimaryButton
-          label={isNew ? "Oluştur" : "Kaydet"}
-          onPress={() => save.mutate()}
-          loading={save.isPending}
+      <PrimaryButton label={isNew ? "Oluştur" : "Kaydet"} onPress={() => save.mutate()} loading={save.isPending} />
+      {!isNew ? (
+        <DeleteButton
+          onPress={() =>
+            Alert.alert("Kuralı sil?", existing?.name ?? "", [
+              { text: "Vazgeç", style: "cancel" },
+              { text: "Sil", style: "destructive", onPress: () => remove.mutate() },
+            ])
+          }
         />
-        {!isNew && (
-          <DeleteButton
-            onPress={() =>
-              Alert.alert("Kuralı sil?", existing?.name ?? "", [
-                { text: "Vazgeç", style: "cancel" },
-                { text: "Sil", style: "destructive", onPress: () => remove.mutate() },
-              ])
-            }
-          />
-        )}
-      </ScrollView>
-    </SafeAreaView>
+      ) : null}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  message: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center" },
-  content: { padding: 16, gap: 18, paddingBottom: 60 },
-  row: { flexDirection: "row", gap: 12 },
+  card: { gap: space.md },
+  row: { flexDirection: "row", gap: space.sm },
 });

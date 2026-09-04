@@ -10,7 +10,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 import { Tint } from "@/components/kit/Glass";
 import { color, radius as R, space } from "@/theme/tokens";
 

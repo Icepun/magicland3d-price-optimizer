@@ -19,7 +19,7 @@ import {
   SubHeader,
   Txt,
 } from "@/components/kit";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { PressableScale } from "@/components/kit/PressableScale";
 import { getAllOrders, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { clearPrepDone, getPrepDone, setPrepDone } from "@/lib/db/prep";

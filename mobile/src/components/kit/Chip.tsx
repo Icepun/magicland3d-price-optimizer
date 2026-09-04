@@ -1,7 +1,7 @@
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
 import { Txt } from "@/components/kit/Txt";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { PressableScale } from "@/components/kit/PressableScale";
 import { color, radius, space } from "@/theme/tokens";
 
 /** SÜZGEÇ ÇİPİ — seçiliyken mor ton + mor kenarlık; sayı varsa yanında soluk. */

@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 import { Glass } from "@/components/kit/Glass";
 import { Txt } from "@/components/kit/Txt";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { PressableScale } from "@/components/kit/PressableScale";
 import { friendlyError } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";
 

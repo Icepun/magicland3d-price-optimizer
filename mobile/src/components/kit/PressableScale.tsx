@@ -7,7 +7,7 @@ import Reanimated, {
   withSpring,
 } from "react-native-reanimated";
 
-import { useReduceMotion } from "@/components/fade-in";
+import { useReduceMotion } from "@/components/kit/motion";
 
 const AnimatedPressable = Reanimated.createAnimatedComponent(Pressable);
 

@@ -1,21 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
 import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
-import {
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, StyleSheet, View } from "react-native";
 
-import { PressableScale } from "@/components/ui/PressableScale";
-import { SkeletonForm } from "@/components/ui";
-import { PrimaryButton, ScreenHeader } from "@/components/form";
+import { DeleteButton, Field, PrimaryButton, Segmented, TextField } from "@/components/form";
+import { ErrorState, Screen, SubHeader, Tint } from "@/components/kit";
+import { FormShimmer } from "@/components/kit/FormShimmer";
 import {
   createExpenseRule,
   deleteExpenseRule,
@@ -25,13 +16,13 @@ import {
   type ExpenseType,
 } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
-import { ML, radius } from "@/theme/colors";
+import { space } from "@/theme/tokens";
 
 const PLATFORMS = [
   { key: "all", label: "Tümü" },
   { key: "shopify", label: "Shopify" },
   { key: "trendyol", label: "Trendyol" },
-  { key: "hepsiburada", label: "Hepsiburada" },
+  { key: "hepsiburada", label: "HB" },
 ];
 const TYPES: { key: ExpenseType; label: string }[] = [
   { key: "percentage", label: "Yüzde %" },
@@ -53,27 +44,18 @@ export default function ExpenseEditScreen() {
 
   if (!isNew && (!hasFreshData || !existing)) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ScreenHeader title="Gider Düzenle" />
-        <View style={styles.center}>
-          {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
-            <SkeletonForm rows={5} />
-          ) : (
-            <>
-              <Text style={styles.message}>
-                {rulesQuery.error instanceof Error
-                  ? rulesQuery.error.message
-                  : "Gider kuralı bulunamadı."}
-              </Text>
-              <PrimaryButton
-                label="Tekrar dene"
-                onPress={() => void rulesQuery.refetch()}
-                loading={rulesQuery.isFetching}
-              />
-            </>
-          )}
-        </View>
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Gider kuralı" />}>
+        {rulesQuery.isPending || rulesQuery.isFetching || !rulesQuery.isFetchedAfterMount ? (
+          <FormShimmer rows={5} />
+        ) : (
+          <ErrorState
+            title="Kural yüklenemedi"
+            error={rulesQuery.error ?? new Error("Gider kuralı bulunamadı.")}
+            onRetry={() => void rulesQuery.refetch()}
+            retrying={rulesQuery.isFetching}
+          />
+        )}
+      </Screen>
     );
   }
 
@@ -86,19 +68,16 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
 
   const [name, setName] = useState(existing?.name ?? "");
   const [platform, setPlatform] = useState<string>(existing?.platform ?? "all");
-  const [type, setType] = useState<ExpenseType>(
-    existing?.type === "fixed" ? "per_order" : (existing?.type ?? "per_order")
-  );
-  const [value, setValue] = useState(
-    existing
-      ? existing.type === "percentage"
-        ? String(existing.value * 100)
-        : String(existing.value)
-      : "",
-  );
+  const [type, setType] = useState<ExpenseType>(existing?.type === "fixed" ? "per_order" : (existing?.type ?? "per_order"));
+  const [value, setValue] = useState(existing ? (existing.type === "percentage" ? String(existing.value * 100) : String(existing.value)) : "");
   const [category, setCategory] = useState(existing?.categoryName ?? "");
   const [minPrice, setMinPrice] = useState(existing ? String(existing.minPrice) : "0");
   const [maxPrice, setMaxPrice] = useState(existing ? String(existing.maxPrice) : "999999");
+
+  function invalidate() {
+    qc.invalidateQueries({ queryKey: ["expense-rules-all"] });
+    qc.invalidateQueries({ queryKey: ["rules"] });
+  }
 
   const save = useMutation({
     mutationFn: async () => {
@@ -110,11 +89,7 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
         throw new Error("Lütfen tüm sayısal alanlara geçerli bir değer girin.");
       }
       if (raw < 0 || (type === "percentage" && raw > 100)) {
-        throw new Error(
-          type === "percentage"
-            ? "Yüzde değeri 0 ile 100 arasında olmalı."
-            : "Gider değeri negatif olamaz.",
-        );
+        throw new Error(type === "percentage" ? "Yüzde değeri 0 ile 100 arasında olmalı." : "Gider değeri negatif olamaz.");
       }
       if (parsedMinPrice < 0 || parsedMaxPrice < parsedMinPrice) {
         throw new Error("Fiyat aralığı geçersiz.");
@@ -148,194 +123,57 @@ function ExpenseEditForm({ id, existing }: { id: string; existing: ExpenseRuleFu
     },
   });
 
-  function invalidate() {
-    qc.invalidateQueries({ queryKey: ["expense-rules-all"] });
-    qc.invalidateQueries({ queryKey: ["rules"] });
-  }
-
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.header}>
-        <PressableScale onPress={() => router.back()} hitSlop={12} style={styles.back}>
-          <Text style={styles.backText}>‹</Text>
-        </PressableScale>
-        <Text style={styles.headerTitle}>{isNew ? "Yeni Gider" : "Gider Düzenle"}</Text>
-        <View style={{ width: 32 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Field label="GİDER ADI">
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="Platform Hizmet Bedeli"
-            placeholderTextColor={ML.textFaint}
-            style={styles.input}
-          />
+    <Screen header={<SubHeader title={isNew ? "Yeni gider kuralı" : "Gider kuralı"} subtitle={existing?.name} />}>
+      <Tint strong style={styles.card}>
+        <Field label="Gider adı">
+          <TextField value={name} onChange={setName} placeholder="Platform Hizmet Bedeli" />
         </Field>
-
-        <Field label="PLATFORM">
+        <Field label="Platform">
           <Segmented items={PLATFORMS} selected={platform} onSelect={setPlatform} />
         </Field>
-
-        <Field label="TİP">
-          <Segmented items={TYPES} selected={type} onSelect={(k) => setType(k as ExpenseType)} />
+        <Field label="Tip">
+          <Segmented items={TYPES} selected={type} onSelect={(k) => setType(k)} />
         </Field>
-
-        <Field label={type === "percentage" ? "DEĞER (%)" : "DEĞER (₺)"}>
-          <TextInput
-            value={value}
-            onChangeText={setValue}
-            keyboardType="decimal-pad"
-            placeholder="0"
-            placeholderTextColor={ML.textFaint}
-            style={styles.input}
-          />
+        <Field label={type === "percentage" ? "Değer (%)" : "Değer (₺)"}>
+          <TextField value={value} onChange={setValue} placeholder="0" numeric />
         </Field>
+      </Tint>
 
-        <Field label="KATEGORİ (opsiyonel)">
-          <TextInput
-            value={category}
-            onChangeText={setCategory}
-            placeholder="Boş = tüm kategoriler"
-            placeholderTextColor={ML.textFaint}
-            style={styles.input}
-          />
+      <Tint strong style={styles.card}>
+        <Field label="Kategori (isteğe bağlı)">
+          <TextField value={category} onChange={setCategory} placeholder="Boş = tüm kategoriler" />
         </Field>
-
-        <View style={styles.priceRow}>
+        <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Field label="MİN FİYAT (₺)">
-              <TextInput
-                value={minPrice}
-                onChangeText={setMinPrice}
-                keyboardType="decimal-pad"
-                placeholderTextColor={ML.textFaint}
-                style={styles.input}
-              />
+            <Field label="Min fiyat (₺)">
+              <TextField value={minPrice} onChange={setMinPrice} numeric />
             </Field>
           </View>
           <View style={{ flex: 1 }}>
-            <Field label="MAX FİYAT (₺)">
-              <TextInput
-                value={maxPrice}
-                onChangeText={setMaxPrice}
-                keyboardType="decimal-pad"
-                placeholderTextColor={ML.textFaint}
-                style={styles.input}
-              />
+            <Field label="Max fiyat (₺)">
+              <TextField value={maxPrice} onChange={setMaxPrice} numeric />
             </Field>
           </View>
         </View>
+      </Tint>
 
-        <PressableScale
-          onPress={() => save.mutate()}
-          disabled={save.isPending}
-          style={({ pressed }) => [styles.saveBtn, pressed && { opacity: 0.85 }]}
-        >
-          <Text style={styles.saveText}>{isNew ? "Oluştur" : "Kaydet"}</Text>
-        </PressableScale>
-
-        {!isNew && (
-          <PressableScale
-            onPress={() =>
-              Alert.alert("Kuralı sil?", existing?.name ?? "", [
-                { text: "Vazgeç", style: "cancel" },
-                { text: "Sil", style: "destructive", onPress: () => remove.mutate() },
-              ])
-            }
-            style={styles.deleteBtn}
-          >
-            <Text style={styles.deleteText}>Sil</Text>
-          </PressableScale>
-        )}
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={styles.label}>{label}</Text>
-      {children}
-    </View>
-  );
-}
-
-function Segmented({
-  items,
-  selected,
-  onSelect,
-}: {
-  items: { key: string; label: string }[];
-  selected: string;
-  onSelect: (k: string) => void;
-}) {
-  return (
-    <View style={styles.segmented}>
-      {items.map((it) => {
-        const on = it.key === selected;
-        return (
-          <PressableScale
-            key={it.key}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onSelect(it.key);
-            }}
-            style={[styles.segment, on && styles.segmentOn]}
-          >
-            <Text style={[styles.segmentText, on && { color: "#fff", fontFamily: font.bold }]}>
-              {it.label}
-            </Text>
-          </PressableScale>
-        );
-      })}
-    </View>
+      <PrimaryButton label={isNew ? "Oluştur" : "Kaydet"} onPress={() => save.mutate()} loading={save.isPending} />
+      {!isNew ? (
+        <DeleteButton
+          onPress={() =>
+            Alert.alert("Kuralı sil?", existing?.name ?? "", [
+              { text: "Vazgeç", style: "cancel" },
+              { text: "Sil", style: "destructive", onPress: () => remove.mutate() },
+            ])
+          }
+        />
+      ) : null}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
-  message: { color: ML.textDim, fontFamily: font.medium, fontSize: 14, textAlign: "center" },
-  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
-  back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontFamily: font.medium, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontFamily: font.bold, textAlign: "center" },
-  content: { padding: 16, gap: 18, paddingBottom: 60 },
-  priceRow: { flexDirection: "row", gap: 12 },
-  label: { color: ML.textFaint, fontSize: 11, fontFamily: font.bold, letterSpacing: 1 },
-  input: {
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    color: ML.text,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontFamily: font.medium, fontSize: 16,
-  },
-  segmented: {
-    flexDirection: "row",
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    padding: 4,
-    gap: 4,
-  },
-  segment: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
-  segmentOn: { backgroundColor: ML.accent },
-  segmentText: { color: ML.textDim, fontFamily: font.medium, fontSize: 14 },
-  saveBtn: {
-    backgroundColor: ML.accent,
-    borderRadius: radius.lg,
-    paddingVertical: 16,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  saveText: { color: "#fff", fontSize: 17, fontFamily: font.extrabold },
-  deleteBtn: { paddingVertical: 14, alignItems: "center" },
-  deleteText: { color: ML.red, fontSize: 16, fontFamily: font.bold },
+  card: { gap: space.md },
+  row: { flexDirection: "row", gap: space.sm },
 });

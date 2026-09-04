@@ -21,7 +21,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { PressableScale } from "@/components/kit/PressableScale";
 import {
   consumeSpool,
   createSpool,

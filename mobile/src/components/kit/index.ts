@@ -21,5 +21,5 @@ export { Shimmer, ShimmerCard, ShimmerList } from "./Skeleton";
 export { SubHeader } from "./SubHeader";
 export { TabBar } from "./TabBar";
 export { Txt, type TxtTone, type TxtVariant } from "./Txt";
-export { PressableScale } from "@/components/ui/PressableScale";
-export { FadeInView, useReduceMotion } from "@/components/fade-in";
+export { PressableScale } from "@/components/kit/PressableScale";
+export { FadeInView, useReduceMotion } from "@/components/kit/motion";
