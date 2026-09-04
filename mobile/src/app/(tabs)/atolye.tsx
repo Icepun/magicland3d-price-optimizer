@@ -221,7 +221,7 @@ export default function AtolyeScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   // Başlık 4px alt boşluk bırakıyor; eski Atölye başlığı 12 bırakıyordu → farkı burada kapat.
   content: { padding: 20, paddingTop: space.sm, gap: space.md },
   card: { gap: space.sm },

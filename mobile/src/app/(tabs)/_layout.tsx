@@ -5,6 +5,7 @@ import * as Haptics from "expo-haptics";
 import { StyleSheet, View, type ColorValue } from "react-native";
 
 import { ML } from "@/theme/colors";
+import { font } from "@/theme/tokens";
 
 /**
  * Sekme ikonu — seçiliyken SF Symbol'ün kendi "hiyerarşik" vurgusuyla dolgun görünür.
@@ -55,8 +56,15 @@ export default function TabsLayout() {
          * akması istenirse önce ekranların alt güvenli boşluğu tek yerden verilmeli (ayrı iş).
          */
         tabBarStyle: { backgroundColor: "transparent", borderTopWidth: 0 },
+        /**
+         * SAHNE ZEMİNİ ŞEFFAF: sekme gezgini her sahneyi navigasyon temasının (varsayılan AÇIK
+         * tema) zemin rengiyle boyuyor — ekranlar kendi opak zeminini bırakınca altından
+         * kirli beyaz çıktı. Zemin kökte tek katman (kit/Backdrop); sahne onu örtmemeli.
+         */
+        sceneStyle: { backgroundColor: "transparent" },
         tabBarBackground: () => <TabBarBackground />,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: "600" },
+        // Yeni yazı tipi (Plus Jakarta Sans) kabukta ilk burada: fontWeight VERİLMEZ, ağırlık = aile.
+        tabBarLabelStyle: { fontFamily: font.semibold, fontSize: 11 },
       }}
       screenListeners={{
         // Sekme değişiminde hafif titreşim — hangi sekmeye geçtiğini parmak da doğrular.

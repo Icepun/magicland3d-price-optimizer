@@ -426,7 +426,7 @@ function GroupHeader({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   searchWrap: { paddingHorizontal: 20, paddingVertical: 10 },
   search: {

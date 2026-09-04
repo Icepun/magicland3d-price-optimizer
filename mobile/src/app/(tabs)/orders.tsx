@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   chips: { gap: 8, paddingRight: 16 },
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   addButton: {
     backgroundColor: ML.accentSoft,
     borderRadius: radius.md,

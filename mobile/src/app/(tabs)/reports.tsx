@@ -616,7 +616,7 @@ function ReportsSkeleton() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
   title: { color: ML.text, fontSize: 32, fontWeight: "800", letterSpacing: -0.5 },
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },

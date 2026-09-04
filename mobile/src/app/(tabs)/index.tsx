@@ -341,7 +341,7 @@ function DashboardSkeleton() {
 const styles = StyleSheet.create({
   revHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   periodChips: { flexDirection: "row", gap: 6 },
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
   content: { padding: 16, gap: 12, paddingBottom: 24 },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24 },
