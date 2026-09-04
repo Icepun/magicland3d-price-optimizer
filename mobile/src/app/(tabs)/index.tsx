@@ -30,7 +30,7 @@ import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format
 import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
 import {
   ORDER_PLATFORM_COLOR,
-  ORDER_PLATFORM_LABEL,
+  ORDER_PLATFORM_SHORT_LABEL,
   ORDER_PLATFORMS,
   PLATFORM_COLOR,
   PLATFORM_LABEL,
@@ -262,8 +262,10 @@ function PlatformChip({ platform, rev, n }: { platform: OrderPlatform; rev?: num
   return (
     <Tint strong radius={radius.pill} padded={false} style={styles.chip}>
       <View style={[styles.dot, { backgroundColor: ORDER_PLATFORM_COLOR[platform] }]} />
-      <Txt v="smallStrong">{ORDER_PLATFORM_LABEL[platform]}</Txt>
-      <Txt v="small" tone="dim" num>
+      <Txt v="smallStrong" numberOfLines={1} style={styles.chipLabel}>
+        {ORDER_PLATFORM_SHORT_LABEL[platform]}
+      </Txt>
+      <Txt v="small" tone="dim" num numberOfLines={1}>
         {rev != null ? formatCompactCurrency(rev) : "—"}
       </Txt>
       {n != null && n > 0 ? (
@@ -372,6 +374,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     minHeight: 36,
   },
+  chipLabel: { flexShrink: 1 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   tiles: { flexDirection: "row", gap: space.sm },
   tile: { flex: 1, gap: 6, minHeight: 92, padding: space.md },
