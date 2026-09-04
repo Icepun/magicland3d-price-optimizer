@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { font } from "@/theme/tokens";
 import * as Haptics from "expo-haptics";
-import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -18,6 +18,7 @@ import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
 import { PressableScale } from "@/components/ui/PressableScale";
+import { SubHeader } from "@/components/kit/SubHeader";
 import { SkeletonForm } from "@/components/ui";
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
@@ -714,15 +715,8 @@ function Label({ text }: { text: string }) {
 }
 
 function Header({ onBack }: { onBack?: () => void }) {
-  return (
-    <View style={styles.header}>
-      <PressableScale onPress={onBack ?? (() => router.back())} hitSlop={12} style={styles.back}>
-        <Text style={styles.backText}>‹</Text>
-      </PressableScale>
-      <Text style={styles.headerTitle}>Maliyet Düzenle</Text>
-      <View style={{ width: 32 }} />
-    </View>
-  );
+  // Alt ekran başlığı kit'ten: yuvarlak cam geri düğmesi, ortada başlık (tüm alt ekranlarla aynı).
+  return <SubHeader title="Maliyet düzenle" onBack={onBack} />;
 }
 
 const styles = StyleSheet.create({
