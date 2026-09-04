@@ -17,7 +17,7 @@ export function Bars({
   values,
   height = 56,
   gap = 3,
-  maxBarWidth = 10,
+  maxBarWidth = 22,
   emphasis,
   barColor = C.accent,
   dimColor = C.tintStrong,
@@ -58,9 +58,11 @@ export function Bars({
 
   const n = values.length;
   const max = Math.max(1e-9, ...values.map((v) => (Number.isFinite(v) ? v : 0)));
-  const bw = n > 0 && width > 0 ? Math.min(maxBarWidth, Math.max(2, (width - gap * (n - 1)) / n)) : 0;
-  // Çubuklar sağa dayanır: en yeni gün sağda, boşluk solda kalır.
-  const totalW = n * bw + Math.max(0, n - 1) * gap;
+  // Az çubukta aralık açılır (7 gün → geniş çubuklar), çokta ince kalır (60 gün → dalga).
+  const g = n <= 14 ? Math.max(gap, 8) : gap;
+  const bw = n > 0 && width > 0 ? Math.min(maxBarWidth, Math.max(2, (width - g * (n - 1)) / n)) : 0;
+  // Çubuklar sağa dayanır: en yeni gün sağda, boşluk (varsa) solda kalır.
+  const totalW = n * bw + Math.max(0, n - 1) * g;
   const offsetX = Math.max(0, width - totalW);
 
   return (
@@ -71,7 +73,7 @@ export function Bars({
             {values.map((raw, i) => {
               const v = Number.isFinite(raw) && raw > 0 ? raw : 0;
               const h = v > 0 ? Math.max(3, (v / max) * height) : 2;
-              const x = offsetX + i * (bw + gap);
+              const x = offsetX + i * (bw + g);
               const vurgu = emphasis ? emphasis(i, v) : false;
               return (
                 <Rect

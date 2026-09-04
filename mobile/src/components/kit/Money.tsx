@@ -3,7 +3,7 @@ import { View, type StyleProp, type TextStyle, type ViewStyle } from "react-nati
 
 import { useReduceMotion } from "@/components/fade-in";
 import { Txt, type TxtTone, type TxtVariant } from "@/components/kit/Txt";
-import { formatCurrency } from "@/lib/format";
+import { formatCurrency, formatNumber } from "@/lib/format";
 import { motion } from "@/theme/tokens";
 
 /**
@@ -79,5 +79,29 @@ export function Money({
         </Txt>
       ) : null}
     </View>
+  );
+}
+
+/** ADET/SAYI — akan tam sayı (varsayılan biçim tr-TR binlik ayraçlı). */
+export function Count({
+  value,
+  format,
+  v = "stat",
+  tone = "default",
+  animate = true,
+  style,
+}: {
+  value: number;
+  format?: (n: number) => string;
+  v?: TxtVariant;
+  tone?: TxtTone;
+  animate?: boolean;
+  style?: StyleProp<TextStyle>;
+}) {
+  const shown = useCountUp(value, animate ? motion.number : 0);
+  return (
+    <Txt v={v} tone={tone} num numberOfLines={1} style={style}>
+      {format ? format(shown) : formatNumber(Math.round(shown))}
+    </Txt>
   );
 }

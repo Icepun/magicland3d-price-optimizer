@@ -50,16 +50,31 @@ export function Glass({
     </View>
   );
   if (!onPress) return body;
+  // Cam gövde blur için kendi View'ında kalmalı; yerleşim (flex/genişlik/kenar boşluğu) sarmalayıcıya.
   return (
     <PressableScale
       onPress={onPress}
       haptic={haptic}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      style={yerlesim(style)}
     >
       {body}
     </PressableScale>
   );
+}
+
+const YERLESIM = [
+  "flex", "flexGrow", "flexShrink", "flexBasis", "width", "minWidth", "maxWidth", "alignSelf",
+  "margin", "marginTop", "marginBottom", "marginLeft", "marginRight", "marginHorizontal", "marginVertical",
+] as const;
+
+/** Çağıranın stilinden yalnız yerleşim anahtarlarını süzer (sarmalayıcı için). */
+function yerlesim(style: StyleProp<ViewStyle>): ViewStyle {
+  const duz = (StyleSheet.flatten(style) ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of YERLESIM) if (duz[k] !== undefined) out[k] = duz[k];
+  return out as ViewStyle;
 }
 
 /**
@@ -85,27 +100,24 @@ export function Tint({
   haptic?: HapticStyle;
   accessibilityLabel?: string;
 }) {
-  const body = (
-    <View
-      style={[
-        styles.tint,
-        { borderRadius: r, backgroundColor: strong ? color.tintStrong : color.tint },
-        padded ? styles.padded : null,
-        style,
-      ]}
-    >
-      {children}
-    </View>
-  );
-  if (!onPress) return body;
+  const stil = [
+    styles.tint,
+    { borderRadius: r, backgroundColor: strong ? color.tintStrong : color.tint },
+    padded ? styles.padded : null,
+    style,
+  ];
+  if (!onPress) return <View style={stil}>{children}</View>;
+  // ⚠️ Stiller DOĞRUDAN basılabilir yüzeye: ayrı bir sarmalayıcı, çağıranın verdiği flex/genişliği
+  // almadığı için üçlü kutular satırda büzüşüyordu (Panel'de yaşandı).
   return (
     <PressableScale
       onPress={onPress}
       haptic={haptic}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      style={stil}
     >
-      {body}
+      {children}
     </PressableScale>
   );
 }
