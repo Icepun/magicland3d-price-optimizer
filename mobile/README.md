@@ -1,56 +1,35 @@
-# Welcome to your Expo app 👋
+# Magicland 3D Hub — iOS
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Masaüstü Magicland 3D Hub'ın telefon sürümü (Expo SDK 56, React Native, expo-router). Aynı Turso
+veritabanı, aynı `src/core` iş mantığı (vendor kopya, `npm run sync-core`).
 
-## Get started
+## Tasarım dili (Eylül 2026)
 
-1. Install dependencies
+Koyu cam + Magicland moru. Kaynak şablon: "Ledgerix — Smart Logistics Analytics"
+(dribbble.com/shots/27304602); turuncu yerine marka moru `#7C5CFF`.
 
-   ```bash
-   npm install
-   ```
+- Jetonlar: `src/theme/tokens.ts` (renk, cam yüzeyler, punto ölçeği, hareket, blur).
+- Kit: `src/components/kit/*` — yeni/dokunulan her ekran yalnız buradan beslenir.
+  - Zemin: `Backdrop` (gradyan + SVG ışık lekeleri, kökte tek katman; ekranlar şeffaf).
+  - Yüzeyler: `Glass` (blur'lu, hero/başlık/sheet) · `Tint` (blur'suz, liste satırları).
+  - Metin/rakam: `Txt`, `Money` (büyük tam + küçük kuruş), `Count`, `useCountUp`.
+  - Grafik: `Bars` (ince çubuk dalgası), `Ring` (halka), `Progress`; Raporlar'da özel SVG aylık grafik.
+  - Kontroller: `Segmented`, `Chip`/`Pill`, `Button`, `IconButton`/`CornerArrow`, `Input`/`SearchInput`, `Sheet`.
+  - Kabuk: `Header` (marka + zil + menü), `SubHeader`, `TabBar` (Liquid Glass/blur, kayan kapsül), `Screen`.
+  - Durumlar: `Shimmer*`, `EmptyState`, `ErrorState`.
+- Yazı tipi: Plus Jakarta Sans (ağırlıklar tek tek alt paketten; `fontWeight` VERİLMEZ, ağırlık = aile).
+- `src/theme/colors.ts` (ML) eski ekranlar için uyumluluk katmanı; değerleri tokens'tan türetilir.
 
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Çalıştırma
 
 ```bash
-npm run reset-project
+npx expo start          # Metro
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Simülatörde native derleme, OTA yayını ve tuzaklar için `AGENTS.md`.
 
-### Other setup steps
+## Yayın
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- Native bağımlılık değişmediyse: `eas update --channel production --environment production`
+  (önce `npx expo export --platform all` yeşil olmalı; çıktıdaki "Runtime version" telefonla eşleşmeli).
+- Native değiştiyse: GitHub → Actions → "Mobile TestFlight" (elle tetiklenir).
