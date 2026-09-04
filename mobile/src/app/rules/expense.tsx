@@ -117,7 +117,7 @@ export default function ExpenseRulesScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
   back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
   backText: { color: ML.text, fontSize: 34, marginTop: -4 },

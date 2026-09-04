@@ -36,8 +36,16 @@ export function Glass({
   haptic?: HapticStyle;
   accessibilityLabel?: string;
 }) {
+  /**
+   * Çağıranın stili İKİYE bölünür: yerleşim anahtarları (flex, genişlik, kenar boşluğu) dış
+   * kaba, kalanı (flexDirection, gap, hizalama, iç boşluk) İÇ içerik kabına. Aksi hâlde
+   * `style={{ flexDirection: "row" }}` dış kaba gidiyor ve çocuklar yine alt alta diziliyordu
+   * (sipariş detayındaki halka kartın altına düşmüştü).
+   */
+  const dis = yerlesim(style);
+  const ic = icerik(style);
   const body = (
-    <View style={[styles.wrap, { borderRadius: r }, style]}>
+    <View style={[styles.wrap, { borderRadius: r }, onPress ? null : dis]}>
       <BlurView intensity={intensity} tint="dark" style={StyleSheet.absoluteFill} />
       <View
         style={[
@@ -46,18 +54,18 @@ export function Glass({
         ]}
       />
       <View style={styles.edge} />
-      <View style={padded ? styles.padded : null}>{children}</View>
+      <View style={[padded ? styles.padded : null, ic]}>{children}</View>
     </View>
   );
   if (!onPress) return body;
-  // Cam gövde blur için kendi View'ında kalmalı; yerleşim (flex/genişlik/kenar boşluğu) sarmalayıcıya.
+  // Cam gövde blur için kendi View'ında kalmalı; yerleşim sarmalayıcıya.
   return (
     <PressableScale
       onPress={onPress}
       haptic={haptic}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      style={yerlesim(style)}
+      style={dis}
     >
       {body}
     </PressableScale>
@@ -69,11 +77,19 @@ const YERLESIM = [
   "margin", "marginTop", "marginBottom", "marginLeft", "marginRight", "marginHorizontal", "marginVertical",
 ] as const;
 
-/** Çağıranın stilinden yalnız yerleşim anahtarlarını süzer (sarmalayıcı için). */
+/** Çağıranın stilinden yalnız yerleşim anahtarlarını süzer (dış kap için). */
 function yerlesim(style: StyleProp<ViewStyle>): ViewStyle {
   const duz = (StyleSheet.flatten(style) ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const k of YERLESIM) if (duz[k] !== undefined) out[k] = duz[k];
+  return out as ViewStyle;
+}
+
+/** Yerleşim anahtarları DIŞINDA kalanlar (iç içerik kabı için). */
+function icerik(style: StyleProp<ViewStyle>): ViewStyle {
+  const duz = (StyleSheet.flatten(style) ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(duz)) if (!(YERLESIM as readonly string[]).includes(k)) out[k] = duz[k];
   return out as ViewStyle;
 }
 

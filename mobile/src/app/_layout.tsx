@@ -140,6 +140,13 @@ export default function RootLayout() {
   });
   const fontsReady = fontsLoaded || fontError != null;
 
+  /**
+   * Font gelmeden ağaç ÇİZİLMEZ (Expo şablonunun da yaptığı gibi `return null`). Sebep: sekme
+   * etiketleri sistem fontuyla ölçülüp yerleşiyor, Jakarta yüklenince metin genişliyor ama yerleşim
+   * yenilenmiyordu → "Pan…" gibi kesik etiketler. Açılış ekranı zaten bu sürede açık.
+   */
+  if (!fontsReady) return null;
+
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: color.bg0 }}>
       <AppQueryProvider>

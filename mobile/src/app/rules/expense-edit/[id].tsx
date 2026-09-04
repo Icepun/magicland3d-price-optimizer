@@ -295,7 +295,7 @@ function Segmented({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
   message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },

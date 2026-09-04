@@ -405,7 +405,7 @@ function Field({ label, children, flex }: { label: string; children: React.React
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   dim: { color: ML.textDim, fontSize: 14 },
   list: { paddingHorizontal: 11, paddingTop: 11, paddingBottom: 90 },

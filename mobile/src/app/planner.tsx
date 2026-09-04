@@ -219,7 +219,7 @@ function Summary({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, padding: 24 },
   emoji: { fontSize: 40 },
   dim: { color: ML.textDim, fontSize: 14, textAlign: "center" },

@@ -249,7 +249,7 @@ export default function CustomPrintsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   banner: {
     marginHorizontal: 16,
     marginBottom: 10,

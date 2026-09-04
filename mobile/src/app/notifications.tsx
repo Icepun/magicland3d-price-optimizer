@@ -164,7 +164,7 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingTop: 80 },
   dim: { color: ML.textDim, fontSize: 14 },
   emptyEmoji: { fontSize: 40 },

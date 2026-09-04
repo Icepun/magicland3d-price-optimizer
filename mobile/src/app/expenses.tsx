@@ -370,7 +370,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 const styles = StyleSheet.create({
   katChips: { flexDirection: "row", gap: 6, paddingTop: 8, paddingRight: 4 },
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   content: { padding: 16, gap: 10, paddingBottom: 48 },
   center: { paddingVertical: 50, alignItems: "center" },
   summary: {

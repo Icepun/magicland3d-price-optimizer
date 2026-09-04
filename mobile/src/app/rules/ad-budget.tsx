@@ -196,7 +196,7 @@ export default function AdBudgetScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   content: { padding: space.lg, paddingTop: 0, gap: space.md, paddingBottom: space.xxl },
   form: { gap: space.md },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },

@@ -593,7 +593,7 @@ function Header({ title }: { title: string }) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: {
     flexDirection: "row",
     alignItems: "center",

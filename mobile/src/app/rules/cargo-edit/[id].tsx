@@ -221,7 +221,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 16, padding: 24 },
   message: { color: ML.textDim, fontSize: 14, textAlign: "center" },
   content: { padding: 16, gap: 18, paddingBottom: 60 },

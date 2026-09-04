@@ -105,7 +105,7 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
+  safe: { flex: 1, backgroundColor: "transparent" }, // zemin kökte (kit/Backdrop)
   header: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4 },
   back: { width: 36, height: 40, alignItems: "center", justifyContent: "center" },
   backText: { color: ML.text, fontSize: 36, marginTop: -6 },
