@@ -5,6 +5,7 @@ import { PlusJakartaSans_600SemiBold } from "@expo-google-fonts/plus-jakarta-san
 import { PlusJakartaSans_700Bold } from "@expo-google-fonts/plus-jakarta-sans/700Bold";
 import { PlusJakartaSans_800ExtraBold } from "@expo-google-fonts/plus-jakarta-sans/800ExtraBold";
 import { useFonts } from "expo-font";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { useQueryClient } from "@tanstack/react-query";
 // Tema sağlayıcı expo-router'dan: SDK 56'da React Navigation paketin içine gömülü,
 // `@react-navigation/native` ayrı bir modül olarak ÇÖZÜLMEZ.
@@ -142,6 +143,8 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: color.bg0 }}>
       <AppQueryProvider>
+        {/* Alt sayfalar (kit/Sheet) bu sağlayıcıya portallanır; GestureHandlerRootView'ın İÇİNDE olmalı. */}
+        <BottomSheetModalProvider>
         <StatusBar style="light" />
         <SplashGate fontsReady={fontsReady} />
         <FinanceSyncGate />
@@ -159,6 +162,7 @@ export default function RootLayout() {
           </ThemeProvider>
         </View>
         <UpdateGate />
+        </BottomSheetModalProvider>
       </AppQueryProvider>
     </GestureHandlerRootView>
   );
