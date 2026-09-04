@@ -67,7 +67,8 @@ export default function NotificationsScreen() {
       ) : (
         <FlatList
           data={alerts}
-          keyExtractor={(a) => a.id}
+          // Aynı id iki kez gelebiliyor (kalıcı + anlık uyarı çakışması) → sıra eklenerek tekil.
+          keyExtractor={(a, i) => `${a.id}:${i}`}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={color.accentBright} />}
           renderItem={({ item, index }) => (
@@ -103,14 +104,15 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
   const crit = alert.severity === "critical";
   const ok = alert.severity === "success";
   const renk = crit ? color.bad : ok ? color.good : color.warn;
-  const icon: SymbolViewProps["name"] =
-    alert.type === "stock" || alert.type === "order"
-      ? "shippingbox.fill"
-      : alert.type === "print"
-        ? "printer.fill"
-        : alert.type === "filament"
-          ? "circle.grid.cross.fill"
-          : "circle.dashed";
+  // Kalıcı bildirimlerde tür masaüstünden geliyor; başlık "Filament/makara" diyorsa makara ikonu.
+  const filament = alert.type === "filament" || /filament|makara/i.test(alert.title);
+  const icon: SymbolViewProps["name"] = filament
+    ? "circle.grid.cross.fill"
+    : alert.type === "print"
+      ? "printer.fill"
+      : alert.type === "stock" || alert.type === "order"
+        ? "shippingbox.fill"
+        : "circle.dashed";
   return (
     <Tint
       strong
