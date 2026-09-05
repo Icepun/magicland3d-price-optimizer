@@ -68,7 +68,10 @@ describe("uyarı satırı rota ile açılır", () => {
 
   it("ekran productId yerine route'a bakar (yazıcı uyarısı da tıklanabilir)", () => {
     const ekran = fs.readFileSync(path.join(ROOT, "mobile/src/app/notifications.tsx"), "utf8");
-    expect(ekran).toContain("alert.route && router.push(alert.route as never)");
+    // Korunan şey GEZİNMENİN KAYNAĞI: rota alanı. Koşulun nasıl yazıldığı (`&&` mi, üçlü mü)
+    // ekran yeniden tasarlandığında değişiyor — tek bir yazıma kilitlenen kontrol, davranış
+    // hiç bozulmadan kırmızıya döner.
+    expect(ekran).toContain("router.push(alert.route as never)");
     expect(ekran).not.toContain("alert.productId && router.push");
   });
 });
