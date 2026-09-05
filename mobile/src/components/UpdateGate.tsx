@@ -1,36 +1,37 @@
-import { useEffect, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import * as Updates from "expo-updates";
+import { SymbolView } from "expo-symbols";
+import { useEffect, useState } from "react";
+import { ActivityIndicator, Modal, StyleSheet, View } from "react-native";
 
-import { ML, radius } from "@/theme/colors";
+import { Button } from "@/components/kit/Button";
+import { Glass } from "@/components/kit/Glass";
+import { Progress } from "@/components/kit/Progress";
+import { Txt } from "@/components/kit/Txt";
+import { color, radius, space } from "@/theme/tokens";
 
 /**
  * Görünür OTA güncelleme akışı (expo-updates v56):
- *  açılışta sunucuyu kontrol et → "yeni güncelleme var" popup'ı → kullanıcı "Güncelle" der →
- *  GERÇEK % progress bar ile indirir (useUpdates.downloadProgress) → otomatik yeniden başlatır.
+ *  açılışta sunucuyu kontrol et → "yeni güncelleme var" cam pencere → kullanıcı "Güncelle" der →
+ *  GERÇEK % ilerleme çubuğuyla indirir (useUpdates.downloadProgress) → otomatik yeniden başlatır.
  *
  * Sadece release build'de çalışır (dev / Expo Go'da gizli). Arka planda native auto-download
  * olsa bile kullanıcı onayı olmadan yeniden başlatmaz (starting bayrağı).
  */
 export function UpdateGate() {
-  const { isUpdateAvailable, isUpdatePending, isDownloading, downloadProgress } =
-    Updates.useUpdates();
+  const { isUpdateAvailable, isUpdatePending, isDownloading, downloadProgress } = Updates.useUpdates();
   const [dismissed, setDismissed] = useState(false);
   const [starting, setStarting] = useState(false);
 
-  // Açılışta sunucuyu kontrol et (native auto-check kapalı/yavaş olsa bile güvence).
   useEffect(() => {
     if (!Updates.isEnabled || __DEV__) return;
     Updates.checkForUpdateAsync().catch(() => {});
   }, []);
 
-  // Kullanıcı "Güncelle" dedikten sonra indirme bitince uygula (yeniden başlat).
   useEffect(() => {
     if (isUpdatePending && starting) Updates.reloadAsync().catch(() => setStarting(false));
   }, [isUpdatePending, starting]);
 
-  const visible =
-    Updates.isEnabled && !__DEV__ && !dismissed && (isUpdateAvailable || isUpdatePending);
+  const visible = Updates.isEnabled && !__DEV__ && !dismissed && (isUpdateAvailable || isUpdatePending);
   if (!visible) return null;
 
   const busy = starting || isDownloading;
@@ -57,77 +58,48 @@ export function UpdateGate() {
       }}
     >
       <View style={styles.backdrop}>
-        <View style={styles.card}>
-          <Text style={styles.emoji}>✨</Text>
-          <Text style={styles.title}>Yeni güncelleme hazır</Text>
+        <Glass strong style={styles.card}>
+          <View style={styles.icon}>
+            <SymbolView name="sparkles" tintColor={color.accentBright} style={{ width: 26, height: 26 }} />
+          </View>
+          <Txt v="heading" center>
+            Yeni güncelleme hazır
+          </Txt>
 
           {busy ? (
             <>
-              <Text style={styles.hint}>
+              <Txt v="small" tone="dim" center>
                 {isUpdatePending ? "Yeniden başlatılıyor…" : "İndiriliyor…"}
-              </Text>
-              <View style={styles.track}>
-                <View style={[styles.fill, { width: `${Math.max(6, pct)}%` }]} />
-              </View>
+              </Txt>
+              <Progress value={Math.max(0.06, pct / 100)} height={8} style={{ marginTop: space.xs }} />
               <View style={styles.pctRow}>
-                <ActivityIndicator color={ML.accent} size="small" />
-                <Text style={styles.pct}>%{pct}</Text>
+                <ActivityIndicator color={color.accentBright} size="small" />
+                <Txt v="smallStrong" tone="dim" num>
+                  %{pct}
+                </Txt>
               </View>
             </>
           ) : (
             <>
-              <Text style={styles.hint}>Uygulamanın son sürümünü şimdi yükleyelim mi?</Text>
+              <Txt v="small" tone="dim" center>
+                Uygulamanın son sürümünü şimdi yükleyelim mi?
+              </Txt>
               <View style={styles.btns}>
-                <Pressable onPress={() => setDismissed(true)} hitSlop={10}>
-                  <Text style={styles.later}>Sonra</Text>
-                </Pressable>
-                <Pressable onPress={onUpdate} hitSlop={10} style={styles.updateBtn}>
-                  <Text style={styles.updateTxt}>Güncelle</Text>
-                </Pressable>
+                <Button label="Sonra" variant="secondary" size="sm" onPress={() => setDismissed(true)} style={{ flex: 1 }} />
+                <Button label="Güncelle" icon="arrow.down.circle.fill" size="sm" onPress={onUpdate} style={{ flex: 1 }} />
               </View>
             </>
           )}
-        </View>
+        </Glass>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    padding: 28,
-  },
-  card: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    padding: 22,
-    borderWidth: 1,
-    borderColor: ML.border,
-    alignItems: "center",
-  },
-  emoji: { fontSize: 34, marginBottom: 6 },
-  title: { color: ML.text, fontSize: 18, fontWeight: "800", marginBottom: 6 },
-  hint: { color: ML.textDim, fontSize: 14, textAlign: "center", marginBottom: 16, lineHeight: 20 },
-  track: {
-    width: "100%",
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: ML.cardElevated,
-    overflow: "hidden",
-  },
-  fill: { height: "100%", borderRadius: 4, backgroundColor: ML.accent },
-  pctRow: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 10 },
-  pct: { color: ML.textDim, fontSize: 13, fontWeight: "700", fontVariant: ["tabular-nums"] },
-  btns: { flexDirection: "row", alignItems: "center", gap: 24 },
-  later: { color: ML.textDim, fontSize: 15, fontWeight: "600" },
-  updateBtn: {
-    backgroundColor: ML.accent,
-    paddingHorizontal: 22,
-    paddingVertical: 11,
-    borderRadius: radius.md,
-  },
-  updateTxt: { color: "#fff", fontSize: 15, fontWeight: "800" },
+  backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: space.xl },
+  card: { alignItems: "center", gap: space.sm },
+  icon: { width: 52, height: 52, borderRadius: radius.md, backgroundColor: color.accentSoft, alignItems: "center", justifyContent: "center", marginBottom: space.xs },
+  pctRow: { flexDirection: "row", alignItems: "center", gap: space.sm, marginTop: space.xs },
+  btns: { flexDirection: "row", gap: space.sm, marginTop: space.sm, alignSelf: "stretch" },
 });

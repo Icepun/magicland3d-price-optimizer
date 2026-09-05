@@ -1,29 +1,38 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router, useLocalSearchParams } from "expo-router";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SymbolView } from "expo-symbols";
+import { StyleSheet, View } from "react-native";
 
-import { PressableScale } from "@/components/ui/PressableScale";
-import { AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
-import { ScreenHeader } from "@/components/form";
-import { thumbUrl } from "@/lib/image";
-import { getAllOrders, ORDERS_STALE_MS, statusInfo, type StatusTone } from "@/lib/api/orders";
+import { Pill } from "@/components/kit/Chip";
+import {
+  Button,
+  ErrorState,
+  FadeInView,
+  Glass,
+  Money,
+  Ring,
+  Screen,
+  Shimmer,
+  ShimmerCard,
+  SubHeader,
+  Tint,
+  Txt,
+} from "@/components/kit";
+import { getAllOrders, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
-import { getProductMap, computeOrderProfit, matchOrderLine } from "@/lib/order-profit";
-import { formatCurrency, formatDate, formatPercent, friendlyError } from "@/lib/format";
-import { ML, radius } from "@/theme/colors";
-import { ORDER_PLATFORM_LABEL } from "@/lib/platforms";
+import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
+import { thumbUrl } from "@/lib/image";
+import { computeOrderProfit, getProductMap, matchOrderLine } from "@/lib/order-profit";
+import { ORDER_PLATFORM_COLOR, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
+import { STATUS_TONE } from "@/lib/status-tone";
+import { color, radius, space } from "@/theme/tokens";
 
-const TONE: Record<StatusTone, string> = {
-  green: ML.green,
-  orange: ML.orange,
-  accent: ML.accent,
-  red: ML.red,
-  dim: ML.textDim,
-};
-
+/**
+ * SİPARİŞ DETAYI — platform + durum, ciro/kâr/marj kartı, satırlar. Kâr hesabı listeyle aynı
+ * (tek ürün haritası; satır eşleştirmesi de aynı haritadan → "eşleşmedi" çelişkisi yok).
+ */
 export default function OrderDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
@@ -36,253 +45,201 @@ export default function OrderDetailScreen() {
   } = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
   const order = orders?.orders.find((o) => o.id === id);
 
-  // Eşleştirme haritası: görünürlük filtresiz set (masaüstü orders route ile birebir).
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
-  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
   if (ordersLoading) {
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ScreenHeader title="Sipariş" />
-        <OrderDetailSkeleton />
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Sipariş" />}>
+        <Shimmer width="55%" height={18} />
+        <Shimmer width="40%" height={12} delay={70} />
+        <ShimmerCard height={110} delay={140} />
+        {[0, 1, 2].map((i) => (
+          <ShimmerCard key={i} height={68} delay={280 + i * 80} />
+        ))}
+      </Screen>
     );
   }
 
   if (ordersFailed || !order) {
     // Ham hata metni gösterilmez: kullanıcı için tek satır, eyleme dönük bir cümle.
-    const message = ordersFailed
-      ? friendlyError(ordersError)
-      : orders?.errors.length
-        ? "Sipariş bulunamadı. Bazı satış kanalları şu an yüklenemedi."
-        : "Sipariş bulunamadı.";
     return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ScreenHeader title="Sipariş" />
-        <View style={[styles.center, styles.errorState]}>
-          <Text style={styles.dim}>{message}</Text>
-          <PressableScale
-            onPress={() => refetch()}
-            disabled={isRefetching}
-            style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.8 }]}
-          >
-            <Text style={styles.retryText}>{isRefetching ? "Yenileniyor…" : "Tekrar dene"}</Text>
-          </PressableScale>
-        </View>
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Sipariş" />}>
+        <ErrorState
+          title={ordersFailed ? "Siparişler alınamadı" : "Sipariş bulunamadı"}
+          error={
+            ordersFailed
+              ? ordersError
+              : orders?.errors.length
+                ? new Error("Bazı satış kanalları şu an yüklenemedi.")
+                : new Error("Bu sipariş son 60 günün listesinde yok.")
+          }
+          onRetry={() => void refetch()}
+          retrying={isRefetching}
+        />
+      </Screen>
     );
   }
 
-  const accent = ML[order.platform];
+  const accent = ORDER_PLATFORM_COLOR[order.platform];
   const st = statusInfo(order);
-  // Tek harita: hem kâr hesabı hem satır eşleştirme aynı pm'i kullanır (çifte inşa + çelişki yok).
   const pm = getProductMap(products ?? []);
-  const profit =
-    products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
-  const margin =
-    profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
+  const profit = products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
+  const margin = profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
+  const notlar: string[] = [];
+  if (profit?.partial) notlar.push("Bazı ürünler eşleşmedi, kâr kısmi (~).");
+  if (profit?.desiEstimated) {
+    notlar.push(
+      profit.missingDesiCount > 0
+        ? `${profit.missingDesiCount} ürünün desisi eksik; kargo 1 desiyle hesaplandı (◆).`
+        : "Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi (◆)."
+    );
+  }
+  if (profit && Math.abs(profit.orderRevenueAdjustment) >= 0.01) {
+    notlar.push(
+      `Kargo geliri / sipariş indirimi: ${profit.orderRevenueAdjustment >= 0 ? "+" : ""}${formatCurrency(profit.orderRevenueAdjustment)}`
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScreenHeader title={order.orderNumber} />
-      <ScrollView contentContainerStyle={styles.content}>
-        {/* Üst bilgi */}
+    <Screen header={<SubHeader title={order.orderNumber} subtitle={formatDate(order.date)} />}>
+      {/* Üst bilgi */}
+      <FadeInView index={0}>
         <View style={styles.headRow}>
           <View style={[styles.platDot, { backgroundColor: accent }]} />
-          <Text style={[styles.platName, { color: accent }]}>
+          <Txt v="heading" style={{ color: accent, flex: 1 }} numberOfLines={1}>
             {ORDER_PLATFORM_LABEL[order.platform]}
-          </Text>
-          <View style={[styles.statusBadge, { backgroundColor: TONE[st.tone] + "22" }]}>
-            <Text style={[styles.statusText, { color: TONE[st.tone] }]}>{st.label}</Text>
-          </View>
+          </Txt>
+          <Pill color={STATUS_TONE[st.tone]}>{st.label}</Pill>
         </View>
-        <Text style={styles.sub}>
-          {order.customer ?? "—"} · {formatDate(order.date)}
-        </Text>
-        {order.isManual && order.editHref ? (
-          <PressableScale
-            onPress={() => router.push(order.editHref as never)}
-            style={({ pressed }) => [styles.editButton, pressed && { opacity: 0.75 }]}
-          >
-            <Text style={styles.editButtonText}>Manuel siparişi düzenle</Text>
-          </PressableScale>
-        ) : null}
+        <Txt v="body" tone="dim" numberOfLines={1}>
+          {order.customer ?? "Müşteri adı yok"}
+        </Txt>
+      </FadeInView>
 
-        {/* Kâr/ciro */}
-        <FadeInView style={styles.kpiCard}>
-          <View style={styles.kpiCol}>
-            <Text style={styles.kpiLabel}>CİRO</Text>
-            <AnimatedNumber
-              value={order.total}
-              format={(n) => formatCurrency(n)}
-              style={styles.kpiValue}
-            />
-          </View>
-          <View style={styles.kpiCol}>
-            <Text style={styles.kpiLabel}>KÂR</Text>
-            {profit?.profit == null ? (
-              <Text style={[styles.kpiValue, { color: ML.textDim }]}>—</Text>
-            ) : (
-              <AnimatedNumber
-                value={profit.profit}
-                format={(n) => `${profit.partial ? "~" : ""}${formatCurrency(n)}`}
-                style={[styles.kpiValue, { color: profit.profit < 0 ? ML.red : ML.green }]}
-              />
-            )}
-          </View>
-          <View style={styles.kpiCol}>
-            <Text style={styles.kpiLabel}>MARJ</Text>
-            {margin == null ? (
-              <Text style={styles.kpiValue}>—</Text>
-            ) : (
-              <AnimatedNumber
-                value={margin}
-                format={(n) => formatPercent(n)}
-                style={styles.kpiValue}
-              />
-            )}
-          </View>
-        </FadeInView>
-        {profit?.partial ? (
-          <Text style={styles.note}>~ bazı ürünler eşleşmedi, kâr kısmi.</Text>
-        ) : null}
-        {profit?.desiEstimated ? (
-          <Text style={styles.note}>
-            {profit.missingDesiCount > 0
-              ? `◆ ${profit.missingDesiCount} ürünün desisi eksik; kargo 1 desiyle hesaplandı.`
-              : "◆ Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi."}
-          </Text>
-        ) : null}
-        {profit && Math.abs(profit.orderRevenueAdjustment) >= 0.01 ? (
-          <Text style={styles.note}>
-            Kargo geliri / sipariş indirimi:{" "}
-            {profit.orderRevenueAdjustment >= 0 ? "+" : ""}
-            {formatCurrency(profit.orderRevenueAdjustment)}
-          </Text>
-        ) : null}
+      {order.isManual && order.editHref ? (
+        <Button
+          label="Manuel siparişi düzenle"
+          icon="pencil"
+          variant="secondary"
+          size="sm"
+          onPress={() => router.push(order.editHref as never)}
+          style={{ alignSelf: "flex-start" }}
+        />
+      ) : null}
 
-        {/* Satırlar */}
-        <Text style={styles.sectionLabel}>ÜRÜNLER ({order.items.length})</Text>
-        {order.items.map((line, i) => {
-          // Kâr kutusuyla AYNI eşleştirme (anahtar + Shopify ad-fallback) — çelişkili "eşleşmedi" bitti.
-          const p = matchOrderLine(line, order.platform, pm);
-          const lineImage = line.image ?? p?.imageUrl ?? null;
-          return (
-            <FadeInView key={i} index={i} baseDelay={60} style={styles.lineRow}>
-              {lineImage ? (
-                <Image
-                  source={{ uri: thumbUrl(lineImage, 128)! }}
-                  alt={line.name}
-                  style={styles.lineImg}
-                  contentFit="cover"
-                />
+      {/* Ciro / kâr / marj */}
+      <FadeInView index={1}>
+        <Glass style={styles.kpi}>
+          <View style={{ flex: 1, gap: space.md }}>
+            <View>
+              <Txt v="label" tone="faint" style={styles.kicker}>
+                CİRO
+              </Txt>
+              <Money value={order.total} v="title" />
+            </View>
+            <View>
+              <Txt v="label" tone="faint" style={styles.kicker}>
+                KÂR
+              </Txt>
+              {profit?.profit == null ? (
+                <Txt v="title" tone="dim">
+                  —
+                </Txt>
               ) : (
-                <View style={[styles.lineImg, styles.lineImgEmpty]} />
+                <View style={styles.rowGap}>
+                  {profit.partial ? (
+                    <Txt v="heading" tone="dim">
+                      ~
+                    </Txt>
+                  ) : null}
+                  <Money value={profit.profit} v="title" tone={profit.profit < 0 ? "bad" : "good"} />
+                </View>
               )}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.lineName} numberOfLines={2}>
+            </View>
+          </View>
+          <View style={styles.marjCol}>
+            <Ring
+              value={margin ?? 0}
+              size={84}
+              stroke={9}
+              color={margin == null ? color.textFaint : margin < 0 ? color.bad : margin < 0.2 ? color.warn : color.good}
+            >
+              <Txt v="smallStrong" num>
+                {margin == null ? "—" : formatPercent(margin, 0)}
+              </Txt>
+            </Ring>
+            <Txt v="label" tone="faint" style={styles.kicker}>
+              MARJ
+            </Txt>
+          </View>
+        </Glass>
+      </FadeInView>
+
+      {notlar.length > 0 ? (
+        <Tint style={styles.notes}>
+          {notlar.map((n) => (
+            <View key={n} style={styles.noteRow}>
+              <SymbolView name="info.circle" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
+              <Txt v="small" tone="dim" style={{ flex: 1 }}>
+                {n}
+              </Txt>
+            </View>
+          ))}
+        </Tint>
+      ) : null}
+
+      {/* Satırlar */}
+      <Txt v="label" tone="faint" style={styles.section}>
+        ÜRÜNLER ({order.items.length})
+      </Txt>
+      {order.items.map((line, i) => {
+        const p = matchOrderLine(line, order.platform, pm);
+        const lineImage = line.image ?? p?.imageUrl ?? null;
+        return (
+          <FadeInView key={i} index={i + 2}>
+            <Tint strong style={styles.line}>
+              {lineImage ? (
+                <Image source={{ uri: thumbUrl(lineImage, 128)! }} alt={line.name} style={styles.lineImg} contentFit="cover" />
+              ) : (
+                <View style={[styles.lineImg, styles.lineImgEmpty]}>
+                  <SymbolView name="cube.box" tintColor={color.textFaint} style={{ width: 18, height: 18 }} />
+                </View>
+              )}
+              <View style={{ flex: 1, gap: 2 }}>
+                <Txt v="bodyStrong" numberOfLines={2}>
                   {line.name}
-                </Text>
-                <Text style={styles.lineMeta}>
-                  {order.isManual
-                    ? `${line.quantity} adet`
-                    : `${line.quantity} × ${formatCurrency(line.unitPrice)}`}
+                </Txt>
+                <Txt v="small" tone="faint" num>
+                  {order.isManual ? `${line.quantity} adet` : `${line.quantity} × ${formatCurrency(line.unitPrice)}`}
                   {p || order.isManual ? "" : "  · eşleşmedi"}
-                </Text>
+                </Txt>
               </View>
               {!order.isManual ? (
-                <Text style={styles.lineTotal}>
+                <Txt v="bodyStrong" tone="dim" num>
                   {formatCurrency(line.unitPrice * line.quantity)}
-                </Text>
+                </Txt>
               ) : null}
-            </FadeInView>
-          );
-        })}
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-/** Sipariş detayı açılırken kartların yerini tutan iskelet. */
-function OrderDetailSkeleton() {
-  return (
-    <View style={styles.content}>
-      <Skeleton width="55%" height={18} />
-      <Skeleton width="40%" height={12} delay={70} />
-      <SkeletonCard height={92} delay={140} />
-      <Skeleton width="35%" height={11} delay={220} />
-      {[0, 1, 2].map((i) => (
-        <SkeletonCard key={i} height={68} delay={280 + i * 80} />
-      ))}
-    </View>
+            </Tint>
+          </FadeInView>
+        );
+      })}
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  errorState: { padding: 24, gap: 14 },
-  dim: { color: ML.textDim, fontSize: 14, textAlign: "center" },
-  retryBtn: {
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-  },
-  retryText: { color: "#fff", fontSize: 14, fontWeight: "700" },
-  content: { padding: 16, gap: 10, paddingBottom: 40 },
-  headRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  headRow: { flexDirection: "row", alignItems: "center", gap: space.sm, marginBottom: 2 },
   platDot: { width: 9, height: 9, borderRadius: 5 },
-  platName: { fontSize: 17, fontWeight: "700", flex: 1 },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
-  statusText: { fontSize: 12, fontWeight: "700" },
-  sub: { color: ML.textDim, fontSize: 14 },
-  editButton: {
-    alignSelf: "flex-start",
-    backgroundColor: ML.manual + "22",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.manual + "66",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  editButtonText: { color: ML.manual, fontSize: 13, fontWeight: "700" },
-  kpiCard: {
-    flexDirection: "row",
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 16,
-    marginTop: 6,
-  },
-  kpiCol: { flex: 1, gap: 4 },
-  kpiLabel: { color: ML.textFaint, fontSize: 10, fontWeight: "700", letterSpacing: 1 },
-  kpiValue: { color: ML.text, fontSize: 20, fontWeight: "800" },
-  note: { color: ML.textFaint, fontSize: 12, marginLeft: 4 },
-  sectionLabel: {
-    color: ML.textFaint,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: 10,
-    marginLeft: 4,
-  },
-  lineRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 12,
-  },
-  lineImg: { width: 44, height: 44, borderRadius: 8, backgroundColor: ML.cardElevated },
-  lineImgEmpty: { borderWidth: 1, borderColor: ML.border },
-  lineName: { color: ML.text, fontSize: 14, fontWeight: "600" },
-  lineMeta: { color: ML.textFaint, fontSize: 12, marginTop: 3 },
-  lineTotal: { color: ML.textDim, fontSize: 14, fontWeight: "700" },
+  rowGap: { flexDirection: "row", alignItems: "baseline", gap: 4 },
+  kicker: { letterSpacing: 1, marginBottom: 2 },
+  kpi: { flexDirection: "row", alignItems: "center", gap: space.lg },
+  marjCol: { alignItems: "center", gap: space.xs },
+  notes: { gap: space.sm },
+  noteRow: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
+  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  line: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
+  lineImg: { width: 48, height: 48, borderRadius: radius.sm, backgroundColor: color.tintStrong },
+  lineImgEmpty: { alignItems: "center", justifyContent: "center" },
 });

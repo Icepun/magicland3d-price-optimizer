@@ -1,12 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, StyleSheet, View } from "react-native";
 
-import { ConnectionError } from "@/components/ConnectionError";
-import { ScreenHeader } from "@/components/form";
-import { Card, Chip, Pill, SectionLabel, SkeletonList } from "@/components/ui";
-import { PressableScale } from "@/components/ui/PressableScale";
+import { Chip, Pill } from "@/components/kit/Chip";
+import { Button, EmptyState, ErrorState, FadeInView, Glass, Input, Money, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
 import {
   AD_PLATFORMS,
   AD_PLATFORM_LABEL,
@@ -18,19 +15,12 @@ import {
 } from "@/lib/db/ad-budgets";
 import { getRules } from "@/lib/db/rules";
 import { syncFinanceFromCache } from "@/lib/finance-sync";
-import { formatCurrency } from "@/lib/format";
-import { ML, radius, space, tabular, type } from "@/theme/colors";
+import { color, space } from "@/theme/tokens";
 
 /**
- * REKLAM BÜTÇESİ — günlük reklam harcaması, platform başına.
- *
- * NEDEN TELEFONDA: bu rakam TÜM kâr hesabını etkiliyor (her sipariş ciroya oranla reklam payı
- * taşıyor) ama yalnız masaüstünden girilebiliyordu. Kullanıcı reklamı telefondan açıp
- * kapatıyor; harcamayı günler sonra girince aradaki siparişlerin kârı yanlış kalıyordu.
- *
- * ⚠️ ESKİ DÖNEM SİLİNMEZ: geçmiş siparişlerin kârı kendi döneminin oranına bağlı. Yeni bütçe
- * eskisini bitirip başlar. Kaydettikten sonra donmuş kârlar (Raporlar) yeni oranla YENİDEN
- * YAZILIR — yoksa Siparişler yeni, Raporlar eski rakamı gösterirdi.
+ * REKLAM BÜTÇESİ — günlük reklam harcaması, platform başına. Bu rakam TÜM kâr hesabını etkiler.
+ * ⚠️ Eski dönem silinmez (geçmiş siparişlerin kârı ona bağlı); yeni bütçe eskisini kapatıp başlar,
+ * donmuş kârlar yeni oranla yeniden yazılır. Mantık öncekiyle aynı; sunum kit'e taşındı.
  */
 
 function tarihYaz(ms: number | null): string {
@@ -41,7 +31,6 @@ function tarihYaz(ms: number | null): string {
 export default function AdBudgetScreen() {
   const qc = useQueryClient();
   const butceler = useQuery({ queryKey: ["ad-budgets"], queryFn: getAdBudgets });
-  // Yürürlükteki oranlar kurallarla birlikte zaten hesaplanıyor (payda = dönemin cirosu).
   const rules = useQuery({ queryKey: ["rules"], queryFn: getRules });
 
   const [platform, setPlatform] = useState<AdPlatform>("all");
@@ -58,18 +47,11 @@ export default function AdBudgetScreen() {
       setTutar("");
       await qc.invalidateQueries({ queryKey: ["ad-budgets"] });
       await qc.invalidateQueries({ queryKey: ["rules"] });
-      // Donmuş kârlar yeni reklam payıyla yeniden yazılsın (Raporlar ile Siparişler ayrışmasın).
       void syncFinanceFromCache(qc, { zorlaKarYaz: true });
-      Alert.alert(
-        "Bütçe kaydedildi",
-        "Bu andan itibaren siparişler yeni reklam payını taşıyor. Raporlardaki kârlar arka planda güncelleniyor."
-      );
+      Alert.alert("Bütçe kaydedildi", "Bu andan itibaren siparişler yeni reklam payını taşıyor. Raporlardaki kârlar arka planda güncelleniyor.");
     },
     onError: (e) => {
-      Alert.alert(
-        e instanceof AdBudgetOverlapError ? "Dönem çakışıyor" : "Kaydedilemedi",
-        e instanceof Error ? e.message : "Reklam bütçesi kaydedilemedi."
-      );
+      Alert.alert(e instanceof AdBudgetOverlapError ? "Dönem çakışıyor" : "Kaydedilemedi", e instanceof Error ? e.message : "Reklam bütçesi kaydedilemedi.");
     },
   });
 
@@ -84,163 +66,104 @@ export default function AdBudgetScreen() {
 
   const liste = butceler.data ?? [];
   const gecerliTutar = Number(tutar.replace(",", ".")) >= 0 && tutar.trim().length > 0;
+  const yururlukteSayisi = liste.filter((b) => b.isActive === 1 && b.validTo == null).length;
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      {/* Diğer tüm alt ekranlarla aynı başlık çubuğu. */}
-      <ScreenHeader title="Reklam Bütçesi" />
-
+    <Screen header={<SubHeader title="Reklam bütçesi" subtitle={liste.length ? `${yururlukteSayisi} yürürlükte · ${liste.length} dönem` : undefined} />}>
       {butceler.error ? (
-        <ConnectionError
-          error={butceler.error}
-          onRetry={() => void butceler.refetch()}
-          retrying={butceler.isFetching}
-        />
+        <ErrorState error={butceler.error} onRetry={() => void butceler.refetch()} retrying={butceler.isFetching} />
       ) : butceler.isLoading ? (
-        <SkeletonList count={4} height={80} />
+        <ShimmerList count={4} height={96} />
       ) : (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <SectionLabel>Yeni dönem başlat</SectionLabel>
-          <Card style={styles.form}>
-            <View style={styles.chips}>
-              {AD_PLATFORMS.map((p) => (
-                <Chip
-                  key={p}
-                  label={AD_PLATFORM_LABEL[p]}
-                  selected={platform === p}
-                  onPress={() => setPlatform(p)}
-                />
-              ))}
-            </View>
-            <View style={styles.inputRow}>
-              <Text style={styles.currency}>₺</Text>
-              <TextInput
+        <>
+          <Txt v="label" tone="faint" style={styles.section}>
+            YENİ DÖNEM BAŞLAT
+          </Txt>
+          <FadeInView index={0}>
+            <Glass style={styles.form}>
+              <View style={styles.chips}>
+                {AD_PLATFORMS.map((p) => (
+                  <Chip key={p} label={AD_PLATFORM_LABEL[p]} selected={platform === p} onPress={() => setPlatform(p)} />
+                ))}
+              </View>
+              <Input
                 value={tutar}
                 onChangeText={setTutar}
+                numeric
                 placeholder="Günlük tutar"
-                placeholderTextColor={ML.textFaint}
-                keyboardType="decimal-pad"
-                style={[styles.input, tabular]}
+                icon="turkishlirasign"
+                suffix="₺ / gün"
                 accessibilityLabel="Günlük reklam harcaması"
               />
-              <Text style={styles.perDay}>/gün</Text>
-            </View>
-            <Text style={styles.hint}>
-              Günlük harcama kâra doğrudan yansır. Bugünden itibaren geçerli olur. Aynı platformun yürürlükteki bütçesi kapanır — eski
-              dönem silinmez, geçmiş siparişlerin kârı ona bağlıdır.
-            </Text>
-            <PressableScale
-              onPress={() => kaydet.mutate()}
-              disabled={!gecerliTutar || kaydet.isPending}
-              haptic="orta"
-              style={[styles.saveBtn, (!gecerliTutar || kaydet.isPending) && styles.saveBtnOff]}
-              accessibilityRole="button"
-            >
-              <Text style={styles.saveText}>
-                {kaydet.isPending ? "Kaydediliyor…" : "Bütçeyi başlat"}
-              </Text>
-            </PressableScale>
-          </Card>
+              <Txt v="small" tone="faint">
+                Günlük harcama kâra doğrudan yansır ve bugünden itibaren geçerli olur. Aynı platformun yürürlükteki bütçesi kapanır; eski dönem
+                silinmez, geçmiş siparişlerin kârı ona bağlıdır.
+              </Txt>
+              <Button label="Bütçeyi başlat" icon="play.fill" onPress={() => kaydet.mutate()} disabled={!gecerliTutar} loading={kaydet.isPending} />
+            </Glass>
+          </FadeInView>
 
-          <SectionLabel>Dönemler</SectionLabel>
+          <Txt v="label" tone="faint" style={styles.section}>
+            DÖNEMLER
+          </Txt>
           {liste.length === 0 ? (
-            <Text style={styles.empty}>Henüz reklam bütçesi girilmemiş.</Text>
+            <EmptyState icon="megaphone" title="Henüz reklam bütçesi yok" hint="Yukarıdan platform seçip günlük tutarı gir." />
           ) : (
-            liste.map((b) => {
+            liste.map((b, i) => {
               const yururlukte = b.isActive === 1 && b.validTo == null;
               const oran = oranlar.get(b.platform);
               return (
-                <Card key={b.id} style={styles.row} accent={yururlukte ? ML.accent : undefined}>
-                  <View style={styles.rowTop}>
-                    <Text style={styles.platform}>
-                      {AD_PLATFORM_LABEL[b.platform as AdPlatform] ?? b.platform}
-                    </Text>
-                    {yururlukte ? <Pill color={ML.green}>Yürürlükte</Pill> : null}
-                  </View>
-                  <Text style={[styles.amount, tabular]}>
-                    {formatCurrency(b.dailyAmount)} <Text style={styles.perDaySmall}>/gün</Text>
-                  </Text>
-                  <Text style={styles.period}>
-                    {tarihYaz(b.validFrom)} → {b.validTo == null ? "devam ediyor" : tarihYaz(b.validTo)}
-                  </Text>
-                  {yururlukte && oran != null ? (
-                    <Text style={styles.rate}>Ciroya oranı: %{(oran * 100).toFixed(2)}</Text>
-                  ) : null}
-                  {yururlukte ? (
-                    <PressableScale
-                      onPress={() =>
-                        Alert.alert("Reklamı durdur", "Bu bütçe bugün itibarıyla kapansın mı?", [
-                          { text: "Vazgeç", style: "cancel" },
-                          {
-                            text: "Durdur",
-                            style: "destructive",
-                            onPress: () => durdur.mutate(b.id),
-                          },
-                        ])
-                      }
-                      haptic="orta"
-                      style={styles.stopBtn}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.stopText}>Reklamı durdur</Text>
-                    </PressableScale>
-                  ) : null}
-                </Card>
+                <FadeInView key={b.id} index={i + 1}>
+                  <Tint strong style={[styles.row, yururlukte ? styles.rowActive : null]}>
+                    <View style={styles.rowTop}>
+                      <Txt v="heading">{AD_PLATFORM_LABEL[b.platform as AdPlatform] ?? b.platform}</Txt>
+                      {yururlukte ? <Pill color={color.good}>Yürürlükte</Pill> : <Pill color={color.textFaint}>Kapandı</Pill>}
+                    </View>
+                    <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
+                      <Money value={b.dailyAmount} v="title" tone={yururlukte ? "accent" : "dim"} animate={false} />
+                      <Txt v="small" tone="dim">
+                        / gün
+                      </Txt>
+                    </View>
+                    <Txt v="small" tone="dim" num>
+                      {tarihYaz(b.validFrom)} → {b.validTo == null ? "devam ediyor" : tarihYaz(b.validTo)}
+                    </Txt>
+                    {yururlukte && oran != null ? (
+                      <Txt v="smallStrong" tone="warn" num>
+                        Ciroya oranı %{(oran * 100).toFixed(2)}
+                      </Txt>
+                    ) : null}
+                    {yururlukte ? (
+                      <Button
+                        label="Reklamı durdur"
+                        icon="stop.fill"
+                        variant="danger"
+                        size="sm"
+                        onPress={() =>
+                          Alert.alert("Reklamı durdur", "Bu bütçe bugün itibarıyla kapansın mı?", [
+                            { text: "Vazgeç", style: "cancel" },
+                            { text: "Durdur", style: "destructive", onPress: () => durdur.mutate(b.id) },
+                          ])
+                        }
+                        style={{ alignSelf: "flex-start", marginTop: space.xs }}
+                      />
+                    ) : null}
+                  </Tint>
+                </FadeInView>
               );
             })
           )}
-        </ScrollView>
+        </>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
-  content: { padding: space.lg, paddingTop: 0, gap: space.md, paddingBottom: space.xxl },
+  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
   form: { gap: space.md },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
-  inputRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  currency: { ...type.heading, color: ML.textDim },
-  input: {
-    flex: 1,
-    minHeight: 48,
-    color: ML.text,
-    fontSize: 20,
-    fontWeight: "700",
-    paddingHorizontal: space.sm,
-    backgroundColor: ML.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-  },
-  perDay: { ...type.small, color: ML.textDim },
-  perDaySmall: { ...type.small, color: ML.textDim },
-  hint: { ...type.small, color: ML.textFaint, lineHeight: 17 },
-  saveBtn: {
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-  },
-  saveBtnOff: { opacity: 0.4 },
-  saveText: { color: ML.bg, fontWeight: "800", fontSize: 16 },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
   row: { gap: 4 },
-  rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  platform: { ...type.heading, color: ML.text },
-  amount: { ...type.title, color: ML.accent },
-  period: { ...type.small, color: ML.textDim },
-  rate: { ...type.small, color: ML.orange, fontWeight: "700" },
-  stopBtn: {
-    marginTop: space.sm,
-    minHeight: 44,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.red,
-  },
-  stopText: { color: ML.red, fontWeight: "700" },
-  empty: { ...type.small, color: ML.textFaint, textAlign: "center", paddingVertical: space.lg },
+  rowActive: { borderColor: color.accent + "66" },
+  rowTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
 });

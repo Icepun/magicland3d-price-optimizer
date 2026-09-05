@@ -21,6 +21,20 @@ export const ORDER_PLATFORM_LABEL: Record<OrderPlatform, string> = {
   manual: "Manuel",
 };
 
+/**
+ * Dar yüzeyler için kısa etiket — "Hepsiburada" Panel'deki platform çipine sığmıyordu (taşıyordu),
+ * Berke "HB" yazılmasını onayladı (2026-09-04). Uzun etiket gereken yerde PLATFORM_LABEL kullan.
+ */
+export const PLATFORM_SHORT_LABEL: Record<Platform, string> = {
+  ...PLATFORM_LABEL,
+  hepsiburada: "HB",
+};
+
+export const ORDER_PLATFORM_SHORT_LABEL: Record<OrderPlatform, string> = {
+  ...PLATFORM_SHORT_LABEL,
+  manual: "Manuel",
+};
+
 /** Marka renkleri (UI rozet/kart). */
 export const PLATFORM_COLOR: Record<Platform, string> = {
   shopify: "#4FBF67", // yeşil (ML teması ile birebir)

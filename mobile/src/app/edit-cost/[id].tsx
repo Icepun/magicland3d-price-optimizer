@@ -1,29 +1,23 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
-import { router, useLocalSearchParams, useNavigation } from "expo-router";
+import { useLocalSearchParams, useNavigation } from "expo-router";
+import { SymbolView } from "expo-symbols";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from "react-native";
 
 import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
-import { PressableScale } from "@/components/ui/PressableScale";
-import { SkeletonForm } from "@/components/ui";
+import { Chip } from "@/components/kit/Chip";
+import { Button, ErrorState, Glass, Input, Money, Screen, Segmented, Shimmer, SubHeader, Tint, Txt } from "@/components/kit";
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
-import { formatCurrency } from "@/lib/format";
 import { parseTrNumber } from "@/lib/number";
-import { ML, radius } from "@/theme/colors";
+import { color, radius, space } from "@/theme/tokens";
+
+/** Formdaki rakamlar her tuşta değişir: kısa akış. */
+const FORM_TWEEN = 340;
 
 const NYLON: { key: NylonLevel; label: string }[] = [
   { key: "none", label: "Yok" },
@@ -456,163 +450,162 @@ export default function EditCostScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <Header />
-        <SkeletonForm rows={6} />
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Maliyet düzenle" />}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <View key={i} style={{ gap: space.sm }}>
+            <Shimmer width="35%" height={11} delay={i * 70} />
+            <Shimmer width="100%" height={46} radius={radius.md} delay={i * 70 + 60} />
+          </View>
+        ))}
+      </Screen>
     );
   }
 
   if (productFailed || !product) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <Header />
-        <View style={[styles.center, styles.errorBox]}>
-          <Text style={styles.errorText}>
-            {productError instanceof Error ? productError.message : "Ürün yüklenemedi."}
-          </Text>
-          <PressableScale
-            onPress={() => void refetchProduct()}
-            disabled={productRefetching}
-            style={styles.retryButton}
-          >
-            <Text style={styles.retryButtonText}>
-              {productRefetching ? "Yenileniyor…" : "Tekrar dene"}
-            </Text>
-          </PressableScale>
-        </View>
-      </SafeAreaView>
+      <Screen header={<SubHeader title="Maliyet düzenle" />}>
+        <ErrorState
+          title="Ürün yüklenemedi"
+          error={productError ?? new Error("Ürün bulunamadı.")}
+          onRetry={() => void refetchProduct()}
+          retrying={productRefetching}
+        />
+      </Screen>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Header />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text style={styles.productName} numberOfLines={1}>
-          {product.name}
-        </Text>
+    <Screen header={<SubHeader title="Maliyet düzenle" subtitle={product.name} />}>
+      <Segmented
+        options={[
+          { value: "detailed", label: "Detaylı hesap" },
+          { value: "manual", label: "Elle gir" },
+        ]}
+        value={mode}
+        onChange={(k) => setMode(k)}
+      />
 
-        <Segmented
-          items={[
-            { key: "detailed", label: "Detaylı" },
-            { key: "manual", label: "Manuel" },
-          ]}
-          selected={mode}
-          onSelect={(k) => setMode(k as "detailed" | "manual")}
-        />
-
-        {/* Canlı önizleme */}
-        <View style={styles.preview}>
-          <View>
-            <Text style={styles.previewLabel}>TOPLAM MALİYET</Text>
-            <Text style={styles.previewValue}>{formatCurrency(preview?.totalCost ?? 0)}</Text>
-          </View>
-          <View style={{ alignItems: "flex-end", gap: 2 }}>
-            <Text style={styles.previewSub}>Üretim {formatCurrency(preview?.productionCost ?? 0)}</Text>
-            <Text style={styles.previewSub}>Paketleme {formatCurrency(preview?.packagingCost ?? 0)}</Text>
-          </View>
+      {/* Canlı önizleme — @core resolveProductCost, kaydetmeden */}
+      <Glass style={styles.preview}>
+        <View style={{ flex: 1 }}>
+          <Txt v="label" tone="accent" style={styles.kicker}>
+            TOPLAM MALİYET
+          </Txt>
+          <Money value={preview?.totalCost ?? 0} v="hero" durationMs={FORM_TWEEN} />
         </View>
+        <View style={{ alignItems: "flex-end", gap: 2 }}>
+          <Txt v="label" tone="faint">
+            ÜRETİM
+          </Txt>
+          <Money value={preview?.productionCost ?? 0} v="bodyStrong" durationMs={FORM_TWEEN} />
+          <Txt v="label" tone="faint" style={{ marginTop: space.xs }}>
+            PAKETLEME
+          </Txt>
+          <Money value={preview?.packagingCost ?? 0} v="bodyStrong" durationMs={FORM_TWEEN} />
+        </View>
+      </Glass>
 
-        {mode === "manual" && (
-          <View style={styles.fieldRow}>
-            <NumberField label="Maliyet (₺)" value={manualCost} onChange={setManualCost} />
+      {mode === "manual" ? (
+        <Tint strong style={styles.card}>
+          <View style={styles.twoCol}>
+            <NumberField label="Maliyet" suffix="₺" value={manualCost} onChange={setManualCost} />
             <NumberField label="Desi" value={desi} onChange={setDesi} />
           </View>
-        )}
+        </Tint>
+      ) : null}
 
-        {mode === "detailed" && (
-          <>
-        {/* Filament */}
-        <Label text="FİLAMENT" />
-        <ChipRow
-          items={filaments.map((f) => ({ key: f.id, label: `${f.name} (₺${f.costPerGram}/g)` }))}
-          selected={filamentTypeId}
-          onSelect={setFilamentTypeId}
-        />
-
-        {/* 3D baskı sayısal */}
-        <View style={styles.fieldRow}>
-          <NumberField label="Ağırlık (g)" value={weight} onChange={setWeight} />
-          <NumberField label="Süre (saat)" value={time} onChange={setTime} />
-        </View>
-        <View style={styles.fieldRow}>
-          <NumberField label="Fire (%)" value={waste} onChange={setWaste} />
-          <NumberField label="Desi" value={desi} onChange={setDesi} />
-        </View>
-
-        {/* Paketleme */}
-        <Label text="POŞET / KOLİ" />
-        <ChipRow
-          items={packagingOptions.map((o) => ({
-            key: o.id,
-            label: `${o.name} (₺${o.price})`,
-          }))}
-          selected={packagingOptionId}
-          onSelect={setPackagingOptionId}
-        />
-
-        <Label text="NAYLON" />
-        <Segmented
-          items={NYLON}
-          selected={nylonLevel}
-          onSelect={(k) => setNylonLevel(k as NylonLevel)}
-        />
-
-        <Label text="BANT" />
-        <Segmented
-          items={[
-            { key: "no", label: "Yok" },
-            { key: "yes", label: "Var" },
-          ]}
-          selected={tapeUsed ? "yes" : "no"}
-          onSelect={(k) => setTapeUsed(k === "yes")}
-        />
-          </>
-        )}
-
-        {variantGroup && variantGroup.members.length > 1 ? (
-          <PressableScale
-            onPress={() => {
-              Haptics.selectionAsync();
-              setApplyAll((v) => !v);
-            }}
-            style={styles.applyAllRow}
-          >
-            <View style={[styles.checkbox, applyAll && styles.checkboxOn]}>
-              {applyAll ? <Text style={styles.checkboxTick}>✓</Text> : null}
+      {mode === "detailed" ? (
+        <>
+          <Tint strong style={styles.card}>
+            <Etiket>FİLAMENT</Etiket>
+            <ChipRow
+              items={filaments.map((f) => ({ key: f.id, label: `${f.name} · ₺${f.costPerGram}/g` }))}
+              selected={filamentTypeId}
+              onSelect={setFilamentTypeId}
+            />
+            <View style={styles.twoCol}>
+              <NumberField label="Ağırlık" suffix="g" value={weight} onChange={setWeight} />
+              <NumberField label="Süre" suffix="saat" value={time} onChange={setTime} />
             </View>
-            <Text style={styles.applyAllText}>
-              Bu maliyeti tüm varyantlara uygula ({variantGroup.members.length} ürün)
-            </Text>
-          </PressableScale>
-        ) : null}
+            <View style={styles.twoCol}>
+              <NumberField label="Fire" suffix="%" value={waste} onChange={setWaste} />
+              <NumberField label="Desi" value={desi} onChange={setDesi} />
+            </View>
+          </Tint>
 
-        <View style={styles.statusRow}>
-          {status === "saving" ? (
-            <>
-              <ActivityIndicator color={ML.textDim} size="small" />
-              <Text style={styles.statusText}>Kaydediliyor…</Text>
-            </>
-          ) : status === "saved" ? (
-            <Text style={[styles.statusText, { color: ML.green }]}>✓ Otomatik kaydedildi</Text>
-          ) : status === "error" ? (
-            <>
-              <Text style={styles.statusError}>
-                ⚠ {saveError ?? parsedForm.error ?? "Kaydetme başarısız."}
-              </Text>
-              {saveError && currentPayload ? (
-                <PressableScale onPress={() => enqueueSave(currentPayload)} hitSlop={8}>
-                  <Text style={styles.statusRetry}>Tekrar dene</Text>
-                </PressableScale>
-              ) : null}
-            </>
-          ) : (
-            <Text style={styles.statusText}>Değişiklikler otomatik kaydedilir</Text>
-          )}
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          <Tint strong style={styles.card}>
+            <Etiket>POŞET / KOLİ</Etiket>
+            <ChipRow
+              items={packagingOptions.map((o) => ({ key: o.id, label: `${o.name} · ₺${o.price}` }))}
+              selected={packagingOptionId}
+              onSelect={setPackagingOptionId}
+            />
+            <Etiket>NAYLON</Etiket>
+            <Segmented
+              options={NYLON.map((n) => ({ value: n.key, label: n.label }))}
+              value={nylonLevel}
+              onChange={(k) => setNylonLevel(k)}
+            />
+            <Etiket>BANT</Etiket>
+            <Segmented
+              options={[
+                { value: "no", label: "Yok" },
+                { value: "yes", label: "Var" },
+              ]}
+              value={tapeUsed ? "yes" : "no"}
+              onChange={(k) => setTapeUsed(k === "yes")}
+            />
+          </Tint>
+        </>
+      ) : null}
+
+      {variantGroup && variantGroup.members.length > 1 ? (
+        <Tint
+          strong
+          onPress={() => {
+            void Haptics.selectionAsync().catch(() => {});
+            setApplyAll((v) => !v);
+          }}
+          style={styles.applyAll}
+          accessibilityLabel="Bu maliyeti tüm varyantlara uygula"
+        >
+          <View style={[styles.checkbox, applyAll ? styles.checkboxOn : null]}>
+            {applyAll ? <SymbolView name="checkmark" weight="bold" tintColor={color.onAccent} style={{ width: 13, height: 13 }} /> : null}
+          </View>
+          <Txt v="bodyStrong" style={{ flex: 1 }}>
+            Bu maliyeti tüm varyantlara uygula ({variantGroup.members.length} ürün)
+          </Txt>
+        </Tint>
+      ) : null}
+
+      <View style={styles.statusRow}>
+        {status === "saving" ? (
+          <>
+            <ActivityIndicator color={color.textDim} size="small" />
+            <Txt v="small" tone="dim">
+              Kaydediliyor…
+            </Txt>
+          </>
+        ) : status === "saved" ? (
+          <Txt v="smallStrong" tone="good">
+            ✓ Otomatik kaydedildi
+          </Txt>
+        ) : status === "error" ? (
+          <>
+            <Txt v="smallStrong" tone="bad" center>
+              ⚠ {saveError ?? parsedForm.error ?? "Kaydetme başarısız."}
+            </Txt>
+            {saveError && currentPayload ? (
+              <Button label="Tekrar dene" size="sm" variant="secondary" onPress={() => enqueueSave(currentPayload)} />
+            ) : null}
+          </>
+        ) : (
+          <Txt v="small" tone="faint">
+            Değişiklikler otomatik kaydedilir
+          </Txt>
+        )}
+      </View>
+    </Screen>
   );
 }
 
@@ -626,61 +619,19 @@ function ChipRow({
   onSelect: (key: string) => void;
 }) {
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.chipRow}
-    >
-      {items.map((it) => {
-        const on = it.key === selected;
-        return (
-          <PressableScale
-            key={it.key}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onSelect(it.key);
-            }}
-            style={[styles.chip, on && styles.chipOn]}
-          >
-            <Text style={[styles.chipText, on && { color: "#fff", fontWeight: "700" }]}>
-              {it.label}
-            </Text>
-          </PressableScale>
-        );
-      })}
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.chipRow}>
+      {items.map((it) => (
+        <Chip
+          key={it.key}
+          label={it.label}
+          selected={it.key === selected}
+          onPress={() => {
+            void Haptics.selectionAsync().catch(() => {});
+            onSelect(it.key);
+          }}
+        />
+      ))}
     </ScrollView>
-  );
-}
-
-function Segmented({
-  items,
-  selected,
-  onSelect,
-}: {
-  items: { key: string; label: string }[];
-  selected: string;
-  onSelect: (key: string) => void;
-}) {
-  return (
-    <View style={styles.segmented}>
-      {items.map((it) => {
-        const on = it.key === selected;
-        return (
-          <PressableScale
-            key={it.key}
-            onPress={() => {
-              Haptics.selectionAsync();
-              onSelect(it.key);
-            }}
-            style={[styles.segment, on && styles.segmentOn]}
-          >
-            <Text style={[styles.segmentText, on && { color: "#fff", fontWeight: "700" }]}>
-              {it.label}
-            </Text>
-          </PressableScale>
-        );
-      })}
-    </View>
   );
 }
 
@@ -688,141 +639,55 @@ function NumberField({
   label,
   value,
   onChange,
+  suffix,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  suffix?: string;
 }) {
   return (
-    <View style={{ flex: 1 }}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChange}
-        keyboardType="decimal-pad"
-        placeholder="0"
-        placeholderTextColor={ML.textFaint}
-        style={styles.field}
-      />
+    <View style={{ flex: 1, gap: 6 }}>
+      <Txt v="label" tone="faint" style={styles.kicker}>
+        {label.toLocaleUpperCase("tr-TR")}
+      </Txt>
+      <Input value={value} onChangeText={onChange} numeric placeholder="0" suffix={suffix} />
     </View>
   );
 }
 
-function Label({ text }: { text: string }) {
-  return <Text style={styles.label}>{text}</Text>;
-}
-
-function Header({ onBack }: { onBack?: () => void }) {
+function Etiket({ children }: { children: string }) {
   return (
-    <View style={styles.header}>
-      <PressableScale onPress={onBack ?? (() => router.back())} hitSlop={12} style={styles.back}>
-        <Text style={styles.backText}>‹</Text>
-      </PressableScale>
-      <Text style={styles.headerTitle}>Maliyet Düzenle</Text>
-      <View style={{ width: 32 }} />
-    </View>
+    <Txt v="label" tone="faint" style={styles.kicker}>
+      {children}
+    </Txt>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
-  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, height: 48 },
-  back: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
-  backText: { color: ML.text, fontSize: 34, marginTop: -4 },
-  headerTitle: { flex: 1, color: ML.text, fontSize: 17, fontWeight: "700", textAlign: "center" },
-  content: { padding: 16, gap: 8, paddingBottom: 60 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  errorBox: { padding: 24, gap: 14 },
-  errorText: { color: ML.textDim, fontSize: 14, textAlign: "center" },
-  retryButton: {
-    backgroundColor: ML.accent,
-    borderRadius: radius.md,
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-  },
-  retryButtonText: { color: "#fff", fontSize: 14, fontWeight: "700" },
-  productName: { color: ML.textDim, fontSize: 15, marginBottom: 4 },
-  preview: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: ML.accentSoft,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.accent,
-    padding: 16,
-    marginBottom: 8,
-  },
-  previewLabel: { color: ML.accent, fontSize: 11, fontWeight: "700", letterSpacing: 1 },
-  previewValue: { color: ML.text, fontSize: 30, fontWeight: "800", marginTop: 2 },
-  previewSub: { color: ML.textDim, fontSize: 13 },
-  label: {
-    color: ML.textFaint,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: 14,
-    marginBottom: 2,
-  },
-  chipRow: { gap: 8, paddingVertical: 2, paddingRight: 16 },
-  chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: ML.card,
-    borderWidth: 1,
-    borderColor: ML.border,
-  },
-  chipOn: { backgroundColor: ML.accent, borderColor: ML.accent },
-  chipText: { color: ML.textDim, fontSize: 14 },
-  fieldRow: { flexDirection: "row", gap: 12, marginTop: 6 },
-  fieldLabel: { color: ML.textFaint, fontSize: 12, marginBottom: 6 },
-  field: {
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    color: ML.text,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 17,
-    fontWeight: "600",
-  },
-  segmented: {
-    flexDirection: "row",
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    padding: 4,
-    gap: 4,
-  },
-  segment: { flex: 1, paddingVertical: 10, borderRadius: radius.sm, alignItems: "center" },
-  segmentOn: { backgroundColor: ML.accent },
-  segmentText: { color: ML.textDim, fontSize: 15 },
-  applyAllRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 22, paddingVertical: 4 },
+  kicker: { letterSpacing: 1 },
+  preview: { flexDirection: "row", alignItems: "center", gap: space.md },
+  card: { gap: space.md },
+  twoCol: { flexDirection: "row", gap: space.sm },
+  chipRow: { gap: space.sm, paddingRight: space.xs },
+  applyAll: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: radius.sm,
+    width: 26,
+    height: 26,
+    borderRadius: 8,
     borderWidth: 2,
-    borderColor: ML.border,
+    borderColor: color.lineStrong,
     alignItems: "center",
     justifyContent: "center",
   },
-  checkboxOn: { backgroundColor: ML.accent, borderColor: ML.accent },
-  checkboxTick: { color: "#fff", fontSize: 15, fontWeight: "900" },
-  applyAllText: { color: ML.text, fontSize: 14, fontWeight: "600", flex: 1 },
+  checkboxOn: { backgroundColor: color.accent, borderColor: color.accent },
   statusRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
-    marginTop: 16,
-    minHeight: 22,
+    gap: space.sm,
+    marginTop: space.sm,
+    minHeight: 24,
   },
-  statusText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
-  statusError: { color: ML.red, fontSize: 13, fontWeight: "600", textAlign: "center" },
-  statusRetry: { color: ML.accent, fontSize: 13, fontWeight: "800" },
 });

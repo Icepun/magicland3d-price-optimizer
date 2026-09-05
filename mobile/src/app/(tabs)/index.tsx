@@ -1,36 +1,63 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
-import { Chip } from "@/components/ui";
-import { AppHeader } from "@/components/AppHeader";
-import { PressableScale } from "@/components/ui/PressableScale";
-import { AnimatedBar, AnimatedNumber, FadeInView, Skeleton, SkeletonCard } from "@/components/fade-in";
+import { SymbolView } from "expo-symbols";
 import { useMemo, useState } from "react";
-import {
-  RefreshControl,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { StyleSheet, View } from "react-native";
 
+import {
+  Bars,
+  CornerArrow,
+  Count,
+  ErrorState,
+  FadeInView,
+  Glass,
+  Header,
+  Money,
+  Ring,
+  Screen,
+  Segmented,
+  Shimmer,
+  ShimmerCard,
+  Tint,
+  Txt,
+  type TxtTone,
+} from "@/components/kit";
 import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
+import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
-import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
-import { getProductMap, computeOrderProfit } from "@/lib/order-profit";
+import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format";
+import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
+import {
+  ORDER_PLATFORM_COLOR,
+  ORDER_PLATFORM_SHORT_LABEL,
+  ORDER_PLATFORMS,
+  PLATFORM_COLOR,
+  PLATFORM_LABEL,
+  type OrderPlatform,
+} from "@/lib/platforms";
 import { useManualRefresh } from "@/lib/use-refresh";
-import { formatCurrency, formatNumber, formatPercent, friendlyError } from "@/lib/format";
-import { ML, motion, radius } from "@/theme/colors";
-import { ORDER_PLATFORMS, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
+import { color, radius, space } from "@/theme/tokens";
 
+const GUN = 86_400_000;
+const DONEMLER = [
+  { value: 7 as const, label: "7g" },
+  { value: 30 as const, label: "30g" },
+  { value: 60 as const, label: "60g" },
+];
+
+/**
+ * PANEL — günün ilk bakışı: ciro, kâr, günlük satış dalgası, stok/zarar sayıları, platform marjı.
+ *
+ * Veri katmanı öncekiyle AYNI (batch sorgular, 60 günlük sipariş penceresi, masaüstüyle birebir
+ * kâr hesabı); yalnız sunum yeniden yazıldı. Dönem süzgeci ek ağ isteği açmaz: 60 günlük veri
+ * elde, 7/30/60 yalnız yerel kesim.
+ */
 export default function DashboardScreen() {
   const { data: products, isLoading, isError, error, refetch: refetchProducts } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
-  // Tek batch round-trip (getRules) — eski hali 3 ardışık Turso çağrısıydı.
-  /** Panel dönemi: 7 / 30 / 60 gün. Kaynak sorgu zaten 60 gün, ek ağ isteği YOK. */
   const [donem, setDonem] = useState<7 | 30 | 60>(30);
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
@@ -67,20 +94,22 @@ export default function DashboardScreen() {
     const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
       ORDER_PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
     );
+    /** Günlük ciro kovaları: soldan sağa eskiden bugüne (grafik). */
+    const gunluk = new Array<number>(donem).fill(0);
     let total = 0;
     let profit = 0;
     let count = 0;
     /**
-     * DÖNEM SÜZGECİ — kaynak sorgu 60 gün getiriyor; kullanıcı 7/30/60 arasında seçiyor.
      * "Şimdi" olarak sorgunun ÇEKİLDİĞİ an kullanılır (`dataUpdatedAt`): render sırasında
      * `Date.now()` çağırmak React Compiler hatası veriyor ve mobil lint adımını düşürüyor.
      */
-    const kesim = ordersAt ? ordersAt - donem * 86_400_000 : 0;
-    for (const o of ordersData.orders.filter((o) => o.date == null || o.date >= kesim)) {
+    const simdi = ordersAt || 0;
+    const kesim = simdi ? simdi - donem * GUN : 0;
+    for (const o of ordersData.orders) {
+      if (o.date != null && o.date < kesim) continue;
       // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
       if (isCancelledOrder(o)) continue;
-      // Döviz çevrimi yapılmadan farklı para birimlerini TL toplamına eklemek yanlış sonuç verir
-      // (masaüstü ve Raporlar sekmesi de bu siparişleri hariç tutuyor — üçü artık aynı).
+      // Döviz çevrimi yapılmadan farklı para birimleri TL toplamına eklenmez (Raporlar da aynı).
       if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
       const op = computeOrderProfit(o, pm, rules, settings);
       total += op.revenue;
@@ -91,323 +120,274 @@ export default function DashboardScreen() {
       }
       if (op.profit != null) profit += op.profit;
       count++;
+      if (o.date != null && simdi) {
+        const geri = Math.min(donem - 1, Math.max(0, Math.floor((simdi - o.date) / GUN)));
+        gunluk[donem - 1 - geri] += op.revenue;
+      }
     }
-    return { total, profit, byPlat, count };
+    return { total, profit, byPlat, count, gunluk };
   }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <AppHeader
-        title="Panel"
-        subtitle="Pazaryerleri + manuel satışlar"
-        updatedAt={ordersAt}
-      />
-
+    <Screen
+      header={<Header title="Panel" subtitle="Pazaryerleri + manuel satışlar" updatedAt={ordersAt} />}
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+    >
       {isError ? (
-        <View style={styles.center}>
-          <Text style={styles.errorTitle}>Veriler alınamadı</Text>
-          <Text style={styles.subtitle}>{friendlyError(error)}</Text>
-          <PressableScale onPress={() => refetchProducts()} style={styles.retryBtn}>
-            <Text style={styles.retryText}>Tekrar dene</Text>
-          </PressableScale>
-        </View>
+        <ErrorState error={error} onRetry={() => void refetchProducts()} />
       ) : isLoading || !summary ? (
-        <DashboardSkeleton />
+        <PanelIskeleti />
       ) : (
-        <ScrollView
-          contentContainerStyle={styles.content}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={ML.accent} />
-          }
-        >
-          {/* Son 30 gün ciro/kâr */}
-          <FadeInView style={styles.revCard}>
-            <View style={styles.revHead}>
-              <Text style={styles.revLabel}>SON {donem} GÜN</Text>
-              <View style={styles.periodChips}>
-                {([7, 30, 60] as const).map((d) => (
-                  <Chip key={d} label={`${d}g`} selected={donem === d} onPress={() => setDonem(d)} />
+        <>
+          {/* CİRO KARTI — dönem seçici, büyük tutar, kâr, günlük dalga, platform çipleri */}
+          <FadeInView index={0}>
+            <Glass style={styles.hero}>
+              <View style={styles.rowBetween}>
+                <Txt v="label" tone="accent" style={styles.kicker}>
+                  CİRO · SON {donem} GÜN
+                </Txt>
+                <Segmented options={DONEMLER} value={donem} onChange={setDonem} style={styles.segment} />
+              </View>
+
+              {rev ? (
+                <Money value={rev.total} v="hero" />
+              ) : (
+                <Shimmer width={210} height={40} radius={10} />
+              )}
+
+              <View style={styles.profitRow}>
+                <Txt v="small" tone="dim">
+                  Sipariş kârı
+                </Txt>
+                {rev ? (
+                  <>
+                    <Money value={rev.profit} v="heading" tone={rev.profit < 0 ? "bad" : "good"} compact />
+                    {rev.total > 0 ? (
+                      <View style={[styles.deltaPill, { backgroundColor: rev.profit < 0 ? color.badSoft : color.goodSoft }]}>
+                        <Txt v="label" tone={rev.profit < 0 ? "bad" : "good"} num>
+                          {formatPercent(rev.profit / rev.total)}
+                        </Txt>
+                      </View>
+                    ) : null}
+                    <Txt v="small" tone="faint" num>
+                      · {formatNumber(rev.count)} sipariş
+                    </Txt>
+                  </>
+                ) : (
+                  <Shimmer width={120} height={16} />
+                )}
+              </View>
+
+              <Bars values={rev?.gunluk ?? []} height={64} emphasis={(i) => i >= donem - 7} style={styles.bars} />
+              <View style={styles.rowBetween}>
+                <Txt v="label" tone="faint">
+                  {donem} GÜN ÖNCE
+                </Txt>
+                <Txt v="label" tone="faint">
+                  SON 7 GÜN
+                </Txt>
+              </View>
+
+              <View style={styles.chips}>
+                {ORDER_PLATFORMS.map((plat) => (
+                  <PlatformChip key={plat} platform={plat} rev={rev?.byPlat[plat].rev} n={rev?.byPlat[plat].n} />
                 ))}
               </View>
-            </View>
-            <View style={styles.revTopRow}>
-              <View>
-                <Text style={styles.revCiroLabel}>Ciro</Text>
-                {rev ? (
-                  <AnimatedNumber
-                    value={rev.total}
-                    format={(n) => formatCurrency(n)}
-                    style={styles.revCiro}
-                  />
-                ) : (
-                  <Skeleton width={150} height={28} style={{ marginTop: 4 }} />
-                )}
-              </View>
-              <View style={{ alignItems: "flex-end" }}>
-                <Text style={styles.revCiroLabel}>Sipariş kârı</Text>
-                {rev ? (
-                  <AnimatedNumber
-                    value={rev.profit}
-                    format={(n) => formatCurrency(n)}
-                    style={[styles.revProfit, { color: rev.profit < 0 ? ML.red : ML.green }]}
-                  />
-                ) : (
-                  <Skeleton width={110} height={22} delay={90} style={{ marginTop: 4 }} />
-                )}
-              </View>
-            </View>
-            <View style={styles.revSplit}>
-              {ORDER_PLATFORMS.map((plat, i) => (
-                <View key={plat} style={styles.revPlat}>
-                  <View style={[styles.dot, { backgroundColor: ML[plat] }]} />
-                  <Text style={styles.revPlatText}>{ORDER_PLATFORM_LABEL[plat]}</Text>
-                  {rev ? (
-                    <>
-                      <AnimatedNumber
-                        value={rev.byPlat[plat].rev}
-                        format={(n) => formatCurrency(n)}
-                        style={styles.revPlatText}
-                      />
-                      <AnimatedNumber
-                        value={rev.byPlat[plat].n}
-                        format={(n) => formatNumber(Math.round(n))}
-                        style={styles.revPlatN}
-                      />
-                    </>
-                  ) : (
-                    <Skeleton width={92} height={12} delay={i * 70} />
-                  )}
-                </View>
-              ))}
+            </Glass>
+          </FadeInView>
+
+          {/* STOK / ZARAR SAYILARI */}
+          <FadeInView index={1}>
+            <View style={styles.tiles}>
+              <StatTile
+                label="Ürünler"
+                value={summary.totalProducts}
+                tone="accent"
+                onPress={() => router.push({ pathname: "/products", params: { filter: "all" } })}
+              />
+              <StatTile
+                label="Stoksuz"
+                value={summary.outOfStock}
+                tone={summary.outOfStock > 0 ? "warn" : "default"}
+                onPress={() => router.push({ pathname: "/products", params: { filter: "out-of-stock" } })}
+              />
+              <StatTile
+                label="Zarar eden"
+                value={summary.lossListings}
+                tone={summary.lossListings > 0 ? "bad" : "default"}
+                onPress={() => router.push({ pathname: "/products", params: { filter: "loss" } })}
+              />
             </View>
           </FadeInView>
 
-          {/* Stok/ürün durumu */}
-          <View style={styles.grid}>
-            <Stat
-              label="Toplam Ürün"
-              value={summary.totalProducts}
-              tone="accent"
-              index={0}
-              onPress={() => router.push({ pathname: "/products", params: { filter: "all" } })}
-            />
-            <Stat
-              label="Stokta Biten"
-              value={summary.outOfStock}
-              tone="orange"
-              index={1}
-              onPress={() => router.push({ pathname: "/products", params: { filter: "out-of-stock" } })}
-            />
-            <Stat
-              label="Zarar Eden Ürün"
-              value={summary.lossListings}
-              tone="red"
-              index={2}
-              onPress={() => router.push({ pathname: "/products", params: { filter: "loss" } })}
-              wide
-            />
-          </View>
-
-          <Text style={styles.sectionLabel}>PLATFORM BAZLI (MARJ)</Text>
+          {/* PLATFORM MARJI */}
+          <Txt v="label" tone="faint" style={styles.section}>
+            PLATFORM MARJI
+          </Txt>
           {summary.platforms.map((p, i) => (
-            <PlatformRow key={p.platform} p={p} index={i} />
+            <FadeInView key={p.platform} index={i + 2}>
+              <PlatformCard p={p} />
+            </FadeInView>
           ))}
 
-          {summary.missingCost > 0 && (
-            <Text style={styles.note}>
-              {summary.missingCost} üründe maliyet girilmemiş — kâr hesabı dışı.
-            </Text>
-          )}
-        </ScrollView>
+          {summary.missingCost > 0 ? (
+            <FadeInView index={5}>
+              <Tint
+                strong
+                onPress={() => router.push({ pathname: "/products", params: { filter: "no-cost" } })}
+                style={styles.note}
+                accessibilityLabel="Maliyeti girilmemiş ürünler"
+              >
+                <View style={[styles.noteIcon, { backgroundColor: color.warnSoft }]}>
+                  <SymbolView name="exclamationmark.triangle.fill" tintColor={color.warn} style={{ width: 18, height: 18 }} />
+                </View>
+                <Txt v="small" tone="dim" style={{ flex: 1 }}>
+                  <Txt v="smallStrong" num>
+                    {formatNumber(summary.missingCost)}
+                  </Txt>{" "}
+                  üründe maliyet girilmemiş — kâr hesabı dışı.
+                </Txt>
+                <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
+              </Tint>
+            </FadeInView>
+          ) : null}
+        </>
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
-function PlatformRow({ p, index }: { p: PlatformSummary; index: number }) {
-  const accent = ML[p.platform];
-  const lossPct = p.listingCount > 0 ? (p.lossCount / p.listingCount) * 100 : 0;
+function PlatformChip({ platform, rev, n }: { platform: OrderPlatform; rev?: number; n?: number }) {
   return (
-    <FadeInView index={index} baseDelay={140} style={styles.platformCard}>
-      <View style={styles.platformHead}>
-        <View style={[styles.dot, { backgroundColor: accent }]} />
-        <Text style={[styles.platformName, { color: accent }]}>
-          {ORDER_PLATFORM_LABEL[p.platform]}
-        </Text>
-        <Text style={styles.listingCount}>{p.listingCount} listing</Text>
-      </View>
-      <View style={styles.platformStats}>
-        <View>
-          <Text style={styles.miniLabel}>Ortalama Marj</Text>
-          <AnimatedNumber
-            value={p.avgMargin}
-            format={(n) => formatPercent(n)}
-            style={[styles.miniValue, { color: p.avgMargin < 0 ? ML.red : ML.green }]}
-          />
-        </View>
-        <View style={{ alignItems: "flex-end" }}>
-          <Text style={styles.miniLabel}>Zarar Eden</Text>
-          <AnimatedNumber
-            value={p.lossCount}
-            format={(n) => `${formatNumber(Math.round(n))} / ${formatNumber(p.listingCount)}`}
-            style={[styles.miniValue, { color: p.lossCount ? ML.red : ML.textDim }]}
-          />
-        </View>
-      </View>
-      <AnimatedBar
-        percent={lossPct}
-        color={ML.red}
-        height={5}
-        minPercent={lossPct > 0 ? 3 : 0}
-        delay={index * motion.stagger}
-      />
-    </FadeInView>
+    <Tint strong radius={radius.pill} padded={false} style={styles.chip}>
+      <View style={[styles.dot, { backgroundColor: ORDER_PLATFORM_COLOR[platform] }]} />
+      <Txt v="smallStrong" numberOfLines={1} style={styles.chipLabel}>
+        {ORDER_PLATFORM_SHORT_LABEL[platform]}
+      </Txt>
+      <Txt v="small" tone="dim" num numberOfLines={1}>
+        {rev != null ? formatCompactCurrency(rev) : "—"}
+      </Txt>
+      {n != null && n > 0 ? (
+        <Txt v="small" tone="faint" num>
+          {formatNumber(n)}
+        </Txt>
+      ) : null}
+    </Tint>
   );
 }
 
-function Stat({
+function StatTile({
   label,
   value,
   tone,
-  wide,
-  index,
   onPress,
 }: {
   label: string;
   value: number;
-  tone: "accent" | "green" | "red" | "orange";
-  wide?: boolean;
-  index: number;
+  tone: TxtTone;
   onPress?: () => void;
 }) {
-  const color = { accent: ML.accent, green: ML.green, red: ML.red, orange: ML.orange }[tone];
   return (
-    <FadeInView index={index} style={[wide && styles.statWide, !wide && styles.statHalf]}>
-      <PressableScale
-        onPress={onPress}
-        style={({ pressed }) => [styles.stat, pressed && onPress ? { opacity: 0.7 } : null]}
-      >
-        <Text style={styles.statLabel}>{label}</Text>
-        <AnimatedNumber
-          value={value}
-          format={(n) => formatNumber(Math.round(n))}
-          style={[styles.statValue, { color }]}
-        />
-        {onPress ? <Text style={styles.statChevron}>›</Text> : null}
-      </PressableScale>
-    </FadeInView>
+    <Tint strong onPress={onPress} style={styles.tile} accessibilityLabel={`${label}: ${formatNumber(value)}`}>
+      <View style={styles.tileHead}>
+        <Txt v="small" tone="dim" numberOfLines={1} style={{ flex: 1 }}>
+          {label}
+        </Txt>
+        <SymbolView name="arrow.up.right" tintColor={color.textFaint} style={styles.tileArrow} />
+      </View>
+      <Count value={value} v="stat" tone={tone} />
+    </Tint>
+  );
+}
+
+function PlatformCard({ p }: { p: PlatformSummary }) {
+  const marka = PLATFORM_COLOR[p.platform];
+  const marj = Number.isFinite(p.avgMargin) ? p.avgMargin : 0;
+  const halka = marj < 0 ? color.bad : marj < 0.2 ? color.warn : marka;
+  const zarar = p.lossCount > 0;
+  return (
+    <Tint strong padded={false} style={styles.platform}>
+      <Ring value={marj} size={64} stroke={7} color={halka}>
+        <Txt v="label" num>
+          {formatPercent(marj, 0)}
+        </Txt>
+      </Ring>
+      <View style={{ flex: 1, gap: 2 }}>
+        <View style={styles.rowGap}>
+          <View style={[styles.dot, { backgroundColor: marka }]} />
+          <Txt v="heading" numberOfLines={1}>
+            {PLATFORM_LABEL[p.platform]}
+          </Txt>
+        </View>
+        <Txt v="small" tone="dim" num>
+          Ortalama marj {formatPercent(marj)} · {formatNumber(p.listingCount)} listing
+        </Txt>
+        <View style={styles.rowGap}>
+          <View style={[styles.deltaPill, { backgroundColor: zarar ? color.badSoft : color.tintStrong }]}>
+            <Txt v="label" tone={zarar ? "bad" : "faint"} num>
+              {formatNumber(p.lossCount)} zarar eden
+            </Txt>
+          </View>
+        </View>
+      </View>
+      <CornerArrow
+        onPress={() => router.push({ pathname: "/products", params: { filter: zarar ? "loss" : "all" } })}
+      />
+    </Tint>
   );
 }
 
 /** Panel yüklenirken kartların yerini tutan iskelet — boş ekran ya da tek çark yerine. */
-function DashboardSkeleton() {
+function PanelIskeleti() {
   return (
-    <View style={styles.content}>
-      <View style={styles.revCard}>
-        <Skeleton width={90} height={11} />
-        <View style={styles.revTopRow}>
-          <View style={{ gap: 8 }}>
-            <Skeleton width={54} height={11} />
-            <Skeleton width={160} height={28} delay={60} />
-          </View>
-          <View style={{ gap: 8, alignItems: "flex-end" }}>
-            <Skeleton width={72} height={11} delay={40} />
-            <Skeleton width={104} height={22} delay={100} />
-          </View>
-        </View>
-        <View style={styles.revSplit}>
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} width="62%" height={12} delay={140 + i * 60} />
-          ))}
-        </View>
+    <>
+      <ShimmerCard height={292} />
+      <View style={styles.tiles}>
+        <ShimmerCard height={92} delay={60} style={{ flex: 1 }} />
+        <ShimmerCard height={92} delay={120} style={{ flex: 1 }} />
+        <ShimmerCard height={92} delay={180} style={{ flex: 1 }} />
       </View>
-      <View style={styles.grid}>
-        <View style={styles.statHalf}>
-          <SkeletonCard height={92} />
-        </View>
-        <View style={styles.statHalf}>
-          <SkeletonCard height={92} delay={80} />
-        </View>
-        <View style={styles.statWide}>
-          <SkeletonCard height={92} delay={160} />
-        </View>
-      </View>
-      <SkeletonCard height={104} delay={240} />
-      <SkeletonCard height={104} delay={320} />
-    </View>
+      <ShimmerCard height={96} delay={240} />
+      <ShimmerCard height={96} delay={300} />
+      <ShimmerCard height={96} delay={360} />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  revHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
-  periodChips: { flexDirection: "row", gap: 6 },
-  safe: { flex: 1, backgroundColor: ML.bg },
-  subtitle: { color: ML.textDim, fontSize: 14, marginTop: 2 },
-  content: { padding: 16, gap: 12, paddingBottom: 24 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8, padding: 24 },
-  errorTitle: { color: ML.text, fontSize: 17, fontWeight: "700" },
-  retryBtn: {
-    marginTop: 8,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: ML.accent + "77",
+  hero: { gap: space.md },
+  kicker: { letterSpacing: 1.2 },
+  segment: { width: 172 },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
+  rowGap: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  profitRow: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
+  deltaPill: { paddingHorizontal: space.sm, paddingVertical: 3, borderRadius: radius.pill },
+  bars: { marginTop: space.xs },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
+  chip: {
+    flexGrow: 1,
+    flexBasis: "46%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: space.md,
+    minHeight: 36,
   },
-  retryText: { color: ML.accent, fontSize: 14, fontWeight: "700" },
-  revCard: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.border,
-    padding: 18,
-    gap: 14,
-  },
-  revLabel: { color: ML.accent, fontSize: 11, fontWeight: "800", letterSpacing: 1.2 },
-  revTopRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end" },
-  revCiroLabel: { color: ML.textDim, fontSize: 12 },
-  revCiro: { color: ML.text, fontSize: 30, fontWeight: "800", letterSpacing: -0.5, marginTop: 2 },
-  revProfit: { fontSize: 22, fontWeight: "800", marginTop: 2 },
-  revSplit: { gap: 8 },
-  revPlat: { flexDirection: "row", alignItems: "center", gap: 6 },
-  revPlatText: { color: ML.textDim, fontSize: 13, fontWeight: "600" },
-  revPlatN: { color: ML.textFaint, fontSize: 12, fontWeight: "400" },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  statHalf: { flexGrow: 1, flexBasis: "47%" },
-  statWide: { flexGrow: 1, flexBasis: "100%" },
-  stat: {
-    flex: 1,
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 16,
-  },
-  statChevron: { position: "absolute", top: 12, right: 14, color: ML.textFaint, fontSize: 20 },
-  statLabel: { color: ML.textDim, fontSize: 13 },
-  statValue: { fontSize: 28, fontWeight: "800", marginTop: 6, letterSpacing: -0.5 },
-  sectionLabel: {
-    color: ML.textFaint,
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1,
-    marginTop: 8,
-    marginLeft: 4,
-  },
-  platformCard: {
-    backgroundColor: ML.card,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    padding: 16,
-    gap: 12,
-  },
-  platformHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  chipLabel: { flexShrink: 1 },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  platformName: { fontSize: 16, fontWeight: "700", flex: 1 },
-  listingCount: { color: ML.textFaint, fontSize: 13 },
-  platformStats: { flexDirection: "row", justifyContent: "space-between" },
-  miniLabel: { color: ML.textFaint, fontSize: 11 },
-  miniValue: { color: ML.text, fontSize: 18, fontWeight: "700", marginTop: 3 },
-  note: { color: ML.textFaint, fontSize: 12, textAlign: "center", marginTop: 8 },
+  tiles: { flexDirection: "row", gap: space.sm },
+  tile: { flex: 1, gap: 6, minHeight: 92, padding: space.md },
+  tileHead: { flexDirection: "row", alignItems: "center", gap: 4 },
+  tileArrow: { width: 13, height: 13 },
+  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  platform: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.md,
+    padding: space.md,
+    paddingRight: space.md,
+  },
+  note: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
+  noteIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
 });

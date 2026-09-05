@@ -1,15 +1,25 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { SymbolView, type SymbolViewProps } from "expo-symbols";
+import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, StyleSheet, View } from "react-native";
 
-import { AnimatedBar, AnimatedNumber } from "@/components/fade-in";
-import { PressableScale } from "@/components/ui/PressableScale";
-import { SkeletonList } from "@/components/ui";
-import { ScreenHeader } from "@/components/form";
+import { Pill } from "@/components/kit/Chip";
+import {
+  Button,
+  Count,
+  EmptyState,
+  FadeInView,
+  Glass,
+  IconButton,
+  Progress,
+  Screen,
+  ShimmerList,
+  SubHeader,
+  Tint,
+  Txt,
+} from "@/components/kit";
 import {
   getPrinterSnapshots,
   getRecentCommands,
@@ -18,13 +28,13 @@ import {
   type PrinterSnapshot,
 } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
-import { ML, radius, tabular } from "@/theme/colors";
+import { color, radius, space } from "@/theme/tokens";
 
 function brandColor(brand: string): string {
   if (brand === "bambu") return "#2DD4A7";
   if (brand === "snapmaker") return "#5B9BF5";
   if (brand === "elegoo") return "#EF4444";
-  return ML.accent;
+  return color.accentBright;
 }
 
 function fmtRemaining(sec: number | null): string {
@@ -37,12 +47,12 @@ function fmtRemaining(sec: number | null): string {
 }
 
 const STATUS: Record<string, { label: string; color: string }> = {
-  printing: { label: "Yazdırıyor", color: ML.accent },
-  paused: { label: "Duraklatıldı", color: ML.orange },
-  finished: { label: "Tamamlandı", color: ML.green },
-  idle: { label: "Hazır", color: ML.textDim },
-  error: { label: "Hata", color: "#EF4444" },
-  offline: { label: "Çevrimdışı", color: ML.textFaint },
+  printing: { label: "Yazdırıyor", color: color.accentBright },
+  paused: { label: "Duraklatıldı", color: color.warn },
+  finished: { label: "Tamamlandı", color: color.good },
+  idle: { label: "Hazır", color: color.textDim },
+  error: { label: "Hata", color: color.bad },
+  offline: { label: "Çevrimdışı", color: color.textFaint },
 };
 
 const ACTION_LABEL: Record<PrintAction, string> = {
@@ -52,6 +62,10 @@ const ACTION_LABEL: Record<PrintAction, string> = {
   cancel: "İptal",
 };
 
+/**
+ * YAZICILAR — masaüstü aktarıcısının 4 sn'de bir yazdığı anlık durum + duraklat/devam/iptal.
+ * Komut mantığı (iptal onayı, çift gönderim kilidi, 90 sn zaman aşımı) öncekiyle AYNI.
+ */
 export default function PrintersScreen() {
   const qc = useQueryClient();
   const { data: snapshots = [], isLoading } = useQuery({
@@ -60,7 +74,7 @@ export default function PrintersScreen() {
     refetchInterval: 4000,
   });
 
-  // Relay tazeliğini saymak için periyodik tik — veri değişmese de "X önce" yaşı artsın
+  // Relay tazeliğini saymak için periyodik tik — veri değişmese de "X önce" yaşı artsın.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5000);
@@ -70,7 +84,6 @@ export default function PrintersScreen() {
   const printing = snapshots.filter((s) => s.status === "printing").length;
   const online = snapshots.filter((s) => s.online).length;
 
-  // Masaüstü relay'i en son ne zaman yazdı? (en taze updatedAt). Stale ise "masaüstü açık mı?"
   const lastUpdate = useMemo(() => {
     let max = 0;
     for (const s of snapshots) {
@@ -82,8 +95,6 @@ export default function PrintersScreen() {
   const ageMs = lastUpdate > 0 ? Math.max(0, now - lastUpdate) : 0;
   const stale = lastUpdate > 0 && ageMs > 90_000;
 
-  // Gönderilen kontrol komutunun (duraklat/devam/iptal) durumu — pending → done/error.
-  // 90 sn içinde uygulanmazsa (masaüstü kapalı) zaman aşımı mesajına düşer + yoklama durur.
   const [sent, setSent] = useState<{ id: string; label: string; at: number } | null>(null);
   const cmdTimedOut = !!sent && now - sent.at > 90_000;
   const { data: cmds = [] } = useQuery({
@@ -100,7 +111,7 @@ export default function PrintersScreen() {
       return () => clearTimeout(t);
     }
   }, [cmdSettled, cmdTimedOut]);
-  // Çift gönderim kilidi: komut beklerken butonlar pasif (iki kez "İptal"/"Duraklat" gönderilmesin).
+  // Çift gönderim kilidi: komut beklerken düğmeler pasif.
   const cmdBusy = !!sent && !cmdSettled && !cmdTimedOut;
 
   const runCommand = (s: PrinterSnapshot, action: PrintAction) => {
@@ -115,63 +126,41 @@ export default function PrintersScreen() {
       }
     };
     if (action === "cancel") {
-      Alert.alert(
-        "Baskıyı iptal et",
-        `${s.name} üzerindeki baskı iptal edilsin mi? Bu işlem geri alınamaz.`,
-        [
-          { text: "Vazgeç", style: "cancel" },
-          { text: "İptal et", style: "destructive", onPress: send },
-        ]
-      );
+      Alert.alert("Baskıyı iptal et", `${s.name} üzerindeki baskı iptal edilsin mi? Bu işlem geri alınamaz.`, [
+        { text: "Vazgeç", style: "cancel" },
+        { text: "İptal et", style: "destructive", onPress: send },
+      ]);
     } else {
       send();
     }
   };
 
+  const bannerTone = sentCmd?.status === "done" ? color.good : sentCmd?.status === "error" || cmdTimedOut ? color.bad : color.accentBright;
+
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScreenHeader title="Yazıcılar" />
-      <View style={styles.chips}>
-        <Chip text={`${snapshots.length} yazıcı`} />
-        <Chip text={`${online} çevrimiçi`} color={ML.green} />
-        <Chip text={`${printing} yazdırıyor`} color={ML.accent} />
-      </View>
-
-      <PressableScale
-        onPress={() => router.push("/custom-prints" as never)}
-        style={({ pressed }) => [styles.archiveLink, pressed && { backgroundColor: ML.cardElevated }]}
-      >
-        <SymbolView name="tray.full.fill" tintColor={ML.accent} style={{ width: 17, height: 17 }} />
-        <Text style={styles.archiveText}>Özel Baskılar Arşivi</Text>
-        <SymbolView name="chevron.right" tintColor={ML.textFaint} style={{ width: 13, height: 13 }} />
-      </PressableScale>
-
+    <Screen
+      header={
+        <SubHeader
+          title="Yazıcılar"
+          subtitle={snapshots.length > 0 ? `${online} çevrimiçi · ${printing} yazdırıyor` : undefined}
+          right={
+            <IconButton icon="tray.full.fill" onPress={() => router.push("/custom-prints" as never)} accessibilityLabel="Özel baskılar arşivi" />
+          }
+        />
+      }
+    >
       {snapshots.length > 0 ? (
         <View style={styles.liveBar}>
-          <View style={[styles.liveDot, { backgroundColor: stale ? ML.orange : ML.green }]} />
-          <Text style={[styles.liveText, stale && { color: ML.orange }]}>
-            {stale
-              ? `Canlı değil · ${fmtAge(ageMs)} güncellendi — masaüstü açık mı?`
-              : `Canlı · ${fmtAge(ageMs)} güncellendi`}
-          </Text>
+          <View style={[styles.liveDot, { backgroundColor: stale ? color.warn : color.good }]} />
+          <Txt v="small" tone={stale ? "warn" : "dim"} numberOfLines={1}>
+            {stale ? `Canlı değil · ${fmtAge(ageMs)} güncellendi — masaüstü açık mı?` : `Canlı · ${fmtAge(ageMs)} güncellendi`}
+          </Txt>
         </View>
       ) : null}
 
       {sent ? (
-        <View
-          style={[
-            styles.cmdBanner,
-            sentCmd?.status === "done" && { borderColor: ML.green + "66" },
-            sentCmd?.status === "error" && { borderColor: ML.red + "66" },
-          ]}
-        >
-          <Text
-            style={[
-              styles.cmdText,
-              sentCmd?.status === "done" && { color: ML.green },
-              (sentCmd?.status === "error" || cmdTimedOut) && { color: ML.red },
-            ]}
-          >
+        <Tint strong style={[styles.banner, { borderColor: bannerTone + "66" }]}>
+          <Txt v="smallStrong" style={{ color: bannerTone }}>
             {sentCmd?.status === "done"
               ? `✓ ${sent.label} uygulandı`
               : sentCmd?.status === "error"
@@ -179,32 +168,26 @@ export default function PrintersScreen() {
                 : cmdTimedOut
                   ? `⚠ ${sent.label} uygulanmadı — masaüstü kapalı görünüyor.`
                   : `⏳ ${sent.label} gönderildi — masaüstü uyguluyor…`}
-          </Text>
-        </View>
+          </Txt>
+        </Tint>
       ) : null}
 
       {isLoading ? (
-        <SkeletonList count={3} height={120} />
+        <ShimmerList count={3} height={150} />
       ) : snapshots.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyTitle}>Henüz veri yok</Text>
-          <Text style={styles.emptyDesc}>Masaüstü uygulaması açık ve yazıcılar ekli olmalı. Durum birkaç saniyede bir güncellenir.</Text>
-        </View>
+        <EmptyState
+          icon="printer"
+          title="Henüz veri yok"
+          hint="Masaüstü uygulaması açık ve yazıcılar ekli olmalı. Durum birkaç saniyede bir güncellenir."
+        />
       ) : (
-        <ScrollView contentContainerStyle={styles.list}>
-          {snapshots.map((s) => (
-            <PrinterCard
-              key={s.printerConfigId}
-              s={s}
-              stale={stale}
-              disabled={cmdBusy}
-              onCommand={(a) => runCommand(s, a)}
-            />
-          ))}
-          <View style={{ height: 24 }} />
-        </ScrollView>
+        snapshots.map((s, i) => (
+          <FadeInView key={s.printerConfigId} index={i}>
+            <PrinterCard s={s} stale={stale} disabled={cmdBusy} onCommand={(a) => runCommand(s, a)} />
+          </FadeInView>
+        ))
       )}
-    </SafeAreaView>
+    </Screen>
   );
 }
 
@@ -219,125 +202,80 @@ function PrinterCard({
   disabled: boolean;
   onCommand: (a: PrintAction) => void;
 }) {
-  const accent = brandColor(s.brand);
+  const marka = brandColor(s.brand);
   const info = STATUS[s.status] ?? STATUS.idle;
   const offline = !s.online || s.status === "offline";
-  const pct = Math.round((s.progress || 0) * 100);
+  const oran = Math.max(0, Math.min(1, s.progress || 0));
   const active = s.status === "printing" || s.status === "paused";
   const showControls = active && !stale && s.online;
+  const busy = !offline && (s.status === "printing" || s.status === "paused" || s.status === "finished");
 
   return (
-    <View style={[styles.card, { borderColor: accent + "55" }]}>
-      <View style={styles.cardHead}>
-        <View style={[styles.dot, { backgroundColor: accent }]} />
-        <Text style={styles.pName}>{s.name}</Text>
-        <View style={[styles.pill, { backgroundColor: info.color + "22" }]}>
-          <Text style={[styles.pillText, { color: info.color }]}>{info.label}</Text>
-        </View>
+    <Glass style={styles.card}>
+      <View style={styles.head}>
+        <View style={[styles.dot, { backgroundColor: marka }]} />
+        <Txt v="heading" numberOfLines={1} style={{ flex: 1 }}>
+          {s.name}
+        </Txt>
+        <Pill color={info.color}>{info.label}</Pill>
       </View>
 
-      {/* Hata/duraklama NEDENİ — atölyede telefona bakmanın asıl sebebi "neden durdu".
-          Aktarıcı bu alanı yazıyordu ama telefon şimdiye kadar hiç göstermiyordu. */}
+      {/* Hata/duraklama NEDENİ — atölyede telefona bakmanın asıl sebebi "neden durdu". */}
       {s.statusMessage && (s.status === "error" || s.status === "paused") ? (
-        <Text
-          style={[styles.reason, { color: info.color }]}
-          numberOfLines={2}
-        >
+        <Txt v="small" style={{ color: info.color }} numberOfLines={2}>
           {s.statusMessage}
-        </Text>
+        </Txt>
       ) : null}
 
-      {!offline && (s.status === "printing" || s.status === "paused" || s.status === "finished") ? (
-        <>
-          <View style={styles.body}>
-            {s.productImage ? (
-              <Image
-                source={{ uri: thumbUrl(s.productImage, 96)! }}
-                alt={s.productName ?? s.currentFilename ?? "Baskı"}
-                style={styles.thumb}
-                contentFit="cover"
-                transition={150}
-                recyclingKey={s.printerConfigId}
-              />
-            ) : (
-              <View style={[styles.thumb, styles.thumbEmpty]} />
-            )}
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={styles.product} numberOfLines={2}>{s.productName ?? s.currentFilename ?? "Baskı"}</Text>
-              <Text style={[styles.temp, tabular]}>
-                🌡 <AnimatedNumber value={s.nozzle} format={(n) => `${Math.round(n)}°`} style={styles.temp} /> / <AnimatedNumber value={s.bed} format={(n) => `${Math.round(n)}°`} style={styles.temp} />
-              </Text>
-              <Text style={styles.eta}>{s.status === "finished" ? "Tamamlandı 🎉" : `~${fmtRemaining(s.etaSec)} kaldı`}</Text>
-            </View>
-          </View>
-          {/* İlerleme AKARAK değişir: aktarıcı 4 saniyede bir yazdığı için çubuk ve yüzde
-              zıplıyordu; artık iki değer de aynı ritimde (motion.bar) yumuşak ilerliyor. */}
-          <AnimatedBar percent={pct} color={accent} height={8} />
-          <AnimatedNumber
-            value={pct}
-            format={(n) => `%${Math.round(n)}`}
-            style={[styles.pct, tabular, { color: accent }]}
+      <View style={styles.body}>
+        {busy && s.productImage ? (
+          <Image
+            source={{ uri: thumbUrl(s.productImage, 96)! }}
+            alt={s.productName ?? s.currentFilename ?? "Baskı"}
+            style={styles.thumb}
+            contentFit="cover"
+            transition={150}
+            recyclingKey={s.printerConfigId}
           />
-        </>
-      ) : (
-        <View style={styles.body}>
-          <View style={[styles.thumb, styles.thumbEmpty]} />
-          <View style={{ flex: 1, gap: 4 }}>
-            <Text style={styles.product}>{offline ? "Bağlantı yok" : "Hazır"}</Text>
-            <Text style={styles.temp}>🌡 {s.nozzle}° / {s.bed}°</Text>
+        ) : (
+          <View style={[styles.thumb, styles.thumbEmpty]}>
+            <SymbolView name={offline ? "wifi.slash" : "printer"} tintColor={color.textFaint} style={{ width: 22, height: 22 }} />
           </View>
+        )}
+        <View style={{ flex: 1, gap: 3, minWidth: 0 }}>
+          <Txt v="bodyStrong" numberOfLines={2}>
+            {busy ? (s.productName ?? s.currentFilename ?? "Baskı") : offline ? "Bağlantı yok" : "Hazır"}
+          </Txt>
+          <View style={styles.rowGap}>
+            <SymbolView name="thermometer.medium" tintColor={color.textFaint} style={{ width: 12, height: 14 }} />
+            <Count value={s.nozzle} v="small" tone="faint" format={(n) => `${Math.round(n)}°`} />
+            <Txt v="small" tone="faint">
+              /
+            </Txt>
+            <Count value={s.bed} v="small" tone="faint" format={(n) => `${Math.round(n)}°`} />
+          </View>
+          {busy ? (
+            <Txt v="smallStrong" tone="dim" num>
+              {s.status === "finished" ? "Tamamlandı 🎉" : `~${fmtRemaining(s.etaSec)} kaldı`}
+            </Txt>
+          ) : null}
         </View>
-      )}
+        {busy ? <Count value={oran * 100} v="title" style={{ color: marka }} format={(n) => `%${Math.round(n)}`} /> : null}
+      </View>
+
+      {busy ? <Progress value={oran} color={marka} height={8} /> : null}
 
       {showControls ? (
-        <View style={[styles.controls, disabled && { opacity: 0.45 }]}>
+        <View style={[styles.controls, disabled ? { opacity: 0.45 } : null]}>
           {s.status === "printing" ? (
-            <CtrlBtn label="Duraklat" icon="pause.fill" color={ML.orange} disabled={disabled} onPress={() => onCommand("pause")} />
+            <Button label="Duraklat" icon="pause.fill" variant="secondary" size="sm" disabled={disabled} onPress={() => onCommand("pause")} style={{ flex: 1 }} />
           ) : (
-            <CtrlBtn label="Devam" icon="play.fill" color={ML.green} disabled={disabled} onPress={() => onCommand("resume")} />
+            <Button label="Devam" icon="play.fill" size="sm" disabled={disabled} onPress={() => onCommand("resume")} style={{ flex: 1 }} />
           )}
-          <CtrlBtn label="İptal" icon="stop.fill" color={ML.red} disabled={disabled} onPress={() => onCommand("cancel")} />
+          <Button label="İptal" icon="stop.fill" variant="danger" size="sm" disabled={disabled} onPress={() => onCommand("cancel")} style={{ flex: 1 }} />
         </View>
       ) : null}
-    </View>
-  );
-}
-
-function CtrlBtn({
-  label,
-  icon,
-  color,
-  disabled,
-  onPress,
-}: {
-  label: string;
-  icon: SymbolViewProps["name"];
-  color: string;
-  disabled?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <PressableScale
-      onPress={onPress}
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.ctrlBtn,
-        { borderColor: color + "55" },
-        pressed && !disabled && { backgroundColor: color + "1A" },
-      ]}
-    >
-      <SymbolView name={icon} tintColor={color} style={{ width: 13, height: 13 }} />
-      <Text style={[styles.ctrlText, { color }]}>{label}</Text>
-    </PressableScale>
-  );
-}
-
-function Chip({ text, color }: { text: string; color?: string }) {
-  return (
-    <View style={[styles.chip, color && { borderColor: color + "55" }]}>
-      {color ? <View style={[styles.chipDot, { backgroundColor: color }]} /> : null}
-      <Text style={styles.chipText}>{text}</Text>
-    </View>
+    </Glass>
   );
 }
 
@@ -351,69 +289,15 @@ function fmtAge(ms: number): string {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: ML.bg },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 8, paddingHorizontal: 16, paddingBottom: 8 },
-  chip: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: ML.card, borderRadius: 999, borderWidth: 1, borderColor: ML.border, paddingHorizontal: 12, paddingVertical: 6 },
-  chipDot: { width: 7, height: 7, borderRadius: 4 },
-  chipText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
-  archiveLink: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 10,
-    backgroundColor: ML.card,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.borderSoft,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-  },
-  archiveText: { color: ML.text, fontSize: 14, fontWeight: "700", flex: 1 },
-  liveBar: { flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 16, paddingBottom: 10 },
+  liveBar: { flexDirection: "row", alignItems: "center", gap: 7 },
   liveDot: { width: 7, height: 7, borderRadius: 4 },
-  liveText: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
-  cmdBanner: {
-    marginHorizontal: 16,
-    marginBottom: 10,
-    padding: 10,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: ML.border,
-    backgroundColor: ML.card,
-  },
-  cmdText: { color: ML.textDim, fontSize: 12.5, fontWeight: "600" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32, gap: 8 },
-  emptyTitle: { color: ML.text, fontSize: 16, fontWeight: "700" },
-  emptyDesc: { color: ML.textDim, fontSize: 13, textAlign: "center", lineHeight: 19 },
-  list: { padding: 16, gap: 12 },
-  card: { backgroundColor: ML.card, borderRadius: radius.lg, borderWidth: 1, padding: 14, gap: 10 },
-  cardHead: { flexDirection: "row", alignItems: "center", gap: 10 },
+  banner: { padding: space.md, borderWidth: 1 },
+  card: { gap: space.md },
+  head: { flexDirection: "row", alignItems: "center", gap: space.sm },
   dot: { width: 10, height: 10, borderRadius: 5 },
-  pName: { color: ML.text, fontSize: 15, fontWeight: "700", flex: 1 },
-  pill: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 999 },
-  pillText: { fontSize: 12, fontWeight: "700" },
-  /** Hata/duraklama nedeni — rozetin hemen altında, rozetle aynı renkte. */
-  reason: { fontSize: 12, fontWeight: "600", marginTop: -2, marginBottom: 2 },
-  body: { flexDirection: "row", gap: 12, alignItems: "center" },
-  thumb: { width: 56, height: 56, borderRadius: radius.md, backgroundColor: ML.cardElevated },
-  thumbEmpty: { borderWidth: 1, borderColor: ML.border },
-  product: { color: ML.text, fontSize: 14, fontWeight: "600" },
-  temp: { color: ML.textFaint, fontSize: 12 },
-  eta: { color: ML.textDim, fontSize: 12, fontWeight: "600" },
-  barTrack: { height: 8, borderRadius: 4, backgroundColor: ML.cardElevated, overflow: "hidden" },
-  barFill: { height: "100%", borderRadius: 4 },
-  pct: { fontSize: 14, fontWeight: "800" },
-  controls: { flexDirection: "row", gap: 8, paddingTop: 2 },
-  ctrlBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    borderWidth: 1,
-    borderRadius: radius.md,
-    paddingVertical: 9,
-  },
-  ctrlText: { fontSize: 13, fontWeight: "700" },
+  body: { flexDirection: "row", gap: space.md, alignItems: "center" },
+  rowGap: { flexDirection: "row", alignItems: "center", gap: 4 },
+  thumb: { width: 56, height: 56, borderRadius: radius.sm, backgroundColor: color.tintStrong },
+  thumbEmpty: { alignItems: "center", justifyContent: "center" },
+  controls: { flexDirection: "row", gap: space.sm },
 });
