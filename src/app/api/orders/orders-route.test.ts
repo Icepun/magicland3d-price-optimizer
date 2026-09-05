@@ -290,8 +290,11 @@ describe("siparişler ucu — çekim bütünlüğü", () => {
    * liste bu alana göre sıralandığı için kronolojik sırada yanlış yere düşüyordu.
    */
   it("teslim tarihi, siparişin VERİLİŞ tarihi olarak yazılmaz", async () => {
-    const verilis = "2026-08-01T09:00:00.000Z";
-    const teslim = "2026-08-09T18:00:00.000Z";
+    // Tarihler ŞİMDİYE GÖRE: sabit takvim tarihleri 30 günlük çekim penceresinin (WINDOW_DAYS)
+    // dışına düşünce sipariş listeye hiç girmiyor ve test kendi kendine kırılıyordu — takvim
+    // ilerledi diye kırılan bir test, ölçtüğü davranış hakkında hiçbir şey söylemiyor.
+    const verilis = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const teslim = new Date(Date.now() - 1 * 86_400_000).toISOString();
     h.state.hbPackages = {
       delivered: [{ OrderNumber: "T1", orderDate: verilis, DeliveredDate: teslim }],
     };
