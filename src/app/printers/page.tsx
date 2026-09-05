@@ -2533,6 +2533,14 @@ function PrinterStorageDialog({ printerId, activeFile, onClose }: { printerId: s
 
 // ───────────────────────── Yönet (yapılandırma) modalı ─────────────────────────
 
+/** `/api/printers/model-files` özet satırı — `name: null` = yazıcı silinmiş, dosyalar kalmış. */
+interface YaziciDosyaGrubu {
+  printerConfigId: string;
+  name: string | null;
+  count: number;
+  bytes: number;
+}
+
 const BRANDS = [
   { value: "elegoo", label: "Elegoo", type: "moonraker", port: 7125 },
   { value: "snapmaker", label: "Snapmaker", type: "moonraker", port: 7125 },
@@ -2547,15 +2555,47 @@ function ManageModal({ onClose }: { onClose: () => void }) {
   });
   const [editing, setEditing] = useState<PrinterConfig | "new" | null>(null);
   const [confirmDel, setConfirmDel] = useState<PrinterConfig | null>(null);
+  const [dosyalariDaSil, setDosyalariDaSil] = useState(true);
+  const [confirmKalan, setConfirmKalan] = useState<YaziciDosyaGrubu | null>(null);
+
+  /**
+   * Yazıcı başına model dosyası özeti. Silme onayında "ne kadar dosya gidecek" yazabilmek ve
+   * artık olmayan yazıcılardan kalanları görünür kılmak için — yazıcı silinince o dosyalar
+   * hiçbir ekranda görünmüyordu ama bulutta yer kaplamaya devam ediyordu.
+   */
+  const { data: dosyaOzeti } = useQuery<{ groups: YaziciDosyaGrubu[] }>({
+    queryKey: ["printer-model-files"],
+    queryFn: () => fetchJson("/api/printers/model-files"),
+  });
+  const dosyaBilgisi = (id: string) => dosyaOzeti?.groups.find((g) => g.printerConfigId === id);
+  const kalanlar = dosyaOzeti?.groups.filter((g) => g.name === null) ?? [];
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ["printer-configs"] });
     qc.invalidateQueries({ queryKey: ["printers"] });
+    qc.invalidateQueries({ queryKey: ["printer-model-files"] });
   };
 
   const del = useMutation({
-    mutationFn: (id: string) => fetchJson(`/api/printers/config/${id}`, { method: "DELETE" }),
+    mutationFn: ({ id, withFiles }: { id: string; withFiles: boolean }) =>
+      fetchJson(`/api/printers/config/${id}${withFiles ? "?withFiles=1" : ""}`, { method: "DELETE" }),
     onSuccess: () => { refresh(); setConfirmDel(null); toast.success("Yazıcı silindi"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const kalaniTemizle = useMutation({
+    mutationFn: (printerConfigId: string) =>
+      fetchJson("/api/printers/model-files", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ printerConfigId }),
+      }),
+    onSuccess: (r: unknown) => {
+      refresh();
+      setConfirmKalan(null);
+      const n = (r as { satir?: number })?.satir ?? 0;
+      toast.success(`${n} dosya silindi`);
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -2589,13 +2629,17 @@ function ManageModal({ onClose }: { onClose: () => void }) {
                       <p className="text-sm font-medium truncate">{c.name}</p>
                       <p className="text-[11px] text-muted-foreground truncate">
                         {c.model || BRANDS.find((b) => b.value === c.brand)?.label || c.brand} · <span className="font-mono">{c.host}</span>
+                        {(() => {
+                          const d = dosyaBilgisi(c.id);
+                          return d ? <> · {d.count} dosya, {fmtBytes(d.bytes)}</> : null;
+                        })()}
                       </p>
                     </div>
                     <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditing(c)} title="Düzenle">
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
                     {/* Tek tık kalıcı silme yerine onay — eşleştirme geçmişi de birlikte gidiyor. */}
-                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/70 hover:text-destructive" disabled={del.isPending} onClick={() => setConfirmDel(c)} title="Sil">
+                    <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/70 hover:text-destructive" disabled={del.isPending} onClick={() => { setDosyalariDaSil(true); setConfirmDel(c); }} title="Sil">
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -2605,6 +2649,30 @@ function ManageModal({ onClose }: { onClose: () => void }) {
             <Button variant="outline" className="w-full gap-2" onClick={() => setEditing("new")}>
               <Plus className="h-4 w-4" /> Yazıcı Ekle
             </Button>
+
+            {/* Silinmiş yazıcılardan kalan dosyalar — başka hiçbir ekranda görünmüyorlar. */}
+            {kalanlar.length > 0 && (
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-2.5 space-y-2">
+                <p className="text-[11px] text-amber-400">
+                  Artık kayıtlı olmayan yazıcılardan kalan dosyalar yer kaplıyor.
+                </p>
+                {kalanlar.map((g) => (
+                  <div key={g.printerConfigId} className="flex items-center gap-2">
+                    <HardDrive className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    <span className="text-xs flex-1 tabular-nums">
+                      {g.count} dosya · {fmtBytes(g.bytes)}
+                    </span>
+                    <Button
+                      size="sm" variant="outline" className="h-7 px-2 text-[11px]"
+                      disabled={kalaniTemizle.isPending}
+                      onClick={() => setConfirmKalan(g)}
+                    >
+                      Temizle
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </DialogContent>
@@ -2620,10 +2688,65 @@ function ManageModal({ onClose }: { onClose: () => void }) {
               <span className="font-medium text-foreground">{confirmDel?.name}</span> ve ürün eşleştirme geçmişi silinecek. Bu işlem geri alınamaz.
             </p>
           </DialogHeader>
+
+          {/* Dosyaları da sorulur: sorulmadığı için satılan bir yazıcının 2 GB'ı görünmez şekilde kalmıştı. */}
+          {(() => {
+            const d = confirmDel ? dosyaBilgisi(confirmDel.id) : undefined;
+            if (!d) return null;
+            return (
+              <label className="flex items-start gap-2 rounded-md border p-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-3.5 w-3.5 accent-destructive"
+                  checked={dosyalariDaSil}
+                  disabled={del.isPending}
+                  onChange={(e) => setDosyalariDaSil(e.target.checked)}
+                />
+                <span className="text-xs leading-snug">
+                  Model dosyalarını da sil
+                  <span className="block text-[11px] text-muted-foreground tabular-nums">
+                    {d.count} dosya · {fmtBytes(d.bytes)}
+                    {!dosyalariDaSil && " — silmezsen dosyalar kalır, buradan sonra temizleyebilirsin"}
+                  </span>
+                </span>
+              </label>
+            );
+          })()}
+
           <DialogFooter>
             <Button variant="ghost" size="sm" disabled={del.isPending} onClick={() => setConfirmDel(null)}>Vazgeç</Button>
-            <Button variant="destructive" size="sm" disabled={del.isPending} onClick={() => confirmDel && del.mutate(confirmDel.id)}>
+            <Button
+              variant="destructive" size="sm" disabled={del.isPending}
+              onClick={() => confirmDel && del.mutate({ id: confirmDel.id, withFiles: dosyalariDaSil })}
+            >
               {del.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kalan dosyaları temizleme onayı — GERİ ALINAMAZ, bulut nesneleri de siliniyor. */}
+      <Dialog open={!!confirmKalan} onOpenChange={(o) => !o && !kalaniTemizle.isPending && setConfirmKalan(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Trash2 className="h-4 w-4 text-destructive" /> Kalan dosyaları sil
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Artık kayıtlı olmayan bir yazıcıdan kalan{" "}
+              <span className="font-medium text-foreground tabular-nums">
+                {confirmKalan?.count} dosya ({confirmKalan ? fmtBytes(confirmKalan.bytes) : ""})
+              </span>{" "}
+              silinecek. Bu işlem geri alınamaz.
+            </p>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={kalaniTemizle.isPending} onClick={() => setConfirmKalan(null)}>Vazgeç</Button>
+            <Button
+              variant="destructive" size="sm" disabled={kalaniTemizle.isPending}
+              onClick={() => confirmKalan && kalaniTemizle.mutate(confirmKalan.printerConfigId)}
+            >
+              {kalaniTemizle.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
             </Button>
           </DialogFooter>
         </DialogContent>

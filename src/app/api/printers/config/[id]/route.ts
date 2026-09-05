@@ -7,6 +7,7 @@ import { dropBambuConns } from "@/core/printers/bambu";
 import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
 import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
 import { wsHostKapat } from "@/core/printers/moonraker-ws";
+import { yaziciModelDosyalariniSil } from "@/lib/model-file-cleanup";
 
 const UpdateSchema = z.object({
   name: z.string().min(1).optional(),
@@ -60,11 +61,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
     const cfg = await prisma.printerConfig.findUnique({ where: { id } });
+    /**
+     * ?withFiles=1 → yazıcının model dosyaları da silinir.
+     *
+     * Varsayılan olarak SİLMİYORUZ: dosyalar kullanıcının yüklediği içerik. Ama silinmezlerse
+     * hiçbir ekranda görünmez hâle gelirler (ürün kartındaki yazıcı sekmesi kaybolur) ve
+     * bulutta yer kaplamaya devam ederler — bu yüzden "Yönet" ekranı hem silmeden önce sorar
+     * hem de kalanları listeleyip sonradan temizlemeye izin verir.
+     */
+    if (new URL(req.url).searchParams.get("withFiles") === "1") {
+      await yaziciModelDosyalariniSil(id);
+    }
     // İlişkili ürün eşleştirmelerini + son-bilinen slot snapshot'ını da temizle (yetim satır kalmasın)
     await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id } });
     await prisma.appSetting.deleteMany({ where: { key: `slotSnapshot:${id}` } });
