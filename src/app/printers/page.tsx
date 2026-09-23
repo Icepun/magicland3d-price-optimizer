@@ -26,7 +26,7 @@ import { usePrefersReducedMotion } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
-import { vizKeyForModel, getSprites, getPack, kareAnahtari } from "@/lib/gcode-viz/viz-cache";
+import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 // Görselleştirme boru hattı three (~539KB) çeker → DİNAMİK yükle (Yazıcılar initial bundle'ında değil).
 const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
@@ -36,7 +36,8 @@ import {
 } from "@/components/printers/print-flow";
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
-import type { VizPack } from "@/lib/gcode-viz/viz-pack";
+import type { VizPack, YolZamani } from "@/lib/gcode-viz/viz-pack";
+import type { CanliOrnek } from "@/lib/gcode-viz/canli-konum";
 // Ürün görselleri KÜÇÜK hâliyle çekilir: ham dosyalar 1,33 MB, küçüğü 21 KB (62 kat).
 // Baskı Başlat seçicisinde 67 görsel var → ~89 MB yerine ~1,4 MB.
 import { thumbUrl } from "@/lib/image";
@@ -69,6 +70,15 @@ import {
 const GcodeViewerDialog = dynamic(
   () => import("@/components/printers/GcodeViewer").then((m) => m.GcodeViewerDialog),
   { ssr: false, loading: () => <ViewerLoadingShell /> },
+);
+
+/**
+ * Kartın canlı 3B'si three çeker → yalnız modeli olan bir iş varken iner. Yüklenirken kart
+ * dilimleyicinin görselini gösterir (boş kalmaz).
+ */
+const KartUcBoyut = dynamic(
+  () => import("@/components/printers/KartUcBoyut").then((m) => m.KartUcBoyut),
+  { ssr: false },
 );
 
 /** Parça seçici de ayrı parça — yalnız gerektiğinde iner. */
@@ -508,6 +518,7 @@ export default function PrintersPage() {
               key={p.id}
               printer={p}
               now={clockNow}
+              veriAni={dataUpdatedAt}
               index={i}
               pending={pendingFor(pendingMap, p.id)}
               pausedReminderText={pausedReminder(pausedSince[p.id] ?? null, clockNow)}
@@ -813,10 +824,13 @@ const PrinterCard = memo(PrinterCardInner, (a, b) =>
 );
 
 function PrinterCardInner({
-  printer, now, index, pending, retrying, pausedReminderText, lastKnownJob,
+  printer, now, veriAni, index, pending, retrying, pausedReminderText, lastKnownJob,
   onCommand, onCancel, onStart, onMatch, onManage, onRetry,
 }: {
-  printer: PanelPrinter; now: number; index: number; pending: ActionKind | null; retrying: boolean;
+  printer: PanelPrinter; now: number;
+  /** Yazıcı durumunun alındığı an (ms) — canlı ölçüm bununla damgalanır. */
+  veriAni: number;
+  index: number; pending: ActionKind | null; retrying: boolean;
   pausedReminderText: string | null; lastKnownJob?: PrinterJob;
   onCommand: (v: ActionVars) => void; onCancel: () => void; onStart: () => void; onMatch: () => void;
   onManage: () => void; onRetry: () => void;
@@ -880,17 +894,17 @@ function PrinterCardInner({
   // Duraklama nedeni "Duraklatıldı"nın yanında; uzun cihaz metni kartı taşırmasın.
   const pauseReason = isPaused && printer.statusMessage ? printer.statusMessage.trim().slice(0, 46) : null;
 
-  // CANLI DOLAN MODEL (çekme modeli): süren baskı hangi modele aitse (dosya adından çözülür,
-  // yeniden yükleme GEREKMEZ), inşa kareleri o modelin kalıcı kimliğiyle aranır; yoksa arka planda
-  // KİBARCA üretilir (bir sonraki poll'da görünür). Var olan modellerde ve süren baskılarda çalışır.
+  // CANLI 3B MODEL: süren (ya da yeni biten) baskı hangi modele aitse — dosya adından çözülür,
+  // yeniden yükleme GEREKMEZ — o modelin paketi yüklenir ve kart onu canlı çizer (KartUcBoyut).
+  // Paket gelene dek kart dilimleyicinin görseline düşer.
   const printingNow = (isPrinting || isPaused) && online;
-  const live = useLiveBuildModel(printer.id, printer.currentFilename, printingNow);
-  const buildFrames = live.frames;
+  const modelGoster = (printingNow || isFinished) && online;
+  const live = useLiveBuildModel(printer.id, printer.currentFilename, modelGoster);
 
-  // MADDE 4: kare KATMAN oranından seçilir — kareler katman oranıyla üretiliyor, bayt ilerlemesi
-  // aynı anda 23 puana kadar sapabiliyor (canlı ölçüm: bayt %90 / katman %66,5).
+  // Yedek görsel (dilimleyici resmi) alttan bu orana kadar açılır — KATMAN oranından; bayt
+  // ilerlemesi aynı anda 23 puana kadar sapabiliyor (canlı ölçüm: bayt %90 / katman %66,5).
   const framePick = pickBuildFrame({
-    frameCount: buildFrames?.length ?? 0,
+    frameCount: 0,
     layerCurrent,
     layerTotal: job?.layerTotal ?? 0,
     progress,
@@ -915,6 +929,27 @@ function PrinterCardInner({
     : null;
   const dot = nozzleDot(job?.live.nozzleX ?? null, job?.live.nozzleY ?? null, bedFrame);
   const showStage = printingNow && !!bedFrame && (!!dot || packLayerIndex != null);
+
+  // CANLI ÖLÇÜM — kart ve 3B izleyici nozulu bununla akıtır (bkz. gcode-viz/canli-konum.ts).
+  // Moonraker dosya baytı + gerçek nozul konumu verir; Bambu yalnız katmanı (satır numarası 0).
+  const olcumX = job?.live.nozzleX ?? null;
+  const olcumY = job?.live.nozzleY ?? null;
+  const olcumZ = job?.live.zHeight ?? null;
+  const canliOrnek = useMemo<CanliOrnek | null>(
+    () =>
+      printingNow
+        ? {
+            dosyaKonumu: filePosition,
+            nozulX: olcumX,
+            nozulY: olcumY,
+            nozulZ: olcumZ,
+            katmanIdx: packLayerIndex,
+            duraklatildi: isPaused,
+            an: veriAni,
+          }
+        : null,
+    [printingNow, filePosition, olcumX, olcumY, olcumZ, packLayerIndex, isPaused, veriAni],
+  );
 
   // ARKA PLAN BASKI: bu yazıcıya başlatılan yükleme/başlatma akışı (modal kapansa da sürer) →
   // kartta ilerleme/hata göster (kullanıcı ekranda kilitlenmez).
@@ -1071,8 +1106,18 @@ function PrinterCardInner({
           <div className="flex gap-3.5">
             {/* MADDE 3 + 7: büyük gerçek plaka görseli, üstünde katman rozeti ve canlı aşama */}
             <JobVisual
-              frames={buildFrames}
-              frameIndex={framePick.index}
+              uc={
+                modelGoster && live.pack
+                  ? {
+                      pack: live.pack.pack,
+                      yz: live.pack.yz,
+                      ornek: canliOrnek,
+                      katmanIdx: packLayerIndex,
+                      bitti: isFinished,
+                      toolColors,
+                    }
+                  : null
+              }
               plateSrc={job.plateThumbnail}
               ratio={framePick.ratio}
               images={jobImageCandidates(job, live.thumbnail)}
@@ -1361,6 +1406,7 @@ function PrinterCardInner({
           cacheKey={viewerSnap.cacheKey}
           name={viewerSnap.name}
           liveLayer={layerCurrent}
+          canliOrnek={canliOrnek}
           toolColors={toolColors}
           onClose={() => setViewerSnap(null)}
         />
@@ -1887,7 +1933,7 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
   );
 }
 
-// ── Canlı dolan model: baskı kartında modelin katman katman inşası ──────────
+// ── Canlı 3B model: baskı kartında modelin canlı inşası ─────────────────────
 interface PrintModelInfo {
   id: string;
   contentMd5: string | null;
@@ -1896,22 +1942,25 @@ interface PrintModelInfo {
   thumbnailVar?: boolean;
 }
 
-/** Canlı aşama çizimi için gereken paket + yardımcıları (görselleştirme modülü DİNAMİK yüklenir). */
+/**
+ * Kartın canlı çizimi için paket + yol zaman çizelgesi (görselleştirme modülü DİNAMİK yüklenir).
+ * `layerAt`/`isBody` kartın küçük üstten görünümü (yedek) içindir.
+ */
 interface LivePack {
   pack: VizPack;
+  yz: YolZamani;
   layerAt: (offsets: ArrayLike<number>, filePosition: number) => number;
   isBody: (feature: number) => boolean;
 }
 
 /**
- * Süren baskının modelini çöz → inşa karelerini kalıcı kimlikle bul; yoksa arka planda üret.
+ * Süren baskının modelini çöz → kompakt paketini yükle (önce cihazdaki önbellek, yoksa sunucu).
  * Yeniden yükleme gerekmez; var olan modellerde ve halihazırda süren baskılarda da çalışır.
- * Kareler oluşana dek null döner (kart mevcut ürün görseline düşer).
+ * Paket gelene dek `pack` null döner (kart dilimleyicinin görseline düşer).
  */
 function useLiveBuildModel(
   printerId: string, filename: string | null, printing: boolean,
 ): {
-  frames: string[] | null;
   thumbnail: string | null;
   pack: LivePack | null;
   /** 3B izleyicinin ihtiyacı — model çözülmediyse null (kart tıklanamaz kalır). */
@@ -1928,90 +1977,41 @@ function useLiveBuildModel(
   });
   const model = modelQ.data?.model ?? null;
   const vizKey = model ? vizKeyForModel(model) : null;
-  const frameSourceKey = model && vizKey ? `${model.id}|${vizKey}` : null;
+  const paketAnahtari = model && vizKey ? `${model.id}|${vizKey}` : null;
 
-  const [loadedFrames, setLoadedFrames] = useState<{ key: string; urls: string[] } | null>(null);
-  const urls = loadedFrames?.key === frameSourceKey ? loadedFrames.urls : null;
-  useEffect(() => {
-    let alive = true;
-    let created: string[] = [];
-    if (!frameSourceKey || !vizKey || !model) return;
-
-    const show = (set: { frames: Blob[] }) => {
-      if (!alive) return;
-      created = set.frames.map((b) => URL.createObjectURL(b));
-      setLoadedFrames({ key: frameSourceKey, urls: created });
-    };
-    const load = async () => {
-      const set = await getSprites(kareAnahtari(vizKey)).catch(() => null);
-      if (set && set.frames.length) { show(set); return; }
-      // Kareler yok → arka planda KİBARCA üret (seri + boşta + yüklemede bekler), sonra yokla.
-      void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnailVar })).catch(() => {});
-      /**
-       * Üretim bitene dek periyodik bak. Eskiden 5 saniyede bir, 24 kez: kare üretimi kalıcı
-       * olarak başarısızsa (dosya çözülemiyor, WebGL bağlamı yok) aynı ağır iş iki dakika
-       * boyunca 24 kez tekrarlanıyordu. Şimdi 15 saniyede bir, 6 kez.
-       *
-       * ⚠️ Kalıcı "başarısız" işareti KOYULMUYOR: başarısızlık geçici olabiliyor (bağlam
-       * kaybı, `toBlob` null) ve kalıcı işaretlenirse kart o oturumda bir daha dolmaz.
-       */
-      let tries = 0;
-      const iv = setInterval(async () => {
-        if (!alive || tries++ > 6) { clearInterval(iv); return; }
-        const s = await getSprites(kareAnahtari(vizKey)).catch(() => null);
-        if (s && s.frames.length) { clearInterval(iv); show(s); return; }
-        void vizPipe().then((m) => m.ensureVizAssets({ fileId: model.id, cacheKey: vizKey, thumbnailMissing: !model.thumbnailVar })).catch(() => {}); // takıldıysa yeniden dene (iç dedupe)
-      }, 15000);
-      // temizlikte durdur
-      cleanup.push(() => clearInterval(iv));
-    };
-    const cleanup: (() => void)[] = [];
-    void load();
-    return () => {
-      alive = false;
-      cleanup.forEach((fn) => fn());
-      created.forEach((u) => URL.revokeObjectURL(u));
-    };
-    // Object URL'leri yalnız model kimliği/içerik anahtarı değişince yenile. Aynı modelin query
-    // nesnesi veya thumbnail alanı tazelendiğinde URL'leri revoke edip görseli kırma.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameSourceKey]);
-
-  // CANLI AŞAMA paketi: kareleri üreten iş zaten kompakt paketi IDB'ye yazıyor. Paket varsa o an
-  // basılan katmanın üstten görünümünü çizebiliyoruz; yoksa kart yalnız nozul noktasını gösterir.
+  // 2) Paket. Sunucu ilk kez tarıyorsa (büyük dosya, eski biçim) birkaç saniye sürebilir →
+  //    başarısız olursa artan aralıklarla yeniden denenir; bu sırada kart yedek görseli gösterir.
   const [livePack, setLivePack] = useState<{ key: string; value: LivePack } | null>(null);
-  const pack = livePack?.key === frameSourceKey ? livePack.value : null;
-  const framesReady = !!urls;
+  const pack = livePack?.key === paketAnahtari ? livePack.value : null;
+  const modelId = model?.id ?? null;
+  const kucukResimYok = model ? !model.thumbnailVar : false;
   useEffect(() => {
-    if (!frameSourceKey || !vizKey) return;
+    if (!paketAnahtari || !vizKey || !modelId) return;
     let alive = true;
-    let tries = 0;
+    let deneme = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const attempt = async () => {
-      if (!alive) return;
-      const buf = await getPack(vizKey).catch(() => null);
-      if (!alive) return;
-      if (buf) {
-        try {
-          const m = await import("@/lib/gcode-viz/viz-pack");
-          if (!alive) return;
-          setLivePack({
-            key: frameSourceKey,
-            value: { pack: m.decodeVizPack(buf), layerAt: m.layerAtBytePosition, isBody: m.isBodyFeature },
-          });
-          return;
-        } catch { /* bozuk paket → aşama çizimi yok, kart çalışmaya devam eder */ }
+    const dene = async () => {
+      try {
+        const m = await vizPipe();
+        const p = await m.loadVizPack(vizKey, modelId);
+        const vp = await import("@/lib/gcode-viz/viz-pack");
+        if (!alive) return;
+        setLivePack({
+          key: paketAnahtari,
+          value: { pack: p, yz: vp.yolZamaniKur(p), layerAt: vp.layerAtBytePosition, isBody: vp.isBodyFeature },
+        });
+        // Dosyanın küçük resmi yoksa (kütüphane, ürün sayfası) arka planda KİBARCA üretilir.
+        if (kucukResimYok) m.ensureVizAssets({ fileId: modelId, cacheKey: vizKey, thumbnailMissing: true });
+      } catch {
+        if (!alive) return;
+        if (deneme++ < 6) timer = setTimeout(() => void dene(), Math.min(60_000, 4000 * 2 ** deneme));
       }
-      // Paket henüz üretilmedi (kareler üretilirken yazılıyor) → seyrek yokla.
-      if (tries++ < 20) timer = setTimeout(() => void attempt(), 8000);
     };
-    void attempt();
+    void dene();
     return () => { alive = false; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [frameSourceKey, framesReady]);
+  }, [paketAnahtari, vizKey, modelId, kucukResimYok]);
 
   return {
-    frames: urls,
     // Görselin URL'i — gövdeye gömülü data-URL yerine bir yıllık önbellekli uç.
     thumbnail: model?.thumbnailVar ? `/api/models/${model.id}/preview` : null,
     pack,
@@ -2087,14 +2087,26 @@ function BuildReveal({
   );
 }
 
+/** Kartın canlı 3B girdisi (KartUcBoyut). */
+interface KartUcGirdisi {
+  pack: VizPack;
+  yz: YolZamani;
+  ornek: CanliOrnek | null;
+  /** Ölçüm takip edilemezse kilitlenecek katman (0 tabanlı). */
+  katmanIdx: number | null;
+  /** Baskı bitti → tamamlanmış model döner. */
+  bitti: boolean;
+  toolColors?: (string | null | undefined)[];
+}
+
 function JobVisual({
-  frames, frameIndex, plateSrc, ratio, images, productName, accent, badge, stage, reduceMotion, onOpen3d,
+  uc, plateSrc, ratio, images, productName, accent, badge, stage, reduceMotion, onOpen3d,
 }: {
-  frames: string[] | null;
-  frameIndex: number;
-  /** Slicer'ın kendi render'ı — varsa kart görseli budur (kareler baskı yollarını çiziyor). */
+  /** Canlı 3B — varsa kartın görseli budur; hazır olana dek aşağıdaki yedek görünür. */
+  uc: KartUcGirdisi | null;
+  /** Slicer'ın kendi render'ı — 3B hazır olana dek (ya da WebGL yoksa) yedek görsel budur. */
   plateSrc: string | null;
-  /** 0..1 — görsel bu orana kadar alttan yukarı açılır. */
+  /** 0..1 — yedek görsel bu orana kadar alttan yukarı açılır. */
   ratio: number;
   /** Öncelik sırası — biri yüklenemezse sıradakine düşülür. */
   images: string[];
@@ -2106,25 +2118,24 @@ function JobVisual({
   /** MADDE 11: model dosyası varsa görsel 3B izleyiciyi açar; yoksa null (ölü tık yok). */
   onOpen3d?: (() => void) | null;
 }) {
-  const list = frames ?? [];
-  // Slicer'ın render'ı varsa O gösterilir. Kendi ürettiğimiz kareler baskı YOLLARINI üst üste
-  // bindirdiği için model beyaz bir siluete dönüşüyor; render gölgeli ve net.
-  // Önizleme üretilemeyen dosyalarda uç nokta boş döner; o kaynağı işaretleyip eski yola düş.
+  // Önizleme üretilemeyen dosyalarda uç nokta boş döner; o kaynağı işaretleyip sıradakine düş.
   const [plateFailed, setPlateFailed] = useState<string | null>(null);
   const plateAday = plateSrc?.trim() || null;
   const plate = plateAday && plateAday !== plateFailed ? plateAday : null;
-  const hasFrames = !plate && list.length > 0;
-  // ÇAPRAZ GEÇİŞ: yeni kare üsttte belirirken ÖNCEKİ kare altta duruyor. Eskiden yalnız yeni kare
-  // vardı ve her kare değişiminde bir an boşluğa göz kırpıyordu.
-  const [prevIndex, setPrevIndex] = useState(frameIndex);
-  useEffect(() => {
-    if (prevIndex === frameIndex) return;
-    // Geçiş bitince alttaki kareyi eşitle — üstteki zaten tam görünür olduğu için göz fark etmez.
-    const t = setTimeout(() => setPrevIndex(frameIndex), 520);
-    return () => clearTimeout(t);
-  }, [frameIndex, prevIndex]);
+
+  /**
+   * CANLI 3B ÖNCE (kullanıcı kararı, 23 Eyl 2026): dilimleyicinin resmi alttan düz bir maskeyle
+   * açılıyordu; yassı parçada (takvim panosu) birkaç mm basılmışken resmin yarısı "basıldı"
+   * görünüyordu. Resim artık yalnız 3B hazır olana dek ya da WebGL yoksa görünen YEDEK.
+   * Durum paket kimliğine bağlı: başka bir baskıya geçince kendiliğinden sıfırlanır.
+   */
+  const [ucHazirPaket, setUcHazirPaket] = useState<VizPack | null>(null);
+  const [ucHataPaket, setUcHataPaket] = useState<VizPack | null>(null);
+  const ucGoster = !!uc && ucHataPaket !== uc.pack;
+  const ucHazir = ucGoster && ucHazirPaket === uc?.pack;
 
   const clickable = !!onOpen3d;
+  const gecis = !reduceMotion && "transition-opacity duration-700 ease-out";
   return (
     <div
       className={cn(
@@ -2137,42 +2148,50 @@ function JobVisual({
         borderColor: alpha(accent, 26),
       }}
     >
-      {plate ? (
-        <BuildReveal
-          src={plate}
-          alt={productName}
-          ratio={ratio}
-          accent={accent}
-          reduceMotion={reduceMotion}
-          onError={() => setPlateFailed(plate)}
-        />
-      ) : hasFrames ? (
-        <>
-          {prevIndex !== frameIndex && list[prevIndex] && (
-            <img key={`prev-${prevIndex}`} src={list[prevIndex]} alt="" className="absolute inset-0 h-full w-full object-contain" />
-          )}
-          <img
-            key={frameIndex}
-            src={list[frameIndex]}
+      {/* Yedek görsel — canlı 3B hazır olunca söner */}
+      <div className={cn("absolute inset-0", gecis, ucHazir ? "opacity-0" : "opacity-100")}>
+        {plate ? (
+          <BuildReveal
+            src={plate}
             alt={productName}
-            className="absolute inset-0 h-full w-full object-contain motion-safe:animate-in motion-safe:fade-in duration-500"
+            ratio={ratio}
+            accent={accent}
+            reduceMotion={reduceMotion}
+            onError={() => setPlateFailed(plate)}
           />
-        </>
-      ) : (
-        <FallbackImage
-          candidates={images}
-          alt={productName}
-          className="absolute inset-0 h-full w-full object-contain p-2 motion-safe:animate-in motion-safe:fade-in duration-500"
-          fallback={<VisualPlaceholder reduceMotion={reduceMotion} />}
-        />
+        ) : (
+          <FallbackImage
+            candidates={images}
+            alt={productName}
+            className="absolute inset-0 h-full w-full object-contain p-2 motion-safe:animate-in motion-safe:fade-in duration-500"
+            fallback={<VisualPlaceholder reduceMotion={reduceMotion} />}
+          />
+        )}
+      </div>
+
+      {ucGoster && uc && (
+        <div className={cn("absolute inset-0", gecis, ucHazir ? "opacity-100" : "opacity-0")}>
+          <KartUcBoyut
+            pack={uc.pack}
+            yz={uc.yz}
+            ornek={uc.ornek}
+            katmanIdx={uc.katmanIdx}
+            bitti={uc.bitti}
+            toolColors={uc.toolColors}
+            reduceMotion={reduceMotion}
+            onHazir={() => setUcHazirPaket(uc.pack)}
+            onHata={() => setUcHataPaket(uc.pack)}
+          />
+        </div>
       )}
 
       {badge && (
-        <span className="absolute left-1.5 top-1.5 rounded-md border bg-background/80 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
+        <span className="absolute left-1.5 top-1.5 z-10 rounded-md border bg-background/80 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-300">
           {badge}
         </span>
       )}
-      {stage && <LiveStageTile {...stage} accent={accent} reduceMotion={reduceMotion} />}
+      {/* Küçük üstten görünüm yalnız yedek görseldeyken: canlı 3B nozulu zaten gösteriyor. */}
+      {stage && !ucHazir && <LiveStageTile {...stage} accent={accent} reduceMotion={reduceMotion} />}
 
       {/* MADDE 11: tıklanabilirlik GÖRÜNSÜN — sağ üstte 3B rozeti, üstünde hafif örtü. */}
       {clickable && (

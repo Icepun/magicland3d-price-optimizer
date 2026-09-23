@@ -61,6 +61,18 @@ export interface VizPack {
   pathFeature: Uint8Array;
   /** Yol i'yi basan araç (T0 → 0, T1 → 1, …). Gerçek filament renkleri buna bağlanır. */
   pathTool: Uint8Array;
+  /**
+   * CANLI KONUM (v3): yol i'nin dosyadaki ilk ve son ekstrüzyon satırının bayt konumu.
+   * Moonraker `virtual_sdcard.file_position` bununla katmana değil doğrudan YOLA çevrilir.
+   */
+  pathByteStart: Uint32Array;
+  pathByteEnd: Uint32Array;
+  /**
+   * Yol i'nin başladığı ve bittiği andaki tahmini baskı süresi (sn, dosya başından) — dilimleyicinin
+   * F hızlarından, ivme yok sayılarak. İki yoklama arasında nozulu akıtmak için kullanılır.
+   */
+  pathTimeStart: Float32Array;
+  pathTimeEnd: Float32Array;
 
   /** Katman i'nin Z yüksekliği (mm). */
   layerZ: Float32Array;
@@ -92,6 +104,55 @@ export interface VizPack {
   epsilon: number;
 }
 
+/**
+ * YOL ZAMAN ÇİZELGESİ — canlı konumun tek kaynağı. Yazıcının bildirdiği bayt konumu, katman ve
+ * süre buradan segment ilerlemesine çevrilir (bkz. canli-konum.ts). Hem paketten (kart) hem
+ * açılmış geometriden (izleyici) aynı biçimde kurulur.
+ */
+export interface YolZamani {
+  /** Yol i'nin ilk segmentinin genel indeksi (segmentler paket sırasıyla dizili). */
+  segBas: Uint32Array;
+  /** Yol i'nin segment sayısı (nokta − 1). */
+  segSay: Uint32Array;
+  baytBas: Uint32Array;
+  baytSon: Uint32Array;
+  zamanBas: Float32Array;
+  zamanSon: Float32Array;
+  /** Katman i'nin yol aralığı: [bas, son). */
+  katmanYolBas: Uint32Array;
+  katmanYolSon: Uint32Array;
+  toplamSegment: number;
+}
+
+/** Paketten yol zaman çizelgesi. Segment sırası `expandPack` ile AYNI (katman → yol). */
+export function yolZamaniKur(p: VizPack): YolZamani {
+  const n = p.pathLen.length;
+  const segBas = new Uint32Array(n);
+  const segSay = new Uint32Array(n);
+  let sayac = 0;
+  for (let li = 0; li < p.layerZ.length; li++) {
+    for (let pi = p.layerPathStart[li]; pi < p.layerPathEnd[li]; pi++) {
+      segBas[pi] = sayac;
+      const k = Math.max(0, p.pathLen[pi] - 1);
+      segSay[pi] = k;
+      sayac += k;
+    }
+  }
+  const bos32 = new Uint32Array(n);
+  const bosF = new Float32Array(n);
+  return {
+    segBas,
+    segSay,
+    baytBas: p.pathByteStart?.length === n ? p.pathByteStart : bos32,
+    baytSon: p.pathByteEnd?.length === n ? p.pathByteEnd : bos32,
+    zamanBas: p.pathTimeStart?.length === n ? p.pathTimeStart : bosF,
+    zamanSon: p.pathTimeEnd?.length === n ? p.pathTimeEnd : bosF,
+    katmanYolBas: p.layerPathStart,
+    katmanYolSon: p.layerPathEnd,
+    toplamSegment: sayac,
+  };
+}
+
 /** İzleyici/kart tarafının beklediği düz segment geometrisi. */
 export interface ParsedGcode {
   /** Segment uçları: [x1,y1,z1,x2,y2,z2] × N. */
@@ -110,6 +171,8 @@ export interface ParsedGcode {
   filamentColors: string[];
   fileSize: number;
   thinLevel: number;
+  /** Canlı konum için yol zaman çizelgesi (v3 paketlerde). */
+  yollar?: YolZamani;
 }
 
 // ── İkili kodlama ───────────────────────────────────────────────────────────
@@ -123,7 +186,9 @@ export interface ParsedGcode {
 // için sorun yalnız OKUMADA çıkıyordu. Sürüm 2 hizalamayı eleman boyutuna bağlar; eski (v1)
 // paketler "eski sürüm" diye reddedilir ve yeniden üretilir.
 const MAGIC = 0x5a564c4d; // "MLVZ" (little-endian u32)
-export const PACK_VERSION = 2;
+// v3 (23 Eyl 2026): yol başına bayt aralığı ve tahmini süre (canlı konum). Eski paketler
+// "eski sürüm" diye reddedilir; worker taze paketi sunucudan alır, sunucu yeniden tarar.
+export const PACK_VERSION = 3;
 
 interface PackHeader {
   v: number;
@@ -176,6 +241,7 @@ export function encodeVizPack(p: VizPack): ArrayBuffer {
   const sections: ArrayBufferView[] = [
     p.points, p.pathStart, p.pathLen, p.pathFeature, p.pathTool,
     p.layerZ, p.layerPathStart, p.layerPathEnd, p.layerByteOffset,
+    p.pathByteStart, p.pathByteEnd, p.pathTimeStart, p.pathTimeEnd,
   ];
 
   // Başlıktan sonra en büyük eleman boyutuna (8) hizala; her bölüm ayrıca kendi boyutuna hizalanır.
@@ -225,9 +291,14 @@ export function decodeVizPack(buf: ArrayBuffer): VizPack {
   const layerPathStart = take(Uint32Array, h.layerCount);
   const layerPathEnd = take(Uint32Array, h.layerCount);
   const layerByteOffset = take(Float64Array, h.layerCount);
+  const pathByteStart = take(Uint32Array, h.pathCount);
+  const pathByteEnd = take(Uint32Array, h.pathCount);
+  const pathTimeStart = take(Float32Array, h.pathCount);
+  const pathTimeEnd = take(Float32Array, h.pathCount);
 
   return {
     points, pathStart, pathLen, pathFeature, pathTool,
+    pathByteStart, pathByteEnd, pathTimeStart, pathTimeEnd,
     layerZ, layerPathStart, layerPathEnd, layerByteOffset,
     originX: h.originX, originY: h.originY, scaleXY: h.scaleXY,
     bounds: h.bounds,
@@ -288,6 +359,7 @@ export function expandPack(p: VizPack): ParsedGcode {
     filamentColors: p.filamentColors,
     fileSize: p.fileSize,
     thinLevel: p.thinLevel,
+    yollar: yolZamaniKur(p),
   };
 }
 

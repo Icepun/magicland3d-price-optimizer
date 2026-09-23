@@ -1,11 +1,13 @@
 "use client";
 /**
- * Görselleştirme boru hattı (istemci): geometri (worker parse + IDB önbellek) → gerekiyorsa
- * sunucuya thumbnail + IDB'ye inşa kareleri. Aynı dosya için eşzamanlı istekler tekilleştirilir.
+ * Görselleştirme boru hattı (istemci): geometri (worker parse + IDB önbellek), yalnız paket
+ * (yazıcı kartı) ve gerekiyorsa sunucuya küçük resim. Aynı dosya için eşzamanlı istekler
+ * tekilleştirilir.
  */
 import type { ParsedGcode } from "./parse-gcode";
-import { getPack, putPack, getSprites, putSprites, kareAnahtari } from "./viz-cache";
-import { renderThumbnail, renderBuildFrames } from "./three-scene";
+import { decodeVizPack, type VizPack } from "./viz-pack";
+import { getPack, putPack } from "./viz-cache";
+import { renderThumbnail } from "./three-scene";
 // Yükleme sayacı three İÇERMEYEN ayrı modülde (tek kaynak) — bkz. viz-uploads.ts.
 import { waitUploadsIdle } from "./viz-uploads";
 
@@ -37,6 +39,7 @@ type WorkerResult =
       filamentColors: string[];
       fileSize: number;
       thinLevel: number;
+      yollar?: ParsedGcode["yollar"] | null;
       pack: ArrayBuffer | null;
     };
 
@@ -60,6 +63,37 @@ export function loadGeometry(
   })().finally(() => inflight.delete(cacheKey));
   inflight.set(cacheKey, p);
   return p;
+}
+
+const paketBekleyen = new Map<string, Promise<VizPack>>();
+
+/**
+ * YALNIZ KOMPAKT PAKET (yazıcı kartı için): önce IndexedDB, yoksa ya da eski sürümse sunucu.
+ * Açılmış geometri ÜRETİLMEZ — 2 milyon segmentlik dosyada ~50 MB bellek ederdi; kart paketten
+ * kendi hafif sahnesini kurar (kart-sahne.ts). İzleyiciyle aynı anahtar: biri indirdiyse öteki de
+ * önbellekten alır.
+ */
+export function loadVizPack(cacheKey: string, fileId: string): Promise<VizPack> {
+  const suren = paketBekleyen.get(cacheKey);
+  if (suren) return suren;
+  const is = (async () => {
+    const onbellek = await getPack(cacheKey).catch(() => null);
+    if (onbellek) {
+      try {
+        return decodeVizPack(onbellek);
+      } catch {
+        /* eski biçim → sunucudan taze paket */
+      }
+    }
+    const res = await fetch(`/api/models/${fileId}/viz-pack`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Model yüklenemedi");
+    const tampon = await res.arrayBuffer();
+    const paket = decodeVizPack(tampon);
+    void putPack(cacheKey, tampon);
+    return paket;
+  })().finally(() => paketBekleyen.delete(cacheKey));
+  paketBekleyen.set(cacheKey, is);
+  return is;
 }
 
 function parseInWorker(
@@ -107,6 +141,7 @@ function parseInWorker(
           filamentColors: d.filamentColors ?? [],
           fileSize: d.fileSize,
           thinLevel: d.thinLevel,
+          yollar: d.yollar ?? undefined,
         },
         pack: d.pack ?? null,
       });
@@ -156,10 +191,9 @@ export function ensureVizAssetsAfterPrint(fileId: string): void {
 }
 
 /**
- * Arka plan varlık üretimi (SERİ + boşta + yükleme-bekleyen): (a) thumbnail yoksa üret + kaydet;
- * (b) inşa karelerini üret + IDB'ye koy (kartta canlı dolan model). Görselleştirme ASLA çekirdek
- * akışı (yükleme/baskı/gezinme) etkilemez. Not: yükleme veya izleyici-açılışında ÇAĞRILMAZ —
- * yalnız baskı başlangıcında (ensureVizAssetsAfterPrint). İzleyici geometriyi kendi yükler.
+ * Arka plan varlık üretimi (SERİ + boşta + yükleme-bekleyen): dosyanın küçük resmi yoksa üret +
+ * sunucuya kaydet (kütüphane, ürün sayfası). Görselleştirme ASLA çekirdek akışı (yükleme/baskı/
+ * gezinme) etkilemez. Kart artık canlı 3B çiziyor (kart-sahne.ts): hazır inşa kareleri üretilmez.
  */
 export function ensureVizAssets(opts: { fileId: string; cacheKey: string; thumbnailMissing: boolean }): void {
   const { fileId, cacheKey, thumbnailMissing } = opts;
@@ -173,34 +207,20 @@ export function ensureVizAssets(opts: { fileId: string; cacheKey: string; thumbn
 }
 
 async function runAssetJob(fileId: string, cacheKey: string, thumbnailMissing: boolean): Promise<boolean> {
-  // Kareler AYRI sürümlenir: çizim iyileşince tazelensinler ama pahalı tarama paketi kalsın.
-  const kareKey = kareAnahtari(cacheKey);
-  const haveSprites = await getSprites(kareKey);
-  if (haveSprites && !thumbnailMissing) return true;
+  if (!thumbnailMissing) return true;
   await waitUploadsIdle();
   await idle();
   const g = await loadGeometry(cacheKey, fileId); // parse Web Worker'da (ana thread donmaz)
   if (!g.totalSegments) return false;
-  if (thumbnailMissing) {
-    await waitUploadsIdle();
-    await idle();
-    const dataUrl = renderThumbnail(g, 512);
-    if (dataUrl && dataUrl.length < 900_000) {
-      await fetch(`/api/models/${fileId}/preview`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thumbnail: dataUrl }),
-      }).catch(() => {});
-    }
-  }
-  if (!haveSprites) {
-    await waitUploadsIdle();
-    await idle();
-    // 32 kare: kart artık YALNIZ gövdeyi çiziyor, dolum gözle görülür şekilde büyüyor —
-    // daha çok ara kare geçişi akıcılaştırır. (Kart kaç kare olduğunu kendi okur.)
-    const frames = await renderBuildFrames(g, 32, 240, idle); // her kareden sonra boşta bekle
-    if (!frames.length) return false;
-    await putSprites({ key: kareKey, frames, layerCount: g.layerRanges.length, savedAt: Date.now() });
+  await waitUploadsIdle();
+  await idle();
+  const dataUrl = renderThumbnail(g, 512);
+  if (dataUrl && dataUrl.length < 900_000) {
+    await fetch(`/api/models/${fileId}/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thumbnail: dataUrl }),
+    }).catch(() => {});
   }
   return true;
 }

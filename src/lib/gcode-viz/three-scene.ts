@@ -72,7 +72,7 @@ export interface VizSceneOptions {
 }
 
 /** "#RRGGBB" → [r,g,b] 0-1. Tanınmazsa null. */
-function hexToRgb(hex: string | null | undefined): [number, number, number] | null {
+export function hexToRgb(hex: string | null | undefined): [number, number, number] | null {
   if (!hex) return null;
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return null;
@@ -192,7 +192,7 @@ function fillColors(target: Uint8Array, g: ParsedGcode, opts: VizSceneOptions): 
  * çizgisi (tek uzun düz çizgi) tüm bounding-box'ı şişirip modeli köşede minicik bırakıyordu.
  * Gövde yoksa (çok küçük dosya) tüm segmentlerin %2-%98 yüzdeliğine düşer.
  */
-function bodyXYBounds(g: ParsedGcode): { minX: number; maxX: number; minY: number; maxY: number } {
+export function bodyXYBounds(g: ParsedGcode): { minX: number; maxX: number; minY: number; maxY: number } {
   const n = g.totalSegments;
   if (n === 0) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, seen = 0;
@@ -268,7 +268,7 @@ const KALIN_SEGMENT_BUTCESI = 3_000_000;
 const KALIN_SEGMENT_BUTCESI_YAZILIMSAL = 600_000;
 
 let yazilimsalCizici: boolean | null = null;
-function yazilimsalMi(): boolean {
+export function yazilimsalMi(): boolean {
   if (yazilimsalCizici !== null) return yazilimsalCizici;
   try {
     const c = document.createElement("canvas");
@@ -594,39 +594,5 @@ export function renderThumbnail(g: ParsedGcode, size = 512, palette?: VizPalette
     return renderer.domElement.toDataURL("image/png");
   } finally {
     viz.dispose(); // renderer paylaşımlı — dispose ETME
-  }
-}
-
-/** İnşa kareleri: N aşamada küçük WEBP kareleri — kartta canlı dolum için. Kareler arasında
- *  BOŞTA bekleyip (yield) arayüzü bloke etmez; paylaşılan renderer kullanır. */
-export async function renderBuildFrames(
-  g: ParsedGcode,
-  frameCount = 24,
-  size = 240,
-  yieldFn?: () => Promise<void>,
-  palette?: VizPalette,
-): Promise<Blob[]> {
-  const renderer = getSharedRenderer(size);
-  if (!renderer) return [];
-  const canvas = renderer.domElement as HTMLCanvasElement;
-  const blobs: Blob[] = [];
-  const viz = buildVizScene(g, { background: null, mode: "card", palette });
-  viz.camera.aspect = 1;
-  viz.camera.updateProjectionMatrix();
-  viz.setResolution(size, size); // kalın çizgi kalınlığı çözünürlükten hesaplanır
-  try {
-    const layers = Math.max(1, viz.layerCount);
-    for (let k = 1; k <= frameCount; k++) {
-      const layerIdx = Math.min(layers - 1, Math.ceil((k / frameCount) * layers) - 1);
-      viz.setLayer(layerIdx);
-      renderer.render(viz.scene, viz.camera);
-      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, "image/webp", 0.8));
-      if (!blob) return [];
-      blobs.push(blob);
-      if (yieldFn) await yieldFn(); // her kareden sonra arayüze nefes aldır
-    }
-    return blobs;
-  } finally {
-    viz.dispose();
   }
 }

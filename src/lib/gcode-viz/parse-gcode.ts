@@ -87,6 +87,23 @@ export class GcodeScanner {
   private pathToolArr = new Uint8Array(this.pathCap);
   private pathCount = 0;
 
+  // Yol zaman çizelgesi — CANLI KONUM için: yolun dosyadaki bayt aralığı (Moonraker
+  // file_position → yol) ve dilimleyici hızlarından tahmini süre aralığı (iki yoklama arası akış).
+  private pathByteStartArr = new Uint32Array(this.pathCap);
+  private pathByteEndArr = new Uint32Array(this.pathCap);
+  private pathTimeStartArr = new Float32Array(this.pathCap);
+  private pathTimeEndArr = new Float32Array(this.pathCap);
+  private curPathByteStart = 0;
+  private curPathByteEnd = 0;
+  private curPathTimeStart = 0;
+  private curPathTimeEnd = 0;
+  /** İşlenen satırın dosyadaki başı ve hareketin başladığı andaki süre (yol açılırken okunur). */
+  private curLineAbs = 0;
+  private curMoveT0 = 0;
+  /** G0/G1 hızı (mm/dk, kalıcı) ve dosya başından tahmini süre (sn). İvme yok sayılır. */
+  private feed = 0;
+  private time = 0;
+
   // Katman tablosu
   private layerCap = 2048;
   private layerZArr = new Float32Array(this.layerCap);
@@ -196,6 +213,8 @@ export class GcodeScanner {
         points: new Uint16Array(0),
         pathStart: new Uint32Array(0), pathLen: new Uint32Array(0),
         pathFeature: new Uint8Array(0), pathTool: new Uint8Array(0),
+        pathByteStart: new Uint32Array(0), pathByteEnd: new Uint32Array(0),
+        pathTimeStart: new Float32Array(0), pathTimeEnd: new Float32Array(0),
         layerZ: new Float32Array(0), layerPathStart: new Uint32Array(0),
         layerPathEnd: new Uint32Array(0), layerByteOffset: new Float64Array(0),
         originX: 0, originY: 0, scaleXY: 1,
@@ -228,6 +247,10 @@ export class GcodeScanner {
       pathLen: this.pathLenArr.slice(0, this.pathCount),
       pathFeature: this.pathFeatArr.slice(0, this.pathCount),
       pathTool: this.pathToolArr.slice(0, this.pathCount),
+      pathByteStart: this.pathByteStartArr.slice(0, this.pathCount),
+      pathByteEnd: this.pathByteEndArr.slice(0, this.pathCount),
+      pathTimeStart: this.pathTimeStartArr.slice(0, this.pathCount),
+      pathTimeEnd: this.pathTimeEndArr.slice(0, this.pathCount),
       layerZ: this.layerZArr.slice(0, this.layerCount),
       layerPathStart: this.layerStartArr.slice(0, this.layerCount),
       layerPathEnd: this.layerEndArr.slice(0, this.layerCount),
@@ -318,8 +341,10 @@ export class GcodeScanner {
 
   private handleG(buf: Uint8Array, s: number, e: number, abs: number): void {
     const c1 = buf[s + 1];
-    if (c1 !== 48 && c1 !== 49) return; // yalnız G0/G1
     const c2 = buf[s + 2];
+    // G4 bekleme (P ms / S sn) — süre tahminine eklenir.
+    if (c1 === 52 && !(c2 >= 48 && c2 <= 57)) { this.handleDwell(buf, s + 2, e); return; }
+    if (c1 !== 48 && c1 !== 49) return; // yalnız G0/G1
     if (c2 >= 48 && c2 <= 57) return; // G10/G17/G92… değil
 
     let nx = this.x, ny = this.y, nz = this.z, ne = NaN;
@@ -327,20 +352,31 @@ export class GcodeScanner {
     while (j < e) {
       const ch = buf[j];
       if (ch === 59) break; // satır içi yorum
-      if (ch === 88 || ch === 89 || ch === 90 || ch === 69) {
+      if (ch === 88 || ch === 89 || ch === 90 || ch === 69 || ch === 70) {
         const v = this.readNum(buf, j + 1, e);
         j = this.numEnd;
         if (Number.isFinite(v)) {
           if (ch === 88) nx = v;
           else if (ch === 89) ny = v;
           else if (ch === 90) nz = v;
-          else ne = v;
+          else if (ch === 69) ne = v;
+          else if (v > 0) this.feed = v;
         }
       } else j++;
     }
 
+    const eOnce = this.e;
     const extruding = Number.isFinite(ne) ? (this.absE ? ne > this.e + 1e-6 : ne > 1e-6) : false;
     if (Number.isFinite(ne)) this.e = this.absE ? ne : this.e + ne;
+
+    // SÜRE: yol / hız. İvme yok sayılır (gerçek süre biraz uzundur; canlı takipçi oranı
+    // yazıcının bildirdiği konumlardan düzeltir). Yalnız E hareketi (geri çekme) E yolunu sayar.
+    const dx = nx - this.x, dy = ny - this.y, dz = nz - this.z;
+    let yol = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (yol === 0 && Number.isFinite(ne)) yol = Math.abs(this.absE ? ne - eOnce : ne);
+    this.curMoveT0 = this.time;
+    this.curLineAbs = abs;
+    if (yol > 0) this.time += yol / (this.feed > 0 ? this.feed / 60 : 50);
 
     if (extruding && (nx !== this.x || ny !== this.y)) {
       // Katman işareti olmayan dosyalar (bazı Cura/legacy çıktıları): Z arttıkça katman aç.
@@ -352,10 +388,26 @@ export class GcodeScanner {
       if (nz > this.maxZ) this.maxZ = nz;
       if (!this.pathOpen) this.startPath(this.x, this.y);
       this.addPoint(nx, ny);
+      this.curPathByteEnd = abs + (e - s);
+      this.curPathTimeEnd = this.time;
     } else if (this.pathOpen) {
       this.closePath(); // seyahat/geri çekme → yol biter
     }
     this.x = nx; this.y = ny; this.z = nz;
+  }
+
+  /** G4 P<ms> / S<sn> — yazıcı bekler; süreye eklenir. */
+  private handleDwell(buf: Uint8Array, i: number, e: number): void {
+    let j = i;
+    while (j < e) {
+      const ch = buf[j];
+      if (ch === 59) break;
+      if (ch === 80 || ch === 83) {
+        const v = this.readNum(buf, j + 1, e);
+        j = this.numEnd;
+        if (Number.isFinite(v) && v > 0) this.time += ch === 80 ? v / 1000 : v;
+      } else j++;
+    }
   }
 
   /** Bayt dizisinden sayı oku (parseFloat + string dilimi yerine — 5 M satırda fark eder). */
@@ -429,6 +481,10 @@ export class GcodeScanner {
     this.curPathStart = this.pointCount;
     this.curPathFeature = this.feature;
     this.curPathTool = this.tool;
+    this.curPathByteStart = this.curLineAbs;
+    this.curPathByteEnd = this.curLineAbs;
+    this.curPathTimeStart = this.curMoveT0;
+    this.curPathTimeEnd = this.curMoveT0;
     this.commitPoint(x, y);
     this.anchorX = x; this.anchorY = y;
     this.hasPend = false;
@@ -466,11 +522,19 @@ export class GcodeScanner {
         const b = new Uint32Array(this.pathCap); b.set(this.pathLenArr); this.pathLenArr = b;
         const c = new Uint8Array(this.pathCap); c.set(this.pathFeatArr); this.pathFeatArr = c;
         const d = new Uint8Array(this.pathCap); d.set(this.pathToolArr); this.pathToolArr = d;
+        const b1 = new Uint32Array(this.pathCap); b1.set(this.pathByteStartArr); this.pathByteStartArr = b1;
+        const b2 = new Uint32Array(this.pathCap); b2.set(this.pathByteEndArr); this.pathByteEndArr = b2;
+        const t1 = new Float32Array(this.pathCap); t1.set(this.pathTimeStartArr); this.pathTimeStartArr = t1;
+        const t2 = new Float32Array(this.pathCap); t2.set(this.pathTimeEndArr); this.pathTimeEndArr = t2;
       }
       this.pathStartArr[this.pathCount] = this.curPathStart;
       this.pathLenArr[this.pathCount] = len;
       this.pathFeatArr[this.pathCount] = this.curPathFeature;
       this.pathToolArr[this.pathCount] = this.curPathTool;
+      this.pathByteStartArr[this.pathCount] = Math.min(0xffffffff, this.curPathByteStart);
+      this.pathByteEndArr[this.pathCount] = Math.min(0xffffffff, Math.max(this.curPathByteStart, this.curPathByteEnd));
+      this.pathTimeStartArr[this.pathCount] = this.curPathTimeStart;
+      this.pathTimeEndArr[this.pathCount] = Math.max(this.curPathTimeStart, this.curPathTimeEnd);
       this.pathCount++;
     } else {
       this.pointCount = this.curPathStart; // tek noktalı yol → geri al

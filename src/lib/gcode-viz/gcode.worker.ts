@@ -153,6 +153,24 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     const { g, packBytes } = out;
     const transfer: Transferable[] = [g.positions.buffer, g.features.buffer, g.tools.buffer];
     if (packBytes) transfer.push(packBytes);
+    // Yol zaman çizelgesi (canlı konum). Paketten gelen diziler paketin tamponuna bakan
+    // GÖRÜNÜMLER — olduğu gibi gönderilirse tüm paket (~15 MB) kopyalanırdı; küçük kopyalar taşınır.
+    const yz = g.yollar;
+    const yollar = yz
+      ? {
+          segBas: yz.segBas, segSay: yz.segSay,
+          baytBas: yz.baytBas.slice(), baytSon: yz.baytSon.slice(),
+          zamanBas: yz.zamanBas.slice(), zamanSon: yz.zamanSon.slice(),
+          katmanYolBas: yz.katmanYolBas.slice(), katmanYolSon: yz.katmanYolSon.slice(),
+          toplamSegment: yz.toplamSegment,
+        }
+      : null;
+    if (yollar) {
+      transfer.push(
+        yollar.segBas.buffer, yollar.segSay.buffer, yollar.baytBas.buffer, yollar.baytSon.buffer,
+        yollar.zamanBas.buffer, yollar.zamanSon.buffer, yollar.katmanYolBas.buffer, yollar.katmanYolSon.buffer,
+      );
+    }
     post(
       {
         ok: true,
@@ -168,6 +186,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         filamentColors: g.filamentColors,
         fileSize: g.fileSize,
         thinLevel: g.thinLevel,
+        yollar,
         pack: packBytes,
       },
       transfer,

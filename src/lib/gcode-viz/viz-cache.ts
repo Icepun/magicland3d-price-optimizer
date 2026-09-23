@@ -1,6 +1,6 @@
 "use client";
 /**
- * Görselleştirme önbelleği (IndexedDB, cihaz-yerel): kompakt "viz-pack" + inşa kareleri.
+ * Görselleştirme önbelleği (IndexedDB, cihaz-yerel): kompakt "viz-pack".
  * Anahtar: contentMd5'in ilk 10 hex'i ("md5:xxxxxxxxxx") — baskı dosya adına gömülen ekle AYNI,
  * böylece yazıcı kartındaki canlı iş doğrudan önbelleğe eşlenir. Md5 yoksa "file:<id>:<boyut>".
  *
@@ -18,29 +18,28 @@ const DB_NAME = "mlhub-gcode-viz";
 // de kalın gövdeyi kullanıyor. Kayıtlı kareler/küçük resimler pişmiş piksel — sürüm artmazsa
 // kullanıcı yeni görünümü kartlarda GÖREMEZ.
 // v6: izleyicide DOLGU da katı gövde olarak çiziliyor (model artık içi boş kabuk değil).
-const DB_VER = 6;
+// v7 (23 Eyl 2026): paket biçimi v3 (canlı konum için yol başına bayt + süre). Kart artık canlı
+// 3B çiziyor; hazır inşa kareleri (sprites) kaldırıldı, o depo silinir.
+const DB_VER = 7;
 const GEOM = "geom";
-const SPRITES = "sprites";
-const MAX_GEOM = 16; // LRU üst sınırları (disk şişmesin)
-const MAX_SPRITES = 60;
+const ESKI_KARELER = "sprites";
+const MAX_GEOM = 16; // LRU üst sınırı (disk şişmesin)
 
 interface PackRow {
   key: string;
   pack: ArrayBuffer;
   savedAt: number;
 }
-export interface SpriteSet { key: string; frames: Blob[]; layerCount: number; savedAt: number }
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VER);
     req.onupgradeneeded = () => {
       const db = req.result;
-      // Eski biçimdeki satırlar okunamaz → iki store da sıfırdan kurulur.
+      // Eski biçimdeki satırlar okunamaz → paket deposu sıfırdan kurulur, kare deposu kalkar.
       if (db.objectStoreNames.contains(GEOM)) db.deleteObjectStore(GEOM);
       db.createObjectStore(GEOM, { keyPath: "key" });
-      if (db.objectStoreNames.contains(SPRITES)) db.deleteObjectStore(SPRITES);
-      db.createObjectStore(SPRITES, { keyPath: "key" });
+      if (db.objectStoreNames.contains(ESKI_KARELER)) db.deleteObjectStore(ESKI_KARELER);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -88,46 +87,11 @@ export async function putPack(key: string, pack: ArrayBuffer): Promise<void> {
   } catch { /* kota/db hatası — önbelleksiz devam */ }
 }
 
-export async function getSprites(key: string): Promise<SpriteSet | null> {
-  try {
-    const row = await tx<SpriteSet | undefined>(SPRITES, "readonly", (s) => s.get(key) as IDBRequest<SpriteSet | undefined>);
-    return row ?? null;
-  } catch {
-    return null;
-  }
-}
-
-export async function putSprites(set: SpriteSet): Promise<void> {
-  try {
-    await tx(SPRITES, "readwrite", (s) => s.put({ ...set, savedAt: Date.now() }));
-    void pruneLru(SPRITES, MAX_SPRITES);
-  } catch { /* kota — kritik değil */ }
-}
-
 /** Baskı dosya adındaki içerik-hash ekinden önbellek anahtarı çıkar ("parça-a1b2c3d4e5.gcode"). */
 export function vizKeyFromFilename(filename: string | null | undefined): string | null {
   if (!filename) return null;
   const m = /-([0-9a-f]{10})(?:\.[^.]+)*$/i.exec(filename.trim());
   return m ? `md5:${m[1].toLowerCase()}` : null;
-}
-
-/**
- * KARE SÜRÜMÜ — çizim kodu (ışıklandırma/geometri) her değiştiğinde ARTIR.
- *
- * Kareler diskte içerik hash'iyle saklanıyor; dosya değişmediği sürece anahtar da değişmiyor.
- * Bu yüzden çizimi iyileştirdiğimizde kullanıcı ESKİ kareleri görmeye devam ediyordu — iki kez
- * yaşandı, tsc/eslint/test hiçbiri yakalamıyor. Sürümü artırmak yalnız KARELERİ tazeler;
- * pahalı tarama paketi (`getPack`) aynı anahtarda kalır, 155 MB'lık dosya yeniden taranmaz.
- *
- * v2 (16 Ağu 2026): tüp ışıklandırmasında yüzey normali düzeltildi.
- * v3 (17 Ağu 2026): kalın çizgi bütçesi 600 bin → 3 milyon; en ağır dosyalar da artık ışık
- *                   alıyor, eski kareleri o dosyalarda ışıksız üretilmişti.
- */
-export const KARE_SURUMU = 3;
-
-/** Karelerin saklandığı anahtar — paket anahtarından AYRI sürümlenir. */
-export function kareAnahtari(vizKey: string): string {
-  return `${vizKey}#k${KARE_SURUMU}`;
 }
 
 /** Model kaydından önbellek anahtarı (md5 varsa onun ilk 10 hex'i — dosya adı ekiyle aynı). */

@@ -61,7 +61,10 @@ export interface MoonrakerStatus {
   currentLayer: number | null;
   totalLayer: number | null;
   zHeight: number | null; // gcode_move.gcode_position[2] — layer tahmini için
-  /** Nozul noktası (gcode_move.gcode_position X/Y) — canlı aşama görselleştirmesi için. */
+  /**
+   * Nozul noktası — canlı 3B ve aşama görselleştirmesi için. GERÇEK konum (motion_report
+   * .live_position) varsa o; yoksa komut edilen (gcode_move.gcode_position) X/Y.
+   */
   posX: number | null;
   posY: number | null;
   /** gcode_move.speed_factor → yüzde (M220). Bilinmiyorsa null. */
@@ -117,7 +120,7 @@ export interface MoonrakerFile {
 // seçimli hâli 145 bayt. Poligonlar 5 saniyelik sıcak yola BİNMEZ; ayrı ve tek seferlik
 // okunur (fetchMoonrakerExcludeObjects).
 const QUERY =
-  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&exclude_object=current_object,excluded_objects";
+  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&motion_report=live_position&exclude_object=current_object,excluded_objects";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
 const portCache = processSingleton("mr_portCache", () => new Map<string, number>());
@@ -460,6 +463,13 @@ export function parseStatus(status: any): MoonrakerStatus {
   const pos = Array.isArray(gm.gcode_position) ? gm.gcode_position : [];
   const axis = (i: number) => (typeof pos[i] === "number" ? (pos[i] as number) : null);
   const zPos = axis(2);
+  // GERÇEK nozul konumu: gcode_position hareket kuyruğunun ÖNÜNDE (okunan son satır, ~1-2 sn
+  // ileride). Canlı 3B nozulu gerçek yerinde göstermek için ölçülen konum tercih edilir
+  // (23 Eyl 2026: iki U1 de motion_report.live_position veriyor).
+  const mr = status.motion_report ?? {};
+  const canli: unknown[] = Array.isArray(mr.live_position) ? mr.live_position : [];
+  const canliEksen = (i: number) =>
+    typeof canli[i] === "number" && Number.isFinite(canli[i] as number) ? (canli[i] as number) : null;
   const speedFactor = typeof gm.speed_factor === "number" ? gm.speed_factor : null;
   return {
     online: true,
@@ -480,8 +490,8 @@ export function parseStatus(status: any): MoonrakerStatus {
     currentLayer: typeof ps.info?.current_layer === "number" ? ps.info.current_layer : null,
     totalLayer: typeof ps.info?.total_layer === "number" ? ps.info.total_layer : null,
     zHeight: zPos,
-    posX: axis(0),
-    posY: axis(1),
+    posX: canliEksen(0) ?? axis(0),
+    posY: canliEksen(1) ?? axis(1),
     speedPercent: speedFactor != null && speedFactor > 0 ? Math.round(speedFactor * 100) : null,
     nozzle: Math.round(ex.temperature ?? 0),
     nozzleTarget: Math.round(ex.target ?? 0),

@@ -13,7 +13,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Box, Pause, Play, Radio, RotateCcw } from "lucide-react";
+import { Box, Pause, Play, Radio, RotateCcw, Rotate3d } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { kaynakModeliYukle, type MeshIlerleme } from "@/lib/mesh-viz/mesh-load";
 import { buildMeshSahne, meshKamerasi, type MeshSahne } from "@/lib/mesh-viz/mesh-scene";
@@ -29,6 +29,10 @@ export interface MeshViewerProps {
   /** Filament rengi ("#RRGGBB") — modelin rengi buna göre ayarlanır. */
   renk?: string | null;
 }
+
+/** Kendiliğinden dönme hızı (OrbitControls birimi; 2 ≈ 30 saniyede bir tur) ve bırakınca bekleme. */
+const DONME_HIZI = 2;
+const DONME_BEKLEME_MS = 2500;
 
 const ASAMA_ETIKET: Record<MeshIlerleme["asama"], string> = {
   indir: "Model getiriliyor",
@@ -60,6 +64,11 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
   const [ucgen, setUcgen] = useState(0);
   const [yukseklikMm, setYukseklikMm] = useState(0);
   const azHareket = usePrefersReducedMotion();
+  /** Kendiliğinden dönme: kullanıcı seçmediyse hareket azaltma tercihine uyar. */
+  const [donmeSecimi, setDonmeSecimi] = useState<boolean | null>(null);
+  const donuyor = donmeSecimi ?? !azHareket;
+  const donmeRef = useRef(donuyor);
+  useEffect(() => { donmeRef.current = donuyor; }, [donuyor]);
 
   const canliOran =
     liveLayer != null && liveLayer > 0 && layerTotal != null && layerTotal > 0
@@ -101,6 +110,10 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
     renderer.localClippingEnabled = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
+    // Tuval KUTUYA sığsın: Retina ekranda tuval kendi piksel boyutunda gösteriliyor, model iki
+    // kat büyük ve kırpık çıkıyordu.
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
     mount.appendChild(renderer.domElement);
 
     const sahne = buildMeshSahne(geometri, { renk });
@@ -109,6 +122,14 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
     kontrol.enableDamping = true;
     kontrol.dampingFactor = 0.08;
     kontrol.target.set(0, 0, 0);
+    kontrol.autoRotateSpeed = DONME_HIZI;
+    // Tutup çevirirken dönme durur, bırakınca kısa süre sonra sürer.
+    let tutuyor = false;
+    let birakti = 0;
+    const basla = () => { tutuyor = true; };
+    const bitir = () => { tutuyor = false; birakti = performance.now(); };
+    kontrol.addEventListener("start", basla);
+    kontrol.addEventListener("end", bitir);
 
     sahneRef.current = sahne;
     rendererRef.current = renderer;
@@ -129,15 +150,20 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
     ro.observe(mount);
 
     let id = 0;
-    const dongu = () => {
+    let son = performance.now();
+    const dongu = (t: number = performance.now()) => {
       id = requestAnimationFrame(dongu);
+      const dt = Math.min(0.05, Math.max(0, (t - son) / 1000));
+      son = t;
+      if (document.hidden) return;
+      kontrol.autoRotate = donmeRef.current && !tutuyor && t - birakti > DONME_BEKLEME_MS;
       /**
        * BOŞTA ÇİZME. `OrbitControls.update()` kamera hâlâ hareket ediyorsa true döner;
        * sahne değişikliklerini sahnenin kendi bayrağı bildiriyor. İkisi de yoksa birebir
        * aynı kareyi saniyede 60 kez çizmenin anlamı yok — üstelik Electron'da
        * `backgroundThrottling: false`, yani pencere tepsideyken bile duruyordu.
        */
-      const hareket = kontrol.update();
+      const hareket = kontrol.update(dt);
       if (hareket || sahne.kirliMi()) renderer.render(sahne.sahne, kamera);
     };
     dongu();
@@ -145,6 +171,8 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
     return () => {
       cancelAnimationFrame(id);
       ro.disconnect();
+      kontrol.removeEventListener("start", basla);
+      kontrol.removeEventListener("end", bitir);
       kontrol.dispose();
       sahne.serbestBirak();
       renderer.dispose();
@@ -204,7 +232,7 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
           </DialogTitle>
         </DialogHeader>
 
-        <div className="relative h-[420px] w-full overflow-hidden rounded-xl border bg-popover">
+        <div className="relative h-[460px] w-full overflow-hidden rounded-xl border bg-popover">
           <div ref={mountRef} className="absolute inset-0" />
 
           {!hazir && !hata && (
@@ -227,8 +255,25 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
           )}
 
           {hazir && ucgen > 0 && (
-            <div className="pointer-events-none absolute right-3 top-3 rounded-full border bg-background/70 px-2.5 py-1 text-[11px] tabular-nums text-muted-foreground backdrop-blur">
-              {Math.round(yukseklikMm)} mm
+            <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5 motion-safe:animate-in motion-safe:fade-in duration-300">
+              <button
+                type="button"
+                aria-pressed={donuyor}
+                onClick={() => setDonmeSecimi(!donuyor)}
+                title={donuyor ? "Dönmeyi durdur" : "Modeli döndür"}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] backdrop-blur transition-all active:scale-95",
+                  donuyor
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border bg-background/70 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Rotate3d className="h-3 w-3" />
+                Döndür
+              </button>
+              <span className="pointer-events-none rounded-full border bg-background/70 px-2.5 py-1 text-[11px] tabular-nums text-muted-foreground backdrop-blur">
+                {Math.round(yukseklikMm)} mm
+              </span>
             </div>
           )}
         </div>

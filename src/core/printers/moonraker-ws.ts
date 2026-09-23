@@ -29,6 +29,7 @@ export const ABONE_NESNELER: Record<string, string[] | null> = {
   toolhead: ["extruder"],
   heater_bed: ["temperature", "target"],
   gcode_move: ["gcode_position", "speed_factor"],
+  motion_report: ["live_position"],
   exclude_object: ["current_object", "excluded_objects"],
 };
 
