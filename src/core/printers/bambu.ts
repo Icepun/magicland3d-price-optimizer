@@ -70,18 +70,27 @@ const HMS_LEVEL_TEXT: Record<BambuWarning["level"], string> = {
   info: "Yazıcı bilgi veriyor",
 };
 
-/** HMS kodunun ilk 4 hanesi hangi birimden geldiğini söyler — kullanıcıya ANLAMLI kısım budur. */
+/**
+ * HMS kodunun ilk 2 hanesi hangi birimden geldiğini söyler — kullanıcıya ANLAMLI kısım budur.
+ *
+ * ⚠️ Eski eşleme dördünde de yanlıştı: 0300'e "AMS / filament" diyordu. 23 Eyl 2026'da AMS'si
+ * olmayan A2L "0300-2E00-0003-0001" (motor gürültü kalibrasyonu) verdi ve panel bunu AMS uyarısı
+ * gösterdi. Üreticinin kod sayfalarıyla doğrulandı: 0300 hareket kartı (fan, tabla, motor),
+ * 0500 ana kart (kamera, depolama), 07xx AMS (A-D birimleri), 12xx A serisinin AMS'i,
+ * 0C00 kamera algılaması. 0800 baskı kafası (dilimleyicinin modül listesi).
+ */
 function hmsModuleText(code: string): string | null {
-  const head = code.slice(0, 4).toUpperCase();
-  if (head === "0700" || head === "0701") return "Baskı kafası";
-  if (head === "0300") return "AMS / filament";
-  if (head === "0500") return "Tabla";
-  if (head === "1200") return "Ana kart";
+  const birim = code.slice(0, 2).toUpperCase();
+  if (birim === "03") return "Yazıcı mekaniği";
+  if (birim === "05") return "Ana kart";
+  if (birim === "07" || birim === "12") return "AMS";
+  if (birim === "08") return "Baskı kafası";
+  if (birim === "0C") return "Kamera";
   return null;
 }
 
 /** HMS girişini kullanıcı diline çevir. Kod bilinmiyorsa uydurmuyoruz: birim + önem düzeyi. */
-function toWarning(attr: number, code: number): BambuWarning {
+export function toWarning(attr: number, code: number): BambuWarning {
   const text = formatHms(attr, code);
   const sev = (code >>> 16) & 0xffff;
   const level: BambuWarning["level"] =
@@ -304,7 +313,8 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const startSec = Number(p.gcode_start_time);
   const gcodeState = typeof p.gcode_state === "string" ? p.gcode_state : null;
   const printError = typeof p.print_error === "number" ? p.print_error : null;
-  const trayNow = Number(p.ams?.tray_now);
+  // AMS'siz yazıcı da `tray_now: "0"` gönderiyor (A2L) — o zaman takılı makara yok.
+  const trayNow = amsDurumuCoz(p).amsVar === false ? NaN : Number(p.ams?.tray_now);
   return {
     online: true,
     gcodeState,
@@ -673,6 +683,44 @@ export async function getBambuAmsSlots(host: string, accessCode: string, serial:
     }
   }
   return slots;
+}
+
+export interface BambuAmsDurumu {
+  /** AMS takılı mı? Rapor henüz gelmediyse ya da alan yoksa null (bilinmiyor → karar verme). */
+  amsVar: boolean | null;
+  /** Dış makara (AMS'siz baskıda filament buradan gelir) — rapor veriyorsa. */
+  harici: { renk: string; tip: string } | null;
+}
+
+/**
+ * Rapordan AMS durumu. Ölçüldü (23 Eyl 2026, AMS'siz A2L): `ams.ams: []`, `ams_exist_bits: "0"`;
+ * dış makara yeni biçimde `vir_slot` dizisinde (id "255"), eski biçimdeki `vt_tray` yok.
+ * A1 (AMS lite takılı) `ams.ams` içinde birim + 4 makara, `ams_exist_bits: "1"` gönderir.
+ */
+export function amsDurumuCoz(print: Record<string, any> | undefined | null): BambuAmsDurumu {
+  const ams = print?.ams;
+  let amsVar: boolean | null = null;
+  if (ams && typeof ams === "object") {
+    if (Array.isArray(ams.ams)) amsVar = ams.ams.length > 0;
+    else if (typeof ams.ams_exist_bits === "string") {
+      const bitler = parseInt(ams.ams_exist_bits, 16);
+      if (Number.isFinite(bitler)) amsVar = bitler > 0;
+    }
+  }
+  const disKaynak = Array.isArray(print?.vir_slot) ? print.vir_slot : print?.vt_tray ? [print.vt_tray] : [];
+  const dis = disKaynak.find((t: any) => t && typeof t.tray_type === "string" && t.tray_type) ?? null;
+  return {
+    amsVar,
+    harici: dis ? { renk: hexFromBambu(dis.tray_color), tip: dis.tray_type } : null,
+  };
+}
+
+/** Yazıcının AMS durumu + makaraları — renk ekranı ve baskı başlatma kararı için (taze rapor). */
+export async function getBambuAmsDurumu(
+  host: string, accessCode: string, serial: string,
+): Promise<BambuAmsDurumu & { slots: BambuSlot[] }> {
+  const slots = await getBambuAmsSlots(host, accessCode, serial);
+  return { slots, ...amsDurumuCoz(conns.get(connKey(host, serial, accessCode))?.print) };
 }
 
 /** Bir soket olayını promise'e çevir (timeout + tek seferlik error guard ile). */

@@ -6,6 +6,7 @@ import { Layers, Loader2, AlertTriangle, Minus, Plus, ArrowRight, Check, Play } 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { amsKarari, AMS_YOK_COK_RENK } from "@/core/printers/ams-karari";
 
 /**
  * Baskı akışının PAYLAŞILAN parçaları — hem Yazıcılar sayfası (StartModal/CustomPrint) hem de
@@ -213,7 +214,12 @@ export function SlotStep({
 }) {
   // Slotlar HER AÇILIŞTA makineden taze okunur + ekran açıkken 5sn'de bir yenilenir —
   // makinede filament/renk değiştirirsen buradaki çipler de canlı güncellenir.
-  const slotsQ = useQuery<{ type: string; slots: PrinterSlot[]; fromSnapshot?: boolean; error?: string }>({
+  const slotsQ = useQuery<{
+    type: string; slots: PrinterSlot[]; fromSnapshot?: boolean; error?: string;
+    /** Bambu: AMS takılı mı (false = yok → dış makara). Bilinmiyorsa gelmez. */
+    amsVar?: boolean | null;
+    harici?: { renk: string; tip: string } | null;
+  }>({
     queryKey: ["printer-slots", printerId],
     queryFn: () => fetchJson(`/api/printers/${printerId}/slots`),
     staleTime: 0,
@@ -236,6 +242,9 @@ export function SlotStep({
   const isLoading = slotsQ.isLoading || colorsQ.isLoading;
 
   const slots = useMemo(() => slotsQ.data?.slots ?? [], [slotsQ.data]);
+  // AMS TAKILI DEĞİL: yuva seçimi yok, baskı dış makaradan (bkz. core/printers/ams-karari).
+  const amsYok = isBambu && slotsQ.data?.amsVar === false;
+  const harici = slotsQ.data?.harici ?? null;
   // Slot okunamazsa numarayla yine de eşlemek için 4 jenerik slot
   const pickSlots: PrinterSlot[] = slots.length
     ? slots
@@ -256,6 +265,7 @@ export function SlotStep({
     () => (usingFile ? fileColors : Array.from({ length: manualCount }, (_, i) => ({ index: i, hex: "#9ca3af", type: "", grams: null }))),
     [usingFile, fileColors, manualCount]
   );
+  const amsHatasi = isBambu ? amsKarari(slotsQ.data?.amsVar, useAms, printColors.length).hata : null;
 
   // Otomatik eşleme.
   // ⚠️ Snapmaker (tool-changer): kafa↔slot↔renk eşlemesi dilimleyicide (Orca) gcode'a GÖMÜLÜ.
@@ -315,7 +325,10 @@ export function SlotStep({
     const maxIdx = printColors.reduce((m, c) => Math.max(m, c.index), 0);
     const map = Array.from({ length: maxIdx + 1 }, () => -1);
     printColors.forEach((c, i) => { map[c.index] = assign[i] ?? 0; });
-    if (isBambu) onConfirm(useAms ? { useAms: true, amsMapping: map, prefs } : { useAms: false, prefs });
+    if (isBambu) {
+      const { useAms: amsIle } = amsKarari(slotsQ.data?.amsVar, useAms, printColors.length);
+      onConfirm(amsIle ? { useAms: true, amsMapping: map, prefs } : { useAms: false, prefs });
+    }
     else onConfirm({ amsMapping: map, prefs }); // Snapmaker: kafa eşlemesi → route'ta gcode tool remap
   };
 
@@ -325,7 +338,9 @@ export function SlotStep({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Layers className="h-4 w-4 text-primary" /> Renk Eşleme — {model.productName}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            {isBambu
+            {amsYok
+              ? "Yazıcıda AMS takılı değil — baskı dıştaki makaradan yapılır."
+              : isBambu
               ? "Renkler baskı dosyasından okundu. Her renk için hangi makarayı kullanacağını seç."
               : "Renkler baskı dosyasından okundu. Her renk için hangi kafayı kullanacağını seç."}
           </p>
@@ -335,7 +350,14 @@ export function SlotStep({
           <div className="py-10 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
         ) : (
           <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-3">
-            {slots.length > 0 ? (
+            {amsYok ? (
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground motion-safe:animate-in motion-safe:fade-in duration-300">
+                <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-foreground">
+                  <span className="h-4 w-4 rounded-full border border-black/20 shrink-0" style={{ background: harici?.renk ?? "#9ca3af" }} />
+                  Dış makara{harici?.tip ? ` · ${harici.tip}` : ""}
+                </span>
+              </div>
+            ) : slots.length > 0 ? (
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1.5">
                   Yazıcıdaki renkler — değiştirmek için yazıcı ekranını kullan
@@ -393,6 +415,12 @@ export function SlotStep({
                       </div>
                     </div>
                     <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    {amsYok ? (
+                      <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
+                        <span className="h-3 w-3 rounded-full border border-black/10" style={{ background: harici?.renk ?? "#9ca3af" }} />
+                        Dış makara
+                      </span>
+                    ) : (
                     <div className="flex gap-1.5 flex-wrap flex-1">
                       {pickSlots.map((s) => {
                         const sel = chosen === s.slot;
@@ -410,19 +438,20 @@ export function SlotStep({
                         );
                       })}
                     </div>
+                    )}
                   </div>
                 );
               })}
             </div>
 
-            {rawGcodeBambu && printColors.length > 1 ? (
+            {rawGcodeBambu && printColors.length > 1 && !amsYok ? (
               <div className="rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2 text-[11px] text-destructive flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 <span>
                   Bu dosya çok renkli basılamaz — Bambu Studio&apos;da <strong>3MF</strong> olarak kaydedip yeniden yükle.
                 </span>
               </div>
-            ) : rawGcodeBambu ? (
+            ) : rawGcodeBambu && !amsYok ? (
               <p className="text-[11px] text-amber-400 flex items-start gap-1.5">
                 <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
                 Filamentleri yukarıdaki sıraya göre tak.
@@ -457,7 +486,7 @@ export function SlotStep({
               </div>
             )}
 
-            {isBambu && (
+            {isBambu && !amsYok && (
               <button onClick={() => setUseAms((v) => !v)} className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground">
                 <span className={cn("h-4 w-4 rounded border flex items-center justify-center", useAms ? "bg-primary border-primary" : "border-border")}>
                   {useAms && <Check className="h-3 w-3 text-primary-foreground" />}
@@ -466,6 +495,13 @@ export function SlotStep({
               </button>
             )}
           </div>
+        )}
+
+        {amsHatasi && (
+          <p className="text-[11px] text-destructive flex items-start gap-1.5 motion-safe:animate-in motion-safe:fade-in duration-300">
+            <AlertTriangle className="h-3.5 w-3.5 mt-px shrink-0" />
+            {AMS_YOK_COK_RENK}
+          </p>
         )}
 
         {dupHeads && (
@@ -486,7 +522,7 @@ export function SlotStep({
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>
-          <Button disabled={printing || !assignReady || dupHeads || invalidHeads || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
+          <Button disabled={printing || !assignReady || dupHeads || invalidHeads || !!amsHatasi || (rawGcodeBambu && printColors.length > 1)} onClick={start}>
             {printing ? <><Loader2 className="h-4 w-4 mr-1.5 animate-spin" />Gönderiliyor…</> : <><Play className="h-4 w-4 mr-1.5" />Bas ({printColors.length} renk)</>}
           </Button>
         </DialogFooter>

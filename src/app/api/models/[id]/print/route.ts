@@ -8,7 +8,8 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
 import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize } from "@/core/printers/moonraker";
-import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsSlots, mapBambuState, bambuRaporBekle } from "@/core/printers/bambu";
+import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsDurumu, mapBambuState, bambuRaporBekle } from "@/core/printers/bambu";
+import { amsKarari } from "@/core/printers/ams-karari";
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
@@ -103,6 +104,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           let reused = false;
           send({ stage: "status" });
 
+          // AMS TAKILI MI? Takılı değilken `use_ams: true` giden baskı hiç başlamıyordu (A2L,
+          // 23 Eyl 2026). Karar her girişte (panel, ürünler, kuyruk) burada verilir; okunamazsa
+          // istenen aynen geçer.
+          const amsDurum = isBambu
+            ? await getBambuAmsDurumu(printer.host, printer.accessCode!, printer.serial!).catch(() => null)
+            : null;
+          const amsVar = amsDurum?.amsVar ?? null;
+
           // ── 0) YAZICIDA HAZIR MI? — kimlik: ada gömülü içerik-MD5 + bayt-bayt boyut eşleşmesi.
           // Bambu'da payload metası (sliced/colors/plate) da DB'de hazır olmalı; eksikse normal yol
           // (ilk baskı doldurur, sonrakiler atlar). Probe hatası = sessizce normal yola düş.
@@ -115,7 +124,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                   const colors = ((JSON.parse(mf.colorsJson!) as { colors?: { index: number }[] }).colors ?? []);
                   const isRawGcode = /\.(gcode|gco|g)$/i.test(mf.originalName) && !/\.3mf$/i.test(mf.originalName);
                   if (!(isRawGcode && colors.length > 1)) {
-                    if (useAms && Array.isArray(amsMapping) && colors.length) {
+                    const karar = amsKarari(amsVar, useAms, colors.length);
+                    if (karar.hata) throw new Error(karar.hata);
+                    if (karar.useAms && Array.isArray(amsMapping) && colors.length) {
                       for (const c of colors) {
                         const slot = amsMapping[c.index];
                         if (slot == null || slot < 0) {
@@ -131,7 +142,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                     }
                     send({ stage: "upload", pct: 100, cached: true }); // yazıcıda hazır — yükleme yok
                     const r = await bambuStartExisting(printer.host, printer.accessCode!, printer.serial!, upName, {
-                      md5: mf.contentMd5, amsMapping: bambuMapping, useAms, plateParam: plate.plateParam ?? undefined, prefs,
+                      md5: mf.contentMd5, amsMapping: bambuMapping, useAms: karar.useAms, plateParam: plate.plateParam ?? undefined, prefs,
                     });
                     matchFilename = r.matchName;
                     reused = true;
@@ -149,7 +160,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             } catch (e) {
               // Kullanıcıya dönmesi gereken hatalar (meşgul/eşleme) yeniden fırlar; probe/ağ hataları
               // sessizce normal (indir+yükle) yola düşer.
-              if (e instanceof Error && /(meşgul|Renk eşleştirmesi|bağlanılamadı)/.test(e.message)) throw e;
+              if (e instanceof Error && /(meşgul|Renk eşleştirmesi|bağlanılamadı|AMS takılı değil)/.test(e.message)) throw e;
               reused = false;
             }
           }
@@ -197,6 +208,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             send({ stage: "status" });
 
             // ── 2) DOĞRULAMA (Bambu)
+            let useAmsEtkin = useAms;
             if (isBambu) {
               let sliced = mf.sliced;
               if (sliced == null) {
@@ -213,8 +225,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                   "Bambu çok renkli baskı için ham .gcode yetmiyor — AMS eşleme tablosunu taşımadığı için yazıcı reddediyor. Bambu Studio'da plakayı dilimle → sağ üstteki oka tıkla → \"Dilimlenmiş plaka dosyasını dışa aktar\" ile aldığın .3mf dosyasını yükle."
                 );
               }
+              // AMS takılı değilse dış makara; çok renkli dosya reddedilir.
+              const karar = amsKarari(amsVar, useAms, (await getColors()).colors.length);
+              if (karar.hata) throw new Error(karar.hata);
+              useAmsEtkin = karar.useAms;
               // AMS renk eşleştirmesi tutarlı mı? (her renk dolu bir slota)
-              if (useAms && Array.isArray(amsMapping)) {
+              if (useAmsEtkin && Array.isArray(amsMapping)) {
                 const colors = (await getColors()).colors;
                 if (colors.length) {
                   for (const c of colors) {
@@ -223,19 +239,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                       throw new Error("Renk eşleştirmesi eksik: her baskı rengi bir AMS slotuna atanmalı.");
                     }
                   }
-                  try {
-                    const slots = await getBambuAmsSlots(printer.host, printer.accessCode!, printer.serial!);
-                    if (slots.length) {
-                      for (const c of colors) {
-                        const phys = slots.find((s) => s.slot === amsMapping[c.index]);
-                        if (phys && phys.empty) {
-                          throw new Error(`AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.`);
-                        }
-                      }
+                  // Makaralar başta okundu (amsDurum); okunamadıysa boş-kontrolü atlanır.
+                  const slots = amsDurum?.slots ?? [];
+                  for (const c of colors) {
+                    const phys = slots.find((s) => s.slot === amsMapping[c.index]);
+                    if (phys && phys.empty) {
+                      throw new Error(`AMS slot ${amsMapping[c.index] + 1} boş — dolu bir slot seçin.`);
                     }
-                  } catch (e) {
-                    if (e instanceof Error && /AMS slot/.test(e.message)) throw e;
-                    /* slot okunamazsa boş-kontrolünü atla */
                   }
                 }
               }
@@ -259,7 +269,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                 while (bambuMapping.length < plate.filamentCount) bambuMapping.push(-1);
               }
               const r = await bambuUploadAndPrint(printer.host, printer.accessCode!, printer.serial!, buf, upName, {
-                amsMapping: bambuMapping, useAms, plateParam: plate.plateParam ?? undefined, prefs,
+                amsMapping: bambuMapping, useAms: useAmsEtkin, plateParam: plate.plateParam ?? undefined, prefs,
                 onProgress: (pct) => send({ stage: "upload", pct }),
               });
               matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı

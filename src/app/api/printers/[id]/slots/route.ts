@@ -5,7 +5,7 @@ import { remotePrisma as arkaPrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { fetchMoonrakerSlots, fetchMoonrakerSlotDebug } from "@/core/printers/moonraker";
-import { getBambuAmsSlots } from "@/core/printers/bambu";
+import { getBambuAmsDurumu } from "@/core/printers/bambu";
 import { getBambuStatusCached, getMoonrakerStatusCached } from "@/core/printers/status-cache";
 
 export const dynamic = "force-dynamic";
@@ -83,9 +83,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         const snap = await readSlotSnapshot(id);
         return NextResponse.json({ type: "bambu", slots: snap ?? [], fromSnapshot: true });
       }
-      const read = await getBambuAmsSlots(cfg.host, cfg.accessCode, cfg.serial);
+      // AMS takılı değilse renk ekranı yuva göstermez, baskıyı dış makaradan gönderir.
+      const { slots: read, amsVar, harici } = await getBambuAmsDurumu(cfg.host, cfg.accessCode, cfg.serial);
       writeSlotSnapshot(id, read);
-      return NextResponse.json({ type: "bambu", slots: read });
+      return NextResponse.json({ type: "bambu", slots: read, amsVar, harici });
     }
 
     // Moonraker — Snapmaker U1: 4 kafa, print_task_config'den canlı.
