@@ -81,7 +81,7 @@ describe("push gönderimi", () => {
     const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
 
     expect(ozet.hata).toBe(1);
-    expect(ozet.sebepler[0]).toContain("yeniden kurmak");
+    expect(ozet.sebepler[0]).toContain("bildirim anahtarı eksik");
   });
 
   it("ağ kopukluğunu yutmaz, sebep olarak bildirir", async () => {
@@ -173,7 +173,7 @@ describe("telefon kaydı yalnız cihaza özel hatada silinir", () => {
     const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
 
     expect(ozet.temizlenenKayit).toBe(0);
-    expect(ozet.sebepler.join(" ")).toMatch(/geçersiz/i);
+    expect(ozet.sebepler.join(" ")).toMatch(/anahtarı eksik/i);
   });
 
   it("DeviceNotRegistered kaydı siler", async () => {

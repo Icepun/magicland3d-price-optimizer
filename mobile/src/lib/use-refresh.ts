@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
 
+import { invalidateProductSuperset } from "@/lib/db/dashboard";
+
 /**
  * RefreshControl'ü SADECE elle aşağı-çekmeye bağlar.
  * `isRefetching`'e bağlamak, arka plan refetch'lerinde spinner'ı içeriği aşağı itip
@@ -9,6 +11,9 @@ export function useManualRefresh(refetch: () => Promise<unknown>) {
   const [refreshing, setRefreshing] = useState(false);
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    // Elle yenileme = "şu anki veriyi getir": kısa ömürlü ürün tamponu da atlanır, yoksa
+    // 30 sn boyunca aynı (eski) veri dönüyordu.
+    invalidateProductSuperset();
     try {
       await refetch();
     } catch {

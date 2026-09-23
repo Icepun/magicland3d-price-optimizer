@@ -33,6 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { fetchJson } from "@/lib/fetch-json";
 import { thumbUrl } from "@/lib/image";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { requestListState } from "@/lib/list-state";
@@ -600,17 +601,16 @@ export function CommandPalette() {
   // Gizli/pasif ürünler de gelir; listede etiketlenir ve en alta sıralanır.
   const { data: products, isLoading: productsLoading } = useQuery<LiteProduct[]>({
     queryKey: ["products", "hizli-arama"],
-    queryFn: () =>
-      fetch("/api/products?filter=all&lite=1&includeHidden=1").then((response) =>
-        response.json()
-      ),
+    // fetchJson: hata gövdesi ({ error }) liste sanılırsa `forEach` patlar ve arama kutusu çöker.
+    queryFn: () => fetchJson<LiteProduct[]>("/api/products?filter=all&lite=1&includeHidden=1"),
     enabled: open,
     staleTime: 5 * 60_000,
   });
 
   const { data: spools, isLoading: spoolsLoading } = useQuery<LiteSpool[]>({
     queryKey: ["spools"],
-    queryFn: () => fetch("/api/spools").then((response) => response.json()),
+    // Anahtar Makaralar sayfasıyla ORTAK: hata gövdesi önbelleğe yazılırsa o sayfa da bozulur.
+    queryFn: () => fetchJson<LiteSpool[]>("/api/spools"),
     enabled: open,
     staleTime: 5 * 60_000,
   });

@@ -116,6 +116,49 @@ describe("route cache", () => {
     expect(settings).toEqual({ vatRate: "20" });
   });
 
+  /**
+   * REGRESYON: temizlik yalnız HAZIR kayıtları siliyordu. Temizlikten ÖNCE başlamış bir hesap
+   * temizlikten SONRA bitince eski veriyi "taze" damgasıyla yazıyordu — kullanıcı stoğu
+   * değiştiriyor, Ürünler listesi 2 dakika eski stoğu göstermeye devam ediyordu.
+   */
+  it("temizlikten önce başlamış hesabın sonucu önbelleğe YAZILMAZ", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+    const mod = await import("./route-cache");
+
+    let bitir: (v: { stok: number }) => void = () => {};
+    const eskiHesap = mod.swr("products:aktif", 60_000, () => new Promise<{ stok: number }>((r) => { bitir = r; }));
+    mod.bustCaches(["products:"]); // kullanıcı stoğu değiştirdi
+    bitir({ stok: 5 }); // değişiklikten önce okunmuş eski değer
+    await expect(eskiHesap).resolves.toEqual({ stok: 5 }); // çağırana yine döner
+
+    let yeniden = false;
+    const sonraki = await mod.swr("products:aktif", 60_000, async () => {
+      yeniden = true;
+      return { stok: 4 };
+    });
+    expect(yeniden, "eski sonuç saklanmamalı, yeni hesap başlamalı").toBe(true);
+    expect(sonraki).toEqual({ stok: 4 });
+    expect(fs.readdirSync(dir)).toHaveLength(1);
+  });
+
+  it("temizlenmeyen anahtarın süren hesabı etkilenmez", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+    const mod = await import("./route-cache");
+
+    let bitir: (v: number) => void = () => {};
+    const hesap = mod.swr("settings:v1", 60_000, () => new Promise<number>((r) => { bitir = r; }));
+    mod.bustCaches(["products:"]);
+    bitir(7);
+    await hesap;
+    let yeniden = false;
+    await mod.swr("settings:v1", 60_000, async () => { yeniden = true; return 8; });
+    expect(yeniden).toBe(false);
+  });
+
   it("boş ön ek listesi hiçbir şeyi silmez", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
     tempDirs.push(dir);

@@ -33,6 +33,7 @@ import {
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
+import { useFreshStocks } from "@/lib/use-fresh-stocks";
 import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
@@ -209,10 +210,18 @@ export default function ProductDetailPage({
   const { id } = use(params);
   const queryClient = useQueryClient();
 
-  const { data: product, isLoading, isError, refetch: refetchProduct } = useQuery<ProductDetail>({
+  const {
+    data: product,
+    isLoading,
+    isError,
+    refetch: refetchProduct,
+    dataUpdatedAt: detayAlindi,
+  } = useQuery<ProductDetail>({
     queryKey: ["product", id],
     queryFn: () => fetchJson(`/api/products/${id}`),
   });
+  // Önbellekten açılan detay da telefonda değişen stoğu göstersin (tek küçük sorgu).
+  useFreshStocks(detayAlindi || undefined);
 
   const { data: filaments = [] } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],

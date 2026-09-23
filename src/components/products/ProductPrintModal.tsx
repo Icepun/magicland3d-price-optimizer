@@ -11,6 +11,8 @@ import {
   SlotStep, PrintProgress, runPrintStream,
   type PrintableModel, type PrintProg, type PrintPrefs,
 } from "@/components/printers/print-flow";
+import { fetchJson } from "@/lib/fetch-json";
+import { dedupeFiles, familyMemberIds } from "@/core/printers/printer-family";
 
 interface ModelFile {
   id: string;
@@ -20,11 +22,13 @@ interface ModelFile {
   sizeBytes: number;
   gramaj: number | null;
   fileType: string;
+  contentMd5?: string | null;
 }
 interface PrinterCfg {
   id: string;
   name: string;
   brand: string;
+  model: string | null;
   type: string;
   enabled: boolean;
   accent: string | null;
@@ -52,12 +56,12 @@ export function ProductPrintModal({
   const qc = useQueryClient();
   const { data: files, isLoading: lf } = useQuery<ModelFile[]>({
     queryKey: ["product-models", productId],
-    queryFn: () => fetch(`/api/products/${productId}/models`).then((r) => r.json()),
+    queryFn: () => fetchJson<ModelFile[]>(`/api/products/${productId}/models`),
     staleTime: 30_000,
   });
   const { data: printers, isLoading: lp } = useQuery<PrinterCfg[]>({
     queryKey: ["printer-configs"],
-    queryFn: () => fetch("/api/printers/config").then((r) => r.json()),
+    queryFn: () => fetchJson<PrinterCfg[]>("/api/printers/config"),
     staleTime: 60_000,
   });
   const isLoading = lf || lp;
@@ -68,21 +72,30 @@ export function ProductPrintModal({
   const [picked, setPicked] = useState<{ file: ModelFile; printer: PrinterCfg } | null>(null);
 
   // Bu ürün için dosyası OLAN yazıcılar (sadece basılabilir olanlar listelenir).
+  // AİLE: aynı marka + modeldeki yazıcılar dosyaları ORTAK kullanır — U1 Alt için yüklenen dosya
+  // U1 Üst bölümünde de görünür ve oradan basılır (core/printers/printer-family).
   const groups = useMemo(() => {
     const fileArr = Array.isArray(files) ? files : [];
     const cfgArr = Array.isArray(printers) ? printers : [];
     return cfgArr
-      .map((pr) => ({ printer: pr, parts: fileArr.filter((f) => f.printerConfigId === pr.id) }))
+      .map((pr) => {
+        const aile = new Set(familyMemberIds(cfgArr, pr.id));
+        // Önce bu yazıcının kendi dosyası: aynı içerik kardeşe de yüklendiyse bu kalır.
+        const aday = fileArr
+          .filter((f) => aile.has(f.printerConfigId))
+          .sort((a, b) => Number(b.printerConfigId === pr.id) - Number(a.printerConfigId === pr.id));
+        return { printer: pr, parts: dedupeFiles(aday) };
+      })
       .filter((g) => g.parts.length > 0);
   }, [files, printers]);
 
   const isMultiColor = (pr: PrinterCfg) => pr.brand === "bambu" || pr.brand === "snapmaker";
 
-  async function runPrint(fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) {
+  async function runPrint(fileId: string, printerId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
-      await runPrintStream(fileId, opts, setProgress);
+      await runPrintStream(fileId, { ...opts, printerId }, setProgress);
       toast.success("Baskı başlatıldı 🎉");
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
       setTimeout(onClose, 750);
@@ -96,7 +109,7 @@ export function ProductPrintModal({
 
   const startPart = (printer: PrinterCfg, part: ModelFile) => {
     if (isMultiColor(printer)) setPicked({ file: part, printer });
-    else runPrint(part.id);
+    else runPrint(part.id, printer.id);
   };
 
   // ── Renk/slot eşleme adımı (Bambu/Snapmaker) ──
@@ -121,7 +134,7 @@ export function ProductPrintModal({
         progress={progress}
         onBack={() => { setPicked(null); setProgress(null); }}
         onClose={onClose}
-        onConfirm={(opts) => runPrint(picked.file.id, opts)}
+        onConfirm={(opts) => runPrint(picked.file.id, picked.printer.id, opts)}
       />
     );
   }

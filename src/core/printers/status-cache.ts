@@ -26,6 +26,7 @@ import { parseStatus, moonrakerPortu } from "./moonraker";
 import { wsBaslat, wsDurumAl } from "./moonraker-ws";
 import { mergeMoonrakerExtras } from "./extras-merge";
 import { fileMatchKey, deepFileMatchKey } from "./file-match";
+import { familyMemberIds } from "./printer-family";
 import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } from "./bambu";
 /**
   * ⚠️ ARKA PLAN ŞERİDİ — bilerek `remotePrisma`.
@@ -505,7 +506,12 @@ type ModelFileRow = { id: string; productId: string; printerConfigId: string | n
  * yüklenen bir model dosyasının kart görselini iki dakika geciktirirdi.
  */
 const MODEL_FILES_TTL_MS = 30_000;
-let modelFilesCache: { at: number; rows: ModelFileRow[] } | null = null;
+let modelFilesCache: {
+  at: number;
+  rows: ModelFileRow[];
+  /** yazıcı → aynı ailedeki yazıcılar (kendisi dahil) — bkz. core/printers/printer-family */
+  aile: Map<string, string[]>;
+} | null = null;
 
 /**
  * ⚠️ ÜRÜNE GÖRE SEÇMEK YETMEZ. Bir ürünün aynı yazıcıda birden çok parçası olabiliyor
@@ -525,28 +531,43 @@ export interface OnizlemeDosyalari {
 
 export async function getModelFilesForPreview(): Promise<OnizlemeDosyalari> {
   if (!modelFilesCache || Date.now() - modelFilesCache.at >= MODEL_FILES_TTL_MS) {
-    const rows = await prisma.productModelFile.findMany({
-      select: { id: true, productId: true, printerConfigId: true, originalName: true },
-    });
-    modelFilesCache = { at: Date.now(), rows };
+    const [rows, yazicilar] = await Promise.all([
+      prisma.productModelFile.findMany({
+        select: { id: true, productId: true, printerConfigId: true, originalName: true },
+      }),
+      prisma.printerConfig.findMany({ select: { id: true, type: true, brand: true, model: true } }),
+    ]);
+    const aile = new Map(yazicilar.map((y) => [y.id, familyMemberIds(yazicilar, y.id)]));
+    modelFilesCache = { at: Date.now(), rows, aile };
   }
 
   const dosyaya = new Map<string, string>();
-  const sayac = new Map<string, { id: string; adet: number }>();
+  const sayac = new Map<string, { id: string; adet: number; tekil: Set<string> }>();
   for (const r of modelFilesCache.rows) {
     if (!r.printerConfigId) continue;
-    if (r.originalName) {
-      // İki anahtar da yazılır: Bambu dosyaları `Parça.gcode.3mf` adlanıyor ve yazıcı bazen
-      // tek bazen çift uzantıyla bildiriyor.
-      for (const k of [fileMatchKey(r.originalName), deepFileMatchKey(r.originalName)]) {
-        const anahtar = `${r.printerConfigId}::${k}`;
-        if (!dosyaya.has(anahtar)) dosyaya.set(anahtar, r.id);
+    // AİLE: dosya aynı ailedeki HER yazıcı adına kaydedilir — U1 Üst, U1 Alt'ın dosyasını
+    // basınca kart görseli yine bulunur. Önce dosyanın kendi yazıcısı yazılır (öncelik onun).
+    const uyeler = modelFilesCache.aile.get(r.printerConfigId) ?? [r.printerConfigId];
+    for (const yaziciId of uyeler) {
+      if (r.originalName) {
+        // İki anahtar da yazılır: Bambu dosyaları `Parça.gcode.3mf` adlanıyor ve yazıcı bazen
+        // tek bazen çift uzantıyla bildiriyor.
+        for (const k of [fileMatchKey(r.originalName), deepFileMatchKey(r.originalName)]) {
+          const anahtar = `${yaziciId}::${k}`;
+          if (!dosyaya.has(anahtar)) dosyaya.set(anahtar, r.id);
+        }
       }
+      const urunAnahtar = `${r.productId}|${yaziciId}`;
+      const mevcut = sayac.get(urunAnahtar);
+      // Aynı dosyanın iki yazıcıya ayrı yüklenmiş kopyası "iki parça" sayılmasın: ad bazında tekil.
+      const adAnahtari = fileMatchKey(r.originalName || r.id);
+      if (mevcut) {
+        if (!mevcut.tekil.has(adAnahtari)) {
+          mevcut.tekil.add(adAnahtari);
+          mevcut.adet++;
+        }
+      } else sayac.set(urunAnahtar, { id: r.id, adet: 1, tekil: new Set([adAnahtari]) });
     }
-    const urunAnahtar = `${r.productId}|${r.printerConfigId}`;
-    const mevcut = sayac.get(urunAnahtar);
-    if (mevcut) mevcut.adet++;
-    else sayac.set(urunAnahtar, { id: r.id, adet: 1 });
   }
 
   const urune = new Map<string, string>();

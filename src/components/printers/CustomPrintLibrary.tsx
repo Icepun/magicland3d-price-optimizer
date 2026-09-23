@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   FileBox, Trash2, Play, Cloud, HardDrive, Loader2, Search, Check,
-  ArrowDownWideNarrow, Clock3, Box,
+  ArrowDownWideNarrow, Clock3, Box, Layers,
 } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 
@@ -25,12 +25,15 @@ import {
   type PrintableModel, type PrintPrefs,
 } from "@/components/printers/print-flow";
 import { startBackgroundPrint } from "@/lib/print-jobs";
+import { dedupeFiles, familyDisplayName, printerFamilyKey } from "@/core/printers/printer-family";
 
 /** Yazıcılar sayfasının canlı yazıcı listesinden (PanelPrinter) gereken alanlar. */
 export interface LivePrinter {
   id: string;
   name: string;
   brand: string;
+  model?: string | null;
+  type?: string | null;
   accent: string;
   online: boolean;
   status: string;
@@ -49,7 +52,7 @@ interface CustomPrintRow {
   hasThumbnail: boolean;
   contentMd5: string | null;
   createdAt: string;
-  printer: { id: string; name: string; brand: string; accent: string } | null;
+  printer: { id: string; name: string; brand: string; model?: string | null; type?: string | null; accent: string } | null;
 }
 interface CustomPrintResponse {
   items: CustomPrintRow[];
@@ -97,36 +100,117 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
         : { items: [], summary: { count: 0, customCloudBytes: 0, customLocalBytes: 0, cloudTotalBytes: 0, cloudTotalCount: 0 } };
     },
   });
-  const items = useMemo(() => data?.items ?? [], [data]);
+  /**
+   * AİLE: aynı marka + modeldeki yazıcılar (ör. iki Snapmaker U1) aynı dosyayı basar. Dosyanın
+   * hangi yazıcıya yüklendiği artık önemsiz — aile içinde boştaki herhangi bir yazıcıda basılır.
+   * Silinmiş yazıcının dosyası kendi başına bir "aile"dir (basılamaz, yalnız silinebilir).
+   */
+  const aileOf = (it: CustomPrintRow) =>
+    it.printer
+      ? printerFamilyKey({ id: it.printer.id, type: it.printer.type ?? null, brand: it.printer.brand, model: it.printer.model ?? null })
+      : `tek:${it.printerConfigId}`;
+  const canliAile = useMemo(() => {
+    const m = new Map<string, LivePrinter[]>();
+    for (const p of printers) {
+      const k = printerFamilyKey({ id: p.id, type: p.type ?? null, brand: p.brand, model: p.model ?? null });
+      m.set(k, [...(m.get(k) ?? []), p]);
+    }
+    return m;
+  }, [printers]);
+
+  // Aynı dosya aynı aileye iki kez yüklenmişse listede BİR kez görünür (en yenisi — API sırası).
+  const items = useMemo(() => {
+    const tum = data?.items ?? [];
+    const aileBasina = new Map<string, CustomPrintRow[]>();
+    for (const it of tum) {
+      const k = aileOf(it);
+      aileBasina.set(k, [...(aileBasina.get(k) ?? []), it]);
+    }
+    const kalan = new Set([...aileBasina.values()].flatMap((liste) => dedupeFiles(liste)).map((it) => it.id));
+    return tum.filter((it) => kalan.has(it.id));
+  }, [data]);
   const summary = data?.summary;
 
   // ── Filtre / arama / sıralama ──────────────────────────────────────────────
   const [q, setQ] = useState("");
-  const [printerFilter, setPrinterFilter] = useState<string | null>(null); // printerConfigId
+  const [printerFilter, setPrinterFilter] = useState<string | null>(null); // aile anahtarı
   const [sortBySize, setSortBySize] = useState(false);
 
-  // Filtre çipleri: arşivdeki dosyaların ait olduğu yazıcılar + adet.
+  // Filtre çipleri: AİLE başına (iki U1 tek çip: "Snapmaker U1").
   const printerChips = useMemo(() => {
     const counts = new Map<string, { id: string; name: string; accent: string; count: number }>();
     for (const it of items) {
-      const key = it.printerConfigId;
+      const key = aileOf(it);
       const cur = counts.get(key);
       if (cur) cur.count++;
-      else counts.set(key, { id: key, name: it.printer?.name ?? "Silinmiş yazıcı", accent: it.printer?.accent ?? "#9ca3af", count: 1 });
+      else {
+        const uyeSayisi = canliAile.get(key)?.length ?? 1;
+        const ad = !it.printer
+          ? "Silinmiş yazıcı"
+          : uyeSayisi > 1
+            ? familyDisplayName({ ...it.printer, type: it.printer.type ?? null, model: it.printer.model ?? null })
+            : it.printer.name;
+        counts.set(key, { id: key, name: ad, accent: it.printer?.accent ?? "#9ca3af", count: 1 });
+      }
     }
     return [...counts.values()].sort((a, b) => b.count - a.count);
-  }, [items]);
+  }, [items, canliAile]);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLocaleLowerCase("tr-TR");
     let list = items.filter(
       (it) =>
-        (!printerFilter || it.printerConfigId === printerFilter) &&
+        (!printerFilter || aileOf(it) === printerFilter) &&
         (!query || it.originalName.toLocaleLowerCase("tr-TR").includes(query))
     );
     if (sortBySize) list = [...list].sort((a, b) => b.sizeBytes - a.sizeBytes);
     return list; // varsayılan sıralama API'den: en yeni üstte
   }, [items, q, printerFilter, sortBySize]);
+
+  /**
+   * Bu dosya ŞU AN nerede basılabilir? Önce yüklendiği yazıcı, o meşgulse aynı ailedeki boştaki
+   * yazıcı. Hiçbiri uygun değilse neden uygun olmadığı döner (düğmenin ipucu).
+   */
+  const hedefYazici = (it: CustomPrintRow): { hedef: LivePrinter | null; neden: string } => {
+    const uyeler = canliAile.get(aileOf(it)) ?? [];
+    const sirali = [...uyeler].sort((a, b) => Number(b.id === it.printerConfigId) - Number(a.id === it.printerConfigId));
+    const bos = sirali.find((p) => p.online && p.status !== "printing" && p.status !== "paused");
+    if (bos) return { hedef: bos, neden: "" };
+    if (uyeler.length === 0) return { hedef: null, neden: "Yazıcı yok" };
+    if (uyeler.every((p) => !p.online)) return { hedef: null, neden: "Çevrimdışı" };
+    return { hedef: null, neden: "Meşgul" };
+  };
+
+  // ── Kopya dosyalar (aynı ailede aynı içerik) — tek tıkla temizlik ───────────
+  const kopyalar = useQuery<{ count: number; bytes: number }>({
+    queryKey: ["model-file-duplicates"],
+    queryFn: async () => {
+      const r = await fetch("/api/printers/model-files/duplicates");
+      if (!r.ok) throw new Error("Kopyalar okunamadı");
+      return r.json();
+    },
+    staleTime: 60_000,
+  });
+  const [kopyaOnay, setKopyaOnay] = useState(false);
+  const kopyaTemizle = useMutation({
+    mutationFn: async () => {
+      const r = await fetch("/api/printers/model-files/duplicates", { method: "POST" });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || "Temizlenemedi");
+      }
+      return r.json() as Promise<{ deleted: number; bytes: number }>;
+    },
+    onSuccess: (res) => {
+      setKopyaOnay(false);
+      toast.success(`${res.deleted} kopya temizlendi · ${fmtSize(res.bytes)} boşaldı`);
+      qc.setQueryData(["model-file-duplicates"], { count: 0, bytes: 0 });
+      void qc.invalidateQueries({ queryKey: ["custom-prints"] });
+      void qc.invalidateQueries({ queryKey: ["product-models"] });
+      void qc.invalidateQueries({ queryKey: ["printable-models"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Temizlenemedi"),
+  });
 
   // ── Çoklu seçim ───────────────────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -149,7 +233,6 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
   // ── Baskı akışı ───────────────────────────────────────────────────────────
   const [reprint, setReprint] = useState<{ row: CustomPrintRow; printer: LivePrinter } | null>(null);
   const printing = false; // baskı ARKA PLANDA (modal kilitlenmez) → ilerleme yazıcı kartında
-  const liveById = useMemo(() => new Map(printers.map((p) => [p.id, p])), [printers]);
 
   // ARKA PLANDA başlat + arşivi kapat → ilerleme kartta, hata pop-up. Kullanıcı beklemez.
   const runPrint = (fileId: string, printerId: string, label: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
@@ -159,10 +242,12 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
   };
 
   const startReprint = (row: CustomPrintRow) => {
-    const live = liveById.get(row.printerConfigId);
-    if (!live) { toast.error("Bu dosyanın yazıcısı artık yok"); return; }
-    if (!live.online) { toast.error(`${live.name} çevrimdışı`); return; }
-    if (live.status === "printing" || live.status === "paused") { toast.error(`${live.name} şu an meşgul`); return; }
+    // Yüklendiği yazıcı meşgulse aynı ailedeki BOŞTAKİ yazıcı seçilir (ör. diğer U1).
+    const { hedef: live, neden } = hedefYazici(row);
+    if (!live) {
+      toast.error(neden === "Yazıcı yok" ? "Bu dosyanın yazıcısı artık yok" : neden === "Çevrimdışı" ? "Yazıcı çevrimdışı" : "Yazıcı şu an meşgul");
+      return;
+    }
     // Renk eşleme (SlotStep) SADECE çok renkli makinelerde. Elegoo tek ekstruder: SlotStep'te
     // slot seçimi gerçek gcode remap'i yapar → direkt bas.
     if (live.brand === "bambu" || live.brand === "snapmaker") setReprint({ row, printer: live });
@@ -272,6 +357,23 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
           </div>
         )}
 
+        {/* Kopya dosyalar — aynı yazıcı ailesine birden çok kez yüklenmiş aynı dosya */}
+        {(kopyalar.data?.count ?? 0) > 0 && (
+          <div className="flex items-center gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-300">
+            <Layers className="h-4 w-4 text-amber-500 shrink-0" />
+            <p className="flex-1 text-xs">
+              Aynı dosyanın <span className="font-semibold tabular-nums">{kopyalar.data!.count}</span> fazladan kopyası var
+              <span className="text-muted-foreground"> · {fmtSize(kopyalar.data!.bytes)}</span>
+            </p>
+            <Button
+              size="sm" variant="outline" className="h-7 text-xs shrink-0 transition-transform active:scale-95"
+              onClick={() => setKopyaOnay(true)}
+            >
+              Kopyaları temizle
+            </Button>
+          </div>
+        )}
+
         {/* Arama + sıralama */}
         {items.length > 0 && (
           <div className="flex items-center gap-2">
@@ -353,9 +455,10 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
         ) : (
           <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-1.5">
             {filtered.map((it) => {
-              const live = liveById.get(it.printerConfigId);
-              const busy = live?.status === "printing" || live?.status === "paused";
-              const canPrint = !!live && live.online && !busy;
+              const { hedef, neden } = hedefYazici(it);
+              const canPrint = !!hedef;
+              // Dosya başka bir kardeş yazıcıda basılacaksa düğme bunu söyler ("Bas · U1 Üst").
+              const baskaYazicida = !!hedef && hedef.id !== it.printerConfigId;
               const isSel = selected.has(it.id);
               return (
                 <div
@@ -412,12 +515,13 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
                     <Box className="h-4 w-4" />
                   </Button>
                   <Button
-                    size="sm" variant="outline" className="h-8 gap-1 text-xs shrink-0"
+                    size="sm" variant="outline" className="h-8 gap-1 text-xs shrink-0 max-w-[9.5rem] transition-transform active:scale-95"
                     disabled={!canPrint || printing}
-                    title={!live ? "Yazıcı yok" : !live.online ? "Çevrimdışı" : busy ? "Meşgul" : "Tekrar bas"}
+                    title={canPrint ? `${hedef!.name} üzerinde bas` : neden}
                     onClick={() => startReprint(it)}
                   >
-                    <Play className="h-3.5 w-3.5" /> Bas
+                    <Play className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{baskaYazicida ? `Bas · ${hedef!.name}` : "Bas"}</span>
                   </Button>
                   <Button
                     size="icon" variant="ghost"
@@ -444,6 +548,28 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
           onClose={() => setViewer3d(null)}
         />
       )}
+
+      {/* Kopya temizliği onayı — her dosyanın bir kopyası kalır. */}
+      <Dialog open={kopyaOnay} onOpenChange={(o) => !o && !kopyaTemizle.isPending && setKopyaOnay(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Layers className="h-4 w-4 text-amber-500" /> Kopyaları temizle
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              <span className="font-medium text-foreground tabular-nums">{kopyalar.data?.count ?? 0} fazladan kopya</span> silinecek
+              ({fmtSize(kopyalar.data?.bytes ?? 0)}). Her dosyanın bir kopyası kalır ve aynı modeldeki tüm yazıcılarda basılabilir.
+            </p>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" disabled={kopyaTemizle.isPending} onClick={() => setKopyaOnay(false)}>Vazgeç</Button>
+            <Button size="sm" disabled={kopyaTemizle.isPending} onClick={() => kopyaTemizle.mutate()} className="gap-1.5">
+              {kopyaTemizle.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {kopyaTemizle.isPending ? "Temizleniyor…" : "Temizle"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Silme onayı — tekli/toplu ortak; kalıcı işlem (bulut/disk dosyaları da gider). */}
       <Dialog open={!!confirmDel} onOpenChange={(o) => !o && !del.isPending && setConfirmDel(null)}>

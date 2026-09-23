@@ -1,3 +1,4 @@
+import { toDbDate } from "@core/sqlite-date";
 import { execute, query } from "@/lib/turso";
 
 /** Masaüstü relay'inin yazdığı canlı yazıcı durumu (telefon bunu okur). */
@@ -43,15 +44,53 @@ export interface PrintableModel {
   gramaj: number | null;
 }
 
+/**
+ * Yazıcıda basılabilecek ürün dosyaları — AYNI AİLEDEKİ yazıcıların dosyaları DAHİL.
+ *
+ * Aile = bağlantı türü + marka + model (masaüstü `core/printers/printer-family` ile aynı kural).
+ * İki Snapmaker U1 aynı dosyayı basar; eskiden ikinci U1'de ürün dosyaları hiç görünmüyordu.
+ * Modeli girilmemiş yazıcı yalnız kendi dosyalarını görür. Aynı dosya iki yazıcıya ayrı ayrı
+ * yüklendiyse bir kez listelenir (önce bu yazıcınınki).
+ */
 export async function getPrintableModels(printerConfigId: string): Promise<PrintableModel[]> {
-  return query<PrintableModel>(
+  const rows = await query<PrintableModel & { kendi: number; contentMd5: string | null }>(
     `SELECT m.id AS fileId, m.productId, p.name AS productName, p.imageUrl AS imageUrl,
-            m.label, m.originalName, m.sizeBytes, m.gramaj
-       FROM ProductModelFile m JOIN Product p ON p.id = m.productId
-      WHERE m.printerConfigId = ?
-      ORDER BY m.sortOrder ASC`,
+            m.label, m.originalName, m.sizeBytes, m.gramaj, m.contentMd5,
+            (m.printerConfigId = h.id) AS kendi
+       FROM ProductModelFile m
+       JOIN Product p ON p.id = m.productId
+       JOIN PrinterConfig h ON h.id = ?
+       JOIN PrinterConfig k ON k.id = m.printerConfigId
+      WHERE m.printerConfigId = h.id
+         OR (TRIM(COALESCE(h.model, '')) <> ''
+             AND LOWER(TRIM(k.model)) = LOWER(TRIM(h.model))
+             AND LOWER(COALESCE(k.brand, '')) = LOWER(COALESCE(h.brand, ''))
+             AND LOWER(COALESCE(k.type, '')) = LOWER(COALESCE(h.type, '')))
+      ORDER BY kendi DESC, m.sortOrder ASC`,
     [printerConfigId]
   );
+  // Tekrar ayıklama ÜRÜN içinde: içerik özeti ya da ad + boyut aynıysa aynı dosyadır.
+  const gorulen = new Set<string>();
+  const out: PrintableModel[] = [];
+  for (const r of rows) {
+    const anahtarlar = [
+      `${r.productId}|ad:${r.originalName.trim().toLowerCase()}|${r.sizeBytes}`,
+      ...(r.contentMd5 ? [`${r.productId}|md5:${r.contentMd5}`] : []),
+    ];
+    if (anahtarlar.some((a) => gorulen.has(a))) continue;
+    for (const a of anahtarlar) gorulen.add(a);
+    out.push({
+      fileId: r.fileId,
+      productId: r.productId,
+      productName: r.productName,
+      imageUrl: r.imageUrl,
+      label: r.label,
+      originalName: r.originalName,
+      sizeBytes: r.sizeBytes,
+      gramaj: r.gramaj,
+    });
+  }
+  return out;
 }
 
 export type PrintAction = "start" | "pause" | "resume" | "cancel";
@@ -67,7 +106,7 @@ export async function sendPrintCommand(
   await execute(
     `INSERT INTO PrintCommand (id, printerConfigId, action, modelFileId, status, source, createdAt)
      VALUES (?, ?, ?, ?, 'pending', 'mobile', ?)`,
-    [id, printerConfigId, action, modelFileId ?? null, new Date().toISOString()]
+    [id, printerConfigId, action, modelFileId ?? null, toDbDate(new Date())]
   );
   return id;
 }

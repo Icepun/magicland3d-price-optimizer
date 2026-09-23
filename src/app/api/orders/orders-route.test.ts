@@ -313,16 +313,20 @@ describe("siparişler ucu — çekim bütünlüğü", () => {
   });
 
   it("en yeni sipariş en üstte; tarihi olmayan en alta düşer", async () => {
+    // Tarihler ŞİMDİYE GÖRE (yukarıdaki testle aynı sebep): sabit takvim tarihleri 30 günlük
+    // pencerenin dışına düşünce ESKI/YENI listeye hiç girmiyor, test takvim ilerledi diye kırılıyordu.
+    const eski = new Date(Date.now() - 10 * 86_400_000).toISOString();
+    const yeni = new Date(Date.now() - 2 * 86_400_000).toISOString();
     h.state.hbPackages = {
       delivered: [
-        { OrderNumber: "ESKI", orderDate: "2026-08-01T09:00:00.000Z" },
-        { OrderNumber: "YENI", orderDate: "2026-08-10T09:00:00.000Z" },
+        { OrderNumber: "ESKI", orderDate: eski },
+        { OrderNumber: "YENI", orderDate: yeni },
         { OrderNumber: "TARIHSIZ" },
       ],
     };
     h.state.hbDetails = {
-      ESKI: { orderDate: "2026-08-01T09:00:00.000Z", items: [{ quantity: 1, unitPrice: 10, productName: "A", merchantSku: "S1" }] },
-      YENI: { orderDate: "2026-08-10T09:00:00.000Z", items: [{ quantity: 1, unitPrice: 10, productName: "B", merchantSku: "S2" }] },
+      ESKI: { orderDate: eski, items: [{ quantity: 1, unitPrice: 10, productName: "A", merchantSku: "S1" }] },
+      YENI: { orderDate: yeni, items: [{ quantity: 1, unitPrice: 10, productName: "B", merchantSku: "S2" }] },
       TARIHSIZ: { items: [{ quantity: 1, unitPrice: 10, productName: "C", merchantSku: "S3" }] },
     };
 

@@ -1,3 +1,4 @@
+import { toDbDate } from "@core/sqlite-date";
 import { query, execute } from "@/lib/turso";
 
 export interface ProductRow {
@@ -28,7 +29,7 @@ export async function adjustProductStock(id: string, delta: number): Promise<num
         SET stock = MAX(0, COALESCE(stock, 0) + ?), updatedAt = ?
       WHERE id = ?
       RETURNING stock`,
-    [delta, new Date().toISOString(), id],
+    [delta, toDbDate(new Date()), id],
   );
   const row = result.rows[0];
   if (!row) throw new Error("Ürün bulunamadı.");
@@ -39,7 +40,7 @@ export async function adjustProductStock(id: string, delta: number): Promise<num
 export async function setProductAlias(id: string, alias: string): Promise<void> {
   await execute(
     `UPDATE Product SET alias = ?, updatedAt = ? WHERE id = ?`,
-    [alias.trim() || null, new Date().toISOString(), id]
+    [alias.trim() || null, toDbDate(new Date()), id]
   );
 }
 

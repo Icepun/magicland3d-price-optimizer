@@ -5,6 +5,7 @@ import { syncOrderFinanceSnapshots } from "@/lib/db/finance";
 import { computeOrderProfit, getProductMap, type OrderProfit } from "@/lib/order-profit";
 import type { Rules } from "@/lib/profit";
 import type { ProductDetail } from "@/lib/db/product-detail";
+import { isPersistableOrderId } from "@core/trendyol-order-id";
 
 /**
  * AYLIK FİNANS GEÇMİŞİNİN YAZILMASI — artık Raporlar EKRANINA bağlı değil.
@@ -34,6 +35,9 @@ export function buildFinanceSnapshots(
   const out: FinanceSnapshotInput = [];
   for (const o of orders) {
     if (o.date == null || o.platform === "manual") continue;
+    // Trendyol'un henüz paket id'si vermediği sipariş geçici kimlik taşır; yazılırsa gerçek id
+    // gelince ikinci satır açılır ve Raporlar siparişi İKİ KEZ sayar (masaüstüyle aynı kural).
+    if (!isPersistableOrderId(o.platform, o.id)) continue;
     const op: OrderProfit = computeOrderProfit(o, pm, rules, settings);
     out.push({
       platform: o.platform,

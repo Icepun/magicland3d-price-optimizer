@@ -8,7 +8,17 @@ import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { readModelBundle, readModelBundleAralikli } from "@/core/printers/model-colors";
 import { printerCfgCached } from "@/core/printers/config-cache";
-import { getR2Config, isValidModelKey, headObjectSize, getObjectRange } from "@/lib/r2";
+import { getR2Config, isValidModelKey, headObjectSize, getObjectRange, deleteObject } from "@/lib/r2";
+import { familyMemberIds } from "@/core/printers/printer-family";
+import { mevcutOzelBaskiOzeti } from "@/lib/custom-print-existing";
+
+/** Yazıcının ailesi (aynı marka + model) — özel baskılar aile içinde ortak. */
+async function aileKimlikleri(printerConfigId: string): Promise<string[]> {
+  return familyMemberIds(
+    await prisma.printerConfig.findMany({ select: { id: true, type: true, brand: true, model: true } }),
+    printerConfigId,
+  );
+}
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +74,13 @@ export async function POST(req: NextRequest) {
       if (!ALLOWED.includes(fileType)) {
         return NextResponse.json({ error: `Desteklenmeyen tür: .${fileType} (gcode / 3mf)` }, { status: 400 });
       }
+      // Aynı dosya bu yazıcı AİLESİNDE zaten varsa ikinci satır açılmaz; yeni yüklenen bulut
+      // nesnesi hemen silinir (yoksa hademe gelene kadar boşa yer kaplardı).
+      const mevcut = await mevcutOzelBaskiOzeti(await aileKimlikleri(printerConfigId), originalName, sizeBytes);
+      if (mevcut) {
+        if (r2cfgCheck) await deleteObject(r2Key, r2cfgCheck).catch(() => { /* hademe süpürür */ });
+        return NextResponse.json(mevcut);
+      }
       /**
        * ⚠️ DOSYA GERİ İNDİRİLMİYOR. Tarayıcı dosyayı buluta yeni yükledi; sunucunun aynı
        * baytları geri çekmesi 25-140 MB'lık gcode'da kullanıcının beklediği sürenin
@@ -92,6 +109,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `Desteklenmeyen tür: .${fileType} (gcode / 3mf)` }, { status: 400 });
       }
       const buf = Buffer.from(await file.arrayBuffer());
+      // Aynı dosya bu yazıcı AİLESİNDE zaten varsa diske ikinci kez yazılmaz.
+      const mevcut = await mevcutOzelBaskiOzeti(await aileKimlikleri(printerConfigId), file.name, buf.length);
+      if (mevcut) return NextResponse.json(mevcut);
       storedPath = path.join(getModelsDir(), `${crypto.randomUUID()}.${fileType}`);
       await fs.promises.writeFile(storedPath, buf); // sync yazma büyük dosyada ana süreci donduruyordu
       readPath = storedPath;

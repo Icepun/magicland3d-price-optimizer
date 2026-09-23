@@ -312,6 +312,36 @@ function setupAutoUpdater() {
     });
   });
 
+  /**
+   * OTOMATİK KONTROL — açılıştan 90 sn sonra bir kez, sonra 6 saatte bir.
+   *
+   * Eskiden kontrol YALNIZ düğmeyle yapılıyordu; updater.log'da 9 Eylül'den 23 Eylül'e tek
+   * kontrol yoktu — yeni sürüm çıksa da kullanıcı düğmeye basmadıkça haberi olmuyordu.
+   * Yalnız DURUMU günceller (autoDownload kapalı): indirme ve kurulum yine kullanıcının onayıyla.
+   * Sessizdir: geçici ağ hatası ekrana "hata" olarak yansımaz (günlüğe yazılır), "çok fazla
+   * istek" yanıtında kontrol bir saat ertelenir. Seyrek tutuldu — sunucu sık istekte bizi
+   * yavaşlatıyor (13 Ağu 2026'da 429 görüldü).
+   */
+  const otomatikKontrol = async () => {
+    if (!app.isPackaged || isShuttingDown) return;
+    if (Date.now() < rateLimitedUntil) return;
+    // Kullanıcı zaten bir işlemin ortasındaysa (indiriyor, indirildi, var) dokunma.
+    if (["checking", "available", "downloading", "downloaded"].includes(updateState.status)) return;
+    const onceki = updateState;
+    updaterRetrying = true; // hata olayı ekrana yansımasın
+    try {
+      await autoUpdater.checkForUpdates();
+    } catch (e) {
+      writeLog("otomatik kontrol basarisiz:", e?.message || e);
+      if (isRateLimited(e)) rateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+      setUpdateState(onceki); // sessiz: önceki durum geri gelir
+    } finally {
+      updaterRetrying = false;
+    }
+  };
+  setTimeout(() => { void otomatikKontrol(); }, 90_000);
+  setInterval(() => { void otomatikKontrol(); }, 6 * 60 * 60_000);
+
   ipcMain.handle("updater:get-status", () => updateState);
   ipcMain.handle("updater:get-log-path", () => logPath);
   ipcMain.handle("updater:check", async () => {
@@ -849,13 +879,23 @@ function showOsNotification(title, body) {
   }
 }
 
+/**
+ * Yeni sipariş bildirimi mi? Önemi ne olursa olsun (stokta var / üretilecek / stok yok) masaüstü
+ * bildirimi olarak gösterilir — kullanıcı her siparişi anında görmek istiyor. Eskiden yalnız
+ * "kritik" ve "başarı" gösteriliyordu; "üretilecek" siparişler hiç duyurulmuyordu.
+ * (src/components/layout/NotificationBell.tsx → isNewOrderAlert ile aynı kural.)
+ */
+function isNewOrderAlert(a) {
+  return typeof a.id === "string" && a.id.startsWith("order-new:");
+}
+
 /** Gösterilecek bildirimleri seçer (yaş sınırı + patlama koruması). */
 function planOsToasts(alerts, notified, now) {
   const candidates = alerts.filter(
     (a) =>
       a &&
       typeof a.id === "string" &&
-      (a.severity === "critical" || a.severity === "success") &&
+      (a.severity === "critical" || a.severity === "success" || isNewOrderAlert(a)) &&
       !notified.has(a.id)
   );
   if (candidates.length === 0) return { toasts: [], markNotified: [] };
@@ -864,7 +904,8 @@ function planOsToasts(alerts, notified, now) {
     if (!a.createdAt) return true;
     const at = new Date(a.createdAt).getTime();
     if (!Number.isFinite(at)) return true;
-    const limit = a.severity === "critical" ? OS_AGE_LIMITS.critical : OS_AGE_LIMITS.success;
+    const limit =
+      a.severity === "critical" || isNewOrderAlert(a) ? OS_AGE_LIMITS.critical : OS_AGE_LIMITS.success;
     return now - at < limit;
   };
   const fresh = candidates.filter(isFresh);

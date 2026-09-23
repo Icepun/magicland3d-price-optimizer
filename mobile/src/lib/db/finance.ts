@@ -1,4 +1,4 @@
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
 import { dbEpochMs } from "@core/sqlite-date";
@@ -415,7 +415,7 @@ export async function syncOrderFinanceSnapshots(
 
   const hepsi = [...statements, ...itemStatements];
   for (let offset = 0; offset < hepsi.length; offset += 50) {
-    await batch(hepsi.slice(offset, offset + 50));
+    await writeBatch(hepsi.slice(offset, offset + 50));
   }
 }
 

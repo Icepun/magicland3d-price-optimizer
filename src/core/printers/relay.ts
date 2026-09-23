@@ -35,6 +35,7 @@ import {
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
 import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
+import { sameFamily } from "./printer-family";
 
 const TICK_MS = 10_000;
 /** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
@@ -144,11 +145,25 @@ async function saveNotifyState(): Promise<void> {
   }
 }
 
+/**
+ * Tek tur — hata FIRLATMAZ.
+ *
+ * `tick()` içindeki veritabanı okumaları (yazıcı listesi, eşleşmeler, ürünler) sunucu anlık
+ * hata verince (ör. Turso 502) reddediliyor ve `void tick()` bunu kimseye teslim etmiyordu:
+ * startup.log'da 40 "UNHANDLED REJECTION". Tur zaten bir sonraki aralıkta yeniden deneniyor;
+ * burada yalnız reddi yakalıyoruz.
+ */
+function guvenliTur(): void {
+  void tick().catch(() => {
+    /* ağ/veritabanı anlık hatası — sonraki tur dener */
+  });
+}
+
 export function startPrinterRelay() {
   if (startedKutu.v) return;
   startedKutu.v = true;
-  setTimeout(() => { void tick(); }, 5000);
-  setInterval(() => { void tick(); }, TICK_MS);
+  setTimeout(guvenliTur, 5000);
+  setInterval(guvenliTur, TICK_MS);
 }
 
 interface SnapFields {
@@ -261,6 +276,17 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
     if (c.type !== "moonraker") throw new Error("Bambu'da uzaktan baskı başlatma henüz desteklenmiyor");
     const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
+    // Dosya bu yazıcı ya da AYNI AİLEDEN bir yazıcı için yüklenmiş olmalı (iki U1 aynı dosyayı
+    // basar). Eskiden hiç bakılmıyordu: telefondan gelen komut her dosyayı her yazıcıya gönderebilirdi.
+    if (mf.printerConfigId !== c.id) {
+      const kaynak = await prisma.printerConfig.findUnique({
+        where: { id: mf.printerConfigId },
+        select: { id: true, type: true, brand: true, model: true },
+      });
+      if (!kaynak || !sameFamily(kaynak, c)) {
+        throw new Error("Bu dosya bu yazıcı için hazırlanmamış");
+      }
+    }
     // Masaüstü print rotasıyla AYNI çözümleme: R2'deki (bulut) dosya indirilir, yerel dosya
     // diskten okunur. (Eski hali yalnız storedPath'e bakıyordu → telefondan bulut dosyaya
     // "Tekrar bas" %100 "Dosya bu cihazda yok" hatası veriyordu.)

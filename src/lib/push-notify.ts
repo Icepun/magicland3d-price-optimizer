@@ -77,9 +77,11 @@ function sadeSebep(kod: string | undefined, yedekMesaj?: string): string {
       return "Bildirim metni çok uzun.";
     case "MessageRateExceeded":
       return "Çok sık bildirim gönderildi, biraz sonra tekrar deneyin.";
+    // Proje düzeyinde anahtar sorunu (iOS'ta Apple push anahtarı EAS'te yok/geçersiz). Uygulamayı
+    // yeniden kurmak DÜZELTMEZ — eski metin tam olarak bunu önerip yanlış yola sokuyordu.
     case "InvalidCredentials":
     case "MismatchedSenderId":
-      return "Bildirim ayarları geçersiz; uygulamayı telefona yeniden kurmak gerekiyor.";
+      return "Apple bildirim anahtarı eksik; telefon uygulamasının kurulumu tamamlanmalı.";
     case "ExpoError":
     case "ProviderError":
       return "Bildirim servisi şu an bildirim kabul etmiyor.";

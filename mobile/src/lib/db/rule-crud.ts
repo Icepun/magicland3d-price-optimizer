@@ -1,5 +1,5 @@
 import { yururluktekiDonemBaslangiciMs } from "@core/tariff-period";
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureCargoVatSchema } from "@/lib/db/schema";
 
 function newId(): string {
@@ -76,7 +76,7 @@ export async function updateSetting(key: string, value: string): Promise<void> {
   );
 }
 
-/** Birden çok AppSetting'i TEK round-trip'te yaz (batch) — ayarlar ekranı 6 alanı
+/** Birden çok AppSetting'i TEK round-trip'te ve TEK PARÇA yaz — ayarlar ekranı 6 alanı
  *  eskiden 6 ardışık upsert ile kaydediyordu (~300-1200ms + yarıda kalma riski). */
 export async function updateSettings(entries: Record<string, string>): Promise<void> {
   const stmts = Object.entries(entries).map(([key, value]) => ({
@@ -84,7 +84,7 @@ export async function updateSettings(entries: Record<string, string>): Promise<v
           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     args: [key, value],
   }));
-  if (stmts.length > 0) await batch(stmts);
+  if (stmts.length > 0) await writeBatch(stmts);
 }
 
 // ===================== KOMİSYON KURALLARI =====================

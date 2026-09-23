@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Camera, Loader2, Maximize2, Minimize2, WifiOff, X } from "lucide-react";
+import { Camera, Loader2, Maximize2, Minimize2, RotateCw, WifiOff, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -27,8 +27,31 @@ export function CameraDialog({
 }) {
   const [durum, setDurum] = useState<"yukleniyor" | "canli" | "hata">("yukleniyor");
   const [buyuk, setBuyuk] = useState(false);
-  // Her açılışta benzersiz adres — tarayıcı önbellekten donmuş kare göstermesin.
-  const [anahtar] = useState(() => Date.now());
+  // Her açılışta (ve her "Tekrar dene"de) benzersiz adres — tarayıcı donmuş akışı geri getirmesin.
+  const [anahtar, setAnahtar] = useState(() => Date.now());
+  /** Açılış uzadı mı? (ipucu metni) */
+  const [uzun, setUzun] = useState(false);
+
+  /**
+   * SÜRE SINIRI. Görüntü hiç gelmezse bekleme ekranı eskiden SONSUZA DEK dönüyordu
+   * ("tıklayınca kamera açılmıyor, yükleniyor ekranında kalıyor"). Bambu ilk kareyi ~2,5 sn'de,
+   * U1 uyandırmadan sonra ~2 sn'de veriyor; 20 sn hâlâ görüntü yoksa bir şey yolunda değil.
+   */
+  useEffect(() => {
+    if (durum !== "yukleniyor") return;
+    const ipucu = setTimeout(() => setUzun(true), 6_000);
+    const sinir = setTimeout(() => setDurum("hata"), 20_000);
+    return () => {
+      clearTimeout(ipucu);
+      clearTimeout(sinir);
+    };
+  }, [durum, anahtar]);
+
+  const tekrarDene = () => {
+    setUzun(false);
+    setDurum("yukleniyor");
+    setAnahtar(Date.now());
+  };
 
   // ESC ile kapatma dışında, büyütmeyi de klavyeden yapabilelim.
   useEffect(() => {
@@ -83,34 +106,47 @@ export function CameraDialog({
         <div className={cn("relative w-full bg-black transition-[aspect-ratio] duration-300", buyuk ? "aspect-video" : "aspect-[4/3]")}>
           {/* Görüntü gelene kadar ölü ekran yok. */}
           {durum === "yukleniyor" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 animate-in fade-in duration-300">
               <Loader2 className="h-7 w-7 animate-spin text-white/60" />
-              <p className="text-sm text-white/60">Kamera açılıyor…</p>
-            </div>
-          )}
-
-          {durum === "hata" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center">
-              <WifiOff className="h-8 w-8 text-white/30" />
-              <p className="text-sm font-medium text-white/80">Görüntü alınamadı</p>
-              <p className="max-w-sm text-xs text-white/50">
-                Yazıcının kamerası kapalı olabilir ya da başka bir uygulama kullanıyor olabilir.
+              <p className="text-sm text-white/60 transition-opacity duration-300">
+                {uzun ? "Görüntü bekleniyor…" : "Kamera açılıyor…"}
               </p>
             </div>
           )}
 
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            key={anahtar}
-            src={`/api/printers/${printerId}/camera?t=${anahtar}`}
-            alt=""
-            onLoad={() => setDurum("canli")}
-            onError={() => setDurum("hata")}
-            className={cn(
-              "h-full w-full object-contain transition-opacity duration-500",
-              durum === "canli" ? "opacity-100" : "opacity-0",
-            )}
-          />
+          {durum === "hata" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8 text-center animate-in fade-in zoom-in-95 duration-300">
+              <WifiOff className="h-8 w-8 text-white/30" />
+              <p className="text-sm font-medium text-white/80">Görüntü alınamadı</p>
+              <p className="max-w-sm text-xs text-white/50">
+                Kamera başka bir uygulamada açık olabilir.
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={tekrarDene}
+                className="mt-1 h-8 gap-1.5 border-white/20 bg-white/5 text-white/80 transition-transform hover:bg-white/10 hover:text-white active:scale-95"
+              >
+                <RotateCw className="h-3.5 w-3.5" />
+                Tekrar dene
+              </Button>
+            </div>
+          )}
+
+          {durum !== "hata" && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={anahtar}
+              src={`/api/printers/${printerId}/camera?t=${anahtar}`}
+              alt=""
+              onLoad={() => setDurum("canli")}
+              onError={() => setDurum("hata")}
+              className={cn(
+                "h-full w-full object-contain transition-opacity duration-500",
+                durum === "canli" ? "opacity-100" : "opacity-0",
+              )}
+            />
+          )}
         </div>
       </DialogContent>
     </Dialog>

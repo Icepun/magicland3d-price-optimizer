@@ -147,11 +147,11 @@ export default function SpoolsPage() {
 
   const saveSetting = useMutation({
     mutationFn: (body: Record<string, string>) =>
-      fetch("/api/settings", {
+      fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
 

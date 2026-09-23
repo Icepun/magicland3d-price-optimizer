@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dropBambuConns } from "@/core/printers/bambu";
@@ -79,7 +79,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
     // İlişkili ürün eşleştirmelerini + son-bilinen slot snapshot'ını da temizle (yetim satır kalmasın)
     await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id } });
-    await prisma.appSetting.deleteMany({ where: { key: `slotSnapshot:${id}` } });
+    await prisma.appSetting.deleteMany({
+      where: { key: { in: [`slotSnapshot:${id}`, `printerStorageCapacity:${id}`] } },
+    });
+    // Canlı durum satırı ve telefon komutları da gitmeli: zil tüm durum satırlarını okuyor —
+    // hata/duraklatılmış anda silinen bir yazıcı zilde KALICI bir hayalet uyarı bırakıyordu
+    // (sahada bir satır kalmıştı: Neptune 4 Plus). Bekleyen komut da artık uygulanamaz.
+    await remotePrisma.printerSnapshot.deleteMany({ where: { printerConfigId: id } });
+    await remotePrisma.printCommand.deleteMany({ where: { printerConfigId: id } });
     await prisma.printerConfig.delete({ where: { id } });
     // Panel silinen yazıcıyı 15 saniye daha çizip LAN'da yoklamasın.
     invalidatePrinterConfigs();

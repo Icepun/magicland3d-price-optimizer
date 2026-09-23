@@ -60,6 +60,19 @@ interface Yanit {
 function bugunInput(): string {
   return new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
+
+/**
+ * Kayıtlı başlangıç → tarih kutusu biçimi ("2026-09-01"), TÜRKİYE takvimine göre.
+ *
+ * ⚠️ `toISOString().slice(0,10)` KULLANILMAZ: başlangıç Türkiye gece yarısı olarak kaydediliyor
+ * (`…T00:00:00+03:00` = önceki gün 21:00 UTC). UTC tarihini almak kutuyu BİR GÜN GERİ
+ * dolduruyordu; "Değiştir" deyip olduğu gibi kaydetmek de "bu tarihte bütçe zaten var"
+ * hatasına düşüyordu.
+ */
+export function tarihKutusu(iso: string): string {
+  // "sv-SE" biçimi YYYY-MM-DD verir.
+  return new Date(iso).toLocaleDateString("sv-SE", { timeZone: "Europe/Istanbul" });
+}
 const kisaTarih = (iso: string) =>
   new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Istanbul" });
 
@@ -197,7 +210,7 @@ export function AdBudgetCard() {
                         setTutar(b ? String(b.dailyAmount) : "");
                         // Mevcut dönemin tarihi forma gelsin — kullanıcı onu düzeltmek istiyor.
                         if (b?.validFrom) {
-                          setBaslangic(new Date(b.validFrom).toISOString().slice(0, 10));
+                          setBaslangic(tarihKutusu(b.validFrom));
                         }
                       }}
                     >

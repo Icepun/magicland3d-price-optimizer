@@ -13,6 +13,7 @@ import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from 
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 import { buildSignedUploadName } from "@/lib/print-file-signature";
+import { sameFamily } from "@/core/printers/printer-family";
 
 export const dynamic = "force-dynamic";
 
@@ -51,10 +52,23 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
-    const printer = await prisma.printerConfig.findUnique({ where: { id: mf.printerConfigId } });
+    // HEDEF YAZICI: dosya hangi yazıcı için yüklendiyse o; ama aynı AİLEDEN (aynı marka + model)
+    // başka bir yazıcıya da gönderilebilir — iki U1 aynı dosyayı basar (core/printers/printer-family).
+    const hedefId =
+      typeof body?.printerId === "string" && body.printerId ? String(body.printerId) : mf.printerConfigId;
+    const printer = await prisma.printerConfig.findUnique({ where: { id: hedefId } });
     if (!printer) return NextResponse.json({ error: "Bağlı yazıcı bulunamadı" }, { status: 404 });
+    if (hedefId !== mf.printerConfigId) {
+      const kaynak = await prisma.printerConfig.findUnique({
+        where: { id: mf.printerConfigId },
+        select: { id: true, type: true, brand: true, model: true },
+      });
+      if (!kaynak || !sameFamily(kaynak, printer)) {
+        return NextResponse.json({ error: "Bu dosya bu yazıcı için hazırlanmamış." }, { status: 400 });
+      }
+    }
     if (printer.type === "bambu" && (!printer.accessCode || !printer.serial)) {
-      return NextResponse.json({ error: "Bambu access code / seri no eksik (Yönet)" }, { status: 400 });
+      return NextResponse.json({ error: "Bambu erişim kodu veya seri numarası eksik (Yönet)." }, { status: 400 });
     }
 
     // Hızlı ön kontroller (dosyasız) — akış öncesi net 4xx.

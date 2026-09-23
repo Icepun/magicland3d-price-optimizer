@@ -120,6 +120,8 @@ async function inventoryAlerts(): Promise<AppAlert[]> {
 async function printerAlerts(): Promise<AppAlert[]> {
   const printers = await remotePrisma.printerSnapshot
     .findMany({
+      // Yalnız hata/duraklatılmış satırlar okunur — diğerleri zaten uyarı üretmiyor.
+      where: { status: { in: ["error", "paused"] } },
       select: {
         printerConfigId: true,
         name: true,
@@ -130,8 +132,21 @@ async function printerAlerts(): Promise<AppAlert[]> {
       },
     })
     .catch(() => []);
+  // Silinmiş/kapatılmış yazıcının son durum satırı "hata"da kalmışsa zilde KALICI hayalet uyarı
+  // olurdu. Yalnız kayıtlı ve açık yazıcılar sayılır.
+  const kayitli =
+    printers.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await remotePrisma.printerConfig
+              .findMany({ where: { enabled: true }, select: { id: true } })
+              .catch(() => printers.map((p) => ({ id: p.printerConfigId })))
+          ).map((c) => c.id)
+        );
   const alerts: AppAlert[] = [];
   for (const pr of printers) {
+    if (!kayitli.has(pr.printerConfigId)) continue;
     const job = pr.productName ? ` — ${pr.productName}` : "";
     const reason = pr.statusMessage ? ` · ${pr.statusMessage}` : "";
     if (pr.status === "error") {

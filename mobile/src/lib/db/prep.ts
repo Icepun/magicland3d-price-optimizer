@@ -1,4 +1,4 @@
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 
 /**
  * Paketleme "hazırlandı" işaretleri — masaüstüyle ORTAK (şema v46, `PrepDone`).
@@ -51,5 +51,5 @@ export async function setPrepDone(key: string, done: boolean): Promise<void> {
 export async function clearPrepDone(keys: string[]): Promise<void> {
   if (keys.length === 0) return;
   await ensurePrepSchema();
-  await batch(keys.map((k) => ({ sql: `DELETE FROM "PrepDone" WHERE "key" = ?`, args: [k] })));
+  await writeBatch(keys.map((k) => ({ sql: `DELETE FROM "PrepDone" WHERE "key" = ?`, args: [k] })));
 }

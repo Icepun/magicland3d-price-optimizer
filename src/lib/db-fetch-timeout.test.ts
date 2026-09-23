@@ -119,6 +119,62 @@ describe("iptal edilen istek yeniden denenir — ama YALNIZ okumada", () => {
     expect(cagri, "yazma tekrarlanmamalı").toBe(1);
   });
 
+  /**
+   * GERÇEK ÇAĞRI BİÇİMİ. libSQL'in HTTP istemcisi fetch'i TEK argümanla, hazır bir Request
+   * nesnesiyle çağırıyor — gövde `init.body`'de DEĞİL, nesnenin içinde. Yukarıdaki testler
+   * (adres + init.body) bu biçimi hiç denemiyordu; sahada yeniden deneme 1.196 kez "Request
+   * object that has already been used" ile çöktü ve yazma koruması kör kaldı.
+   *
+   * Sahte fetch undici gibi davranır: `new Request(input, init)` ile gövdeyi TÜKETİR.
+   */
+  function hranaIstegi(sql: string): Request {
+    return new Request("https://db.example/v3/pipeline", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requests: [{ type: "execute", stmt: { sql } }] }),
+    });
+  }
+
+  it("Request nesnesiyle gelen OKUMA iptal olursa klondan yeniden denenir", async () => {
+    dbOlaylariSifirla();
+    let cagri = 0;
+    const sahte = async (input: unknown, init?: { signal?: AbortSignal }) => {
+      cagri++;
+      const istek = new Request(input as Request, init as RequestInit); // gövdeyi tüketir
+      const govde = await istek.text();
+      if (cagri === 1) return takilanFetch(init);
+      return govde;
+    };
+    const sarmal = withDbFetchTimeout(sahte, 50);
+    const r = await sarmal(hranaIstegi("SELECT id FROM Product"));
+    expect(cagri).toBe(2);
+    expect(String(r)).toContain("SELECT id FROM Product");
+    expect(dbOlaylari().ozet["yeniden-deneme-basarili"]).toBe(1);
+  });
+
+  it("Request nesnesiyle gelen YAZMA iptal olursa ASLA yeniden denenmez", async () => {
+    let cagri = 0;
+    const sahte = async (input: unknown, init?: { signal?: AbortSignal }) => {
+      cagri++;
+      await new Request(input as Request, init as RequestInit).text();
+      return takilanFetch(init);
+    };
+    const sarmal = withDbFetchTimeout(sahte, 50);
+    await expect(sarmal(hranaIstegi("UPDATE Product SET stock = 3 WHERE id = 'a'"))).rejects.toThrow();
+    expect(cagri, "yazma tekrarlanmamalı").toBe(1);
+  });
+
+  it("sağlıklı Request isteği tek seferde ve gövdesiyle geçer", async () => {
+    let cagri = 0;
+    const sahte = async (input: unknown, init?: { signal?: AbortSignal }) => {
+      cagri++;
+      return new Request(input as Request, init as RequestInit).text();
+    };
+    const r = await withDbFetchTimeout(sahte, 5_000)(hranaIstegi("SELECT 1"));
+    expect(cagri).toBe(1);
+    expect(String(r)).toContain("SELECT 1");
+  });
+
   it("tanınmayan gövde yazma SAYILIR (güvenli taraf)", () => {
     expect(govdeYazmaIceriyor({ nesne: true })).toBe(true);
     expect(govdeYazmaIceriyor(null)).toBe(false);

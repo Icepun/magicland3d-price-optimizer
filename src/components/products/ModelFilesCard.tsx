@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { fetchJson } from "@/lib/fetch-json";
 import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 import { MeshAttachButton } from "./MeshAttachButton";
+import { dedupeFiles, familyDisplayName, printerFamilyKey } from "@/core/printers/printer-family";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
@@ -198,8 +199,24 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
       return Array.isArray(rows) ? rows.map(hafifSatir) : [];
     },
   });
-  const printers = Array.isArray(printersQuery.data) ? printersQuery.data : [];
+  const printers = useMemo(
+    () => (Array.isArray(printersQuery.data) ? printersQuery.data : []),
+    [printersQuery.data],
+  );
   const files = Array.isArray(filesQuery.data) ? filesQuery.data : [];
+  /**
+   * Yazıcılar AİLEYE göre gruplanır: aynı marka + modeldeki yazıcılar (ör. iki Snapmaker U1)
+   * aynı dosyayı basar, dosyaları ortaktır. Eskiden her yazıcıya ayrı kutu çiziliyordu ve ikinci
+   * U1'in kutusu boş kaldığı için dosyalar ona "yokmuş" gibi görünüyordu.
+   */
+  const aileler = useMemo(() => {
+    const m = new Map<string, PrinterCfg[]>();
+    for (const p of printers) {
+      const k = printerFamilyKey(p);
+      m.set(k, [...(m.get(k) ?? []), p]);
+    }
+    return [...m.values()];
+  }, [printers]);
   // isPending (isLoading DEĞİL): sorgu görünürlüğü bekleyip duraklarken isLoading false döner ve
   // kart "yazıcı yok / parça yok" diye yalan söylerdi. Beklerken de durum "yükleniyor"dur.
   const yaziciDurumu = veriDurumu(printersQuery.isPending, printersQuery.isError, printers.length);
@@ -319,28 +336,46 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
             Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten bir yazıcı ekle. Sonra her parçanın dosyasını buraya yükleyebilirsin.
           </p>
         ) : (
-          printers.map((p, gi) => (
-            <div
-              key={p.id}
-              className="animate-in fade-in slide-in-from-bottom-1 duration-500"
-              style={{ animationDelay: `${gi * 70}ms`, animationFillMode: "both" }}
-            >
-              <PrinterGroup
-                printer={p}
-                parts={files.filter((f) => f.printerConfigId === p.id)}
-                productId={productId}
-                applyToVariants={shareOn}
-                onChanged={refresh}
-              />
-            </div>
-          ))
+          aileler.map((aile, gi) => {
+            const temsil = aile[0];
+            const ids = new Set(aile.map((a) => a.id));
+            // Aynı dosya iki kardeş yazıcıya ayrı ayrı yüklenmişse bir kez görünür.
+            const parts = dedupeFiles(files.filter((f) => ids.has(f.printerConfigId)));
+            return (
+              <div
+                key={temsil.id}
+                className="animate-in fade-in slide-in-from-bottom-1 duration-500"
+                style={{ animationDelay: `${gi * 70}ms`, animationFillMode: "both" }}
+              >
+                <PrinterGroup
+                  printer={temsil}
+                  parts={parts}
+                  productId={productId}
+                  applyToVariants={shareOn}
+                  onChanged={refresh}
+                  baslik={aile.length > 1 ? `${familyDisplayName(temsil)} · ${aile.length} yazıcı` : undefined}
+                  altBaslik={aile.length > 1 ? aile.map((a) => a.name).join(", ") : undefined}
+                />
+              </div>
+            );
+          })
         )}
       </CardContent>
     </Card>
   );
 }
 
-function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }: { printer: PrinterCfg; parts: ModelFile[]; productId: string; applyToVariants: boolean; onChanged: () => void }) {
+function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, baslik, altBaslik }: {
+  printer: PrinterCfg;
+  parts: ModelFile[];
+  productId: string;
+  applyToVariants: boolean;
+  onChanged: () => void;
+  /** Aile bölümünün adı (ör. "Snapmaker U1 · 2 yazıcı"); yoksa yazıcının adı. */
+  baslik?: string;
+  /** Ailedeki yazıcıların adları. */
+  altBaslik?: string;
+}) {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
   const [prog, setProg] = useState<UploadProgress | null>(null);
@@ -435,7 +470,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
     }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
-    if (ok > 0) toast.success(`${printer.name}: ${ok} parça yüklendi${applyToVariants ? " · tüm varyantlara" : ""}`);
+    if (ok > 0) toast.success(`${baslik ?? printer.name}: ${ok} parça yüklendi${applyToVariants ? " · tüm varyantlara" : ""}`);
   };
 
   return (
@@ -444,7 +479,10 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged }:
         <div className="flex items-center justify-center h-7 w-7 rounded-md bg-background border shrink-0">
           <Printer className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
-        <p className="text-sm font-medium flex-1 truncate">{printer.name}</p>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium truncate">{baslik ?? printer.name}</p>
+          {altBaslik && <p className="text-[10px] text-muted-foreground truncate">{altBaslik}</p>}
+        </div>
         {parts.length > 0 && <Badge variant="secondary" className="tabular-nums text-[10px]">{parts.length} parça</Badge>}
         <input ref={inputRef} type="file" accept=".gcode,.gco,.g,.3mf" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) handleFiles(e.target.files); }} />
         <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0 transition-transform active:scale-95" disabled={prog !== null} onClick={() => inputRef.current?.click()}>

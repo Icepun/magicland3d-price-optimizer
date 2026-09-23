@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchJson } from "@/lib/fetch-json";
 import { memo } from "react";
 import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
@@ -58,7 +59,7 @@ function PriceHistoryCardImpl({ productId }: { productId: string }) {
   const { data, isLoading } = useQuery<PriceHistoryEntry[]>({
     queryKey: ["price-history", productId],
     queryFn: () =>
-      fetch(`/api/products/${productId}/price-history?days=365&limit=300`).then((r) => r.json()),
+      fetchJson(`/api/products/${productId}/price-history?days=365&limit=300`),
   });
 
   const history = Array.isArray(data) ? data : [];

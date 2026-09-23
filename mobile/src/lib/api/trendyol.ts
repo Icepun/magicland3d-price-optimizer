@@ -1,6 +1,7 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
 import { padTrendyolWindow, trendyolDateToUtc } from "@core/trendyol-date";
+import { trendyolOrderId } from "@core/trendyol-order-id";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -82,7 +83,9 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         const json = (await res.json()) as { content?: TyOrder[] };
         const content = json.content ?? [];
         for (const [i, o] of content.entries()) {
-          rows.push({ key: String(o.id ?? o.orderNumber ?? `${chunkEnd}-${pageNo}-${i}`), o });
+          // Masaüstüyle AYNI kimlik: paket id'si 0 gelen yeni sipariş "ty-0"da birleşip
+          // diğerini silmesin, finans geçmişine hayalet çift kayıt yazmasın.
+          rows.push({ key: trendyolOrderId(o, `${chunkEnd}-${pageNo}-${i}`), o });
         }
         if (content.length < 100) break; // son sayfa
       }
@@ -98,7 +101,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
       if (seen.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
       seen.add(key);
       orders.push({
-        id: `ty-${o.id ?? o.orderNumber ?? key}`,
+        id: key,
         platform: "trendyol" as const,
         orderNumber: String(o.orderNumber ?? o.id ?? "—"),
         // Masaüstüyle AYNI çeviri: Trendyol'un damgası Türkiye duvar saatini taşıyor,

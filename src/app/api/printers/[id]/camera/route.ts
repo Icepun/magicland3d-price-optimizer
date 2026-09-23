@@ -69,13 +69,22 @@ function mjpegBasliklari(): HeadersInit {
   };
 }
 
-/** Tek kareyi multipart parçasına sar. */
+/** Akışın ilk sınır satırı — her parça bunun ARDINDAN gelir. */
+function acilis(): Uint8Array {
+  return new Uint8Array(Buffer.from(`--${SINIR}\r\n`, "ascii"));
+}
+
+/**
+ * Tek kareyi multipart parçasına sar — SINIR KARENİN HEMEN ARDINDAN gönderilir.
+ *
+ * ⚠️ NEDEN SONA: tarayıcı bir parçayı ancak bir SONRAKİ sınırı görünce "bitti" sayıp çiziyor.
+ * Sınır eskiden parçanın BAŞINDAYDI; Bambu 2,5 sn'de bir kare gönderdiği için ilk görüntü
+ * ancak ikinci kare gelince (~5 sn) çiziliyordu ve pencere o süre "açılıyor"da kalıyordu
+ * (ölçüldü 23 Eyl 2026). Sınırı karenin sonuna koymak her kareyi GELDİĞİ AN gösterir.
+ */
 function parca(jpeg: Buffer): Uint8Array {
-  const bas = Buffer.from(
-    `--${SINIR}\r\nContent-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`,
-    "ascii",
-  );
-  return new Uint8Array(Buffer.concat([bas, jpeg, Buffer.from("\r\n", "ascii")]));
+  const bas = Buffer.from(`Content-Type: image/jpeg\r\nContent-Length: ${jpeg.length}\r\n\r\n`, "ascii");
+  return new Uint8Array(Buffer.concat([bas, jpeg, Buffer.from(`\r\n--${SINIR}\r\n`, "ascii")]));
 }
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -125,6 +134,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
       const akis = new ReadableStream<Uint8Array>({
         start(kontrol) {
+          kontrol.enqueue(acilis());
           let kapandi = false;
           const kapat = () => {
             if (kapandi) return;
@@ -154,6 +164,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       const port = cfg.port;
       const akis = new ReadableStream<Uint8Array>({
         start(kontrol) {
+          kontrol.enqueue(acilis());
           let kapandi = false;
           const kapat = () => {
             if (kapandi) return;

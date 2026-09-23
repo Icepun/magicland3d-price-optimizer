@@ -37,10 +37,12 @@ export interface PartCancelDialogProps {
   /** İptal komutunu gönderir; hata fırlatırsa arayüz mesajı gösterir. */
   onExclude: (name: string) => Promise<void>;
   onUndo: (name: string) => Promise<void>;
+  /** İptal geri alınabilir mi? Bambu'da atlanan parça bir daha basılmaz → düğme gösterilmez. */
+  geriAlinabilir?: boolean;
 }
 
 export function PartCancelDialog({
-  printerId, frame, currentName, excluded, onClose, fetchParts, onExclude, onUndo,
+  printerId, frame, currentName, excluded, onClose, fetchParts, onExclude, onUndo, geriAlinabilir = true,
 }: PartCancelDialogProps) {
   const [parts, setParts] = useState<MappedPart[] | null>(null);
   const [hata, setHata] = useState<string | null>(null);
@@ -54,7 +56,10 @@ export function PartCancelDialog({
     let alive = true;
     fetchParts()
       .then((ham) => { if (alive) setParts(parcalariSirala(ham)); })
-      .catch(() => { if (alive) setHata("Parça listesi alınamadı."); });
+      // Sunucu parçanın neden olmadığını söyleyebiliyor (etiketsiz dosya vb.) — onu göster.
+      .catch((e: unknown) => {
+        if (alive) setHata(e instanceof Error && e.message ? e.message : "Parça listesi alınamadı.");
+      });
     return () => { alive = false; };
   }, [fetchParts, printerId]);
 
@@ -212,9 +217,11 @@ export function PartCancelDialog({
                 <p className="flex-1 text-xs">
                   {sonIptal.no}. parça iptal edildi. Yazıcı birkaç saniye içinde atlayacak.
                 </p>
-                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={calisiyor} onClick={geriAl}>
-                  Geri al
-                </Button>
+                {geriAlinabilir && (
+                  <Button size="sm" variant="outline" className="h-7 text-xs" disabled={calisiyor} onClick={geriAl}>
+                    Geri al
+                  </Button>
+                )}
               </div>
             )}
             {geriAlindi && sonIptal && (

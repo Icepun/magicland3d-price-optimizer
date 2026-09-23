@@ -91,3 +91,40 @@ describe("snapmakerKameraVar", () => {
     await expect(snapmakerKameraVar("10.0.0.5", 7125)).resolves.toBe(false);
   });
 });
+
+/**
+ * SAHADA YAŞANDI (23 Eyl 2026, iki U1, 1.6 ve 2.0 yazılımı): kamera uyurken kare dosyası
+ * SİLİNİYOR (404). Kontrol yalnız dosyaya baktığı için düğme "kamera bulunamadı" diye sönük
+ * kalıyordu. Uyurken de duran "camera" dosya kökü kameranın varlığını söyler.
+ */
+describe("uyuyan kamera", () => {
+  it("kare dosyası 404 ama 'camera' kökü varsa kamera VAR sayılır", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (String(url).includes("monitor.jpg")) {
+        return { ok: false, status: 404, headers: { get: () => "application/json" }, arrayBuffer: async () => new ArrayBuffer(0) };
+      }
+      return {
+        ok: true,
+        json: async () => ({ result: [{ name: "gcodes", permissions: "rw" }, { name: "camera", permissions: "r" }] }),
+      };
+    }));
+    const { snapmakerKameraVar } = await import("./snapmaker-camera");
+    expect(await snapmakerKameraVar("10.0.0.5", 7125)).toBe(true);
+  });
+
+  it("ne kare ne 'camera' kökü varsa kamera YOK", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (String(url).includes("monitor.jpg")) {
+        return { ok: false, status: 404, headers: { get: () => "application/json" }, arrayBuffer: async () => new ArrayBuffer(0) };
+      }
+      return { ok: true, json: async () => ({ result: [{ name: "gcodes", permissions: "rw" }] }) };
+    }));
+    const { snapmakerKameraVar } = await import("./snapmaker-camera");
+    expect(await snapmakerKameraVar("10.0.0.5", 7125)).toBe(false);
+  });
+
+  it("uyanmayan kamerada akış süre sınırıyla hata verir (sonsuz 'açılıyor' yok)", () => {
+    expect(KAYNAK).toContain("ILK_KARE_SINIRI_MS");
+    expect(KAYNAK).toContain('bitir("Kameradan görüntü gelmiyor.")');
+  });
+});

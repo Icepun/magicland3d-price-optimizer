@@ -487,6 +487,72 @@ export async function bambuControl(
   throw new Error(`${BAMBU_ACTION_LABEL[action]} komutu gönderildi ama yazıcı uygulamadı — ekranını kontrol et.`);
 }
 
+/** Raporun `s_obj` alanı → atlanmış parça kimlikleri (identify_id). */
+export function atlananParcalar(print: Record<string, unknown> | undefined): number[] {
+  const ham = print?.s_obj;
+  if (!Array.isArray(ham)) return [];
+  return ham.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/** Şu an atlanmış parçalar (bellekteki son rapordan — ağ yok). */
+export function bambuAtlananlar(host: string, accessCode: string, serial: string): number[] {
+  const conn = conns.get(connKey(host, serial, accessCode));
+  return conn?.hasData ? atlananParcalar(conn.print) : [];
+}
+
+/**
+ * PARÇA ATLA — baskı sürerken tek parçayı iptal eder (diğerleri devam eder). GERİ ALINAMAZ.
+ *
+ * Komut: `{ print: { command: "skip_objects", obj_list: [identify_id…] } }`. Liste, daha önce
+ * atlananlarla BİRLEŞTİRİLİP gönderilir (yazıcı listeyi toptan yorumlasa da atlananlar geri
+ * gelmez). Doğrulama: komuttan SONRA gelen raporun `s_obj` alanında kimliğin görünmesi.
+ * Ölçüldü (23 Eyl 2026): A1 yazılımı 01.08'in raporu `s_obj` taşıyor.
+ */
+export async function bambuSkipObjects(
+  host: string,
+  accessCode: string,
+  serial: string,
+  ids: number[],
+): Promise<{ verified: boolean }> {
+  const conn = ensureConn(host, accessCode, serial);
+  if (!conn.connected) throw new Error("Yazıcı bağlı değil — komut gönderilmedi.");
+  if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+    publishPushall(conn, serial);
+    const bekle = Date.now() + 3000;
+    while (Date.now() < bekle && (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS)) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+      throw new Error("Yazıcı şu an durumunu bildirmiyor — komut gönderilmedi.");
+    }
+  }
+  const durum = typeof conn.print.gcode_state === "string" ? conn.print.gcode_state.toUpperCase() : null;
+  if (durum !== "RUNNING" && durum !== "PAUSE") throw new Error("Parça yalnız baskı sürerken atlanabilir.");
+
+  const hedef = ids.filter((n) => Number.isFinite(n) && n > 0);
+  if (!hedef.length) throw new Error("Atlanacak parça seçilmedi.");
+  const liste = [...new Set([...atlananParcalar(conn.print), ...hedef])];
+  const sentAfterMs = conn.lastMessageAt;
+  // QoS 0 — diğer kontrol komutlarıyla aynı hayalet-komut koruması (bkz. bambuControl).
+  await new Promise<void>((resolve, reject) => {
+    conn.client.publish(
+      `device/${serial}/request`,
+      JSON.stringify({ print: { sequence_id: "0", command: "skip_objects", obj_list: liste } }),
+      { qos: 0 },
+      (err) => (err ? reject(new Error("Komut yazıcıya iletilemedi.")) : resolve()),
+    );
+  });
+  publishPushall(conn, serial);
+  const son = Date.now() + 8000;
+  while (Date.now() < son) {
+    if (conn.lastMessageAt > sentAfterMs && hedef.every((id) => atlananParcalar(conn.print).includes(id))) {
+      return { verified: true };
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error("Komut gönderildi ama yazıcı parçayı atlamadı — ekranını kontrol et.");
+}
+
 /**
  * MADDE 10 — Bambu'da hız "profil" ile ayarlanır (serbest yüzde yok):
  *   1 sessiz (%50) · 2 standart (%100) · 3 hızlı (%124) · 4 çok hızlı (%166)
@@ -916,31 +982,6 @@ const BAMBU_FILES_DIR = "cache";
 
 const LS_LINE = /^([-dl])[\w.+-]{9,}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\w{3}\s+\d+\s+[\d:]{4,5})\s+(.+?)\r?$/;
 
-/** Yazıcı depolamasındaki baskı dosyaları. Asıl konum /cache; kök de taranır (uygulamanın
- *  STOR ettiği artıklar orada olabilir). Ad çakışırsa /cache kazanır. Klasörler atlanır. */
-export async function bambuStorageList(host: string, accessCode: string): Promise<BambuStorageFile[]> {
-  return bambuFtpQuery(host, accessCode, async ({ cmd, nextReply, openData, readDataToEnd }) => {
-    const seen = new Map<string, BambuStorageFile>();
-    for (const dir of [BAMBU_FILES_DIR, "/"]) { // önce /cache (öncelik) sonra kök
-      try {
-        const d = await openData();
-        const r150 = await cmd(`LIST ${dir}`); // AÇIK yol — bare LIST bazı ftpd'lerde farklı davranır
-        if (r150.code >= 400) continue;
-        const text = await readDataToEnd(d);
-        await nextReply(); // 226
-        for (const line of text.split("\n")) {
-          const m = LS_LINE.exec(line);
-          if (!m || m[1] !== "-") continue; // yalnız normal dosyalar (klasör/link atla)
-          const name = m[4].trim();
-          if (!name || name === "." || name === ".." || seen.has(name)) continue;
-          seen.set(name, { name, size: Number(m[2]) || 0, modified: null });
-        }
-      } catch { /* dizin yok/erişilemedi → atla */ }
-    }
-    return [...seen.values()].sort((a, b) => b.size - a.size);
-  });
-}
-
 /** Yazıcı depolamasından dosya sil (yalnız kontrol kanalı — DELE). Önce /cache, olmazsa kök
  *  denenir (dosya iki yerden birinde). Silinen sayısını döndürür. */
 export async function bambuDeleteFiles(host: string, accessCode: string, names: string[]): Promise<number> {
@@ -951,6 +992,144 @@ export async function bambuDeleteFiles(host: string, accessCode: string, names: 
       if (!n || n.includes("/") || n.includes("\\") || n.startsWith(".")) continue; // yalnız düz dosya adları
       let r = await cmd(`DELE ${BAMBU_FILES_DIR}/${n}`); // önce /cache
       if (r.code >= 400) r = await cmd(`DELE ${n}`);     // yoksa kök
+      if (r.code < 400) ok++;
+    }
+    return ok;
+  });
+}
+
+// ── Depolama dökümü ──────────────────────────────────────────────────────────────────────────
+
+export interface BambuStorageFolder {
+  /** Klasör adı; "/" = kök dizindeki dosyalar. */
+  name: string;
+  bytes: number;
+  count: number;
+}
+
+export interface BambuStorageSummary {
+  /** Silinebilen baskı dosyaları (/cache + kök) — eski `bambuStorageList` ile aynı liste. */
+  files: BambuStorageFile[];
+  /** Klasör klasör doluluk. */
+  folders: BambuStorageFolder[];
+  /** Yazıcının kendi kamera kayıtları (/ipcam) — en yeniden eskiye. */
+  ipcamFiles: BambuStorageFile[];
+}
+
+/**
+ * Listelemesi çok yavaş ama neredeyse boş klasörler — atlanır.
+ * Ölçüldü (23 Eyl 2026, A1): /image 591 dosya · 2,4 MB · 11,5 sn (diğer klasörlerin toplamı ~5 sn).
+ */
+const ATLANAN_KLASORLER: readonly string[] = ["image"];
+
+const AYLAR: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+/** `ls -l` tarihi ("Sep 22 14:05" / "Sep 22  2025") → epoch ms (yaklaşık; sıralama için yeter). */
+export function lsTarihi(metin: string, simdi: Date = new Date()): number | null {
+  const m = /^(\w{3})\s+(\d{1,2})\s+(?:(\d{1,2}):(\d{2})|(\d{4}))$/.exec(metin.trim());
+  if (!m) return null;
+  const ay = AYLAR[m[1].toLowerCase()];
+  if (ay === undefined) return null;
+  const gun = Number(m[2]);
+  if (m[5]) return Date.UTC(Number(m[5]), ay, gun);
+  // Saatli biçimde yıl yok: bu yıl say, gelecekte kalıyorsa geçen yıl.
+  let t = Date.UTC(simdi.getUTCFullYear(), ay, gun, Number(m[3]), Number(m[4]));
+  if (t > simdi.getTime() + 2 * 86_400_000) t = Date.UTC(simdi.getUTCFullYear() - 1, ay, gun, Number(m[3]), Number(m[4]));
+  return t;
+}
+
+/**
+ * KARTIN GERÇEK DOLULUĞU — klasör klasör.
+ *
+ * SORUN (ölçüldü 23 Eyl 2026): depolama göstergesi yalnız /cache + kökü sayıyordu: 2,3 GB. Kartta
+ * gerçekte 12,3 GB vardı; farkın 8,9 GB'ı yazıcının her baskıyı kaydettiği kamera videoları
+ * (/ipcam), gerisi yazıcı günlükleri (/logger 750 MB, /recorder 400 MB) ve timelapse'ti.
+ * Kart KAPASİTESİ ise yazıcıdan hiçbir yoldan okunamıyor (FTP'de boş alan komutlarının hepsi
+ * 502, MQTT raporunda yalnız "kart takılı") — kullanıcı bir kez girer.
+ */
+export async function bambuStorageSummary(host: string, accessCode: string): Promise<BambuStorageSummary> {
+  return bambuFtpQuery(host, accessCode, async ({ cmd, nextReply, openData, readDataToEnd }) => {
+    const listele = async (dir: string): Promise<RegExpExecArray[] | null> => {
+      const d = await openData();
+      const r150 = await cmd(`LIST ${dir}`);
+      if (r150.code >= 400) {
+        try { d.destroy(); } catch { /* yoksay */ }
+        return null;
+      }
+      const text = await readDataToEnd(d);
+      await nextReply(); // 226
+      const out: RegExpExecArray[] = [];
+      for (const line of text.split("\n")) {
+        const m = LS_LINE.exec(line);
+        if (!m) continue;
+        const ad = m[4].trim();
+        if (!ad || ad === "." || ad === "..") continue;
+        out.push(m);
+      }
+      return out;
+    };
+
+    const kok = (await listele("/")) ?? [];
+    const dosyalar = new Map<string, BambuStorageFile>();
+    const klasorler: BambuStorageFolder[] = [];
+    const ipcam: BambuStorageFile[] = [];
+    let kokBayt = 0;
+    let kokAdet = 0;
+    const altKlasorler: string[] = [];
+    for (const m of kok) {
+      const ad = m[4].trim();
+      if (m[1] === "d") {
+        altKlasorler.push(ad);
+        continue;
+      }
+      if (m[1] !== "-") continue;
+      const boyut = Number(m[2]) || 0;
+      kokBayt += boyut;
+      kokAdet++;
+      dosyalar.set(ad, { name: ad, size: boyut, modified: lsTarihi(m[3]) });
+    }
+    klasorler.push({ name: "/", bytes: kokBayt, count: kokAdet });
+
+    for (const dir of altKlasorler) {
+      if (ATLANAN_KLASORLER.includes(dir)) continue;
+      try {
+        const satirlar = await listele(dir);
+        if (!satirlar) continue;
+        let bayt = 0;
+        let adet = 0;
+        for (const m of satirlar) {
+          if (m[1] !== "-") continue;
+          const ad = m[4].trim();
+          const boyut = Number(m[2]) || 0;
+          bayt += boyut;
+          adet++;
+          // /cache'teki ad kökteki aynı adı ezer (baskı dosyasının asıl yeri /cache).
+          if (dir === BAMBU_FILES_DIR) dosyalar.set(ad, { name: ad, size: boyut, modified: lsTarihi(m[3]) });
+          if (dir === "ipcam") ipcam.push({ name: ad, size: boyut, modified: lsTarihi(m[3]) });
+        }
+        klasorler.push({ name: dir, bytes: bayt, count: adet });
+      } catch { /* klasör okunamadı → atla, toplam biraz eksik kalır */ }
+    }
+
+    ipcam.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0) || b.name.localeCompare(a.name));
+    return {
+      files: [...dosyalar.values()].sort((a, b) => b.size - a.size),
+      folders: klasorler,
+      ipcamFiles: ipcam,
+    };
+  });
+}
+
+/** Kamera kayıtlarını sil (/ipcam). Yalnız düz dosya adları kabul edilir. Silinen sayısı döner. */
+export async function bambuDeleteIpcam(host: string, accessCode: string, names: string[]): Promise<number> {
+  if (!names.length) return 0;
+  return bambuFtpQuery(host, accessCode, async ({ cmd }) => {
+    let ok = 0;
+    for (const n of names) {
+      if (!n || n.includes("/") || n.includes("\\") || n.startsWith(".")) continue;
+      const r = await cmd(`DELE ipcam/${n}`);
       if (r.code < 400) ok++;
     }
     return ok;

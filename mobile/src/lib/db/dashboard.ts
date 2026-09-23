@@ -37,6 +37,18 @@ export async function getOrderMatchProducts(): Promise<ProductDetail[]> {
 const SUPERSET_TTL_MS = 30_000;
 let supersetCache: { at: number; promise: Promise<SupersetProduct[]> } | null = null;
 
+/**
+ * Tamponu boşalt — ürün verisi DEĞİŞTİĞİNDE ve kullanıcı elle yenilediğinde çağrılır.
+ *
+ * ⚠️ SAHADA YAŞANDI (23 Eyl 2026): stok değişince ekran listeyi tazeliyordu ama tazeleme bu
+ * 30 sn'lik tampondan DEĞİŞİKLİKTEN ÖNCEKİ veriyi alıp iyimser (doğru) değerin üstüne
+ * yazıyordu. Ürün detayında stok yeniydi, listeye dönünce eski stok görünüyordu; aşağı çekip
+ * yenilemek de 30 sn boyunca aynı eski veriyi getiriyordu ("refresh yok").
+ */
+export function invalidateProductSuperset(): void {
+  supersetCache = null;
+}
+
 function fetchSuperset(): Promise<SupersetProduct[]> {
   if (supersetCache && Date.now() - supersetCache.at < SUPERSET_TTL_MS) {
     return supersetCache.promise;

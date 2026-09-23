@@ -24,6 +24,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
+import { invalidateProductSuperset } from "@/lib/db/dashboard";
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
 import { adjustProductStock, getPriceHistory, setProductAlias, type PriceChange } from "@/lib/db/products";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -88,8 +89,12 @@ export default function ProductDetailScreen() {
       );
     },
     onSettled: () => {
+      // Tampon ÖNCE boşalır: yoksa liste tazelemesi yazımdan önceki stoğu getirip doğru
+      // değerin üstüne yazıyordu (bkz. invalidateProductSuperset).
+      invalidateProductSuperset();
       qc.invalidateQueries({ queryKey: ["product", id] });
       qc.invalidateQueries({ queryKey: ["dashboard-data"] });
+      qc.invalidateQueries({ queryKey: ["match-products"] });
       qc.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
@@ -108,6 +113,14 @@ export default function ProductDetailScreen() {
     },
     onError: (_e, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(["product", id], ctx.prev);
+    },
+    onSuccess: (_d, a) => {
+      // Takma ad listede de görünüyor — liste önbelleği yeniden kurulmadan yamalanır.
+      invalidateProductSuperset();
+      const v = a.trim() || null;
+      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
+        o ? o.map((p) => (p.id === id ? { ...p, alias: v } : p)) : o
+      );
     },
   });
 

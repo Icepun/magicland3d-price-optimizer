@@ -3,7 +3,7 @@ import { asamaOlcer } from "@/lib/server-perf-log";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
-import { mapBambuState, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
+import { mapBambuState, bambuAtlananlar, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
 import { fileMatchKey, deepFileMatchKey } from "@/core/printers/file-match";
 import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
 import { etaHafizasiOku, etaHafizasiYaz } from "@/core/printers/eta-memory";
@@ -481,6 +481,12 @@ export async function GET(req: NextRequest) {
             level: bs.speedLevel,
           },
           slots,
+          // Parça atlama: baskı sürerken düğme açık; parçalar dosyadan diyalog açılınca okunur
+          // (5 sn'lik yoklamaya dosya okuma bindirilmez). Atlananlar rapordaki `s_obj`'dan.
+          parts:
+            bStatus === "printing" || bStatus === "paused"
+              ? { current: null, excluded: bambuAtlananlar(c.host, c.accessCode, c.serial).map(String), count: 0 }
+              : undefined,
           job: bJob,
         };
       }

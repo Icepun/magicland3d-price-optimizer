@@ -1,4 +1,4 @@
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 import { dbEpochMs } from "@core/sqlite-date";
 import { tarifeDonemSiniri } from "@core/tariff-period";
 
@@ -93,7 +93,8 @@ export async function saveAdBudget(input: {
 
   // ⚠️ TARİHLER ISO METİN (masaüstü Prisma da öyle yazıyor). Epoch-ms sayı yazılırsa SQLite'ta
   // tamsayı < metin olduğu için dönem filtreleri bu satırları sessizce eler.
-  await batch([
+  // TEK PARÇA: eski dönem kapanıp yenisi yazılamazsa reklam bütçesi tamamen kaybolurdu.
+  await writeBatch([
     {
       sql: `UPDATE AdBudget SET validTo = ?
              WHERE platform = ? AND (validTo IS NULL OR ${dbEpochMs("validTo")} >= ?)`,

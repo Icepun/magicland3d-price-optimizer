@@ -40,7 +40,8 @@ export function startBackgroundPrint(
   const set = (v: ActivePrint | null) => qc.setQueryData(key, v);
   set({ stage: "upload", pct: 0, label: opts.label, startedAt });
 
-  void runPrintStream(opts.fileId, opts.printOpts ?? {}, (p) => {
+  // Hedef yazıcı AÇIKÇA gider: dosya aynı ailedeki başka yazıcıya (ör. diğer U1) yüklenmiş olabilir.
+  void runPrintStream(opts.fileId, { ...opts.printOpts, printerId: opts.printerId }, (p) => {
     if (p.stage === "done") return; // done → kart normal "yazdırıyor" job'a döner (aşağıda temizlenir)
     set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt });
   })

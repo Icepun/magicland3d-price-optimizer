@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +24,7 @@ export function ImageMobileFixCard() {
   const qc = useQueryClient();
   const { data: products = [] } = useQuery<Prod[]>({
     queryKey: ["products", "all"],
-    queryFn: () => fetch("/api/products?filter=all").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/products?filter=all"),
     staleTime: 60_000,
   });
   const localImages = (Array.isArray(products) ? products : []).filter(

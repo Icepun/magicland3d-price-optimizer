@@ -10,6 +10,7 @@ import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
 
 import { Chip } from "@/components/kit/Chip";
 import { Button, ErrorState, Glass, Input, Money, Screen, Segmented, Shimmer, SubHeader, Tint, Txt } from "@/components/kit";
+import { invalidateProductSuperset } from "@/lib/db/dashboard";
 import { getProductDetail, getVariantGroup } from "@/lib/db/product-detail";
 import { getFilamentTypes, saveProductCostBatch, type CostInput } from "@/lib/db/cost-save";
 import { getSettingsMap } from "@/lib/db/rules";
@@ -442,6 +443,8 @@ export default function EditCostScreen() {
       ) {
         enqueueSave(payload);
       }
+      // Tampon önce boşalır — yoksa liste yeni maliyeti 30 sn boyunca eski veriyle ezerdi.
+      invalidateProductSuperset();
       void qc.invalidateQueries({ queryKey: ["product"] });
       void qc.invalidateQueries({ queryKey: ["dashboard-data"] });
       void qc.invalidateQueries({ queryKey: ["match-products"] });

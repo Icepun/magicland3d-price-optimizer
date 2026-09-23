@@ -97,9 +97,40 @@ export function govdeYazmaIceriyor(body: unknown): boolean {
   return /\b(insert|update|delete|replace|create|drop|alter|pragma|begin|commit|vacuum)\b/i.test(metin);
 }
 
+/** Girdi bir `Request` nesnesi mi? (libSQL istemcisi fetch'i böyle çağırıyor — aşağıya bak.) */
+function istekNesnesi(x: unknown): Request | null {
+  return typeof Request !== "undefined" && x instanceof Request ? x : null;
+}
+
+/**
+ * Request gövdesinde yazma var mı? Gövde klonlanarak okunur — asıl nesne tüketilmez.
+ * Okunamıyorsa "var" say (yanlış pozitif yalnız bir yavaşlık, yanlış negatif VERİ BOZAR).
+ */
+async function istekYazmaIceriyor(istek: Request | null): Promise<boolean> {
+  if (!istek) return true;
+  if (istek.body == null) return false;
+  try {
+    return govdeYazmaIceriyor(await istek.clone().text());
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Verilen fetch'i zaman aşımı + (yalnız okumada) tek yeniden denemeyle sarar.
  * `temel` verilmezse global fetch kullanılır (test bunu kendi sahte fetch'iyle çağırır).
+ *
+ * ⚠️ libSQL'in HTTP istemcisi fetch'i TEK ARGÜMANLA, hazır bir `Request` nesnesiyle çağırıyor
+ * (`fetch(new Request(url, { method: "POST", body }))`). Bu sarmal ilk yazıldığında iki şey
+ * varsayılmıştı, ikisi de yanlıştı:
+ *   1. Aynı nesneyle ikinci kez fetch yapılabilir → YAPILAMAZ: ilk deneme gövdeyi tüketiyor,
+ *      ikinci deneme "Request object that has already been used" ile çöküyordu. Günlükte
+ *      1.196 kez (tek günde 322) — kurtarma denemesi BİR KEZ BİLE çalışmamıştı.
+ *   2. Gövde `init.body`'de → DEĞİL: `init` hiç yok, her istek "okuma" sanılıyordu. Yani
+ *      yazma koruması kördü; çift yazma olmamasının tek sebebi 1. hatanın denemeyi öldürmesiydi.
+ * Çözüm: ilk denemeden ÖNCE klon alınır (okunmadıkça maliyeti yok); yazma kontrolü ve yeniden
+ * deneme o klondan yapılır. İkisini ayrı ayrı düzeltmek YASAK — yalnız 1'i düzeltmek zaman
+ * aşımına uğrayan yazmaları iki kez uygular.
  */
 export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): FetchLike {
   const alt: FetchLike =
@@ -110,8 +141,9 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
   const birKez = (input: unknown, init?: { signal?: AbortSignal; body?: unknown }) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), sure);
-    // Çağıranın kendi iptal sinyali varsa onu da dinle — yoksa iptal yutulurdu.
-    const disSinyal = init?.signal;
+    // Çağıranın kendi iptal sinyali varsa onu da dinle — yoksa iptal yutulurdu. Request
+    // nesnesinin kendi sinyali de sayılır: init'teki sinyal onu EZER.
+    const disSinyal = init?.signal ?? istekNesnesi(input)?.signal;
     if (disSinyal) {
       if (disSinyal.aborted) ctrl.abort();
       else disSinyal.addEventListener("abort", () => ctrl.abort(), { once: true });
@@ -121,6 +153,9 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
 
   return async (input, init) => {
     const bas = Date.now();
+    const istek = istekNesnesi(input);
+    // Yeniden deneme için yedek — ilk deneme asıl nesnenin gövdesini tüketecek.
+    const yedek = istek && !yenidenKapali ? istek.clone() : null;
     try {
       const r = await birKez(input, init);
       const gecen = Date.now() - bas;
@@ -130,16 +165,17 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
       const gecen = Date.now() - bas;
       olayEkle("iptal", gecen);
 
-      const disIptal = init?.signal?.aborted === true;
-      const yazma = govdeYazmaIceriyor(init?.body);
-      if (yenidenKapali || disIptal || yazma) throw e;
+      const disIptal = init?.signal?.aborted === true || istek?.signal?.aborted === true;
+      if (yenidenKapali || disIptal) throw e;
+      const yazma = istek ? await istekYazmaIceriyor(yedek) : govdeYazmaIceriyor(init?.body);
+      if (yazma) throw e;
 
       /**
        * TAZE BAĞLANTIYLA TEK DENEME. Ölçüm: uygulama 18-20 sn takılıyken ayrı süreç aynı
        * sorguyu 72-73 ms'de aldı — yani ölen bağlantıydı, hizmet değil.
        */
       olayEkle("yeniden-denendi", gecen);
-      const r = await birKez(input, init);
+      const r = await birKez(yedek ?? input, init);
       olayEkle("yeniden-deneme-basarili", Date.now() - bas);
       return r;
     }

@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,7 +35,7 @@ type TestState =
 export function R2StorageCard() {
   const { data: settings } = useQuery<Record<string, string>>({
     queryKey: ["app-settings-r2"],
-    queryFn: () => fetch("/api/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/settings"),
   });
   return (
     <R2StorageForm

@@ -1,4 +1,4 @@
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 
 export interface FilamentType {
   id: string;
@@ -123,7 +123,8 @@ export async function saveProductCostBatch(
       now,
     ],
   });
-  await batch([
+  // TEK PARÇA: maliyet, desi ve varyant kopyaları birlikte yazılır ya da hiçbiri.
+  await writeBatch([
     upsert(productId),
     { sql: `UPDATE Product SET desi = ?, updatedAt = ? WHERE id = ?`, args: [desi, now, productId] },
     ...alsoProductIds.filter((pid) => pid !== productId).map(upsert),

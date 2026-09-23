@@ -3,13 +3,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { patchProductsInCache } from "@/lib/products-cache";
-
-type ProductLike = { id: string; stock: number };
-/** Ürün detayı cache'i — varyant grubu üyelerinin stoğu BURADA da kopya durur. */
-type ProductDetailLike = ProductLike & {
-  variantGroup?: { products?: { id: string; stock: number }[] } | null;
-};
+import { markStockWritePending, patchProductsInCache, patchStocksInCache } from "@/lib/products-cache";
 
 /**
  * Optimistic stok yazıcı (masaüstü).
@@ -52,26 +46,10 @@ export function useStockWriter() {
 
   const applyOptimistic = useCallback(
     (id: string, stock: number) => {
-      qc.setQueryData<ProductLike | undefined>(["product", id], (old) =>
-        old ? { ...old, stock } : old
-      );
-      qc.setQueriesData<ProductLike[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, stock } : p)) : old
-      );
-      // VARYANT LİSTELERİ: her varyantın detay cache'i, grup KARDEŞLERİNİN stoğunu da kopya tutar.
-      // Yalnız ["product", id] güncellenince diğer varyanta geçildiğinde ESKİ stok görünüyordu
-      // (ana sayfaya dönmeden düzelmiyordu). Tüm ürün detaylarındaki grup üyesini de yamala.
-      qc.setQueriesData<ProductDetailLike | undefined>({ queryKey: ["product"] }, (old) => {
-        const members = old?.variantGroup?.products;
-        if (!members?.some((p) => p.id === id)) return old;
-        return {
-          ...old!,
-          variantGroup: {
-            ...old!.variantGroup!,
-            products: members.map((p) => (p.id === id ? { ...p, stock } : p)),
-          },
-        };
-      });
+      // Liste, ürün detayı ve VARYANT kardeşlerinin detay kopyaları tek yerde yamalanır
+      // (bkz. patchStocksInCache). Varyant kopyası atlanınca diğer varyanta geçildiğinde ESKİ
+      // stok görünüyordu.
+      patchStocksInCache(qc, [{ id, stock }]);
     },
     [qc]
   );
@@ -119,6 +97,8 @@ export function useStockWriter() {
         }
       } finally {
         inFlight.current.delete(id);
+        // Yazım bitti → uzaktan gelen stok tazelemesi artık bu ürünü güncelleyebilir.
+        if (!pending.current.has(id)) markStockWritePending(id, false);
       }
 
       if (failed) {
@@ -141,6 +121,7 @@ export function useStockWriter() {
     (id: string, value: number) => {
       const stock = Math.max(0, Math.round(value));
       pending.current.set(id, stock);
+      markStockWritePending(id, true);
       applyOptimistic(id, stock);
       const prev = timers.current.get(id);
       if (prev) clearTimeout(prev);

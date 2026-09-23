@@ -7,6 +7,7 @@ import {
   matchPrintedModel,
   type ModelFileCandidate,
 } from "@/lib/print-file-signature";
+import { familyMemberIds } from "@/core/printers/printer-family";
 
 export const dynamic = "force-dynamic";
 
@@ -37,10 +38,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     // Uzak-HTTP libSQL'de her sorgu ~96ms ve SIRALI → sorgu sayısı kadar, çekilen satır da önemli.
     // İmza varsa (bu uygulamadan başlatılan her baskıda var) doğrudan içerikten daralt:
     // tüm liste taranmaz, tek satır döner.
+    // AİLE: U1 Üst, U1 Alt için yüklenmiş dosyayı basıyor olabilir (aynı marka + model dosyaları
+    // ortak — bkz. core/printers/printer-family). Arama kardeş yazıcıların dosyalarını da kapsar.
+    const aile = familyMemberIds(
+      await prisma.printerConfig.findMany({ select: { id: true, type: true, brand: true, model: true } }),
+      id,
+    );
     const sig = extractContentSignature(filename);
     const narrow: Candidate[] = sig
       ? await prisma.productModelFile.findMany({
-          where: { printerConfigId: id, contentMd5: { startsWith: sig } },
+          where: { printerConfigId: { in: aile }, contentMd5: { startsWith: sig } },
           select: CANDIDATE_SELECT,
           orderBy: { createdAt: "desc" }, // aynı dosya varyantlara kopyalanmışsa hep aynı satır dönsün
           take: 50,
@@ -51,7 +58,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     let match = narrow.length ? matchPrintedModel(filename, narrow) : null;
     if (!match || (!match.hit && match.reason !== "ambiguous")) {
       const rows = await prisma.productModelFile.findMany({
-        where: { printerConfigId: id },
+        where: { printerConfigId: { in: aile } },
         select: CANDIDATE_SELECT,
         orderBy: { createdAt: "desc" },
         take: 500,

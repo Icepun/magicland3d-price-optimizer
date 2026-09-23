@@ -1,4 +1,4 @@
-import { batch, execute, query } from "@/lib/turso";
+import { execute, query, writeBatch } from "@/lib/turso";
 
 export interface Spool {
   id: string;
@@ -49,7 +49,7 @@ export async function consumeSpool(
   opts?: { productId?: string | null; productName?: string | null; note?: string | null }
 ): Promise<number> {
   const now = new Date().toISOString();
-  const [, , , after] = await batch([
+  const [, , , after] = await writeBatch([
     {
       sql: `UPDATE FilamentSpool SET remainingGrams = MAX(0, remainingGrams - ?), updatedAt = ? WHERE id = ?`,
       args: [grams, now, id],

@@ -34,6 +34,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { cn } from "@/lib/utils";
 import { thumbUrl } from "@/lib/image";
+import { useFreshStocks } from "@/lib/use-fresh-stocks";
 import {
   KAPSAM_SECENEKLERI, basilacakAdet, gunlukSatis, hedefStok,
   parseHedefModu, parseKapsamGun, parseTavan,
@@ -221,13 +222,15 @@ function printerStatusLabel(printer: QueuePrinter): { label: string; cls: string
 }
 
 export default function PlannerPage() {
-  const { data, isLoading } = useQuery<ProductRow[]>({
+  const { data, isLoading, dataUpdatedAt } = useQuery<ProductRow[]>({
     // Aktif ürünler (~442KB) — Ürünler/Filament ile AYNI key → tek fetch, sayfalar arası paylaşılır.
     // (Raporlar bu gövdeyi ARTIK paylaşmıyor; kendi küçük kârlılık uçtan noktasını çekiyor.)
     queryKey: ["products", "active"],
     queryFn: () => fetchJson("/api/products?filter=active"),
     staleTime: 60_000,
   });
+  // Basılacak adet stoğa bağlı: telefonda değişen stok da hesaba girsin (tek küçük sorgu).
+  useFreshStocks(dataUpdatedAt || undefined);
   const products = useMemo(() => (Array.isArray(data) ? data : []), [data]);
 
   // Satış geçmişi ayrı ve hafif bir uçtan gelir → ürün listesini bekletmez.

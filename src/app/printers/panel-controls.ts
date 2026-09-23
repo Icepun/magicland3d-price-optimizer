@@ -399,7 +399,8 @@ export function parcaIptalDurumu(input: {
   basiyor: boolean;
   parcaVar: boolean;
 }): ParcaIptalDurumu {
-  if (input.tip !== "moonraker") {
+  // Bambu da destekliyor (A1 yazılımı 01.08: skip_objects); parçalar basılan dosyadan okunur.
+  if (input.tip !== "moonraker" && input.tip !== "bambu") {
     return { acik: false, ipucu: "Bu yazıcı parça iptalini desteklemiyor." };
   }
   if (!input.basiyor) {

@@ -8,7 +8,8 @@ import {
   moonrakerSetPauseAtLayer, moonrakerChangeFilament, fetchMoonrakerCaps, fetchMoonrakerStatus,
   moonrakerExcludeObject, moonrakerUnexcludeObject,
 } from "@/core/printers/moonraker";
-import { bambuControl, bambuSetSpeedLevel, BAMBU_SPEED_LEVELS } from "@/core/printers/bambu";
+import { bambuControl, bambuSetSpeedLevel, bambuSkipObjects, getBambuStatus, BAMBU_SPEED_LEVELS } from "@/core/printers/bambu";
+import { bambuParcaBilgisi } from "@/lib/bambu-parts";
 import { validateSpeedChange, validatePauseLayer } from "@/core/printers/controls";
 import { bumpMoonrakerStatus, bumpBambuStatus } from "@/core/printers/status-cache";
 
@@ -62,8 +63,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         bumpBambuStatus(cfg.host, cfg.serial);
         return NextResponse.json({ ok: true, speedLevel: applied });
       }
-      if (action === "light" || action === "pauseAtLayer" || action === "changeFilament"
-        || action === "excludeObject" || action === "unexcludeObject") {
+      /**
+       * PARÇA ATLA. "Ad" yazıcıya gidecek kimliktir (identify_id); parça listesi uçtan gelir.
+       * Kimlik o anki dosyanın parçalarından biri mi — sunucu da doğrular (uydurma kimlik
+       * yazıcıya hiç gitmez). Bambu'da geri alma YOK: atlanan parça bir daha basılmaz.
+       */
+      if (action === "excludeObject") {
+        const kimlik = Number((body.objectName ?? "").trim());
+        if (!Number.isFinite(kimlik) || kimlik <= 0) {
+          return NextResponse.json({ error: "Parça seçilmedi." }, { status: 400 });
+        }
+        const s = await getBambuStatus(cfg.host, cfg.accessCode, cfg.serial);
+        const bilgi = s.filename ? await bambuParcaBilgisi(cfg.id, s.filename) : null;
+        if (!bilgi?.etiketli || !bilgi.nesneler.some((n) => n.id === kimlik)) {
+          return NextResponse.json({ error: "Bu parça şu anki baskıda bulunamadı." }, { status: 400 });
+        }
+        await bambuSkipObjects(cfg.host, cfg.accessCode, cfg.serial, [kimlik]);
+        bumpBambuStatus(cfg.host, cfg.serial);
+        return NextResponse.json({ ok: true });
+      }
+      if (action === "unexcludeObject") {
+        return NextResponse.json({ error: "Bambu'da atlanan parça geri alınamaz." }, { status: 400 });
+      }
+      if (action === "light" || action === "pauseAtLayer" || action === "changeFilament") {
         return NextResponse.json(
           { error: `${cfg.name} bu özelliği desteklemiyor — yazıcının kendi ekranından yapılabilir.` },
           { status: 400 },

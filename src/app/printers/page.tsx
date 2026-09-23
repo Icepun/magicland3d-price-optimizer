@@ -50,6 +50,7 @@ import {
   type NozzleDot, type PanelPrinter, type PrinterJob, type PrinterStatus, type SlotChip,
   type StageFrame, type StatusTone, type StatusVisual,
 } from "./panel-view";
+import type { PartPolygon } from "./part-map";
 // Kontrol düğmelerinin kararları (hangi düğme etkin, hangi hız kademesi seçilebilir, iptal
 // onayında ne yazacak…) — saf ve test edilebilir tek yerde.
 import {
@@ -1328,8 +1329,13 @@ function PrinterCardInner({
           fetchParts={async () => {
             const r = await fetch(`/api/printers/${printer.id}/parts`);
             if (!r.ok) throw new Error("Parça listesi alınamadı.");
-            return (await r.json()).parts ?? [];
+            const j = (await r.json()) as { parts?: PartPolygon[]; neden?: string };
+            // Parça yoksa sunucu NEDENİNİ söyler (etiketsiz dosya, kütüphanede olmayan dosya…).
+            if (!j.parts?.length && j.neden) throw new Error(j.neden);
+            return j.parts ?? [];
           }}
+          // Bambu'da atlanan parça geri getirilemiyor — "Geri al" gösterilmez.
+          geriAlinabilir={printer.type !== "bambu"}
           onExclude={async (name: string) => {
             const r = await fetch(`/api/printers/${printer.id}/action`, {
               method: "POST", headers: { "Content-Type": "application/json" },
@@ -1424,7 +1430,10 @@ function ConnectionTestButton({ printerId }: { printerId: string }) {
     setAcik(true);
     try {
       const r = await fetch(`/api/printers/${printerId}/diagnose`, { method: "POST" });
-      setSonuc(await r.json());
+      // Sunucu hata verirse gövde test sonucu değil ({ error }) — çizilirse ekran çöker.
+      const j = (await r.json().catch(() => null)) as TestSonucu | null;
+      if (!r.ok || !j || !Array.isArray(j.asamalar)) throw new Error("test");
+      setSonuc(j);
     } catch {
       setSonuc({
         asamalar: [],
@@ -1911,7 +1920,7 @@ function useLiveBuildModel(
   // 1) Baskı → model kaydı (dosya adından, hash-eki/uzantı toleranslı). Uzun cache: aynı iş boyu sabit.
   const modelQ = useQuery<{ model: PrintModelInfo | null }>({
     queryKey: ["print-model", printerId, filename],
-    queryFn: () => fetch(`/api/printers/${printerId}/print-model?filename=${encodeURIComponent(filename || "")}`).then((r) => r.json()),
+    queryFn: () => fetchJson(`/api/printers/${printerId}/print-model?filename=${encodeURIComponent(filename || "")}`),
     enabled: printing && !!filename,
     staleTime: 10 * 60_000,
     retry: 1,
@@ -2342,12 +2351,31 @@ interface PrinterStorageResp {
   free: number | null;
   used: number | null;
   files: { name: string; size: number; modified: number | null }[];
+  /** Bambu: kartın doluluğu gruplara ayrılmış (baskı dosyaları, kamera kayıtları, …). */
+  parts?: { key: string; label: string; bytes: number }[];
+  /** Bambu: kullanıcının girdiği kart boyutu (GB); girilmediyse null. */
+  capacityGb?: number | null;
+  /** Bambu: yazıcının kendi kamera kayıtları. */
+  ipcam?: { count: number; bytes: number };
 }
 function fmtBytes(n: number): string {
   if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(1).replace(".", ",")} GB`;
   if (n >= 1024 ** 2) return `${Math.round(n / 1024 ** 2)} MB`;
   return `${Math.max(1, Math.round(n / 1024))} KB`;
 }
+/**
+ * Bambu kartı için ONDALIK birimler: kullanıcı kartı "32 GB" diye giriyor (üreticinin birimi).
+ * İkili birimle gösterilirse "toplam 29,8 GB" çıkar ve dolu + boş, girilen sayıyı tutmaz.
+ */
+function fmtKart(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(1).replace(".", ",")} GB`;
+  if (n >= 1e6) return `${Math.round(n / 1e6)} MB`;
+  return `${Math.max(1, Math.round(n / 1e3))} KB`;
+}
+/** Yazıcıya göre doğru birim. */
+const depoBoyutu = (kind: PrinterStorageResp["kind"] | undefined, n: number) => (kind === "bambu" ? fmtKart(n) : fmtBytes(n));
+/** A1'e takılan yaygın kart boyutları — tek dokunuşla seçilir. */
+const KART_BOYUTLARI = [8, 16, 32, 64, 128, 256];
 
 function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: string; accent: string; activeFile?: string | null }) {
   const [open, setOpen] = useState(false);
@@ -2389,8 +2417,13 @@ function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: str
             </span>
             {/* Barla TUTARLI metin = boş yer (eski "kullanılan / toplam" kullanıcının o kadar dosyası
                 varmış gibi görünüyordu; oysa doluluğun çoğu yazıcının kendi sistemi). */}
-            <span className="tabular-nums shrink-0">{st.files.length} dosya · {fmtBytes(st.free!)} boş</span>
+            <span className="tabular-nums shrink-0">{st.files.length} dosya · {depoBoyutu(st.kind, st.free!)} boş</span>
           </>
+        ) : st.kind === "bambu" && st.used != null ? (
+          // Kart boyutu girilmemiş: GERÇEK doluluk (kamera kayıtları dahil) + kısa yönlendirme.
+          <span className="flex-1 text-left tabular-nums">
+            {fmtKart(st.used)} dolu <span className="text-primary/80">· kart boyutunu gir</span>
+          </span>
         ) : (
           <span className="flex-1 text-left tabular-nums">{st.files.length} dosya · {fmtBytes(filesBytes)}</span>
         )}
@@ -2464,7 +2497,9 @@ function PrinterStorageDialog({ printerId, activeFile, onClose }: { printerId: s
           <p className="text-xs text-foreground/80 mt-1">
             Baskı dosyaların: <span className="font-semibold tabular-nums">{files.length} dosya · {fmtBytes(filesBytes)}</span>
           </p>
-          {pctUsed != null && st ? (
+          {st?.kind === "bambu" ? (
+            <BambuKartBolumu printerId={printerId} st={st} />
+          ) : pctUsed != null && st ? (
             <div className="mt-2 space-y-1">
               <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
                 <div
@@ -2528,6 +2563,146 @@ function PrinterStorageDialog({ printerId, activeFile, onClose }: { printerId: s
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * BAMBU KARTI — gerçek doluluk, kart boyutu ve kamera kayıtları.
+ *
+ * Yazıcı kart boyutunu hiçbir yoldan bildirmiyor; kullanıcı bir kez seçer. Doluluk kartın TAMAMI:
+ * sahada 12,3 GB'ın 8,9 GB'ı yazıcının kendi kamera kayıtlarıydı ve eski gösterge onları hiç
+ * saymıyordu (2,3 GB gösteriyordu).
+ */
+function BambuKartBolumu({ printerId, st }: { printerId: string; st: PrinterStorageResp }) {
+  const qc = useQueryClient();
+  const [boyutSec, setBoyutSec] = useState(false);
+  const [kayitOnay, setKayitOnay] = useState(false);
+  const used = st.used ?? 0;
+  const pct = st.total ? Math.min(100, Math.round((used / st.total) * 100)) : null;
+  const bolumler = st.parts ?? [];
+  const ipcam = st.ipcam ?? { count: 0, bytes: 0 };
+
+  const kaydet = useMutation({
+    mutationFn: (gb: number | null) =>
+      fetchJson(`/api/printers/${printerId}/storage`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ capacityGb: gb }),
+      }),
+    onSuccess: () => {
+      setBoyutSec(false);
+      void qc.invalidateQueries({ queryKey: ["printer-storage", printerId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Kaydedilemedi"),
+  });
+  const kayitTemizle = useMutation({
+    mutationFn: () =>
+      fetchJson<{ deleted: number; keptActive?: boolean }>(`/api/printers/${printerId}/storage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ipcam: "all" }),
+      }),
+    onSuccess: (r) => {
+      setKayitOnay(false);
+      toast.success(
+        r.keptActive
+          ? `${r.deleted} kayıt silindi · sürmekte olan baskının kaydı korundu`
+          : `${r.deleted} kamera kaydı silindi`
+      );
+      void qc.invalidateQueries({ queryKey: ["printer-storage", printerId] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Silinemedi"),
+  });
+
+  const boyutSecici = (
+    <div className="flex flex-wrap gap-1.5 animate-in fade-in slide-in-from-top-1 duration-200">
+      {KART_BOYUTLARI.map((gb) => (
+        <button
+          key={gb}
+          disabled={kaydet.isPending}
+          onClick={() => kaydet.mutate(gb)}
+          className={cn(
+            "rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums transition-all active:scale-95",
+            st.capacityGb === gb ? "border-primary bg-primary/10 text-primary" : "hover:bg-muted"
+          )}
+        >
+          {gb} GB
+        </button>
+      ))}
+      {kaydet.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin self-center text-muted-foreground" />}
+    </div>
+  );
+
+  return (
+    <div className="mt-2 space-y-2.5">
+      {pct != null ? (
+        <div className="space-y-1">
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full transition-[width] duration-700 ease-out"
+              style={{ width: `${pct}%`, background: pct >= 90 ? "oklch(0.63 0.2 25)" : pct >= 75 ? "oklch(0.75 0.15 75)" : "oklch(0.62 0.14 250)" }}
+            />
+          </div>
+          <p className="text-[11px] text-muted-foreground tabular-nums flex items-center gap-1.5">
+            {fmtKart(used)} dolu · {fmtKart(st.free ?? 0)} boş · kart {st.capacityGb} GB
+            <button onClick={() => setBoyutSec((v) => !v)} className="ml-auto text-primary hover:underline">değiştir</button>
+          </p>
+          {boyutSec && boyutSecici}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-primary/25 bg-primary/[0.05] p-2.5 space-y-2">
+          <p className="text-[11px]">
+            Kartta <span className="font-semibold tabular-nums">{fmtKart(used)}</span> dolu. Hafıza kartı kaç GB?
+          </p>
+          {boyutSecici}
+        </div>
+      )}
+
+      {bolumler.length > 0 && (
+        <div className="space-y-1">
+          {bolumler.map((b, i) => (
+            <div
+              key={b.key}
+              className="flex items-center gap-2 text-[11px] animate-in fade-in slide-in-from-left-1 duration-300"
+              style={{ animationDelay: `${i * 50}ms`, animationFillMode: "both" }}
+            >
+              <span className="w-36 shrink-0 truncate text-muted-foreground">{b.label}</span>
+              <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                <span
+                  className="absolute inset-y-0 left-0 rounded-full bg-primary/60 transition-[width] duration-700 ease-out"
+                  style={{ width: `${used > 0 ? Math.max(2, Math.round((b.bytes / used) * 100)) : 0}%` }}
+                />
+              </span>
+              <span className="w-16 shrink-0 text-right tabular-nums">{fmtKart(b.bytes)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {ipcam.count > 0 && (
+        <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-2 text-[11px]">
+          <Camera className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <span className="flex-1">
+            Kamera kayıtları · <span className="tabular-nums">{ipcam.count} video · {fmtKart(ipcam.bytes)}</span>
+          </span>
+          {kayitOnay ? (
+            <span className="flex items-center gap-1 animate-in fade-in duration-200">
+              <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" disabled={kayitTemizle.isPending} onClick={() => setKayitOnay(false)}>
+                Vazgeç
+              </Button>
+              <Button size="sm" variant="destructive" className="h-6 px-2 text-[11px] gap-1" disabled={kayitTemizle.isPending} onClick={() => kayitTemizle.mutate()}>
+                {kayitTemizle.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                Hepsini sil
+              </Button>
+            </span>
+          ) : (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] transition-transform active:scale-95" onClick={() => setKayitOnay(true)}>
+              Temizle
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3211,6 +3386,20 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     if (!picked) return;
     setUploading(true);
     setUploadProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
+    // ÖN KONTROL: aynı dosya (ad + boyut) bu yazıcının AİLESİNDE zaten varsa yeniden yükleme —
+    // ikinci U1'de basmak için aynı dosyalar tekrar tekrar yükleniyordu (834 MB kopya birikti).
+    try {
+      const qs = new URLSearchParams({ printerId: picked.id, name: f.name, size: String(f.size) });
+      const r = await fetch(`/api/custom-print/find?${qs}`);
+      const j = r.ok ? ((await r.json()) as { existing?: CustomUpload | null }) : null;
+      if (j?.existing) {
+        setFile(j.existing);
+        toast.success("Bu dosya kitaplıkta zaten var — yeniden yüklenmedi");
+        setUploading(false);
+        setUploadProg(null);
+        return;
+      }
+    } catch { /* kontrol edilemedi → normal yükleme (sunucu yine de kopya açmaz) */ }
     setUploadsActive(1); // arka plan görselleştirme üretimi bu yükleme boyunca beklesin
     try {
       const data = await uploadCustomModel({ printerConfigId: picked.id, file: f, onProgress: setUploadProg });

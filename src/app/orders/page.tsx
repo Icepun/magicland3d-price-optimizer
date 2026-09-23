@@ -397,9 +397,9 @@ function useFetchStage(active: boolean): FetchStage | null {
     let alive = true;
     const read = () => {
       fetch("/api/orders?stage=1", { cache: "no-store" })
-        .then((r) => r.json())
-        .then((body: FetchStage) => {
-          if (alive) setStage(body);
+        .then((r) => (r.ok ? r.json() : null))
+        .then((body: FetchStage | null) => {
+          if (alive && body) setStage(body);
         })
         .catch(() => {
           /* ilerleme bilgisi kritik değil — çekim etkilenmez */
@@ -424,7 +424,8 @@ export default function OrdersPage() {
     queryFn: ({ signal }) => {
       const url = forceFresh.current ? "/api/orders?fresh=1" : "/api/orders";
       forceFresh.current = false;
-      return fetch(url, { signal }).then((r) => r.json());
+      // fetchJson: sunucu hatası HATA olarak gelir — eskiden hata gövdesi "0 sipariş" diye çiziliyordu.
+      return fetchJson<OrdersResponse>(url, { signal });
     },
     // 5dk taze: sekmeye dönüşte 3 pazaryeri API'sini tekrar çağırma (anında cache). Tazelemek için "Yenile".
     staleTime: 5 * 60_000,
@@ -1004,15 +1005,10 @@ export default function OrdersPage() {
               <p className="font-medium text-amber-400">
                 Raporlara kaydedilemedi
               </p>
+              {/* Ham teknik hata metni kullanıcıya gösterilmez (arayüz kuralı) — sunucu günlüğüne yazılıyor. */}
               <p className="text-xs text-muted-foreground mt-0.5">
                 Siparişler listelendi ama aylık rapora işlenmedi. Yenile&apos;ye bas.
               </p>
-              {data.financeHistory.error && (
-                <details className="mt-1 text-[11px] text-muted-foreground/80">
-                  <summary className="cursor-pointer select-none">Ayrıntı</summary>
-                  <p className="mt-0.5 break-all">{data.financeHistory.error}</p>
-                </details>
-              )}
             </div>
           </CardContent>
         </Card>

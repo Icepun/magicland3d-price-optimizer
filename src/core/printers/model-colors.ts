@@ -560,3 +560,44 @@ export function is3mfSliced(filePath: string): boolean {
     return false;
   }
 }
+
+// ── Bambu parça atlama girdileri ─────────────────────────────────────────────────────────────
+
+/** Parça atlamanın ham girdileri: `slice_info.config` + `plate_*.json` (bkz. bambu-objects). */
+export interface BambuNesneGirdileri {
+  sliceInfo: string | null;
+  plakaJsonlari: Record<string, string>;
+}
+
+const NESNE_GIRDISI = /Metadata\/(slice_info\.config|plate_\d+\.json)$/i;
+
+/** Yerel dosyanın tamamından (yalnız iki küçük girdi açılır). */
+export function bambuNesneGirdileri(buf: Buffer): BambuNesneGirdileri {
+  const sonuc: BambuNesneGirdileri = { sliceInfo: null, plakaJsonlari: {} };
+  try {
+    const files = unzipSync(new Uint8Array(buf), { filter: (f) => NESNE_GIRDISI.test(f.name) });
+    for (const [ad, veri] of Object.entries(files)) {
+      if (/slice_info\.config$/i.test(ad)) sonuc.sliceInfo = strFromU8(veri);
+      else sonuc.plakaJsonlari[ad] = strFromU8(veri);
+    }
+  } catch { /* bozuk zip → boş */ }
+  return sonuc;
+}
+
+/** Buluttaki dosyadan ARALIKLI okuma — dosya indirilmez, yalnız zip dizini + iki girdi. */
+export async function bambuNesneGirdileriAralikli(
+  oku: AralikOkuyucu,
+  toplamBoyut: number,
+): Promise<BambuNesneGirdileri> {
+  const sonuc: BambuNesneGirdileri = { sliceInfo: null, plakaJsonlari: {} };
+  const girdiler = await zipDizini(oku, toplamBoyut);
+  if (!girdiler) return sonuc;
+  for (const g of girdiler) {
+    if (!NESNE_GIRDISI.test(g.ad)) continue;
+    const v = await zipGirdiVerisi(oku, g);
+    if (!v) continue;
+    if (/slice_info\.config$/i.test(g.ad)) sonuc.sliceInfo = v.toString("utf8");
+    else sonuc.plakaJsonlari[g.ad] = v.toString("utf8");
+  }
+  return sonuc;
+}

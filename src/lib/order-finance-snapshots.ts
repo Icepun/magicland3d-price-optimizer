@@ -21,6 +21,47 @@ import {
 } from "./monthly-finance";
 // "Bu satır güncel hesapla mı yazılmış?" — karşılaştırma TEK yerde (bkz. core/finance-version.ts).
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
+import { isPersistableOrderId } from "@/core/trendyol-order-id";
+import { bustCache } from "./route-cache";
+
+/**
+ * Geçersiz kimlikle yazılmış HAYALET satırları temizler (yalnız Trendyol, gerçek paket id'si
+ * olmayanlar — ör. "ty-0").
+ *
+ * NEDEN: Trendyol yeni siparişi ilk saniyelerde paket id'si 0 ile veriyor; eski kod bunu "ty-0"
+ * diye kaydediyordu, gerçek id gelince aynı sipariş İKİNCİ kez yazılıyordu → Raporlar'da çift
+ * sayım (23 Eyl 2026: #11563168410, 779,99 TL). Yazıcılar artık bu kimlikleri yazmıyor
+ * (`isPersistableOrderId`), ama eski satırlar ve güncellenmemiş bir telefonun yazdıkları için
+ * temizlik SÜREKLİ ama seyrek koşar. Ucuz: iki DELETE, çoğu turda 0 satır.
+ */
+const HAYALET_TEMIZLIK_ARALIK_MS = 6 * 60 * 60_000;
+const hayaletTemizlik = ((globalThis as unknown as { __mlhub_hayaletTemizlik?: { sonMs: number } })
+  .__mlhub_hayaletTemizlik ??= { sonMs: 0 });
+
+/**
+ * Test ve tanı için dışa açık: bozuk kimlikli Trendyol satırlarını eşleyen koşul.
+ * `isPersistableOrderId` ile AYNI küme — bilerek dar (yalnız bilinen bozuk kimlikler).
+ */
+export const HAYALET_TRENDYOL_KOSULU =
+  `"platform" = 'trendyol' AND ("externalOrderId" IN ('ty-', 'ty-0', 'ty-null', 'ty-undefined', 'ty-NaN') OR "externalOrderId" LIKE 'ty-gecici-%')`;
+
+export async function purgeInvalidOrderSnapshots(options: { force?: boolean } = {}): Promise<number> {
+  // Yalnız temizlik sıklığı için saat — veritabanına yazılmaz.
+  const turMs = Date.now();
+  if (!options.force && turMs - hayaletTemizlik.sonMs < HAYALET_TEMIZLIK_ARALIK_MS) return 0;
+  hayaletTemizlik.sonMs = turMs;
+  try {
+    const kalem = await prisma.$executeRawUnsafe(`DELETE FROM "OrderItemSnapshot" WHERE ${HAYALET_TRENDYOL_KOSULU}`);
+    const siparis = await prisma.$executeRawUnsafe(`DELETE FROM "OrderFinanceSnapshot" WHERE ${HAYALET_TRENDYOL_KOSULU}`);
+    const toplam = Number(kalem) + Number(siparis);
+    // Aylık finans gövdesi bu satırlarla hesaplanmıştı → tazelensin.
+    if (toplam > 0) bustCache("finance-monthly:");
+    return toplam;
+  } catch {
+    hayaletTemizlik.sonMs = 0; // bir sonraki yazımda yeniden dene
+    return 0;
+  }
+}
 
 /**
  * Siparişin TEK BİR kaleminin kalıcı geçmişe yazılan hâli.
@@ -500,8 +541,14 @@ export async function persistOrderFinanceSnapshots(
     const orderedAt = new Date(order.date);
     if (!Number.isFinite(orderedAt.getTime())) return [];
     const externalOrderId = canonicalFinanceOrderId(order.platform, order.id);
+    // Trendyol'un henüz paket id'si vermediği sipariş GEÇİCİ kimlik taşır — yazılırsa gerçek id
+    // gelince ikinci satır açılır ve Raporlar siparişi iki kez sayar. Birkaç saniye sonraki
+    // turda gerçek kimlikle yazılır.
+    if (!isPersistableOrderId(order.platform, externalOrderId)) return [];
     return [{ order, orderedAt, externalOrderId }];
   });
+
+  await purgeInvalidOrderSnapshots();
 
   if (valid.length === 0) return emptyWriteResult();
 

@@ -57,13 +57,27 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
  */
 export async function runPrintStream(
   fileId: string,
-  opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs },
+  opts: {
+    amsMapping?: number[];
+    useAms?: boolean;
+    prefs?: PrintPrefs;
+    /**
+     * Hedef yazıcı. Verilmezse dosyanın yüklendiği yazıcı. Aynı ailedeki (aynı marka + model)
+     * başka bir yazıcı da olabilir — iki U1 aynı dosyayı basar.
+     */
+    printerId?: string;
+  },
   onProgress: (p: PrintProg) => void,
 ): Promise<void> {
   const res = await fetch(`/api/models/${fileId}/print`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amsMapping: opts.amsMapping, useAms: opts.useAms, prefs: opts.prefs }),
+    body: JSON.stringify({
+      amsMapping: opts.amsMapping,
+      useAms: opts.useAms,
+      prefs: opts.prefs,
+      printerId: opts.printerId,
+    }),
   });
   if (!res.ok || !res.body) {
     const j = await res.json().catch(() => ({}) as { error?: string });

@@ -394,8 +394,17 @@ describe("parcaIptalDurumu", () => {
     expect(d.ipucu).toMatch(/baskı/i);
   });
 
-  it("Bambu'da desteklenmiyor — ama düğme yine de bir şey söylüyor", () => {
+  /**
+   * 23 Eyl 2026: Bambu da destekliyor (A1 yazılımı 01.08 raporu `s_obj` taşıyor; komut
+   * `skip_objects`). Parçalar basılan 3MF'ten okunur — etiket yoksa diyalog nedenini söyler.
+   */
+  it("Bambu baskı sürerken AÇIK", () => {
     const d = parcaIptalDurumu({ tip: "bambu", basiyor: true, parcaVar: true });
+    expect(d.acik).toBe(true);
+  });
+
+  it("desteklemeyen yazıcı tipinde kapalı ve bir şey söylüyor", () => {
+    const d = parcaIptalDurumu({ tip: "sim", basiyor: true, parcaVar: true });
     expect(d.acik).toBe(false);
     expect(d.ipucu.length).toBeGreaterThan(0);
   });

@@ -83,19 +83,45 @@ function persistDisk(key: string, entry: Entry): void {
   }
 }
 
+/**
+ * Süren hesabın jetonu. `bustCaches` jetonu geçersiz kılınca o hesabın sonucu önbelleğe YAZILMAZ.
+ *
+ * SORUN (ölçülmeden önce kodda bulundu, 23 Eyl 2026): temizlik yalnız HAZIR kayıtları siliyordu.
+ * Temizlikten ÖNCE başlamış bir hesap (ör. Ürünler listesinin arka plan tazelemesi, uzak veritabanında
+ * 1-3 sn sürüyor) temizlikten SONRA bitince eski veriyi "taze" damgasıyla belleğe ve diske
+ * yazıyordu. Kullanıcı stoğu değiştiriyor, liste 2 dakika boyunca eski stoğu göstermeye devam
+ * ediyordu. Artık temizlik o hesabı da "bayat" sayar: sonucu çağırana döner ama saklanmaz, bir
+ * sonraki istek yeni hesabı başlatır.
+ */
+const jetonlar = new Map<string, symbol>();
+
 function runAndStore<T>(key: string, compute: () => Promise<T>): Promise<T> {
-  const p = compute()
+  const jeton = Symbol(key);
+  jetonlar.set(key, jeton);
+  const p: Promise<T> = compute()
     .then((d) => {
-      const entry = { at: Date.now(), data: d };
-      store.set(key, entry);
-      persistDisk(key, entry);
+      if (jetonlar.get(key) === jeton) {
+        const entry = { at: Date.now(), data: d };
+        store.set(key, entry);
+        persistDisk(key, entry);
+      }
       return d;
     })
     .finally(() => {
-      inflight.delete(key);
+      if (inflight.get(key) === p) inflight.delete(key);
+      if (jetonlar.get(key) === jeton) jetonlar.delete(key);
     });
   inflight.set(key, p as Promise<unknown>);
   return p;
+}
+
+/** Temizlenen anahtarların süren hesaplarını geçersiz kıl (sonuçları saklanmaz, yeni istek yeniden hesaplar). */
+function suranHesaplariGecersizKil(eslesir: (key: string) => boolean): void {
+  for (const k of [...jetonlar.keys()]) {
+    if (!eslesir(k)) continue;
+    jetonlar.delete(k);
+    inflight.delete(k);
+  }
 }
 
 export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<T>): Promise<T> {
@@ -188,6 +214,7 @@ export function bustCache(prefix?: string): void {
     }
     store.clear();
     diskChecked.clear();
+    suranHesaplariGecersizKil(() => true);
     return;
   }
   bustCaches([prefix]);
@@ -204,6 +231,8 @@ export function bustCache(prefix?: string): void {
 export function bustCaches(prefixes: string[]): void {
   const list = prefixes.filter((p) => p.length > 0);
   if (list.length === 0) return;
+  // Temizlikten önce başlamış hesaplar bittiğinde eski veriyi "taze" diye yazmasın.
+  suranHesaplariGecersizKil((k) => list.some((prefix) => k.startsWith(prefix)));
   for (const k of [...store.keys()]) {
     if (!list.some((prefix) => k.startsWith(prefix))) continue;
     store.delete(k);

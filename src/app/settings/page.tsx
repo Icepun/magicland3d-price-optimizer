@@ -151,16 +151,20 @@ function DataManagementCard() {
     setImporting(true);
     try {
       const text = await file.text();
-      const data = JSON.parse(text);
-      const res = await fetch("/api/data/import", {
+      let data: unknown;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error("dosya okunamadı");
+      }
+      const result = await fetchJson<{
+        stats: { products: number; listings: number; commissionRules: number; cargoRules: number; expenseRules: number };
+        warnings?: unknown;
+      }>("/api/data/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
-      const result = await res.json();
-      if (!res.ok) {
-        throw new Error(result.error ?? "Geri yükleme başarısız");
-      }
       const s = result.stats;
       const summary = `Yedek geri yüklendi: ${s.products} ürün, ${s.listings} ilan, ${s.commissionRules + s.cargoRules + s.expenseRules} kural`;
       const warnings = Array.isArray(result.warnings) ? (result.warnings as string[]) : [];
@@ -251,7 +255,7 @@ function TursoSyncCard() {
   const qc = useQueryClient();
   const { data } = useQuery<TursoPublicSettings>({
     queryKey: ["turso-settings"],
-    queryFn: () => fetch("/api/turso/settings").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/turso/settings"),
   });
 
   const sourceUrl = data?.url ?? "";
@@ -262,12 +266,13 @@ function TursoSyncCard() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const save = useMutation({
+    // fetchJson: sunucu reddederse "kaydedildi" denmesin (eskiden hata gövdesi başarı sayılıyordu).
     mutationFn: () =>
-      fetch("/api/turso/settings", {
+      fetchJson("/api/turso/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url, authToken: authToken || undefined }),
-      }).then((r) => r.json()),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["turso-settings"] });
       setAuthToken("");
@@ -278,11 +283,7 @@ function TursoSyncCard() {
 
   const test = useMutation({
     mutationFn: () =>
-      fetch("/api/turso/test", { method: "POST" }).then(async (r) => {
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.error ?? "Test başarısız");
-        return body as { ok: boolean; message: string };
-      }),
+      fetchJson<{ ok: boolean; message: string }>("/api/turso/test", { method: "POST" }),
     onSuccess: (res) => {
       setTestResult(res);
       if (res.ok) toast.success("Bulut bağlantısı başarılı");
@@ -294,7 +295,7 @@ function TursoSyncCard() {
   });
 
   const disconnect = useMutation({
-    mutationFn: () => fetch("/api/turso/settings", { method: "DELETE" }).then((r) => r.json()),
+    mutationFn: () => fetchJson("/api/turso/settings", { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["turso-settings"] });
       setUrl("");

@@ -43,7 +43,7 @@ export async function GET() {
     const printers = printerIds.length
       ? await prisma.printerConfig.findMany({
           where: { id: { in: printerIds } },
-          select: { id: true, name: true, brand: true, model: true, accent: true, enabled: true },
+          select: { id: true, name: true, brand: true, model: true, type: true, accent: true, enabled: true },
         })
       : [];
     const pmap = new Map(printers.map((p) => [p.id, p]));

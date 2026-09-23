@@ -29,12 +29,13 @@ import {
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { trendyolDateToIso } from "@/core/trendyol-date";
+import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
-import { pushToAllDevices } from "@/lib/push-notify";
+import { notifyNewOrders, type NotifyLine, type NotifyOrder } from "@/lib/order-notify";
 import {
   lastOrderFinanceSnapshotWrite,
   orderFinanceSnapshotWriteInFlight,
@@ -43,7 +44,6 @@ import {
 } from "@/lib/order-finance-snapshots";
 import { bustFinanceCachesAfterOrderSnapshots } from "@/lib/cache-busting";
 import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
-import { toDbDate } from "@/lib/sqlite-date";
 // Eşleştirme anahtarı sadeleştirmesi TEK yerde: hızlı bildirim taraması da aynısını kullanır,
 // iki taraf ayrı kural yazarsa aynı sipariş burada eşleşip orada eşleşmez.
 import { normalizeMatchKey } from "@/lib/order-watch";
@@ -716,11 +716,11 @@ async function computeOrdersBodyInner(
     );
     const seenTy = new Set<string>();
     for (const [rowIndex, o] of tyByWindow.flat().entries()) {
-      const key = String(o.id ?? o.orderNumber ?? "");
-      if (key) {
-        if (seenTy.has(key)) continue; // pencere sınırı çakışması olursa çift sayma
-        seenTy.add(key);
-      }
+      // Paket id'si 0 olan yeni siparişler (Trendyol ilk saniyelerde böyle veriyor) artık "0"
+      // anahtarında birleşip birbirini listeden SİLMİYOR — bkz. core/trendyol-order-id.
+      const id = trendyolOrderId(o, rowIndex);
+      if (seenTy.has(id)) continue; // pencere sınırı çakışması olursa çift sayma
+      seenTy.add(id);
       const st = trendyolStatus(o.status);
       // Çok kalemli siparişte TEK kalemin iadesi paket durumuna yansımıyor: satır
       // durumundan sayılır. Paket tutarının bu durumda ne olduğu doğrulanmadığı için
@@ -730,9 +730,8 @@ async function computeOrdersBodyInner(
       ).length;
       buffer.push({
         platform: "trendyol",
-        // Kimliksiz satır (beklenmez) yine de tekil kalsın: iki sipariş aynı kimliğe düşerse
-        // finans geçmişinde biri diğerini eziyor.
-        id: `ty-${o.id ?? o.orderNumber ?? `row-${rowIndex}`}`,
+        // Paket id'si henüz yoksa GEÇİCİ kimlik: listede görünür, kalıcı kayda yazılmaz.
+        id,
         orderNumber: String(o.orderNumber ?? o.id ?? "—"),
         // Trendyol'un damgası Türkiye duvar saatini taşıyor; gerçek UTC'ye çeviriyoruz.
         // Ham hâliyle arayüz üstüne +3 daha ekleyip siparişleri 3 saat ileri gösteriyordu.
@@ -1276,20 +1275,18 @@ async function computeOrdersBodyInner(
   // AYNI fonksiyon). Adet başına: ürün/paketleme/komisyon/yüzdesel gider. Siparişe BİR KEZ: kargo +
   // SABİT gider (Platform Hizmet Bedeli — kullanıcı teyidi: sipariş başına kesiliyor).
 
-  // Olay-anı bildirim adayları (stoğu biten / sipariş-üzerine ürüne sipariş).
-  // Sadece AKSİYON gereken (pending/processing) + SON 7 GÜN siparişler → tekilleştirilmiş.
-  const PLATFORM_LABEL: Record<string, string> = { shopify: "Shopify", trendyol: "Trendyol", hepsiburada: "Hepsiburada" };
-  const notifCutoff = Date.now() - 7 * 86_400_000;
-  const notifs: { id: string; type: string; severity: string; title: string; body: string; href: string }[] = [];
+  // "Yeni sipariş" bildirimi adayları — AKSİYON bekleyen (pending/processing) siparişler.
+  // Karar ve metin `lib/order-notify`'da (hızlı taramayla AYNI fonksiyon): her sipariş geldiği
+  // ANDAKİ stokla tek kez bildirilir; sonradan stok değişince eski siparişe alarm doğmaz.
+  const notifyOrders: NotifyOrder[] = [];
 
   // Sipariş kimliği → kalemleri (kalıcı ürün bazlı satış geçmişine yazılacak).
   const snapshotItemsByOrderId = new Map<string, FinanceSnapshotItem[]>();
 
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of historyRows) {
-    const actionable =
-      (r.statusKind === "pending" || r.statusKind === "processing") &&
-      (!r.date || new Date(r.date).getTime() >= notifCutoff);
+    const actionable = r.statusKind === "pending" || r.statusKind === "processing";
+    const notifyLines: NotifyLine[] = [];
     let thumb: string | null = null;
     const profitLines: OrderProfitLine[] = [];
     // Ürün bazlı satış geçmişi için kalemler (kalıcı kaydedilir — pazaryeri penceresi dolsa da kalır).
@@ -1323,32 +1320,12 @@ async function computeOrdersBodyInner(
           : null,
       });
 
-      if (m) {
-        // Bildirim: aktif siparişte sipariş-üzerine ürün → üretim hatırlatıcı (uyarı);
-        // değilse stok 0/negatif → acil (sattık ama gönderemiyoruz).
-        if (actionable) {
-          const qty = l.quantity > 1 ? ` ×${l.quantity}` : "";
-          const tail = `${PLATFORM_LABEL[r.platform]} #${r.orderNumber}${qty}`;
-          if (m.madeToOrder) {
-            notifs.push({
-              id: `order-made:${r.id}:${m.id}`,
-              type: "order-made",
-              severity: "warning",
-              title: "Sipariş üzerine üretim",
-              body: `${m.name} — ${tail}`,
-              href: `/products/${m.id}`,
-            });
-          } else if (m.stock <= 0) {
-            notifs.push({
-              id: `order-stock:${r.id}:${m.id}`,
-              type: "order-stock",
-              severity: "critical",
-              title: "Stoğu biten ürüne sipariş!",
-              body: `${m.name} — ${tail} · stok yok`,
-              href: `/products/${m.id}`,
-            });
-          }
-        }
+      if (actionable) {
+        notifyLines.push({
+          name: l.name,
+          quantity: l.quantity,
+          product: m ? { id: m.id, name: m.name, stock: m.stock, madeToOrder: m.madeToOrder } : null,
+        });
       }
       return {
         name: l.name,
@@ -1360,6 +1337,17 @@ async function computeOrdersBodyInner(
         costMissing: !m || !m.productionCostKnown,
       };
     });
+
+    if (actionable && notifyLines.length > 0) {
+      const t = r.date ? Date.parse(r.date) : NaN;
+      notifyOrders.push({
+        platform: r.platform,
+        orderNumber: r.orderNumber,
+        orderedAtMs: Number.isFinite(t) ? t : null,
+        actionable: true,
+        lines: notifyLines,
+      });
+    }
 
     // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil aynı fonksiyon): adet başına ürün/
     // komisyon/yüzdesel gider; siparişe BİR KEZ kargo + SABİT gider (Platform Hizmet Bedeli).
@@ -1526,41 +1514,10 @@ async function computeOrdersBodyInner(
     };
   }
 
-  // Bildirimleri kalıcılaştır — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ / BOZMAZ).
-  // ÖNCE hangileri GERÇEKTEN yeni tespit edilir → yalnız yeniler eklenir ve KRİTİK olanlar
-  // (stoğu biten ürüne sipariş) telefona da push'lanır. Eski INSERT OR IGNORE tek başına
-  // "yeni mi?" bilgisini vermiyordu → mobil push hiç yoktu ve tekrar-push riski olurdu.
-  if (notifs.length > 0) {
-    void (async () => {
-      try {
-        const existing = await prisma.notification.findMany({
-          where: { id: { in: notifs.map((n) => n.id) } },
-          select: { id: true },
-        });
-        const known = new Set(existing.map((e) => e.id));
-        const fresh = notifs.filter((n) => !known.has(n.id));
-        if (fresh.length === 0) return;
-        // createdAt AÇIKÇA yazılır. Kolon boş bırakılınca SQLite'ın DEFAULT CURRENT_TIMESTAMP
-        // değeri giriyordu: "2026-08-13 07:00:00" — Prisma'nın yazdığı ISO biçimden FARKLI bir
-        // metin. Metin sıralamasında boşluk 'T'den küçük olduğu için karışık kolonda zil
-        // sıralaması ve tarih filtreleri sessizce yanlış sonuç veriyordu (ölçüm: 734 satır).
-        const simdi = toDbDate(new Date());
-        const placeholders = fresh.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
-        const params = fresh.flatMap((n) => [n.id, n.type, n.severity, n.title, n.body, n.href, simdi]);
-        await prisma.$executeRawUnsafe(
-          `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES ${placeholders}`,
-          ...params
-        );
-        // Telefona yalnız SİPARİŞ olayları düşer (kullanıcı kararı: stok/filament uyarıları
-        // zilde kalsın, telefonu meşgul etmesin). Bu blok zaten yalnız sipariş bildirimi
-        // üretiyor; koşul ileride başka tür eklenirse sessizce push'a dönüşmesin diye açık.
-        const PUSHABLE = new Set(["order-stock", "order-made"]);
-        for (const n of fresh.filter((f) => f.severity === "critical" && PUSHABLE.has(f.type))) {
-          await pushToAllDevices(n.title, n.body).catch(() => {});
-        }
-      } catch { /* tablo yoksa/yazma hatası → sessiz geç */ }
-    })();
-  }
+  // Yeni siparişleri bildir — fire-and-forget (siparişler yanıtını YAVAŞLATMAZ / BOZMAZ).
+  // Hızlı tarama çoğunlukla önce görür; bu yol onun kaçırdıklarının (ör. bilgisayar kapalıyken
+  // gelenler) yedeğidir. Aynı sipariş iki yoldan iki kez bildirilmez (bkz. lib/order-notify).
+  if (notifyOrders.length > 0) void notifyNewOrders(notifyOrders);
 
   // En yeni üstte. Tarihi olmayan/okunamayan sipariş EN ALTA düşer (0), yukarı sızmaz.
   // Geçersiz tarih NaN üretip karşılaştırmayı bozuyordu; eşit zaman damgalarında ikincil

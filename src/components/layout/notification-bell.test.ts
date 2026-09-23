@@ -91,4 +91,16 @@ describe("planOsToasts", () => {
 
     expect(plan.toasts).toHaveLength(1);
   });
+
+  /** Eskiden "üretilecek" (uyarı seviyesi) sipariş hiç duyurulmuyordu. */
+  it("yeni sipariş bildirimi uyarı seviyesinde de gösterilir", () => {
+    const plan = planOsToasts(
+      [uyari({ id: "order-new:trendyol:1001", severity: "warning", title: "Yeni sipariş — üretilecek" })],
+      new Set(),
+      SIMDI
+    );
+
+    expect(plan.toasts).toHaveLength(1);
+    expect(plan.markNotified).toEqual(["order-new:trendyol:1001"]);
+  });
 });

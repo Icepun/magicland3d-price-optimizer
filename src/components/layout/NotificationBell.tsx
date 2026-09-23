@@ -1,5 +1,6 @@
 "use client";
 
+import { fetchJson } from "@/lib/fetch-json";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -53,18 +54,29 @@ export interface OsToastPlan {
  * Hangi bildirimlerin işletim sistemi bildirimi olarak gösterileceğine karar verir.
  * Saf fonksiyon — davranışı testlerle sabitlenir.
  */
+/**
+ * Yeni sipariş bildirimi mi? Önemi ne olursa olsun (stokta var / üretilecek / stok yok) işletim
+ * sistemi bildirimi olarak gösterilir. Eskiden "üretilecek" siparişler hiç duyurulmuyordu.
+ * (electron/main.js → isNewOrderAlert ile aynı kural.)
+ */
+export function isNewOrderAlert(a: Pick<AppAlert, "id">): boolean {
+  return a.id.startsWith("order-new:");
+}
+
 export function planOsToasts(
   alerts: AppAlert[],
   notified: Set<string>,
   now: number = Date.now()
 ): OsToastPlan {
   const candidates = alerts.filter(
-    (a) => (a.severity === "critical" || a.severity === "success") && !notified.has(a.id)
+    (a) =>
+      (a.severity === "critical" || a.severity === "success" || isNewOrderAlert(a)) &&
+      !notified.has(a.id)
   );
   if (candidates.length === 0) return { toasts: [], markNotified: [] };
 
   const ageLimit = (a: AppAlert) =>
-    a.severity === "critical" ? OS_AGE_LIMITS.critical : OS_AGE_LIMITS.success;
+    a.severity === "critical" || isNewOrderAlert(a) ? OS_AGE_LIMITS.critical : OS_AGE_LIMITS.success;
   const isFresh = (a: AppAlert) => {
     if (!a.createdAt) return true; // anlık uyarıların zamanı yok → hep taze sayılır
     const at = new Date(a.createdAt).getTime();
@@ -121,7 +133,7 @@ function isDesktopApp(): boolean {
 export function NotificationBell() {
   const { data } = useQuery<{ alerts: AppAlert[] }>({
     queryKey: ["notifications"],
-    queryFn: () => fetch("/api/notifications").then((r) => r.json()),
+    queryFn: () => fetchJson("/api/notifications"),
     // Bildirimin ekrana düşme süresi doğrudan buna bağlı — üretim gecikmesinin üstüne
     // bir dakika daha binmesin diye kısa tutuldu (uç tarafı bu sıklık için ucuzlatıldı).
     refetchInterval: 20_000,

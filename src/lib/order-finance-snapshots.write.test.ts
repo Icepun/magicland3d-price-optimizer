@@ -512,3 +512,41 @@ describe("ham SQL yazımı Prisma ile aynı tarih biçimini kullanır", () => {
     expect(found.map((row) => row.externalOrderId)).toEqual(["ty-tip-3"]);
   });
 });
+
+/**
+ * SAHADA YAŞANDI (23 Eyl 2026): Trendyol yeni siparişi ilk saniyelerde paket id'si 0 ile verdi,
+ * eski kod "ty-0" diye kaydetti; gerçek id gelince aynı sipariş ikinci kez yazıldı ve Raporlar
+ * onu İKİ KEZ saydı (#11563168410, 779,99 TL fazla ciro).
+ */
+describe("Trendyol hayalet kimlikleri", () => {
+  it("paket id'si olmayan (geçici / 0) sipariş kalıcı kayda yazılmaz", async () => {
+    await persist(
+      [order({ id: "ty-gecici-11563168410", orderNumber: "11563168410" }), order({ id: "ty-0", orderNumber: "11563168999" })],
+      new Map([["ty-gecici-11563168410", items({ productName: "Robot Eli" })]]),
+    );
+    const rows = await db.orderFinanceSnapshot.findMany({
+      where: { orderNumber: { in: ["11563168410", "11563168999"] } },
+    });
+    expect(rows).toHaveLength(0);
+    expect(await itemRows("ty-gecici-11563168410")).toHaveLength(0);
+  });
+
+  it("eski sürümün bıraktığı 'ty-0' satırı temizlenir, gerçek kayıt korunur", async () => {
+    const { purgeInvalidOrderSnapshots } = await import("./order-finance-snapshots");
+    await db.orderFinanceSnapshot.create({
+      data: {
+        platform: "trendyol", externalOrderId: "ty-0", orderNumber: "11563168410",
+        orderedAt: new Date("2026-09-03T03:11:30.878Z"), revenueKurus: 77_999, profitKurus: 27_339,
+        statusKind: "pending",
+      },
+    });
+    await persist([order({ id: "ty-4124054982", orderNumber: "11563168410" })]);
+
+    await purgeInvalidOrderSnapshots({ force: true });
+    const kalan = await db.orderFinanceSnapshot.findMany({
+      where: { orderNumber: "11563168410" },
+      select: { externalOrderId: true },
+    });
+    expect(kalan.map((r) => r.externalOrderId)).toEqual(["ty-4124054982"]);
+  });
+});

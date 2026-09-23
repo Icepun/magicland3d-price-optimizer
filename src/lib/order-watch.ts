@@ -1,9 +1,11 @@
 import { prisma, remotePrisma } from "./prisma";
 import { matchByPriority, uniqueIndex } from "./listing-index";
-import { pushToAllDevices } from "./push-notify";
 import { ensureRuntimeSchema } from "./runtime-schema";
 import { toDbDate } from "./sqlite-date";
 import { buildFilamentAlerts, groupSpools, type SpoolLike } from "@/core/filament-groups";
+import { trendyolOrderId } from "@/core/trendyol-order-id";
+import { trendyolDateToUtc } from "@/core/trendyol-date";
+import { notifyNewOrders, type NotifyOrder } from "./order-notify";
 import { loadFilamentSettings } from "@/lib/filament-settings";
 import { ShopifyClient } from "@/services/shopify-client";
 import { getShopifyCredentials } from "@/services/shopify-settings";
@@ -36,17 +38,12 @@ const WARM_MS = 5 * 60_000;
 const FIRST_WARM_MS = 90_000;
 /** Bildirim taraması yalnız SON 2 GÜNÜN siparişlerine bakar — daha eskisi zaten bildirilmiştir. */
 const SCAN_WINDOW_MS = 2 * 86_400_000;
-/** Tek turda telefona gidecek en fazla bildirim (birikmiş durumda telefonu bombalamamak için). */
-const MAX_PUSH_PER_SCAN = 5;
 
-/**
- * TELEFONA bildirim gönderilecek bildirim türleri.
- *
- * Kullanıcının kararı: telefona yalnız SİPARİŞLER ve YAZICI olayları (bitti/durdu/hata) düşsün.
- * Stok ve filament uyarıları bilgilendirmedir — gün içinde eşik defalarca geçilebilir ve hemen
- * müdahale gerektirmez; onlar uygulamadaki zilde kalır. (Yazıcı olaylarını relay ayrı gönderir.)
+/*
+ * TELEFONA GİDENLER — kullanıcının kararı: yalnız SİPARİŞLER ve YAZICI olayları (bitti/durdu/
+ * hata). Sipariş bildirimini `lib/order-notify` gönderir, yazıcı olaylarını relay. Stok ve
+ * filament uyarıları bilgilendirmedir — gün içinde eşik defalarca geçilebilir; zilde kalır.
  */
-const PUSHABLE_TYPES = new Set(["order-stock", "order-made"]);
 
 let started = false;
 let warming = false;
@@ -113,6 +110,8 @@ export interface ScanOrder {
   platform: "shopify" | "trendyol" | "hepsiburada";
   id: string;
   orderNumber: string;
+  /** Siparişin verildiği an (epoch ms) — "yeni mi?" kararı için; bilinmiyorsa null. */
+  orderedAtMs: number | null;
   /** Sipariş hâlâ aksiyon bekliyor mu (hazırlanacak/gönderilecek)? Kapanmış siparişe bildirim yok. */
   actionable: boolean;
   lines: ScanLine[];
@@ -138,12 +137,6 @@ export interface ScanInventory {
   readTypes: string[];
 }
 
-const PLATFORM_LABEL: Record<string, string> = {
-  shopify: "Shopify",
-  trendyol: "Trendyol",
-  hepsiburada: "Hepsiburada",
-};
-
 /**
  * Stok/filament kaynaklı kalıcı satırların tipleri — eşik düşünce bu tipler temizlenir.
  *
@@ -157,18 +150,13 @@ export const INVENTORY_TYPES = ["stock", "site-stock", "spool", "filament"];
 // ── Saf yardımcılar ─────────────────────────────────────────────────────────────────────────
 
 /**
- * Sipariş satırlarını ürünlerle eşleştirip bildirim adaylarını üretir.
+ * Sipariş satırlarını ürünlerle eşleştirip "yeni sipariş" bildiriminin girdisini üretir
+ * (bildirim metni ve kararı `lib/order-notify` içinde — Siparişler ucuyla AYNI fonksiyon).
  *
- * Kimlikler /api/orders'ın ürettikleriyle BİREBİR aynıdır (`order-stock:` / `order-made:`) →
- * iki taraf aynı olayı iki kez bildirmez, hangisi önce görürse o yazar.
- *
- * Aynı anahtar birden çok ürüne düşerse o anahtar hiç kullanılmaz: yanlış ürün için bildirim
- * atmaktansa hiç atmamak yeğdir (ağır uç sonraki turda doğrusunu bulur).
+ * Aynı anahtar birden çok ürüne düşerse o anahtar hiç kullanılmaz: yanlış ürünün stoğunu
+ * söylemektense satırı "eşleşmedi" saymak yeğdir.
  */
-export function buildOrderNotifications(
-  orders: ScanOrder[],
-  products: ScanProduct[]
-): WatchNotification[] {
+export function matchScanOrders(orders: ScanOrder[], products: ScanProduct[]): NotifyOrder[] {
   type Entry = { key: string; product: ScanProduct };
   const barcodeEntries: Entry[] = [];
   const externalIdEntries: Entry[] = [];
@@ -189,48 +177,31 @@ export function buildOrderNotifications(
   const skuIndex = uniqueIndex(skuEntries, (e) => e.key);
   const nameIndex = uniqueIndex(nameEntries, (e) => e.key);
 
-  const out: WatchNotification[] = [];
-  const seen = new Set<string>();
+  const out: NotifyOrder[] = [];
   for (const order of orders) {
     if (!order.actionable) continue;
-    for (const line of order.lines) {
-      const candidates: Array<readonly [string, Map<string, Entry>]> = [];
-      for (const b of line.barcodes) candidates.push([normalizeMatchKey(b), barcodeIndex]);
-      for (const e of line.externalIds) candidates.push([normalizeMatchKey(e), externalIdIndex]);
-      for (const s of line.skus) candidates.push([normalizeMatchKey(s), skuIndex]);
-      // Shopify satırı barkod taşımaz → son çare ürün adı (Siparişler ucuyla aynı sıra).
-      if (order.platform === "shopify") candidates.push([normalizeMatchKey(line.name), nameIndex]);
-      const product = matchByPriority(candidates)?.product;
-      if (!product) continue;
-
-      const qty = line.quantity > 1 ? ` ×${line.quantity}` : "";
-      const tail = `${PLATFORM_LABEL[order.platform] ?? order.platform} #${order.orderNumber}${qty}`;
-      if (product.madeToOrder) {
-        const id = `order-made:${order.id}:${product.id}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        out.push({
-          id,
-          type: "order-made",
-          severity: "warning",
-          title: "Sipariş üzerine üretim",
-          body: `${product.name} — ${tail}`,
-          href: `/products/${product.id}`,
-        });
-      } else if (product.stock <= 0) {
-        const id = `order-stock:${order.id}:${product.id}`;
-        if (seen.has(id)) continue;
-        seen.add(id);
-        out.push({
-          id,
-          type: "order-stock",
-          severity: "critical",
-          title: "Stoğu biten ürüne sipariş!",
-          body: `${product.name} — ${tail} · stok yok`,
-          href: `/products/${product.id}`,
-        });
-      }
-    }
+    out.push({
+      platform: order.platform,
+      orderNumber: order.orderNumber,
+      orderedAtMs: order.orderedAtMs,
+      actionable: true,
+      lines: order.lines.map((line) => {
+        const candidates: Array<readonly [string, Map<string, Entry>]> = [];
+        for (const b of line.barcodes) candidates.push([normalizeMatchKey(b), barcodeIndex]);
+        for (const e of line.externalIds) candidates.push([normalizeMatchKey(e), externalIdIndex]);
+        for (const s of line.skus) candidates.push([normalizeMatchKey(s), skuIndex]);
+        // Shopify satırı barkod taşımaz → son çare ürün adı (Siparişler ucuyla aynı sıra).
+        if (order.platform === "shopify") candidates.push([normalizeMatchKey(line.name), nameIndex]);
+        const product = matchByPriority(candidates)?.product ?? null;
+        return {
+          name: line.name,
+          quantity: line.quantity,
+          product: product
+            ? { id: product.id, name: product.name, stock: product.stock, madeToOrder: product.madeToOrder }
+            : null,
+        };
+      }),
+    });
   }
   return out;
 }
@@ -286,6 +257,13 @@ export function inventoryNotificationIds(inv: ScanInventory): string[] {
 
 // ── Pazaryeri tarafı (ucuz liste çağrıları) ─────────────────────────────────────────────────
 
+/** Pazaryerinden gelen tarih (ISO metin ya da epoch) → epoch ms; okunamazsa null. */
+function zamanMs(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  const t = typeof v === "number" ? v : Date.parse(String(v));
+  return Number.isFinite(t) && t > 0 ? t : null;
+}
+
 function keyList(...values: unknown[]): string[] {
   return values.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
 }
@@ -322,6 +300,7 @@ async function fetchShopifyScan(): Promise<ScanOrder[]> {
       platform: "shopify" as const,
       id: o.id || `shopify-${o.name}`,
       orderNumber: o.name,
+      orderedAtMs: zamanMs(o.createdAt),
       actionable: !o.cancelledAt && financial !== "REFUNDED" && fulfillment !== "FULFILLED",
       lines: o.lines.map((l) => ({
         name: l.title,
@@ -344,8 +323,11 @@ async function fetchTrendyolScan(): Promise<ScanOrder[]> {
   });
   return (page.content ?? []).map((o, i) => ({
     platform: "trendyol" as const,
-    id: `ty-${o.id ?? o.orderNumber ?? i}`,
+    // Paket id'si 0 gelen yeni sipariş "ty-0"da birleşmesin (bkz. core/trendyol-order-id).
+    id: trendyolOrderId(o, i),
     orderNumber: String(o.orderNumber ?? o.id ?? "—"),
+    // Trendyol damgası Türkiye duvar saati — Siparişler ucuyla aynı çeviri.
+    orderedAtMs: trendyolDateToUtc(o.orderDate)?.getTime() ?? null,
     actionable: TRENDYOL_ACTIONABLE.has(String(o.status ?? "")),
     lines: (o.lines ?? []).map((l) => ({
       name: l.productName ?? l.barcode ?? "Ürün",
@@ -371,6 +353,7 @@ async function fetchHepsiburadaScan(): Promise<ScanOrder[]> {
         platform: "hepsiburada",
         id: `hb-${orderNumber}`,
         orderNumber,
+        orderedAtMs: zamanMs(li.orderDate) ?? zamanMs(li.createdDate),
         actionable: true,
         lines: [],
       };
@@ -546,16 +529,8 @@ async function persistNotifications(rows: WatchNotification[]): Promise<void> {
       )
       .catch(() => 0);
   }
-
-  // TELEFONA yalnız SİPARİŞ olayları gider (yazıcı olaylarını relay ayrıca gönderir).
-  // Kullanıcının kararı: stok/filament uyarıları telefonu meşgul etmesin, zilde kalsın —
-  // bunlar "hemen müdahale" gerektirmiyor ve gün içinde tekrar tekrar eşik geçebiliyor.
-  const pushable = fresh
-    .filter((n) => n.severity === "critical" && PUSHABLE_TYPES.has(n.type))
-    .slice(0, MAX_PUSH_PER_SCAN);
-  for (const n of pushable) {
-    await pushToAllDevices(n.title, n.body).catch(() => {});
-  }
+  // Telefona GİTMEZ: buradan yalnız stok/filament satırları geçiyor (kullanıcının kararı —
+  // zilde kalsınlar). Sipariş bildirimleri `lib/order-notify` üzerinden gidiyor.
 }
 
 /**
@@ -586,14 +561,13 @@ async function scanTick(): Promise<void> {
     await ensureRuntimeSchema();
     const orders = await fetchScanOrders();
     if (dbPaused()) return; // ağ çekimi sürerken uyku geldiyse DB'ye dokunma
-    const rows: WatchNotification[] = [];
     if (orders.some((o) => o.actionable)) {
       const products = await loadScanProducts(orders);
-      rows.push(...buildOrderNotifications(orders, products));
+      // Yeni sipariş → geldiği andaki stokla TEK bildirim (masaüstü + telefon).
+      await notifyNewOrders(matchScanOrders(orders, products));
     }
     const inventory = await loadInventory();
-    rows.push(...buildInventoryNotifications(inventory));
-    await persistNotifications(rows);
+    await persistNotifications(buildInventoryNotifications(inventory));
     await clearResolvedInventory(inventoryNotificationIds(inventory), inventory.readTypes);
   } catch {
     /* ağ yok / pazaryeri meşgul — sonraki tur dener */
@@ -633,7 +607,7 @@ async function warmTick(): Promise<void> {
       await remotePrisma.notification
         .updateMany({
           where: {
-            type: { in: ["order-stock", "order-made"] },
+            type: { in: ["order-new", "order-stock", "order-made"] },
             acknowledgedAt: null,
             createdAt: { lt: new Date(now - 7 * 86_400_000) },
           },

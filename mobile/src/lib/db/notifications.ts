@@ -4,6 +4,7 @@ import {
   parseThreshold,
   type SpoolLike,
 } from "@/core/filament-groups";
+import { toDbDate } from "@core/sqlite-date";
 import { batch, execute } from "@/lib/turso";
 
 export type AlertType = "stock" | "filament" | "print" | "order";
@@ -77,8 +78,12 @@ export async function getNotifications(): Promise<NotificationsResult> {
       sql: `SELECT key, value FROM AppSetting WHERE key LIKE 'filament%'`,
     },
     {
-      sql: `SELECT printerConfigId, name, status, statusMessage, productName
-              FROM PrinterSnapshot WHERE status IN ('error', 'paused')`,
+      // Yalnız KAYITLI ve açık yazıcılar: silinmiş bir yazıcının son durum satırı "hata"da
+      // kalmışsa bildirimlerde sonsuza dek hayalet uyarı olarak duruyordu (masaüstüyle aynı kural).
+      sql: `SELECT s.printerConfigId, s.name, s.status, s.statusMessage, s.productName
+              FROM PrinterSnapshot s
+              JOIN PrinterConfig c ON c.id = s.printerConfigId AND c.enabled = 1
+             WHERE s.status IN ('error', 'paused')`,
     },
   ]);
   /**
@@ -236,7 +241,7 @@ export function mobileRoute(href: string | null | undefined): string | null {
 /** Kalıcı bildirimi "okundu" işaretle — masaüstü ziliyle AYNI tablo, iki cihazda birden düşer. */
 export async function ackNotification(id: string): Promise<void> {
   await execute(`UPDATE Notification SET acknowledgedAt = ? WHERE id = ?`, [
-    new Date().toISOString(),
+    toDbDate(new Date()),
     id,
   ]);
 }
@@ -244,6 +249,6 @@ export async function ackNotification(id: string): Promise<void> {
 /** Tüm bekleyen kalıcı bildirimleri okundu işaretle. */
 export async function ackAllNotifications(): Promise<void> {
   await execute(`UPDATE Notification SET acknowledgedAt = ? WHERE acknowledgedAt IS NULL`, [
-    new Date().toISOString(),
+    toDbDate(new Date()),
   ]);
 }

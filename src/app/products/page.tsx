@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, LIST_STATE_EVENT, type ListState, saveListState, scrollContainer } from "@/lib/list-state";
 import { useStockWriter } from "@/lib/use-stock-writer";
+import { useFreshStocks } from "@/lib/use-fresh-stocks";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
@@ -1205,6 +1206,7 @@ export default function ProductsPage() {
     error: listError,
     isFetching: listFetching,
     refetch: refetchProducts,
+    dataUpdatedAt: listeAlindi,
   } = useQuery<Product[]>({
     enabled: urlOkundu,
     queryKey: listQueryKey,
@@ -1229,6 +1231,9 @@ export default function ProductsPage() {
     refetchOnMount: false,
     refetchOnWindowFocus: false,
   });
+
+  // Ağır liste yeniden çekilmez; yalnız son okumadan beri (telefonda da) DEĞİŞEN stoklar gelir.
+  useFreshStocks(listeAlindi || undefined);
 
   // Entegrasyon durumu — hangi platformlar konfigüre
   const { data: integrations } = useQuery<{

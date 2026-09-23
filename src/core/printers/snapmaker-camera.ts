@@ -30,8 +30,8 @@ function kareUrl(host: string, port: number): string {
   return `${moonrakerBase(host, port)}/server/files/camera/monitor.jpg`;
 }
 
-/** Bu yazıcıda kamera var mı? (uyandırma gerekmez — bayat kare de 200 döner) */
-export async function snapmakerKameraVar(host: string, port: number): Promise<boolean> {
+/** Kamera uyanıkken kare dosyası JPEG olarak duruyor mu? */
+async function kareHazir(host: string, port: number): Promise<boolean> {
   const ctrl = new AbortController();
   const zaman = setTimeout(() => ctrl.abort(), 3000);
   try {
@@ -47,6 +47,37 @@ export async function snapmakerKameraVar(host: string, port: number): Promise<bo
   }
 }
 
+/** Moonraker'da "camera" dosya kökü var mı? (U1'in kamerası orada — uyurken de durur.) */
+async function kameraKokuVar(host: string, port: number): Promise<boolean> {
+  const ctrl = new AbortController();
+  const zaman = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const r = await fetch(`${moonrakerBase(host, port)}/server/files/roots`, { signal: ctrl.signal });
+    if (!r.ok) return false;
+    const j = (await r.json()) as { result?: unknown } | unknown[];
+    const kokler = Array.isArray(j) ? j : (j as { result?: unknown }).result;
+    return Array.isArray(kokler) && kokler.some((k) => (k as { name?: unknown })?.name === "camera");
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(zaman);
+  }
+}
+
+/**
+ * Bu yazıcıda kamera var mı?
+ *
+ * ⚠️ Kare dosyasına bakmak YETMEZ (ölçüldü 23 Eyl 2026, iki U1'de, 1.6 ve 2.0 yazılımı): kamera
+ * uyurken `monitor.jpg` SİLİNİYOR (404). Eski kontrol yalnız ona baktığı için kamera düğmesi
+ * "Bu yazıcıda kamera bulunamadı" diye sönük kalıyordu — kamerayı da uyandıran kimse olmadığı
+ * için sonsuza dek. Uyurken de duran "camera" dosya kökü kameranın varlığını söyler; akış
+ * açılınca kamera uyandırılır.
+ */
+export async function snapmakerKameraVar(host: string, port: number): Promise<boolean> {
+  if (await kareHazir(host, port)) return true;
+  return kameraKokuVar(host, port);
+}
+
 export interface KameraAkisi {
   durdur: () => void;
 }
@@ -55,6 +86,11 @@ export interface KameraAkisi {
 const UYANDIRMA_MS = 8_000;
 /** Kare çekme aralığı — ölçülen tazelenme hızıyla aynı (daha sık çekmek boşuna). */
 const KARE_MS = 480;
+/**
+ * Uyandırma komutundan sonra ilk kare bu süre içinde gelmezse akış hatayla biter. Ölçülen:
+ * 1,5-2 sn. Sınır olmadan kamera hiç uyanmadığında pencere sonsuza dek "açılıyor" kalıyordu.
+ */
+const ILK_KARE_SINIRI_MS = 15_000;
 
 /**
  * Canlı akış: kamerayı uyanık tutar ve değişen her kareyi verir.
@@ -121,6 +157,8 @@ export function snapmakerKameraAkisi(
     }
   })();
 
+  const baslangic = Date.now();
+  let kareGeldi = false;
   const kareCek = async () => {
     if (kapandi) return;
     try {
@@ -133,6 +171,7 @@ export function snapmakerKameraAkisi(
           if (h !== sonHash) {
             sonHash = h;
             bosCekim = 0;
+            kareGeldi = true;
             onKare(b);
           } else if (++bosCekim > 40) {
             // ~20 saniyedir kare değişmiyor: kamera uyandırılamıyor demektir.
@@ -140,9 +179,16 @@ export function snapmakerKameraAkisi(
             return;
           }
         }
+      } else {
+        // Uyurken kare dosyası YOK (404) — uyandırma birkaç saniye sürer, gövdeyi tüket ve bekle.
+        try { await r.arrayBuffer(); } catch { /* önemsiz */ }
       }
     } catch {
       /* tek düşen istek akışı bitirmesin — bir sonraki tur dener */
+    }
+    if (!kareGeldi && Date.now() - baslangic > ILK_KARE_SINIRI_MS) {
+      bitir("Kameradan görüntü gelmiyor.");
+      return;
     }
     if (!kapandi) kareZamanlayici = setTimeout(kareCek, KARE_MS);
   };
