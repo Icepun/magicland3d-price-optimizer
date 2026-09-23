@@ -28,6 +28,8 @@ import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
+import { panelCirosu } from "@/lib/panel-ciro";
+import { HEPSIBURADA_STATUS_KINDS, TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
 import {
   ORDER_PLATFORM_COLOR,
   ORDER_PLATFORM_SHORT_LABEL,
@@ -39,7 +41,16 @@ import {
 import { useManualRefresh } from "@/lib/use-refresh";
 import { color, radius, space } from "@/theme/tokens";
 
-const GUN = 86_400_000;
+/**
+ * Pazaryeri tanımadığımız bir durum adı gönderdiyse sipariş satış da olabilir iade de —
+ * masaüstü özeti bu siparişleri ciroya KATMAZ (bkz. api/orders route `statusUnknown`).
+ * Manuel siparişi kullanıcı kendisi girdiği için orada bu kural yok (masaüstüyle aynı).
+ */
+function durumuTaninmiyor(o: { platform: string; status: string }): boolean {
+  if (o.platform === "trendyol") return !(o.status in TRENDYOL_STATUS_KINDS);
+  if (o.platform === "hepsiburada") return !(o.status in HEPSIBURADA_STATUS_KINDS);
+  return false;
+}
 const DONEMLER = [
   { value: 7 as const, label: "7g" },
   { value: 30 as const, label: "30g" },
@@ -91,41 +102,19 @@ export default function DashboardScreen() {
   const rev = useMemo(() => {
     if (!ordersData || !matchProducts || !rules || !settings) return null;
     const pm = getProductMap(matchProducts);
-    const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
-      ORDER_PLATFORMS.map((p) => [p, { rev: 0, n: 0 }])
-    );
-    /** Günlük ciro kovaları: soldan sağa eskiden bugüne (grafik). */
-    const gunluk = new Array<number>(donem).fill(0);
-    let total = 0;
-    let profit = 0;
-    let count = 0;
     /**
      * "Şimdi" olarak sorgunun ÇEKİLDİĞİ an kullanılır (`dataUpdatedAt`): render sırasında
      * `Date.now()` çağırmak React Compiler hatası veriyor ve mobil lint adımını düşürüyor.
+     * Kesim ve kovalar `panelCirosu` içinde — masaüstü özetiyle aynı UTC gün başı.
      */
-    const simdi = ordersAt || 0;
-    const kesim = simdi ? simdi - donem * GUN : 0;
-    for (const o of ordersData.orders) {
-      if (o.date != null && o.date < kesim) continue;
-      // Masaüstü özetiyle birebir: iptal/iade/teslim-edilemedi siparişler ciro/kâr/sayıma girmez.
-      if (isCancelledOrder(o)) continue;
-      // Döviz çevrimi yapılmadan farklı para birimleri TL toplamına eklenmez (Raporlar da aynı).
-      if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
-      const op = computeOrderProfit(o, pm, rules, settings);
-      total += op.revenue;
-      const b = byPlat[o.platform];
-      if (b) {
-        b.rev += op.revenue;
-        b.n++;
-      }
-      if (op.profit != null) profit += op.profit;
-      count++;
-      if (o.date != null && simdi) {
-        const geri = Math.min(donem - 1, Math.max(0, Math.floor((simdi - o.date) / GUN)));
-        gunluk[donem - 1 - geri] += op.revenue;
-      }
-    }
-    return { total, profit, byPlat, count, gunluk };
+    return panelCirosu(ordersData.orders, {
+      gun: donem,
+      simdi: ordersAt || 0,
+      platformlar: ORDER_PLATFORMS,
+      // Masaüstü özetiyle birebir: iptal/iade ve tanınmayan pazaryeri durumu ciroya girmez.
+      sayilmazMi: (o) => isCancelledOrder(o) || durumuTaninmiyor(o),
+      hesapla: (o) => computeOrderProfit(o, pm, rules, settings),
+    });
   }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
 
   return (
@@ -179,7 +168,7 @@ export default function DashboardScreen() {
                 )}
               </View>
 
-              <Bars values={rev?.gunluk ?? []} height={64} emphasis={(i) => i >= donem - 7} style={styles.bars} />
+              <Bars values={rev?.gunluk ?? []} height={64} emphasis={(i) => i >= donem + 1 - 7} style={styles.bars} />
               <View style={styles.rowBetween}>
                 <Txt v="label" tone="faint">
                   {donem} GÜN ÖNCE

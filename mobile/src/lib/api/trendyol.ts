@@ -1,6 +1,7 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
-import { padTrendyolWindow, trendyolDateToUtc } from "@core/trendyol-date";
+import { trendyolDateToUtc } from "@core/trendyol-date";
+import { buildTrendyolWindows } from "@core/trendyol-windows";
 import { trendyolOrderId } from "@core/trendyol-order-id";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
@@ -58,25 +59,31 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
 
   const safeDays = Math.max(1, Math.min(60, Math.trunc(historyDays)));
   const cutoff = (Math.floor(Date.now() / 86_400_000) - safeDays) * 86_400_000;
-  const CHUNK = 14 * 86_400_000;
   const seen = new Set<string>();
   const orders: UnifiedOrder[] = [];
 
-  // 14 günlük pencereler PARALEL çekilir (~300-800ms tasarruf); sayfalama pencere içinde ardışık
-  // kalır. Tekilleştirme, pencere sonuçları sıralı birleştirilirken `seen` ile yapılır.
-  const chunks: { chunkStart: number; chunkEnd: number }[] = [];
-  for (let chunkEnd = Date.now(); chunkEnd > cutoff; chunkEnd -= CHUNK) {
-    chunks.push({ chunkStart: Math.max(cutoff, chunkEnd - CHUNK), chunkEnd });
-  }
+  /**
+   * ⚠️ PENCERELER ORTAK ÇEKİRDEKTEN — masaüstüyle BİREBİR (`@core/trendyol-windows`).
+   *
+   * Burada tam 14 günlük dilim vardı; üstüne saat dilimi payı iki uçtan 3'er saat eklenince
+   * açıklık 14 gün 6 saate çıkıyor, Trendyol da 2 haftayı aşan aralığı SESSİZCE kırpıp EN YENİ
+   * saatleri atıyordu. Sonuç: son birkaç saatin Trendyol siparişleri telefonda HİÇ görünmüyordu —
+   * listede, Panel cirosunda, hazırlık listesinde. (23 Eyl 2026 canlı ölçüm: 22:46 ve 22:57
+   * siparişleri eksikti; masaüstü aynı hatayı 13 Ağu'da düzeltmişti ama düzeltme masaüstüne özel
+   * bir dosyada kaldığı için telefona hiç ulaşmamıştı.)
+   *
+   * Pencereler PARALEL çekilir; sayfalama pencere içinde ardışık kalır. Tekilleştirme, sonuçlar
+   * sıralı birleştirilirken `seen` ile yapılır.
+   */
+  const pencereler = buildTrendyolWindows(Date.now(), cutoff);
   const perChunk = await Promise.all(
-    chunks.map(async ({ chunkStart, chunkEnd }) => {
+    pencereler.map(async ({ startDate, endDate }) => {
       const rows: { key: string; o: TyOrder }[] = [];
       for (let pageNo = 0; pageNo < 50; pageNo++) {
         const res = await fetchT(
-          // Sınırlar masaüstüyle aynı şekilde iki uçtan genişletiliyor: Trendyol sorgu
-          // parametrelerini de duvar saati düzleminde yorumluyorsa, gerçek UTC göndermek
-          // pencereyi kaydırır ve en yeni siparişler listeye hiç girmez.
-          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${padTrendyolWindow(chunkStart, "start")}&endDate=${padTrendyolWindow(chunkEnd, "end")}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
+          // Sınırlar `buildTrendyolWindows` içinde iki uçtan 3'er saat genişletilmiş hâlde gelir
+          // (Trendyol duvar saati düzlemi) ve açıklık 14 günü AŞMAZ.
+          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${startDate}&endDate=${endDate}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
           { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
         );
         if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
@@ -85,7 +92,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         for (const [i, o] of content.entries()) {
           // Masaüstüyle AYNI kimlik: paket id'si 0 gelen yeni sipariş "ty-0"da birleşip
           // diğerini silmesin, finans geçmişine hayalet çift kayıt yazmasın.
-          rows.push({ key: trendyolOrderId(o, `${chunkEnd}-${pageNo}-${i}`), o });
+          rows.push({ key: trendyolOrderId(o, `${endDate}-${pageNo}-${i}`), o });
         }
         if (content.length < 100) break; // son sayfa
       }
