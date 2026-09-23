@@ -4,7 +4,17 @@ import { useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, View } from "react-native";
 
 import { Chip } from "@/components/kit/Chip";
-import { Button, EmptyState, ErrorState, FadeInView, Glass, IconButton, Input, Money, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
+import { Button, EmptyState, ErrorState, FadeInView, Glass, IconButton, Input, Money, Progress, Screen, Segmented, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
+import {
+  PERIYOTLAR,
+  araliktakiler,
+  aylaraGore,
+  donemOzeti,
+  kategoriDagilimi,
+  periyotAraligi,
+  type GiderSatiri,
+  type PeriyotTipi,
+} from "@core/expense-view";
 import {
   createActualExpense,
   deleteActualExpense,
@@ -121,8 +131,38 @@ export default function ExpensesScreen() {
     onError: (error) => Alert.alert("Silinemedi", error instanceof Error ? error.message : "Bilinmeyen hata"),
   });
 
-  const totalKurus = useMemo(() => (expensesQuery.data ?? []).reduce((sum, expense) => sum + expense.amountKurus, 0), [expensesQuery.data]);
   const sayi = expensesQuery.data?.length ?? 0;
+
+  /**
+   * DÖNEM — masaüstündeki Giderler sayfasıyla AYNI hesap (`@core/expense-view`): varsayılan
+   * "bu ay", Türkiye takvimine göre. Ekran bir tur TÜM ZAMANLARIN toplamını gösteriyordu;
+   * kullanıcı aylık bakıyor ("PC'deki gibi aylık olması lazım").
+   *
+   * "Şimdi" = listenin çekildiği an (`dataUpdatedAt`): render sırasında `Date.now()` React
+   * Compiler hatası verir. Liste her kayıtta yeniden çekildiği için sınır güncel kalır.
+   */
+  const [periyot, setPeriyot] = useState<PeriyotTipi>("ay");
+  const simdi = expensesQuery.dataUpdatedAt;
+  const donem = useMemo(() => {
+    const satirlar: (GiderSatiri & { kaynak: ActualExpense })[] = (expensesQuery.data ?? []).map((e) => ({
+      id: e.id,
+      name: e.name,
+      category: e.category,
+      amount: e.amountKurus / 100,
+      paidAt: e.paidAt,
+      note: e.note,
+      recurringId: null,
+      kaynak: e,
+    }));
+    const aralik = periyotAraligi(periyot, simdi || 0);
+    const icindekiler = araliktakiler(satirlar, aralik.basMs, aralik.sonMs);
+    return {
+      ozet: donemOzeti(satirlar, aralik),
+      aylar: aylaraGore(icindekiler),
+      kategoriler: kategoriDagilimi(icindekiler, () => color.warn),
+    };
+  }, [expensesQuery.data, periyot, simdi]);
+  const periyotBilgisi = PERIYOTLAR.find((p) => p.id === periyot) ?? PERIYOTLAR[1];
 
   return (
     <Screen
@@ -134,17 +174,49 @@ export default function ExpensesScreen() {
         />
       }
     >
+      <Segmented
+        options={PERIYOTLAR.map((p) => ({ value: p.id, label: p.kisa }))}
+        value={periyot}
+        onChange={setPeriyot}
+      />
+
       <FadeInView index={0}>
         <Glass style={styles.summary}>
-          <View style={{ flex: 1 }}>
-            <Txt v="label" tone="faint" style={styles.kicker}>
-              KAYITLI TOPLAM
-            </Txt>
-            <Money value={totalKurus / 100} v="hero" tone="warn" />
-          </View>
-          <Txt v="small" tone="dim" style={{ maxWidth: 150 }}>
+          <Txt v="label" tone="faint" style={styles.kicker}>
+            {periyotBilgisi.label.toLocaleUpperCase("tr-TR")}
+          </Txt>
+          <Money value={donem.ozet.toplam} v="hero" tone="warn" />
+          <Txt v="small" tone="dim">
+            {donem.ozet.adet > 0 ? `${formatNumber(donem.ozet.adet)} ödeme` : "Bu dönemde ödeme yok"}
+            {donem.ozet.degisimYuzde != null
+              ? ` · ${KARSILASTIRMA[periyot]} %${formatNumber(Math.abs(Math.round(donem.ozet.degisimYuzde)))} ${donem.ozet.degisimYuzde >= 0 ? "fazla" : "az"}`
+              : ""}
+          </Txt>
+          <Txt v="small" tone="faint">
             Sipariş kârına karışmaz; ödeme tarihinin aylık net kârından düşer.
           </Txt>
+
+          {/* Kategori dağılımı — "para nereye gitti". Tek kategori varsa %100 çubuğu bilgi vermez. */}
+          {donem.kategoriler.length > 1 ? (
+            <View style={styles.kategoriler}>
+              {donem.kategoriler.slice(0, 4).map((k) => (
+                <View key={k.kategori} style={{ gap: 4 }}>
+                  <View style={styles.kategoriSatir}>
+                    <Txt v="small" numberOfLines={1} style={{ flex: 1 }}>
+                      {k.kategori}
+                    </Txt>
+                    <Money value={k.toplam} v="smallStrong" tone="dim" animate={false} />
+                  </View>
+                  <Progress value={k.yuzde / 100} color={k.renk} height={4} />
+                </View>
+              ))}
+              {donem.kategoriler.length > 4 ? (
+                <Txt v="small" tone="faint">
+                  +{donem.kategoriler.length - 4} kategori daha
+                </Txt>
+              ) : null}
+            </View>
+          ) : null}
         </Glass>
       </FadeInView>
 
@@ -203,47 +275,69 @@ export default function ExpensesScreen() {
         <ErrorState title="Giderler yüklenemedi" error={expensesQuery.error} onRetry={() => void expensesQuery.refetch()} retrying={expensesQuery.isFetching} />
       ) : sayi === 0 ? (
         <EmptyState icon="creditcard" title="Henüz ödeme yok" hint="Sağ üstteki artı ile ilk gider ödemeni kaydet." actionLabel="Ödeme ekle" onAction={() => setDraft(emptyDraft())} />
+      ) : donem.aylar.length === 0 ? (
+        <EmptyState icon="calendar" title="Bu dönemde ödeme yok" hint="Üstten başka bir dönem seç ya da yeni ödeme ekle." />
       ) : (
-        (expensesQuery.data ?? []).map((expense, i) => (
-          <FadeInView key={expense.id} index={i + 1}>
-            <Tint strong onPress={() => setDraft(expenseDraft(expense))} style={styles.card} accessibilityLabel={expense.name}>
-              <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                <Txt v="bodyStrong" numberOfLines={1}>
-                  {expense.name}
-                </Txt>
-                <Txt v="small" tone="dim" numberOfLines={1}>
-                  {new Date(expense.paidAt).toLocaleDateString("tr-TR", { day: "2-digit", month: "short", year: "numeric", timeZone: "Europe/Istanbul" })}
-                  {expense.category ? ` · ${expense.category}` : ""}
-                </Txt>
-                {expense.note ? (
-                  <Txt v="small" tone="faint" numberOfLines={2}>
-                    {expense.note}
-                  </Txt>
-                ) : null}
-              </View>
-              <View style={styles.cardRight}>
-                <Money value={expense.amountKurus / 100} v="bodyStrong" tone="warn" animate={false} />
-                <IconButton
-                  icon="trash"
-                  size={30}
-                  tint={color.bad}
-                  haptic="orta"
-                  accessibilityLabel="Ödemeyi sil"
-                  onPress={() =>
-                    Alert.alert("Ödemeyi sil?", expense.name, [
-                      { text: "Vazgeç", style: "cancel" },
-                      { text: "Sil", style: "destructive", onPress: () => remove.mutate(expense.id) },
-                    ])
-                  }
-                />
-              </View>
-            </Tint>
-          </FadeInView>
+        donem.aylar.map((ay, ai) => (
+          <View key={ay.key} style={{ gap: space.sm }}>
+            {/* Ay başlığı: yalnız birden çok ay görünürken anlamlı ama tutarlılık için hep var. */}
+            <View style={styles.ayBaslik}>
+              <Txt v="label" tone="faint" style={styles.kicker}>
+                {ay.label.toLocaleUpperCase("tr-TR")}
+              </Txt>
+              <Money value={ay.toplam} v="smallStrong" tone="dim" animate={false} />
+            </View>
+            {ay.giderler.map(({ kaynak: expense }, i) => (
+              <FadeInView key={expense.id} index={ai + i + 1}>
+                <Tint strong onPress={() => setDraft(expenseDraft(expense))} style={styles.card} accessibilityLabel={expense.name}>
+                  <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                    <Txt v="bodyStrong" numberOfLines={1}>
+                      {expense.name}
+                    </Txt>
+                    <Txt v="small" tone="dim" numberOfLines={1}>
+                      {new Date(expense.paidAt).toLocaleDateString("tr-TR", { day: "2-digit", month: "short", year: "numeric", timeZone: "Europe/Istanbul" })}
+                      {expense.category ? ` · ${expense.category}` : ""}
+                    </Txt>
+                    {expense.note ? (
+                      <Txt v="small" tone="faint" numberOfLines={2}>
+                        {expense.note}
+                      </Txt>
+                    ) : null}
+                  </View>
+                  <View style={styles.cardRight}>
+                    <Money value={expense.amountKurus / 100} v="bodyStrong" tone="warn" animate={false} />
+                    <IconButton
+                      icon="trash"
+                      size={30}
+                      tint={color.bad}
+                      haptic="orta"
+                      accessibilityLabel="Ödemeyi sil"
+                      onPress={() =>
+                        Alert.alert("Ödemeyi sil?", expense.name, [
+                          { text: "Vazgeç", style: "cancel" },
+                          { text: "Sil", style: "destructive", onPress: () => remove.mutate(expense.id) },
+                        ])
+                      }
+                    />
+                  </View>
+                </Tint>
+              </FadeInView>
+            ))}
+          </View>
         ))
       )}
     </Screen>
   );
 }
+
+/** "Önceki döneme göre" ifadesi — dönem türüne göre doğal Türkçe. */
+const KARSILASTIRMA: Record<PeriyotTipi, string> = {
+  hafta: "geçen haftadan",
+  ay: "geçen aydan",
+  "3ay": "önceki 3 aydan",
+  "6ay": "önceki 6 aydan",
+  yil: "geçen yıldan",
+};
 
 function Alan({ label, children, flex }: { label: string; children: React.ReactNode; flex?: boolean }) {
   return (
@@ -258,7 +352,10 @@ function Alan({ label, children, flex }: { label: string; children: React.ReactN
 
 const styles = StyleSheet.create({
   kicker: { letterSpacing: 1 },
-  summary: { flexDirection: "row", alignItems: "center", gap: space.md },
+  summary: { gap: space.xs },
+  kategoriler: { gap: space.sm, marginTop: space.sm },
+  kategoriSatir: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  ayBaslik: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: space.sm, marginHorizontal: space.xs },
   form: { gap: space.md, borderColor: color.accent + "66" },
   twoCol: { flexDirection: "row", gap: space.sm },
   katChips: { flexDirection: "row", gap: space.xs, paddingTop: space.sm, paddingRight: space.xs },

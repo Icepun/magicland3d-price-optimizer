@@ -21,6 +21,7 @@ import { Backdrop } from "@/components/kit/Backdrop";
 import { UpdateGate } from "@/components/UpdateGate";
 import { getDashboardData } from "@/lib/db/dashboard";
 import { syncFinanceFromCache } from "@/lib/finance-sync";
+import { refreshChangedStocks } from "@/lib/fresh-stocks";
 import { startPushRegistration } from "@/lib/push";
 import { color } from "@/theme/tokens";
 
@@ -110,8 +111,12 @@ function FinanceSyncGate() {
     const ilk = setTimeout(() => void syncFinanceFromCache(qc), 8000);
     const periyot = setInterval(() => void syncFinanceFromCache(qc), 10 * 60_000);
     // Uygulama öne geldiğinde de dene (arka planda geçen sürede yeni sipariş gelmiş olabilir).
+    // Aynı anda başka yerde değişen STOKLAR da çekilir: telefon arkadayken masaüstünde ya da
+    // siparişle düşen stok, uygulamaya dönünce listede ve varyant grubunda eski kalmasın.
     const sub = AppState.addEventListener("change", (st) => {
-      if (st === "active") void syncFinanceFromCache(qc);
+      if (st !== "active") return;
+      void syncFinanceFromCache(qc);
+      void refreshChangedStocks(qc);
     });
     return () => {
       clearTimeout(ilk);

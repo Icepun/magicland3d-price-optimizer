@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, View } from "react-native";
 
 import { Pill } from "@/components/kit/Chip";
@@ -26,6 +26,8 @@ import {
 } from "@/components/kit";
 import { invalidateProductSuperset } from "@/lib/db/dashboard";
 import { getProductDetail, getVariantGroup, type ProductDetail } from "@/lib/db/product-detail";
+import { refreshChangedStocks } from "@/lib/fresh-stocks";
+import { stoklariYama } from "@/lib/stock-cache";
 import { adjustProductStock, getPriceHistory, setProductAlias, type PriceChange } from "@/lib/db/products";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
@@ -61,6 +63,9 @@ export default function ProductDetailScreen() {
   });
 
   // İyimser stok: UI anında değişir, DB yazımı arkada; hata olursa geri al.
+  // ⚠️ Yama `stoklariYama` ile DÖRT önbelleğe birden gider (liste, eşleştirme, detay, VARYANT
+  // GRUBU). Varyant grubu bir tur unutulmuştu: detaydaki "Varyant grubu" bölümü eski stoğu
+  // gösteriyor, stok düşüp geri gelince eski değerde takılı kalıyordu.
   const stockMutation = useMutation({
     mutationFn: (delta: number) => adjustProductStock(id, delta),
     onMutate: async (delta: number) => {
@@ -68,25 +73,17 @@ export default function ProductDetailScreen() {
       await Promise.all([
         qc.cancelQueries({ queryKey: ["product", id] }),
         qc.cancelQueries({ queryKey: ["dashboard-data"] }),
+        qc.cancelQueries({ queryKey: ["variant-group"] }),
       ]);
-      const prevProduct = qc.getQueryData<ProductDetail>(["product", id]);
-      const prevDashboard = qc.getQueryData<ProductDetail[]>(["dashboard-data"]);
-      const optimisticStock = Math.max(0, (prevProduct?.stock ?? 0) + delta);
-      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock: optimisticStock } : o));
-      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
-        o ? o.map((p) => (p.id === id ? { ...p, stock: optimisticStock } : p)) : o
-      );
-      return { prevProduct, prevDashboard };
+      const oncekiStok = qc.getQueryData<ProductDetail>(["product", id])?.stock;
+      if (oncekiStok != null) stoklariYama(qc, [{ id, stock: Math.max(0, oncekiStok + delta) }]);
+      return { oncekiStok };
     },
     onError: (_e, _v, ctx) => {
-      if (ctx?.prevProduct) qc.setQueryData(["product", id], ctx.prevProduct);
-      if (ctx?.prevDashboard) qc.setQueryData(["dashboard-data"], ctx.prevDashboard);
+      if (ctx?.oncekiStok != null) stoklariYama(qc, [{ id, stock: ctx.oncekiStok }]);
     },
     onSuccess: (stock) => {
-      qc.setQueryData<ProductDetail>(["product", id], (o) => (o ? { ...o, stock } : o));
-      qc.setQueryData<ProductDetail[]>(["dashboard-data"], (o) =>
-        o ? o.map((p) => (p.id === id ? { ...p, stock } : p)) : o
-      );
+      stoklariYama(qc, [{ id, stock }]);
     },
     onSettled: () => {
       // Tampon ÖNCE boşalır: yoksa liste tazelemesi yazımdan önceki stoğu getirip doğru
@@ -95,9 +92,17 @@ export default function ProductDetailScreen() {
       qc.invalidateQueries({ queryKey: ["product", id] });
       qc.invalidateQueries({ queryKey: ["dashboard-data"] });
       qc.invalidateQueries({ queryKey: ["match-products"] });
+      qc.invalidateQueries({ queryKey: ["variant-group"] });
       qc.invalidateQueries({ queryKey: ["notifications"] });
     },
   });
+
+  // Ekrana her dönüşte başka yerde (masaüstü, sipariş, diğer telefon) değişen stoklar gelsin.
+  useFocusEffect(
+    useCallback(() => {
+      void refreshChangedStocks(qc);
+    }, [qc])
+  );
 
   // Takma ad — iyimser düzenleme.
   const [aliasOpen, setAliasOpen] = useState(false);

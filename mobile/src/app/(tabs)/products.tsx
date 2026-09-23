@@ -1,9 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useDeferredValue, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useMemo, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 
 import { Chip, Pill } from "@/components/kit/Chip";
@@ -20,6 +20,7 @@ import {
   Txt,
 } from "@/components/kit";
 import { getDashboardData } from "@/lib/db/dashboard";
+import { refreshChangedStocks } from "@/lib/fresh-stocks";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatNumber } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
@@ -83,6 +84,14 @@ const RowGap = () => <View style={{ height: space.sm }} />;
  */
 export default function ProductsScreen() {
   const params = useLocalSearchParams<{ filter?: string }>();
+  const qc = useQueryClient();
+  // Sekmeye her dönüşte başka yerde (masaüstü, sipariş, diğer telefon) değişen stoklar gelsin —
+  // tüm liste yeniden çekilmeden, tek küçük sorguyla (bkz. lib/fresh-stocks).
+  useFocusEffect(
+    useCallback(() => {
+      void refreshChangedStocks(qc);
+    }, [qc])
+  );
   const [search, setSearch] = useState("");
   // Arama tuşa anında yazılır; süzgeç + liste farkı ertelenmiş değerle düşük öncelikte koşar.
   const deferredSearch = useDeferredValue(search);
