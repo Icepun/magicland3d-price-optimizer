@@ -22,7 +22,7 @@ import {
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import {
-  gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
+  aileDosyalari, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
   searchProduct, sortProducts, type SortMode,
 } from "./models-view";
 
@@ -33,7 +33,7 @@ const GcodeViewerDialog = dynamic(
   { ssr: false, loading: () => <ViewerLoadingShell /> }
 );
 
-interface LibPrinter { id: string; name: string; brand: string; type: string }
+interface LibPrinter { id: string; name: string; brand: string; type: string; model: string | null }
 interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; estPrintMin: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number }
 interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number }
 interface LibStorage {
@@ -94,10 +94,10 @@ export default function ModelsPage() {
   const products = useMemo(() => {
     let list = allProducts.filter((p) => eslesmeler.has(p.productId));
     if (onlyMissing && printerIds.length) {
-      list = list.filter((p) => missingFiles(p, printerIds, missingPrinter));
+      list = list.filter((p) => missingFiles(p, printerIds, missingPrinter, printers));
     }
     return sortProducts(list, sortMode);
-  }, [allProducts, eslesmeler, onlyMissing, missingPrinter, printerIds, sortMode]);
+  }, [allProducts, eslesmeler, onlyMissing, missingPrinter, printerIds, printers, sortMode]);
 
   return (
     <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
@@ -162,7 +162,7 @@ export default function ModelsPage() {
               herhangi biri
             </FilterChip>
             {printers.map((pr) => {
-              const kapsam = allProducts.filter((p) => p.files.some((f) => f.printerConfigId === pr.id)).length;
+              const kapsam = allProducts.filter((p) => aileDosyalari(p.files, pr.id, printers).length > 0).length;
               return (
                 <FilterChip
                   key={pr.id}
@@ -244,7 +244,8 @@ export default function ModelsPage() {
                   */}
                   <div className="mt-auto grid grid-cols-4 gap-1.5">
                     {printers.map((pr) => {
-                      const cnt = p.files.filter((f) => f.printerConfigId === pr.id).length;
+                      // Aile: kardeş yazıcının dosyası bu yazıcıda da basılır (iki U1).
+                      const cnt = aileDosyalari(p.files, pr.id, printers).length;
                       const has = cnt > 0;
                       return (
                         <button
@@ -351,7 +352,8 @@ function PartsModal({
   product, printer, printers, onClose,
 }: { product: LibProduct; printer: LibPrinter; printers: LibPrinter[]; onClose: () => void }) {
   const qc = useQueryClient();
-  const parts = product.files.filter((f) => f.printerConfigId === printer.id);
+  // Aile: ikinci U1, ilk U1'e yüklenen dosyaları da görür ve basar (aynı içerik bir kez).
+  const parts = aileDosyalari(product.files, printer.id, printers);
   const multiColor = printer.brand === "bambu" || printer.brand === "snapmaker";
 
   // ── Yazıcılar arası filament karşılaştırması ────────────────────────────────────────

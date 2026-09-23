@@ -127,7 +127,8 @@ async function computeModels() {
     prisma.printerConfig.findMany({
       where: { enabled: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, brand: true, type: true },
+      // model: aile hesabı (aynı marka + model yazıcılar dosyaları paylaşır) bunu kullanıyor.
+      select: { id: true, name: true, brand: true, type: true, model: true },
     }),
   ]);
 

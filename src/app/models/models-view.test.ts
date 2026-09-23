@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  foldTr, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
+  aileDosyalari, foldTr, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
   searchProduct, sortProducts,
 } from "./models-view";
 
@@ -178,5 +178,46 @@ describe("eksik dosya filtresi", () => {
   it("yazıcı seçilmezse herhangi birinde eksik olması yeter (eski davranış)", () => {
     expect(missingFiles(urun, hepsi)).toBe(true);
     expect(missingFiles(urun, ["snap", "bambu"])).toBe(false);
+  });
+});
+
+/**
+ * AİLE — iki Snapmaker U1 aynı dosyaları basar. Kütüphane dosyaları yazıcıya göre saydığı için
+ * ikinci U1 her üründe "dosya yok" görünüyordu (23 Eyl 2026, canlı ekranda görüldü).
+ */
+describe("yazıcı ailesi", () => {
+  const yazicilar = [
+    { id: "u1-alt", type: "moonraker", brand: "snapmaker", model: "U1" },
+    { id: "u1-ust", type: "moonraker", brand: "snapmaker", model: "U1" },
+    { id: "a1", type: "bambu", brand: "bambu", model: "A1" },
+    { id: "modelsiz", type: "moonraker", brand: "elegoo", model: null },
+  ];
+  const dosya = (id: string, printerConfigId: string, md5: string | null = null) => ({
+    id, printerConfigId, originalName: `${id}.gcode`, sizeBytes: 100, contentMd5: md5,
+  });
+
+  it("kardeş U1'in dosyası bu U1'de de görünür", () => {
+    const dosyalar = [dosya("govde", "u1-alt"), dosya("kafa", "a1")];
+    expect(aileDosyalari(dosyalar, "u1-ust", yazicilar).map((d) => d.id)).toEqual(["govde"]);
+    expect(aileDosyalari(dosyalar, "a1", yazicilar).map((d) => d.id)).toEqual(["kafa"]);
+  });
+
+  it("aynı dosya iki U1'e ayrı yüklendiyse bir kez sayılır", () => {
+    const dosyalar = [dosya("x1", "u1-alt", "a".repeat(32)), dosya("x2", "u1-ust", "a".repeat(32))];
+    expect(aileDosyalari(dosyalar, "u1-alt", yazicilar)).toHaveLength(1);
+  });
+
+  it("modeli girilmemiş yazıcı kimseyle eşleşmez", () => {
+    const dosyalar = [dosya("govde", "u1-alt")];
+    expect(aileDosyalari(dosyalar, "modelsiz", yazicilar)).toHaveLength(0);
+  });
+
+  it("eksik filtresi aileyi hesaba katar", () => {
+    const urun = { files: [{ printerConfigId: "u1-alt" }] };
+    const ids = yazicilar.map((y) => y.id);
+    expect(missingFiles(urun, ids, "u1-ust", yazicilar)).toBe(false);
+    expect(missingFiles(urun, ids, "a1", yazicilar)).toBe(true);
+    // Aile bilgisi verilmezse eski davranış.
+    expect(missingFiles(urun, ids, "u1-ust")).toBe(true);
   });
 });

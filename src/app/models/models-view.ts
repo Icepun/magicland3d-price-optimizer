@@ -5,6 +5,21 @@
  * yazıcılar arası karşılaştırma için. Ürün maliyetiyle ilgisi YOKTUR
  * (gerekçe ve koruma: `src/lib/model-gramaj.ts`, `src/lib/model-gramaj.test.ts`).
  */
+import { dedupeFiles, familyMemberIds, type AileUyesi } from "@/core/printers/printer-family";
+
+/**
+ * Yazıcının AİLESİNDEKİ dosyalar: aynı tür + marka + modeldeki yazıcılar aynı dosyayı basar
+ * (bkz. core/printers/printer-family). Aynı içerik iki yazıcıya ayrı yüklendiyse bir kez sayılır.
+ *
+ * NEDEN: kütüphane dosyaları yazıcıya göre sayıyordu; ikinci U1 her üründe "dosya yok"
+ * görünüyordu. Oysa o dosyaları basabiliyor.
+ */
+export function aileDosyalari<
+  F extends { printerConfigId: string; originalName: string; contentMd5?: string | null; sizeBytes?: number | null },
+>(files: F[], printerId: string, printers: AileUyesi[] = []): F[] {
+  const uyeler = new Set(printers.length ? familyMemberIds(printers, printerId) : [printerId]);
+  return dedupeFiles(files.filter((f) => uyeler.has(f.printerConfigId)));
+}
 
 /**
  * Arama için metin katlama: Türkçe küçük harf + diakritik sadeleştirme.
@@ -93,11 +108,16 @@ export function sortProducts<T extends SortableProduct>(products: T[], mode: Sor
 export function missingFiles(
   product: { files: Array<{ printerConfigId: string }> },
   printerIds: string[],
-  printerId?: string | null
+  printerId?: string | null,
+  /** Verilirse aile hesaba katılır: kardeş yazıcının dosyası bu yazıcıda da "var" sayılır. */
+  printers?: AileUyesi[],
 ): boolean {
   const hedefler = printerId ? [printerId] : printerIds;
   if (!hedefler.length) return false;
-  return hedefler.some((id) => !product.files.some((f) => f.printerConfigId === id));
+  return hedefler.some((id) => {
+    const uyeler = printers?.length ? familyMemberIds(printers, id) : [id];
+    return !product.files.some((f) => uyeler.includes(f.printerConfigId));
+  });
 }
 
 export interface GramajFile {
