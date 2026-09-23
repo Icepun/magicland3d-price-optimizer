@@ -77,11 +77,14 @@ function sadeSebep(kod: string | undefined, yedekMesaj?: string): string {
       return "Bildirim metni çok uzun.";
     case "MessageRateExceeded":
       return "Çok sık bildirim gönderildi, biraz sonra tekrar deneyin.";
-    // Proje düzeyinde anahtar sorunu (iOS'ta Apple push anahtarı EAS'te yok/geçersiz). Uygulamayı
-    // yeniden kurmak DÜZELTMEZ — eski metin tam olarak bunu önerip yanlış yola sokuyordu.
+    // Proje düzeyinde anahtar sorunu: iOS'ta Apple push anahtarı EAS'te yok/geçersiz
+    // (düzeltme: `eas credentials -p ios`). Telefonda yapılacak HİÇBİR ŞEY yok — ne yeniden kurmak
+    // ne "kurulumu tamamlamak" düzeltir. Eski metinler ikisini de önerip kullanıcıyı telefona
+    // yönlendiriyordu. `MismatchedSenderId` Android (FCM) koduna ait; bu yüzden metin platform
+    // adı vermiyor.
     case "InvalidCredentials":
     case "MismatchedSenderId":
-      return "Apple bildirim anahtarı eksik; telefon uygulamasının kurulumu tamamlanmalı.";
+      return "Bildirim anahtarı eksik (sunucu ayarı) — telefonda yapılacak bir şey yok.";
     case "ExpoError":
     case "ProviderError":
       return "Bildirim servisi şu an bildirim kabul etmiyor.";

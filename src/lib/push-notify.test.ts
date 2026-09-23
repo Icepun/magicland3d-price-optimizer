@@ -81,7 +81,7 @@ describe("push gönderimi", () => {
     const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
 
     expect(ozet.hata).toBe(1);
-    expect(ozet.sebepler[0]).toContain("bildirim anahtarı eksik");
+    expect(ozet.sebepler[0]).toMatch(/bildirim anahtarı eksik/i);
   });
 
   it("ağ kopukluğunu yutmaz, sebep olarak bildirir", async () => {
@@ -174,6 +174,26 @@ describe("telefon kaydı yalnız cihaza özel hatada silinir", () => {
 
     expect(ozet.temizlenenKayit).toBe(0);
     expect(ozet.sebepler.join(" ")).toMatch(/anahtarı eksik/i);
+  });
+
+  /**
+   * Bu hata SUNUCU tarafında (EAS'teki push anahtarı) düzelir. Metin kullanıcıyı telefona
+   * yönlendirirse ("yeniden kur", "kurulumu tamamla") uygulamayı silip kurar, hiçbir şey
+   * değişmez ve telefon kaydı da boşuna yenilenir.
+   */
+  it("anahtar hatası kullanıcıyı telefona YÖNLENDİRMEZ", async () => {
+    findMany.mockResolvedValue([{ token: token(1) }]);
+    fetchMock.mockResolvedValueOnce(
+      yanit({
+        data: [{ status: "error", details: { error: "InvalidCredentials" }, message: "bad creds" }],
+      })
+    );
+
+    const ozet = await pushToAllDevices("Başlık", "Gövde", { makbuzGecikmeMs: 0 });
+    const metin = ozet.sebepler.join(" ");
+
+    expect(metin).toMatch(/telefonda yapılacak bir şey yok/i);
+    expect(metin).not.toMatch(/yeniden kur|kurulumu tamamla/i);
   });
 
   it("DeviceNotRegistered kaydı siler", async () => {
