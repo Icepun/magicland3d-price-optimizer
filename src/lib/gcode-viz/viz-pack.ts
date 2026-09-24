@@ -102,6 +102,13 @@ export interface VizPack {
   thinLevel: number;
   /** Seyreltme toleransı (mm) — kademeyle büyür. */
   epsilon: number;
+  /**
+   * PARÇALAR (varsa): yol i'nin parçası — `objects` tablosunda indeks + 1, 0 = parça dışı.
+   * Anahtar yazıcının parça kimliğidir: Bambu'da identify_id ("281"), Klipper'da nesne adı.
+   * Dilimleyici parçaları etiketlemediyse ikisi de yoktur.
+   */
+  pathObject?: Uint16Array;
+  objects?: string[];
 }
 
 /**
@@ -173,6 +180,9 @@ export interface ParsedGcode {
   thinLevel: number;
   /** Canlı konum için yol zaman çizelgesi (v3 paketlerde). */
   yollar?: YolZamani;
+  /** Segment başına parça (`objectKeys` indeksi + 1, 0 = parça dışı) — paket parça taşıyorsa. */
+  objects?: Uint16Array;
+  objectKeys?: string[];
 }
 
 // ── İkili kodlama ───────────────────────────────────────────────────────────
@@ -190,6 +200,14 @@ const MAGIC = 0x5a564c4d; // "MLVZ" (little-endian u32)
 // "eski sürüm" diye reddedilir; worker taze paketi sunucudan alır, sunucu yeniden tarar.
 export const PACK_VERSION = 3;
 
+/**
+ * Önbellek anahtarındaki etiket (disk, bulut, telefon). Parça bölümü (24 Eyl 2026) biçim
+ * sürümünü ARTIRMADAN eklendi: telefondaki çözücü `v`yi sıkı denetliyor ve yalnız 3'ü tanıyor;
+ * bölüm dosyanın SONUNA eklendiği için eski çözücü onu görmeden okur. Ama önbellekteki eski
+ * (parçasız) paketler yeniden üretilmeli → anahtar değişir.
+ */
+export const PACK_ANAHTAR_ETIKETI = `v${PACK_VERSION}n`;
+
 interface PackHeader {
   v: number;
   segmentCount: number;
@@ -206,6 +224,8 @@ interface PackHeader {
   fileSize: number;
   thinLevel: number;
   epsilon: number;
+  /** Parça anahtarları — varsa bölüm listesinin SONUNDA yol başına parça dizisi gelir. */
+  objects?: string[];
 }
 
 /** Bir sonraki `a` katına yuvarla (a ikinin kuvveti). Kodlayıcı ve çözücü AYNI işlevi kullanır. */
@@ -236,6 +256,7 @@ export function encodeVizPack(p: VizPack): ArrayBuffer {
     fileSize: p.fileSize,
     thinLevel: p.thinLevel,
     epsilon: p.epsilon,
+    ...(p.objects?.length && p.pathObject?.length === p.pathLen.length ? { objects: p.objects } : {}),
   };
   const headerBytes = new TextEncoder().encode(JSON.stringify(header));
   const sections: ArrayBufferView[] = [
@@ -243,6 +264,8 @@ export function encodeVizPack(p: VizPack): ArrayBuffer {
     p.layerZ, p.layerPathStart, p.layerPathEnd, p.layerByteOffset,
     p.pathByteStart, p.pathByteEnd, p.pathTimeStart, p.pathTimeEnd,
   ];
+  // Parça bölümü EN SONA: eski çözücü (telefon) buraya hiç bakmaz.
+  if (header.objects) sections.push(p.pathObject as Uint16Array);
 
   // Başlıktan sonra en büyük eleman boyutuna (8) hizala; her bölüm ayrıca kendi boyutuna hizalanır.
   let offset = alignTo(8 + headerBytes.length, 8);
@@ -295,6 +318,8 @@ export function decodeVizPack(buf: ArrayBuffer): VizPack {
   const pathByteEnd = take(Uint32Array, h.pathCount);
   const pathTimeStart = take(Float32Array, h.pathCount);
   const pathTimeEnd = take(Float32Array, h.pathCount);
+  const objects = Array.isArray(h.objects) && h.objects.length ? h.objects.map(String) : null;
+  const pathObject = objects ? take(Uint16Array, h.pathCount) : null;
 
   return {
     points, pathStart, pathLen, pathFeature, pathTool,
@@ -309,6 +334,7 @@ export function decodeVizPack(buf: ArrayBuffer): VizPack {
     fileSize: h.fileSize,
     thinLevel: h.thinLevel ?? 0,
     epsilon: h.epsilon ?? 0,
+    ...(objects && pathObject ? { objects, pathObject } : {}),
   };
 }
 
@@ -318,6 +344,8 @@ export function expandPack(p: VizPack): ParsedGcode {
   const positions = new Float32Array(segCount * 6);
   const features = new Uint8Array(segCount);
   const tools = new Uint8Array(segCount);
+  const nesneli = !!p.objects?.length && p.pathObject?.length === p.pathLen.length;
+  const objects = nesneli ? new Uint16Array(segCount) : null;
   const layerRanges: ParsedGcode["layerRanges"] = [];
 
   const ox = p.originX, oy = p.originY, s = p.scaleXY;
@@ -330,6 +358,7 @@ export function expandPack(p: VizPack): ParsedGcode {
       const len = p.pathLen[pi];
       const f = p.pathFeature[pi];
       const t = p.pathTool[pi];
+      const nes = objects ? p.pathObject![pi] : 0;
       let px = ox + p.points[base * 2] * s;
       let py = oy + p.points[base * 2 + 1] * s;
       for (let k = 1; k < len; k++) {
@@ -340,6 +369,7 @@ export function expandPack(p: VizPack): ParsedGcode {
         positions[o + 3] = qx; positions[o + 4] = qy; positions[o + 5] = z;
         features[seg] = f;
         tools[seg] = t;
+        if (objects) objects[seg] = nes;
         seg++;
         px = qx; py = qy;
       }
@@ -360,6 +390,7 @@ export function expandPack(p: VizPack): ParsedGcode {
     fileSize: p.fileSize,
     thinLevel: p.thinLevel,
     yollar: yolZamaniKur(p),
+    ...(objects ? { objects: seg === segCount ? objects : objects.slice(0, seg), objectKeys: p.objects } : {}),
   };
 }
 

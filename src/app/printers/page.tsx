@@ -1381,6 +1381,10 @@ function PrinterCardInner({
           }}
           // Bambu'da atlanan parça geri getirilemiyor — "Geri al" gösterilmez.
           geriAlinabilir={printer.type !== "bambu"}
+          model3d={viewer}
+          katmanIdx={packLayerIndex}
+          toolColors={toolColors}
+          reduceMotion={reduceMotion}
           onExclude={async (name: string) => {
             const r = await fetch(`/api/printers/${printer.id}/action`, {
               method: "POST", headers: { "Content-Type": "application/json" },

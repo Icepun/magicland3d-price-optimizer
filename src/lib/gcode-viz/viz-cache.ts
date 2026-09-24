@@ -20,7 +20,8 @@ const DB_NAME = "mlhub-gcode-viz";
 // v6: izleyicide DOLGU da katı gövde olarak çiziliyor (model artık içi boş kabuk değil).
 // v7 (23 Eyl 2026): paket biçimi v3 (canlı konum için yol başına bayt + süre). Kart artık canlı
 // 3B çiziyor; hazır inşa kareleri (sprites) kaldırıldı, o depo silinir.
-const DB_VER = 7;
+// v8 (24 Eyl 2026): paketler parça bilgisi taşıyor — eski (parçasız) paketler silinip yeniden alınır.
+const DB_VER = 8;
 const GEOM = "geom";
 const ESKI_KARELER = "sprites";
 const MAX_GEOM = 16; // LRU üst sınırı (disk şişmesin)

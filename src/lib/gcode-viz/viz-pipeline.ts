@@ -40,6 +40,8 @@ type WorkerResult =
       fileSize: number;
       thinLevel: number;
       yollar?: ParsedGcode["yollar"] | null;
+      objects?: ArrayBufferLike | null;
+      objectKeys?: string[] | null;
       pack: ArrayBuffer | null;
     };
 
@@ -142,6 +144,7 @@ function parseInWorker(
           fileSize: d.fileSize,
           thinLevel: d.thinLevel,
           yollar: d.yollar ?? undefined,
+          ...(d.objects && d.objectKeys?.length ? { objects: new Uint16Array(d.objects), objectKeys: d.objectKeys } : {}),
         },
         pack: d.pack ?? null,
       });

@@ -4,7 +4,8 @@ import { unzipSync } from "fflate";
 import { prisma } from "@/lib/prisma";
 import { getUserDataDir } from "@/lib/storage";
 import { resolveModelFileLocal } from "@/lib/model-files";
-import { GcodeScanner, encodeVizPack, PACK_VERSION } from "./parse-gcode";
+import { GcodeScanner, encodeVizPack } from "./parse-gcode";
+import { PACK_ANAHTAR_ETIKETI } from "./viz-pack";
 
 /**
  * Sunucu tarafı "viz-pack" üreticisi.
@@ -45,7 +46,7 @@ export function packCacheKey(mf: { id: string; contentMd5?: string | null; sizeB
   const base = mf.contentMd5 && /^[0-9a-f]{32}$/i.test(mf.contentMd5)
     ? `md5-${mf.contentMd5.slice(0, 10).toLowerCase()}`
     : `file-${mf.id}-${mf.sizeBytes ?? 0}`;
-  return `${base}-v${PACK_VERSION}`;
+  return `${base}-${PACK_ANAHTAR_ETIKETI}`;
 }
 
 /** Olay döngüsüne nefes aldır — tarama sırasında veritabanı sorguları aç kalmasın. */

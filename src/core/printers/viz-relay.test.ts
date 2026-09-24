@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PACK_VERSION } from "@/lib/gcode-viz/viz-pack";
+import { PACK_ANAHTAR_ETIKETI } from "@/lib/gcode-viz/viz-pack";
 import { veriAdresiniCoz, vizNesneAnahtari } from "./viz-relay";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../../..", import.meta.url)));
@@ -14,11 +14,11 @@ const oku = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
 describe("R2 anahtarı", () => {
   it("içerik özetinden + paket biçim sürümüyle (biçim değişince yeniden yüklenir)", () => {
     const k = vizNesneAnahtari({ id: "m1", contentMd5: "ad098259bb0123456789abcdef012345", sizeBytes: 10 });
-    expect(k).toBe(`viz/md5-ad098259bb-v${PACK_VERSION}.mlvz`);
+    expect(k).toBe(`viz/md5-ad098259bb-${PACK_ANAHTAR_ETIKETI}.mlvz`);
   });
 
   it("özeti olmayan dosya kimlik + boyutla ayrışır", () => {
-    expect(vizNesneAnahtari({ id: "m1", contentMd5: null, sizeBytes: 42 })).toBe(`viz/file-m1-42-v${PACK_VERSION}.mlvz`);
+    expect(vizNesneAnahtari({ id: "m1", contentMd5: null, sizeBytes: 42 })).toBe(`viz/file-m1-42-${PACK_ANAHTAR_ETIKETI}.mlvz`);
   });
 
   it("öneki depo hademesinin sildiği model önekleriyle KARIŞMAZ", () => {

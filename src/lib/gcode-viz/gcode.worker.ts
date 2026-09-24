@@ -153,6 +153,7 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
     const { g, packBytes } = out;
     const transfer: Transferable[] = [g.positions.buffer, g.features.buffer, g.tools.buffer];
     if (packBytes) transfer.push(packBytes);
+    if (g.objects) transfer.push(g.objects.buffer);
     // Yol zaman çizelgesi (canlı konum). Paketten gelen diziler paketin tamponuna bakan
     // GÖRÜNÜMLER — olduğu gibi gönderilirse tüm paket (~15 MB) kopyalanırdı; küçük kopyalar taşınır.
     const yz = g.yollar;
@@ -187,6 +188,9 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         fileSize: g.fileSize,
         thinLevel: g.thinLevel,
         yollar,
+        // Parça seçici: segment başına parça (paket parça taşıyorsa).
+        objects: g.objects?.buffer ?? null,
+        objectKeys: g.objectKeys ?? null,
         pack: packBytes,
       },
       transfer,

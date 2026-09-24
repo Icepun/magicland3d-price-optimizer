@@ -11,6 +11,13 @@
  *  • Aktif araç (`T0`/`T1`/…) izlenir → segment başına araç indeksi (gerçek filament renkleri).
  *  • Katmanın DOSYADAKİ BAYT KONUMU kaydedilir → `virtual_sdcard.file_position` → katman.
  *  • Bayt düzeyinde ayrıştırma (satır başına string üretilmez) — 187 MB'ı tek geçişte tarar.
+ *  • PARÇALAR: dilimleyicinin parça etiketleri izlenir → yol başına parça. Parça seçici bununla
+ *    tabladaki parçayı 3B'de gösterir. Biçimler (kullanıcının dosyalarında doğrulandı, 24 Eyl 2026):
+ *      Bambu:   `; start printing object, unique label id: 281` … `; stop printing object, …`
+ *               (id = yazıcıya giden identify_id)
+ *      Klipper: `EXCLUDE_OBJECT_START NAME=…` … `EXCLUDE_OBJECT_END` (dilimleyici yazdıysa)
+ *      Orca/Prusa yorumu: `; printing object <ad>` … `; stop printing object <ad>` — komut yoksa
+ *               yükleme sırasında bu adla komut EKLENİYOR (core/printers/exclude-object).
  */
 import {
   FEATURE_INFILL, FEATURE_OTHER, FEATURE_SKIRT, FEATURE_SUPPORT,
@@ -65,6 +72,29 @@ function matchAscii(buf: Uint8Array, s: number, e: number, pat: string): number 
 
 const LATIN = new TextDecoder("utf-8", { fatal: false });
 
+/**
+ * `EXCLUDE_OBJECT_START NAME=…` satırının kalanından parça adı. Tırnaklı ad (boşluk içerebilir)
+ * ters bölü kaçışlarıyla çözülür — yazma tarafı `klipperParamKacisla` ile aynı kural.
+ */
+export function klipperAdOku(kalan: string): string | null {
+  const m = /\bNAME=/i.exec(kalan);
+  if (!m) return null;
+  let i = m.index + 5;
+  if (kalan[i] === '"') {
+    let ad = "";
+    for (i++; i < kalan.length; i++) {
+      const c = kalan[i];
+      if (c === "\\" && i + 1 < kalan.length) { ad += kalan[++i]; continue; }
+      if (c === '"') break;
+      ad += c;
+    }
+    return ad || null;
+  }
+  const bosluk = kalan.slice(i).search(/\s/);
+  const ad = (bosluk < 0 ? kalan.slice(i) : kalan.slice(i, i + bosluk)).trim();
+  return ad || null;
+}
+
 export class GcodeScanner {
   private readonly maxPoints: number;
   private eps: number;
@@ -85,6 +115,8 @@ export class GcodeScanner {
   private pathLenArr = new Uint32Array(this.pathCap);
   private pathFeatArr = new Uint8Array(this.pathCap);
   private pathToolArr = new Uint8Array(this.pathCap);
+  /** Yolun parçası: anahtar tablosunda indeks + 1 (0 = parça dışı: başlangıç çizgisi, etek). */
+  private pathObjArr = new Uint16Array(this.pathCap);
   private pathCount = 0;
 
   // Yol zaman çizelgesi — CANLI KONUM için: yolun dosyadaki bayt aralığı (Moonraker
@@ -124,6 +156,7 @@ export class GcodeScanner {
   private curPathStart = 0;
   private curPathFeature = FEATURE_OTHER;
   private curPathTool = 0;
+  private curPathObject = 0;
   private anchorX = 0;
   private anchorY = 0;
   private pendX = 0;
@@ -145,6 +178,13 @@ export class GcodeScanner {
   private minZ = Infinity; private maxZ = -Infinity;
 
   private scannedSegments = 0;
+
+  // Parça etiketleri
+  private nesne = 0;
+  private nesneAnahtarlari: string[] = [];
+  private nesneIndeksi = new Map<string, number>();
+  /** Dosyada Klipper komutları var → yorum etiketleri yok sayılır (aynı parça iki adla sayılmasın). */
+  private nesneKomutlu = false;
   private filamentColors: string[] = [];
 
   // Akış tamponu
@@ -240,6 +280,7 @@ export class GcodeScanner {
 
     let segmentCount = 0;
     for (let i = 0; i < this.pathCount; i++) segmentCount += this.pathLenArr[i] - 1;
+    const nesne = this.nesneTablosu();
 
     return {
       points,
@@ -271,6 +312,7 @@ export class GcodeScanner {
       fileSize: this.declaredFileSize || this.totalBytes,
       thinLevel: this.thinLevel,
       epsilon: this.eps,
+      ...(nesne ? { pathObject: nesne.pathObject, objects: nesne.objects } : {}),
     };
   }
 
@@ -285,6 +327,7 @@ export class GcodeScanner {
 
     if (b0 === 59 /* ';' */) { this.handleComment(buf, s, e, abs); return; }
     if (b0 === 71 /* 'G' */) { this.handleG(buf, s, e, abs); return; }
+    if (b0 === 69 /* 'E' */) { this.handleExclude(buf, s, e); return; }
     if (b0 === 77 /* 'M' */) {
       if (matchAscii(buf, s, e, "M82") > 0) this.absE = true;
       else if (matchAscii(buf, s, e, "M83") > 0) this.absE = false;
@@ -318,6 +361,23 @@ export class GcodeScanner {
       const zv = this.readNum(buf, p, e);
       if (Number.isFinite(zv)) this.setLayerZ(zv);
       return;
+    }
+    p = matchAscii(buf, s, e, "; start printing object, unique label id:");
+    if (p > 0) {
+      while (p < e && buf[p] === 32) p++;
+      const id = this.readNum(buf, p, e);
+      if (Number.isFinite(id)) this.nesneSec(String(Math.round(id)));
+      return;
+    }
+    if (matchAscii(buf, s, e, "; stop printing object, unique label id:") > 0) { this.nesneSec(null); return; }
+    if (!this.nesneKomutlu) {
+      p = matchAscii(buf, s, e, "; printing object ");
+      if (p > 0) {
+        const ad = LATIN.decode(buf.subarray(p, e)).trim();
+        if (ad) this.nesneSec(ad);
+        return;
+      }
+      if (matchAscii(buf, s, e, "; stop printing object") > 0) { this.nesneSec(null); return; }
     }
     p = matchAscii(buf, s, e, ";TYPE:");
     if (p < 0) p = matchAscii(buf, s, e, "; FEATURE:");
@@ -394,6 +454,54 @@ export class GcodeScanner {
       this.closePath(); // seyahat/geri çekme → yol biter
     }
     this.x = nx; this.y = ny; this.z = nz;
+  }
+
+  /** Klipper parça komutları. DEFINE başlıkta gelir: komut varsa yorum etiketleri yok sayılır. */
+  private handleExclude(buf: Uint8Array, s: number, e: number): void {
+    if (matchAscii(buf, s, e, "EXCLUDE_OBJECT_DEFINE") > 0) { this.nesneKomutlu = true; return; }
+    const p = matchAscii(buf, s, e, "EXCLUDE_OBJECT_START");
+    if (p > 0) {
+      this.nesneKomutlu = true;
+      this.nesneSec(klipperAdOku(LATIN.decode(buf.subarray(p, e))));
+      return;
+    }
+    if (matchAscii(buf, s, e, "EXCLUDE_OBJECT_END") > 0) { this.nesneKomutlu = true; this.nesneSec(null); }
+  }
+
+  /** Basılan parçayı değiştir. Yol parçalar arasında bölünür: bir yol tek parçaya aittir. */
+  private nesneSec(anahtar: string | null): void {
+    let i = 0;
+    if (anahtar) {
+      i = this.nesneIndeksi.get(anahtar) ?? 0;
+      if (!i) {
+        if (this.nesneAnahtarlari.length >= 65534) return; // Uint16 sınırı
+        this.nesneAnahtarlari.push(anahtar);
+        i = this.nesneAnahtarlari.length;
+        this.nesneIndeksi.set(anahtar, i);
+      }
+    }
+    if (i !== this.nesne) { this.closePath(); this.nesne = i; }
+  }
+
+  /**
+   * Kullanılan parçaların tablosu. Hiç yolu olmayan anahtar (ör. komuttan önce görülen yorum adı)
+   * atılır, indeksler sıkıştırılır. Etiket yoksa null — paket parçasız (eski biçim) kalır.
+   */
+  private nesneTablosu(): { pathObject: Uint16Array; objects: string[] } | null {
+    if (this.nesneAnahtarlari.length === 0) return null;
+    const kullanim = new Uint32Array(this.nesneAnahtarlari.length + 1);
+    for (let i = 0; i < this.pathCount; i++) kullanim[this.pathObjArr[i]]++;
+    const yeni = new Uint16Array(this.nesneAnahtarlari.length + 1);
+    const objects: string[] = [];
+    for (let k = 1; k < kullanim.length; k++) {
+      if (kullanim[k] === 0) continue;
+      objects.push(this.nesneAnahtarlari[k - 1]);
+      yeni[k] = objects.length;
+    }
+    if (objects.length === 0) return null;
+    const pathObject = new Uint16Array(this.pathCount);
+    for (let i = 0; i < this.pathCount; i++) pathObject[i] = yeni[this.pathObjArr[i]];
+    return { pathObject, objects };
   }
 
   /** G4 P<ms> / S<sn> — yazıcı bekler; süreye eklenir. */
@@ -481,6 +589,7 @@ export class GcodeScanner {
     this.curPathStart = this.pointCount;
     this.curPathFeature = this.feature;
     this.curPathTool = this.tool;
+    this.curPathObject = this.nesne;
     this.curPathByteStart = this.curLineAbs;
     this.curPathByteEnd = this.curLineAbs;
     this.curPathTimeStart = this.curMoveT0;
@@ -522,6 +631,7 @@ export class GcodeScanner {
         const b = new Uint32Array(this.pathCap); b.set(this.pathLenArr); this.pathLenArr = b;
         const c = new Uint8Array(this.pathCap); c.set(this.pathFeatArr); this.pathFeatArr = c;
         const d = new Uint8Array(this.pathCap); d.set(this.pathToolArr); this.pathToolArr = d;
+        const o = new Uint16Array(this.pathCap); o.set(this.pathObjArr); this.pathObjArr = o;
         const b1 = new Uint32Array(this.pathCap); b1.set(this.pathByteStartArr); this.pathByteStartArr = b1;
         const b2 = new Uint32Array(this.pathCap); b2.set(this.pathByteEndArr); this.pathByteEndArr = b2;
         const t1 = new Float32Array(this.pathCap); t1.set(this.pathTimeStartArr); this.pathTimeStartArr = t1;
@@ -531,6 +641,7 @@ export class GcodeScanner {
       this.pathLenArr[this.pathCount] = len;
       this.pathFeatArr[this.pathCount] = this.curPathFeature;
       this.pathToolArr[this.pathCount] = this.curPathTool;
+      this.pathObjArr[this.pathCount] = this.curPathObject;
       this.pathByteStartArr[this.pathCount] = Math.min(0xffffffff, this.curPathByteStart);
       this.pathByteEndArr[this.pathCount] = Math.min(0xffffffff, Math.max(this.curPathByteStart, this.curPathByteEnd));
       this.pathTimeStartArr[this.pathCount] = this.curPathTimeStart;
