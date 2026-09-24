@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ayniPencereGunuMu,
   computeOrdersShared,
   getOrdersCache,
   getOrdersCacheGeneration,
@@ -198,5 +199,38 @@ describe("orders disk kopyası tazeliği", () => {
     const mod = await import("./orders-cache");
 
     expect(mod.getOrdersCache()).toBeNull();
+  });
+});
+
+/**
+ * GÜN DEĞİŞİNCE ÖNBELLEK KULLANILMAZ — 30 günlük pencere UTC gün başına bağlı.
+ *
+ * 24 Eyl 2026: gece 01:21'de hesaplanan özet sabah 07:19'da hâlâ veriliyordu; pencere
+ * 03:00'te (UTC gece yarısı) kaymış olmasına rağmen 30 günün dışına düşen 4 sipariş
+ * (2.519,97 ₺) ciroda kalmıştı. Telefon taze hesapladığı için iki cihaz farklı ciro gösterdi.
+ */
+describe("önbellek pencere günü", () => {
+  const TR_0121 = Date.parse("2026-09-23T22:21:25Z"); // TR 24 Eyl 01:21
+  const TR_0719 = Date.parse("2026-09-24T04:19:15Z"); // TR 24 Eyl 07:19
+
+  it("aynı UTC günü içindeki hesap geçerli", () => {
+    expect(ayniPencereGunuMu(TR_0719 - 3_600_000, TR_0719)).toBe(true);
+  });
+
+  it("Türkiye'de aynı takvim günü olsa bile UTC günü değiştiyse GEÇERSİZ (sahadaki durum)", () => {
+    expect(ayniPencereGunuMu(TR_0121, TR_0719)).toBe(false);
+  });
+
+  it("sınır: UTC gece yarısından bir an önce ve sonra farklı pencere", () => {
+    const geceYarisi = Date.parse("2026-09-24T00:00:00Z");
+    expect(ayniPencereGunuMu(geceYarisi - 1, geceYarisi)).toBe(false);
+    expect(ayniPencereGunuMu(geceYarisi, geceYarisi + 1)).toBe(true);
+  });
+
+  it("sipariş ucu önbelleği yalnız aynı pencere günündeyse anında veriyor", () => {
+    const rota = fs.readFileSync(path.join(process.cwd(), "src/app/api/orders/route.ts"), "utf8");
+    expect(rota).toContain("if (!fresh && cached && ayniPencereGunuMu(cached.at)) {");
+    // Taze hesap düşerse eldeki (eski) sonuca geri dönülür — boş ekran yerine.
+    expect(rota).toContain("if (!fresh && cached) return NextResponse.json(cached.body);");
   });
 });

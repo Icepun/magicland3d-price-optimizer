@@ -9,6 +9,7 @@ import {
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
+  ayniPencereGunuMu,
   computeOrdersShared,
   getOrdersCache,
   isOrdersRefreshing,
@@ -489,7 +490,9 @@ export async function GET(req: NextRequest) {
     }
     const fresh = params.get("fresh") === "1";
     const cached = getOrdersCache();
-    if (!fresh && cached) {
+    // Önbellek YALNIZ aynı UTC gününde hesaplanmışsa anında verilir: gün değişince 30 günlük
+    // pencere kayar ve dünkü hesap yanlış pencereyi anlatır (bkz. ayniPencereGunuMu).
+    if (!fresh && cached && ayniPencereGunuMu(cached.at)) {
       if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
         setOrdersRefreshing(true);
         void computeOrdersShared(computeOrdersBody)
@@ -498,7 +501,14 @@ export async function GET(req: NextRequest) {
       }
       return NextResponse.json(cached.body);
     }
-    return NextResponse.json(await computeOrdersShared(computeOrdersBody));
+    try {
+      return NextResponse.json(await computeOrdersShared(computeOrdersBody));
+    } catch (error) {
+      // Taze hesap düşerse (ör. ağ yok) dünkü pencere de olsa eldeki sonuç boş ekrandan iyidir;
+      // gövde kendi `computedAt` damgasını taşıdığı için ekran ne zaman hesaplandığını yazar.
+      if (!fresh && cached) return NextResponse.json(cached.body);
+      throw error;
+    }
   } catch (error) {
     return jsonError(error);
   }

@@ -107,6 +107,24 @@ function persistDiskCache(value: OrdersCacheEntry): void {
   }
 }
 
+/**
+ * Önbellekteki sonuç BUGÜNKÜ pencereyi mi anlatıyor?
+ *
+ * Özetin 30 günlük kesimi UTC GÜN BAŞINA bağlı (route.ts `cutoff`, telefon `panel-ciro`).
+ * Gün değişince (Türkiye saatiyle 03:00) pencere bir gün kayar: dünkü hesap "biraz bayat"
+ * değil, YANLIŞ PENCEREYİ anlatır. Bayat-iken-sun (SWR) önbelleği bu hesabı yine de anında
+ * veriyordu ve sayfa kendiliğinden yeniden sormadığı için masaüstü, biri "Yenile"ye basana
+ * kadar dünkü pencerenin cirosunu gösteriyordu.
+ *
+ * ⚠️ SAHADA YAŞANDI (24 Eyl 2026): gece 01:21'de hesaplanan özet sabah 07:19'da hâlâ
+ * ekrandaydı; 30 günün dışına düşmüş 4 sipariş (2.519,97 ₺) sayılmaya devam ediyordu.
+ * Telefon taze hesapladığı için doğruydu; kullanıcı iki cihazda farklı ciro gördü.
+ */
+export function ayniPencereGunuMu(at: number, simdi: number = Date.now()): boolean {
+  const GUN_MS = 86_400_000;
+  return Math.floor(at / GUN_MS) === Math.floor(simdi / GUN_MS);
+}
+
 export function getOrdersCache(): OrdersCacheEntry | null {
   loadDiskCacheOnce();
   return cache;
