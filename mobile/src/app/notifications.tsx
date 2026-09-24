@@ -5,6 +5,7 @@ import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 
 import { EmptyState, ErrorState, FadeInView, IconButton, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
 import { PressableScale } from "@/components/kit/PressableScale";
+import { PushDurumSatiri } from "@/components/PushDurumSatiri";
 import { ackAllNotifications, ackNotification, getNotifications, type AppAlert, type NotificationsResult } from "@/lib/db/notifications";
 import { formatNumber } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";
@@ -62,6 +63,7 @@ export default function NotificationsScreen() {
         </View>
       ) : isLoading ? (
         <View style={styles.pad}>
+          <PushDurumSatiri />
           <ShimmerList count={5} height={84} />
         </View>
       ) : (
@@ -71,6 +73,8 @@ export default function NotificationsScreen() {
           keyExtractor={(a, i) => `${a.id}:${i}`}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor={color.accentBright} />}
+          // Bu telefonda bildirim açık mı — gelmiyorsa sebebi ve tek dokunuşluk çözüm burada.
+          ListHeaderComponent={<PushDurumSatiri />}
           renderItem={({ item, index }) => (
             <FadeInView index={index}>
               <AlertRow alert={item} onAck={item.persistent ? () => ack.mutate(item.id) : null} />

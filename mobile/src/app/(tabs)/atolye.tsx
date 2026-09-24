@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
+import { Image } from "expo-image";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useMemo } from "react";
 import { StyleSheet, View } from "react-native";
@@ -12,6 +13,7 @@ import {
   FadeInView,
   Glass,
   Header,
+  PressableScale,
   Progress,
   Ring,
   Screen,
@@ -22,7 +24,9 @@ import {
 import { getAllOrders, ORDERS_STALE_MS, visibleOrders } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getPrepDone } from "@/lib/db/prep";
-import { getPrinterSnapshots } from "@/lib/db/printers";
+import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
+import { thumbUrl } from "@/lib/image";
+import { durumBilgisi, kalanSure, yazicilariSirala } from "@/lib/yazici-durum";
 import { getSpools } from "@/lib/db/spools";
 import { formatNumber } from "@/lib/format";
 import { prepItemsFromOrders } from "@/lib/prep";
@@ -34,14 +38,60 @@ import { color, radius, space } from "@/theme/tokens";
  * kaç ürün toplanacak. Kısayollar bir dokunuş derinde. Veri katmanı öncekiyle aynı.
  */
 
-const DURUM: Record<string, { label: string; color: string }> = {
-  printing: { label: "Yazdırıyor", color: color.good },
-  paused: { label: "Duraklatıldı", color: color.warn },
-  error: { label: "Hata", color: color.bad },
-  finished: { label: "Bitti", color: color.accentBright },
-  idle: { label: "Boşta", color: color.textDim },
-  offline: { label: "Çevrimdışı", color: color.textFaint },
-};
+
+/** Tek yazıcı kartı: görsel (ilerleme halkasında baskının resmi), durum, iş, kalan süre, ısılar. */
+function YaziciKarti({ s }: { s: PrinterSnapshot }) {
+  const info = durumBilgisi(s.status, Boolean(s.online));
+  const cevrimdisi = !s.online || s.status === "offline";
+  const aktif = !cevrimdisi && (s.status === "printing" || s.status === "paused");
+  const isVar = !cevrimdisi && (aktif || s.status === "finished" || s.status === "error");
+  const oran = s.status === "finished" ? 1 : Math.max(0, Math.min(1, s.progress || 0));
+  const kalan = aktif ? kalanSure(s.etaSec) : null;
+  const gorsel = isVar && s.productImage ? thumbUrl(s.productImage, 120) : null;
+  return (
+    <Glass
+      strong={s.status === "error"}
+      onPress={() => router.push("/printers")}
+      style={[styles.printCard, s.status === "error" ? { borderColor: color.bad + "88" } : null, cevrimdisi ? { opacity: 0.6 } : null]}
+      accessibilityLabel={`${s.name}, ${info.label}${kalan ? `, ${kalan} kaldı` : ""}. Yazıcılar ekranını açar`}
+    >
+      <Ring value={isVar ? oran : 0} size={60} stroke={5} color={info.color}>
+        {gorsel ? (
+          <Image source={{ uri: gorsel }} style={styles.gorsel} contentFit="cover" transition={150} recyclingKey={s.printerConfigId} />
+        ) : aktif ? (
+          <Count value={oran * 100} v="label" format={(n) => `%${Math.round(n)}`} />
+        ) : (
+          <SymbolView name="printer.fill" tintColor={info.color} style={{ width: 22, height: 22 }} />
+        )}
+      </Ring>
+      <View style={{ flex: 1, gap: 3, minWidth: 0 }}>
+        <View style={styles.rowBetween}>
+          <Txt v="bodyStrong" numberOfLines={1} style={{ flexShrink: 1 }}>
+            {s.name}
+          </Txt>
+          <Pill color={info.color}>{info.label}</Pill>
+        </View>
+        <Txt v="small" tone="dim" numberOfLines={1}>
+          {isVar ? s.productName ?? s.currentFilename ?? "Baskı" : cevrimdisi ? "Bağlantı yok" : "Yeni baskıya hazır"}
+        </Txt>
+        {s.statusMessage && (s.status === "error" || s.status === "paused") ? (
+          <Txt v="small" tone={s.status === "error" ? "bad" : "warn"} numberOfLines={2}>
+            {s.statusMessage}
+          </Txt>
+        ) : null}
+        {aktif ? <Progress value={oran} color={info.color} height={4} style={{ marginTop: 2 }} /> : null}
+        {!cevrimdisi ? (
+          <Txt v="label" tone="faint" num numberOfLines={1}>
+            {[aktif ? `%${Math.round(oran * 100)}` : null, kalan ? `~${kalan} kaldı` : null, `${Math.round(s.nozzle)}° / ${Math.round(s.bed)}°`]
+              .filter(Boolean)
+              .join(" · ")}
+          </Txt>
+        ) : null}
+      </View>
+      <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 12, height: 12 }} />
+    </Glass>
+  );
+}
 
 function Kisayol({
   icon,
@@ -95,8 +145,10 @@ export default function AtolyeScreen() {
   });
 
   const snaps = printers.data ?? [];
-  const basanlar = snaps.filter((s) => s.status === "printing" || s.status === "paused");
-  const sorunlu = snaps.filter((s) => s.status === "error");
+  const basanlar = snaps.filter((s) => s.online && (s.status === "printing" || s.status === "paused"));
+  // Atölye DÖRT YAZICININ DÖRDÜNÜ gösterir. Bir tur yalnız basan ve hatalı olanlar listeleniyordu;
+  // işi biten ya da boştaki yazıcı hiç görünmüyor, "yazıcım nerede" sorusu doğuyordu.
+  const yazicilar = yazicilariSirala(snaps);
   const cevrimici = snaps.filter((s) => s.online).length;
 
   // Filament uyarıları ortak çekirdekten — zil ve Filament ekranıyla AYNI kural.
@@ -154,62 +206,35 @@ export default function AtolyeScreen() {
         </>
       ) : (
         <>
-          {/* HATA VEREN YAZICI EN ÜSTTE — atölyede en acil bilgi bu. */}
-          {sorunlu.map((s, i) => (
+          {/* YAZICILAR — hepsi, en acil üstte. Başlık ve her kart yazıcı ekranına götürdüğünü
+              açıkça söyler (sağda ok + "Tümü"); bir tur dokunulabilir olduğu hiç belli değildi. */}
+          {yazicilar.length > 0 ? (
+            <PressableScale
+              onPress={() => router.push("/printers")}
+              style={styles.bolumBaslik}
+              accessibilityRole="link"
+              accessibilityLabel="Tüm yazıcılar"
+            >
+              <Txt v="label" tone="faint" style={styles.section}>
+                YAZICILAR · {yazicilar.length}
+              </Txt>
+              <View style={styles.rowGap}>
+                <Txt v="smallStrong" tone="accent">
+                  Tümü
+                </Txt>
+                <SymbolView name="chevron.right" tintColor={color.accentBright} style={{ width: 11, height: 11 }} />
+              </View>
+            </PressableScale>
+          ) : null}
+          {yazicilar.map((s, i) => (
             <FadeInView key={s.printerConfigId} index={i}>
-              <Glass strong onPress={() => router.push("/printers")} style={styles.card}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.rowGap}>
-                    <View style={[styles.statusDot, { backgroundColor: color.bad }]} />
-                    <Txt v="heading" numberOfLines={1} style={{ flexShrink: 1 }}>
-                      {s.name}
-                    </Txt>
-                  </View>
-                  <Pill color={color.bad}>Hata</Pill>
-                </View>
-                {s.statusMessage ? (
-                  <Txt v="small" tone="bad" numberOfLines={2}>
-                    {s.statusMessage}
-                  </Txt>
-                ) : null}
-              </Glass>
+              <YaziciKarti s={s} />
             </FadeInView>
           ))}
 
-          {basanlar.length > 0 ? (
-            <Txt v="label" tone="faint" style={styles.section}>
-              SÜREN BASKILAR
-            </Txt>
-          ) : null}
-          {basanlar.map((s, i) => {
-            const info = DURUM[s.status] ?? DURUM.idle;
-            const oran = Math.max(0, Math.min(1, s.progress || 0));
-            return (
-              <FadeInView key={s.printerConfigId} index={i + sorunlu.length}>
-                <Glass onPress={() => router.push("/printers")} style={styles.printCard}>
-                  <Ring value={oran} size={64} stroke={7} color={info.color}>
-                    <Count value={oran * 100} v="label" format={(n) => `%${Math.round(n)}`} />
-                  </Ring>
-                  <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
-                    <View style={styles.rowBetween}>
-                      <Txt v="heading" numberOfLines={1} style={{ flexShrink: 1 }}>
-                        {s.name}
-                      </Txt>
-                      <Pill color={info.color}>{info.label}</Pill>
-                    </View>
-                    <Txt v="small" tone="dim" numberOfLines={1}>
-                      {s.productName ?? s.currentFilename ?? "Baskı"}
-                    </Txt>
-                    <Progress value={oran} color={info.color} height={5} style={{ marginTop: 2 }} />
-                  </View>
-                </Glass>
-              </FadeInView>
-            );
-          })}
-
           {/* FİLAMENT UYARILARI — "bu baskıyı bitirecek filamentim var mı" sorusu. */}
           {uyarilar.length > 0 ? (
-            <FadeInView index={basanlar.length + sorunlu.length}>
+            <FadeInView index={yazicilar.length}>
               <Tint strong onPress={() => router.push("/spools")} style={styles.card} accessibilityLabel="Filament uyarıları">
                 <View style={styles.rowBetween}>
                   <View style={styles.rowGap}>
@@ -256,6 +281,8 @@ export default function AtolyeScreen() {
 }
 
 const styles = StyleSheet.create({
+  bolumBaslik: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: space.xs, minHeight: 32 },
+  gorsel: { width: 46, height: 46, borderRadius: 23 },
   card: { gap: space.sm },
   printCard: { flexDirection: "row", alignItems: "center", gap: space.md },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },

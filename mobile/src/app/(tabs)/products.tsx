@@ -78,6 +78,9 @@ type Row =
 
 const RowGap = () => <View style={{ height: space.sm }} />;
 
+/** Satırın kâr sütununa sığan en kısa platform adı (sabit genişlikte hizalanır). */
+const PLATFORM_KISA: Record<Platform, string> = { shopify: "S", trendyol: "TY", hepsiburada: "HB" };
+
 /**
  * ÜRÜNLER — arama (Türkçe duyarsız, çok kelimeli), dört süzgeç, varyant grupları (açılır).
  * Veri katmanı öncekiyle aynı; satırlar blur'suz saydam yüzey (FlashList geri dönüşümü).
@@ -237,7 +240,8 @@ export default function ProductsScreen() {
             <Chip
               key={f.key}
               label={f.label}
-              count={sayilar[f.key]}
+              // Veri gelmeden "0" gösterilmez: yükleniyorken "hiç ürün yok" izlenimi veriyordu.
+              count={products ? sayilar[f.key] : undefined}
               selected={f.key === filter}
               onPress={() => router.setParams({ filter: f.key })}
             />
@@ -329,19 +333,21 @@ function ProductRow({ item, member }: { item: ListItem; member?: boolean }) {
         <Txt v="bodyStrong" numberOfLines={1}>
           {member ? item.variantLabel || item.name : item.name}
         </Txt>
+        {/* ⚠️ STOK HİÇ KIRPILMAZ: satırın en önemli bilgisi. Bir tur kategoriyle aynı daralma
+            payını taşıyordu ve dar ekranda "1 ad…" görünüyordu. Yer darsa ÖNCE kategori daralır. */}
         <View style={styles.metaRow}>
-          <Txt v="small" tone="faint" numberOfLines={1} style={{ flexShrink: 1 }}>
-            {item.category}
-          </Txt>
           <View style={[styles.dot, { backgroundColor: stokRenk }]} />
-          <Txt v="smallStrong" style={{ color: out ? color.bad : color.textDim }} num numberOfLines={1}>
+          <Txt v="smallStrong" style={[styles.sabit, { color: out ? color.bad : color.textDim }]} num numberOfLines={1}>
             {madeToOrder ? "Siparişle üretilir" : out ? "Bitti" : `${item.stock} adet`}
           </Txt>
           {item.missingDesi ? (
-            <Txt v="label" tone="warn" style={{ fontSize: 10, lineHeight: 12 }}>
-              · Desi eksik
+            <Txt v="label" tone="warn" style={[styles.sabit, { fontSize: 10, lineHeight: 12 }]} numberOfLines={1}>
+              desi eksik
             </Txt>
           ) : null}
+          <Txt v="small" tone="faint" numberOfLines={1} style={styles.kategori}>
+            {item.category}
+          </Txt>
         </View>
       </View>
 
@@ -349,7 +355,11 @@ function ProductRow({ item, member }: { item: ListItem; member?: boolean }) {
         {item.hasCost ? (
           item.platforms.map((pl) => (
             <View key={pl.platform} style={styles.profitRow}>
-              <View style={[styles.platDot, { backgroundColor: PLATFORM_COLOR[pl.platform] }]} />
+              {/* Nokta değil KISA AD: Trendyol ve Hepsiburada'nın marka turuncuları neredeyse
+                  aynı; renkli noktayla hangi tutarın hangi platforma ait olduğu anlaşılmıyordu. */}
+              <Txt v="label" style={[styles.platKisa, { color: PLATFORM_COLOR[pl.platform] }]}>
+                {PLATFORM_KISA[pl.platform]}
+              </Txt>
               <Txt v="smallStrong" tone={(pl.netProfit ?? 0) < 0 ? "bad" : "good"} num>
                 {pl.netProfit == null
                   ? "—"
@@ -413,6 +423,8 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3 },
   profitCol: { alignItems: "flex-end", gap: 3, minWidth: 78 },
   profitRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  platDot: { width: 7, height: 7, borderRadius: 4 },
+  platKisa: { width: 18, textAlign: "right", fontSize: 10, letterSpacing: 0.3 },
+  sabit: { flexShrink: 0 },
+  kategori: { flexShrink: 1, minWidth: 0 },
   chevron: { width: 14, height: 14 },
 });

@@ -187,9 +187,11 @@ export default function ProductDetailScreen() {
             <Txt v="heading" numberOfLines={3}>
               {product.name}
             </Txt>
-            <Txt v="small" tone="faint" numberOfLines={1}>
-              {product.sku}
-            </Txt>
+            {okunurKod(product) ? (
+              <Txt v="small" tone="faint" numberOfLines={1}>
+                {okunurKod(product)}
+              </Txt>
+            ) : null}
             <Pressable
               onPress={() => {
                 setAliasDraft(product.alias ?? "");
@@ -588,3 +590,19 @@ const styles = StyleSheet.create({
   aliasBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", padding: space.xl },
   aliasBtns: { flexDirection: "row", justifyContent: "flex-end", gap: space.sm, marginTop: space.lg },
 });
+
+/**
+ * Başlığın altında gösterilecek KOD — yalnız insanın okuyabileceği bir koddu.
+ *
+ * Ürünlerin çoğunda (425'te 405) SKU ve barkod Shopify'ın iç kimliği: "shopify-variant-48432681877759".
+ * Bu satır bir tur o kimliği doğrudan gösteriyordu; kullanıcıya bir şey söylemiyor, yalnız yer
+ * kaplıyordu. Gerçek kod (ör. "M1D26F3MKMZ") varsa gösterilir: önce SKU, sonra barkod.
+ */
+const OTOMATIK_KOD = /^shopify-variant-\d+$/i;
+function okunurKod(p: { sku?: string | null; barcode?: string | null }): string | null {
+  for (const aday of [p.sku, p.barcode]) {
+    const k = (aday ?? "").trim();
+    if (k && !OTOMATIK_KOD.test(k)) return k;
+  }
+  return null;
+}

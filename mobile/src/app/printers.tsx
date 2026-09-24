@@ -28,6 +28,7 @@ import {
   type PrinterSnapshot,
 } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
+import { YAZICI_DURUM, kalanSure } from "@/lib/yazici-durum";
 import { color, radius, space } from "@/theme/tokens";
 
 function brandColor(brand: string): string {
@@ -37,23 +38,9 @@ function brandColor(brand: string): string {
   return color.accentBright;
 }
 
-function fmtRemaining(sec: number | null): string {
-  if (sec == null || sec <= 0) return "—";
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  if (h > 0) return `${h}sa ${m}dk`;
-  const s = Math.floor(sec % 60);
-  return m > 0 ? `${m}dk ${s}sn` : `${s}sn`;
-}
-
-const STATUS: Record<string, { label: string; color: string }> = {
-  printing: { label: "Yazdırıyor", color: color.accentBright },
-  paused: { label: "Duraklatıldı", color: color.warn },
-  finished: { label: "Tamamlandı", color: color.good },
-  idle: { label: "Hazır", color: color.textDim },
-  error: { label: "Hata", color: color.bad },
-  offline: { label: "Çevrimdışı", color: color.textFaint },
-};
+/** Durum tablosu ve kalan süre ORTAK (`lib/yazici-durum`) — Atölye ile aynı renk ve ad. */
+const STATUS = YAZICI_DURUM;
+const fmtRemaining = (sec: number | null) => kalanSure(sec) ?? "—";
 
 const ACTION_LABEL: Record<PrintAction, string> = {
   start: "Başlat",

@@ -407,10 +407,13 @@ function ManualOrderForm({
     [customExpenses]
   );
 
+  // Oran hesabın DIŞINDA çözülür: `vatRateOf` yalnız `settings.vatRate`'i okuyor ama içeride
+  // çağrılınca denetleyici tüm `settings` nesnesini bağımlılık sanıp uyarı veriyordu.
+  const ayarKdv = vatRateOf(settings);
   const draft = useMemo<ManualOrderDraft>(() => {
     const base: ManualOrderDraft = {
       saleTotal: Math.max(0, parseTrNumber(saleTotal) ?? 0),
-      vatRate: existing?.draft.vatRate ?? vatRateOf(settings),
+      vatRate: existing?.draft.vatRate ?? ayarKdv,
       mode,
       items: resolvedItems,
       includeProductCost,
@@ -441,7 +444,7 @@ function ManualOrderForm({
     resolvedItems,
     saleTotal,
     selectedExpenses,
-    settings.vatRate,
+    ayarKdv,
   ]);
   const breakdown = useMemo(() => calculateManualOrder(draft), [draft]);
   const resolvedById = useMemo(() => new Map(draft.items.map((item) => [item.id, item])), [draft]);
