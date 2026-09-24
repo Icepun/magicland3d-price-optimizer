@@ -3,6 +3,7 @@ import { fetchT } from "@/lib/api/http";
 import { trendyolDateToUtc } from "@core/trendyol-date";
 import { buildTrendyolWindows } from "@core/trendyol-windows";
 import { trendyolOrderId } from "@core/trendyol-order-id";
+import { anahtarListesi } from "@core/order-match";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -126,6 +127,10 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
           matchKeys: [l.barcode, l.sku, l.merchantSku].filter(
             (k): k is string => !!k && k !== "merchantSku"
           ),
+          // Türüne göre (masaüstü route.ts ile birebir) — eşleştirme güven sırası için.
+          barcodes: anahtarListesi(l.barcode),
+          externalIds: [],
+          skus: anahtarListesi(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
         })),
       });
     }

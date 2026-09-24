@@ -44,7 +44,7 @@ import {
   type FinanceSnapshotItem,
 } from "@/lib/order-finance-snapshots";
 import { bustFinanceCachesAfterOrderSnapshots } from "@/lib/cache-busting";
-import { matchByPriority, uniqueIndex } from "@/lib/listing-index";
+import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@/core/order-match";
 // Eşleştirme anahtarı sadeleştirmesi TEK yerde: hızlı bildirim taraması da aynısını kullanır,
 // iki taraf ayrı kural yazarsa aynı sipariş burada eşleşip orada eşleşmez.
 import { normalizeMatchKey } from "@/lib/order-watch";
@@ -1049,16 +1049,8 @@ async function computeOrdersBodyInner(
   // Anahtar indeksleri TÜR BAZINDA ayrı: aynı metin bir üründe barkod, başkasında stok kodu
   // olabiliyor. Tek harita kullanıldığında "ilk gelen kazanıyor" ve sipariş satırı yanlış ürüne —
   // dolayısıyla yanlış maliyete — bağlanıyordu. Aynı anahtar birden çok ürüne düşerse o anahtar
-  // BELİRSİZ sayılır ve hiç kullanılmaz (uniqueIndex bunu kendisi yapar).
-  type KeyEntry = { key: string; product: Matched };
-  type KeyIndex = Map<string, KeyEntry>;
-  let productBarcodeIndex: KeyIndex = new Map();
-  let listingBarcodeIndex: KeyIndex = new Map();
-  let listingExternalIdIndex: KeyIndex = new Map();
-  let listingSkuIndex: KeyIndex = new Map();
-  let productSkuIndex: KeyIndex = new Map();
-  let anyKeyIndex: KeyIndex = new Map();
-  let nameIndex: KeyIndex = new Map();
+  // BELİRSİZ sayılır ve hiç kullanılmaz. Kural `@/core/order-match`te: telefon da AYNI kuralla eşler.
+  let urunIndeksi: UrunIndeksi<Matched> | null = null;
   let adSnap: Awaited<ReturnType<typeof adRateSnapshot>> = { at: 0, butceler: [], bugun: new Map() };
   let commissionRules: CommissionRules = [];
   let cargoRules: CargoRules = [];
@@ -1181,38 +1173,8 @@ async function computeOrdersBodyInner(
       financialByOrderNumber.set(financial.orderNumber, rows);
     }
 
-    // Her anahtar türü kendi kovasına düşer; aynı ürün aynı anahtarı iki kez verirse (ör. ürün
-    // barkodu = ilan barkodu) tekrar sayılmaz, yoksa kendi kendine "belirsiz" görünürdü.
-    const makeBucket = () => ({ entries: [] as KeyEntry[], seen: new Set<string>() });
-    const buckets = {
-      productBarcode: makeBucket(),
-      listingBarcode: makeBucket(),
-      listingExternalId: makeBucket(),
-      listingSku: makeBucket(),
-      productSku: makeBucket(),
-      any: makeBucket(),
-      name: makeBucket(),
-    };
-    const addKey = (
-      bucket: ReturnType<typeof makeBucket>,
-      raw: string | null | undefined,
-      product: Matched,
-      alsoAny = true
-    ) => {
-      const key = normalizeMatchKey(raw);
-      if (!key) return;
-      const dedupe = `${key}\u0000${product.id}`;
-      if (!bucket.seen.has(dedupe)) {
-        bucket.seen.add(dedupe);
-        bucket.entries.push({ key, product });
-      }
-      if (alsoAny && !buckets.any.seen.has(dedupe)) {
-        buckets.any.seen.add(dedupe);
-        buckets.any.entries.push({ key, product });
-      }
-    };
-
-    for (const p of products) {
+    // Ürün → eşleştirme değeri (maliyet + ilan kuralları); kovalar ve belirsizlik kuralı çekirdekte.
+    urunIndeksi = urunIndeksiKur(products, (p) => {
       const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
       // Listing komisyon override'ı platform bazlı taşınır (Ürünler/Panel ile AYNI kaynak).
       const listingByPlatform: Matched["listingByPlatform"] = {};
@@ -1240,24 +1202,8 @@ async function computeOrdersBodyInner(
         stock: p.stock,
         listingByPlatform,
       };
-      addKey(buckets.productBarcode, p.barcode, m);
-      addKey(buckets.productSku, p.sku, m);
-      for (const l of p.listings) {
-        addKey(buckets.listingBarcode, l.barcode, m); // platform-bazlı barkod
-        addKey(buckets.listingExternalId, l.externalId, m);
-        addKey(buckets.listingSku, l.externalSku, m);
-      }
-      // Shopify ad-eşleştirme: aynı ad birden çok üründeyse belirsiz → hiç eşleştirilmez.
-      addKey(buckets.name, p.name, m, false);
-    }
-
-    productBarcodeIndex = uniqueIndex(buckets.productBarcode.entries, (e) => e.key);
-    listingBarcodeIndex = uniqueIndex(buckets.listingBarcode.entries, (e) => e.key);
-    listingExternalIdIndex = uniqueIndex(buckets.listingExternalId.entries, (e) => e.key);
-    listingSkuIndex = uniqueIndex(buckets.listingSku.entries, (e) => e.key);
-    productSkuIndex = uniqueIndex(buckets.productSku.entries, (e) => e.key);
-    anyKeyIndex = uniqueIndex(buckets.any.entries, (e) => e.key);
-    nameIndex = uniqueIndex(buckets.name.entries, (e) => e.key);
+      return m;
+    });
   }
 
   /**
@@ -1265,21 +1211,8 @@ async function computeOrdersBodyInner(
    * platform kimliği > stok kodu. En son çare, anahtarın türü platformda karışmış olabileceği
    * için tür ayrımı olmayan indekstir. Belirsiz (birden çok ürüne düşen) anahtar hiç kullanılmaz.
    */
-  const matchLine = (line: RawLine, platform: string): Matched | null => {
-    const candidates: Array<readonly [string | null | undefined, KeyIndex]> = [];
-    const addCandidates = (values: string[], index: KeyIndex) => {
-      for (const value of values) candidates.push([normalizeMatchKey(value), index]);
-    };
-    addCandidates(line.barcodes, productBarcodeIndex);
-    addCandidates(line.barcodes, listingBarcodeIndex);
-    addCandidates(line.externalIds, listingExternalIdIndex);
-    addCandidates(line.skus, listingSkuIndex);
-    addCandidates(line.skus, productSkuIndex);
-    addCandidates([...line.barcodes, ...line.externalIds, ...line.skus], anyKeyIndex);
-    // Shopify barkod taşımaz → son çare ürün adı.
-    if (platform === "shopify") candidates.push([normalizeMatchKey(line.name), nameIndex]);
-    return matchByPriority(candidates)?.product ?? null;
-  };
+  const matchLine = (line: RawLine, platform: string): Matched | null =>
+    urunIndeksi ? satiriEsle(urunIndeksi, line, platform) : null;
 
   // NOT: Sipariş kârının TAMAMI @/core/order-profit → computeOrderProfit içinde (masaüstü + mobil
   // AYNI fonksiyon). Adet başına: ürün/paketleme/komisyon/yüzdesel gider. Siparişe BİR KEZ: kargo +

@@ -61,25 +61,11 @@ function baseUrl(): string {
 }
 
 /**
- * Eşleştirme anahtarını (barkod/stok kodu/ürün adı) tek biçime indirger.
- *
- * NEDEN: karşılaştırma ham metin üzerindeydi; sondaki tek bir boşluk ya da harf düzeni farkı
- * eşleşmeyi sessizce bozuyor, sipariş "maliyeti bilinmeyen" sayılıyordu. Türkçe I harfi ise ters
- * yönden ısırıyordu: "ISIK" ile "Işık" iki farklı küçük harfe düşüyordu. Dört I biçimi (I/İ/ı/i)
- * burada tek harfe indirgenir; bu yüzden yalnız I farkıyla ayrışan iki ürün "belirsiz" sayılır ve
- * kör eşleşme yerine hiç eşleşmez.
- *
- * BURADA DURUYOR ÇÜNKÜ: hem Siparişler ucu hem bu hızlı tarama aynı kuralı kullanmak zorunda,
- * ama Next rota dosyaları yalnız istek işleyicilerini dışa açabiliyor.
+ * Eşleştirme anahtarını tek biçime indirger — tanım `@/core/order-match`te (telefon da aynı
+ * kuralla eşler). Siparişler ucu ve bu hızlı tarama buradan kullanmaya devam eder.
  */
-export function normalizeMatchKey(raw: string | null | undefined): string {
-  if (typeof raw !== "string") return "";
-  return raw
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/[İıi]/g, "I")
-    .toUpperCase();
-}
+import { normalizeMatchKey } from "@/core/order-match";
+export { normalizeMatchKey };
 
 // ── Ortak tipler (saf yardımcılar dışarıdan test edilebilsin diye export'lu) ─────────────────
 

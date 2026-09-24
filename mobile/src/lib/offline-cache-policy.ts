@@ -13,7 +13,9 @@
  * JSON'da `{}` oluyor, geri yüklenince `rules.financialByExternalId.get(...)` "get is not a
  * function" ile PATLIYOR ve uygulama açılışta kapanıyordu. Sürüm artışı o dosyaları siler.
  */
-export const ONBELLEK_BICIMI = 3;
+// 4 (24 Eyl 2026): sipariş kalemleri eşleştirme anahtarlarını TÜRÜNE göre taşıyor
+// (barcodes/externalIds/skus — @core/order-match). Eski kayıtlarda yok → bir kez atılıp çekilir.
+export const ONBELLEK_BICIMI = 4;
 
 /** Bu yaştan eski önbellek atılır: "geçen haftaki siparişler" diye açılmasın. */
 export const ONBELLEK_MAKSIMUM_YAS_MS = 3 * 24 * 60 * 60_000;

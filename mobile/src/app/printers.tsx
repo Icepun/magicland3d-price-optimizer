@@ -163,9 +163,9 @@ function PrinterCard({
       ) : null}
 
       <View style={styles.body}>
-        {busy && s.productImage ? (
+        {busy && (s.detay?.plateUrl || s.productImage) ? (
           <Image
-            source={{ uri: thumbUrl(s.productImage, 96)! }}
+            source={{ uri: s.detay?.plateUrl ?? thumbUrl(s.productImage, 96)! }}
             alt={s.productName ?? s.currentFilename ?? "Baskı"}
             style={styles.thumb}
             contentFit="cover"

@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider, focusManager, type Query } from "@tan
 import { type ReactNode, useEffect, useState } from "react";
 import { AppState } from "react-native";
 
+import { hbDiskDeposu } from "@/lib/api/hb-detay-onbellek";
+import { hbDetayDeposunuKur } from "@/lib/api/hepsiburada";
 import {
   flushOfflineCache,
   loadOfflineCache,
@@ -55,6 +57,8 @@ export function AppQueryProvider({ children }: { children: ReactNode }) {
         },
     });
     loadOfflineCache(qc);
+    // HB sipariş detayları diskten: soğuk açılışta ~40 detay isteği yerine yalnız yenileri.
+    hbDetayDeposunuKur(hbDiskDeposu);
     return qc;
   });
 

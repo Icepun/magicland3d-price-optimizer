@@ -47,7 +47,8 @@ function YaziciKarti({ s }: { s: PrinterSnapshot }) {
   const isVar = !cevrimdisi && (aktif || s.status === "finished" || s.status === "error");
   const oran = s.status === "finished" ? 1 : Math.max(0, Math.min(1, s.progress || 0));
   const kalan = aktif ? kalanSure(s.etaSec) : null;
-  const gorsel = isVar && s.productImage ? thumbUrl(s.productImage, 120) : null;
+  // Dilimleyicinin plaka önizlemesi (masaüstü R2'ye koyar) varsa o — Bambu işinde tek görsel bu.
+  const gorsel = isVar ? (s.detay?.plateUrl ?? (s.productImage ? thumbUrl(s.productImage, 120) : null)) : null;
   return (
     <Glass
       strong={s.status === "error"}

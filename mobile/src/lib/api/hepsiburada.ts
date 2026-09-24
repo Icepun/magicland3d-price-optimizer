@@ -1,3 +1,6 @@
+import { anahtarListesi } from "@core/order-match";
+
+import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
 
@@ -95,6 +98,10 @@ function hbLineRaw(li: Record<string, unknown>): OrderItem {
     matchKeys: [li.merchantSku, li.hbSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter(
       (k): k is string => typeof k === "string" && !!k
     ),
+    // Türüne göre (masaüstü hbLineRaw ile birebir) — eşleştirme güven sırası için.
+    barcodes: anahtarListesi(li.barcode),
+    externalIds: anahtarListesi(li.hbSku, li.hepsiburadaSku),
+    skus: anahtarListesi(li.merchantSku, li.sku, li.stockCode),
   };
 }
 
@@ -173,15 +180,39 @@ function getOrderDetail(orderNumber: string): Promise<unknown> {
 
 type HbAgg = { status: string; date: number | null; customer: string | null; lines: OrderItem[] | null };
 
-/** Sipariş detayı önbelleği (oturum boyu, modül seviyesi). Kalemler/tutar/müşteri/sipariş-tarihi
+/** Sipariş detayı önbelleği (modül seviyesi). Kalemler/tutar/müşteri/sipariş-tarihi
  *  sipariş verildikten sonra DEĞİŞMEZ → her ["orders"] yenilemesinde aynı ~50-80 detay çağrısını
  *  tekrarlamak boşunaydı (yenileme 3-8sn). İlk yenilemeden sonra yalnız YENİ siparişler çekilir. */
-const detailCache = new Map<string, { lines: OrderItem[]; customer: string | null; date: number | null }>();
+const detailCache = new Map<string, HbDetayKaydi>();
 const DETAIL_CACHE_MAX = 600;
+
+/**
+ * Önbelleğin DİSKTEKİ deposu — uygulama açılışta kurar (`lib/api/hb-detay-onbellek`).
+ *
+ * Bellek önbelleği yalnız oturum boyuydu: her soğuk açılışta aynı ~40 detay yeniden çekiliyordu
+ * (ölçüldü: açılıştaki 53 isteğin 41'i). Bu modül dosya sistemine DOĞRUDAN dokunmaz — sipariş
+ * hattı Node'da da çalışsın (masaüstüyle rakam karşılaştırma düzeneği); depo verilmezse yalnız
+ * bellek kullanılır, davranış aynıdır.
+ */
+export interface HbDetayDeposu {
+  yukle: (hedef: Map<string, HbDetayKaydi>) => void;
+  kaydet: (kaynak: Map<string, HbDetayKaydi>, enCok: number) => void;
+}
+let depo: HbDetayDeposu | null = null;
+let depoOkundu = false;
+export function hbDetayDeposunuKur(d: HbDetayDeposu): void {
+  depo = d;
+  depoOkundu = false;
+}
 
 export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrder[]> {
   // Kimlik bilgisi eksikse sessizce boş (trendyol.ts/shopify.ts gibi).
   if (!MERCHANT_ID || !SECRET_KEY || !DEV_USERNAME) return [];
+
+  if (depo && !depoOkundu) {
+    depoOkundu = true;
+    depo.yukle(detailCache);
+  }
 
   const safeDays = Math.max(1, Math.min(60, Math.trunc(historyDays)));
   const cutoff = (Math.floor(Date.now() / 86_400_000) - safeDays) * 86_400_000;
@@ -275,6 +306,7 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
       needDetail.push(on);
     }
   }
+  let yeniDetay = false;
   await mapLimit(needDetail.slice(0, 250), 8, async (on) => {
     try {
       const d = (await getOrderDetail(on)) as Record<string, unknown>;
@@ -299,11 +331,14 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
           if (first != null) detailCache.delete(first);
         }
         detailCache.set(on, { lines: e.lines, customer: e.customer, date: od ?? null });
+        yeniDetay = true;
       }
     } catch {
       /* detay alınamadı → o sipariş kalemsiz (kârsız) görünür, listede kalır; önbelleğe girmez */
     }
   });
+
+  if (yeniDetay && depo) depo.kaydet(detailCache, DETAIL_CACHE_MAX);
 
   // d) Birleşik UnifiedOrder'lar (mobil şekil: date = epoch ms, total = Σ unitPrice*qty).
   const orders: UnifiedOrder[] = [];

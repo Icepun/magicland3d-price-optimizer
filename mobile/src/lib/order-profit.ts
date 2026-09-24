@@ -1,5 +1,6 @@
 import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
+import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
 import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
@@ -12,15 +13,15 @@ export interface MatchedProduct {
   detail: ProductDetail;
 }
 
-/** Türkçe-duyarlı ad normalizasyonu (masaüstü orders route normName ile birebir). */
-const normName = (s: string | null | undefined) =>
-  (s ?? "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
-
 export interface ProductMap {
   byId: Map<string, ProductDetail>;
-  byKey: Map<string, ProductDetail>;
-  /** Shopify ad-eşleştirme (Shopify barkod tutmaz): normalize ad → ürün; aynı ad çoklu ürün → null (belirsiz). */
-  byName: Map<string, ProductDetail | null>;
+  /**
+   * Eşleştirme indeksi — masaüstü Siparişler ucuyla AYNI kural (`@core/order-match`): anahtar
+   * türüne göre güven sırası, belirsiz (birden çok ürüne düşen) anahtar hiç kullanılmaz, anahtar
+   * biçimi tek (boşluk/büyük-küçük/Türkçe I). Eski mobil kopya tek haritada "ilk gelen kazanır"
+   * diyordu; belirsiz bir barkod yanlış ürünün maliyetiyle kâr hesaplatabilirdi.
+   */
+  indeks: UrunIndeksi<ProductDetail>;
 }
 
 /** Ürün dizisi kimliğine göre harita önbelleği: aynı react-query dizi referansı için harita BİR KEZ
@@ -36,57 +37,43 @@ export function getProductMap(products: ProductDetail[]): ProductMap {
   return pm;
 }
 
-/** Çok-anahtarlı ürün haritası: Product.barcode/sku + Listing.externalId/externalSku → ürün,
- *  + Shopify için ada göre eşleştirme (masaüstü orders route ile birebir). */
+/** Çok-anahtarlı ürün indeksi: Product.barcode/sku + Listing.barcode/externalId/externalSku + ad. */
 export function buildProductMap(products: ProductDetail[]): ProductMap {
   const byId = new Map<string, ProductDetail>();
-  const byKey = new Map<string, ProductDetail>();
-  const byName = new Map<string, ProductDetail | null>();
-  const add = (k: string | null | undefined, p: ProductDetail) => {
-    if (k && !byKey.has(k)) byKey.set(k, p);
-  };
-  for (const p of products) {
-    byId.set(p.id, p);
-    add(p.barcode, p);
-    add(p.sku, p);
-    for (const l of p.listings) {
-      add(l.externalId, p);
-      add(l.externalSku, p);
-      add(l.barcode, p); // platform-bazlı listing barkodu (Trendyol/HB barkodu) — masaüstü byKey ile birebir
-    }
-    const nk = normName(p.name);
-    if (nk) byName.set(nk, byName.has(nk) ? null : p);
-  }
-  return { byId, byKey, byName };
+  for (const p of products) byId.set(p.id, p);
+  return { byId, indeks: urunIndeksiKur(products, (p) => p) };
 }
 
-/** Bir sipariş satırını aday anahtarlarıyla ürüne eşle. */
-function matchLine(
-  keys: string[] | undefined,
-  byKey: Map<string, ProductDetail>
-): ProductDetail | undefined {
-  for (const k of keys ?? []) {
-    const p = byKey.get(k);
-    if (p) return p;
-  }
-  return undefined;
-}
-export { matchLine };
-
-/** Satır eşleştirme (anahtar + Shopify ad-fallback) — computeOrderProfit ile AYNI mantık.
- *  Sipariş detay ekranı da bunu kullansın ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. */
+/** Satır eşleştirme — computeOrderProfit ile AYNI mantık. Sipariş detay ekranı da bunu kullansın
+ *  ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. */
 export function matchOrderLine(
-  line: { productId?: string | null; matchKeys?: string[]; name: string },
+  line: {
+    productId?: string | null;
+    name: string;
+    matchKeys?: string[];
+    barcodes?: string[];
+    externalIds?: string[];
+    skus?: string[];
+  },
   platform: UnifiedOrder["platform"],
   pm: ProductMap
 ): ProductDetail | undefined {
-  let p = line.productId ? pm.byId.get(line.productId) : undefined;
-  if (!p) p = matchLine(line.matchKeys, pm.byKey);
-  if (!p && platform === "shopify") {
-    const named = pm.byName.get(normName(line.name));
-    if (named) p = named;
-  }
-  return p;
+  const p = line.productId ? pm.byId.get(line.productId) : undefined;
+  if (p) return p;
+  // Türlü anahtar yoksa (eski önbellek kaydı) birleşik liste son çare türsüz aramaya girer.
+  const turlu = !!(line.barcodes || line.externalIds || line.skus);
+  return (
+    satiriEsle(
+      pm.indeks,
+      {
+        name: line.name,
+        barcodes: line.barcodes ?? [],
+        externalIds: line.externalIds ?? [],
+        skus: turlu ? (line.skus ?? []) : (line.matchKeys ?? []),
+      },
+      platform
+    ) ?? undefined
+  );
 }
 
 export interface OrderProfit {

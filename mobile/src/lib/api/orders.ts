@@ -11,8 +11,16 @@ export interface OrderItem {
   unitPrice: number;
   productId?: string | null;
   image?: string | null;
-  /** ürün eşleştirme için aday anahtarlar (barcode/sku/variant-id). */
+  /** ürün eşleştirme için aday anahtarlar (barcode/sku/variant-id) — TÜRSÜZ birleşim. */
   matchKeys: string[];
+  /**
+   * Aynı anahtarlar TÜRÜNE göre ayrı (masaüstü RawLine ile birebir) — eşleştirme güven sırası
+   * türe bağlı (`@core/order-match`). Eski çevrimdışı önbellek kaydında olmayabilir.
+   */
+  barcodes?: string[];
+  /** Platform ürün/varyant kimliği (Listing.externalId ile eşleşir). */
+  externalIds?: string[];
+  skus?: string[];
 }
 
 export interface UnifiedOrder {

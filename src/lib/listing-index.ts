@@ -13,36 +13,5 @@
  *      varyantın fiyatını yazardı.
  */
 
-/** Anahtar → kayıt indeksi. Birden çok kayda düşen anahtarlar (belirsiz) indeksten ÇIKARILIR. */
-export function uniqueIndex<T>(
-  items: Iterable<T>,
-  key: (item: T) => string | null | undefined
-): Map<string, T> {
-  const index = new Map<string, T>();
-  const ambiguous = new Set<string>();
-  for (const item of items) {
-    const raw = key(item);
-    const k = typeof raw === "string" ? raw.trim() : "";
-    if (!k) continue;
-    if (index.has(k)) ambiguous.add(k);
-    else index.set(k, item);
-  }
-  for (const k of ambiguous) index.delete(k);
-  return index;
-}
-
-/**
- * Adayları verilen SIRAYLA dener, ilk tutan kaydı döndürür.
- * `[anahtar, indeks]` çiftleri; anahtar boş/null ise o aday atlanır.
- */
-export function matchByPriority<T>(
-  candidates: Array<readonly [string | null | undefined, Map<string, T>]>
-): T | null {
-  for (const [raw, index] of candidates) {
-    const k = typeof raw === "string" ? raw.trim() : "";
-    if (!k) continue;
-    const hit = index.get(k);
-    if (hit) return hit;
-  }
-  return null;
-}
+// Uygulama `@/core/order-match`te — telefonun sipariş eşleştirmesi de aynı iki kuralı kullanır.
+export { matchByPriority, uniqueIndex } from "@/core/order-match";

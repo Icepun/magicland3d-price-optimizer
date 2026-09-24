@@ -1,5 +1,6 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { anahtarListesi } from "@core/order-match";
 
 const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
 const VER = process.env.EXPO_PUBLIC_SHOPIFY_API_VERSION || "2024-10";
@@ -182,6 +183,11 @@ export async function getShopifyOrders(
         quantity: remaining,
         unitPrice: Number(e.node.discountedUnitPriceSet?.shopMoney?.amount ?? 0),
         matchKeys: keys,
+        // Türüne göre (masaüstü route.ts ile birebir): varyant barkodu; varyant kimliği iki
+        // yazımıyla (Listing.externalId); varyant + satır stok kodu.
+        barcodes: anahtarListesi(e.node.variant?.barcode),
+        externalIds: anahtarListesi(variantId, variantId ? `shopify-variant-${variantId}` : null),
+        skus: anahtarListesi(e.node.variant?.sku, e.node.sku),
       };
     }),
   }));
