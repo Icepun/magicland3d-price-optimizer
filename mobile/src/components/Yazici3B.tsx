@@ -4,8 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Platform, StyleSheet, View } from "react-native";
 
 import { Txt, useReduceMotion } from "@/components/kit";
+import { PressableScale } from "@/components/kit/PressableScale";
 import type { YaziciDetay } from "@core/printer-detail";
 import { izleyiciAdresi, webSayfasi } from "@/lib/izleyici3b/sayfa";
+import { katmanMetni } from "@/lib/yazici-durum";
 import { color, radius, space } from "@/theme/tokens";
 
 /** Sayfaya giden durum — `src/lib/gcode-viz/mobil-izleyici.ts` → `IzleyiciDurumu` ile AYNI şekil. */
@@ -22,9 +24,13 @@ interface IzleyiciDurumu {
   duraklatildi: boolean;
   renkler: (string | null)[];
   hareketAzalt: boolean;
+  gorunum: "canli" | "tamami";
 }
 
-type SayfaMesaji = { tur: "sayfa-hazir" | "yukleniyor" | "cizildi" } | { tur: "hata"; mesaj: string };
+type SayfaMesaji =
+  | { tur: "sayfa-hazir" | "yukleniyor" | "cizildi" }
+  | { tur: "hata"; mesaj: string }
+  | { tur: "dokunma"; aktif: boolean };
 
 /** Durumu sayfaya ilet (sayfa hazır değilse bekler — hazır olunca "sayfa-hazir" mesajıyla gider). */
 function sayfayaGonder(
@@ -64,6 +70,7 @@ export function Yazici3B({
   status,
   guncellendi,
   onHata,
+  onDokunma,
 }: {
   detay: YaziciDetay;
   status: string;
@@ -71,14 +78,21 @@ export function Yazici3B({
   guncellendi: number;
   /** Çizilemezse ekran düz görsele döner. */
   onHata?: () => void;
+  /** Parmak sahneye değdi/kalktı — ekran bu sürede sayfa kaydırmasını kilitler. */
+  onDokunma?: (aktif: boolean) => void;
 }) {
   const hareketAzalt = useReduceMotion();
+  // "Tamamı": bitmiş modelin tamamı (basılmamış kısım da dolu). Baskı yoksa zaten tam model.
+  const [gorunum, setGorunum] = useState<"canli" | "tamami">("canli");
+  const basiliyor = status === "printing" || status === "paused";
   const [adres] = useState(izleyiciAdresi);
   const [asama, setAsama] = useState<"bekliyor" | "yukleniyor" | "cizildi" | "hata">("bekliyor");
   const [hataMetni, setHataMetni] = useState<string | null>(null);
   const webRef = useRef<DomWebViewRef | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sayfaHazir = useRef(false);
+  /** Sayfa "parmak sahnede" dedi, henüz "kalktı" demedi. */
+  const kilitli = useRef(false);
 
   const durum: IzleyiciDurumu = {
     paketUrl: detay.viz?.url ?? null,
@@ -93,6 +107,7 @@ export function Yazici3B({
     duraklatildi: status === "paused",
     renkler: detay.toolColors,
     hareketAzalt,
+    gorunum,
   };
   const durumJson = JSON.stringify(durum);
 
@@ -110,8 +125,24 @@ export function Yazici3B({
       setAsama("hata");
       setHataMetni(m.mesaj);
       onHata?.();
+    } else if (m.tur === "dokunma") {
+      kilitli.current = m.aktif;
+      onDokunma?.(m.aktif);
     }
   };
+
+  // Parmak kalkmadan görünüm kapanırsa (Kamera'ya geçildi, baskı bitti) ekranın kaydırması
+  // kilitli kalmasın: kilit verildiyse sökülürken geri aç.
+  const sonDokunma = useRef(onDokunma);
+  useEffect(() => {
+    sonDokunma.current = onDokunma;
+  });
+  useEffect(
+    () => () => {
+      if (kilitli.current) sonDokunma.current?.(false);
+    },
+    [],
+  );
 
   // Her yeni ölçüm (satır ~10 sn'de bir) sayfaya gider; sayfa aynı paketi yeniden indirmez.
   useEffect(() => {
@@ -164,6 +195,42 @@ export function Yazici3B({
           }}
         />
       ) : null}
+      {asama === "cizildi" ? (
+        <>
+          {katmanMetni(detay.layer, detay.totalLayers) && gorunum === "canli" && basiliyor ? (
+            <View style={styles.etiket} pointerEvents="none">
+              <Txt v="label" style={{ color: color.text }} num>
+                Katman {katmanMetni(detay.layer, detay.totalLayers)}
+              </Txt>
+            </View>
+          ) : null}
+          {basiliyor ? (
+            <View style={styles.secici}>
+              {(["canli", "tamami"] as const).map((g) => (
+                <PressableScale
+                  key={g}
+                  onPress={() => setGorunum(g)}
+                  haptic="hafif"
+                  style={[styles.secenek, gorunum === g ? styles.secenekSecili : null]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: gorunum === g }}
+                  accessibilityLabel={g === "canli" ? "Canlı: basılan kısım" : "Tamamı: bitmiş model"}
+                >
+                  <Txt v="label" style={{ color: gorunum === g ? color.onAccent : color.textDim }}>
+                    {g === "canli" ? "Canlı" : "Tamamı"}
+                  </Txt>
+                </PressableScale>
+              ))}
+            </View>
+          ) : null}
+          <View style={styles.ipucu} pointerEvents="none">
+            <SymbolView name="hand.draw" tintColor={color.textFaint} style={{ width: 12, height: 12 }} />
+            <Txt v="label" tone="faint">
+              Çevir · iki parmakla yakınlaştır · çift dokun: sıfırla
+            </Txt>
+          </View>
+        </>
+      ) : null}
       {asama !== "cizildi" ? (
         <View style={styles.ortu} pointerEvents="none">
           {asama === "hata" || (!adres && Platform.OS !== "web") ? (
@@ -208,4 +275,32 @@ const styles = StyleSheet.create({
     padding: space.lg,
   },
   metin: { textAlign: "center" },
+  etiket: {
+    position: "absolute",
+    left: space.sm,
+    top: space.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  secici: {
+    position: "absolute",
+    right: space.sm,
+    top: space.sm,
+    flexDirection: "row",
+    padding: 2,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  secenek: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.pill },
+  secenekSecili: { backgroundColor: color.accent },
+  ipucu: {
+    position: "absolute",
+    left: space.sm,
+    bottom: space.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
 });

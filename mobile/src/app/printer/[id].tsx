@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, useNavigation } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
@@ -74,7 +74,24 @@ export default function YaziciEkrani() {
 
   // Kullanıcı seçmediyse: 3B paketi hazırsa 3B, değilse baskı görseli (paket sonradan da gelebilir).
   const [secim, setSecim] = useState<Gorunum | null>(null);
+  // Parmak 3B sahnedeyken sayfa kaymasın (sahne dokunmayı bildiriyor).
+  const [kaydirmaKilidi, setKaydirmaKilidi] = useState(false);
+  const navigation = useNavigation();
   const { gonder, mesgul, bant } = useYaziciKomutu(simdi);
+
+  const d = s?.detay ?? null;
+  const cevrimdisi = !s?.online || s.status === "offline";
+  const aktif = !cevrimdisi && (s?.status === "printing" || s?.status === "paused");
+  const isVar = !cevrimdisi && (aktif || s?.status === "finished" || s?.status === "error");
+  const ucBoyutVar = isVar && !!d?.viz;
+  const gorunum: Gorunum = secim === "3b" && !ucBoyutVar ? "baski" : (secim ?? (ucBoyutVar ? "3b" : "baski"));
+
+  // 3B açıkken geri kaydırma KAPALI: iOS 26'da geri hareketi ekranın her yerinden başlıyor ve
+  // modeli yatay çevirmek sayfayı geri götürüyordu. Geri düğmesi her zaman çalışır.
+  const ucBoyutAcik = gorunum === "3b";
+  useEffect(() => {
+    navigation.setOptions({ gestureEnabled: !ucBoyutAcik });
+  }, [navigation, ucBoyutAcik]);
 
   if (!s) {
     return (
@@ -88,11 +105,7 @@ export default function YaziciEkrani() {
     );
   }
 
-  const d = s.detay ?? null;
   const info = durumBilgisi(s.status, Boolean(s.online));
-  const cevrimdisi = !s.online || s.status === "offline";
-  const aktif = !cevrimdisi && (s.status === "printing" || s.status === "paused");
-  const isVar = !cevrimdisi && (aktif || s.status === "finished" || s.status === "error");
   const bitti = s.status === "finished";
   const oran = bitti ? 1 : Math.max(0, Math.min(1, s.progress || 0));
   // Plaka görseli KATMAN oranıyla açılır (masaüstü kartıyla aynı): bayt/zaman ilerlemesi
@@ -114,11 +127,10 @@ export default function YaziciEkrani() {
   // Dilimleyicinin plaka önizlemesi (masaüstü R2'ye koyar) mağaza fotoğrafını yener — tablada ne
   // olduğunu gösteren odur (masaüstü kartıyla aynı sıra).
   const gorselUri = isVar ? (d?.plateUrl ?? (s.productImage ? thumbUrl(s.productImage, 700) : null)) : null;
-  const ucBoyutVar = isVar && !!d?.viz;
-  const gorunum: Gorunum = secim === "3b" && !ucBoyutVar ? "baski" : (secim ?? (ucBoyutVar ? "3b" : "baski"));
 
   return (
     <Screen
+      scrollEnabled={!kaydirmaKilidi}
       header={
         <SubHeader title={s.name} subtitle={altBaslik || undefined} right={<Pill color={info.color}>{info.label}</Pill>} />
       }
@@ -152,7 +164,7 @@ export default function YaziciEkrani() {
         {gorunum === "kamera" ? (
           <YaziciKamerasi yaziciId={s.printerConfigId} yaziciAdi={s.name} />
         ) : gorunum === "3b" && d ? (
-          <Yazici3B detay={d} status={s.status} guncellendi={guncellendi} />
+          <Yazici3B detay={d} status={s.status} guncellendi={guncellendi} onDokunma={setKaydirmaKilidi} />
         ) : (
           <BaskiGorseli
             uri={gorselUri}

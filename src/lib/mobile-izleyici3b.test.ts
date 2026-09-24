@@ -75,4 +75,52 @@ describe("telefon tarafı OTA ile gidebilir", () => {
     expect(alanlar(bilesen)).toEqual(alanlar(izleyici));
     expect(alanlar(izleyici).length).toBeGreaterThan(8);
   });
+
+  it("sayfanın gönderdiği mesaj türleri telefonun tanıdıklarıyla aynı", () => {
+    const turler = (metin: string, bas: string) => {
+      const i = metin.indexOf(bas);
+      const govde = metin.slice(i, metin.indexOf("\n\n", i));
+      return [...govde.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort();
+    };
+    const izleyici = turler(oku("src/lib/gcode-viz/mobil-izleyici.ts"), "type Mesaj =");
+    expect(izleyici).toContain("dokunma");
+    expect(turler(oku("mobile/src/components/Yazici3B.tsx"), "type SayfaMesaji =")).toEqual(izleyici);
+  });
+});
+
+/**
+ * 3B'DE GEZERKEN SAYFA KAYMAZ, GERİ GİTMEZ — "sahnede gezerken sayfa da aşağı-yukarı kayabiliyor
+ * veya geri gidebiliyoruz". WebView içindeki `preventDefault` dıştaki yerel ScrollView'ı
+ * DURDURMAZ; sayfa parmağın sahnede olduğunu bildirir, ekran kaydırmayı o sürede kilitler.
+ * iOS 26'da geri hareketi ekranın her yerinden başlar → 3B açıkken geri kaydırma kapalı.
+ */
+describe("3B sahnede dokunma", () => {
+  const izleyici = oku("src/lib/gcode-viz/mobil-izleyici.ts");
+  const bilesen = oku("mobile/src/components/Yazici3B.tsx");
+  const ekran = oku("mobile/src/app/printer/[id].tsx");
+
+  it("sayfa kendi kaydırma/yakınlaştırmasını kapatır ve dokunmayı bildirir", () => {
+    expect(izleyici).toContain('tuval.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });');
+    expect(izleyici).toContain('tuval.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });');
+    expect(izleyici).toContain('gonder({ tur: "dokunma", aktif: true });');
+    expect(izleyici).toContain('gonder({ tur: "dokunma", aktif: false });');
+    // Sistem hareketi devralsa da kilit bırakılır.
+    expect(izleyici).toContain('tuval.addEventListener("pointercancel", birak);');
+  });
+
+  it("ekran parmak sahnedeyken kaydırmayı kilitler; görünüm kapanırsa kilit kalmaz", () => {
+    expect(ekran).toContain("scrollEnabled={!kaydirmaKilidi}");
+    expect(ekran).toContain("onDokunma={setKaydirmaKilidi}");
+    expect(bilesen).toContain("if (kilitli.current) sonDokunma.current?.(false);");
+    expect(oku("mobile/src/components/kit/Screen.tsx")).toContain("scrollEnabled={scrollEnabled}");
+  });
+
+  it("3B açıkken geri kaydırma kapalı (görünümle aynı kural)", () => {
+    expect(ekran).toContain('const ucBoyutAcik = gorunum === "3b";');
+    expect(ekran).toContain("navigation.setOptions({ gestureEnabled: !ucBoyutAcik });");
+  });
+
+  it('"Tamamı" görünümü ilerlemeyi uygulamaz (bitmiş modelin tamamı)', () => {
+    expect(izleyici).toContain('if (durum.basiliyor && durum.gorunum !== "tamami") {');
+  });
 });

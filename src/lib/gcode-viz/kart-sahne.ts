@@ -158,8 +158,8 @@ export interface KartSahnesi {
   /** Canlı ilerleme: genel segment (kesirli). null → tam model (baskı bitti / canlı değil). */
   setProgress: (p: number | null, sicakIz?: number) => void;
   setPalette: (palette: VizPalette) => void;
-  /** Kamerayı modelin etrafında döndür (radyan). Kartta fareyle çevirme yok, kart kendisi döner. */
-  setAci: (az: number) => void;
+  /** Kamerayı modelin etrafında döndür (radyan); `el` verilirse eğim (varsayılan 0,43). */
+  setAci: (az: number, el?: number) => void;
   kirliMi: () => boolean;
   golgeKirliMi: () => boolean;
   /** Tanı: kabuktaki segment sayısı ve seyreltme katı. */
@@ -171,6 +171,11 @@ export interface KartSecenekleri {
   palette?: VizPalette;
   /** Kartta gölge haritası (varsayılan açık, 1024). */
   golgeli?: boolean;
+  /**
+   * Kalan kısmın (taslak) opaklığı — varsayılan 0,14 (masaüstü kartı). Telefonda sahne tam
+   * genişlikte ve koyu zeminde duruyor; 0,14'lük taslak "model eksik" diye okunuyordu.
+   */
+  hayaletOpaklik?: number;
 }
 
 export function buildKartSahnesi(p: VizPack, yz: YolZamani, secenek: KartSecenekleri = {}): KartSahnesi {
@@ -199,7 +204,7 @@ export function buildKartSahnesi(p: VizPack, yz: YolZamani, secenek: KartSecenek
   const kabukNesne = katiNesneKur(kabukGeo, kabukUni, golgeli);
   const hayaletUni = boncukUniformlari(W, H * kat, K, sicakRenk, yanEgim);
   const hayaletGeo = ornekGeometriKur(sablon, kabukOz.bas, kabukOz.son, kabukRenk, K);
-  const hayalet = hayaletKur(hayaletGeo, hayaletUni);
+  const hayalet = hayaletKur(hayaletGeo, hayaletUni, secenek.hayaletOpaklik);
 
   // ── Bant: basılan katmanın çevresi tam ayrıntıyla ─────────────────────────────
   const bantKonum = new Float32Array(BANT_KAPASITE * 6);
@@ -352,8 +357,8 @@ export function buildKartSahnesi(p: VizPack, yz: YolZamani, secenek: KartSecenek
       kirli = true;
       golgeKirli = true;
     },
-    setAci: (az: number) => {
-      kamera.konumla(az);
+    setAci: (az: number, el?: number) => {
+      kamera.konumla(az, el);
       kirli = true;
     },
     kirliMi: () => {

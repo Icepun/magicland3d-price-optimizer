@@ -20,6 +20,7 @@
 import * as THREE from "three";
 import { HALE_KAPASITE } from "./boncuk-ortak";
 import { CanliTakipci, katmanSonSegment, resolvePackLayerIndex, type CanliOrnek } from "./canli-konum";
+import { ciftDokunusTakipcisi } from "./cift-dokunus";
 import { buildKartSahnesi, paketOkuyucu, type KartSahnesi } from "./kart-sahne";
 import { decodeVizPack, layerAtBytePosition, yolZamaniKur, type VizPack, type YolZamani } from "./viz-pack";
 
@@ -42,15 +43,35 @@ export interface IzleyiciDurumu {
   /** Takım başına gerçek filament rengi. */
   renkler: (string | null)[];
   hareketAzalt: boolean;
+  /** "canli": basılan kısım + kalanın taslağı; "tamami": bitmiş modelin tamamı. */
+  gorunum: "canli" | "tamami";
 }
 
-type Mesaj = { tur: "sayfa-hazir" } | { tur: "yukleniyor" } | { tur: "cizildi" } | { tur: "hata"; mesaj: string };
+type Mesaj =
+  | { tur: "sayfa-hazir" }
+  | { tur: "yukleniyor" }
+  | { tur: "cizildi" }
+  | { tur: "hata"; mesaj: string }
+  /** Parmak sahnede: telefon bu sürede sayfa kaydırmasını kilitler (3B'de gezerken sayfa kaymasın). */
+  | { tur: "dokunma"; aktif: boolean };
 
 const DONUS_HIZI = (Math.PI * 2) / 30; // 30 sn'de bir tur (masaüstü kartıyla aynı)
 const KARE_ARALIGI = 33;
 const GOLGE_ARALIGI = 500;
 /** Elle çevirdikten sonra kendi dönüşüne bu kadar sonra döner. */
-const EL_BEKLEME_MS = 4000;
+const EL_BEKLEME_MS = 6000;
+/** Varsayılan bakış: 45° yandan, kameranın eğimi (radyan) masaüstü kartıyla aynı. */
+const VARSAYILAN_ACI = Math.PI / 4;
+const VARSAYILAN_EGIM = 0.43;
+const EGIM_ALT = 0.05;
+const EGIM_UST = 1.35;
+const YAKIN_EN_AZ = 1;
+const YAKIN_EN_COK = 6;
+/**
+ * Telefonda kalan kısmın taslağı daha belirgin: sahne tam genişlikte ve koyu zeminde duruyor,
+ * masaüstü kartının 0,14'lük taslağı "model eksik" diye okunuyordu.
+ */
+const TASLAK_OPAKLIK = 0.26;
 
 function gonder(m: Mesaj): void {
   try {
@@ -112,6 +133,8 @@ export function izleyiciyiBaslat(kutu: HTMLElement): void {
     }
   };
   window.addEventListener("resize", boyutla);
+  // WebView ölçüsü sayfa yüklendikten SONRA oturabiliyor; pencere olayı her zaman gelmiyor.
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(boyutla).observe(kutu);
 
   const paketiYukle = async (url: string, key: string) => {
     yukleniyor = key;
@@ -124,11 +147,12 @@ export function izleyiciyiBaslat(kutu: HTMLElement): void {
       if (yukleniyor !== key) return; // bu arada başka paket istendi
       const yz = yolZamaniKur(pack);
       yuklu?.sahne.dispose();
-      const sahne = buildKartSahnesi(pack, yz);
+      const sahne = buildKartSahnesi(pack, yz, { hayaletOpaklik: TASLAK_OPAKLIK });
       renderer.shadowMap.enabled = sahne.golgeli;
       yuklu = { key, pack, yz, sahne, takipci: new CanliTakipci(yz), okuyucu: paketOkuyucu(pack, yz) };
       hazirBildirildi = false;
       boyutla();
+      kameraGuncelle();
       renklendir();
       olc();
     } catch (e) {
@@ -167,28 +191,85 @@ export function izleyiciyiBaslat(kutu: HTMLElement): void {
     yuklu.takipci.olc(ornek, yuklu.okuyucu);
   };
 
-  // ── Elle çevirme ──
-  let aci = Math.PI / 4;
-  let surukleX: number | null = null;
+  // ── Dokunma: tek parmak çevir/eğ, iki parmak yakınlaştır, çift dokunuş sıfırla ──
+  // Sayfanın kendi kaydırma/yakınlaştırmasını kapat: parmak sahnedeyken yalnız model hareket etsin.
+  tuval.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
+  tuval.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+  let aci = VARSAYILAN_ACI;
+  let egim = VARSAYILAN_EGIM;
+  let yakinlik = YAKIN_EN_AZ;
   let elZamani = 0;
+  const parmaklar = new Map<number, { x: number; y: number }>();
+  let kistirma: { mesafe: number; yakinlik: number } | null = null;
+  const cift = ciftDokunusTakipcisi();
+  const kameraGuncelle = () => {
+    if (!yuklu) return;
+    const kam = yuklu.sahne.camera;
+    kam.zoom = yakinlik;
+    kam.updateProjectionMatrix();
+    yuklu.sahne.setAci(aci, egim); // sahneyi "kirli" işaretler → yeniden çizilir
+  };
+  const mesafe = () => {
+    const [a, b] = [...parmaklar.values()];
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  };
   tuval.addEventListener("pointerdown", (e) => {
-    surukleX = e.clientX;
     elZamani = performance.now();
-    tuval.setPointerCapture(e.pointerId);
+    if (parmaklar.size === 0) {
+      gonder({ tur: "dokunma", aktif: true });
+      cift.indi(e.clientX, e.clientY, elZamani);
+    } else {
+      cift.ikinciParmak();
+    }
+    parmaklar.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { tuval.setPointerCapture(e.pointerId); } catch { /* bazı motorlarda desteklenmiyor */ }
+    if (parmaklar.size === 2) kistirma = { mesafe: mesafe(), yakinlik };
   });
   tuval.addEventListener("pointermove", (e) => {
-    if (surukleX == null) return;
-    aci -= ((e.clientX - surukleX) / Math.max(1, kutu.clientWidth)) * Math.PI * 1.5;
-    surukleX = e.clientX;
+    const onceki = parmaklar.get(e.pointerId);
+    if (!onceki) return;
+    const simdiki = { x: e.clientX, y: e.clientY };
+    parmaklar.set(e.pointerId, simdiki);
     elZamani = performance.now();
-    if (yuklu) yuklu.sahne.setAci(aci);
+    if (parmaklar.size === 1) cift.oynadi(simdiki.x, simdiki.y);
+    if (parmaklar.size >= 2 && kistirma && kistirma.mesafe > 0) {
+      yakinlik = Math.min(YAKIN_EN_COK, Math.max(YAKIN_EN_AZ, kistirma.yakinlik * (mesafe() / kistirma.mesafe)));
+    } else if (parmaklar.size === 1) {
+      const w = Math.max(1, kutu.clientWidth);
+      aci -= ((simdiki.x - onceki.x) / w) * Math.PI * 1.5;
+      egim = Math.min(EGIM_UST, Math.max(EGIM_ALT, egim + ((simdiki.y - onceki.y) / w) * Math.PI));
+    }
+    kameraGuncelle();
   });
-  const birak = () => {
-    surukleX = null;
+  const birak = (e: PointerEvent) => {
+    if (!parmaklar.delete(e.pointerId)) return;
+    if (parmaklar.size < 2) kistirma = null;
     elZamani = performance.now();
+    if (parmaklar.size > 0) return;
+    gonder({ tur: "dokunma", aktif: false });
+    if (e.type === "pointercancel") {
+      cift.iptal();
+    } else if (cift.kalkti(elZamani)) {
+      // Çift dokunuş: görünümü başa al.
+      aci = VARSAYILAN_ACI;
+      egim = VARSAYILAN_EGIM;
+      yakinlik = YAKIN_EN_AZ;
+      kameraGuncelle();
+    }
   };
   tuval.addEventListener("pointerup", birak);
   tuval.addEventListener("pointercancel", birak);
+  // Web önizlemesinde fare tekerleği yakınlaştırır.
+  tuval.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      yakinlik = Math.min(YAKIN_EN_COK, Math.max(YAKIN_EN_AZ, yakinlik * Math.exp(-e.deltaY * 0.002)));
+      elZamani = performance.now();
+      kameraGuncelle();
+    },
+    { passive: false },
+  );
 
   // ── Çizim döngüsü (KartUcBoyut ile aynı adımlar) ──
   let sonCizim = 0;
@@ -209,7 +290,7 @@ export function izleyiciyiBaslat(kutu: HTMLElement): void {
 
     let p: number | null = null;
     let iz = 120;
-    if (durum.basiliyor) {
+    if (durum.basiliyor && durum.gorunum !== "tamami") {
       const canli = takipci.kullanilabilir ? takipci.ilerle(Date.now()) : null;
       if (canli != null) {
         p = canli;
@@ -220,10 +301,10 @@ export function izleyiciyiBaslat(kutu: HTMLElement): void {
       }
     }
     sahne.setProgress(p, iz);
-    const elde = surukleX != null || t - elZamani < EL_BEKLEME_MS;
+    const elde = parmaklar.size > 0 || t - elZamani < EL_BEKLEME_MS;
     if (!durum.hareketAzalt && !elde) {
       aci += dt * DONUS_HIZI;
-      sahne.setAci(aci);
+      sahne.setAci(aci, egim);
     }
     if (sahne.golgeKirliMi()) golgeBekliyor = true;
     let golgeTazelendi = false;

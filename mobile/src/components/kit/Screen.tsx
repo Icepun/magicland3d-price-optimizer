@@ -21,10 +21,13 @@ export function Screen({
   edges = ["top"],
   contentStyle,
   style,
+  scrollEnabled = true,
 }: {
   children?: ReactNode;
   header?: ReactNode;
   scroll?: boolean;
+  /** Geçici kaydırma kilidi (ör. parmak 3B sahnedeyken sayfa kaymasın). */
+  scrollEnabled?: boolean;
   padded?: boolean;
   refreshing?: boolean;
   onRefresh?: () => void;
@@ -40,6 +43,7 @@ export function Screen({
         <ScrollView
           contentContainerStyle={icerik}
           keyboardShouldPersistTaps="handled"
+          scrollEnabled={scrollEnabled}
           refreshControl={
             onRefresh ? (
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={color.accentBright} />

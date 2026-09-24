@@ -18,7 +18,7 @@ import { hexToRgb, type VizPalette } from "./three-scene";
  * Şader sürümü. Şader metnini değiştirirsen ARTIR: three derlenmiş programı bu anahtarla
  * önbellekten verir, artırılmazsa yama ekrana hiç ulaşmaz ([[improvement-never-reaches-screen]]).
  */
-export const BONCUK_SADER_SURUMU = "boncuk-v1";
+export const BONCUK_SADER_SURUMU = "boncuk-v2";
 
 /** Şerit genişliği (mm) — 0,4 mm nozulun tipik çizgi genişliği. Pakette genişlik taşınmıyor. */
 export const BONCUK_GENISLIK = 0.42;
@@ -229,7 +229,15 @@ export function boncukSablonu(): THREE.BufferGeometry {
 // konduğu ve rengi değişir. Üç çeşit: KATI (basılan kısım), HAYALET (kalan kısmın taslağı),
 // HALE (son basılan şeridin sıcak parıltısı). Gölge geçişi de aynı köşe kodunu kullanır.
 
+/**
+ * `invariant gl_Position` — TASLAK iki geçişte çiziliyor: önce yalnız derinlik, sonra renk YALNIZ
+ * derinliği birebir EŞİT yüzeye (`EqualDepth`). İki geçiş AYRI şader programı; derleyici aynı köşe
+ * kodunu iki programda farklı sırayla hesaplarsa son bitte ayrışan derinlik eşitlik testini düşürür
+ * ve taslak delik deşik çizilir. `invariant` iki programda aynı sonucu GARANTİ eder (bugünkü
+ * masaüstü ve iOS Safari'de sorun görülmedi; farklı GPU sürücüleri için sigorta).
+ */
 export const KOSE_TANIMLARI = /* glsl */ `
+invariant gl_Position;
 attribute vec3 iStart;
 attribute vec3 iEnd;
 attribute vec4 iColor;
@@ -430,7 +438,7 @@ export function katiNesneKur(geo: THREE.InstancedBufferGeometry, uniforms: Boncu
  * yazılır (renk yok), sonra renk YALNIZ en yakın yüzeye dökülür (EqualDepth). Sıra önemli: katı
  * kısım önce çizilmeli (renderOrder 0), yoksa derinlik geçişi onu görünmez yüzeylerle örter.
  */
-export function hayaletKur(geo: THREE.InstancedBufferGeometry, uniforms: BoncukUniformlari): {
+export function hayaletKur(geo: THREE.InstancedBufferGeometry, uniforms: BoncukUniformlari, opaklik = 0.14): {
   on: THREE.Mesh; renk: THREE.Mesh; goster: (v: boolean) => void; dispose: () => void;
 } {
   const onMat = new THREE.MeshStandardMaterial({ colorWrite: false });
@@ -440,7 +448,7 @@ export function hayaletKur(geo: THREE.InstancedBufferGeometry, uniforms: BoncukU
   on.renderOrder = 1;
   on.visible = false;
   const renkMat = new THREE.MeshStandardMaterial({
-    color: 0x9fb0cc, transparent: true, opacity: 0.14, depthWrite: false, depthFunc: THREE.EqualDepth,
+    color: 0x9fb0cc, transparent: true, opacity: opaklik, depthWrite: false, depthFunc: THREE.EqualDepth,
     roughness: 0.9, metalness: 0,
   });
   boncukYamala(renkMat, "hayalet", uniforms);
