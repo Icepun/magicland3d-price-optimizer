@@ -5,7 +5,13 @@ import {
   type SpoolLike,
 } from "@/core/filament-groups";
 import { toDbDate } from "@core/sqlite-date";
-import { batch, execute } from "@/lib/turso";
+import {
+  GIZLI_AYAR_ANAHTARI,
+  gizliHaritaGuncelle,
+  gizliHaritaOku,
+  gizliMi,
+} from "@/lib/bildirim-gizle";
+import { batch, query, writeBatch } from "@/lib/turso";
 
 export type AlertType = "stock" | "filament" | "print" | "order";
 export type Severity = "critical" | "warning" | "success";
@@ -32,6 +38,8 @@ export interface AppAlert {
 export interface NotificationsResult {
   alerts: AppAlert[];
   counts: { total: number; critical: number; warning: number };
+  /** Şu an hesaplanan TÜM anlık uyarıların kimliği (gizliler dahil) — gizli kayıt budaması için. */
+  anlikKimlikler?: string[];
 }
 
 /** SQLite'ın iki tarih biçimini de güvenle çöz: Prisma ISO ("...T...+00:00"/Z) ve raw
@@ -54,7 +62,7 @@ function parseDbDate(s: string | null | undefined): number | null {
  * Tamamı TEK round-trip (batch 4 sorgu).
  */
 export async function getNotifications(): Promise<NotificationsResult> {
-  const [persistentRes, stockRes, spoolRes, filamentSettingsRes, printRes] = await batch([
+  const [persistentRes, stockRes, spoolRes, filamentSettingsRes, printRes, gizliRes] = await batch([
     {
       sql: `SELECT id, type, severity, title, body, href, createdAt
               FROM Notification
@@ -84,6 +92,11 @@ export async function getNotifications(): Promise<NotificationsResult> {
               FROM PrinterSnapshot s
               JOIN PrinterConfig c ON c.id = s.printerConfigId AND c.enabled = 1
              WHERE s.status IN ('error', 'paused')`,
+    },
+    {
+      // Kapatılan anlık uyarılar (iki telefon ortak) — bkz. lib/bildirim-gizle.
+      sql: `SELECT value FROM AppSetting WHERE key = ?`,
+      args: [GIZLI_AYAR_ANAHTARI],
     },
   ]);
   /**
@@ -209,12 +222,18 @@ export async function getNotifications(): Promise<NotificationsResult> {
     });
   }
 
-  alerts.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
-  const critical = alerts.filter((a) => a.severity === "critical").length;
-  const success = alerts.filter((a) => a.severity === "success").length;
+  // Kapatılmış anlık uyarılar (metni değişmediyse) gizli — zil sayısı da onlarsız.
+  const gizli = gizliHaritaOku(
+    (gizliRes?.rows as unknown as { value: string | null }[] | undefined)?.[0]?.value ?? null
+  );
+  const gorunen = alerts.filter((a) => a.persistent || !gizliMi(gizli, a));
+  gorunen.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
+  const critical = gorunen.filter((a) => a.severity === "critical").length;
+  const success = gorunen.filter((a) => a.severity === "success").length;
   return {
-    alerts,
-    counts: { total: alerts.length, critical, warning: alerts.length - critical - success },
+    alerts: gorunen,
+    counts: { total: gorunen.length, critical, warning: gorunen.length - critical - success },
+    anlikKimlikler: alerts.filter((a) => !a.persistent).map((a) => a.id),
   };
 }
 
@@ -238,17 +257,39 @@ export function mobileRoute(href: string | null | undefined): string | null {
   return null;
 }
 
-/** Kalıcı bildirimi "okundu" işaretle — masaüstü ziliyle AYNI tablo, iki cihazda birden düşer. */
-export async function ackNotification(id: string): Promise<void> {
-  await execute(`UPDATE Notification SET acknowledgedAt = ? WHERE id = ?`, [
-    toDbDate(new Date()),
-    id,
-  ]);
-}
-
-/** Tüm bekleyen kalıcı bildirimleri okundu işaretle. */
-export async function ackAllNotifications(): Promise<void> {
-  await execute(`UPDATE Notification SET acknowledgedAt = ? WHERE acknowledgedAt IS NULL`, [
-    toDbDate(new Date()),
-  ]);
+/**
+ * Uyarıları kapat: kalıcılar veritabanında "okundu" (masaüstü ziliyle AYNI tablo, iki cihazda
+ * birden düşer), anlıklar metniyle
+ * gizlenir (iki telefon ortak; durum değişince yeniden görünür — bkz. lib/bildirim-gizle).
+ * `anlikKimlikler`: şu an hesaplanan tüm anlık uyarılar — çözülmüş sorunların kaydı budanır.
+ */
+export async function bildirimleriKapat(
+  kapatilacak: readonly AppAlert[],
+  anlikKimlikler: readonly string[]
+): Promise<void> {
+  const kalicilar = kapatilacak.filter((a) => a.persistent).map((a) => a.id);
+  const anliklar = kapatilacak.filter((a) => !a.persistent);
+  const stmts: { sql: string; args: (string | number | null)[] }[] = [];
+  if (kalicilar.length > 0) {
+    stmts.push({
+      sql: `UPDATE Notification SET acknowledgedAt = ? WHERE id IN (${kalicilar.map(() => "?").join(",")})`,
+      args: [toDbDate(new Date()), ...kalicilar],
+    });
+  }
+  if (anliklar.length > 0) {
+    const [satir] = await query<{ value: string | null }>(`SELECT value FROM AppSetting WHERE key = ?`, [
+      GIZLI_AYAR_ANAHTARI,
+    ]);
+    const yeni = gizliHaritaGuncelle(
+      gizliHaritaOku(satir?.value ?? null),
+      anliklar,
+      new Set([...anlikKimlikler, ...anliklar.map((a) => a.id)])
+    );
+    stmts.push({
+      sql: `INSERT INTO AppSetting (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      args: [GIZLI_AYAR_ANAHTARI, JSON.stringify(yeni)],
+    });
+  }
+  if (stmts.length > 0) await writeBatch(stmts);
 }

@@ -1,18 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
-import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import type { ReactNode } from "react";
+import { Alert, FlatList, RefreshControl, StyleSheet, View } from "react-native";
+import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { EmptyState, ErrorState, FadeInView, IconButton, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
 import { PressableScale } from "@/components/kit/PressableScale";
 import { PushDurumSatiri } from "@/components/PushDurumSatiri";
-import { ackAllNotifications, ackNotification, getNotifications, type AppAlert, type NotificationsResult } from "@/lib/db/notifications";
+import { bildirimleriKapat, getNotifications, type AppAlert, type NotificationsResult } from "@/lib/db/notifications";
 import { formatNumber } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";
 
 /**
- * BİLDİRİMLER — masaüstü ziliyle aynı tablo + anlık kurallar. Okundu işaretleme iyimser;
- * satıra dokununca ilgili ekrana gider (stok→ürün, filament→makaralar, baskı→yazıcılar).
+ * BİLDİRİMLER — masaüstü ziliyle aynı tablo + anlık kurallar. Satıra dokununca ilgili ekrana
+ * gider (stok→ürün, filament→makaralar, baskı→yazıcılar).
+ *
+ * KAPATMA: her uyarı sola kaydırılarak ya da ✕ ile kapanır, başlıkta "Tümünü temizle" var.
+ * Kalıcılar veritabanında okundu (masaüstüyle ortak); anlık uyarılar (stok, filament, yazıcı)
+ * metniyle gizlenir ve durum değişince geri gelir — eskiden bunlar hiç kapatılamıyordu ve zil
+ * hep doluydu. İşlem iyimser: satır hemen düşer, hata olursa liste yeniden çekilir.
  */
 export default function NotificationsScreen() {
   const qc = useQueryClient();
@@ -22,24 +29,25 @@ export default function NotificationsScreen() {
     refetchInterval: 60_000,
   });
 
-  const ack = useMutation({
-    mutationFn: (id: string) => ackNotification(id),
-    onMutate: async (id) => {
-      qc.setQueryData<NotificationsResult>(["notifications"], (old) => (old ? dropAlert(old, (a) => a.id === id) : old));
+  const kapat = useMutation({
+    mutationFn: (kapatilacak: AppAlert[]) => bildirimleriKapat(kapatilacak, data?.anlikKimlikler ?? []),
+    onMutate: async (kapatilacak) => {
+      await qc.cancelQueries({ queryKey: ["notifications"] });
+      const idler = new Set(kapatilacak.map((a) => a.id));
+      qc.setQueryData<NotificationsResult>(["notifications"], (old) => (old ? dropAlert(old, (a) => idler.has(a.id)) : old));
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
-  });
-  const ackAll = useMutation({
-    mutationFn: ackAllNotifications,
-    onMutate: async () => {
-      qc.setQueryData<NotificationsResult>(["notifications"], (old) => (old ? dropAlert(old, (a) => a.persistent) : old));
-    },
+    onError: () => Alert.alert("Kapatılamadı", "Bağlantı sorunu — bildirimler geri getirildi."),
     onSettled: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
   const alerts = data?.alerts ?? [];
-  const hasPersistent = alerts.some((a) => a.persistent);
   const kritik = data?.counts.critical ?? 0;
+
+  const tumunuTemizle = () =>
+    Alert.alert("Tümünü temizle", `${alerts.length} bildirim kapatılsın mı? Durumu değişen uyarılar yeniden görünür.`, [
+      { text: "Vazgeç", style: "cancel" },
+      { text: "Temizle", style: "destructive", onPress: () => kapat.mutate(alerts) },
+    ]);
 
   return (
     <Screen
@@ -50,8 +58,8 @@ export default function NotificationsScreen() {
           title="Bildirimler"
           subtitle={data ? (alerts.length ? `${formatNumber(alerts.length)} uyarı${kritik ? ` · ${kritik} kritik` : ""}` : "yeni bildirim yok") : undefined}
           right={
-            hasPersistent ? (
-              <IconButton icon="checkmark.circle" onPress={() => ackAll.mutate()} accessibilityLabel="Tümünü okundu işaretle" />
+            alerts.length > 0 ? (
+              <IconButton icon="trash" onPress={tumunuTemizle} accessibilityLabel="Tümünü temizle" />
             ) : undefined
           }
         />
@@ -77,7 +85,9 @@ export default function NotificationsScreen() {
           ListHeaderComponent={<PushDurumSatiri />}
           renderItem={({ item, index }) => (
             <FadeInView index={index}>
-              <AlertRow alert={item} onAck={item.persistent ? () => ack.mutate(item.id) : null} />
+              <SilinirSatir onSil={() => kapat.mutate([item])}>
+                <AlertRow alert={item} onAck={() => kapat.mutate([item])} />
+              </SilinirSatir>
             </FadeInView>
           )}
           ItemSeparatorComponent={() => <View style={{ height: space.sm }} />}
@@ -92,7 +102,29 @@ function dropAlert(old: NotificationsResult, drop: (a: AppAlert) => boolean): No
   const alerts = old.alerts.filter((a) => !drop(a));
   const critical = alerts.filter((a) => a.severity === "critical").length;
   const success = alerts.filter((a) => a.severity === "success").length;
-  return { alerts, counts: { total: alerts.length, critical, warning: alerts.length - critical - success } };
+  return { ...old, alerts, counts: { total: alerts.length, critical, warning: alerts.length - critical - success } };
+}
+
+/** Sola kaydırınca kırmızı "Sil" belirir; eşiği geçip bırakınca bildirim kapanır. */
+function SilinirSatir({ onSil, children }: { onSil: () => void; children: ReactNode }) {
+  return (
+    <ReanimatedSwipeable
+      friction={1.6}
+      rightThreshold={72}
+      overshootRight={false}
+      onSwipeableOpen={onSil}
+      renderRightActions={() => (
+        <View style={styles.silAlan} accessibilityElementsHidden>
+          <SymbolView name="trash.fill" tintColor={color.onAccent} style={{ width: 18, height: 18 }} />
+          <Txt v="label" style={{ color: color.onAccent }}>
+            Sil
+          </Txt>
+        </View>
+      )}
+    >
+      {children}
+    </ReanimatedSwipeable>
+  );
 }
 
 function fmtAgo(ts: number): string {
@@ -104,7 +136,7 @@ function fmtAgo(ts: number): string {
   return `${Math.floor(h / 24)} gün önce`;
 }
 
-function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | null }) {
+function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: () => void }) {
   const crit = alert.severity === "critical";
   const ok = alert.severity === "success";
   const renk = crit ? color.bad : ok ? color.good : color.warn;
@@ -140,19 +172,24 @@ function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: (() => void) | nul
           </Txt>
         ) : null}
       </View>
-      {onAck ? (
-        <PressableScale onPress={onAck} hitSlop={10} haptic="hafif" style={styles.ackBtn} accessibilityRole="button" accessibilityLabel="Okundu işaretle">
-          <SymbolView name="xmark" tintColor={color.textFaint} style={{ width: 12, height: 12 }} />
-        </PressableScale>
-      ) : alert.route ? (
-        <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
-      ) : null}
+      <PressableScale onPress={onAck} hitSlop={10} haptic="hafif" style={styles.ackBtn} accessibilityRole="button" accessibilityLabel="Bildirimi kapat">
+        <SymbolView name="xmark" tintColor={color.textFaint} style={{ width: 12, height: 12 }} />
+      </PressableScale>
     </Tint>
   );
 }
 
 const styles = StyleSheet.create({
   pad: { paddingHorizontal: space.lg },
+  silAlan: {
+    width: 88,
+    marginLeft: space.sm,
+    borderRadius: radius.md,
+    backgroundColor: color.bad,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
   list: { paddingHorizontal: space.lg, paddingBottom: space.xxl },
   row: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   iconWrap: { width: 40, height: 40, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
