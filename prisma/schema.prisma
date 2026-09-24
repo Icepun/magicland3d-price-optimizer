@@ -614,7 +614,27 @@ model PrinterSnapshot {
   currentFilename String?
   /** Kalan saniye (varsa). */
   etaSec          Int?
+  /** Telefon yazıcı ekranı ayrıntısı — JSON, biçimi src/core/printer-detail.ts (v48). */
+  detail          String?
   updatedAt       DateTime @updatedAt
+}
+
+/**
+ * Telefonun kamera isteği (v48). Telefon `wantedUntilMs`'i ileri yazar; LAN'daki masaüstü
+ * kareleri R2'ye koyup son karenin imzalı adresini `frameUrl`'e yazar. Zamanlar epoch-ms.
+ * Yazan/okuyan: src/core/printers/camera-relay.ts ve mobile/src/lib/db/printers.ts (ham SQL).
+ */
+model PrinterCamera {
+  printerConfigId String  @id
+  wantedUntilMs   Float   @default(0)
+  /** Kareleri gönderen masaüstü süreci (iki masaüstü aynı anda açıkken tek gönderici). */
+  owner           String?
+  ownerAtMs       Float?
+  frameUrl        String?
+  frameAtMs       Float?
+  /** Kamera açılamadıysa nedeni (Türkçe, kullanıcıya gösterilir). */
+  error           String?
+  updatedAtMs     Float?
 }
 
 /**

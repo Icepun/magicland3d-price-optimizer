@@ -190,6 +190,36 @@ export async function getObjectBytesWithProgress(
   return Buffer.concat(chunks);
 }
 
+/**
+ * Küçük bir nesneyi SUNUCUDAN doğrudan koy (kamera karesi ~80 KB). Model dosyaları gibi büyük
+ * yüklemeler bunu kullanmaz — onlar tarayıcıdan imzalı URL ile gider.
+ */
+export async function putObjectBytes(
+  key: string,
+  body: Uint8Array,
+  contentType: string,
+  cfg: R2Config,
+): Promise<void> {
+  await client(cfg).send(
+    new PutObjectCommand({
+      Bucket: cfg.bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      // Her kare yeni bir anahtar; aracı önbelleklerin eskisini tutmasına gerek yok.
+      CacheControl: "no-store",
+    }),
+  );
+}
+
+/**
+ * Nesneyi OKUMAK için imzalı adres. Telefon R2 anahtarlarını bilmeden yalnız bu nesneyi,
+ * yalnız bu süre boyunca çekebilir.
+ */
+export async function presignGetUrl(key: string, cfg: R2Config, expiresIn = 900): Promise<string> {
+  return getSignedUrl(client(cfg), new GetObjectCommand({ Bucket: cfg.bucket, Key: key }), { expiresIn });
+}
+
 /** R2'den nesneyi sil (son referans gidince). */
 export async function deleteObject(key: string, cfg: R2Config): Promise<void> {
   await client(cfg).send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: key }));
@@ -218,8 +248,9 @@ export async function headObjectSize(key: string, cfg: R2Config): Promise<number
 /** "models/" önekindeki nesneleri listele (orphan süpürücü için). */
 export async function listModelObjects(
   cfg: R2Config,
-  /** Hangi önek taranacak. Varsayılan baskı dosyaları; kaynak modeller "meshes/" altında. */
-  prefix: "models/" | "meshes/" = "models/",
+  /** Hangi önek taranacak. Varsayılan baskı dosyaları; kaynak modeller "meshes/" altında,
+   *  telefona giden kamera kareleri "camera/" altında. */
+  prefix: "models/" | "meshes/" | "camera/" = "models/",
 ): Promise<{ key: string; lastModified: Date | null; size: number }[]> {
   const out: { key: string; lastModified: Date | null; size: number }[] = [];
   let token: string | undefined;

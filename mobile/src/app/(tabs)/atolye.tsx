@@ -51,9 +51,9 @@ function YaziciKarti({ s }: { s: PrinterSnapshot }) {
   return (
     <Glass
       strong={s.status === "error"}
-      onPress={() => router.push("/printers")}
+      onPress={() => router.push(`/printer/${s.printerConfigId}` as never)}
       style={[styles.printCard, s.status === "error" ? { borderColor: color.bad + "88" } : null, cevrimdisi ? { opacity: 0.6 } : null]}
-      accessibilityLabel={`${s.name}, ${info.label}${kalan ? `, ${kalan} kaldı` : ""}. Yazıcılar ekranını açar`}
+      accessibilityLabel={`${s.name}, ${info.label}${kalan ? `, ${kalan} kaldı` : ""}. Yazıcının ayrıntısını ve kamerasını açar`}
     >
       <Ring value={isVar ? oran : 0} size={60} stroke={5} color={info.color}>
         {gorsel ? (

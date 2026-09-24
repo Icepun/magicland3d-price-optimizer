@@ -1,3 +1,11 @@
+import {
+  KAMERA_ISTEK_MS,
+  kameraBirakSql,
+  kameraDurumuSql,
+  kameraIstegiSql,
+  type KameraSatiri,
+} from "@core/printer-camera";
+import { yaziciDetayOku, type YaziciDetay } from "@core/printer-detail";
 import { toDbDate } from "@core/sqlite-date";
 import { execute, query } from "@/lib/turso";
 
@@ -6,6 +14,10 @@ export interface PrinterSnapshot {
   printerConfigId: string;
   name: string;
   brand: string;
+  /** Ayarlardaki model ("A1 Combo", "U1") — boş olabilir. */
+  model: string | null;
+  /** Bağlantı türü: moonraker | bambu. */
+  type: string | null;
   status: string; // printing | paused | finished | idle | error | offline
   /** Hata/duraklama nedeni — yalnız error/paused durumunda dolar (aktarıcı yazar). */
   statusMessage: string | null;
@@ -18,19 +30,94 @@ export interface PrinterSnapshot {
   currentFilename: string | null;
   etaSec: number | null;
   updatedAt: string;
+  /** Katman, kafalar, filament, uyarılar (masaüstü v0.19.232+). Eski masaüstünde null. */
+  detay: YaziciDetay | null;
 }
 
+/**
+ * `detail` kolonu masaüstü v48 şemasıyla geliyor. Telefon masaüstünden ÖNCE güncellenebilir:
+ * kolon yoksa sorgu "no such column" ile düşer ve yazıcılar ekranı tamamen boş kalırdı.
+ * O durumda kolonsuz sorguya dönülür ve 5 dakika boyunca kolon yeniden denenmez.
+ */
+let detayKolonuYokAn = 0;
+const DETAY_YENIDEN_DENEME_MS = 5 * 60_000;
+
+type SnapSatiri = Omit<PrinterSnapshot, "detay"> & { detail?: string | null };
+
 export async function getPrinterSnapshots(): Promise<PrinterSnapshot[]> {
-  return query<PrinterSnapshot>(
-    // statusMessage: hata/duraklama NEDENİ. Masaüstü aktarıcısı bu kolonu yazıyor ama mobil
-    // sorgusu okumuyordu — oysa atölyede telefona bakmanın tek sebebi "neden durdu" sorusu.
-    `SELECT s.printerConfigId, s.name, s.brand, s.status, s.statusMessage, s.online,
+  // statusMessage: hata/duraklama NEDENİ. Masaüstü aktarıcısı bu kolonu yazıyor ama mobil
+  // sorgusu okumuyordu — oysa atölyede telefona bakmanın tek sebebi "neden durdu" sorusu.
+  const sql = (ek: string) =>
+    `SELECT s.printerConfigId, s.name, s.brand, c.model AS model, c.type AS type,
+            s.status, s.statusMessage, s.online,
             s.productName, s.productImage,
-            s.progress, s.nozzle, s.bed, s.currentFilename, s.etaSec, s.updatedAt
+            s.progress, s.nozzle, s.bed, s.currentFilename, s.etaSec, s.updatedAt${ek}
        FROM PrinterSnapshot s
        JOIN PrinterConfig c ON c.id = s.printerConfigId AND c.enabled = 1
-      ORDER BY c.sortOrder ASC, c.createdAt ASC`
-  );
+      ORDER BY c.sortOrder ASC, c.createdAt ASC`;
+  let rows: SnapSatiri[];
+  if (Date.now() - detayKolonuYokAn > DETAY_YENIDEN_DENEME_MS) {
+    try {
+      rows = await query<SnapSatiri>(sql(", s.detail"));
+    } catch (e) {
+      if (!/no such column/i.test(e instanceof Error ? e.message : String(e))) throw e;
+      detayKolonuYokAn = Date.now();
+      rows = await query<SnapSatiri>(sql(""));
+    }
+  } else {
+    rows = await query<SnapSatiri>(sql(""));
+  }
+  return rows.map(({ detail, ...r }) => ({ ...r, detay: yaziciDetayOku(detail ?? null) }));
+}
+
+// ── Kamera (masaüstü LAN'dan R2'ye kare taşır — sözleşme @core/printer-camera) ────────────────
+
+/** Kamera isteğini aç (`yeni`: ekran yeni açıldı → eski hata silinir) ya da tazele. */
+export async function kameraIste(yaziciId: string, yeni: boolean): Promise<void> {
+  // PrinterCamera'nın zaman kolonları SÖZLEŞME GEREĞİ epoch-ms sayı (tarih metni değil) —
+  // `toDbDate` kuralı DATETIME kolonları içindir, burada iki uç da sayı yazar.
+  const an = Date.now();
+  await execute(kameraIstegiSql(), [yaziciId, an + KAMERA_ISTEK_MS, yeni ? 1 : 0, an]);
+}
+
+/** Ekran kapandı → masaüstü birkaç saniye içinde kamerayı bırakır (yazıcıya yük kalmaz). */
+export async function kameraBirak(yaziciId: string): Promise<void> {
+  await execute(kameraBirakSql(), [Date.now(), yaziciId]);
+}
+
+const sayiVeyaNull = (v: unknown): number | null => {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+export async function kameraDurumu(yaziciId: string): Promise<KameraSatiri | null> {
+  const [r] = await query<Record<string, unknown>>(kameraDurumuSql(), [yaziciId]);
+  if (!r) return null;
+  return {
+    printerConfigId: String(r.printerConfigId),
+    wantedUntilMs: Number(r.wantedUntilMs) || 0,
+    owner: r.owner == null ? null : String(r.owner),
+    ownerAtMs: sayiVeyaNull(r.ownerAtMs),
+    frameUrl: r.frameUrl == null ? null : String(r.frameUrl),
+    frameAtMs: sayiVeyaNull(r.frameAtMs),
+    error: r.error == null ? null : String(r.error),
+  };
+}
+
+/** Masaüstü aktarıcısının bildirdiği yetenekler ("camera", "detail"…). Okunamazsa boş. */
+export async function relayYetenekleri(): Promise<string[]> {
+  try {
+    const [r] = await query<{ value: string | null }>(
+      `SELECT value FROM AppSetting WHERE key = 'printRelayCaps'`
+    );
+    return (r?.value ?? "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 export interface PrintableModel {

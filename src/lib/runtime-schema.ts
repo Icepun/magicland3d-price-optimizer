@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v48: Telefon yazıcı ekranı — `PrinterSnapshot.detail` (katman, kafalar, filament, uyarılar;
+//      JSON, biçimi `src/core/printer-detail.ts`) ve `PrinterCamera` (telefonun kamera isteği +
+//      masaüstünün R2'ye koyduğu son karenin imzalı adresi). İkisi de NULLABLE/yeni tablo →
+//      eski sürüm cihazlar etkilenmez (kolonu yazmaz, tabloya bakmaz).
 // v47: Parça başına KAYNAK MODEL (`ProductModelFile.meshR2Key/meshName/meshType/meshSizeBytes`).
 //      Baskı dosyaları dilimlenmiş olduğu için içlerinde geometri YOK (ölçüldü: 157/157 dosyada
 //      sıfır üçgen) — modeli dilimleyicideki gibi gölgeli çizebilmek için ayrı bir STL/OBJ/proje
@@ -82,7 +86,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "47";
+const CURRENT_SCHEMA_VERSION = "48";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1495,6 +1499,26 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     `);
     // v23: baskı bitti/hata bildirimi için hata-nedeni kolonu (mevcut kurulumlara)
     await ensureColumn("PrinterSnapshot", "statusMessage", "TEXT");
+    // v48: telefonun yazıcı ekranı için ayrıntı (JSON — src/core/printer-detail.ts)
+    await ensureColumn("PrinterSnapshot", "detail", "TEXT");
+    /**
+     * v48: TELEFONDAN KAMERA. Telefon yazıcıya ulaşamaz; `wantedUntilMs`'i ileri yazar, LAN'daki
+     * masaüstü kareyi R2'ye koyup imzalı adresini buraya yazar (src/core/printers/camera-relay.ts).
+     * Zamanlar EPOCH-MS SAYI: iki cihaz da aynı biçimi yazsın, tarih metni/sayı karışıklığı
+     * (bkz. sqlite-date.ts) bu tabloda hiç doğmasın.
+     */
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "PrinterCamera" (
+        "printerConfigId" TEXT NOT NULL PRIMARY KEY,
+        "wantedUntilMs" REAL NOT NULL DEFAULT 0,
+        "owner" TEXT,
+        "ownerAtMs" REAL,
+        "frameUrl" TEXT,
+        "frameAtMs" REAL,
+        "error" TEXT,
+        "updatedAtMs" REAL
+      )
+    `);
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrintCommand" (
         "id" TEXT NOT NULL PRIMARY KEY,

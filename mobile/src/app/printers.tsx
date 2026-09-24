@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 
 import { Pill } from "@/components/kit/Chip";
 import {
@@ -20,14 +20,9 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
-import {
-  getPrinterSnapshots,
-  getRecentCommands,
-  sendPrintCommand,
-  type PrintAction,
-  type PrinterSnapshot,
-} from "@/lib/db/printers";
+import { getPrinterSnapshots, type PrintAction, type PrinterSnapshot } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
+import { useYaziciKomutu } from "@/lib/use-yazici-komut";
 import { YAZICI_DURUM, kalanSure } from "@/lib/yazici-durum";
 import { color, radius, space } from "@/theme/tokens";
 
@@ -42,19 +37,12 @@ function brandColor(brand: string): string {
 const STATUS = YAZICI_DURUM;
 const fmtRemaining = (sec: number | null) => kalanSure(sec) ?? "—";
 
-const ACTION_LABEL: Record<PrintAction, string> = {
-  start: "Başlat",
-  pause: "Duraklat",
-  resume: "Devam",
-  cancel: "İptal",
-};
-
 /**
- * YAZICILAR — masaüstü aktarıcısının 4 sn'de bir yazdığı anlık durum + duraklat/devam/iptal.
- * Komut mantığı (iptal onayı, çift gönderim kilidi, 90 sn zaman aşımı) öncekiyle AYNI.
+ * YAZICILAR — masaüstü aktarıcısının yazdığı anlık durum + duraklat/devam/iptal. Karta dokununca
+ * yazıcının kendi ekranı (katman, kamera, sıcaklıklar) açılır. Komut mantığı (iptal onayı, çift
+ * gönderim kilidi, 90 sn zaman aşımı) yazıcı ekranıyla ORTAK: `useYaziciKomutu`.
  */
 export default function PrintersScreen() {
-  const qc = useQueryClient();
   const { data: snapshots = [], isLoading } = useQuery({
     queryKey: ["printer-snapshots"],
     queryFn: getPrinterSnapshots,
@@ -82,47 +70,8 @@ export default function PrintersScreen() {
   const ageMs = lastUpdate > 0 ? Math.max(0, now - lastUpdate) : 0;
   const stale = lastUpdate > 0 && ageMs > 90_000;
 
-  const [sent, setSent] = useState<{ id: string; label: string; at: number } | null>(null);
-  const cmdTimedOut = !!sent && now - sent.at > 90_000;
-  const { data: cmds = [] } = useQuery({
-    queryKey: ["recent-commands"],
-    queryFn: getRecentCommands,
-    refetchInterval: sent && !cmdTimedOut ? 3000 : false,
-    enabled: !!sent && !cmdTimedOut,
-  });
-  const sentCmd = sent ? cmds.find((c) => c.id === sent.id) : null;
-  const cmdSettled = sentCmd?.status === "done" || sentCmd?.status === "error";
-  useEffect(() => {
-    if (cmdSettled || cmdTimedOut) {
-      const t = setTimeout(() => setSent(null), cmdTimedOut ? 12_000 : 6000);
-      return () => clearTimeout(t);
-    }
-  }, [cmdSettled, cmdTimedOut]);
-  // Çift gönderim kilidi: komut beklerken düğmeler pasif.
-  const cmdBusy = !!sent && !cmdSettled && !cmdTimedOut;
-
-  const runCommand = (s: PrinterSnapshot, action: PrintAction) => {
-    if (cmdBusy) return;
-    const send = async () => {
-      try {
-        const id = await sendPrintCommand(s.printerConfigId, action);
-        setSent({ id, label: `${s.name}: ${ACTION_LABEL[action]}`, at: Date.now() });
-        qc.invalidateQueries({ queryKey: ["recent-commands"] });
-      } catch {
-        Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
-      }
-    };
-    if (action === "cancel") {
-      Alert.alert("Baskıyı iptal et", `${s.name} üzerindeki baskı iptal edilsin mi? Bu işlem geri alınamaz.`, [
-        { text: "Vazgeç", style: "cancel" },
-        { text: "İptal et", style: "destructive", onPress: send },
-      ]);
-    } else {
-      send();
-    }
-  };
-
-  const bannerTone = sentCmd?.status === "done" ? color.good : sentCmd?.status === "error" || cmdTimedOut ? color.bad : color.accentBright;
+  // Çift gönderim kilidi: komut beklerken düğmeler pasif (`mesgul`).
+  const { gonder, mesgul: cmdBusy, bant } = useYaziciKomutu(now);
 
   return (
     <Screen
@@ -145,16 +94,10 @@ export default function PrintersScreen() {
         </View>
       ) : null}
 
-      {sent ? (
-        <Tint strong style={[styles.banner, { borderColor: bannerTone + "66" }]}>
-          <Txt v="smallStrong" style={{ color: bannerTone }}>
-            {sentCmd?.status === "done"
-              ? `✓ ${sent.label} uygulandı`
-              : sentCmd?.status === "error"
-                ? `✕ ${sentCmd.error ?? "Komut başarısız"}`
-                : cmdTimedOut
-                  ? `⚠ ${sent.label} uygulanmadı — masaüstü kapalı görünüyor.`
-                  : `⏳ ${sent.label} gönderildi — masaüstü uyguluyor…`}
+      {bant ? (
+        <Tint strong style={[styles.banner, { borderColor: bant.renk + "66" }]}>
+          <Txt v="smallStrong" style={{ color: bant.renk }}>
+            {bant.metin}
           </Txt>
         </Tint>
       ) : null}
@@ -170,7 +113,7 @@ export default function PrintersScreen() {
       ) : (
         snapshots.map((s, i) => (
           <FadeInView key={s.printerConfigId} index={i}>
-            <PrinterCard s={s} stale={stale} disabled={cmdBusy} onCommand={(a) => runCommand(s, a)} />
+            <PrinterCard s={s} stale={stale} disabled={cmdBusy} onCommand={(a) => gonder(s, a)} />
           </FadeInView>
         ))
       )}
@@ -198,13 +141,18 @@ function PrinterCard({
   const busy = !offline && (s.status === "printing" || s.status === "paused" || s.status === "finished");
 
   return (
-    <Glass style={styles.card}>
+    <Glass
+      style={styles.card}
+      onPress={() => router.push(`/printer/${s.printerConfigId}` as never)}
+      accessibilityLabel={`${s.name}, ${info.label}. Yazıcının ayrıntısını ve kamerasını açar`}
+    >
       <View style={styles.head}>
         <View style={[styles.dot, { backgroundColor: marka }]} />
         <Txt v="heading" numberOfLines={1} style={{ flex: 1 }}>
           {s.name}
         </Txt>
         <Pill color={info.color}>{info.label}</Pill>
+        <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 12, height: 12 }} />
       </View>
 
       {/* Hata/duraklama NEDENİ — atölyede telefona bakmanın asıl sebebi "neden durdu". */}

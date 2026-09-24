@@ -8,6 +8,7 @@ import { fileMatchKey, deepFileMatchKey } from "@/core/printers/file-match";
 import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
 import { etaHafizasiOku, etaHafizasiYaz } from "@/core/printers/eta-memory";
 import { SPEED_PRESETS_PCT, type PrinterControlCaps } from "@/core/printers/controls";
+import { katmanTahmini } from "@/core/printer-detail";
 import { printJobDisplayName } from "@/lib/print-job-name";
 // Canlı yoklama yerine PAYLAŞILAN önbellek: relay ile tek yoklayıcı, çevrimdışı yazıcıya üstel
 // backoff + arka planda tazeleme → çevrimdışı yazıcı 5sn'lik paneli HİÇ geciktirmez.
@@ -528,13 +529,15 @@ export async function GET(req: NextRequest) {
 
         // Güncel katman: Klipper info.current_layer (slicer yazıyorsa) → yoksa
         // Z yüksekliğinden tahmin (Fluidd gibi): floor((z - ilk_katman) / katman_yük.) + 1.
+        // Hesap `@/core/printer-detail`te: telefona giden katman AYNI sayı olsun.
         const totalLayer = st.totalLayer ?? meta?.totalLayer ?? 0;
-        let layerCurrent: number | null = st.currentLayer;
-        if ((layerCurrent == null || layerCurrent <= 0) && st.zHeight != null && meta?.layerHeight && meta.layerHeight > 0) {
-          const flh = meta.firstLayerHeight ?? meta.layerHeight;
-          const est = Math.floor((st.zHeight - flh) / meta.layerHeight + 1e-4) + 1;
-          layerCurrent = totalLayer > 0 ? Math.max(1, Math.min(est, totalLayer)) : Math.max(1, est);
-        }
+        const layerCurrent = katmanTahmini({
+          current: st.currentLayer,
+          zHeight: st.zHeight,
+          layerHeight: meta?.layerHeight,
+          firstLayerHeight: meta?.firstLayerHeight,
+          total: totalLayer,
+        });
 
         matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`) ?? null;
         const matched = matchedId ? productMap.get(matchedId) : undefined;

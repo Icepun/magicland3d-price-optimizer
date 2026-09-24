@@ -4,6 +4,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { printerCfgCached } from "@/core/printers/config-cache";
 import { bambuKameraAkisi } from "@/core/printers/bambu-camera";
+import { kameraAbone, type KameraKaynagi } from "@/core/printers/camera-hub";
 import { moonrakerBase } from "@/core/printers/moonraker";
 import { aktarimSuruyor } from "@/core/printers/transfer-state";
 
@@ -87,6 +88,38 @@ function parca(jpeg: Buffer): Uint8Array {
   return new Uint8Array(Buffer.concat([bas, jpeg, Buffer.from(`\r\n--${SINIR}\r\n`, "ascii")]));
 }
 
+/**
+ * Yayın merkezinden beslenen MJPEG akışı.
+ *
+ * Telefon aynı yazıcıyı izliyorsa (camera-relay) yazıcıya İKİNCİ bağlantı açılmaz; pencere
+ * mevcut yayına katılır ve elde taze kare varsa onu hemen gösterir. Pencere kapanınca yalnız
+ * bu abonelik bırakılır — kaynak, son izleyici de ayrılınca kapanır.
+ */
+function mjpegYayini(req: NextRequest, yaziciId: string, kaynak: KameraKaynagi): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(kontrol) {
+      kontrol.enqueue(acilis());
+      let kapandi = false;
+      let birak: (() => void) | null = null;
+      const kapat = () => {
+        if (kapandi) return;
+        kapandi = true;
+        try { birak?.(); } catch { /* zaten kapalı */ }
+        try { kontrol.close(); } catch { /* zaten kapalı */ }
+      };
+      birak = kameraAbone(yaziciId, kaynak, {
+        onKare: (jpeg) => {
+          if (kapandi) return;
+          try { kontrol.enqueue(parca(jpeg)); } catch { kapat(); }
+        },
+        onHata: () => kapat(),
+      });
+      // Pencere kapandığında tarayıcı isteği düşürür → aboneliği hemen bırak.
+      req.signal.addEventListener("abort", kapat, { once: true });
+    },
+  });
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();
@@ -132,29 +165,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       const kod = cfg.accessCode;
       const host = cfg.host;
 
-      const akis = new ReadableStream<Uint8Array>({
-        start(kontrol) {
-          kontrol.enqueue(acilis());
-          let kapandi = false;
-          const kapat = () => {
-            if (kapandi) return;
-            kapandi = true;
-            try { kamera.durdur(); } catch { /* zaten kapalı */ }
-            try { kontrol.close(); } catch { /* zaten kapalı */ }
-          };
-          const kamera = bambuKameraAkisi(
-            host,
-            kod,
-            (jpeg) => {
-              if (kapandi) return;
-              try { kontrol.enqueue(parca(jpeg)); } catch { kapat(); }
-            },
-            () => kapat(),
-          );
-          // Pencere kapandığında tarayıcı isteği düşürür → yazıcıyla bağlantıyı hemen bırak.
-          req.signal.addEventListener("abort", kapat, { once: true });
-        },
-      });
+      const akis = mjpegYayini(
+        req,
+        cfg.id,
+        (onKare, onHata) => bambuKameraAkisi(host, kod, onKare, onHata),
+      );
       return new Response(akis, { headers: mjpegBasliklari() });
     }
 
@@ -162,29 +177,12 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     if (await snapmakerKameraVar(cfg.host, cfg.port)) {
       const host = cfg.host;
       const port = cfg.port;
-      const akis = new ReadableStream<Uint8Array>({
-        start(kontrol) {
-          kontrol.enqueue(acilis());
-          let kapandi = false;
-          const kapat = () => {
-            if (kapandi) return;
-            kapandi = true;
-            try { kamera.durdur(); } catch { /* zaten kapalı */ }
-            try { kontrol.close(); } catch { /* zaten kapalı */ }
-          };
-          const kamera = snapmakerKameraAkisi(
-            host,
-            port,
-            (jpeg) => {
-              if (kapandi) return;
-              try { kontrol.enqueue(parca(jpeg)); } catch { kapat(); }
-            },
-            () => kapat(),
-          );
-          // Pencere kapanınca uyandırma da durur → kamera uykuya döner, yazıcı serbest kalır.
-          req.signal.addEventListener("abort", kapat, { once: true });
-        },
-      });
+      // Pencere kapanınca (ve telefon da izlemiyorsa) uyandırma durur → kamera uykuya döner.
+      const akis = mjpegYayini(
+        req,
+        cfg.id,
+        (onKare, onHata) => snapmakerKameraAkisi(host, port, onKare, onHata),
+      );
       return new Response(akis, { headers: mjpegBasliklari() });
     }
 

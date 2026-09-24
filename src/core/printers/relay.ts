@@ -17,9 +17,12 @@ import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
-  moonrakerControl, moonrakerUploadAndPrint, type MoonrakerState,
+  moonrakerControl, moonrakerUploadAndPrint, type MoonrakerMeta, type MoonrakerState,
 } from "./moonraker";
-import { bambuControl, mapBambuState } from "./bambu";
+import { bambuControl, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
+import {
+  BOS_DETAY, dakikayaYuvarla, katmanTahmini, type YaziciDetay,
+} from "@/core/printer-detail";
 import { fileMatchKey } from "./file-match";
 import { pickProgress, resolveEta } from "./eta";
 import { etaHafizasiOku, etaHafizasiYaz } from "./eta-memory";
@@ -30,14 +33,18 @@ import { tryAcquirePrintLock, releasePrintLock } from "./print-lock";
 import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached,
   getMoonrakerThumbDataUrl, getPrintFileMatches, invalidatePrintFileMatches,
+  getMoonrakerExtrasCached, getBambuSlotsCached,
   SNAPSHOT_IMAGE_MAX_BYTES,
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
 import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
 import { sameFamily } from "./printer-family";
+import { startKameraAktarici } from "./camera-relay";
 
 const TICK_MS = 10_000;
+/** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
+const RELAY_CAPS = "r2start,heartbeat,cmdttl,camera,detail";
 /** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
 const SNAPSHOT_IMAGE_MAX_CHARS = Math.round((SNAPSHOT_IMAGE_MAX_BYTES * 4) / 3);
 /** Heartbeat aralığı: snapshot İÇERİK değişmese de updatedAt en geç bu aralıkla tazelenir.
@@ -164,6 +171,12 @@ export function startPrinterRelay() {
   startedKutu.v = true;
   setTimeout(guvenliTur, 5000);
   setInterval(guvenliTur, TICK_MS);
+  // Telefondan kamera: yalnız bu makinenin LAN'dan ulaşabildiği yazıcılar sahiplenilir (son tur
+  // durumu "offline" değilse). Ulaşamayan masaüstü isteği LAN'daki diğerine bırakır.
+  startKameraAktarici((id) => {
+    const durum = lastStatus.get(id);
+    return durum != null && durum !== "offline";
+  });
 }
 
 interface SnapFields {
@@ -172,7 +185,19 @@ interface SnapFields {
   productName: string | null; productImage: string | null;
   progress: number; nozzle: number; bed: number;
   currentFilename: string | null; etaSec: number | null;
+  /** Telefonun yazıcı ekranı için ayrıntı (katman, kafalar, filament, uyarılar) — JSON,
+   *  biçimi `@/core/printer-detail`. Çevrimdışıyken null. */
+  detail: string | null;
 }
+
+/** Çevrimdışı/kurulmamış yazıcının satırı — ayrıntı yok. */
+function offlineSnap(c: Cfg): SnapFields {
+  return { name: c.name, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null, detail: null };
+}
+
+/** Sıcaklıklar tam sayıya yuvarlanır: ondalık oynama her turda yeni bulut yazması üretmesin. */
+const tam = (n: number | null | undefined): number | null =>
+  n == null || !Number.isFinite(n) ? null : Math.round(n);
 
 type Cfg = { id: string; name: string; brand: string; model: string | null; type: string; host: string; port: number; accessCode: string | null; serial: string | null };
 
@@ -193,11 +218,9 @@ async function buildSnapshot(
 ): Promise<SnapFields | null> {
   const baseName = c.name;
   if (c.type === "bambu") {
-    if (!c.accessCode || !c.serial) {
-      return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
-    }
+    if (!c.accessCode || !c.serial) return offlineSnap(c);
     const bs = await getBambuStatusCached(c.host, c.accessCode, c.serial);
-    if (!bs.online) return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
+    if (!bs.online) return offlineSnap(c);
     const status = mapBambuState(bs.gcodeState);
     const matchedId = bs.filename ? matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) : undefined;
     const matched = matchedId ? productMap.get(matchedId) : undefined;
@@ -213,6 +236,26 @@ async function buildSnapshot(
       slicerEstimateSec: null,
       printerRemainingSec: bs.remainingSec,
     });
+    // Ayrıntı: masaüstü panelinin (/api/printers) AYNI kaynakları — AMS okuması 60 sn önbellekli.
+    const isVar = !!bs.filename && (status === "printing" || status === "paused" || status === "finished");
+    const slots = await getBambuSlotsCached(c.host, c.accessCode, c.serial).catch(() => []);
+    const aktifSlot = bs.activeTray != null ? slots.find((s) => s.slot === bs.activeTray) : undefined;
+    const detay: YaziciDetay = {
+      ...BOS_DETAY,
+      model: c.model,
+      layer: isVar ? bs.layerNum : null,
+      totalLayers: isVar ? bs.totalLayerNum : null,
+      startedAt: isVar ? dakikayaYuvarla(bs.startedAtMs) : null,
+      nozzleTarget: tam(bs.nozzleTarget),
+      bedTarget: tam(bs.bedTarget),
+      speed: BAMBU_SPEED_LEVELS.find((l) => l.level === bs.speedLevel)?.label ?? null,
+      filamentType: isVar ? aktifSlot?.type || null : null,
+      slots: slots.map((s) => ({
+        slot: s.slot, color: s.empty ? "" : s.color, type: s.type, empty: s.empty,
+        active: isVar && s.slot === bs.activeTray,
+      })),
+      warnings: bs.warnings.map((w) => ({ code: w.code, level: w.level, text: w.text })),
+    };
     return {
       name: baseName, brand: c.brand, status, online: true, statusMessage,
       productName: matched?.name ?? (bs.filename ? printJobDisplayName(bs.filename) || bs.filename : null),
@@ -220,22 +263,25 @@ async function buildSnapshot(
       progress: picked.progress,
       nozzle: bs.nozzle, bed: bs.bed,
       currentFilename: bs.filename, etaSec: eta.remainingSec,
+      detail: JSON.stringify(detay),
     };
   }
 
   // Moonraker
   const st = await getMoonrakerStatusCached(c.host, c.port);
-  if (!st.online) return { name: baseName, brand: c.brand, status: "offline", online: false, statusMessage: null, productName: null, productImage: null, progress: 0, nozzle: 0, bed: 0, currentFilename: null, etaSec: null };
+  if (!st.online) return offlineSnap(c);
   const status = moonrakerStatusName(st.state);
   let productName: string | null = null;
   let productImage: string | null = null;
   let etaSec: number | null = null;
-  if (st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete")) {
+  let meta: MoonrakerMeta | null = null;
+  const isVar = !!st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete");
+  if (st.filename && isVar) {
     const matchedId = matchMap.get(`${c.id}::${fileMatchKey(st.filename)}`);
     const matched = matchedId ? productMap.get(matchedId) : undefined;
     // MADDE 13: eşleşme yoksa ham dosya adı değil, temizlenmiş gösterim adı gitsin (telefonda da).
     productName = matched?.name ?? (printJobDisplayName(st.filename) || st.filename);
-    const meta = await getMoonrakerMetaCached(c.host, c.port, st.filename); // dosya başına önbellekli — ucuz
+    meta = await getMoonrakerMetaCached(c.host, c.port, st.filename); // dosya başına önbellekli — ucuz
     // MADDE 3: basılan plakanın görüntüsü mağaza fotoğrafını YENER — ama snapshot satırı baskı
     // boyunca defalarca uzak Turso'ya yazıldığı için görsel KÜÇÜK olmak zorunda
     // (bkz. SNAPSHOT_IMAGE_MAX_BYTES). Sınırı aşan görselde mağaza fotoğrafına düşülür;
@@ -261,12 +307,56 @@ async function buildSnapshot(
     etaHafizasiYaz(c.id, st.filename, st.progress, eta.totalSec);
     etaSec = eta.remainingSec;
   }
+  const statusMessage = status === "error" || status === "paused" ? st.message : null;
+  // Yan bilgiler (slot renkleri, firmware uyarıları) YALNIZ süren işte istenir: boştaki U1'e
+  // panel kapalıyken 15 sn'de bir ek sorgu bindirmeyelim (aktarım sırasında zaten susuyor).
+  const extras = isVar ? await getMoonrakerExtrasCached(c.host, c.port).catch(() => null) : null;
+  const toplamKatman = st.totalLayer ?? meta?.totalLayer ?? null;
+  const detay: YaziciDetay = {
+    ...BOS_DETAY,
+    model: c.model,
+    layer: isVar
+      ? katmanTahmini({
+          current: st.currentLayer,
+          zHeight: st.zHeight,
+          layerHeight: meta?.layerHeight,
+          firstLayerHeight: meta?.firstLayerHeight,
+          total: toplamKatman,
+        })
+      : null,
+    totalLayers: isVar ? toplamKatman : null,
+    startedAt: isVar ? dakikayaYuvarla(Date.now() - st.printDurationSec * 1000) : null,
+    nozzleTarget: tam(st.nozzleTarget),
+    bedTarget: tam(st.bedTarget),
+    // Tek kafalıda dizi boş: `nozzle` kolonu zaten o kafa.
+    heads: st.nozzles.length > 1
+      ? st.nozzles.map((n) => ({ index: n.index, temp: tam(n.temp) ?? 0, target: tam(n.target) ?? 0, active: n.active }))
+      : [],
+    speed: st.speedPercent != null ? `%${Math.round(st.speedPercent)}` : null,
+    filamentType: isVar ? meta?.filamentType || null : null,
+    filamentGrams: isVar && meta?.filamentGrams != null ? Math.round(meta.filamentGrams) : null,
+    slots: (extras?.slots ?? []).map((s) => ({
+      slot: s.slot, color: s.empty ? "" : s.color, type: s.type, empty: s.empty,
+      active: (extras?.activeSlots ?? []).includes(s.slot),
+    })),
+    // Panelle aynı liste: duraklama/hata nedeni + firmware uyarıları (spagetti, kirli tabla…).
+    warnings: [
+      ...(statusMessage
+        ? [{ code: null, level: status === "error" ? ("serious" as const) : ("common" as const), text: statusMessage }]
+        : []),
+      ...(extras?.alerts ?? [])
+        .filter((a) => a.text !== st.message)
+        .map((a) => ({ code: a.code, level: "common" as const, text: a.text })),
+    ],
+    currentObject: isVar ? st.currentObject : null,
+  };
   return {
     name: baseName, brand: c.brand, status, online: true,
-    statusMessage: status === "error" || status === "paused" ? st.message : null,
+    statusMessage,
     productName, productImage,
     progress: st.progress, nozzle: st.nozzle, bed: st.bed,
     currentFilename: st.filename, etaSec,
+    detail: JSON.stringify(detay),
   };
 }
 
@@ -455,8 +545,9 @@ async function tick(): Promise<void> {
       try {
         await remotePrisma.appSetting.upsert({
           where: { key: "printRelayCaps" },
-          create: { key: "printRelayCaps", value: "r2start,heartbeat,cmdttl" },
-          update: { value: "r2start,heartbeat,cmdttl" },
+          // camera/detail (v48): telefon kamera isteyebilir ve yazıcı ayrıntısını okuyabilir.
+          create: { key: "printRelayCaps", value: RELAY_CAPS },
+          update: { value: RELAY_CAPS },
         });
         capsWrittenKutu.v = true;
       } catch { /* sonraki tick dener */ }
@@ -519,7 +610,7 @@ async function tick(): Promise<void> {
       // 10sn'de bir Turso bulut yazması üretiyordu; 30sn kovası yazmaları ~1/3'e indirir
       // (telefon zaten kalan süreyi dakika hassasiyetinde gösteriyor).
       const etaBucket = snap.etaSec == null ? "-" : String(Math.round(snap.etaSec / 30));
-      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, etaBucket, snap.statusMessage].join("|");
+      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, etaBucket, snap.statusMessage, snap.detail].join("|");
       // HEARTBEAT: içerik değişmese de updatedAt en geç 30sn'de bir tazelenir. Telefon
       // "masaüstü açık mı?" tespitini updatedAt yaşından yapıyor; salt-değişince-yaz davranışı
       // boşta/duraklamış yazıcıda (değerler sabit) yanlış "Canlı değil" alarmı + kontrol/tekrar-bas

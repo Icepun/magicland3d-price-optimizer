@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { YAZICI_DURUM, durumBilgisi, kalanSure, yazicilariSirala } from "../../mobile/src/lib/yazici-durum";
+// ⚠️ Telefon modülü (mobile/src/lib/yazici-durum) BURADA İÇE AKTARILMAZ: tema dosyası
+// `react-native` tiplerini çekiyor ve kökteki tsc masaüstü rotalarında sahte FormData hatası
+// veriyordu. Saf mantık çekirdekte; renk eşlemesi kaynaktan okunarak doğrulanır.
+import {
+  YAZICI_DURUM_ADI, bitisSaati, durumAnahtari, kalanSure, katmanMetni, yazicilariSirala,
+} from "../core/printer-status";
 
 /**
  * MOBİL İYİLEŞTİRME PAKETİ 1 (24 Eyl 2026) — kullanıcıyla birlikte listelenen sorunlar.
@@ -20,13 +25,34 @@ describe("yazıcı durumu — Atölye ve Yazıcılar AYNI tablo", () => {
   });
 
   it("yeşil = tamamlandı, mor = basıyor", () => {
-    expect(YAZICI_DURUM.finished.label).toBe("Tamamlandı");
-    expect(YAZICI_DURUM.printing.color).not.toBe(YAZICI_DURUM.finished.color);
+    expect(YAZICI_DURUM_ADI.finished).toBe("Tamamlandı");
+    const renk = oku("mobile/src/lib/yazici-durum.ts");
+    expect(renk).toContain("printing: color.accentBright");
+    expect(renk).toContain("finished: color.good");
   });
 
   it("bağlantısız yazıcı durumu ne olursa olsun Çevrimdışı görünür", () => {
-    expect(durumBilgisi("printing", false).label).toBe("Çevrimdışı");
-    expect(durumBilgisi("bilinmeyen").label).toBe("Hazır");
+    expect(YAZICI_DURUM_ADI[durumAnahtari("printing", false)]).toBe("Çevrimdışı");
+    expect(YAZICI_DURUM_ADI[durumAnahtari("bilinmeyen")]).toBe("Hazır");
+  });
+
+  it("kök testler telefonun tema zincirini içe aktarmıyor (tsc FormData tuzağı)", () => {
+    const kokTestleri = fs
+      .readdirSync(path.join(ROOT, "src/lib"))
+      .filter((f) => f.startsWith("mobile-") && f.endsWith(".test.ts"));
+    for (const f of kokTestleri) {
+      expect(oku(`src/lib/${f}`), f).not.toMatch(/from "\.\.\/\.\.\/mobile\/src\/lib\/yazici-durum"/);
+    }
+  });
+
+  it("bitiş saati ve katman metni", () => {
+    const simdi = new Date(2026, 8, 24, 14, 0, 0).getTime();
+    expect(bitisSaati(2 * 3600 + 42 * 60, simdi)).toBe("16:42");
+    expect(bitisSaati(12 * 3600, simdi)).toBe("yarın 02:00");
+    expect(bitisSaati(null, simdi)).toBeNull();
+    expect(katmanMetni(123.4, 456)).toBe("123 / 456");
+    expect(katmanMetni(12, null)).toBe("12");
+    expect(katmanMetni(0, 456)).toBeNull();
   });
 
   it("sıralama: hata, duraklama, basan, biten, hazır, çevrimdışı — eşitlerde özgün sıra", () => {
