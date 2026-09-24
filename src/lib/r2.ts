@@ -199,6 +199,12 @@ export async function putObjectBytes(
   body: Uint8Array,
   contentType: string,
   cfg: R2Config,
+  opts: {
+    /** "gzip": gövde sıkıştırılmış; okuyan tarayıcı/WebView kendiliğinden açar. */
+    contentEncoding?: string;
+    /** Varsayılan "no-store" (kamera karesi: her kare yeni anahtar). */
+    cacheControl?: string;
+  } = {},
 ): Promise<void> {
   await client(cfg).send(
     new PutObjectCommand({
@@ -206,8 +212,8 @@ export async function putObjectBytes(
       Key: key,
       Body: body,
       ContentType: contentType,
-      // Her kare yeni bir anahtar; aracı önbelleklerin eskisini tutmasına gerek yok.
-      CacheControl: "no-store",
+      ContentEncoding: opts.contentEncoding,
+      CacheControl: opts.cacheControl ?? "no-store",
     }),
   );
 }
@@ -249,8 +255,8 @@ export async function headObjectSize(key: string, cfg: R2Config): Promise<number
 export async function listModelObjects(
   cfg: R2Config,
   /** Hangi önek taranacak. Varsayılan baskı dosyaları; kaynak modeller "meshes/" altında,
-   *  telefona giden kamera kareleri "camera/" altında. */
-  prefix: "models/" | "meshes/" | "camera/" = "models/",
+   *  telefona giden kamera kareleri "camera/", 3B paketleri "viz/", plaka görselleri "plates/". */
+  prefix: "models/" | "meshes/" | "camera/" | "viz/" | "plates/" = "models/",
 ): Promise<{ key: string; lastModified: Date | null; size: number }[]> {
   const out: { key: string; lastModified: Date | null; size: number }[] = [];
   let token: string | undefined;

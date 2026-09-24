@@ -41,6 +41,8 @@ import { pushToAllDevices } from "@/lib/push-notify";
 import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
 import { sameFamily } from "./printer-family";
 import { startKameraAktarici } from "./camera-relay";
+import { vizDurumu } from "./viz-relay";
+import { slotToolColors } from "./tool-colors";
 
 const TICK_MS = 10_000;
 /** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
@@ -255,6 +257,9 @@ async function buildSnapshot(
         active: isVar && s.slot === bs.activeTray,
       })),
       warnings: bs.warnings.map((w) => ({ code: w.code, level: w.level, text: w.text })),
+      // Telefondaki 3B: paket + plaka görseli (hazırsa; değilse arka planda hazırlanır).
+      ...(isVar ? vizDurumu(c.id, bs.filename) : {}),
+      toolColors: isVar ? slotToolColors(slots) : [],
     };
     return {
       name: baseName, brand: c.brand, status, online: true, statusMessage,
@@ -349,6 +354,13 @@ async function buildSnapshot(
         .map((a) => ({ code: a.code, level: "common" as const, text: a.text })),
     ],
     currentObject: isVar ? st.currentObject : null,
+    // Telefondaki 3B: paket + plaka görseli (hazırsa; değilse arka planda hazırlanır), nozulun
+    // canlı yeri ve gerçek filament renkleri — masaüstü kartıyla aynı kaynaklar.
+    ...(isVar ? vizDurumu(c.id, st.filename) : {}),
+    live: st.state === "printing" || st.state === "paused"
+      ? { filePosition: st.filePosition, x: st.posX, y: st.posY, z: st.zHeight }
+      : null,
+    toolColors: extras ? slotToolColors(extras.slots, extras.toolMap) : [],
   };
   return {
     name: baseName, brand: c.brand, status, online: true,

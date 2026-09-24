@@ -20,6 +20,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
+import { Yazici3B } from "@/components/Yazici3B";
 import { YaziciKamerasi } from "@/components/YaziciKamerasi";
 import { parseDbDate } from "@core/sqlite-date";
 import type { YaziciDetay, YaziciUyarisi } from "@core/printer-detail";
@@ -47,7 +48,7 @@ const UYARI_RENGI: Record<YaziciUyarisi["level"], string> = {
 /** Relay bu kadar sessiz kalırsa veri "canlı değil" sayılır (masaüstü kapalı/uyuyor). */
 const BAYAT_MS = 90_000;
 
-type Gorunum = "baski" | "kamera";
+type Gorunum = "baski" | "3b" | "kamera";
 
 /**
  * YAZICI EKRANI — tek yazıcının ayrıntısı: baskının görseli (alttan yukarı dolan plaka) ya da
@@ -71,7 +72,8 @@ export default function YaziciEkrani() {
     return () => clearInterval(t);
   }, []);
 
-  const [gorunum, setGorunum] = useState<Gorunum>("baski");
+  // Kullanıcı seçmediyse: 3B paketi hazırsa 3B, değilse baskı görseli (paket sonradan da gelebilir).
+  const [secim, setSecim] = useState<Gorunum | null>(null);
   const { gonder, mesgul, bant } = useYaziciKomutu(simdi);
 
   if (!s) {
@@ -109,7 +111,11 @@ export default function YaziciEkrani() {
 
   const marka = MARKA_ADI[s.brand?.toLowerCase?.() ?? ""] ?? s.brand;
   const altBaslik = [d?.model ?? s.model, marka].filter(Boolean).join(" · ");
-  const gorselUri = isVar && s.productImage ? thumbUrl(s.productImage, 700) : null;
+  // Dilimleyicinin plaka önizlemesi (masaüstü R2'ye koyar) mağaza fotoğrafını yener — tablada ne
+  // olduğunu gösteren odur (masaüstü kartıyla aynı sıra).
+  const gorselUri = isVar ? (d?.plateUrl ?? (s.productImage ? thumbUrl(s.productImage, 700) : null)) : null;
+  const ucBoyutVar = isVar && !!d?.viz;
+  const gorunum: Gorunum = secim === "3b" && !ucBoyutVar ? "baski" : (secim ?? (ucBoyutVar ? "3b" : "baski"));
 
   return (
     <Screen
@@ -137,13 +143,16 @@ export default function YaziciEkrani() {
         <Segmented<Gorunum>
           options={[
             { value: "baski", label: "Baskı" },
+            ...(ucBoyutVar ? [{ value: "3b" as const, label: "3B" }] : []),
             { value: "kamera", label: "Kamera" },
           ]}
           value={gorunum}
-          onChange={setGorunum}
+          onChange={setSecim}
         />
         {gorunum === "kamera" ? (
           <YaziciKamerasi yaziciId={s.printerConfigId} yaziciAdi={s.name} />
+        ) : gorunum === "3b" && d ? (
+          <Yazici3B detay={d} status={s.status} guncellendi={guncellendi} />
         ) : (
           <BaskiGorseli
             uri={gorselUri}

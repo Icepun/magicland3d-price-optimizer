@@ -248,23 +248,8 @@ export function layerBadgeText(layerCurrent: number | null, layerTotal: number):
   return `katman ${Math.min(cur, Math.round(layerTotal))}/${Math.round(layerTotal)}`;
 }
 
-/**
- * Görselleştirme paketindeki 0 TABANLI katman indeksi.
- * `layerCurrent` (1 tabanlı) TERCİH EDİLİR: `file_position` hareket kuyruğu yüzünden gerçekte
- * basılanın birkaç KB önündedir ve katmanı bir ileri gösterebilir. Katman yoksa bayt konumundan
- * çözülen indekse düşülür.
- */
-export function resolvePackLayerIndex(p: {
-  layerCurrent: number | null;
-  byteLayer: number | null;
-  layerCount: number;
-}): number | null {
-  if (p.layerCount <= 0) return null;
-  const fromLayer = p.layerCurrent != null && p.layerCurrent > 0 ? Math.round(p.layerCurrent) - 1 : null;
-  const idx = fromLayer ?? (p.byteLayer != null && p.byteLayer >= 0 ? p.byteLayer : null);
-  if (idx == null) return null;
-  return Math.min(p.layerCount - 1, Math.max(0, idx));
-}
+// Hesap `@/lib/gcode-viz/canli-konum`da: telefondaki 3B izleyici de AYNI katmanı seçer.
+export { resolvePackLayerIndex } from "@/lib/gcode-viz/canli-konum";
 
 /** Katman İÇİ ince oran (0..1) — yalnız bayt konumundan; katman kararı buna bağlanmaz. */
 export function intraLayerFraction(

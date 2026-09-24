@@ -31,6 +31,24 @@ export interface CanliOrnek {
   an: number;
 }
 
+/**
+ * Görselleştirme paketindeki 0 TABANLI katman indeksi.
+ * `layerCurrent` (1 tabanlı) TERCİH EDİLİR: `file_position` hareket kuyruğu yüzünden gerçekte
+ * basılanın birkaç KB önündedir ve katmanı bir ileri gösterebilir. Katman yoksa bayt konumundan
+ * çözülen indekse düşülür.
+ */
+export function resolvePackLayerIndex(p: {
+  layerCurrent: number | null;
+  byteLayer: number | null;
+  layerCount: number;
+}): number | null {
+  if (p.layerCount <= 0) return null;
+  const fromLayer = p.layerCurrent != null && p.layerCurrent > 0 ? Math.round(p.layerCurrent) - 1 : null;
+  const idx = fromLayer ?? (p.byteLayer != null && p.byteLayer >= 0 ? p.byteLayer : null);
+  if (idx == null) return null;
+  return Math.min(p.layerCount - 1, Math.max(0, idx));
+}
+
 /** Artan dizide `deger`e eşit ya da küçük SON elemanın indeksi; yoksa -1. */
 export function sonKucukEsit(dizi: ArrayLike<number>, deger: number, bas = 0, son = dizi.length): number {
   let lo = bas;

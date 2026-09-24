@@ -53,6 +53,32 @@ describe("ayrıntı JSON'u", () => {
   });
 });
 
+describe("3B alanları", () => {
+  it("paket adresi yalnız https + anahtarla kabul edilir", () => {
+    const d = (viz: unknown) => yaziciDetayOku(JSON.stringify({ v: 1, viz }))!.viz;
+    expect(d({ url: "https://r2/viz/a.mlvz?sig", key: "viz/a.mlvz" })).toEqual({ url: "https://r2/viz/a.mlvz?sig", key: "viz/a.mlvz" });
+    expect(d({ url: "http://192.168.1.5/a", key: "k" })).toBeNull(); // LAN adresi telefonda kırık olur
+    expect(d({ url: "https://r2/a" })).toBeNull();
+    expect(d("bozuk")).toBeNull();
+  });
+
+  it("plaka görseli https değilse düşer; canlı ölçüm ve takım renkleri doğrulanır", () => {
+    const d = yaziciDetayOku(JSON.stringify({
+      v: 1,
+      plateUrl: "data:image/png;base64,AAAA",
+      live: { filePosition: 1234, x: "5", y: 7, z: null },
+      toolColors: ["#FF0000", "kırmızı", null, "#00ff00"],
+    }))!;
+    expect(d.plateUrl).toBeNull();
+    expect(d.live).toEqual({ filePosition: 1234, x: null, y: 7, z: null });
+    expect(d.toolColors).toEqual(["#FF0000", null, null, "#00ff00"]);
+  });
+
+  it("canlı ölçümün hepsi boşsa alan null", () => {
+    expect(yaziciDetayOku(JSON.stringify({ v: 1, live: { filePosition: null } }))!.live).toBeNull();
+  });
+});
+
 describe("katman tahmini — panelle aynı", () => {
   it("yazıcı söylüyorsa o", () => {
     expect(katmanTahmini({ current: 57, zHeight: 99, layerHeight: 0.2, firstLayerHeight: 0.2, total: 300 })).toBe(57);

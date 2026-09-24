@@ -41,6 +41,23 @@ export interface YaziciUyarisi {
   text: string;
 }
 
+/** Telefondaki 3B izleyicinin paketi — masaüstü R2'ye koyar (core/printers/viz-relay.ts). */
+export interface YaziciViz {
+  /** İmzalı okuma adresi (~24 sa geçerli, masaüstü yarı ömürde tazeler). */
+  url: string;
+  /** İçerik anahtarı — adres tazelense de paket aynıysa yeniden indirilmesin. */
+  key: string;
+}
+
+/** Canlı ölçüm (yalnız Moonraker) — 3B'de nozulu gerçek yerinde akıtmak için. */
+export interface YaziciCanliOlcum {
+  /** Dosyada okunan bayt (virtual_sdcard.file_position). */
+  filePosition: number | null;
+  x: number | null;
+  y: number | null;
+  z: number | null;
+}
+
 export interface YaziciDetay {
   /** Biçim sürümü. Alanların ANLAMI değişirse artır; telefon tanımadığı sürümü okumaz. */
   v: 1;
@@ -63,6 +80,13 @@ export interface YaziciDetay {
   warnings: YaziciUyarisi[];
   /** Şu an basılan nesne (dilimleyici nesneleri işaretlediyse). */
   currentObject: string | null;
+  /** 3B paketi hazırsa (masaüstü v0.19.233+). */
+  viz: YaziciViz | null;
+  /** Basılan plakanın dilimleyici görseli — imzalı R2 adresi (yoksa null). */
+  plateUrl: string | null;
+  live: YaziciCanliOlcum | null;
+  /** 3B'de takım (T0, T1…) başına gerçek filament rengi; bilinmeyen null. */
+  toolColors: (string | null)[];
 }
 
 export const BOS_DETAY: YaziciDetay = {
@@ -80,6 +104,10 @@ export const BOS_DETAY: YaziciDetay = {
   slots: [],
   warnings: [],
   currentObject: null,
+  viz: null,
+  plateUrl: null,
+  live: null,
+  toolColors: [],
 };
 
 const DAKIKA_MS = 60_000;
@@ -168,5 +196,31 @@ export function yaziciDetayOku(json: string | null | undefined): YaziciDetay | n
         text: String(w.text),
       })),
     currentObject: metin(d.currentObject),
+    viz: vizOku(d.viz),
+    plateUrl: guvenliAdres(d.plateUrl),
+    live: canliOku(d.live),
+    toolColors: Array.isArray(d.toolColors)
+      ? d.toolColors.map((c) => (typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null))
+      : [],
   };
+}
+
+/** Yalnız https adresi kabul edilir — satıra yanlışlıkla LAN adresi ya da çöp yazılırsa kırık görsel olmasın. */
+function guvenliAdres(v: unknown): string | null {
+  return typeof v === "string" && /^https:\/\//i.test(v) ? v : null;
+}
+
+function vizOku(v: unknown): YaziciViz | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const url = guvenliAdres(o.url);
+  const key = metin(o.key);
+  return url && key ? { url, key } : null;
+}
+
+function canliOku(v: unknown): YaziciCanliOlcum | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const olcum = { filePosition: sayi(o.filePosition), x: sayi(o.x), y: sayi(o.y), z: sayi(o.z) };
+  return Object.values(olcum).some((x) => x != null) ? olcum : null;
 }
