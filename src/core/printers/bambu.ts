@@ -315,6 +315,7 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const printError = typeof p.print_error === "number" ? p.print_error : null;
   // AMS'siz yazıcı da `tray_now: "0"` gönderiyor (A2L) — o zaman takılı makara yok.
   const trayNow = amsDurumuCoz(p).amsVar === false ? NaN : Number(p.ams?.tray_now);
+  const aktif = aktifYuva(trayNow, amsYuvalariCoz(p));
   return {
     online: true,
     gcodeState,
@@ -333,7 +334,7 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     hmsCodes: warnings.map((w) => w.code),
     warnings,
     speedLevel: typeof p.spd_lvl === "number" ? p.spd_lvl : null,
-    activeTray: Number.isFinite(trayNow) && trayNow >= 0 && trayNow < 250 ? trayNow : null,
+    activeTray: aktif,
     statusReason: bambuStatusReason(gcodeState, printError, warnings),
   };
 }
@@ -631,11 +632,108 @@ export async function bambuRaporBekle(
 }
 
 
-export interface BambuSlot { slot: number; color: string; type: string; remain: number | null; empty: boolean }
+export interface BambuSlot {
+  /** Ekranda ve eşlemede kullanılan makara numarası (0 tabanlı, yazıcı içinde TEK). */
+  slot: number;
+  color: string;
+  type: string;
+  remain: number | null;
+  empty: boolean;
+  /** Makaranın takılı olduğu AMS biriminin yazıcıdaki numarası (A2L'nin AMS Lite'ı: 16). */
+  amsId: number;
+  /** Birim içindeki makara (0-3). */
+  yuva: number;
+}
 
 function hexFromBambu(c?: unknown): string {
   if (typeof c === "string" && c.replace(/[^0-9a-fA-F]/g, "").length >= 6) return `#${c.slice(0, 6)}`;
   return "#9ca3af";
+}
+
+/**
+ * Rapordaki AMS birimleri → makaralar. Makara numarası birim SIRASI × 4 + birim içi makara:
+ * tek AMS'li yazıcıda 0-3 (A1'deki gibi), birden çok birimde çakışmaz. Birimin yazıcıdaki
+ * GERÇEK numarası ayrıca tutulur — baskı komutu onu ister (A2L'nin AMS Lite'ı 16 numaralı).
+ */
+export function amsYuvalariCoz(print: Record<string, any> | undefined | null): BambuSlot[] {
+  const units = print?.ams?.ams;
+  if (!Array.isArray(units)) return [];
+  const slots: BambuSlot[] = [];
+  units.forEach((unit: any, sira: number) => {
+    const birim = Number(unit?.id);
+    const amsId = Number.isFinite(birim) ? birim : sira;
+    const trays = Array.isArray(unit?.tray) ? unit.tray : [];
+    trays.forEach((t: any, i: number) => {
+      const idNum = Number(t?.id);
+      const yuva = Number.isFinite(idNum) ? idNum : i;
+      const type = typeof t?.tray_type === "string" ? t.tray_type : "";
+      slots.push({
+        slot: units.length === 1 ? yuva : sira * 4 + yuva,
+        color: hexFromBambu(t?.tray_color),
+        type,
+        remain: typeof t?.remain === "number" ? t.remain : null,
+        empty: !type,
+        amsId,
+        yuva,
+      });
+    });
+  });
+  return slots;
+}
+
+/** A2L'ye bağlanan AMS Lite'ın birim numarası — diğer AMS'ler 0-3, AMS HT 128-135. */
+export const A2L_AMS_LITE_ID = 16;
+
+/**
+ * BASKI KOMUTUNUN AMS EŞLEMESİ — düz dizi (`ams_mapping`) + ayrıntılı dizi (`ams_mapping2`).
+ *
+ * ⚠️ 25 Eyl 2026: A2L'ye AMS Lite takılınca baskı yazıcıya gidiyor ama PREPARE'de takılıp
+ * kalıyordu. Birim 16 numaralı; yalnız düz eşleme ("makara 3") gönderince yazıcı hangi birimi
+ * kastettiğimizi bilemiyor. Dilimleyicinin gönderdiği gibi `ams_mapping2`
+ * ({ams_id, slot_id}) de gönderilir. Kurallar yazıcının kendi eşlemesiyle doğrulanmış kaynaktan
+ * (bambuddy): A2L AMS Lite'ta düz değer birim içi makara (0-3), ayrıntılıda {16, makara};
+ * normal AMS'te düz = birim×4+makara; AMS HT'de düz = birim numarası, makara 0; kullanılmayan
+ * renk -1 / {255, 255}.
+ */
+export function bambuAmsEslemesi(
+  eslem: readonly number[],
+  yuvalar: readonly BambuSlot[],
+): { duz: number[]; ayrintili: Array<{ ams_id: number; slot_id: number }> } {
+  const duz: number[] = [];
+  const ayrintili: Array<{ ams_id: number; slot_id: number }> = [];
+  for (const v of eslem) {
+    if (!Number.isFinite(v) || v < 0) {
+      duz.push(-1);
+      ayrintili.push({ ams_id: 255, slot_id: 255 });
+      continue;
+    }
+    const y = yuvalar.find((s) => s.slot === v);
+    const amsId = y ? y.amsId : Math.floor(v / 4);
+    const yuva = y ? y.yuva : v % 4;
+    if (amsId >= 128 && amsId < 254) {
+      duz.push(amsId);
+      ayrintili.push({ ams_id: amsId, slot_id: 0 });
+    } else if (amsId === A2L_AMS_LITE_ID) {
+      duz.push(yuva);
+      ayrintili.push({ ams_id: amsId, slot_id: yuva });
+    } else {
+      duz.push(amsId * 4 + yuva);
+      ayrintili.push({ ams_id: amsId, slot_id: yuva });
+    }
+  }
+  return { duz, ayrintili };
+}
+
+/**
+ * Raporun `tray_now`'ı → makara numarası. Normal AMS'te tray_now birim×4+makara; A2L'nin AMS
+ * Lite'ında birim içi makara (0-3) geliyor. 254/255 = dış makara → null.
+ */
+export function aktifYuva(trayNow: number, yuvalar: readonly BambuSlot[]): number | null {
+  if (!Number.isFinite(trayNow) || trayNow < 0 || trayNow >= 254) return null;
+  if (yuvalar.length === 0) return trayNow < 250 ? trayNow : null;
+  const bul = (amsId: number, yuva: number) => yuvalar.find((s) => s.amsId === amsId && s.yuva === yuva)?.slot ?? null;
+  if (trayNow >= 128) return bul(trayNow, 0);
+  return bul(Math.floor(trayNow / 4), trayNow % 4) ?? (trayNow < 4 ? bul(A2L_AMS_LITE_ID, trayNow) : null);
 }
 
 /** AMS slotları (numara + renk + materyal) — baskı öncesi yüklü filamentleri göstermek için. */
@@ -665,24 +763,7 @@ export async function getBambuAmsSlots(host: string, accessCode: string, serial:
       await new Promise((r) => setTimeout(r, 150));
     }
   }
-  const units = conn.print?.ams?.ams;
-  if (!Array.isArray(units)) return [];
-  const slots: BambuSlot[] = [];
-  for (const unit of units) {
-    const trays = Array.isArray(unit?.tray) ? unit.tray : [];
-    for (const t of trays) {
-      const idNum = Number(t?.id);
-      const type = typeof t?.tray_type === "string" ? t.tray_type : "";
-      slots.push({
-        slot: Number.isFinite(idNum) ? idNum : slots.length,
-        color: hexFromBambu(t?.tray_color),
-        type,
-        remain: typeof t?.remain === "number" ? t.remain : null,
-        empty: !type,
-      });
-    }
-  }
-  return slots;
+  return amsYuvalariCoz(conn.print);
 }
 
 export interface BambuAmsDurumu {
@@ -1213,20 +1294,23 @@ export async function bambuUploadAndPrint(
 
   const conn = ensureConn(host, accessCode, serial);
   const fileMd5 = crypto.createHash("md5").update(fileBuf).digest("hex");
-  const payload = buildBambuStartPayload(remoteName, stem, isGcode, fileMd5, opts);
+  const payload = buildBambuStartPayload(remoteName, stem, isGcode, fileMd5, opts, amsYuvalariCoz(conn.print));
   await publishBambuStart(conn, serial, payload);
 
   return { matchName: stem };
 }
 
 /** Bambu baskı-başlat MQTT payload'u — upload sonrası VE yazıcıda-hazır (reuse) yolunun ORTAK üreticisi. */
-function buildBambuStartPayload(
+export function buildBambuStartPayload(
   remoteName: string,
   stem: string,
   isGcode: boolean,
   fileMd5: string,
-  opts: { amsMapping?: number[]; useAms?: boolean; plateParam?: string; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } }
+  opts: { amsMapping?: number[]; useAms?: boolean; plateParam?: string; prefs?: { timelapse?: boolean; bedLeveling?: boolean; flowCali?: boolean } },
+  yuvalar: readonly BambuSlot[] = [],
 ): Record<string, unknown> {
+  // AMS kullanılıyorsa eşleme ayrıntılı da gider (A2L'nin 16 numaralı AMS Lite'ı onsuz başlamıyor).
+  const eslem = opts.useAms && opts.amsMapping ? bambuAmsEslemesi(opts.amsMapping, yuvalar) : null;
   return isGcode
     ? { print: { sequence_id: "0", command: "gcode_file", param: `/${remoteName}` } }
     : {
@@ -1243,7 +1327,8 @@ function buildBambuStartPayload(
           timelapse: opts.prefs?.timelapse ?? false, bed_type: "auto", bed_leveling: opts.prefs?.bedLeveling ?? false,
           flow_cali: opts.prefs?.flowCali ?? false, vibration_cali: false, layer_inspect: false,
           // ams_mapping: TÜM proje filamentleri üzerinden, kullanılmayan = -1 (route'ta dolduruldu).
-          ams_mapping: opts.amsMapping ?? [0],
+          ams_mapping: eslem ? eslem.duz : opts.amsMapping ?? [0],
+          ...(eslem ? { ams_mapping2: eslem.ayrintili } : {}),
           use_ams: opts.useAms ?? false,
         },
       };
@@ -1295,7 +1380,7 @@ export async function bambuStartExisting(
   const isGcode = /\.(gcode|gco|g)$/i.test(uploadName) && !/\.3mf$/i.test(uploadName);
   const { remote, stem } = safeRemoteName(uploadName);
   const conn = ensureConn(host, accessCode, serial);
-  const payload = buildBambuStartPayload(remote, stem, isGcode, opts.md5, opts);
+  const payload = buildBambuStartPayload(remote, stem, isGcode, opts.md5, opts, amsYuvalariCoz(conn.print));
   await publishBambuStart(conn, serial, payload);
   return { matchName: stem };
 }

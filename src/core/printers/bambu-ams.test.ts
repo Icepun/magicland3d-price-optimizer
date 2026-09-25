@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { amsDurumuCoz, toWarning } from "./bambu";
+import { aktifYuva, amsDurumuCoz, amsYuvalariCoz, bambuAmsEslemesi, buildBambuStartPayload, toWarning } from "./bambu";
 import { AMS_YOK_COK_RENK, amsKarari } from "./ams-karari";
 
 /** A2L, AMS takılı değil (23 Eyl 2026, canlı rapor). */
@@ -114,5 +114,83 @@ describe("kararın bağlandığı yerler", () => {
   it("yuva ucu AMS durumunu ekrana taşır", () => {
     const uc = oku("src/app/api/printers/[id]/slots/route.ts");
     expect(uc).toMatch(/slots: read, amsVar, harici/);
+  });
+});
+
+/**
+ * A2L + AMS LITE (25 Eyl 2026): baskı yazıcıya gidiyor ama PREPARE'de takılıp kalıyordu.
+ * Birim 16 numaralı ve komutta yalnız düz eşleme vardı. Aşağıdaki birim CANLI rapordan.
+ */
+const A2L_LITE = {
+  ams: {
+    ams: [{
+      id: "16",
+      tray: [
+        { id: "0" }, { id: "1" },
+        { id: "2", tray_type: "PLA", tray_color: "FF6A13FF" },
+        { id: "3", tray_type: "PLA", tray_color: "000000FF" },
+      ],
+    }],
+    ams_exist_bits: "1000", tray_exist_bits: "c000000", tray_now: "255",
+  },
+};
+const A1_LITE = { ams: { ams: [{ id: "0", tray: [0, 1, 2, 3].map((i) => ({ id: String(i), tray_type: "PLA", tray_color: "FFFFFFFF" })) }] } };
+const IKI_BIRIM = {
+  ams: { ams: [0, 1].map((u) => ({ id: String(u), tray: [0, 1, 2, 3].map((i) => ({ id: String(i), tray_type: "PLA", tray_color: "FFFFFFFF" })) })) },
+};
+
+describe("AMS birimi ve baskı eşlemesi", () => {
+  it("A2L: makaralar 1-4 olarak kalır, birim numarası (16) ayrıca tutulur", () => {
+    const y = amsYuvalariCoz(A2L_LITE);
+    expect(y.map((s) => [s.slot, s.amsId, s.yuva, s.empty])).toEqual([[0, 16, 0, true], [1, 16, 1, true], [2, 16, 2, false], [3, 16, 3, false]]);
+    expect(y[2].color).toBe("#FF6A13");
+  });
+
+  it("A2L: düz eşleme birim içi makara, ayrıntılıda {16, makara}; kullanılmayan renk {255,255}", () => {
+    const e = bambuAmsEslemesi([-1, -1, -1, 3], amsYuvalariCoz(A2L_LITE));
+    expect(e.duz).toEqual([-1, -1, -1, 3]);
+    expect(e.ayrintili).toEqual([
+      { ams_id: 255, slot_id: 255 }, { ams_id: 255, slot_id: 255 }, { ams_id: 255, slot_id: 255 }, { ams_id: 16, slot_id: 3 },
+    ]);
+  });
+
+  it("A1 (birim 0) değişmez: düz 0-3, ayrıntılıda {0, makara}", () => {
+    const e = bambuAmsEslemesi([2, 0], amsYuvalariCoz(A1_LITE));
+    expect(e.duz).toEqual([2, 0]);
+    expect(e.ayrintili).toEqual([{ ams_id: 0, slot_id: 2 }, { ams_id: 0, slot_id: 0 }]);
+  });
+
+  it("iki AMS: makara numaraları çakışmaz (0-7), düz = birim×4+makara", () => {
+    const y = amsYuvalariCoz(IKI_BIRIM);
+    expect(y.map((s) => s.slot)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    const e = bambuAmsEslemesi([5], y);
+    expect(e.duz).toEqual([5]);
+    expect(e.ayrintili).toEqual([{ ams_id: 1, slot_id: 1 }]);
+  });
+
+  it("AMS HT (128+): düz = birim numarası, makara 0", () => {
+    const ht = { ams: { ams: [{ id: "128", tray: [{ id: "0", tray_type: "PETG", tray_color: "FFFFFFFF" }] }] } };
+    const e = bambuAmsEslemesi([0], amsYuvalariCoz(ht));
+    expect(e.duz).toEqual([128]);
+    expect(e.ayrintili).toEqual([{ ams_id: 128, slot_id: 0 }]);
+  });
+
+  it("baskı komutu: AMS kullanılıyorsa ams_mapping2 gider; dış makara yolu değişmez", () => {
+    const y = amsYuvalariCoz(A2L_LITE);
+    const ams = buildBambuStartPayload("a.3mf", "a", false, "m", { useAms: true, amsMapping: [-1, -1, -1, 3] }, y) as { print: Record<string, unknown> };
+    expect(ams.print.ams_mapping).toEqual([-1, -1, -1, 3]);
+    expect(ams.print.ams_mapping2).toEqual([
+      { ams_id: 255, slot_id: 255 }, { ams_id: 255, slot_id: 255 }, { ams_id: 255, slot_id: 255 }, { ams_id: 16, slot_id: 3 },
+    ]);
+    const dis = buildBambuStartPayload("a.3mf", "a", false, "m", { useAms: false }, y) as { print: Record<string, unknown> };
+    expect(dis.print.ams_mapping).toEqual([0]);
+    expect(dis.print).not.toHaveProperty("ams_mapping2");
+  });
+
+  it("şu anki makara: A2L'de tray_now birim içi (0-3), normal AMS'te birim×4+makara", () => {
+    expect(aktifYuva(2, amsYuvalariCoz(A2L_LITE))).toBe(2);
+    expect(aktifYuva(255, amsYuvalariCoz(A2L_LITE))).toBeNull();
+    expect(aktifYuva(1, amsYuvalariCoz(A1_LITE))).toBe(1);
+    expect(aktifYuva(5, amsYuvalariCoz(IKI_BIRIM))).toBe(5);
   });
 });
