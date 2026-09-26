@@ -117,7 +117,9 @@ describe("Panel ekranı bu hesabı kullanıyor", () => {
   });
 
   it("tanınmayan pazaryeri durumu masaüstü gibi ciroya girmiyor", () => {
-    expect(panel).toContain("sayilmazMi: (o) => isCancelledOrder(o) || durumuTaninmiyor(o)");
-    expect(panel).toContain('from "@core/order-status-kind"');
+    // Küme Raporlar'la ORTAK fonksiyonda (iptal/iade + tutarı alınamayan + durumu tanınmayan);
+    // davranışı mobile-ciro-disi-siparis.test.ts gerçek telefon koduyla sınıyor.
+    expect(panel).toContain("sayilmazMi: isExcludedFromTotals,");
+    expect(oku("mobile/src/lib/api/orders.ts")).toContain('from "@core/order-status-kind"');
   });
 });

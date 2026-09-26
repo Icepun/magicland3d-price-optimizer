@@ -4,9 +4,9 @@ import {
   HEPSIBURADA_STATUS_KINDS,
   MANUAL_STATUS_KINDS,
   TRENDYOL_STATUS_KINDS,
-  hbSonDurum,
   type OrderStatusKind,
 } from "@/core/order-status-kind";
+import { hbArray, hbSiparisleriTopla, hbStr, hbTarihMs } from "@/core/hb-siparis";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
@@ -24,10 +24,7 @@ import {
 import { getShopifyCredentials } from "@/services/shopify-settings";
 import { TrendyolClient, type TrendyolOrder } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
-import {
-  HepsiburadaClient,
-  type HbClaimKind,
-} from "@/services/hepsiburada-client";
+import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
@@ -282,22 +279,6 @@ function hbNum(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
-function hbStr(...vals: unknown[]): string {
-  for (const v of vals) {
-    if (typeof v === "string" && v.trim()) return v.trim();
-    if (typeof v === "number") return String(v);
-  }
-  return "";
-}
-function hbArray(o: unknown, keys: string[]): Record<string, unknown>[] {
-  if (Array.isArray(o)) return o as Record<string, unknown>[];
-  if (!o || typeof o !== "object") return [];
-  const r = o as Record<string, unknown>;
-  for (const k of keys) {
-    if (Array.isArray(r[k])) return r[k] as Record<string, unknown>[];
-  }
-  return [];
-}
 /**
  * ⚠️ SİPARİŞİN VERİLİŞ ANI — teslim/kargo/iade tarihi DEĞİL.
  *
@@ -305,17 +286,14 @@ function hbArray(o: unknown, keys: string[]): Record<string, unknown>[] {
  * Bir yol yanlışlıkla `DeliveredDate`i öne alıyordu: teslim edilmiş Hepsiburada siparişleri
  * "teslim edildiği saatte verilmiş" gibi görünüyor ve kronolojik sırada yanlış yere düşüyordu.
  * Kullanıcı bunu "veriliş saati bazen yanlış geliyor" diye bildirdi ("bazen", çünkü yalnız
- * durum filtreli listeden gelen siparişler etkileniyordu).
+ * durum filtreli listeden gelen siparişler etkileniyordu). Liste tarihlerinin kuralı artık
+ * telefonla ortak çekirdekte (core/hb-siparis.ts); burada yalnız detay yanıtı okunur.
  *
  * Kural: ÖNCE sipariş/oluşturulma tarihi; teslim-kargo-iade damgaları ASLA öne alınmaz.
  */
 function hbDate(...vals: unknown[]): string | null {
-  for (const v of vals) {
-    if (v == null || v === "") continue;
-    const d = new Date(typeof v === "number" ? v : String(v));
-    if (!isNaN(d.getTime())) return d.toISOString();
-  }
-  return null;
+  const ms = hbTarihMs(...vals);
+  return ms == null ? null : new Date(ms).toISOString();
 }
 /**
  * Sipariş satırı + ürünlerimizle eşleştirme anahtarları.
@@ -819,151 +797,26 @@ async function computeOrdersBodyInner(
    }
    try {
     const client = new HepsiburadaClient(credentials);
-    // HB siparişleri TEK uçta gelmez: /orders sadece "Open" (paketlenecek) verir; kargoda/teslim
-    // siparişler /packages/.../{shipped|delivered|undelivered} ÖZETLERİNDE (tutar YOK) → detay ayrı çekilir.
+    // a-b) Listeleri çekip birleştirme telefonla ORTAK çekirdekte (core/hb-siparis.ts): açık
+    //      siparişler sayfalanır, paket özetlerinde tarih = VERİLİŞ anı, iptal/iade listeleri
+    //      güvenlik freniyle uygulanır. Kurallar tek yerde — telefon kopyası bir daha geride kalmasın.
+    const { siparisler: hbSiparisler, paketCiftleri: hbPackageKeyPairs } = await hbSiparisleriTopla(
+      {
+        acikSiparisler: (offset, limit) => client.listOrders({ offset, limit }),
+        paketler: (durum, offset, limit) => client.listPackages(durum, { offset, limit }),
+        talepler: (tur, offset, limit) => client.listClaimPackages(tur, { offset, limit }),
+      },
+      hbLineRaw
+    );
     type HbAgg = { status: string; date: string | null; customer: string | null; lines: RawLine[] | null };
     const agg = new Map<string, HbAgg>();
-    /** Bu turda görülen (sipariş no ↔ paket no) çiftleri — eski paket-anahtarlı satırları temizlemek için. */
-    const hbPackageKeyPairs: { orderNo: string; packageNo: string }[] = [];
-
-    // a) Open siparişler — /orders FLAT kalem listesi (orderNumber tekrar eder) → orderNumber'a göre grupla.
-    // Bu uç KALEM döndürür, sipariş değil: tek sayfa 100 kalemle sınırlıydı ve 100'den fazlası
-    // sessizce düşüyordu. Paket uçlarıyla AYNI sayfalama deseni (offset/limit, boş sayfada dur, üst sınır).
-    const openItems: Record<string, any>[] = [];
-    for (let off = 0; off < 3000; off += 100) {
-      const arr = hbArray(await client.listOrders({ offset: off, limit: 100 }), ["items", "orders", "data", "content", "result"]);
-      if (!arr.length) break;
-      openItems.push(...(arr as Record<string, any>[]));
-      if (arr.length < 100) break;
-    }
-    for (const li of openItems) {
-      const on = hbStr(li.orderNumber, li.orderId, li.id);
-      if (!on) continue;
-      let e = agg.get(on);
-      if (!e) {
-        e = { status: hbStr(li.status) || "Open", date: hbDate(li.orderDate, li.createdDate), customer: hbStr(li.customerName) || null, lines: [] };
-        agg.set(on, e);
-      }
-      (e.lines as RawLine[]).push(hbLineRaw(li));
-    }
-
-    // b) Paket özetleri (paketlenmiş / kargoda / teslim / teslim-edilemedi) — OrderNumber + tarih topla.
-    const pkgStatuses: Array<["" | "shipped" | "delivered" | "undelivered", string]> =
-      [["", "Packaged"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["undelivered", "UnDelivered"]];
-    const pkgResults = await Promise.all(
-      pkgStatuses.map(async ([s]) => {
-        const items: Record<string, any>[] = [];
-        for (let off = 0; off < 3000; off += 100) {
-          const arr = hbArray(await client.listPackages(s, { offset: off, limit: 100 }), ["items", "data", "content", "result"]);
-          if (!arr.length) break;
-          items.push(...(arr as Record<string, any>[]));
-          if (arr.length < 100) break;
-        }
-        return items;
-      })
-    );
-    for (const [idx, pkgs] of pkgResults.entries()) {
-      const [statusCode, label] = pkgStatuses[idx];
-      // Statüsüz /packages ucu = paketlenecek/gönderime-hazır (status "Open" vb.). Bu uç kalem +
-      // tutarı `items` içinde TAM verir → detay fetch GEREKMEZ, doğrudan tam sipariş işlenir.
-      //
-      // 🔴 ÇİFT SAYIM: burada anahtar olarak ÖNCE packageNumber alınıyordu, kargoya verilen
-      // siparişlerde ise OrderNumber. Aynı sipariş paketlenirken bir, kargoya verilince başka bir
-      // kimlikle kaydediliyor ve OrderFinanceSnapshot'ta İKİ satır oluşuyordu (ciro, kâr ve sipariş
-      // sayısı iki kez). Artık iki uçta da GERÇEK sipariş numarası kazanıyor; paket numarası yalnız
-      // sipariş numarası hiç gelmediğinde ve sadece iç kimlik olarak kullanılıyor.
-      const isFullOrder = statusCode === "";
-      for (const p of pkgs) {
-        if (isFullOrder) {
-          const orderNo = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-          const packageNo = hbStr(p.packageNumber, p.id);
-          const key = orderNo || packageNo;
-          if (!key || agg.has(key)) continue;
-          // Eski kayıtta paket numarasıyla yazılmış kalıntı satır varsa temizlenebilsin.
-          if (orderNo && packageNo && orderNo !== packageNo) hbPackageKeyPairs.push({ orderNo, packageNo });
-          agg.set(key, {
-            status: hbStr(p.status) || label,
-            date: hbDate(p.orderDate, p.CreatedDate, p.PackageReadyDate),
-            customer: hbStr(p.recipientName, p.customerName) || null,
-            lines: (hbArray(p, ["items", "lines", "orderItems"]) as Record<string, any>[]).map(hbLineRaw),
-          });
-        } else {
-          const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-          if (!on) continue;
-          const mevcut = agg.get(on);
-          if (mevcut) {
-            // Aynı sipariş birden çok listede: İLERİDEKİ durum kazanır (teslim, kargoyu ezer).
-            mevcut.status = hbSonDurum(String(mevcut.status ?? ""), label);
-            continue;
-          }
-          agg.set(on, {
-            status: label,
-            // Veriliş anı: sipariş tarihi > oluşturulma > paket hazır. Teslim/kargo/iade
-            // damgaları BİLEREK yok — onlar siparişin verildiği an değil.
-            date: hbDate(p.orderDate, p.CreatedDate, p.PackageReadyDate),
-            customer: null,
-            lines: null,
-          });
-        }
-      }
-    }
-
-    // b2) İPTAL ve İADE listeleri. Bunlar HİÇ sorgulanmıyordu: teslim edilmiş bir sipariş
-    //     sonradan iade edilince diğer listelerden düşüyor, bizim kalıcı kaydımızda ise
-    //     "satıldı" olarak kalıp Raporlar'da sonsuza kadar ciro sayılıyordu.
-    //     Uç yolu doğrulanmadığı için istemci hata durumunda null döner → sessizce geçilir.
-    const claimKinds: Array<[HbClaimKind, string]> = [
-      ["cancelled", "Cancelled"],
-      ["returned", "Returned"],
-    ];
-    const claimResults = await Promise.all(
-      claimKinds.map(async ([kind]) => {
-        const items: Record<string, any>[] = [];
-        try {
-          for (let off = 0; off < 3000; off += 100) {
-            const page = await client.listClaimPackages(kind, { offset: off, limit: 100 });
-            if (page == null) break; // uç yok / geçici hata → bu tur atla
-            const arr = hbArray(page, ["items", "data", "content", "result"]);
-            if (!arr.length) break;
-            items.push(...(arr as Record<string, any>[]));
-            if (arr.length < 100) break;
-          }
-        } catch {
-          /* iptal/iade listesi sipariş çekimini ASLA bozmaz */
-        }
-        return items;
-      })
-    );
-    for (const [idx, rows] of claimResults.entries()) {
-      const [, label] = claimKinds[idx];
-      for (const p of rows) {
-        const on = hbStr(
-          p.OrderNumber,
-          p.orderNumber,
-          Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : ""
-        );
-        if (!on) continue;
-        const selfStatus = hbStr(p.status, p.Status, p.packageStatus, p.claimStatus);
-        const selfCancelled = selfStatus ? hbStatus(selfStatus).kind === "cancelled" : false;
-        const existing = agg.get(on);
-        if (existing) {
-          // ⚠️ GÜVENLİK FRENİ: sipariş başka listede de görünüyorsa, ancak KAYDIN KENDİ durumu
-          // iptal/iade diyorsa ezilir. Uç yolu doğrulanmadığı için "her siparişi döndüren" bir
-          // yanıt bütün ciroyu silemesin.
-          if (selfCancelled) existing.status = selfStatus;
-          continue;
-        }
-        // Hiçbir aktif listede yok: zaten ciroya girmiyordu. İptal/iade olarak eklenir ki
-        // kalıcı kayıttaki eski "satıldı" satırı düzelsin.
-        agg.set(on, {
-          status: selfCancelled ? selfStatus : label,
-          // İade/iptal damgaları siparişin VERİLİŞ anı değil; onlar öne alınırsa iade edilen
-          // sipariş "iade tarihinde verilmiş" gibi görünür ve sıralamayı bozar.
-          date: hbDate(p.orderDate, p.CreatedDate, p.ClaimDate, p.CancelledDate, p.ReturnDate),
-          customer: null,
-          lines: null,
-        });
-      }
+    for (const [on, s] of hbSiparisler) {
+      agg.set(on, {
+        status: s.status,
+        date: s.date == null ? null : new Date(s.date).toISOString(),
+        customer: s.customer,
+        lines: s.lines,
+      });
     }
 
     // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz detay çağrısı olmasın).

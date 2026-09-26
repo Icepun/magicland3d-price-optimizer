@@ -21,6 +21,7 @@ import {
 import {
   getAllOrders,
   isCancelledOrder,
+  isIncompleteOrder,
   ORDERS_STALE_MS,
   statusInfo,
   visibleOrders,
@@ -247,6 +248,8 @@ function OrderRow({ order, profit }: { order: UnifiedOrder; profit?: OrderProfit
   const accent = ORDER_PLATFORM_COLOR[order.platform];
   const st = statusInfo(order);
   const first = order.items[0];
+  // Tutarı alınamayan sipariş ₺0 değil, BİLİNMİYOR: tutar "—", kâr hiç gösterilmez.
+  const tutarYok = isIncompleteOrder(order);
   return (
     <Tint
       strong
@@ -273,11 +276,11 @@ function OrderRow({ order, profit }: { order: UnifiedOrder; profit?: OrderProfit
       </View>
 
       <View style={styles.right}>
-        <Txt v="bodyStrong" num>
-          {formatCurrency(order.total)}
+        <Txt v="bodyStrong" num tone={tutarYok ? "dim" : undefined}>
+          {formatCurrency(tutarYok ? null : order.total)}
         </Txt>
         <Pill color={STATUS_TONE[st.tone]}>{st.label}</Pill>
-        {profit && profit.profit != null ? (
+        {!tutarYok && profit && profit.profit != null ? (
           <Txt v="smallStrong" tone={profit.profit < 0 ? "bad" : "good"} num>
             {profit.partial ? "~" : ""}
             {formatCurrency(profit.profit)}

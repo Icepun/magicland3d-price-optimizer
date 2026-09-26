@@ -1,3 +1,5 @@
+import { HEPSIBURADA_STATUS_KINDS, TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
+
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
 import { getHepsiburadaOrders } from "@/lib/api/hepsiburada";
@@ -36,6 +38,11 @@ export interface UnifiedOrder {
   items: OrderItem[];
   /** Kısmi iade veya API satır limiti gibi nedenle kâr sonucu yaklaşık/eksik olabilir. */
   financialPartial?: boolean;
+  /**
+   * Kalem/tutar bilgisi platformdan alınamadı (ör. Hepsiburada sipariş detayı gelmedi). Listede
+   * kalır; ciro/kâr toplamlarına ve finans geçmişine GİRMEZ — masaüstü `dataIncomplete` kuralı.
+   */
+  dataIncomplete?: boolean;
   profit?: number | null;
   profitPartial?: boolean;
   isManual?: boolean;
@@ -222,4 +229,35 @@ const CANCELLED_STATUS: Record<OrderPlatform, Set<string>> = {
 /** Sipariş ciro getirmiyor mu (iptal/iade/teslim-edilemedi)? Özet metriklerinden hariç tutulur. */
 export function isCancelledOrder(o: UnifiedOrder): boolean {
   return CANCELLED_STATUS[o.platform]?.has(o.status) ?? false;
+}
+
+/**
+ * Siparişin tutarı BİLİNMİYOR mu (kalemi hiç gelmedi)?
+ *
+ * Böyle bir sipariş ₺0 satış DEĞİLDİR: toplama katılırsa ciro düşük, sipariş sayısı yüksek
+ * görünür; finans geçmişine yazılırsa masaüstünün doğru yazdığı tutarı ₺0'la EZER (yazma
+ * `revenueKurus`'u koşulsuz günceller). Özet ve finans senkronu bu siparişleri atlar.
+ */
+export function isIncompleteOrder(o: UnifiedOrder): boolean {
+  return o.dataIncomplete === true;
+}
+
+/**
+ * Pazaryeri tanımadığımız bir durum adı mı gönderdi? Sipariş satış da olabilir iade de —
+ * masaüstü (api/orders route `statusUnknown`) onu ciroya KATMAZ ve finans geçmişine hiç YAZMAZ.
+ * Yalnız Trendyol ve Hepsiburada: Shopify'ın kovası türetilir, manuel siparişi kullanıcı girer.
+ */
+export function isUnknownStatusOrder(o: UnifiedOrder): boolean {
+  if (o.platform === "trendyol") return !(o.status in TRENDYOL_STATUS_KINDS);
+  if (o.platform === "hepsiburada") return !(o.status in HEPSIBURADA_STATUS_KINDS);
+  return false;
+}
+
+/**
+ * Ciro/kâr TOPLAMLARINA girmeyen sipariş: iptal/iade, tutarı alınamayan, durumu tanınmayan.
+ * Panel ve Raporlar AYNI fonksiyonu kullanır — aynı ekranda iki ayrı küme olmasın. Liste yine
+ * hepsini gösterir.
+ */
+export function isExcludedFromTotals(o: UnifiedOrder): boolean {
+  return isCancelledOrder(o) || isIncompleteOrder(o) || isUnknownStatusOrder(o);
 }

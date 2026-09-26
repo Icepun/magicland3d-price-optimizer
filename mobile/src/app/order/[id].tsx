@@ -19,7 +19,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
-import { getAllOrders, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
+import { getAllOrders, isIncompleteOrder, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
@@ -91,9 +91,13 @@ export default function OrderDetailScreen() {
   const accent = ORDER_PLATFORM_COLOR[order.platform];
   const st = statusInfo(order);
   const pm = getProductMap(products ?? []);
-  const profit = products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
+  // Tutarı alınamayan siparişte ciro/kâr/marj BİLİNMİYOR ("—"); ₺0 ve eksi kâr gösterilmez.
+  const tutarYok = isIncompleteOrder(order);
+  const profit =
+    !tutarYok && products && rules && settings ? computeOrderProfit(order, pm, rules, settings) : null;
   const margin = profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
   const notlar: string[] = [];
+  if (tutarYok) notlar.push("Sipariş tutarı alınamadı; yenileyince tekrar denenecek.");
   if (profit?.partial) notlar.push("Bazı ürünler eşleşmedi, kâr kısmi (~).");
   if (profit?.desiEstimated) {
     notlar.push(
@@ -143,7 +147,13 @@ export default function OrderDetailScreen() {
               <Txt v="label" tone="faint" style={styles.kicker}>
                 CİRO
               </Txt>
-              <Money value={order.total} v="title" />
+              {tutarYok ? (
+                <Txt v="title" tone="dim">
+                  —
+                </Txt>
+              ) : (
+                <Money value={order.total} v="title" />
+              )}
             </View>
             <View>
               <Txt v="label" tone="faint" style={styles.kicker}>

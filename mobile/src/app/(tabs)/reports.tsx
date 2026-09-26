@@ -18,7 +18,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
+import { getAllOrders, isExcludedFromTotals, isUnknownStatusOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { orderWindowCutoff } from "@/lib/api/window";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getMonthlyFinanceSummary } from "@/lib/db/finance";
@@ -63,15 +63,30 @@ export default function ReportsScreen() {
     let unknownProfitOrders = 0;
     let partialProfitOrders = 0;
     let unsupportedCurrencyOrders = 0;
+    let unknownStatusOrders = 0;
     if (!orders || !matchProducts || !rules || !settings) {
-      return { total, profit, count, byPlat, unknownProfitOrders, partialProfitOrders, unsupportedCurrencyOrders };
+      return {
+        total,
+        profit,
+        count,
+        byPlat,
+        unknownProfitOrders,
+        partialProfitOrders,
+        unsupportedCurrencyOrders,
+        unknownStatusOrders,
+      };
     }
     const pm = getProductMap(matchProducts);
     const visibleCutoff = orderWindowCutoff();
     for (const o of orders.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
       if (o.date != null && o.date < visibleCutoff) continue;
-      if (isCancelledOrder(o)) continue;
+      // Panel'le AYNI küme: iptal/iade, tutarı alınamayan (₺0 satış değil) ve durumu tanınmayan
+      // (satış mı iade mi bilinmiyor) sipariş toplama katılmaz — masaüstü özetiyle aynı.
+      if (isExcludedFromTotals(o)) {
+        if (isUnknownStatusOrder(o)) unknownStatusOrders++;
+        continue;
+      }
       if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") {
         unsupportedCurrencyOrders++;
         continue;
@@ -89,7 +104,16 @@ export default function ReportsScreen() {
       } else unknownProfitOrders++;
       if (op.partial) partialProfitOrders++;
     }
-    return { total, profit, count, byPlat, unknownProfitOrders, partialProfitOrders, unsupportedCurrencyOrders };
+    return {
+      total,
+      profit,
+      count,
+      byPlat,
+      unknownProfitOrders,
+      partialProfitOrders,
+      unsupportedCurrencyOrders,
+      unknownStatusOrders,
+    };
   }, [orders, matchProducts, rules, settings]);
 
   useEffect(() => {
@@ -113,7 +137,7 @@ export default function ReportsScreen() {
     const cutoff = orderWindowCutoff();
     for (const o of orders.orders) {
       if (o.date != null && o.date < cutoff) continue;
-      if (isCancelledOrder(o)) continue;
+      if (isExcludedFromTotals(o)) continue;
       for (const it of o.items) m.set(it.name, (m.get(it.name) ?? 0) + it.quantity);
     }
     return [...m.entries()]
@@ -130,7 +154,7 @@ export default function ReportsScreen() {
     const sums = new Array<number>(N).fill(0);
     if (orders && now) {
       for (const o of orders.orders) {
-        if (o.date == null || isCancelledOrder(o) || (o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
+        if (o.date == null || isExcludedFromTotals(o) || (o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
         const geri = Math.floor((now - o.date) / GUN);
         if (geri < 0 || geri >= N) continue;
         sums[N - 1 - geri] += o.total;
@@ -218,6 +242,9 @@ export default function ReportsScreen() {
       </FadeInView>
       {rev.unsupportedCurrencyOrders > 0 ? (
         <Uyari>{rev.unsupportedCurrencyOrders} sipariş farklı para biriminde — toplamlara katılmadı.</Uyari>
+      ) : null}
+      {rev.unknownStatusOrders > 0 ? (
+        <Uyari>{rev.unknownStatusOrders} siparişin durumu belirsiz — toplamlara katılmadı.</Uyari>
       ) : null}
 
       {/* AYLIK CİRO VE NET KÂR */}

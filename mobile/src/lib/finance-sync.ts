@@ -1,6 +1,11 @@
 import type { QueryClient } from "@tanstack/react-query";
 
-import { isCancelledOrder, type OrdersResult } from "@/lib/api/orders";
+import {
+  isCancelledOrder,
+  isIncompleteOrder,
+  isUnknownStatusOrder,
+  type OrdersResult,
+} from "@/lib/api/orders";
 import { syncOrderFinanceSnapshots } from "@/lib/db/finance";
 import { computeOrderProfit, getProductMap, type OrderProfit } from "@/lib/order-profit";
 import type { Rules } from "@/lib/profit";
@@ -38,6 +43,15 @@ export function buildFinanceSnapshots(
     // Trendyol'un henüz paket id'si vermediği sipariş geçici kimlik taşır; yazılırsa gerçek id
     // gelince ikinci satır açılır ve Raporlar siparişi İKİ KEZ sayar (masaüstüyle aynı kural).
     if (!isPersistableOrderId(o.platform, o.id)) continue;
+    // Durumu tanınmayan sipariş HİÇ yazılmaz: satış mı iade mi bilmiyoruz. Eskiden "aktif" satış
+    // olarak yazılıyordu; masaüstü bu siparişi yazmıyor, varsa önceki kaydına dokunmuyor.
+    if (isUnknownStatusOrder(o)) continue;
+    // Tutarı alınamamış sipariş YAZILMAZ: ₺0 ciroyla yazılırsa masaüstünün (ya da önceki turun)
+    // doğru kaydını ezer — yazma ciroyu koşulsuz günceller. Doğru kayıt olduğu gibi kalır,
+    // bilgi gelince normal akışta güncellenir. İSTİSNA iptal/iade: "satıldı"da kalmasın diye
+    // iptal bilgisi yine yazılır; raporlar iptali tutarına bakmadan eler (masaüstüyle aynı kural).
+    const iptal = isCancelledOrder(o);
+    if (isIncompleteOrder(o) && !iptal) continue;
     const op: OrderProfit = computeOrderProfit(o, pm, rules, settings);
     out.push({
       platform: o.platform,
@@ -47,7 +61,7 @@ export function buildFinanceSnapshots(
       revenue: op.revenue,
       profit: op.profit,
       profitPartial: op.partial,
-      statusKind: isCancelledOrder(o) ? "cancelled" : "active",
+      statusKind: iptal ? "cancelled" : "active",
       currency: o.currency ?? "TRY",
       // Gerçek komisyon bilgisi de yazılır — masaüstünün "platform kaynaklı" kârı korunur.
       profitSource: op.profitSource,

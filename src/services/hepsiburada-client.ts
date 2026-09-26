@@ -7,6 +7,7 @@
  *
  * Kanonik bilgi: docs/hepsiburada/ (README/test-certification/business-rules-faq).
  */
+import { hbTalepSayfasi, type HbTalepTuru } from "@/core/hb-siparis";
 
 export type HbEnvironment = "test" | "prod";
 
@@ -79,35 +80,11 @@ export class HepsiburadaApiError extends Error {
   }
 }
 
-/** İptal mi iade mi — iki ayrı liste, aynı deneme mantığı. */
-export type HbClaimKind = "cancelled" | "returned";
-
 /**
- * İptal/iade liste uçlarının ADAY yolları.
- *
- * ⚠️ Bu yollar DOĞRULANMADI (HB belgeleri kapalı; elimizde canlı kimlik yok). Bu yüzden sırayla
- * denenir, çalışan hatırlanır, hiçbiri çalışmazsa uç "yok" sayılır ve sipariş akışı bundan
- * ETKİLENMEZ. Doğrulanan gerçek yol bulununca listenin başına alınmalı.
+ * İptal mi iade mi — iki ayrı liste, aynı deneme mantığı. Aday yollar ve "yol yok" kuralı
+ * telefonla ORTAK çekirdekte (`core/hb-siparis.ts`): doğrulanan yol tek yerde güncellensin.
  */
-const HB_CLAIM_PATHS: Record<HbClaimKind, string[]> = {
-  cancelled: [
-    "/packages/merchantid/{mid}/cancelled",
-    "/orders/merchantid/{mid}/cancelled",
-  ],
-  returned: [
-    "/packages/merchantid/{mid}/returned",
-    "/claims/merchantid/{mid}",
-  ],
-};
-
-/**
- * "Bu yol YOK" demek olan durumlar — yalnız bunlarda aday kalıcı olarak elenir.
- *
- * 400 ve 401 BİLEREK DIŞARIDA: 400 "yol doğru ama istek eksik" (HB liste uçları tarih aralığı
- * isteyebiliyor), 401 ise kimlik sorunu. İkisini "yol yok" saymak, DOĞRU yolu kalıcı olarak
- * eleyip iptal/iade taramasını sessizce kapatırdı.
- */
-const HB_PATH_MISSING_STATUS = new Set([403, 404, 405, 501]);
+export type HbClaimKind = HbTalepTuru;
 
 /**
  * Kapanmış siparişlerin detay belleği (süreç ömrü boyunca).
@@ -254,28 +231,16 @@ export class HepsiburadaClient {
     kind: HbClaimKind,
     params: { offset?: number; limit?: number } = {}
   ): Promise<unknown | null> {
-    const known = this.claimPath.get(kind);
-    if (known === null) return null;
-    const offset = params.offset ?? 0;
-    const limit = params.limit ?? 100;
-    const mid = encodeURIComponent(this.credentials.merchantId);
-    const candidates = known ? [known] : HB_CLAIM_PATHS[kind];
-    let allPathsMissing = true;
-    for (const template of candidates) {
-      try {
-        const body = await this.request<unknown>(
-          `${this.hosts.oms}${template.replace("{mid}", mid)}?offset=${offset}&limit=${limit}`
-        );
-        this.claimPath.set(kind, template);
-        return body;
-      } catch (error) {
-        // Yolun yanlış olduğunu SADECE durum kodundan anlarız; mesaj metnine bakmayız.
-        const status = error instanceof HepsiburadaApiError ? error.status : 0;
-        if (!HB_PATH_MISSING_STATUS.has(status)) allPathsMissing = false;
+    // HepsiburadaApiError HTTP durumunu `status` alanında taşır — çekirdek yalnız ona bakar.
+    return hbTalepSayfasi(
+      kind,
+      { offset: params.offset ?? 0, limit: params.limit ?? 100 },
+      {
+        merchantId: this.credentials.merchantId,
+        hafiza: this.claimPath,
+        iste: (yol) => this.request<unknown>(`${this.hosts.oms}${yol}`),
       }
-    }
-    if (allPathsMissing) this.claimPath.set(kind, null);
-    return null;
+    );
   }
 
   /**

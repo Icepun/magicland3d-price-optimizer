@@ -40,7 +40,7 @@ export function panelCirosu<O extends PanelSiparis>(
     gun: number;
     simdi: number;
     platformlar: readonly string[];
-    /** Ciroya girmeyecek sipariş: iptal/iade ve (pazaryerinde) tanınmayan durum. */
+    /** Ciroya girmeyecek sipariş: iptal/iade, tutarı alınamayan ve (pazaryerinde) tanınmayan durum. */
     sayilmazMi: (o: O) => boolean;
     hesapla: (o: O) => { revenue: number; profit: number | null };
   }

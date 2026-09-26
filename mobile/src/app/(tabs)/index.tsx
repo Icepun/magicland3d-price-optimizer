@@ -22,14 +22,13 @@ import {
   Txt,
   type TxtTone,
 } from "@/components/kit";
-import { getAllOrders, isCancelledOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
+import { getAllOrders, isExcludedFromTotals, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
 import { panelCirosu } from "@/lib/panel-ciro";
-import { HEPSIBURADA_STATUS_KINDS, TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
 import {
   ORDER_PLATFORM_COLOR,
   ORDER_PLATFORM_SHORT_LABEL,
@@ -41,16 +40,6 @@ import {
 import { useManualRefresh } from "@/lib/use-refresh";
 import { color, radius, space } from "@/theme/tokens";
 
-/**
- * Pazaryeri tanımadığımız bir durum adı gönderdiyse sipariş satış da olabilir iade de —
- * masaüstü özeti bu siparişleri ciroya KATMAZ (bkz. api/orders route `statusUnknown`).
- * Manuel siparişi kullanıcı kendisi girdiği için orada bu kural yok (masaüstüyle aynı).
- */
-function durumuTaninmiyor(o: { platform: string; status: string }): boolean {
-  if (o.platform === "trendyol") return !(o.status in TRENDYOL_STATUS_KINDS);
-  if (o.platform === "hepsiburada") return !(o.status in HEPSIBURADA_STATUS_KINDS);
-  return false;
-}
 const DONEMLER = [
   { value: 7 as const, label: "7g" },
   { value: 30 as const, label: "30g" },
@@ -111,8 +100,9 @@ export default function DashboardScreen() {
       gun: donem,
       simdi: ordersAt || 0,
       platformlar: ORDER_PLATFORMS,
-      // Masaüstü özetiyle birebir: iptal/iade ve tanınmayan pazaryeri durumu ciroya girmez.
-      sayilmazMi: (o) => isCancelledOrder(o) || durumuTaninmiyor(o),
+      // Masaüstü özetiyle birebir: iptal/iade, tutarı alınamayan ve tanınmayan pazaryeri
+      // durumu ciroya girmez (Raporlar da aynı fonksiyonu kullanır).
+      sayilmazMi: isExcludedFromTotals,
       hesapla: (o) => computeOrderProfit(o, pm, rules, settings),
     });
   }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
