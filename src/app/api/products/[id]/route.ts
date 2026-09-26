@@ -6,6 +6,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches } from "@/lib/cache-busting";
 import { bustCache } from "@/lib/route-cache";
 import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
+import { shopifyVaryantlari, yoksayilanlariGuncelle } from "@/lib/shopify-katalog-sunucu";
 import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
 import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
@@ -282,6 +283,9 @@ export async function DELETE(
   await ensureRuntimeSchema();
 
   const { id } = await params;
+  // Silinen ürünün Shopify ürünü "Shopify'dan Ekle" listesinde yeniden belirmesin → gizlenenlere
+  // düşer (oradan geri alınabilir). Kimlik silmeden ÖNCE okunmalı (ilan ürünle birlikte gidiyor).
+  const shopifyVaryantIdleri = await shopifyVaryantlari([id]).catch(() => [] as string[]);
   // Silmeden önce grup bilgisini al — silince grup boş kalırsa grubu da temizle.
   const existing = await prisma.product.findUnique({
     where: { id },
@@ -305,6 +309,7 @@ export async function DELETE(
       await prisma.variantGroup.delete({ where: { id: existing.variantGroupId } }).catch(() => {});
     }
   }
+  await yoksayilanlariGuncelle(shopifyVaryantIdleri, []).catch(() => {});
   bustProductCaches(); // silinen ürün listeden, Panel sayaçlarından ve ad indeksinden düşsün
   return NextResponse.json({ ok: true });
 }

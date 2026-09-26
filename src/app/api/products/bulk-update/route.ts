@@ -5,6 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { batchWrite } from "@/lib/libsql-batch";
 import { bustProductViewCaches, bustProfitInputCaches } from "@/lib/cache-busting";
 import { jsonError } from "@/lib/api-error";
+import { toDbDate } from "@/core/sqlite-date";
 import { z } from "zod";
 
 /**
@@ -54,10 +55,11 @@ function updateColumns(input: BulkUpdateInput): { sql: string[]; values: unknown
     // SQLite'ta mantıksal değer 0/1 tamsayıdır.
     values.push(input.madeToOrder ? 1 : 0);
   }
-  // updatedAt ham SQL'de kendiliğinden işlenmez; Prisma ile AYNI biçimde (epoch ms) yazılır,
-  // yoksa Prisma bu satırların tarihini okurken çözemez.
+  // updatedAt ham SQL'de kendiliğinden işlenmez; KANONİK biçimde yazılır (bkz. core/sqlite-date).
+  // Eskiden sabit epoch-ms yazılıyordu: veritabanı ISO metin kullanırken aynı kolona iki biçim
+  // karışıyor, tarih sıralaması/filtresi o satırları sessizce yanlış yere koyuyordu.
   sql.push(`"updatedAt" = ?`);
-  values.push(Date.now());
+  values.push(toDbDate(new Date()));
   return { sql, values };
 }
 

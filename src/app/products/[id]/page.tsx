@@ -34,9 +34,10 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { useFreshStocks } from "@/lib/use-fresh-stocks";
-import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle } from "lucide-react";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle, Pencil, EyeOff, Eye } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
@@ -78,6 +79,7 @@ interface ProductDetail {
   commissionRate: number | null;
   stock: number;
   madeToOrder: boolean;
+  hidden?: boolean;
   desi: number | null;
   imageUrl: string | null;
   imageManual?: boolean;
@@ -277,6 +279,11 @@ export default function ProductDetailPage({
   const aliasInput = aliasDraft.productId === productKey ? aliasDraft.value : aliasSource;
   const setAliasInput = (value: string) => setAliasDraft({ productId: productKey, value });
   const [imageEditorOpen, setImageEditorOpen] = useState(false);
+  // Ürün adı yerinde düzenlenir (başlığa tıkla → yaz → Enter). Shopify'dan eklenen ürünün adı da
+  // burada değiştirilir; fiyat tazelemesi adı ezmez.
+  const [adTaslak, setAdTaslak] = useState<string | null>(null);
+  const router = useRouter();
+  const [kaldirSor, setKaldirSor] = useState(false);
 
   // Paketleme ayarları — globalSettings değişmedikçe yeniden parse etme (her render'da JSON.parse YOK).
   const packagingSettings = useMemo(() => parsePackagingSettings(globalSettings), [globalSettings]);
@@ -509,6 +516,76 @@ export default function ProductDetailPage({
       toast.success("Kaydedildi");
     },
   });
+
+  const adKaydetMutation = useMutation({
+    mutationFn: (name: string) =>
+      fetchJson(`/api/products/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      }),
+    onMutate: async (name) => {
+      await queryClient.cancelQueries({ queryKey: ["product", id] });
+      const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
+      queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) => (old ? { ...old, name } : old));
+      queryClient.setQueriesData<Array<{ id: string; name?: string }>>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, name } : p)) : old
+      );
+      return { prev };
+    },
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      toast.error(e?.message || "Ad kaydedilemedi");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
+      toast.success("Ad kaydedildi");
+    },
+  });
+  // ÇIKARMA: gizle (geri alınabilir) ya da kalıcı sil. Shopify ürünü silinirse "Shopify'dan Ekle"
+  // listesinde yeniden belirmez (gizlenenlere düşer).
+  const kaldirMutation = useMutation({
+    mutationFn: async (tur: "gizle" | "goster" | "sil") => {
+      if (tur === "sil") await fetchJson(`/api/products/${id}`, { method: "DELETE" });
+      else
+        await fetchJson("/api/products/bulk-visibility", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: [id], hidden: tur === "gizle" }),
+        });
+      return tur;
+    },
+    onSuccess: (tur) => {
+      setKaldirSor(false);
+      queryClient.setQueriesData<Array<{ id: string; hidden?: boolean }>>({ queryKey: ["products"] }, (old) =>
+        Array.isArray(old)
+          ? tur === "sil"
+            ? old.filter((p) => p.id !== id)
+            : old.map((p) => (p.id === id ? { ...p, hidden: tur === "gizle" } : p))
+          : old
+      );
+      void queryClient.invalidateQueries({ queryKey: ["products"] });
+      void queryClient.invalidateQueries({ queryKey: ["shopify-katalog-ozet"] });
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
+      if (tur === "goster") {
+        queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) => (old ? { ...old, hidden: false } : old));
+        toast.success("Ürün listeye geri getirildi");
+        return;
+      }
+      toast.success(tur === "sil" ? "Ürün silindi" : "Ürün gizlendi — \"Gizlenenler\" sekmesinden geri getirebilirsin");
+      router.push("/products");
+      queryClient.removeQueries({ queryKey: ["product", id] });
+    },
+    onError: () => toast.error("İşlem yapılamadı"),
+  });
+
+  const adKaydet = () => {
+    if (adTaslak === null) return;
+    const yeni = adTaslak.trim();
+    setAdTaslak(null);
+    if (!yeni || yeni === product?.name) return;
+    adKaydetMutation.mutate(yeni);
+  };
 
   // "Sipariş üzerine üretilir" toggle — optimistic (anında, hata olursa geri al).
   const setMadeToOrderMutation = useMutation({
@@ -786,9 +863,29 @@ export default function ProductDetailPage({
           </span>
         </button>
         <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-bold tracking-tight line-clamp-2 leading-tight">
-            {product.name}
-          </h1>
+          {adTaslak !== null ? (
+            <Input
+              autoFocus
+              value={adTaslak}
+              maxLength={200}
+              onChange={(e) => setAdTaslak(e.target.value)}
+              onBlur={adKaydet}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") adKaydet();
+                if (e.key === "Escape") setAdTaslak(null);
+              }}
+              className="h-9 text-lg font-bold animate-in fade-in zoom-in-[0.98] duration-150"
+            />
+          ) : (
+            <h1
+              onClick={() => setAdTaslak(product.name)}
+              title="Adı değiştirmek için tıkla"
+              className="group cursor-text text-xl font-bold tracking-tight line-clamp-2 leading-tight rounded transition-colors hover:text-primary"
+            >
+              {product.name}
+              <Pencil className="ml-2 inline h-3.5 w-3.5 align-baseline opacity-0 transition-opacity duration-150 group-hover:opacity-60" />
+            </h1>
+          )}
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
             <span className="font-mono">{product.sku}</span>
             <span className="mx-1.5">·</span>
@@ -877,6 +974,59 @@ export default function ProductDetailPage({
           <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
           Yenile
         </Button>
+        {kaldirSor ? (
+          <div className="flex shrink-0 items-center gap-1 rounded-md border bg-card p-1 animate-in fade-in slide-in-from-right-1 duration-200">
+            {product.hidden ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5"
+                disabled={kaldirMutation.isPending}
+                onClick={() => kaldirMutation.mutate("goster")}
+              >
+                <Eye className="h-3.5 w-3.5" />
+                Geri getir
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1.5"
+                disabled={kaldirMutation.isPending}
+                onClick={() => kaldirMutation.mutate("gizle")}
+                title="Listeden kaldır, bilgileri sakla"
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+                Gizle
+              </Button>
+            )}
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-7 gap-1.5"
+              disabled={kaldirMutation.isPending}
+              onClick={() => kaldirMutation.mutate("sil")}
+              title="Kalıcı olarak sil"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Kalıcı sil
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => setKaldirSor(false)}>
+              Vazgeç
+            </Button>
+          </div>
+        ) : (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 shrink-0 text-muted-foreground transition-transform hover:text-destructive active:scale-95"
+            onClick={() => setKaldirSor(true)}
+            title="Ürünü gizle ya da sil"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Kaldır
+          </Button>
+        )}
       </div>
 
       {/* KARAR ÖNCE, AYRINTI SONRA: maliyet · her platformdaki kâr · kaça satmalı — hepsi tek ekranda.

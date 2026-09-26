@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { bustProductCaches } from "@/lib/cache-busting";
 
 /**
  * Bir UnmatchedListing'i (Shopify'da olmayan, sadece Trendyol/HB'de bulunan ürün) doğrudan
@@ -91,6 +92,7 @@ export async function POST(
     }
 
     await prisma.$executeRawUnsafe(`DELETE FROM UnmatchedListing WHERE id = ?`, id);
+    bustProductCaches(); // yeni ürün listede ve sipariş eşleşmesinde hemen görünsün
     return NextResponse.json(product, { status: 201 });
   } catch (error) {
     return NextResponse.json(

@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal, X } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal, X, ShoppingBag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, LIST_STATE_EVENT, type ListState, saveListState, scrollContainer } from "@/lib/list-state";
@@ -33,6 +33,7 @@ import { useFreshStocks } from "@/lib/use-fresh-stocks";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
+import { SHOPIFY_OZET_ANAHTARI, ShopifyEkleDialog } from "@/components/products/ShopifyEkleDialog";
 import { fetchJson } from "@/lib/fetch-json";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1052,6 +1053,8 @@ export default function ProductsPage() {
   }, []);
   const [addOpen, setAddOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  /** "Shopify'dan Ekle" penceresi; hangi sekmede açılacağı (kalkan ürün varsa oradan). */
+  const [shopifyEkle, setShopifyEkle] = useState<null | "yeni" | "kalkan">(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   /**
    * Filtre veya platform daraltması değişince seçim SIFIRLANIR — veri kümesi tamamen değişir.
@@ -1136,6 +1139,12 @@ export default function ProductsPage() {
   // dönünce "kaldığın yerden devam" (eskiden arama sıfırlanıyordu).
   useEffect(() => {
     const url = new URL(window.location.href);
+    // Ayarlar'daki "Shopify'dan ürün ekle" buraya ?ekle=shopify ile gelir → pencereyi aç, adresi temizle.
+    if (url.searchParams.get("ekle") === "shopify") {
+      setShopifyEkle("yeni");
+      url.searchParams.delete("ekle");
+      window.history.replaceState(null, "", url.pathname + url.search);
+    }
     const hasUrlFilter = url.searchParams.has("filter");
     const f = readFilterFromUrl();
     const platform = readPlatformFromUrl();
@@ -1244,6 +1253,17 @@ export default function ProductsPage() {
     queryKey: ["integrations-status"],
     queryFn: () => fetchJson("/api/integrations/status"),
   });
+
+  // Shopify'da olup uygulamada olmayan ürün sayısı → "Shopify'dan Ekle" rozeti.
+  const { data: shopifyOzet } = useQuery<{ bagli: boolean; ozet?: { yeniUrun: number; kalkan: number } }>({
+    queryKey: SHOPIFY_OZET_ANAHTARI,
+    queryFn: () => fetchJson("/api/shopify/katalog?ozet=1"),
+    enabled: Boolean(integrations?.shopify),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const shopifyYeni = shopifyOzet?.ozet?.yeniUrun ?? 0;
+  const shopifyKalkan = shopifyOzet?.ozet?.kalkan ?? 0;
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
@@ -2199,9 +2219,40 @@ export default function ProductsPage() {
           <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol veya Hepsiburada'daki ürünü ekle">
             <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
           </Button>
-          <Button onClick={() => setAddOpen(true)} size="sm">
-            <Plus className="h-4 w-4 mr-2" /> Ürün Ekle
+          <Button
+            onClick={() => setAddOpen(true)}
+            size="sm"
+            variant={integrations?.shopify ? "outline" : "default"}
+            title="Hiçbir platformda olmayan ürünü elle ekle"
+          >
+            <Plus className="h-4 w-4 mr-2" /> Elle Ekle
           </Button>
+          {integrations?.shopify && (
+            <Button
+              onClick={() => setShopifyEkle(shopifyYeni === 0 && shopifyKalkan > 0 ? "kalkan" : "yeni")}
+              size="sm"
+              title="Shopify'daki yeni ürünleri seçip ekle"
+              className="group"
+            >
+              <ShoppingBag className="h-4 w-4 mr-2 transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110" />
+              Shopify&apos;dan Ekle
+              {shopifyYeni > 0 ? (
+                <span
+                  key={shopifyYeni}
+                  className="ml-2 min-w-[20px] rounded-full bg-emerald-500 px-1.5 text-[11px] font-semibold leading-5 text-white tabular-nums animate-in zoom-in-50 fade-in duration-300"
+                >
+                  {shopifyYeni}
+                </span>
+              ) : shopifyKalkan > 0 ? (
+                <span
+                  title="Shopify'dan kaldırılan ürün var"
+                  className="ml-2 min-w-[20px] rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold leading-5 text-black tabular-nums animate-in zoom-in-50 fade-in duration-300"
+                >
+                  {shopifyKalkan}
+                </span>
+              ) : null}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -2806,6 +2857,9 @@ export default function ProductsPage() {
       {marketplaceOpen && (
         <MarketplaceAddModal integrations={integrations} onClose={() => setMarketplaceOpen(false)} />
       )}
+
+      {/* Shopify'daki yeni ürünleri seçip adlandırarak ekleme; kaldırılanları temizleme */}
+      {shopifyEkle && <ShopifyEkleDialog ilkSekme={shopifyEkle} onClose={() => setShopifyEkle(null)} />}
 
       {/* Hızlı baskı — yazıcı/parça seç → yükle & başlat */}
       {printTarget && (

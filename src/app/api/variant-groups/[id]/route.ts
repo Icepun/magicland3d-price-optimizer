@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { bustProductViewCaches } from "@/lib/cache-busting";
 import { z } from "zod";
 
 const UpdateSchema = z
@@ -25,6 +26,7 @@ export async function PATCH(
     if (body.name !== undefined) data.name = body.name.trim();
     if (body.shareModels !== undefined) data.shareModels = body.shareModels;
     const group = await prisma.variantGroup.update({ where: { id }, data });
+    bustProductViewCaches();
     return NextResponse.json(group);
   } catch (error) {
     return NextResponse.json(
@@ -47,6 +49,7 @@ export async function DELETE(
       data: { variantGroupId: null, variantLabel: null },
     });
     await prisma.variantGroup.delete({ where: { id } }).catch(() => {});
+    bustProductViewCaches();
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(

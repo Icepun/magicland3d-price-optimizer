@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { bustProductViewCaches } from "@/lib/cache-busting";
 import { z } from "zod";
 
 const CreateSchema = z.object({
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    bustProductViewCaches();
     return NextResponse.json(group, { status: 201 });
   } catch (error) {
     return NextResponse.json(

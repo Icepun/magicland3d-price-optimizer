@@ -7,7 +7,8 @@ import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -318,9 +319,11 @@ function ShopifyTab() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Yeni ürün ekleme artık Ürünler → "Shopify'dan Ekle" penceresinde (seçerek, adını vererek).
+  // Buradaki toplu ekleme her eksik ürünü Shopify adıyla birden ekliyordu; kaldırıldı.
   const sync = useMutation({
     meta: { silent: true }, // kendi SyncProgressCard'ı var → global katman gösterme
-    mutationFn: (mode: "add-new" | "refresh-prices") =>
+    mutationFn: (mode: "refresh-prices") =>
       fetchJson<{ added?: number; checked?: number; changed?: number; totalProducts: number }>(
         "/api/shopify/sync-products",
         {
@@ -329,11 +332,9 @@ function ShopifyTab() {
           body: JSON.stringify({ mode }),
         }
       ),
-    onSuccess: (d, mode) => {
+    onSuccess: (d) => {
       if (d.totalProducts === 0) {
         toast.error("Shopify mağazanda ürün bulunamadı — ürün okuma izinlerini kontrol et");
-      } else if (mode === "add-new") {
-        toast.success(`Shopify: ${d.added ?? 0} yeni ürün eklendi`);
       } else {
         toast.success(`Shopify fiyatlar: ${d.changed ?? 0} değişti (${d.checked ?? 0} kontrol edildi)`);
       }
@@ -457,22 +458,25 @@ function ShopifyTab() {
           <PlugZap className={`h-4 w-4 mr-2 ${testConnection.isPending ? "animate-spin" : ""}`} />
           {testConnection.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
         </Button>
-        <Button
-          variant="outline"
-          disabled={sync.isPending || !settings?.hasStorefrontAccessToken}
-          onClick={() => sync.mutate("add-new")}
-        >
-          <Plus className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "add-new" ? "animate-spin" : ""}`} />
-          {sync.isPending && sync.variables === "add-new" ? "Ekleniyor…" : "Yeni Ürün Ekle"}
-        </Button>
+        {settings?.hasStorefrontAccessToken ? (
+          <Link href="/products?ekle=shopify" className={buttonVariants({ variant: "outline" })}>
+            <Plus className="h-4 w-4 mr-2" />
+            Shopify&apos;dan Ürün Ekle
+          </Link>
+        ) : (
+          <Button variant="outline" disabled>
+            <Plus className="h-4 w-4 mr-2" />
+            Shopify&apos;dan Ürün Ekle
+          </Button>
+        )}
       </div>
       <Button
         className="w-full"
         disabled={sync.isPending || !settings?.hasStorefrontAccessToken}
         onClick={() => sync.mutate("refresh-prices")}
       >
-        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending && sync.variables === "refresh-prices" ? "animate-spin" : ""}`} />
-        {sync.isPending && sync.variables === "refresh-prices" ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
+        <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
+        {sync.isPending ? "Fiyatlar güncelleniyor…" : "Fiyatları Güncelle"}
       </Button>
 
       {debugResult && !testConnection.isPending && (
@@ -519,7 +523,7 @@ function ShopifyStorefrontGuide() {
         </li>
         <li>
           <strong className="text-foreground">Bağlantıyı Test Et</strong> → iki
-          ✓ yeşil görmelisin → sonra <strong className="text-foreground">Yeni Ürün Ekle</strong>
+          ✓ yeşil görmelisin → sonra <strong className="text-foreground">Shopify&apos;dan Ürün Ekle</strong>
         </li>
       </ol>
       <div className="px-3 pb-3 pt-1 text-[10px] text-muted-foreground">

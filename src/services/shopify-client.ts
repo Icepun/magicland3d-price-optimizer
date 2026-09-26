@@ -37,6 +37,10 @@ export interface ShopifyProduct {
   product_type: string;
   image?: { src: string } | null;
   variants: ShopifyProductVariant[];
+  /** Shopify'da oluşturulma zamanı (ISO). */
+  created_at?: string | null;
+  /** Vitrine (satış kanalına) açılma zamanı (ISO) — "yeni listelenen" sıralaması bunu kullanır. */
+  published_at?: string | null;
 }
 
 export interface ShopifyOrderLine {
@@ -94,6 +98,8 @@ interface StorefrontProductsResponse {
           handle: string;
           productType: string;
           availableForSale: boolean;
+          createdAt?: string | null;
+          publishedAt?: string | null;
           featuredImage: { url: string } | null;
           variants: {
             edges: Array<{
@@ -169,6 +175,8 @@ const PRODUCTS_QUERY = `
           handle
           productType
           availableForSale
+          createdAt
+          publishedAt
           featuredImage {
             url
           }
@@ -368,6 +376,8 @@ export class ShopifyClient {
           product_type: p.productType || "Shopify",
           image: p.featuredImage ? { src: p.featuredImage.url } : null,
           variants,
+          created_at: p.createdAt ?? null,
+          published_at: p.publishedAt ?? null,
         });
       }
 

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
+import { shopifyVaryantlari, yoksayilanlariGuncelle } from "@/lib/shopify-katalog-sunucu";
 import { z } from "zod";
 
 const Schema = z.object({
@@ -13,6 +14,8 @@ export async function POST(req: NextRequest) {
   try {
     await ensureRuntimeSchema();
     const { ids } = Schema.parse(await req.json());
+    // Silinenlerin Shopify ürünleri "Shopify'dan Ekle" listesine geri dönmesin (tekil silmeyle aynı).
+    const shopifyVaryantIdleri = await shopifyVaryantlari(ids).catch(() => [] as string[]);
     // Silinecek ürünlerin ait olduğu grupları topla — silince boş kalanları temizle.
     const affected = await prisma.product.findMany({
       where: { id: { in: ids }, variantGroupId: { not: null } },
@@ -33,6 +36,7 @@ export async function POST(req: NextRequest) {
         await prisma.variantGroup.delete({ where: { id: gid } }).catch(() => {});
       }
     }
+    await yoksayilanlariGuncelle(shopifyVaryantIdleri, []).catch(() => {});
     // Silinen ürünler sipariş eşleşmesinden ve listelerden düşmeli (tekil DELETE zaten düşürüyordu).
     bustProductCaches();
     return NextResponse.json({ deleted: result.count });
