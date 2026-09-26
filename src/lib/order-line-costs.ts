@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import {
+  TUM_SIPARISLER,
   satirMaliyetiHaritaAnahtari,
   siparisKimligi,
   type SatirMaliyetKaydi,
@@ -21,6 +22,8 @@ export async function satirMaliyetleriniOku(
   const harita = new Map<string, SatirMaliyetKaydi>();
   const idler = [...new Set(siparisler.map((s) => siparisKimligi(s.platform, s.id)))];
   if (idler.length === 0) return harita;
+  // "Tüm siparişler" kayıtları (hediye paketi gibi) her listede gerekir.
+  idler.push(TUM_SIPARISLER);
   try {
     for (let i = 0; i < idler.length; i += OKUMA_DILIMI) {
       const satirlar = await prisma.orderLineCost.findMany({

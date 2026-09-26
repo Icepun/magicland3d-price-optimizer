@@ -3,15 +3,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { invalidateOrdersCache } from "@/lib/orders-cache";
-import { bustCaches } from "@/lib/route-cache";
-import { recalculateFinanceMonths } from "@/lib/order-finance-snapshots";
-import {
-  bagOnizlemesi,
-  bagiKaldir,
-  satiriBagla,
-  type EtkilenenSiparisler,
-} from "@/lib/order-line-links";
+import { bagOnizlemesi, bagiKaldir, satiriBagla } from "@/lib/order-line-links";
+import { siparisleriTazele } from "@/lib/order-line-refresh";
 import { satirBagiAnahtari } from "@/core/order-line-link";
 
 /**
@@ -31,33 +24,6 @@ const Ad = z
 
 const Anahtar = z.object({ platform: Platform, ad: Ad });
 const BaglaSchema = Anahtar.extend({ productId: z.string().min(1).max(200) });
-
-/**
- * Ekranlar yeni eşleşmeyi görsün; etkilenen siparişlerin kârı arka planda yeniden hesaplanır.
- * Bu siparişlerde kayıtlı kâr, kullanıcının az önce düzelttiği bağla hesaplanmıştı → "bilinmiyor"
- * sonucu da yazılır (bağ kaldırılınca sipariş yeniden "maliyet eksik" olmalı).
- */
-function tazele(e: EtkilenenSiparisler): void {
-  const onbellekleriDusur = () => {
-    invalidateOrdersCache();
-    bustCaches(["dashboard:", "finance-monthly:", "products:profitability", "planner-queue:"]);
-  };
-  onbellekleriDusur();
-  if (e.externalOrderIds.length === 0 || e.aylar.length === 0) return;
-  // Beklenmiyor: yüzlerce siparişi ilgilendirebilir, isteği bekletmek arayüzü kilitlerdi. Düşerse
-  // siparişler zaten "eski hesap" işaretli — Siparişler/Raporlar bir sonraki turda düzeltir.
-  void recalculateFinanceMonths(e.aylar, {
-    yalnizSiparisler: e.externalOrderIds.map((externalOrderId) => ({
-      platform: e.platform,
-      externalOrderId,
-    })),
-    bilinmeyenKariYaz: true,
-  })
-    .then(onbellekleriDusur)
-    .catch((err) =>
-      console.warn("[ürün-bağı] yeniden hesap düştü:", err instanceof Error ? err.message : err)
-    );
-}
 
 export async function GET(req: Request) {
   try {
@@ -93,7 +59,7 @@ export async function PUT(req: Request) {
     });
     if (!urun) return NextResponse.json({ error: "Ürün bulunamadı" }, { status: 404 });
     const e = await satiriBagla(govde.platform, govde.ad, urun.id);
-    tazele(e);
+    siparisleriTazele(e);
     return NextResponse.json({ ok: true, urun, siparisSayisi: e.externalOrderIds.length });
   } catch (error) {
     return jsonError(error);
@@ -105,7 +71,7 @@ export async function DELETE(req: Request) {
     await ensureRuntimeSchema();
     const govde = Anahtar.parse(await req.json());
     const e = await bagiKaldir(govde.platform, govde.ad);
-    tazele(e);
+    siparisleriTazele(e);
     return NextResponse.json({ ok: true, siparisSayisi: e.externalOrderIds.length });
   } catch (error) {
     return jsonError(error);

@@ -92,8 +92,10 @@ export interface UnifiedOrderItem {
   costMissing?: boolean;
   /** Satırın sipariş içindeki kimliği — "siparişe özel maliyet" kaydının anahtarı. */
   satirAnahtari?: string;
-  /** Bu satır için YALNIZ bu siparişe girilmiş maliyet kullanıldı. */
+  /** Bu satır için elle girilmiş maliyet kullanıldı (yalnız bu sipariş ya da bu adla tüm siparişler). */
   ozelMaliyet?: boolean;
+  /** Kullanılan maliyet "bu adla gelen tüm siparişler" kaydıydı (ör. hediye paketi). */
+  ozelMaliyetTum?: boolean;
   /** Satır kendi anahtarıyla eşleşmedi; kullanıcı ADINI bir ürüne bağladı ("Ürüne bağla"). */
   elleBagli?: boolean;
 }
@@ -1362,6 +1364,7 @@ async function computeOrdersBodyInner(
         // Geçici kimlikli siparişte (paket numarası henüz yok) kayıt açılmaz — kimlik değişince boşta kalırdı.
         satirAnahtari: isPersistableOrderId(r.platform, r.id) ? anahtar : undefined,
         ozelMaliyet: Boolean(ozelUrun),
+        ozelMaliyetTum: Boolean(ozelUrun && ozelBulunan?.tumSiparisler),
         elleBagli,
       };
     });

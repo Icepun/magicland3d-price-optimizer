@@ -55,11 +55,18 @@ export interface SatirMaliyeti {
 }
 
 /**
+ * "TÜM SİPARİŞLER" kaydının sipariş kimliği. Hediye paketi gibi kataloğa girmeyen ama sık gelen
+ * satırlar için maliyet bir kez girilir, o adla gelen her siparişe uygulanır (Berke'nin kararı,
+ * 27 Eyl 2026). Aynı tabloda (OrderLineCost) tutulur; anahtar her zaman ad anahtarıdır ("n:<ad>").
+ */
+export const TUM_SIPARISLER = "*";
+
+/**
  * Sipariş kimliğinin TEK biçimi — finans kayıtlarıyla aynı (Shopify'da "sh-<no>").
  * Masaüstü, ay yeniden hesabı ve telefon kimliği farklı biçimlerde taşıyabiliyor.
  */
 export function siparisKimligi(platform: string, externalOrderId: string): string {
-  if (platform !== "shopify") return externalOrderId;
+  if (platform !== "shopify" || externalOrderId === TUM_SIPARISLER) return externalOrderId;
   if (externalOrderId.startsWith("sh-")) return externalOrderId;
   const gid = externalOrderId.match(/\/Order\/([^/]+)$/i);
   return `sh-${gid?.[1] ?? externalOrderId.replace(/^shopify-/, "")}`;
@@ -81,10 +88,13 @@ export function satirMaliyetiHaritaAnahtari(platform: string, externalOrderId: s
 }
 
 /**
- * Satırın siparişe özel maliyet kaydını bul. Önce satırın GÜNCEL anahtarı denenir (eşleşen üründe
- * "p:<id>"); yoksa ad anahtarı ("n:<ad>"): kayıt, satır henüz hiçbir ürüne eşleşmezken girilmiş
- * olabilir (ürün sonradan kataloğa eklendi ya da elle bağlandı). Berke'nin kararı: yalnız o siparişe
- * girilen rakam o siparişte geçerli kalır, sonradan gelen katalog maliyeti onu ezmez.
+ * Satırın siparişe özel maliyet kaydını bul. Sıra:
+ *  1. Bu siparişin GÜNCEL anahtarı (eşleşen üründe "p:<id>", değilse "n:<ad>").
+ *  2. Bu siparişin ad anahtarı — kayıt satır henüz hiçbir ürüne eşleşmezken girilmiş olabilir
+ *     (ürün sonradan kataloğa eklendi ya da elle bağlandı). Berke'nin kararı: yalnız o siparişe
+ *     girilen rakam o siparişte geçerli kalır, sonradan gelen katalog maliyeti onu ezmez.
+ *  3. "Tüm siparişler" kaydı — YALNIZ hiçbir ürüne eşleşmeyen satırda. Ürüne eşleşen satırın
+ *     maliyeti üründen gelir; genel kayıt katalogu ezmez.
  *
  * Dönen `anahtar` BULUNAN kaydınkidir — düzenleme/silme doğru kayda gitsin.
  */
@@ -93,15 +103,18 @@ export function satirMaliyetiBul<T>(
   platform: string,
   externalOrderId: string,
   satir: { productId?: string | null; name: string }
-): { kayit: T; anahtar: string } | null {
+): { kayit: T; anahtar: string; tumSiparisler: boolean } | null {
   if (!harita || harita.size === 0) return null;
   const guncel = satirAnahtari(satir);
   const bulunan = harita.get(satirMaliyetiHaritaAnahtari(platform, externalOrderId, guncel));
-  if (bulunan) return { kayit: bulunan, anahtar: guncel };
-  if (!satir.productId) return null;
+  if (bulunan) return { kayit: bulunan, anahtar: guncel, tumSiparisler: false };
   const adAnahtari = satirAnahtari({ productId: null, name: satir.name });
-  const adla = harita.get(satirMaliyetiHaritaAnahtari(platform, externalOrderId, adAnahtari));
-  return adla ? { kayit: adla, anahtar: adAnahtari } : null;
+  if (satir.productId) {
+    const adla = harita.get(satirMaliyetiHaritaAnahtari(platform, externalOrderId, adAnahtari));
+    return adla ? { kayit: adla, anahtar: adAnahtari, tumSiparisler: false } : null;
+  }
+  const genel = harita.get(satirMaliyetiHaritaAnahtari(platform, TUM_SIPARISLER, adAnahtari));
+  return genel ? { kayit: genel, anahtar: adAnahtari, tumSiparisler: true } : null;
 }
 
 function sayiVeyaNull(x: unknown, enAz = 0): number | null {

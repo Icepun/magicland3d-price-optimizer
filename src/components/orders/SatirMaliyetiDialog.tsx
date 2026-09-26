@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Calculator, Coins, Loader2, Plus, Trash2, X } from "lucide-react";
+import { Calculator, Coins, Layers, Loader2, Plus, Receipt, Trash2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,9 +31,15 @@ export interface SatirMaliyetiHedefi {
   satirAdi: string;
   adet: number;
   gorsel: string | null;
-  /** Bu satıra daha önce siparişe özel maliyet girilmiş mi (düzenleme)? */
+  /** Bu satıra daha önce maliyet girilmiş mi (düzenleme)? */
   kayitli: boolean;
+  /** Kayıtlı maliyetin kapsamı: yalnız bu sipariş ya da bu adla gelen tüm siparişler. */
+  kapsam: SatirMaliyetKapsami;
+  /** "Tüm siparişler" seçilebilir mi (yalnız hiçbir ürüne eşleşmeyen satır). */
+  tumuneUygulanabilir: boolean;
 }
+
+export type SatirMaliyetKapsami = "siparis" | "tum";
 
 interface KayitYaniti {
   kayit: { maliyet: SatirMaliyeti | null; desi: number | null; satirAdi: string } | null;
@@ -95,12 +101,12 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
     queryFn: () => fetchJson("/api/settings"),
   });
   const kayitSorgusu = useQuery<KayitYaniti>({
-    queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari],
+    queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari, hedef.kapsam],
     queryFn: () =>
       fetchJson(
         `/api/orders/satir-maliyeti?platform=${hedef.platform}&siparis=${encodeURIComponent(
           hedef.siparisId
-        )}&anahtar=${encodeURIComponent(hedef.satirAnahtari)}`
+        )}&anahtar=${encodeURIComponent(hedef.satirAnahtari)}&kapsam=${hedef.kapsam}`
       ),
     enabled: hedef.kayitli,
     staleTime: 0,
@@ -115,7 +121,7 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
         <DialogHeader className="space-y-1">
           <DialogTitle className="flex items-center gap-2">
             <Coins className="h-4 w-4 text-amber-500" />
-            {hedef.kayitli ? "Siparişe özel maliyet" : "Maliyet gir"}
+            {!hedef.kayitli ? "Maliyet gir" : hedef.kapsam === "tum" ? "Sabit maliyet" : "Siparişe özel maliyet"}
           </DialogTitle>
           <div className="flex items-center gap-2.5">
             {hedef.gorsel && (
@@ -129,7 +135,8 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{hedef.satirAdi}</p>
               <p className="text-[11px] text-muted-foreground">
-                Yalnız bu sipariş için · {hedef.siparisNo} · {hedef.adet} adet
+                {hedef.tumuneUygulanabilir ? "" : "Yalnız bu sipariş için · "}
+                {hedef.siparisNo} · {hedef.adet} adet
               </p>
             </div>
           </div>
@@ -183,6 +190,20 @@ function SatirMaliyetiFormu({
   const [tapeUsed, setTapeUsed] = useState(b.tapeUsed);
   const [desi, setDesi] = useState(b.desi);
   const [silSor, setSilSor] = useState(false);
+  const [kapsam, setKapsam] = useState<SatirMaliyetKapsami>(hedef.kapsam);
+  const kapsamSec = (k: SatirMaliyetKapsami) => {
+    setKapsam(k);
+    // Tüm siparişlere uygulanan satır (hediye paketi gibi) ürünle aynı kutuya girer: desi boşsa 0.
+    if (k === "tum" && !desi.trim()) setDesi("0");
+  };
+  // "Tüm siparişler" seçiliyken kaç siparişe uygulanacağı (bilgi amaçlı).
+  const adSayisi = useQuery<{ siparisSayisi: number }>({
+    queryKey: ["satir-bagla", hedef.platform, hedef.satirAdi],
+    queryFn: () =>
+      fetchJson(`/api/orders/satir-bagla?platform=${hedef.platform}&ad=${encodeURIComponent(hedef.satirAdi)}`),
+    enabled: hedef.tumuneUygulanabilir && kapsam === "tum",
+    staleTime: 30_000,
+  });
 
   const paketlemeAyari = useMemo(() => parsePackagingSettings(ayarlar), [ayarlar]);
   const fiyatlar = useMemo(() => filamentFiyatHaritasi(filamentler), [filamentler]);
@@ -239,13 +260,16 @@ function SatirMaliyetiFormu({
           satirAdi: hedef.satirAdi,
           maliyet: girdi,
           desi: sayi(desi) ?? null,
+          kapsam,
         }),
-      }),
-    onSuccess: () => {
-      toast.success("Maliyet kaydedildi — sipariş kârı güncelleniyor");
-      void qc.invalidateQueries({ queryKey: ["orders"] });
-      void qc.invalidateQueries({ queryKey: ["dashboard"] });
-      qc.removeQueries({ queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari] });
+      }) as Promise<{ siparisSayisi?: number }>,
+    onSuccess: (r) => {
+      toast.success(
+        kapsam === "tum"
+          ? `Maliyet kaydedildi — ${r.siparisSayisi ? `${r.siparisSayisi} siparişe` : "bu adla gelen siparişlere"} uygulanıyor`
+          : "Maliyet kaydedildi — sipariş kârı güncelleniyor"
+      );
+      yenile();
       onClose();
     },
     onError: (e) => toast.error("Kaydedilemedi", { description: e instanceof Error ? e.message : undefined }),
@@ -260,17 +284,25 @@ function SatirMaliyetiFormu({
           platform: hedef.platform,
           siparisId: hedef.siparisId,
           satirAnahtari: hedef.satirAnahtari,
+          // Kaldırılan, pencerenin açtığı kayıttır (kapsam değiştirilmiş olsa da).
+          kapsam: hedef.kapsam,
         }),
       }),
     onSuccess: () => {
-      toast.success("Siparişe özel maliyet kaldırıldı");
-      void qc.invalidateQueries({ queryKey: ["orders"] });
-      void qc.invalidateQueries({ queryKey: ["dashboard"] });
-      qc.removeQueries({ queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari] });
+      toast.success("Maliyet kaldırıldı");
+      yenile();
       onClose();
     },
     onError: () => toast.error("Kaldırılamadı"),
   });
+
+  function yenile() {
+    void qc.invalidateQueries({ queryKey: ["orders"] });
+    void qc.invalidateQueries({ queryKey: ["dashboard"] });
+    void qc.invalidateQueries({ queryKey: ["finance-monthly"] });
+    qc.removeQueries({ queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari] });
+    qc.removeQueries({ queryKey: ["satir-bagla", hedef.platform, hedef.satirAdi] });
+  }
 
   const secim =
     "w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
@@ -284,6 +316,42 @@ function SatirMaliyetiFormu({
 
   return (
     <div className="space-y-4">
+      {/* Kapsam — yalnız hiçbir ürüne eşleşmeyen satırda (hediye paketi gibi) */}
+      {hedef.tumuneUygulanabilir && (
+        <div className="space-y-1.5 animate-in fade-in duration-300">
+          <div className="grid grid-cols-2 gap-1 rounded-lg border p-1">
+            {(
+              [
+                ["siparis", "Yalnız bu sipariş", Receipt],
+                ["tum", "Bu adla tüm siparişler", Layers],
+              ] as const
+            ).map(([k, etiket, Ikon]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => kapsamSec(k)}
+                className={cn(
+                  "flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-200 active:scale-95",
+                  kapsam === k
+                    ? "bg-primary/15 text-primary ring-1 ring-primary/30"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                <Ikon className="h-3.5 w-3.5" />
+                {etiket}
+              </button>
+            ))}
+          </div>
+          {kapsam === "tum" && (
+            <p className="text-[11px] text-muted-foreground animate-in fade-in slide-in-from-top-1 duration-200">
+              {adSayisi.data?.siparisSayisi
+                ? `"${hedef.satirAdi}" adıyla gelen ${adSayisi.data.siparisSayisi} siparişe ve bundan sonrakilere uygulanır.`
+                : `"${hedef.satirAdi}" adıyla gelen tüm siparişlere uygulanır.`}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Yöntem */}
       <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 animate-in fade-in duration-300">
         {(

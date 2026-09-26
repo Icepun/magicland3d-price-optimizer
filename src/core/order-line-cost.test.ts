@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  TUM_SIPARISLER,
   satirAnahtari,
   satirMaliyetiBul,
   satirMaliyetiCozumle,
@@ -68,6 +69,7 @@ describe("kaydı bulma (satır sonradan eşleşirse)", () => {
     expect(satirMaliyetiBul(harita, "shopify", "sh-1", { productId: null, name: "cars - piston kupası" })).toEqual({
       kayit: "ad-kaydi",
       anahtar: adAnahtari,
+      tumSiparisler: false,
     });
   });
 
@@ -75,6 +77,7 @@ describe("kaydı bulma (satır sonradan eşleşirse)", () => {
     expect(satirMaliyetiBul(harita, "shopify", "sh-1", { productId: "p-20", name: "Cars - Piston Kupası" })).toEqual({
       kayit: "ad-kaydi",
       anahtar: adAnahtari,
+      tumSiparisler: false,
     });
   });
 
@@ -82,7 +85,26 @@ describe("kaydı bulma (satır sonradan eşleşirse)", () => {
     expect(satirMaliyetiBul(harita, "shopify", "sh-2", { productId: "p-20", name: "Cars - Piston Kupası" })).toEqual({
       kayit: "urun-kaydi",
       anahtar: "p:p-20",
+      tumSiparisler: false,
     });
+  });
+
+  it("'tüm siparişler' kaydı eşleşmeyen satırda bulunur; siparişin kendi kaydı önce gelir", () => {
+    const hediye = satirAnahtari({ productId: null, name: "Hediye Paketi" });
+    const h = new Map([
+      [satirMaliyetiHaritaAnahtari("shopify", TUM_SIPARISLER, hediye), "genel"],
+      [satirMaliyetiHaritaAnahtari("shopify", "sh-7", hediye), "ozel"],
+    ]);
+    expect(siparisKimligi("shopify", TUM_SIPARISLER)).toBe(TUM_SIPARISLER);
+    expect(satirMaliyetiBul(h, "shopify", "gid://shopify/Order/5", { productId: null, name: "hediye paketi" })).toEqual({
+      kayit: "genel",
+      anahtar: hediye,
+      tumSiparisler: true,
+    });
+    expect(satirMaliyetiBul(h, "shopify", "sh-7", { productId: null, name: "Hediye Paketi" })?.kayit).toBe("ozel");
+    // Başka platform ve ürüne eşleşen satır genel kaydı KULLANMAZ (maliyet üründen gelir).
+    expect(satirMaliyetiBul(h, "trendyol", "ty-1", { productId: null, name: "Hediye Paketi" })).toBeNull();
+    expect(satirMaliyetiBul(h, "shopify", "sh-9", { productId: "p-1", name: "Hediye Paketi" })).toBeNull();
   });
 
   it("başka siparişin kaydını bulmaz; boş harita null", () => {

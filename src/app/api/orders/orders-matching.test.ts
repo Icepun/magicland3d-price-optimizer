@@ -384,6 +384,39 @@ describe("elle ürün bağı", () => {
   });
 });
 
+describe("tüm siparişlere uygulanan maliyet (hediye paketi)", () => {
+  const genelKayit = (platform: string) => ({
+    platform,
+    externalOrderId: "*",
+    lineKey: satirBagiAnahtari("Hediye Paketi"),
+    lineName: "Hediye Paketi",
+    costJson: JSON.stringify({ mod: "tutar", tutar: 20, ekFilamentler: [] }),
+    desi: 0,
+  });
+
+  it("aynı adla gelen HER siparişte kullanılır, kâr eksik kalmaz", async () => {
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "HP-YOK", productName: "Hediye Paketi" })];
+    h.state.lineCosts = [genelKayit("trendyol")];
+    const r = await fetchOrders();
+    expect(r.orders[0].items[0]).toMatchObject({
+      productId: null,
+      costMissing: false,
+      ozelMaliyet: true,
+      ozelMaliyetTum: true,
+      satirAnahtari: satirBagiAnahtari("Hediye Paketi"),
+    });
+    expect(r.orders[0].profit).not.toBeNull();
+    expect(r.orders[0].profitPartial).toBe(false);
+  });
+
+  it("başka platformun kaydı uygulanmaz", async () => {
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "HP-YOK", productName: "Hediye Paketi" })];
+    h.state.lineCosts = [genelKayit("shopify")];
+    const r = await fetchOrders();
+    expect(r.orders[0].items[0]).toMatchObject({ costMissing: true, ozelMaliyet: false });
+  });
+});
+
 describe("ürün bazlı satış geçmişi", () => {
   it("kalemleri ürün kimliği ve adet fiyatıyla kalıcı kayda gönderir", async () => {
     h.state.products = [product({ id: "p-kayit", name: "Kedi Figürü", barcode: "KF-1" })];
