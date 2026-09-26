@@ -1,6 +1,15 @@
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import { prisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
+import type { FilamentFiyatlari } from "@/core/filament-karisimi";
+import {
+  satirAnahtari,
+  satirMaliyetiHaritaAnahtari,
+  satirMaliyetliUrun,
+  siparisKimligi,
+} from "@/core/order-line-cost";
+import { filamentFiyatlariOku } from "./filament-fiyatlari";
+import { satirMaliyetleriniOku } from "./order-line-costs";
 import {
   resolveOrderProfit,
   type OrderProfitLine,
@@ -99,11 +108,9 @@ export interface FinanceSnapshotOrder {
   inputVatCredit?: number | null;
 }
 
+/** Tek kaynak çekirdekte (telefon ve siparişe özel maliyet de aynı biçimi kullanıyor). */
 export function canonicalFinanceOrderId(platform: string, externalOrderId: string): string {
-  if (platform !== "shopify") return externalOrderId;
-  if (externalOrderId.startsWith("sh-")) return externalOrderId;
-  const gidMatch = externalOrderId.match(/\/Order\/([^/]+)$/i);
-  return `sh-${gidMatch?.[1] ?? externalOrderId.replace(/^shopify-/, "")}`;
+  return siparisKimligi(platform, externalOrderId);
 }
 
 export function shouldReplaceCapturedProfit(
@@ -958,7 +965,8 @@ type RecalcProduct = OrderProfitProduct & {
 
 async function readRecalcProducts(
   productIds: string[],
-  settings: Record<string, string | undefined>
+  settings: Record<string, string | undefined>,
+  filamentFiyatlari: FilamentFiyatlari
 ): Promise<Map<string, RecalcProduct>> {
   const byId = new Map<string, RecalcProduct>();
   for (let offset = 0; offset < productIds.length; offset += READ_CHUNK) {
@@ -973,7 +981,8 @@ async function readRecalcProducts(
       const resolved = resolveProductCost(
         product.cost,
         settings,
-        product.cost?.filamentType?.costPerGram ?? 0
+        product.cost?.filamentType?.costPerGram ?? 0,
+        filamentFiyatlari
       );
       const listingByPlatform: RecalcProduct["listingByPlatform"] = {};
       for (const listing of product.listings) {
@@ -1197,8 +1206,13 @@ export async function recalculateFinanceMonths(
   const settings: Record<string, string | undefined> = Object.fromEntries(
     settingRows.map((row) => [row.key, row.value])
   );
-  const productById = await readRecalcProducts([...productIds], settings);
+  const filamentFiyatlari = await filamentFiyatlariOku();
+  const productById = await readRecalcProducts([...productIds], settings, filamentFiyatlari);
   const financialByOrder = await readRecalcFinancials(rows);
+  // Siparişe özel maliyetler — Siparişler ekranıyla AYNI kural (yoksa Raporlar farklı kâr gösterirdi).
+  const satirMaliyetleri = await satirMaliyetleriniOku(
+    rows.map((row) => ({ platform: row.platform, id: row.externalOrderId }))
+  );
 
   const updates: FinanceSnapshotOrder[] = [];
   /** Kuru turda "yazsaydık değişirdi" sayımı için: güncelleme ↔ kayıtlı satır eşlemesi. */
@@ -1225,6 +1239,35 @@ export async function recalculateFinanceMonths(
       }
       const profitLines: OrderProfitLine[] = lines.map((line) => {
         const match = line.productId ? productById.get(line.productId) ?? null : null;
+        // Kalem geçmişinde eşleşen üründe ürün kimliği, eşleşmeyende satır adı tutuluyor — sipariş
+        // listesinin satır anahtarıyla birebir aynı (bkz. core/order-line-cost).
+        const ozelKayit = satirMaliyetleri.get(
+          satirMaliyetiHaritaAnahtari(
+            row.platform,
+            row.externalOrderId,
+            satirAnahtari({ productId: line.productId, name: line.productName })
+          )
+        );
+        const ozelUrun = ozelKayit
+          ? satirMaliyetliUrun(
+              ozelKayit,
+              match
+                ? {
+                    id: match.id,
+                    name: match.name,
+                    categoryName: match.categoryName,
+                    desi: match.desi,
+                    commissionRate: match.commissionRate,
+                    listing: match.listingByPlatform[row.platform] ?? null,
+                  }
+                : null,
+              settings,
+              filamentFiyatlari
+            )
+          : null;
+        if (ozelUrun) {
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: ozelUrun };
+        }
         if (!match) {
           return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null };
         }

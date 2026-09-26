@@ -2,9 +2,15 @@ import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
 import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
+import {
+  satirAnahtari,
+  satirMaliyetiHaritaAnahtari,
+  satirMaliyetliUrun,
+  type SatirMaliyetKaydi,
+} from "@core/order-line-cost";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
-import type { Rules } from "@/lib/profit";
+import { kuralFilamentFiyatlari, type Rules } from "@/lib/profit";
 import { isCancelledOrder, type UnifiedOrder } from "@/lib/api/orders";
 
 export interface MatchedProduct {
@@ -76,6 +82,25 @@ export function matchOrderLine(
   );
 }
 
+/**
+ * Bu satıra masaüstünden "siparişe özel maliyet" girilmiş mi? (Masaüstü Siparişler → "Maliyet gir")
+ * Satır anahtarı masaüstüyle AYNI: eşleşen üründe ürün kimliği, eşleşmeyende satır adı.
+ */
+export function ozelMaliyetKaydi(
+  order: Pick<UnifiedOrder, "platform" | "id">,
+  line: { name: string },
+  eslesen: ProductDetail | undefined,
+  rules: Rules
+): SatirMaliyetKaydi | null {
+  const harita = rules.satirMaliyetleri instanceof Map ? rules.satirMaliyetleri : null;
+  if (!harita || harita.size === 0 || order.platform === "manual") return null;
+  return (
+    harita.get(
+      satirMaliyetiHaritaAnahtari(order.platform, order.id, satirAnahtari({ productId: eslesen?.id ?? null, name: line.name }))
+    ) ?? null
+  );
+}
+
 export interface OrderProfit {
   revenue: number;
   profit: number | null; // null = hiç eşleşme/maliyet yok
@@ -129,14 +154,36 @@ export function computeOrderProfit(
   // (Eski mobil kopya: listing komisyonunu uygulamıyordu + sabit gideri adet başına tekrar
   //  kesiyordu → telefondaki kârlar masaüstünden şişik çıkıyordu.)
   let image: string | null = null;
+  const fiyatlar = kuralFilamentFiyatlari(rules);
   const lines: OrderProfitLine[] = order.items.map((line) => {
     const p = matchOrderLine(line, order.platform, pm);
     if (p && !image) image = p.imageUrl;
+    // Siparişe özel maliyet varsa o kullanılır (masaüstüyle aynı kural ve aynı motor).
+    const ozel = ozelMaliyetKaydi(order, line, p, rules);
+    const ozelUrun = ozel
+      ? satirMaliyetliUrun(
+          ozel,
+          p
+            ? {
+                id: p.id,
+                name: p.name,
+                categoryName: p.categoryName,
+                desi: p.desi,
+                commissionRate: p.commissionRate,
+                listing: p.listings.find((l) => l.platform === order.platform) ?? null,
+              }
+            : null,
+          settings,
+          fiyatlar
+        )
+      : null;
+    if (ozelUrun) return { unitPrice: line.unitPrice, quantity: line.quantity, product: ozelUrun };
     const resolved = p
       ? resolveProductCost(
           p.cost ? { ...p.cost, tapeUsed: !!p.cost.tapeUsed } : null,
           settings,
-          p.cost?.costPerGram ?? 0
+          p.cost?.costPerGram ?? 0,
+          fiyatlar
         )
       : null;
     return {

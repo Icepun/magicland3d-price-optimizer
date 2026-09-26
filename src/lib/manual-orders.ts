@@ -3,6 +3,7 @@ import { vatRateOf } from "@/core/vat";
 import { z } from "zod";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatHaritasi } from "@/core/filament-karisimi";
 import { computeFullProductCost } from "@/core/cost-calculator";
 import { filterCargoRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
 import { resolveVatableCost } from "@/core/pricing-engine";
@@ -715,7 +716,8 @@ async function resolveManualOrderInput(
       const resolved = resolveProductCost(
         product.cost,
         settingsMap,
-        product.cost?.filamentType?.costPerGram ?? 0
+        product.cost?.filamentType?.costPerGram ?? 0,
+        filamentCostPerGramById
       );
       // Maliyet satırının VAR OLMASI yetmez — üretim payı girilmemişse maliyet bilinmiyor demektir.
       const costKnown = resolved?.productionCostKnown ?? false;
@@ -1109,7 +1111,8 @@ export async function getManualOrderOptions() {
       const resolved = resolveProductCost(
         product.cost,
         settingsMap,
-        product.cost?.filamentType?.costPerGram ?? 0
+        product.cost?.filamentType?.costPerGram ?? 0,
+        filamentFiyatHaritasi(filamentTypes)
       );
       return {
         id: product.id,

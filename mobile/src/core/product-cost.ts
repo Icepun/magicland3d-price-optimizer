@@ -1,4 +1,5 @@
 import { computeFullProductCost } from "./cost-calculator";
+import { ekFilamentMaliyeti, ekFilamentleriOku, type FilamentFiyatlari } from "./filament-karisimi";
 import {
   computePackagingCost,
   parsePackagingSettings,
@@ -19,6 +20,8 @@ export interface ResolvableProductCost {
   totalCost: number | null;
   packagingCost?: number | null;
   filamentWeight: number | null;
+  /** Ana filamente EK filamentler (JSON, bkz. core/filament-karisimi). Boş = tek filament. */
+  ekFilamentlerJson?: string | null;
   printTimeHours: number | null;
   wasteRate: number | null;
   packagingOptionId: string | null;
@@ -80,14 +83,22 @@ function manualPackagingBreakdown(
   };
 }
 
+/**
+ * `filamentFiyatlari`: tüm filament türlerinin güncel gram fiyatı. Ek filamentli ürünlerde
+ * eklerin tutarı buradan okunur. ZORUNLU parametre (kasıtlı): unutulan bir çağrı yeri çoklu
+ * filamentli ürünü sessizce ucuz gösterirdi — tsc her çağrı yerini yakalasın.
+ */
 export function resolveProductCost(
   cost: ResolvableProductCost | null | undefined,
   settings: Record<string, string | undefined>,
-  filamentCostPerGram: number
+  filamentCostPerGram: number,
+  filamentFiyatlari: FilamentFiyatlari
 ): ResolvedCost | null {
   if (!cost) return null;
 
   if (cost.costMode === "detailed") {
+    // Ek filamentler (varsa). Fiyatı bilinmeyen bir ek varsa maliyet TAM sayılmaz.
+    const ek = ekFilamentMaliyeti(ekFilamentleriOku(cost.ekFilamentlerJson), filamentFiyatlari);
     const packagingSettings = parsePackagingSettings(settings);
     const packaging = computePackagingCost(
       {
@@ -109,6 +120,7 @@ export function resolveProductCost(
       laborCostPerHour: Number(settings.costLaborPerHour ?? 0),
       wasteRate: cost.wasteRate ?? 0,
       packagingCost: packaging.total,
+      ekFilamentMaliyeti: ek.tutar,
     });
     return {
       productionCost: calc.productionCost,
@@ -119,7 +131,8 @@ export function resolveProductCost(
       // Paketleme HARİÇ üretim payı: filament gramajı/süresi girilmemişse 0 kalır → bilinmiyor.
       // Malzeme payı da 0 olmamalı: filament türü seçilmeden girilen süre/gramaj eksik maliyettir
       // (gram maliyeti 0 → malzeme 0₺), kâr olduğundan yüksek çıkar.
-      productionCostKnown: calc.productionCost > 0 && calc.filamentCost > 0,
+      // Ek filamentin fiyatı bilinmiyorsa (tür silinmiş/fiyatsız) malzeme eksik hesaplanmıştır.
+      productionCostKnown: calc.productionCost > 0 && calc.filamentCost > 0 && !ek.eksik,
     };
   }
 

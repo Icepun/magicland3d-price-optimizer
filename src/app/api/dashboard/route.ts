@@ -6,6 +6,7 @@ import { platformMinOrderQty, shopifyCargoOverride } from "@/core/platform-rules
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { bustCache, swr } from "@/lib/route-cache";
@@ -82,6 +83,7 @@ async function computeDashboard() {
       prisma.appSetting.findMany(),
     ]);
 
+  const filamentFiyatlari = await filamentFiyatlariOku();
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
@@ -152,7 +154,8 @@ async function computeDashboard() {
     const resolved = resolveProductCost(
       product.cost,
       settingsMap,
-      product.cost?.filamentType?.costPerGram ?? 0
+      product.cost?.filamentType?.costPerGram ?? 0,
+      filamentFiyatlari
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;

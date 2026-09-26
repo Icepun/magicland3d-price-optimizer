@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { withProductCommissionRule } from "@/core/product-commission";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 /**
@@ -34,6 +35,7 @@ export async function GET(
       prisma.appSetting.findMany(),
     ]);
 
+  const filamentFiyatlari = await filamentFiyatlariOku();
   const settingsMap = Object.fromEntries(
     settings.map((s: { key: string; value: string }) => [s.key, s.value])
   );
@@ -43,7 +45,8 @@ export async function GET(
   const resolved = resolveProductCost(
     product.cost,
     settingsMap,
-    product.cost?.filamentType?.costPerGram ?? 0
+    product.cost?.filamentType?.costPerGram ?? 0,
+    filamentFiyatlari
   );
 
   if (!resolved || !resolved.productionCostKnown) {

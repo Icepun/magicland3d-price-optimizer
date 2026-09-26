@@ -53,6 +53,8 @@ import {
 } from "@/lib/db/manual-orders";
 import type { ProductDetail } from "@/lib/db/product-detail";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
+import { kuralFilamentFiyatlari } from "@/lib/profit";
+import type { FilamentFiyatlari } from "@core/filament-karisimi";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
 import { parseTrNumber } from "@/lib/number";
@@ -143,11 +145,17 @@ const EMPTY_TEXTS = {
   wasteRateText: "",
 } as const;
 
-function resolveCatalogItem(product: ProductDetail, settings: Record<string, string>, id = newLineId()): FormItem {
+function resolveCatalogItem(
+  product: ProductDetail,
+  settings: Record<string, string>,
+  filamentFiyatlari: FilamentFiyatlari,
+  id = newLineId()
+): FormItem {
   const resolved = resolveProductCost(
     product.cost ? { ...product.cost, tapeUsed: Boolean(product.cost.tapeUsed) } : null,
     settings,
-    product.cost?.costPerGram ?? 0
+    product.cost?.costPerGram ?? 0,
+    filamentFiyatlari
   );
   return {
     id,
@@ -287,6 +295,7 @@ export default function ManualOrderEditScreen() {
       existing={orderQuery.data ?? null}
       products={productsQuery.data}
       expenseRules={rulesQuery.data.expense}
+      filamentFiyatlari={kuralFilamentFiyatlari(rulesQuery.data)}
       settings={settingsQuery.data}
       costContext={costContextQuery.data}
       initialProduct={initialProduct}
@@ -298,6 +307,7 @@ function ManualOrderForm({
   existing,
   products,
   expenseRules,
+  filamentFiyatlari,
   settings,
   costContext,
   initialProduct,
@@ -305,6 +315,8 @@ function ManualOrderForm({
   existing: ManualOrder | null;
   products: ProductDetail[];
   expenseRules: ExpenseRuleInput[];
+  /** Çoklu filamentli katalog ürünlerinin ek filament fiyatları. */
+  filamentFiyatlari: FilamentFiyatlari;
   settings: Record<string, string>;
   costContext: FreeformCostContext;
   initialProduct: ProductDetail | null;
@@ -339,7 +351,7 @@ function ManualOrderForm({
   const [note, setNote] = useState(existing?.note ?? "");
   const [items, setItems] = useState<FormItem[]>(() => {
     if (existing) return formItems(existing.draft.items);
-    if (initialProduct) return [resolveCatalogItem(initialProduct, settings)];
+    if (initialProduct) return [resolveCatalogItem(initialProduct, settings, filamentFiyatlari)];
     return [];
   });
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -572,7 +584,7 @@ function ManualOrderForm({
   function addCatalogProduct(product: ProductDetail) {
     setItems((current) => {
       const existingIndex = current.findIndex((item) => item.productId === product.id);
-      if (existingIndex < 0) return [...current, resolveCatalogItem(product, settings)];
+      if (existingIndex < 0) return [...current, resolveCatalogItem(product, settings, filamentFiyatlari)];
       return current.map((item, index) => (index === existingIndex ? { ...item, quantity: item.quantity + 1 } : item));
     });
     setPickerOpen(false);

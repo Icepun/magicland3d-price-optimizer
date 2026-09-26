@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { computeFullProductCost } from "@/core/cost-calculator";
-import { computePackagingCost, parsePackagingSettings } from "@/core/packaging";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches } from "@/lib/cache-busting";
 import { bustCache } from "@/lib/route-cache";
 import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
 import { shopifyVaryantlari, yoksayilanlariGuncelle } from "@/lib/shopify-katalog-sunucu";
 import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
+import { detayliMaliyetOnbellegi, maliyetGovdesiniKolonlaraCevir } from "@/lib/product-cost-cache";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
 
@@ -39,6 +39,17 @@ const UpdateProductSchema = z.object({
       costMode: z.enum(["manual", "template", "detailed"]).optional(),
       filamentTypeId: z.string().nullable().optional(),
       filamentWeight: z.number().min(0, "Ağırlık eksi olamaz").nullable().optional(),
+      // Çoklu filament: ana filamente EK türler (boş dizi = tek filament). Verilmezse dokunulmaz.
+      ekFilamentler: z
+        .array(
+          z.object({
+            filamentTypeId: z.string().min(1),
+            gram: z.number().min(0, "Ağırlık eksi olamaz"),
+          })
+        )
+        .max(8)
+        .nullable()
+        .optional(),
       printTimeHours: z.number().min(0, "Süre eksi olamaz").nullable().optional(),
       // Mesajlar KULLANICIYA gösteriliyor (istemci yanıttaki `error` alanını olduğu gibi basar).
       wasteRate: z
@@ -199,56 +210,29 @@ async function patchProduct(
   }
 
   if (cost !== undefined) {
-    let finalCost: ProductCostPatch = { ...cost };
+    // `ekFilamentler` (dizi) → `ekFilamentlerJson` kolonu; verilmediyse mevcut ekler korunur.
+    let finalCost: Omit<ProductCostPatch, "ekFilamentler"> & { ekFilamentlerJson?: string | null } =
+      maliyetGovdesiniKolonlaraCevir(cost);
     if (cost.costMode === "detailed") {
       const appSettings = await prisma.appSetting.findMany();
       const settings = Object.fromEntries(appSettings.map((s) => [s.key, s.value]));
-      const electricityCostPerHour =
-        settings.costElectricityIncluded === "true"
-          ? parseFloat(settings.costElectricityPerHour || "0")
-          : 0;
-      const machineWearCostPerHour = parseFloat(settings.costMachineWearPerHour || "0");
-      const laborCostPerHour = parseFloat(settings.costLaborPerHour || "0");
-
-      let costPerGram = 0;
-      if (cost.filamentTypeId) {
-        const filament = await prisma.filamentType.findUnique({
-          where: { id: cost.filamentTypeId },
-        });
-        costPerGram = filament?.costPerGram || 0;
-      }
-
-      // Dinamik paketleme — seçimlerden + güncel ayarlardan
-      const packagingSettings = parsePackagingSettings(settings);
-      const packaging = computePackagingCost(
-        {
-          packagingOptionId: cost.packagingOptionId,
-          nylonLevel: cost.nylonLevel,
-          tapeUsed: cost.tapeUsed,
-        },
-        packagingSettings
-      );
-
-      const calc = computeFullProductCost({
-        filamentWeight: cost.filamentWeight ?? 0,
-        costPerGram,
-        printTimeHours: cost.printTimeHours ?? 0,
-        electricityCostPerHour,
-        machineWearCostPerHour,
-        laborCostPerHour,
-        wasteRate: cost.wasteRate ?? 0,
-        packagingCost: packaging.total,
-      });
-
+      // Ek filament gövdede yoksa kayıttakiler hesaba girer (önbellek kolonları tutarlı kalsın).
+      const ekFilamentlerJson =
+        finalCost.ekFilamentlerJson !== undefined
+          ? finalCost.ekFilamentlerJson
+          : (
+              await prisma.productCost.findUnique({
+                where: { productId: id },
+                select: { ekFilamentlerJson: true },
+              })
+            )?.ekFilamentlerJson ?? null;
       finalCost = {
-        ...cost,
-        materialCost: calc.filamentCost,
-        electricityCost: calc.electricityCost,
-        machineWearCost: calc.machineWearCost,
-        laborCost: calc.laborCost,
-        packagingCost: calc.packagingCost,
-        otherCost: calc.wasteCost,
-        totalCost: calc.totalCost,
+        ...finalCost,
+        ...detayliMaliyetOnbellegi(
+          { ...finalCost, ekFilamentlerJson },
+          settings,
+          await filamentFiyatlariOku()
+        ),
       };
     }
 

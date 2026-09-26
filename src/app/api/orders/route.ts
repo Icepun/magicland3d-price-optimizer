@@ -29,6 +29,15 @@ import {
 } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
+import {
+  satirAnahtari,
+  satirMaliyetiHaritaAnahtari,
+  satirMaliyetliUrun,
+  type SatirKatalogBilgisi,
+} from "@/core/order-line-cost";
+import { satirMaliyetleriniOku } from "@/lib/order-line-costs";
+import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { trendyolDateToIso } from "@/core/trendyol-date";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
@@ -78,6 +87,10 @@ export interface UnifiedOrderItem {
    * kullanıcı doğrudan o ürünün maliyet ekranına gidebilir.
    */
   costMissing?: boolean;
+  /** Satırın sipariş içindeki kimliği — "siparişe özel maliyet" kaydının anahtarı. */
+  satirAnahtari?: string;
+  /** Bu satır için YALNIZ bu siparişe girilmiş maliyet kullanıldı. */
+  ozelMaliyet?: boolean;
 }
 
 export interface UnifiedOrder {
@@ -1073,6 +1086,8 @@ async function computeOrdersBodyInner(
   }
   // Shopify global komisyon oranı resolveListingCommissionOverride içinde buradan okunur → dış kapsam.
   let settingsMap: Record<string, string | undefined> = {};
+  // Filament gram fiyatları (çoklu filamentli ürünler + siparişe özel maliyet) — dış kapsam.
+  let filamentFiyatlari: Map<string, number> = new Map();
 
   if (allKeys.size > 0 || shopifyNames.size > 0) {
     const keyList = [...allKeys];
@@ -1160,6 +1175,7 @@ async function computeOrdersBodyInner(
     ]);
 
     settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
+    filamentFiyatlari = await filamentFiyatlariOku();
     commissionRules = cRules as CommissionRules;
     cargoRules = kRules as CargoRules;
     expenseRules = eRules as ExpenseRules;
@@ -1175,7 +1191,12 @@ async function computeOrdersBodyInner(
 
     // Ürün → eşleştirme değeri (maliyet + ilan kuralları); kovalar ve belirsizlik kuralı çekirdekte.
     urunIndeksi = urunIndeksiKur(products, (p) => {
-      const resolved = resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0);
+      const resolved = resolveProductCost(
+        p.cost,
+        settingsMap,
+        p.cost?.filamentType?.costPerGram ?? 0,
+        filamentFiyatlari
+      );
       // Listing komisyon override'ı platform bazlı taşınır (Ürünler/Panel ile AYNI kaynak).
       const listingByPlatform: Matched["listingByPlatform"] = {};
       for (const l of p.listings) {
@@ -1226,6 +1247,10 @@ async function computeOrdersBodyInner(
   // Sipariş kimliği → kalemleri (kalıcı ürün bazlı satış geçmişine yazılacak).
   const snapshotItemsByOrderId = new Map<string, FinanceSnapshotItem[]>();
 
+  // SİPARİŞE ÖZEL MALİYET: kataloğa eklenmemiş / maliyeti girilmemiş ürünün yalnız o siparişteki
+  // maliyeti (Siparişler → "Maliyet gir"). Hesap katalog ürünüyle AYNI çekirdekten geçer.
+  const satirMaliyetleri = await satirMaliyetleriniOku(historyRows);
+
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of historyRows) {
     const actionable = r.statusKind === "pending" || r.statusKind === "processing";
@@ -1247,20 +1272,34 @@ async function computeOrdersBodyInner(
       });
 
       // Kâr hesabı için satırı topla — hesabın tamamı aşağıda computeOrderProfit'te (tek çağrı).
+      const katalog: SatirKatalogBilgisi | null = m
+        ? {
+            id: m.id, name: m.name, categoryName: m.categoryName,
+            desi: m.desi, commissionRate: m.commissionRate,
+            listing: m.listingByPlatform[r.platform] ?? null,
+          }
+        : null;
+      const anahtar = satirAnahtari({ productId: m?.id ?? null, name: l.name });
+      const ozelKayit = satirMaliyetleri.get(satirMaliyetiHaritaAnahtari(r.platform, r.id, anahtar));
+      // Siparişe özel maliyet VARSA o kullanılır (Berke'nin kararı: yalnız o sipariş için girilen
+      // rakam o siparişte geçerlidir, katalog maliyeti sonradan girilse de onu ezmez).
+      const ozelUrun = ozelKayit
+        ? satirMaliyetliUrun(ozelKayit, katalog, settingsMap, filamentFiyatlari)
+        : null;
       profitLines.push({
         unitPrice: l.unitPrice,
         quantity: l.quantity,
-        product: m
-          ? {
-              id: m.id, name: m.name, categoryName: m.categoryName,
-              desi: m.desi, commissionRate: m.commissionRate,
-              productionCost: m.productionCost, packagingCost: m.packagingCost,
-              packagingComponents: m.packagingComponents,
-              filamentCost: m.filamentCost,
-              productionCostKnown: m.productionCostKnown,
-              listing: m.listingByPlatform[r.platform] ?? null,
-            }
-          : null,
+        product:
+          ozelUrun ??
+          (m && katalog
+            ? {
+                ...katalog,
+                productionCost: m.productionCost, packagingCost: m.packagingCost,
+                packagingComponents: m.packagingComponents,
+                filamentCost: m.filamentCost,
+                productionCostKnown: m.productionCostKnown,
+              }
+            : null),
       });
 
       if (actionable) {
@@ -1277,7 +1316,10 @@ async function computeOrdersBodyInner(
         productId: m?.id ?? null,
         madeToOrder: m?.madeToOrder ?? false,
         // Çekirdekteki "kâra girmez" koşulunun aynısı (order-profit.ts).
-        costMissing: !m || !m.productionCostKnown,
+        costMissing: ozelUrun ? !ozelUrun.productionCostKnown : !m || !m.productionCostKnown,
+        // Geçici kimlikli siparişte (paket numarası henüz yok) kayıt açılmaz — kimlik değişince boşta kalırdı.
+        satirAnahtari: isPersistableOrderId(r.platform, r.id) ? anahtar : undefined,
+        ozelMaliyet: Boolean(ozelUrun),
       };
     });
 

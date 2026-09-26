@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
     trendyolCall: 0,
     persistedOrders: [] as any[],
     persistedItems: null as Map<string, any[]> | null,
+    /** Siparişe özel maliyet kayıtları (OrderLineCost). */
+    lineCosts: [] as any[],
   },
 }));
 
@@ -57,6 +59,8 @@ vi.mock("@/lib/prisma", () => {
       appSetting: empty(),
       platformOrderFinancial: empty(),
       notification: empty(),
+      filamentType: empty(),
+      orderLineCost: { findMany: vi.fn(async () => h.state.lineCosts) },
       orderFinanceSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
       $executeRawUnsafe: vi.fn(async () => 0),
     },
@@ -143,6 +147,7 @@ beforeEach(() => {
   h.state.trendyolCall = 0;
   h.state.persistedOrders = [];
   h.state.persistedItems = null;
+  h.state.lineCosts = [];
 });
 
 describe("sipariş satırı ↔ ürün eşleştirmesi", () => {
@@ -202,6 +207,77 @@ describe("sipariş satırı ↔ ürün eşleştirmesi", () => {
     const body = await fetchOrders();
 
     expect(body.orders[0].items[0].productId).toBe("p-ilan");
+  });
+});
+
+describe("siparişe özel maliyet", () => {
+  const tutarMaliyeti = (tutar: number) =>
+    JSON.stringify({ mod: "tutar", tutar, ekFilamentler: [], packagingOptionId: null, nylonLevel: null, tapeUsed: null });
+
+  it("eşleşmeyen satır: özel maliyet uygulanır, kâr eksik kalmaz", async () => {
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1" })];
+    const once = await fetchOrders();
+    const satir = once.orders[0].items[0];
+    expect(satir.costMissing).toBe(true);
+    expect(satir.satirAnahtari).toBeTruthy();
+    expect(once.orders[0].profit).toBeNull();
+
+    h.state.trendyolCall = 0;
+    h.state.lineCosts = [
+      {
+        platform: "trendyol",
+        externalOrderId: once.orders[0].id,
+        lineKey: satir.satirAnahtari,
+        lineName: satir.name,
+        costJson: tutarMaliyeti(30),
+        desi: 1,
+      },
+    ];
+    const sonra = await fetchOrders();
+    expect(sonra.orders[0].items[0]).toMatchObject({ costMissing: false, ozelMaliyet: true });
+    expect(sonra.orders[0].profit).not.toBeNull();
+    expect(sonra.orders[0].profitPartial).toBe(false);
+  });
+
+  it("başka siparişin kaydı bu siparişe UYGULANMAZ (yalnız o sipariş)", async () => {
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1" })];
+    const once = await fetchOrders();
+    const satir = once.orders[0].items[0];
+    h.state.trendyolCall = 0;
+    h.state.lineCosts = [
+      {
+        platform: "trendyol",
+        externalOrderId: "ty-baska",
+        lineKey: satir.satirAnahtari,
+        lineName: satir.name,
+        costJson: tutarMaliyeti(30),
+        desi: 1,
+      },
+    ];
+    const sonra = await fetchOrders();
+    expect(sonra.orders[0].items[0].costMissing).toBe(true);
+    expect(sonra.orders[0].items[0].ozelMaliyet).toBe(false);
+  });
+
+  it("maliyeti girilmemiş katalog ürünü: kayıt ürünün kimliğiyle eşleşir", async () => {
+    h.state.products = [product({ id: "p-maliyetsiz", barcode: "MY-1" })];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "MY-1" })];
+    const once = await fetchOrders();
+    expect(once.orders[0].items[0].satirAnahtari).toBe("p:p-maliyetsiz");
+
+    h.state.trendyolCall = 0;
+    h.state.lineCosts = [
+      {
+        platform: "trendyol",
+        externalOrderId: once.orders[0].id,
+        lineKey: "p:p-maliyetsiz",
+        lineName: "Ürün",
+        costJson: tutarMaliyeti(25),
+        desi: null,
+      },
+    ];
+    const sonra = await fetchOrders();
+    expect(sonra.orders[0].items[0]).toMatchObject({ costMissing: false, ozelMaliyet: true });
   });
 });
 

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { resolveProductCost } from "./product-cost";
 
+/** Ek filamenti olmayan ürünler: fiyat haritası kullanılmaz. */
+const BOS_FIYAT = new Map<string, number>();
+const coz = (
+  cost: Parameters<typeof resolveProductCost>[0],
+  settings: Parameters<typeof resolveProductCost>[1],
+  gramFiyati: number
+) => resolveProductCost(cost, settings, gramFiyati, BOS_FIYAT);
+
 const BASE = {
   costMode: "manual",
   filamentWeight: null,
@@ -13,7 +21,7 @@ const BASE = {
 
 describe("manuel ürün maliyeti", () => {
   it("ürün ve ambalaj ayrı kaydedildiyse ambalaj kapsamını korur", () => {
-    const result = resolveProductCost(
+    const result = coz(
       {
         ...BASE,
         manualCost: 50,
@@ -31,7 +39,7 @@ describe("manuel ürün maliyeti", () => {
   });
 
   it("eski kayıtta toplam zaten manualCost ise ambalajı ikinci kez eklemez", () => {
-    const result = resolveProductCost(
+    const result = coz(
       {
         ...BASE,
         manualCost: 60,
@@ -64,7 +72,7 @@ const PACKAGING_SETTINGS = {
 
 describe("üretim maliyeti bilinirliği", () => {
   it("detaylı modda gramaj/süre girilmemişse maliyet BİLİNMİYOR sayılır (paketleme maskelemez)", () => {
-    const result = resolveProductCost(
+    const result = coz(
       { ...BASE, costMode: "detailed", manualCost: null, totalCost: null },
       PACKAGING_SETTINGS,
       1.2
@@ -77,7 +85,7 @@ describe("üretim maliyeti bilinirliği", () => {
   });
 
   it("filament gramajı girilince maliyet BİLİNİYOR sayılır", () => {
-    const result = resolveProductCost(
+    const result = coz(
       { ...BASE, costMode: "detailed", manualCost: null, totalCost: null, filamentWeight: 20 },
       PACKAGING_SETTINGS,
       1.2
@@ -92,7 +100,7 @@ describe("üretim maliyeti bilinirliği", () => {
    * aşınma/elektrik üretim payını 0'ın üstüne çıkarır — ürün eksik maliyetle "kârlı" görünüyordu.
    */
   it("malzeme payı 0 ise (filament türü seçilmemiş) maliyet BİLİNMİYOR sayılır", () => {
-    const result = resolveProductCost(
+    const result = coz(
       {
         ...BASE,
         costMode: "detailed",
@@ -111,7 +119,7 @@ describe("üretim maliyeti bilinirliği", () => {
   });
 
   it("filament türü seçilince aynı ürün BİLİNİYOR sayılır", () => {
-    const result = resolveProductCost(
+    const result = coz(
       {
         ...BASE,
         costMode: "detailed",
@@ -128,14 +136,14 @@ describe("üretim maliyeti bilinirliği", () => {
   });
 
   it("elle girilen maliyet 0 ise bilinmiyor, pozitifse biliniyor sayılır", () => {
-    const bos = resolveProductCost(
+    const bos = coz(
       { ...BASE, manualCost: 0, packagingCost: 10, totalCost: 10 },
       PACKAGING_SETTINGS,
       0
     );
     expect(bos?.productionCostKnown).toBe(false);
 
-    const dolu = resolveProductCost(
+    const dolu = coz(
       { ...BASE, manualCost: 50, packagingCost: 10, totalCost: 60 },
       PACKAGING_SETTINGS,
       0
@@ -144,6 +152,6 @@ describe("üretim maliyeti bilinirliği", () => {
   });
 
   it("maliyet kaydı hiç yoksa null döner", () => {
-    expect(resolveProductCost(null, PACKAGING_SETTINGS, 1.2)).toBeNull();
+    expect(coz(null, PACKAGING_SETTINGS, 1.2)).toBeNull();
   });
 });

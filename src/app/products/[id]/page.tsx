@@ -41,6 +41,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
+import { ekFilamentleriOku, ekFilamentleriYaz } from "@/core/filament-karisimi";
 import { belowShopifyMinBasket } from "@/core/platform-rules";
 import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/lib/client-pricing";
 import { fetchJson } from "@/lib/fetch-json";
@@ -91,6 +92,8 @@ interface ProductDetail {
     totalCost: number | null;
     filamentTypeId: string | null;
     filamentWeight: number | null;
+    /** Çoklu filament — ana filamente EK türler (JSON). */
+    ekFilamentlerJson?: string | null;
     printTimeHours: number | null;
     wasteRate: number | null;
     packagingPoset: number | null;
@@ -316,6 +319,10 @@ export default function ProductDetailPage({
     return {
       filamentTypeId: c?.filamentTypeId || "",
       filamentWeight: c?.filamentWeight ? String(c.filamentWeight) : "",
+      ekFilamentler: ekFilamentleriOku(c?.ekFilamentlerJson).map((e) => ({
+        filamentTypeId: e.filamentTypeId,
+        gram: String(e.gram),
+      })),
       printTimeHours: c?.printTimeHours ? String(c.printTimeHours) : "",
       // Oran → yüzde çevriminin ondalık artığı ekrana yazılıyordu (0,07 → "7.000000000000001").
       wasteRate: c?.wasteRate ? String(Math.round(Number(c.wasteRate) * 10000) / 100) : "",
@@ -352,6 +359,7 @@ export default function ProductDetailPage({
               costMode: "detailed",
               filamentTypeId: v.filamentTypeId || null,
               filamentWeight: v.filamentWeight,
+              ekFilamentler: v.ekFilamentler,
               printTimeHours: v.printTimeHours,
               wasteRate: v.wasteRate,
               packagingOptionId: v.packagingOptionId || null,
@@ -393,6 +401,7 @@ export default function ProductDetailPage({
                 costMode: "detailed",
                 filamentTypeId: v.filamentTypeId || null,
                 filamentWeight: v.filamentWeight,
+                ekFilamentlerJson: ekFilamentleriYaz(v.ekFilamentler),
                 printTimeHours: v.printTimeHours,
                 wasteRate: v.wasteRate,
                 packagingOptionId: v.packagingOptionId || null,
@@ -437,6 +446,7 @@ export default function ProductDetailPage({
             costMode: "detailed",
             filamentTypeId: v.filamentTypeId || null,
             filamentWeight: v.filamentWeight,
+            ekFilamentler: v.ekFilamentler,
             printTimeHours: v.printTimeHours,
             wasteRate: v.wasteRate,
             packagingOptionId: v.packagingOptionId || null,

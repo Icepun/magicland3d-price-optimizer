@@ -7,6 +7,8 @@ import { withProductCommissionRule, resolveListingCommissionOverride } from "@/c
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
+import { toplamFilamentGrami } from "@/core/filament-karisimi";
 import { collectRulePriceBreakpoints } from "@/core/price-target";
 import {
   chooseThresholdHint,
@@ -207,6 +209,7 @@ async function computeProducts(urlString: string) {
       prisma.appSetting.findMany(),
     ]);
 
+  const filamentFiyatlari = await filamentFiyatlariOku();
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
@@ -229,7 +232,7 @@ async function computeProducts(urlString: string) {
       candidates = candidates.filter(
         (p) =>
           !(
-            resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0)
+            resolveProductCost(p.cost, settingsMap, p.cost?.filamentType?.costPerGram ?? 0, filamentFiyatlari)
               ?.productionCostKnown ?? false
           )
       );
@@ -255,7 +258,8 @@ async function computeProducts(urlString: string) {
     const resolved = resolveProductCost(
       product.cost,
       settingsMap,
-      product.cost?.filamentType?.costPerGram ?? 0
+      product.cost?.filamentType?.costPerGram ?? 0,
+      filamentFiyatlari
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;
@@ -473,7 +477,8 @@ async function computeProducts(urlString: string) {
     );
     const profitPerGram = perUnitRatio(
       currentNetProfit,
-      product.cost?.filamentWeight,
+      // Çoklu filamentli üründe ana + ek filamentlerin toplamı.
+      product.cost ? toplamFilamentGrami(product.cost) : null,
       profitBasis?.orderQty ?? 1
     );
 
@@ -534,7 +539,8 @@ async function computeProducts(urlString: string) {
             totalCost: product.cost.totalCost,
             manualCost: product.cost.manualCost,
             packagingCost: product.cost.packagingCost,
-            filamentWeight: product.cost.filamentWeight, // planner kullanıyor
+            // Planlayıcı kullanıyor — çoklu filamentte ana + ek filamentlerin toplamı.
+            filamentWeight: toplamFilamentGrami(product.cost) || product.cost.filamentWeight,
           }
         : null,
       // Ham `_count` yerine tek okunur alan: grubun kaç varyantı var (süzülenler dahil).

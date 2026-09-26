@@ -64,6 +64,20 @@ function fetchSuperset(): Promise<SupersetProduct[]> {
 type SupersetProduct = ProductDetail & { _active: boolean; _hidden: boolean };
 
 async function fetchProductSet(productWhere: string, listingWhere: string): Promise<SupersetProduct[]> {
+  try {
+    return await urunKumesiniOku(productWhere, listingWhere, true);
+  } catch (e) {
+    // Masaüstü henüz çoklu filament sürümüne geçmediyse kolon yok → eski sorguyla devam.
+    if (!/no such column/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    return urunKumesiniOku(productWhere, listingWhere, false);
+  }
+}
+
+async function urunKumesiniOku(
+  productWhere: string,
+  listingWhere: string,
+  ekFilamentli: boolean
+): Promise<SupersetProduct[]> {
   const [prodRes, listRes] = await batch([
     {
       sql: `SELECT p.id, p.name, p.alias, p.sku, p.barcode, p.categoryName, p.currentSalePrice,
@@ -73,6 +87,7 @@ async function fetchProductSet(productWhere: string, listingWhere: string): Prom
                    pc.productId AS hasCost, pc.costMode, pc.manualCost, pc.totalCost, pc.packagingCost,
                    pc.filamentTypeId, pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
+                   ${ekFilamentli ? "pc.ekFilamentlerJson," : ""}
                    COALESCE(ft.costPerGram, 0) AS costPerGram
               FROM Product p
               LEFT JOIN ProductCost pc ON pc.productId = p.id
@@ -127,6 +142,7 @@ async function fetchProductSet(productWhere: string, listingWhere: string): Prom
           packagingOptionId: p.packagingOptionId,
           nylonLevel: p.nylonLevel,
           tapeUsed: p.tapeUsed,
+          ekFilamentlerJson: p.ekFilamentlerJson ?? null,
           costPerGram: p.costPerGram,
         }
       : null,

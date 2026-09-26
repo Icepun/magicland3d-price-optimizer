@@ -11,6 +11,7 @@ import {
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import {
   collectRulePriceBreakpoints,
   findMinimumPriceForMargin,
@@ -41,10 +42,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     prisma.expenseRule.findMany({ where: { isActive: true } }),
     prisma.appSetting.findMany(),
   ]);
+  const filamentFiyatlari = await filamentFiyatlariOku();
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
   const vatRate = vatRateOf(settingsMap);
 
-  const resolved = resolveProductCost(product.cost, settingsMap, product.cost?.filamentType?.costPerGram ?? 0);
+  const resolved = resolveProductCost(product.cost, settingsMap, product.cost?.filamentType?.costPerGram ?? 0, filamentFiyatlari);
   if (!resolved || !resolved.productionCostKnown) {
     return NextResponse.json({ hasCost: false });
   }

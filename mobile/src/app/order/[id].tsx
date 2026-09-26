@@ -24,7 +24,7 @@ import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
-import { computeOrderProfit, getProductMap, matchOrderLine } from "@/lib/order-profit";
+import { computeOrderProfit, getProductMap, matchOrderLine, ozelMaliyetKaydi } from "@/lib/order-profit";
 import { ORDER_PLATFORM_COLOR, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 import { STATUS_TONE } from "@/lib/status-tone";
 import { color, radius, space } from "@/theme/tokens";
@@ -213,7 +213,13 @@ export default function OrderDetailScreen() {
                 </Txt>
                 <Txt v="small" tone="faint" num>
                   {order.isManual ? `${line.quantity} adet` : `${line.quantity} × ${formatCurrency(line.unitPrice)}`}
-                  {p || order.isManual ? "" : "  · eşleşmedi"}
+                  {order.isManual
+                    ? ""
+                    : rules && ozelMaliyetKaydi(order, line, p ?? undefined, rules)
+                      ? "  · siparişe özel maliyet"
+                      : p
+                        ? ""
+                        : "  · eşleşmedi"}
                 </Txt>
               </View>
               {!order.isManual ? (

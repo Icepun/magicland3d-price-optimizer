@@ -11,6 +11,14 @@ import Link from "next/link";
 import { formatCurrency, cn } from "@/lib/utils";
 import { computePackagingCost, type PackagingSettings, type NylonLevel } from "@/core/packaging";
 import { resolveProductCost } from "@/core/product-cost";
+import {
+  ekFilamentleriOku,
+  ekFilamentleriYaz,
+  filamentFiyatHaritasi,
+  EK_FILAMENT_AZAMI,
+  type EkFilament,
+} from "@/core/filament-karisimi";
+import { Plus, X } from "lucide-react";
 
 interface FilamentType {
   id: string;
@@ -22,6 +30,8 @@ interface FilamentType {
 export interface CostValues {
   filamentTypeId: string;
   filamentWeight: number;
+  /** Çoklu filament: ana filamente EK türler (yalnız türü seçili ve gramı > 0 olanlar). */
+  ekFilamentler: EkFilament[];
   printTimeHours: number;
   wasteRate: number; // 0-1
   packagingOptionId: string;
@@ -34,6 +44,7 @@ export interface CostValues {
 export interface CostInitial {
   filamentTypeId: string;
   filamentWeight: string;
+  ekFilamentler: { filamentTypeId: string; gram: string }[];
   printTimeHours: string;
   wasteRate: string; // yüzde metni
   packagingOptionId: string;
@@ -48,6 +59,7 @@ export interface SavedCostSnapshot {
   cost: {
     filamentTypeId: string | null;
     filamentWeight: number | null;
+    ekFilamentlerJson?: string | null;
     printTimeHours: number | null;
     wasteRate: number | null;
     packagingOptionId: string | null;
@@ -134,6 +146,7 @@ export function costValuesOf(saved: SavedCostSnapshot): CostValues {
   return {
     filamentTypeId: c?.filamentTypeId || "",
     filamentWeight: c?.filamentWeight ?? 0,
+    ekFilamentler: ekFilamentleriOku(c?.ekFilamentlerJson),
     printTimeHours: c?.printTimeHours ?? 0,
     wasteRate: Number(c?.wasteRate) || 0,
     packagingOptionId: c?.packagingOptionId || "",
@@ -153,6 +166,11 @@ export function costValuesEqual(a: CostValues | null, b: CostValues | null): boo
   return (
     a.filamentTypeId === b.filamentTypeId &&
     yakin(a.filamentWeight, b.filamentWeight) &&
+    a.ekFilamentler.length === b.ekFilamentler.length &&
+    a.ekFilamentler.every(
+      (e, i) =>
+        e.filamentTypeId === b.ekFilamentler[i].filamentTypeId && yakin(e.gram, b.ekFilamentler[i].gram)
+    ) &&
     yakin(a.printTimeHours, b.printTimeHours) &&
     yakin(a.wasteRate, b.wasteRate) &&
     a.packagingOptionId === b.packagingOptionId &&
@@ -249,6 +267,12 @@ function CostEditorImpl({
 }) {
   const [filamentTypeId, setFilamentTypeId] = useState(initial.filamentTypeId);
   const [filamentWeight, setFilamentWeight] = useState(initial.filamentWeight);
+  // Ek filament satırları (çoğu ürün tek filament — liste boş başlar). `anahtar` yalnız çizim için.
+  // Başlangıç satırları 1..n; yeni satırlar sayaçtan (ref yalnız olay işleyicisinde okunur).
+  const ekSayaci = useRef(initial.ekFilamentler.length);
+  const [ekler, setEkler] = useState<{ anahtar: number; filamentTypeId: string; gram: string }[]>(() =>
+    initial.ekFilamentler.map((e, i) => ({ anahtar: i + 1, ...e }))
+  );
   const [printTimeHours, setPrintTimeHours] = useState(initial.printTimeHours);
   const [wasteRate, setWasteRate] = useState(initial.wasteRate);
   const [packagingOptionId, setPackagingOptionId] = useState(initial.packagingOptionId);
@@ -264,9 +288,24 @@ function CostEditorImpl({
   };
 
   // ── Canlı maliyet (local, anında) ──
+  const fiyatHaritasi = useMemo(() => filamentFiyatHaritasi(filaments), [filaments]);
   const selectedFilament = filaments.find((f) => f.id === filamentTypeId);
   const costPerGram = selectedFilament?.costPerGram || 0;
   const fWeight = parseFloat(filamentWeight) || 0;
+  // Ek filamentler: gram metni → sayı; yalnız türü seçili ve gramı > 0 olanlar hesaba girer.
+  const ekGecerli = ekler
+    .map((e) => ({ filamentTypeId: e.filamentTypeId, gram: parseFloat(e.gram.replace(",", ".")) || 0 }))
+    .filter((e) => e.filamentTypeId && e.gram > 0);
+  const ekGramHatalari = ekler.map((e) => {
+    const t = e.gram.trim().replace(",", ".");
+    if (!t) return undefined;
+    const n = Number.parseFloat(t);
+    if (!Number.isFinite(n)) return "Ağırlık için sayı gir";
+    if (n < 0) return "Ağırlık eksi olamaz";
+    return undefined;
+  });
+  const ekMalzeme = ekGecerli.reduce((t, e) => t + e.gram * (fiyatHaritasi.get(e.filamentTypeId) ?? 0), 0);
+  const ekGramToplam = ekGecerli.reduce((t, e) => t + e.gram, 0);
   const pTime = parseFloat(printTimeHours) || 0;
   const wRate = (parseFloat(wasteRate) || 0) / 100;
   const electricityRate =
@@ -285,7 +324,7 @@ function CostEditorImpl({
       ? packagingSettings.tapePrice / packagingSettings.tapeProductsPerRoll
       : 0;
 
-  const calcFilament = fWeight * costPerGram;
+  const calcFilament = fWeight * costPerGram + ekMalzeme;
   const calcElectricity = pTime * electricityRate;
   const calcMachineWear = pTime * machineWearRate;
   const calcLabor = pTime * laborRate;
@@ -304,6 +343,7 @@ function CostEditorImpl({
         manualCost: null,
         totalCost: null,
         filamentWeight: fWeight,
+        ekFilamentlerJson: ekFilamentleriYaz(ekGecerli),
         printTimeHours: pTime,
         wasteRate: wRate,
         packagingOptionId: packagingOptionId || null,
@@ -311,7 +351,8 @@ function CostEditorImpl({
         tapeUsed,
       },
       globalSettings,
-      costPerGram
+      costPerGram,
+      fiyatHaritasi
     )?.productionCostKnown ?? false;
 
   // ── Alan bazında doğrulama — geçersizken istek HİÇ gitmez ──
@@ -321,13 +362,15 @@ function CostEditorImpl({
     wasteRate,
     desiInput,
   });
-  const hasFieldError = Object.keys(fieldErrors).length > 0;
+  const hasFieldError = Object.keys(fieldErrors).length > 0 || ekGramHatalari.some(Boolean);
 
   // ── 250ms debounce → parent'a bildir (canlı önizleme + otomatik kayıt parent'ta) ──
+  const ekAnahtari = JSON.stringify(ekGecerli);
   const values = useMemo<CostValues>(
     () => ({
       filamentTypeId,
       filamentWeight: fWeight,
+      ekFilamentler: JSON.parse(ekAnahtari) as EkFilament[],
       printTimeHours: pTime,
       wasteRate: wRate,
       packagingOptionId,
@@ -335,7 +378,7 @@ function CostEditorImpl({
       tapeUsed,
       desi: parseDesiInput(desiInput),
     }),
-    [filamentTypeId, fWeight, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput]
+    [filamentTypeId, fWeight, ekAnahtari, pTime, wRate, packagingOptionId, nylonLevel, tapeUsed, desiInput]
   );
   useEffect(() => {
     if (!touchedRef.current || hasFieldError) return;
@@ -447,6 +490,83 @@ function CostEditorImpl({
               )}
             </div>
           </div>
+          {/* Çoklu filament — isteğe bağlı. Çoğu ürün tek filamentle basılır; gerekirse eklenir. */}
+          {ekler.map((e, i) => (
+            <div
+              key={e.anahtar}
+              className="flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-200"
+            >
+              <div className="min-w-0 flex-1">
+                <Label className="text-xs">Filament {i + 2}</Label>
+                <select
+                  value={e.filamentTypeId}
+                  onChange={(ev) => {
+                    touch();
+                    const deger = ev.target.value;
+                    setEkler((l) => l.map((x) => (x.anahtar === e.anahtar ? { ...x, filamentTypeId: deger } : x)));
+                  }}
+                  className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">Seçin...</option>
+                  {filaments.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({formatCurrency(f.costPerGram)}/g)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="w-24 shrink-0">
+                <Label className="text-xs">Ağırlık (g)</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={e.gram}
+                  onChange={(ev) => {
+                    touch();
+                    const deger = ev.target.value;
+                    setEkler((l) => l.map((x) => (x.anahtar === e.anahtar ? { ...x, gram: deger } : x)));
+                  }}
+                  aria-invalid={Boolean(ekGramHatalari[i])}
+                />
+                {ekGramHatalari[i] && (
+                  <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                    {ekGramHatalari[i]}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  touch();
+                  setEkler((l) => l.filter((x) => x.anahtar !== e.anahtar));
+                }}
+                className="mt-6 grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive active:scale-90"
+                title="Bu filamenti kaldır"
+                aria-label="Bu filamenti kaldır"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {ekler.length < EK_FILAMENT_AZAMI && (
+            <button
+              type="button"
+              onClick={() => {
+                touch();
+                setEkler((l) => [...l, { anahtar: ++ekSayaci.current, filamentTypeId: "", gram: "" }]);
+              }}
+              className="inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10 active:scale-95"
+            >
+              <Plus className="h-3 w-3" />
+              Başka filament ekle
+            </button>
+          )}
+          {ekGramToplam > 0 && (
+            <p className="text-[10px] text-muted-foreground animate-in fade-in duration-300 tabular-nums">
+              Toplam {Math.round((fWeight + ekGramToplam) * 10) / 10} g filament
+            </p>
+          )}
           <div>
             <Label className="text-xs">Fire (%)</Label>
             <Input

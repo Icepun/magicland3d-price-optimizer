@@ -9,7 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
-import { skipToken, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
@@ -617,9 +617,14 @@ export function CommandPalette() {
 
   // Siparişler YALNIZ daha önce yüklendiyse aranır: arama kutusu üç pazaryerini
   // canlı yoklayıp kullanıcıyı bekletmemeli.
+  //
+  // Gözlemci KAPALI (kendisi hiç çekmez) ama çekim fonksiyonu gerçek: `skipToken` verildiğinde
+  // sipariş listesi geçersiz kılınınca (ör. siparişe özel maliyet kaydı) React Query bu
+  // gözlemcinin seçenekleriyle tazelemeye kalkıp "skipToken" hatası veriyordu.
   const { data: ordersData } = useQuery<OrdersCacheShape>({
     queryKey: ["orders"],
-    queryFn: skipToken,
+    queryFn: ({ signal }) => fetchJson<OrdersCacheShape>("/api/orders", { signal }),
+    enabled: false,
   });
 
   const loading = open && (productsLoading || spoolsLoading);

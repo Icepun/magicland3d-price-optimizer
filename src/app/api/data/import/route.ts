@@ -63,6 +63,7 @@ const ProductCostSchema = z.object({
   templateId: nullableString,
   filamentTypeId: nullableString,
   filamentWeight: finite.nullable().optional(),
+  ekFilamentlerJson: nullableString,
   printTimeHours: finite.nullable().optional(),
   wasteRate: finite.nullable().optional(),
   packagingPoset: finite.nullable().optional(),
@@ -235,6 +236,17 @@ const OrderItemSnapshotSchema = z.object({
   currency: z.string().optional(),
 });
 
+/** Siparişe özel maliyet — bu sürümde eklendi, eski yedeklerde YOK (opsiyonel). */
+const OrderLineCostSchema = z.object({
+  id,
+  platform: id,
+  externalOrderId: id,
+  lineKey: z.string().min(1),
+  lineName: z.string().optional(),
+  costJson: z.string(),
+  desi: finite.nullable().optional(),
+});
+
 const PlatformOrderFinancialSchema = z.object({
   id,
   platform: id,
@@ -388,6 +400,7 @@ const ImportSchema = z.object({
   actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
   orderItemSnapshots: z.array(OrderItemSnapshotSchema).optional().default([]),
+  orderLineCosts: z.array(OrderLineCostSchema).optional().default([]),
   platformOrderFinancials: z
     .array(PlatformOrderFinancialSchema)
     .optional()
@@ -494,6 +507,7 @@ interface ImportStats {
   orderFinanceSnapshots: number;
   orderFinanceSnapshotsSkipped: number;
   orderItemSnapshots: number;
+  orderLineCosts: number;
   platformOrderFinancials: number;
   manualOrders: number;
   costTemplates: number;
@@ -554,6 +568,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
     orderFinanceSnapshots: 0,
     orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
     orderItemSnapshots: 0,
+    orderLineCosts: 0,
     platformOrderFinancials: 0,
     manualOrders: 0,
     costTemplates: 0,
@@ -934,6 +949,38 @@ async function runImport(data: ImportPayload, emit: Emit) {
   });
   stats.orderItemSnapshots = jobs[jobs.length - 1].stmts.length;
 
+  // Siparişe özel maliyetler. Satır anahtarı katalog ürününe bağlıysa ("p:<ürün>") ürün kimliği
+  // bu veritabanındaki karşılığına taşınır; eşleşmeyen ürünün anahtarı olduğu gibi kalır.
+  jobs.push({
+    label: "Siparişe özel maliyetler",
+    statKey: "orderLineCosts",
+    stmts: data.orderLineCosts.map((row) => {
+      const lineKey = row.lineKey.startsWith("p:")
+        ? `p:${resolveProduct(row.lineKey.slice(2)) ?? row.lineKey.slice(2)}`
+        : row.lineKey;
+      const fields: Row = {
+        lineName: row.lineName ?? "",
+        costJson: row.costJson,
+        desi: row.desi ?? null,
+        updatedAt: stamp,
+      };
+      return upsert(
+        "OrderLineCost",
+        ["platform", "externalOrderId", "lineKey"],
+        {
+          id: row.id,
+          platform: row.platform,
+          externalOrderId: row.externalOrderId,
+          lineKey,
+          createdAt: stamp,
+          ...fields,
+        },
+        fields
+      );
+    }),
+  });
+  stats.orderLineCosts = jobs[jobs.length - 1].stmts.length;
+
   const financialIdByKey = new Map<string, string>();
   if (data.platformOrderFinancials.length) {
     for (const row of await readRows<{ id: string; platform: string; externalOrderId: string }>(
@@ -1159,6 +1206,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
       costMode: cost.costMode ?? "manual",
       filamentTypeId: cost.filamentTypeId ?? null,
       filamentWeight: cost.filamentWeight ?? null,
+      ekFilamentlerJson: cost.ekFilamentlerJson ?? null,
       printTimeHours: cost.printTimeHours ?? null,
       wasteRate: cost.wasteRate ?? null,
       packagingPoset: cost.packagingPoset ?? null,

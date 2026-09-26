@@ -52,10 +52,15 @@ export interface FullProductCostInput {
   wasteRate: number;
   /** computePackagingCost(...).total — dinamik paketleme maliyeti */
   packagingCost: number;
+  /**
+   * EK filamentlerin malzeme tutarı (fire hariç) — çoklu filamentli ürünlerde. Ana filamentle
+   * birlikte malzeme payına girer; fire ORTAK orandan hepsine uygulanır (Berke'nin kararı).
+   */
+  ekFilamentMaliyeti?: number;
 }
 
 export function computeFullProductCost(input: FullProductCostInput) {
-  const filamentCost = input.filamentWeight * input.costPerGram;
+  const filamentCost = input.filamentWeight * input.costPerGram + (input.ekFilamentMaliyeti ?? 0);
   const electricityCost = input.printTimeHours * input.electricityCostPerHour;
   const machineWearCost = input.printTimeHours * input.machineWearCostPerHour;
   const laborCost = input.printTimeHours * input.laborCostPerHour;

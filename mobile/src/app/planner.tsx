@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { basilacakAdet, hedefStok, parseHedefModu, parseKapsamGun, type HedefAyari } from "@/core/planner-target";
+import { toplamFilamentGrami } from "@/core/filament-karisimi";
 import { Pill } from "@/components/kit/Chip";
 import { Count, EmptyState, ErrorState, FadeInView, Glass, IconButton, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
 import { getDashboardData } from "@/lib/db/dashboard";
@@ -75,7 +76,8 @@ export default function PlannerScreen() {
           imageUrl: p.imageUrl,
           stock: p.stock,
           printQty,
-          filament: printQty * (p.cost?.filamentWeight ?? 0),
+          // Çoklu filamentli üründe ana + ek filamentlerin toplamı (masaüstü planlayıcıyla aynı).
+          filament: printQty * toplamFilamentGrami(p.cost),
         };
       })
       .filter((p) => p.printQty > 0)

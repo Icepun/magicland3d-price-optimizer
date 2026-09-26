@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 export async function GET(req: NextRequest) {
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
       }),
       prisma.appSetting.findMany(),
     ]);
+    const filamentFiyatlari = await filamentFiyatlariOku();
     const settingsMap = Object.fromEntries(settings.map((setting) => [setting.key, setting.value]));
 
     const header =
@@ -24,7 +26,8 @@ export async function GET(req: NextRequest) {
       const resolved = resolveProductCost(
         p.cost,
         settingsMap,
-        p.cost?.filamentType?.costPerGram ?? 0
+        p.cost?.filamentType?.costPerGram ?? 0,
+        filamentFiyatlari
       );
       return [
         p.barcode,

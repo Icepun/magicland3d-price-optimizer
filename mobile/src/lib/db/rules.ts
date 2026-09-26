@@ -1,6 +1,8 @@
 import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
 // Tarih biçimi bilgisi TEK yerde (ortak çekirdek) — karşılaştırmalar biçimden bağımsız olsun diye.
 import { dbEpochMs } from "@core/sqlite-date";
+import { filamentFiyatHaritasi } from "@core/filament-karisimi";
+import { satirMaliyetiHaritaAnahtari, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { batch, query, type SqlValue } from "@/lib/turso";
 import type {
   CommissionRuleInput,
@@ -45,7 +47,7 @@ function ruleMs(v: unknown): number | null {
 
 export async function getRules(): Promise<Rules> {
   await ensureCargoVatSchema();
-  const [c, k, e, f] = await batch([
+  const [c, k, e, f, ft] = await batch([
     {
       sql: `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
                    fixedCommission, validFrom, validTo, priority, isActive
@@ -66,6 +68,10 @@ export async function getRules(): Promise<Rules> {
       // Trendyol GERÇEK komisyonu (settlement). Aynı batch'te → ekstra round-trip YOK.
       sql: `SELECT externalOrderId, orderNumber, commissionKurus, grossRevenueKurus
               FROM PlatformOrderFinancial WHERE platform = 'trendyol'`,
+    },
+    {
+      // Filament gram fiyatları — çoklu filamentli ürünlerin ek filamentleri (masaüstüyle aynı).
+      sql: `SELECT id, costPerGram FROM FilamentType`,
     },
   ]);
 
@@ -177,6 +183,20 @@ export async function getRules(): Promise<Rules> {
     adBudgets = [];
   }
 
+  // SİPARİŞE ÖZEL MALİYETLER (masaüstü Siparişler → "Maliyet gir"). Ayrı sorgu: tablo masaüstü
+  // güncellenene kadar yok → okunamazsa boş kalır, kurallar yine gelir.
+  const satirMaliyetleri = new Map<string, SatirMaliyetKaydi>();
+  try {
+    const satirlar = await query<SatirMaliyetKaydi>(
+      `SELECT platform, externalOrderId, lineKey, lineName, costJson, desi FROM OrderLineCost`
+    );
+    for (const s of satirlar) {
+      satirMaliyetleri.set(satirMaliyetiHaritaAnahtari(s.platform, s.externalOrderId, s.lineKey), s);
+    }
+  } catch {
+    /* tablo henüz yok (masaüstü eski sürüm) → siparişe özel maliyet yok */
+  }
+
   return {
     commission: (c.rows as unknown as CommissionRuleInput[]).map(normalizeRuleDates),
     cargo: (k.rows as unknown as CargoRuleInput[]).map(normalizeRuleDates),
@@ -184,6 +204,10 @@ export async function getRules(): Promise<Rules> {
     financialByExternalId,
     financialByOrderNumber,
     adBudgets,
+    filamentFiyatlari: filamentFiyatHaritasi(
+      (ft?.rows ?? []) as unknown as { id: string; costPerGram: number }[]
+    ),
+    satirMaliyetleri,
   };
 }
 

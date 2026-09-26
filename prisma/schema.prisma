@@ -155,6 +155,8 @@ model ProductCost {
   nylonLevel        String?
   /** Bant kullanılıyor mu */
   tapeUsed          Boolean?
+  /** Ana filamente EK filamentler (JSON [{filamentTypeId, gram}]) — çoklu filamentli ürünler (v50). */
+  ekFilamentlerJson String?
 
   // Legacy / manual override
   manualCost      Float?
@@ -399,6 +401,27 @@ model OrderFinanceSnapshot {
  * hepsi buna dayanır). İptaller de yazılır; raporlar statusKind ile ayıklar.
  * Tekilleştirme: (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.
  */
+/**
+ * Siparişe özel maliyet (v50) — katalogda olmayan ya da maliyeti girilmemiş ürünün YALNIZ o
+ * siparişteki maliyeti. Kâr hesabı katalog ürünüyle aynı motordan geçer (core/order-line-cost).
+ */
+model OrderLineCost {
+  id              String   @id
+  platform        String
+  /** Kanonik sipariş kimliği (finans kayıtlarıyla aynı biçim; Shopify'da "sh-<no>"). */
+  externalOrderId String
+  /** Satır kimliği: "p:<ürün>" (katalogla eşleşmiş) ya da "n:<ad>" (eşleşmemiş). */
+  lineKey         String
+  lineName        String   @default("")
+  /** Maliyet girdisi (JSON, core/order-line-cost → SatirMaliyeti). */
+  costJson        String
+  desi            Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([platform, externalOrderId, lineKey])
+}
+
 model OrderItemSnapshot {
   id               String   @id
   platform         String

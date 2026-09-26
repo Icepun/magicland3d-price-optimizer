@@ -18,7 +18,7 @@ import {
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@core/cargo-calculator";
 
 import type { ProductDetail, ListingRow } from "@/lib/db/product-detail";
-import type { Rules } from "@/lib/profit";
+import { kuralFilamentFiyatlari, type Rules } from "@/lib/profit";
 import type { Platform } from "@/lib/platforms";
 
 const MARGINS = [20, 30, 40, 50];
@@ -52,7 +52,8 @@ export function computePriceLab(
   const resolved = resolveProductCost(
     detail.cost ? { ...detail.cost, tapeUsed: !!detail.cost.tapeUsed } : null,
     settings,
-    detail.cost?.costPerGram ?? 0
+    detail.cost?.costPerGram ?? 0,
+    kuralFilamentFiyatlari(rules)
   );
   // Masaüstü price-lab rotasıyla birebir kapı. totalCost KULLANILAMAZ: paketleme her ürüne
   // otomatik eklendiği için hiçbir zaman 0 olmaz ve üretim maliyeti girilmemiş ürün "maliyeti

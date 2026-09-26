@@ -8,6 +8,8 @@ export interface ProductCostRow {
   packagingCost: number | null;
   filamentTypeId: string | null;
   filamentWeight: number | null;
+  /** Çoklu filament — ana filamente EK türler (JSON). Masaüstü v50 öncesiyse hiç gelmez. */
+  ekFilamentlerJson?: string | null;
   printTimeHours: number | null;
   wasteRate: number | null;
   packagingOptionId: string | null;
@@ -67,6 +69,16 @@ export interface VariantGroupInfo {
 }
 
 export async function getProductDetail(id: string): Promise<ProductDetail | null> {
+  try {
+    return await urunDetayiniOku(id, true);
+  } catch (e) {
+    // Masaüstü henüz çoklu filament sürümüne geçmediyse kolon yok → eski sorguyla devam.
+    if (!/no such column/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    return urunDetayiniOku(id, false);
+  }
+}
+
+async function urunDetayiniOku(id: string, ekFilamentli: boolean): Promise<ProductDetail | null> {
   const [pRes, cRes, lRes] = await batch([
     {
       sql: `SELECT id, name, alias, sku, barcode, categoryName, currentSalePrice, stock,
@@ -78,6 +90,7 @@ export async function getProductDetail(id: string): Promise<ProductDetail | null
       sql: `SELECT pc.costMode, pc.manualCost, pc.totalCost, pc.packagingCost, pc.filamentTypeId,
                    pc.filamentWeight, pc.printTimeHours, pc.wasteRate,
                    pc.packagingOptionId, pc.nylonLevel, pc.tapeUsed,
+                   ${ekFilamentli ? "pc.ekFilamentlerJson," : ""}
                    COALESCE(ft.costPerGram, 0) AS costPerGram
               FROM ProductCost pc
               LEFT JOIN FilamentType ft ON ft.id = pc.filamentTypeId

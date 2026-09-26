@@ -7,6 +7,14 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, View } from "react-na
 
 import { resolveProductCost } from "@core/product-cost";
 import { parsePackagingSettings, type NylonLevel } from "@core/packaging";
+import {
+  EK_FILAMENT_AZAMI,
+  ekFilamentleriOku,
+  ekFilamentleriYaz,
+  filamentFiyatHaritasi,
+  type EkFilament,
+} from "@core/filament-karisimi";
+import { PressableScale } from "@/components/kit/PressableScale";
 
 import { Chip } from "@/components/kit/Chip";
 import { Button, ErrorState, Glass, Input, Money, Screen, Segmented, Shimmer, SubHeader, Tint, Txt } from "@/components/kit";
@@ -69,6 +77,9 @@ export default function EditCostScreen() {
 
   const [filamentTypeId, setFilamentTypeId] = useState<string | null>(null);
   const [weight, setWeight] = useState("");
+  // Çoklu filament (isteğe bağlı): ana filamente EK türler. `anahtar` yalnız çizim için.
+  const ekSayaci = useRef(0);
+  const [ekler, setEkler] = useState<{ anahtar: number; filamentTypeId: string | null; gram: string }[]>([]);
   const [time, setTime] = useState("");
   const [waste, setWaste] = useState("");
   const [packagingOptionId, setPackagingOptionId] = useState<string | null>(null);
@@ -109,6 +120,10 @@ export default function EditCostScreen() {
       tapeUsed: !!c?.tapeUsed,
       desi: product.desi ? String(product.desi) : "",
       manualCost: c?.manualCost != null ? String(c.manualCost) : "",
+      ekler: ekFilamentleriOku(c?.ekFilamentlerJson).map((e) => ({
+        filamentTypeId: e.filamentTypeId as string | null,
+        gram: String(e.gram),
+      })),
     };
     setMode(v.mode);
     setFilamentTypeId(v.filamentTypeId);
@@ -120,6 +135,7 @@ export default function EditCostScreen() {
     setTapeUsed(v.tapeUsed);
     setDesi(v.desi);
     setManualCost(v.manualCost);
+    setEkler(v.ekler.map((e) => ({ anahtar: ++ekSayaci.current, ...e })));
     setApplyAll(false);
     baselineRef.current = JSON.stringify(v);
     setSaveError(null);
@@ -137,10 +153,12 @@ export default function EditCostScreen() {
     tapeUsed,
     desi,
     manualCost,
+    ekler: ekler.map((e) => ({ filamentTypeId: e.filamentTypeId, gram: e.gram })),
   });
 
   const packagingOptions = settings ? parsePackagingSettings(settings).options : [];
   const costPerGram = filaments.find((f) => f.id === filamentTypeId)?.costPerGram ?? 0;
+  const fiyatHaritasi = useMemo(() => filamentFiyatHaritasi(filaments), [filaments]);
 
   const parsedForm = useMemo(() => {
     const parsedManualCost = costNumber(manualCost);
@@ -148,6 +166,11 @@ export default function EditCostScreen() {
     const parsedTime = costNumber(time);
     const parsedWaste = costNumber(waste);
     const parsedDesi = desi.trim() ? parseTrNumber(desi) : null;
+    // Ek filamentler: boş gram 0 sayılır (satır hesaba girmez), geçersiz gram hata verir.
+    const ekGramlari = ekler.map((e) => costNumber(e.gram));
+    const gecerliEkler: EkFilament[] = ekler
+      .map((e, i) => ({ filamentTypeId: e.filamentTypeId ?? "", gram: ekGramlari[i] ?? 0 }))
+      .filter((e) => e.filamentTypeId && e.gram > 0);
 
     let error: string | null = null;
     if (desi.trim() && parsedDesi === null) error = "Desi için geçerli bir sayı girin.";
@@ -172,6 +195,10 @@ export default function EditCostScreen() {
       (parsedWaste < 0 || parsedWaste > 100)
     )
       error = "Fire oranı 0 ile 100 arasında olmalı.";
+    else if (mode === "detailed" && ekGramlari.some((g) => g === null))
+      error = "Ek filament ağırlığı için geçerli bir sayı girin.";
+    else if (mode === "detailed" && ekGramlari.some((g) => g != null && g < 0))
+      error = "Ağırlık negatif olamaz.";
 
     const input: CostInput | null = error
       ? null
@@ -186,6 +213,7 @@ export default function EditCostScreen() {
             packagingOptionId: null,
             nylonLevel: "none",
             tapeUsed: false,
+            ekFilamentler: [],
           }
         : {
             mode: "detailed",
@@ -196,6 +224,7 @@ export default function EditCostScreen() {
             packagingOptionId,
             nylonLevel,
             tapeUsed,
+            ekFilamentler: gecerliEkler,
           };
 
     return {
@@ -206,9 +235,11 @@ export default function EditCostScreen() {
       previewWeight: Math.max(0, parsedWeight ?? 0),
       previewTime: Math.max(0, parsedTime ?? 0),
       previewWaste: Math.min(100, Math.max(0, parsedWaste ?? 0)),
+      previewEkler: gecerliEkler,
     };
   }, [
     desi,
+    ekler,
     filamentTypeId,
     manualCost,
     mode,
@@ -258,6 +289,7 @@ export default function EditCostScreen() {
               manualCost: null,
               totalCost: null,
               filamentWeight: parsedForm.previewWeight,
+              ekFilamentlerJson: ekFilamentleriYaz(parsedForm.previewEkler),
               printTimeHours: parsedForm.previewTime,
               wasteRate: parsedForm.previewWaste / 100,
               packagingOptionId,
@@ -265,7 +297,8 @@ export default function EditCostScreen() {
               tapeUsed,
             },
         settings,
-        costPerGram
+        costPerGram,
+        fiyatHaritasi
       )
     : null;
 
@@ -530,6 +563,48 @@ export default function EditCostScreen() {
               <NumberField label="Ağırlık" suffix="g" value={weight} onChange={setWeight} />
               <NumberField label="Süre" suffix="saat" value={time} onChange={setTime} />
             </View>
+            {/* Çoklu filament — isteğe bağlı. Çoğu ürün tek filamentle basılır. */}
+            {ekler.map((e, i) => (
+              <View key={e.anahtar} style={styles.ekSatir}>
+                <View style={styles.ekBaslik}>
+                  <Etiket>{`FİLAMENT ${i + 2}`}</Etiket>
+                  <PressableScale
+                    onPress={() => setEkler((l) => l.filter((x) => x.anahtar !== e.anahtar))}
+                    hitSlop={10}
+                    accessibilityRole="button"
+                    accessibilityLabel="Bu filamenti kaldır"
+                  >
+                    <SymbolView name="xmark.circle.fill" tintColor={color.textFaint} style={{ width: 20, height: 20 }} />
+                  </PressableScale>
+                </View>
+                <ChipRow
+                  items={filaments.map((f) => ({ key: f.id, label: `${f.name} · ₺${f.costPerGram}/g` }))}
+                  selected={e.filamentTypeId}
+                  onSelect={(k) =>
+                    setEkler((l) => l.map((x) => (x.anahtar === e.anahtar ? { ...x, filamentTypeId: k } : x)))
+                  }
+                />
+                <NumberField
+                  label="Ağırlık"
+                  suffix="g"
+                  value={e.gram}
+                  onChange={(t) => setEkler((l) => l.map((x) => (x.anahtar === e.anahtar ? { ...x, gram: t } : x)))}
+                />
+              </View>
+            ))}
+            {ekler.length < EK_FILAMENT_AZAMI ? (
+              <Button
+                label="Başka filament ekle"
+                icon="plus"
+                size="sm"
+                variant="secondary"
+                style={{ alignSelf: "flex-start" }}
+                onPress={() => {
+                  void Haptics.selectionAsync().catch(() => {});
+                  setEkler((l) => [...l, { anahtar: ++ekSayaci.current, filamentTypeId: null, gram: "" }]);
+                }}
+              />
+            ) : null}
             <View style={styles.twoCol}>
               <NumberField label="Fire" suffix="%" value={waste} onChange={setWaste} />
               <NumberField label="Desi" value={desi} onChange={setDesi} />
@@ -672,6 +747,13 @@ const styles = StyleSheet.create({
   preview: { flexDirection: "row", alignItems: "center", gap: space.md },
   card: { gap: space.md },
   twoCol: { flexDirection: "row", gap: space.sm },
+  ekSatir: {
+    gap: space.sm,
+    paddingTop: space.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: color.line,
+  },
+  ekBaslik: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   chipRow: { gap: space.sm, paddingRight: space.xs },
   applyAll: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   checkbox: {

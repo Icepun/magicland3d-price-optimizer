@@ -9,6 +9,7 @@
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { dbEpochMs } from "@/lib/sqlite-date";
+import { toplamFilamentGrami } from "@/core/filament-karisimi";
 import {
   DAY_MS,
   EXCLUDED_STATUS,
@@ -436,7 +437,7 @@ export async function computeQueue(
         name: true,
         imageUrl: true,
         stock: true,
-        cost: { select: { printTimeHours: true, filamentWeight: true } },
+        cost: { select: { printTimeHours: true, filamentWeight: true, ekFilamentlerJson: true } },
       },
     }),
     prisma.productModelFile.findMany({
@@ -470,7 +471,8 @@ export async function computeQueue(
       imageUrl: p.imageUrl,
       stock: p.stock,
       printTimeHours: p.cost?.printTimeHours ?? null,
-      filamentWeight: p.cost?.filamentWeight ?? null,
+      // Çoklu filamentli üründe ana + ek filamentlerin toplamı.
+      filamentWeight: p.cost ? toplamFilamentGrami(p.cost) || p.cost.filamentWeight : null,
       target: hedefStok(ayar, gunlukSatisById.get(p.id) ?? 0),
     })),
     modelFiles,

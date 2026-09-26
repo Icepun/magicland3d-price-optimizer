@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v50: Çoklu filament + siparişe özel maliyet. `ProductCost.ekFilamentlerJson` (ana filamente EK
+//      filamentler, bkz. core/filament-karisimi) ve `OrderLineCost` (katalogda olmayan / maliyeti
+//      girilmemiş ürünün YALNIZ o siparişteki maliyeti, bkz. core/order-line-cost).
 // v49: Cihaz başına bildirim tercihi — `PushToken.cihazId/cihazAdi/kapali`. `kapali` KAPATILAN
 //      türlerin virgüllü listesi (`src/core/bildirim-turleri.ts`): yeni tür eklenince varsayılanı
 //      açık. cihazId telefonun kendi ürettiği kalıcı kimlik — token yenilenince tercih taşınır.
@@ -89,7 +92,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "49";
+const CURRENT_SCHEMA_VERSION = "50";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1143,6 +1146,24 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
       `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_productId_orderedAt_idx"
        ON "OrderItemSnapshot"("productId", "orderedAt")`
     );
+    // v50: Siparişe özel maliyet — (platform, sipariş, satır) başına TEK kayıt.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "OrderLineCost" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalOrderId" TEXT NOT NULL,
+        "lineKey" TEXT NOT NULL,
+        "lineName" TEXT NOT NULL DEFAULT '',
+        "costJson" TEXT NOT NULL,
+        "desi" REAL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "OrderLineCost_platform_externalOrderId_lineKey_key"
+       ON "OrderLineCost"("platform", "externalOrderId", "lineKey")`
+    );
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_statusKind_orderedAt_idx"
        ON "OrderItemSnapshot"("statusKind", "orderedAt")`
@@ -1346,6 +1367,8 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await ensureColumn("ProductCost", "packagingOptionId", "TEXT");
     await ensureColumn("ProductCost", "nylonLevel", "TEXT");
     await ensureColumn("ProductCost", "tapeUsed", "BOOLEAN");
+    // v50: Çoklu filament — boş = tek filament (eski davranış, eski sürümler etkilenmez).
+    await ensureColumn("ProductCost", "ekFilamentlerJson", "TEXT");
 
     // Listing tablosu — 3 platform için ayrı satış kaydı
     await bufDDL(`

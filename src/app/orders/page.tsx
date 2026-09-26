@@ -68,6 +68,7 @@ import {
   statusChipCounts,
 } from "./siparis-filtre";
 import { cn } from "@/lib/utils";
+import { SatirMaliyetiDialog, type SatirMaliyetiHedefi } from "@/components/orders/SatirMaliyetiDialog";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
 type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "manual";
@@ -80,6 +81,10 @@ interface UnifiedOrderItem {
   madeToOrder?: boolean;
   /** Bu satır kâra girmedi (ürün eşleşmedi ya da maliyeti girilmemiş). */
   costMissing?: boolean;
+  /** Siparişe özel maliyet kaydının anahtarı (yalnız pazaryeri siparişlerinde). */
+  satirAnahtari?: string;
+  /** Bu satırda yalnız bu siparişe girilmiş maliyet kullanıldı. */
+  ozelMaliyet?: boolean;
 }
 interface UnifiedOrder {
   platform: OrderPlatform;
@@ -1919,6 +1924,8 @@ const OrderRow = memo(function OrderRow({
   isNew?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // "Maliyet gir" — ürünler sayfasında olmayan/maliyeti boş ürünün yalnız bu siparişteki maliyeti.
+  const [maliyetHedefi, setMaliyetHedefi] = useState<SatirMaliyetiHedefi | null>(null);
   const isManualOrder = order.isManual === true || order.platform === "manual";
   const manualId = order.manualOrderId || order.id;
   // Manuel siparişte "hangi kalemin maliyeti eksik" bilgisi listeyle birlikte gelmiyor: eskiden
@@ -2116,6 +2123,13 @@ const OrderRow = memo(function OrderRow({
                   const costMissing = missingCostItems[i];
                   // Maliyeti eksik manuel kalemin ürün bağlantısı yok → düzenleme penceresine götür.
                   const opensManualEditor = isManualOrder && costMissing && !it.productId;
+                  // Pazaryeri siparişi: maliyeti eksik (ya da siparişe özel girilmiş) satır için
+                  // "Maliyet gir" — yalnız bu siparişe kaydedilir.
+                  const ozelMaliyetAcilir =
+                    !isManualOrder &&
+                    order.platform !== "manual" &&
+                    Boolean(it.satirAnahtari) &&
+                    (costMissing || it.ozelMaliyet === true);
                   const clickable = Boolean(it.productId) || opensManualEditor;
                   const rowCls = cn(
                     "flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md transition-colors",
@@ -2136,11 +2150,57 @@ const OrderRow = memo(function OrderRow({
                             {it.productId || isManualOrder ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
                           </span>
                         )}
+                        {it.ozelMaliyet && !costMissing && (
+                          <span className="ml-1.5 text-[9px] font-medium text-sky-500">· siparişe özel maliyet</span>
+                        )}
                       </span>
                       {clickable && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
                       <span className="tabular-nums text-xs text-muted-foreground shrink-0">×{it.quantity}</span>
                     </>
                   );
+                  if (ozelMaliyetAcilir && it.satirAnahtari && order.platform !== "manual") {
+                    const platform = order.platform;
+                    const anahtar = it.satirAnahtari;
+                    const ac = () =>
+                      setMaliyetHedefi({
+                        platform,
+                        siparisId: order.id,
+                        siparisNo: order.orderNumber,
+                        satirAnahtari: anahtar,
+                        satirAdi: it.name,
+                        adet: it.quantity,
+                        gorsel: it.image,
+                        kayitli: it.ozelMaliyet === true,
+                      });
+                    return (
+                      <div key={i} className={cn(rowCls, "pr-0.5")}>
+                        {it.productId ? (
+                          <Link
+                            href={`/products/${it.productId}`}
+                            className="flex min-w-0 flex-1 items-center gap-2.5"
+                            title="Ürün sayfasına git"
+                          >
+                            {body}
+                          </Link>
+                        ) : (
+                          <div className="flex min-w-0 flex-1 items-center gap-2.5">{body}</div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={ac}
+                          className={cn(
+                            "shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-all duration-150 active:scale-95",
+                            it.ozelMaliyet && !costMissing
+                              ? "text-sky-500 hover:bg-sky-500/15"
+                              : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+                          )}
+                          title={it.ozelMaliyet ? "Bu siparişe girilen maliyeti düzenle" : "Bu ürünün yalnız bu siparişteki maliyetini gir"}
+                        >
+                          {it.ozelMaliyet && !costMissing ? "Düzenle" : "Maliyet gir"}
+                        </button>
+                      </div>
+                    );
+                  }
                   if (opensManualEditor) {
                     return (
                       <button
@@ -2380,6 +2440,9 @@ const OrderRow = memo(function OrderRow({
             </div>
           )}
         </div>
+      )}
+      {maliyetHedefi && (
+        <SatirMaliyetiDialog hedef={maliyetHedefi} onClose={() => setMaliyetHedefi(null)} />
       )}
     </Card>
   );

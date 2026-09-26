@@ -6,6 +6,8 @@ import { platformMinOrderQty, shopifyCargoOverride } from "@/core/platform-rules
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { ekFilamentleriYaz } from "@/core/filament-karisimi";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { z } from "zod";
 
@@ -22,6 +24,11 @@ import { z } from "zod";
 const PreviewSchema = z.object({
   filamentTypeId: z.string().nullable().optional(),
   filamentWeight: z.number().min(0).nullable().optional(),
+  /** Çoklu filament — kaydedilmemiş ek filamentler. */
+  ekFilamentler: z
+    .array(z.object({ filamentTypeId: z.string().min(1), gram: z.number().min(0) }))
+    .max(8)
+    .optional(),
   printTimeHours: z.number().min(0).nullable().optional(),
   wasteRate: z.number().min(0).max(1).nullable().optional(),
   packagingOptionId: z.string().nullable().optional(),
@@ -57,12 +64,9 @@ export async function POST(
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
   const vatRate = vatRateOf(settingsMap);
 
-  // Filament gram fiyatı — gönderilen filamentTypeId'den
-  let filamentCostPerGram = 0;
-  if (cost.filamentTypeId) {
-    const f = await prisma.filamentType.findUnique({ where: { id: cost.filamentTypeId } });
-    filamentCostPerGram = f?.costPerGram ?? 0;
-  }
+  // Filament gram fiyatları — ana filament ve ekler aynı haritadan.
+  const filamentFiyatlari = await filamentFiyatlariOku();
+  const filamentCostPerGram = (cost.filamentTypeId ? filamentFiyatlari.get(cost.filamentTypeId) : undefined) ?? 0;
 
   // Kaydedilmemiş değerlerden maliyeti çöz
   const resolved = resolveProductCost(
@@ -71,6 +75,7 @@ export async function POST(
       manualCost: null,
       totalCost: null,
       filamentWeight: cost.filamentWeight ?? 0,
+      ekFilamentlerJson: ekFilamentleriYaz(cost.ekFilamentler ?? []),
       printTimeHours: cost.printTimeHours ?? 0,
       wasteRate: cost.wasteRate ?? 0,
       packagingOptionId: cost.packagingOptionId ?? null,
@@ -78,7 +83,8 @@ export async function POST(
       tapeUsed: cost.tapeUsed ?? null,
     },
     settingsMap,
-    filamentCostPerGram
+    filamentCostPerGram,
+    filamentFiyatlari
   );
 
   const productCost = resolved?.productionCost ?? 0;

@@ -90,6 +90,7 @@ describe("desi 0 olan ürün açıldığında kayıt tetiklenmez", () => {
     expect(seed).toEqual({
       filamentTypeId: "",
       filamentWeight: 0,
+      ekFilamentler: [],
       printTimeHours: 0,
       wasteRate: 0,
       packagingOptionId: "",

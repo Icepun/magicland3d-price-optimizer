@@ -3,6 +3,8 @@ import { simulatePrice } from "@core/pricing-engine";
 import { vatRateOf } from "@core/vat";
 import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules";
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
+import type { FilamentFiyatlari } from "@core/filament-karisimi";
+import type { SatirMaliyetKaydi } from "@core/order-line-cost";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
@@ -44,6 +46,16 @@ export interface ProductProfit {
 }
 
 export interface Rules {
+  /**
+   * Filament gram fiyatları — çoklu filamentli ürünlerde ek filamentlerin tutarı buradan
+   * (masaüstüyle aynı güncel fiyat). Yoksa ek filamentli ürün "maliyet eksik" görünür.
+   */
+  filamentFiyatlari?: Map<string, number>;
+  /**
+   * Siparişe özel maliyetler (masaüstü Siparişler → "Maliyet gir"), harita anahtarı
+   * `satirMaliyetiHaritaAnahtari`. Telefon da aynı siparişte aynı kârı göstersin.
+   */
+  satirMaliyetleri?: Map<string, SatirMaliyetKaydi>;
   commission: CommissionRuleInput[];
   cargo: CargoRuleInput[];
   expense: ExpenseRuleInput[];
@@ -89,6 +101,15 @@ export function computeProductProfitMemo(
  * Bir ürünün her platform listing'i için kâr hesabı — masaüstü /api/products ve
  * /api/products/[id]/profit ile BİREBİR aynı (@core paylaşımı). Tek kaynak.
  */
+/**
+ * Kuralların filament fiyat haritası. ⚠️ `instanceof Map` ŞART: kurallar bir zamanlar diske
+ * yazılıp düz nesne olarak geri gelmişti (bkz. order-profit.ts notu).
+ */
+const BOS_FIYAT: FilamentFiyatlari = new Map();
+export function kuralFilamentFiyatlari(rules: Rules | null | undefined): FilamentFiyatlari {
+  return rules?.filamentFiyatlari instanceof Map ? rules.filamentFiyatlari : BOS_FIYAT;
+}
+
 export function computeProductProfit(
   detail: ProductDetail,
   rules: Rules,
@@ -97,7 +118,8 @@ export function computeProductProfit(
   const resolved = resolveProductCost(
     detail.cost ? { ...detail.cost, tapeUsed: !!detail.cost.tapeUsed } : null,
     settings,
-    detail.cost?.costPerGram ?? 0
+    detail.cost?.costPerGram ?? 0,
+    kuralFilamentFiyatlari(rules)
   );
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;

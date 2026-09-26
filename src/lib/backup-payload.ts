@@ -88,6 +88,7 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     printFileProducts,
     rawProductModelFiles,
     orderItemSnapshots,
+    orderLineCosts,
   ] = await Promise.all([
     q(() => prisma.variantGroup.findMany()),
     q(() => prisma.product.findMany()),
@@ -124,6 +125,8 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
           WHERE "platform" <> 'manual'`
       )
     ),
+    // Siparişe özel maliyetler (kullanıcının elle girdiği) — yedeğe girmezse geri yükleme onları siler.
+    q(() => prisma.orderLineCost.findMany()),
   ]);
 
   const excludedSettingKeys = rawAppSettings
@@ -186,6 +189,7 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     printFileProducts,
     productModelFiles,
     orderItemSnapshots,
+    orderLineCosts,
   };
 }
 

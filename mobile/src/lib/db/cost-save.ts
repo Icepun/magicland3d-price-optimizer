@@ -1,3 +1,4 @@
+import { ekFilamentleriYaz, type EkFilament } from "@core/filament-karisimi";
 import { execute, query, writeBatch } from "@/lib/turso";
 
 export interface FilamentType {
@@ -31,6 +32,8 @@ export interface CostInput {
   packagingOptionId: string | null;
   nylonLevel: "none" | "low" | "medium" | "high";
   tapeUsed: boolean;
+  /** Çoklu filament — ana filamente EK türler. Verilmezse kayıttaki ekler KORUNUR. */
+  ekFilamentler?: EkFilament[];
 }
 
 /** ProductCost upsert (detailed VEYA manual mod) — masaüstü PATCH /api/products/[id] cost ile aynı alanlar. */
@@ -91,11 +94,13 @@ export async function saveProductCostBatch(
 ): Promise<void> {
   const now = new Date().toISOString();
   const mode = c.mode ?? "detailed";
-  const upsert = (pid: string) => ({
+  // Ek filament yalnız verildiyse yazılır; verilmezse (eski ekran) kayıttakiler korunur.
+  const ekYaz = (ekKolonu: boolean) => ekKolonu && c.ekFilamentler !== undefined;
+  const upsert = (pid: string, ekKolonu: boolean) => ({
     sql: `INSERT INTO ProductCost
             (id, productId, costMode, manualCost, filamentTypeId, filamentWeight, printTimeHours,
-             wasteRate, packagingOptionId, nylonLevel, tapeUsed, updatedAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             wasteRate, packagingOptionId, nylonLevel, tapeUsed, updatedAt${ekYaz(ekKolonu) ? ", ekFilamentlerJson" : ""})
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${ekYaz(ekKolonu) ? ", ?" : ""})
           ON CONFLICT(productId) DO UPDATE SET
             costMode      = excluded.costMode,
             manualCost    = excluded.manualCost,
@@ -105,7 +110,7 @@ export async function saveProductCostBatch(
             wasteRate      = excluded.wasteRate,
             packagingOptionId = excluded.packagingOptionId,
             nylonLevel     = excluded.nylonLevel,
-            tapeUsed       = excluded.tapeUsed,
+            tapeUsed       = excluded.tapeUsed,${ekYaz(ekKolonu) ? "\n            ekFilamentlerJson = excluded.ekFilamentlerJson," : ""}
             totalCost      = NULL,
             updatedAt      = excluded.updatedAt`,
     args: [
@@ -121,12 +126,21 @@ export async function saveProductCostBatch(
       c.nylonLevel,
       c.tapeUsed ? 1 : 0,
       now,
+      ...(ekYaz(ekKolonu) ? [ekFilamentleriYaz(c.ekFilamentler ?? [])] : []),
     ],
   });
   // TEK PARÇA: maliyet, desi ve varyant kopyaları birlikte yazılır ya da hiçbiri.
-  await writeBatch([
-    upsert(productId),
-    { sql: `UPDATE Product SET desi = ?, updatedAt = ? WHERE id = ?`, args: [desi, now, productId] },
-    ...alsoProductIds.filter((pid) => pid !== productId).map(upsert),
-  ]);
+  const yaz = (ekKolonu: boolean) =>
+    writeBatch([
+      upsert(productId, ekKolonu),
+      { sql: `UPDATE Product SET desi = ?, updatedAt = ? WHERE id = ?`, args: [desi, now, productId] },
+      ...alsoProductIds.filter((pid) => pid !== productId).map((pid) => upsert(pid, ekKolonu)),
+    ]);
+  try {
+    await yaz(true);
+  } catch (e) {
+    // Masaüstü henüz çoklu filament sürümüne geçmediyse kolon yok → eski biçimle kaydet.
+    if (!/no such column/i.test(e instanceof Error ? e.message : String(e))) throw e;
+    await yaz(false);
+  }
 }

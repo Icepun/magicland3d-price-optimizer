@@ -23,6 +23,7 @@ import {
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
+import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 
 export interface ProfitabilityRow {
   id: string;
@@ -125,6 +126,7 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
     prisma.appSetting.findMany(),
   ]);
 
+  const filamentFiyatlari = await filamentFiyatlariOku();
   const settingsMap = Object.fromEntries(settings.map((row) => [row.key, row.value]));
   const vatRate = vatRateOf(settingsMap);
   type CargoRuleInput = Parameters<typeof simulatePrice>[0]["cargoRules"];
@@ -135,7 +137,8 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
     const resolved = resolveProductCost(
       product.cost,
       settingsMap,
-      product.cost?.filamentType?.costPerGram ?? 0
+      product.cost?.filamentType?.costPerGram ?? 0,
+      filamentFiyatlari
     );
     const productCost = resolved?.productionCost ?? 0;
     const packagingCost = resolved?.packagingCost ?? 0;

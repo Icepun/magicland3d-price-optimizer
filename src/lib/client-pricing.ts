@@ -13,6 +13,7 @@ import {
 } from "../core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "../core/cargo-calculator";
 import { packagingScopeInput, resolveProductCost } from "../core/product-cost";
+import { ekFilamentleriYaz, filamentFiyatHaritasi } from "../core/filament-karisimi";
 import {
   collectRulePriceBreakpoints,
   findMinimumPriceForMargin,
@@ -63,6 +64,8 @@ export interface PricingProduct {
 export interface PricingCost {
   filamentTypeId: string;
   filamentWeight: number;
+  /** Çoklu filament: ana filamente EK türler (gram, fire hariç). Boş = tek filament. */
+  ekFilamentler?: { filamentTypeId: string; gram: number }[];
   printTimeHours: number;
   wasteRate: number;
   packagingOptionId: string;
@@ -161,14 +164,15 @@ function buildBase(input: ClientPricingInput): PricingBase {
   const cargoRules = reviveRuleDates(input.cargoRules ?? []).filter((r) => r.isActive);
   const expenseRules = (input.expenseRules ?? []).filter((r) => r.isActive);
 
-  const filamentCostPerGram =
-    filaments.find((f) => f.id === cost.filamentTypeId)?.costPerGram ?? 0;
+  const filamentFiyatlari = filamentFiyatHaritasi(filaments);
+  const filamentCostPerGram = filamentFiyatlari.get(cost.filamentTypeId) ?? 0;
   const resolved = resolveProductCost(
     {
       costMode: "detailed",
       manualCost: null,
       totalCost: null,
       filamentWeight: cost.filamentWeight,
+      ekFilamentlerJson: ekFilamentleriYaz(cost.ekFilamentler ?? []),
       printTimeHours: cost.printTimeHours,
       wasteRate: cost.wasteRate,
       packagingOptionId: cost.packagingOptionId || null,
@@ -176,7 +180,8 @@ function buildBase(input: ClientPricingInput): PricingBase {
       tapeUsed: cost.tapeUsed,
     },
     settings,
-    filamentCostPerGram
+    filamentCostPerGram,
+    filamentFiyatlari
   );
   const productCost = resolved?.productionCost ?? 0;
   const packagingCost = resolved?.packagingCost ?? 0;
