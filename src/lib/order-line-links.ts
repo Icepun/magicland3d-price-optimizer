@@ -100,7 +100,7 @@ function etkilenenler(platform: string, kalemler: KalemSatiri[]): EtkilenenSipar
 }
 
 /** Etkilenen siparişlerin kâr özetini "yeniden hesaplanmalı" diye işaretle. */
-async function ozetleriEskit(e: EtkilenenSiparisler): Promise<void> {
+export async function ozetleriEskit(e: EtkilenenSiparisler): Promise<void> {
   for (let i = 0; i < e.externalOrderIds.length; i += OKUMA_DILIMI) {
     const dilim = e.externalOrderIds.slice(i, i + OKUMA_DILIMI);
     await prisma.$executeRawUnsafe(
@@ -110,6 +110,19 @@ async function ozetleriEskit(e: EtkilenenSiparisler): Promise<void> {
       ...dilim
     );
   }
+}
+
+/**
+ * Bu platformda bu ADLA gelmiş, hiçbir ürüne bağlı OLMAYAN kalemlerin siparişleri. "Tüm siparişler"
+ * maliyeti (hediye paketi gibi) yalnız eşleşmeyen satıra uygulandığı için kapsamı budur.
+ */
+export async function adlaEtkilenenSiparisler(
+  platform: string,
+  /** Ad anahtarı ("n:<ad>", bkz. satirBagiAnahtari). */
+  lineKey: string
+): Promise<EtkilenenSiparisler> {
+  if (!lineKey.startsWith("n:")) return { platform, externalOrderIds: [], aylar: [] };
+  return etkilenenler(platform, await adaUyanKalemler(platform, lineKey, null));
 }
 
 /** Bağlamadan önce gösterilecek bilgi: mevcut bağ + bu adla kayıtlı sipariş sayısı. */

@@ -24,6 +24,7 @@ import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
+import { TUM_SIPARISLER } from "@core/order-line-cost";
 import {
   computeOrderProfit,
   getProductMap,
@@ -232,7 +233,9 @@ export default function OrderDetailScreen() {
                   {order.isManual
                     ? ""
                     : rules && ozelMaliyetKaydi(order, line, p ?? undefined, rules)
-                      ? "  · siparişe özel maliyet"
+                      ? ozelMaliyetKaydi(order, line, p ?? undefined, rules)?.externalOrderId === TUM_SIPARISLER
+                        ? "  · sabit maliyet"
+                        : "  · siparişe özel maliyet"
                       : p
                         ? ""
                         : "  · eşleşmedi"}

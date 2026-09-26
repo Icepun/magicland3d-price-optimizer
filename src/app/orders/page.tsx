@@ -85,8 +85,10 @@ interface UnifiedOrderItem {
   costMissing?: boolean;
   /** Siparişe özel maliyet kaydının anahtarı (yalnız pazaryeri siparişlerinde). */
   satirAnahtari?: string;
-  /** Bu satırda yalnız bu siparişe girilmiş maliyet kullanıldı. */
+  /** Bu satırda elle girilmiş maliyet kullanıldı. */
   ozelMaliyet?: boolean;
+  /** O maliyet "bu adla gelen tüm siparişler" kaydıydı. */
+  ozelMaliyetTum?: boolean;
   /** Satır adı elle bir ürüne bağlandı ("Ürüne bağla"). */
   elleBagli?: boolean;
 }
@@ -2166,7 +2168,9 @@ const OrderRow = memo(function OrderRow({
                           <span className="ml-1.5 text-[9px] font-medium text-violet-500">· elle bağlandı</span>
                         )}
                         {it.ozelMaliyet && !costMissing && (
-                          <span className="ml-1.5 text-[9px] font-medium text-sky-500">· siparişe özel maliyet</span>
+                          <span className="ml-1.5 text-[9px] font-medium text-sky-500">
+                            {it.ozelMaliyetTum ? "· sabit maliyet" : "· siparişe özel maliyet"}
+                          </span>
                         )}
                       </span>
                       {clickable && <ArrowUpRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />}
@@ -2187,6 +2191,9 @@ const OrderRow = memo(function OrderRow({
                         adet: it.quantity,
                         gorsel: it.image,
                         kayitli: it.ozelMaliyet === true,
+                        kapsam: it.ozelMaliyetTum ? "tum" : "siparis",
+                        // "Tüm siparişler" yalnız hiçbir ürüne eşleşmeyen satıra açılır.
+                        tumuneUygulanabilir: !it.productId && anahtar.startsWith("n:"),
                       });
                     };
                     const baglaAc = () =>
@@ -2240,7 +2247,7 @@ const OrderRow = memo(function OrderRow({
                                   ? "text-sky-500 hover:bg-sky-500/15"
                                   : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
                               )}
-                              title={it.ozelMaliyet ? "Bu siparişe girilen maliyeti düzenle" : "Bu ürünün yalnız bu siparişteki maliyetini gir"}
+                              title={it.ozelMaliyet ? "Girilen maliyeti düzenle" : "Bu ürünün maliyetini gir"}
                             >
                               {it.ozelMaliyet && !costMissing ? "Düzenle" : "Maliyet gir"}
                             </button>
