@@ -84,7 +84,9 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         const res = await fetchT(
           // Sınırlar `buildTrendyolWindows` içinde iki uçtan 3'er saat genişletilmiş hâlde gelir
           // (Trendyol duvar saati düzlemi) ve açıklık 14 günü AŞMAZ.
-          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/orders?page=${pageNo}&size=100&startDate=${startDate}&endDate=${endDate}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
+          // v2 uç: eski sipariş ucu 15 Ekim 2026'da kapanıyor; masaüstü v0.19.202'den beri bunu
+          // kullanıyor (gövde aynı).
+          `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/v2/orders?page=${pageNo}&size=100&startDate=${startDate}&endDate=${endDate}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
           { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
         );
         if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
