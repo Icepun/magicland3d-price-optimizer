@@ -1,6 +1,7 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
 import { anahtarListesi } from "@core/order-match";
+import { shopifyTeslimEdildi, type ShopifyGonderim } from "@core/order-status-kind";
 
 const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
 const VER = process.env.EXPO_PUBLIC_SHOPIFY_API_VERSION || "2024-10";
@@ -47,6 +48,7 @@ const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
     pageInfo{ hasNextPage endCursor }
     edges{ node{
       id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt
+      fulfillments(first:10){ status displayStatus deliveredAt }
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
       customer{ firstName lastName }
       lineItems(first:20){
@@ -68,6 +70,8 @@ interface ShEdge {
     displayFulfillmentStatus: string;
     displayFinancialStatus?: string;
     cancelledAt?: string | null;
+    /** Teslim bilgisi burada — sipariş durumu teslim edilince de FULFILLED kalır. */
+    fulfillments?: ShopifyGonderim[] | null;
     currentTotalPriceSet?: {
       shopMoney?: { amount?: string; currencyCode?: string };
     };
@@ -97,6 +101,8 @@ function shopifyStatusKey(node: ShEdge["node"]): string {
   if (node.cancelledAt) return "CANCELLED";
   const fin = node.displayFinancialStatus;
   if (fin === "REFUNDED") return "REFUNDED";
+  // Masaüstüyle aynı: gönderilmiş ve gönderimi teslim edilmiş sipariş "teslim edildi".
+  if (node.displayFulfillmentStatus === "FULFILLED" && shopifyTeslimEdildi(node.fulfillments)) return "DELIVERED";
   return node.displayFulfillmentStatus;
 }
 

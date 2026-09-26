@@ -37,6 +37,7 @@ import {
   Sparkles,
   CalendarDays,
   Copy,
+  Link2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -69,6 +70,7 @@ import {
 } from "./siparis-filtre";
 import { cn } from "@/lib/utils";
 import { SatirMaliyetiDialog, type SatirMaliyetiHedefi } from "@/components/orders/SatirMaliyetiDialog";
+import { UrunBaglaDialog, type UrunBaglaHedefi } from "@/components/orders/UrunBaglaDialog";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
 type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "manual";
@@ -85,6 +87,8 @@ interface UnifiedOrderItem {
   satirAnahtari?: string;
   /** Bu satırda yalnız bu siparişe girilmiş maliyet kullanıldı. */
   ozelMaliyet?: boolean;
+  /** Satır adı elle bir ürüne bağlandı ("Ürüne bağla"). */
+  elleBagli?: boolean;
 }
 interface UnifiedOrder {
   platform: OrderPlatform;
@@ -1926,6 +1930,8 @@ const OrderRow = memo(function OrderRow({
   const [open, setOpen] = useState(false);
   // "Maliyet gir" — ürünler sayfasında olmayan/maliyeti boş ürünün yalnız bu siparişteki maliyeti.
   const [maliyetHedefi, setMaliyetHedefi] = useState<SatirMaliyetiHedefi | null>(null);
+  // "Ürüne bağla" — eşleşmeyen satırın ADINI bir ürüne bağlar (o adla gelen tüm siparişler).
+  const [baglaHedefi, setBaglaHedefi] = useState<UrunBaglaHedefi | null>(null);
   const isManualOrder = order.isManual === true || order.platform === "manual";
   const manualId = order.manualOrderId || order.id;
   // Manuel siparişte "hangi kalemin maliyeti eksik" bilgisi listeyle birlikte gelmiyor: eskiden
@@ -2130,6 +2136,12 @@ const OrderRow = memo(function OrderRow({
                     order.platform !== "manual" &&
                     Boolean(it.satirAnahtari) &&
                     (costMissing || it.ozelMaliyet === true);
+                  // Hiçbir ürüne eşleşmeyen (ya da elle bağlanmış) pazaryeri satırı → "Ürüne bağla".
+                  const baglanabilir =
+                    !isManualOrder &&
+                    order.platform !== "manual" &&
+                    Boolean(it.name?.trim()) &&
+                    (!it.productId || it.elleBagli === true);
                   const clickable = Boolean(it.productId) || opensManualEditor;
                   const rowCls = cn(
                     "flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md transition-colors",
@@ -2150,6 +2162,9 @@ const OrderRow = memo(function OrderRow({
                             {it.productId || isManualOrder ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
                           </span>
                         )}
+                        {it.elleBagli && (
+                          <span className="ml-1.5 text-[9px] font-medium text-violet-500">· elle bağlandı</span>
+                        )}
                         {it.ozelMaliyet && !costMissing && (
                           <span className="ml-1.5 text-[9px] font-medium text-sky-500">· siparişe özel maliyet</span>
                         )}
@@ -2158,10 +2173,11 @@ const OrderRow = memo(function OrderRow({
                       <span className="tabular-nums text-xs text-muted-foreground shrink-0">×{it.quantity}</span>
                     </>
                   );
-                  if (ozelMaliyetAcilir && it.satirAnahtari && order.platform !== "manual") {
+                  if ((ozelMaliyetAcilir || baglanabilir) && order.platform !== "manual") {
                     const platform = order.platform;
                     const anahtar = it.satirAnahtari;
-                    const ac = () =>
+                    const ac = () => {
+                      if (!anahtar) return;
                       setMaliyetHedefi({
                         platform,
                         siparisId: order.id,
@@ -2171,6 +2187,14 @@ const OrderRow = memo(function OrderRow({
                         adet: it.quantity,
                         gorsel: it.image,
                         kayitli: it.ozelMaliyet === true,
+                      });
+                    };
+                    const baglaAc = () =>
+                      setBaglaHedefi({
+                        platform,
+                        satirAdi: it.name,
+                        gorsel: it.image,
+                        bagliUrunId: it.elleBagli ? it.productId ?? null : null,
                       });
                     return (
                       <div key={i} className={cn(rowCls, "pr-0.5")}>
@@ -2185,19 +2209,43 @@ const OrderRow = memo(function OrderRow({
                         ) : (
                           <div className="flex min-w-0 flex-1 items-center gap-2.5">{body}</div>
                         )}
-                        <button
-                          type="button"
-                          onClick={ac}
-                          className={cn(
-                            "shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-all duration-150 active:scale-95",
-                            it.ozelMaliyet && !costMissing
-                              ? "text-sky-500 hover:bg-sky-500/15"
-                              : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+                        <div className="flex shrink-0 items-center gap-1">
+                          {baglanabilir && (
+                            <button
+                              type="button"
+                              onClick={baglaAc}
+                              className={cn(
+                                "inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold transition-all duration-150 active:scale-95",
+                                it.elleBagli
+                                  ? "text-violet-500 hover:bg-violet-500/15"
+                                  : "bg-violet-500/15 text-violet-500 hover:bg-violet-500/25"
+                              )}
+                              title={
+                                it.elleBagli
+                                  ? "Bağlı ürünü değiştir ya da bağı kaldır"
+                                  : "Bu adla gelen tüm siparişleri bir ürüne bağla"
+                              }
+                            >
+                              <Link2 className="h-3 w-3" />
+                              {it.elleBagli ? "Bağ" : "Ürüne bağla"}
+                            </button>
                           )}
-                          title={it.ozelMaliyet ? "Bu siparişe girilen maliyeti düzenle" : "Bu ürünün yalnız bu siparişteki maliyetini gir"}
-                        >
-                          {it.ozelMaliyet && !costMissing ? "Düzenle" : "Maliyet gir"}
-                        </button>
+                          {ozelMaliyetAcilir && anahtar && (
+                            <button
+                              type="button"
+                              onClick={ac}
+                              className={cn(
+                                "shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-all duration-150 active:scale-95",
+                                it.ozelMaliyet && !costMissing
+                                  ? "text-sky-500 hover:bg-sky-500/15"
+                                  : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+                              )}
+                              title={it.ozelMaliyet ? "Bu siparişe girilen maliyeti düzenle" : "Bu ürünün yalnız bu siparişteki maliyetini gir"}
+                            >
+                              {it.ozelMaliyet && !costMissing ? "Düzenle" : "Maliyet gir"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
                   }
@@ -2444,6 +2492,7 @@ const OrderRow = memo(function OrderRow({
       {maliyetHedefi && (
         <SatirMaliyetiDialog hedef={maliyetHedefi} onClose={() => setMaliyetHedefi(null)} />
       )}
+      {baglaHedefi && <UrunBaglaDialog hedef={baglaHedefi} onClose={() => setBaglaHedefi(null)} />}
     </Card>
   );
 });

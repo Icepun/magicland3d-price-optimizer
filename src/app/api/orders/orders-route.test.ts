@@ -547,6 +547,53 @@ describe("iade ve iptaller ciroda kalmaz", () => {
   });
 });
 
+describe("teslim durumu", () => {
+  const shopifyOrder = (over: Record<string, any>) => ({
+    id: "gid://shopify/Order/5",
+    name: "#5",
+    createdAt: now(),
+    cancelledAt: null,
+    financialStatus: "PAID",
+    fulfillmentStatus: "FULFILLED",
+    totalAmount: 300,
+    currency: "TRY",
+    customerName: null,
+    lines: [
+      { title: "Ürün", quantity: 1, orderedQuantity: 1, refundedQuantity: 0, unitPrice: 300, barcode: null, sku: null, variantId: null, variantSku: null, image: null },
+    ],
+    linesTruncated: false,
+    trackingNumber: null,
+    cargoProvider: null,
+    delivered: false,
+    ...over,
+  });
+
+  it("Shopify'da teslim edildi işaretli sipariş 'Teslim Edildi' görünür, ciroda kalır", async () => {
+    h.state.shopifyOrders = [shopifyOrder({ delivered: true })];
+    const body = await fetchOrders();
+    expect(body.orders[0]).toMatchObject({ statusKind: "delivered", statusLabel: "Teslim Edildi" });
+    expect(body.summary.shopify).toMatchObject({ revenue: 300, orderCount: 1 });
+  });
+
+  it("Shopify'da yalnız gönderilmiş sipariş kargoda kalır", async () => {
+    h.state.shopifyOrders = [shopifyOrder({ delivered: false })];
+    const body = await fetchOrders();
+    expect(body.orders[0]).toMatchObject({ statusKind: "shipped" });
+  });
+
+  it("Hepsiburada: hem kargoda hem teslim listesindeki sipariş teslim edilmiş sayılır", async () => {
+    h.state.hbPackages = {
+      shipped: [{ OrderNumber: "T1", CreatedDate: now() }],
+      delivered: [{ OrderNumber: "T1", DeliveredDate: now() }],
+    };
+    h.state.hbDetails = {
+      T1: { orderDate: now(), items: [{ quantity: 1, unitPrice: 75, productName: "Ürün" }] },
+    };
+    const body = await fetchOrders();
+    expect(body.orders.find((o: any) => o.id === "hb-T1")).toMatchObject({ statusKind: "delivered" });
+  });
+});
+
 describe("finans geçmişi hatası kullanıcıya ulaşır", () => {
   it("arka plan yazımı düştüyse yanıt bunu bildirir", async () => {
     // 🔴 Yazım arka plana alınınca bu uyarı hiçbir koşulda çıkamıyordu.

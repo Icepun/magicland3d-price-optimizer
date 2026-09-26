@@ -247,6 +247,15 @@ const OrderLineCostSchema = z.object({
   desi: finite.nullable().optional(),
 });
 
+/** Elle ürün bağı ("Ürüne bağla") — bu sürümde eklendi, eski yedeklerde YOK (opsiyonel). */
+const OrderLineLinkSchema = z.object({
+  id,
+  platform: id,
+  lineKey: z.string().min(1),
+  lineName: z.string().optional(),
+  productId: id,
+});
+
 const PlatformOrderFinancialSchema = z.object({
   id,
   platform: id,
@@ -401,6 +410,7 @@ const ImportSchema = z.object({
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
   orderItemSnapshots: z.array(OrderItemSnapshotSchema).optional().default([]),
   orderLineCosts: z.array(OrderLineCostSchema).optional().default([]),
+  orderLineLinks: z.array(OrderLineLinkSchema).optional().default([]),
   platformOrderFinancials: z
     .array(PlatformOrderFinancialSchema)
     .optional()
@@ -508,6 +518,7 @@ interface ImportStats {
   orderFinanceSnapshotsSkipped: number;
   orderItemSnapshots: number;
   orderLineCosts: number;
+  orderLineLinks: number;
   platformOrderFinancials: number;
   manualOrders: number;
   costTemplates: number;
@@ -569,6 +580,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
     orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
     orderItemSnapshots: 0,
     orderLineCosts: 0,
+    orderLineLinks: 0,
     platformOrderFinancials: 0,
     manualOrders: 0,
     costTemplates: 0,
@@ -980,6 +992,35 @@ async function runImport(data: ImportPayload, emit: Emit) {
     }),
   });
   stats.orderLineCosts = jobs[jobs.length - 1].stmts.length;
+
+  // Elle ürün bağları. Ürün kimliği bu veritabanındaki karşılığına taşınır; karşılığı olmayan
+  // ürüne giden bağ anlamsız → atlanır (satır yeniden "Ürüne bağla" der).
+  const baglar = data.orderLineLinks.flatMap((row) => {
+    const productId = resolveProduct(row.productId);
+    if (!productId) {
+      stats.skipped++;
+      return [];
+    }
+    return [{ ...row, productId }];
+  });
+  jobs.push({
+    label: "Ürün bağları",
+    statKey: "orderLineLinks",
+    stmts: baglar.map((row) => {
+      const fields: Row = {
+        lineName: row.lineName ?? "",
+        productId: row.productId,
+        updatedAt: stamp,
+      };
+      return upsert(
+        "OrderLineLink",
+        ["platform", "lineKey"],
+        { id: row.id, platform: row.platform, lineKey: row.lineKey, createdAt: stamp, ...fields },
+        fields
+      );
+    }),
+  });
+  stats.orderLineLinks = jobs[jobs.length - 1].stmts.length;
 
   const financialIdByKey = new Map<string, string>();
   if (data.platformOrderFinancials.length) {

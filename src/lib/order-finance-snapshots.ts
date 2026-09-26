@@ -3,13 +3,14 @@ import { prisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
 import type { FilamentFiyatlari } from "@/core/filament-karisimi";
 import {
-  satirAnahtari,
-  satirMaliyetiHaritaAnahtari,
+  satirMaliyetiBul,
   satirMaliyetliUrun,
   siparisKimligi,
 } from "@/core/order-line-cost";
+import { bagliUrunKimligi } from "@/core/order-line-link";
 import { filamentFiyatlariOku } from "./filament-fiyatlari";
 import { satirMaliyetleriniOku } from "./order-line-costs";
+import { satirBaglariniOku } from "./order-line-links";
 import {
   resolveOrderProfit,
   type OrderProfitLine,
@@ -1099,6 +1100,17 @@ export interface FinanceRecalcOptions {
    * sorusunu yazmadan yanıtlamak için. Kullanıcı rakamı görmeden geçmişi değiştirmemeli.
    */
   dryRun?: boolean;
+  /**
+   * Yalnız BU siparişler (ay filtresine ek olarak). Elle ürün bağı gibi birkaç siparişi ilgilendiren
+   * düzeltmede kullanılır: ayın tamamını hesaplamak başka siparişlerin rakamına da dokunurdu.
+   */
+  yalnizSiparisler?: readonly { platform: string; externalOrderId: string }[];
+  /**
+   * "Maliyet bilinmiyor" sonucu kayıtlı kârı EZSİN. Normalde ezmez (silinmiş ürün yüzünden bilgi
+   * kaybolmasın); ama kullanıcı yanlış ürün bağını KALDIRDIYSA eski kâr o yanlış ürünle
+   * hesaplanmıştır — korunursa sipariş sonsuza dek yanlış kârla ve "eski hesap" uyarısıyla kalırdı.
+   */
+  bilinmeyenKariYaz?: boolean;
 }
 
 function emptyRecalcResult(month: string, dryRun: boolean): FinanceMonthRecalcResult {
@@ -1151,6 +1163,9 @@ export async function recalculateFinanceMonths(
 
   report("reading", 0, 0);
   const wantedSet = new Set(wanted);
+  const yalniz = options.yalnizSiparisler
+    ? new Set(options.yalnizSiparisler.map((s) => snapshotKey(s.platform, s.externalOrderId)))
+    : null;
   const rows: RecalcSnapshotRow[] = (
     await prisma.orderFinanceSnapshot.findMany({
       // Manuel siparişin finansı ManualOrder satırında DONDURULMUŞTUR (kendi KDV oranı ve kalem
@@ -1178,7 +1193,11 @@ export async function recalculateFinanceMonths(
         currency: true,
       },
     })
-  ).filter((row) => wantedSet.has(monthKey(row.orderedAt)));
+  ).filter(
+    (row) =>
+      wantedSet.has(monthKey(row.orderedAt)) &&
+      (!yalniz || yalniz.has(snapshotKey(row.platform, row.externalOrderId)))
+  );
 
   if (rows.length === 0) {
     report("done", 0, 0);
@@ -1189,9 +1208,17 @@ export async function recalculateFinanceMonths(
   const itemsByOrder = await readExistingItems([
     ...new Set(rows.map((row) => row.externalOrderId)),
   ]);
+  // Elle ürün bağı (Siparişler → "Ürüne bağla"): kalem geçmişi bağlanırken güncelleniyor, ama bağdan
+  // SONRA eşleşmemiş olarak yazılmış bir kalem (ör. telefonun yazdığı) de aynı ürüne gitsin.
+  const satirBaglari = await satirBaglariniOku();
+  const kalemUrunu = (platform: string, line: { productId: string | null; productName: string }) =>
+    line.productId ?? bagliUrunKimligi(satirBaglari, platform, line.productName);
   const productIds = new Set<string>();
-  for (const lines of itemsByOrder.values()) {
-    for (const line of lines) if (line.productId) productIds.add(line.productId);
+  for (const row of rows) {
+    for (const line of itemsByOrder.get(snapshotKey(row.platform, row.externalOrderId)) ?? []) {
+      const id = kalemUrunu(row.platform, line);
+      if (id) productIds.add(id);
+    }
   }
 
   // Kurallar ve ayarlar sipariş listesi hattıyla AYNI kaynaktan okunur (aktif olanlar).
@@ -1238,16 +1265,14 @@ export async function recalculateFinanceMonths(
         continue;
       }
       const profitLines: OrderProfitLine[] = lines.map((line) => {
-        const match = line.productId ? productById.get(line.productId) ?? null : null;
+        const urunId = kalemUrunu(row.platform, line);
+        const match = urunId ? productById.get(urunId) ?? null : null;
         // Kalem geçmişinde eşleşen üründe ürün kimliği, eşleşmeyende satır adı tutuluyor — sipariş
         // listesinin satır anahtarıyla birebir aynı (bkz. core/order-line-cost).
-        const ozelKayit = satirMaliyetleri.get(
-          satirMaliyetiHaritaAnahtari(
-            row.platform,
-            row.externalOrderId,
-            satirAnahtari({ productId: line.productId, name: line.productName })
-          )
-        );
+        const ozelKayit = satirMaliyetiBul(satirMaliyetleri, row.platform, row.externalOrderId, {
+          productId: urunId,
+          name: line.productName,
+        })?.kayit;
         const ozelUrun = ozelKayit
           ? satirMaliyetliUrun(
               ozelKayit,
@@ -1303,7 +1328,7 @@ export async function recalculateFinanceMonths(
 
       // Ürün katalogdan silinmişse yeni hesap "maliyet bilinmiyor" der. Daha önce yakalanmış
       // gerçek bir kârı bu yüzden SİLMEYİZ — yeniden hesap bilgi kaybettirmemeli.
-      if (resolved.profit == null && row.profitKurus != null) {
+      if (resolved.profit == null && row.profitKurus != null && !options.bilinmeyenKariYaz) {
         protectedOrders++;
         continue;
       }

@@ -4,6 +4,7 @@ import {
   HEPSIBURADA_STATUS_KINDS,
   MANUAL_STATUS_KINDS,
   TRENDYOL_STATUS_KINDS,
+  hbSonDurum,
   type OrderStatusKind,
 } from "@/core/order-status-kind";
 import { prisma, remotePrisma } from "@/lib/prisma";
@@ -32,11 +33,13 @@ import { resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import {
   satirAnahtari,
-  satirMaliyetiHaritaAnahtari,
+  satirMaliyetiBul,
   satirMaliyetliUrun,
   type SatirKatalogBilgisi,
 } from "@/core/order-line-cost";
+import { bagliUrunKimligi } from "@/core/order-line-link";
 import { satirMaliyetleriniOku } from "@/lib/order-line-costs";
+import { satirBaglariniOku } from "@/lib/order-line-links";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { trendyolDateToIso } from "@/core/trendyol-date";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
@@ -91,6 +94,8 @@ export interface UnifiedOrderItem {
   satirAnahtari?: string;
   /** Bu satır için YALNIZ bu siparişe girilmiş maliyet kullanıldı. */
   ozelMaliyet?: boolean;
+  /** Satır kendi anahtarıyla eşleşmedi; kullanıcı ADINI bir ürüne bağladı ("Ürüne bağla"). */
+  elleBagli?: boolean;
 }
 
 export interface UnifiedOrder {
@@ -358,7 +363,9 @@ async function mapLimit<T>(items: T[], limit: number, fn: (x: T) => Promise<void
 function shopifyStatus(
   fulfillment: string | null,
   financial: string | null,
-  cancelled: boolean
+  cancelled: boolean,
+  /** Gönderim teslim edildi mi (`shopifyTeslimEdildi`) — sipariş alanı bunu taşımaz. */
+  delivered = false
 ): { kind: OrderStatusKind; label: string } {
   if (cancelled) return { kind: "cancelled", label: "İptal" };
   // Tam iade fulfillment'tan önce değerlendirilir ve ciro/kâra girmez. Kısmi iade ise
@@ -367,7 +374,9 @@ function shopifyStatus(
   const fin = (financial || "").toUpperCase();
   if (fin === "REFUNDED") return { kind: "cancelled", label: "İade" };
   const f = (fulfillment || "").toUpperCase();
-  if (f === "FULFILLED") return { kind: "shipped", label: "Gönderildi" };
+  if (f === "FULFILLED") {
+    return delivered ? { kind: "delivered", label: "Teslim Edildi" } : { kind: "shipped", label: "Gönderildi" };
+  }
   if (f === "PARTIALLY_FULFILLED") return { kind: "processing", label: "Kısmi Gönderim" };
   if (f === "IN_PROGRESS" || f === "SCHEDULED") return { kind: "processing", label: "Hazırlanıyor" };
   if (fin === "PENDING" || fin === "AUTHORIZED") return { kind: "pending", label: "Ödeme Bekliyor" };
@@ -640,7 +649,7 @@ async function computeOrdersBodyInner(
     // historyRows filtresi tam kırpar. Shopify created_at = orderDate.
     const list = await client.listOrders({ sinceDays: HISTORY_SYNC_DAYS + 1, limit: 100 });
     for (const o of list) {
-      const st = shopifyStatus(o.fulfillmentStatus, o.financialStatus, Boolean(o.cancelledAt));
+      const st = shopifyStatus(o.fulfillmentStatus, o.financialStatus, Boolean(o.cancelledAt), o.delivered);
       buffer.push({
         platform: "shopify",
         id: o.id || `shopify-${o.name}`,
@@ -880,7 +889,13 @@ async function computeOrdersBodyInner(
           });
         } else {
           const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-          if (!on || agg.has(on)) continue;
+          if (!on) continue;
+          const mevcut = agg.get(on);
+          if (mevcut) {
+            // Aynı sipariş birden çok listede: İLERİDEKİ durum kazanır (teslim, kargoyu ezer).
+            mevcut.status = hbSonDurum(String(mevcut.status ?? ""), label);
+            continue;
+          }
           agg.set(on, {
             status: label,
             // Veriliş anı: sipariş tarihi > oluşturulma > paket hazır. Teslim/kargo/iade
@@ -1089,7 +1104,21 @@ async function computeOrdersBodyInner(
   // Filament gram fiyatları (çoklu filamentli ürünler + siparişe özel maliyet) — dış kapsam.
   let filamentFiyatlari: Map<string, number> = new Map();
 
-  if (allKeys.size > 0 || shopifyNames.size > 0) {
+  // ELLE ÜRÜN BAĞLARI (Siparişler → "Ürüne bağla"): kendi anahtarıyla eşleşmeyen satırın ADI → ürün.
+  // Ürün yenilenince eski siparişler eski adla kalıyor; bağ onları seçilen ürüne eşler. Bağlı
+  // ürünler ön süzgeçte ada/anahtara takılmayabilir → kimlikleri ayrıca çekilir.
+  const satirBaglari = await satirBaglariniOku();
+  const bagliUrunIdleri = new Set<string>();
+  for (const r of historyRows) {
+    for (const l of r.lines) {
+      const id = bagliUrunKimligi(satirBaglari, r.platform, l.name);
+      if (id) bagliUrunIdleri.add(id);
+    }
+  }
+  /** Ürün kimliği → eşleştirme değeri (elle bağlı satırlar buradan bulunur). */
+  const urunlerById = new Map<string, Matched>();
+
+  if (allKeys.size > 0 || shopifyNames.size > 0 || bagliUrunIdleri.size > 0) {
     const keyList = [...allKeys];
     const normalizedShopifyNames = new Set(
       [...shopifyNames].map(normalizeMatchKey).filter(Boolean)
@@ -1148,7 +1177,7 @@ async function computeOrdersBodyInner(
             { listings: { some: { externalId: { in: keyList } } } },
             { listings: { some: { externalSku: { in: keyList } } } },
             { listings: { some: { barcode: { in: keyList } } } },
-            { id: { in: nameMatchedIds } },
+            { id: { in: [...nameMatchedIds, ...bagliUrunIdleri] } },
           ],
         },
         include: { cost: { include: { filamentType: { select: { costPerGram: true } } } }, listings: true },
@@ -1223,6 +1252,7 @@ async function computeOrdersBodyInner(
         stock: p.stock,
         listingByPlatform,
       };
+      urunlerById.set(p.id, m);
       return m;
     });
   }
@@ -1232,8 +1262,14 @@ async function computeOrdersBodyInner(
    * platform kimliği > stok kodu. En son çare, anahtarın türü platformda karışmış olabileceği
    * için tür ayrımı olmayan indekstir. Belirsiz (birden çok ürüne düşen) anahtar hiç kullanılmaz.
    */
-  const matchLine = (line: RawLine, platform: string): Matched | null =>
-    urunIndeksi ? satiriEsle(urunIndeksi, line, platform) : null;
+  const matchLine = (line: RawLine, platform: string): { urun: Matched | null; elleBagli: boolean } => {
+    const m = urunIndeksi ? satiriEsle(urunIndeksi, line, platform) : null;
+    if (m) return { urun: m, elleBagli: false };
+    // Yalnız YEDEK: satır kendi anahtarıyla eşleşmediyse elle bağa bakılır (bağ doğru eşleşmeyi ezmez).
+    const bagliId = bagliUrunKimligi(satirBaglari, platform, line.name);
+    const bagli = bagliId ? urunlerById.get(bagliId) ?? null : null;
+    return { urun: bagli, elleBagli: Boolean(bagli) };
+  };
 
   // NOT: Sipariş kârının TAMAMI @/core/order-profit → computeOrderProfit içinde (masaüstü + mobil
   // AYNI fonksiyon). Adet başına: ürün/paketleme/komisyon/yüzdesel gider. Siparişe BİR KEZ: kargo +
@@ -1260,13 +1296,14 @@ async function computeOrdersBodyInner(
     // Ürün bazlı satış geçmişi için kalemler (kalıcı kaydedilir — pazaryeri penceresi dolsa da kalır).
     const snapshotItems: FinanceSnapshotItem[] = [];
     const items: UnifiedOrderItem[] = r.lines.map((l) => {
-      const m = matchLine(l, r.platform);
+      const { urun: m, elleBagli } = matchLine(l, r.platform);
       const image = l.image || m?.imageUrl || null;
       if (image && !thumb) thumb = image;
 
       snapshotItems.push({
         productId: m?.id ?? null,
-        productName: m?.name || l.name,
+        // Elle bağlı satırda HAM ad kalır: bağ kaldırılınca geçmişteki aynı satırlar geri bulunabilsin.
+        productName: elleBagli ? l.name : m?.name || l.name,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
       });
@@ -1279,8 +1316,13 @@ async function computeOrdersBodyInner(
             listing: m.listingByPlatform[r.platform] ?? null,
           }
         : null;
-      const anahtar = satirAnahtari({ productId: m?.id ?? null, name: l.name });
-      const ozelKayit = satirMaliyetleri.get(satirMaliyetiHaritaAnahtari(r.platform, r.id, anahtar));
+      // Kayıt satır eşleşmeden ÖNCE ("n:<ad>") girilmiş olabilir → ad anahtarı da denenir.
+      const ozelBulunan = satirMaliyetiBul(satirMaliyetleri, r.platform, r.id, {
+        productId: m?.id ?? null,
+        name: l.name,
+      });
+      const anahtar = ozelBulunan?.anahtar ?? satirAnahtari({ productId: m?.id ?? null, name: l.name });
+      const ozelKayit = ozelBulunan?.kayit;
       // Siparişe özel maliyet VARSA o kullanılır (Berke'nin kararı: yalnız o sipariş için girilen
       // rakam o siparişte geçerlidir, katalog maliyeti sonradan girilse de onu ezmez).
       const ozelUrun = ozelKayit
@@ -1320,6 +1362,7 @@ async function computeOrdersBodyInner(
         // Geçici kimlikli siparişte (paket numarası henüz yok) kayıt açılmaz — kimlik değişince boşta kalırdı.
         satirAnahtari: isPersistableOrderId(r.platform, r.id) ? anahtar : undefined,
         ozelMaliyet: Boolean(ozelUrun),
+        elleBagli,
       };
     });
 

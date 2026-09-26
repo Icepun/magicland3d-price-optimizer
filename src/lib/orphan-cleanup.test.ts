@@ -185,14 +185,15 @@ describe("cleanupProductOrphans — ürün silinince yetim satır kalmaz", () =>
 
   it("her ürün için tüm bağlı tablolara ifade üretir ve kimlikleri parametre geçer", () => {
     const statements = buildOrphanCleanupStatements(["a", "b", "a"]);
-    // 5 silme + 1 filament bağı koparma
-    expect(statements).toHaveLength(6);
+    // 6 silme + 1 filament bağı koparma
+    expect(statements).toHaveLength(7);
     for (const table of [
       "ProductCost",
       "PriceHistory",
       "Listing",
       "ProductModelFile",
       "PrintFileProduct",
+      "OrderLineLink",
     ]) {
       const stmt = statements.find((s) => s.sql.includes(`"${table}"`));
       expect(stmt, table).toBeDefined();

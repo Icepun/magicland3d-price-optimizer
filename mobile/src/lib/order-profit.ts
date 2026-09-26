@@ -2,12 +2,8 @@ import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
 import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
-import {
-  satirAnahtari,
-  satirMaliyetiHaritaAnahtari,
-  satirMaliyetliUrun,
-  type SatirMaliyetKaydi,
-} from "@core/order-line-cost";
+import { satirMaliyetiBul, satirMaliyetliUrun, type SatirMaliyetKaydi } from "@core/order-line-cost";
+import { bagliUrunKimligi, type SatirBaglari } from "@core/order-line-link";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
 import { kuralFilamentFiyatlari, type Rules } from "@/lib/profit";
@@ -50,8 +46,14 @@ export function buildProductMap(products: ProductDetail[]): ProductMap {
   return { byId, indeks: urunIndeksiKur(products, (p) => p) };
 }
 
+/** Kurallardaki elle ürün bağları (eski önbellek kaydında olmayabilir → güvenli okuma). */
+export function kuralSatirBaglari(rules: Rules | null | undefined): SatirBaglari | null {
+  return rules?.satirBaglari instanceof Map ? rules.satirBaglari : null;
+}
+
 /** Satır eşleştirme — computeOrderProfit ile AYNI mantık. Sipariş detay ekranı da bunu kullansın
- *  ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. */
+ *  ki "kâr hesaplandı ama satır eşleşmedi" çelişkisi olmasın. `baglar`: elle ürün bağları —
+ *  yalnız satır kendi anahtarıyla eşleşmezse bakılır (masaüstüyle aynı kural). */
 export function matchOrderLine(
   line: {
     productId?: string | null;
@@ -62,29 +64,32 @@ export function matchOrderLine(
     skus?: string[];
   },
   platform: UnifiedOrder["platform"],
-  pm: ProductMap
+  pm: ProductMap,
+  baglar?: SatirBaglari | null
 ): ProductDetail | undefined {
   const p = line.productId ? pm.byId.get(line.productId) : undefined;
   if (p) return p;
   // Türlü anahtar yoksa (eski önbellek kaydı) birleşik liste son çare türsüz aramaya girer.
   const turlu = !!(line.barcodes || line.externalIds || line.skus);
-  return (
-    satiriEsle(
-      pm.indeks,
-      {
-        name: line.name,
-        barcodes: line.barcodes ?? [],
-        externalIds: line.externalIds ?? [],
-        skus: turlu ? (line.skus ?? []) : (line.matchKeys ?? []),
-      },
-      platform
-    ) ?? undefined
+  const eslesen = satiriEsle(
+    pm.indeks,
+    {
+      name: line.name,
+      barcodes: line.barcodes ?? [],
+      externalIds: line.externalIds ?? [],
+      skus: turlu ? (line.skus ?? []) : (line.matchKeys ?? []),
+    },
+    platform
   );
+  if (eslesen) return eslesen;
+  const bagliId = bagliUrunKimligi(baglar, platform, line.name);
+  return bagliId ? pm.byId.get(bagliId) : undefined;
 }
 
 /**
  * Bu satıra masaüstünden "siparişe özel maliyet" girilmiş mi? (Masaüstü Siparişler → "Maliyet gir")
- * Satır anahtarı masaüstüyle AYNI: eşleşen üründe ürün kimliği, eşleşmeyende satır adı.
+ * Satır anahtarı masaüstüyle AYNI: eşleşen üründe ürün kimliği, eşleşmeyende satır adı (kayıt satır
+ * eşleşmeden önce girildiyse ad anahtarı da denenir — `satirMaliyetiBul`).
  */
 export function ozelMaliyetKaydi(
   order: Pick<UnifiedOrder, "platform" | "id">,
@@ -94,11 +99,7 @@ export function ozelMaliyetKaydi(
 ): SatirMaliyetKaydi | null {
   const harita = rules.satirMaliyetleri instanceof Map ? rules.satirMaliyetleri : null;
   if (!harita || harita.size === 0 || order.platform === "manual") return null;
-  return (
-    harita.get(
-      satirMaliyetiHaritaAnahtari(order.platform, order.id, satirAnahtari({ productId: eslesen?.id ?? null, name: line.name }))
-    ) ?? null
-  );
+  return satirMaliyetiBul(harita, order.platform, order.id, { productId: eslesen?.id ?? null, name: line.name })?.kayit ?? null;
 }
 
 export interface OrderProfit {
@@ -155,8 +156,9 @@ export function computeOrderProfit(
   //  kesiyordu → telefondaki kârlar masaüstünden şişik çıkıyordu.)
   let image: string | null = null;
   const fiyatlar = kuralFilamentFiyatlari(rules);
+  const baglar = kuralSatirBaglari(rules);
   const lines: OrderProfitLine[] = order.items.map((line) => {
-    const p = matchOrderLine(line, order.platform, pm);
+    const p = matchOrderLine(line, order.platform, pm, baglar);
     if (p && !image) image = p.imageUrl;
     // Siparişe özel maliyet varsa o kullanılır (masaüstüyle aynı kural ve aynı motor).
     const ozel = ozelMaliyetKaydi(order, line, p, rules);

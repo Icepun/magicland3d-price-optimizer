@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { ShopifyCredentials } from "./shopify-settings";
+import { shopifyTeslimEdildi } from "@/core/order-status-kind";
 
 /**
  * Client-credentials Admin API erişim token'ı önbelleği (modül seviyesi, 24 saat).
@@ -77,6 +78,11 @@ export interface ShopifyOrder {
   linesTruncated: boolean;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  /**
+   * Gönderim teslim edildi mi (Shopify panelinde "Teslim edildi" işaretli / kargo teslim bildirdi).
+   * `fulfillmentStatus` bunu TAŞIMAZ — teslim edilen sipariş orada FULFILLED kalır.
+   */
+  delivered: boolean;
 }
 
 /** Client ID/Secret tanımlı değilken fırlatılır — UI "kimlik bilgileri gerekli" gösterir. */
@@ -155,7 +161,12 @@ interface AdminOrdersResponse {
             }>;
             pageInfo: { hasNextPage: boolean };
           };
-          fulfillments: Array<{ trackingInfo: Array<{ number: string | null; company: string | null }> }>;
+          fulfillments: Array<{
+            status?: string | null;
+            displayStatus?: string | null;
+            deliveredAt?: string | null;
+            trackingInfo: Array<{ number: string | null; company: string | null }>;
+          }>;
         };
       }>;
       pageInfo: { hasNextPage: boolean; endCursor: string | null };
@@ -259,7 +270,7 @@ const ordersQuery = (apiVersion: string) => `
             }
             pageInfo { hasNextPage }
           }
-          fulfillments(first: 1) { trackingInfo { number company } }
+          fulfillments(first: 10) { status displayStatus deliveredAt trackingInfo { number company } }
         }
       }
       pageInfo { hasNextPage endCursor }
@@ -566,7 +577,8 @@ export class ShopifyClient {
       cursor = orders.pageInfo.endCursor;
     }
     return edges.map(({ node }) => {
-      const tracking = node.fulfillments?.[0]?.trackingInfo?.[0];
+      // İlk takip numarası olan gönderim (ilk gönderimde numara yoksa sonrakilere bakılır).
+      const tracking = (node.fulfillments ?? []).map((f) => f.trackingInfo?.[0]).find(Boolean);
       const customerName = node.customer
         ? [node.customer.firstName, node.customer.lastName].filter(Boolean).join(" ") || null
         : null;
@@ -577,6 +589,7 @@ export class ShopifyClient {
         cancelledAt: node.cancelledAt,
         financialStatus: node.displayFinancialStatus,
         fulfillmentStatus: node.displayFulfillmentStatus,
+        delivered: shopifyTeslimEdildi(node.fulfillments),
         totalAmount: Number(node.currentTotalPriceSet?.shopMoney?.amount ?? 0),
         currency: node.currentTotalPriceSet?.shopMoney?.currencyCode ?? "TRY",
         customerName,

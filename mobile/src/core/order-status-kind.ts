@@ -78,6 +78,9 @@ export const SHOPIFY_STATUS_KINDS: Record<string, OrderStatusKind> = {
   CANCELLED: "cancelled",
   REFUNDED: "cancelled",
   RESTOCKED: "cancelled",
+  // Shopify'ın kendi adı değil: gönderilmiş (FULFILLED) ve gönderimi teslim edilmiş sipariş
+  // için türetilir (bkz. shopifyTeslimEdildi).
+  DELIVERED: "delivered",
   FULFILLED: "shipped",
   PARTIALLY_FULFILLED: "processing",
   IN_PROGRESS: "processing",
@@ -85,3 +88,61 @@ export const SHOPIFY_STATUS_KINDS: Record<string, OrderStatusKind> = {
   ON_HOLD: "pending",
   UNFULFILLED: "pending",
 };
+
+/** Shopify gönderiminin (fulfillment) teslim bilgisi — Admin API alanları. */
+export interface ShopifyGonderim {
+  /** SUCCESS | CANCELLED | ERROR | FAILURE | OPEN | PENDING */
+  status?: string | null;
+  /** DELIVERED | PICKED_UP | IN_TRANSIT | OUT_FOR_DELIVERY | … */
+  displayStatus?: string | null;
+  deliveredAt?: string | null;
+}
+
+/**
+ * Sipariş TESLİM EDİLDİ mi?
+ *
+ * Shopify panelinde "Teslim edildi olarak işaretle" siparişin gönderim durumunu DEĞİŞTİRMEZ
+ * (`displayFulfillmentStatus` FULFILLED kalır; o alanda teslim diye bir değer yok). Bilgi
+ * gönderimin (fulfillment) kendisinde durur. Yalnız sipariş alanı okunduğu için teslim edilmiş
+ * siparişler hep "Kargoda" görünüyordu (27 Eyl 2026 ölçümü: son 60 siparişin 40'ı teslim edilmişti).
+ *
+ * İptal/başarısız gönderim sayılmaz; birden çok gönderim varsa HEPSİ teslim edilmiş olmalı.
+ */
+export function shopifyTeslimEdildi(gonderimler: readonly ShopifyGonderim[] | null | undefined): boolean {
+  const gecerli = (gonderimler ?? []).filter((g) => {
+    const s = (g.status ?? "").toUpperCase();
+    return s !== "CANCELLED" && s !== "ERROR" && s !== "FAILURE";
+  });
+  return (
+    gecerli.length > 0 &&
+    gecerli.every((g) => {
+      const d = (g.displayStatus ?? "").toUpperCase();
+      return d === "DELIVERED" || d === "PICKED_UP" || Boolean(g.deliveredAt);
+    })
+  );
+}
+
+/**
+ * Hepsiburada paket listelerinde durumun İLERLEME sırası. Liste dışı durumlar (teslim edilemedi,
+ * iptal, iade) buraya girmez: onları kendi listeleri/talepleri belirler.
+ */
+const HB_ILERLEME: Record<string, number> = {
+  Open: 0,
+  New: 0,
+  Packaged: 1,
+  ReadyToShip: 1,
+  Shipped: 2,
+  InTransit: 2,
+  Delivered: 3,
+};
+
+/**
+ * Aynı HB siparişi birden çok listede göründüğünde (kargodan teslime geçiş anı, çok paketli
+ * sipariş) hangi durum kalır? İLERİDEKİ kazanır. Eskiden ilk görülen kazanıyordu ve listeler
+ * "kargoda → teslim" sırasıyla okunduğu için teslim edilen sipariş "Kargoda" kalabiliyordu.
+ */
+export function hbSonDurum(mevcut: string, yeni: string): string {
+  const a = HB_ILERLEME[mevcut];
+  const b = HB_ILERLEME[yeni];
+  return a != null && b != null && b > a ? yeni : mevcut;
+}

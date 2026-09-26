@@ -24,7 +24,13 @@ import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
-import { computeOrderProfit, getProductMap, matchOrderLine, ozelMaliyetKaydi } from "@/lib/order-profit";
+import {
+  computeOrderProfit,
+  getProductMap,
+  kuralSatirBaglari,
+  matchOrderLine,
+  ozelMaliyetKaydi,
+} from "@/lib/order-profit";
 import { ORDER_PLATFORM_COLOR, ORDER_PLATFORM_LABEL } from "@/lib/platforms";
 import { STATUS_TONE } from "@/lib/status-tone";
 import { color, radius, space } from "@/theme/tokens";
@@ -195,7 +201,7 @@ export default function OrderDetailScreen() {
         ÜRÜNLER ({order.items.length})
       </Txt>
       {order.items.map((line, i) => {
-        const p = matchOrderLine(line, order.platform, pm);
+        const p = matchOrderLine(line, order.platform, pm, kuralSatirBaglari(rules));
         const lineImage = line.image ?? p?.imageUrl ?? null;
         return (
           <FadeInView key={i} index={i + 2}>

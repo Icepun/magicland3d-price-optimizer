@@ -152,7 +152,8 @@ const TRENDYOL_STATUS: Record<string, { label: string; tone: StatusTone }> = {
 };
 
 const SHOPIFY_STATUS: Record<string, { label: string; tone: StatusTone }> = {
-  FULFILLED: { label: "Gönderildi", tone: "green" },
+  DELIVERED: { label: "Teslim", tone: "green" },
+  FULFILLED: { label: "Gönderildi", tone: "accent" },
   UNFULFILLED: { label: "Bekliyor", tone: "orange" },
   PARTIALLY_FULFILLED: { label: "Kısmi", tone: "orange" },
   IN_PROGRESS: { label: "Hazırlanıyor", tone: "orange" },

@@ -80,6 +80,30 @@ export function satirMaliyetiHaritaAnahtari(platform: string, externalOrderId: s
   return `${platform}|${siparisKimligi(platform, externalOrderId)}|${anahtar}`;
 }
 
+/**
+ * Satırın siparişe özel maliyet kaydını bul. Önce satırın GÜNCEL anahtarı denenir (eşleşen üründe
+ * "p:<id>"); yoksa ad anahtarı ("n:<ad>"): kayıt, satır henüz hiçbir ürüne eşleşmezken girilmiş
+ * olabilir (ürün sonradan kataloğa eklendi ya da elle bağlandı). Berke'nin kararı: yalnız o siparişe
+ * girilen rakam o siparişte geçerli kalır, sonradan gelen katalog maliyeti onu ezmez.
+ *
+ * Dönen `anahtar` BULUNAN kaydınkidir — düzenleme/silme doğru kayda gitsin.
+ */
+export function satirMaliyetiBul<T>(
+  harita: ReadonlyMap<string, T> | null | undefined,
+  platform: string,
+  externalOrderId: string,
+  satir: { productId?: string | null; name: string }
+): { kayit: T; anahtar: string } | null {
+  if (!harita || harita.size === 0) return null;
+  const guncel = satirAnahtari(satir);
+  const bulunan = harita.get(satirMaliyetiHaritaAnahtari(platform, externalOrderId, guncel));
+  if (bulunan) return { kayit: bulunan, anahtar: guncel };
+  if (!satir.productId) return null;
+  const adAnahtari = satirAnahtari({ productId: null, name: satir.name });
+  const adla = harita.get(satirMaliyetiHaritaAnahtari(platform, externalOrderId, adAnahtari));
+  return adla ? { kayit: adla, anahtar: adAnahtari } : null;
+}
+
 function sayiVeyaNull(x: unknown, enAz = 0): number | null {
   const n = typeof x === "number" ? x : typeof x === "string" && x.trim() ? Number(x.replace(",", ".")) : NaN;
   return Number.isFinite(n) && n >= enAz ? n : null;

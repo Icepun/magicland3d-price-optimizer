@@ -37,6 +37,8 @@ const CASCADE_TABLES = [
   "Listing",
   "ProductModelFile",
   "PrintFileProduct",
+  // Elle ürün bağı: ürün yoksa bağ anlamsız — satır yeniden "Ürüne bağla" der.
+  "OrderLineLink",
 ] as const;
 
 export type OrphanCleanupResult = {

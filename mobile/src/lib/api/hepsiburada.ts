@@ -1,4 +1,5 @@
 import { anahtarListesi } from "@core/order-match";
+import { hbSonDurum } from "@core/order-status-kind";
 
 import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
@@ -278,7 +279,13 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
         });
       } else {
         const on = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
-        if (!on || agg.has(on)) continue;
+        if (!on) continue;
+        const mevcut = agg.get(on);
+        if (mevcut) {
+          // Aynı sipariş birden çok listede: İLERİDEKİ durum kazanır (masaüstüyle aynı kural).
+          mevcut.status = hbSonDurum(String(mevcut.status ?? ""), label);
+          continue;
+        }
         agg.set(on, {
           status: label,
           date: hbDateMs(p.DeliveredDate, p.ShippedDate, p.UndeliveredDate, p.CreatedDate, p.orderDate, p.PackageReadyDate),

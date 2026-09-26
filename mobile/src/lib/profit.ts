@@ -56,6 +56,11 @@ export interface Rules {
    * `satirMaliyetiHaritaAnahtari`. Telefon da aynı siparişte aynı kârı göstersin.
    */
   satirMaliyetleri?: Map<string, SatirMaliyetKaydi>;
+  /**
+   * Elle ürün bağları (masaüstü Siparişler → "Ürüne bağla"): eşleşmeyen satır ADI → ürün kimliği.
+   * Yalnız satır kendi anahtarıyla eşleşmediğinde kullanılır (bkz. @core/order-line-link).
+   */
+  satirBaglari?: Map<string, string>;
   commission: CommissionRuleInput[];
   cargo: CargoRuleInput[];
   expense: ExpenseRuleInput[];

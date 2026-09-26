@@ -422,6 +422,25 @@ model OrderLineCost {
   @@unique([platform, externalOrderId, lineKey])
 }
 
+/**
+ * ELLE ÜRÜN BAĞI (Siparişler → "Ürüne bağla"): katalogla eşleşmeyen satır ADI → ürün.
+ * Aynı adla gelen tüm siparişler (geçmiş + gelecek) bu ürüne eşlenir; yalnız satır kendi
+ * anahtarıyla eşleşmediğinde kullanılır. Kural: src/core/order-line-link.ts
+ */
+model OrderLineLink {
+  id        String   @id
+  platform  String
+  /** "n:<normalize(satır adı)>" — siparişe özel maliyetteki eşleşmeyen satır anahtarıyla aynı biçim. */
+  lineKey   String
+  lineName  String   @default("")
+  productId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([platform, lineKey])
+  @@index([productId])
+}
+
 model OrderItemSnapshot {
   id               String   @id
   platform         String

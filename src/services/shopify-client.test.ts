@@ -213,6 +213,35 @@ function orderWithLines(lines: ReturnType<typeof lineNode>[]) {
   };
 }
 
+describe("ShopifyClient teslim bilgisi", () => {
+  it("panelde teslim edildi işaretli sipariş 'delivered' taşır, yoldaki taşımaz", async () => {
+    const teslim = {
+      ...orderWithLines([]),
+      fulfillments: [
+        {
+          status: "SUCCESS",
+          displayStatus: "DELIVERED",
+          deliveredAt: "2026-07-22T10:00:00Z",
+          trackingInfo: [],
+        },
+        { status: "SUCCESS", displayStatus: "DELIVERED", deliveredAt: null, trackingInfo: [{ number: "TK-2", company: "Aras" }] },
+      ],
+    };
+    const { client, adminGraphql } = clientWithResponse(teslim);
+    const [order] = await client.listOrders();
+    expect(order).toMatchObject({ fulfillmentStatus: "FULFILLED", delivered: true, trackingNumber: "TK-2" });
+    // Sorgu gönderimin teslim alanlarını istemeli (sipariş alanı teslimi taşımıyor).
+    expect(String(adminGraphql.mock.calls[0]?.[0])).toContain("displayStatus");
+
+    const yolda = {
+      ...orderWithLines([]),
+      fulfillments: [{ status: "SUCCESS", displayStatus: "IN_TRANSIT", deliveredAt: null, trackingInfo: [] }],
+    };
+    const [order2] = await clientWithResponse(yolda).client.listOrders();
+    expect(order2.delivered).toBe(false);
+  });
+});
+
 function clientWithResponse(node: unknown, apiVersion = "2026-07") {
   const client = new ShopifyClient(credentials({ apiVersion }));
   const adminGraphql = vi.fn().mockResolvedValue({

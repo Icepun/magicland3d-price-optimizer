@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
     persistedItems: null as Map<string, any[]> | null,
     /** Siparişe özel maliyet kayıtları (OrderLineCost). */
     lineCosts: [] as any[],
+    /** Elle ürün bağları (OrderLineLink). */
+    lineLinks: [] as any[],
   },
 }));
 
@@ -61,6 +63,7 @@ vi.mock("@/lib/prisma", () => {
       notification: empty(),
       filamentType: empty(),
       orderLineCost: { findMany: vi.fn(async () => h.state.lineCosts) },
+      orderLineLink: { findMany: vi.fn(async () => h.state.lineLinks) },
       orderFinanceSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
       $executeRawUnsafe: vi.fn(async () => 0),
     },
@@ -102,6 +105,7 @@ vi.mock("@/services/hepsiburada-client", () => ({
 }));
 
 const { GET } = await import("./route");
+const { satirBagiAnahtari } = await import("@/core/order-line-link");
 
 function product(over: Record<string, any>): any {
   return {
@@ -148,6 +152,7 @@ beforeEach(() => {
   h.state.persistedOrders = [];
   h.state.persistedItems = null;
   h.state.lineCosts = [];
+  h.state.lineLinks = [];
 });
 
 describe("sipariş satırı ↔ ürün eşleştirmesi", () => {
@@ -278,6 +283,104 @@ describe("siparişe özel maliyet", () => {
     ];
     const sonra = await fetchOrders();
     expect(sonra.orders[0].items[0]).toMatchObject({ costMissing: false, ozelMaliyet: true });
+  });
+});
+
+describe("elle ürün bağı", () => {
+  const maliyetli = (over: Record<string, any>) =>
+    product({
+      cost: {
+        costMode: "manual",
+        manualCost: 40,
+        totalCost: 40,
+        packagingCost: null,
+        filamentWeight: null,
+        ekFilamentlerJson: null,
+        printTimeHours: null,
+        wasteRate: null,
+        packagingOptionId: null,
+        nylonLevel: null,
+        tapeUsed: null,
+        filamentType: null,
+      },
+      ...over,
+    });
+  const ESKI_AD = "Cars - Piston Kupası";
+  const bag = (platform: string, productId: string) => ({
+    platform,
+    lineKey: satirBagiAnahtari(ESKI_AD),
+    productId,
+  });
+
+  it("eşleşmeyen satır adıyla bağlıysa ürüne eşlenir ve o ürünün maliyetiyle hesaplanır", async () => {
+    h.state.products = [maliyetli({ id: "p-20", name: "Piston Kupası — 20 cm", barcode: "YENI-1" })];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1", productName: ESKI_AD })];
+    const once = await fetchOrders();
+    expect(once.orders[0].items[0]).toMatchObject({ productId: null, costMissing: true });
+    expect(once.orders[0].profit).toBeNull();
+
+    h.state.trendyolCall = 0;
+    h.state.lineLinks = [bag("trendyol", "p-20")];
+    const sonra = await fetchOrders();
+    expect(sonra.orders[0].items[0]).toMatchObject({
+      productId: "p-20",
+      elleBagli: true,
+      costMissing: false,
+    });
+    expect(sonra.orders[0].profit).not.toBeNull();
+    // Kalem geçmişi ürüne bağlanır ama HAM ad kalır: bağ kaldırılınca aynı satırlar bulunabilsin.
+    expect(h.state.persistedItems?.get("ty-1")?.[0]).toMatchObject({
+      productId: "p-20",
+      productName: ESKI_AD,
+    });
+  });
+
+  it("başka platformdaki aynı ada bağ uygulanmaz", async () => {
+    h.state.products = [maliyetli({ id: "p-20", name: "Piston Kupası — 20 cm" })];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1", productName: ESKI_AD })];
+    h.state.lineLinks = [bag("shopify", "p-20")];
+    const r = await fetchOrders();
+    expect(r.orders[0].items[0]).toMatchObject({ productId: null, elleBagli: false, costMissing: true });
+  });
+
+  it("kendi anahtarıyla eşleşen satırda bağa BAKILMAZ", async () => {
+    h.state.products = [
+      maliyetli({ id: "p-dogru", name: "Doğru Ürün", barcode: "DG-1" }),
+      maliyetli({ id: "p-20", name: "Piston Kupası — 20 cm" }),
+    ];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "DG-1", productName: ESKI_AD })];
+    h.state.lineLinks = [bag("trendyol", "p-20")];
+    const r = await fetchOrders();
+    expect(r.orders[0].items[0]).toMatchObject({ productId: "p-dogru", elleBagli: false });
+  });
+
+  it("bağdan önce girilen siparişe özel maliyet bağdan sonra da geçerli", async () => {
+    h.state.products = [maliyetli({ id: "p-20", name: "Piston Kupası — 20 cm" })];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1", productName: ESKI_AD })];
+    const once = await fetchOrders();
+    const anahtar = once.orders[0].items[0].satirAnahtari;
+    expect(anahtar).toBe(satirBagiAnahtari(ESKI_AD));
+
+    h.state.trendyolCall = 0;
+    h.state.lineLinks = [bag("trendyol", "p-20")];
+    h.state.lineCosts = [
+      {
+        platform: "trendyol",
+        externalOrderId: once.orders[0].id,
+        lineKey: anahtar,
+        lineName: ESKI_AD,
+        costJson: JSON.stringify({ mod: "tutar", tutar: 30, ekFilamentler: [] }),
+        desi: 1,
+      },
+    ];
+    const sonra = await fetchOrders();
+    expect(sonra.orders[0].items[0]).toMatchObject({
+      productId: "p-20",
+      elleBagli: true,
+      ozelMaliyet: true,
+      // Düzenle/Kaldır BULUNAN kayda gitsin.
+      satirAnahtari: anahtar,
+    });
   });
 });
 

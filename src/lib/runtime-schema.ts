@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v51: Elle ürün bağı — `OrderLineLink` (platform + eşleşmeyen satır ADI → ürün). Ürün yenilenince
+//      eski siparişler eski adla kalıyor, hiçbir anahtar tutmuyordu; bağ o adla gelen TÜM siparişleri
+//      seçilen ürüne eşler (bkz. core/order-line-link). Yeni tablo → eski sürüm cihazlar etkilenmez.
 // v50: Çoklu filament + siparişe özel maliyet. `ProductCost.ekFilamentlerJson` (ana filamente EK
 //      filamentler, bkz. core/filament-karisimi) ve `OrderLineCost` (katalogda olmayan / maliyeti
 //      girilmemiş ürünün YALNIZ o siparişteki maliyeti, bkz. core/order-line-cost).
@@ -92,7 +95,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "50";
+const CURRENT_SCHEMA_VERSION = "51";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1163,6 +1166,26 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "OrderLineCost_platform_externalOrderId_lineKey_key"
        ON "OrderLineCost"("platform", "externalOrderId", "lineKey")`
+    );
+    // v51: Elle ürün bağı — eşleşmeyen satır ADI (platform başına) → ürün. Tek kayıt/ad.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "OrderLineLink" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "lineKey" TEXT NOT NULL,
+        "lineName" TEXT NOT NULL DEFAULT '',
+        "productId" TEXT NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "OrderLineLink_platform_lineKey_key"
+       ON "OrderLineLink"("platform", "lineKey")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "OrderLineLink_productId_idx"
+       ON "OrderLineLink"("productId")`
     );
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "OrderItemSnapshot_statusKind_orderedAt_idx"

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   satirAnahtari,
+  satirMaliyetiBul,
   satirMaliyetiCozumle,
   satirMaliyetiHaritaAnahtari,
   satirMaliyetiOku,
@@ -53,6 +54,40 @@ describe("anahtarlar", () => {
     expect(satirMaliyetiHaritaAnahtari("shopify", "gid://shopify/Order/9", "n:X")).toBe(
       satirMaliyetiHaritaAnahtari("shopify", "sh-9", "n:X")
     );
+  });
+});
+
+describe("kaydı bulma (satır sonradan eşleşirse)", () => {
+  const adAnahtari = satirAnahtari({ productId: null, name: "Cars - Piston Kupası" });
+  const harita = new Map([
+    [satirMaliyetiHaritaAnahtari("shopify", "sh-1", adAnahtari), "ad-kaydi"],
+    [satirMaliyetiHaritaAnahtari("shopify", "sh-2", "p:p-20"), "urun-kaydi"],
+  ]);
+
+  it("eşleşmemiş satır ad anahtarıyla bulunur", () => {
+    expect(satirMaliyetiBul(harita, "shopify", "sh-1", { productId: null, name: "cars - piston kupası" })).toEqual({
+      kayit: "ad-kaydi",
+      anahtar: adAnahtari,
+    });
+  });
+
+  it("satır sonradan ürüne eşleşse de eşleşmeden önce girilen kayıt geçerli kalır", () => {
+    expect(satirMaliyetiBul(harita, "shopify", "sh-1", { productId: "p-20", name: "Cars - Piston Kupası" })).toEqual({
+      kayit: "ad-kaydi",
+      anahtar: adAnahtari,
+    });
+  });
+
+  it("ürün anahtarlı kayıt önce gelir", () => {
+    expect(satirMaliyetiBul(harita, "shopify", "sh-2", { productId: "p-20", name: "Cars - Piston Kupası" })).toEqual({
+      kayit: "urun-kaydi",
+      anahtar: "p:p-20",
+    });
+  });
+
+  it("başka siparişin kaydını bulmaz; boş harita null", () => {
+    expect(satirMaliyetiBul(harita, "shopify", "sh-3", { productId: "p-20", name: "Cars - Piston Kupası" })).toBeNull();
+    expect(satirMaliyetiBul(new Map(), "shopify", "sh-1", { productId: null, name: "x" })).toBeNull();
   });
 });
 

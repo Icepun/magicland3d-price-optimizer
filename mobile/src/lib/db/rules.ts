@@ -3,6 +3,7 @@ import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from 
 import { dbEpochMs } from "@core/sqlite-date";
 import { filamentFiyatHaritasi } from "@core/filament-karisimi";
 import { satirMaliyetiHaritaAnahtari, type SatirMaliyetKaydi } from "@core/order-line-cost";
+import { satirBaglariHaritasi, type SatirBagiKaydi } from "@core/order-line-link";
 import { batch, query, type SqlValue } from "@/lib/turso";
 import type {
   CommissionRuleInput,
@@ -197,6 +198,17 @@ export async function getRules(): Promise<Rules> {
     /* tablo henüz yok (masaüstü eski sürüm) → siparişe özel maliyet yok */
   }
 
+  // ELLE ÜRÜN BAĞLARI (masaüstü Siparişler → "Ürüne bağla"): eşleşmeyen satır adı → ürün.
+  // Tablo masaüstü güncellenene kadar yok → okunamazsa boş, eşleştirme eskisi gibi.
+  let satirBaglari = new Map<string, string>();
+  try {
+    satirBaglari = satirBaglariHaritasi(
+      await query<SatirBagiKaydi>(`SELECT platform, lineKey, productId FROM OrderLineLink`)
+    );
+  } catch {
+    /* tablo henüz yok → elle bağ yok */
+  }
+
   return {
     commission: (c.rows as unknown as CommissionRuleInput[]).map(normalizeRuleDates),
     cargo: (k.rows as unknown as CargoRuleInput[]).map(normalizeRuleDates),
@@ -208,6 +220,7 @@ export async function getRules(): Promise<Rules> {
       (ft?.rows ?? []) as unknown as { id: string; costPerGram: number }[]
     ),
     satirMaliyetleri,
+    satirBaglari,
   };
 }
 
