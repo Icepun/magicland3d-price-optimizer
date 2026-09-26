@@ -16,7 +16,7 @@ import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
 import { R2StorageCard } from "@/components/settings/R2StorageCard";
 import { BackupCard } from "@/components/settings/BackupCard";
-import { PhoneNotificationsCard } from "@/components/settings/PhoneNotificationsCard";
+import { NotificationSettingsCard } from "@/components/settings/NotificationSettingsCard";
 import { fetchJson } from "@/lib/fetch-json";
 import { DEFAULT_VAT_RATE, resolveVatRate } from "@/core/vat";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
@@ -117,7 +117,7 @@ export default function SettingsPage() {
 
       <DataManagementCard />
 
-      <PhoneNotificationsCard />
+      <NotificationSettingsCard />
 
       <Card>
         <CardHeader>

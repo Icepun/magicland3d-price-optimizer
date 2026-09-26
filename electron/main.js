@@ -889,16 +889,21 @@ function isNewOrderAlert(a) {
   return typeof a.id === "string" && a.id.startsWith("order-new:");
 }
 
-/** Gösterilecek bildirimleri seçer (yaş sınırı + patlama koruması). */
+/**
+ * Gösterilecek bildirimleri seçer (yaş sınırı + patlama koruması).
+ * `sessiz`: bu bilgisayarda kapatılmış tür (Ayarlar → Bildirimler) — ekrana çıkmaz ama
+ * "bildirildi" sayılır; tür sonradan açılınca birikmiş eski olaylar birden patlamasın.
+ */
 function planOsToasts(alerts, notified, now) {
-  const candidates = alerts.filter(
+  const all = alerts.filter(
     (a) =>
       a &&
       typeof a.id === "string" &&
       (a.severity === "critical" || a.severity === "success" || isNewOrderAlert(a)) &&
       !notified.has(a.id)
   );
-  if (candidates.length === 0) return { toasts: [], markNotified: [] };
+  if (all.length === 0) return { toasts: [], markNotified: [] };
+  const candidates = all.filter((a) => !a.sessiz);
 
   const isFresh = (a) => {
     if (!a.createdAt) return true;
@@ -922,7 +927,7 @@ function planOsToasts(alerts, notified, now) {
   if (stale.length > 0) {
     toasts.push({ title: "Magicland 3D Hub", body: `${stale.length} bildirim seni bekliyor — zile göz at` });
   }
-  return { toasts, markNotified: candidates.map((a) => a.id) };
+  return { toasts, markNotified: all.map((a) => a.id) };
 }
 
 function startNotificationWatch(baseUrl) {

@@ -41,6 +41,51 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("cihaz başına bildirim tercihi", () => {
+  it("türü KAPATAN telefona gitmez, diğerlerine gider", async () => {
+    findMany.mockResolvedValue([
+      { token: token(1), kapali: "" },
+      { token: token(2), kapali: "baski-bitti,baski-sorun" },
+      { token: token(3), kapali: "baski-sorun" },
+    ]);
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const mesajlar = JSON.parse(init.body) as unknown[];
+      return yanit({ data: mesajlar.map((_, i) => ({ status: "ok", id: `b-${i}` })) });
+    });
+
+    const ozet = await pushToAllDevices("Baskı tamamlandı", "U1", { makbuzGecikmeMs: 0, tur: "baski-bitti" });
+
+    const giden = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body) as { to: string }[];
+    expect(giden.map((m) => m.to)).toEqual([token(1), token(3)]);
+    expect(ozet.toplamCihaz).toBe(2);
+  });
+
+  it("türsüz gönderim (test) herkese gider; yalnizToken yalnız o telefona", async () => {
+    findMany.mockResolvedValue([
+      { token: token(1), kapali: "siparis,baski-bitti,baski-sorun" },
+      { token: token(2), kapali: "" },
+    ]);
+    fetchMock.mockImplementation(async (_url: string, init: { body: string }) => {
+      const mesajlar = JSON.parse(init.body) as unknown[];
+      return yanit({ data: mesajlar.map((_, i) => ({ status: "ok", id: `b-${i}` })) });
+    });
+
+    await pushToAllDevices("Test", "Gövde", { makbuzGecikmeMs: 0, yalnizToken: token(1) });
+
+    const giden = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body) as { to: string }[];
+    expect(giden.map((m) => m.to)).toEqual([token(1)]);
+  });
+
+  it("herkes kapattıysa hiç istek atılmaz", async () => {
+    findMany.mockResolvedValue([{ token: token(1), kapali: "siparis" }]);
+
+    const ozet = await pushToAllDevices("Yeni sipariş", "#1", { makbuzGecikmeMs: 0, tur: "siparis" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ozet.toplamCihaz).toBe(0);
+  });
+});
+
 describe("push gönderimi", () => {
   it("100'den fazla cihazı ayrı isteklere böler", async () => {
     const tokenlar = Array.from({ length: 250 }, (_, i) => ({ token: token(i) }));

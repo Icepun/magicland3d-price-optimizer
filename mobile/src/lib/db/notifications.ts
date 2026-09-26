@@ -11,6 +11,9 @@ import {
   gizliHaritaOku,
   gizliMi,
 } from "@/lib/bildirim-gizle";
+import { kapaliTurler, kendiKaydim, telefondaKapali, type PushSatiri } from "@/lib/bildirim-tercih";
+import { cihazKimligi } from "@/lib/cihaz-kimligi";
+import { bilinenPushToken } from "@/lib/push";
 import { batch, query, writeBatch } from "@/lib/turso";
 
 export type AlertType = "stock" | "filament" | "print" | "order";
@@ -31,6 +34,8 @@ export interface AppAlert {
   route: string | null;
   /** Kalıcı Notification tablosundan mı (ack'lenebilir) yoksa anlık hesaplanan mı? */
   persistent: boolean;
+  /** Veritabanındaki ham tür (`printer-done`, `order-new`…) — bildirim tercihi eşlemesi için. */
+  hamTip?: string;
   /** Kalıcı bildirimin oluşturulma zamanı (epoch ms) — anlık uyarılarda null. */
   createdAt: number | null;
 }
@@ -62,7 +67,7 @@ function parseDbDate(s: string | null | undefined): number | null {
  * Tamamı TEK round-trip (batch 4 sorgu).
  */
 export async function getNotifications(): Promise<NotificationsResult> {
-  const [persistentRes, stockRes, spoolRes, filamentSettingsRes, printRes, gizliRes] = await batch([
+  const [persistentRes, stockRes, spoolRes, filamentSettingsRes, printRes, gizliRes, pushRes] = await batch([
     {
       sql: `SELECT id, type, severity, title, body, href, createdAt
               FROM Notification
@@ -97,6 +102,11 @@ export async function getNotifications(): Promise<NotificationsResult> {
       // Kapatılan anlık uyarılar (iki telefon ortak) — bkz. lib/bildirim-gizle.
       sql: `SELECT value FROM AppSetting WHERE key = ?`,
       args: [GIZLI_AYAR_ANAHTARI],
+    },
+    {
+      // Bu telefonun bildirim tercihi (kapattığı türler) — bkz. lib/bildirim-tercih.
+      // `SELECT *`: masaüstü eski sürümse tercih kolonu yok; sorgu düşmesin, hepsi açık sayılsın.
+      sql: `SELECT * FROM PushToken`,
     },
   ]);
   /**
@@ -134,6 +144,7 @@ export async function getNotifications(): Promise<NotificationsResult> {
       productId: raw.href?.match(/^\/products\/(.+)$/)?.[1] ?? null,
       route: mobileRoute(raw.href),
       persistent: true,
+      hamTip: raw.type,
       createdAt: parseDbDate(raw.createdAt),
     });
   }
@@ -226,7 +237,15 @@ export async function getNotifications(): Promise<NotificationsResult> {
   const gizli = gizliHaritaOku(
     (gizliRes?.rows as unknown as { value: string | null }[] | undefined)?.[0]?.value ?? null
   );
-  const gorunen = alerts.filter((a) => a.persistent || !gizliMi(gizli, a));
+  // Bu telefonda kapatılan türler (Bildirimler → tercih çipleri ya da masaüstü Ayarlar).
+  const kapali = kapaliTurler(
+    kendiKaydim((pushRes?.rows ?? []) as unknown as PushSatiri[], bilinenPushToken(), cihazKimligi())
+  );
+  const gorunen = alerts.filter(
+    (a) =>
+      (a.persistent || !gizliMi(gizli, a)) &&
+      !telefondaKapali({ id: a.id, type: a.hamTip ?? a.type }, kapali)
+  );
   gorunen.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
   const critical = gorunen.filter((a) => a.severity === "critical").length;
   const success = gorunen.filter((a) => a.severity === "success").length;

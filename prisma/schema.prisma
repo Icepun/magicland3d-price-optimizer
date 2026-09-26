@@ -688,6 +688,12 @@ model PushToken {
   token     String   @id
   /** ios | android */
   platform  String   @default("")
+  /** Telefonun kendi ürettiği kalıcı kimlik — token yenilenince tercih buradan taşınır (v49). */
+  cihazId   String?
+  /** Ekranda görünen ad ("Simay'ın telefonu"); telefon ilk kayıtta modelini yazar. */
+  cihazAdi  String?
+  /** KAPATILAN bildirim türleri, virgülle (src/core/bildirim-turleri.ts). Boş = hepsi açık. */
+  kapali    String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

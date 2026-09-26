@@ -1,6 +1,7 @@
 // Arka plan işi: AYRI client (ayrı adapter = ayrı mutex) → push gönderimi UI sorgularının
 // kuyruğunu meşgul etmez. Relay de aynı deseni kullanıyor (src/core/printers/relay.ts).
 import { remotePrisma as prisma } from "./prisma";
+import { bildirimAcik, type BildirimTuru } from "@/core/bildirim-turleri";
 
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
@@ -188,11 +189,14 @@ function makbuzlariPlanla(biletToken: Map<string, string>, gecikmeMs: number): v
  *
  * Sözleşme: DIŞARIYA ASLA HATA FIRLATMAZ (relay'i bozmamalı) ama artık SESSİZ de değil —
  * her turda tek satır özet günlüğe yazılır ve özet döner.
+ *
+ * `tur`: bildirim türü — o türü KAPATAN telefonlara gitmez (cihaz başına tercih, PushToken.kapali).
+ * `yalnizToken`: yalnız o telefona (ayarlardaki "Test gönder").
  */
 export async function pushToAllDevices(
   title: string,
   body: string,
-  secenek?: { makbuzGecikmeMs?: number; makbuzlariBekle?: boolean }
+  secenek?: { makbuzGecikmeMs?: number; makbuzlariBekle?: boolean; tur?: BildirimTuru; yalnizToken?: string }
 ): Promise<PushGonderimOzeti> {
   const ozet: PushGonderimOzeti = {
     toplamCihaz: 0,
@@ -206,8 +210,10 @@ export async function pushToAllDevices(
   try {
     let tokenlar: string[] = [];
     try {
-      const rows = await prisma.pushToken.findMany({ select: { token: true } });
+      const rows = await prisma.pushToken.findMany({ select: { token: true, kapali: true } });
       tokenlar = rows
+        .filter((r) => !secenek?.yalnizToken || r.token === secenek.yalnizToken)
+        .filter((r) => bildirimAcik(r.kapali, secenek?.tur ?? null))
         .map((r) => r.token)
         .filter((t) => typeof t === "string" && t.startsWith("ExponentPushToken"));
     } catch (err) {

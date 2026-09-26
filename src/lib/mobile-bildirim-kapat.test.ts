@@ -82,7 +82,9 @@ describe("bildirim veritabanı katmanı", () => {
   const db = oku("mobile/src/lib/db/notifications.ts");
 
   it("kalıcılar hiç gizlenmez (onlar okundu işaretlenir); sayılar gizlilersiz", () => {
-    expect(db).toContain("const gorunen = alerts.filter((a) => a.persistent || !gizliMi(gizli, a));");
+    expect(db).toContain("(a.persistent || !gizliMi(gizli, a)) &&");
+    // Telefonun kapattığı türler (bildirim tercihi) listede de görünmez.
+    expect(db).toContain("!telefondaKapali({ id: a.id, type: a.hamTip ?? a.type }, kapali)");
     expect(db).toContain("counts: { total: gorunen.length, critical, warning: gorunen.length - critical - success }");
   });
 

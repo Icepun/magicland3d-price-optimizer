@@ -225,14 +225,15 @@ export async function notifyNewOrders(orders: NotifyOrder[]): Promise<number> {
     }
     if (bildirilecek.length === 0) return 0;
 
-    // Telefona: siparişler kullanıcının kararıyla HER ZAMAN gider (stok/filament gitmez).
+    // Telefona: siparişler gider (stok/filament gitmez); siparişi KAPATAN telefona gitmez.
     const ayri =
       bildirilecek.length <= AYRI_PUSH_SINIRI ? bildirilecek : bildirilecek.slice(0, AYRI_PUSH_SINIRI - 1);
-    for (const n of ayri) await pushToAllDevices(n.title, n.body).catch(() => {});
+    for (const n of ayri) await pushToAllDevices(n.title, n.body, { tur: "siparis" }).catch(() => {});
     if (ayri.length < bildirilecek.length) {
       await pushToAllDevices(
         "Yeni siparişler",
         `${bildirilecek.length - ayri.length} yeni sipariş daha — uygulamada gör`,
+        { tur: "siparis" },
       ).catch(() => {});
     }
     return bildirilecek.length;

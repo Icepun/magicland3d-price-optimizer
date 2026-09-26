@@ -89,3 +89,6 @@ perf.log
 
 # Test çalıştırmalarından kalan geçici veritabanı
 /prisma/t.db
+
+# makineye özel bildirim tercihi (userData; dev'de repo köküne/prisma/ altına düşebilir)
+bildirim-tercihleri.json

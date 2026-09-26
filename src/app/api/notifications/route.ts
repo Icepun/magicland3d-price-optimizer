@@ -4,6 +4,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
 import { buildFilamentAlerts, groupSpools } from "@/core/filament-groups";
 import { loadFilamentSettings } from "@/lib/filament-settings";
+import { masaustuKapaliOku, masaustundeKapali } from "@/lib/bildirim-tercihleri";
 
 /**
  * Bildirim ucu — zil bunu SIK yoklar (~20 sn), bu yüzden turu ucuz tutulur:
@@ -28,6 +29,9 @@ export interface AppAlert {
   /** Kalıcı bildirimlerde oluşturulma zamanı (ISO) — istemci ESKİ birikmişleri OS bildirimi
       olarak PATLATMASIN diye yaş sınırında kullanılır (anlık stok/filament uyarılarında yok). */
   createdAt?: string;
+  /** Bu bilgisayarda kapatılmış türde (yalnız scope=events): arka plan ekrana çıkarmadan
+      "bildirildi" sayar — tür sonradan açılınca eski olaylar birden patlamasın. */
+  sessiz?: boolean;
 }
 
 /** Stok/filament taraması bu kadar süre önbellekte kalır (zil 20 sn'de bir yokluyor). */
@@ -213,8 +217,14 @@ export async function GET(req: Request) {
   try {
     await ensureRuntimeSchema();
 
+    // Bu bilgisayarda kapatılan türler (Ayarlar → Bildirimler): zilde görünmez, ekrana düşmez.
+    const kapali = masaustuKapaliOku();
+
     if (eventsOnly) {
-      return NextResponse.json(withCounts(await storedAlerts()));
+      const olaylar = (await storedAlerts()).map((a) =>
+        masaustundeKapali(a, kapali) ? { ...a, sessiz: true } : a
+      );
+      return NextResponse.json(withCounts(olaylar));
     }
 
     const live = [
@@ -231,7 +241,9 @@ export async function GET(req: Request) {
       const existing = byId.get(s.id);
       byId.set(s.id, existing ? { ...existing, createdAt: s.createdAt } : s);
     }
-    return NextResponse.json(withCounts([...byId.values()]));
+    return NextResponse.json(
+      withCounts([...byId.values()].filter((a) => !masaustundeKapali(a, kapali)))
+    );
   } catch {
     /* tablo yoksa boş dön */
     return NextResponse.json(withCounts([]));

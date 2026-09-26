@@ -2,7 +2,9 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import Constants from "expo-constants";
 import { AppState, Platform, type AppStateStatus } from "react-native";
-import { execute } from "@/lib/turso";
+import { kapaliListesi, kapaliMetni, TELEFON_BILDIRIM_TURLERI, type BildirimTuru } from "@/core/bildirim-turleri";
+import { cihazKimligi } from "@/lib/cihaz-kimligi";
+import { execute, query, writeBatch } from "@/lib/turso";
 
 /**
  * Push bildirimleri (baskı bitti / hatayla durdu / sipariş uyarıları).
@@ -214,22 +216,7 @@ export async function registerForPush(zorla = false): Promise<PushKayitDurumu> {
     }
 
     try {
-      // Masaüstü bu tabloyu okuyup push gönderir. Aynı cihaz tekrar açılınca ON CONFLICT ile tazelenir.
-      //
-      // ⚠️ `createdAt` AÇIKÇA yazılır: kolonun tablo varsayılanı `CURRENT_TIMESTAMP` ve o değer
-      // "2026-08-13 07:00:00" (boşluklu) biçiminde. Metin sıralamasında boşluk 'T'den küçük
-      // olduğu için o satırlar sıralamanın ve tarih filtrelerinin dışına düşüyor; masaüstünün
-      // açılış onarımı kolonu tek biçime çekiyor, bu yazım onu bozuyordu.
-      const damga = simdiKanonik();
-      const sonuc = await execute(
-        `INSERT INTO PushToken (token, platform, createdAt, updatedAt) VALUES (?, ?, ?, ?)
-         ON CONFLICT(token) DO UPDATE SET platform = excluded.platform, updatedAt = excluded.updatedAt`,
-        [token, Platform.OS, damga, damga]
-      );
-      if (!sonuc || sonuc.rowsAffected < 1) {
-        // Yazma sessizce boş döndüyse kayıt YOK demektir; başarı sayma.
-        throw new Error("kayıt satırı yazılmadı");
-      }
+      await tokenKaydet(token);
     } catch (err) {
       console.warn("[push] token kaydedilemedi:", err instanceof Error ? err.message : err);
       denemeSayaci += 1;
@@ -246,6 +233,97 @@ export async function registerForPush(zorla = false): Promise<PushKayitDurumu> {
     return durum;
   } finally {
     denemeSuruyor = false;
+  }
+}
+
+/**
+ * Token'ı PushToken tablosuna yaz. Masaüstü bu tabloyu okuyup push gönderir; aynı cihaz tekrar
+ * açılınca ON CONFLICT ile tazelenir.
+ *
+ * ⚠️ `createdAt` AÇIKÇA yazılır: kolonun tablo varsayılanı `CURRENT_TIMESTAMP` ve o değer
+ * "2026-08-13 07:00:00" (boşluklu) biçiminde. Metin sıralamasında boşluk 'T'den küçük
+ * olduğu için o satırlar sıralamanın ve tarih filtrelerinin dışına düşüyor; masaüstünün
+ * açılış onarımı kolonu tek biçime çekiyor, bu yazım onu bozuyordu.
+ *
+ * Kalıcı cihaz kimliği varsa (v49): token yenilendiğinde eski satırın bildirim tercihi ve adı
+ * yeni satıra taşınır, eski satır silinir — kullanıcının seçimi kaybolmaz. Var olan satırda
+ * ad ve tercih ASLA ezilmez (masaüstünden verilmiş olabilir). Masaüstü henüz güncellenmemişse
+ * kolonlar yoktur → eski biçimle kaydolunur, bildirimler yine gelir.
+ */
+async function tokenKaydet(token: string): Promise<void> {
+  const damga = simdiKanonik();
+  const cihazId = cihazKimligi();
+  if (cihazId) {
+    const model = (Device.modelName ?? "").trim().slice(0, 40) || null;
+    try {
+      const [yazim] = await writeBatch([
+        {
+          sql: `INSERT INTO PushToken (token, platform, cihazId, cihazAdi, kapali, createdAt, updatedAt)
+                VALUES (?, ?, ?,
+                  COALESCE((SELECT cihazAdi FROM PushToken WHERE cihazId = ? AND token <> ? AND cihazAdi IS NOT NULL
+                             ORDER BY updatedAt DESC LIMIT 1), ?),
+                  COALESCE((SELECT kapali FROM PushToken WHERE cihazId = ? AND token <> ?
+                             ORDER BY updatedAt DESC LIMIT 1), ''),
+                  ?, ?)
+                ON CONFLICT(token) DO UPDATE SET
+                  platform = excluded.platform,
+                  cihazId = excluded.cihazId,
+                  cihazAdi = COALESCE(cihazAdi, excluded.cihazAdi),
+                  updatedAt = excluded.updatedAt`,
+          args: [token, Platform.OS, cihazId, cihazId, token, model, cihazId, token, damga, damga],
+        },
+        { sql: `DELETE FROM PushToken WHERE cihazId = ? AND token <> ?`, args: [cihazId, token] },
+      ]);
+      // Yazma sessizce boş döndüyse kayıt YOK demektir; başarı sayma.
+      if (!yazim || yazim.rowsAffected < 1) throw new Error("kayıt satırı yazılmadı");
+      return;
+    } catch (err) {
+      if (!/no such column/i.test(err instanceof Error ? err.message : String(err))) throw err;
+    }
+  }
+  const sonuc = await execute(
+    `INSERT INTO PushToken (token, platform, createdAt, updatedAt) VALUES (?, ?, ?, ?)
+     ON CONFLICT(token) DO UPDATE SET platform = excluded.platform, updatedAt = excluded.updatedAt`,
+    [token, Platform.OS, damga, damga]
+  );
+  if (!sonuc || sonuc.rowsAffected < 1) throw new Error("kayıt satırı yazılmadı");
+}
+
+/** Kayıt tamamlandıysa bu telefonun push token'ı (bildirim listesi kendi tercihini bununla bulur). */
+export function bilinenPushToken(): string | null {
+  return yazilanToken;
+}
+
+export interface TelefonTercihi {
+  /** Tercih kaydedilebiliyor mu? (Bildirim kaydı yoksa ya da masaüstü eski sürümse hayır.) */
+  destek: boolean;
+  kapali: BildirimTuru[];
+}
+
+const TELEFON_TURLERI = new Set<string>(TELEFON_BILDIRIM_TURLERI.map((t) => t.anahtar));
+
+/** Bu telefonun kapattığı türler — kendi push kaydından. */
+export async function telefonTercihiOku(): Promise<TelefonTercihi> {
+  const token = yazilanToken;
+  if (!token) return { destek: false, kapali: [] };
+  // `SELECT *`: masaüstü v49 öncesiyse `kapali` kolonu yok; sorgu düşmesin, destek yok desin.
+  const [satir] = await query<Record<string, unknown>>(`SELECT * FROM PushToken WHERE token = ?`, [token]);
+  if (!satir || typeof satir.kapali !== "string") return { destek: false, kapali: [] };
+  return { destek: true, kapali: kapaliListesi(satir.kapali).filter((t) => TELEFON_TURLERI.has(t)) };
+}
+
+/** Kapalı türleri kaydet (yalnız telefona gelen türler). */
+export async function telefonTercihiYaz(kapali: readonly BildirimTuru[]): Promise<void> {
+  const token = yazilanToken;
+  if (!token) throw new Error("Bildirim kaydı henüz yok.");
+  const r = await execute(`UPDATE PushToken SET kapali = ? WHERE token = ?`, [
+    kapaliMetni(kapali.filter((t) => TELEFON_TURLERI.has(t))),
+    token,
+  ]);
+  if (!r || r.rowsAffected < 1) {
+    // Kayıt masaüstünden silinmiş olabilir: yeniden kaydol, sonra tekrar dene.
+    yazilanToken = null;
+    throw new Error("Bildirim kaydı bulunamadı, birazdan tekrar dene.");
   }
 }
 

@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v49: Cihaz başına bildirim tercihi — `PushToken.cihazId/cihazAdi/kapali`. `kapali` KAPATILAN
+//      türlerin virgüllü listesi (`src/core/bildirim-turleri.ts`): yeni tür eklenince varsayılanı
+//      açık. cihazId telefonun kendi ürettiği kalıcı kimlik — token yenilenince tercih taşınır.
 // v48: Telefon yazıcı ekranı — `PrinterSnapshot.detail` (katman, kafalar, filament, uyarılar;
 //      JSON, biçimi `src/core/printer-detail.ts`) ve `PrinterCamera` (telefonun kamera isteği +
 //      masaüstünün R2'ye koyduğu son karenin imzalı adresi). İkisi de NULLABLE/yeni tablo →
@@ -86,7 +89,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "48";
+const CURRENT_SCHEMA_VERSION = "49";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1563,6 +1566,11 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // v49: cihaz başına bildirim tercihi. Hepsi NULLABLE/varsayılanlı: eski telefon sürümleri
+    // yalnız (token, platform, createdAt, updatedAt) yazıyor.
+    await ensureColumn("PushToken", "cihazId", "TEXT");
+    await ensureColumn("PushToken", "cihazAdi", "TEXT");
+    await ensureColumn("PushToken", "kapali", "TEXT NOT NULL DEFAULT ''");
 
     // CHECKPOINT: kalan tampon (CargoRule sonrası CREATE/ALTER'lar) primary'ye yazılsın,
     // sonra buffer modunu KAPAT → guarded migration'lar + sürüm damgası canlı prisma ile.

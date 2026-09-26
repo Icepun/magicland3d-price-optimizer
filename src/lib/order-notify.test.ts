@@ -13,7 +13,7 @@ const db = vi.hoisted(() => ({
   bildirim: new Map<string, { okundu: boolean; severity: string; body: string }>(),
   ayar: new Map<string, string>(),
 }));
-const push = vi.hoisted(() => ({ gonderilen: [] as Array<{ title: string; body: string }> }));
+const push = vi.hoisted(() => ({ gonderilen: [] as Array<{ title: string; body: string; tur?: string }> }));
 
 vi.mock("./prisma", () => ({
   prisma: {
@@ -39,8 +39,8 @@ vi.mock("./prisma", () => ({
   },
 }));
 vi.mock("./push-notify", () => ({
-  pushToAllDevices: vi.fn(async (title: string, body: string) => {
-    push.gonderilen.push({ title, body });
+  pushToAllDevices: vi.fn(async (title: string, body: string, secenek?: { tur?: string }) => {
+    push.gonderilen.push({ title, body, tur: secenek?.tur });
     return {};
   }),
 }));
@@ -124,6 +124,8 @@ describe("notifyNewOrders", () => {
     await notifyNewOrders([siparis("A1")]);
     await notifyNewOrders(["F1", "F2", "F3", "F4", "F5", "F6"].map((no) => siparis(no)));
     expect(push.gonderilen).toHaveLength(4); // 3 ayrı + 1 özet
+    // Özet dahil hepsi "sipariş" türünde: siparişi kapatan telefona hiçbiri gitmez.
+    expect(push.gonderilen.map((p) => p.tur)).toEqual(["siparis", "siparis", "siparis", "siparis"]);
     expect(push.gonderilen[3].body).toContain("3 yeni sipariş daha");
   });
 

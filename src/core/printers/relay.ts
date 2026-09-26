@@ -505,7 +505,7 @@ async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
     /* Notification tablosu yoksa sessiz geç */
   }
   // 2) Mobil push — telefon kapalıyken de bildirim düşer.
-  await pushToAllDevices(title, body).catch(() => {});
+  await pushToAllDevices(title, body, { tur: "baski-bitti" }).catch(() => {});
 }
 
 /** Baskı hatayla durdu / duraklatıldı → kalıcı Notification (KRİTİK) + mobil push.
@@ -536,7 +536,7 @@ async function notifyPrintFault(c: Cfg, snap: SnapFields): Promise<void> {
   } catch {
     /* Notification tablosu yoksa sessiz geç */
   }
-  await pushToAllDevices(title, body).catch(() => {});
+  await pushToAllDevices(title, body, { tur: "baski-sorun" }).catch(() => {});
 }
 
 async function tick(): Promise<void> {

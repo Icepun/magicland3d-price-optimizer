@@ -42,14 +42,17 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     await ensureRuntimeSchema();
+    // `cihaz` verilirse yalnız o telefona (ayarlardaki telefon satırının "Test" düğmesi).
+    const govde = (await req.json().catch(() => ({}))) as { cihaz?: unknown };
+    const yalnizToken = typeof govde.cihaz === "string" && govde.cihaz ? govde.cihaz : undefined;
 
     const ozet = await pushToAllDevices(
       "Magicland 3D Hub",
       "Test bildirimi — bunu gördüyseniz bildirimler çalışıyor.",
-      { makbuzlariBekle: true, makbuzGecikmeMs: TEST_MAKBUZ_GECIKME_MS }
+      { makbuzlariBekle: true, makbuzGecikmeMs: TEST_MAKBUZ_GECIKME_MS, yalnizToken }
     );
 
     const teslimEdilen = ozet.teslim?.basarili ?? 0;
@@ -62,8 +65,13 @@ export async function POST() {
             ? "kismi"
             : "basarisiz";
 
-    const mesaj =
-      durum === "cihaz-yok"
+    const mesaj = yalnizToken
+      ? durum === "cihaz-yok"
+        ? "Bu telefon artık kayıtlı değil."
+        : durum === "basarili"
+          ? "Test bildirimi telefona ulaştı."
+          : "Test bildirimi telefona ulaşmadı."
+      : durum === "cihaz-yok"
         ? "Kayıtlı telefon yok. Telefondaki uygulamayı açıp bildirim iznini verin."
         : durum === "basarili"
           ? `Test bildirimi ${teslimEdilen} telefona ulaştı.`
