@@ -3,6 +3,7 @@ import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { pushToAllDevices, sonPushOzeti } from "@/lib/push-notify";
+import { pushSonucu } from "@/lib/push-sonuc";
 
 /**
  * Telefon bildirimi tanı ucu (arayüz başka yerde yazılıyor; burada yalnız sade veri var).
@@ -55,44 +56,9 @@ export async function POST(req: Request) {
       { makbuzlariBekle: true, makbuzGecikmeMs: TEST_MAKBUZ_GECIKME_MS, yalnizToken }
     );
 
-    const teslimEdilen = ozet.teslim?.basarili ?? 0;
-    const durum: "basarili" | "kismi" | "basarisiz" | "cihaz-yok" =
-      ozet.toplamCihaz === 0
-        ? "cihaz-yok"
-        : teslimEdilen > 0 && ozet.hata === 0 && (ozet.teslim?.hatali ?? 0) === 0
-          ? "basarili"
-          : teslimEdilen > 0
-            ? "kismi"
-            : "basarisiz";
-
-    const mesaj = yalnizToken
-      ? durum === "cihaz-yok"
-        ? "Bu telefon artık kayıtlı değil."
-        : durum === "basarili"
-          ? "Test bildirimi telefona ulaştı."
-          : "Test bildirimi telefona ulaşmadı."
-      : durum === "cihaz-yok"
-        ? "Kayıtlı telefon yok. Telefondaki uygulamayı açıp bildirim iznini verin."
-        : durum === "basarili"
-          ? `Test bildirimi ${teslimEdilen} telefona ulaştı.`
-          : durum === "kismi"
-            ? `${teslimEdilen} telefona ulaştı, bazılarına ulaşmadı.`
-            : "Hiçbir telefona ulaşmadı.";
-
-    return NextResponse.json(
-      {
-        durum,
-        mesaj,
-        toplamCihaz: ozet.toplamCihaz,
-        gonderildi: ozet.gonderildi,
-        teslimEdilen,
-        hata: ozet.hata + (ozet.teslim?.hatali ?? 0),
-        temizlenenKayit: ozet.temizlenenKayit,
-        sebepler: ozet.sebepler,
-        zaman: ozet.zaman,
-      },
-      { headers: { "Cache-Control": "no-store" } }
-    );
+    return NextResponse.json(pushSonucu(ozet, { tekTelefon: !!yalnizToken, ne: "Test bildirimi" }), {
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch (error) {
     return jsonError(error);
   }

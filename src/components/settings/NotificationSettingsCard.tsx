@@ -10,6 +10,7 @@ import {
   Check,
   CheckCircle2,
   Disc3,
+  MessageSquareText,
   Monitor,
   Package,
   PauseCircle,
@@ -18,12 +19,14 @@ import {
   ShoppingBag,
   Smartphone,
   Trash2,
+  Users,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchJson } from "@/lib/fetch-json";
+import { OZEL_BASLIK_AZAMI, OZEL_METIN_AZAMI, VARSAYILAN_BASLIK } from "@/lib/push-sonuc";
 import { formatRelativeTime } from "@/lib/format";
 import { usePrefersReducedMotion } from "@/lib/client-state";
 import { cn } from "@/lib/utils";
@@ -91,6 +94,7 @@ export function NotificationSettingsCard() {
         </p>
         <BuBilgisayar />
         <Telefonlar />
+        <OzelBildirimGonder />
       </CardContent>
     </Card>
   );
@@ -345,9 +349,7 @@ function TelefonSatiri({
   const [adTaslak, setAdTaslak] = useState("");
   const [silSor, setSilSor] = useState(false);
   const [cikiyor, setCikiyor] = useState(false);
-  const [ilerleme, setIlerleme] = useState(0);
   const [testSonucu, setTestSonucu] = useState<TestSonucu | null>(null);
-  const zamanlayici = useRef<number | null>(null);
   const [simdiMs] = useState(() => Date.now());
 
   const ad = telefon.cihazAdi || varsayilanAd;
@@ -422,32 +424,14 @@ function TelefonSatiri({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cihaz: telefon.id }),
       }),
-    onMutate: () => {
-      setTestSonucu(null);
-      setIlerleme(0);
-    },
+    onMutate: () => setTestSonucu(null),
     onSuccess: (r) => {
       setTestSonucu(r);
       if (r.durum === "cihaz-yok") void qc.invalidateQueries({ queryKey: TELEFON_ANAHTAR });
     },
     onError: () =>
       setTestSonucu({ durum: "basarisiz", mesaj: "Test gönderilemedi. İnternet bağlantını kontrol et." }),
-    onSettled: () => setIlerleme(100),
   });
-
-  // Çubuk tahmini süreye göre dolar, %95'te bekler; gerçek yanıt gelince tamamlanır.
-  useEffect(() => {
-    if (!test.isPending) return;
-    const basla = performance.now();
-    const adim = () => {
-      setIlerleme(Math.min(0.95, (performance.now() - basla) / TEST_TAHMINI_MS) * 100);
-      zamanlayici.current = window.setTimeout(adim, reduceMotion ? 400 : 80);
-    };
-    adim();
-    return () => {
-      if (zamanlayici.current) window.clearTimeout(zamanlayici.current);
-    };
-  }, [test.isPending, reduceMotion]);
 
   function adKaydet() {
     const yeni = adTaslak.trim();
@@ -555,42 +539,189 @@ function TelefonSatiri({
         </p>
       )}
 
-      {test.isPending && (
-        <div className="space-y-1 animate-in fade-in duration-200">
-          <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-[width] duration-100 ease-linear"
-              style={{ width: `${ilerleme}%` }}
-            />
-          </div>
-          <p className="text-[11px] text-muted-foreground tabular-nums">
-            Telefona ulaşması bekleniyor · %{Math.round(ilerleme)}
-          </p>
-        </div>
-      )}
+      {test.isPending && <TeslimIlerlemesi />}
+      {testSonucu && !test.isPending && <SonucKutusu sonuc={testSonucu} />}
+    </CihazKutusu>
+  );
+}
 
-      {testSonucu && !test.isPending && (
+/** Gönderim sunucuda teslim makbuzunu bekliyor: çubuk tahmini süreye göre dolar, %95'te bekler. */
+function TeslimIlerlemesi() {
+  const reduceMotion = usePrefersReducedMotion();
+  const [ilerleme, setIlerleme] = useState(0);
+  const zamanlayici = useRef<number | null>(null);
+  useEffect(() => {
+    const basla = performance.now();
+    const adim = () => {
+      setIlerleme(Math.min(0.95, (performance.now() - basla) / TEST_TAHMINI_MS) * 100);
+      zamanlayici.current = window.setTimeout(adim, reduceMotion ? 400 : 80);
+    };
+    adim();
+    return () => {
+      if (zamanlayici.current) window.clearTimeout(zamanlayici.current);
+    };
+  }, [reduceMotion]);
+  return (
+    <div className="space-y-1 animate-in fade-in duration-200">
+      <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className={cn(
-            "flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs animate-in fade-in zoom-in-95 duration-300",
-            testSonucu.durum === "basarili"
-              ? "border-emerald-500/30 bg-emerald-500/5"
-              : "border-amber-500/40 bg-amber-500/5"
-          )}
-        >
-          {testSonucu.durum === "basarili" ? (
-            <Check className="h-3.5 w-3.5 shrink-0 mt-px text-emerald-500" />
-          ) : (
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px text-amber-500" />
-          )}
-          <div>
-            <p className="font-medium">{testSonucu.mesaj}</p>
-            {!!testSonucu.sebepler?.length && testSonucu.durum !== "basarili" && (
-              <p className="text-muted-foreground mt-0.5">{testSonucu.sebepler.slice(0, 2).join(" · ")}</p>
-            )}
-          </div>
-        </div>
+          className="h-full rounded-full bg-primary transition-[width] duration-100 ease-linear"
+          style={{ width: `${ilerleme}%` }}
+        />
+      </div>
+      <p className="text-[11px] text-muted-foreground tabular-nums">
+        Telefona ulaşması bekleniyor · %{Math.round(ilerleme)}
+      </p>
+    </div>
+  );
+}
+
+function SonucKutusu({ sonuc }: { sonuc: TestSonucu }) {
+  const basarili = sonuc.durum === "basarili";
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs animate-in fade-in zoom-in-95 duration-300",
+        basarili ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/40 bg-amber-500/5"
       )}
+    >
+      {basarili ? (
+        <Check className="h-3.5 w-3.5 shrink-0 mt-px text-emerald-500" />
+      ) : (
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px text-amber-500" />
+      )}
+      <div>
+        <p className="font-medium">{sonuc.mesaj}</p>
+        {!!sonuc.sebepler?.length && !basarili && (
+          <p className="text-muted-foreground mt-0.5">{sonuc.sebepler.slice(0, 2).join(" · ")}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ÖZEL BİLDİRİM — elle yazılan başlık + metin, tüm telefonlara ya da tek telefona.
+ * Telefonun kapattığı bildirim türleri buna uygulanmaz (bilinçli gönderilen mesaj).
+ */
+function OzelBildirimGonder() {
+  const { data } = useQuery<{ telefonlar: Telefon[] }>({
+    queryKey: TELEFON_ANAHTAR,
+    queryFn: () => fetchJson("/api/push/cihazlar"),
+    staleTime: 30_000,
+  });
+  const telefonlar = data?.telefonlar ?? [];
+  const adlar = varsayilanAdlar(telefonlar);
+  const [baslik, setBaslik] = useState("");
+  const [metin, setMetin] = useState("");
+  const [hedef, setHedef] = useState<string | null>(null); // null = tüm telefonlar
+  const [sonuc, setSonuc] = useState<TestSonucu | null>(null);
+
+  // Seçili telefon listeden düştüyse (kaldırıldı) hedef "tümü"ne döner.
+  const hedefTelefon = hedef ? telefonlar.find((t) => t.id === hedef) : undefined;
+  const hedefId = hedefTelefon?.id;
+
+  const gonder = useMutation({
+    mutationFn: () =>
+      fetchJson<TestSonucu>("/api/push/gonder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ baslik, metin, cihaz: hedefId }),
+      }),
+    onMutate: () => setSonuc(null),
+    onSuccess: (r) => {
+      setSonuc(r);
+      if (r.durum === "basarili") setMetin("");
+    },
+    onError: (e) =>
+      setSonuc({
+        durum: "basarisiz",
+        mesaj: e instanceof Error && e.message ? e.message : "Bildirim gönderilemedi. İnternet bağlantını kontrol et.",
+      }),
+  });
+
+  if (telefonlar.length === 0) return null;
+  const bos = !metin.trim();
+
+  return (
+    <CihazKutusu
+      ikon={<MessageSquareText className="h-4 w-4" />}
+      baslik={<span className="font-medium">Özel bildirim gönder</span>}
+      altYazi="Yazdığın mesaj telefonlara bildirim olarak düşer"
+      sira={telefonlar.length + 1}
+    >
+      <form
+        className="space-y-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!bos && !gonder.isPending) gonder.mutate();
+        }}
+      >
+        <Input
+          value={baslik}
+          maxLength={OZEL_BASLIK_AZAMI}
+          placeholder={`Başlık (boşsa "${VARSAYILAN_BASLIK}")`}
+          onChange={(e) => setBaslik(e.target.value)}
+          aria-label="Bildirim başlığı"
+        />
+        <div className="relative">
+          <textarea
+            value={metin}
+            maxLength={OZEL_METIN_AZAMI}
+            rows={3}
+            placeholder="Mesaj — örn. Kargocu 15:00'te geliyor, paketler hazır olsun"
+            onChange={(e) => setMetin(e.target.value)}
+            onKeyDown={(e) => {
+              // ⌘/Ctrl + Enter gönderir; düz Enter satır atlar.
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                if (!bos && !gonder.isPending) gonder.mutate();
+              }
+            }}
+            aria-label="Bildirim metni"
+            className="block w-full min-w-0 resize-none rounded-lg border border-input bg-input/30 px-2.5 py-1.5 text-base outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm"
+          />
+          <span className="pointer-events-none absolute bottom-1.5 right-2 text-[10px] tabular-nums text-muted-foreground">
+            {metin.length}/{OZEL_METIN_AZAMI}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-muted-foreground mr-0.5">Kime:</span>
+          {[{ id: null as string | null, ad: "Tüm telefonlar" }, ...telefonlar.map((t) => ({ id: t.id as string | null, ad: t.cihazAdi || adlar.get(t.id) || "Telefon" }))].map(
+            (secenek) => {
+              const secili = (secenek.id ?? null) === (hedefId ?? null);
+              return (
+                <button
+                  key={secenek.id ?? "hepsi"}
+                  type="button"
+                  role="radio"
+                  aria-checked={secili}
+                  onClick={() => setHedef(secenek.id)}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium select-none",
+                    "transition-[background-color,border-color,color,transform] duration-200 active:scale-95",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                    secili
+                      ? "border-primary/35 bg-primary/10 text-foreground shadow-sm"
+                      : "border-dashed border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                  )}
+                >
+                  {secenek.id ? <Smartphone className="h-3 w-3" /> : <Users className="h-3 w-3" />}
+                  {secenek.ad}
+                </button>
+              );
+            }
+          )}
+          <Button type="submit" size="sm" className="ml-auto h-7 px-3 text-xs" disabled={bos || gonder.isPending}>
+            <Send className={cn("h-3.5 w-3.5 mr-1", gonder.isPending && "animate-pulse")} />
+            {gonder.isPending ? "Gönderiliyor" : "Gönder"}
+          </Button>
+        </div>
+      </form>
+
+      {gonder.isPending && <TeslimIlerlemesi />}
+      {sonuc && !gonder.isPending && <SonucKutusu sonuc={sonuc} />}
     </CihazKutusu>
   );
 }
