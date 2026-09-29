@@ -146,7 +146,8 @@ self.onmessage = async (ev: MessageEvent<Req>) => {
         out = await viaPack(fileId);
       } catch (packErr) {
         // Paket üretilemedi (disk hatası, eski sunucu…) → ham dosyadan devam et.
-        if (packErr instanceof Error && /bulunamadı|cihazda yok|Bulut depolama/i.test(packErr.message)) throw packErr;
+        // "Çok büyük": ham dosyayı indirip burada taramak tarayıcıyı da boğar (425 MB gcode).
+        if (packErr instanceof Error && /bulunamadı|cihazda yok|Bulut depolama|çok büyük/i.test(packErr.message)) throw packErr;
         out = await viaRawFile(fileId);
       }
     }

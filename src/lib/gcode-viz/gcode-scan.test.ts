@@ -16,6 +16,7 @@ import {
   GcodeScanner, scanGcodeText, parseGcode,
   FEATURE_OUTER, FEATURE_INNER, FEATURE_INFILL, FEATURE_SOLID, FEATURE_SUPPORT, FEATURE_SKIRT,
   featureCode, isBodyFeature, layerAtBytePosition, encodeVizPack, decodeVizPack, expandPack,
+  ModelCokBuyukHatasi,
 } from "./parse-gcode";
 
 /** Katman başına dörtgen bir çerçeve basan sentetik Orca-stili gcode üretir. */
@@ -308,5 +309,39 @@ describe("paket ikili biçimi", () => {
     const p = scanGcodeText("; sadece yorum\nM104 S200\n");
     expect(p.segmentCount).toBe(0);
     expect(expandPack(p).totalSegments).toBe(0);
+  });
+});
+
+/**
+ * Çok sayıda KISA ve AYRIK yol (50'li anahtarlık plakası): her yol en az 2 nokta taşıdığı için
+ * sadeleştirme nokta sayısını bütçenin altına indiremez. 29 Eyl 2026: eski kod bu durumda HER yol
+ * kapanışında tüm modeli 14 kez baştan sadeleştiriyordu → 425 MB'lık dosya saatlerce bitmedi ve
+ * uygulamanın tamamını dondurdu.
+ */
+function makeKisaYollar(yolSayisi: number): string {
+  const out: string[] = ["M83", ";LAYER_CHANGE", ";Z:0.2", ";TYPE:Outer wall"];
+  for (let i = 0; i < yolSayisi; i++) {
+    const x = (i % 200) * 1.5;
+    const y = Math.floor(i / 200) * 1.5;
+    // Seyahat (ekstrüzyonsuz) → yeni yol; ardından tek kısa ekstrüzyon.
+    out.push(`G1 X${x.toFixed(2)} Y${y.toFixed(2)} F9000`);
+    out.push(`G1 X${(x + 0.8).toFixed(2)} Y${(y + 0.3).toFixed(2)} E0.02`);
+  }
+  return out.join("\n") + "\n";
+}
+
+describe("bütçenin altına inilemeyen dosya (kısa yollar)", () => {
+  it("tarama doğrusal kalır: bütçe aşımı her yolda tüm modeli yeniden sadeleştirmez", () => {
+    const metin = makeKisaYollar(40_000);
+    const bas = Date.now();
+    const pack = scanGcodeText(metin, { maxPoints: 2_000 });
+    const sure = Date.now() - bas;
+    expect(pack.pathStart.length).toBe(40_000); // model KESİLMEDİ
+    expect(sure).toBeLessThan(3_000); // eski kod burada dakikalarca dönüyordu
+    expect(pack.epsilon).toBeLessThanOrEqual(0.64); // tolerans sonsuza katlanmıyor
+  });
+
+  it("yol tavanı aşılınca 'çok büyük' hatasıyla durur", () => {
+    expect(() => scanGcodeText(makeKisaYollar(3_000), { maxPaths: 1_000 })).toThrow(ModelCokBuyukHatasi);
   });
 });

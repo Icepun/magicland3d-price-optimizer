@@ -39,6 +39,12 @@ export interface ScanOptions {
    * 0,08 mm tolerans (ekstrüzyon genişliğinin 1/5'i) ve ~15 MB paket verir.
    */
   maxPoints?: number;
+  /**
+   * YOL tavanı. Nokta bütçesi yolları kısaltır ama her yol en az 2 nokta taşır; yol sayısı bu
+   * tavanı aşan dosyanın paketi çizilemeyecek kadar büyür (ölçüldü: 2,4 M yol → 89 MB paket).
+   * Aşılınca tarama `ModelCokBuyukHatasi` ile durur — önizleme yerine plaka görseli gösterilir.
+   */
+  maxPaths?: number;
   /** Başlangıç sadeleştirme toleransı (mm). 0.02 mm ≈ kayıpsız (ekstrüzyon genişliği 0.4 mm). */
   epsilon?: number;
   /** Dosya boyutu (bilinmiyorsa taranan bayt sayısı kullanılır). */
@@ -47,6 +53,12 @@ export interface ScanOptions {
 
 /** Dolgu/destek/etek daha kaba sadeleştirilir: bütçe GÖVDEYE ayrılsın. */
 const COARSE_FACTOR = 3;
+
+/**
+ * Sadeleştirme toleransının tavanı (mm). Bunun üstünde şekil bozulur; ayrıca bütçenin altına
+ * inilemeyen dosyada tolerans her denemede ikiye katlanıp sonsuza gidiyordu.
+ */
+const EPS_TAVAN = 0.64;
 
 function coarse(feature: number): boolean {
   return feature === FEATURE_INFILL || feature === FEATURE_SUPPORT || feature === FEATURE_SKIRT;
@@ -95,10 +107,28 @@ export function klipperAdOku(kalan: string): string | null {
   return ad || null;
 }
 
+/** Varsayılan yol tavanı: ~37 MB paket (telefona gönderilebilen en büyük paket 40 MB). */
+export const VARSAYILAN_AZAMI_YOL = 1_000_000;
+
+/** Dosya 3B önizleme için fazla büyük — tarama durduruldu (arayüz plaka görseline düşer). */
+export class ModelCokBuyukHatasi extends Error {
+  constructor(readonly yolSayisi: number) {
+    super("Bu baskı 3B önizleme için çok büyük");
+    this.name = "ModelCokBuyukHatasi";
+  }
+}
+
 export class GcodeScanner {
   private readonly maxPoints: number;
+  private readonly maxPaths: number;
   private eps: number;
   private epsSq: number;
+  /**
+   * Bütçe denetiminin yeniden yapılacağı nokta sayısı. Sadeleştirme bütçenin altına inemezse
+   * (kısa yollu dev dosya: her yol en az 2 nokta) bir sonraki deneme ancak nokta sayısı %50
+   * artınca yapılır — bkz. butceyeIn.
+   */
+  private sonrakiKontrol = 0;
   private epsSqCoarse: number;
   private thinLevel = 0;
   private declaredFileSize: number;
@@ -195,6 +225,8 @@ export class GcodeScanner {
 
   constructor(opts?: ScanOptions) {
     this.maxPoints = Math.max(2_000, opts?.maxPoints ?? 3_000_000);
+    this.sonrakiKontrol = this.maxPoints;
+    this.maxPaths = Math.max(1_000, opts?.maxPaths ?? VARSAYILAN_AZAMI_YOL);
     this.eps = opts?.epsilon ?? 0.02;
     this.epsSq = this.eps * this.eps;
     this.epsSqCoarse = this.epsSq * COARSE_FACTOR * COARSE_FACTOR;
@@ -647,14 +679,30 @@ export class GcodeScanner {
       this.pathTimeStartArr[this.pathCount] = this.curPathTimeStart;
       this.pathTimeEndArr[this.pathCount] = Math.max(this.curPathTimeStart, this.curPathTimeEnd);
       this.pathCount++;
+      if (this.pathCount > this.maxPaths) throw new ModelCokBuyukHatasi(this.pathCount);
     } else {
       this.pointCount = this.curPathStart; // tek noktalı yol → geri al
     }
     this.pathOpen = false;
 
     // Bütçe kontrolü YALNIZ burada güvenli: açık yol yokken tüm noktalar bir yola aittir.
+    if (this.pointCount > this.sonrakiKontrol) this.butceyeIn();
+  }
+
+  /**
+   * Nokta bütçesini aşan birikimi sadeleştir.
+   *
+   * ⚠️ SAHADA KİLİTLENDİ (29 Eyl 2026, 50'li anahtarlık, 425 MB gcode): eski kod bütçe aşıldığı
+   * sürece HER yol kapanışında tüm modeli 14 kez baştan sadeleştiriyordu. Kısa yollu dosyada
+   * her yol zaten 2 noktaya inmiş olduğundan sayı bütçenin altına hiç inmiyor, iş karesel
+   * büyüyor ve tarama saatlerce bitmiyordu — aynı olay döngüsündeki uygulamanın tamamı donuyordu.
+   * Artık: tolerans tavanı aşılmaz (en çok ~5 geçiş) ve sonraki deneme ancak nokta sayısı %50
+   * artınca yapılır — toplam iş doğrusal kalır.
+   */
+  private butceyeIn(): void {
     let guard = 0;
-    while (this.pointCount > this.maxPoints && guard++ < 14) this.thinOnce();
+    while (this.pointCount > this.maxPoints && guard++ < 14 && this.eps < EPS_TAVAN) this.thinOnce();
+    this.sonrakiKontrol = Math.max(this.maxPoints, Math.ceil(this.pointCount * 1.5));
   }
 
   private commitPoint(x: number, y: number): void {

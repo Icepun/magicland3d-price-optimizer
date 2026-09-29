@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getVizPack } from "@/lib/gcode-viz/pack-server";
+import { ModelCokBuyukHatasi } from "@/lib/gcode-viz/parse-gcode";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       },
     });
   } catch (error) {
+    // Önizleme için fazla büyük dosya: istemci plaka görseline düşer, ham dosyayı indirmeye çalışmaz.
+    if (error instanceof ModelCokBuyukHatasi) {
+      return NextResponse.json({ error: error.message, cokBuyuk: true }, { status: 422 });
+    }
     if (error instanceof Error && /bulunamadı|bu cihazda yok/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }

@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { unzipSync } from "fflate";
+import zlib from "node:zlib";
 import { prisma } from "@/lib/prisma";
 import { getUserDataDir } from "@/lib/storage";
 import { resolveModelFileLocal } from "@/lib/model-files";
-import { GcodeScanner, encodeVizPack } from "./parse-gcode";
+import { zipDizini } from "@/lib/slicer-preview";
+import { GcodeScanner, ModelCokBuyukHatasi, encodeVizPack } from "./parse-gcode";
 import { PACK_ANAHTAR_ETIKETI } from "./viz-pack";
 
 /**
@@ -15,13 +16,19 @@ import { PACK_ANAHTAR_ETIKETI } from "./viz-pack";
  * BİR KEZ burada akışla taranıp ~15 MB'lık pakete dönüşür, paket diske yazılır; sonraki
  * açılışlar R2'ye hiç gitmez.
  *
- * ⚠️ Bu süreç veritabanı sorgularıyla aynı olay döngüsünü paylaşır (uzak-HTTP libSQL sıralı
- * çalışır). Bu yüzden tarama her parçadan sonra olay döngüsüne nefes aldırır.
+ * ⚠️ Bu süreç veritabanı sorgularıyla ve TÜM uygulama sunucusuyla aynı olay döngüsünü paylaşır.
+ * Bu yüzden: (1) dosya hiçbir zaman tümüyle belleğe açılmaz — .3mf içindeki plaka gcode'u da
+ * akışla çözülür (sıkıştırma çözücü iş parçacığı havuzunda çalışır), (2) her parçadan sonra olay
+ * döngüsüne nefes aldırılır, (3) önizleme için fazla büyük dosya bir kez işaretlenir ve bir daha
+ * taranmaz. 29 Eyl 2026: 106 MB'lık bir .3mf (içinde 425 MB gcode, 50'li anahtarlık) eski
+ * tarayıcıda saatlerce bitmedi ve uygulamayı tamamen dondurdu.
  */
 
 const CACHE_DIR_NAME = "viz-packs";
 const CHUNK = 4 * 1024 * 1024;
 const MAX_CACHE_FILES = 40;
+/** Bundan büyük paket ne kartta ne telefonda rahat çizilir → "çok büyük" sayılır. */
+export const AZAMI_PAKET_BAYT = 40 * 1024 * 1024;
 
 export interface PackResult {
   bytes: Uint8Array;
@@ -49,53 +56,111 @@ export function packCacheKey(mf: { id: string; contentMd5?: string | null; sizeB
   return `${base}-${PACK_ANAHTAR_ETIKETI}`;
 }
 
+/** "Önizleme için çok büyük" işareti — dosya bir daha taranmasın (her deneme dakikalar sürerdi). */
+function buyukIsaretYolu(dir: string, key: string): string {
+  return path.join(dir, `${key}.buyuk`);
+}
+
+/** Bu dosya daha önce "önizleme için çok büyük" diye işaretlendi mi? (Ucuz: tek dosya varlığı.) */
+export function vizPaketiCokBuyuk(mf: { id: string; contentMd5?: string | null; sizeBytes?: number | null }): boolean {
+  try {
+    return fs.existsSync(buyukIsaretYolu(cacheDir(), packCacheKey(mf)));
+  } catch {
+    return false;
+  }
+}
+
 /** Olay döngüsüne nefes aldır — tarama sırasında veritabanı sorguları aç kalmasın. */
 function breathe(): Promise<void> {
   return new Promise((r) => setImmediate(r));
 }
 
 /**
+ * .3mf (zip) içindeki EN BÜYÜK plaka gcode'unu akışla tara.
+ *
+ * Eskiden dosyanın tamamı okunup `unzipSync` ile plaka BELLEKTE açılıyordu: 425 MB'lık plaka
+ * hem o kadar bellek hem de olay döngüsünü saniyelerce kilitleyen tek bir eşzamanlı çağrı
+ * demekti. Artık yalnız zip dizini okunur, plaka verisi diskten parça parça çözülür.
+ */
+async function scan3mfToPack(file: string, fileSize: number): Promise<Uint8Array> {
+  const fd = await fs.promises.open(file, "r");
+  let plaka: { veriBas: number; sikisik: number; yontem: number; acik: number } | null = null;
+  try {
+    const oku = async (a: number, b: number): Promise<Buffer> => {
+      const uz = Math.max(0, b - a + 1);
+      const buf = Buffer.alloc(uz);
+      const { bytesRead } = await fd.read(buf, 0, uz, a);
+      return buf.subarray(0, bytesRead);
+    };
+    const girdiler = (await zipDizini(oku, fileSize)) ?? [];
+    const plakalar = girdiler
+      .filter((g) => /^Metadata\/plate_\d+\.gcode$/i.test(g.ad))
+      .sort((a, b) => b.sikisikBoyut - a.sikisikBoyut);
+    const g = plakalar[0];
+    if (!g) throw new Error("3MF içinde plaka gcode'u yok (dilimlenmiş .3mf olmalı)");
+    const yerelBas = await oku(g.yerelOfset, g.yerelOfset + 29);
+    if (yerelBas.length < 30) throw new Error("3MF okunamadı");
+    plaka = {
+      veriBas: g.yerelOfset + 30 + yerelBas.readUInt16LE(26) + yerelBas.readUInt16LE(28),
+      sikisik: g.sikisikBoyut,
+      yontem: g.yontem,
+      acik: g.acikBoyut,
+    };
+  } finally {
+    await fd.close();
+  }
+  if (plaka.yontem !== 0 && plaka.yontem !== 8) throw new Error("3MF sıkıştırması tanınmadı");
+
+  const kaynak = fs.createReadStream(file, {
+    start: plaka.veriBas,
+    end: plaka.veriBas + plaka.sikisik - 1,
+    highWaterMark: 1024 * 1024,
+  });
+  const cozucu = plaka.yontem === 8 ? zlib.createInflateRaw({ chunkSize: 1024 * 1024 }) : null;
+  const akis = cozucu ? kaynak.pipe(cozucu) : kaynak;
+  const scanner = new GcodeScanner({ fileSize: plaka.acik });
+  try {
+    for await (const parca of akis) {
+      scanner.push(parca as Buffer);
+      await breathe();
+    }
+  } finally {
+    kaynak.destroy();
+    cozucu?.destroy();
+  }
+  return new Uint8Array(encodeVizPack(scanner.finish()));
+}
+
+/**
  * Yerel dosyayı akışla tara → paket baytları.
- * gcode ASLA tamamen belleğe alınmaz (178 MB dosya var). Yalnız .3mf (ZIP) açılmak zorunda
- * olduğu için belleğe okunur — dilimlenmiş 3mf'ler sıkıştırılmış ve çok daha küçüktür.
+ * gcode ASLA tamamen belleğe alınmaz (178 MB dosya var).
  */
 async function scanFileToPack(file: string, declaredSize: number): Promise<Uint8Array> {
   const fd = await fs.promises.open(file, "r");
+  let isZip = false;
   try {
     // ZIP imzası (PK) → .3mf. Yalnız 4 bayt okunur; gcode belleğe alınmaz.
     const head = Buffer.alloc(4);
     const { bytesRead: headLen } = await fd.read(head, 0, 4, 0);
-    const isZip = headLen >= 2 && head[0] === 0x50 && head[1] === 0x4b;
-
-    if (isZip) {
-      const zip = new Uint8Array(await fs.promises.readFile(file));
-      const entries = unzipSync(zip, { filter: (f) => /^Metadata\/plate_\d+\.gcode$/i.test(f.name) });
-      const names = Object.keys(entries);
-      if (!names.length) throw new Error("3MF içinde plaka gcode'u yok (dilimlenmiş .3mf olmalı)");
-      names.sort((a, b) => entries[b].length - entries[a].length);
-      const plate = entries[names[0]];
-      const scanner = new GcodeScanner({ fileSize: plate.length });
-      for (let off = 0; off < plate.length; off += CHUNK) {
-        scanner.push(plate.subarray(off, Math.min(plate.length, off + CHUNK)));
+    isZip = headLen >= 2 && head[0] === 0x50 && head[1] === 0x4b;
+    if (!isZip) {
+      const scanner = new GcodeScanner({ fileSize: declaredSize });
+      const buf = Buffer.allocUnsafe(CHUNK);
+      let pos = 0;
+      for (;;) {
+        const { bytesRead } = await fd.read(buf, 0, CHUNK, pos);
+        if (bytesRead <= 0) break;
+        pos += bytesRead;
+        scanner.push(new Uint8Array(buf.buffer, buf.byteOffset, bytesRead));
         await breathe();
       }
       return new Uint8Array(encodeVizPack(scanner.finish()));
     }
-
-    const scanner = new GcodeScanner({ fileSize: declaredSize });
-    const buf = Buffer.allocUnsafe(CHUNK);
-    let pos = 0;
-    for (;;) {
-      const { bytesRead } = await fd.read(buf, 0, CHUNK, pos);
-      if (bytesRead <= 0) break;
-      pos += bytesRead;
-      scanner.push(new Uint8Array(buf.buffer, buf.byteOffset, bytesRead));
-      await breathe();
-    }
-    return new Uint8Array(encodeVizPack(scanner.finish()));
   } finally {
     await fd.close();
   }
+  const boyut = declaredSize > 0 ? declaredSize : (await fs.promises.stat(file)).size;
+  return scan3mfToPack(file, boyut);
 }
 
 /** En eski paketleri sil (disk şişmesin). */
@@ -126,6 +191,12 @@ export function getVizPack(modelFileId: string): Promise<PackResult> {
     const key = packCacheKey(mf);
     const dir = cacheDir();
     const out = path.join(dir, `${key}.mlvz`);
+    // Önce "çok büyük" işareti: dosya indirilmez, taranmaz. (Aynı ada konmuş yer tutucu paket
+    // de temizlenir — işaret varken paket asla doğru değildir.)
+    if (fs.existsSync(buyukIsaretYolu(dir, key))) {
+      fs.promises.unlink(out).catch(() => {});
+      throw new ModelCokBuyukHatasi(0);
+    }
     if (fs.existsSync(out)) {
       const bytes = new Uint8Array(await fs.promises.readFile(out));
       fs.promises.utimes(out, new Date(), new Date()).catch(() => {}); // LRU damgası
@@ -134,7 +205,19 @@ export function getVizPack(modelFileId: string): Promise<PackResult> {
 
     const local = await resolveModelFileLocal(mf);
     try {
-      const bytes = await scanFileToPack(local.path, mf.sizeBytes || 0);
+      let bytes: Uint8Array;
+      try {
+        bytes = await scanFileToPack(local.path, mf.sizeBytes || 0);
+        if (bytes.byteLength > AZAMI_PAKET_BAYT) throw new ModelCokBuyukHatasi(0);
+      } catch (e) {
+        if (e instanceof ModelCokBuyukHatasi) {
+          // Bir daha taranmasın: işaret diske yazılır (dosya içeriği değişmedikçe sonuç aynı).
+          await fs.promises
+            .writeFile(buyukIsaretYolu(dir, key), `${e.yolSayisi || "?"} yol`)
+            .catch(() => {});
+        }
+        throw e;
+      }
       await fs.promises.writeFile(out, bytes).catch(() => {}); // önbellek yazılamazsa da devam
       pruneCache(dir);
       return { bytes, fromCache: false, cacheKey: key };

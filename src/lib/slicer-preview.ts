@@ -65,6 +65,8 @@ export interface ZipGirdi {
   ad: string;
   yontem: number;
   sikisikBoyut: number;
+  /** Açılmış boyut (merkezi dizinden; ZIP64 değilse gerçek değer). */
+  acikBoyut: number;
   yerelOfset: number;
 }
 
@@ -87,12 +89,13 @@ function merkeziAyristir(buf: Buffer): ZipGirdi[] {
   while (p + 46 <= buf.length && buf.readUInt32LE(p) === MERKEZ_IMZA) {
     const yontem = buf.readUInt16LE(p + 10);
     const sikisikBoyut = buf.readUInt32LE(p + 20);
+    const acikBoyut = buf.readUInt32LE(p + 24);
     const adUz = buf.readUInt16LE(p + 28);
     const ekUz = buf.readUInt16LE(p + 30);
     const yorumUz = buf.readUInt16LE(p + 32);
     const yerelOfset = buf.readUInt32LE(p + 42);
     const ad = buf.subarray(p + 46, p + 46 + adUz).toString("utf8");
-    girdiler.push({ ad, yontem, sikisikBoyut, yerelOfset });
+    girdiler.push({ ad, yontem, sikisikBoyut, acikBoyut, yerelOfset });
     p += 46 + adUz + ekUz + yorumUz;
   }
   return girdiler;

@@ -19,7 +19,13 @@ import { promisify } from "node:util";
 import { prisma } from "@/lib/prisma";
 import { getR2Config, headObjectSize, listModelObjects, deleteObject, presignGetUrl, putObjectBytes } from "@/lib/r2";
 import { resolvePrintModel, type PrintModelInfo } from "@/lib/print-model-resolve";
-import { getVizPack, packCacheKey } from "@/lib/gcode-viz/pack-server";
+import {
+  AZAMI_PAKET_BAYT as SUNUCU_AZAMI_PAKET_BAYT,
+  getVizPack,
+  packCacheKey,
+  vizPaketiCokBuyuk,
+} from "@/lib/gcode-viz/pack-server";
+import { ModelCokBuyukHatasi } from "@/lib/gcode-viz/parse-gcode";
 import { processSingleton } from "./process-singleton";
 
 const gzip = promisify(zlib.gzip);
@@ -32,7 +38,7 @@ const YOK_BEKLEME_MS = 5 * 60_000;
 /** Beklenmeyen hatadan sonra yeniden deneme. */
 const HATA_BEKLEME_MS = 2 * 60_000;
 /** Bundan büyük paket telefona gönderilmez — indirme ve telefon belleği için fazla. */
-export const AZAMI_PAKET_BAYT = 40 * 1024 * 1024;
+export const AZAMI_PAKET_BAYT = SUNUCU_AZAMI_PAKET_BAYT;
 /** Bu kadar eski (son değişiklik) 3B paketi/plaka görseli süpürülür; yeniden basılırsa tekrar yüklenir. */
 const SUPURME_YASI_MS = 45 * 24 * 3600_000;
 
@@ -133,10 +139,16 @@ async function hazirla(yaziciId: string, dosya: string, onceki: Kayit | undefine
   // ── 3B paketi ──
   let viz: Kayit["viz"] = null;
   const vizAnahtari = vizNesneAnahtari(model);
-  const bulutta = onceki?.viz?.key === vizAnahtari || (await headObjectSize(vizAnahtari, cfg)) != null;
-  if (!bulutta) {
-    const paket = await getVizPack(model.id); // diskte varsa anında; yoksa BİR KEZ taranır
-    if (paket.bytes.byteLength <= AZAMI_PAKET_BAYT) {
+  // Önizleme için fazla büyük dosya: 3B yok, plaka görseli yine gider (aşağıda).
+  const cokBuyuk = vizPaketiCokBuyuk(model);
+  const bulutta = !cokBuyuk && (onceki?.viz?.key === vizAnahtari || (await headObjectSize(vizAnahtari, cfg)) != null);
+  if (!cokBuyuk && !bulutta) {
+    // Diskte varsa anında; yoksa BİR KEZ taranır. Çok büyükse 3B atlanır, görsel devam eder.
+    const paket = await getVizPack(model.id).catch((e: unknown) => {
+      if (e instanceof ModelCokBuyukHatasi) return null;
+      throw e;
+    });
+    if (paket && paket.bytes.byteLength <= AZAMI_PAKET_BAYT) {
       const sikisik = await gzip(paket.bytes, { level: 6 });
       await putObjectBytes(vizAnahtari, new Uint8Array(sikisik), "application/octet-stream", cfg, {
         contentEncoding: "gzip",
@@ -145,7 +157,7 @@ async function hazirla(yaziciId: string, dosya: string, onceki: Kayit | undefine
       });
       viz = { url: await presignGetUrl(vizAnahtari, cfg, ADRES_OMRU_SN), key: vizAnahtari };
     }
-  } else {
+  } else if (bulutta) {
     viz = { url: await presignGetUrl(vizAnahtari, cfg, ADRES_OMRU_SN), key: vizAnahtari };
   }
 
