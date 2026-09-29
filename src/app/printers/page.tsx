@@ -36,6 +36,7 @@ import {
 } from "@/components/printers/print-flow";
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
+import { useUcBoyutAcik, ucBoyutAyarla } from "@/lib/uc-boyut-ayari";
 import type { VizPack, YolZamani } from "@/lib/gcode-viz/viz-pack";
 import type { CanliOrnek } from "@/lib/gcode-viz/canli-konum";
 // Ürün görselleri KÜÇÜK hâliyle çekilir: ham dosyalar 1,33 MB, küçüğü 21 KB (62 kat).
@@ -344,6 +345,8 @@ export default function PrintersPage() {
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
   const [cancelId, setCancelId] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
+  // Kartlarda canlı 3B (bu cihazda hatırlanır) — işlemci gerekince kapatılır.
+  const ucAcik = useUcBoyutAcik();
   const [libraryOpen, setLibraryOpen] = useState(false);
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
@@ -445,6 +448,37 @@ export default function PrintersPage() {
           <Button variant="outline" size="sm" disabled={manualRefresh} onClick={retryNow} className="gap-2">
             <RefreshCw className={cn("h-4 w-4", manualRefresh && "animate-spin")} />
             Yenile
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              ucBoyutAyarla(!ucAcik);
+              toast.success(ucAcik ? "3B çizimler kapatıldı" : "3B çizimler açıldı", {
+                description: ucAcik ? "Kartlarda plaka görseli gösterilecek" : undefined,
+                duration: 2500,
+              });
+            }}
+            aria-pressed={ucAcik}
+            title={ucAcik ? "Kartlardaki canlı 3B çizimleri kapat (işlemciyi rahatlatır)" : "Kartlardaki canlı 3B çizimleri aç"}
+            className={cn("gap-2 transition-colors", !ucAcik && "text-muted-foreground")}
+          >
+            <Rotate3d className={cn("h-4 w-4 transition-transform duration-300", ucAcik ? "text-primary" : "opacity-60")} />
+            3B
+            <span
+              className={cn(
+                "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200",
+                ucAcik ? "bg-primary" : "bg-muted-foreground/30"
+              )}
+              aria-hidden
+            >
+              <span
+                className={cn(
+                  "absolute h-3 w-3 rounded-full bg-background shadow-sm transition-transform duration-200",
+                  ucAcik ? "translate-x-3.5" : "translate-x-0.5"
+                )}
+              />
+            </span>
           </Button>
           <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className="gap-2" disabled={simulated || printers.length === 0}>
             <Upload className="h-4 w-4" /> Özel Baskı
@@ -1003,7 +1037,7 @@ function PrinterCardInner({
 
       <CardContent className="p-4 space-y-3.5">
         {/* ARKA PLAN BASKI ilerlemesi/hatası — modal kapansa da kullanıcı süreci burada görür */}
-        {activePrint && <ActivePrintBanner ap={activePrint} accent={accent} />}
+        {activePrint && <ActivePrintBanner ap={activePrint} accent={accent} printerId={printer.id} />}
 
         {/* Acil: baskı durdu / yazıcı hatası (nedeni hemen altındaki uyarı satırında) */}
         {isError && (
@@ -1887,7 +1921,8 @@ const AP_STAGE_LABEL: Record<string, string> = {
   confirm: "Yazıcı onaylıyor",
 };
 
-function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) {
+function ActivePrintBanner({ ap, accent, printerId }: { ap: ActivePrint; accent: string; printerId: string }) {
+  const qc = useQueryClient();
   const isErr = ap.stage === "error";
   const pct = typeof ap.pct === "number" ? Math.max(0, Math.min(100, Math.round(ap.pct))) : null;
   // MADDE 21(e): bu bantta dönen ikon ve belirsiz bar hareket ayarını hiç dinlemiyordu.
@@ -1906,6 +1941,17 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
         <span className="ml-auto tabular-nums shrink-0" style={{ color: isErr ? undefined : accent }}>
           {isErr ? "başlatılamadı" : pct != null ? `${pct}%` : (AP_STAGE_LABEL[ap.stage] ?? "…")}
         </span>
+        {isErr && (
+          <button
+            type="button"
+            onClick={() => qc.setQueryData(activePrintKey(printerId), null)}
+            className="shrink-0 rounded p-0.5 text-destructive/70 transition-colors hover:bg-destructive/15 hover:text-destructive active:scale-90"
+            aria-label="Uyarıyı kapat"
+            title="Kapat"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {isErr ? (
         <>
@@ -1930,7 +1976,13 @@ function ActivePrintBanner({ ap, accent }: { ap: ActivePrint; accent: string }) 
               <div className="absolute inset-y-0 h-full w-1/3 rounded-full" style={{ background: accent, animation: "indeterminate-bar 1.6s ease-in-out infinite" }} />
             )}
           </div>
-          <p className="text-[10px] text-muted-foreground">{AP_STAGE_LABEL[ap.stage] ?? "İşleniyor"}… · bu arada başka işine bakabilirsin</p>
+          {ap.yeniden ? (
+            <p className="text-[10px] font-medium text-amber-500 motion-safe:animate-in motion-safe:fade-in">
+              Bağlantı koptu — yeniden deneniyor ({ap.yeniden.n}/{ap.yeniden.toplam})
+            </p>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">{AP_STAGE_LABEL[ap.stage] ?? "İşleniyor"}… · bu arada başka işine bakabilirsin</p>
+          )}
         </>
       )}
     </div>
@@ -1989,8 +2041,10 @@ function useLiveBuildModel(
   const pack = livePack?.key === paketAnahtari ? livePack.value : null;
   const modelId = model?.id ?? null;
   const kucukResimYok = model ? !model.thumbnailVar : false;
+  // 3B kapalıyken paket hiç indirilmez/çözülmez (kart plaka görseline düşer).
+  const ucAcik = useUcBoyutAcik();
   useEffect(() => {
-    if (!paketAnahtari || !vizKey || !modelId) return;
+    if (!ucAcik || !paketAnahtari || !vizKey || !modelId) return;
     let alive = true;
     let deneme = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2013,7 +2067,7 @@ function useLiveBuildModel(
     };
     void dene();
     return () => { alive = false; if (timer) clearTimeout(timer); };
-  }, [paketAnahtari, vizKey, modelId, kucukResimYok]);
+  }, [ucAcik, paketAnahtari, vizKey, modelId, kucukResimYok]);
 
   return {
     // Görselin URL'i — gövdeye gömülü data-URL yerine bir yıllık önbellekli uç.
@@ -2135,7 +2189,8 @@ function JobVisual({
    */
   const [ucHazirPaket, setUcHazirPaket] = useState<VizPack | null>(null);
   const [ucHataPaket, setUcHataPaket] = useState<VizPack | null>(null);
-  const ucGoster = !!uc && ucHataPaket !== uc.pack;
+  const ucAcik = useUcBoyutAcik();
+  const ucGoster = ucAcik && !!uc && ucHataPaket !== uc.pack;
   const ucHazir = ucGoster && ucHazirPaket === uc?.pack;
 
   const clickable = !!onOpen3d;

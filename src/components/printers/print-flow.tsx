@@ -37,6 +37,8 @@ export type PrintProg = {
   pct: number | null;
   /** Bu aşamanın tahmini kalan süresi (sn). Hesaplanamıyorsa null — o zaman hiç gösterilmez. */
   kalanSn?: number | null;
+  /** Bağlantı koptu, aktarım yeniden deneniyor (deneme no / toplam). */
+  yeniden?: { n: number; toplam: number } | null;
 };
 export type PrintPrefs = { timelapse: boolean; bedLeveling: boolean; flowCali: boolean };
 interface FileColor { index: number; hex: string; type: string; grams: number | null }
@@ -100,6 +102,7 @@ export async function runPrintStream(
    */
   let asama = "";
   let asamaT0 = 0;
+  let yeniden: PrintProg["yeniden"] = null;
   const ilerle = (stage: PrintProg["stage"], pct: number | null): void => {
     if (stage !== asama) { asama = stage; asamaT0 = Date.now(); }
     let kalanSn: number | null = null;
@@ -110,7 +113,7 @@ export async function runPrintStream(
         if (kalan > 2 && kalan < 3600) kalanSn = Math.round(kalan);
       }
     }
-    onProgress({ stage, pct, kalanSn });
+    onProgress({ stage, pct, kalanSn, yeniden });
   };
   for (;;) {
     const { value, done } = await reader.read();
@@ -121,8 +124,12 @@ export async function runPrintStream(
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (!line) continue;
-      let ev: { stage: string; pct?: number | null; message?: string };
+      let ev: { stage: string; pct?: number | null; message?: string; retry?: number; of?: number };
       try { ev = JSON.parse(line); } catch { continue; }
+      if (typeof ev.retry === "number") {
+        yeniden = { n: ev.retry, toplam: typeof ev.of === "number" ? ev.of : ev.retry };
+        asama = ""; // kalan süre tahmini yeni denemeden başlasın
+      }
       if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
       else if (ev.stage === "done") ok = true;
       else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") ilerle(ev.stage, null);

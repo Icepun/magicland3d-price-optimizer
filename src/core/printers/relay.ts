@@ -38,6 +38,7 @@ import {
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
+import { yarimKalanAktarimlariBildir } from "@/lib/print-transfer";
 import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
 import { sameFamily } from "./printer-family";
 import { startKameraAktarici } from "./camera-relay";
@@ -64,6 +65,8 @@ const START_TTL_MS = 3 * 60_000;
 const processedCmdIds = processSingleton("relay_processedCmdIds", () => new Set<string>());
 const startedKutu = processSingleton("relay_started", () => ({ v: false }));
 const capsWrittenKutu = processSingleton("relay_capsWritten", () => ({ v: false })); // relay yetenek bildirimi (AppSetting) bir kez yazılır
+/** Önceki oturumda yarıda kalan baskı gönderimleri bu süreçte bir kez bildirildi mi? */
+const yarimKontrolKutu = processSingleton("relay_yarim_aktarim", () => ({ v: false }));
 const tickingKutu = processSingleton("relay_ticking", () => ({ v: false })); // re-entrancy guard — bir tick bitmeden diğeri başlamasın (üst üste binme/birikme yok)
 const commandsRunningKutu = processSingleton("relay_commandsRunning", () => ({ v: false })); // komut koşucusu guard'ı — tick'ten ayrık, tek koşucu
 const tickCountKutu = processSingleton("relay_tickCount", () => ({ v: 0 })); // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
@@ -551,6 +554,11 @@ async function tick(): Promise<void> {
     // Kapalıyken biten/hataya düşen baskıyı yakalayabilmek için önceki oturumun durumu.
     await loadNotifyState();
     tickCountKutu.v++;
+    // Uygulama baskı gönderirken kapandıysa: "yarıda kaldı" bildirimi (açılışta bir kez).
+    if (!yarimKontrolKutu.v) {
+      yarimKontrolKutu.v = true;
+      void yarimKalanAktarimlariBildir().catch(() => {});
+    }
     // İlk-tick yan işleri (caps yazımı + depo hademesi) 3. tick'e (~t+25sn) ertelendi:
     // açılışın ilk saniyelerinde bulut yazması/R2 listelemesi ilk ekran sorgularıyla yarışmasın.
     if (!capsWrittenKutu.v && tickCountKutu.v >= 3) {

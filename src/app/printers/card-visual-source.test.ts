@@ -35,7 +35,11 @@ describe("kart görseli kaynağı", () => {
 
   it("WebGL yoksa ya da bağlam kaybedilirse yedek görsele döner", () => {
     expect(GORSEL).toMatch(/onHata=\{\(\) => setUcHataPaket\(uc\.pack\)\}/);
-    expect(GORSEL).toMatch(/const ucGoster = !!uc && ucHataPaket !== uc\.pack/);
+    expect(GORSEL).toMatch(/const ucGoster = ucAcik && !!uc && ucHataPaket !== uc\.pack/);
+  });
+
+  it("3B kapalıyken kart canlı 3B çizmez (ayar bu cihazda hatırlanır)", () => {
+    expect(GORSEL).toMatch(/const ucAcik = useUcBoyutAcik\(\);/);
   });
 
   it("hazır inşa kareleri tamamen kalktı (eski kaynak öne geçemez)", () => {

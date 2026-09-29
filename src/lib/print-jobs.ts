@@ -21,6 +21,8 @@ export interface ActivePrint {
   label: string;
   message?: string;
   startedAt: number;
+  /** Bağlantı koptu, aktarım yeniden deneniyor. */
+  yeniden?: { n: number; toplam: number } | null;
 }
 
 export const activePrintKey = (printerId: string) => ["active-print", printerId] as const;
@@ -43,7 +45,7 @@ export function startBackgroundPrint(
   // Hedef yazıcı AÇIKÇA gider: dosya aynı ailedeki başka yazıcıya (ör. diğer U1) yüklenmiş olabilir.
   void runPrintStream(opts.fileId, { ...opts.printOpts, printerId: opts.printerId }, (p) => {
     if (p.stage === "done") return; // done → kart normal "yazdırıyor" job'a döner (aşağıda temizlenir)
-    set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt });
+    set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt, yeniden: p.yeniden ?? null });
   })
     .then(() => {
       toast.success(`${opts.label} — baskı başladı 🎉`);
@@ -53,7 +55,8 @@ export function startBackgroundPrint(
     .catch((e) => {
       const msg = e instanceof Error ? e.message : "Baskı başlatılamadı";
       toast.error(`${opts.label}: ${msg}`, { duration: 9000 }); // POP-UP: kullanıcı başka yerdeyken de görür
+      // Hata kartta KAPATILANA DEK kalır: eskiden 12 sn sonra siliniyordu ve başından ayrılan
+      // kullanıcı baskının neden başlamadığını hiç göremiyordu (sunucu ayrıca kalıcı bildirim atar).
       set({ stage: "error", pct: null, label: opts.label, message: msg, startedAt });
-      setTimeout(() => set(null), 12000); // hata kartta ~12sn kalır, sonra temizlenir
     });
 }

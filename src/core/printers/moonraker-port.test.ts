@@ -198,3 +198,15 @@ describe("keşif düşerse SON ÇALIŞAN porta düşülür", () => {
     expect(calls.some((c) => c.port === 7125)).toBe(false);
   });
 });
+
+describe("kopan aktarım yeniden denenir mi", () => {
+  it("ağ kopması ve zaman aşımı yeniden denenir; kalıcı hatalar denenmez", async () => {
+    const { aktarimYenidenDenenebilir } = await import("./moonraker");
+    expect(aktarimYenidenDenenebilir(new Error("Yazıcıyla bağlantı aktarım sırasında koptu. Yazıcının…"))).toBe(true);
+    expect(aktarimYenidenDenenebilir(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor"))).toBe(true);
+    expect(aktarimYenidenDenenebilir(new Error("Yükleme başarısız (HTTP 502) bad gateway"))).toBe(true);
+    expect(aktarimYenidenDenenebilir(new Error("Yazıcıda yer yok — eski baskı dosyalarını silip tekrar dene."))).toBe(false);
+    expect(aktarimYenidenDenenebilir(new Error("Dosya aktarımda bozuldu (bütünlük doğrulaması) — tekrar dene."))).toBe(false);
+    expect(aktarimYenidenDenenebilir(new Error("Yükleme başarısız (HTTP 400) x"))).toBe(false);
+  });
+});

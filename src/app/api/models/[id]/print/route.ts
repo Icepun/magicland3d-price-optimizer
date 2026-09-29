@@ -15,6 +15,7 @@ import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-loc
 import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 import { buildSignedUploadName } from "@/lib/print-file-signature";
 import { sameFamily } from "@/core/printers/printer-family";
+import { baskiAktarimiBaslat } from "@/lib/print-transfer";
 
 export const dynamic = "force-dynamic";
 
@@ -93,9 +94,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const enc = new TextEncoder();
     let tmpToClean: string | null = null;
+    // Kara kutu: sonuç ekrandaki akıştan BAĞIMSIZ kaydedilir, başarısızlık kalıcı bildirim olur
+    // (kullanıcı başından ayrılmış, pencere yenilenmiş olabilir). Bkz. lib/print-transfer.
+    const aktarimBitti = baskiAktarimiBaslat({
+      printerId: printer.id,
+      printerName: printer.name,
+      label: mf.originalName,
+      fileId: mf.id,
+    });
+    let sonHata: string | null = null;
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (o: Record<string, unknown>) => {
+          if (o.stage === "error") sonHata = String(o.message ?? "Baskı başlatılamadı");
           try { controller.enqueue(enc.encode(JSON.stringify(o) + "\n")); } catch { /* akış kapandı */ }
         };
         let printerErrored = false;
@@ -278,6 +289,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               await moonrakerUploadAndPrint(printer.host, printer.port, buf, upName, {
                 headMapping: amsMapping, prefs, brand: printer.brand,
                 onProgress: (pct) => send({ stage: "upload", pct }),
+                // Bağlantı koptu: yazıcının ağa dönmesi bekleniyor, aktarım baştan yapılacak.
+                onRetry: (deneme, toplam) => send({ stage: "upload", pct: 0, retry: deneme, of: toplam }),
               });
               matchFilename = upName.replace(/\.[^.]+$/, "");
             }
@@ -347,6 +360,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           // Sıra ÖNEMLİ: önce temizlik + kilit, EN SON close (guard'sız close fırlayıp temizliği atlıyordu).
           if (tmpToClean) { try { fs.unlinkSync(tmpToClean); } catch { /* geçici dosya temizliği kritik değil */ } tmpToClean = null; }
           releasePrintLock(printer.id);
+          await aktarimBitti(sonHata ? { ok: false, sebep: sonHata } : { ok: true }).catch(() => {});
           try { controller.close(); } catch { /* akış zaten kapalı (istemci ayrıldı) */ }
         }
       },

@@ -1,6 +1,23 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
-const { app, BrowserWindow, ipcMain, shell, powerMonitor, Tray, Menu, Notification } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, powerMonitor, powerSaveBlocker, Tray, Menu, Notification } = require("electron");
+
+/**
+ * BASKI GÖNDERİLİRKEN UYKU YOK. Yazıcıya dosya aktarımı dakikalar sürebiliyor; kullanıcı baskıyı
+ * başlatıp başından ayrılınca Windows uykuya geçerse aktarım kopuyor, uyanınca pencere yenilendiği
+ * için de hatanın izi kalmıyordu. Next sunucusu (lib/print-transfer) aynı süreçte çalıştığı için
+ * bu kancayı globalThis üzerinden çağırır.
+ */
+let uykuEngeliId = null;
+globalThis.__MLHUB_UYKU_ENGELI__ = (aktif) => {
+  try {
+    if (aktif && uykuEngeliId == null) uykuEngeliId = powerSaveBlocker.start("prevent-app-suspension");
+    else if (!aktif && uykuEngeliId != null) {
+      powerSaveBlocker.stop(uykuEngeliId);
+      uykuEngeliId = null;
+    }
+  } catch { /* uyku engeli bir kolaylık — aktarımı asla bozmamalı */ }
+};
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
@@ -453,6 +470,16 @@ function setupAutoUpdater() {
     if (!app.isPackaged) return;
 
     writeLog("quit-and-install requested");
+    // Yazıcıya dosya gönderilirken kurulum aktarımı keserdi → baskı başlamazdı. Bitince kurulur.
+    if ((globalThis.__MLHUB_BASKI_AKTARIMI__ || 0) > 0) {
+      writeLog("quit-and-install ertelendi: baskı gönderimi sürüyor");
+      setUpdateState({
+        status: "downloaded",
+        message: "Yazıcıya baskı gönderiliyor — bitince güncelle",
+        percent: 100,
+      });
+      return updateState;
+    }
     isQuittingForUpdate = true;
     setUpdateState({
       status: "installing",

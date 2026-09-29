@@ -1213,6 +1213,32 @@ function yuklemeHizSiniriKbps(marka?: string): number {
   return 0;
 }
 
+/** Kopan aktarım en fazla bu kadar denenir (ilk deneme dahil). */
+const AKTARIM_DENEME = 3;
+
+/**
+ * Ağ kopması / zaman aşımı mı? Kalıcı hatalar (yer yok, bütünlük, 4xx) yeniden DENENMEZ —
+ * aynı sonucu verir ve kullanıcıyı boşuna bekletir.
+ */
+export function aktarimYenidenDenenebilir(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : "";
+  if (/yer yok|bozuldu|HTTP 4\d\d/.test(m)) return false;
+  return /bağlantı aktarım sırasında koptu|zaman aşımı|Yükleme hatası|HTTP 5\d\d/.test(m);
+}
+
+/** Yazıcının ağa dönmesini bekle (U1 kopuşu tipik olarak 20-60 sn sürüyor). Dönmezse null. */
+async function yaziciAgaDonsun(host: string, port: number, azamiMs = 150_000): Promise<MoonrakerStatus | null> {
+  const son = Date.now() + azamiMs;
+  while (Date.now() < son) {
+    await new Promise((r) => setTimeout(r, 5000));
+    try {
+      const st = await fetchMoonrakerStatus(host, port);
+      if (st.online) return st;
+    } catch { /* hâlâ yok — beklemeye devam */ }
+  }
+  return null;
+}
+
 async function moonrakerUploadStream(
   host: string,
   port: number,
@@ -1336,7 +1362,14 @@ export async function moonrakerUploadAndPrint(
   port: number,
   fileBuf: Buffer,
   filename: string,
-  opts: { headMapping?: number[]; prefs?: MoonrakerPrefs; brand?: string; onProgress?: (pct: number) => void } = {}
+  opts: {
+    headMapping?: number[];
+    prefs?: MoonrakerPrefs;
+    brand?: string;
+    onProgress?: (pct: number) => void;
+    /** Aktarım koptu ve yeniden deneniyor (deneme no, toplam). */
+    onRetry?: (deneme: number, toplam: number) => void;
+  } = {}
 ): Promise<void> {
   const isSnapmaker = (opts.brand || "").toLowerCase() === "snapmaker";
   // Yüklemeden ÖNCE boşta-kontrolü — meşgul yazıcıya upload etmek boşa bant genişliği + Elegoo'da
@@ -1384,9 +1417,30 @@ export async function moonrakerUploadAndPrint(
 
   // Upload — GERÇEK yüzde ilerlemeli akış. Snapmaker: print=false (başlatma ayrı, parametreli);
   // diğer: print=true (atomik).
-  const uploadResp = await moonrakerUploadStream(
-    host, port, body, filename, !isSnapmaker, opts.onProgress, yuklemeHizSiniriKbps(opts.brand),
-  );
+  /**
+   * KOPAN AKTARIM YENİDEN DENENİR. Ölçüldü (21 Ağu 2026): U1 büyük dosya alırken yolun ortasında
+   * WiFi'dan tamamen düşüyor. Eskiden aktarım hatayla biter, hata birkaç saniyelik bir bildirimde
+   * kalırdı — kullanıcı başından ayrıldıysa baskı hiç başlamamış olurdu (29 Eyl 2026, U1 Alt).
+   * Artık yazıcının ağa dönmesi beklenir ve aktarım baştan yapılır.
+   */
+  let uploadResp: unknown = null;
+  for (let deneme = 1; ; deneme++) {
+    try {
+      uploadResp = await moonrakerUploadStream(
+        host, port, body, filename, !isSnapmaker, opts.onProgress, yuklemeHizSiniriKbps(opts.brand),
+      );
+      break;
+    } catch (e) {
+      if (deneme >= AKTARIM_DENEME || !aktarimYenidenDenenebilir(e)) throw e;
+      opts.onRetry?.(deneme + 1, AKTARIM_DENEME);
+      const st = await yaziciAgaDonsun(host, port);
+      if (!st) throw e;
+      // Elegoo (print=true) kopuşa rağmen dosyayı alıp basmaya başlamış olabilir: tekrar gönderme.
+      if (!isSnapmaker && (st.state === "printing" || st.state === "paused") && st.filename === filename) return;
+      if (st.state === "printing" || st.state === "paused") throw e;
+      opts.onProgress?.(0);
+    }
+  }
   if (!isSnapmaker) {
     // Elegoo (print=true): Moonraker dosyayı alıp BASMAMIŞ olabilir (meşgul/hazır değil) —
     // yanıt HTTP 2xx gelir ama print_started:false taşır. Açıkça false ise hata fırlat.
