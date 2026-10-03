@@ -886,16 +886,19 @@ async function computeOrdersBodyInner(
     //    İKİ satır. Paket↔sipariş eşleşmesini SADECE gerçek veriden bildiğimiz için silme kesin:
     //    tahmin yok, yalnız bu turda ikisini birden gördüğümüz siparişler temizlenir.
     //    (Görünür pencerenin dışında kalan daha eski çiftler bu yolla eşleştirilemez.)
-    const staleIds = hbPackageKeyPairs.map((p) => `hb-${p.packageNo}`);
+    const staleIds = [...new Set(hbPackageKeyPairs.map((p) => `hb-${p.packageNo}`))];
     if (staleIds.length) {
       for (let i = 0; i < staleIds.length; i += 200) {
+        const dilim = staleIds.slice(i, i + 200);
         await prisma.orderFinanceSnapshot
-          .deleteMany({
-            where: { platform: "hepsiburada", externalOrderId: { in: staleIds.slice(i, i + 200) } },
-          })
+          .deleteMany({ where: { platform: "hepsiburada", externalOrderId: { in: dilim } } })
           .catch(() => {
             /* temizlik siparişleri getirmeyi ASLA bozmamalı */
           });
+        // Ürün bazlı satış geçmişi de aynı siparişi iki kez saymasın.
+        await prisma.orderItemSnapshot
+          .deleteMany({ where: { platform: "hepsiburada", externalOrderId: { in: dilim } } })
+          .catch(() => {});
       }
     }
     // f) Çekim sorunsuz bitti → ancak şimdi ortak listeye aktar ve durumu yaz.

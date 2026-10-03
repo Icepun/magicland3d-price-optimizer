@@ -50,9 +50,28 @@ export function hbTarihMs(...vals: unknown[]): number | null {
   return null;
 }
 
-/** Paket/talep kaydının GERÇEK sipariş numarası (paket numarası değil). */
-function hbSiparisNo(p: Record<string, unknown>): string {
-  return hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+/**
+ * Paket/talep kaydının GERÇEK sipariş numarası (paket numarası değil).
+ *
+ * ⚠️ STATÜSÜZ PAKET LİSTESİNDE sipariş numarası paketin kendisinde YOK, kalemlerinde
+ * (`items[].orderNumber`) duruyor — ölçüldü 3 Eki 2026. Kalemlere bakılmadığı için anahtar paket
+ * numarasına düşüyordu: aynı sipariş paketlenince ikinci kez "yeni sipariş" bildirildi (1-2 gün
+ * sonra, toplu) ve finans geçmişine ikinci kez yazıldı (Hepsiburada'nın 223 kaydının 83'ü).
+ * Teslim/kargo listeleri ise numarayı üstte büyük harfle (`OrderNumber`) veriyor.
+ */
+export function hbSiparisNo(p: Record<string, unknown>): string {
+  const ust = hbStr(p.OrderNumber, p.orderNumber, Array.isArray(p.OrderNumbers) ? p.OrderNumbers[0] : "");
+  if (ust) return ust;
+  for (const kalem of hbArray(p, ["items", "Items", "lines", "orderItems"])) {
+    const no = hbStr(kalem.orderNumber, kalem.OrderNumber);
+    if (no) return no;
+  }
+  return "";
+}
+
+/** Paket numarası — statüsüz listede `packageNumber`, teslim/kargo listelerinde `PackageNumber`. */
+export function hbPaketNo(p: Record<string, unknown>): string {
+  return hbStr(p.packageNumber, p.PackageNumber);
 }
 
 /**
@@ -307,11 +326,14 @@ export async function hbSiparisleriTopla<K>(
     const tamSiparis = durum === "";
     for (const p of paketler) {
       const orderNo = hbSiparisNo(p);
+      // Paket↔sipariş çifti HER listeden toplanır: paket numarasıyla yazılmış eski kopya kayıtlar
+      // (bkz. hbSiparisNo) ancak çift bilinince kesin olarak temizlenebiliyor.
+      const paketNo = hbPaketNo(p);
+      if (orderNo && paketNo && orderNo !== paketNo) paketCiftleri.push({ orderNo, packageNo: paketNo });
       if (tamSiparis) {
-        const packageNo = hbStr(p.packageNumber, p.id);
+        const packageNo = paketNo || hbStr(p.id);
         const key = orderNo || packageNo;
         if (!key || siparisler.has(key)) continue;
-        if (orderNo && packageNo && orderNo !== packageNo) paketCiftleri.push({ orderNo, packageNo });
         siparisler.set(key, {
           status: hbStr(p.status) || etiket,
           date: hbPaketVerilisMs(p),

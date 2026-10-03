@@ -123,6 +123,31 @@ describe("paket listeleri", () => {
     expect(siparisler.get("O1")?.lines).toEqual([{ ad: "Vazo", adet: 1 }]);
     expect(paketCiftleri).toEqual([{ orderNo: "O1", packageNo: "P1" }]);
   });
+
+  /**
+   * GERÇEK BİÇİM (ölçüldü 3 Eki 2026): statüsüz pakette sipariş numarası ÜSTTE yok, kalemde.
+   * Eskiden anahtar paket numarasına düşüyordu → aynı sipariş paketlenince ikinci kez "yeni"
+   * bildiriliyor ve finans geçmişine ikinci kez yazılıyordu.
+   */
+  it("sipariş numarası yalnız kalemdeyse de anahtar SİPARİŞ numarasıdır (açık siparişle birleşir)", async () => {
+    const { siparisler, paketCiftleri } = await topla(
+      uclar({
+        acik: [[{ orderNumber: "4733", productName: "Vazo", quantity: 1 }]],
+        paket: {
+          "": [{ packageNumber: "5523", status: "Open", items: [{ orderNumber: "4733", productName: "Vazo" }] }],
+        },
+      })
+    );
+    expect([...siparisler.keys()]).toEqual(["4733"]);
+    expect(paketCiftleri).toEqual([{ orderNo: "4733", packageNo: "5523" }]);
+  });
+
+  it("teslim/kargo listelerindeki büyük harfli PackageNumber da kopya temizliği için eşlenir", async () => {
+    const { paketCiftleri } = await topla(
+      uclar({ paket: { delivered: [{ OrderNumber: "4740", PackageNumber: "5522" }] } })
+    );
+    expect(paketCiftleri).toEqual([{ orderNo: "4740", packageNo: "5522" }]);
+  });
 });
 
 describe("iptal / iade listeleri", () => {
