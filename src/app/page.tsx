@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { fetchJson } from "@/lib/fetch-json";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -819,6 +819,8 @@ interface OrdersSummaryBucket {
 }
 interface OrdersSummary {
   days: number;
+  /** Pencerenin ilk anı (eski bir gövdede yok — o zaman hesap anından türetilir). */
+  from?: string;
   shopify: OrdersSummaryBucket;
   trendyol: OrdersSummaryBucket;
   hepsiburada: OrdersSummaryBucket;
@@ -850,8 +852,19 @@ function OrdersCardShell({ delay, children }: { delay: number; children: React.R
   );
 }
 
+/** Sipariş penceresinin ilk anı — gider toplamı AYNI andan itibaren alınır. */
+function siparisPenceresiBasi(summary: OrdersSummary | undefined, computedAt: string | undefined): string | null {
+  if (!summary) return null;
+  if (summary.from && Number.isFinite(Date.parse(summary.from))) return summary.from;
+  const hesap = computedAt ? Date.parse(computedAt) : Number.NaN;
+  if (!Number.isFinite(hesap)) return null;
+  // Sunucuyla aynı formül: hesap gününün UTC başından `days` gün geri.
+  return new Date((Math.floor(hesap / 86_400_000) - summary.days) * 86_400_000).toISOString();
+}
+
 function OrdersSummaryCard({ delay }: { delay: number }) {
   const { data, isLoading, isError, isFetching, refetch } = useQuery<{
+    computedAt?: string;
     summary?: OrdersSummary;
     shopify?: PlatformFetchStatus;
     trendyol?: PlatformFetchStatus;
@@ -865,6 +878,32 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
     refetchOnMount: true,
   });
   const s = data?.summary;
+  /**
+   * NET KÂR = sipariş kârı − AYNI 30 günde ödenen giderler (Gider Ödemeleri). Gider ekranı
+   * değişince `["actual-expenses"]` önekiyle düşürülür, bu kart da kendiliğinden tazelenir.
+   */
+  const pencereBasi = siparisPenceresiBasi(s, data?.computedAt);
+  /**
+   * ⚠️ ANAHTAR SABİT: pencere başlangıcı anahtara konunca veri gelince YENİ bir sorgu çizim
+   * sırasında kuruluyordu; Panel'in önbellek dinleyicisi (useComputedAt) o an tetiklenip "başka
+   * bir bileşen çizilirken güncelleme" uyarısı veriyordu. Pencere değişirse aşağıdaki etki
+   * yeniden çeker.
+   */
+  const gider = useQuery<{ from: string; toplam: number; adet: number }>({
+    queryKey: ["actual-expenses", "toplam"],
+    queryFn: ({ signal }) =>
+      fetchJson(`/api/actual-expenses?toplam=1&from=${encodeURIComponent(pencereBasi ?? "")}`, {
+        signal,
+      }),
+    enabled: pencereBasi != null,
+    staleTime: 60_000,
+    refetchOnMount: true,
+  });
+  const giderPenceresi = gider.data?.from;
+  const giderYenile = gider.refetch;
+  useEffect(() => {
+    if (pencereBasi && giderPenceresi && giderPenceresi !== pencereBasi) void giderYenile();
+  }, [pencereBasi, giderPenceresi, giderYenile]);
 
   if (isLoading && !s) {
     return (
@@ -908,7 +947,10 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
     );
   }
 
-  const profitPos = s.total.profit >= 0;
+  // Başka bir pencerenin toplamı bu pencerenin net kârına KARIŞMAZ (yenisi gelene dek bekle).
+  const giderToplami = gider.data?.from === pencereBasi ? gider.data?.toplam : undefined;
+  const net = giderToplami == null ? null : s.total.profit - giderToplami;
+  const netPos = (net ?? s.total.profit) >= 0;
   // Kurulmamış platform "hata" değildir; yalnız kurulu olup ALINAMAYAN veri uyarı üretir.
   const failed = (st?: PlatformFetchStatus) => !!st && !st.ok && !st.notConfigured;
   const rows: {
@@ -969,17 +1011,47 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
               </p>
             </div>
 
-            {/* Sipariş kârı — genel gider ödemeleri aylık raporda ayrıca düşülür. */}
+            {/* NET KÂR — aynı 30 günde ödenen giderler düşülmüş hâli. Gider toplamı alınamazsa
+                rakam kendi adıyla ("Sipariş kârı") gösterilir: gideri düşülmemiş bir sayıya
+                "net" denmez. */}
             <div className="sm:border-l sm:border-border/50 sm:pl-4">
-              <p className="text-[11px] text-muted-foreground">Sipariş kârı</p>
-              <p
-                className="text-2xl font-bold tabular-nums leading-tight"
-                style={{ color: profitPos ? ACCENTS.green : ACCENTS.red }}
-              >
-                {profitPos ? "+" : ""}
-                <AnimatedNumber value={s.total.profit} format={fmtTL} />
-              </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">tahmini</p>
+              {net != null ? (
+                <>
+                  <p className="text-[11px] text-muted-foreground">Net kâr</p>
+                  <p
+                    className="text-2xl font-bold tabular-nums leading-tight"
+                    style={{ color: netPos ? ACCENTS.green : ACCENTS.red }}
+                  >
+                    {netPos ? "+" : ""}
+                    <AnimatedNumber value={net} format={fmtTL} />
+                  </p>
+                  <p className="text-[11px] text-muted-foreground tabular-nums mt-0.5 animate-in fade-in duration-500">
+                    {giderToplami && giderToplami > 0
+                      ? `${fmtTL(giderToplami)} gider düşüldü`
+                      : "Gider kaydı yok"}
+                  </p>
+                </>
+              ) : gider.isError || pencereBasi == null ? (
+                <>
+                  <p className="text-[11px] text-muted-foreground">Sipariş kârı</p>
+                  <p
+                    className="text-2xl font-bold tabular-nums leading-tight"
+                    style={{ color: netPos ? ACCENTS.green : ACCENTS.red }}
+                  >
+                    {netPos ? "+" : ""}
+                    <AnimatedNumber value={s.total.profit} format={fmtTL} />
+                  </p>
+                  <p className="text-[11px] mt-0.5" style={{ color: ACCENTS.amber }}>
+                    Giderler alınamadı
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[11px] text-muted-foreground">Net kâr</p>
+                  <Skeleton className="h-7 w-24 mt-0.5" />
+                  <Skeleton className="h-2.5 w-20 mt-1.5" />
+                </>
+              )}
             </div>
 
             {/* Platform kırılımı */}

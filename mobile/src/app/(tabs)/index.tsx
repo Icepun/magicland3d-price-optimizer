@@ -25,10 +25,11 @@ import {
 import { getAllOrders, isExcludedFromTotals, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
+import { getExpenseTotalSince } from "@/lib/db/finance";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
-import { panelCirosu } from "@/lib/panel-ciro";
+import { donemKesimi, panelCirosu } from "@/lib/panel-ciro";
 import {
   ORDER_PLATFORM_COLOR,
   ORDER_PLATFORM_SHORT_LABEL,
@@ -107,6 +108,20 @@ export default function DashboardScreen() {
     });
   }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
 
+  /**
+   * NET KÂR = sipariş kârı − AYNI dönemde ödenen giderler (masaüstü Panel'iyle aynı). Kesim ciro
+   * penceresiyle birebir; Gider ekranı `["actual-expenses"]` önekini düşürünce bu da tazelenir.
+   */
+  const kesim = ordersAt ? donemKesimi(ordersAt, donem) : null;
+  const { data: giderKurus } = useQuery({
+    queryKey: ["actual-expenses", "toplam", kesim, ordersAt],
+    queryFn: () => getExpenseTotalSince(kesim ?? 0, ordersAt || undefined),
+    enabled: kesim != null,
+  });
+  const gider = giderKurus == null ? null : giderKurus / 100;
+  const net = rev && gider != null ? rev.profit - gider : null;
+  const gosterilenKar = net ?? rev?.profit ?? 0;
+
   return (
     <Screen
       header={<Header title="Panel" subtitle="Pazaryerleri + manuel satışlar" updatedAt={ordersAt} />}
@@ -137,15 +152,15 @@ export default function DashboardScreen() {
 
               <View style={styles.profitRow}>
                 <Txt v="small" tone="dim">
-                  Sipariş kârı
+                  {net != null ? "Net kâr" : "Sipariş kârı"}
                 </Txt>
                 {rev ? (
                   <>
-                    <Money value={rev.profit} v="heading" tone={rev.profit < 0 ? "bad" : "good"} compact />
+                    <Money value={gosterilenKar} v="heading" tone={gosterilenKar < 0 ? "bad" : "good"} compact />
                     {rev.total > 0 ? (
-                      <View style={[styles.deltaPill, { backgroundColor: rev.profit < 0 ? color.badSoft : color.goodSoft }]}>
-                        <Txt v="label" tone={rev.profit < 0 ? "bad" : "good"} num>
-                          {formatPercent(rev.profit / rev.total)}
+                      <View style={[styles.deltaPill, { backgroundColor: gosterilenKar < 0 ? color.badSoft : color.goodSoft }]}>
+                        <Txt v="label" tone={gosterilenKar < 0 ? "bad" : "good"} num>
+                          {formatPercent(gosterilenKar / rev.total)}
                         </Txt>
                       </View>
                     ) : null}
@@ -157,6 +172,11 @@ export default function DashboardScreen() {
                   <Shimmer width={120} height={16} />
                 )}
               </View>
+              {gider != null && gider > 0 ? (
+                <Txt v="label" tone="faint" num>
+                  {formatCompactCurrency(gider)} gider düşüldü
+                </Txt>
+              ) : null}
 
               <Bars values={rev?.gunluk ?? []} height={64} emphasis={(i) => i >= donem + 1 - 7} style={styles.bars} />
               <View style={styles.rowBetween}>

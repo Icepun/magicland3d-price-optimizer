@@ -30,6 +30,8 @@ import {
   trendyolCommissionStatsSql,
 } from "@/lib/finance-report-meta";
 import { readProductProfitability } from "@/lib/finance-product-profitability";
+import { ensureRecurringExpenses } from "@/lib/recurring-expense-run";
+import { karEksikAdaylari, karEksikSebepleriniOku } from "@/lib/finance-missing-costs";
 
 /**
  * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
@@ -196,9 +198,10 @@ export async function GET(req: NextRequest) {
   // v7: KDV özeti yanıttan çıkarıldı (arayüzde kart yok), ürün bazlı satış özeti ve gerçek
   // komisyon sayıları eklendi. Anahtar artmazsa diskteki ESKİ gövde 30 güne kadar taze sayılır
   // ve yeni alanlar hiç görünmezdi.
+  // v8: "kâr hesabı tam değil" uyarısının sebepleri (maliyetsiz ürünler, bağlanmamış satışlar).
   try {
     const data = await swr(
-      `finance-monthly:v7:${monthCount}`,
+      `finance-monthly:v8:${monthCount}`,
       60_000,
       () => computeMonthlyFinance(monthCount)
     );
@@ -269,6 +272,15 @@ export async function POST(req: NextRequest) {
 
 async function computeMonthlyFinance(monthCount: number) {
   await ensureRuntimeSchema();
+  // Vakti gelen sabit giderler (muhasebe, abonelik…) yalnız Gider ekranı açılınca kayda
+  // dönüşüyordu: o ekran açılmadan net kâr o ayın sabit giderlerini İÇERMİYORDU (Eylül'de
+  // 6'sında ödenen gider 11'ine kadar rapora girmedi). Yazılacak bir şey yoksa iki okuma.
+  await ensureRecurringExpenses().catch((error) => {
+    console.error(
+      "[finance-monthly] sabit giderler oluşturulamadı:",
+      error instanceof Error ? error.message : error
+    );
+  });
 
   // Pencere ve toplama AYNI "şimdi"yi kullanmalı; yoksa istek tam ay dönümüne denk gelirse
   // çekilen aralık ile toplanan aylar bir ay kayabilir.
@@ -436,6 +448,21 @@ async function computeMonthlyFinance(monthCount: number) {
     now,
   });
 
+  // "Kâr hesabı tam değil" uyarısının SEBEPLERİ: hangi ürüne maliyet girilmeli, hangi satış ürüne
+  // bağlanmalı. Okuma yalnız eksik sipariş varsa yapılır; düşerse uyarı sayıyla yetinir.
+  const karEksik =
+    quality.incompleteOrders > 0
+      ? await karEksikSebepleriniOku(
+          karEksikAdaylari({ orders: salesOrders, items, rangeFrom: windowStart })
+        ).catch((error) => {
+          console.error(
+            "[finance-monthly] eksik maliyet listesi okunamadı:",
+            error instanceof Error ? error.message : error
+          );
+          return null;
+        })
+      : null;
+
   // Tek sorgu (OrderFinanceSnapshot LEFT JOIN DISTINCT OrderItemSnapshot). Pencere aynı
   // tutulur ki sayfadaki toplam ile ay kartlarındaki sayılar aynı kümeden gelsin.
   const recalcReadiness = await readFinanceRecalcReadiness({
@@ -457,6 +484,7 @@ async function computeMonthlyFinance(monthCount: number) {
     totals,
     months,
     quality,
+    karEksik,
     products,
     // "Kaç siparişin kârı eski hesaplamayla kayıtlı ve kaçı GERÇEKTEN düzeltilebilir?"
     // Ürün dökümü olmayan sipariş yeniden hesaplanamaz; bu ayrım olmadan sayfa 18 sipariş

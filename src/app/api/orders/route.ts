@@ -41,6 +41,8 @@ import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { trendyolDateToIso } from "@/core/trendyol-date";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
+import { trendyolIadeDurumu } from "@/core/trendyol-iade";
+import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
@@ -250,6 +252,7 @@ const TRENDYOL_RETURNED_LINE_STATUS = new Set(["Returned", "UnDeliveredAndReturn
 function isReturnedLineStatus(status?: string): boolean {
   return Boolean(status && TRENDYOL_RETURNED_LINE_STATUS.has(status));
 }
+
 
 // ── Hepsiburada yardımcıları (yanıt şekli Test'le doğrulanana dek defansif) ──
 const HB_STATUS = HEPSIBURADA_STATUS_KINDS;
@@ -711,6 +714,8 @@ async function computeOrdersBodyInner(
     // için dilim 14 GÜN OLAMAZ — açıklık sınırı aşar ve Trendyol pencerenin en yeni ucunu
     // sessizce kırpar (bkz. o dosyadaki olay kaydı).
     const tyWindows = buildTrendyolWindows(Date.now(), historyCutoff);
+    // İade talepleri siparişlerle AYNI ANDA istenir — bekleme eklemez, hata fırlatmaz.
+    const iadelerSozu = trendyolIadeleriniOku(client);
     // Sonuçlar dilim sırasında toplanır (yeni → eski): eşzamanlı çekim listenin sırasını bozmasın.
     const tyByWindow: TrendyolOrder[][] = tyWindows.map(() => []);
     await mapLimit(
@@ -726,6 +731,7 @@ async function computeOrdersBodyInner(
         }
       }
     );
+    const iadeler = await iadelerSozu;
     const seenTy = new Set<string>();
     for (const [rowIndex, o] of tyByWindow.flat().entries()) {
       // Paket id'si 0 olan yeni siparişler (Trendyol ilk saniyelerde böyle veriyor) artık "0"
@@ -733,13 +739,23 @@ async function computeOrdersBodyInner(
       const id = trendyolOrderId(o, rowIndex);
       if (seenTy.has(id)) continue; // pencere sınırı çakışması olursa çift sayma
       seenTy.add(id);
-      const st = trendyolStatus(o.status);
+      let st = trendyolStatus(o.status);
       // Çok kalemli siparişte TEK kalemin iadesi paket durumuna yansımıyor: satır
       // durumundan sayılır. Paket tutarının bu durumda ne olduğu doğrulanmadığı için
       // ciroya DOKUNMUYORUZ — yalnız kullanıcıya "bu siparişte iade var" diyoruz.
-      const returnedLineCount = (o.lines ?? []).filter((l) =>
+      let returnedLineCount = (o.lines ?? []).filter((l) =>
         isReturnedLineStatus(l.orderLineItemStatusName)
       ).length;
+      // Kabul edilmiş iade talebi: paket "Delivered" görünse de para geri verildi. Bütün adetler
+      // iade edildiyse sipariş İADE olur (ciro/kâr dışı); bir kısmıysa yalnız işaretlenir.
+      const iade = iadeler.get(id);
+      const paketAdet = (o.lines ?? []).reduce((t, l) => t + Number(l.quantity ?? 1), 0);
+      const iadeDurumu = trendyolIadeDurumu(paketAdet, iade);
+      if (iadeDurumu === "tam" && st.kind !== "cancelled") {
+        st = { ...TRENDYOL_STATUS.Returned, unknown: false };
+      } else if (iadeDurumu === "kismi" && iade) {
+        returnedLineCount = Math.max(returnedLineCount, iade.satirSayisi);
+      }
       buffer.push({
         platform: "trendyol",
         // Paket id'si henüz yoksa GEÇİCİ kimlik: listede görünür, kalıcı kayda yazılmaz.
@@ -771,6 +787,8 @@ async function computeOrdersBodyInner(
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
     commitRaws(buffer);
+    // Pencere dışına düşmüş (ya da telefonun eski sürümünün geri çevirdiği) kayıtlar — arka planda.
+    if (iadeler.size > 0) void trendyolIadeleriniGecmiseIsle(iadeler);
     trendyol = { ok: true, count: buffer.length };
     markOrdersSource(runId, "trendyol", "done", buffer.length);
   } catch (e) {
@@ -1596,6 +1614,8 @@ async function computeOrdersBodyInner(
     orders: visibleOrders,
     summary: {
       days: WINDOW_DAYS,
+      // Pencerenin İLK anı — Panel'in net kârı giderleri AYNI andan itibaren düşer.
+      from: new Date(cutoff).toISOString(),
       shopify: sShopify,
       trendyol: sTrendyol,
       hepsiburada: sHepsiburada,

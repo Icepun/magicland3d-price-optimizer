@@ -117,6 +117,14 @@ export interface RecalcReadiness extends RecalcReadinessBucket {
   months: RecalcMonthReadiness[];
 }
 
+/** "Kâr hesabı tam değil" uyarısının sebepleri — maliyetsiz ürünler ve bağlanmamış satışlar. */
+export interface KarEksikSebepleri {
+  urunler: Array<{ productId: string; name: string; imageUrl: string | null; siparis: number }>;
+  digerUrun: number;
+  baglanmamis: Array<{ ad: string; siparis: number }>;
+  digerBaglanmamis: number;
+}
+
 /** Teorik kârlılık listesi — `/api/finance/monthly?section=profitability` gövdesi. */
 export interface ProfitabilityRow {
   id: string;
@@ -148,6 +156,7 @@ export interface FinanceResponse {
   quality: FinanceQuality;
   /** Sunucunun sonradan eklediği bloklar — eski bir gövdede yok olabilir. */
   commission?: CommissionStats;
+  karEksik?: KarEksikSebepleri | null;
   products?: ProductSalesSummary;
   sources?: SourceHealth;
   recalcReadiness?: RecalcReadiness;
@@ -541,17 +550,22 @@ export function monthProgress(
 /**
  * Ay sonu tahmini: günlük ortalama × ayın gün sayısı.
  *
- * ⚠️ Ayın İLK GÜNLERİNDE tahmin ÜRETİLMEZ: bir-iki günlük satıştan ay çıkarmak saçma bir
- * rakam verir. Bitmiş ayda da üretilmez — orada tahmine gerek yok, gerçek rakam var.
+ * ⚠️ Ayın İLK HAFTASINDA tahmin ÜRETİLMEZ. Eşik 3 gündü ve yetmedi (4 Eki 2026): Ekim'in ilk üç
+ * gününden ~₺265 bin ay sonu çıkıyordu (Eylül'ün tamamı ₺137 bin) — tek bir ₺8.500'lük manuel
+ * sipariş günlük ortalamayı ikiye katlıyordu. Bir haftalık satış hafta içi/sonu dalgasını da
+ * kapsar. Bitmiş ayda da üretilmez — orada tahmine gerek yok, gerçek rakam var.
  * Değer SIFIRKEN de üretilmez: henüz hiç hareket yokken "ay sıfırla kapanacak" demek olurdu.
  */
+/** Ay sonu tahmininin başladığı gün sayısı (tam gün olarak geçmiş süre). */
+export const PROJECTION_MIN_DAYS = 7;
+
 export function monthProjection(
   value: number | null | undefined,
   progress: MonthProgress | null
 ): number | null {
   if (!progress || !progress.ongoing) return null;
   if (progress.totalDays <= 0) return null;
-  if (progress.elapsed < 3) return null;
+  if (progress.elapsed < PROJECTION_MIN_DAYS) return null;
   if (progress.elapsedDays >= progress.totalDays) return null;
   if (typeof value !== "number" || !Number.isFinite(value) || value === 0) return null;
   return (value / progress.elapsed) * progress.totalDays;

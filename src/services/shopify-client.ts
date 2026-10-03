@@ -142,6 +142,8 @@ interface AdminOrdersResponse {
           name: string;
           createdAt: string;
           cancelledAt: string | null;
+          /** Shopify'ın test siparişi (deneme ödeme yöntemiyle) — satış değildir. */
+          test?: boolean | null;
           displayFinancialStatus: string | null;
           displayFulfillmentStatus: string | null;
           currentTotalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
@@ -253,6 +255,7 @@ const ordersQuery = (apiVersion: string) => `
           name
           createdAt
           cancelledAt
+          test
           displayFinancialStatus
           displayFulfillmentStatus
           currentTotalPriceSet { shopMoney { amount currencyCode } }
@@ -576,7 +579,9 @@ export class ShopifyClient {
       }
       cursor = orders.pageInfo.endCursor;
     }
-    return edges.map(({ node }) => {
+    // TEST SİPARİŞİ satış değildir: listeye, ciroya ve finans geçmişine hiç girmez. (Ağustos'ta
+    // deneme için açılan siparişler Raporlar'da ₺1.700,98 ciro olarak duruyordu.)
+    return edges.filter(({ node }) => node.test !== true).map(({ node }) => {
       // İlk takip numarası olan gönderim (ilk gönderimde numara yoksa sonrakilere bakılır).
       const tracking = (node.fulfillments ?? []).map((f) => f.trackingInfo?.[0]).find(Boolean);
       const customerName = node.customer

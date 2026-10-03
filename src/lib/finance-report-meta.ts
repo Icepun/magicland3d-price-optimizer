@@ -29,7 +29,9 @@ export function trendyolCommissionStatsSql(): string {
     (SELECT COUNT(*) FROM "PlatformOrderFinancial" f
        JOIN "OrderFinanceSnapshot" s
          ON s."platform" = 'trendyol' AND s."externalOrderId" = f."externalOrderId"
-      WHERE f."platform" = 'trendyol' AND s."actualCommissionKurus" IS NULL) AS "pending"`;
+      WHERE f."platform" = 'trendyol' AND s."actualCommissionKurus" IS NULL
+        -- İptal/iade edilen siparişin kârı zaten sayılmıyor; "işlenemiyor" listesine girmez.
+        AND s."statusKind" <> 'cancelled') AS "pending"`;
 }
 
 export interface TrendyolCommissionStats {

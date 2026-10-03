@@ -57,7 +57,7 @@ describe("actual expenses routes", () => {
       await db.actualExpense.findUniqueOrThrow({ where: { id: payload.id } })
     ).toMatchObject({ amountKurus: 1235 });
 
-    const listed = await listExpenses();
+    const listed = await listExpenses(request("GET"));
     expect(await listed.json()).toEqual([expect.objectContaining({ id: payload.id, amount: 12.35 })]);
 
     const updated = await updateExpense(request("PATCH", { amount: 20.005 }), {
@@ -77,5 +77,37 @@ describe("actual expenses routes", () => {
       request("POST", { name: "Hatalı", amount: 0, paidAt: "tarih-değil" })
     );
     expect(response.status).toBe(400);
+  });
+
+  /**
+   * Panel'in net kârı bu toplamla kurulur: pencere başlangıcından BUGÜNE ödenenler. Pencereden
+   * önceki ve henüz gelmemiş tarihli gider girmez.
+   */
+  it("verilen andan bugüne ödenen giderleri toplar", async () => {
+    const gun = 86_400_000;
+    const simdi = Date.now();
+    const ekle = async (amount: number, paidAtMs: number) => {
+      const res = await createExpense(
+        request("POST", { name: "Reklam", amount, paidAt: new Date(paidAtMs).toISOString() })
+      );
+      expect(res.status).toBe(201);
+    };
+    await ekle(1636, simdi - 40 * gun); // pencereden önce
+    await ekle(5250, simdi - 10 * gun);
+    await ekle(4600.5, simdi - gun);
+    await ekle(999, simdi + 5 * gun); // ileri tarihli — henüz ödenmedi
+
+    const from = new Date(simdi - 30 * gun).toISOString();
+    const res = await listExpenses(
+      new Request(
+        `http://localhost/api/actual-expenses?toplam=1&from=${encodeURIComponent(from)}`
+      ) as NextRequest
+    );
+    expect(await res.json()).toEqual({ from, toplam: 9850.5, adet: 2 });
+
+    const hatali = await listExpenses(
+      new Request("http://localhost/api/actual-expenses?toplam=1&from=dun") as NextRequest
+    );
+    expect(hatali.status).toBe(400);
   });
 });

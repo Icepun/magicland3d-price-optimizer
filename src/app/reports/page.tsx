@@ -48,6 +48,7 @@ import { usePageHidden, usePrefersReducedMotion } from "@/lib/client-state";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
 import { toast } from "sonner";
+import { requestOrdersView } from "@/components/ui/command-palette";
 import {
   blockedRecalcText,
   chartMonths,
@@ -67,6 +68,7 @@ import {
   visibleRangeOptions,
   windowRecalcSummary,
   type FinanceResponse,
+  type KarEksikSebepleri,
   type MonthRangeKey,
   type ProductProfitability,
   type ProductSalesRow,
@@ -654,6 +656,7 @@ export default function ReportsPage() {
       month.orderProfit !== 0
   );
   const incompleteTotal = finance?.quality.incompleteOrders ?? 0;
+  const karEksik = finance?.karEksik ?? null;
   // Kayıtlı geçmiş sipariş çekimine bağlı değil: iskelet YALNIZ gerçekten hiç veri yokken.
   // ⚠️ `isPending` DEĞİL `isLoading`: ağ kopukken sorgu duraklatılır ve `isPending` sonsuza
   // kadar true kalır — ekran kalıcı olarak gri kutularda donardı.
@@ -909,7 +912,7 @@ export default function ReportsPage() {
             <Card className="border-amber-500/40 bg-amber-500/5">
               <CardContent className="p-4 flex gap-3">
                 <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
-                <div className="text-sm">
+                <div className="text-sm min-w-0 flex-1">
                   <p className="font-medium">
                     Son 12 ayda {incompleteTotal} siparişin kâr hesabı tam değil.
                   </p>
@@ -922,6 +925,7 @@ export default function ReportsPage() {
                   <p className="text-muted-foreground mt-0.5">
                     Bu siparişlerin cirosu toplamda var, kârda yok.
                   </p>
+                  {karEksik && <KarEksikListesi sebepler={karEksik} />}
                 </div>
               </CardContent>
             </Card>
@@ -1742,6 +1746,84 @@ function ReportsSkeleton() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Kâr hesabı tam değil" uyarısının ALTINDA: hangi ürüne maliyet girilmeli, hangi satış bir ürüne
+ * bağlanmalı. Ürün çipi ürünün sayfasını açar (maliyet orada girilir); bağlanmamış satış çipi
+ * Siparişler'i o adla aranmış hâlde açar ("Ürüne bağla" satırın yanında).
+ */
+function KarEksikListesi({ sebepler }: { sebepler: KarEksikSebepleri }) {
+  const urunler = Array.isArray(sebepler.urunler) ? sebepler.urunler : [];
+  const baglanmamis = Array.isArray(sebepler.baglanmamis) ? sebepler.baglanmamis : [];
+  if (urunler.length === 0 && baglanmamis.length === 0) return null;
+  const cip = cn(
+    "group inline-flex max-w-full items-center gap-1.5 rounded-full border border-amber-500/30 bg-background/60 py-0.5 text-xs transition-all duration-200 hover:-translate-y-px hover:border-amber-500/60 hover:bg-amber-500/10 active:translate-y-0 active:scale-[0.97] animate-in fade-in slide-in-from-bottom-1",
+    ROW_FOCUS
+  );
+  return (
+    <div className="mt-3 space-y-3">
+      {urunler.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium">Maliyeti girilmemiş ürünler</p>
+          <div className="flex flex-wrap gap-1.5">
+            {urunler.map((urun, index) => (
+              <Link
+                key={urun.productId}
+                href={`/products/${urun.productId}`}
+                className={cn(cip, "pl-1 pr-2.5")}
+                style={{ animationDelay: `${index * 40}ms`, animationFillMode: "both" }}
+              >
+                <MiniThumb src={urun.imageUrl} size="h-5 w-5" />
+                <span className="truncate max-w-[13rem] group-hover:text-primary transition-colors">
+                  {urun.name}
+                </span>
+                <span className="shrink-0 text-muted-foreground tabular-nums">
+                  {urun.siparis} sipariş
+                </span>
+              </Link>
+            ))}
+            {sebepler.digerUrun > 0 && (
+              <span className="self-center text-xs text-muted-foreground">
+                +{sebepler.digerUrun} ürün daha
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+      {baglanmamis.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-medium">Ürüne bağlanmamış satışlar</p>
+          <div className="flex flex-wrap gap-1.5">
+            {baglanmamis.map((satis, index) => (
+              <Link
+                key={satis.ad}
+                href="/orders"
+                onClick={() => requestOrdersView({ search: satis.ad })}
+                className={cn(cip, "px-2.5")}
+                style={{
+                  animationDelay: `${(urunler.length + index) * 40}ms`,
+                  animationFillMode: "both",
+                }}
+              >
+                <span className="truncate max-w-[16rem] group-hover:text-primary transition-colors">
+                  {satis.ad}
+                </span>
+                <span className="shrink-0 text-muted-foreground tabular-nums">
+                  {satis.siparis} sipariş
+                </span>
+              </Link>
+            ))}
+            {sebepler.digerBaglanmamis > 0 && (
+              <span className="self-center text-xs text-muted-foreground">
+                +{sebepler.digerBaglanmamis} satış daha
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -47,7 +47,7 @@ const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
   orders(first:$first, after:$after, sortKey:CREATED_AT, reverse:true, query:$query){
     pageInfo{ hasNextPage endCursor }
     edges{ node{
-      id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt
+      id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt test
       fulfillments(first:10){ status displayStatus deliveredAt }
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
       customer{ firstName lastName }
@@ -70,6 +70,8 @@ interface ShEdge {
     displayFulfillmentStatus: string;
     displayFinancialStatus?: string;
     cancelledAt?: string | null;
+    /** Shopify'ın test siparişi — satış değildir (masaüstüyle aynı: listeye hiç girmez). */
+    test?: boolean | null;
     /** Teslim bilgisi burada — sipariş durumu teslim edilince de FULFILLED kalır. */
     fulfillments?: ShopifyGonderim[] | null;
     currentTotalPriceSet?: {
@@ -155,7 +157,8 @@ export async function getShopifyOrders(
     throw new Error("Shopify sipariş sayfalaması güvenlik sınırına ulaştı.");
   }
 
-  return allEdges.map(({ node }) => ({
+  // TEST SİPARİŞİ satış değildir: listeye, ciroya, finans geçmişine girmez (masaüstüyle aynı).
+  return allEdges.filter(({ node }) => node.test !== true).map(({ node }) => ({
     id: `sh-${node.id.split("/").pop() ?? node.name}`,
     platform: "shopify" as const,
     orderNumber: node.name,

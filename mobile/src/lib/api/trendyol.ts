@@ -4,6 +4,14 @@ import { trendyolDateToUtc } from "@core/trendyol-date";
 import { buildTrendyolWindows } from "@core/trendyol-windows";
 import { trendyolOrderId } from "@core/trendyol-order-id";
 import { anahtarListesi } from "@core/order-match";
+import { TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
+import {
+  trendyolIadeDurumu,
+  trendyolIadeleri,
+  trendyolTalepleriniTopla,
+  type TrendyolPaketIadesi,
+  type TrendyolTalepSayfasi,
+} from "@core/trendyol-iade";
 
 const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
 const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
@@ -77,6 +85,24 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
    * sıralı birleştirilirken `seen` ile yapılır.
    */
   const pencereler = buildTrendyolWindows(Date.now(), cutoff);
+  const basliklar = { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua };
+  /**
+   * İADE TALEPLERİ — masaüstüyle AYNI kural (`@core/trendyol-iade`). Trendyol iade edilen paketi
+   * "Delivered" bırakıyor; iade yalnız bu uçta görünüyor. Siparişlerle aynı anda istenir; alınamazsa
+   * siparişler etkilenmez, yalnız bu turda iade işlenmez.
+   */
+  const iadelerSozu: Promise<Map<string, TrendyolPaketIadesi>> = trendyolTalepleriniTopla(
+    async (page, size) => {
+      const res = await fetchT(
+        `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/claims?startDate=${cutoff}&endDate=${Date.now()}&page=${page}&size=${size}`,
+        { headers: basliklar }
+      );
+      if (!res.ok) throw new Error(`Trendyol iade talepleri: HTTP ${res.status}`);
+      return (await res.json()) as TrendyolTalepSayfasi;
+    }
+  )
+    .then(trendyolIadeleri)
+    .catch(() => new Map<string, TrendyolPaketIadesi>());
   const perChunk = await Promise.all(
     pencereler.map(async ({ startDate, endDate }) => {
       const rows: { key: string; o: TyOrder }[] = [];
@@ -87,7 +113,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
           // v2 uç: eski sipariş ucu 15 Ekim 2026'da kapanıyor; masaüstü v0.19.202'den beri bunu
           // kullanıyor (gövde aynı).
           `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/v2/orders?page=${pageNo}&size=100&startDate=${startDate}&endDate=${endDate}&orderByField=PackageLastModifiedDate&orderByDirection=DESC`,
-          { headers: { Authorization: `Basic ${token}`, Accept: "application/json", "User-Agent": ua } }
+          { headers: basliklar }
         );
         if (!res.ok) throw new Error(`Trendyol siparişler: HTTP ${res.status}`);
         const json = (await res.json()) as { content?: TyOrder[] };
@@ -103,6 +129,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
     })
   );
 
+  const iadeler = await iadelerSozu;
   for (const rows of perChunk) {
     // Masaüstü route.ts:318 ile birebir: PAKET id'siyle tekilleştir (orderNumber DEĞİL).
     // Bölünmüş siparişte (UnPacked/kısmi iptal) aynı orderNumber'ın iki paketi iki kayıttır;
@@ -117,7 +144,16 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         // Masaüstüyle AYNI çeviri: Trendyol'un damgası Türkiye duvar saatini taşıyor,
         // gerçek UTC'ye çevrilmezse sipariş 3 saat ileri görünür.
         date: trendyolDateToUtc(o.orderDate)?.getTime() ?? null,
-        status: o.status,
+        // Bütün adetleri kabul edilmiş iade → "İade" (ciro/kâr dışı). Zaten iptal/iade görünen
+        // paketin adı korunur; kısmi iadede tutara dokunulmaz — masaüstüyle aynı.
+        status:
+          TRENDYOL_STATUS_KINDS[o.status]?.kind !== "cancelled" &&
+          trendyolIadeDurumu(
+            (o.lines ?? []).reduce((t, l) => t + Number(l.quantity ?? 1), 0),
+            iadeler.get(key)
+          ) === "tam"
+            ? "Returned"
+            : o.status,
         customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
         // Masaüstüyle birebir savunmalı alanlar (totalPrice gelmezse NaN ciroya bulaşmasın).
         total: Number(o.totalPrice ?? o.grossAmount ?? 0),

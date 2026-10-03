@@ -42,7 +42,8 @@ describe("Trendyol komisyon sayıları — GERÇEK libSQL", () => {
       await db.$executeRawUnsafe(
         `CREATE TABLE "OrderFinanceSnapshot" (
           "id" TEXT NOT NULL PRIMARY KEY, "platform" TEXT NOT NULL,
-          "externalOrderId" TEXT NOT NULL, "actualCommissionKurus" INTEGER)`
+          "externalOrderId" TEXT NOT NULL, "actualCommissionKurus" INTEGER,
+          "statusKind" TEXT NOT NULL DEFAULT 'delivered')`
       );
       await db.$executeRawUnsafe(
         `CREATE TABLE "PlatformOrderFinancial" (
@@ -50,14 +51,15 @@ describe("Trendyol komisyon sayıları — GERÇEK libSQL", () => {
           "externalOrderId" TEXT NOT NULL)`
       );
 
-      const snapshot = (id: string, platform: string, actual: number | null) =>
+      const snapshot = (id: string, platform: string, actual: number | null, statusKind = "delivered") =>
         db.$executeRawUnsafe(
-          `INSERT INTO "OrderFinanceSnapshot" ("id","platform","externalOrderId","actualCommissionKurus")
-           VALUES (?,?,?,?)`,
+          `INSERT INTO "OrderFinanceSnapshot" ("id","platform","externalOrderId","actualCommissionKurus","statusKind")
+           VALUES (?,?,?,?,?)`,
           id,
           platform,
           id,
-          actual
+          actual,
+          statusKind
         );
       const financial = (id: string, platform = "trendyol") =>
         db.$executeRawUnsafe(
@@ -71,8 +73,11 @@ describe("Trendyol komisyon sayıları — GERÇEK libSQL", () => {
       await snapshot("t2", "trendyol", null); // kayıt var, uygulanmamış
       await snapshot("t3", "trendyol", null); // hiç komisyon kaydı yok
       await snapshot("s1", "shopify", null); // başka platform sayılmaz
+      // İade/iptal edilen siparişin kârı zaten sayılmıyor → "işlenemiyor" listesine girmez.
+      await snapshot("t4", "trendyol", null, "cancelled");
       await financial("t1");
       await financial("t2");
+      await financial("t4");
       await financial("yok"); // eşleşmeyen kayıt
       await financial("t3", "hepsiburada"); // başka platform
 
@@ -80,7 +85,7 @@ describe("Trendyol komisyon sayıları — GERÇEK libSQL", () => {
         await db.$queryRawUnsafe<Array<Record<string, unknown>>>(trendyolCommissionStatsSql())
       );
 
-      expect(stats).toEqual({ records: 3, orders: 3, applied: 1, pending: 1 });
+      expect(stats).toEqual({ records: 4, orders: 4, applied: 1, pending: 1 });
       // Uygulanan sayı, indirilen kayıt sayısından KÜÇÜK olabilir — başlığın yanlış olduğu yer.
       expect(stats.applied).toBeLessThan(stats.records);
     } finally {

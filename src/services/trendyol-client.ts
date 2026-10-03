@@ -1,3 +1,5 @@
+import type { TrendyolTalepSayfasi } from "@/core/trendyol-iade";
+
 export type TrendyolEnvironment = "prod" | "stage";
 
 export interface TrendyolCredentials {
@@ -441,6 +443,26 @@ export class TrendyolClient {
 
     return this.request<TrendyolSettlementPage>(
       `/integration/finance/che/sellers/${this.credentials.sellerId}/settlements?${searchParams.toString()}`
+    );
+  }
+
+  /**
+   * İade talepleri (talep tarihine göre). Trendyol iade edilen siparişin paketini "Delivered"
+   * bırakıyor; iade bilgisi YALNIZ burada duruyor — kural: `core/trendyol-iade.ts`.
+   */
+  async listClaims(params: {
+    startDate: number;
+    endDate: number;
+    page?: number;
+    size?: number;
+  }): Promise<TrendyolTalepSayfasi> {
+    const searchParams = new URLSearchParams();
+    searchParams.set("startDate", String(params.startDate));
+    searchParams.set("endDate", String(params.endDate));
+    searchParams.set("page", String(params.page ?? 0));
+    searchParams.set("size", String(params.size ?? 200));
+    return this.request<TrendyolTalepSayfasi>(
+      `/integration/order/sellers/${this.credentials.sellerId}/claims?${searchParams.toString()}`
     );
   }
 

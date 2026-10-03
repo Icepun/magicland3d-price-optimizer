@@ -181,6 +181,34 @@ describe("ShopifyClient orders", () => {
       financialStatus: "PARTIALLY_REFUNDED",
     });
   });
+
+  it("test siparişi satış değildir — listeye hiç girmez", async () => {
+    const client = new ShopifyClient({
+      shopDomain: "example.myshopify.com",
+      apiVersion: "2026-07",
+      storefrontAccessToken: "test",
+      clientId: "client",
+      clientSecret: "secret",
+    });
+    const adminGraphql = vi.fn().mockResolvedValueOnce({
+      data: {
+        orders: {
+          edges: [
+            { node: { ...orderNode("1", "1199.99"), test: true } },
+            { node: { ...orderNode("2", "120.00"), test: false } },
+            { node: orderNode("3", "50.00") },
+          ],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+    });
+    Object.defineProperty(client, "adminGraphql", { value: adminGraphql });
+
+    const orders = await client.listOrders({ limit: 100, sinceDays: 30 });
+
+    expect(orders.map((o) => o.name)).toEqual(["#2", "#3"]);
+    expect(String(adminGraphql.mock.calls[0]?.[0])).toMatch(/\btest\b/);
+  });
 });
 
 /** Satır kalemi: `quantity` sipariş anındaki adet, `currentQuantity` iade sonrası kalan adet. */

@@ -415,15 +415,18 @@ describe("devam eden ay", () => {
     expect(Math.round(monthProjection(70_174, progress) ?? 0)).toBe(175_789);
   });
 
-  it("AYIN İLK GÜNLERİNDE tahmin ÜRETİLMEZ", () => {
-    // Bir-iki günlük satıştan ay çıkarmak saçma bir rakam verir.
+  it("AYIN İLK HAFTASINDA tahmin ÜRETİLMEZ", () => {
+    // Birkaç günlük satıştan ay çıkarmak saçma bir rakam verir.
     const ilkGun = monthProgress("2026-08", Date.parse("2026-08-01T10:00:00+03:00"), TZ);
     expect(monthProjection(5_000, ilkGun)).toBeNull();
     const ikinciGun = monthProgress("2026-08", Date.parse("2026-08-02T01:00:00+03:00"), TZ);
     expect(monthProjection(1_200, ikinciGun)).toBeNull();
-    // Üç tam gün dolduğunda tahmin başlar.
-    const dorduncuGun = monthProgress("2026-08", Date.parse("2026-08-04T12:00:00+03:00"), TZ);
-    expect(monthProjection(1_200, dorduncuGun)).not.toBeNull();
+    // 4 Eki 2026 vakası: üç günlük ciro (tek ₺8.500'lük sipariş dahil) ₺265 bin tahmin üretiyordu.
+    const ekimDorduncu = monthProgress("2026-10", Date.parse("2026-10-04T10:00:00+03:00"), TZ);
+    expect(monthProjection(29_235.83, ekimDorduncu)).toBeNull();
+    // Yedi tam gün dolduğunda tahmin başlar.
+    const sekizinciGun = monthProgress("2026-08", Date.parse("2026-08-08T12:00:00+03:00"), TZ);
+    expect(monthProjection(1_200, sekizinciGun)).not.toBeNull();
   });
 
   it("HENÜZ HAREKET YOKKEN tahmin ÜRETİLMEZ", () => {

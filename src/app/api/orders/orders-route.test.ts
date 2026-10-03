@@ -13,6 +13,10 @@ const h = vi.hoisted(() => ({
     shopifyOrders: [] as any[],
     trendyolPages: [] as Array<any[] | Error>,
     trendyolCall: 0,
+    /** Trendyol iade talepleri (Error = uç alınamadı). */
+    trendyolClaims: [] as any[] | Error,
+    /** Pencere dışı kayıtlara işlenmek üzere arka plana verilen iade paketleri. */
+    gecmisIadeler: null as string[] | null,
     hbOpenPages: [] as any[][],
     hbPackages: {} as Record<string, any[]>,
     /** İptal/iade listeleri. null = uç yok (istemci null döner) → akış etkilenmemeli. */
@@ -111,8 +115,23 @@ vi.mock("@/services/trendyol-client", () => ({
       if (next instanceof Error) throw next;
       return { content: next ?? [] };
     }
+    async listClaims() {
+      if (h.state.trendyolClaims instanceof Error) throw h.state.trendyolClaims;
+      return { content: h.state.trendyolClaims, totalPages: 1 };
+    }
   },
 }));
+// Talep okuma GERÇEK; yalnız pencere dışı kayıtları güncelleyen veritabanı adımı izlenir.
+vi.mock("@/lib/trendyol-iadeleri", async (importOriginal) => {
+  const gercek = await importOriginal<typeof import("@/lib/trendyol-iadeleri")>();
+  return {
+    ...gercek,
+    trendyolIadeleriniGecmiseIsle: vi.fn(async (iadeler: Map<string, unknown>) => {
+      h.state.gecmisIadeler = [...iadeler.keys()].sort();
+      return 0;
+    }),
+  };
+});
 vi.mock("@/services/hepsiburada-settings", () => ({
   getHepsiburadaCredentials: vi.fn(async () => {
     if (h.state.missingCredentials.has("hepsiburada")) {
@@ -144,6 +163,7 @@ vi.mock("@/services/hepsiburada-client", () => ({
 }));
 
 const { GET } = await import("./route");
+const { trendyolIadeOnbelleginiSifirla } = await import("@/lib/trendyol-iadeleri");
 
 const now = () => new Date().toISOString();
 
@@ -158,6 +178,9 @@ beforeEach(() => {
   h.state.shopifyOrders = [];
   h.state.trendyolPages = [];
   h.state.trendyolCall = 0;
+  h.state.trendyolClaims = [];
+  h.state.gecmisIadeler = null;
+  trendyolIadeOnbelleginiSifirla();
   h.state.hbOpenPages = [];
   h.state.hbPackages = {};
   h.state.hbClaims = { cancelled: null, returned: null };
@@ -216,6 +239,61 @@ describe("siparişler ucu — hesap ve hata yolu", () => {
 
     expect(res.status).toBe(500);
     expect(body.error).toContain("veritabanına ulaşılamadı");
+  });
+});
+
+describe("siparişler ucu — Trendyol iadeleri", () => {
+  /** Canlı biçim (4 Eki 2026): paket "Delivered" kalıyor, iade yalnız talepte. */
+  const tyPaket = (id: number, adet: number) => ({
+    id,
+    orderNumber: `TY-${id}`,
+    status: "Delivered",
+    orderDate: Date.now(),
+    totalPrice: 250 * adet,
+    lines: [{ barcode: `BAR-${id}`, productName: "Kol Standı", quantity: adet, price: 250 }],
+  });
+  const talep = (paketId: number, durumlar: string[]) => ({
+    orderNumber: `TY-${paketId}`,
+    orderOutboundPackageId: paketId,
+    orderShipmentPackageId: paketId + 9_000,
+    items: [
+      {
+        orderLine: { id: paketId * 10 },
+        claimItems: durumlar.map((name, i) => ({ id: `${paketId}-${i}`, claimItemStatus: { name } })),
+      },
+    ],
+  });
+
+  it("tam iade 'İade' olur ve ciroya girmez; kısmi iade yalnız işaretlenir", async () => {
+    h.state.trendyolPages = [[tyPaket(501, 1), tyPaket(502, 2), tyPaket(503, 1)]];
+    h.state.trendyolClaims = [
+      talep(501, ["Accepted"]),
+      talep(502, ["Accepted"]),
+      talep(503, ["Cancelled"]),
+    ];
+
+    const body = await fetchOrders();
+    const bul = (id: string) => body.orders.find((o: any) => o.id === id);
+
+    expect(bul("ty-501")).toMatchObject({ statusKind: "cancelled", statusLabel: "İade" });
+    expect(bul("ty-502")).toMatchObject({ statusKind: "delivered", returnedLineCount: 1 });
+    expect(bul("ty-503")).toMatchObject({ statusKind: "delivered" });
+    // Ciro: 502 (500) + 503 (250) — iade edilen 501 yok.
+    expect(body.summary.trendyol).toMatchObject({ revenue: 750, orderCount: 2 });
+    // Kalıcı kayda da iade olarak yazılır; pencere dışı kayıtlar için arka plana verilir.
+    expect(h.state.persisted.find((o: any) => o.id === "ty-501")?.statusKind).toBe("cancelled");
+    expect(h.state.gecmisIadeler).toEqual(["ty-501", "ty-502"]);
+  });
+
+  it("iade ucu alınamazsa siparişler ETKİLENMEZ", async () => {
+    h.state.trendyolPages = [[tyPaket(601, 1)]];
+    h.state.trendyolClaims = new Error("claims 500");
+
+    const body = await fetchOrders();
+
+    expect(body.trendyol).toMatchObject({ ok: true, count: 1 });
+    expect(body.summary.trendyol).toMatchObject({ revenue: 250, orderCount: 1 });
+    expect(h.state.gecmisIadeler).toBeNull();
   });
 });
 

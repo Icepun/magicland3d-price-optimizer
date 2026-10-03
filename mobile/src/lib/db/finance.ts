@@ -428,6 +428,21 @@ export async function getActualExpenses(): Promise<ActualExpense[]> {
   );
 }
 
+/**
+ * Verilen andan BUGÜNE ödenen giderlerin toplamı (kuruş) — Panel'in net kârı. Masaüstü
+ * `/api/actual-expenses?toplam=1` ile aynı küme: pencere başı ≤ ödeme ≤ şimdi (ileri tarihli
+ * gider henüz ödenmedi sayılır).
+ */
+export async function getExpenseTotalSince(fromMs: number, nowMs = Date.now()): Promise<number> {
+  await ensureFinanceSchema();
+  const rows = await query<{ toplam: number | null }>(
+    `SELECT COALESCE(SUM("amountKurus"), 0) AS "toplam" FROM "ActualExpense"
+      WHERE ${dbEpochMs("paidAt")} >= ? AND ${dbEpochMs("paidAt")} <= ?`,
+    [fromMs, nowMs]
+  );
+  return Number(rows[0]?.toplam ?? 0);
+}
+
 export async function createActualExpense(input: ActualExpenseInput): Promise<void> {
   await ensureFinanceSchema();
   validateExpenseInput(input);
