@@ -263,16 +263,51 @@ function friendlyUpdateError(error) {
   return "Güncelleme kontrolü şu an yapılamadı. Birazdan tekrar deneyin.";
 }
 
+/**
+ * Windows'ta fark indirmesinin "eski" tarafı önbellekteki installer.exe'dir — kurulum programı
+ * her kurulumda kendini oraya kopyalar. Önbellekteki current.blockmap ise YALNIZ fark indirmesi
+ * yapılan turda yenileniyor; fark indirmesi kapalıyken (12 Ağu – 4 Eki 2026) bayat kaldı. Bayat
+ * harita + güncel installer.exe yanlış birleştirilir → "sha512 checksum mismatch" → tam indirme.
+ * Harita silinince electron-updater ÇALIŞAN sürümün haritasını sunucudan alır (~0,2 MB) ve o
+ * harita installer.exe ile her zaman eştir. Mac'te önbellekteki update.zip ile harita birlikte
+ * yazıldığı için bu sorun yok; dokunulmaz.
+ */
+function bayatFarkHaritasiniSil(writeLog) {
+  if (process.platform !== "win32") return;
+  try {
+    const yml = fs.readFileSync(path.join(process.resourcesPath, "app-update.yml"), "utf8");
+    const ad = /^updaterCacheDirName:\s*["']?([^"'\r\n]+?)["']?\s*$/m.exec(yml)?.[1];
+    if (!ad) return;
+    const kok = process.env.LOCALAPPDATA || path.join(app.getPath("home"), "AppData", "Local");
+    const harita = path.join(kok, ad, "current.blockmap");
+    if (fs.existsSync(harita)) {
+      fs.unlinkSync(harita);
+      writeLog("onbellekteki eski fark haritasi silindi:", harita);
+    }
+  } catch (e) {
+    // Silinemezse en kötü ihtimalle fark indirmesi tutmaz ve tam dosya iner — eski davranış.
+    writeLog("fark haritasi temizlenemedi:", e?.message || e);
+  }
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
-  // FARK-İNDİRMESİ KAPALI. Blockmap yöntemi dosyayı parçalara bölüp ONLARCA ayrı aralık isteği
-  // atıyor; sürüm dosyalarının sunucusuna erişim kesintili olduğu için isteklerden BİRİNİN
-  // düşmesi tüm indirmeyi düşürüyordu → pratikte her denemede "Cannot download differentially"
-  // ardından tam indirme de aynı turda ölüyordu (updater.log'da birebir bu görüldü). Tek parça
-  // indirme hem daha az istek hem yeniden denemeye elverişli. Bedeli: her güncellemede tam
-  // dosya (~230 MB) iner — güncelleme haftada birkaç kez olduğu için kabul edilebilir.
-  autoUpdater.disableDifferentialDownload = true;
+  // FARK İNDİRMESİ AÇIK — yalnız değişen parçalar iner.
+  //
+  // 12 Ağu 2026'da kapatılmıştı (sürüm sunucusuna erişim kesintiliydi). Kapalıyken HER güncelleme
+  // tam dosyaydı (Windows 184 MB, Mac 232 MB). Gerçek blockmap'lerle ölçüm (4 Eki 2026):
+  // 0.19.244→245 yalnız 3,6 MB, 0.19.245→246 61,8 MB; tur başına 8-12 aralık isteği.
+  // Güvenlik — eski kararlı yol yedekte durur:
+  //   1) fark indirmesi herhangi bir sebeple düşerse electron-updater AYNI turda tam dosyayı indirir;
+  //   2) bir indirme denemesi düşerse bu oturumdaki sonraki denemeler doğrudan tam dosyayla yapılır
+  //      (`updater:download`);
+  //   3) Windows'ta önbellekteki eski sürüm haritası her indirmede tazelenir
+  //      (`bayatFarkHaritasiniSil`) — bayat harita yüzünden fark indirmesi hep "sha512 checksum
+  //      mismatch" ile tam indirmeye düşüyordu (Mayıs'taki altı denemenin altısı).
+  autoUpdater.disableDifferentialDownload = false;
+  // Web yükleyici kullanılmıyor; açık bırakmak her indirmede günlüğe uyarı düşürüyordu.
+  autoUpdater.disableWebInstaller = true;
 
   // Write update logs to a file so they are visible in packaged builds.
   // Log file: %APPDATA%\Trendyol Price Optimizer\updater.log
@@ -426,8 +461,9 @@ function setupAutoUpdater() {
   });
   ipcMain.handle("updater:download", async () => {
     if (!app.isPackaged) return updateState;
-    // İndirme de aynı kesintili ağ hatasına düşüyor (~230 MB tek parça). Beş deneme + artan
-    // bekleme; ara denemelerin hatası ekrana yansımaz (updaterRetrying), yalnız hepsi biterse yazılır.
+    bayatFarkHaritasiniSil(writeLog);
+    // İndirme de aynı kesintili ağ hatasına düşebiliyor. Beş deneme + artan bekleme; ara
+    // denemelerin hatası ekrana yansımaz (updaterRetrying), yalnız hepsi biterse yazılır.
     void (async () => {
       const denemeler = 5;
       updaterRetrying = true;
@@ -438,6 +474,12 @@ function setupAutoUpdater() {
             return;
           } catch (e) {
             writeLog(`indirme denemesi ${i}/${denemeler} basarisiz:`, e?.message || e);
+            // Bir deneme düştüyse bu oturumda parça parça indirmeye bir daha güvenme: sonraki
+            // denemeler tek parça tam dosyayla yapılır (fark indirmesi kapalıyken kanıtlanmış yol).
+            if (!autoUpdater.disableDifferentialDownload) {
+              autoUpdater.disableDifferentialDownload = true;
+              writeLog("fark indirmesi bu oturum icin kapatildi — tam dosya indirilecek");
+            }
             // Kontrolde olduğu gibi: "çok fazla istek"te ısrar yasağı uzatır — hemen dur.
             if (isRateLimited(e)) {
               updaterRetrying = false;
