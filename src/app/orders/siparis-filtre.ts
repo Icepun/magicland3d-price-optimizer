@@ -38,6 +38,8 @@ export interface FilterableOrder {
   dataIncomplete?: boolean;
   /** Pazaryeri durumu tanınmıyor (satış mı iade mi belli değil) → özet toplamlarının dışında. */
   statusUnknown?: boolean;
+  /** 30 günden önce verilmiş, işi bitmediği için listede duran elle sipariş → özet dışında. */
+  outsideWindow?: boolean;
 }
 
 /**
@@ -87,6 +89,8 @@ export function orderMatchesSearch(
  * toplamların dışında kalır.
  */
 export function countsInSummary(order: FilterableOrder): boolean {
+  // Listede duran eski açık elle sipariş özetin penceresinde değil (sunucu da saymıyor).
+  if (order.outsideWindow) return false;
   if (order.statusKind === "cancelled") return false;
   // Durumu tanınmayan sipariş sunucu özetinde de ciro dışında; burada elenmezse "N siparişte
   // maliyet eksik" bağlantısı özette olmayan siparişleri listeler ve aynı ekranda iki farklı

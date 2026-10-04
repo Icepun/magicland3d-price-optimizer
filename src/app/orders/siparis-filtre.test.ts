@@ -84,6 +84,13 @@ describe("maliyet eksik kümesi özetle birebir aynı", () => {
       false
     );
   });
+
+  it("30 günden eski ama listede duran açık elle sipariş özete ve uyarıya girmez", () => {
+    expect(countsInSummary(order({ statusKind: "processing", outsideWindow: true }))).toBe(false);
+    expect(
+      hasMissingCost(order({ statusKind: "processing", outsideWindow: true, profit: null }))
+    ).toBe(false);
+  });
 });
 
 describe("durum çipleri listeyle aynı kümeden sayılır", () => {

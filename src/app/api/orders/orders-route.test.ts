@@ -29,6 +29,9 @@ const h = vi.hoisted(() => ({
     missingCredentials: new Set<string>(),
     /** Manuel sipariş okuması bu mesajla patlar (null = sorunsuz). */
     manualError: null as string | null,
+    /** Manuel sipariş satırları ve son okumanın sorgusu. */
+    manualRows: [] as any[],
+    manualArgs: null as any,
     sharedCalls: 0,
     /** Doluysa paylaşılan hesap gerçek hesabı çalıştırmadan bu gövdeyi döndürür. */
     sharedResult: null as any,
@@ -78,9 +81,10 @@ vi.mock("@/lib/prisma", () => {
     },
     remotePrisma: {
       manualOrder: {
-        findMany: vi.fn(async () => {
+        findMany: vi.fn(async (args: any) => {
           if (h.state.manualError) throw new Error(h.state.manualError);
-          return [] as any[];
+          h.state.manualArgs = args;
+          return h.state.manualRows;
         }),
       },
     },
@@ -162,6 +166,12 @@ vi.mock("@/services/hepsiburada-client", () => ({
   },
 }));
 
+// Kalem/hesap zarfının biçimi bu testin konusu değil.
+vi.mock("@/lib/manual-orders", () => ({
+  parseManualOrderItems: () => ({ items: [] }),
+  parseManualOrderBreakdown: () => ({ breakdown: { commissionCost: 0, missingCostItems: 0 } }),
+}));
+
 const { GET } = await import("./route");
 const { trendyolIadeOnbelleginiSifirla } = await import("@/lib/trendyol-iadeleri");
 
@@ -189,6 +199,8 @@ beforeEach(() => {
   h.state.lastWrite = null;
   h.state.missingCredentials = new Set<string>();
   h.state.manualError = null;
+  h.state.manualRows = [];
+  h.state.manualArgs = null;
   h.state.sharedCalls = 0;
   h.state.sharedResult = null;
   h.state.sharedError = null;
@@ -239,6 +251,43 @@ describe("siparişler ucu — hesap ve hata yolu", () => {
 
     expect(res.status).toBe(500);
     expect(body.error).toContain("veritabanına ulaşılamadı");
+  });
+});
+
+describe("siparişler ucu — işi bitmemiş elle sipariş", () => {
+  const gun = 86_400_000;
+  const elle = (id: string, gunOnce: number, statusKind: string, kurus: number) => ({
+    id,
+    orderNumber: `MAN-${id}`,
+    orderedAt: new Date(Date.now() - gunOnce * gun),
+    statusKind,
+    customerName: "Müşteri",
+    currency: "TRY",
+    revenueKurus: kurus,
+    profitKurus: Math.round(kurus * 0.7),
+    profitPartial: false,
+    itemsJson: "{}",
+    breakdownJson: "{}",
+  });
+
+  /** 4 Eki 2026 vakası: 3 Eylül'deki ₺3.000'lik özel sipariş 30 günü geçince listeden düştü. */
+  it("30 günü geçen ama gönderilmemiş elle sipariş listede kalır, özete GİRMEZ", async () => {
+    h.state.manualRows = [
+      elle("eski-acik", 31, "processing", 300_000),
+      elle("eski-teslim", 35, "delivered", 120_000),
+      elle("yeni", 2, "processing", 150_000),
+    ];
+
+    const body = await fetchOrders();
+    const elleler = body.orders.filter((o: any) => o.platform === "manual");
+
+    expect(elleler.map((o: any) => o.id).sort()).toEqual(["eski-acik", "yeni"]);
+    expect(elleler.find((o: any) => o.id === "eski-acik")).toMatchObject({ outsideWindow: true });
+    expect(elleler.find((o: any) => o.id === "yeni")?.outsideWindow).toBeUndefined();
+    // 30 günlük özet yalnız penceredeki siparişi sayar.
+    expect(body.summary.manual).toMatchObject({ revenue: 1500, orderCount: 1 });
+    // Eski açık sipariş tarihine bakılmadan okunur.
+    expect(JSON.stringify(h.state.manualArgs.where)).toContain('"statusKind":{"in":["pending","processing"]}');
   });
 });
 

@@ -68,6 +68,7 @@ import {
   filterOrdersBeforeStatus,
   statusChipCounts,
 } from "./siparis-filtre";
+import { siparisListedeKalir } from "@/core/order-window";
 import { cn } from "@/lib/utils";
 import { SatirMaliyetiDialog, type SatirMaliyetiHedefi } from "@/components/orders/SatirMaliyetiDialog";
 import { UrunBaglaDialog, type UrunBaglaHedefi } from "@/components/orders/UrunBaglaDialog";
@@ -134,6 +135,8 @@ interface UnifiedOrder {
   isManual?: boolean;
   manualOrderId?: string | null;
   editHref?: string | null;
+  /** 30 günden önce verilmiş, işi bitmediği için listede duran elle sipariş — özetlere girmez. */
+  outsideWindow?: boolean;
 }
 interface PlatformStatus {
   ok: boolean;
@@ -618,11 +621,20 @@ export default function OrdersPage() {
       const rest = current.orders.filter(
         (o) => !(o.platform === "manual" && o.id === targetId)
       );
-      const next = saved ? manualOrderRow(saved) : null;
-      // Görünür pencerenin dışında kalan tarih sunucuda da listelenmez → burada da eklenmez.
+      const yeniSatir = saved ? manualOrderRow(saved) : null;
+      // Sunucuyla AYNI kural (core/order-window): pencere dışındaki tarih listelenmez — işi
+      // bitmemiş elle sipariş hariç; o listede kalır ama özetlere girmez.
       const cutoff = windowCutoff(current.summary?.days ?? 30);
+      const tarih = yeniSatir?.date ? new Date(yeniSatir.date).getTime() : null;
+      const next = yeniSatir
+        ? { ...yeniSatir, outsideWindow: tarih != null && !(tarih >= cutoff) }
+        : null;
       const visible =
-        next && (!next.date || new Date(next.date).getTime() >= cutoff)
+        next &&
+        siparisListedeKalir(
+          { platform: next.platform, statusKind: next.statusKind, tarihMs: tarih },
+          cutoff
+        )
           ? next
           : null;
       const orders = visible ? [...rest, visible] : rest;

@@ -42,6 +42,7 @@ import { trendyolDateToIso } from "@/core/trendyol-date";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { trendyolIadeDurumu } from "@/core/trendyol-iade";
+import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
 import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
@@ -153,6 +154,11 @@ export interface UnifiedOrder {
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;
+  /**
+   * 30 günlük pencereden ÖNCE verilmiş ama işi bitmediği için listede duran elle sipariş
+   * (core/order-window). Özetlere ve "bugün" toplamlarına GİRMEZ — kendi ayında sayıldı.
+   */
+  outsideWindow?: boolean;
 }
 
 interface PlatformStatus {
@@ -550,7 +556,14 @@ async function computeOrdersBodyInner(
     error: string | null;
   }> = remotePrisma.manualOrder
     .findMany({
-      where: { orderedAt: { gte: new Date(historyCutoff) } },
+      // İşi bitmemiş elle sipariş tarihine bakılmadan okunur — listede ve hazırlıkta kalır
+      // (bkz. core/order-window). Özetler yine yalnız pencere içini sayar.
+      where: {
+        OR: [
+          { orderedAt: { gte: new Date(historyCutoff) } },
+          { statusKind: { in: [...ACIK_SIPARIS_TURLERI] } },
+        ],
+      },
       orderBy: { orderedAt: "desc" },
     })
     .then((rows) => {
@@ -1502,9 +1515,21 @@ async function computeOrdersBodyInner(
     };
   }
 
-  const visibleOrders = orders.filter(
-    (order) => !order.date || new Date(order.date).getTime() >= cutoff
-  );
+  const tarihMs = (order: { date: string | null }) =>
+    order.date ? new Date(order.date).getTime() : null;
+  // Son 30 gün + işi bitmemiş elle eklenen siparişler (tarihine bakılmadan — core/order-window).
+  const pencereDisi = (order: { date: string | null }) => {
+    const ms = tarihMs(order);
+    return ms != null && !(ms >= cutoff);
+  };
+  const visibleOrders = orders
+    .filter((order) =>
+      siparisListedeKalir(
+        { platform: order.platform, statusKind: order.statusKind, tarihMs: tarihMs(order) },
+        cutoff
+      )
+    )
+    .map((order) => (pencereDisi(order) ? { ...order, outsideWindow: true } : order));
 
   // Dashboard özeti (iptal/iade hariç) ──────────────────────────────────────
   const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 });
@@ -1517,6 +1542,9 @@ async function computeOrdersBodyInner(
   let incompleteDataOrders = 0;
   let partialReturnOrders = 0;
   for (const o of visibleOrders) {
+    // Özet YALNIZ son 30 günde verilen siparişleri sayar; listede kalan eski açık elle sipariş
+    // kendi ayının cirosunda zaten sayıldı.
+    if (o.outsideWindow) continue;
     if (o.statusKind === "cancelled") continue;
     // Kalem/tutar bilgisi alınamamış sipariş toplamlara ₺0 ekler ve ciroyu olduğundan düşük,
     // sipariş sayısını olduğundan yüksek gösterir. Listede kalır, özet dışında tutulur.

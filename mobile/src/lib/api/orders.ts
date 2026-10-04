@@ -1,4 +1,9 @@
-import { HEPSIBURADA_STATUS_KINDS, TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
+import {
+  HEPSIBURADA_STATUS_KINDS,
+  MANUAL_STATUS_KINDS,
+  TRENDYOL_STATUS_KINDS,
+} from "@core/order-status-kind";
+import { siparisListedeKalir } from "@core/order-window";
 
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
@@ -88,7 +93,9 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   // yakında durumu değişen (ör. Teslim Edildi) siparişler de gelir. "Son 30 gün" = son 30 günde
   // VERİLEN sipariş → orderDate'e göre kırp. cutoff gün başına sabit (iki platform aynı sayıyı
   // göstersin diye). Tarihsizleri tut (HB/Shopify zaten pencere içinde).
-  const recent = orders.filter((o) => !o.date || o.date >= cutoff);
+  // İstisna (masaüstüyle aynı, @core/order-window): işi bitmemiş elle sipariş tarihine bakılmadan
+  // kalır. Panel cirosu kendi tarih kesimini uyguladığı için ciroya girmez.
+  const recent = orders.filter((o) => listedeKalir(o, cutoff));
 
   // Tarihsiz (null) siparişler masaüstüyle aynı şekilde EN ALTA düşer.
   recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
@@ -136,10 +143,22 @@ export function getAllOrders(): Promise<OrdersResult> {
   return getOrdersForDays(60);
 }
 
-/** Kullanıcıya gösterilen 30 günlük pencereye kırp (tarihi bilinmeyen sipariş DAHİL kalır). */
+/** Ortak liste kuralı: pencere içi + işi bitmemiş elle sipariş (tarihi bilinmeyen DAHİL). */
+function listedeKalir(o: UnifiedOrder, cutoff: number): boolean {
+  return siparisListedeKalir(
+    {
+      platform: o.platform,
+      statusKind: o.platform === "manual" ? MANUAL_STATUS_KINDS[o.status]?.kind : null,
+      tarihMs: o.date,
+    },
+    cutoff
+  );
+}
+
+/** Kullanıcıya gösterilen 30 günlük pencereye kırp (tarihi bilinmeyen ve işi bitmemiş elle sipariş DAHİL). */
 export function visibleOrders(orders: UnifiedOrder[]): UnifiedOrder[] {
   const cutoff = orderWindowCutoff();
-  return orders.filter((o) => o.date == null || o.date >= cutoff);
+  return orders.filter((o) => listedeKalir(o, cutoff));
 }
 
 export type StatusTone = "green" | "orange" | "accent" | "red" | "dim";

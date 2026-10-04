@@ -582,10 +582,12 @@ async function normalizedWrite(input: ManualOrderWriteInput) {
 export async function getManualOrdersSince(cutoffMs: number): Promise<ManualOrder[]> {
   await ensureManualOrderSchema();
   const cutoff = new Date(cutoffMs).toISOString();
+  // İşi bitmemiş (bekleyen/hazırlanan) sipariş tarihine bakılmadan okunur — listede ve
+  // hazırlıkta kalır (masaüstüyle aynı kural, @core/order-window).
   const rows = await query<ManualOrderRow>(
     `SELECT ${SELECT_COLUMNS}
        FROM "ManualOrder"
-      WHERE "orderedAt" >= ?
+      WHERE "orderedAt" >= ? OR "statusKind" IN ('pending', 'processing')
       ORDER BY "orderedAt" DESC, "createdAt" DESC`,
     [cutoff]
   );
