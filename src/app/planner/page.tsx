@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { useKaliciSecim } from "@/lib/kalici-secim";
 import { fetchJson } from "@/lib/fetch-json";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -133,6 +134,7 @@ interface QueuePayload {
 
 /** Öncelik: makine saati başına kazanç, satış hızı ya da en büyük stok açığı. */
 type PriorityMode = "profit" | "velocity" | "shortage";
+const ONCELIKLER: readonly PriorityMode[] = ["profit", "velocity", "shortage"];
 /** Görünüm: düz liste ya da yazıcıya göre kuyruk. */
 type ViewMode = "list" | "queue";
 
@@ -227,7 +229,10 @@ export default function PlannerPage() {
     // (Raporlar bu gövdeyi ARTIK paylaşmıyor; kendi küçük kârlılık uçtan noktasını çekiyor.)
     queryKey: ["products", "active"],
     queryFn: () => fetchJson("/api/products?filter=active"),
-    staleTime: 60_000,
+    // Liste yalnız bir değişiklik onu geçersiz kılınca (maliyet, kargo, fiyat güncelleme…)
+    // yeniden iner — o durumda sayfaya girişte tazelenir. 60 sn'lik bayatlık her girişte 640 KB'ı
+    // yeniden indiriyordu; stok zaten aşağıdaki küçük sorguyla (useFreshStocks) taze tutuluyor.
+    staleTime: Infinity,
   });
   // Basılacak adet stoğa bağlı: telefonda değişen stok da hesaba girsin (tek küçük sorgu).
   useFreshStocks(dataUpdatedAt || undefined);
@@ -278,8 +283,10 @@ export default function PlannerPage() {
   );
 
   // Sıra ve süzgeç kullanıcının seçimi — varsayılan MEVCUT davranıştır (kâr/saat, hepsi görünür).
-  const [priority, setPriority] = useState<PriorityMode>("profit");
-  const [hideDeadStock, setHideDeadStock] = useState(false);
+  // Bu cihazda hatırlanır: eskiden her açılışta sıfırlanıyordu (hedef ve mod DB'de saklanırken).
+  const [priority, setPriority] = useKaliciSecim<PriorityMode>("mlhub-uretim-sira", "profit", ONCELIKLER);
+  const [gizleSecimi, setGizleSecimi] = useKaliciSecim("mlhub-uretim-satmayan-gizle", "0", ["0", "1"] as const);
+  const hideDeadStock = gizleSecimi === "1";
   const [view, setView] = useState<ViewMode>("list");
 
   // Yazıcı kuyruğu yalnız o görünüm açılınca çekilir — her sorgu süreç genelinde sıraya
@@ -291,6 +298,9 @@ export default function PlannerPage() {
     queryFn: () =>
       fetchJson(`/api/planner/queue?target=${target}&mod=${mod}&kapsam=${kapsamGun}`),
     staleTime: 60_000,
+    // Kayıtlı hedef/mod gelmeden ÇEKME: önce varsayılan ayarla (5 · sabit) bir kez boşuna
+    // hesaplanıp (~1,1 sn) sonra asıl ayarla yeniden hesaplanıyordu (9 Eki 2026 ölçümü).
+    enabled: settings !== undefined,
     // Görünümden BAĞIMSIZ çekiliyor: "boştaki yazıcıya ne basayım" önerisi sayfanın en
     // üstünde, liste görünümünde de duruyor. Sunucuda 20 sn'lik önbelleği var, ayrı sorgu
     // olduğu için ürün listesini bekletmez.
@@ -674,7 +684,7 @@ export default function PlannerPage() {
           variant={hideDeadStock ? "default" : "outline"}
           size="sm"
           disabled={!deadStockReady}
-          onClick={() => setHideDeadStock((v) => !v)}
+          onClick={() => setGizleSecimi(hideDeadStock ? "0" : "1")}
           className="h-9 gap-1.5 transition-all"
           title={
             deadStockReady
@@ -948,14 +958,17 @@ export default function PlannerPage() {
                         ) : velocityReady && p.sales ? (
                           <span
                             className="inline-flex items-center gap-1 text-[11px] font-medium tabular-nums px-1.5 py-0.5 rounded-full border bg-primary/10 text-primary border-primary/30"
-                            title={
+                            title={[
+                              `Son ${insights?.recentDays ?? 30} günde ${p.sales.soldRecent} adet`,
                               p.sales.daysPerSale != null
-                                ? `Ortalama ${formatNumber(p.sales.daysPerSale, 1)} günde bir satıyor`
-                                : undefined
-                            }
+                                ? `ortalama ${formatNumber(p.sales.daysPerSale, 1)} günde bir satıyor`
+                                : null,
+                            ].filter(Boolean).join(" · ")}
                           >
                             <Zap className="h-3 w-3" />
-                            {insights?.recentDays ?? 30} günde {p.sales.soldRecent} adet
+                            {/* Plan bu pencereye bakıyor — çip de aynısını yazmalı. Eskiden "30 günde
+                                0 adet" yazan ürün 77 günlük satışıyla planda duruyordu. */}
+                            {insights?.measuredDays ?? 90} günde {p.sales.soldInWindow} adet
                           </span>
                         ) : null}
                       </div>

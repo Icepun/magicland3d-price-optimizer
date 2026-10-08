@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { SpoolDisk, ColorDot } from "@/components/spools/spool-visuals";
 import { formatNumber } from "@/lib/format";
+import type { FilamentTuketimi } from "@/lib/filament-tuketim";
 import { cn } from "@/lib/utils";
 import {
   FILAMENT_BRANDS, FILAMENT_COLORS, DEFAULT_LOW_SPOOL_COUNT, MIN_LOW_SPOOL_COUNT,
@@ -75,6 +76,12 @@ export default function SpoolsPage() {
     queryKey: ["settings"],
     queryFn: () => fetchJson("/api/settings"),
     staleTime: 5 * 60_000,
+  });
+  // Satış hızından "elimdeki filament kaç gün yeter" (renk bazında veri yok; bkz. filament-tuketim).
+  const { data: tuketim } = useQuery<FilamentTuketimi>({
+    queryKey: ["spools", "tuketim"],
+    queryFn: () => fetchJson("/api/spools/tuketim"),
+    staleTime: 10 * 60_000,
   });
 
   const spools = useMemo(() => (Array.isArray(data) ? data : []), [data]);
@@ -244,6 +251,25 @@ export default function SpoolsPage() {
         {ozet.azalan > 0 && (
           <span className="font-mono text-sm tabular-nums text-amber-400">
             · <AnimatedNumber value={ozet.azalan} format={(n) => formatNumber(n, 0)} /> renk azaldı
+          </span>
+        )}
+        {tuketim?.kacGun != null && (
+          <span
+            className={cn(
+              "font-mono text-sm tabular-nums",
+              tuketim.kacGun < 21 ? "text-amber-400" : "text-muted-foreground"
+            )}
+            title={[
+              `Son ${tuketim.olculenGun} günde satılan ürünlerin reçetesi ~${formatNumber(tuketim.toplamGram / 1000, 1)} kg filament`,
+              `günde ~${formatNumber(tuketim.gunlukGram, 0)} g`,
+              `elde ~${formatNumber(tuketim.stokGram / 1000, 1)} kg`,
+              tuketim.gramsizAdet > 0 ? `${tuketim.gramsizAdet} satılan adette gramaj girilmemiş — hesap o kadar eksik` : null,
+              "Renk bazında değil: makara açılış tarihi tutulmuyor",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          >
+            · bu satış hızıyla ~{formatNumber(Math.round(tuketim.kacGun), 0)} gün yeter
           </span>
         )}
         <div className="ml-auto flex items-center gap-1.5 flex-wrap">
