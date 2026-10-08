@@ -44,6 +44,7 @@ import { sameFamily } from "./printer-family";
 import { startKameraAktarici } from "./camera-relay";
 import { vizDurumu } from "./viz-relay";
 import { slotToolColors } from "./tool-colors";
+import { durumOrnegiYaz } from "./durum-ornegi";
 
 const TICK_MS = 10_000;
 /** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
@@ -636,6 +637,8 @@ async function tick(): Promise<void> {
       // boşta/duraklamış yazıcıda (değerler sabit) yanlış "Canlı değil" alarmı + kontrol/tekrar-bas
       // kilidi üretiyordu.
       const nowMs = Date.now();
+      // Doluluk örneği (5 dk'da bir, satır değişmese de) — beklenmez, relay'i yavaşlatmaz.
+      void durumOrnegiYaz(c.id, snap.status, nowMs);
       const unchanged = lastKey.get(c.id) === key;
       const fresh = nowMs - (lastWriteAt.get(c.id) ?? 0) < HEARTBEAT_MS;
       if (unchanged && fresh) return;

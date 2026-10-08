@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v52: Yazıcı doluluğu — `PrinterStatusSample` (yazıcı × 5 dakikalık dilim → durum). Relay
+//      `INSERT OR IGNORE` yazar; iki masaüstü aynı dilimi yazsa da tek satır kalır. Yeni tablo →
+//      eski sürüm cihazlar etkilenmez (yalnız yazmazlar).
 // v51: Elle ürün bağı — `OrderLineLink` (platform + eşleşmeyen satır ADI → ürün). Ürün yenilenince
 //      eski siparişler eski adla kalıyor, hiçbir anahtar tutmuyordu; bağ o adla gelen TÜM siparişleri
 //      seçilen ürüne eşler (bkz. core/order-line-link). Yeni tablo → eski sürüm cihazlar etkilenmez.
@@ -95,7 +98,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "51";
+const CURRENT_SCHEMA_VERSION = "52";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1568,6 +1571,17 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "updatedAtMs" REAL
       )
     `);
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "PrinterStatusSample" (
+        "printerConfigId" TEXT NOT NULL,
+        "bucketMs" REAL NOT NULL,
+        "status" TEXT NOT NULL,
+        PRIMARY KEY ("printerConfigId", "bucketMs")
+      )
+    `);
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "PrinterStatusSample_bucketMs_idx" ON "PrinterStatusSample"("bucketMs")`
+    );
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "PrintCommand" (
         "id" TEXT NOT NULL PRIMARY KEY,

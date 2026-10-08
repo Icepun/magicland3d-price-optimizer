@@ -666,6 +666,23 @@ model PrinterSnapshot {
  * kareleri R2'ye koyup son karenin imzalı adresini `frameUrl`'e yazar. Zamanlar epoch-ms.
  * Yazan/okuyan: src/core/printers/camera-relay.ts ve mobile/src/lib/db/printers.ts (ham SQL).
  */
+/**
+ * Yazıcı DURUM ÖRNEĞİ — 5 dakikalık dilim başına tek satır (Yazıcılar → doluluk).
+ * Relay her dilimde yazıcının o anki durumunu `INSERT OR IGNORE` ile yazar: Mac ve Windows
+ * aynı anda çalışsa da (ikisi de relay) aynı dilim TEK satır olur, iki kez sayılmaz.
+ * 30 günden eskiler relay tarafından silinir.
+ */
+model PrinterStatusSample {
+  printerConfigId String
+  /** Dilim başlangıcı — epoch-ms, 5 dakikanın katı. */
+  bucketMs        Float
+  /** printing | paused | error | idle | finished | offline */
+  status          String
+
+  @@id([printerConfigId, bucketMs])
+  @@index([bucketMs])
+}
+
 model PrinterCamera {
   printerConfigId String  @id
   wantedUntilMs   Float   @default(0)

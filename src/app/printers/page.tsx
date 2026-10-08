@@ -3,6 +3,7 @@
 
 import { TimelapseStrip } from "@/components/printers/TimelapseGallery";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
+import { DolulukSeridi } from "@/components/printers/DolulukSeridi";
 import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -264,7 +265,7 @@ export default function PrintersPage() {
   const commandInFlight = anyPending(pendingMap);
   /** Bu mount'taki İLK çekim mi? Yalnız o istek sunucu önbelleğini atlar. */
   const ilkCekimRef = useRef(true);
-  const { data, dataUpdatedAt, isLoading, refetch } = useQuery<PrintersResponse>({
+  const { data, dataUpdatedAt, isLoading, isError, error, isFetching, refetch } = useQuery<PrintersResponse>({
     queryKey: ["printers"],
     // İlk çekimde `?fresh=1`: sunucudaki 4 saniyelik önbelleği ve çevrimdışı geri çekilmesini
     // atlar. Düzenli 5 saniyelik yoklama önbelleği kullanmaya devam eder — yazıcıları boşuna
@@ -528,6 +529,9 @@ export default function PrintersPage() {
         </div>
       )}
 
+      {/* Son 7 gün doluluk — yazıcıya bağlanmaz, relay'in örneklerini okur. */}
+      <DolulukSeridi />
+
       {isLoading ? (
         // İskelet gerçek kart yüksekliğine yakın olmalı — 130 px kısa iskelet veri gelince
         // sayfayı zıplatıyordu.
@@ -535,6 +539,22 @@ export default function PrintersPage() {
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-[392px] w-full rounded-xl" />
           ))}
+        </div>
+      ) : isError && !data ? (
+        // Hata "yazıcı yok" DEĞİLDİR: istek düşünce boş liste gösterilirse 4 yazıcısı olan
+        // kullanıcı onları silinmiş sanıp yeniden eklemeye kalkar (9 Eki 2026 denetimi).
+        <div className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/[0.04] py-16 text-center">
+          <AlertTriangle className="h-10 w-10 mx-auto text-amber-500/70" />
+          <p className="mt-3 font-medium">Yazıcılara ulaşılamadı</p>
+          <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+            {error instanceof Error && error.message && !/failed to fetch|load failed|networkerror/i.test(error.message)
+              ? error.message
+              : "Uygulamanın sunucusuna bağlanılamadı."}{" "}
+            Yazıcıların kayıtlı, yalnızca şu an okunamıyor.
+          </p>
+          <Button size="sm" variant="outline" className="mt-4 gap-2" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} /> Tekrar dene
+          </Button>
         </div>
       ) : printers.length === 0 ? (
         <div className="rounded-xl border border-dashed py-16 text-center">
