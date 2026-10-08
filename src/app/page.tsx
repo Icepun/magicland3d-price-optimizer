@@ -1,5 +1,7 @@
 "use client";
 
+import { zararGruplari } from "@/lib/panel-gruplama";
+import { gonderilecekSayisi, type BugunYazici } from "@/lib/panel-bugun";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { fetchJson } from "@/lib/fetch-json";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,6 +18,8 @@ import {
   CloudOff,
   CheckCircle2,
   ChevronDown,
+  Printer,
+  Disc3,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -578,7 +582,11 @@ function PlatformCardSkeleton({ delay }: { delay: number }) {
   );
 }
 
-/** Platform bölümünün iskeleti/gerçeği aynı düzende: üstte iki pazaryeri, altta ortalı Shopify. */
+/**
+ * Platform bölümünün iskeleti/gerçeği aynı düzende: üç platform TEK SIRA (geniş ekranda).
+ * Eskiden iki pazaryeri üstte, Shopify altta ortada tek başına duruyordu — ikinci satırın
+ * yarısı boştu ve kart diğer ikisinden kopuk görünüyordu (9 Eki 2026 denetimi).
+ */
 function PlatformSectionLayout({
   marketplaces,
   shopify,
@@ -589,11 +597,9 @@ function PlatformSectionLayout({
   return (
     <div>
       <h2 className="text-base font-semibold mb-3">Platform Bazlı Özet</h2>
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">{marketplaces}</div>
-        <div className="md:flex md:justify-center">
-          <div className="md:w-[calc(50%-0.375rem)]">{shopify}</div>
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 items-stretch">
+        {marketplaces}
+        {shopify}
       </div>
     </div>
   );
@@ -860,6 +866,98 @@ function siparisPenceresiBasi(summary: OrdersSummary | undefined, computedAt: st
   if (!Number.isFinite(hesap)) return null;
   // Sunucuyla aynı formül: hesap gününün UTC başından `days` gün geri.
   return new Date((Math.floor(hesap / 86_400_000) - summary.days) * 86_400_000).toISOString();
+}
+
+/**
+ * "BUGÜN" ŞERİDİ — günün yapılacakları tek satırda: gönderilecek siparişler, boştaki/sorunlu
+ * yazıcılar, biten filament renkleri (9 Eki 2026 denetimi: üçü ayrı sayfalardaydı).
+ * Sipariş sayısı paylaşılan ["orders"] önbelleğinden (Siparişler sayfasıyla aynı kural).
+ */
+function BugunSeridi() {
+  const siparisler = useQuery<{ orders?: { statusKind?: string | null }[] }>({
+    queryKey: ["orders"],
+    queryFn: ({ signal }) => fetchJson("/api/orders", { signal }),
+    staleTime: 5 * 60_000,
+  });
+  const bugun = useQuery<{ yazici: BugunYazici; bitenRenkler: string[] }>({
+    queryKey: ["panel-bugun"],
+    queryFn: ({ signal }) => fetchJson("/api/panel/bugun", { signal }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const gonderilecek = siparisler.data?.orders ? gonderilecekSayisi(siparisler.data.orders) : null;
+  const yz = bugun.data?.yazici;
+  const biten = bugun.data?.bitenRenkler ?? null;
+
+  const kutu = (
+    href: string,
+    Ikon: React.ElementType,
+    renk: string,
+    ust: string,
+    alt: React.ReactNode,
+    yukleniyor: boolean
+  ) => (
+    <Link
+      href={href}
+      className={cn(
+        "group flex min-w-0 items-center gap-3 rounded-lg px-3 py-2 transition-colors hover:bg-muted/40",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      )}
+    >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md" style={{ backgroundColor: `color-mix(in oklch, ${renk} 14%, transparent)` }}>
+        <Ikon className="h-4 w-4" style={{ color: renk }} />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[11px] text-muted-foreground">{ust}</span>
+        {yukleniyor ? (
+          <Skeleton className="mt-1 h-4 w-28" />
+        ) : (
+          <span className="block truncate text-sm font-semibold group-hover:text-foreground">{alt}</span>
+        )}
+      </span>
+    </Link>
+  );
+
+  return (
+    <Card className="animate-in fade-in slide-in-from-bottom-1 duration-400">
+      <CardContent className="grid grid-cols-1 gap-1 p-2 sm:grid-cols-3">
+        {kutu(
+          "/orders",
+          ClipboardList,
+          ACCENTS.amber,
+          "Bugün gönderilecek",
+          gonderilecek == null ? "—" : gonderilecek === 0 ? "Bekleyen sipariş yok" : `${gonderilecek} sipariş`,
+          siparisler.isLoading
+        )}
+        {kutu(
+          yz && yz.sorunlu.length > 0 ? "/printers" : "/planner",
+          Printer,
+          yz && yz.sorunlu.length > 0 ? ACCENTS.red : ACCENTS.primary,
+          yz && yz.sorunlu.length > 0 ? "Yazıcıda sorun" : "Boşta bekleyen yazıcı",
+          !yz
+            ? bugun.isError
+              ? "Okunamadı"
+              : "—"
+            : yz.sorunlu.length > 0
+              ? `${yz.sorunlu.join(" · ")} durdu`
+              : yz.bosta.length > 0
+                ? `${yz.bosta.length} yazıcı · ${yz.bosta.join(" · ")}`
+                : yz.basiyor > 0
+                  ? `Hepsi basıyor (${yz.basiyor})`
+                  : "Durum bilinmiyor",
+          bugun.isLoading
+        )}
+        {kutu(
+          "/spools",
+          Disc3,
+          biten && biten.length > 0 ? ACCENTS.red : ACCENTS.green,
+          "Biten filament",
+          biten == null ? (bugun.isError ? "Okunamadı" : "—") : biten.length === 0 ? "Biten renk yok" : biten.join(" · "),
+          bugun.isLoading
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 function OrdersSummaryCard({ delay }: { delay: number }) {
@@ -1230,10 +1328,18 @@ function LowStockCard({ data, delay }: { data: DashboardData; delay: number }) {
   );
 }
 
+/** "₺29,85" ya da "-₺43,98 – -₺29,85" — aralığın iki ucu aynıysa tek değer. */
+function aralikMetni(a: [number, number], fmt: (n: number) => string): string {
+  return a[0] === a[1] ? fmt(a[0]) : `${fmt(a[0])} – ${fmt(a[1])}`;
+}
+
 function ProblemCard({ data, delay }: { data: DashboardData; delay: number }) {
   // Taşan satırların türü — sayıların TOPLAMI değil, gerçekten sığmayan küme.
   const kalanZarar = data.problemMoreNegative ?? 0;
   const kalanMaliyet = data.problemMoreMissingCost ?? Math.max(0, data.problemMore - kalanZarar);
+  const zararlar = data.problemProducts.filter((p) => p.problem !== "missing_cost");
+  const maliyetEksikler = data.problemProducts.filter((p) => p.problem === "missing_cost");
+  const maliyetEksikToplam = maliyetEksikler.length + kalanMaliyet;
 
   return (
     <SectionCard
@@ -1259,19 +1365,17 @@ function ProblemCard({ data, delay }: { data: DashboardData; delay: number }) {
       ) : (
         <>
           <div className="space-y-0.5">
-            {data.problemProducts.map((p, idx) => {
-              const pb =
-                PROBLEM_LABELS[p.problem] ?? {
-                  label: p.problem,
-                  variant: "outline" as const,
-                };
-              const platformInfo = p.platform ? PLATFORM_INFO[p.platform] : null;
+            {zararGruplari(zararlar).map((g, idx) => {
+              const ilk = g.satirlar[0];
+              const platformInfo = ilk.platform ? PLATFORM_INFO[ilk.platform] : null;
+              const coklu = g.satirlar.length > 1;
               return (
                 <Link
-                  key={`${p.id}-${p.listingId ?? idx}`}
-                  href={`/products/${p.id}`}
+                  key={g.anahtar}
+                  href={`/products/${ilk.id}`}
                   className="block animate-in fade-in slide-in-from-bottom-1 duration-300"
                   style={{ animationDelay: `${rowDelay(idx)}ms`, animationFillMode: "both" }}
+                  title={coklu ? g.satirlar.map((s) => s.name).join("\n") : undefined}
                 >
                   <div className="flex items-center justify-between py-2.5 px-3 -mx-3 rounded-lg cursor-pointer transition-all duration-150 hover:bg-muted/40 active:scale-[0.995] group">
                     <div className="min-w-0 flex-1">
@@ -1289,40 +1393,68 @@ function ProblemCard({ data, delay }: { data: DashboardData; delay: number }) {
                               : undefined
                           }
                         >
-                          {/* İlanı olmayan ürünler de bu listede — hangi satırın ilan hangisinin
-                              ürün olduğu görünsün, fiyat da ona göre etiketlensin. */}
                           {platformInfo ? platformInfo.label : "Ürün"}
                         </span>
-                        {p.name}
+                        <span className="truncate">{g.ad}</span>
+                        {coklu && (
+                          // Aynı ürünün renkleri tek satır (16 ayrı satır listeyi 4.400 px'e uzatıyordu).
+                          <span className="shrink-0 rounded-full border px-1.5 text-[10px] text-muted-foreground tabular-nums">
+                            {g.satirlar.length} varyant
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-muted-foreground tabular-nums mt-0.5">
-                        {platformInfo ? "İlan fiyatı" : "Ürün fiyatı"} {formatCurrency(p.salePrice)}
+                        {platformInfo ? "İlan fiyatı" : "Ürün fiyatı"}{" "}
+                        {aralikMetni(g.fiyatAralik, formatCurrency)}
                       </p>
                     </div>
                     <div className="flex items-center gap-3 shrink-0 ml-3">
-                      {p.profit !== null && (
+                      {g.karAralik && (
                         <div className="text-right tabular-nums">
                           <p
                             className="text-xs font-medium"
-                            style={{ color: p.profit < 0 ? ACCENTS.red : undefined }}
+                            style={{ color: g.karAralik[0] < 0 ? ACCENTS.red : undefined }}
                           >
-                            {formatCurrency(p.profit)}
+                            {aralikMetni(g.karAralik, formatCurrency)}
                           </p>
-                          {p.margin !== null && (
+                          {g.marjAralik && (
                             <p className="text-[10px] text-muted-foreground">
-                              {formatPercent(p.margin)}
+                              {aralikMetni(g.marjAralik, (n) => formatPercent(n))}
                             </p>
                           )}
                         </div>
                       )}
-                      <Badge variant={pb.variant} className="text-xs shrink-0">
-                        {pb.label}
+                      <Badge variant={PROBLEM_LABELS.negative_profit.variant} className="text-xs shrink-0">
+                        {PROBLEM_LABELS.negative_profit.label}
                       </Badge>
                     </div>
                   </div>
                 </Link>
               );
             })}
+            {maliyetEksikler.length > 0 && (
+              // Maliyeti eksik ürünler TEK satır: listenin 140 satırı bunlardı ve zarar edenleri
+              // gömüyordu. Ayrıntı Ürünler'in "Maliyet Eksik" sekmesinde.
+              <Link
+                href="/products?filter=missing-cost"
+                className="block animate-in fade-in slide-in-from-bottom-1 duration-300"
+              >
+                <div className="flex items-center justify-between py-2.5 px-3 -mx-3 rounded-lg cursor-pointer transition-all duration-150 hover:bg-muted/40 active:scale-[0.995] group">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium group-hover:text-foreground transition-colors">
+                      {maliyetEksikToplam} ürünün maliyeti girilmemiş
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate mt-0.5">
+                      {maliyetEksikler.slice(0, 3).map((p) => p.name).join(" · ")}
+                      {maliyetEksikToplam > 3 ? ` ve ${maliyetEksikToplam - 3} ürün daha` : ""}
+                    </p>
+                  </div>
+                  <Badge variant={PROBLEM_LABELS.missing_cost.variant} className="text-xs shrink-0 ml-3">
+                    Maliyet gir →
+                  </Badge>
+                </div>
+              </Link>
+            )}
           </div>
           {/* İki ayrı satır: taşanların çoğu "maliyeti eksik" iken tek bağlantı "zarar edenler"e
               gidiyordu → kullanıcı "+32 satır daha" deyip 12 kayıt görüyordu. */}
@@ -1332,12 +1464,7 @@ function ProblemCard({ data, delay }: { data: DashboardData; delay: number }) {
               label={`+${kalanZarar} zarar eden ilan`}
             />
           )}
-          {kalanMaliyet > 0 && (
-            <MoreRow
-              href="/products?filter=missing-cost"
-              label={`+${kalanMaliyet} maliyeti eksik ürün`}
-            />
-          )}
+
         </>
       )}
     </SectionCard>
@@ -1528,6 +1655,9 @@ export default function DashboardPage() {
           {yenileniyor ? "Yenileniyor…" : "Yenile"}
         </Button>
       </div>
+
+      {/* Günün yapılacakları — gönderilecek, boştaki yazıcı, biten filament */}
+      <BugunSeridi />
 
       {/* Sipariş bazlı ciro/kâr — son 30 gün (öne çıkan) */}
       <OrdersSummaryCard delay={0} />
