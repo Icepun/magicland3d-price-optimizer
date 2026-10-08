@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { KaydetCubuguSaglayici, useKayitBolumu } from "./kaydet-cubugu";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,22 +60,6 @@ export default function CostSettingsPage() {
     queryFn: () => fetchJson("/api/settings"),
   });
 
-  // Global settings mutation
-  const saveSettingsMutation = useMutation({
-    mutationFn: (data: Record<string, string>) =>
-      fetchJson("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["app-settings"] });
-      clearPricingQueryCache(queryClient);
-      toast.success("Genel maliyet oranları kaydedildi — tüm ürünlere uygulandı");
-    },
-    onError: () => toast.error("Kaydedilemedi"),
-  });
-
   // Filament mutations
   const createFilamentMutation = useMutation({
     mutationFn: (data: FilamentFormData) =>
@@ -121,20 +106,8 @@ export default function CostSettingsPage() {
     defaultValues: { name: "", costPerGram: 0.5, isActive: true },
   });
 
-  const handleSettingsSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    const data = {
-      costElectricityPerHour: formData.get("costElectricityPerHour") as string,
-      costElectricityIncluded:
-        formData.get("costElectricityIncluded") === "true" ? "true" : "false",
-      costMachineWearPerHour: formData.get("costMachineWearPerHour") as string,
-      costLaborPerHour: formData.get("costLaborPerHour") as string,
-    };
-    saveSettingsMutation.mutate(data);
-  };
-
   return (
+    <KaydetCubuguSaglayici>
     <div className="p-6 space-y-6 mx-auto w-full max-w-[1400px]">
       <div className="flex items-center justify-between">
         <div>
@@ -274,56 +247,7 @@ export default function CostSettingsPage() {
                 <Skeleton className="h-9 w-24" />
               </div>
             ) : (
-              <form onSubmit={handleSettingsSubmit} className="space-y-4">
-                <div className="space-y-1">
-                  <Label htmlFor="costElectricityPerHour">Elektrik Maliyeti (TL/saat)</Label>
-                  <Input
-                    id="costElectricityPerHour"
-                    name="costElectricityPerHour"
-                    type="number"
-                    step="0.01"
-                    defaultValue={globalSettings.costElectricityPerHour || "0.00"}
-                  />
-                </div>
-                <label className="flex items-start gap-2 rounded-md border p-3 text-sm">
-                  <input
-                    type="checkbox"
-                    name="costElectricityIncluded"
-                    value="true"
-                    defaultChecked={globalSettings.costElectricityIncluded === "true"}
-                    className="mt-0.5 h-4 w-4 accent-primary"
-                  />
-                  <span>
-                    <span className="font-medium">Elektriği net kârdan düş</span>
-                    <span className="block text-xs text-muted-foreground mt-0.5">
-                      Kapalıysa saatlik değer kayıtlı kalır fakat maliyete eklenmez.
-                    </span>
-                  </span>
-                </label>
-                <div className="space-y-1">
-                  <Label htmlFor="costMachineWearPerHour">Makine Aşınması (TL/saat)</Label>
-                  <Input
-                    id="costMachineWearPerHour"
-                    name="costMachineWearPerHour"
-                    type="number"
-                    step="0.01"
-                    defaultValue={globalSettings.costMachineWearPerHour || "0.00"}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="costLaborPerHour">İşçilik Maliyeti (TL/saat)</Label>
-                  <Input
-                    id="costLaborPerHour"
-                    name="costLaborPerHour"
-                    type="number"
-                    step="0.01"
-                    defaultValue={globalSettings.costLaborPerHour || "0.00"}
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={saveSettingsMutation.isPending}>
-                  {saveSettingsMutation.isPending ? "Kaydediliyor..." : "Ayarları Kaydet"}
-                </Button>
-              </form>
+              <GenelOranlarFormu key={JSON.stringify(globalSettings)} ayarlar={globalSettings} />
             )}
           </CardContent>
         </Card>
@@ -400,6 +324,65 @@ export default function CostSettingsPage() {
           </form>
         </DialogContent>
       </Dialog>
+    </div>
+    </KaydetCubuguSaglayici>
+  );
+}
+
+/**
+ * Genel maliyet oranları — KONTROLLÜ form, sayfanın tek kaydet çubuğuna bağlı.
+ * Ayarlar tazelenince (key) yeni değerlerle baştan kurulur.
+ */
+function GenelOranlarFormu({ ayarlar }: { ayarlar: Record<string, string> }) {
+  const ilk = {
+    costElectricityPerHour: ayarlar.costElectricityPerHour || "0.00",
+    costElectricityIncluded: ayarlar.costElectricityIncluded === "true" ? "true" : "false",
+    costMachineWearPerHour: ayarlar.costMachineWearPerHour || "0.00",
+    costLaborPerHour: ayarlar.costLaborPerHour || "0.00",
+  };
+  const [baz] = useState(ilk);
+  const [d, setD] = useState(ilk);
+  const [kaydedilen, setKaydedilen] = useState<string | null>(null);
+  const imza = JSON.stringify(d);
+  useKayitBolumu("genel-oranlar", {
+    etiket: "Genel maliyet oranları",
+    kirli: imza !== JSON.stringify(baz) && imza !== kaydedilen,
+    degisiklikler: () => ({ ...d }),
+    vazgec: () => setD(baz),
+    kaydedildi: () => setKaydedilen(imza),
+  });
+  const alan = (ad: keyof typeof ilk, etiket: string) => (
+    <div className="space-y-1">
+      <Label htmlFor={ad}>{etiket}</Label>
+      <Input
+        id={ad}
+        type="number"
+        step="0.01"
+        value={d[ad]}
+        onChange={(e) => setD((o) => ({ ...o, [ad]: e.target.value }))}
+      />
+    </div>
+  );
+  return (
+    <div className="space-y-4">
+      {alan("costElectricityPerHour", "Elektrik Maliyeti (TL/saat)")}
+      <label className="flex items-start gap-2 rounded-md border p-3 text-sm">
+        <input
+          type="checkbox"
+          checked={d.costElectricityIncluded === "true"}
+          onChange={(e) => setD((o) => ({ ...o, costElectricityIncluded: e.target.checked ? "true" : "false" }))}
+          className="mt-0.5 h-4 w-4 accent-primary"
+        />
+        <span>
+          <span className="font-medium">Elektriği net kârdan düş</span>
+          <span className="block text-xs text-muted-foreground mt-0.5">
+            Kapalıysa saatlik değer kayıtlı kalır fakat maliyete eklenmez.
+          </span>
+        </span>
+      </label>
+      {alan("costMachineWearPerHour", "Makine Aşınması (TL/saat)")}
+      {alan("costLaborPerHour", "İşçilik Maliyeti (TL/saat)")}
+      <p className="text-[11px] text-muted-foreground">Değişiklikler sayfanın altındaki çubuktan kaydedilir.</p>
     </div>
   );
 }

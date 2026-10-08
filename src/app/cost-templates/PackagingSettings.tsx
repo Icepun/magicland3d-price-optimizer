@@ -1,13 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Plus, Trash2, Package, Scissors, StickyNote } from "lucide-react";
-import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import {
   parsePackagingSettings,
@@ -16,7 +15,7 @@ import {
   type PackagingScope,
 } from "@/core/packaging";
 import { fetchJson } from "@/lib/fetch-json";
-import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
+import { useKayitBolumu } from "./kaydet-cubugu";
 
 function genId() {
   return `pkg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -36,7 +35,6 @@ export function PackagingSettings() {
 }
 
 function PackagingSettingsForm({ settings }: { settings: Record<string, string> }) {
-  const qc = useQueryClient();
   const [initial] = useState(() => parsePackagingSettings(settings));
 
   // Paketleme seçenekleri (controlled liste)
@@ -57,44 +55,52 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
   const [sakizPrice, setSakizPrice] = useState(initial.sakizPrice ? String(initial.sakizPrice) : "");
   const [scopes, setScopes] = useState(initial.scopes);
 
-  const save = useMutation({
-    mutationFn: (data: Record<string, string>) =>
-      fetchJson("/api/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["app-settings"] });
-      clearPricingQueryCache(qc);
-      toast.success("Paketleme ayarları kaydedildi — tüm ürünlere uygulandı");
-    },
-    onError: () => toast.error("Kaydedilemedi"),
+  // Kaydedilecek değerler — eskiden üç ayrı düğme (ikisi aynı işi yapıyordu) bunları ayrı
+  // ayrı kaydediyordu. Artık sayfanın TEK kaydet çubuğu (kaydet-cubugu) hepsini birlikte kaydeder.
+  const degerler = (): Record<string, string> => ({
+    packagingOptions: JSON.stringify(options),
+    nylonRollPrice: nylonRollPrice || "0",
+    nylonRollGrams: nylonRollGrams || "0",
+    nylonLowGrams: nylonLowGrams || "10",
+    nylonMediumGrams: nylonMediumGrams || "20",
+    nylonHighGrams: nylonHighGrams || "30",
+    tapePrice: tapePrice || "0",
+    tapeProductsPerRoll: tapeProductsPerRoll || "20",
+    cardQty: cardQty || "0",
+    cardPrice: cardPrice || "0",
+    stickerQty: stickerQty || "0",
+    stickerPrice: stickerPrice || "0",
+    sakizQty: sakizQty || "0",
+    sakizPrice: sakizPrice || "0",
+    packagingScopes: JSON.stringify(scopes),
   });
-
-  const saveOptions = (next: PackagingOption[]) => {
-    setOptions(next);
-    save.mutate({ packagingOptions: JSON.stringify(next) });
-  };
-
-  const saveNumeric = () => {
-    save.mutate({
-      nylonRollPrice: nylonRollPrice || "0",
-      nylonRollGrams: nylonRollGrams || "0",
-      nylonLowGrams: nylonLowGrams || "10",
-      nylonMediumGrams: nylonMediumGrams || "20",
-      nylonHighGrams: nylonHighGrams || "30",
-      tapePrice: tapePrice || "0",
-      tapeProductsPerRoll: tapeProductsPerRoll || "20",
-      cardQty: cardQty || "0",
-      cardPrice: cardPrice || "0",
-      stickerQty: stickerQty || "0",
-      stickerPrice: stickerPrice || "0",
-      sakizQty: sakizQty || "0",
-      sakizPrice: sakizPrice || "0",
-      packagingScopes: JSON.stringify(scopes),
-    });
-  };
+  const [bazImza] = useState(() => JSON.stringify(degerler()));
+  const [kaydedilenImza, setKaydedilenImza] = useState<string | null>(null);
+  const imza = JSON.stringify(degerler());
+  useKayitBolumu("paketleme", {
+    etiket: "Paketleme ve ek maliyetler",
+    kirli: imza !== bazImza && imza !== kaydedilenImza,
+    degisiklikler: degerler,
+    vazgec: () => {
+      setOptions(initial.options);
+      setNylonRollPrice(initial.nylonRollPrice ? String(initial.nylonRollPrice) : "");
+      setNylonRollGrams(initial.nylonRollGrams ? String(initial.nylonRollGrams) : "");
+      setNylonLowGrams(String(initial.nylonLowGrams));
+      setNylonMediumGrams(String(initial.nylonMediumGrams));
+      setNylonHighGrams(String(initial.nylonHighGrams));
+      setTapePrice(initial.tapePrice ? String(initial.tapePrice) : "");
+      setTapeProductsPerRoll(String(initial.tapeProductsPerRoll));
+      setCardQty(initial.cardQty ? String(initial.cardQty) : "");
+      setCardPrice(initial.cardPrice ? String(initial.cardPrice) : "");
+      setStickerQty(initial.stickerQty ? String(initial.stickerQty) : "");
+      setStickerPrice(initial.stickerPrice ? String(initial.stickerPrice) : "");
+      setSakizQty(initial.sakizQty ? String(initial.sakizQty) : "");
+      setSakizPrice(initial.sakizPrice ? String(initial.sakizPrice) : "");
+      setScopes(initial.scopes);
+    },
+    // Ayarlar tazelenince form yeni değerlerle baştan kurulur (key); o ana kadar "kayıtlı" say.
+    kaydedildi: () => setKaydedilenImza(imza),
+  });
 
   const setScope = (key: PackagingComponentKey, scope: PackagingScope) =>
     setScopes((current) => ({ ...current, [key]: scope }));
@@ -178,13 +184,6 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
               </Button>
             </div>
           ))}
-          <Button
-            className="w-full mt-2"
-            onClick={() => saveOptions(options)}
-            disabled={save.isPending}
-          >
-            {save.isPending ? "Kaydediliyor..." : "Paketleme Seçeneklerini Kaydet"}
-          </Button>
         </CardContent>
       </Card>
 
@@ -320,13 +319,6 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
               </select>
             </div>
           ))}
-          <Button
-            className="sm:col-span-2 lg:col-span-3"
-            onClick={saveNumeric}
-            disabled={save.isPending}
-          >
-            {save.isPending ? "Kaydediliyor..." : "Paketleme Kapsamlarını Kaydet"}
-          </Button>
         </CardContent>
       </Card>
 
@@ -382,9 +374,6 @@ function PackagingSettingsForm({ settings }: { settings: Record<string, string> 
             <span className="text-sm font-medium">Kart / sticker / sakız birim maliyeti toplamı</span>
             <span className="text-lg font-bold tabular-nums text-primary">{formatCurrency(fixedTotal)}</span>
           </div>
-          <Button className="w-full" onClick={saveNumeric} disabled={save.isPending}>
-            {save.isPending ? "Kaydediliyor..." : "Naylon / Bant / Ek Maliyetleri Kaydet"}
-          </Button>
         </CardContent>
       </Card>
     </div>

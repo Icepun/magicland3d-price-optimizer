@@ -23,8 +23,9 @@ interface Prod {
 export function ImageMobileFixCard() {
   const qc = useQueryClient();
   const { data: products = [] } = useQuery<Prod[]>({
-    queryKey: ["products", "all"],
-    queryFn: () => fetchJson("/api/products?filter=all"),
+    // Yalnız yerel görselli ürünler, kâr hesabı olmadan (lite) — birkaç satır.
+    queryKey: ["products", "yerel-gorsel"],
+    queryFn: () => fetchJson("/api/products?filter=all&lite=1&yerelGorsel=1"),
     staleTime: 60_000,
   });
   const localImages = (Array.isArray(products) ? products : []).filter(

@@ -64,7 +64,9 @@ export async function GET(req: NextRequest) {
     const cacheable =
       !url.searchParams.has("ids") &&
       !url.searchParams.has("search") &&
-      !url.searchParams.has("lite");
+      !url.searchParams.has("lite") &&
+      // Ayar ÖNİZLEMESİ (Maliyet & Paketleme → "Etkiyi gör") hiçbir önbelleğe girmez.
+      !url.searchParams.has("ayarOnizleme");
 
     const data = cacheable
       ? await swr(
@@ -77,6 +79,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data);
   } catch (error) {
     return jsonError(error);
+  }
+}
+
+/** `?ayarOnizleme=<JSON>` → yalnız string değerli düz nesne; bozuksa boş (önizleme yok). */
+function ayarOnizlemesiOku(ham: string | null): Record<string, string> {
+  if (!ham) return {};
+  try {
+    const v = JSON.parse(ham) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).filter(
+        (e): e is [string, string] => typeof e[1] === "string" && e[0].length < 80
+      )
+    );
+  } catch {
+    return {};
   }
 }
 
@@ -123,6 +141,12 @@ async function computeProducts(urlString: string) {
     ) {
       where.isActive = true;
     }
+  }
+
+  // Yalnız bu bilgisayarda duran yerel görseller (Ayarlar → "görselleri mobil uyumlu yap").
+  // O kart 4 ürünü bulmak için 652 KB'lık tam listeyi indiriyordu (9 Eki 2026 ölçümü).
+  if (searchParams.get("yerelGorsel") === "1") {
+    where.imageUrl = { startsWith: "/api/images/" };
   }
 
   if (search) {
@@ -213,6 +237,10 @@ async function computeProducts(urlString: string) {
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
+  // ÖNİZLEME: kaydedilmemiş ayar değişiklikleri YALNIZ bu hesapta uygulanır — veritabanına
+  // yazılmaz, önbelleğe girmez (yukarıda `cacheable`). Maliyet & Paketleme "kaydedersen kaç
+  // ürünün kârı ne kadar değişir?" sorusunu Ürünler'le BİREBİR aynı hesapla yanıtlar.
+  Object.assign(settingsMap, ayarOnizlemesiOku(searchParams.get("ayarOnizleme")));
   const vatRate = vatRateOf(settingsMap);
 
   /**
