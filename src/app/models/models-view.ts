@@ -5,6 +5,7 @@
  * yazıcılar arası karşılaştırma için. Ürün maliyetiyle ilgisi YOKTUR
  * (gerekçe ve koruma: `src/lib/model-gramaj.ts`, `src/lib/model-gramaj.test.ts`).
  */
+import { adParcala } from "@/lib/urun-adi";
 import { dedupeFiles, familyMemberIds, type AileUyesi } from "@/core/printers/printer-family";
 
 /**
@@ -192,4 +193,81 @@ export function missingGramajFiles<T extends { id: string; gramaj: number | null
   files: T[]
 ): T[] {
   return files.filter((f) => f.gramaj == null);
+}
+
+/**
+ * Makine şeridi için kısa ad. Şerit dört eşit bölmeye ayrıldığı için tam ad sığmaz;
+ * kullanıcının makineyi tanıdığı ayırt edici parçayı bırakırız ("Neptune 4 Pro" → "N4 PRO").
+ */
+export function shortPrinter(name: string): string {
+  const n = name.trim();
+  // "Neptune 4 Pro" → "N4 PRO" · "Neptune 4 Plus" → "N4 PLUS"
+  const neptune = /neptune\s*(\d+)\s*(pro|plus|max)?/i.exec(n);
+  if (neptune) {
+    return `N${neptune[1]}${neptune[2] ? ` ${neptune[2]}` : ""}`.toLocaleUpperCase("tr-TR");
+  }
+  // "Bambu Lab A1 Combo" → "A1" · "Snapmaker U1" → "U1"
+  const model = /(?:^|\s)([a-z]\d[a-z0-9]*)(?:\s|$)/i.exec(n);
+  if (model) return model[1].toLocaleUpperCase("tr-TR");
+  return n.slice(0, 7).toLocaleUpperCase("tr-TR");
+}
+
+/**
+ * Tüm yazıcıların kısa adları — ÇAKIŞANLAR AYRIŞTIRILIR.
+ * "Snapmaker U1 Alt" ve "Snapmaker U1 Üst" ikisi de "U1" oluyordu; şeritte hangi bölmenin
+ * hangi makine olduğu anlaşılmıyordu (9 Eki 2026 denetimi). Çakışan adlara modelden sonraki
+ * kelime eklenir ("U1 ALT" / "U1 ÜST"); öyle bir kelime yoksa sıra numarası.
+ */
+export function kisaYaziciAdlari(printers: readonly { id: string; name: string }[]): Map<string, string> {
+  const taban = new Map(printers.map((p) => [p.id, shortPrinter(p.name)]));
+  const sayac = new Map<string, number>();
+  for (const ad of taban.values()) sayac.set(ad, (sayac.get(ad) ?? 0) + 1);
+  const out = new Map<string, string>();
+  const sira = new Map<string, number>();
+  for (const p of printers) {
+    const t = taban.get(p.id)!;
+    if ((sayac.get(t) ?? 0) < 2) {
+      out.set(p.id, t);
+      continue;
+    }
+    const kelimeler = p.name.trim().split(/\s+/);
+    const i = kelimeler.findIndex((k) => k.toLocaleUpperCase("tr-TR") === t);
+    const ek = i >= 0 ? kelimeler.slice(i + 1).join(" ") : "";
+    const n = (sira.get(t) ?? 0) + 1;
+    sira.set(t, n);
+    out.set(p.id, ek ? `${t} ${ek.toLocaleUpperCase("tr-TR")}` : `${t} ${n}`);
+  }
+  return out;
+}
+
+export { adParcala } from "@/lib/urun-adi";
+
+export interface GruplanabilirUrun {
+  productId: string;
+  name: string;
+  files: { printerConfigId: string; contentMd5: string | null; originalName: string; sizeBytes: number }[];
+}
+
+/**
+ * DOSYALARI BİREBİR AYNI renk varyantlarını tek kartta topla.
+ * Ahtapot Şarap Tutacağı'nın 3 rengi, Alev Temalı Kol Standı'nın PS5 renkleri aynı dosyaları
+ * taşıyor ama her biri ayrı kart olarak ekranı dolduruyordu. Kural: aynı taban ad + aynı dosya
+ * kümesi → bir kart. Dosyası farklı olan (PS5 / Xbox) ayrı kalır. Sıra korunur (ilk görülen).
+ */
+export function varyantlariTopla<T extends GruplanabilirUrun>(urunler: readonly T[]): { anahtar: string; urunler: T[] }[] {
+  const parmakIzi = (u: T) =>
+    u.files
+      .map((f) => `${f.printerConfigId}:${f.contentMd5 ?? `${f.originalName}#${f.sizeBytes}`}`)
+      .sort()
+      .join("|");
+  const gruplar = new Map<string, T[]>();
+  for (const u of urunler) {
+    const { taban, varyant } = adParcala(u.name);
+    // Varyantsız ad ya da dosyasız ürün hiçbir şeyle birleşmez.
+    const anahtar = varyant && u.files.length > 0 ? `${foldTr(taban)}\u0000${parmakIzi(u)}` : `tek\u0000${u.productId}`;
+    const g = gruplar.get(anahtar);
+    if (g) g.push(u);
+    else gruplar.set(anahtar, [u]);
+  }
+  return [...gruplar.entries()].map(([anahtar, liste]) => ({ anahtar, urunler: liste }));
 }

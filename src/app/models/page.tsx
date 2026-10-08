@@ -22,8 +22,8 @@ import {
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import {
-  aileDosyalari, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
-  searchProduct, sortProducts, type SortMode,
+  adParcala, aileDosyalari, gramajByPrinter, gramajCompareText, kisaYaziciAdlari, missingFiles,
+  missingGramajFiles, searchProduct, sortProducts, varyantlariTopla, type SortMode,
 } from "./models-view";
 
 // three.js ilk pakete girmesin — izleyici yalnız açıldığında iner.
@@ -98,6 +98,11 @@ export default function ModelsPage() {
     }
     return sortProducts(list, sortMode);
   }, [allProducts, eslesmeler, onlyMissing, missingPrinter, printerIds, printers, sortMode]);
+
+  // Aynı dosyalı renk varyantları tek kart (Ahtapot Şarap Tutacağı 3 renk → 1 kart).
+  const gruplar = useMemo(() => varyantlariTopla(products), [products]);
+  // "U1" iki yazıcıda birden çıkıyordu → "U1 ALT" / "U1 ÜST".
+  const kisaAdlar = useMemo(() => kisaYaziciAdlari(printers), [printers]);
 
   return (
     <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
@@ -201,29 +206,41 @@ export default function ModelsPage() {
         <EmptyHint title="Henüz model yok" desc="Bir ürünün detay sayfasındaki 'Baskı Dosyaları' kartından parça parça dosya yükle; hepsi burada toplanır." />
       ) : (
         <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(320px,1fr))]">
-          {products.map((p, i) => {
+          {gruplar.map(({ anahtar, urunler }, i) => {
+            const p = urunler[0];
+            const coklu = urunler.length > 1;
             const eslesenParca = eslesmeler.get(p.productId)?.length ?? 0;
             return (
               <Card
-                key={p.productId}
+                key={anahtar}
                 className="group flex flex-col overflow-hidden transition-all hover:border-primary/30 hover:shadow-[0_6px_24px_oklch(0.66_0.2_278_/_10%)] animate-in fade-in slide-in-from-bottom-1"
                 style={{ animationDelay: `${Math.min(i, 12) * 30}ms`, animationFillMode: "both" }}
               >
                 <CardContent className="flex flex-1 flex-col gap-3 p-3">
                   <div className="flex items-start gap-3">
-                    <div className="h-16 w-16 shrink-0 rounded-lg border bg-muted/60 flex items-center justify-center overflow-hidden">
-                      {p.imageUrl
-                        ? <img src={thumbUrl(p.imageUrl) ?? undefined} alt="" className="max-w-full max-h-full object-contain" />
-                        : <Package className="h-6 w-6 text-muted-foreground/35" />}
-                    </div>
+                    <KartGorseli src={p.imageUrl} />
                     <div className="min-w-0 flex-1">
                       <Link
                         href={`/products/${p.productId}`}
                         className="block text-[15px] font-semibold leading-snug hover:underline line-clamp-2"
                         title={p.name}
                       >
-                        {p.name}
+                        {coklu ? adParcala(p.name).taban : p.name}
                       </Link>
+                      {coklu && (
+                        // Dosyaları birebir aynı varyantlar — her biri kendi ürün sayfasına gider.
+                        <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
+                          <span className="font-medium text-foreground/80">{urunler.length} varyant · </span>
+                          {urunler.map((u, k) => (
+                            <span key={u.productId}>
+                              {k > 0 && " · "}
+                              <Link href={`/products/${u.productId}`} className="hover:text-foreground hover:underline">
+                                {adParcala(u.name).varyant}
+                              </Link>
+                            </span>
+                          ))}
+                        </p>
+                      )}
                       {/* Sayılar mono + tabular: bu sayfa bir makine göstergesi gibi okunmalı. */}
                       <p className="mt-1 font-mono text-[11px] tabular-nums text-muted-foreground">
                         {p.files.length} parça
@@ -252,7 +269,7 @@ export default function ModelsPage() {
                           key={pr.id}
                           disabled={!has}
                           onClick={() => { if (has) setParts({ product: p, printer: pr }); }}
-                          title={has ? `${pr.name} · ${cnt} parça — parçaları gör ve bas` : `${pr.name}: dosya yok`}
+                          title={has ? `${pr.name} · ${cnt} parça — parçaları gör ve bas${coklu ? ` (${urunler.length} varyantta aynı dosyalar)` : ""}` : `${pr.name}: dosya yok`}
                           className={cn(
                             "flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 transition-colors",
                             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -262,7 +279,7 @@ export default function ModelsPage() {
                           )}
                         >
                           <span className="w-full truncate text-center text-[9px] font-semibold uppercase tracking-wide">
-                            {shortPrinter(pr.name)}
+                            {kisaAdlar.get(pr.id) ?? pr.name}
                           </span>
                           <span className="font-mono text-[11px] leading-none tabular-nums">
                             {has ? cnt : "—"}
@@ -290,22 +307,18 @@ export default function ModelsPage() {
   );
 }
 
-/**
- * Makine şeridi için kısa ad. Şerit dört eşit bölmeye ayrıldığı için tam ad sığmaz;
- * kullanıcının makineyi tanıdığı ayırt edici parçayı bırakırız ("Neptune 4 Pro" → "N4 PRO").
- * Tam ad her bölmenin ipucunda duruyor.
- */
-function shortPrinter(name: string): string {
-  const n = name.trim();
-  // "Neptune 4 Pro" → "N4 PRO" · "Neptune 4 Plus" → "N4 PLUS"
-  const neptune = /neptune\s*(\d+)\s*(pro|plus|max)?/i.exec(n);
-  if (neptune) {
-    return `N${neptune[1]}${neptune[2] ? ` ${neptune[2]}` : ""}`.toLocaleUpperCase("tr-TR");
-  }
-  // "Bambu Lab A1 Combo" → "A1" · "Snapmaker U1" → "U1"
-  const model = /(?:^|\s)([a-z]\d[a-z0-9]*)(?:\s|$)/i.exec(n);
-  if (model) return model[1].toLocaleUpperCase("tr-TR");
-  return n.slice(0, 7).toLocaleUpperCase("tr-TR");
+/** Kart görseli — dosya bu bilgisayarda yoksa (yalnız diğer makinede duran yerel görsel) kırık
+ * resim yerine boş kutu ikonu. Denetimde 3 kartın görseli 404 veriyordu. */
+function KartGorseli({ src }: { src: string | null }) {
+  const [kirik, setKirik] = useState(false);
+  const url = src ? thumbUrl(src) : null;
+  return (
+    <div className="h-16 w-16 shrink-0 rounded-lg border bg-muted/60 flex items-center justify-center overflow-hidden">
+      {url && !kirik
+        ? <img src={url} alt="" className="max-w-full max-h-full object-contain" onError={() => setKirik(true)} />
+        : <Package className="h-6 w-6 text-muted-foreground/35" />}
+    </div>
+  );
 }
 
 function FilterChip({

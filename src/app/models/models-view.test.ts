@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  aileDosyalari, foldTr, gramajByPrinter, gramajCompareText, missingFiles, missingGramajFiles,
-  searchProduct, sortProducts,
+  adParcala, aileDosyalari, foldTr, gramajByPrinter, gramajCompareText, kisaYaziciAdlari, missingFiles,
+  missingGramajFiles, searchProduct, shortPrinter, sortProducts, varyantlariTopla,
 } from "./models-view";
 
 const P = { snap: "snapmaker", bambu: "bambu", nep: "neptune" };
@@ -219,5 +219,71 @@ describe("yazıcı ailesi", () => {
     expect(missingFiles(urun, ids, "a1", yazicilar)).toBe(true);
     // Aile bilgisi verilmezse eski davranış.
     expect(missingFiles(urun, ids, "u1-ust")).toBe(true);
+  });
+});
+
+describe("makine şeridi kısa adları", () => {
+  const yazicilar = [
+    { id: "a", name: "Snapmaker U1 Alt" },
+    { id: "b", name: "Bambu Lab A1 Combo" },
+    { id: "c", name: "Snapmaker U1 Üst" },
+    { id: "d", name: "Bambu Lab A2L Combo" },
+  ];
+
+  it("iki U1 artık ayırt ediliyor (denetimde ikisi de 'U1' yazıyordu)", () => {
+    const ad = kisaYaziciAdlari(yazicilar);
+    expect(ad.get("a")).toBe("U1 ALT");
+    expect(ad.get("c")).toBe("U1 ÜST");
+    expect(new Set(ad.values()).size).toBe(4);
+  });
+
+  it("çakışmayan adlar kısa kalır", () => {
+    const ad = kisaYaziciAdlari(yazicilar);
+    expect(ad.get("b")).toBe("A1");
+    expect(ad.get("d")).toBe("A2L");
+    expect(shortPrinter("Elegoo Neptune 4 Pro")).toBe("N4 PRO");
+  });
+
+  it("ayırt edici kelime yoksa sıra numarası", () => {
+    const ad = kisaYaziciAdlari([{ id: "x", name: "Snapmaker U1" }, { id: "y", name: "Snapmaker U1" }]);
+    expect([ad.get("x"), ad.get("y")]).toEqual(["U1 1", "U1 2"]);
+  });
+});
+
+describe("aynı dosyalı varyantlar tek kart", () => {
+  const dosya = (yazici: string, md5: string) => ({ printerConfigId: yazici, contentMd5: md5, originalName: md5, sizeBytes: 1 });
+  const urun = (id: string, name: string, files: ReturnType<typeof dosya>[]) => ({ productId: id, name, files });
+
+  it("aynı taban ad + aynı dosyalar birleşir, farklı dosyalı varyant ayrı kalır", () => {
+    const gruplar = varyantlariTopla([
+      urun("1", "Alev Temalı Kol Standı — PS5 / Altın", [dosya("u1", "ps5")]),
+      urun("2", "Alev Temalı Kol Standı — PS5 / Bakır", [dosya("u1", "ps5")]),
+      urun("3", "Alev Temalı Kol Standı — Xbox / Altın", [dosya("u1", "xbox")]),
+    ]);
+    expect(gruplar.map((g) => g.urunler.map((u) => u.productId))).toEqual([["1", "2"], ["3"]]);
+  });
+
+  it("dosya sırası önemli değil; farklı taban adlı ürünler birleşmez", () => {
+    const gruplar = varyantlariTopla([
+      urun("1", "Ahtapot Şarap Tutacağı — Mor", [dosya("u1", "a"), dosya("a1", "b")]),
+      urun("2", "Ahtapot Şarap Tutacağı — Nebula", [dosya("a1", "b"), dosya("u1", "a")]),
+      urun("3", "Başka Ürün — Mor", [dosya("u1", "a"), dosya("a1", "b")]),
+    ]);
+    expect(gruplar.map((g) => g.urunler.length)).toEqual([2, 1]);
+  });
+
+  it("varyantsız ad ya da dosyasız ürün hiçbir şeyle birleşmez", () => {
+    const gruplar = varyantlariTopla([
+      urun("1", "Groot Kol Tutacağı", [dosya("u1", "g")]),
+      urun("2", "Groot Kol Tutacağı", [dosya("u1", "g")]),
+      urun("3", "Boş — Mor", []),
+      urun("4", "Boş — Mavi", []),
+    ]);
+    expect(gruplar).toHaveLength(4);
+  });
+
+  it("ad ayracı", () => {
+    expect(adParcala("Ahtapot Şarap Tutacağı — Bebek Mavisi")).toEqual({ taban: "Ahtapot Şarap Tutacağı", varyant: "Bebek Mavisi" });
+    expect(adParcala("Groot")).toEqual({ taban: "Groot", varyant: "" });
   });
 });
