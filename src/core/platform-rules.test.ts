@@ -5,6 +5,7 @@ import {
   shopifyCargoOverride,
   platformMinOrderQty,
   platformPriceBreakpoints,
+  targetPriceFloor,
 } from "./platform-rules";
 import { trendyolMinQty } from "./pricing-engine";
 
@@ -97,5 +98,22 @@ describe("kampanya eşiği müşterinin ödediği tutara bakar", () => {
     expect(shopifyCargoOverride("trendyol", 100)).toBeUndefined();
     expect(shopifyCargoOverride("hepsiburada", 100)).toBeUndefined();
     expect(belowShopifyMinBasket("trendyol", 100)).toBe(false);
+  });
+});
+
+describe("targetPriceFloor", () => {
+  it("Shopify'da tek başına satılan ürünün hedef fiyatı sepet minimumunun altına inmez", () => {
+    expect(targetPriceFloor("shopify", 224.99)).toBe(SHOPIFY_MIN_BASKET);
+    expect(targetPriceFloor("shopify", SHOPIFY_MIN_BASKET)).toBe(SHOPIFY_MIN_BASKET);
+  });
+
+  it("zaten sepete eklenen ucuz ürünün (< 150) aramasında sınır yok", () => {
+    expect(targetPriceFloor("shopify", 134.99)).toBeUndefined();
+    expect(targetPriceFloor("shopify", null)).toBeUndefined();
+  });
+
+  it("diğer platformlarda sınır yok", () => {
+    expect(targetPriceFloor("trendyol", 249.99)).toBeUndefined();
+    expect(targetPriceFloor("hepsiburada", 199.99)).toBeUndefined();
   });
 });

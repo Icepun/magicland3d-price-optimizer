@@ -249,6 +249,30 @@ describe("computeClientPricing", () => {
   });
 
   /**
+   * HEDEF FİYAT SEPET MİNİMUMUNA İNMEZ — 9 Eki 2026 denetimi.
+   * Ayarlanabilir GPU Tutucu (Shopify ₺224,99, maliyet ~₺19, kargo ₺115) için Lab "%20 marj →
+   * ₺27,17" diyordu: çözücü en düşük fiyatı ararken 150₺ altına iniyor, orada kargo 0 sayılıyor.
+   */
+  it("Fiyat Lab: tek başına satılan Shopify ürününe 150₺ altı hedef fiyat önermez", () => {
+    const input = baseInput({ cargoRules: [CARGO_88] });
+    input.cost.filamentWeight = 10; // 10₺ üretim — eşiğin altı çok "kârlı" görünsün
+    const shopify = computeClientPricing(input).priceLab.targets?.find((t) => t.platform === "shopify");
+    const fiyatlar = (shopify?.rows ?? []).map((r) => r.price);
+    expect(fiyatlar).toHaveLength(4);
+    for (const f of fiyatlar) expect(f).not.toBeNull();
+    for (const f of fiyatlar) expect(f as number).toBeGreaterThanOrEqual(150);
+  });
+
+  it("Fiyat Lab: zaten 150₺ altında satılan ürünün hedefi altta aranmaya devam eder", () => {
+    const input = baseInput({ cargoRules: [CARGO_88] });
+    input.cost.filamentWeight = 10;
+    input.product.listings[0].salePrice = 120;
+    input.product.currentSalePrice = 120;
+    const shopify = computeClientPricing(input).priceLab.targets?.find((t) => t.platform === "shopify");
+    expect(shopify?.rows[0].price as number).toBeLessThan(150);
+  });
+
+  /**
    * KAMPANYA EŞİĞİ — sepet minimumu müşterinin ÖDEDİĞİ tutara bakar.
    *
    * Bu bir kez yanlış "düzeltildi": eşiğe liste fiyatı sokulunca 140₺'ye inen bir kampanyada

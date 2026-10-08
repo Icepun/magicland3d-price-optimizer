@@ -7,6 +7,7 @@ import {
   platformMinOrderQty,
   platformPriceBreakpoints,
   shopifyCargoOverride,
+  targetPriceFloor,
 } from "@/core/platform-rules";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
@@ -30,19 +31,22 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   await ensureRuntimeSchema();
   const { id } = await params;
 
-  const product = await prisma.product.findUnique({
-    where: { id },
-    include: { cost: { include: { filamentType: true } }, listings: { where: { isActive: true } } },
-  });
-  if (!product) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  const [commissionRules, cargoRules, expenseRules, settings] = await Promise.all([
-    prisma.commissionRule.findMany({ where: { isActive: true } }),
-    prisma.cargoRule.findMany({ where: { isActive: true } }),
-    prisma.expenseRule.findMany({ where: { isActive: true } }),
-    prisma.appSetting.findMany(),
-  ]);
-  const filamentFiyatlari = await filamentFiyatlariOku();
+  // TEK paralel tur: ürün, maliyeti, ilanları, kurallar ve filament fiyatları birbirini
+  // beklemez. Eskiden `include` + ardından kurallar + ardından filament fiyatları sıralı ~6 tur
+  // gidiyordu; uzak HTTP veritabanında uç her açılışta ~1 sn sürüyordu (9 Eki 2026 ölçümü).
+  const [urun, cost, listings, commissionRules, cargoRules, expenseRules, settings, filamentFiyatlari] =
+    await Promise.all([
+      prisma.product.findUnique({ where: { id } }),
+      prisma.productCost.findUnique({ where: { productId: id }, include: { filamentType: true } }),
+      prisma.listing.findMany({ where: { productId: id, isActive: true } }),
+      prisma.commissionRule.findMany({ where: { isActive: true } }),
+      prisma.cargoRule.findMany({ where: { isActive: true } }),
+      prisma.expenseRule.findMany({ where: { isActive: true } }),
+      prisma.appSetting.findMany(),
+      filamentFiyatlariOku(),
+    ]);
+  if (!urun) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  const product = { ...urun, cost, listings };
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s.value]));
   const vatRate = vatRateOf(settingsMap);
 
@@ -92,7 +96,12 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // Hedef marj → fiyat; kargo/min-adet sıçramalarında her sabit aralığı ayrı ara.
-  function priceForMargin(platform: string, listing: Parameters<typeof simFor>[1], targetMargin: number): number | null {
+  function priceForMargin(
+    platform: string,
+    listing: Parameters<typeof simFor>[1],
+    targetMargin: number,
+    currentPrice: number | null
+  ): number | null {
     const platformCargo = filterCargoRulesByPlatform(cargoRules as KR, platform);
     const platformExpense = filterRulesByPlatform(expenseRules as ER, platform);
     const breakpoints = collectRulePriceBreakpoints(
@@ -105,6 +114,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       marginAt: (price) => simFor(platform, listing, price).profitMargin,
       targetMargin,
       breakpoints,
+      minPrice: targetPriceFloor(platform, currentPrice),
     });
   }
 
@@ -118,7 +128,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       platform,
       currentPrice,
       currentMargin: simFor(platform, listing, currentPrice).profitMargin,
-      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100) })),
+      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100, currentPrice) })),
     };
   });
 

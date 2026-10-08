@@ -5,6 +5,7 @@ import {
   platformMinOrderQty,
   platformPriceBreakpoints,
   shopifyCargoOverride,
+  targetPriceFloor,
 } from "@core/platform-rules";
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import {
@@ -101,7 +102,7 @@ export function computePriceLab(
     });
 
   // Kargo/min-adet eşiklerinde marj aşağı sıçrayabilir; her sabit aralığı ayrı ara.
-  function priceForMargin(listing: LabListing, targetPct: number): number | null {
+  function priceForMargin(listing: LabListing, targetPct: number, currentPrice: number | null): number | null {
     const tm = targetPct / 100;
     const platformCargo = filterCargoRulesByPlatform(rules.cargo, listing.platform);
     const platformExpense = filterRulesByPlatform(rules.expense, listing.platform);
@@ -115,6 +116,7 @@ export function computePriceLab(
       marginAt: (price) => simFor(listing, price).profitMargin,
       targetMargin: tm,
       breakpoints,
+      minPrice: targetPriceFloor(listing.platform, currentPrice),
     });
   }
 
@@ -136,7 +138,7 @@ export function computePriceLab(
       platform,
       currentPrice,
       currentMargin: cur.profitMargin,
-      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(listing, m) })),
+      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(listing, m, currentPrice) })),
     };
   });
 

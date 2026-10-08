@@ -5,6 +5,7 @@ import {
   platformMinOrderQty,
   platformPriceBreakpoints,
   shopifyCargoOverride,
+  targetPriceFloor,
 } from "../core/platform-rules";
 import { vatRateOf } from "../core/vat";
 import {
@@ -297,7 +298,8 @@ function priceLabFromBase(b: PricingBase): PriceLab {
   const priceForMargin = (
     platform: string,
     listing: PricingListing | null,
-    targetMargin: number
+    targetMargin: number,
+    currentPrice: number | null
   ): number | null => {
     const breakpoints = collectRulePriceBreakpoints(
       b.productRules,
@@ -309,6 +311,7 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       marginAt: (price) => simFor(platform, listing, price).profitMargin,
       targetMargin,
       breakpoints,
+      minPrice: targetPriceFloor(platform, currentPrice),
     });
   };
 
@@ -321,7 +324,7 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       platform,
       currentPrice,
       currentMargin: simFor(platform, listing, currentPrice).profitMargin,
-      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100) })),
+      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100, currentPrice) })),
     };
   });
 

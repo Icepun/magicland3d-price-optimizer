@@ -41,6 +41,25 @@ export function belowShopifyMinBasket(platform: string, effectivePrice: number):
 }
 
 /**
+ * Hedef-marj aramasının ALT SINIRI (Fiyat Laboratuvarı "%20 marj için şu fiyat").
+ *
+ * Çözücü hedefi sağlayan EN DÜŞÜK fiyatı arar. Shopify'da sepet minimumunun altında kargo
+ * satıcıya kalmadığı (0) için arama oraya iniyor ve ₺224,99'luk tek başına satılan ürüne
+ * "%20 marj → ₺27,17" diyordu — o fiyattan ürün tek başına alınamaz, öneri anlamsız.
+ * Kural: şu an minimumun ÜSTÜNDE satılan ürünün hedefi de üstünde aranır. Zaten sepete eklenen
+ * ucuz ürünlerde (< 150, ör. anahtarlık) sınır yok — onların gerçek satış biçimi bu.
+ * `undefined` = varsayılan alt sınır.
+ */
+export function targetPriceFloor(
+  platform: string,
+  currentPrice: number | null | undefined
+): number | undefined {
+  return platform === "shopify" && currentPrice != null && currentPrice >= SHOPIFY_MIN_BASKET
+    ? SHOPIFY_MIN_BASKET
+    : undefined;
+}
+
+/**
  * Platformun dayattığı minimum sipariş adedi — kâr N adetlik sipariş üzerinden hesaplanır.
  * Trendyol dışında her platformda 1.
  */
