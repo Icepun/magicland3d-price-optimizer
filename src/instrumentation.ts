@@ -22,6 +22,15 @@ export async function register() {
       console.error("[instrumentation] sipariş izleyici başlatılamadı:", e);
     }
 
+    // Ağır sayfaların (Raporlar, Panel, Ürünler) sunucu önbelleği boşsa açılıştan kısa süre sonra
+    // sırayla doldurulur — güncellemeden sonraki ilk ziyaret 4 sn beklemesin.
+    try {
+      const { startRouteWarmup } = await import("./lib/route-warmup");
+      startRouteWarmup();
+    } catch (e) {
+      console.error("[instrumentation] önbellek ısıtma başlatılamadı:", e);
+    }
+
     // Günlük otomatik yedek: bulut verisinden taşınabilir JSON üretip kullanıcı klasörüne yazar.
     // Açılışta hemen çalışmaz; gecikmeli başlar ve günde bir kez yeter.
     try {
