@@ -49,7 +49,37 @@ describe("periyot aralıkları — Türkiye takvimi", () => {
     const a = periyotAraligi("ay", SIMDI);
     expect(a.basMs).toBe(TR("2026-08-01T00:00:00"));
     expect(a.oncekiBasMs).toBe(TR("2026-07-01T00:00:00"));
+    // Ayın 14'ü öğlen → geçen ayın 14'ü öğlene kadar (tüm Temmuz DEĞİL).
+    expect(a.oncekiSonMs).toBe(TR("2026-07-14T12:00:00"));
+  });
+
+  it("kısmi dönem önceki dönemin TAMAMIYLA kıyaslanmaz (denetimdeki '-%81 yeşil')", () => {
+    const ekim9 = TR("2026-10-09T18:00:00");
+    const a = periyotAraligi("ay", ekim9);
+    expect(a.oncekiSonMs).toBe(TR("2026-09-09T18:00:00"));
+    const o = donemOzeti(
+      [
+        gider({ amount: 4930, paidAt: new Date(TR("2026-10-03T10:00:00")).toISOString() }),
+        gider({ amount: 5000, paidAt: new Date(TR("2026-09-05T10:00:00")).toISOString() }),
+        // Eylül'ün geri kalanı — ayın 9'unda kıyasa girmez.
+        gider({ amount: 20000, paidAt: new Date(TR("2026-09-20T10:00:00")).toISOString() }),
+      ],
+      a
+    );
+    expect(o.oncekiToplam).toBe(5000);
+  });
+
+  it("önceki dönem daha kısaysa kendi sonunda kesilir", () => {
+    const mart31 = TR("2026-03-31T12:00:00");
+    const a = periyotAraligi("ay", mart31);
     expect(a.oncekiSonMs).toBe(a.basMs - 1);
+  });
+
+  it("hafta ve yıl da geçen süre kadar kıyaslanır", () => {
+    const h = periyotAraligi("hafta", SIMDI);
+    expect(h.oncekiSonMs).toBe(h.oncekiBasMs + (SIMDI - h.basMs));
+    const y = periyotAraligi("yil", SIMDI);
+    expect(y.oncekiSonMs).toBe(y.oncekiBasMs + (SIMDI - y.basMs));
   });
 
   it("3 ay ve 6 ay, içinde bulunulan ay DAHİL geriye sayar", () => {
@@ -145,7 +175,8 @@ describe("dönem özeti", () => {
     const o = donemOzeti(
       [
         gider({ amount: 120, paidAt: iso(TR("2026-08-05T10:00:00")) }),
-        gider({ amount: 80, paidAt: iso(TR("2026-07-20T10:00:00")) }),
+        // Önceki dönemin KIYASLANAN kısmında (1–14 Temmuz; bugün 14 Ağustos).
+        gider({ amount: 80, paidAt: iso(TR("2026-07-10T10:00:00")) }),
       ],
       aralik
     );

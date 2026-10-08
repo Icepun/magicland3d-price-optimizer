@@ -160,6 +160,55 @@ export interface FinanceResponse {
   products?: ProductSalesSummary;
   sources?: SourceHealth;
   recalcReadiness?: RecalcReadiness;
+  /** Geçen ayın BUGÜNE KADARKİ kısmı — süren ay bununla kıyaslanır (v9 gövdesi). */
+  previousToDate?: PreviousToDate | null;
+  /** Son 12 hafta (v9 gövdesi). */
+  weeks?: WeeklyBucket[];
+}
+
+export interface PreviousToDate {
+  month: string;
+  revenue: number;
+  netProfit: number;
+  expenses: number;
+  orderCount: number;
+  until: string;
+}
+
+export interface WeeklyBucket {
+  week: string;
+  label: string;
+  revenue: number;
+  orderProfit: number;
+  expenses: number;
+  netProfit: number;
+  orderCount: number;
+  ongoing: boolean;
+}
+
+/**
+ * Türkçe yönelme eki: "1–9 Eylül" → "1–9 Eylül'e", "Kasım" → "Kasım'a".
+ * Son ünlü kalın (a ı o u) ise 'a, ince (e i ö ü) ise 'e.
+ */
+export function yonelmeEki(metin: string): string {
+  const unluler = metin.toLocaleLowerCase("tr-TR").match(/[aeıioöuü]/g);
+  const son = unluler?.at(-1);
+  return `${metin}'${son && "aıou".includes(son) ? "a" : "e"}`;
+}
+
+/**
+ * Süren ay kıyası: geçen ayın aynı gününe kadarki kısmı varsa o, yoksa geçen ayın tamamı.
+ * Ay bitmişse (ya da sunucu eski gövde döndürdüyse) her zaman tam ay.
+ */
+export function kiyasKaynagi<T extends { month: string }>(
+  previousMonth: T | undefined,
+  previousToDate: PreviousToDate | null | undefined,
+  currentOngoing: boolean
+): { kaynak: T | PreviousToDate | undefined; kismi: boolean } {
+  if (currentOngoing && previousMonth && previousToDate && previousToDate.month === previousMonth.month) {
+    return { kaynak: previousToDate, kismi: true };
+  }
+  return { kaynak: previousMonth, kismi: false };
 }
 
 /* ── Geçen ay kıyası ───────────────────────────────────────────────────────────────────── */

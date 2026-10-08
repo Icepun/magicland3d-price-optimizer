@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateMonthlyFinance,
+  aggregateWeeklyFinance,
   monthKey,
   monthlyFinanceWindowStart,
+  previousMonthSameMoment,
+  previousMonthToDate,
   recentMonthKeys,
   tlToKurus,
 } from "./monthly-finance";
@@ -378,5 +381,111 @@ describe("aylık KDV özeti", () => {
       netProfit: 200,
       orderCount: 1,
     });
+  });
+});
+
+describe("geçen ayın bugüne kadarki kısmı (süren ayla adil kıyas)", () => {
+  const siparis = (iso: string, revenueKurus: number) => ({
+    platform: "trendyol",
+    orderedAt: new Date(iso),
+    revenueKurus,
+    profitKurus: Math.round(revenueKurus / 4),
+    profitPartial: false,
+    statusKind: "delivered",
+    currency: "TRY",
+  });
+
+  it("aynı gün ve saat, İstanbul saatiyle", () => {
+    // 9 Ekim 18:00 İstanbul (15:00 UTC) → 9 Eylül 18:00 İstanbul.
+    expect(previousMonthSameMoment(new Date("2026-10-09T15:00:00.000Z")).toISOString()).toBe(
+      "2026-09-09T15:00:00.000Z"
+    );
+  });
+
+  it("geçen ay daha kısaysa son gününe kırpılır", () => {
+    // 31 Mart 12:00 İstanbul → 28 Şubat 12:00 İstanbul (2026 artık yıl değil).
+    expect(previousMonthSameMoment(new Date("2026-03-31T09:00:00.000Z")).toISOString()).toBe(
+      "2026-02-28T09:00:00.000Z"
+    );
+  });
+
+  it("yıl dönümünde Aralık'a geçer", () => {
+    expect(previousMonthSameMoment(new Date("2026-01-09T09:00:00.000Z")).toISOString()).toBe(
+      "2025-12-09T09:00:00.000Z"
+    );
+  });
+
+  it("yalnız geçen ayın aynı anına kadarki satış ve gider sayılır", () => {
+    const now = new Date("2026-10-09T15:00:00.000Z");
+    const sonuc = previousMonthToDate({
+      now,
+      snapshots: [
+        siparis("2026-09-03T10:00:00.000Z", 100_000), // sayılır
+        siparis("2026-09-09T14:59:00.000Z", 50_000), // sayılır (aynı anın hemen öncesi)
+        siparis("2026-09-20T10:00:00.000Z", 900_000), // sayılmaz — ayın geri kalanı
+        siparis("2026-10-05T10:00:00.000Z", 70_000), // bu ay — sayılmaz
+      ],
+      expenses: [
+        { paidAt: new Date("2026-09-06T10:00:00.000Z"), amountKurus: 30_000 },
+        { paidAt: new Date("2026-09-25T10:00:00.000Z"), amountKurus: 500_000 },
+      ],
+    });
+    expect(sonuc?.item.month).toBe("2026-09");
+    expect(sonuc?.item.revenue).toBe(1500);
+    expect(sonuc?.item.orderCount).toBe(2);
+    expect(sonuc?.item.expenses).toBe(300);
+  });
+});
+
+describe("haftalık görünüm", () => {
+  const siparis = (iso: string, revenueKurus: number, extra: Record<string, unknown> = {}) => ({
+    platform: "shopify",
+    orderedAt: new Date(iso),
+    revenueKurus,
+    profitKurus: revenueKurus / 2,
+    profitPartial: false,
+    statusKind: "delivered",
+    currency: "TRY",
+    ...extra,
+  });
+  // Cuma, 9 Ekim 2026 18:00 İstanbul.
+  const now = new Date("2026-10-09T15:00:00.000Z");
+
+  it("haftalar pazartesi başlar, en yenisi süren hafta", () => {
+    const h = aggregateWeeklyFinance({ snapshots: [], expenses: [], weekCount: 3, now });
+    expect(h.map((w) => w.week)).toEqual(["2026-09-21", "2026-09-28", "2026-10-05"]);
+    expect(h.map((w) => w.ongoing)).toEqual([false, false, true]);
+    expect(h[2].label).toBe("5–11 Eki");
+    expect(h[1].label).toBe("28 Eyl – 4 Eki");
+  });
+
+  it("aylık toplamla aynı kurallar: iptal ve döviz girmez, manuel bir kez sayılır", () => {
+    const h = aggregateWeeklyFinance({
+      now,
+      weekCount: 1,
+      snapshots: [
+        siparis("2026-10-06T10:00:00.000Z", 10_000),
+        siparis("2026-10-06T11:00:00.000Z", 99_000, { statusKind: "cancelled" }),
+        siparis("2026-10-06T12:00:00.000Z", 99_000, { currency: "USD" }),
+        siparis("2026-10-06T13:00:00.000Z", 99_000, { platform: "manual" }),
+      ],
+      manualOrders: [
+        { orderedAt: new Date("2026-10-07T10:00:00.000Z"), revenueKurus: 5_000, profitKurus: 1_000, profitPartial: false, statusKind: "delivered", currency: "TRY" },
+      ],
+      expenses: [{ paidAt: new Date("2026-10-08T10:00:00.000Z"), amountKurus: 2_000 }],
+    });
+    expect(h[0]).toMatchObject({ revenue: 150, orderCount: 2, expenses: 20, orderProfit: 60, netProfit: 40 });
+  });
+
+  it("pazar gecesi İstanbul saatiyle aynı haftada kalır", () => {
+    // Pazar 11 Ekim 23:30 İstanbul = 20:30 UTC → hâlâ 5 Ekim haftası.
+    const h = aggregateWeeklyFinance({
+      now: new Date("2026-10-11T20:40:00.000Z"),
+      weekCount: 1,
+      snapshots: [siparis("2026-10-11T20:30:00.000Z", 1_000)],
+      expenses: [],
+    });
+    expect(h[0].week).toBe("2026-10-05");
+    expect(h[0].orderCount).toBe(1);
   });
 });

@@ -27,7 +27,7 @@ export const PERIYOTLAR: { id: PeriyotTipi; label: string; kisa: string }[] = [
 export interface Aralik {
   basMs: number;
   sonMs: number;
-  /** Bir önceki eş uzunluktaki dönem — karşılaştırma için. */
+  /** Bir önceki dönemin, bu dönemde geçen süre kadarlık başı — karşılaştırma için. */
   oncekiBasMs: number;
   oncekiSonMs: number;
 }
@@ -55,6 +55,22 @@ function trAn(yil: number, ay: number, gun: number): number {
  * saydığı için naif bir hesap haftayı bir gün kaydırırdı.
  */
 export function periyotAraligi(tip: PeriyotTipi, nowMs: number): Aralik {
+  return esUzunluk(hamAralik(tip, nowMs));
+}
+
+/**
+ * Önceki dönem, bu dönemde GEÇEN süre kadar alınır.
+ *
+ * NEDEN: Ekim'in 9 günü Eylül'ün TAMAMIYLA kıyaslanıyor ve "-%81" yeşil gösteriliyordu —
+ * gider azalmamıştı, ay henüz bitmemişti (9 Eki 2026 denetimi). Ayın 9'unda, geçen ayın ilk 9
+ * gününe bakılır; önceki dönem daha kısaysa (Şubat) kendi sonunda kesilir.
+ */
+function esUzunluk(a: Aralik): Aralik {
+  const gecen = Math.max(0, a.sonMs - a.basMs);
+  return { ...a, oncekiSonMs: Math.min(a.oncekiBasMs + gecen, a.basMs - 1) };
+}
+
+function hamAralik(tip: PeriyotTipi, nowMs: number): Aralik {
   const { yil, ay, gun, haftaGunu } = trParcalari(nowMs);
   const sonMs = nowMs;
 

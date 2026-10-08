@@ -52,6 +52,14 @@ export function PeriyotSecici({
 
 /* ─────────────────────────── Özet şeridi ─────────────────────────── */
 
+const KIYAS_BASLIGI: Record<PeriyotTipi, string> = {
+  hafta: "Geçen haftanın aynı günlerine göre",
+  ay: "Geçen ayın aynı günlerine göre",
+  "3ay": "Önceki 3 ayın aynı süresine göre",
+  "6ay": "Önceki 6 ayın aynı süresine göre",
+  yil: "Geçen yılın aynı dönemine göre",
+};
+
 export function OzetSerit({
   toplam,
   adet,
@@ -82,7 +90,8 @@ export function OzetSerit({
           </p>
         </div>
         <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">Önceki döneme göre</p>
+          {/* Önceki dönem bu dönemde geçen süre kadar alınır (bkz. core/expense-view esUzunluk). */}
+          <p className="text-[11px] text-muted-foreground">{KIYAS_BASLIGI[periyot]}</p>
           <p
             className={cn(
               "mt-0.5 text-2xl font-bold tabular-nums leading-none",

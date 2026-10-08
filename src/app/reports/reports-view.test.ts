@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { kiyasKaynagi, yonelmeEki } from "./reports-view";
 import {
   RECALC_BLOCK_LABELS,
   blockedRecalcText,
@@ -564,5 +565,31 @@ describe("Raporlar sayfası sözleşmeleri", () => {
   it("ağ kopukken 'veri yok' DENMEZ", () => {
     // Duraklamış sorguda isError de isFetching de false; bu ayrım olmadan ekran yalan söylüyordu.
     expect(source).toContain('financeQuery.fetchStatus === "paused"');
+  });
+});
+
+describe("süren ay kıyası (9 Eki 2026 denetimi: '-%55 kırmızı')", () => {
+  const eylul = { month: "2026-09", revenue: 137000, netProfit: 31000, expenses: 25000, orderCount: 300 };
+  const eylulKismi = { month: "2026-09", revenue: 50000, netProfit: 12000, expenses: 5000, orderCount: 95, until: "2026-09-09T15:00:00.000Z" };
+
+  it("süren ay geçen ayın aynı günleriyle kıyaslanır", () => {
+    expect(kiyasKaynagi(eylul, eylulKismi, true)).toEqual({ kaynak: eylulKismi, kismi: true });
+  });
+
+  it("bitmiş ay ya da eski sunucu gövdesi tam ayla kıyaslanır", () => {
+    expect(kiyasKaynagi(eylul, eylulKismi, false)).toEqual({ kaynak: eylul, kismi: false });
+    expect(kiyasKaynagi(eylul, undefined, true)).toEqual({ kaynak: eylul, kismi: false });
+  });
+
+  it("kısmi veri başka bir aya aitse kullanılmaz", () => {
+    expect(kiyasKaynagi(eylul, { ...eylulKismi, month: "2026-08" }, true).kismi).toBe(false);
+  });
+
+  it("yönelme eki son ünlüye uyar", () => {
+    expect(yonelmeEki("1–9 Eylül")).toBe("1–9 Eylül'e");
+    expect(yonelmeEki("1–9 Kasım")).toBe("1–9 Kasım'a");
+    expect(yonelmeEki("1–9 Ekim")).toBe("1–9 Ekim'e");
+    expect(yonelmeEki("Ağustos")).toBe("Ağustos'a");
+    expect(yonelmeEki("1–4 Haziran")).toBe("1–4 Haziran'a");
   });
 });

@@ -47,6 +47,7 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { usePageHidden, usePrefersReducedMotion } from "@/lib/client-state";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
+import { useKaliciSecim } from "@/lib/kalici-secim";
 import { toast } from "sonner";
 import { requestOrdersView } from "@/components/ui/command-palette";
 import {
@@ -56,6 +57,7 @@ import {
   deltaTone,
   freshnessLine,
   isMonthRangeKey,
+  kiyasKaynagi,
   monthKeyOf,
   monthPeriodLabel,
   monthProgress,
@@ -67,6 +69,7 @@ import {
   statDelta,
   visibleRangeOptions,
   windowRecalcSummary,
+  yonelmeEki,
   type FinanceResponse,
   type KarEksikSebepleri,
   type MonthRangeKey,
@@ -295,6 +298,8 @@ const TOOLTIP_STYLE = {
   fontSize: 12,
   color: "oklch(0.95 0 0)",
 } as const;
+
+const GRAFIK_KIPLERI = ["ay", "hafta"] as const;
 
 export default function ReportsPage() {
   const queryClient = useQueryClient();
@@ -546,10 +551,29 @@ export default function ReportsPage() {
   const periodLabel = currentMonth
     ? monthPeriodLabel(currentMonth.month, currentProgress)
     : null;
+  // Süren ay geçen ayın AYNI GÜNLERİYLE kıyaslanır (sunucu bu kısmı ayrıca hesaplar).
+  const { kaynak: onceki, kismi: kismiKiyas } = kiyasKaynagi(
+    previousMonth,
+    finance?.previousToDate,
+    currentProgress?.ongoing ?? false
+  );
   const previousPeriodLabel = previousMonth
-    ? monthPeriodLabel(previousMonth.month, null)
+    ? kismiKiyas && currentProgress
+      ? monthPeriodLabel(
+          previousMonth.month,
+          // Geçen ay daha kısaysa (Şubat) kendi son gününde kalır — sunucuyla aynı kural.
+          (() => {
+            const p = monthProgress(previousMonth.month, Date.parse(finance!.previousToDate!.until) - 1, timeZone);
+            return p ? { ...p, ongoing: true } : null;
+          })()
+        )
+      : monthPeriodLabel(previousMonth.month, null)
     : null;
   const ongoingKey = monthKeyOf(new Date(nowMs).toISOString(), timeZone);
+  // Ay / Hafta görünümü (bu cihazda hatırlanır). Ayın ilk günlerinde aylık grafik neredeyse
+  // boş kalıyordu; haftalık görünüm süren ayı da okunur kılar.
+  const [grafikKip, setGrafikKip] = useKaliciSecim("mlhub-rapor-grafik", "ay", GRAFIK_KIPLERI);
+  const haftalik = grafikKip === "hafta" && (finance?.weeks?.length ?? 0) > 0;
 
   const chartData = useMemo(
     () =>
@@ -558,6 +582,19 @@ export default function ReportsPage() {
         ongoing: month.month === ongoingKey,
       })),
     [financeMonths, finance?.dataFrom, activeRange, timeZone, ongoingKey]
+  );
+  const grafikVerisi = useMemo(
+    () =>
+      haftalik
+        ? (finance?.weeks ?? []).map((w) => ({
+            month: w.week,
+            label: w.label,
+            revenue: w.revenue,
+            netProfit: w.netProfit,
+            ongoing: w.ongoing,
+          }))
+        : chartData,
+    [haftalik, finance?.weeks, chartData]
   );
   const showsOngoing = chartData.some((month) => month.ongoing);
   const showsLoss = chartData.some((month) => month.netProfit < 0);
@@ -844,8 +881,9 @@ export default function ReportsPage() {
               label="Ciro"
               period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.revenue : null}
-              previous={hasMonthlyData && previousMonth ? previousMonth.revenue : null}
+              previous={hasMonthlyData && onceki ? onceki.revenue : null}
               previousPeriod={previousPeriodLabel}
+              previousPartial={kismiKiyas}
               /* Ay sonu tahmini YALNIZ günü gününe biriken ölçülerde: ciro ve sipariş adedi.
                  Gider toplu ödeniyor (kira bir günde düşer) → giderde ve ona bağlı net kârda
                  günlük ortalamayla ay sonu çıkarmak yanlış rakam üretir. */
@@ -864,8 +902,9 @@ export default function ReportsPage() {
               label="Net kâr"
               period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.netProfit : null}
-              previous={hasMonthlyData && previousMonth ? previousMonth.netProfit : null}
+              previous={hasMonthlyData && onceki ? onceki.netProfit : null}
               previousPeriod={previousPeriodLabel}
+              previousPartial={kismiKiyas}
               format={fmtK}
               higherIsBetter
               color={
@@ -880,8 +919,9 @@ export default function ReportsPage() {
               label="Gider ödemesi"
               period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.expenses : null}
-              previous={hasMonthlyData && previousMonth ? previousMonth.expenses : null}
+              previous={hasMonthlyData && onceki ? onceki.expenses : null}
               previousPeriod={previousPeriodLabel}
+              previousPartial={kismiKiyas}
               format={fmtK}
               /* Giderde ARTIŞ kötüdür — rengi ters döner. */
               higherIsBetter={false}
@@ -893,8 +933,9 @@ export default function ReportsPage() {
               label="Sipariş"
               period={periodLabel}
               value={hasMonthlyData && currentMonth ? currentMonth.orderCount : null}
-              previous={hasMonthlyData && previousMonth ? previousMonth.orderCount : null}
+              previous={hasMonthlyData && onceki ? onceki.orderCount : null}
               previousPeriod={previousPeriodLabel}
+              previousPartial={kismiKiyas}
               projection={
                 hasMonthlyData && currentMonth
                   ? monthProjection(currentMonth.orderCount, currentProgress)
@@ -953,9 +994,37 @@ export default function ReportsPage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <CalendarRange className="h-4 w-4 text-primary" />
-                  Aydan Aya Ciro ve Net Kâr
+                  {haftalik ? "Haftadan Haftaya Ciro ve Net Kâr" : "Aydan Aya Ciro ve Net Kâr"}
                 </CardTitle>
-                {rangeOptions.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                <div
+                  role="group"
+                  aria-label="Grafik dönemi"
+                  className="flex items-center gap-0.5 rounded-lg border border-border/60 bg-muted/25 p-0.5"
+                >
+                  {([
+                    ["ay", "Ay"],
+                    ["hafta", "Hafta"],
+                  ] as const).map(([kip, etiket]) => (
+                    <button
+                      key={kip}
+                      type="button"
+                      aria-pressed={grafikKip === kip}
+                      disabled={kip === "hafta" && !finance?.weeks?.length}
+                      onClick={() => setGrafikKip(kip)}
+                      className={cn(
+                        "h-7 rounded-md px-2.5 text-xs font-medium transition-all duration-200 active:scale-[0.96] disabled:opacity-40",
+                        ROW_FOCUS,
+                        grafikKip === kip
+                          ? "bg-primary/15 text-primary"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                      )}
+                    >
+                      {etiket}
+                    </button>
+                  ))}
+                </div>
+                {!haftalik && rangeOptions.length > 0 && (
                   <div
                     role="group"
                     aria-label="Grafik aralığı"
@@ -980,15 +1049,16 @@ export default function ReportsPage() {
                     ))}
                   </div>
                 )}
+                </div>
               </div>
             </CardHeader>
             <CardContent className="pt-4">
-              {hasMonthlyData && chartData.length > 0 ? (
+              {hasMonthlyData && grafikVerisi.length > 0 ? (
                 <div className="overflow-x-auto">
                   <div className="h-72 min-w-[480px] text-muted-foreground">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
-                        data={chartData}
+                        data={grafikVerisi}
                         margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
                       >
                         <CartesianGrid
@@ -1027,7 +1097,7 @@ export default function ReportsPage() {
                           radius={[4, 4, 0, 0]}
                           isAnimationActive={grafikAnimasyonu}
                         >
-                          {chartData.map((month) => (
+                          {grafikVerisi.map((month) => (
                             <Cell
                               key={month.month}
                               fill={PRIMARY}
@@ -1047,7 +1117,7 @@ export default function ReportsPage() {
                           radius={[4, 4, 0, 0]}
                           isAnimationActive={grafikAnimasyonu}
                         >
-                          {chartData.map((month) => {
+                          {grafikVerisi.map((month) => {
                             const color = month.netProfit < 0 ? LOSS : PROFIT;
                             return (
                               <Cell
@@ -1076,7 +1146,12 @@ export default function ReportsPage() {
                   </p>
                 </div>
               )}
-              {hasMonthlyData && showsOngoing && (
+              {hasMonthlyData && haftalik && (
+                <p className="mt-3 text-xs text-muted-foreground animate-in fade-in duration-500">
+                  Kesikli çubuk bu hafta — hafta henüz bitmedi. Gider, ödendiği haftanın kârından düşer.
+                </p>
+              )}
+              {hasMonthlyData && !haftalik && showsOngoing && (
                 <p className="mt-3 text-xs text-muted-foreground animate-in fade-in duration-500">
                   Kesikli çubuk {periodLabel ?? "bu ay"} — ay henüz bitmedi, çubuk büyümeye
                   devam edecek.
@@ -1842,6 +1917,7 @@ function Stat({
   value,
   previous,
   previousPeriod,
+  previousPartial = false,
   projection,
   format,
   higherIsBetter,
@@ -1854,8 +1930,10 @@ function Stat({
   period?: string | null;
   value: number | null;
   previous?: number | null;
-  /** Kıyaslanan ayın adı. */
+  /** Kıyaslanan dönem: tam ayda ay adı ("Eylül"), süren ayda aynı günler ("1–9 Eylül"). */
   previousPeriod?: string | null;
+  /** Kıyas geçen ayın bugüne kadarki kısmıyla mı yapılıyor (süren ay)? */
+  previousPartial?: boolean;
   /** Ay sonu tahmini — yalnız süren ayda ve günü gününe biriken ölçülerde. */
   projection?: number | null;
   format: (n: number) => string;
@@ -1905,7 +1983,11 @@ function Stat({
           >
             {delta.diff === 0 ? (
               <span className="text-muted-foreground truncate">
-                {previousPeriod ? `${previousPeriod} ayıyla aynı` : "Geçen ayın tamamıyla aynı"}
+                {previousPeriod
+                  ? previousPartial
+                    ? `${previousPeriod} ile aynı`
+                    : `${previousPeriod} ayıyla aynı`
+                  : "Geçen ayın tamamıyla aynı"}
               </span>
             ) : (
               <>
@@ -1915,10 +1997,15 @@ function Stat({
                   {format(Math.abs(delta.diff))}
                   {delta.ratio != null && ` · ${formatPercent(Math.abs(delta.ratio), 0)}`}
                 </span>
-                {/* Bu ay HENÜZ SÜRÜYOR; kıyas geçen ayın TAMAMINA karşı yapılıyor. Ayın
-                    başında büyük bir düşüş görünmesi bundandır — cümle bunu söyler. */}
+                {/* Süren ay geçen ayın AYNI GÜNLERİYLE kıyaslanır ("1–9 Eylül'e göre"). Eskiden
+                    geçen ayın tamamıyla kıyaslanıyor ve ayın başında sahte bir düşüş görünüyordu
+                    (9 Eki 2026: ciro "-%55" kırmızı). Eski sunucu gövdesinde tam ay kalır. */}
                 <span className="text-muted-foreground truncate">
-                  {previousPeriod ? `${previousPeriod} ayının tamamına göre` : "geçen ayın tamamına göre"}
+                  {previousPeriod
+                    ? previousPartial
+                      ? `${yonelmeEki(previousPeriod)} göre`
+                      : `${previousPeriod} ayının tamamına göre`
+                    : "geçen ayın tamamına göre"}
                 </span>
               </>
             )}

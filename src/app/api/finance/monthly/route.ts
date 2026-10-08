@@ -4,9 +4,11 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import {
   aggregateMonthlyFinance,
+  aggregateWeeklyFinance,
   FINANCE_TIME_ZONE,
   monthKey,
   monthlyFinanceWindowStart,
+  previousMonthToDate,
 } from "@/lib/monthly-finance";
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 import { readFinanceRecalcReadiness } from "@/lib/finance-recalc-readiness";
@@ -199,9 +201,10 @@ export async function GET(req: NextRequest) {
   // komisyon sayıları eklendi. Anahtar artmazsa diskteki ESKİ gövde 30 güne kadar taze sayılır
   // ve yeni alanlar hiç görünmezdi.
   // v8: "kâr hesabı tam değil" uyarısının sebepleri (maliyetsiz ürünler, bağlanmamış satışlar).
+  // v9: geçen ayın bugüne kadarki kısmı (adil kıyas) + haftalık görünüm.
   try {
     const data = await swr(
-      `finance-monthly:v8:${monthCount}`,
+      `finance-monthly:v9:${monthCount}`,
       60_000,
       () => computeMonthlyFinance(monthCount)
     );
@@ -370,6 +373,32 @@ async function computeMonthlyFinance(monthCount: number) {
     void vat; // hesaplanır, yanıta konmaz (bkz. üstteki not)
     return { ...month, outdatedOrders: outdatedByMonth.get(month.month) ?? 0 };
   });
+  // Süren ay geçen ayın TAMAMIYLA değil, aynı gününe/saatine kadarki kısmıyla kıyaslanır.
+  // Pencere en az iki ay olmalı; tek aylık istekte geçen ayın satırları hiç okunmadı.
+  const oncekiKisim =
+    monthCount >= 2
+      ? previousMonthToDate({ snapshots, manualOrders, expenses, now, timeZone: FINANCE_TIME_ZONE })
+      : null;
+  const previousToDate = oncekiKisim
+    ? {
+        month: oncekiKisim.item.month,
+        revenue: oncekiKisim.item.revenue,
+        netProfit: oncekiKisim.item.netProfit,
+        expenses: oncekiKisim.item.expenses,
+        orderCount: oncekiKisim.item.orderCount,
+        until: oncekiKisim.until.toISOString(),
+      }
+    : null;
+  // Son 12 hafta — ayın ilk günlerinde aylık grafik neredeyse boş kalıyordu.
+  const weeks = aggregateWeeklyFinance({
+    snapshots,
+    manualOrders,
+    expenses,
+    weekCount: 12,
+    now,
+    timeZone: FINANCE_TIME_ZONE,
+  });
+
   const totals = months.reduce(
     (sum, month) => ({
       revenue: Number((sum.revenue + month.revenue).toFixed(2)),
@@ -483,6 +512,8 @@ async function computeMonthlyFinance(monthCount: number) {
     commission,
     totals,
     months,
+    previousToDate,
+    weeks,
     quality,
     karEksik,
     products,

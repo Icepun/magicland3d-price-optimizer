@@ -330,13 +330,16 @@ export default function ExpensesScreen() {
   );
 }
 
-/** "Önceki döneme göre" ifadesi — dönem türüne göre doğal Türkçe. */
+/**
+ * "Önceki döneme göre" ifadesi — dönem türüne göre doğal Türkçe. Önceki dönem bu dönemde
+ * GEÇEN süre kadar alınır (ayın 9'unda geçen ayın ilk 9 günü; bkz. core/expense-view).
+ */
 const KARSILASTIRMA: Record<PeriyotTipi, string> = {
-  hafta: "geçen haftadan",
-  ay: "geçen aydan",
-  "3ay": "önceki 3 aydan",
-  "6ay": "önceki 6 aydan",
-  yil: "geçen yıldan",
+  hafta: "geçen haftanın aynı günlerinden",
+  ay: "geçen ayın aynı günlerinden",
+  "3ay": "önceki 3 ayın aynı süresinden",
+  "6ay": "önceki 6 ayın aynı süresinden",
+  yil: "geçen yılın aynı döneminden",
 };
 
 function Alan({ label, children, flex }: { label: string; children: React.ReactNode; flex?: boolean }) {
