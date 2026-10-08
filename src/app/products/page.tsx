@@ -628,27 +628,32 @@ const ProductRow = memo(function ProductRow({
       {/* Baskı süresi ve gramaj başına kazanç — "şimdi hangisini basayım?" kolonları.
           Rozet, rakamın hangi platformun fiyatından çıktığını söyler (hesap değişmez). */}
       <TableCell className="text-right tabular-nums text-xs">
-        {product.profitPerHour != null ? (
-          <div className="flex flex-col items-end">
-            <FlowNumber
-              value={product.profitPerHour}
-              format={(n) => formatCurrency(n)}
-              className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}
-            />
-            {karKaynagi && <ProfitSourceBadge platform={karKaynagi} />}
-          </div>
-        ) : (
-          <span className="text-muted-foreground/40">—</span>
-        )}
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-xs">
-        {product.profitPerGram != null ? (
-          <div className="flex flex-col items-end">
-            <FlowNumber
-              value={product.profitPerGram}
-              format={(n) => formatCurrency(n)}
-              className={cn("font-medium", product.profitPerGram < 0 && "text-destructive")}
-            />
+        {product.profitPerHour != null || product.profitPerGram != null ? (
+          <div className="flex flex-col items-end leading-tight">
+            {product.profitPerHour != null ? (
+              <span className="whitespace-nowrap">
+                <FlowNumber
+                  value={product.profitPerHour}
+                  format={(n) => formatCurrency(n)}
+                  className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}
+                />
+                <span className="text-[10px] text-muted-foreground">/sa</span>
+              </span>
+            ) : (
+              <span className="text-muted-foreground/40">—</span>
+            )}
+            {product.profitPerGram != null ? (
+              <span className="whitespace-nowrap text-muted-foreground">
+                <FlowNumber
+                  value={product.profitPerGram}
+                  format={(n) => formatCurrency(n)}
+                  className={cn(product.profitPerGram < 0 && "text-destructive")}
+                />
+                <span className="text-[10px]">/g</span>
+              </span>
+            ) : (
+              <span className="text-muted-foreground/40">—</span>
+            )}
             {karKaynagi && <ProfitSourceBadge platform={karKaynagi} />}
           </div>
         ) : (
@@ -922,9 +927,10 @@ const GroupRow = memo(function GroupRow({
         )}
       </TableCell>
       <TableCell className="text-right tabular-nums text-xs">
-        <div className="flex flex-col items-end">
+        <div className="flex flex-col items-end leading-tight">
           <span
             className={cn(
+              "whitespace-nowrap",
               ozet.karSaat
                 ? ozet.karSaat.max < 0
                   ? "text-destructive font-medium"
@@ -934,25 +940,23 @@ const GroupRow = memo(function GroupRow({
             title={rangeHint(ozet.karSaat, "Kâr/saat")}
           >
             {rangeText(ozet.karSaat)}
+            {ozet.karSaat && <span className="text-[10px]">/sa</span>}
           </span>
-          {ozet.karSaat && ozet.karKaynagi && <ProfitSourceBadge platform={ozet.karKaynagi} />}
-        </div>
-      </TableCell>
-      <TableCell className="text-right tabular-nums text-xs">
-        <div className="flex flex-col items-end">
           <span
             className={cn(
+              "whitespace-nowrap",
               ozet.karGram
                 ? ozet.karGram.max < 0
-                  ? "text-destructive font-medium"
-                  : "text-muted-foreground"
+                  ? "text-destructive"
+                  : "text-muted-foreground/80"
                 : "text-muted-foreground/40"
             )}
             title={rangeHint(ozet.karGram, "Kâr/gram")}
           >
             {rangeText(ozet.karGram)}
+            {ozet.karGram && <span className="text-[10px]">/g</span>}
           </span>
-          {ozet.karGram && ozet.karKaynagi && <ProfitSourceBadge platform={ozet.karKaynagi} />}
+          {(ozet.karSaat || ozet.karGram) && ozet.karKaynagi && <ProfitSourceBadge platform={ozet.karKaynagi} />}
         </div>
       </TableCell>
       {PLATFORM_KEYS.map((platform) => {
@@ -2292,8 +2296,12 @@ export default function ProductsPage() {
                     "px-3 py-1.5 text-sm font-medium rounded-sm transition-all duration-150 active:scale-[0.97] flex items-center gap-1.5",
                     secili
                       ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-background/40"
+                      : "text-muted-foreground hover:text-foreground hover:bg-background/40",
+                    // Boş sekme soluk: "Eşiğe Yakın 0" gibi sekmeler dolu olanlarla aynı ağırlıkta
+                    // duruyor ve göz onlarda da duruyordu. Tıklanabilir kalır.
+                    adet === 0 && !secili && "opacity-45"
                   )}
+                  title={adet === 0 ? `${opt.label}: şu an ürün yok` : undefined}
                 >
                   {opt.label}
                   {adet != null && (
@@ -2379,21 +2387,24 @@ export default function ProductsPage() {
               <TableHead className={cn("min-w-[260px]", STICKY_3, "bg-card")}>Ürün</TableHead>
               <TableHead className="text-center w-[110px]">Stok</TableHead>
               <TableHead className="text-right tabular-nums w-[90px]">Maliyet</TableHead>
-              <TableHead className="text-right w-[100px] p-0">
-                <SortableHead
-                  label="Kâr/saat"
-                  hint="Baskı süresine göre kazanç — sıralamak için tıkla"
-                  active={sort?.key === "profitPerHour" ? sort.dir : null}
-                  onClick={() => toggleSort("profitPerHour")}
-                />
-              </TableHead>
-              <TableHead className="text-right w-[100px] p-0">
-                <SortableHead
-                  label="Kâr/gram"
-                  hint="Filament gramajına göre kazanç — sıralamak için tıkla"
-                  active={sort?.key === "profitPerGram" ? sort.dir : null}
-                  onClick={() => toggleSort("profitPerGram")}
-                />
+              {/* Kâr/saat ve kâr/gram TEK sütunda alt alta: iki ayrı sütun 1440 px ekranda
+                  Hepsiburada sütununu sağdan taşırıyordu (9 Eki 2026 denetimi). İkisi de ayrı
+                  ayrı sıralanabilir. */}
+              <TableHead className="text-right w-[112px] p-0">
+                <div className="flex flex-col py-0.5">
+                  <SortableHead
+                    label="Kâr/saat"
+                    hint="Baskı süresine göre kazanç — sıralamak için tıkla"
+                    active={sort?.key === "profitPerHour" ? sort.dir : null}
+                    onClick={() => toggleSort("profitPerHour")}
+                  />
+                  <SortableHead
+                    label="Kâr/gram"
+                    hint="Filament gramajına göre kazanç — sıralamak için tıkla"
+                    active={sort?.key === "profitPerGram" ? sort.dir : null}
+                    onClick={() => toggleSort("profitPerGram")}
+                  />
+                </div>
               </TableHead>
               <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.shopify }}>
                 Shopify
@@ -2433,12 +2444,8 @@ export default function ProductsPage() {
                     </TableCell>
                     <TableCell><Skeleton className="h-3 w-14 ml-auto" /></TableCell>
                     <TableCell>
-                      <Skeleton className="h-3 w-12 ml-auto mb-1.5" />
-                      <Skeleton className="h-2 w-10 ml-auto" />
-                    </TableCell>
-                    <TableCell>
-                      <Skeleton className="h-3 w-12 ml-auto mb-1.5" />
-                      <Skeleton className="h-2 w-10 ml-auto" />
+                      <Skeleton className="h-3 w-14 ml-auto mb-1.5" />
+                      <Skeleton className="h-2.5 w-10 ml-auto" />
                     </TableCell>
                     <TableCell>
                       <Skeleton className="h-3 w-16 mx-auto mb-1.5" />
@@ -2463,7 +2470,7 @@ export default function ProductsPage() {
               </>
             ) : isError ? (
               <TableRow>
-                <TableCell colSpan={11} className="py-10">
+                <TableCell colSpan={10} className="py-10">
                   <div className="flex flex-col items-center gap-3 text-center animate-in fade-in duration-300">
                     <span className="rounded-full bg-destructive/15 p-2.5">
                       <AlertTriangle className="h-5 w-5 text-destructive" />
@@ -2489,7 +2496,7 @@ export default function ProductsPage() {
               </TableRow>
             ) : filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="py-12">
+                <TableCell colSpan={10} className="py-12">
                   {/* Boş listenin SEBEBİ farklı: arama sonuçsuz mu, sekme mi boş, daraltma mı dar? */}
                   <div className="flex flex-col items-center gap-2 text-center animate-in fade-in duration-300">
                     <span className="rounded-full bg-muted/60 p-3">
@@ -2520,7 +2527,7 @@ export default function ProductsPage() {
               <>
               {paddingTop > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={11} className="p-0 border-0" style={{ height: paddingTop }} />
+                  <td colSpan={10} className="p-0 border-0" style={{ height: paddingTop }} />
                 </tr>
               )}
               {virtualItems.map((vi, sira) => {
@@ -2576,7 +2583,7 @@ export default function ProductsPage() {
               })}
               {paddingBottom > 0 && (
                 <tr aria-hidden="true">
-                  <td colSpan={11} className="p-0 border-0" style={{ height: paddingBottom }} />
+                  <td colSpan={10} className="p-0 border-0" style={{ height: paddingBottom }} />
                 </tr>
               )}
               </>

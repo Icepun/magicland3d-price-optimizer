@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { PriceHistoryCard } from "@/components/products/PriceHistoryCard";
+import { SalesHistoryCard } from "@/components/products/SalesHistoryCard";
 import { PriceLabCard } from "@/components/products/PriceLabCard";
 import { VariantsCard } from "@/components/products/VariantsCard";
 import { StockInput } from "@/components/products/StockInput";
@@ -1114,6 +1115,8 @@ export default function ProductDetailPage({
 
       <ModelFilesCard productId={product.id} variantGroup={product.variantGroup} />
 
+      {/* Satış geçmişi + "stok kaç gün yeter" — fiyat geçmişinin hemen üstünde. */}
+      <SalesHistoryCard productId={product.id} stok={product.madeToOrder ? null : product.stock} />
       <PriceHistoryCard productId={product.id} />
 
       {imageEditorOpen && (

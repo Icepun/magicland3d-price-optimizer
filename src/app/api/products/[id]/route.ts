@@ -87,32 +87,36 @@ export async function GET(
   await ensureRuntimeSchema();
 
   const { id } = await params;
-  const product = await prisma.product.findUnique({
-    where: { id },
-    include: {
-      // cost: sadece skaler kolonlar (filamentTypeId dahil) — filamentType JOIN'i sayfada
-      // kullanılmıyor (filament maliyeti ayrı ["filament-types"] sorgusundan çözülüyor).
-      // priceHistory KALDIRILDI — detay sayfası onu okumuyor (ayrı PriceHistoryCard kendi çeker).
-      cost: true,
-      listings: { orderBy: { platform: "asc" } },
-      variantGroup: {
-        select: {
-          id: true,
-          name: true,
-          shareModels: true,
-          products: {
-            select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
-            orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
-          },
-        },
-      },
-    },
-  });
+  // PARALEL okuma. Eskiden tek `findUnique({ include })` idi; Prisma bunu ilişki başına AYRI
+  // sorgulara bölüyor ve uzak HTTP veritabanında bunlar SIRAYLA gidiyordu (~5 × 100 ms): uç her
+  // açılışta 0,5–1,2 sn sürüyordu (9 Eki 2026 ölçümü). Şimdi iki tur: ürün + maliyet + ilanlar
+  // birlikte, sonra (varsa) varyant grubu ve üyeleri birlikte. Gövde biçimi AYNI.
+  // cost: sadece skaler kolonlar (filamentTypeId dahil) — filamentType JOIN'i sayfada
+  // kullanılmıyor (filament maliyeti ayrı ["filament-types"] sorgusundan çözülüyor).
+  // priceHistory yok — detay sayfası onu okumuyor (ayrı PriceHistoryCard kendi çeker).
+  const [product, cost, listings] = await Promise.all([
+    prisma.product.findUnique({ where: { id } }),
+    prisma.productCost.findUnique({ where: { productId: id } }),
+    prisma.listing.findMany({ where: { productId: id }, orderBy: { platform: "asc" } }),
+  ]);
 
   if (!product) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(product);
+  const variantGroup = product.variantGroupId
+    ? await Promise.all([
+        prisma.variantGroup.findUnique({
+          where: { id: product.variantGroupId },
+          select: { id: true, name: true, shareModels: true },
+        }),
+        prisma.product.findMany({
+          where: { variantGroupId: product.variantGroupId },
+          select: { id: true, name: true, variantLabel: true, imageUrl: true, stock: true, currentSalePrice: true },
+          orderBy: [{ variantLabel: "asc" }, { name: "asc" }],
+        }),
+      ]).then(([grup, products]) => (grup ? { ...grup, products } : null))
+    : null;
+  return NextResponse.json({ ...product, cost, listings, variantGroup });
 }
 
 export async function PATCH(
