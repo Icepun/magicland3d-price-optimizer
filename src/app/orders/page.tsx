@@ -9,6 +9,10 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { createPortal } from "react-dom";
+import { useKaliciSecim } from "@/lib/kalici-secim";
+import { gunlereBol } from "./gun-basliklari";
+import { useIsClient } from "@/lib/client-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
@@ -38,6 +42,7 @@ import {
   CalendarDays,
   Copy,
   Link2,
+  Printer,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -430,6 +435,8 @@ function useFetchStage(active: boolean): FetchStage | null {
 }
 
 
+const YOGUNLUKLAR = ["rahat", "sik"] as const;
+
 export default function OrdersPage() {
   const queryClient = useQueryClient();
   const forceFresh = useRef(false); // "Yenile" → sunucu önbelleğini atla (?fresh=1), canlı çek.
@@ -459,6 +466,7 @@ export default function OrdersPage() {
   const [search, setSearch] = useState("");
   /** "liste" = sipariş sipariş; "hazirlik" = ürün bazında toplanmış paketleme listesi. */
   const [view, setView] = useState<"liste" | "hazirlik">("liste");
+  const [yogunluk, setYogunluk] = useKaliciSecim("mlhub-siparis-yogunluk", "rahat", YOGUNLUKLAR);
   /** Özet karttaki "N siparişte maliyet eksik" uyarısına tıklayınca yalnız o siparişler listelenir. */
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [manualCreateOpen, setManualCreateOpen] = useState(false);
@@ -767,17 +775,22 @@ export default function OrdersPage() {
     // view: hazırlık görünümünde durum çipleri gizleniyor, listeye dönünce ofset değişiyor.
   }, [scrollEl, isLoading, platform, status, filtered.length, safePage, pageSize, onlyIncomplete, view]);
 
+  // Gün başlıkları (Bugün · Dün · 7 Ekim Çarşamba) listenin satırı olarak araya girer.
+  const simdiGun = useClientNow();
+  const satirlar = useMemo(() => gunlereBol(pageItems, simdiGun ?? 0), [pageItems, simdiGun]);
+  const sik = yogunluk === "sik";
   // TanStack Virtual callback tabanlı API döndürür; React Compiler bu bileşeni bilinçli olarak atlar.
   // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
-    count: pageItems.length,
+    count: satirlar.length,
     getScrollElement: () => scrollEl,
-    estimateSize: () => 84,
+    estimateSize: (i) => (satirlar[i]?.tur === "gun" ? 34 : sik ? 58 : 84),
     overscan: 8,
     scrollMargin,
     getItemKey: (i) => {
-      const o = pageItems[i];
-      return o ? `${o.platform}-${o.id}` : i;
+      const r = satirlar[i];
+      if (!r) return i;
+      return r.tur === "gun" ? `gun-${r.anahtar}` : `${r.siparis.platform}-${r.siparis.id}`;
     },
   });
   const vItems = rowVirtualizer.getVirtualItems();
@@ -1111,6 +1124,28 @@ export default function OrdersPage() {
         {statusChips.map(({ kind, count }) => (
           <StatusChip key={kind} active={status === kind} onClick={() => setStatus(kind)} label={STATUS_STYLE[kind].label} count={count} dot={STATUS_STYLE[kind].dot} />
         ))}
+        {/* Liste yoğunluğu (bu bilgisayarda hatırlanır): rahat kartlar ya da ekrana 2 kat sipariş. */}
+        <div role="group" aria-label="Liste yoğunluğu" className="ml-auto flex items-center gap-0.5 rounded-full border p-0.5">
+          {(
+            [
+              ["rahat", "Rahat"],
+              ["sik", "Sıkı"],
+            ] as const
+          ).map(([deger, etiket]) => (
+            <button
+              key={deger}
+              type="button"
+              aria-pressed={yogunluk === deger}
+              onClick={() => setYogunluk(deger)}
+              className={cn(
+                "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors",
+                yogunluk === deger ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {etiket}
+            </button>
+          ))}
+        </div>
       </div>
       )}
 
@@ -1159,16 +1194,31 @@ export default function OrdersPage() {
         <div ref={listRef}>
           {padTop > 0 && <div style={{ height: padTop }} />}
           {vItems.map((vi) => {
-            const o = pageItems[vi.index];
-            if (!o) return null;
+            const satir = satirlar[vi.index];
+            if (!satir) return null;
+            if (satir.tur === "gun") {
+              return (
+                <div
+                  key={`gun-${satir.anahtar}`}
+                  data-index={vi.index}
+                  ref={rowVirtualizer.measureElement}
+                  className="flex items-baseline gap-2 px-1 pb-1.5 pt-2"
+                >
+                  <span className="text-xs font-semibold text-foreground/85">{satir.etiket}</span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{satir.adet} sipariş</span>
+                </div>
+              );
+            }
+            const o = satir.siparis;
             return (
               <div
                 key={`${o.platform}-${o.id}`}
                 data-index={vi.index}
                 ref={rowVirtualizer.measureElement}
-                className="pb-2"
+                className={sik ? "pb-1" : "pb-2"}
               >
                 <OrderRow
+                  sik={sik}
                   order={o}
                   isNew={freshOrderIds.has(`${o.platform}-${o.id}`)}
                   deleting={
@@ -1675,6 +1725,70 @@ function StatusChip({ active, onClick, label, count, dot }: { active: boolean; o
   );
 }
 
+/** Yazdırma sırasında yalnız toplama listesi görünsün (globals.css: body.toplama-yazdiriliyor). */
+function toplamaListesiniYazdir() {
+  const govde = document.body;
+  const temizle = () => {
+    govde.classList.remove("toplama-yazdiriliyor");
+    window.removeEventListener("afterprint", temizle);
+  };
+  govde.classList.add("toplama-yazdiriliyor");
+  window.addEventListener("afterprint", temizle);
+  window.print();
+}
+
+/** Kâğıda çıkan toplama listesi — ekranda görünmez, body'nin doğrudan çocuğu. */
+function ToplamaYazdirmaSayfasi({
+  items,
+  doneSet,
+  unitTotal,
+  orderCount,
+}: {
+  items: PrepItem[];
+  doneSet: Set<string>;
+  unitTotal: number;
+  orderCount: number;
+}) {
+  // Portal hedefi (document.body) yalnız istemcide var.
+  const istemcide = useIsClient();
+  if (!istemcide) return null;
+  const tarih = new Date().toLocaleDateString("tr-TR", { day: "numeric", month: "long", year: "numeric", weekday: "long" });
+  return createPortal(
+    <div id="toplama-yazdir" style={{ color: "#000", fontFamily: "system-ui, sans-serif", padding: "16px 8px" }}>
+      <h1 style={{ fontSize: 18, margin: "0 0 4px" }}>Toplama listesi</h1>
+      <p style={{ fontSize: 12, margin: "0 0 12px" }}>
+        {tarih} · {unitTotal} adet · {items.length} çeşit · {orderCount} sipariş
+      </p>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1.5px solid #000" }}>
+            <th style={{ width: 28, padding: "4px 0" }} />
+            <th style={{ width: 44, padding: "4px 0" }}>Adet</th>
+            <th style={{ padding: "4px 0" }}>Ürün</th>
+            <th style={{ padding: "4px 0" }}>Siparişler</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => (
+            <tr key={item.key} style={{ borderBottom: "1px solid #bbb", breakInside: "avoid" }}>
+              <td style={{ padding: "6px 0", fontSize: 16 }}>{doneSet.has(item.key) ? "☑" : "☐"}</td>
+              <td style={{ padding: "6px 0", fontWeight: 700 }}>×{item.quantity}</td>
+              <td style={{ padding: "6px 8px 6px 0" }}>
+                {item.name}
+                {item.madeToOrder ? " (sipariş üzerine)" : ""}
+              </td>
+              <td style={{ padding: "6px 0", fontFamily: "ui-monospace, monospace", fontSize: 11 }}>
+                {item.orderNumbers.join(", ")}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>,
+    document.body
+  );
+}
+
 /**
  * Hazırlık listesi: gönderilmeyi bekleyen siparişlerin kalemleri ürün bazında toplanmış,
  * toplandıkça işaretlenebilir hâlde. Amaç paketleme sırasında tek ekrana bakmak.
@@ -1763,20 +1877,28 @@ function PrepPanel({
                 Ürünü topladıkça işaretle.
               </span>
             )}
-            {doneCount > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1.5 text-xs"
-                onClick={onReset}
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                İşaretleri temizle
+            <div className="flex items-center gap-1">
+              {doneCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={onReset}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  İşaretleri temizle
+                </Button>
+              )}
+              {/* Kâğıt toplama listesi — atölyede ekran yerine kalemle işaretlemek için. */}
+              <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" onClick={toplamaListesiniYazdir}>
+                <Printer className="h-3.5 w-3.5" />
+                Yazdır
               </Button>
-            )}
+            </div>
           </div>
         </CardContent>
       </Card>
+      <ToplamaYazdirmaSayfasi items={items} doneSet={doneSet} unitTotal={unitTotal} orderCount={orderCount} />
 
       {/* Toplanacak ürünler */}
       <div className="space-y-2">
@@ -1933,6 +2055,7 @@ const OrderRow = memo(function OrderRow({
   onDelete,
   deleting,
   isNew,
+  sik = false,
 }: {
   order: UnifiedOrder;
   onEdit: () => void;
@@ -1940,6 +2063,8 @@ const OrderRow = memo(function OrderRow({
   deleting: boolean;
   /** Bu sipariş son yenilemede geldi → kısa süre vurgulanır. */
   isNew?: boolean;
+  /** Sıkı görünüm: daha az dolgu, küçük görsel, tutar/kâr/durum yan yana. */
+  sik?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   // "Maliyet gir" — ürünler sayfasında olmayan/maliyeti boş ürünün yalnız bu siparişteki maliyeti.
@@ -2016,16 +2141,16 @@ const OrderRow = memo(function OrderRow({
       )}
     >
       <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
-        <div className="flex items-center gap-3 px-3 py-3">
+        <div className={cn("flex items-center gap-3 px-3", sik ? "py-1.5" : "py-3")}>
           {/* Ürün görseli / çeşit kutusu + adet & platform rozeti */}
           <div className="relative shrink-0">
             {order.items.length > 1 ? (
-              <div className="flex h-12 w-12 flex-col items-center justify-center rounded-lg border bg-muted leading-none">
+              <div className={cn("flex flex-col items-center justify-center rounded-lg border bg-muted leading-none", sik ? "h-9 w-9" : "h-12 w-12")}>
                 <span className="text-lg font-bold leading-none tabular-nums text-foreground">{order.items.length}</span>
                 <span className="mt-0.5 text-[9px] leading-none text-muted-foreground">çeşit</span>
               </div>
             ) : (
-              <Thumb src={order.image} />
+              <Thumb src={order.image} size={sik ? "h-9 w-9" : undefined} />
             )}
 
             {/* Tek ürün ama birden fazla adet → sağ üstte ×N */}
@@ -2068,8 +2193,8 @@ const OrderRow = memo(function OrderRow({
             </p>
           </div>
 
-          {/* Tutar + kâr + durum */}
-          <div className="flex flex-col items-end gap-1 shrink-0">
+          {/* Tutar + kâr + durum (sıkı görünümde yan yana) */}
+          <div className={cn("flex shrink-0", sik ? "flex-row-reverse items-center gap-3" : "flex-col items-end gap-1")}>
             <span
               className={cn(
                 "font-bold text-sm tabular-nums transition-colors",

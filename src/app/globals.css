@@ -422,3 +422,14 @@ table thead th,
     animation: none !important;
   }
 }
+
+/*
+ * Toplama listesi yazdırma (Siparişler → Hazırlık → Yazdır). Liste body'nin doğrudan çocuğu
+ * olarak çizilir; yazdırırken yalnız o görünür, uygulama kabuğu kâğıda çıkmaz.
+ */
+#toplama-yazdir { display: none; }
+@media print {
+  body.toplama-yazdiriliyor > *:not(#toplama-yazdir) { display: none !important; }
+  body.toplama-yazdiriliyor #toplama-yazdir { display: block; }
+  body.toplama-yazdiriliyor { background: #fff !important; }
+}
