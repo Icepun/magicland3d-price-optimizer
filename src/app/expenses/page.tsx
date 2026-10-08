@@ -280,6 +280,14 @@ export default function ExpensesPage() {
     [expenses, aralik]
   );
   const ozet = useMemo(() => donemOzeti(expenses, aralik), [expenses, aralik]);
+  // Bu ay "Reklam" kategorisinde girilmiş ödemeler — bütçe kartı, bunların ürün kârlarına
+  // dağıtılmadığını söyler (9 Eki 2026 denetimi).
+  const buAyReklamGideri = useMemo(() => {
+    const ay = periyotAraligi("ay", nowMs);
+    return araliktakiler(expenses, ay.basMs, ay.sonMs)
+      .filter((g) => /reklam/i.test(kategoriAdi(g)))
+      .reduce((t, g) => t + (Number(g.amount) || 0), 0);
+  }, [expenses, nowMs]);
   const dilimler = useMemo(
     () => kategoriDagilimi(donemGiderleri, renkOf),
     [donemGiderleri, renkOf]
@@ -480,7 +488,7 @@ export default function ExpensesPage() {
       )}
 
       {/* Reklam bütçesi: gider LİSTESİNE girmez, ürün maliyetine yedirilir. */}
-      <AdBudgetCard />
+      <AdBudgetCard buAyReklamGideri={buAyReklamGideri} />
 
       {query.isLoading ? (
         <div className="grid gap-3">

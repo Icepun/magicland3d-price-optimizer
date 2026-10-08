@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { baglantiDurumu, type BaglantiTonu } from "@/lib/baglanti-ozeti";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store } from "lucide-react";
 
 interface TrendyolPublicSettings {
@@ -792,6 +793,8 @@ export default function ApiSettingsPage() {
         </p>
       </div>
 
+      <BaglantiOzetiKarti />
+
       <Tabs defaultValue="shopify">
         <TabsList>
           <TabsTrigger value="shopify">
@@ -815,6 +818,73 @@ export default function ApiSettingsPage() {
           <HepsiburadaTab />
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+const OZET_PLATFORMLARI = [
+  { anahtar: "shopify", ad: "Shopify" },
+  { anahtar: "trendyol", ad: "Trendyol" },
+  { anahtar: "hepsiburada", ad: "Hepsiburada" },
+] as const;
+
+const TON_SINIFI: Record<BaglantiTonu, string> = {
+  iyi: "border-emerald-500/30 bg-emerald-500/5",
+  uyari: "border-amber-500/40 bg-amber-500/5",
+  hata: "border-destructive/40 bg-destructive/5",
+  kapali: "border-dashed",
+};
+
+/** Üç platformun durumu tek bakışta: bağlı mı, siparişler geliyor mu, fiyatlar ne zaman eşitlendi. */
+function BaglantiOzetiKarti() {
+  const [simdi] = useState(() => Date.now());
+  const durum = useQuery<Record<string, boolean>>({
+    queryKey: ["integrations-status"],
+    queryFn: () => fetchJson("/api/integrations/status"),
+    staleTime: 60_000,
+  });
+  const ayarlar = useQuery<Record<string, string>>({
+    queryKey: ["app-settings"],
+    queryFn: () => fetchJson("/api/settings"),
+  });
+  const siparis = useQuery<Record<string, { ok?: boolean; count?: number } | undefined>>({
+    queryKey: ["orders"],
+    queryFn: ({ signal }) => fetchJson("/api/orders", { signal }),
+    staleTime: 5 * 60_000,
+  });
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+      {OZET_PLATFORMLARI.map((p) => {
+        const d = baglantiDurumu({
+          bagli: durum.data?.[p.anahtar],
+          siparis: siparis.data?.[p.anahtar],
+          sonEsitlemeIso: ayarlar.data?.[`${p.anahtar}LastSyncAt`],
+          nowMs: simdi,
+        });
+        return (
+          <div key={p.anahtar} className={cn("rounded-lg border px-3 py-2.5 text-sm", TON_SINIFI[d.ton])}>
+            <p className="font-medium">{p.ad}</p>
+            {durum.isLoading ? (
+              <p className="text-xs text-muted-foreground">…</p>
+            ) : !d.bagli ? (
+              <p className="text-xs text-muted-foreground">Bağlı değil</p>
+            ) : (
+              <>
+                <p className={cn("text-xs", d.ton === "hata" ? "text-destructive" : "text-muted-foreground")}>
+                  {d.siparisMetni ?? "Siparişler okunuyor…"}
+                </p>
+                <p className={cn("text-xs", d.ton === "uyari" ? "text-amber-500" : "text-muted-foreground")}>
+                  {d.esitlemeGun == null
+                    ? "Fiyatlar hiç eşitlenmedi"
+                    : d.esitlemeGun === 0
+                      ? "Fiyatlar bugün eşitlendi"
+                      : `Fiyatlar ${d.esitlemeGun} gün önce eşitlendi`}
+                </p>
+              </>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

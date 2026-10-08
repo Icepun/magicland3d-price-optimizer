@@ -25,6 +25,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { fetchJson } from "@/lib/fetch-json";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
+import { formatCurrency } from "@/lib/format";
+import { komisyonOzeti, type KomisyonSiparisi } from "@/lib/komisyon-ozeti";
 
 interface CommissionRule {
   id: string;
@@ -199,9 +201,12 @@ export default function CommissionRulesPage() {
 
       <p className="text-sm text-muted-foreground">
         Aşağıdaki kurallar <strong>Trendyol</strong> kategori bazlı komisyonu içindir.
-        Shopify komisyonu sabittir, ayrı kartta. Trendyol&apos;da ürüne komisyon
+        Shopify komisyonu sabittir, ayrı kartta. <strong>Hepsiburada</strong>{" "}komisyonu her ilanda
+        pazaryerinden okunur — burada ayar gerekmez. Trendyol&apos;da ürüne komisyon
         girilmezse ürün listesinde kırmızı uyarı çıkar.
       </p>
+
+      <GerceklesenKomisyonKarti />
 
       <ShopifyCommissionCard />
 
@@ -402,6 +407,74 @@ function ShopifyCommissionCard() {
           Shopify tüm ürünlerde aynı komisyonu alır (varsayılan %3.2). Bir Shopify
           ilanına özel oran girersen o geçerli olur.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+const PLATFORM_ADI: Record<string, string> = { trendyol: "Trendyol", hepsiburada: "Hepsiburada", shopify: "Shopify" };
+
+/**
+ * Son 30 günde GERÇEKLEŞEN komisyon — platform başına (9 Eki 2026 denetimi: sayfa yalnız
+ * kural listesiydi ve çoğu zaman boş görünüyordu). Siparişler sayfasıyla aynı önbellek.
+ */
+function GerceklesenKomisyonKarti() {
+  const { data, isLoading, isError } = useQuery<{ orders?: KomisyonSiparisi[] }>({
+    queryKey: ["orders"],
+    queryFn: ({ signal }) => fetchJson("/api/orders", { signal }),
+    staleTime: 5 * 60_000,
+  });
+  const satirlar = useMemo(() => komisyonOzeti(data?.orders ?? []), [data]);
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Percent className="h-4 w-4 text-primary" /> Son 30 günde gerçekleşen komisyon
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <Skeleton className="h-24 w-full" />
+        ) : isError ? (
+          <p className="text-sm text-amber-500">Siparişler alınamadı — komisyon özeti gösterilemiyor.</p>
+        ) : satirlar.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Son 30 günde pazaryeri siparişi yok.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 font-medium">Platform</th>
+                  <th className="py-1.5 text-right font-medium">Sipariş</th>
+                  <th className="py-1.5 text-right font-medium">Ciro</th>
+                  <th className="py-1.5 text-right font-medium">Komisyon</th>
+                  <th className="py-1.5 text-right font-medium">Ortalama</th>
+                  <th className="py-1.5 pl-4 font-medium">Kaynak</th>
+                </tr>
+              </thead>
+              <tbody className="tabular-nums">
+                {satirlar.map((p) => (
+                  <tr key={p.platform} className="border-t">
+                    <td className="py-2 font-medium">{PLATFORM_ADI[p.platform] ?? p.platform}</td>
+                    <td className="py-2 text-right">{p.siparis}</td>
+                    <td className="py-2 text-right">{formatCurrency(p.ciro)}</td>
+                    <td className="py-2 text-right">{formatCurrency(p.komisyon)}</td>
+                    <td className="py-2 text-right font-semibold">{p.oran == null ? "—" : `%${(p.oran * 100).toFixed(1)}`}</td>
+                    <td className="py-2 pl-4 text-xs text-muted-foreground">
+                      {[
+                        p.gercekAdet ? `${p.gercekAdet} gerçek` : null,
+                        p.tahminAdet ? `${p.tahminAdet} tahmini` : null,
+                        p.bilinmeyenAdet ? `${p.bilinmeyenAdet} bilinmiyor` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

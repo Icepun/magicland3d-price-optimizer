@@ -1,12 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, CheckCircle2, Ruler } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { AlertTriangle, Check, CheckCircle2, Loader2, Ruler } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fetchJson } from "@/lib/fetch-json";
 import { cn } from "@/lib/utils";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
+import { parseDesiInput } from "@/components/products/CostEditor";
 
 interface Kapsam {
   measuredDays: number;
@@ -67,20 +71,11 @@ export function CargoCoverageCard() {
         {data.top.length > 0 && (
           <div className="space-y-1">
             <p className="text-[11px] font-medium text-muted-foreground">
-              Önce bunları gir — en çok satanlar:
+              Önce bunları gir — en çok satanlar (desiyi yaz, Enter):
             </p>
             <div className="flex flex-wrap gap-1.5">
               {data.top.map((u) => (
-                <Link
-                  key={u.id}
-                  href={`/products/${u.id}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border bg-background/60 px-2 py-1 text-[11px] hover:border-primary/40 transition-colors"
-                  title="Ürün sayfasında desiyi gir"
-                >
-                  <span className="truncate max-w-[190px]">{u.name}</span>
-                  <span className="tabular-nums text-muted-foreground">{u.units} adet</span>
-                  <ArrowRight className="h-3 w-3 shrink-0" />
-                </Link>
+                <DesiCipi key={u.id} urun={u} />
               ))}
             </div>
           </div>
@@ -95,5 +90,60 @@ export function CargoCoverageCard() {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Desiyi ürün sayfasına gitmeden YERİNDE gir (9 Eki 2026 denetimi: her çip ürün sayfasına
+ * götürüyordu, on ürün için on sayfa). Kayıttan sonra kapsam ve tüm kâr önbellekleri tazelenir.
+ */
+function DesiCipi({ urun }: { urun: { id: string; name: string; units: number } }) {
+  const qc = useQueryClient();
+  const [metin, setMetin] = useState("");
+  const desi = parseDesiInput(metin);
+  const kaydet = useMutation({
+    mutationFn: (deger: number) =>
+      fetchJson(`/api/products/${urun.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ desi: deger }),
+      }),
+    onSuccess: (_d, deger) => {
+      toast.success(`${urun.name}: ${deger} desi kaydedildi`);
+      void qc.invalidateQueries({ queryKey: ["cargo-coverage"] });
+      clearPricingQueryCache(qc);
+    },
+    onError: (e) => toast.error(e instanceof Error && e.message ? e.message : "Desi kaydedilemedi"),
+  });
+  const gonder = () => {
+    if (desi != null && !kaydet.isPending) kaydet.mutate(desi);
+  };
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border bg-background/60 py-0.5 pl-2 pr-0.5 text-[11px] transition-colors focus-within:border-primary/50">
+      <Link href={`/products/${urun.id}`} className="truncate max-w-[180px] hover:underline" title="Ürün sayfasını aç">
+        {urun.name}
+      </Link>
+      <span className="tabular-nums text-muted-foreground">{urun.units} adet</span>
+      <input
+        value={metin}
+        onChange={(e) => setMetin(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") gonder();
+        }}
+        inputMode="decimal"
+        placeholder="desi"
+        aria-label={`${urun.name} desisi`}
+        className="h-6 w-12 rounded-full border bg-background px-2 text-center tabular-nums outline-none focus:border-primary/50"
+      />
+      <button
+        type="button"
+        onClick={gonder}
+        disabled={desi == null || kaydet.isPending}
+        aria-label="Desiyi kaydet"
+        className="flex h-6 w-6 items-center justify-center rounded-full text-primary transition-colors hover:bg-primary/10 disabled:opacity-30"
+      >
+        {kaydet.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+      </button>
+    </span>
   );
 }

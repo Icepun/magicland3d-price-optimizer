@@ -76,7 +76,7 @@ export function tarihKutusu(iso: string): string {
 const kisaTarih = (iso: string) =>
   new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Istanbul" });
 
-export function AdBudgetCard() {
+export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: number }) {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery<Yanit>({
     queryKey: ["ad-budgets"],
@@ -160,6 +160,17 @@ export function AdBudgetCard() {
             </p>
           </div>
         </div>
+
+        {/* Reklam GİDER olarak girilmiş ama bütçe yok: tutar aylık net kâra giriyor, ürün kârlarına
+            dağıtılmıyor. Otomatik taşıma YOK — ikisini birden tutmak aynı parayı iki kez sayar. */}
+        {!isLoading && buAyReklamGideri > 0 && PLATFORMLAR.every((p) => !yururlukte(p.id)) && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed">
+            Bu ay Giderler&apos;de <strong className="tabular-nums">{formatCurrency(buAyReklamGideri)}</strong> reklam
+            ödemesi var: aylık net kâra giriyor ama ürün kârlarına dağıtılmıyor. Ürün bazında görmek
+            istersen aşağıdan günlük bütçe gir —{" "}
+            <strong>o zaman aynı ödemeyi giderden çıkar</strong>, yoksa reklam iki kez sayılır.
+          </div>
+        )}
 
         {isLoading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
