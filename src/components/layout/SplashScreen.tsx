@@ -3,14 +3,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useIsFetching } from "@tanstack/react-query";
 import Image from "next/image";
+import { splashKalksinMi } from "@/lib/splash-kurali";
 
 /**
  * Açılış ekranı — DÜRÜST (sabit zamanlayıcı değil).
  *
  * Eskiden sabit 2.6sn/3.3sn timer'dı: uygulama hazır olmadan kaybolup iskelet/boş flaş yaratıyor
- * ya da hazırsa gereksiz bekletiyordu ("garip açılış"). Artık panel verisi (["dashboard"] sorgusu)
- * GERÇEKTEN gelince kapanır:
- *   • Açılışta dashboard fetch başlar (inFlight>0) → biter (inFlight=0) → hazır.
+ * ya da hazırsa gereksiz bekletiyordu ("garip açılış"). Artık AÇIK SAYFANIN ilk verisi gelince
+ * kapanır (hangi sayfa olursa olsun — kural ve gerekçesi: lib/splash-kurali):
+ *   • Sayfanın sorguları başlar (havada > 0) → hepsi biter (0) → hazır.
  *   • MIN: logo flaş etmesin diye en az 550ms görünür.
  *   • MAX: fail-safe — veri hiç gelmese bile 7sn'de kapanır (asılı kalmaz).
  */
@@ -18,18 +19,16 @@ export function SplashScreen() {
   const [visible, setVisible] = useState(true);
   const [mounted, setMounted] = useState(true);
 
-  // Panel verisi havada mı? (0 = boşta). İlk açılışta 0→>0→0 seyreder.
-  const dashFetching = useIsFetching({ queryKey: ["dashboard"] });
+  // Açık sayfanın sorguları havada mı? (0 = boşta). İlk açılışta 0→>0→0 seyreder.
+  const fetching = useIsFetching();
   const sawFetchRef = useRef(false);
-  const fetchingRef = useRef(dashFetching);
+  const fetchingRef = useRef(fetching);
   useEffect(() => {
-    fetchingRef.current = dashFetching;
-    if (dashFetching > 0) sawFetchRef.current = true;
-  }, [dashFetching]);
+    fetchingRef.current = fetching;
+    if (fetching > 0) sawFetchRef.current = true;
+  }, [fetching]);
 
   useEffect(() => {
-    const MIN_MS = 550; // logo flaş etmesin
-    const MAX_MS = 7000; // fail-safe: hiçbir zaman asılı kalmasın
     const start = performance.now();
     let done = false;
     const hide = () => {
@@ -39,9 +38,12 @@ export function SplashScreen() {
       setTimeout(() => setMounted(false), 700); // fade süresiyle aynı
     };
     const id = setInterval(() => {
-      const elapsed = performance.now() - start;
-      const dataReady = sawFetchRef.current && fetchingRef.current === 0;
-      if ((dataReady && elapsed >= MIN_MS) || elapsed >= MAX_MS) {
+      const kalksin = splashKalksinMi({
+        gecenMs: performance.now() - start,
+        sorguGoruldu: sawFetchRef.current,
+        havadaSorgu: fetchingRef.current,
+      });
+      if (kalksin) {
         clearInterval(id);
         hide();
       }
@@ -111,7 +113,7 @@ export function SplashScreen() {
           className="text-xs font-semibold uppercase tracking-[0.32em]"
           style={{ color: "oklch(0.54 0.012 265)" }}
         >
-          Fiyat Optimizasyon Aracı
+          3D Üretim · Satış Merkezi
         </span>
       </div>
 
