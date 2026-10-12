@@ -23,6 +23,8 @@ import {
   layerBadgeText,
   nozzleDot,
   orderWarnings,
+  cardWarnings,
+  pauseReasonText,
   pickBuildFrame,
   resolvePackLayerIndex,
   resolveRemaining,
@@ -293,7 +295,47 @@ describe("MADDE 14 — uyarılar ve bağlantı", () => {
       { code: "D", level: "serious", text: "Tabla soğuk" },
     ]);
     expect(list.map((w) => w.text)).toEqual(["Kapak açık", "Tabla soğuk", "Filament azaldı"]);
-    expect(list.map((w) => w.severe)).toEqual([true, true, false]);
+    // Kırmızı YALNIZ donanım arızasında (fatal): "serious" müdahale bekliyor demek, arıza değil.
+    expect(list.map((w) => w.severe)).toEqual([true, false, false]);
+  });
+
+  /** 12 Eki 2026: "ciddi uyarı" deniyordu, yazıcının başında filamentin bittiği görülüyordu. */
+  it("uyarı 'ne oldu' + 'ne yapmalı' diye ikiye ayrılır; filament bitmesi kırmızı değildir", () => {
+    const [w] = orderWarnings([
+      { code: "1200-2100-0002-0001", level: "serious", text: "AMS lite yuva 2'deki filament tükendi; lütfen yeni bir filament takın." },
+    ]);
+    expect(w).toMatchObject({
+      baslik: "AMS lite yuva 2'deki filament tükendi",
+      aciklama: "Lütfen yeni bir filament takın.",
+      severe: false,
+    });
+  });
+
+  it("duraklama nedeni uyarılarda yoksa banda eklenir; varsa ikinci kez yazılmaz", () => {
+    const uyari = { code: "X", level: "serious" as const, text: "AMS lite yuva 2'deki filament tükendi; lütfen yeni bir filament takın." };
+    // Neden uyarının kısaltılmış hâli → aynı olay, tek bant.
+    expect(
+      cardWarnings({ status: "paused", warnings: [uyari], statusMessage: "AMS lite yuva 2'deki filament tükendi" })
+    ).toHaveLength(1);
+    // Klipper yazıcısı: uyarı listesi boş, neden yalnız mesajda.
+    const [klipper] = cardWarnings({
+      status: "paused",
+      warnings: [],
+      statusMessage: "3. kafa filamenti çekemiyor — makara bitmiş ya da filament takılmış olabilir",
+    });
+    expect(klipper).toMatchObject({ severe: false, baslik: expect.stringContaining("3. kafa filamenti çekemiyor") });
+    // Hata nedeni kırmızı; basarken ya da genel cümlede bant eklenmez.
+    expect(cardWarnings({ status: "error", warnings: [], statusMessage: "Püskürtme ucu sıcaklığı anormal." })[0].severe).toBe(true);
+    expect(cardWarnings({ status: "printing", warnings: [], statusMessage: "Bir şey" })).toHaveLength(0);
+    expect(cardWarnings({ status: "error", warnings: [], statusMessage: "Baskı hatayla durdu" })).toHaveLength(0);
+  });
+
+  it("durum satırına nedenin ilk cümlesi yazılır", () => {
+    expect(pauseReasonText("AMS lite filamenti tükendi. Lütfen aynı AMS yuvasına yeni bir filament takın.")).toBe(
+      "AMS lite filamenti tükendi"
+    );
+    expect(pauseReasonText("Duraklatıldı")).toBeNull();
+    expect(pauseReasonText(null)).toBeNull();
   });
 
   it("boş metinli uyarı gösterilmez, sayı sınırlanır", () => {

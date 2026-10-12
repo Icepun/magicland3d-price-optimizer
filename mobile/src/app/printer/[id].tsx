@@ -24,6 +24,7 @@ import { Yazici3B } from "@/components/Yazici3B";
 import { YaziciKamerasi } from "@/components/YaziciKamerasi";
 import { parseDbDate } from "@core/sqlite-date";
 import type { YaziciDetay, YaziciUyarisi } from "@core/printer-detail";
+import { uyariParcala } from "@core/yazici-uyari";
 import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
 import { useYaziciKomutu } from "@/lib/use-yazici-komut";
@@ -38,9 +39,10 @@ const MARKA_ADI: Record<string, string> = {
   prusa: "Prusa",
 };
 
+// Kırmızı yalnız donanım arızasında: "filament bitti" de müdahale ister ama arıza değildir.
 const UYARI_RENGI: Record<YaziciUyarisi["level"], string> = {
   fatal: color.bad,
-  serious: color.bad,
+  serious: color.warn,
   common: color.warn,
   info: color.info,
 };
@@ -342,13 +344,15 @@ function Uyarilar({ s, d }: { s: PrinterSnapshot; d: YaziciDetay | null }) {
   const liste: YaziciUyarisi[] = [...(d?.warnings ?? [])];
   // Eski masaüstünde ayrıntı yok: neden yalnız statusMessage'ta.
   if (!d && s.statusMessage && (s.status === "error" || s.status === "paused")) {
-    liste.push({ code: null, level: s.status === "error" ? "serious" : "common", text: s.statusMessage });
+    liste.push({ code: null, level: s.status === "error" ? "fatal" : "serious", text: s.statusMessage });
   }
   if (!liste.length) return null;
   return (
     <View style={{ gap: space.sm }}>
       {liste.map((u, i) => {
         const renk = UYARI_RENGI[u.level];
+        // "Ne oldu" kalın, "ne yapmalı" altında — uzun cümle tek blok halinde okunmuyordu.
+        const { baslik, aciklama } = uyariParcala(u.text);
         return (
           <Tint key={`${u.code ?? "m"}-${i}`} strong style={[styles.uyari, { borderColor: renk + "55" }]}>
             <SymbolView
@@ -358,8 +362,13 @@ function Uyarilar({ s, d }: { s: PrinterSnapshot; d: YaziciDetay | null }) {
             />
             <View style={{ flex: 1, gap: 2 }}>
               <Txt v="smallStrong" style={{ color: renk }}>
-                {u.text}
+                {baslik}
               </Txt>
+              {aciklama ? (
+                <Txt v="small" tone="dim">
+                  {aciklama}
+                </Txt>
+              ) : null}
               {u.code ? (
                 <Txt v="label" tone="faint" num>
                   Kod {u.code}

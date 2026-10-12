@@ -297,6 +297,29 @@ describe("MADDE 18 — üst özet", () => {
     expect(list[0].severe).toBe(true);
   });
 
+  /** 12 Eki 2026: çipte "duraklatıldı" / "uyarı var" yazıyordu — ne olduğu yazıcının başında anlaşılıyordu. */
+  it("neden biliniyorsa çipte O yazar; filament bitmesi kırmızı değildir", () => {
+    const filament = { code: "1200-2100-0002-0001", level: "serious" as const, text: "AMS lite yuva 2'deki filament tükendi; lütfen yeni bir filament takın." };
+    const [duran] = troubleList([printer({ id: "a", status: "paused", warnings: [filament] })]);
+    expect(duran).toMatchObject({ text: "filament bitti", severe: false });
+    // Klipper: neden yalnız mesajda.
+    const [u1] = troubleList([printer({ id: "b", status: "paused", statusMessage: "Baskı dağılmış olabilir (spagetti algılandı)" })]);
+    expect(u1.text).toBe("baskı dağılmış olabilir");
+    // Basarken boş yuva uyarısı amber; donanım arızası kırmızı.
+    const [basan] = troubleList([printer({ id: "c", warnings: [filament] })]);
+    expect(basan).toMatchObject({ text: "filament bitti", severe: false });
+    const ariza = { code: "0300-0200-0001-0001", level: "fatal" as const, text: "Püskürtme ucu sıcaklığı anormal; ısıtıcıda kısa devre olabilir." };
+    expect(troubleList([printer({ id: "d", warnings: [ariza] })])[0]).toMatchObject({ text: "ısıtma sorunu", severe: true });
+    // İptal edilen baskı arıza değildir.
+    expect(troubleList([printer({ id: "e", status: "error", statusMessage: "İş iptal edildi." })])[0]).toMatchObject({
+      text: "baskı iptal edildi",
+      severe: false,
+    });
+    // Neden tanınmıyorsa eski genel sözler kalır.
+    expect(troubleList([printer({ id: "f", status: "paused" })])[0].text).toBe("duraklatıldı");
+    expect(troubleList([printer({ id: "g", status: "error" })])[0]).toMatchObject({ text: "baskı durdu", severe: true });
+  });
+
   it("örnek (sim) kartlar sorun sayılmaz", () => {
     expect(troubleList([printer({ type: "sim", status: "error" })])).toHaveLength(0);
   });

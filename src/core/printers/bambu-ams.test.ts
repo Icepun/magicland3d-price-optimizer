@@ -75,19 +75,25 @@ describe("uyarı birimi (HMS)", () => {
   it("0300 hareket kartı — AMS DEĞİL (A2L'nin motor kalibrasyonu uyarısı)", () => {
     const w = uyari(0x03002e00, 0x00030001);
     expect(w.code).toBe("0300-2E00-0003-0001");
-    expect(w.text).toBe("Yazıcı mekaniği — Yazıcı uyarı veriyor");
+    expect(w.text).toMatch(/Motor Gürültüsü Engelleme/);
   });
 
-  it("07xx ve 12xx AMS (makaradaki filament bitti)", () => {
-    expect(uyari(0x07002000, 0x00020001).text).toBe("AMS — Yazıcı ciddi bir uyarı veriyor");
-    expect(uyari(0x07012000, 0x00020001).text).toMatch(/^AMS — /);
-    expect(uyari(0x12002000, 0x00020001).text).toMatch(/^AMS — /);
+  /**
+   * 12 Eki 2026: kart "AMS — Yazıcı ciddi bir uyarı veriyor" diyordu, yazıcının başında filamentin
+   * bittiği görülüyordu. Artık üreticinin KENDİ cümlesi yazılır (yuva numarasıyla).
+   */
+  it("07xx ve 12xx AMS: makaradaki filament bitti — hangi yuva olduğu yazılır", () => {
+    expect(uyari(0x07002000, 0x00020001).text).toBe("AMS A yuva 1 filamenti tükendi. Lütfen yeni bir filament takın.");
+    expect(uyari(0x07012100, 0x00020001).text).toMatch(/^AMS B yuva 2 filamenti tükendi/);
+    expect(uyari(0x12002100, 0x00020001).text).toMatch(/^AMS lite yuva 2'deki filament tükendi/);
+    expect(uyari(0x12002100, 0x00020001).level).toBe("serious");
   });
 
-  it("0500 ana kart, 0C00 kamera; bilinmeyen birim uydurulmaz", () => {
-    expect(uyari(0x05000600, 0x00020001).text).toMatch(/^Ana kart — /);
-    expect(uyari(0x0c000300, 0x00030005).text).toMatch(/^Kamera — /);
-    expect(uyari(0x18000000, 0x00030001).text).toBe("Yazıcı uyarı veriyor");
+  it("sözlükte olmayan kod uydurulmaz: birim + düzey + kod; 'ciddi' denmez", () => {
+    expect(uyari(0x05000600, 0x0002ffff).text).toBe("Ana kart — Yazıcı bir sorun bildiriyor (kod 0500-0600-0002-FFFF)");
+    expect(uyari(0x0c000300, 0x0003ffff).text).toMatch(/^Kamera — Yazıcı uyarı veriyor \(kod /);
+    expect(uyari(0x99000000, 0x0003ffff).text).toBe("Yazıcı uyarı veriyor (kod 9900-0000-0003-FFFF)");
+    expect(uyari(0x99000000, 0x0001ffff).text).toMatch(/^Yazıcı durdu — donanım arızası bildiriyor/);
   });
 });
 

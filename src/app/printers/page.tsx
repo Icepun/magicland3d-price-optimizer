@@ -48,11 +48,12 @@ import { thumbUrl } from "@/lib/image";
 import {
   bedFrameFor, buildSlotChips, connectionNotice, formatRemaining, intraLayerFraction,
   baskiYeniBittiMi,
-  jobImageCandidates, layerBadgeText, nozzleDot, orderWarnings, pickBuildFrame, pickImage,
-  resolvePackLayerIndex, resolveRemaining, resolveStage, resolveStatusVisual, slotLabel,
+  cardWarnings, jobImageCandidates, layerBadgeText, nozzleDot, pauseReasonText, pickBuildFrame, pickImage,
+  CANCELLED_VISUAL, resolvePackLayerIndex, resolveRemaining, resolveStage, resolveStatusVisual, slotLabel,
   type NozzleDot, type PanelPrinter, type PrinterJob, type PrinterStatus, type SlotChip,
   type StageFrame, type StatusTone, type StatusVisual,
 } from "./panel-view";
+import { kisaNeden } from "@/core/yazici-uyari";
 import type { PartPolygon } from "./part-map";
 // Kontrol düğmelerinin kararları (hangi düğme etkin, hangi hız kademesi seçilebilir, iptal
 // onayında ne yazacak…) — saf ve test edilebilir tek yerde.
@@ -939,14 +940,16 @@ function PrinterCardInner({
   });
   const finishingNow = isPrinting && remainingView.known && remainingSec <= 0.5;
 
-  const sv = resolveStatusVisual(printer);
-  const warnings = orderWarnings(printer.warnings);
+  // İptal edilen baskı bir arıza değil: başlık bunu söyler, aynı cümle altta ikinci kez yazılmaz.
+  const iptalEdildi = status === "error" && !offline && kisaNeden(printer.statusMessage) === "Baskı iptal edildi";
+  const sv = iptalEdildi ? CANCELLED_VISUAL : resolveStatusVisual(printer);
+  const warnings = cardWarnings(printer).filter((w) => !(iptalEdildi && kisaNeden(w.text) === "Baskı iptal edildi"));
   const slotChips = buildSlotChips(printer.slots, job?.activeSlots, {
     color: job?.filamentColor ?? "",
     type: job?.filamentType ?? "",
   });
-  // Duraklama nedeni "Duraklatıldı"nın yanında; uzun cihaz metni kartı taşırmasın.
-  const pauseReason = isPaused && printer.statusMessage ? printer.statusMessage.trim().slice(0, 46) : null;
+  // Duraklama nedeni "Duraklatıldı"nın yanında (ilk cümle); tamamı üstteki uyarı bandında.
+  const pauseReason = isPaused ? pauseReasonText(printer.statusMessage) : null;
 
   // CANLI 3B MODEL: süren (ya da yeni biten) baskı hangi modele aitse — dosya adından çözülür,
   // yeniden yükleme GEREKMEZ — o modelin paketi yüklenir ve kart onu canlı çizer (KartUcBoyut).
@@ -1061,11 +1064,17 @@ function PrinterCardInner({
 
         {/* Acil: baskı durdu / yazıcı hatası (nedeni hemen altındaki uyarı satırında) */}
         {isError && (
-          <div className="flex items-center gap-2.5 rounded-lg border px-3 py-2"
-            style={{ borderColor: "var(--status-error-line)", backgroundColor: "var(--status-error-soft)" }}>
-            <AlertTriangle className="h-4 w-4 shrink-0 motion-safe:animate-pulse" style={{ color: "var(--status-error)" }} />
+          <div className="flex items-center gap-2.5 rounded-lg border px-3 py-2 motion-safe:animate-in motion-safe:fade-in duration-300"
+            style={iptalEdildi
+              ? { borderColor: "var(--panel-amber-line)", backgroundColor: "var(--panel-amber-soft)" }
+              : { borderColor: "var(--status-error-line)", backgroundColor: "var(--status-error-soft)" }}>
+            {iptalEdildi
+              ? <Ban className="h-4 w-4 shrink-0" style={{ color: "var(--panel-amber)" }} />
+              : <AlertTriangle className="h-4 w-4 shrink-0 motion-safe:animate-pulse" style={{ color: "var(--status-error)" }} />}
             <div className="min-w-0">
-              <p className="text-xs font-bold leading-tight" style={{ color: "var(--status-error)" }}>Baskı durdu — yazıcıyı kontrol et</p>
+              <p className="text-xs font-bold leading-tight" style={{ color: iptalEdildi ? "var(--panel-amber)" : "var(--status-error)" }}>
+                {iptalEdildi ? "Baskı iptal edildi" : "Baskı durdu — yazıcıyı kontrol et"}
+              </p>
               <p className="text-[11px] truncate text-foreground/70">
                 {job?.productName || "Yazıcı ekranındaki uyarıya bak"}
               </p>
@@ -1087,7 +1096,11 @@ function PrinterCardInner({
                 }}
               >
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" style={{ color: w.severe ? "var(--panel-red)" : "var(--panel-amber)" }} />
-                <p className="text-[11px] leading-snug text-foreground/85">{w.text}</p>
+                {/* Ne oldu (kalın) + ne yapmalı — yazıcının kendi açıklaması. */}
+                <div className="min-w-0 text-[11px] leading-snug">
+                  <p className="font-semibold text-foreground/90">{w.baslik}</p>
+                  {w.aciklama && <p className="mt-0.5 text-foreground/65">{w.aciklama}</p>}
+                </div>
               </div>
             ))}
           </div>
@@ -1214,8 +1227,8 @@ function PrinterCardInner({
               <Box className="h-9 w-9 text-muted-foreground/30" />
             </div>
             <div className="flex-1 min-w-0 text-sm text-muted-foreground">
-              <p className="font-medium text-foreground/70">{isError ? "Hata" : "Hazır"}</p>
-              <p className="text-xs mt-0.5">{isError ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
+              <p className="font-medium text-foreground/70">{iptalEdildi ? "İptal edildi" : isError ? "Hata" : "Hazır"}</p>
+              <p className="text-xs mt-0.5">{iptalEdildi ? "Tablayı boşaltıp yeni baskı başlatabilirsin." : isError ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
               <SlotStrip chips={slotChips} className="mt-2" />
               <CardBadges printer={printer} speedView={speedView} className="mt-2" />
               <div className="flex flex-wrap items-center gap-1.5 mt-2">
@@ -1269,7 +1282,7 @@ function PrinterCardInner({
                       : isPaused ? (
                         <>
                           <Pause className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--status-paused)" }} />
-                          <span className="truncate">
+                          <span className="truncate" title={pauseReason ?? undefined}>
                             Duraklatıldı{pauseReason ? ` · ${pauseReason}` : remainingView.known ? ` · ${remainingView.text} kaldı` : ""}
                           </span>
                         </>

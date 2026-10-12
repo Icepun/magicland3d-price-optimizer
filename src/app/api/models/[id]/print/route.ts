@@ -330,11 +330,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               sonRapor = await bambuRaporBekle(printer.host, printer.accessCode!, printer.serial!, sonRapor, 1600);
               const s = await getBambuStatus(printer.host, printer.accessCode!, printer.serial!);
               if (s.printError && s.printError !== 0) {
+                // Yazıcının KENDİ açıklaması varsa o yazılır; tahmin ("sık neden…") yalnız kod
+                // tanınmadığında yedek olarak kalır.
+                const aciklama = s.statusReason ?? s.printErrorText;
                 const hex = `0x${(s.printError >>> 0).toString(16).toUpperCase()}`;
                 const hms = s.hmsCodes.length ? ` HMS: ${s.hmsCodes.join(", ")}.` : "";
                 send({
                   stage: "error",
-                  message: `Yazıcı baskıyı reddetti (hata ${hex}).${hms} Sık neden: eşlenen AMS slotu boş / yanlış filament tipi. Slotların dolu olduğunu + renk eşleşmesini kontrol et.`,
+                  message: aciklama
+                    ? `Yazıcı baskıyı başlatmadı: ${aciklama}`
+                    : `Yazıcı baskıyı reddetti (hata ${hex}).${hms} Sık neden: eşlenen AMS slotu boş / yanlış filament tipi. Slotların dolu olduğunu + renk eşleşmesini kontrol et.`,
                 });
                 printerErrored = true; break;
               }

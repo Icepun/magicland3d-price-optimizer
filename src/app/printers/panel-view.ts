@@ -11,6 +11,7 @@
 
 import type { PrinterControlCaps } from "@/core/printers/controls";
 import type { EtaSource, ProgressSource } from "@/core/printers/eta";
+import { uyariParcala } from "@/core/yazici-uyari";
 
 // ── API sözleşmesinin AYNADAKİ hâli ────────────────────────────────────────
 // Bu tipler `src/app/api/printers/route.ts` ile birebir aynı olmak ZORUNDA. Uyum
@@ -181,6 +182,9 @@ export function resolveStatusVisual(p: {
 export function statusVisualOf(tone: StatusTone): StatusVisual {
   return TONE_VISUALS[tone];
 }
+
+/** İptal edilen baskı arıza DEĞİL: kırmızı "Hata" yerine sakin bir "İptal edildi". */
+export const CANCELLED_VISUAL: StatusVisual = { ...TONE_VISUALS.idle, label: "İptal edildi" };
 
 // ── MADDE 2: kafa değişiminde kart bilgileri kaybolmasın ───────────────────
 //
@@ -449,26 +453,62 @@ export function pickImage(candidates: readonly string[], failed: readonly string
 // ── MADDE 14: uyarılar ─────────────────────────────────────────────────────
 
 export interface WarningView extends PanelWarning {
-  /** Kırmızı mı amber mi (fatal/serious kırmızı). */
+  /**
+   * Kırmızı mı amber mi. YALNIZ "fatal" (donanım arızası / baskı durdu) kırmızıdır: üreticinin
+   * "serious" düzeyi "müdahale bekliyor" demek — filamentin bitmesi de o düzeyde ve bir arıza değil.
+   */
   severe: boolean;
+  /** Ne oldu — kalın yazılan ilk cümle. */
+  baslik: string;
+  /** Ne yapmalı — varsa ikinci satır. */
+  aciklama: string | null;
 }
 
 const LEVEL_RANK: Record<PanelWarning["level"], number> = { fatal: 0, serious: 1, common: 2, info: 3 };
 
-/** En ağırdan hafife sırala, aynı metni tekrarlama, kartı boğmamak için en çok `limit` tane. */
+/** İki açıklama aynı olayı mı anlatıyor? (Neden satırı uyarının kısaltılmış hâli olabiliyor.) */
+const ayniOlay = (a: string, b: string) =>
+  uyariParcala(a).baslik.toLocaleLowerCase("tr-TR") === uyariParcala(b).baslik.toLocaleLowerCase("tr-TR");
+
+/** En ağırdan hafife sırala, aynı olayı tekrarlama, kartı boğmamak için en çok `limit` tane. */
 export function orderWarnings(warnings: PanelWarning[] | undefined, limit = 3): WarningView[] {
-  const seen = new Set<string>();
   const out: WarningView[] = [];
   for (const w of (warnings ?? []).slice().sort((a, b) => LEVEL_RANK[a.level] - LEVEL_RANK[b.level])) {
     const text = (w.text || "").trim();
     if (!text) continue;
-    const key = text.toLocaleLowerCase("tr-TR");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ ...w, text, severe: w.level === "fatal" || w.level === "serious" });
+    if (out.some((o) => ayniOlay(o.text, text))) continue;
+    out.push({ ...w, text, severe: w.level === "fatal", ...uyariParcala(text) });
     if (out.length >= limit) break;
   }
   return out;
+}
+
+/**
+ * Kartta gösterilecek uyarılar: yazıcının uyarıları + (duraklama/hata nedeni ayrı geldiyse) o neden.
+ *
+ * Neden çoğu zaman uyarılardan biridir; ama yazıcı yalnız bir hata kodu bildirdiyse (ör. "İş
+ * iptal edildi") ya da Klipper yazıcısıysa uyarı listesi boştur ve neden hiçbir yerde tam
+ * okunamıyordu — yalnız durum satırında 46 karaktere kırpılmış hâli vardı.
+ */
+export function cardWarnings(
+  p: Pick<PanelPrinter, "warnings" | "statusMessage" | "status">,
+  limit = 3
+): WarningView[] {
+  const liste = [...(p.warnings ?? [])];
+  const neden = (p.statusMessage ?? "").trim();
+  // "Baskı hatayla durdu" gibi yeni bir şey söylemeyen genel cümle bant olmaz (kart zaten söylüyor).
+  const bosCumle = /^(baskı hatayla durdu|duraklatıldı)/i.test(neden);
+  if (neden && !bosCumle && (p.status === "paused" || p.status === "error") && !liste.some((w) => ayniOlay(w.text, neden))) {
+    liste.push({ code: null, level: p.status === "error" ? "fatal" : "serious", text: neden });
+  }
+  return orderWarnings(liste, limit);
+}
+
+/** "Duraklatıldı · …" satırına yazılacak kısa neden (ilk cümle). Yoksa null. */
+export function pauseReasonText(statusMessage: string | null | undefined): string | null {
+  const baslik = uyariParcala(statusMessage).baslik;
+  // Yazıcı "duraklatıldı" demişse satırda ikinci kez yazma.
+  return baslik && !/^duraklatıldı$/i.test(baslik) ? baslik : null;
 }
 
 export interface ConnectionNotice {

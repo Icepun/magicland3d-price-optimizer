@@ -16,6 +16,7 @@ import {
 } from "@/core/printers/controls";
 import type { PanelPrinter, PrinterJob } from "./panel-view";
 import { clamp01, formatRemaining } from "./panel-view";
+import { kisaNeden } from "@/core/yazici-uyari";
 
 // ── MADDE 6: taşıma düğmeleri (duraklat / devam / iptal / başlat) ──────────
 //
@@ -291,16 +292,21 @@ export function troubleList(printers: PanelPrinter[] | undefined, limit = 3): Tr
       out.push({ id: p.id, name: p.name, severe: true, text: "ulaşılamıyor" });
       continue;
     }
+    // Neden biliniyorsa çipte O yazar ("filament bitti") — "duraklatıldı" tek başına bir şey söylemiyor.
+    const kisa = (metin: string | null | undefined) => kisaNeden(metin)?.toLocaleLowerCase("tr-TR") ?? null;
+    const agir = (p.warnings ?? []).find((w) => w.level === "fatal") ?? (p.warnings ?? []).find((w) => w.level === "serious");
+    const neden = kisa(agir?.text) ?? kisa(p.statusMessage);
     if (p.status === "error") {
-      out.push({ id: p.id, name: p.name, severe: true, text: "baskı durdu" });
+      const iptal = neden === "baskı iptal edildi";
+      out.push({ id: p.id, name: p.name, severe: !iptal, text: iptal ? neden : "baskı durdu" });
       continue;
     }
     if (p.status === "paused") {
-      out.push({ id: p.id, name: p.name, severe: false, text: "duraklatıldı" });
+      out.push({ id: p.id, name: p.name, severe: false, text: neden ?? "duraklatıldı" });
       continue;
     }
-    const severe = (p.warnings ?? []).find((w) => w.level === "fatal" || w.level === "serious");
-    if (severe) out.push({ id: p.id, name: p.name, severe: true, text: "uyarı var" });
+    // Basarken gelen uyarı: yalnız donanım arızası (fatal) kırmızıdır; "müdahale bekliyor" amber.
+    if (agir) out.push({ id: p.id, name: p.name, severe: agir.level === "fatal", text: kisa(agir.text) ?? "uyarı var" });
   }
   out.sort((a, b) => Number(b.severe) - Number(a.severe));
   return out.slice(0, limit);

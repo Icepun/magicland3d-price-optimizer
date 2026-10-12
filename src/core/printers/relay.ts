@@ -12,6 +12,7 @@
  * ama uzaktan erişim olmaz (sorun değil).
  */
 import { processSingleton } from "./process-singleton";
+import { kisaNeden } from "../yazici-uyari";
 import fs from "node:fs";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
@@ -517,7 +518,12 @@ async function notifyPrintComplete(c: Cfg, snap: SnapFields): Promise<void> {
 async function notifyPrintFault(c: Cfg, snap: SnapFields): Promise<void> {
   const job = snap.productName ? ` — ${snap.productName}` : "";
   const isError = snap.status === "error";
-  const title = isError ? "Baskı hatayla durdu ⚠️" : "Baskı duraklatıldı ⏸";
+  // Neden biliniyorsa BAŞLIK onu söyler ("Filament bitti ⏸") — "duraklatıldı" tek başına kullanıcıyı
+  // yazıcının başına gitmeden bilgilendirmiyordu. Tanınmayan nedenlerde genel başlık kalır.
+  const neden = kisaNeden(snap.statusMessage);
+  const title = isError
+    ? neden === "Baskı iptal edildi" ? "Baskı iptal edildi" : "Baskı hatayla durdu ⚠️"
+    : `${neden ?? "Baskı duraklatıldı"} ⏸`;
   // statusMessage yazıcıdan gelen nedeni taşır (hata kodu vb.); yoksa yazıcı adıyla yetin.
   const body = `${c.name}${job}${snap.statusMessage ? ` · ${snap.statusMessage}` : ""}`;
   // "Baskı duraklatıldı" da aynı şekilde üçleniyordu (sahada 08:44'te üç satır).

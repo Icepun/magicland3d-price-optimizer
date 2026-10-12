@@ -18,6 +18,7 @@
  */
 
 import { processSingleton } from "./process-singleton";
+import { klipperMesajiCevir } from "../yazici-uyari";
 import { timelapseKapakSec } from "./timelapse-name";
 import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
 // Kaçışlama `exclude-object.ts`e taşındı (dosya üretimi de aynı kuralı kullanıyor);
@@ -476,8 +477,10 @@ export function parseStatus(status: any): MoonrakerStatus {
     state: (ps.state as MoonrakerState) || "standby",
     // Neden: düz mesaj yoksa U1'in yapılandırılmış exception'ından üret (filament bitti/dolandı/
     // slot tanımsız/nozzle uyumsuz — panelde ve telefonda net görünür).
+    // Düz mesaj HAM gelir ("detected noodle", "extruder[2]: … error: wheel_speed", JSON) — kullanıcı
+    // diline çevrilir; tanınmayanı olduğu gibi bırakır (bkz. core/yazici-uyari).
     message:
-      (typeof ps.message === "string" && ps.message.trim() ? ps.message.trim() : null) ??
+      klipperMesajiCevir(typeof ps.message === "string" ? ps.message : null) ??
       exceptionText(ps.exception),
     filename: ps.filename || null,
     progress: picked.progress,

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { kisaNeden } from "@/core/yazici-uyari";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
@@ -153,12 +154,14 @@ async function printerAlerts(): Promise<AppAlert[]> {
     if (!kayitli.has(pr.printerConfigId)) continue;
     const job = pr.productName ? ` — ${pr.productName}` : "";
     const reason = pr.statusMessage ? ` · ${pr.statusMessage}` : "";
+    // Neden biliniyorsa başlık onu söyler ("Filament bitti") — telefon bildirimiyle aynı kural.
+    const neden = kisaNeden(pr.statusMessage);
     if (pr.status === "error") {
       alerts.push({
         id: `printer-${pr.printerConfigId}-error`,
         type: "printer",
         severity: "critical",
-        title: "Baskı hatayla durdu",
+        title: neden === "Baskı iptal edildi" ? neden : "Baskı hatayla durdu",
         body: `${pr.name}${job}${reason}`,
         href: "/printers",
       });
@@ -167,7 +170,7 @@ async function printerAlerts(): Promise<AppAlert[]> {
         id: `printer-${pr.printerConfigId}-paused`,
         type: "printer",
         severity: "warning",
-        title: "Baskı duraklatıldı",
+        title: neden ?? "Baskı duraklatıldı",
         body: `${pr.name}${job}${reason}`,
         href: "/printers",
       });

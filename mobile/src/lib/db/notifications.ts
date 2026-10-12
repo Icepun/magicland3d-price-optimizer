@@ -5,6 +5,7 @@ import {
   type SpoolLike,
 } from "@/core/filament-groups";
 import { toDbDate } from "@core/sqlite-date";
+import { kisaNeden, uyariKisalt } from "@core/yazici-uyari";
 import {
   GIZLI_AYAR_ANAHTARI,
   gizliHaritaGuncelle,
@@ -219,13 +220,16 @@ export async function getNotifications(): Promise<NotificationsResult> {
     productName: string | null;
   }[]) {
     const err = pr.status === "error";
-    const detail = pr.productName ?? pr.statusMessage;
+    // Başlık nedeni söyler ("Filament bitti"); gövde yazıcı + ürün + yazıcının kendi cümlesi.
+    const neden = kisaNeden(pr.statusMessage);
+    const iptal = neden === "Baskı iptal edildi";
+    const parcalar = [pr.name, pr.productName, pr.statusMessage ? uyariKisalt(pr.statusMessage, 140) : null];
     alerts.push({
       id: `print-${pr.printerConfigId}`,
       type: "print",
-      severity: err ? "critical" : "warning",
-      title: err ? "Baskı hatası" : "Baskı duraklatıldı",
-      body: detail ? `${pr.name} — ${detail}` : pr.name,
+      severity: err && !iptal ? "critical" : "warning",
+      title: iptal ? neden : (neden ?? (err ? "Baskı hatayla durdu" : "Baskı duraklatıldı")),
+      body: parcalar.filter(Boolean).join(" · "),
       productId: null,
       route: "/printers",
       persistent: false,

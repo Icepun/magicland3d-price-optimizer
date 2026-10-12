@@ -19,6 +19,8 @@
 import mqtt, { type MqttClient } from "mqtt";
 import * as tls from "node:tls";
 import { processSingleton } from "./process-singleton";
+import { bambuHataAciklamasi, bambuHataKodu, bambuModelOneki, hmsAciklamasi } from "./bambu-hms";
+import { uyariKisalt } from "../yazici-uyari";
 import * as net from "node:net";
 import crypto from "node:crypto";
 
@@ -37,6 +39,8 @@ export interface BambuStatus {
   bedTarget: number;
   filename: string | null;
   printError: number | null; // print.print_error (0 = sorun yok)
+  /** print_error'ın üreticideki açıklaması ("AMS lite filamenti tükendi. …") — kod tanınmıyorsa null. */
+  printErrorText: string | null;
   hmsCount: number; // print.hms[] uzunluğu (aktif uyarı sayısı)
   hmsCodes: string[]; // print.hms[] → okunur HMS kodları (ör. "0700-8001-0002-0008")
   /** Panele düşecek uyarılar — sade Türkçe metin + ham kod (MADDE 14). */
@@ -63,9 +67,16 @@ function formatHms(attr: number, code: number): string {
   return `${h((attr >>> 16) & 0xffff)}-${h(attr & 0xffff)}-${h((code >>> 16) & 0xffff)}-${h(code & 0xffff)}`;
 }
 
+/**
+ * Kod sözlükte YOKSA kullanılan genel cümleler (bkz. bambu-hms.ts — normalde resmi açıklama yazılır).
+ *
+ * ⚠️ Üreticinin "serious" (2) düzeyi "ciddi arıza" DEĞİL, "müdahale bekliyor" demek: filamentin
+ * bitmesi de bu düzeyde. Eskiden "Yazıcı ciddi bir uyarı veriyor" yazıyordu; kullanıcı yazıcının
+ * başına gidince makaranın bittiğini görüyordu. Gerçek donanım arızaları "fatal" (1) düzeyinde.
+ */
 const HMS_LEVEL_TEXT: Record<BambuWarning["level"], string> = {
-  fatal: "Yazıcı durdu — donanım uyarısı",
-  serious: "Yazıcı ciddi bir uyarı veriyor",
+  fatal: "Yazıcı durdu — donanım arızası bildiriyor",
+  serious: "Yazıcı bir sorun bildiriyor",
   common: "Yazıcı uyarı veriyor",
   info: "Yazıcı bilgi veriyor",
 };
@@ -89,15 +100,21 @@ function hmsModuleText(code: string): string | null {
   return null;
 }
 
-/** HMS girişini kullanıcı diline çevir. Kod bilinmiyorsa uydurmuyoruz: birim + önem düzeyi. */
-export function toWarning(attr: number, code: number): BambuWarning {
-  const text = formatHms(attr, code);
+/**
+ * HMS girişini kullanıcı diline çevir: önce üreticinin RESMİ açıklaması ("AMS lite yuva 2'deki
+ * filament tükendi; lütfen yeni bir filament takın."). Kod sözlükte yoksa uydurmuyoruz: birim +
+ * önem düzeyi + kodun kendisi (destek araması için).
+ */
+export function toWarning(attr: number, code: number, modelOneki?: string | null): BambuWarning {
+  const kod = formatHms(attr, code);
   const sev = (code >>> 16) & 0xffff;
   const level: BambuWarning["level"] =
     sev === 1 ? "fatal" : sev === 2 ? "serious" : sev === 3 ? "common" : "info";
+  const resmi = hmsAciklamasi(kod, modelOneki);
+  if (resmi) return { code: kod, level, text: resmi };
   // Değişken adı `module` OLAMAZ — Next derlemesi bunu hata sayıyor (@next/next/no-assign-module-variable).
-  const part = hmsModuleText(text);
-  return { code: text, level, text: part ? `${part} — ${HMS_LEVEL_TEXT[level]}` : HMS_LEVEL_TEXT[level] };
+  const part = hmsModuleText(kod);
+  return { code: kod, level, text: `${part ? `${part} — ` : ""}${HMS_LEVEL_TEXT[level]} (kod ${kod})` };
 }
 
 interface Conn {
@@ -304,15 +321,19 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const hasData = conn.hasData && (conn.connected || now - conn.disconnectedAt < 15_000);
   if (!hasData) return offlineBambuStatus();
 
+  const modelOneki = bambuModelOneki(serial);
   const hmsArr = Array.isArray(p.hms) ? p.hms : [];
   const warnings: BambuWarning[] = hmsArr
-    .map((h: any) => (h && typeof h.attr === "number" && typeof h.code === "number" ? toWarning(h.attr, h.code) : null))
+    .map((h: any) =>
+      h && typeof h.attr === "number" && typeof h.code === "number" ? toWarning(h.attr, h.code, modelOneki) : null
+    )
     .filter((x: BambuWarning | null): x is BambuWarning => !!x);
 
   const remainingMin = typeof p.mc_remaining_time === "number" ? p.mc_remaining_time : null;
   const startSec = Number(p.gcode_start_time);
   const gcodeState = typeof p.gcode_state === "string" ? p.gcode_state : null;
   const printError = typeof p.print_error === "number" ? p.print_error : null;
+  const printErrorText = bambuHataAciklamasi(printError, modelOneki);
   // AMS'siz yazıcı da `tray_now: "0"` gönderiyor (A2L) — o zaman takılı makara yok.
   const trayNow = amsDurumuCoz(p).amsVar === false ? NaN : Number(p.ams?.tray_now);
   const aktif = aktifYuva(trayNow, amsYuvalariCoz(p));
@@ -330,12 +351,13 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     bedTarget: Math.round(p.bed_target_temper ?? 0),
     filename: p.subtask_name || p.gcode_file || null,
     printError,
+    printErrorText,
     hmsCount: hmsArr.length,
     hmsCodes: warnings.map((w) => w.code),
     warnings,
     speedLevel: typeof p.spd_lvl === "number" ? p.spd_lvl : null,
     activeTray: aktif,
-    statusReason: bambuStatusReason(gcodeState, printError, warnings),
+    statusReason: bambuStatusReason(gcodeState, printError, warnings, printErrorText),
   };
 }
 
@@ -343,37 +365,43 @@ function offlineBambuStatus(): BambuStatus {
   return {
     online: false, gcodeState: null, percent: 0, remainingSec: null, startedAtMs: null,
     layerNum: null, totalLayerNum: null, nozzle: 0, nozzleTarget: 0, bed: 0, bedTarget: 0, filename: null,
-    printError: null, hmsCount: 0, hmsCodes: [], warnings: [], speedLevel: null, activeTray: null,
+    printError: null, printErrorText: null, hmsCount: 0, hmsCodes: [], warnings: [], speedLevel: null, activeTray: null,
     statusReason: null,
   };
 }
 
 /**
- * MADDE 14 — "neden durdu / ne uyarıyor" panele düşsün.
- * Bambu düz metin sebep vermiyor; elimizde hata kodu ve HMS uyarıları var. En ciddi uyarıyı
- * öne çıkarıp sade Türkçe tek satır üretiyoruz (kod, ayrı alanda zaten duruyor).
+ * MADDE 14 — "neden durdu / ne uyarıyor" panele, telefona ve bildirime düşsün.
+ *
+ * Yalnız NEDEN döner ("AMS lite yuva 2'deki filament tükendi; lütfen yeni bir filament takın.");
+ * "Duraklatıldı" / "Baskı hatayla durdu" sözünü gösteren yer kendi ekler. Eskiden önek burada
+ * yazılıyordu ve kartta "Duraklatıldı · Duraklatıldı · …" diye iki kez çıkıyordu.
+ *
+ * Öncelik: müdahale isteyen HMS uyarısı (yuva numarasını söyler) → yazıcının ekranındaki hata
+ * cümlesi (`print_error`) → kalan en önemli uyarı. Hiçbiri yoksa uydurma sebep yazılmaz.
  */
-function bambuStatusReason(
+export function bambuStatusReason(
   gcodeState: string | null,
   printError: number | null,
   warnings: BambuWarning[],
+  printErrorText: string | null = null,
 ): string | null {
   const order: BambuWarning["level"][] = ["fatal", "serious", "common", "info"];
   const top = order.map((lvl) => warnings.find((w) => w.level === lvl)).find(Boolean) ?? null;
+  const agir = top && (top.level === "fatal" || top.level === "serious") ? top : null;
+  const kisa = (metin: string | null | undefined) => (metin ? uyariKisalt(metin, 220) : null);
   const state = (gcodeState || "").toUpperCase();
-  if (state === "FAILED") {
-    return top ? `Baskı hatayla durdu · ${top.text}` : "Baskı hatayla durdu";
+  if (state === "FAILED" || state === "PAUSE") {
+    const neden = kisa(agir?.text) ?? kisa(printErrorText) ?? kisa(top?.text);
+    if (neden) return neden;
+    // Kod var ama sözlükte yok: en azından kodu söyle (kullanıcı elle duraklattıysa kod 0'dır).
+    const kod = bambuHataKodu(printError);
+    return kod ? `Yazıcı bir sorun bildirdi (kod ${kod.slice(0, 4)}-${kod.slice(4)})` : null;
   }
-  if (state === "PAUSE") {
-    if (top) return `Duraklatıldı · ${top.text}`;
-    if (printError) return "Duraklatıldı — yazıcı bir sorun bildirdi";
-    return null; // kullanıcı elle duraklatmış olabilir; uydurma sebep yazma
-  }
-  // NORMAL DURUMDA sebep yazma. HMS listesinde kalıcı düşük önemli girişler (ör. boş AMS slotu)
-  // duruyor; bunları `statusReason` yapmak sorunsuz basan yazıcı için telefonda kalıcı sahte
+  // NORMAL DURUMDA yalnız müdahale isteyen uyarı sebep olur. HMS listesinde kalıcı düşük önemli
+  // girişler duruyor; bunları sebep yapmak sorunsuz basan yazıcı için telefonda kalıcı sahte
   // uyarı üretiyordu. Uyarılar zaten ayrı `warnings[]` dizisinde gidiyor.
-  if (top && (top.level === "fatal" || top.level === "serious")) return top.text;
-  return null;
+  return kisa(agir?.text);
 }
 
 /** Komuttan sonra yazıcının olması gereken gcode_state değerleri. */
