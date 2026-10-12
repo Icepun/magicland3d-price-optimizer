@@ -33,8 +33,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     await ensureRuntimeSchema();
     const { id } = await params;
     const data = PatchSchema.parse(await req.json());
-    const updated = await prisma.productModelFile.update({ where: { id }, data });
-    return NextResponse.json(updated);
+    const updated = await prisma.productModelFile.update({
+      where: { id },
+      data,
+      // Görselin kendisi (ortalama 61 KB) geri gönderilmez — ekran yalnız bu alanları kullanır.
+      select: { id: true, label: true, gramaj: true, estPrintMin: true, r2Key: true, storedPath: true },
+    });
+    // ?allVariants=1 → "Tüm varyantlara uygula" AÇIKKEN düzenleme: aynı dosyayı (ortak
+    // r2Key/storedPath) paylaşan diğer varyant satırları da aynı adı/değeri alır. Silme ile
+    // aynı kural — yoksa ad yalnız bu varyantta değişir, diğerlerinde eskisi kalırdı.
+    if (new URL(req.url).searchParams.get("allVariants") === "1" && Object.keys(data).length > 0) {
+      if (updated.r2Key) {
+        await prisma.productModelFile.updateMany({ where: { r2Key: updated.r2Key, id: { not: id } }, data });
+      } else if (updated.storedPath) {
+        // storedPath="" R2 satırlarının ortak değeri → onunla eşleştirme YAPMA.
+        await prisma.productModelFile.updateMany({ where: { storedPath: updated.storedPath, id: { not: id } }, data });
+      }
+    }
+    return NextResponse.json({ id: updated.id, label: updated.label, gramaj: updated.gramaj, estPrintMin: updated.estPrintMin });
   } catch (error) {
     return jsonError(error);
   }

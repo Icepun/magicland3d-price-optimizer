@@ -24,13 +24,13 @@
  * OKUMA MALİYETİ: gcode'un gramajı başlıkta ve altbilgide yazılı, gövdede değil. Bu yüzden
  * yalnız baş ve son 400 KB aralık isteğiyle çekilir — 178 MB'lık dosyada bile ~800 KB iner.
  * Kütüphane 8,4 GB; tam indirme yapılsaydı doldurma işlemi o kadar veri çekerdi.
- * 3MF sıkıştırılmış bir arşiv olduğu için aralıkla okunamaz; tamamı iner (ortalama ~6 MB).
+ * 3MF bir arşiv: dizini + gereken küçük girdiler aralıkla okunur; dizin çözülemezse tamamı iner.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { gcodeMeta, readModelMeta } from "@/core/printers/model-colors";
+import { gcodeMeta, readModelBundleAralikli, readModelMeta } from "@/core/printers/model-colors";
 import { getObjectBytes, getObjectRange, getObjectSize, getR2Config } from "./r2";
 
 /** Baş/son okuma penceresi — `readHeadTail`'ın gcode için kullandığı değerle aynı. */
@@ -77,41 +77,85 @@ export async function readModelGramaj(mf: ModelGramajInput): Promise<number | nu
  * hangi makinede basacağı onun kararı, dosya yalnız o makinenin tahminini söyler.
  */
 export async function readModelOlcum(mf: ModelGramajInput): Promise<ModelOlcum> {
+  const b = await readModelBilgisi(mf);
+  return { gramaj: b.gramaj, estPrintMin: b.estPrintMin };
+}
+
+/** Ölçüm + dilimleyicinin gömdüğü önizleme görseli — hepsi AYNI okumadan çıkar. */
+export interface ModelBilgisi extends ModelOlcum {
+  /** Önizleme görseli (data URL) — dosyada yoksa ya da saklanamayacak kadar büyükse null. */
+  thumbnail: string | null;
+}
+
+/** Saklanabilir görsel üst sınırı (data URL karakteri) — `/preview` ucunun kabul ettiğiyle aynı. */
+export const GORSEL_SINIRI = 1_000_000;
+
+/** Geçerli ve saklanabilir bir önizleme mi? Değilse null (bozuk veriyi kaydetme). */
+export function saklanabilirGorsel(t: string | null | undefined): string | null {
+  return typeof t === "string" && /^data:image\/(png|webp|jpeg);base64,/.test(t) && t.length <= GORSEL_SINIRI
+    ? t
+    : null;
+}
+
+const bilgi = (meta: { grams: number | null; estPrintMin: number | null; thumbnail?: string | null }): ModelBilgisi => ({
+  ...topla(meta),
+  thumbnail: saklanabilirGorsel(meta.thumbnail),
+});
+
+/**
+ * Gramaj + süre + önizleme görseli.
+ *
+ * ⚠️ Üçü de YALNIZ GÖSTERİM içindir; ürün maliyetine girmez (dosyanın başındaki açıklama).
+ *
+ * Buluttaki dosya İNDİRİLMEZ: gcode'un başı/sonu, 3MF'in dizini + iki küçük ayar dosyası ve
+ * tek bir görsel aralık isteğiyle okunur. 3MF dizini okunamazsa (alışılmadık arşiv) eskisi
+ * gibi tamamı indirilir.
+ */
+export async function readModelBilgisi(mf: ModelGramajInput): Promise<ModelBilgisi> {
+  const BOS_BILGI: ModelBilgisi = { ...BOS, thumbnail: null };
   const isGcode = /\.(gcode|gco|g)$/i.test(`.${mf.fileType}`) || /gcode|gco/i.test(mf.fileType);
 
   // ── Buluttaki dosya ──────────────────────────────────────────────────────────────────
   if (mf.r2Key) {
     const cfg = await getR2Config();
-    if (!cfg) return BOS;
+    if (!cfg) return BOS_BILGI;
+    const key = mf.r2Key;
+    const size = await getObjectSize(key, cfg);
+    if (size <= 0) return BOS_BILGI;
 
     if (isGcode) {
-      const size = await getObjectSize(mf.r2Key, cfg);
-      if (size <= 0) return BOS;
       // Küçük dosyada tek istek yeter; büyükte baş + son.
       if (size <= WINDOW * 2) {
-        const buf = await getObjectRange(mf.r2Key, cfg, 0, size - 1);
-        return topla(gcodeMeta(buf.toString("latin1")));
+        const buf = await getObjectRange(key, cfg, 0, size - 1);
+        return bilgi(gcodeMeta(buf.toString("latin1")));
       }
       const [head, tail] = await Promise.all([
-        getObjectRange(mf.r2Key, cfg, 0, WINDOW - 1),
-        getObjectRange(mf.r2Key, cfg, size - WINDOW, size - 1),
+        getObjectRange(key, cfg, 0, WINDOW - 1),
+        getObjectRange(key, cfg, size - WINDOW, size - 1),
       ]);
       // `readHeadTail` ile AYNI birleştirme — ayrıştırıcı iki parçayı satır sonuyla ayrılmış bekler.
-      return topla(gcodeMeta(`${head.toString("latin1")}\n${tail.toString("latin1")}`));
+      return bilgi(gcodeMeta(`${head.toString("latin1")}\n${tail.toString("latin1")}`));
     }
 
-    // 3MF: zip, aralıkla okunamaz. Geçici dosyaya yazıp mevcut okuyucuya ver.
-    const buf = await getObjectBytes(mf.r2Key, cfg);
+    // 3MF: önce aralıklı okuma (dizin + küçük girdiler).
+    try {
+      const paket = await readModelBundleAralikli((a, c) => getObjectRange(key, cfg, a, c), size, "3mf");
+      const b = bilgi(paket.meta);
+      if (b.gramaj != null || b.estPrintMin != null || b.thumbnail != null) return b;
+    } catch { /* aşağıdaki tam okumaya düş */ }
+
+    // Son çare: tamamını indirip mevcut okuyucuya ver.
+    const buf = await getObjectBytes(key, cfg);
     const tmp = path.join(os.tmpdir(), `gramaj-${crypto.randomUUID()}.3mf`);
     try {
       await fs.promises.writeFile(tmp, buf);
-      return topla(readModelMeta(tmp));
+      return bilgi(readModelMeta(tmp));
     } finally {
       try { fs.unlinkSync(tmp); } catch { /* ignore */ }
     }
   }
 
   // ── Yereldeki dosya ──────────────────────────────────────────────────────────────────
-  if (!mf.storedPath || !fs.existsSync(mf.storedPath)) return BOS;
-  return topla(readModelMeta(mf.storedPath));
+  if (!mf.storedPath || !fs.existsSync(mf.storedPath)) return BOS_BILGI;
+  return bilgi(readModelMeta(mf.storedPath));
 }

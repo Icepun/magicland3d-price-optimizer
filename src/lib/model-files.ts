@@ -55,6 +55,8 @@ export interface CreateModelRowsInput {
       dosyayı yeniden açmasın (R2 indirmesi + senkron unzip donması biter). */
   colorsJson?: string | null;
   sliced?: boolean | null;
+  /** Dilimleyicinin dosyaya gömdüğü önizleme (data URL) — kart yükler yüklemez göstersin. */
+  thumbnail?: string | null;
 }
 
 /**
@@ -74,6 +76,7 @@ export async function createModelRows(input: CreateModelRowsInput) {
   const r2Key = input.r2Key ?? null;
   const colorsJson = input.colorsJson ?? null;
   const sliced = input.sliced ?? null;
+  const thumbnail = input.thumbnail ?? null;
 
   // Hedef ürünler (kendisi / "tüm varyantlara uygula" ise grup üyeleri) — TÜM okumalar yazmadan ÖNCE.
   let targetIds: string[] = [productId];
@@ -99,7 +102,7 @@ export async function createModelRows(input: CreateModelRowsInput) {
     _count: { _all: true },
   });
   const countMap = new Map(counts.map((c) => [c.productId, c._count._all]));
-  const common = { printerConfigId, label, originalName, storedPath, r2Key, fileType, sizeBytes, gramaj, estPrintMin, colorsJson, sliced };
+  const common = { printerConfigId, label, originalName, storedPath, r2Key, fileType, sizeBytes, gramaj, estPrintMin, colorsJson, sliced, thumbnail };
 
   // ANA ürün: create → id'li satırı döndürür. İstemci bunu cache'e ekler → yükleme sonrası refetch
   // GEREKMEZ (yazma-sonrası-okuma blokajı/donma yok).

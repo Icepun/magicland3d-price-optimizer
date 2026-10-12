@@ -1,10 +1,14 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw } from "lucide-react";
+import {
+  FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw,
+  Clock3, Weight, Pencil, CloudUpload, Sparkles,
+} from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 import { usePrefersReducedMotion } from "@/lib/client-state";
@@ -25,10 +29,18 @@ import { fetchJson } from "@/lib/fetch-json";
 import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 import { MeshAttachButton } from "./MeshAttachButton";
 import { dedupeFiles, familyDisplayName, printerFamilyKey } from "@/core/printers/printer-family";
+import {
+  baskiDosyasiMi, bilgiEksik, fmtGram, fmtSure, gorunenAd, grupOzeti, ozetMetni, turEtiketi, uzantisizAd,
+} from "@/lib/model-dosya-gorunum";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
-interface ModelFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; fileType: string; sortOrder: number; contentMd5?: string | null; hasThumbnail?: boolean; meshR2Key?: string | null; meshName?: string | null; meshSizeBytes?: number | null }
+interface ModelFile {
+  id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number;
+  gramaj: number | null; estPrintMin?: number | null; fileType: string; sortOrder: number;
+  contentMd5?: string | null; hasThumbnail?: boolean; sliced?: boolean | null; renkler?: string[];
+  meshR2Key?: string | null; meshName?: string | null; meshSizeBytes?: number | null;
+}
 
 /**
  * Satırı ekranda GEREKEN alanlara indirger.
@@ -46,6 +58,9 @@ function hafifSatir(row: ModelFile): ModelFile {
     originalName: row.originalName,
     sizeBytes: row.sizeBytes,
     gramaj: row.gramaj ?? null,
+    estPrintMin: row.estPrintMin ?? null,
+    sliced: row.sliced ?? null,
+    renkler: Array.isArray(row.renkler) ? row.renkler : [],
     fileType: row.fileType,
     sortOrder: row.sortOrder,
     contentMd5: row.contentMd5 ?? null,
@@ -178,6 +193,63 @@ function fmtEta(p: UploadProgress) {
   return `~${Math.floor(rem / 60)} dk ${Math.ceil(rem % 60)} sn`;
 }
 
+/**
+ * Oturum boyunca dosya başına TEK okuma denemesi. İçinde süre/gramaj yazmayan bir dosya,
+ * kart her açıldığında yeniden okunmasın (her deneme buluttan birkaç yüz KB çeker).
+ */
+const okumasiDenenenler = new Set<string>();
+
+interface DosyaBilgisi { gramaj: number | null; estPrintMin: number | null; hasThumbnail?: boolean }
+
+/**
+ * Eski dosyaların eksik bilgisini (süre, gramaj, önizleme) dosyadan okuyup satırı YERİNDE
+ * tamamlar. Yeni yüklenenlerde bu bilgi yüklemeyle birlikte gelir; burası yalnız geçmişi doldurur.
+ * Sırayla, teker teker çalışır — kart hiçbir zaman bunu beklemez.
+ */
+function useEksikBilgiyiTamamla(productId: string, parcalar: ModelFile[], etkin: boolean): ReadonlySet<string> {
+  const qc = useQueryClient();
+  // Her denemeden sonra artar → sıra yeniden hesaplanır (deneme kümesi tepkisel değil).
+  const [tur, setTur] = useState(0);
+  const sira = useMemo(
+    () => parcalar.filter((f) => bilgiEksik(f) && !okumasiDenenenler.has(f.id)).map((f) => f.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `tur` bilinçli tetikleyici
+    [parcalar, tur],
+  );
+  const siradaki = sira[0] ?? null;
+  useEffect(() => {
+    if (!etkin || !siradaki || okumasiDenenenler.has(siradaki)) return;
+    const id = siradaki;
+    okumasiDenenenler.add(id);
+    void (async () => {
+      try {
+        const r = await fetchJson<DosyaBilgisi>(`/api/models/${id}/gramaj`, { method: "POST" });
+        // Sonuç, kart bu arada kapanmış olsa da önbelleğe yazılır (geçerli veri).
+        qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
+          Array.isArray(eski)
+            ? eski.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      gramaj: r.gramaj ?? f.gramaj,
+                      estPrintMin: r.estPrintMin ?? f.estPrintMin ?? null,
+                      hasThumbnail: !!r.hasThumbnail || !!f.hasThumbnail,
+                    }
+                  : f,
+              )
+            : eski,
+        );
+      } catch {
+        /* Bilgi yalnız gösterim içindir: okunamazsa satır eksik bilgiyle kalır, kart çalışır. */
+      }
+      // Sıra ancak şimdi yeniden hesaplanır → okunan satır o ana dek "okunuyor" görünür.
+      setTur((t) => t + 1);
+    })();
+  }, [etkin, siradaki, productId, qc]);
+
+  // Sırada bekleyenler de "okunuyor" görünür — bilgi birazdan gelecek, satır boş kalmasın.
+  return useMemo(() => new Set(etkin ? sira : []), [etkin, sira]);
+}
+
 // memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
 export const ModelFilesCard = memo(ModelFilesCardImpl);
 function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; variantGroup?: VariantGroupLite | null }) {
@@ -203,7 +275,10 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
     () => (Array.isArray(printersQuery.data) ? printersQuery.data : []),
     [printersQuery.data],
   );
-  const files = Array.isArray(filesQuery.data) ? filesQuery.data : [];
+  const files = useMemo(
+    () => (Array.isArray(filesQuery.data) ? filesQuery.data : []),
+    [filesQuery.data],
+  );
   /**
    * Yazıcılar AİLEYE göre gruplanır: aynı marka + modeldeki yazıcılar (ör. iki Snapmaker U1)
    * aynı dosyayı basar, dosyaları ortaktır. Eskiden her yazıcıya ayrı kutu çiziliyordu ve ikinci
@@ -221,6 +296,35 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   // kart "yazıcı yok / parça yok" diye yalan söylerdi. Beklerken de durum "yükleniyor"dur.
   const yaziciDurumu = veriDurumu(printersQuery.isPending, printersQuery.isError, printers.length);
   const dosyaDurumu = veriDurumu(filesQuery.isPending, filesQuery.isError, files.length);
+  // Her ailenin EKRANDA görünen parçaları — aynı dosya iki kardeş yazıcıya ayrı ayrı
+  // yüklenmişse bir kez görünür.
+  const aileParcalari = useMemo(
+    () =>
+      aileler.map((aile) => {
+        const ids = new Set(aile.map((a) => a.id));
+        return { aile, parts: dedupeFiles(files.filter((f) => ids.has(f.printerConfigId))) };
+      }),
+    [aileler, files],
+  );
+  const gorunenParcalar = useMemo(() => aileParcalari.flatMap((a) => a.parts), [aileParcalari]);
+  // Dosya bir yazıcı kutusunun DIŞINA bırakılırsa pencere onu açmaya çalışır ve uygulama ekranı
+  // kaybolur. Kutular kendi bırakmasını zaten karşılıyor; dışarıda kalan bırakma yutulur.
+  useEffect(() => {
+    const disariBirakma = (e: DragEvent) => {
+      if (e.defaultPrevented) return; // bir kutu sahiplendi
+      if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
+    window.addEventListener("dragover", disariBirakma);
+    window.addEventListener("drop", disariBirakma);
+    return () => {
+      window.removeEventListener("dragover", disariBirakma);
+      window.removeEventListener("drop", disariBirakma);
+    };
+  }, []);
+  // Eski dosyaların süresi/gramajı/önizlemesi arka planda tamamlanır (yalnız görünenler için).
+  const okunanlar = useEksikBilgiyiTamamla(productId, gorunenParcalar, gorundu && dosyaDurumu === "dolu");
 
   const memberCount = variantGroup?.products?.length ?? 0;
   const inGroup = memberCount >= 2;
@@ -336,11 +440,8 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
             Önce <span className="font-medium text-foreground">Yazıcılar → Yönet</span>&apos;ten bir yazıcı ekle. Sonra her parçanın dosyasını buraya yükleyebilirsin.
           </p>
         ) : (
-          aileler.map((aile, gi) => {
+          aileParcalari.map(({ aile, parts }, gi) => {
             const temsil = aile[0];
-            const ids = new Set(aile.map((a) => a.id));
-            // Aynı dosya iki kardeş yazıcıya ayrı ayrı yüklenmişse bir kez görünür.
-            const parts = dedupeFiles(files.filter((f) => ids.has(f.printerConfigId)));
             return (
               <div
                 key={temsil.id}
@@ -352,6 +453,7 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
                   parts={parts}
                   productId={productId}
                   applyToVariants={shareOn}
+                  okunanlar={okunanlar}
                   onChanged={refresh}
                   baslik={aile.length > 1 ? `${familyDisplayName(temsil)} · ${aile.length} yazıcı` : undefined}
                   altBaslik={aile.length > 1 ? aile.map((a) => a.name).join(", ") : undefined}
@@ -365,11 +467,13 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   );
 }
 
-function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, baslik, altBaslik }: {
+function PrinterGroup({ printer, parts, productId, applyToVariants, okunanlar, onChanged, baslik, altBaslik }: {
   printer: PrinterCfg;
   parts: ModelFile[];
   productId: string;
   applyToVariants: boolean;
+  /** Bilgisi (süre/gramaj/önizleme) şu an dosyadan okunan parçalar. */
+  okunanlar: ReadonlySet<string>;
   onChanged: () => void;
   /** Aile bölümünün adı (ör. "Snapmaker U1 · 2 yazıcı"); yoksa yazıcının adı. */
   baslik?: string;
@@ -381,7 +485,13 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
   const [prog, setProg] = useState<UploadProgress | null>(null);
   const [uploadingName, setUploadingName] = useState("");
   const [viewer, setViewer] = useState<ModelFile | null>(null);
+  // Az önce yüklenen parçalar kısa süre vurgulu kalır — "hangisi yeni geldi" aranmasın.
+  const [yeniler, setYeniler] = useState<ReadonlySet<string>>(() => new Set());
+  // Sürükle-bırak: iç içe öğelerde enter/leave çift ateşlendiği için sayaçla tutulur.
+  const [surukleniyor, setSurukleniyor] = useState(false);
+  const surukSayaci = useRef(0);
   const azHareket = usePrefersReducedMotion();
+  const ozet = parts.length > 1 ? ozetMetni(grupOzeti(parts)) : null;
 
   const del = useMutation({
     // "Tüm varyantlara uygula" açıksa ?allVariants=1 → sunucu dosyayı TÜM varyantlardan siler.
@@ -405,8 +515,9 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
   });
 
   const patchField = useMutation({
+    // "Tüm varyantlara uygula" açıksa ad diğer varyantlardaki aynı dosyaya da yazılır.
     mutationFn: async ({ id, body }: { id: string; body: Record<string, unknown> }) => {
-      const r = await fetch(`/api/models/${id}`, {
+      const r = await fetch(`/api/models/${id}${applyToVariants ? "?allVariants=1" : ""}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -414,8 +525,7 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
       if (!r.ok) throw new Error("Kaydedilemedi");
       return r.json().catch(() => null);
     },
-    // Optimistic: etiket/gramaj cache'te anında güncellenir → REFETCH YOK. (Eski refetch, blur'da
-    // yazdığın değeri uncontrolled input'ta eziyordu + ağır.) Hata olursa geri alınır.
+    // Optimistic: ad cache'te anında güncellenir → REFETCH YOK. Hata olursa geri alınır.
     onMutate: async ({ id, body }) => {
       await qc.cancelQueries({ queryKey: ["product-models", productId] });
       const prev = qc.getQueryData<ModelFile[]>(["product-models", productId]);
@@ -428,16 +538,18 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
       if (ctx?.prev) qc.setQueryData(["product-models", productId], ctx.prev);
       toast.error("Kaydedilemedi (geri alındı)");
     },
+    onSuccess: () => {
+      // Diğer varyantların listesi sonraki ziyarette taze gelsin.
+      if (applyToVariants) onChanged();
+    },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: ["models"], refetchType: "none" });
-      // Etiket/gramaj değişimi "Baskı Başlat" seçicisinde de görünsün (çapraz-sayfa tazelik).
-      // Bu invalidate olmadan seçici staleTime'ı düşürülürse düzenlenen değer bayat kalırdı.
+      // Ad değişimi "Baskı Başlat" seçicisinde de görünsün (çapraz-sayfa tazelik).
       qc.invalidateQueries({ queryKey: ["printable-models"] });
     },
   });
 
-  const handleFiles = async (fileList: FileList) => {
-    const list = Array.from(fileList);
+  const handleFiles = async (list: File[]) => {
     let ok = 0;
     const created: ModelFile[] = [];
     setUploadsActive(1); // arka plan görselleştirme üretimi bu yükleme boyunca beklesin
@@ -447,7 +559,8 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
         setProg({ loaded: 0, total: f.size, bytesPerSec: 0 });
         try {
           const row = await uploadProductModel({ productId, printerConfigId: printer.id, file: f, applyToVariants, onProgress: setProg });
-          if (row && typeof row === "object") created.push(row as ModelFile);
+          // Satır süre, gramaj ve önizlemeyle BİRLİKTE gelir → kart yükler yüklemez gösterir.
+          if (row && typeof row === "object") created.push(hafifSatir(row as ModelFile));
           ok++;
         } catch (e) {
           toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
@@ -459,22 +572,69 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
     setProg(null);
     setUploadingName("");
     // OPTIMISTIC: oluşturulan satırları cache'e ekle → bu ürün için refetch YOK (donma yok).
-    // NOT: görselleştirme varlıkları burada ÜRETİLMEZ (eski hali yüklemeyi kilitliyordu) —
-    // thumbnail ilk baskıda / 3D izleyici açılınca; inşa kareleri baskı başlayınca oluşur.
     if (created.length) {
       qc.setQueryData<ModelFile[]>(["product-models", productId], (old) =>
         Array.isArray(old) ? [...old, ...created] : created
       );
       // Yazıcılar → "Baskı Başlat" ürün listesi bu yeni modeli görsün (çapraz-sayfa tazelik).
       qc.invalidateQueries({ queryKey: ["printable-models"] });
+      const idler = created.map((c) => c.id);
+      setYeniler((eski) => new Set([...eski, ...idler]));
+      setTimeout(() => {
+        setYeniler((eski) => new Set([...eski].filter((id) => !idler.includes(id))));
+      }, 6000);
     }
     onChanged();
     if (inputRef.current) inputRef.current.value = "";
     if (ok > 0) toast.success(`${baslik ?? printer.name}: ${ok} parça yüklendi${applyToVariants ? " · tüm varyantlara" : ""}`);
   };
 
+  const dosyaTasiyor = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const birakildi = (e: React.DragEvent) => {
+    if (!dosyaTasiyor(e)) return;
+    e.preventDefault();
+    surukSayaci.current = 0;
+    setSurukleniyor(false);
+    if (prog !== null) return; // süren yükleme bitmeden yenisi başlamaz
+    const hepsi = Array.from(e.dataTransfer.files ?? []);
+    const uygun = hepsi.filter((f) => baskiDosyasiMi(f.name));
+    if (uygun.length < hepsi.length) toast.error("Yalnız .gcode ve .3mf dosyaları eklenebilir");
+    if (uygun.length) void handleFiles(uygun);
+  };
+
   return (
-    <div className="rounded-xl border bg-muted/20 overflow-hidden">
+    <div
+      className={cn(
+        "relative rounded-xl border bg-muted/20 overflow-hidden transition-[border-color,box-shadow] duration-200",
+        surukleniyor && "border-primary/60 shadow-[0_0_0_3px] shadow-primary/15",
+      )}
+      onDragEnter={(e) => {
+        if (!dosyaTasiyor(e)) return;
+        e.preventDefault();
+        surukSayaci.current += 1;
+        setSurukleniyor(true);
+      }}
+      onDragOver={(e) => {
+        if (!dosyaTasiyor(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = prog !== null ? "none" : "copy";
+      }}
+      onDragLeave={(e) => {
+        if (!dosyaTasiyor(e)) return;
+        surukSayaci.current = Math.max(0, surukSayaci.current - 1);
+        if (surukSayaci.current === 0) setSurukleniyor(false);
+      }}
+      onDrop={birakildi}
+    >
+      {surukleniyor && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-1.5 bg-background/80 backdrop-blur-[2px] animate-in fade-in duration-150">
+          <CloudUpload className={cn("h-6 w-6 text-primary", !azHareket && "animate-bounce")} />
+          <p className="text-xs font-medium text-primary">
+            {prog !== null ? "Önce süren yükleme bitsin" : `Bırak, ${baslik ?? printer.name} için yüklensin`}
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center gap-2.5 px-3 py-2 border-b border-border/40 bg-muted/30">
         <div className="flex items-center justify-center h-7 w-7 rounded-md bg-background border shrink-0">
           <Printer className="h-3.5 w-3.5 text-muted-foreground" />
@@ -483,8 +643,23 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
           <p className="text-sm font-medium truncate">{baslik ?? printer.name}</p>
           {altBaslik && <p className="text-[10px] text-muted-foreground truncate">{altBaslik}</p>}
         </div>
+        {ozet && (
+          <span
+            className="hidden sm:inline text-[11px] text-muted-foreground tabular-nums animate-in fade-in duration-300"
+            title="Bu yazıcıdaki tüm parçaların toplamı"
+          >
+            Toplam <span className="font-medium text-foreground/80">{ozet}</span>
+          </span>
+        )}
         {parts.length > 0 && <Badge variant="secondary" className="tabular-nums text-[10px]">{parts.length} parça</Badge>}
-        <input ref={inputRef} type="file" accept=".gcode,.gco,.g,.3mf" multiple className="hidden" onChange={(e) => { if (e.target.files?.length) handleFiles(e.target.files); }} />
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".gcode,.gco,.g,.3mf"
+          multiple
+          className="hidden"
+          onChange={(e) => { if (e.target.files?.length) void handleFiles(Array.from(e.target.files)); }}
+        />
         <Button size="sm" variant="outline" className="h-7 gap-1 text-xs shrink-0 transition-transform active:scale-95" disabled={prog !== null} onClick={() => inputRef.current?.click()}>
           {prog !== null ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} Parça Ekle
         </Button>
@@ -518,72 +693,37 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
 
       <div className="p-2 space-y-1.5">
         {parts.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground/60 px-1 py-1">Henüz parça yok. Her parça için bir dosya ekle.</p>
+          prog === null && (
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              className="group/bos w-full rounded-lg border border-dashed border-border/70 px-3 py-3.5 text-center transition-colors hover:border-primary/40 hover:bg-primary/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <CloudUpload className="mx-auto h-5 w-5 text-muted-foreground/45 transition-all duration-200 group-hover/bos:-translate-y-0.5 group-hover/bos:text-primary" />
+              <p className="mt-1.5 text-[11px] text-muted-foreground/75">Henüz parça yok. Dosyayı buraya sürükle ya da tıkla.</p>
+              <p className="text-[10px] text-muted-foreground/45">.gcode · .3mf</p>
+            </button>
+          )
         ) : (
           parts.map((part, pi) => (
-            <div
+            <ParcaSatiri
               key={part.id}
-              className="flex items-center gap-2 rounded-lg border bg-background p-1.5 transition-colors hover:border-primary/30 animate-in fade-in slide-in-from-left-1 duration-300"
-              style={{ animationDelay: `${pi * 40}ms`, animationFillMode: "both" }}
-            >
-              {/* KÜÇÜK GÖRSEL ÖNCE: parçanın neye benzediği için artık koca dosyayı indirip
-                  3B izleyiciyi açmak gerekmiyor — küçük resim varsa doğrudan o gösterilir. */}
-              <button
-                type="button"
-                onClick={() => setViewer(part)}
-                title="3D önizleme"
-                className="relative flex items-center justify-center h-9 w-9 shrink-0 overflow-hidden rounded bg-primary/10 text-primary transition-transform hover:scale-105 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {part.hasThumbnail ? (
-                  /* eslint-disable-next-line @next/next/no-img-element */
-                  <img
-                    src={`/api/models/${part.id}/preview`}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    className="h-full w-full object-contain"
-                  />
-                ) : (
-                  <span className="text-[11px] font-bold tabular-nums">{pi + 1}</span>
-                )}
-                {part.hasThumbnail && (
-                  <span className="absolute bottom-0 left-0 rounded-tr bg-background/85 px-1 text-[9px] font-bold leading-tight tabular-nums text-primary">
-                    {pi + 1}
-                  </span>
-                )}
-              </button>
-              <div className="min-w-0 flex-1">
-                <Input
-                  defaultValue={part.label ?? ""}
-                  placeholder={part.originalName}
-                  onBlur={(e) => { const v = e.target.value.trim(); if (v !== (part.label ?? "")) patchField.mutate({ id: part.id, body: { label: v === "" ? null : v } }); }}
-                  className="h-6 text-xs border-0 px-1 shadow-none focus-visible:ring-1"
-                  title="Parça adı (örn. Gövde, Kapak)"
-                />
-                <p className="text-[10px] text-muted-foreground/70 truncate px-1">{part.originalName} · {fmtSize(part.sizeBytes)}</p>
-              </div>
-              <MeshAttachButton
-                fileId={part.id}
-                meshName={part.meshName ?? null}
-                onDegisti={(yeni) => {
-                  // Yerinde yama — `invalidateQueries` burada uygulamayı saniyelerce dondurur
-                  // (yazma sonrası okuma; uzak-HTTP libSQL'de her sorgu ~96 ms ve SIRALI).
-                  qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
-                    (eski ?? []).map((r) => (r.id === part.id ? { ...r, ...yeni } : r)),
-                  );
-                }}
-              />
-              <Button
-                size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground transition-transform hover:text-primary active:scale-90"
-                title={part.meshName ? "3B modeli izle" : "Katman katman izle"}
-                onClick={() => setViewer(part)}
-              >
-                <Box className="h-3.5 w-3.5" />
-              </Button>
-              <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0 transition-transform active:scale-90" disabled={del.isPending} onClick={() => del.mutate(part.id)} title="Parçayı sil">
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+              part={part}
+              sira={pi}
+              yeni={yeniler.has(part.id)}
+              okunuyor={okunanlar.has(part.id)}
+              siliniyor={del.isPending && del.variables === part.id}
+              onAd={(label) => patchField.mutate({ id: part.id, body: { label } })}
+              onSil={() => del.mutate(part.id)}
+              onIzle={() => setViewer(part)}
+              onModel={(yeni) => {
+                // Yerinde yama — `invalidateQueries` burada uygulamayı saniyelerce dondurur
+                // (yazma sonrası okuma; uzak-HTTP libSQL'de her sorgu ~96 ms ve SIRALI).
+                qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
+                  (eski ?? []).map((r) => (r.id === part.id ? { ...r, ...yeni } : r)),
+                );
+              }}
+            />
           ))
         )}
       </div>
@@ -592,10 +732,200 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, onChanged, b
         <GcodeViewerDialog
           fileId={viewer.id}
           cacheKey={vizKeyForModel(viewer)}
-          name={viewer.label || viewer.originalName}
+          name={gorunenAd(viewer)}
           onClose={() => setViewer(null)}
         />
       )}
+    </div>
+  );
+}
+
+/** Küçük resmin üstüne gelince açılan büyük önizleme — kart kenarında kırpılmasın diye gövdeye çizilir. */
+function BuyukOnizleme({ src, hedef }: { src: string; hedef: DOMRect }) {
+  const BOY = 236;
+  // Önce SOLA açılır: sağda satırın kendi adı ve bilgileri var, onları kapatmasın.
+  const solda = hedef.left - 12 - BOY >= 8;
+  const sol = solda ? hedef.left - 12 - BOY : Math.min(hedef.right + 12, window.innerWidth - BOY - 8);
+  const ust = Math.min(Math.max(8, hedef.top + hedef.height / 2 - BOY / 2), window.innerHeight - BOY - 8);
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[70] rounded-xl border bg-popover p-1.5 shadow-2xl shadow-black/40 animate-in fade-in zoom-in-95 duration-150"
+      style={{ left: sol, top: ust, width: BOY, height: BOY }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt="" className="h-full w-full rounded-lg object-contain" />
+    </div>,
+    document.body,
+  );
+}
+
+/** Tek parça satırı: önizleme, ad (yerinde değiştirilebilir), süre/gramaj/renk ve işlemler. */
+function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzle, onModel }: {
+  part: ModelFile;
+  sira: number;
+  yeni: boolean;
+  okunuyor: boolean;
+  siliniyor: boolean;
+  onAd: (label: string | null) => void;
+  onSil: () => void;
+  onIzle: () => void;
+  onModel: (yeni: { meshR2Key: string | null; meshName: string | null; meshSizeBytes: number | null }) => void;
+}) {
+  const [duzenle, setDuzenle] = useState(false);
+  const [taslak, setTaslak] = useState("");
+  const [gorselHata, setGorselHata] = useState(false);
+  const [buyuk, setBuyuk] = useState<DOMRect | null>(null);
+  const ad = gorunenAd(part);
+  const dosyaAdi = uzantisizAd(part.originalName);
+  const gorselVar = !!part.hasThumbnail && !gorselHata;
+  const onizlemeYolu = `/api/models/${part.id}/preview`;
+  const renkler = part.renkler ?? [];
+  const sureVar = part.estPrintMin != null && part.estPrintMin > 0;
+  const gramVar = part.gramaj != null && part.gramaj > 0;
+
+  const adiDuzenle = () => { setTaslak(ad); setDuzenle(true); };
+  const adiKaydet = () => {
+    setDuzenle(false);
+    const v = taslak.trim();
+    // Boş bırakmak ya da dosya adına geri dönmek = verilen adı kaldır.
+    const yeniAd = v === "" || v === dosyaAdi ? null : v;
+    if (yeniAd !== (part.label ?? null)) onAd(yeniAd);
+  };
+
+  return (
+    <div
+      className={cn(
+        "group/satir flex items-center gap-3 rounded-lg border bg-background p-2 transition-[border-color,background-color,box-shadow,opacity] duration-500 hover:border-primary/30 animate-in fade-in slide-in-from-left-1",
+        yeni && "border-primary/50 bg-primary/[0.05] shadow-[0_0_0_3px] shadow-primary/10",
+        siliniyor && "opacity-50",
+      )}
+      style={{ animationDelay: `${sira * 40}ms`, animationFillMode: "both", animationDuration: "300ms" }}
+    >
+      {/* ÖNİZLEME: dilimleyicinin dosyaya gömdüğü görsel — yükler yüklemez görünür. */}
+      <button
+        type="button"
+        onClick={onIzle}
+        onMouseEnter={(e) => { if (gorselVar) setBuyuk(e.currentTarget.getBoundingClientRect()); }}
+        onMouseLeave={() => setBuyuk(null)}
+        onBlur={() => setBuyuk(null)}
+        title={gorselVar ? undefined : "3B önizleme"}
+        aria-label={`${ad} — 3B önizleme`}
+        className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-gradient-to-br from-primary/15 to-primary/5 text-primary transition-transform duration-200 hover:scale-[1.04] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {gorselVar ? (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={onizlemeYolu}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            onError={() => setGorselHata(true)}
+            className="h-full w-full object-contain animate-in fade-in zoom-in-95 duration-500"
+          />
+        ) : okunuyor ? (
+          <Skeleton className="h-full w-full rounded-none" />
+        ) : (
+          <Box className="h-5 w-5 opacity-60" />
+        )}
+        <span className="absolute bottom-0 left-0 rounded-tr-md bg-background/85 px-1 text-[9px] font-bold leading-tight tabular-nums text-primary">
+          {sira + 1}
+        </span>
+      </button>
+      {buyuk && gorselVar && <BuyukOnizleme src={onizlemeYolu} hedef={buyuk} />}
+
+      <div className="min-w-0 flex-1 space-y-1">
+        {duzenle ? (
+          <Input
+            autoFocus
+            value={taslak}
+            maxLength={80}
+            placeholder={dosyaAdi}
+            onChange={(e) => setTaslak(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onBlur={adiKaydet}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); adiKaydet(); }
+              if (e.key === "Escape") { e.preventDefault(); setDuzenle(false); }
+            }}
+            aria-label="Parça adı"
+            className="h-7 text-sm px-2"
+          />
+        ) : (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={adiDuzenle}
+              title="Adı değiştir"
+              className="group/ad -mx-1 flex min-w-0 items-center gap-1.5 rounded px-1 text-left transition-colors hover:bg-muted/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="truncate text-sm font-medium">{ad}</span>
+              <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/40 transition-colors group-hover/ad:text-primary" />
+            </button>
+            {yeni && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary animate-in fade-in zoom-in-90 duration-300">
+                <Sparkles className="h-2.5 w-2.5" /> Yeni
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Dosyanın kendi bilgileri: tür · süre · gramaj · renkler · boyut */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+          <span className="rounded border border-border/70 px-1 font-mono text-[9px] font-semibold leading-4 tracking-wide text-muted-foreground/80">
+            {turEtiketi(part.fileType)}
+          </span>
+          {sureVar && (
+            <span className="inline-flex items-center gap-1 tabular-nums text-foreground/80 animate-in fade-in duration-300" title="Tahmini baskı süresi">
+              <Clock3 className="h-3 w-3 text-muted-foreground" /> {fmtSure(part.estPrintMin)}
+            </span>
+          )}
+          {gramVar && (
+            <span className="inline-flex items-center gap-1 tabular-nums text-foreground/80 animate-in fade-in duration-300" title="Kullanılan filament">
+              <Weight className="h-3 w-3 text-muted-foreground" /> {fmtGram(part.gramaj)}
+            </span>
+          )}
+          {okunuyor && (!sureVar || !gramVar) && (
+            <span className="inline-flex items-center gap-1.5" aria-label="Dosya bilgisi okunuyor">
+              <Skeleton className="h-3.5 w-14 rounded" />
+              <Skeleton className="h-3.5 w-11 rounded" />
+            </span>
+          )}
+          {renkler.length > 0 && (
+            <span className="inline-flex items-center" title={`${renkler.length} renk`}>
+              {renkler.map((hex, i) => (
+                <span
+                  key={`${hex}-${i}`}
+                  className={cn("h-3 w-3 rounded-full border border-background ring-1 ring-border/70", i > 0 && "-ml-1")}
+                  style={{ backgroundColor: hex }}
+                />
+              ))}
+              {renkler.length > 1 && <span className="ml-1 tabular-nums">{renkler.length} renk</span>}
+            </span>
+          )}
+          <span className="tabular-nums text-muted-foreground/70">{fmtSize(part.sizeBytes)}</span>
+          {part.sliced === false && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400" title="Bu dosya dilimlenmemiş; yazıcıya gönderilemez.">
+              <AlertTriangle className="h-2.5 w-2.5" /> Dilimlenmemiş
+            </span>
+          )}
+        </div>
+
+        {part.label && !duzenle && (
+          <p className="truncate text-[10px] text-muted-foreground/55" title={part.originalName}>{part.originalName}</p>
+        )}
+      </div>
+
+      <MeshAttachButton fileId={part.id} meshName={part.meshName ?? null} onDegisti={onModel} />
+      <Button
+        size="icon" variant="ghost" className="h-7 w-7 shrink-0 text-muted-foreground transition-transform hover:text-primary active:scale-90"
+        title={part.meshName ? "3B modeli izle" : "Katman katman izle"}
+        onClick={onIzle}
+      >
+        <Box className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0 transition-transform active:scale-90" disabled={siliniyor} onClick={onSil} title="Parçayı sil">
+        {siliniyor ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+      </Button>
     </div>
   );
 }

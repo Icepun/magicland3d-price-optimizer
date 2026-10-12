@@ -1,6 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
+import { fmtSure } from "@/lib/model-dosya-gorunum";
 import { fetchJson } from "@/lib/fetch-json";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
@@ -44,14 +45,6 @@ interface LibStorage {
   fileCount: number;
   byPrinter: Array<{ printerConfigId: string; bytes: number; files: number }>;
   largest: Array<{ id: string; productId: string; productName: string; printerConfigId: string; name: string; sizeBytes: number }>;
-}
-
-/** Dakikayı "2sa 18dk" biçiminde yaz — dosya adlarındaki yazımla aynı okunsun. */
-function fmtSure(dk: number | null | undefined): string {
-  if (dk == null || !Number.isFinite(dk) || dk <= 0) return "—";
-  const sa = Math.floor(dk / 60);
-  const kalan = Math.round(dk % 60);
-  return sa > 0 ? `${sa}sa ${kalan}dk` : `${kalan}dk`;
 }
 
 function fmtSize(b: number) {
