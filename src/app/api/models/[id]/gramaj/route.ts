@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { readModelBilgisi } from "@/lib/model-gramaj";
+import { bustModelCaches } from "@/lib/cache-busting";
 
 export const dynamic = "force-dynamic";
 
@@ -57,6 +58,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
     if (Object.keys(data).length > 0) {
       await prisma.productModelFile.update({ where: { id }, data });
+      bustModelCaches();
     }
     const gramaj = data.gramaj ?? mf.gramaj;
     const estPrintMin = data.estPrintMin ?? mf.estPrintMin;

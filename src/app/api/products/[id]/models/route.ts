@@ -11,6 +11,7 @@ import { getR2Config, isValidModelKey, headObjectSize, getObjectRange } from "@/
 import { readModelBundle, readModelBundleAralikli } from "@/core/printers/model-colors";
 import { saklanabilirGorsel } from "@/lib/model-gramaj";
 import { renkleriCoz } from "@/lib/model-dosya-gorunum";
+import { bustModelCaches } from "@/lib/cache-busting";
 
 export const dynamic = "force-dynamic";
 
@@ -144,6 +145,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         r2Key,
         storedPath: "",
       });
+      bustModelCaches(); // kütüphane yeni dosyayı hemen görsün
       return NextResponse.json(hafifYanit(mine), { status: 201 });
     }
 
@@ -201,6 +203,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       sliced,
       thumbnail: gorsel,
     });
+    bustModelCaches();
     return NextResponse.json(hafifYanit(mine), { status: 201 });
   } catch (error) {
     return jsonError(error);

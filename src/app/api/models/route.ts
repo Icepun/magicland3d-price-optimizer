@@ -41,6 +41,9 @@ interface LibRow {
   files: LibFile[];
   /** Bu ürünün dosyalarının toplam boyutu (bayt) — listede ve sıralamada kullanılır. */
   totalBytes: number;
+  /** Varyant grubu — aynı gruptaki ürünler kütüphanede TEK satırda toplanır. */
+  variantGroupId: string | null;
+  variantGroupName: string | null;
 }
 
 /**
@@ -98,15 +101,22 @@ interface LibStorage {
   }>;
 }
 
-/** Baskı Kütüphanesi: dosyası olan ürünler + yazıcı listesi (kapsama rozetleri için). */
+/**
+ * Baskı Kütüphanesi: TÜM görünür ürünler (dosyası olsun olmasın) + yazıcı listesi.
+ *
+ * Eskiden yalnız dosyası OLAN ürünler dönüyordu; sayfanın asıl sorusu ise "hangisinin dosyası
+ * yok". Ölçüldü (13 Eki 2026): 481 görünür ürünün 328'inin hiç dosyası yoktu ve hiçbiri
+ * listede görünmüyordu.
+ */
 export async function GET() {
-  const data = await swr("models:v1", 2 * 60_000, computeModels);
+  // v2: yanıt biçimi değişti (dosyasız ürünler + varyant grubu) — diskteki eski gövde okunmasın.
+  const data = await swr("models:v2", 2 * 60_000, computeModels);
   return NextResponse.json(data);
 }
 
 async function computeModels() {
   await ensureRuntimeSchema();
-  const [files, printers] = await Promise.all([
+  const [files, printers, urunler] = await Promise.all([
     prisma.productModelFile.findMany({
       // "__custom__" = özel baskı dosyaları (ürüne bağlı değil) → kütüphanede gösterme.
       // Bu sentinel'in Product kaydı yoktur → include null döner → eskiden f.product.name patlıyordu.
@@ -120,7 +130,6 @@ async function computeModels() {
         id: true, productId: true, printerConfigId: true, label: true,
         originalName: true, sizeBytes: true, gramaj: true, estPrintMin: true,
         fileType: true, contentMd5: true, r2Key: true,
-        product: { select: { id: true, name: true, imageUrl: true } },
       },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
@@ -130,7 +139,16 @@ async function computeModels() {
       // model: aile hesabı (aynı marka + model yazıcılar dosyaları paylaşır) bunu kullanıyor.
       select: { id: true, name: true, brand: true, type: true, model: true },
     }),
+    // Ürünler AYRI sorguda: dosyası olmayanlar da listelenecek. Yalnız çizilen alanlar.
+    prisma.product.findMany({
+      select: {
+        id: true, name: true, imageUrl: true, hidden: true, variantGroupId: true,
+        variantGroup: { select: { name: true } },
+      },
+      orderBy: { name: "asc" },
+    }),
   ]);
+  const urunById = new Map(urunler.map((u) => [u.id, u]));
 
   // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler döner (içerik değil, ~20 MB fark).
   const thumbIds = new Set(
@@ -148,13 +166,22 @@ async function computeModels() {
   }
 
   const map = new Map<string, LibRow>();
+  const satirAc = (u: (typeof urunler)[number]): LibRow => {
+    const row: LibRow = {
+      productId: u.id, name: u.name, imageUrl: u.imageUrl, files: [], totalBytes: 0,
+      variantGroupId: u.variantGroupId ?? null,
+      variantGroupName: u.variantGroup?.name ?? null,
+    };
+    map.set(u.id, row);
+    return row;
+  };
+  // Gizlenen ürün listelenmez — AMA dosyası varsa görünür kalır (aşağıda eklenir): yoksa o
+  // dosyalar hiçbir ekrandan silinemez ve bulutta sessizce yer tutardı.
+  for (const u of urunler) if (!u.hidden) satirAc(u);
   for (const f of files) {
-    if (!f.product) continue; // ürünü silinmiş yetim dosya → atla (crash guard)
-    let row = map.get(f.productId);
-    if (!row) {
-      row = { productId: f.productId, name: f.product.name, imageUrl: f.product.imageUrl, files: [], totalBytes: 0 };
-      map.set(f.productId, row);
-    }
+    const urun = urunById.get(f.productId);
+    if (!urun) continue; // ürünü silinmiş yetim dosya → atla (crash guard)
+    const row = map.get(f.productId) ?? satirAc(urun);
     row.files.push({
       id: f.id,
       printerConfigId: f.printerConfigId,
@@ -183,7 +210,7 @@ async function computeModels() {
   let uniqueBytes = 0;
   let rowBytes = 0;
   for (const f of files) {
-    if (!f.product) continue;
+    if (!urunById.has(f.productId)) continue;
     rowBytes += f.sizeBytes ?? 0;
     const anahtar = f.r2Key ?? `local:${f.id}`;
     if (gorulen.has(anahtar)) continue;
@@ -206,20 +233,25 @@ async function computeModels() {
     // sıralaması sessizce bozulmasın.
     largest: [...files]
       // Aynı nesneyi gösteren satırlar listede TEKRAR ETMESİN (varyantlar aynı dosyayı paylaşır).
-      .filter((f, i, arr) => f.product && arr.findIndex((o) => (o.r2Key ?? o.id) === (f.r2Key ?? f.id)) === i)
+      .filter((f, i, arr) => urunById.has(f.productId) && arr.findIndex((o) => (o.r2Key ?? o.id) === (f.r2Key ?? f.id)) === i)
       .sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))
       .slice(0, 10)
       .map((f) => ({
         id: f.id,
         productId: f.productId,
-        productName: f.product!.name,
+        productName: urunById.get(f.productId)!.name,
         printerConfigId: f.printerConfigId,
         name: f.label || f.originalName,
         sizeBytes: f.sizeBytes ?? 0,
       })),
   };
 
-  return { products, printers, storage, duplicates: findDuplicates(files) };
+  return {
+    products,
+    printers,
+    storage,
+    duplicates: findDuplicates(files.map((f) => ({ ...f, product: urunById.get(f.productId) ?? null }))),
+  };
 }
 
 type FileRow = {

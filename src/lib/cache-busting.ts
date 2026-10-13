@@ -27,6 +27,7 @@ export function bustProductCaches(): void {
     "dashboard:",
     "order-name-index:", // yeni/silinen ürün veya değişen ad
     "notifications-inventory:",
+    "models:", // kütüphane TÜM ürünleri listeliyor: yeni/silinen/gizlenen ürün, ad, varyant grubu
   ]);
   invalidateOrdersCache(); // fiyat + eşleşme değişimi kâr gövdesini etkiler
 }
@@ -52,7 +53,7 @@ export function bustProfitInputCaches(): void {
 /** Yalnız ürün GÖRÜNÜMLERİ değişti (kâr/eşleşme etkilenmiyor) — ör. görsel, sıralama. */
 export function bustProductViewCaches(): void {
   // stok değiştiyse zildeki "stok kritik" uyarısı da tazelensin — hepsi tek taramada.
-  bustCaches(["products:", "dashboard:", "notifications-inventory:"]);
+  bustCaches(["products:", "dashboard:", "notifications-inventory:", "models:"]);
 }
 
 /**
@@ -143,7 +144,12 @@ export async function bustFinanceCachesAfterOrderSnapshots(
   }
 }
 
-/** Model dosyaları değişti (yükleme/silme). */
+/**
+ * Model dosyaları değişti (yükleme / silme / ad / dosya bilgisi).
+ *
+ * ⚠️ Her yazan uç çağırmalı. Eskiden yalnız kopya temizliği çağırıyordu: kütüphanede bir parçayı
+ * silip yeniden adlandırınca liste 2 dakika boyunca ESKİ hâlini gösteriyordu.
+ */
 export function bustModelCaches(): void {
   bustCache("models:");
 }

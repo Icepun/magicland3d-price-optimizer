@@ -5,7 +5,6 @@
  * yazıcılar arası karşılaştırma için. Ürün maliyetiyle ilgisi YOKTUR
  * (gerekçe ve koruma: `src/lib/model-gramaj.ts`, `src/lib/model-gramaj.test.ts`).
  */
-import { adParcala } from "@/lib/urun-adi";
 import { dedupeFiles, familyMemberIds, type AileUyesi } from "@/core/printers/printer-family";
 
 /**
@@ -73,52 +72,6 @@ export function searchProduct(product: SearchableProduct, query: string): Search
     .map((f) => f.id);
 
   return { matches: nameMatched || matchedFileIds.length > 0, matchedFileIds, nameMatched };
-}
-
-export type SortMode = "name" | "parts" | "size" | "recent";
-
-export interface SortableProduct {
-  name: string;
-  files: Array<{ id: string }>;
-  totalBytes: number;
-}
-
-/** Liste sıralaması. `recent` sunucudan gelen sırayı (en son güncellenen önce) korur. */
-export function sortProducts<T extends SortableProduct>(products: T[], mode: SortMode): T[] {
-  const list = [...products];
-  switch (mode) {
-    case "parts":
-      return list.sort((a, b) => b.files.length - a.files.length || a.name.localeCompare(b.name, "tr-TR"));
-    case "size":
-      return list.sort((a, b) => b.totalBytes - a.totalBytes || a.name.localeCompare(b.name, "tr-TR"));
-    case "recent":
-      return list;
-    case "name":
-    default:
-      return list.sort((a, b) => a.name.localeCompare(b.name, "tr-TR"));
-  }
-}
-
-/**
- * Bu üründe SEÇİLEN yazıcının dosyası eksik mi?
- *
- * `printerId` verilmezse eski davranış: yazıcılardan HERHANGİ birinde eksikse eşleşir.
- * ⚠️ Bu genel filtre pratikte işe yaramıyordu — kapsama oranları (95/89/75/70 / 110) yüzünden
- * neredeyse her ürün takılıyordu. Yazıcı seçilince filtre anlamlı hale gelir.
- */
-export function missingFiles(
-  product: { files: Array<{ printerConfigId: string }> },
-  printerIds: string[],
-  printerId?: string | null,
-  /** Verilirse aile hesaba katılır: kardeş yazıcının dosyası bu yazıcıda da "var" sayılır. */
-  printers?: AileUyesi[],
-): boolean {
-  const hedefler = printerId ? [printerId] : printerIds;
-  if (!hedefler.length) return false;
-  return hedefler.some((id) => {
-    const uyeler = printers?.length ? familyMemberIds(printers, id) : [id];
-    return !product.files.some((f) => uyeler.includes(f.printerConfigId));
-  });
 }
 
 export interface GramajFile {
@@ -196,8 +149,8 @@ export function missingGramajFiles<T extends { id: string; gramaj: number | null
 }
 
 /**
- * Makine şeridi için kısa ad. Şerit dört eşit bölmeye ayrıldığı için tam ad sığmaz;
- * kullanıcının makineyi tanıdığı ayırt edici parçayı bırakırız ("Neptune 4 Pro" → "N4 PRO").
+ * Tablo sütunu için kısa ad: tam ad sığmaz; kullanıcının makineyi tanıdığı ayırt edici parçayı
+ * bırakırız ("Neptune 4 Pro" → "N4 PRO", "Snapmaker U1" → "U1").
  */
 export function shortPrinter(name: string): string {
   const n = name.trim();
@@ -212,62 +165,4 @@ export function shortPrinter(name: string): string {
   return n.slice(0, 7).toLocaleUpperCase("tr-TR");
 }
 
-/**
- * Tüm yazıcıların kısa adları — ÇAKIŞANLAR AYRIŞTIRILIR.
- * "Snapmaker U1 Alt" ve "Snapmaker U1 Üst" ikisi de "U1" oluyordu; şeritte hangi bölmenin
- * hangi makine olduğu anlaşılmıyordu (9 Eki 2026 denetimi). Çakışan adlara modelden sonraki
- * kelime eklenir ("U1 ALT" / "U1 ÜST"); öyle bir kelime yoksa sıra numarası.
- */
-export function kisaYaziciAdlari(printers: readonly { id: string; name: string }[]): Map<string, string> {
-  const taban = new Map(printers.map((p) => [p.id, shortPrinter(p.name)]));
-  const sayac = new Map<string, number>();
-  for (const ad of taban.values()) sayac.set(ad, (sayac.get(ad) ?? 0) + 1);
-  const out = new Map<string, string>();
-  const sira = new Map<string, number>();
-  for (const p of printers) {
-    const t = taban.get(p.id)!;
-    if ((sayac.get(t) ?? 0) < 2) {
-      out.set(p.id, t);
-      continue;
-    }
-    const kelimeler = p.name.trim().split(/\s+/);
-    const i = kelimeler.findIndex((k) => k.toLocaleUpperCase("tr-TR") === t);
-    const ek = i >= 0 ? kelimeler.slice(i + 1).join(" ") : "";
-    const n = (sira.get(t) ?? 0) + 1;
-    sira.set(t, n);
-    out.set(p.id, ek ? `${t} ${ek.toLocaleUpperCase("tr-TR")}` : `${t} ${n}`);
-  }
-  return out;
-}
-
 export { adParcala } from "@/lib/urun-adi";
-
-export interface GruplanabilirUrun {
-  productId: string;
-  name: string;
-  files: { printerConfigId: string; contentMd5: string | null; originalName: string; sizeBytes: number }[];
-}
-
-/**
- * DOSYALARI BİREBİR AYNI renk varyantlarını tek kartta topla.
- * Ahtapot Şarap Tutacağı'nın 3 rengi, Alev Temalı Kol Standı'nın PS5 renkleri aynı dosyaları
- * taşıyor ama her biri ayrı kart olarak ekranı dolduruyordu. Kural: aynı taban ad + aynı dosya
- * kümesi → bir kart. Dosyası farklı olan (PS5 / Xbox) ayrı kalır. Sıra korunur (ilk görülen).
- */
-export function varyantlariTopla<T extends GruplanabilirUrun>(urunler: readonly T[]): { anahtar: string; urunler: T[] }[] {
-  const parmakIzi = (u: T) =>
-    u.files
-      .map((f) => `${f.printerConfigId}:${f.contentMd5 ?? `${f.originalName}#${f.sizeBytes}`}`)
-      .sort()
-      .join("|");
-  const gruplar = new Map<string, T[]>();
-  for (const u of urunler) {
-    const { taban, varyant } = adParcala(u.name);
-    // Varyantsız ad ya da dosyasız ürün hiçbir şeyle birleşmez.
-    const anahtar = varyant && u.files.length > 0 ? `${foldTr(taban)}\u0000${parmakIzi(u)}` : `tek\u0000${u.productId}`;
-    const g = gruplar.get(anahtar);
-    if (g) g.push(u);
-    else gruplar.set(anahtar, [u]);
-  }
-  return [...gruplar.entries()].map(([anahtar, liste]) => ({ anahtar, urunler: liste }));
-}

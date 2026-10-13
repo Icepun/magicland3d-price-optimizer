@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
+import { bustModelCaches } from "@/lib/cache-busting";
 import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,7 @@ export async function POST(req: NextRequest) {
     // 15 saniye görünmez. Aynı adreste daha önce başka bir yazıcı varsa ondan kalan yetenek
     // tablosu ve bağlantı portu da unutulur — yeni cihaz sıfırdan keşfedilsin.
     invalidatePrinterConfigs();
+    bustModelCaches(); // Model Kütüphanesi sütunları yazıcı listesinden geliyor
     clearMoonrakerCaps(created.host);
     clearMoonrakerPort(created.host);
     return NextResponse.json(created, { status: 201 });

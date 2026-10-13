@@ -12,6 +12,7 @@ import {
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 import { usePrefersReducedMotion } from "@/lib/client-state";
+import { useDisariBirakmayiYut } from "@/lib/dosya-birakma";
 
 // three.js yalnız izleyici açılınca yüklensin (bundle şişmesin).
 const GcodeViewerDialog = dynamic(
@@ -307,22 +308,8 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
     [aileler, files],
   );
   const gorunenParcalar = useMemo(() => aileParcalari.flatMap((a) => a.parts), [aileParcalari]);
-  // Dosya bir yazıcı kutusunun DIŞINA bırakılırsa pencere onu açmaya çalışır ve uygulama ekranı
-  // kaybolur. Kutular kendi bırakmasını zaten karşılıyor; dışarıda kalan bırakma yutulur.
-  useEffect(() => {
-    const disariBirakma = (e: DragEvent) => {
-      if (e.defaultPrevented) return; // bir kutu sahiplendi
-      if (!Array.from(e.dataTransfer?.types ?? []).includes("Files")) return;
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
-    };
-    window.addEventListener("dragover", disariBirakma);
-    window.addEventListener("drop", disariBirakma);
-    return () => {
-      window.removeEventListener("dragover", disariBirakma);
-      window.removeEventListener("drop", disariBirakma);
-    };
-  }, []);
+  // Dosya bir yazıcı kutusunun DIŞINA bırakılırsa pencere onu açmaya çalışmasın.
+  useDisariBirakmayiYut();
   // Eski dosyaların süresi/gramajı/önizlemesi arka planda tamamlanır (yalnız görünenler için).
   const okunanlar = useEksikBilgiyiTamamla(productId, gorunenParcalar, gorundu && dosyaDurumu === "dolu");
 

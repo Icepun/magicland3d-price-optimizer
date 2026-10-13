@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, deleteObject } from "@/lib/r2";
+import { bustModelCaches } from "@/lib/cache-busting";
 
 const PatchSchema = z.object({
   label: z.string().trim().max(80).nullable().optional(),
@@ -50,6 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         await prisma.productModelFile.updateMany({ where: { storedPath: updated.storedPath, id: { not: id } }, data });
       }
     }
+    bustModelCaches(); // kütüphane yeni adı hemen görsün
     return NextResponse.json({ id: updated.id, label: updated.label, gramaj: updated.gramaj, estPrintMin: updated.estPrintMin });
   } catch (error) {
     return jsonError(error);
@@ -74,6 +76,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     } else {
       await prisma.productModelFile.delete({ where: { id } });
     }
+    bustModelCaches(); // satır gitti — kütüphane silineni göstermeye devam etmesin
 
     /**
      * KAYNAK MODEL de aynı kuralla temizlenir: parça silindiyse ona bağlı görüntüleme dosyası

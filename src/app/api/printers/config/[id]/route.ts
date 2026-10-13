@@ -5,6 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dropBambuConns } from "@/core/printers/bambu";
 import { invalidatePrinterConfigs } from "@/core/printers/status-cache";
+import { bustModelCaches } from "@/lib/cache-busting";
 import { clearMoonrakerCaps, clearMoonrakerPort } from "@/core/printers/moonraker";
 import { wsHostKapat } from "@/core/printers/moonraker-ws";
 import { yaziciModelDosyalariniSil } from "@/lib/model-file-cleanup";
@@ -37,6 +38,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // 15 saniye boyunca ESKİ adrese sorulur ve kullanıcı "ulaşılamadı" görüp ayarı yanlış
     // yaptığını sanar. Yetenek tablosu da adrese bağlı → o da unutulur.
     invalidatePrinterConfigs();
+    bustModelCaches(); // Model Kütüphanesi sütunları yazıcı listesinden geliyor
     // Keşfedilen bağlantı portu da adrese bağlı: eski adresten kalan port yeni adrese
     // uygulanırsa yazıcı "ulaşılamıyor" görünür.
     if (before && (before.host !== updated.host || before.port !== updated.port)) {
@@ -90,6 +92,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     await prisma.printerConfig.delete({ where: { id } });
     // Panel silinen yazıcıyı 15 saniye daha çizip LAN'da yoklamasın.
     invalidatePrinterConfigs();
+    bustModelCaches(); // Model Kütüphanesi sütunları yazıcı listesinden geliyor
     if (cfg?.host) {
       clearMoonrakerCaps(cfg.host);
       clearMoonrakerPort(cfg.host);
