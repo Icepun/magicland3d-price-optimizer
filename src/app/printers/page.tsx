@@ -32,9 +32,12 @@ import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 // Görselleştirme boru hattı three (~539KB) çeker → DİNAMİK yükle (Yazıcılar initial bundle'ında değil).
 const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
 import {
-  SlotStep,
+  SlotStep, parcaBilgisi,
   type PrintableModel, type PrintPrefs,
 } from "@/components/printers/print-flow";
+import { ParcaBilgiSatiri, ParcaGorseli, ParcaOzetKarti } from "@/components/printers/parca-gorunum";
+import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
+import { gorunenAd, grupOzeti, ozetMetni } from "@/lib/model-dosya-gorunum";
 import { CustomPrintLibrary } from "@/components/printers/CustomPrintLibrary";
 import { startBackgroundPrint, activePrintKey, type ActivePrint } from "@/lib/print-jobs";
 import { useUcBoyutAcik, ucBoyutAyarla } from "@/lib/uc-boyut-ayari";
@@ -3287,8 +3290,10 @@ function buildPickNodes(models: PrintableModel[]): PickNode[] {
 function NodeRow({ node, disabled, onClick }: { node: PickNode; disabled: boolean; onClick: () => void }) {
   const isGroup = node.kind === "group";
   const drillable = isGroup || (node.kind === "solo" && node.files.length > 1);
+  // Ürünün tamamını basmak ne kadar sürer / ne kadar filament ister (bilinen parçalardan).
+  const ozet = node.kind === "solo" ? ozetMetni(grupOzeti(node.files)) : null;
   return (
-    <button onClick={onClick} disabled={disabled} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
+    <button onClick={onClick} disabled={disabled} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50 transition-colors">
       <div className="h-9 w-9 shrink-0 rounded-md border bg-muted flex items-center justify-center overflow-hidden">
         {node.image ? <img src={thumbUrl(node.image) ?? undefined} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : <Package className="h-4 w-4 text-muted-foreground/40" />}
       </div>
@@ -3298,9 +3303,9 @@ function NodeRow({ node, disabled, onClick }: { node: PickNode; disabled: boolea
           {isGroup ? (
             <><Layers className="h-3 w-3 shrink-0" /> {node.variantCount} varyant{node.allShared ? " · ortak dosya" : ""}</>
           ) : node.files.length > 1 ? (
-            <>{node.files.length} parça</>
+            <>{node.files.length} parça{ozet ? <span className="tabular-nums"> · {ozet}</span> : null}</>
           ) : (
-            <span className="font-mono truncate">{node.files[0]?.originalName}</span>
+            <span className="truncate tabular-nums">{ozet ?? node.files[0]?.originalName}</span>
           )}
         </p>
       </div>
@@ -3309,15 +3314,24 @@ function NodeRow({ node, disabled, onClick }: { node: PickNode; disabled: boolea
   );
 }
 
-function FileRow({ m, idx, disabled, onClick }: { m: PrintableModel; idx: number; disabled: boolean; onClick: () => void }) {
+/** Basılacak parça: neye benzediği, ne kadar süreceği, kaç gram ve hangi renkler. */
+function FileRow({ m, idx, disabled, okunuyor, onClick }: { m: PrintableModel; idx: number; disabled: boolean; okunuyor: boolean; onClick: () => void }) {
+  const p = parcaBilgisi(m);
   return (
-    <button onClick={onClick} disabled={disabled} className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-muted text-left disabled:opacity-50">
-      <span className="flex items-center justify-center h-7 w-7 rounded bg-primary/10 text-primary text-[11px] font-bold tabular-nums shrink-0">{idx + 1}</span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm truncate">{m.label || m.originalName}</p>
-        <p className="text-[10px] text-muted-foreground font-mono truncate">{m.originalName}{m.gramaj ? ` · ${m.gramaj} gr` : ""}</p>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="group/parca w-full flex items-center gap-3 rounded-lg border border-transparent p-2 text-left transition-colors hover:border-primary/30 hover:bg-muted/60 disabled:opacity-50 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-left-1"
+      style={{ animationDelay: `${Math.min(idx, 10) * 35}ms`, animationFillMode: "both", animationDuration: "260ms" }}
+    >
+      <ParcaGorseli p={p} boyut="lg" sira={idx} okunuyor={okunuyor} />
+      <div className="min-w-0 flex-1 space-y-1">
+        <p className="truncate text-sm font-medium" title={m.originalName}>{gorunenAd(m)}</p>
+        <ParcaBilgiSatiri p={p} okunuyor={okunuyor} />
       </div>
-      <Play className="h-4 w-4 text-primary shrink-0" />
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary transition-all group-hover/parca:bg-primary group-hover/parca:text-primary-foreground group-active/parca:scale-90">
+        <Play className="h-4 w-4" />
+      </span>
     </button>
   );
 }
@@ -3359,21 +3373,38 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
   const openNode = nodes.find((n) => n.key === openKey) ?? null;
   const openMember = openNode?.kind === "group" ? openNode.members.find((m) => m.productId === openVariant) ?? null : null;
+  // Ekranda listelenen parçalar — eski dosyaların süresi / gramajı / önizlemesi bunlar için
+  // arka planda okunur (yeni yüklenenlerde zaten hazır gelir).
+  const gorunenParcalar = useMemo(() => {
+    const dosyalar =
+      openNode?.kind === "solo" ? openNode.files
+        : openMember ? openMember.files
+          : openNode?.kind === "group" && openNode.allShared ? openNode.sharedFiles
+            : [];
+    return dosyalar.map((m) => ({ id: m.fileId, gramaj: m.gramaj, estPrintMin: m.estPrintMin, hasThumbnail: m.hasThumbnail }));
+  }, [openNode, openMember]);
+  const okunanlar = useEksikBilgiyiTamamla(gorunenParcalar, !picked, (id, b) => {
+    qc.setQueryData<{ models: PrintableModel[] }>(["printable-models", target.id], (eski) =>
+      eski ? { ...eski, models: eski.models.map((m) => (m.fileId === id ? bilgiyiIsle(m, b) : m)) } : eski,
+    );
+  });
   // Tek renkli (Elegoo): dosyaya tıklamak DOĞRUDAN basıyordu — yanlış tık = istenmeyen baskı.
   // 1 satırlık onay adımı eklendi (çok renklilerde SlotStep zaten doğal onay).
   const [confirmFile, setConfirmFile] = useState<PrintableModel | null>(null);
   const pickFile = (m: PrintableModel) => (multiColor ? setPicked(m) : setConfirmFile(m));
+  // Seçilen parçanın EN GÜNCEL hâli: bilgisi seçildikten sonra okunduysa özet kartı onu göstersin.
+  const guncel = (m: PrintableModel) => data?.models.find((x) => x.fileId === m.fileId) ?? m;
 
   if (picked) {
     return (
-      <SlotStep printerId={target.id} model={picked} isBambu={isBambu} isSnapmaker={target.brand === "snapmaker"} printing={false} progress={null}
+      <SlotStep printerId={target.id} model={guncel(picked)} isBambu={isBambu} isSnapmaker={target.brand === "snapmaker"} printing={false} progress={null}
         onBack={() => setPicked(null)} onClose={onClose} onConfirm={(opts) => runPrint(picked.fileId, picked.productName, opts)} />
     );
   }
 
   return (
     <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
-      <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Baskı Başlat — {target.name}</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1 truncate">
@@ -3419,13 +3450,13 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
               ))
             )
           ) : openNode.kind === "solo" ? (
-            openNode.files.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} onClick={() => pickFile(m)} />)
+            openNode.files.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} okunuyor={okunanlar.has(m.fileId)} onClick={() => pickFile(m)} />)
           ) : openMember ? (
-            openMember.files.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} onClick={() => pickFile(m)} />)
+            openMember.files.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} okunuyor={okunanlar.has(m.fileId)} onClick={() => pickFile(m)} />)
           ) : openNode.allShared ? (
             <>
               <p className="text-[11px] text-muted-foreground px-1 py-1">Tüm varyantlarda ortak — bir kez seç, hepsi için aynı dosya.</p>
-              {openNode.sharedFiles.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} onClick={() => pickFile(m)} />)}
+              {openNode.sharedFiles.map((m, i) => <FileRow key={m.fileId} m={m} idx={i} disabled={printing} okunuyor={okunanlar.has(m.fileId)} onClick={() => pickFile(m)} />)}
             </>
           ) : (
             openNode.members.map((mem) => (
@@ -3447,16 +3478,23 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
       {/* Tek renkli baskı onayı (Elegoo) */}
       <Dialog open={!!confirmFile} onOpenChange={(o) => !o && setConfirmFile(null)}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Play className="h-4 w-4 text-primary" /> Baskıyı başlat?
             </DialogTitle>
-            <p className="text-xs text-muted-foreground mt-1 break-all">
-              <span className="font-medium text-foreground">{confirmFile?.label || confirmFile?.originalName}</span>
-              {" — "}{target.name} üzerinde basılacak. Arka planda yüklenir; ilerlemeyi kartta görürsün.
+            <p className="text-xs text-muted-foreground mt-1">
+              {target.name} üzerinde basılacak. İlerlemeyi yazıcı kartında görürsün.
             </p>
           </DialogHeader>
+          {confirmFile && (
+            <ParcaOzetKarti
+              p={parcaBilgisi(guncel(confirmFile))}
+              urunAdi={confirmFile.productName}
+              urunGorseli={confirmFile.imageUrl}
+              okunuyor={okunanlar.has(confirmFile.fileId)}
+            />
+          )}
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setConfirmFile(null)}>Vazgeç</Button>
             <Button size="sm" onClick={() => { if (confirmFile) runPrint(confirmFile.fileId, confirmFile.productName); }}>
@@ -3537,6 +3575,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
     const model: PrintableModel = {
       fileId: file.fileId, productId: "__custom__", productName: file.originalName,
       imageUrl: file.thumbnail, label: null, originalName: file.originalName, sizeBytes: file.sizeBytes, gramaj: file.grams,
+      estPrintMin: file.estPrintMin, hasThumbnail: !!file.thumbnail,
     };
     return (
       <SlotStep

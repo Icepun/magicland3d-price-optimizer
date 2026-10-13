@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { amsKarari, AMS_YOK_COK_RENK } from "@/core/printers/ams-karari";
+import { ParcaOzetKarti, type ParcaBilgisi } from "./parca-gorunum";
 
 /**
  * Baskı akışının PAYLAŞILAN parçaları — hem Yazıcılar sayfası (StartModal/CustomPrint) hem de
@@ -30,6 +31,24 @@ export interface PrintableModel {
   variantLabel?: string | null;
   /** storedPath dosya adı — "tüm varyantlara uygula" ile paylaşılan dosyada EŞİTTİR (dedup anahtarı). */
   shareKey?: string;
+  // "Ne basıyorum?" — dosyanın kendi bilgileri (yalnız gösterim; hepsi isteğe bağlı):
+  /** Tahmini baskı süresi (dk). */
+  estPrintMin?: number | null;
+  /** Dilimleyicinin gömdüğü önizleme var mı — görsel ayrı uçtan çekilir (`/api/models/<id>/preview`). */
+  hasThumbnail?: boolean;
+  /** Kullanılan filament renkleri (#RRGGBB). */
+  renkler?: string[];
+  fileType?: string;
+  sliced?: boolean | null;
+}
+
+/** Baskı modelinden ortak parça görünümünün beklediği biçim. */
+export function parcaBilgisi(m: PrintableModel): ParcaBilgisi {
+  return {
+    id: m.fileId, label: m.label, originalName: m.originalName, sizeBytes: m.sizeBytes, gramaj: m.gramaj,
+    estPrintMin: m.estPrintMin ?? null, hasThumbnail: m.hasThumbnail, renkler: m.renkler,
+    fileType: m.fileType, sliced: m.sliced,
+  };
 }
 export interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 export type PrintProg = {
@@ -352,6 +371,14 @@ export function SlotStep({
               : "Renkler baskı dosyasından okundu. Her renk için hangi kafayı kullanacağını seç."}
           </p>
         </DialogHeader>
+
+        {/* NE BASIYORUM: büyük görsel, süre, gramaj, renkler — başlatmadan önceki son bakış. */}
+        <ParcaOzetKarti
+          p={parcaBilgisi(model)}
+          urunAdi={model.productId === "__custom__" ? null : model.productName}
+          urunGorseli={model.imageUrl?.startsWith("data:") ? null : model.imageUrl}
+          renkler={fileColors.map((c) => c.hex)}
+        />
 
         {isLoading ? (
           <div className="py-10 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>

@@ -3,9 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  baskiDosyasiMi, bilgiEksik, fmtGram, fmtSure, gorunenAd, grupOzeti, ozetMetni, renkleriCoz,
+  baskiDosyasiMi, bilgiEksik, bitisMetni, fmtGram, fmtSure, gorunenAd, grupOzeti, ozetMetni, renkleriCoz,
   turEtiketi, uzantisizAd,
 } from "./model-dosya-gorunum";
+import { bilgiyiIsle } from "./dosya-bilgisi";
 
 /**
  * 12 Eki 2026 — Baskı Dosyaları kartı: satırda yalnız dosya adı ve boyutu yazıyordu. Süre,
@@ -136,7 +137,74 @@ describe("yükleme ucu dosyadaki bilgiyi artık ATMIYOR", () => {
   it("kart yeni satırı önizlemesiyle gösterir ve adı değiştirilebilir", () => {
     expect(kart).toContain("created.push(hafifSatir(row as ModelFile))");
     expect(kart).toContain('title="Adı değiştir"');
-    expect(kart).toContain("fmtSure(part.estPrintMin)");
-    expect(kart).toContain("fmtGram(part.gramaj)");
+    // Görsel ve bilgi satırı ORTAK bileşenden — baskı ekranlarıyla aynı görünsün.
+    expect(kart).toContain("<ParcaGorseli p={part}");
+    expect(kart).toContain("<ParcaBilgiSatiri p={part}");
+  });
+});
+
+/**
+ * 13 Eki 2026, Berke: "baskıyı başlatırken de bu bilgileri görsek harika olur … şu anda çok sade
+ * görünüyor ve ne basıyorum anlamıyorum". Baskı listeleri yalnız dosya adı + gramaj yazıyordu.
+ */
+describe("baskıyı başlatırken: ne basıyorum?", () => {
+  const KOK = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+  const oku = (yol: string) => readFileSync(path.join(KOK, yol), "utf8");
+  const ortak = oku("src/components/printers/parca-gorunum.tsx");
+
+  it("tahmini bitiş: bugün saat, gece yarısını aşınca 'yarın'", () => {
+    const ogle = new Date(2026, 9, 13, 14, 0).getTime();
+    expect(bitisMetni(ogle, 220)).toBe("17:40");
+    expect(bitisMetni(new Date(2026, 9, 13, 22, 30).getTime(), 220)).toBe("yarın 02:10");
+    expect(bitisMetni(ogle, 36 * 60)).toBe("2 gün sonra 02:00"); // 13'ü 14:00 + 36 sa = 15'i 02:00
+  });
+
+  it("süre ya da saat bilinmiyorsa bitiş saati UYDURULMAZ", () => {
+    const ogle = new Date(2026, 9, 13, 14, 0).getTime();
+    expect(bitisMetni(ogle, null)).toBeNull();
+    expect(bitisMetni(ogle, 0)).toBeNull();
+    expect(bitisMetni(0, 120)).toBeNull(); // saat henüz bilinmiyor (sunucu çizimi)
+  });
+
+  it("dosyadan okunan bilgi yalnız EKSİK alanı doldurur, eldekini ezmez", () => {
+    const satir = { gramaj: 61.4, estPrintMin: null as number | null, hasThumbnail: false };
+    expect(bilgiyiIsle(satir, { gramaj: 99, estPrintMin: 138, hasThumbnail: true })).toEqual({
+      gramaj: 99, estPrintMin: 138, hasThumbnail: true,
+    });
+    // Okunamayan (null) alan eldeki değeri SIFIRLAMAZ.
+    expect(bilgiyiIsle({ gramaj: 61.4, estPrintMin: 138, hasThumbnail: true }, { gramaj: null, estPrintMin: null })).toEqual({
+      gramaj: 61.4, estPrintMin: 138, hasThumbnail: true,
+    });
+  });
+
+  it("ortak görünüm süre, gramaj, renk ve bitiş saatini çizer", () => {
+    expect(ortak).toContain("fmtSure(p.estPrintMin)");
+    expect(ortak).toContain("fmtGram(p.gramaj)");
+    expect(ortak).toContain("<RenkNoktalari");
+    expect(ortak).toContain("bitisMetni(simdi, p.estPrintMin)");
+  });
+
+  it("üç baskı ekranı da ortak görünümü kullanır", () => {
+    const yazicilar = oku("src/app/printers/page.tsx");
+    const hizli = oku("src/components/products/ProductPrintModal.tsx");
+    const kutuphane = oku("src/app/models/page.tsx");
+    for (const [ad, kaynak] of [["Yazıcılar", yazicilar], ["Ürünler", hizli], ["Modeller", kutuphane]] as const) {
+      expect(kaynak, ad).toContain("<ParcaGorseli");
+      expect(kaynak, ad).toContain("<ParcaBilgiSatiri");
+      // Eski dosyaların bilgisi listeyi açınca arka planda dolar.
+      expect(kaynak, ad).toContain("useEksikBilgiyiTamamla(");
+    }
+    // Son adımda büyük özet kartı: renk eşleme ve tek renkli onay.
+    expect(oku("src/components/printers/print-flow.tsx")).toContain("<ParcaOzetKarti");
+    expect(yazicilar).toContain("<ParcaOzetKarti");
+  });
+
+  it("yazıcının basılabilir dosyaları süre, renk ve önizleme bilgisiyle döner", () => {
+    const uc = oku("src/app/api/printers/[id]/printable-models/route.ts");
+    for (const alan of ["estPrintMin: f.estPrintMin", "hasThumbnail: gorselli.has(f.id)", "renkler: renkleriCoz(f.colorsJson)"]) {
+      expect(uc).toContain(alan);
+    }
+    // Görselin KENDİSİ listeyle gelmez (satır başına ~61 KB) — yalnız "var mı".
+    expect(uc).not.toMatch(/thumbnail:\s*true/);
   });
 });

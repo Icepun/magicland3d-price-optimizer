@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
+import { renkleriCoz } from "@/lib/model-dosya-gorunum";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,8 @@ interface LibFile {
   hasThumbnail: boolean;
   /** `vizKeyForModel` bunu kullanıyor — aynı içerik farklı kayıtlarda tek önbelleğe düşsün. */
   contentMd5: string | null;
+  /** Kullanılan filament renkleri (#RRGGBB) — parça satırında nokta olarak çizilir. */
+  renkler: string[];
   /**
    * Bu dosyayı KAÇ kayıt paylaşıyor (aynı bulut nesnesi).
    *
@@ -109,8 +112,9 @@ interface LibStorage {
  * listede görünmüyordu.
  */
 export async function GET() {
-  // v2: yanıt biçimi değişti (dosyasız ürünler + varyant grubu) — diskteki eski gövde okunmasın.
-  const data = await swr("models:v2", 2 * 60_000, computeModels);
+  // Sürüm, yanıt biçimi her değiştiğinde artar — diskteki eski gövde okunmasın.
+  // v2: dosyasız ürünler + varyant grubu · v3: parça renkleri.
+  const data = await swr("models:v3", 2 * 60_000, computeModels);
   return NextResponse.json(data);
 }
 
@@ -130,6 +134,7 @@ async function computeModels() {
         id: true, productId: true, printerConfigId: true, label: true,
         originalName: true, sizeBytes: true, gramaj: true, estPrintMin: true,
         fileType: true, contentMd5: true, r2Key: true,
+        colorsJson: true, // küçük (birkaç yüz bayt); ekrana yalnız çizilecek renkler gider
       },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     }),
@@ -193,6 +198,7 @@ async function computeModels() {
       fileType: f.fileType,
       hasThumbnail: thumbIds.has(f.id),
       contentMd5: f.contentMd5 ?? null,
+      renkler: renkleriCoz(f.colorsJson),
       sharedWith: f.r2Key ? (paylasim.get(f.r2Key) ?? 1) : 1,
     });
     row.totalBytes += f.sizeBytes ?? 0;

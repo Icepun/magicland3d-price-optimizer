@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Printer, Play, Loader2, FileBox, Package } from "lucide-react";
+import { Printer, Play, Loader2, Package } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,9 @@ import {
 } from "@/components/printers/print-flow";
 import { fetchJson } from "@/lib/fetch-json";
 import { dedupeFiles, familyMemberIds } from "@/core/printers/printer-family";
+import { ParcaBilgiSatiri, ParcaGorseli } from "@/components/printers/parca-gorunum";
+import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
+import { gorunenAd, grupOzeti, ozetMetni } from "@/lib/model-dosya-gorunum";
 
 interface ModelFile {
   id: string;
@@ -23,6 +26,11 @@ interface ModelFile {
   gramaj: number | null;
   fileType: string;
   contentMd5?: string | null;
+  // Dosyanın kendi bilgileri — "ne basıyorum?" (yalnız gösterim).
+  estPrintMin?: number | null;
+  hasThumbnail?: boolean;
+  renkler?: string[];
+  sliced?: boolean | null;
 }
 interface PrinterCfg {
   id: string;
@@ -32,10 +40,6 @@ interface PrinterCfg {
   type: string;
   enabled: boolean;
   accent: string | null;
-}
-
-function fmtSize(b: number) {
-  return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
 /**
@@ -91,6 +95,17 @@ export function ProductPrintModal({
 
   const isMultiColor = (pr: PrinterCfg) => pr.brand === "bambu" || pr.brand === "snapmaker";
 
+  // Eski dosyaların süresi / gramajı / önizlemesi arka planda okunur (listelenen parçalar için).
+  const gorunenParcalar = useMemo(() => {
+    const gorulen = new Set<string>();
+    return groups.flatMap((g) => g.parts).filter((p) => (gorulen.has(p.id) ? false : (gorulen.add(p.id), true)));
+  }, [groups]);
+  const okunanlar = useEksikBilgiyiTamamla(gorunenParcalar, !picked, (id, b) => {
+    qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
+      Array.isArray(eski) ? eski.map((f) => (f.id === id ? bilgiyiIsle(f, b) : f)) : eski,
+    );
+  });
+
   async function runPrint(fileId: string, printerId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
@@ -114,15 +129,22 @@ export function ProductPrintModal({
 
   // ── Renk/slot eşleme adımı (Bambu/Snapmaker) ──
   if (picked) {
+    // En güncel satır: bilgisi seçildikten sonra okunduysa özet kartı onu göstersin.
+    const dosya = (Array.isArray(files) ? files : []).find((f) => f.id === picked.file.id) ?? picked.file;
     const model: PrintableModel = {
-      fileId: picked.file.id,
+      fileId: dosya.id,
       productId,
       productName,
       imageUrl: null,
-      label: picked.file.label,
-      originalName: picked.file.originalName,
-      sizeBytes: picked.file.sizeBytes,
-      gramaj: picked.file.gramaj,
+      label: dosya.label,
+      originalName: dosya.originalName,
+      sizeBytes: dosya.sizeBytes,
+      gramaj: dosya.gramaj,
+      estPrintMin: dosya.estPrintMin ?? null,
+      hasThumbnail: dosya.hasThumbnail,
+      renkler: dosya.renkler,
+      fileType: dosya.fileType,
+      sliced: dosya.sliced,
     };
     return (
       <SlotStep
@@ -141,7 +163,7 @@ export function ProductPrintModal({
 
   return (
     <Dialog open onOpenChange={(o) => !o && !printing && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Printer className="h-4 w-4 text-primary" /> Baskı başlat
@@ -152,7 +174,7 @@ export function ProductPrintModal({
         {isLoading ? (
           <div className="space-y-2">
             {Array.from({ length: 3 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 w-full rounded-lg" />
+              <Skeleton key={i} className="h-[88px] w-full rounded-lg" />
             ))}
           </div>
         ) : groups.length === 0 ? (
@@ -167,6 +189,7 @@ export function ProductPrintModal({
           <div className="space-y-3 max-h-[55vh] overflow-y-auto -mx-1 px-1">
             {groups.map(({ printer, parts }) => {
               const multi = isMultiColor(printer);
+              const toplam = parts.length > 1 ? ozetMetni(grupOzeti(parts)) : null;
               return (
                 <div key={printer.id} className="rounded-xl border overflow-hidden">
                   <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30">
@@ -175,7 +198,9 @@ export function ProductPrintModal({
                       style={{ background: printer.accent || "var(--primary)" }}
                     />
                     <span className="text-sm font-semibold truncate">{printer.name}</span>
-                    <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{parts.length} parça</span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                      {parts.length} parça{toplam ? ` · ${toplam}` : ""}
+                    </span>
                     {multi && (
                       <span className="ml-auto text-[10px] text-muted-foreground shrink-0">renk eşlemeli</span>
                     )}
@@ -184,16 +209,15 @@ export function ProductPrintModal({
                     {parts.map((part, i) => {
                       const isBusy = printing && progress != null;
                       return (
-                        <div key={part.id} className="flex items-center gap-2.5 px-3 py-2">
-                          <span className="flex items-center justify-center h-6 w-6 rounded bg-primary/10 text-primary text-[11px] font-bold tabular-nums shrink-0">
-                            {i + 1}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
-                            <p className="text-[10px] text-muted-foreground/70 truncate flex items-center gap-1">
-                              <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}
-                              {part.gramaj ? ` · ${part.gramaj} gr` : ""}
-                            </p>
+                        <div
+                          key={part.id}
+                          className="flex items-center gap-3 px-3 py-2 transition-colors hover:bg-muted/40 motion-safe:animate-in motion-safe:fade-in"
+                          style={{ animationDelay: `${Math.min(i, 10) * 35}ms`, animationFillMode: "both", animationDuration: "260ms" }}
+                        >
+                          <ParcaGorseli p={part} boyut="lg" sira={i} okunuyor={okunanlar.has(part.id)} />
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <p className="text-sm font-medium truncate" title={part.originalName}>{gorunenAd(part)}</p>
+                            <ParcaBilgiSatiri p={part} okunuyor={okunanlar.has(part.id)} />
                           </div>
                           <Button
                             size="sm"

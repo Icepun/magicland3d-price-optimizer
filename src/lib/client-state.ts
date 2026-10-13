@@ -54,3 +54,26 @@ export function usePageHidden(): boolean {
     getServerSnapshot,
   );
 }
+
+// ── Dakika saati ──────────────────────────────────────────────────────────────────────
+// "Şimdi başlarsa 17:42'de biter" gibi saat hesapları render sırasında `Date.now()` çağıramaz
+// (her çizimde farklı sonuç). Saat harici depodan okunur ve dakikada bir yenilenir.
+let dakikaDamgasi = 0;
+const buDakika = () => Math.floor(Date.now() / 60_000) * 60_000;
+
+function subscribeDakika(onChange: () => void): () => void {
+  const id = setInterval(onChange, 20_000);
+  return () => clearInterval(id);
+}
+
+function getDakikaSnapshot(): number {
+  // Aynı dakika içinde AYNI değer döner (depo sözleşmesi); dakika değişince yenisi.
+  const simdi = buDakika();
+  if (simdi !== dakikaDamgasi) dakikaDamgasi = simdi;
+  return dakikaDamgasi;
+}
+
+/** İçinde bulunulan dakikanın başlangıcı (ms). Sunucuda 0 — saat gösteren yer onu gizlemeli. */
+export function useDakika(): number {
+  return useSyncExternalStore(subscribeDakika, getDakikaSnapshot, () => 0);
+}

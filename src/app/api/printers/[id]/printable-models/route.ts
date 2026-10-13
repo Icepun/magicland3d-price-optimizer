@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dedupeFiles, familyMemberIds } from "@/core/printers/printer-family";
+import { renkleriCoz } from "@/lib/model-dosya-gorunum";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +36,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       select: {
         id: true, productId: true, label: true, originalName: true, printerConfigId: true,
         sizeBytes: true, gramaj: true, r2Key: true, storedPath: true, contentMd5: true,
+        // "Ne basıyorum?" — süre, tür ve renkler (küçük alanlar; görselin kendisi DEĞİL).
+        estPrintMin: true, fileType: true, sliced: true, colorsJson: true,
         product: {
           select: {
             id: true, name: true, imageUrl: true, alias: true,
@@ -58,6 +61,18 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       urunBasina.set(f.productId, liste);
     }
     const tekil = [...urunBasina.values()].flatMap((liste) => dedupeFiles(liste));
+    // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler (içerik ayrı uçtan, uzun önbellekle).
+    const gorselli = new Set(
+      aile.length
+        ? (
+            await prisma.$queryRawUnsafe<{ id: string }[]>(
+              `SELECT id FROM ProductModelFile WHERE printerConfigId IN (${aile.map(() => "?").join(",")})
+                 AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+              ...aile,
+            )
+          ).map((r) => r.id)
+        : [],
+    );
     const sira = new Map(files.map((f, i) => [f.id, i]));
     tekil.sort((a, b) => (sira.get(a.id) ?? 0) - (sira.get(b.id) ?? 0));
 
@@ -77,6 +92,11 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         originalName: f.originalName,
         sizeBytes: f.sizeBytes,
         gramaj: f.gramaj,
+        estPrintMin: f.estPrintMin,
+        fileType: f.fileType,
+        sliced: f.sliced,
+        hasThumbnail: gorselli.has(f.id),
+        renkler: renkleriCoz(f.colorsJson),
         // Aynı fiziksel dosya (varyantlar arası paylaşılan) → aynı referans → aynı shareKey.
         // R2'de storedPath boş; r2Key paylaşılan anahtardır.
         shareKey: f.r2Key || path.basename(f.storedPath),

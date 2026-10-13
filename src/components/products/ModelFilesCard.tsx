@@ -1,13 +1,12 @@
 "use client";
 
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   FileBox, Upload, Trash2, Loader2, Printer, Check, Layers, Box, AlertTriangle, RefreshCw,
-  Clock3, Weight, Pencil, CloudUpload, Sparkles,
+  Pencil, CloudUpload, Sparkles,
 } from "lucide-react";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
@@ -30,9 +29,9 @@ import { fetchJson } from "@/lib/fetch-json";
 import { uploadProductModel, type UploadProgress } from "@/lib/upload-model";
 import { MeshAttachButton } from "./MeshAttachButton";
 import { dedupeFiles, familyDisplayName, printerFamilyKey } from "@/core/printers/printer-family";
-import {
-  baskiDosyasiMi, bilgiEksik, fmtGram, fmtSure, gorunenAd, grupOzeti, ozetMetni, turEtiketi, uzantisizAd,
-} from "@/lib/model-dosya-gorunum";
+import { baskiDosyasiMi, gorunenAd, grupOzeti, ozetMetni, uzantisizAd } from "@/lib/model-dosya-gorunum";
+import { ParcaBilgiSatiri, ParcaGorseli } from "@/components/printers/parca-gorunum";
+import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
 
 interface PrinterCfg { id: string; name: string; brand: string; model: string | null; type: string }
 interface VariantGroupLite { id: string; name: string; shareModels?: boolean; products: { id: string }[] }
@@ -194,63 +193,6 @@ function fmtEta(p: UploadProgress) {
   return `~${Math.floor(rem / 60)} dk ${Math.ceil(rem % 60)} sn`;
 }
 
-/**
- * Oturum boyunca dosya başına TEK okuma denemesi. İçinde süre/gramaj yazmayan bir dosya,
- * kart her açıldığında yeniden okunmasın (her deneme buluttan birkaç yüz KB çeker).
- */
-const okumasiDenenenler = new Set<string>();
-
-interface DosyaBilgisi { gramaj: number | null; estPrintMin: number | null; hasThumbnail?: boolean }
-
-/**
- * Eski dosyaların eksik bilgisini (süre, gramaj, önizleme) dosyadan okuyup satırı YERİNDE
- * tamamlar. Yeni yüklenenlerde bu bilgi yüklemeyle birlikte gelir; burası yalnız geçmişi doldurur.
- * Sırayla, teker teker çalışır — kart hiçbir zaman bunu beklemez.
- */
-function useEksikBilgiyiTamamla(productId: string, parcalar: ModelFile[], etkin: boolean): ReadonlySet<string> {
-  const qc = useQueryClient();
-  // Her denemeden sonra artar → sıra yeniden hesaplanır (deneme kümesi tepkisel değil).
-  const [tur, setTur] = useState(0);
-  const sira = useMemo(
-    () => parcalar.filter((f) => bilgiEksik(f) && !okumasiDenenenler.has(f.id)).map((f) => f.id),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `tur` bilinçli tetikleyici
-    [parcalar, tur],
-  );
-  const siradaki = sira[0] ?? null;
-  useEffect(() => {
-    if (!etkin || !siradaki || okumasiDenenenler.has(siradaki)) return;
-    const id = siradaki;
-    okumasiDenenenler.add(id);
-    void (async () => {
-      try {
-        const r = await fetchJson<DosyaBilgisi>(`/api/models/${id}/gramaj`, { method: "POST" });
-        // Sonuç, kart bu arada kapanmış olsa da önbelleğe yazılır (geçerli veri).
-        qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
-          Array.isArray(eski)
-            ? eski.map((f) =>
-                f.id === id
-                  ? {
-                      ...f,
-                      gramaj: r.gramaj ?? f.gramaj,
-                      estPrintMin: r.estPrintMin ?? f.estPrintMin ?? null,
-                      hasThumbnail: !!r.hasThumbnail || !!f.hasThumbnail,
-                    }
-                  : f,
-              )
-            : eski,
-        );
-      } catch {
-        /* Bilgi yalnız gösterim içindir: okunamazsa satır eksik bilgiyle kalır, kart çalışır. */
-      }
-      // Sıra ancak şimdi yeniden hesaplanır → okunan satır o ana dek "okunuyor" görünür.
-      setTur((t) => t + 1);
-    })();
-  }, [etkin, siradaki, productId, qc]);
-
-  // Sırada bekleyenler de "okunuyor" görünür — bilgi birazdan gelecek, satır boş kalmasın.
-  return useMemo(() => new Set(etkin ? sira : []), [etkin, sira]);
-}
-
 // memo: detay cache'i (madeToOrder/maliyet) değişince gereksiz render olmasın — yalnız productId'ye bağlı.
 export const ModelFilesCard = memo(ModelFilesCardImpl);
 function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; variantGroup?: VariantGroupLite | null }) {
@@ -311,7 +253,12 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   // Dosya bir yazıcı kutusunun DIŞINA bırakılırsa pencere onu açmaya çalışmasın.
   useDisariBirakmayiYut();
   // Eski dosyaların süresi/gramajı/önizlemesi arka planda tamamlanır (yalnız görünenler için).
-  const okunanlar = useEksikBilgiyiTamamla(productId, gorunenParcalar, gorundu && dosyaDurumu === "dolu");
+  const okunanlar = useEksikBilgiyiTamamla(gorunenParcalar, gorundu && dosyaDurumu === "dolu", (id, b) => {
+    // Sonuç satıra YERİNDE işlenir — yeniden sorgu atılmaz.
+    qc.setQueryData<ModelFile[]>(["product-models", productId], (eski) =>
+      Array.isArray(eski) ? eski.map((f) => (f.id === id ? bilgiyiIsle(f, b) : f)) : eski,
+    );
+  });
 
   const memberCount = variantGroup?.products?.length ?? 0;
   const inGroup = memberCount >= 2;
@@ -727,25 +674,6 @@ function PrinterGroup({ printer, parts, productId, applyToVariants, okunanlar, o
   );
 }
 
-/** Küçük resmin üstüne gelince açılan büyük önizleme — kart kenarında kırpılmasın diye gövdeye çizilir. */
-function BuyukOnizleme({ src, hedef }: { src: string; hedef: DOMRect }) {
-  const BOY = 236;
-  // Önce SOLA açılır: sağda satırın kendi adı ve bilgileri var, onları kapatmasın.
-  const solda = hedef.left - 12 - BOY >= 8;
-  const sol = solda ? hedef.left - 12 - BOY : Math.min(hedef.right + 12, window.innerWidth - BOY - 8);
-  const ust = Math.min(Math.max(8, hedef.top + hedef.height / 2 - BOY / 2), window.innerHeight - BOY - 8);
-  return createPortal(
-    <div
-      className="pointer-events-none fixed z-[70] rounded-xl border bg-popover p-1.5 shadow-2xl shadow-black/40 animate-in fade-in zoom-in-95 duration-150"
-      style={{ left: sol, top: ust, width: BOY, height: BOY }}
-    >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt="" className="h-full w-full rounded-lg object-contain" />
-    </div>,
-    document.body,
-  );
-}
-
 /** Tek parça satırı: önizleme, ad (yerinde değiştirilebilir), süre/gramaj/renk ve işlemler. */
 function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzle, onModel }: {
   part: ModelFile;
@@ -760,15 +688,8 @@ function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzl
 }) {
   const [duzenle, setDuzenle] = useState(false);
   const [taslak, setTaslak] = useState("");
-  const [gorselHata, setGorselHata] = useState(false);
-  const [buyuk, setBuyuk] = useState<DOMRect | null>(null);
   const ad = gorunenAd(part);
   const dosyaAdi = uzantisizAd(part.originalName);
-  const gorselVar = !!part.hasThumbnail && !gorselHata;
-  const onizlemeYolu = `/api/models/${part.id}/preview`;
-  const renkler = part.renkler ?? [];
-  const sureVar = part.estPrintMin != null && part.estPrintMin > 0;
-  const gramVar = part.gramaj != null && part.gramaj > 0;
 
   const adiDuzenle = () => { setTaslak(ad); setDuzenle(true); };
   const adiKaydet = () => {
@@ -789,36 +710,7 @@ function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzl
       style={{ animationDelay: `${sira * 40}ms`, animationFillMode: "both", animationDuration: "300ms" }}
     >
       {/* ÖNİZLEME: dilimleyicinin dosyaya gömdüğü görsel — yükler yüklemez görünür. */}
-      <button
-        type="button"
-        onClick={onIzle}
-        onMouseEnter={(e) => { if (gorselVar) setBuyuk(e.currentTarget.getBoundingClientRect()); }}
-        onMouseLeave={() => setBuyuk(null)}
-        onBlur={() => setBuyuk(null)}
-        title={gorselVar ? undefined : "3B önizleme"}
-        aria-label={`${ad} — 3B önizleme`}
-        className="relative flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-gradient-to-br from-primary/15 to-primary/5 text-primary transition-transform duration-200 hover:scale-[1.04] active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {gorselVar ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img
-            src={onizlemeYolu}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            onError={() => setGorselHata(true)}
-            className="h-full w-full object-contain animate-in fade-in zoom-in-95 duration-500"
-          />
-        ) : okunuyor ? (
-          <Skeleton className="h-full w-full rounded-none" />
-        ) : (
-          <Box className="h-5 w-5 opacity-60" />
-        )}
-        <span className="absolute bottom-0 left-0 rounded-tr-md bg-background/85 px-1 text-[9px] font-bold leading-tight tabular-nums text-primary">
-          {sira + 1}
-        </span>
-      </button>
-      {buyuk && gorselVar && <BuyukOnizleme src={onizlemeYolu} hedef={buyuk} />}
+      <ParcaGorseli p={part} sira={sira} okunuyor={okunuyor} onClick={onIzle} />
 
       <div className="min-w-0 flex-1 space-y-1">
         {duzenle ? (
@@ -857,45 +749,7 @@ function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzl
         )}
 
         {/* Dosyanın kendi bilgileri: tür · süre · gramaj · renkler · boyut */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          <span className="rounded border border-border/70 px-1 font-mono text-[9px] font-semibold leading-4 tracking-wide text-muted-foreground/80">
-            {turEtiketi(part.fileType)}
-          </span>
-          {sureVar && (
-            <span className="inline-flex items-center gap-1 tabular-nums text-foreground/80 animate-in fade-in duration-300" title="Tahmini baskı süresi">
-              <Clock3 className="h-3 w-3 text-muted-foreground" /> {fmtSure(part.estPrintMin)}
-            </span>
-          )}
-          {gramVar && (
-            <span className="inline-flex items-center gap-1 tabular-nums text-foreground/80 animate-in fade-in duration-300" title="Kullanılan filament">
-              <Weight className="h-3 w-3 text-muted-foreground" /> {fmtGram(part.gramaj)}
-            </span>
-          )}
-          {okunuyor && (!sureVar || !gramVar) && (
-            <span className="inline-flex items-center gap-1.5" aria-label="Dosya bilgisi okunuyor">
-              <Skeleton className="h-3.5 w-14 rounded" />
-              <Skeleton className="h-3.5 w-11 rounded" />
-            </span>
-          )}
-          {renkler.length > 0 && (
-            <span className="inline-flex items-center" title={`${renkler.length} renk`}>
-              {renkler.map((hex, i) => (
-                <span
-                  key={`${hex}-${i}`}
-                  className={cn("h-3 w-3 rounded-full border border-background ring-1 ring-border/70", i > 0 && "-ml-1")}
-                  style={{ backgroundColor: hex }}
-                />
-              ))}
-              {renkler.length > 1 && <span className="ml-1 tabular-nums">{renkler.length} renk</span>}
-            </span>
-          )}
-          <span className="tabular-nums text-muted-foreground/70">{fmtSize(part.sizeBytes)}</span>
-          {part.sliced === false && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400" title="Bu dosya dilimlenmemiş; yazıcıya gönderilemez.">
-              <AlertTriangle className="h-2.5 w-2.5" /> Dilimlenmemiş
-            </span>
-          )}
-        </div>
+        <ParcaBilgiSatiri p={part} okunuyor={okunuyor} />
 
         {part.label && !duzenle && (
           <p className="truncate text-[10px] text-muted-foreground/55" title={part.originalName}>{part.originalName}</p>

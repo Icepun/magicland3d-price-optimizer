@@ -1,7 +1,6 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { fmtSure } from "@/lib/model-dosya-gorunum";
 import { fetchJson } from "@/lib/fetch-json";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import dynamic from "next/dynamic";
@@ -9,7 +8,7 @@ import { memo, useCallback, useDeferredValue, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
-  Boxes, Search, Package, Play, Loader2, Layers, FileBox, Pencil, Trash2, Check, X, Plus,
+  Boxes, Search, Package, Play, Loader2, Layers, Pencil, Trash2, Check, X, Plus,
   ChevronRight, Printer, CircleDashed, ArrowUpRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -26,6 +25,9 @@ import {
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { useDisariBirakmayiYut } from "@/lib/dosya-birakma";
+import { ParcaBilgiSatiri, ParcaGorseli } from "@/components/printers/parca-gorunum";
+import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
+import { gorunenAd } from "@/lib/model-dosya-gorunum";
 import { aileDosyalari, gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
 import {
   hucreAciklamasi, kapsamAileleri, kapsamOzeti, modelSatirlari, satirAra, satirSirala, satirUyar, varyantAdi,
@@ -41,7 +43,7 @@ const GcodeViewerDialog = dynamic(
 );
 
 interface LibPrinter { id: string; name: string; brand: string; type: string; model: string | null }
-interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; estPrintMin: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number }
+interface LibFile { id: string; printerConfigId: string; label: string | null; originalName: string; sizeBytes: number; gramaj: number | null; estPrintMin: number | null; fileType: string; hasThumbnail: boolean; contentMd5: string | null; sharedWith: number; renkler?: string[] }
 interface LibProduct { productId: string; name: string; imageUrl: string | null; files: LibFile[]; totalBytes: number; variantGroupId?: string | null; variantGroupName?: string | null }
 interface LibStorage {
   /** Buluttaki GERÇEK kullanım (aynı dosya varyantlarda paylaşılıyorsa bir kez sayılır). */
@@ -705,20 +707,19 @@ function PartsModal({
     printers.find((p) => p.id === printerId) ??
     printers.find((p) => p.id === aile.yazicilar[0].id) ??
     { id: printerId, name: aile.ad, brand: "", type: "", model: null };
-  // Aile: ikinci U1, ilk U1'e yüklenen dosyaları da görür ve basar (aynı içerik bir kez).
-  const parts = aileDosyalari(product.files, printer.id, printers);
+
   const multiColor = printer.brand === "bambu" || printer.brand === "snapmaker";
 
   // ── Yazıcılar arası filament karşılaştırması ────────────────────────────────────────
   // Aynı ürünün dört yazıcı için ayrı dosyaları farklı miktarda filament harcıyor (destek,
   // dolgu, dilimleyici ayarı). Bu fark hiçbir yerde görünmüyordu.
   // ⚠️ Bu gramaj ÜRÜN MALİYETİNDEN tamamen ayrı bir alan — maliyeti etkilemez.
-  const [gramajlar, setGramajlar] = useState<Record<string, number | null>>({});
-  const [sureler, setSureler] = useState<Record<string, number | null>>({});
+  /** Dosyadan okunan değerler (düğmeyle ya da arka planda) — sunucu listesi tazelenene dek üstte durur. */
+  const [okunan, setOkunan] = useState<Record<string, { gramaj: number | null; estPrintMin: number | null; hasThumbnail?: boolean }>>({});
   const [okuma, setOkuma] = useState<{ done: number; total: number } | null>(null);
   const dosyalar = useMemo(
-    () => product.files.map((f) => ({ ...f, gramaj: gramajlar[f.id] ?? f.gramaj })),
-    [product.files, gramajlar]
+    () => product.files.map((f) => (okunan[f.id] ? bilgiyiIsle(f, okunan[f.id]) : f)),
+    [product.files, okunan]
   );
   const printerIds = useMemo(() => printers.map((p) => p.id), [printers]);
   const karsilastirma = useMemo(() => gramajByPrinter(dosyalar, printerIds), [dosyalar, printerIds]);
@@ -729,14 +730,12 @@ function PartsModal({
     setOkuma({ done: 0, total: eksikler.length });
     for (const [i, f] of eksikler.entries()) {
       try {
-        const r = await fetchJson<{ gramaj: number | null; estPrintMin: number | null }>(
+        const r = await fetchJson<{ gramaj: number | null; estPrintMin: number | null; hasThumbnail?: boolean }>(
           `/api/models/${f.id}/gramaj`, { method: "POST" }
         );
-        setGramajlar((prev) => ({ ...prev, [f.id]: r.gramaj }));
-        setSureler((prev) => ({ ...prev, [f.id]: r.estPrintMin }));
+        setOkunan((prev) => ({ ...prev, [f.id]: r }));
       } catch {
         // Tek dosya okunamazsa diğerleri devam etsin; sonuç zaten "—" kalır.
-        setGramajlar((prev) => ({ ...prev, [f.id]: null }));
       }
       setOkuma({ done: i + 1, total: eksikler.length });
     }
@@ -744,9 +743,16 @@ function PartsModal({
     qc.invalidateQueries({ queryKey: ["models"] });
   };
 
+  // Aile: ikinci U1, ilk U1'e yüklenen dosyaları da görür ve basar (aynı içerik bir kez).
+  const parts = useMemo(() => aileDosyalari(dosyalar, printer.id, printers), [dosyalar, printer.id, printers]);
+
   const [printing, setPrinting] = useState(false);
   const [progress, setProgress] = useState<PrintProg | null>(null);
   const [picked, setPicked] = useState<LibFile | null>(null);
+  // Listelenen parçaların eksik bilgisi (süre / gramaj / önizleme) arka planda okunur.
+  const okunanlar = useEksikBilgiyiTamamla(parts, !picked && !okuma, (id, b) => {
+    setOkunan((prev) => ({ ...prev, [id]: b }));
+  });
   /** 3B izleyicide açık parça — basmakla ilgisi yok, yalnız inceleme. */
   const [viewer, setViewer] = useState<LibFile | null>(null);
   /** Yeniden adlandırılan parça (id) ve yazılan metin. */
@@ -813,9 +819,11 @@ function PartsModal({
 
   // Çok renkli (Bambu/Snapmaker) → renk eşleme adımı (paylaşılan SlotStep).
   if (picked) {
+    const dosya = parts.find((f) => f.id === picked.id) ?? picked; // en güncel bilgiyle
     const model: PrintableModel = {
-      fileId: picked.id, productId: product.productId, productName: product.name, imageUrl: product.imageUrl,
-      label: picked.label, originalName: picked.originalName, sizeBytes: picked.sizeBytes, gramaj: picked.gramaj,
+      fileId: dosya.id, productId: product.productId, productName: product.name, imageUrl: product.imageUrl,
+      label: dosya.label, originalName: dosya.originalName, sizeBytes: dosya.sizeBytes, gramaj: dosya.gramaj,
+      estPrintMin: dosya.estPrintMin, hasThumbnail: dosya.hasThumbnail, renkler: dosya.renkler, fileType: dosya.fileType,
     };
     return (
       <SlotStep
@@ -917,27 +925,7 @@ function PartsModal({
                 altı parçalı bir üründe hangisini basacağını addan tahmin etmek gerekiyordu.
                 Görsel varsa gösterilir; her hâlde tıklanabilir ve 3B izleyiciyi açar.
               */}
-              <button
-                type="button"
-                onClick={() => setViewer(part)}
-                title="3B önizleme — modeli döndür, katman katman incele"
-                className="group/th relative flex items-center justify-center h-11 w-11 shrink-0 rounded-md border bg-muted/40 overflow-hidden transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {part.hasThumbnail ? (
-                  <img
-                    src={`/api/models/${part.id}/preview`}
-                    alt=""
-                    loading="lazy"
-                    className="max-w-full max-h-full object-contain"
-                  />
-                ) : (
-                  <FileBox className="h-4 w-4 text-muted-foreground/40" />
-                )}
-                <span className="absolute inset-0 flex items-center justify-center bg-background/70 text-[9px] font-bold text-primary opacity-0 transition-opacity group-hover/th:opacity-100">
-                  3B
-                </span>
-              </button>
-              <span className="flex items-center justify-center h-7 w-7 rounded bg-primary/10 text-primary text-xs font-bold tabular-nums shrink-0">{i + 1}</span>
+              <ParcaGorseli p={part} boyut="lg" sira={i} okunuyor={okunanlar.has(part.id)} onClick={() => setViewer(part)} />
               <div className="min-w-0 flex-1">
                 {renaming?.id === part.id ? (
                   <div className="flex items-center gap-1">
@@ -961,17 +949,13 @@ function PartsModal({
                   </div>
                 ) : (
                   <>
-                    <p className="text-sm font-medium truncate">{part.label || part.originalName}</p>
-                    <p className="text-[10px] text-muted-foreground/70 truncate flex items-center gap-1.5">
-                      <FileBox className="h-3 w-3" /> {fmtSize(part.sizeBytes)}
-                      {(gramajlar[part.id] ?? part.gramaj) ? ` · ${gramajlar[part.id] ?? part.gramaj} gr` : ""}
-                      {(sureler[part.id] ?? part.estPrintMin) ? ` · ${fmtSure(sureler[part.id] ?? part.estPrintMin)}` : ""}
-                      {part.sharedWith > 1 && (
-                        <span className="text-amber-400/80" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
-                          · {part.sharedWith} üründe
-                        </span>
-                      )}
-                    </p>
+                    <p className="text-sm font-medium truncate" title={part.originalName}>{gorunenAd(part)}</p>
+                    <ParcaBilgiSatiri p={part} okunuyor={okunanlar.has(part.id)} className="mt-1" />
+                    {part.sharedWith > 1 && (
+                      <p className="mt-0.5 text-[10px] text-amber-400/80" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
+                        {part.sharedWith} üründe kullanılıyor
+                      </p>
+                    )}
                   </>
                 )}
               </div>

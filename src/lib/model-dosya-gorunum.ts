@@ -110,3 +110,18 @@ export function ozetMetni(o: GrupOzeti): string | null {
 export function baskiDosyasiMi(ad: string): boolean {
   return /\.(gcode|gco|g|3mf)$/i.test(ad ?? "");
 }
+
+/**
+ * Baskı ŞİMDİ başlarsa ne zaman biter — "17:42", gece yarısını aşıyorsa "yarın 02:10".
+ * Süre ya da saat bilinmiyorsa null (uydurma bir saat yazmaktansa hiç yazmamak).
+ */
+export function bitisMetni(simdiMs: number, dk: number | null | undefined): string | null {
+  if (!(simdiMs > 0) || dk == null || !Number.isFinite(dk) || dk <= 0) return null;
+  const simdi = new Date(simdiMs);
+  const bitis = new Date(simdiMs + dk * 60_000);
+  const saat = bitis.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
+  const gunBasi = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const gun = Math.round((gunBasi(bitis) - gunBasi(simdi)) / 86_400_000);
+  if (gun <= 0) return saat;
+  return gun === 1 ? `yarın ${saat}` : `${gun} gün sonra ${saat}`;
+}
