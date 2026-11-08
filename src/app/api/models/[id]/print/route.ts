@@ -32,8 +32,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * Modeli yazıcıya yükle + baskıyı başlat. Yanıt = NDJSON akışı (satır satır ilerleme):
- *   {stage:"download",pct} · {stage:"status"} · {stage:"upload",pct[,cached]} · {stage:"start"} ·
- *   {stage:"confirm"} · {stage:"done"} · {stage:"error",message}
+ *   {stage:"download",pct} · {stage:"status"} · {stage:"pack",pct} (yalnız U1: sıkıştırma) ·
+ *   {stage:"upload",pct[,cached]} · {stage:"start"} · {stage:"confirm"} · {stage:"done"} ·
+ *   {stage:"error",message}
  *
  * YENİDEN KULLANIM: dosya daha önce bu yazıcıya (içerik-hash'li adla) yüklendiyse ve boyut
  * birebir tutuyorsa R2 indirmesi + yükleme tamamen atlanır → saniyeler içinde başlar.
@@ -288,6 +289,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               // Snapmaker: kafa seçimi native MAP_TABLE ile; Elegoo: atomik print=true. Gerçek % raporlanır.
               await moonrakerUploadAndPrint(printer.host, printer.port, buf, upName, {
                 headMapping: amsMapping, prefs, brand: printer.brand,
+                // U1: dosya önce sıkıştırılır (~3 kat az veri) — bu aşamanın da gerçek yüzdesi var.
+                onPack: (pct) => send({ stage: "pack", pct }),
                 onProgress: (pct) => send({ stage: "upload", pct }),
                 // Bağlantı koptu: yazıcının ağa dönmesi bekleniyor, aktarım baştan yapılacak.
                 onRetry: (deneme, toplam) => send({ stage: "upload", pct: 0, retry: deneme, of: toplam }),

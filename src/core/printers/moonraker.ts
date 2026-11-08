@@ -25,6 +25,7 @@ import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
 // eski içe aktarmalar kırılmasın diye buradan yeniden dışa açılıyor.
 export { klipperParamKacisla } from "./exclude-object";
 import { aktarimBasladi, aktarimBitti } from "./transfer-state";
+import { ufpAdi, ufpPaketle, ufpUygunMu } from "./ufp";
 import http from "node:http";
 import crypto from "node:crypto";
 import { pickProgress, type ProgressSource } from "./eta";
@@ -1183,7 +1184,7 @@ function buildSnapmakerStartScript(
  * byte takibi vermiyor; Moonraker'da sunucu-taraflı upload progress da yok, ama gövdeyi akış
  * halinde parse eder → istemci tarafında yazılan bayt ≈ gerçek ilerleme). U1 `checksum` (SHA256)
  * alanını doğrular (bozuk aktarım = HTTP 422); Elegoo'nun eski Moonraker'ı alanı yok sayar.
- * Zaman aşımı dosya boyutuyla ölçeklenir (eski sabit 180sn büyük dosyada yetmeyebiliyordu).
+ * Zaman aşımı boyuta göre değil, sessizliğe göre işler (aşağıda: gönderim / yanıt evreleri).
  */
 /**
  * AKTARIM HIZ SINIRI (KB/sn) — 0 / verilmezse sınırsız.
@@ -1219,6 +1220,11 @@ function yuklemeHizSiniriKbps(marka?: string): number {
 /** Kopan aktarım en fazla bu kadar denenir (ilk deneme dahil). */
 const AKTARIM_DENEME = 3;
 
+/** Gönderirken bu kadar süre hiç bayt gitmezse hat ölü sayılır. */
+const GONDERIM_SESSIZLIK_MS = 90_000;
+/** Son bayttan sonra yazıcının dosyayı açıp taraması için tanınan süre (Moonraker'ın UFP tavanı 300 sn). */
+const YANIT_BEKLEME_MS = 330_000;
+
 /**
  * Ağ kopması / zaman aşımı mı? Kalıcı hatalar (yer yok, bütünlük, 4xx) yeniden DENENMEZ —
  * aynı sonucu verir ve kullanıcıyı boşuna bekletir.
@@ -1227,6 +1233,25 @@ export function aktarimYenidenDenenebilir(e: unknown): boolean {
   const m = e instanceof Error ? e.message : "";
   if (/yer yok|bozuldu|HTTP 4\d\d/.test(m)) return false;
   return /bağlantı aktarım sırasında koptu|zaman aşımı|Yükleme hatası|HTTP 5\d\d/.test(m);
+}
+
+/** Yazıcı sıkıştırılmış paketi ağ dışı bir sebeple (HTTP hatası) mı reddetti? → ham dosyayla denenir. */
+export function ufpReddedildi(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : "";
+  return /Yükleme başarısız \(HTTP \d{3}\)/.test(m);
+}
+
+/**
+ * Paket yazıcıda beklenen `.gcode` adıyla ve TAM boyutla mı açıldı? U1 yanıtı açılan dosyanın
+ * yolunu ve boyutunu söylüyor; söylemiyorsa güvenilir sayılır. `.ufp` olarak kaldıysa, başka ada
+ * gittiyse ya da eksik açıldıysa ham dosya gönderilir.
+ */
+export function ufpBeklenenYerde(yanit: unknown, gcodeAdi: string, beklenenBoyut: number): boolean {
+  const item = (yanit as { item?: { path?: unknown; size?: unknown } } | null)?.item;
+  const yol = item?.path;
+  if (typeof yol === "string" && yol && yol !== gcodeAdi && yol.split("/").pop() !== gcodeAdi) return false;
+  if (typeof item?.size === "number" && item.size !== beklenenBoyut) return false;
+  return true;
 }
 
 /** Yazıcının ağa dönmesini bekle (U1 kopuşu tipik olarak 20-60 sn sürüyor). Dönmezse null. */
@@ -1265,7 +1290,6 @@ async function moonrakerUploadStream(
     "utf8"
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
-  const timeoutMs = Math.max(180_000, Math.ceil(fileBuf.length / (200 * 1024)) * 1000); // ≥180sn, ~200KB/sn tabanı
 
   /**
    * Aktarım boyunca durum yoklamasını sustur. Ölçüldü (21 Ağu 2026): U1 büyük dosya
@@ -1306,7 +1330,14 @@ async function moonrakerUploadStream(
         });
       }
     );
-    req.setTimeout(timeoutMs, () => req.destroy(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor")));
+    /**
+     * ZAMAN AŞIMI İKİ EVRELİ (8 Kas 2026). Eskiden tek bir "sessizlik" süresi vardı ve dosya
+     * boyuyla büyüyordu (211 MB → 18 dk): hat yolda ölünce aktarım dakikalarca "yükleniyor"
+     * görünüp ancak sonra düşüyordu. Artık gönderirken hiç bayt gitmeyen 90 sn hattı ölü sayar
+     * (yeniden deneme devreye girer); son bayttan sonra ise yazıcı dosyayı açıp tararken hat
+     * doğal olarak sessizdir — o evrede Moonraker'ın kendi tavanı (UFP için 300 sn) kadar beklenir.
+     */
+    req.setTimeout(GONDERIM_SESSIZLIK_MS, () => req.destroy(new Error("Yükleme zaman aşımı — ağ yavaş ya da yazıcı yanıt vermiyor")));
     req.on("error", (e) => {
       bitir();
       /**
@@ -1354,7 +1385,7 @@ async function moonrakerUploadStream(
         }
         if (!ok) { req.once("drain", writeNext); return; }
       }
-      req.end(tail);
+      req.end(tail, () => req.setTimeout(YANIT_BEKLEME_MS));
     };
     writeNext();
   });
@@ -1370,6 +1401,8 @@ export async function moonrakerUploadAndPrint(
     prefs?: MoonrakerPrefs;
     brand?: string;
     onProgress?: (pct: number) => void;
+    /** Dosya gönderim öncesi sıkıştırılıyor (0–100). Yalnız sıkıştırılarak gönderilecekse çağrılır. */
+    onPack?: (pct: number) => void;
     /** Aktarım koptu ve yeniden deneniyor (deneme no, toplam). */
     onRetry?: (deneme: number, toplam: number) => void;
   } = {}
@@ -1418,6 +1451,23 @@ export async function moonrakerUploadAndPrint(
     }
   }
 
+  /**
+   * SIKIŞTIRILMIŞ AKTARIM (yalnız Snapmaker) — dosya zip (UFP) olarak gider, yazıcı aynı adla
+   * `.gcode`'a açar; ~3 kat az bayt = ~3 kat kısa aktarım ve kopuşa denk gelme ihtimali o kadar
+   * düşük (bkz. ./ufp). Sıkıştırılamazsa ya da yazıcı paketi kabul etmezse ham dosya gider.
+   * Snapmaker dışı Moonraker'da denenmedi → orada ham kalır. `MLHUB_UFP=0` kapatır.
+   */
+  const ham = { govde: body, ad: filename, ufp: false };
+  let gonderim = ham;
+  if (isSnapmaker && process.env.MLHUB_UFP !== "0" && ufpUygunMu(filename, body.length)) {
+    try {
+      const paket = await ufpPaketle(body, opts.onPack);
+      if (paket.length < body.length * 0.9) gonderim = { govde: paket, ad: ufpAdi(filename), ufp: true };
+    } catch {
+      // Sıkıştırma başarısız → ham dosya gider; baskı bu yüzden durmamalı.
+    }
+  }
+
   // Upload — GERÇEK yüzde ilerlemeli akış. Snapmaker: print=false (başlatma ayrı, parametreli);
   // diğer: print=true (atomik).
   /**
@@ -1430,10 +1480,24 @@ export async function moonrakerUploadAndPrint(
   for (let deneme = 1; ; deneme++) {
     try {
       uploadResp = await moonrakerUploadStream(
-        host, port, body, filename, !isSnapmaker, opts.onProgress, yuklemeHizSiniriKbps(opts.brand),
+        host, port, gonderim.govde, gonderim.ad, !isSnapmaker, opts.onProgress, yuklemeHizSiniriKbps(opts.brand),
       );
+      // Paket kabul edildi ama yazıcı onu beklenen adla açmadıysa (farklı bir yazılım) ham dosyayla tekrarla.
+      if (gonderim.ufp && !ufpBeklenenYerde(uploadResp, filename, body.length)) {
+        gonderim = ham;
+        deneme--;
+        opts.onProgress?.(0);
+        continue;
+      }
       break;
     } catch (e) {
+      // Yazıcı paketi REDDETTİYSE (ağ değil, HTTP hatası) bir kez ham dosyayla dene — deneme hakkı yemez.
+      if (gonderim.ufp && ufpReddedildi(e)) {
+        gonderim = ham;
+        deneme--;
+        opts.onProgress?.(0);
+        continue;
+      }
       if (deneme >= AKTARIM_DENEME || !aktarimYenidenDenenebilir(e)) throw e;
       opts.onRetry?.(deneme + 1, AKTARIM_DENEME);
       const st = await yaziciAgaDonsun(host, port);

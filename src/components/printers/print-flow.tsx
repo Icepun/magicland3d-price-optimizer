@@ -52,7 +52,7 @@ export function parcaBilgisi(m: PrintableModel): ParcaBilgisi {
 }
 export interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 export type PrintProg = {
-  stage: "download" | "status" | "upload" | "start" | "confirm" | "done";
+  stage: "download" | "status" | "pack" | "upload" | "start" | "confirm" | "done";
   pct: number | null;
   /** Bu aşamanın tahmini kalan süresi (sn). Hesaplanamıyorsa null — o zaman hiç gösterilmez. */
   kalanSn?: number | null;
@@ -153,6 +153,7 @@ export async function runPrintStream(
       else if (ev.stage === "done") ok = true;
       else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") ilerle(ev.stage, null);
       else if (ev.stage === "download") ilerle("download", ev.pct ?? null); // R2 → sunucu (gerçek %)
+      else if (ev.stage === "pack") ilerle("pack", ev.pct ?? null); // U1: gönderim öncesi sıkıştırma
       else ilerle("upload", ev.pct ?? null);
     }
   }
@@ -178,11 +179,12 @@ export function PrintProgress({ p }: { p: PrintProg }) {
   const label =
     p.stage === "download" ? "Buluttan indiriliyor…"
       : p.stage === "status" ? "Yazıcı kontrol ediliyor…"
-        : p.stage === "start" ? "Baskı komutu gönderiliyor…"
-          : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
-            : p.stage === "done" ? "Başlatıldı 🎉"
-              : "Yazıcıya yükleniyor…";
-  const showPct = (p.stage === "upload" || p.stage === "download") && p.pct != null;
+        : p.stage === "pack" ? "Dosya sıkıştırılıyor…"
+          : p.stage === "start" ? "Baskı komutu gönderiliyor…"
+            : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
+              : p.stage === "done" ? "Başlatıldı 🎉"
+                : "Yazıcıya yükleniyor…";
+  const showPct = (p.stage === "upload" || p.stage === "download" || p.stage === "pack") && p.pct != null;
   return (
     <div className="space-y-1.5 rounded-lg border bg-muted/30 p-2.5">
       <div className="flex items-center justify-between text-[11px]">

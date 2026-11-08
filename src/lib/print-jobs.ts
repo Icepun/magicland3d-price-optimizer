@@ -23,6 +23,8 @@ export interface ActivePrint {
   startedAt: number;
   /** Bağlantı koptu, aktarım yeniden deneniyor. */
   yeniden?: { n: number; toplam: number } | null;
+  /** Bu aşamanın tahmini kalan süresi (sn); hesaplanamıyorsa yok. */
+  kalanSn?: number | null;
 }
 
 export const activePrintKey = (printerId: string) => ["active-print", printerId] as const;
@@ -45,7 +47,7 @@ export function startBackgroundPrint(
   // Hedef yazıcı AÇIKÇA gider: dosya aynı ailedeki başka yazıcıya (ör. diğer U1) yüklenmiş olabilir.
   void runPrintStream(opts.fileId, { ...opts.printOpts, printerId: opts.printerId }, (p) => {
     if (p.stage === "done") return; // done → kart normal "yazdırıyor" job'a döner (aşağıda temizlenir)
-    set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt, yeniden: p.yeniden ?? null });
+    set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt, yeniden: p.yeniden ?? null, kalanSn: p.kalanSn ?? null });
   })
     .then(() => {
       toast.success(`${opts.label} — baskı başladı 🎉`);

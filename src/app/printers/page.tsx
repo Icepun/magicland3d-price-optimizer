@@ -1952,10 +1952,16 @@ function useActivePrint(printerId: string): ActivePrint | null {
 const AP_STAGE_LABEL: Record<string, string> = {
   download: "Buluttan indiriliyor",
   status: "Hazırlanıyor",
+  pack: "Dosya sıkıştırılıyor",
   upload: "Yazıcıya yükleniyor",
   start: "Başlatılıyor",
   confirm: "Yazıcı onaylıyor",
 };
+
+/** Aktarımın kalan süresi — kısa: "~40 sn kaldı" / "~6 dk kaldı". */
+function kalanKisa(sn: number): string {
+  return sn < 60 ? `~${sn} sn kaldı` : `~${Math.round(sn / 60)} dk kaldı`;
+}
 
 function ActivePrintBanner({ ap, accent, printerId }: { ap: ActivePrint; accent: string; printerId: string }) {
   const qc = useQueryClient();
@@ -2017,7 +2023,9 @@ function ActivePrintBanner({ ap, accent, printerId }: { ap: ActivePrint; accent:
               Bağlantı koptu — yeniden deneniyor ({ap.yeniden.n}/{ap.yeniden.toplam})
             </p>
           ) : (
-            <p className="text-[10px] text-muted-foreground">{AP_STAGE_LABEL[ap.stage] ?? "İşleniyor"}… · bu arada başka işine bakabilirsin</p>
+            <p className="text-[10px] text-muted-foreground tabular-nums">
+              {AP_STAGE_LABEL[ap.stage] ?? "İşleniyor"}… · {ap.kalanSn != null ? kalanKisa(ap.kalanSn) : "bu arada başka işine bakabilirsin"}
+            </p>
           )}
         </>
       )}
