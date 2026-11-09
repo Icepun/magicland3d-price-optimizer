@@ -21,6 +21,7 @@ import * as tls from "node:tls";
 import { processSingleton } from "./process-singleton";
 import { bambuHataAciklamasi, bambuHataKodu, bambuModelOneki, hmsAciklamasi } from "./bambu-hms";
 import { uyariKisalt } from "../yazici-uyari";
+import { BAMBU_FILAMENT_PROFILI, renkKodu } from "./filament-tipleri";
 import * as net from "node:net";
 import crypto from "node:crypto";
 
@@ -590,6 +591,130 @@ export async function bambuSkipObjects(
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error("Komut gönderildi ama yazıcı parçayı atlamadı — ekranını kontrol et.");
+}
+
+/**
+ * AMS MAKARASININ RENGİ / TÜRÜ — Bambu Studio'daki "filament düzenle"nin LAN karşılığı.
+ *
+ * Komut: `{ print: { command: "ams_filament_setting", ams_id, tray_id, tray_info_idx,
+ * tray_color: "RRGGBBFF", nozzle_temp_min, nozzle_temp_max, tray_type } }`. Yazıcının ekranı sabit
+ * bir paletle sınırlı; komut her onaltılık rengi kabul ediyor. `ams_id` raporun birim numarası
+ * (A2L'nin AMS Lite'ı 16), `tray_id` birim içi makara. Tür DEĞİŞMİYORSA makaranın kendi profili
+ * (`tray_info_idx`) ve sıcaklıkları korunur. Bambu'nun etiketli (RFID) makarası değiştirilmez —
+ * bilgisi etiketten okunuyor (Bambu Studio da kilitliyor). Sonuç bir sonraki raporda doğrulanır.
+ */
+export async function bambuFilamentAyarla(
+  host: string,
+  accessCode: string,
+  serial: string,
+  slot: number,
+  ayar: { renk?: string | null; tip?: string | null },
+): Promise<void> {
+  const renk = ayar.renk != null ? renkKodu(ayar.renk) : null;
+  if (ayar.renk != null && !renk) throw new Error("Renk tanınmadı.");
+  const tip = ayar.tip ?? null;
+  if (tip != null && !BAMBU_FILAMENT_PROFILI[tip]) throw new Error("Bu malzeme türü seçilemiyor.");
+  if (!renk && !tip) throw new Error("Değişiklik yok.");
+
+  const conn = ensureConn(host, accessCode, serial);
+  if (!conn.connected) throw new Error("Yazıcı bağlı değil — komut gönderilmedi.");
+  if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+    publishPushall(conn, serial);
+    const bekle = Date.now() + 3000;
+    while (Date.now() < bekle && (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS)) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    if (!conn.hasData || Date.now() - conn.lastMessageAt > BAMBU_FRESH_MS) {
+      throw new Error("Yazıcı şu an durumunu bildirmiyor — komut gönderilmedi.");
+    }
+  }
+  const durum = mapBambuState(typeof conn.print.gcode_state === "string" ? conn.print.gcode_state : null);
+  if (durum === "printing" || durum === "paused") throw new Error("Baskı sürerken değiştirilemez.");
+
+  const { komut, yeniRenk, yeniTip } = bambuFilamentKomutu(conn.print, slot, { renk, tip });
+  const sentAfterMs = conn.lastMessageAt;
+  // QoS 0 — diğer kontrol komutlarıyla aynı hayalet-komut koruması (bkz. bambuControl).
+  await new Promise<void>((resolve, reject) => {
+    conn.client.publish(`device/${serial}/request`, JSON.stringify(komut), { qos: 0 }, (err) =>
+      err ? reject(new Error("Komut yazıcıya iletilemedi.")) : resolve(),
+    );
+  });
+  publishPushall(conn, serial);
+  const son = Date.now() + 8000;
+  while (Date.now() < son) {
+    if (conn.lastMessageAt > sentAfterMs) {
+      const simdi = amsMakarasiBul(conn.print, slot)?.tray;
+      const renkTamam = typeof simdi?.tray_color === "string" && simdi.tray_color.slice(0, 6).toUpperCase() === yeniRenk;
+      const tipTamam = simdi?.tray_type === yeniTip;
+      if (renkTamam && tipTamam) return;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error("Komut gönderildi ama yazıcı makarayı güncellemedi — ekranını kontrol et.");
+}
+
+/**
+ * `ams_filament_setting` komutunu hazırla (saf — test edilir). Makara bulunamazsa ya da etiketliyse
+ * (RFID: `tag_uid` sıfırdan farklı) kullanıcıya dönük hata fırlatır.
+ */
+export function bambuFilamentKomutu(
+  print: Record<string, any> | undefined | null,
+  slot: number,
+  ayar: { renk: string | null; tip: string | null },
+): { komut: { print: Record<string, unknown> }; yeniRenk: string; yeniTip: string } {
+  const hedef = amsMakarasiBul(print, slot);
+  if (!hedef) throw new Error("Makara bulunamadı.");
+  const t = hedef.tray;
+  if (typeof t.tag_uid === "string" && /[1-9a-f]/i.test(t.tag_uid)) {
+    throw new Error("Bu makaranın bilgisi etiketinden okunuyor — değiştirilemez.");
+  }
+  const mevcutTip = typeof t.tray_type === "string" && t.tray_type ? t.tray_type : null;
+  const yeniTip = ayar.tip ?? mevcutTip ?? "PLA";
+  const tipDegisti = yeniTip !== mevcutTip;
+  const profil = BAMBU_FILAMENT_PROFILI[yeniTip] ?? BAMBU_FILAMENT_PROFILI.PLA;
+  const sayi = (v: unknown) =>
+    (typeof v === "string" || typeof v === "number") && Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null;
+  const yeniRenk = ayar.renk ?? (typeof t.tray_color === "string" ? t.tray_color.slice(0, 6).toUpperCase() : "FFFFFF");
+  return {
+    yeniRenk,
+    yeniTip,
+    komut: {
+      print: {
+        sequence_id: "0",
+        command: "ams_filament_setting",
+        ams_id: hedef.amsId,
+        tray_id: hedef.yuva,
+        tray_info_idx: !tipDegisti && typeof t.tray_info_idx === "string" && t.tray_info_idx ? t.tray_info_idx : profil.idx,
+        tray_color: `${yeniRenk}FF`,
+        nozzle_temp_min: (!tipDegisti && sayi(t.nozzle_temp_min)) || profil.min,
+        nozzle_temp_max: (!tipDegisti && sayi(t.nozzle_temp_max)) || profil.max,
+        tray_type: yeniTip,
+      },
+    },
+  };
+}
+
+/** Ekrandaki makara numarası → rapordaki ham makara + birim numarası (amsYuvalariCoz ile aynı numaralama). */
+export function amsMakarasiBul(
+  print: Record<string, any> | undefined | null,
+  slot: number,
+): { amsId: number; yuva: number; tray: Record<string, any> } | null {
+  const units = print?.ams?.ams;
+  if (!Array.isArray(units)) return null;
+  for (let sira = 0; sira < units.length; sira++) {
+    const unit = units[sira];
+    const birim = Number(unit?.id);
+    const amsId = Number.isFinite(birim) ? birim : sira;
+    const trays = Array.isArray(unit?.tray) ? unit.tray : [];
+    for (let i = 0; i < trays.length; i++) {
+      const t = trays[i];
+      const idNum = Number(t?.id);
+      const yuva = Number.isFinite(idNum) ? idNum : i;
+      const no = units.length === 1 ? yuva : sira * 4 + yuva;
+      if (no === slot) return { amsId, yuva, tray: t ?? {} };
+    }
+  }
+  return null;
 }
 
 /**

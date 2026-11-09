@@ -1034,6 +1034,11 @@ function PrinterCardInner({
   const viewer = live.viewer;
   const [viewerSnap, setViewerSnap] = useState<{ fileId: string; cacheKey: string; name: string } | null>(null);
   const [partPicker, setPartPicker] = useState(false);
+  // Takılı filamentin rengi/türü — yazıcı boştayken çipe tıklanınca (U1 kafası / Bambu AMS makarası).
+  const [renkCipi, setRenkCipi] = useState<SlotChip | null>(null);
+  const renkDuzenlenebilir =
+    isReal && online && transport.canStart && (printer.type === "bambu" || printer.brand === "snapmaker");
+  const renkSec = renkDuzenlenebilir ? (c: SlotChip) => { if (!c.empty) setRenkCipi(c); } : undefined;
   const kartQc = useQueryClient();
 
   return (
@@ -1204,7 +1209,7 @@ function PrinterCardInner({
             <div className="flex-1 min-w-0 space-y-2">
               <p className="text-sm font-medium leading-snug line-clamp-2">{job.productName}</p>
               {/* MADDE 12: yüklü filamentler — bu baskıda kullanılanlar vurgulu */}
-              <SlotStrip chips={slotChips} />
+              <SlotStrip chips={slotChips} onSec={renkSec} />
               <CardBadges printer={printer} speedView={speedView} />
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
                 {!preparing && isPrinting && elapsedSec > 0 && (
@@ -1234,7 +1239,7 @@ function PrinterCardInner({
             <div className="flex-1 min-w-0 text-sm text-muted-foreground">
               <p className="font-medium text-foreground/70">{iptalEdildi ? "İptal edildi" : isError ? "Hata" : "Hazır"}</p>
               <p className="text-xs mt-0.5">{iptalEdildi ? "Tablayı boşaltıp yeni baskı başlatabilirsin." : isError ? "Yazıcıda bir sorun var." : "Baskı bekleniyor…"}</p>
-              <SlotStrip chips={slotChips} className="mt-2" />
+              <SlotStrip chips={slotChips} className="mt-2" onSec={renkSec} />
               <CardBadges printer={printer} speedView={speedView} className="mt-2" />
               <div className="flex flex-wrap items-center gap-1.5 mt-2">
                 <TempStrip temps={printer.temps} />
@@ -1440,6 +1445,17 @@ function PrinterCardInner({
         {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
+
+      {renkCipi && (
+        <FilamentRenkDialog
+          printerId={printer.id}
+          printerName={printer.name}
+          isBambu={printer.type === "bambu"}
+          slot={renkCipi.slot}
+          mevcut={{ color: renkCipi.color, type: renkCipi.type }}
+          onClose={() => setRenkCipi(null)}
+        />
+      )}
 
       {partPicker && printer.parts && bedFrame && (
         <PartCancelDialog
@@ -1809,6 +1825,10 @@ const CameraDialog = dynamic(
 
 const FilamentBosaltDialog = dynamic(
   () => import("@/components/printers/FilamentBosaltDialog").then((m) => m.FilamentBosaltDialog),
+  { ssr: false },
+);
+const FilamentRenkDialog = dynamic(
+  () => import("@/components/printers/FilamentRenkDialog").then((m) => m.FilamentRenkDialog),
   { ssr: false },
 );
 
@@ -2468,18 +2488,27 @@ function drawLayerTopView(
   }
 }
 
-/** MADDE 12 — yüklü filamentler. Renk tek sinyal değil: slot numarası da yazar. */
-function SlotStrip({ chips, className }: { chips: SlotChip[]; className?: string }) {
+/**
+ * MADDE 12 — yüklü filamentler. Renk tek sinyal değil: slot numarası da yazar.
+ * `onSec` verilirse (yazıcı boştayken) dolu çipler tıklanır → rengi/türü değiştir.
+ */
+function SlotStrip({ chips, className, onSec }: { chips: SlotChip[]; className?: string; onSec?: (c: SlotChip) => void }) {
   if (chips.length === 0) return null;
   return (
     <div className={cn("flex flex-wrap items-center gap-1", className)}>
       {chips.map((c) => (
         <span
           key={c.slot}
+          role={onSec && !c.empty ? "button" : undefined}
+          tabIndex={onSec && !c.empty ? 0 : undefined}
+          title={onSec && !c.empty ? "Rengini değiştir" : undefined}
+          onClick={onSec && !c.empty ? () => onSec(c) : undefined}
+          onKeyDown={onSec && !c.empty ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSec(c); } } : undefined}
           className={cn(
-            "inline-flex items-center gap-1 rounded-full border py-0.5 pl-1 pr-1.5 text-[10px] font-semibold tabular-nums transition-opacity duration-300",
+            "inline-flex items-center gap-1 rounded-full border py-0.5 pl-1 pr-1.5 text-[10px] font-semibold tabular-nums transition-[opacity,background-color,border-color,transform] duration-200",
             c.active ? "opacity-100" : "opacity-45",
-            c.empty ? "border-dashed text-muted-foreground" : "text-foreground/80"
+            c.empty ? "border-dashed text-muted-foreground" : "text-foreground/80",
+            onSec && !c.empty && "cursor-pointer hover:opacity-100 hover:border-primary/50 hover:bg-primary/10 active:scale-95",
           )}
         >
           <span

@@ -26,6 +26,7 @@ import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
 export { klipperParamKacisla } from "./exclude-object";
 import { aktarimBasladi, aktarimBitti } from "./transfer-state";
 import { ufpAdi, ufpPaketle, ufpUygunMu } from "./ufp";
+import { renkKodu, U1_FILAMENT_TIPLERI } from "./filament-tipleri";
 import http from "node:http";
 import crypto from "node:crypto";
 import { pickProgress, type ProgressSource } from "./eta";
@@ -2609,6 +2610,66 @@ export async function moonrakerExcludeObject(host: string, port: number, name: s
     if (son?.excluded.includes(name)) return;
   }
   throw new Error("Parça iptal edilemedi. Tekrar dene.");
+}
+
+/**
+ * KAFADAKİ FİLAMENTİN RENGİ / TÜRÜ (Snapmaker U1) — yazıcı ekranının "filament düzenle"si.
+ *
+ * Ekranın gönderdiğinin AYNISI (gui.log): tür için
+ *   SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=n VENDOR=Generic FILAMENT_TYPE=PLA FILAMENT_SUBTYPE=''
+ * renk için
+ *   SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=n FILAMENT_COLOR_RGBA=RRGGBBFF
+ * Ekran sabit bir paletle sınırlı ama yazılım HER onaltılık rengi kabul ediyor (u1-klipper
+ * print_task_config.py yalnız biçimi denetliyor). Snapmaker'ın etiketli makarası ("official")
+ * değiştirilemez — yazılım reddeder, biz de hiç göndermeyiz. Yazılım her değişiklikte o kafanın
+ * akış katsayısını sıfırlıyor (ekranda da öyle). Sonuç yazıcıdan geri okunarak doğrulanır.
+ */
+export async function moonrakerFilamentAyarla(
+  host: string,
+  port: number,
+  kafa: number,
+  ayar: { renk?: string | null; tip?: string | null },
+): Promise<void> {
+  if (!Number.isInteger(kafa) || kafa < 0 || kafa > 3) throw new Error("Kafa tanınmadı.");
+  const renk = ayar.renk != null ? renkKodu(ayar.renk) : null;
+  if (ayar.renk != null && !renk) throw new Error("Renk tanınmadı.");
+  const tip = ayar.tip ?? null;
+  if (tip != null && !(U1_FILAMENT_TIPLERI as readonly string[]).includes(tip)) throw new Error("Bu malzeme türü seçilemiyor.");
+  if (!renk && !tip) throw new Error("Değişiklik yok.");
+  await assertMoonrakerIdle(host, port);
+
+  const oku = async () => {
+    const res = await mreq(host, port, `/printer/objects/query?print_task_config=filament_official,filament_color_rgba,filament_type`, undefined, 4000);
+    if (!res.ok) throw new Error("Yazıcıdan filament bilgisi okunamadı.");
+    const ptc = unwrap(await res.json())?.status?.print_task_config ?? {};
+    return {
+      resmi: Array.isArray(ptc.filament_official) ? ptc.filament_official[kafa] === true : false,
+      renk: Array.isArray(ptc.filament_color_rgba) && typeof ptc.filament_color_rgba[kafa] === "string"
+        ? String(ptc.filament_color_rgba[kafa]).slice(0, 6).toUpperCase() : null,
+      tip: Array.isArray(ptc.filament_type) && typeof ptc.filament_type[kafa] === "string" ? String(ptc.filament_type[kafa]) : null,
+    };
+  };
+  const once = await oku();
+  if (once.resmi) throw new Error("Bu makaranın bilgisi etiketinden okunuyor — değiştirilemez.");
+
+  const HATA = "Filament bilgisi kaydedilemedi.";
+  if (tip && tip !== once.tip) {
+    await moonrakerGcodeScript(
+      host, port,
+      `SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=${kafa} VENDOR=Generic FILAMENT_TYPE=${klipperParamKacisla(tip)} FILAMENT_SUBTYPE=''`,
+      { timeoutMs: 15_000, failMessage: HATA },
+    );
+  }
+  if (renk && renk !== once.renk) {
+    await moonrakerGcodeScript(
+      host, port,
+      `SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=${kafa} FILAMENT_COLOR_RGBA=${renk}FF`,
+      { timeoutMs: 15_000, failMessage: HATA },
+    );
+  }
+  // TEYİT: komut kabul edilmiş olabilir ama kaydedilmemiş olabilir.
+  const sonra = await oku();
+  if ((renk && sonra.renk !== renk) || (tip && sonra.tip !== tip)) throw new Error(HATA);
 }
 
 /** Filament boşaltma akışının olayları (arayüz ilerlemesi için). */

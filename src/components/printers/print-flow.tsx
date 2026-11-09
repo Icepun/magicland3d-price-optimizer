@@ -11,6 +11,12 @@ import { amsKarari, AMS_YOK_COK_RENK } from "@/core/printers/ams-karari";
 import { ParcaOzetKarti, type ParcaBilgisi } from "./parca-gorunum";
 import type { PartPolygon, Cerceve } from "@/app/printers/part-map";
 
+// Takılı filamentin rengini/türünü değiştirme penceresi — yalnız açılınca yüklenir.
+const FilamentRenkDialog = dynamic(
+  () => import("./FilamentRenkDialog").then((m) => m.FilamentRenkDialog),
+  { ssr: false },
+);
+
 // Parça seçim penceresi (3B dahil) yalnız açılınca yüklenir.
 const BaslangicParcaDialog = dynamic(
   () => import("./BaslangicParcaDialog").then((m) => m.BaslangicParcaDialog),
@@ -309,6 +315,8 @@ export function SlotStep({
   const dosyaParcalari = partsQ.data?.parts ?? [];
   const parcaSecimi = dosyaParcalari.length >= 2;
   const [atlanacakParcalar, setAtlanacakParcalar] = useState<string[]>([]);
+  const [renkYuvasi, setRenkYuvasi] = useState<PrinterSlot | null>(null);
+  const renkDuzenlenir = isBambu || !!isSnapmaker;
   const [parcaPenceresi, setParcaPenceresi] = useState(false);
 
   const slots = useMemo(() => slotsQ.data?.slots ?? [], [slotsQ.data]);
@@ -439,16 +447,29 @@ export function SlotStep({
             ) : slots.length > 0 ? (
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1.5">
-                  Yazıcıdaki renkler — değiştirmek için yazıcı ekranını kullan
+                  {renkDuzenlenir ? "Yazıcıdaki renkler — değiştirmek için üstüne tıkla" : "Yazıcıdaki renkler — değiştirmek için yazıcı ekranını kullan"}
                 </p>
                 <div className="flex flex-wrap gap-1.5">
-                  {slots.map((s) => (
-                    <span key={s.slot} className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]">
-                      <span className="font-bold tabular-nums">{s.slot + 1}</span>
-                      <span className="h-4 w-4 rounded-full border border-black/20 shrink-0" style={{ background: s.color }} />
-                      {s.empty ? "boş" : s.type || "—"}
-                    </span>
-                  ))}
+                  {slots.map((s) => {
+                    const tiklanir = renkDuzenlenir && !s.empty && !printing;
+                    return (
+                      <button
+                        key={s.slot}
+                        type="button"
+                        disabled={!tiklanir}
+                        onClick={() => setRenkYuvasi(s)}
+                        title={tiklanir ? "Rengini değiştir" : undefined}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-all duration-150",
+                          tiklanir ? "cursor-pointer hover:border-primary/50 hover:bg-primary/10 active:scale-95" : "cursor-default",
+                        )}
+                      >
+                        <span className="font-bold tabular-nums">{s.slot + 1}</span>
+                        <span className="h-4 w-4 rounded-full border border-black/20 shrink-0 transition-colors duration-300" style={{ background: s.color }} />
+                        {s.empty ? "boş" : s.type || "—"}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             ) : (
@@ -630,6 +651,16 @@ export function SlotStep({
         )}
 
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
+
+        {renkYuvasi && (
+          <FilamentRenkDialog
+            printerId={printerId}
+            isBambu={isBambu}
+            slot={renkYuvasi.slot}
+            mevcut={{ color: renkYuvasi.color, type: renkYuvasi.type }}
+            onClose={() => setRenkYuvasi(null)}
+          />
+        )}
 
         {parcaPenceresi && (
           <BaslangicParcaDialog
