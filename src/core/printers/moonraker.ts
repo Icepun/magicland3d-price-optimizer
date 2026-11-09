@@ -2622,18 +2622,43 @@ function kafaNesnesi(kafa: number): string {
   return kafa === 0 ? "extruder" : `extruder${kafa}`;
 }
 
+/** Kafanın besleme kanalı durumu + sıcaklığı (`filament_feed left|right` → `extruder<n>`). */
+async function kanalDurumu(
+  host: string, port: number, kafa: number,
+): Promise<{ kanal: string | null; sicaklik: number | null; hedef: number | null }> {
+  const nesne = kafaNesnesi(kafa);
+  const res = await mreq(
+    host, port,
+    `/printer/objects/query?filament_feed%20left&filament_feed%20right&${nesne}=temperature,target`,
+    undefined, 2500,
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const st = unwrap(await res.json())?.status ?? {};
+  const kanalObj = st["filament_feed left"]?.[`extruder${kafa}`] ?? st["filament_feed right"]?.[`extruder${kafa}`];
+  const isi = st[nesne];
+  return {
+    kanal: typeof kanalObj?.channel_state === "string" ? kanalObj.channel_state : null,
+    sicaklik: typeof isi?.temperature === "number" ? Math.round(isi.temperature) : null,
+    hedef: typeof isi?.target === "number" && isi.target > 0 ? Math.round(isi.target) : null,
+  };
+}
+
 /**
  * FİLAMENT BOŞALT (Snapmaker U1) — kullanıcının yazıcı başında beklemesine gerek kalmasın.
  *
- * Yazıcı ekranının gönderdiği dizinin AYNISI (9 Kas 2026, U1 Üst `gui.log`'undan okundu; komutlar
- * u1-klipper `filament_feed.py` FEED_AUTO ile doğrulandı):
  *   AUTO_FEEDING_BATCH ACTION=START
- *   her kafa için:
- *     … ACTION=DOING STAGE=prepare EXTRUDER=n [NEXT_EXTRUDER=m] UNLOAD=1  → eve git, kafayı al, ısıt
- *     … ACTION=DOING STAGE=doing   EXTRUDER=n UNLOAD=1                    → filamenti geri çek
+ *   her kafa için:  … ACTION=DOING EXTRUDER=n [NEXT_EXTRUDER=m] UNLOAD=1
  *   AUTO_FEEDING_BATCH ACTION=STOP   (ısıtıcıları kapatır — HATADA DA gönderilir)
- * `NEXT_EXTRUDER` sıradaki kafayı da önceden ısıtır (ekran da öyle yapıyor). Komutlar adım bitene
- * dek dönmez; ısınma ilerlemesi bu sırada kafanın sıcaklığından okunur.
+ *
+ * ⚠️ TEK ADIM, BİLEREK (9 Kas 2026, sahada yaşandı). Yazıcı ekranı boşaltmayı iki adımda yapıyor
+ * (`STAGE=prepare` → ısınınca `STAGE=doing`) ve kafa "çekmeye hazır" (`unload_heat_finish`)
+ * durumuna geçtiği an — boşaltmayı KİM başlatmış olursa olsun — "doing"i KENDİSİ gönderiyor
+ * (U1 Üst gui.log: aynı milisaniyede ekrandan + bizden iki "doing"). İkinci komut "durum
+ * uyuşmazlığı" (525/70) verip ekranda "filament unload anomaly" uyarısı açıyordu ve akış ikinci
+ * kafaya hiç geçmiyordu. STAGE verilmezse FEED_AUTO eve gitme + kafa alma + ısıtma + geri çekmeyi
+ * tek seferde yapar (u1-klipper filament_feed.py) ve o ara durumu HİÇ kurmaz → ekran araya girmez.
+ * `NEXT_EXTRUDER` sıradaki kafayı önceden ısıtır. İlerleme kanalın kendi durumundan okunur
+ * (`unload_heating` → `unload_doing` → `unload_finish`).
  * Yazıcı yazılımı da yalnız boştayken (IDLE) kabul ediyor; baskı sürerken hiç denenmez.
  */
 export async function moonrakerFilamentBosalt(
@@ -2656,18 +2681,18 @@ export async function moonrakerFilamentBosalt(
       aktif = kafa;
       onOlay({ asama: "isiniyor", kafa, sicaklik: null, hedef: null });
 
-      // Isınırken sıcaklığı saniyede bir oku (komut ısınma bitene dek dönmüyor).
+      // Komut boşaltma bitene dek dönmüyor; bu sırada kanal durumu + sıcaklık saniyede bir okunur.
       let sur = true;
-      const nesne = kafaNesnesi(kafa);
+      let cekiyor = false;
       const izle = (async () => {
         while (sur) {
           try {
-            const res = await mreq(host, port, `/printer/objects/query?${nesne}=temperature,target`, undefined, 2500);
-            if (res.ok) {
-              const st = unwrap(await res.json())?.status?.[nesne];
-              const sicaklik = typeof st?.temperature === "number" ? Math.round(st.temperature) : null;
-              const hedef = typeof st?.target === "number" && st.target > 0 ? Math.round(st.target) : null;
-              if (sur) onOlay({ asama: "isiniyor", kafa, sicaklik, hedef });
+            const d = await kanalDurumu(host, port, kafa);
+            if (!sur) break;
+            if (d.kanal === "unload_doing") {
+              if (!cekiyor) { cekiyor = true; onOlay({ asama: "cekiliyor", kafa }); }
+            } else if (!cekiyor) {
+              onOlay({ asama: "isiniyor", kafa, sicaklik: d.sicaklik, hedef: d.hedef });
             }
           } catch { /* tek okuma kaçtı — ilerleme bir sonraki saniyede gelir */ }
           await new Promise((r) => setTimeout(r, 1000));
@@ -2676,20 +2701,19 @@ export async function moonrakerFilamentBosalt(
       try {
         await moonrakerGcodeScript(
           host, port,
-          `AUTO_FEEDING_BATCH ACTION=DOING STAGE=prepare EXTRUDER=${kafa}${sonraki != null ? ` NEXT_EXTRUDER=${sonraki}` : ""} UNLOAD=1`,
-          { timeoutMs: 8 * 60_000, failMessage: HATA },
+          `AUTO_FEEDING_BATCH ACTION=DOING EXTRUDER=${kafa}${sonraki != null ? ` NEXT_EXTRUDER=${sonraki}` : ""} UNLOAD=1`,
+          { timeoutMs: 12 * 60_000, failMessage: HATA },
         );
+      } catch (e) {
+        // Komut hata döndü ama kafa yine de boşaldıysa (ör. başka bir istemci aynı adımı da
+        // gönderdi) bu bir başarıdır — akış sonraki kafaya geçer.
+        const sonDurum = await kanalDurumu(host, port, kafa).catch(() => null);
+        if (sonDurum?.kanal !== "unload_finish") throw e;
       } finally {
         sur = false;
         await izle;
       }
-
-      onOlay({ asama: "cekiliyor", kafa });
-      await moonrakerGcodeScript(
-        host, port,
-        `AUTO_FEEDING_BATCH ACTION=DOING STAGE=doing EXTRUDER=${kafa} UNLOAD=1`,
-        { timeoutMs: 6 * 60_000, failMessage: HATA },
-      );
+      if (!cekiyor) onOlay({ asama: "cekiliyor", kafa });
       onOlay({ asama: "bitti", kafa });
       aktif = null;
     }
