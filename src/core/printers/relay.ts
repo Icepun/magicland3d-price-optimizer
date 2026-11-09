@@ -18,9 +18,11 @@ import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
-  moonrakerControl, moonrakerUploadAndPrint, type MoonrakerMeta, type MoonrakerState,
+  moonrakerControl, moonrakerUploadAndPrint, moonrakerExcludeObject, fetchMoonrakerObjects,
+  type MoonrakerMeta, type MoonrakerState,
 } from "./moonraker";
-import { bambuControl, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
+import { bambuControl, bambuSkipObjects, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
+import { moonrakerTelefonParcalari, bambuTelefonParcalari } from "./telefon-parcalar";
 import {
   BOS_DETAY, dakikayaYuvarla, katmanTahmini, type YaziciDetay,
 } from "@/core/printer-detail";
@@ -247,6 +249,10 @@ async function buildSnapshot(
     const isVar = !!bs.filename && (status === "printing" || status === "paused" || status === "finished");
     const slots = await getBambuSlotsCached(c.host, c.accessCode, c.serial).catch(() => []);
     const aktifSlot = bs.activeTray != null ? slots.find((s) => s.slot === bs.activeTray) : undefined;
+    // Telefondan parça iptali: yalnız süren/duraklamış işte (iş başına önbellekli).
+    const parcaBilgisi = bs.filename && (status === "printing" || status === "paused")
+      ? await bambuTelefonParcalari(c.id, c.host, c.accessCode, c.serial, bs.filename).catch(() => null)
+      : null;
     const detay: YaziciDetay = {
       ...BOS_DETAY,
       model: c.model,
@@ -265,6 +271,8 @@ async function buildSnapshot(
       // Telefondaki 3B: paket + plaka görseli (hazırsa; değilse arka planda hazırlanır).
       ...(isVar ? vizDurumu(c.id, bs.filename) : {}),
       toolColors: isVar ? slotToolColors(slots) : [],
+      parcalar: parcaBilgisi?.parcalar ?? [],
+      iptalParcalar: parcaBilgisi?.iptalParcalar ?? [],
     };
     return {
       name: baseName, brand: c.brand, status, online: true, statusMessage,
@@ -322,6 +330,9 @@ async function buildSnapshot(
   // panel kapalıyken 15 sn'de bir ek sorgu bindirmeyelim (aktarım sırasında zaten susuyor).
   const extras = isVar ? await getMoonrakerExtrasCached(c.host, c.port).catch(() => null) : null;
   const toplamKatman = st.totalLayer ?? meta?.totalLayer ?? null;
+  const parcaBilgisi = st.filename && (st.state === "printing" || st.state === "paused")
+    ? await moonrakerTelefonParcalari(c.id, c.host, c.port, st.filename, st.excludedObjects).catch(() => null)
+    : null;
   const detay: YaziciDetay = {
     ...BOS_DETAY,
     model: c.model,
@@ -366,6 +377,8 @@ async function buildSnapshot(
       ? { filePosition: st.filePosition, x: st.posX, y: st.posY, z: st.zHeight }
       : null,
     toolColors: extras ? slotToolColors(extras.slots, extras.toolMap) : [],
+    parcalar: parcaBilgisi?.parcalar ?? [],
+    iptalParcalar: parcaBilgisi?.iptalParcalar ?? [],
   };
   return {
     name: baseName, brand: c.brand, status, online: true,
@@ -377,7 +390,29 @@ async function buildSnapshot(
   };
 }
 
-async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string | null }): Promise<void> {
+async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string | null; param?: string | null }): Promise<void> {
+  /**
+   * TELEFONDAN PARÇA İPTALİ — `param` yazıcının parça adıdır (anlık görüntüdeki `parcalar[].ad`).
+   * Son kalan parça iptal edilmez: Klipper tüm nesneler dışlanınca baskıyı bitirmiyor, ısıtıcılar
+   * dosya sonuna kadar boşa çalışıyor (masaüstü seçicisiyle aynı koruma).
+   */
+  if (cmd.action === "exclude") {
+    const ad = cmd.param?.trim();
+    if (!ad) throw new Error("Parça belirtilmedi");
+    if (c.type === "bambu") {
+      if (!c.accessCode || !c.serial) throw new Error("Bambu erişim kodu veya seri no eksik");
+      const id = Number(ad);
+      if (!Number.isInteger(id) || id <= 0) throw new Error("Parça tanınmadı");
+      await bambuSkipObjects(c.host, c.accessCode, c.serial, [id]);
+      return;
+    }
+    const nesneler = await fetchMoonrakerObjects(c.host, c.port);
+    const st = await getMoonrakerStatusCached(c.host, c.port);
+    const kalan = nesneler.filter((n) => !st.excludedObjects.includes(n.name) && n.name !== ad);
+    if (nesneler.length && kalan.length === 0) throw new Error("Son parça iptal edilemez — baskıyı iptal et");
+    await moonrakerExcludeObject(c.host, c.port, ad);
+    return;
+  }
   if (cmd.action === "start") {
     if (!cmd.modelFileId) throw new Error("Model dosyası belirtilmedi");
     if (c.type !== "moonraker") throw new Error("Bambu'da uzaktan baskı başlatma henüz desteklenmiyor");
@@ -685,7 +720,7 @@ async function tick(): Promise<void> {
 
 /** Bekleyen telefon komutlarını sıralı işle (sıra korunmalı; tek koşucu — commandsRunning guard'ı). */
 async function processPendingCommands(configs: Cfg[]): Promise<void> {
-  let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null; createdAt: Date }[] = [];
+  let pending: { id: string; printerConfigId: string; action: string; modelFileId: string | null; param: string | null; createdAt: Date }[] = [];
   try {
     pending = await remotePrisma.printCommand.findMany({ where: { status: "pending" }, orderBy: { createdAt: "asc" }, take: 10 });
   } catch { return; }

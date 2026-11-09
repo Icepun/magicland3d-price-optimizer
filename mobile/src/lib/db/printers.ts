@@ -180,16 +180,29 @@ export async function getPrintableModels(printerConfigId: string): Promise<Print
   return out;
 }
 
-export type PrintAction = "start" | "pause" | "resume" | "cancel";
+/** exclude = tek parçayı iptal et (parametre: yazıcıdaki parça adı). */
+export type PrintAction = "start" | "pause" | "resume" | "cancel" | "exclude";
 
 /** Telefondan komut gönder → masaüstü relay'i ~10sn içinde uygular. Komut id'sini döndürür
  *  (getRecentCommands ile durumu — pending/done/error — izlenebilsin). */
 export async function sendPrintCommand(
   printerConfigId: string,
   action: PrintAction,
-  modelFileId?: string
+  modelFileId?: string,
+  /** exclude: iptal edilecek parçanın yazıcıdaki adı. */
+  param?: string
 ): Promise<string> {
   const id = "cmd_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+  // `param` kolonu masaüstü v0.19.256 (şema v53) ile geldi — yalnız parça iptalinde yazılır,
+  // diğer komutlar eski masaüstüyle de çalışmaya devam etsin.
+  if (param != null) {
+    await execute(
+      `INSERT INTO PrintCommand (id, printerConfigId, action, modelFileId, param, status, source, createdAt)
+       VALUES (?, ?, ?, ?, ?, 'pending', 'mobile', ?)`,
+      [id, printerConfigId, action, modelFileId ?? null, param, toDbDate(new Date())]
+    );
+    return id;
+  }
   await execute(
     `INSERT INTO PrintCommand (id, printerConfigId, action, modelFileId, status, source, createdAt)
      VALUES (?, ?, ?, ?, 'pending', 'mobile', ?)`,

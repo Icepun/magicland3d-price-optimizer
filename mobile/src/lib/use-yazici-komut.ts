@@ -10,6 +10,7 @@ export const KOMUT_ADI: Record<PrintAction, string> = {
   pause: "Duraklat",
   resume: "Devam",
   cancel: "İptal",
+  exclude: "Parça iptali",
 };
 
 /** Masaüstü bu sürede uygulamazsa komut "uygulanmadı" sayılır (masaüstü kapalı/uyuyor). */
@@ -47,11 +48,15 @@ export function useYaziciKomutu(simdi: number) {
 
   const mesgul = !!gonderilen && !sonuclandi && !zamanAsimi;
 
-  const gonder = (yazici: { printerConfigId: string; name: string }, eylem: PrintAction) => {
+  /**
+   * `param`: parça iptalinde yazıcıdaki parça adı. Parça iptalinin onayı seçim kartında sorulur
+   * (hangi parça olduğu orada görünüyor) — burada ikinci kez sorulmaz.
+   */
+  const gonder = (yazici: { printerConfigId: string; name: string }, eylem: PrintAction, param?: string) => {
     if (mesgul) return;
     const yolla = async () => {
       try {
-        const id = await sendPrintCommand(yazici.printerConfigId, eylem);
+        const id = await sendPrintCommand(yazici.printerConfigId, eylem, undefined, param);
         setGonderilen({ id, ad: `${yazici.name}: ${KOMUT_ADI[eylem]}`, at: Date.now() });
         qc.invalidateQueries({ queryKey: ["recent-commands"] });
       } catch {

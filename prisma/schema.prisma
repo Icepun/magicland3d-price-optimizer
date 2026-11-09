@@ -707,6 +707,8 @@ model PrintCommand {
   action          String
   /** start için: basılacak model dosyası (ProductModelFile.id). */
   modelFileId     String?
+  /** exclude için: iptal edilecek parçanın yazıcıdaki adı (Klipper nesne adı / Bambu identify_id). */
+  param           String?
   /** pending | done | error */
   status          String    @default("pending")
   error           String?

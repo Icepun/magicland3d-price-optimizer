@@ -61,6 +61,8 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v53: Telefondan parça iptali — `PrintCommand.param` (exclude komutunun parça adı). Eski sürüm
+//      masaüstü bu kolonu okumaz; telefon kolonu yalnız `exclude` komutunda yazar.
 // v52: Yazıcı doluluğu — `PrinterStatusSample` (yazıcı × 5 dakikalık dilim → durum). Relay
 //      `INSERT OR IGNORE` yazar; iki masaüstü aynı dilimi yazsa da tek satır kalır. Yeni tablo →
 //      eski sürüm cihazlar etkilenmez (yalnız yazmazlar).
@@ -98,7 +100,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "52";
+const CURRENT_SCHEMA_VERSION = "53";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1598,6 +1600,8 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "PrintCommand_status_idx" ON "PrintCommand"("status")`
     );
+    // v53: telefondan parça iptali — `exclude` komutunun parça adı.
+    await ensureColumn("PrintCommand", "param", "TEXT");
 
     // Kalıcı bildirimler (v21) — olay-anı uyarıları (stoğu biten/sipariş-üzerine ürüne sipariş).
     // id = tekilleştirme anahtarı (createMany skipDuplicates ile tekrar yazılmaz).

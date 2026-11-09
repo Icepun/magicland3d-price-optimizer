@@ -20,6 +20,7 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
+import { ParcaIptalKarti } from "@/components/ParcaIptalKarti";
 import { Yazici3B } from "@/components/Yazici3B";
 import { YaziciKamerasi } from "@/components/YaziciKamerasi";
 import { parseDbDate } from "@core/sqlite-date";
@@ -229,6 +230,17 @@ export default function YaziciEkrani() {
           )}
           <Button label="İptal" icon="stop.fill" variant="danger" disabled={mesgul} onPress={() => gonder(s, "cancel")} style={{ flex: 1 }} />
         </View>
+      ) : null}
+
+      {/* ── Bozulan parçayı iptal et (dosya parçaları işaretlediyse) ─────────── */}
+      {aktif && !bayat && d && d.parcalar.length >= 2 ? (
+        <ParcaIptalKarti
+          parcalar={d.parcalar}
+          iptaller={d.iptalParcalar}
+          basilan={d.currentObject}
+          mesgul={mesgul}
+          onIptal={(p) => gonder(s, "exclude", p.ad)}
+        />
       ) : null}
 
       {/* ── Sıcaklıklar ──────────────────────────────────────────────────────── */}

@@ -49,6 +49,19 @@ export interface YaziciViz {
   key: string;
 }
 
+/**
+ * Tabladaki parça — telefondan "bozulan parçayı iptal et" için.
+ * `ad` yazıcıya giden addır (Klipper nesne adı / Bambu identify_id) ve EKRANDA GÖSTERİLMEZ;
+ * kullanıcı `no` görür. Numara masaüstü seçicisiyle AYNI kuralla verilir (ön→arka, sol→sağ),
+ * masaüstünde hesaplanıp yazılır → iki ekran aynı parçaya aynı numarayı söyler.
+ */
+export interface YaziciParca {
+  ad: string;
+  no: number;
+  /** Tepeden kutu, tabla mm: [x0, y0, x1, y1]. */
+  kutu: [number, number, number, number];
+}
+
 /** Canlı ölçüm (yalnız Moonraker) — 3B'de nozulu gerçek yerinde akıtmak için. */
 export interface YaziciCanliOlcum {
   /** Dosyada okunan bayt (virtual_sdcard.file_position). */
@@ -87,6 +100,10 @@ export interface YaziciDetay {
   live: YaziciCanliOlcum | null;
   /** 3B'de takım (T0, T1…) başına gerçek filament rengi; bilinmeyen null. */
   toolColors: (string | null)[];
+  /** Parça iptali yapılabilen baskıda (2+ etiketli parça) parçalar; değilse boş. */
+  parcalar: YaziciParca[];
+  /** İptal edilmiş parçaların adları (`YaziciParca.ad`). */
+  iptalParcalar: string[];
 }
 
 export const BOS_DETAY: YaziciDetay = {
@@ -108,6 +125,8 @@ export const BOS_DETAY: YaziciDetay = {
   plateUrl: null,
   live: null,
   toolColors: [],
+  parcalar: [],
+  iptalParcalar: [],
 };
 
 const DAKIKA_MS = 60_000;
@@ -202,7 +221,29 @@ export function yaziciDetayOku(json: string | null | undefined): YaziciDetay | n
     toolColors: Array.isArray(d.toolColors)
       ? d.toolColors.map((c) => (typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null))
       : [],
+    parcalar: parcalarOku(d.parcalar),
+    iptalParcalar: Array.isArray(d.iptalParcalar)
+      ? d.iptalParcalar.filter((x): x is string => typeof x === "string" && x.length > 0)
+      : [],
   };
+}
+
+/** Parça listesi — bozuk/eksik kayıt atlanır (eski masaüstü bu alanı hiç yazmaz → boş). */
+function parcalarOku(v: unknown): YaziciParca[] {
+  if (!Array.isArray(v)) return [];
+  const out: YaziciParca[] = [];
+  for (const p of v) {
+    if (!p || typeof p !== "object") continue;
+    const o = p as Record<string, unknown>;
+    const k = o.kutu;
+    if (
+      typeof o.ad !== "string" || !o.ad ||
+      typeof o.no !== "number" || !Number.isFinite(o.no) ||
+      !Array.isArray(k) || k.length !== 4 || !k.every((x) => typeof x === "number" && Number.isFinite(x))
+    ) continue;
+    out.push({ ad: o.ad, no: o.no, kutu: [k[0], k[1], k[2], k[3]] as [number, number, number, number] });
+  }
+  return out;
 }
 
 /** Yalnız https adresi kabul edilir — satıra yanlışlıkla LAN adresi ya da çöp yazılırsa kırık görsel olmasın. */
