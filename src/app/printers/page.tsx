@@ -13,6 +13,7 @@ import {
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
   Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity, Scissors, Camera,
+  ArrowUpFromLine,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -33,7 +34,8 @@ import { setUploadsActive } from "@/lib/gcode-viz/viz-uploads";
 const vizPipe = () => import("@/lib/gcode-viz/viz-pipeline");
 import {
   SlotStep, parcaBilgisi,
-  type PrintableModel, type PrintPrefs,
+  type PrintableModel,
+  type BaskiSecenekleri,
 } from "@/components/printers/print-flow";
 import { ParcaBilgiSatiri, ParcaGorseli, ParcaOzetKarti } from "@/components/printers/parca-gorunum";
 import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
@@ -1365,6 +1367,11 @@ function PrinterCardInner({
               {/* KAMERA — yalnız gerçekten kamerası olan yazıcıda çizilir. */}
               <CameraButton printerId={printer.id} printerName={printer.name} />
 
+              {/* FİLAMENT BOŞALT — U1'de yazıcı başında beklemeden (yalnız boştayken). */}
+              {printer.brand === "snapmaker" && transport.canStart && (
+                <FilamentBosaltButton printerId={printer.id} printerName={printer.name} disabled={busy} />
+              )}
+
               {/* MADDE 17 — katmanda duraklat.
                   Kurulu duraklatma yazıcıda BASKIDAN BAĞIMSIZ kalıcı: baskı bitse de, katman
                   toplamı okunamasa da KALDIRILABİLMELİ (yoksa sonraki baskı yarıda duruyordu). */}
@@ -1800,6 +1807,28 @@ const CameraDialog = dynamic(
   { ssr: false },
 );
 
+const FilamentBosaltDialog = dynamic(
+  () => import("@/components/printers/FilamentBosaltDialog").then((m) => m.FilamentBosaltDialog),
+  { ssr: false },
+);
+
+function FilamentBosaltButton({ printerId, printerName, disabled }: { printerId: string; printerName: string; disabled?: boolean }) {
+  const [acik, setAcik] = useState(false);
+  return (
+    <>
+      <Button
+        size="sm" variant="outline" className="h-7 gap-1 text-xs"
+        disabled={disabled}
+        onClick={() => setAcik(true)}
+        title="Kafalardaki filamenti geri çek"
+      >
+        <ArrowUpFromLine className="h-3.5 w-3.5" /> Filament boşalt
+      </Button>
+      {acik && <FilamentBosaltDialog printerId={printerId} printerName={printerName} onClose={() => setAcik(false)} />}
+    </>
+  );
+}
+
 function CameraButton({ printerId, printerName }: { printerId: string; printerName: string }) {
   const [acik, setAcik] = useState(false);
   const { data, isLoading } = useQuery({
@@ -1956,6 +1985,7 @@ const AP_STAGE_LABEL: Record<string, string> = {
   upload: "Yazıcıya yükleniyor",
   start: "Başlatılıyor",
   confirm: "Yazıcı onaylıyor",
+  parts: "Seçilen parçalar iptal ediliyor",
 };
 
 /** Aktarımın kalan süresi — kısa: "~40 sn kaldı" / "~6 dk kaldı". */
@@ -3368,7 +3398,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
 
   // Baskıyı ARKA PLANDA başlat + modalı KAPAT → ilerleme kartta görünür, hata pop-up (toast).
   // Kullanıcı bu ekranda kilitlenmez, hızlıca başka işine döner.
-  const runPrint = (fileId: string, label: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+  const runPrint = (fileId: string, label: string, opts: BaskiSecenekleri = {}) => {
     startBackgroundPrint(qc, { printerId: target.id, fileId, label, printOpts: opts });
     onClose();
   };
@@ -3572,7 +3602,7 @@ function CustomPrintModal({ printers, onClose }: { printers: PanelPrinter[]; onC
 
   // Baskıyı ARKA PLANDA başlat + modalı kapat → ilerleme kartta, hata pop-up. (Dosya YÜKLEME adımı
   // hâlâ modalda/senkron — kullanıcı dosyayı seçerken bekler; asıl "başlatma" arka plana alınır.)
-  const runPrint = (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+  const runPrint = (fileId: string, opts: BaskiSecenekleri = {}) => {
     if (!picked) return;
     startBackgroundPrint(qc, { printerId: picked.id, fileId, label: file?.originalName || "Özel baskı", printOpts: opts });
     onClose();

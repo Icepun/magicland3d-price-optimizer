@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import {
   SlotStep, PrintProgress, runPrintStream,
-  type PrintableModel, type PrintProg, type PrintPrefs,
+  type PrintableModel, type PrintProg,
+  type BaskiSecenekleri,
 } from "@/components/printers/print-flow";
 import { fetchJson } from "@/lib/fetch-json";
 import { dedupeFiles, familyMemberIds } from "@/core/printers/printer-family";
@@ -106,12 +107,13 @@ export function ProductPrintModal({
     );
   });
 
-  async function runPrint(fileId: string, printerId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) {
+  async function runPrint(fileId: string, printerId: string, opts: BaskiSecenekleri = {}) {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
-      await runPrintStream(fileId, { ...opts, printerId }, setProgress);
+      const { uyari } = await runPrintStream(fileId, { ...opts, printerId }, setProgress);
       toast.success("Baskı başlatıldı 🎉");
+      if (uyari) toast.warning(uyari, { duration: 12000 });
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
       setTimeout(onClose, 750);
     } catch (e) {

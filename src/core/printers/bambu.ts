@@ -593,6 +593,37 @@ export async function bambuSkipObjects(
 }
 
 /**
+ * BAŞLANGIÇTA PARÇA ATLA — kullanıcı baskıyı başlatırken "bu parçaları basma" dediyse.
+ *
+ * Yazıcı parça atlamayı yalnız baskı yürürken (`RUNNING`) kabul ediyor. Başlatma sonrası önce
+ * `PREPARE` (dosya hazırlanıyor) gelir; `RUNNING`'e geçtiği an başlangıç kodu (ısınma, temizlik,
+ * ön çizgi) çalışıyordur, ilk katman henüz başlamamıştır → atlama burada gönderilir.
+ */
+export async function bambuBaslangictaAtla(
+  host: string,
+  accessCode: string,
+  serial: string,
+  ids: number[],
+  opts: { azamiMs?: number; onBekle?: () => void } = {},
+): Promise<{ ok: boolean }> {
+  const son = Date.now() + (opts.azamiMs ?? 180_000);
+  while (Date.now() < son) {
+    const s = await getBambuStatus(host, accessCode, serial);
+    const durum = (s.gcodeState ?? "").toUpperCase();
+    if (durum === "RUNNING" || durum === "PAUSE") break;
+    if (durum === "FAILED" || durum === "FINISH") return { ok: false };
+    opts.onBekle?.();
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  try {
+    await bambuSkipObjects(host, accessCode, serial, ids);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
  * MADDE 10 — Bambu'da hız "profil" ile ayarlanır (serbest yüzde yok):
  *   1 sessiz (%50) · 2 standart (%100) · 3 hızlı (%124) · 4 çok hızlı (%166)
  * Komut: `{ print: { command: "print_speed", param: "<1-4>" } }`. Uygulandığı `spd_lvl`'den doğrulanır.

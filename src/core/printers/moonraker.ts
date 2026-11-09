@@ -2611,6 +2611,146 @@ export async function moonrakerExcludeObject(host: string, port: number, name: s
   throw new Error("Parça iptal edilemedi. Tekrar dene.");
 }
 
+/** Filament boşaltma akışının olayları (arayüz ilerlemesi için). */
+export type BosaltmaOlayi =
+  | { asama: "isiniyor"; kafa: number; sicaklik: number | null; hedef: number | null }
+  | { asama: "cekiliyor"; kafa: number }
+  | { asama: "bitti"; kafa: number };
+
+/** U1 kafa numarası (0 tabanlı) → Klipper ısıtıcı nesnesi. */
+function kafaNesnesi(kafa: number): string {
+  return kafa === 0 ? "extruder" : `extruder${kafa}`;
+}
+
+/**
+ * FİLAMENT BOŞALT (Snapmaker U1) — kullanıcının yazıcı başında beklemesine gerek kalmasın.
+ *
+ * Yazıcı ekranının gönderdiği dizinin AYNISI (9 Kas 2026, U1 Üst `gui.log`'undan okundu; komutlar
+ * u1-klipper `filament_feed.py` FEED_AUTO ile doğrulandı):
+ *   AUTO_FEEDING_BATCH ACTION=START
+ *   her kafa için:
+ *     … ACTION=DOING STAGE=prepare EXTRUDER=n [NEXT_EXTRUDER=m] UNLOAD=1  → eve git, kafayı al, ısıt
+ *     … ACTION=DOING STAGE=doing   EXTRUDER=n UNLOAD=1                    → filamenti geri çek
+ *   AUTO_FEEDING_BATCH ACTION=STOP   (ısıtıcıları kapatır — HATADA DA gönderilir)
+ * `NEXT_EXTRUDER` sıradaki kafayı da önceden ısıtır (ekran da öyle yapıyor). Komutlar adım bitene
+ * dek dönmez; ısınma ilerlemesi bu sırada kafanın sıcaklığından okunur.
+ * Yazıcı yazılımı da yalnız boştayken (IDLE) kabul ediyor; baskı sürerken hiç denenmez.
+ */
+export async function moonrakerFilamentBosalt(
+  host: string,
+  port: number,
+  kafalar: number[],
+  onOlay: (o: BosaltmaOlayi) => void,
+): Promise<void> {
+  const liste = [...new Set(kafalar.filter((k) => Number.isInteger(k) && k >= 0 && k <= 3))].sort((a, b) => a - b);
+  if (!liste.length) throw new Error("Boşaltılacak kafa seçilmedi.");
+  await assertMoonrakerIdle(host, port);
+
+  const HATA = "Filament boşaltılamadı — yazıcının ekranını kontrol et.";
+  await moonrakerGcodeScript(host, port, "AUTO_FEEDING_BATCH ACTION=START", { timeoutMs: 15_000, failMessage: HATA });
+  let aktif: number | null = null;
+  try {
+    for (let i = 0; i < liste.length; i++) {
+      const kafa = liste[i];
+      const sonraki = liste[i + 1];
+      aktif = kafa;
+      onOlay({ asama: "isiniyor", kafa, sicaklik: null, hedef: null });
+
+      // Isınırken sıcaklığı saniyede bir oku (komut ısınma bitene dek dönmüyor).
+      let sur = true;
+      const nesne = kafaNesnesi(kafa);
+      const izle = (async () => {
+        while (sur) {
+          try {
+            const res = await mreq(host, port, `/printer/objects/query?${nesne}=temperature,target`, undefined, 2500);
+            if (res.ok) {
+              const st = unwrap(await res.json())?.status?.[nesne];
+              const sicaklik = typeof st?.temperature === "number" ? Math.round(st.temperature) : null;
+              const hedef = typeof st?.target === "number" && st.target > 0 ? Math.round(st.target) : null;
+              if (sur) onOlay({ asama: "isiniyor", kafa, sicaklik, hedef });
+            }
+          } catch { /* tek okuma kaçtı — ilerleme bir sonraki saniyede gelir */ }
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      })();
+      try {
+        await moonrakerGcodeScript(
+          host, port,
+          `AUTO_FEEDING_BATCH ACTION=DOING STAGE=prepare EXTRUDER=${kafa}${sonraki != null ? ` NEXT_EXTRUDER=${sonraki}` : ""} UNLOAD=1`,
+          { timeoutMs: 8 * 60_000, failMessage: HATA },
+        );
+      } finally {
+        sur = false;
+        await izle;
+      }
+
+      onOlay({ asama: "cekiliyor", kafa });
+      await moonrakerGcodeScript(
+        host, port,
+        `AUTO_FEEDING_BATCH ACTION=DOING STAGE=doing EXTRUDER=${kafa} UNLOAD=1`,
+        { timeoutMs: 6 * 60_000, failMessage: HATA },
+      );
+      onOlay({ asama: "bitti", kafa });
+      aktif = null;
+    }
+  } catch (e) {
+    // Yarım kalan kafayı ekranın yaptığı gibi iptal et (kanal durumu temizlensin).
+    if (aktif != null) {
+      await moonrakerGcodeScript(host, port, `AUTO_FEEDING_BATCH ACTION=DOING STAGE=cancel EXTRUDER=${aktif} UNLOAD=1`, {
+        timeoutMs: 20_000, failMessage: HATA,
+      }).catch(() => {});
+    }
+    throw e;
+  } finally {
+    await moonrakerGcodeScript(host, port, "AUTO_FEEDING_BATCH ACTION=STOP", { timeoutMs: 30_000, failMessage: HATA })
+      .catch(() => {});
+  }
+}
+
+/**
+ * BAŞLANGIÇTA PARÇA ATLA — kullanıcı baskıyı başlatırken "bu parçaları basma" dediyse.
+ *
+ * Klipper parça tanımlarını dosyanın başında, başlangıç makrosundan ÖNCE okur (U1'de doğrulandı)
+ * ve yeni dosya yüklenince eski listeyi siler. Liste yazıcıda görünür görünmez (genelde birkaç
+ * saniye) her parça için EXCLUDE_OBJECT gönderilir — yazıcı o sırada ısınıyor/tesviye ediyor, ilk
+ * katman henüz başlamadı. Adlar harf duyarsız eşlenir (Klipper adları büyük harfe çevirir);
+ * komuta yazıcının KENDİ yazımı gider. Dosyaya dokunulmaz → yazıcıdaki hazır dosya sonraki
+ * baskılarda yine yeniden kullanılır.
+ */
+export async function moonrakerBaslangictaAtla(
+  host: string,
+  port: number,
+  adlar: string[],
+  opts: { azamiMs?: number; onBekle?: () => void } = {},
+): Promise<{ atlanan: string[]; bulunamayan: string[] }> {
+  const istenen = adlar.map((a) => a.toUpperCase());
+  const son = Date.now() + (opts.azamiMs ?? 120_000);
+  let durum: { objects: string[]; excluded: string[] } | null = null;
+  while (Date.now() < son) {
+    durum = await excludeDurumu(host, port);
+    if (durum?.objects.length) {
+      const yazicida = new Set(durum.objects.map((o) => o.toUpperCase()));
+      if (istenen.every((a) => yazicida.has(a))) break;
+    }
+    opts.onBekle?.();
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (!durum?.objects.length) return { atlanan: [], bulunamayan: adlar };
+  const atlanan: string[] = [];
+  const bulunamayan: string[] = [];
+  for (const ad of adlar) {
+    const yazim = durum.objects.find((o) => o.toUpperCase() === ad.toUpperCase());
+    if (!yazim) { bulunamayan.push(ad); continue; }
+    try {
+      await moonrakerExcludeObject(host, port, yazim);
+      atlanan.push(ad);
+    } catch {
+      bulunamayan.push(ad);
+    }
+  }
+  return { atlanan, bulunamayan };
+}
+
 /**
  * Parça iptalini geri al — YALNIZ ADLA.
  *

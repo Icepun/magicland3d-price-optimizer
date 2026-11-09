@@ -21,7 +21,8 @@ import { thumbUrl } from "@/lib/image";
 import { toast } from "sonner";
 import {
   SlotStep, PrintProgress, runPrintStream,
-  type PrintableModel, type PrintProg, type PrintPrefs,
+  type PrintableModel, type PrintProg,
+  type BaskiSecenekleri,
 } from "@/components/printers/print-flow";
 import { vizKeyForModel } from "@/lib/gcode-viz/viz-cache";
 import { useDisariBirakmayiYut } from "@/lib/dosya-birakma";
@@ -799,12 +800,13 @@ function PartsModal({
     }
   };
 
-  const runPrint = async (fileId: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs } = {}) => {
+  const runPrint = async (fileId: string, opts: BaskiSecenekleri = {}) => {
     setPrinting(true);
     setProgress({ stage: "upload", pct: 0 });
     try {
-      await runPrintStream(fileId, opts, setProgress);
+      const { uyari } = await runPrintStream(fileId, opts, setProgress);
       toast.success("Baskı başlatıldı 🎉");
+      if (uyari) toast.warning(uyari, { duration: 12000 });
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
       setTimeout(onClose, 750);
     } catch (e) {

@@ -2,12 +2,20 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, Loader2, AlertTriangle, Minus, Plus, ArrowRight, Check, Play } from "lucide-react";
+import dynamic from "next/dynamic";
+import { Layers, Loader2, AlertTriangle, Minus, Plus, ArrowRight, Check, Play, Boxes, ChevronRight } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { amsKarari, AMS_YOK_COK_RENK } from "@/core/printers/ams-karari";
 import { ParcaOzetKarti, type ParcaBilgisi } from "./parca-gorunum";
+import type { PartPolygon, Cerceve } from "@/app/printers/part-map";
+
+// Parça seçim penceresi (3B dahil) yalnız açılınca yüklenir.
+const BaslangicParcaDialog = dynamic(
+  () => import("./BaslangicParcaDialog").then((m) => m.BaslangicParcaDialog),
+  { ssr: false },
+);
 
 /**
  * Baskı akışının PAYLAŞILAN parçaları — hem Yazıcılar sayfası (StartModal/CustomPrint) hem de
@@ -52,7 +60,7 @@ export function parcaBilgisi(m: PrintableModel): ParcaBilgisi {
 }
 export interface PrinterSlot { slot: number; color: string; type: string; empty?: boolean }
 export type PrintProg = {
-  stage: "download" | "status" | "pack" | "upload" | "start" | "confirm" | "done";
+  stage: "download" | "status" | "pack" | "upload" | "start" | "confirm" | "parts" | "done";
   pct: number | null;
   /** Bu aşamanın tahmini kalan süresi (sn). Hesaplanamıyorsa null — o zaman hiç gösterilmez. */
   kalanSn?: number | null;
@@ -60,6 +68,14 @@ export type PrintProg = {
   yeniden?: { n: number; toplam: number } | null;
 };
 export type PrintPrefs = { timelapse: boolean; bedLeveling: boolean; flowCali: boolean };
+/** Başlatma penceresinin baskıya geçirdiği seçenekler (tüm girişler aynı tipi kullanır). */
+export type BaskiSecenekleri = {
+  amsMapping?: number[];
+  useAms?: boolean;
+  prefs?: PrintPrefs;
+  /** Baskı başlarken iptal edilecek parçalar (yazıcının göreceği adlar/kimlikler). */
+  skipParts?: string[];
+};
 interface FileColor { index: number; hex: string; type: string; grams: number | null }
 interface ColorInfo { colors: FileColor[]; source: string; fileKind: "gcode" | "3mf" | "other"; originalName?: string; missing?: boolean }
 
@@ -88,9 +104,11 @@ export async function runPrintStream(
      * başka bir yazıcı da olabilir — iki U1 aynı dosyayı basar.
      */
     printerId?: string;
+    /** Baskı başlarken iptal edilecek parçalar (yazıcının göreceği adlar/kimlikler). */
+    skipParts?: string[];
   },
   onProgress: (p: PrintProg) => void,
-): Promise<void> {
+): Promise<{ uyari: string | null }> {
   const res = await fetch(`/api/models/${fileId}/print`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -99,6 +117,7 @@ export async function runPrintStream(
       useAms: opts.useAms,
       prefs: opts.prefs,
       printerId: opts.printerId,
+      skipParts: opts.skipParts?.length ? opts.skipParts : undefined,
     }),
   });
   if (!res.ok || !res.body) {
@@ -109,6 +128,8 @@ export async function runPrintStream(
   const dec = new TextDecoder();
   let buf = "";
   let errMsg: string | null = null;
+  /** Baskıyı durdurmayan uyarı (ör. seçilen parçalar iptal edilemedi) — başarıdan sonra gösterilir. */
+  let uyari: string | null = null;
   let ok = false;
 
   /**
@@ -151,7 +172,8 @@ export async function runPrintStream(
       }
       if (ev.stage === "error") errMsg = ev.message || "Baskı başlatılamadı";
       else if (ev.stage === "done") ok = true;
-      else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm") ilerle(ev.stage, null);
+      else if (ev.stage === "warn") uyari = ev.message || null;
+      else if (ev.stage === "status" || ev.stage === "start" || ev.stage === "confirm" || ev.stage === "parts") ilerle(ev.stage, null);
       else if (ev.stage === "download") ilerle("download", ev.pct ?? null); // R2 → sunucu (gerçek %)
       else if (ev.stage === "pack") ilerle("pack", ev.pct ?? null); // U1: gönderim öncesi sıkıştırma
       else ilerle("upload", ev.pct ?? null);
@@ -166,6 +188,7 @@ export async function runPrintStream(
   void import("@/lib/gcode-viz/viz-pipeline")
     .then((m) => m.ensureVizAssetsAfterPrint(fileId))
     .catch(() => { /* görselleştirme opsiyonel */ });
+  return { uyari };
 }
 
 /** Kalan süreyi kısa ve okunur yaz. */
@@ -182,6 +205,7 @@ export function PrintProgress({ p }: { p: PrintProg }) {
         : p.stage === "pack" ? "Dosya sıkıştırılıyor…"
           : p.stage === "start" ? "Baskı komutu gönderiliyor…"
             : p.stage === "confirm" ? "Yazıcı baskıya hazırlanıyor…"
+            : p.stage === "parts" ? "Seçtiğin parçalar iptal ediliyor…"
               : p.stage === "done" ? "Başlatıldı 🎉"
                 : "Yazıcıya yükleniyor…";
   const showPct = (p.stage === "upload" || p.stage === "download" || p.stage === "pack") && p.pct != null;
@@ -238,7 +262,7 @@ export function SlotStep({
 }: {
   printerId: string; model: PrintableModel; isBambu: boolean; isSnapmaker?: boolean; printing: boolean; progress: PrintProg | null;
   onBack: () => void; onClose: () => void;
-  onConfirm: (opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => void;
+  onConfirm: (opts: BaskiSecenekleri) => void;
 }) {
   // Slotlar HER AÇILIŞTA makineden taze okunur + ekran açıkken 5sn'de bir yenilenir —
   // makinede filament/renk değiştirirsen buradaki çipler de canlı güncellenir.
@@ -268,6 +292,24 @@ export function SlotStep({
     gcTime: 24 * 60 * 60_000,
   });
   const isLoading = slotsQ.isLoading || colorsQ.isLoading;
+  /**
+   * DOSYANIN PARÇALARI — "bazı parçaları basma" seçimi. Dosya içeriğine bağlı → uzun süre taze.
+   * Yalnız 2+ etiketli parça varsa satır görünür; okunamazsa sessizce gizlenir (baskıyı engellemez).
+   */
+  const partsQ = useQuery<{
+    parts: PartPolygon[]; neden?: string; frame: Cerceve | null;
+    model3d: { fileId: string; cacheKey: string } | null;
+  }>({
+    queryKey: ["model-parts", model.fileId, printerId],
+    queryFn: () => fetchJson(`/api/models/${model.fileId}/parts?printerId=${encodeURIComponent(printerId)}`),
+    staleTime: 30 * 60_000,
+    gcTime: 60 * 60_000,
+    retry: false,
+  });
+  const dosyaParcalari = partsQ.data?.parts ?? [];
+  const parcaSecimi = dosyaParcalari.length >= 2;
+  const [atlanacakParcalar, setAtlanacakParcalar] = useState<string[]>([]);
+  const [parcaPenceresi, setParcaPenceresi] = useState(false);
 
   const slots = useMemo(() => slotsQ.data?.slots ?? [], [slotsQ.data]);
   // AMS TAKILI DEĞİL: yuva seçimi yok, baskı dış makaradan (bkz. core/printers/ams-karari).
@@ -349,15 +391,16 @@ export function SlotStep({
     !!isSnapmaker && assignReady && headIds.length > 0 && assign.some((v) => !headIds.includes(v as number));
 
   const start = () => {
+    const skipParts = parcaSecimi && atlanacakParcalar.length ? atlanacakParcalar : undefined;
     // ams_mapping: dilimleyici filament index'ine göre yerleştir, boşlukları -1 ile doldur
     const maxIdx = printColors.reduce((m, c) => Math.max(m, c.index), 0);
     const map = Array.from({ length: maxIdx + 1 }, () => -1);
     printColors.forEach((c, i) => { map[c.index] = assign[i] ?? 0; });
     if (isBambu) {
       const { useAms: amsIle } = amsKarari(slotsQ.data?.amsVar, useAms, printColors.length);
-      onConfirm(amsIle ? { useAms: true, amsMapping: map, prefs } : { useAms: false, prefs });
+      onConfirm(amsIle ? { useAms: true, amsMapping: map, prefs, skipParts } : { useAms: false, prefs, skipParts });
     }
-    else onConfirm({ amsMapping: map, prefs }); // Snapmaker: kafa eşlemesi → route'ta gcode tool remap
+    else onConfirm({ amsMapping: map, prefs, skipParts }); // Snapmaker: kafa eşlemesi → route'ta gcode tool remap
   };
 
   return (
@@ -501,6 +544,38 @@ export function SlotStep({
               </p>
             )}
 
+            {/* PARÇALAR — basılmasını istemediğin parçaları baskı başlamadan seç. */}
+            {parcaSecimi && (
+              <div className="space-y-1.5 pt-2 border-t border-border/50 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-1 duration-300">
+                <p className="text-[11px] text-muted-foreground">Parçalar</p>
+                <button
+                  onClick={() => setParcaPenceresi(true)}
+                  disabled={printing}
+                  className="group w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-xs text-left transition-all hover:bg-muted hover:border-primary/40 active:scale-[0.99] disabled:opacity-50"
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary shrink-0">
+                    <Boxes className="h-4 w-4" />
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    {atlanacakParcalar.length ? (
+                      <>
+                        <span className="font-semibold tabular-nums">{dosyaParcalari.length - atlanacakParcalar.length}</span>
+                        <span className="text-muted-foreground tabular-nums"> / {dosyaParcalari.length} parça basılacak</span>
+                      </>
+                    ) : (
+                      <span>
+                        <span className="font-semibold tabular-nums">{dosyaParcalari.length}</span>
+                        <span className="text-muted-foreground"> parçanın hepsi basılacak</span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="inline-flex items-center gap-0.5 text-primary font-medium">
+                    Seç <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+                  </span>
+                </button>
+              </div>
+            )}
+
             {/* Baskı/calibration seçenekleri — Bambu (MQTT param) + Snapmaker U1 (native print_task_config
                 tercihi: BED_LEVEL/FLOW_CALIBRATE/TIME_LAPSE_CAMERA; gcode'a DOKUNMAZ, priming'i bozmaz).
                 Elegoo'da bu seçenekler yok. */}
@@ -555,6 +630,18 @@ export function SlotStep({
         )}
 
         {progress && <div className="mt-1"><PrintProgress p={progress} /></div>}
+
+        {parcaPenceresi && (
+          <BaslangicParcaDialog
+            parts={dosyaParcalari}
+            frame={partsQ.data?.frame ?? null}
+            model3d={partsQ.data?.model3d ?? null}
+            secilenler={atlanacakParcalar}
+            toolColors={fileColors.map((c) => c.hex)}
+            onKaydet={(liste) => { setAtlanacakParcalar(liste); setParcaPenceresi(false); }}
+            onClose={() => setParcaPenceresi(false)}
+          />
+        )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onBack} disabled={printing}>Geri</Button>

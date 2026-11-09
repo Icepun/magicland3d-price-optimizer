@@ -51,6 +51,71 @@ export interface ParcaKutu {
   maxY: number;
 }
 
+/** Dosyadaki bir parça tanımı (`EXCLUDE_OBJECT_DEFINE`). */
+export interface ExcludeTanim {
+  /** Dosyada yazdığı gibi (Klipper yazıcıda BÜYÜK harfe çevirir — eşleme harf duyarsız yapılır). */
+  name: string;
+  center: [number, number];
+  polygon: [number, number][];
+}
+
+/**
+ * Dosyanın başındaki parça tanımlarını oku — baskı BAŞLAMADAN parça seçebilmek için.
+ *
+ * Orca/Snapmaker Orca tanımları dosya gövdesinin en başına, başlangıç makrosunun hemen önüne
+ * yazıyor (U1'de doğrulandı: 211 MB'lık dosyada 354. satır, `PRINT_START` 361.). Ad tırnaklı
+ * olabilir (`klipperParamKacisla` boşluklu/özel karakterli adı öyle yazar) → kaçışlar çözülür.
+ * Poligon yoksa merkezin çevresine küçük bir kare çizilir; ikisi de yoksa parça atlanır.
+ */
+export function excludeTanimlariniOku(metin: string): ExcludeTanim[] {
+  const sonuc: ExcludeTanim[] = [];
+  const gorulen = new Set<string>();
+  let i = metin.indexOf("EXCLUDE_OBJECT_DEFINE");
+  while (i >= 0) {
+    const son = metin.indexOf("\n", i);
+    const satir = metin.slice(i, son < 0 ? metin.length : son);
+    // Komut satırın BAŞINDA olmalı — yorumun içindeki geçiş ("; EXCLUDE_OBJECT_DEFINE …") komut değildir.
+    const satirBasi = metin.lastIndexOf("\n", i - 1) + 1;
+    const onunde = metin.slice(satirBasi, i);
+    i = son < 0 ? -1 : metin.indexOf("EXCLUDE_OBJECT_DEFINE", son);
+    if (onunde.trim()) continue;
+
+    const adEs = /\bNAME=("(?:[^"\\]|\\.)*"|\S+)/.exec(satir);
+    if (!adEs) continue;
+    const name = adEs[1].startsWith('"')
+      ? adEs[1].slice(1, -1).replace(/\\(["\\])/g, "$1")
+      : adEs[1];
+    if (!name || gorulen.has(name.toUpperCase())) continue;
+
+    let polygon: [number, number][] = [];
+    const polEs = /\bPOLYGON=(\[\[[^\s]*\]\])/.exec(satir);
+    if (polEs) {
+      try {
+        const ham = JSON.parse(polEs[1]) as unknown;
+        if (Array.isArray(ham)) {
+          polygon = ham
+            .filter((p): p is [number, number] => Array.isArray(p) && p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+            .map((p) => [Number(p[0]), Number(p[1])] as [number, number]);
+        }
+      } catch { /* bozuk poligon → merkezden kare */ }
+    }
+    const merEs = /\bCENTER=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/.exec(satir);
+    let center: [number, number] | null = merEs ? [Number(merEs[1]), Number(merEs[2])] : null;
+    if (!center && polygon.length) {
+      const xs = polygon.map((p) => p[0]), ys = polygon.map((p) => p[1]);
+      center = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+    }
+    if (!center) continue;
+    if (polygon.length < 3) {
+      const [cx, cy] = center;
+      polygon = [[cx - 5, cy - 5], [cx + 5, cy - 5], [cx + 5, cy + 5], [cx - 5, cy + 5]];
+    }
+    gorulen.add(name.toUpperCase());
+    sonuc.push({ name, center, polygon });
+  }
+  return sonuc;
+}
+
 /** Dosyada zaten EXCLUDE_OBJECT komutları var mı? (varsa DOKUNMA) */
 export function excludeObjectKomutuVar(buf: Buffer): boolean {
   // Yalnız baştaki birkaç MB'a bak: komutlar varsa DEFINE en başta olur.

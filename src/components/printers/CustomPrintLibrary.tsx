@@ -22,7 +22,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   SlotStep,
-  type PrintableModel, type PrintPrefs,
+  type PrintableModel,
+  type BaskiSecenekleri,
 } from "@/components/printers/print-flow";
 import { startBackgroundPrint } from "@/lib/print-jobs";
 import { dedupeFiles, familyDisplayName, printerFamilyKey } from "@/core/printers/printer-family";
@@ -235,7 +236,7 @@ export function CustomPrintLibrary({ printers, onClose }: { printers: LivePrinte
   const printing = false; // baskı ARKA PLANDA (modal kilitlenmez) → ilerleme yazıcı kartında
 
   // ARKA PLANDA başlat + arşivi kapat → ilerleme kartta, hata pop-up. Kullanıcı beklemez.
-  const runPrint = (fileId: string, printerId: string, label: string, opts: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs }) => {
+  const runPrint = (fileId: string, printerId: string, label: string, opts: BaskiSecenekleri) => {
     startBackgroundPrint(qc, { printerId, fileId, label, printOpts: opts });
     setReprint(null);
     onClose();

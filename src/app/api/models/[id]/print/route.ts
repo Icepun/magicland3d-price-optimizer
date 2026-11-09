@@ -7,8 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
-import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize } from "@/core/printers/moonraker";
-import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsDurumu, mapBambuState, bambuRaporBekle } from "@/core/printers/bambu";
+import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize, moonrakerBaslangictaAtla } from "@/core/printers/moonraker";
+import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsDurumu, mapBambuState, bambuRaporBekle, bambuBaslangictaAtla } from "@/core/printers/bambu";
 import { amsKarari } from "@/core/printers/ams-karari";
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
 import { tryAcquirePrintLock, releasePrintLock } from "@/core/printers/print-lock";
@@ -33,8 +33,9 @@ export const dynamic = "force-dynamic";
 /**
  * Modeli yazıcıya yükle + baskıyı başlat. Yanıt = NDJSON akışı (satır satır ilerleme):
  *   {stage:"download",pct} · {stage:"status"} · {stage:"pack",pct} (yalnız U1: sıkıştırma) ·
- *   {stage:"upload",pct[,cached]} · {stage:"start"} · {stage:"confirm"} · {stage:"done"} ·
- *   {stage:"error",message}
+ *   {stage:"upload",pct[,cached]} · {stage:"start"} · {stage:"confirm"} ·
+ *   {stage:"parts"} (seçilen parçalar iptal ediliyor) · {stage:"warn",message} (baskıyı durdurmayan
+ *   uyarı) · {stage:"done"} · {stage:"error",message}
  *
  * YENİDEN KULLANIM: dosya daha önce bu yazıcıya (içerik-hash'li adla) yüklendiyse ve boyut
  * birebir tutuyorsa R2 indirmesi + yükleme tamamen atlanır → saniyeler içinde başlar.
@@ -52,6 +53,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const useAms: boolean | undefined = typeof body?.useAms === "boolean" ? body.useAms : undefined;
     const prefsRaw = body?.prefs && typeof body.prefs === "object" ? body.prefs : {};
     const prefs = { timelapse: !!prefsRaw.timelapse, bedLeveling: !!prefsRaw.bedLeveling, flowCali: !!prefsRaw.flowCali };
+    // Başlatırken "basılmasın" denen parçalar (yazıcının göreceği adlar/kimlikler — api/models/[id]/parts).
+    const skipParts: string[] = Array.isArray(body?.skipParts)
+      ? (body.skipParts as unknown[])
+          .filter((x): x is string => typeof x === "string" && x.length > 0 && x.length <= 300)
+          .slice(0, 300)
+      : [];
 
     const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
@@ -358,6 +365,36 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             if (!printerErrored && !confirmed) {
               send({ stage: "error", message: "Yazıcı 25 saniyede baskıya geçmedi — ekranını kontrol et; komut ulaşmamış olabilir, tekrar dene." });
               printerErrored = true;
+            }
+          }
+
+          // BAŞLANGIÇTA PARÇA ATLA — baskı başladı; ilk katmandan önce seçilen parçalar iptal edilir.
+          // Başarısızlık baskıyı DURDURMAZ: baskı sürüyor, kullanıcı karttan elle iptal edebilir.
+          if (!printerErrored && skipParts.length) {
+            send({ stage: "parts" });
+            const tumuOlmadi = "Baskı başladı ama seçtiğin parçalar iptal edilemedi — karttaki “Parça seç” ile iptal edebilirsin.";
+            try {
+              if (isBambu) {
+                const ids = skipParts.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+                const r = await bambuBaslangictaAtla(printer.host, printer.accessCode!, printer.serial!, ids, {
+                  onBekle: () => send({ stage: "parts" }),
+                });
+                if (!r.ok) send({ stage: "warn", message: tumuOlmadi });
+              } else {
+                const r = await moonrakerBaslangictaAtla(printer.host, printer.port, skipParts, {
+                  onBekle: () => send({ stage: "parts" }),
+                });
+                if (r.bulunamayan.length) {
+                  send({
+                    stage: "warn",
+                    message: r.atlanan.length
+                      ? "Seçtiğin parçaların bir kısmı iptal edilemedi — karttaki “Parça seç” ile kontrol et."
+                      : tumuOlmadi,
+                  });
+                }
+              }
+            } catch {
+              send({ stage: "warn", message: tumuOlmadi });
             }
           }
 

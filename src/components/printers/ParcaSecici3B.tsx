@@ -32,6 +32,13 @@ export interface ParcaSecici3BProps {
   onUzerinde?: (name: string | null) => void;
   onHazir?: () => void;
   onHata?: () => void;
+  /**
+   * İptal edilmiş parça da tıklanabilsin (baskı başlamadan seçimde "basılmasın" işaretini geri
+   * almak için). Baskı sürerken kapalı: iptal edilen parça bir daha seçilemez.
+   */
+  iptalSecilebilir?: boolean;
+  /** Alt ipucu metni (varsayılan: çevir · seç). */
+  ipucuMetni?: string;
 }
 
 const BASLANGIC_AZ = Math.PI / 4;
@@ -40,7 +47,8 @@ const TIK_ESIGI_PX = 5;
 
 export function ParcaSecici3B({
   geom, parcalar, iptaller, secili, basilan, disVurgu, ilerleme, toolColors, reduceMotion,
-  onSec, onUzerinde, onHazir, onHata,
+  onSec, onUzerinde, onHazir, onHata, iptalSecilebilir = false,
+  ipucuMetni = "Sürükleyerek çevir · parçaya tıklayarak seç",
 }: ParcaSecici3BProps) {
   const kutuRef = useRef<HTMLDivElement | null>(null);
   const sahneRef = useRef<ParcaSahnesi | null>(null);
@@ -62,8 +70,8 @@ export function ParcaSecici3B({
   // Geri çağrılar döngüde ref'ten okunur (sahne her render'da yeniden kurulmasın).
   const geriRef = useRef({ onSec, onUzerinde, onHazir, onHata });
   useEffect(() => { geriRef.current = { onSec, onUzerinde, onHazir, onHata }; }, [onSec, onUzerinde, onHazir, onHata]);
-  const durumRef = useRef({ iptaller, kdenParca });
-  useEffect(() => { durumRef.current = { iptaller, kdenParca }; }, [iptaller, kdenParca]);
+  const durumRef = useRef({ iptaller, kdenParca, iptalSecilebilir });
+  useEffect(() => { durumRef.current = { iptaller, kdenParca, iptalSecilebilir }; }, [iptaller, kdenParca, iptalSecilebilir]);
 
   // ── Sahne ────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -158,7 +166,7 @@ export function ParcaSecici3B({
       const p = konum(e);
       const k = sahne.sec(renderer, p.x, p.y, gen, yuk);
       const parca = durumRef.current.kdenParca[k] ?? null;
-      if (parca && !durumRef.current.iptaller.includes(parca.name)) {
+      if (parca && (durumRef.current.iptalSecilebilir || !durumRef.current.iptaller.includes(parca.name))) {
         setIpucu(false);
         geriRef.current.onSec(parca.name);
       }
@@ -213,7 +221,8 @@ export function ParcaSecici3B({
         sonSecim = t;
         const k = sahne.sec(renderer, p.x, p.y, gen, yuk);
         const parca = durumRef.current.kdenParca[k] ?? null;
-        const secilebilir = parca && !durumRef.current.iptaller.includes(parca.name) ? k : 0;
+        const secilebilir =
+          parca && (durumRef.current.iptalSecilebilir || !durumRef.current.iptaller.includes(parca.name)) ? k : 0;
         tuval.style.cursor = secilebilir ? "pointer" : "grab";
         if (secilebilir !== uzerindeK) {
           uzerindeK = secilebilir;
@@ -332,7 +341,7 @@ export function ParcaSecici3B({
 
       {hazir && ipucu && (
         <p className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-background/75 px-3 py-1 text-[11px] text-muted-foreground backdrop-blur-sm motion-safe:animate-in motion-safe:fade-in duration-500">
-          Sürükleyerek çevir · parçaya tıklayarak seç
+          {ipucuMetni}
         </p>
       )}
     </div>

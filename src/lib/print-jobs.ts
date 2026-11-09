@@ -13,7 +13,7 @@
  */
 import type { QueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { runPrintStream, type PrintProg, type PrintPrefs } from "@/components/printers/print-flow";
+import { runPrintStream, type PrintProg, type BaskiSecenekleri } from "@/components/printers/print-flow";
 
 export interface ActivePrint {
   stage: PrintProg["stage"] | "error";
@@ -36,7 +36,7 @@ export function startBackgroundPrint(
     printerId: string;
     fileId: string;
     label: string;
-    printOpts?: { amsMapping?: number[]; useAms?: boolean; prefs?: PrintPrefs };
+    printOpts?: BaskiSecenekleri;
   },
 ): void {
   const key = activePrintKey(opts.printerId);
@@ -49,8 +49,10 @@ export function startBackgroundPrint(
     if (p.stage === "done") return; // done → kart normal "yazdırıyor" job'a döner (aşağıda temizlenir)
     set({ stage: p.stage, pct: p.pct, label: opts.label, startedAt, yeniden: p.yeniden ?? null, kalanSn: p.kalanSn ?? null });
   })
-    .then(() => {
+    .then(({ uyari }) => {
       toast.success(`${opts.label} — baskı başladı 🎉`);
+      // Baskı başladı ama seçilen parçalar iptal edilemediyse: kullanıcı karttan elle iptal edebilir.
+      if (uyari) toast.warning(`${opts.label}: ${uyari}`, { duration: 12000 });
       set(null);
       setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
     })
