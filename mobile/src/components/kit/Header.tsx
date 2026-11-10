@@ -112,6 +112,7 @@ export function Bell() {
 
 const MENU: { icon: SymbolViewProps["name"]; title: string; hint: string; href: string; tint: string }[] = [
   { icon: "chart.pie.fill", title: "Raporlar", hint: "Aylık ciro, kâr ve ürün kırılımı", href: "/reports", tint: color.accentBright },
+  { icon: "function", title: "Hızlı hesap", hint: "Ürünü kaydetmeden fiyat ve kâr dene", href: "/hizli-hesap", tint: color.good },
   { icon: "bell.fill", title: "Bildirimler", hint: "Stok, filament ve yazıcı uyarıları", href: "/notifications", tint: color.warn },
   { icon: "slider.horizontal.3", title: "Kurallar", hint: "Komisyon, kargo, gider, reklam bütçesi", href: "/settings", tint: color.info },
 ];

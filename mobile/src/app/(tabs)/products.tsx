@@ -13,6 +13,7 @@ import {
   ErrorState,
   FadeInView,
   Header,
+  IconButton,
   Screen,
   SearchInput,
   ShimmerList,
@@ -213,6 +214,13 @@ export default function ProductsScreen() {
         <Header
           title="Ürünler"
           updatedAt={dataUpdatedAt}
+          right={
+            <IconButton
+              icon="function"
+              onPress={() => router.push("/hizli-hesap" as never)}
+              accessibilityLabel="Hızlı hesap"
+            />
+          }
           subtitle={
             products ? (
               <Count value={filtered.length} v="small" tone="dim" format={(n) => `${formatNumber(Math.round(n))} ürün`} />
