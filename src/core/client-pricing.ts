@@ -1,33 +1,33 @@
-import { reviveRuleDates } from "../core/rule-dates";
-import { simulatePrice } from "../core/pricing-engine";
+import { reviveRuleDates } from "./rule-dates";
+import { simulatePrice } from "./pricing-engine";
 import {
   belowShopifyMinBasket,
   platformMinOrderQty,
   platformPriceBreakpoints,
   shopifyCargoOverride,
   targetPriceFloor,
-} from "../core/platform-rules";
-import { vatRateOf } from "../core/vat";
+} from "./platform-rules";
+import { vatRateOf } from "./vat";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
-} from "../core/product-commission";
-import { filterCargoRulesByPlatform, filterRulesByPlatform } from "../core/cargo-calculator";
-import { packagingScopeInput, resolveProductCost } from "../core/product-cost";
-import { ekFilamentleriYaz, filamentFiyatHaritasi } from "../core/filament-karisimi";
+} from "./product-commission";
+import { filterCargoRulesByPlatform, filterRulesByPlatform } from "./cargo-calculator";
+import { packagingScopeInput, resolveProductCost } from "./product-cost";
+import { ekFilamentleriYaz, filamentFiyatHaritasi } from "./filament-karisimi";
 import {
   collectRulePriceBreakpoints,
   findMinimumPriceForMargin,
-} from "../core/price-target";
+} from "./price-target";
 import type {
   SimulationResult,
   CommissionRuleInput,
   CargoRuleInput,
   ExpenseRuleInput,
-} from "../core/types";
+} from "./types";
 
 /**
- * İSTEMCİ-TARAFI kâr hesabı (ürün detay sayfası canlı önizleme + Fiyat Lab).
+ * İSTEMCİ-TARAFI kâr hesabı (ürün detay sayfası canlı önizleme + Fiyat Lab + Hızlı hesap).
  *
  * NEDEN: Next.js sunucusu Electron ANA sürecinde çalışır; maliyet her değişimde sunucuya gitmek
  * pencereyi donduruyordu. Aynı saf `@/core` fonksiyonlarıyla hesabı BURADA (tarayıcıda) yaparız.

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { computeClientPricing, type ClientPricingInput } from "./client-pricing";
-import { simulatePrice, trendyolMinQty } from "../core/pricing-engine";
-import { resolveListingCommissionOverride } from "../core/product-commission";
+import { simulatePrice, trendyolMinQty } from "./pricing-engine";
+import { resolveListingCommissionOverride } from "./product-commission";
 
 /**
  * Parite testi: istemci-tarafı kâr hesabı (computeClientPricing) ile çekirdek simulatePrice'ın

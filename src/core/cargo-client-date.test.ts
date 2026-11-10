@@ -8,7 +8,7 @@
  * HER karşılaştırma `false` döner → süzgeç hiç elemez → SÜRESİ DOLMUŞ tarife hâlâ aday kalır.
  *
  * ÇÖZÜM: kural listesi motora girmeden önce `reviveRuleDates`'ten geçer (`core/rule-dates.ts`),
- * `lib/client-pricing.ts` bunu uyguluyor. Motorun kendisi hâlâ metinle çalışmaz — bu bilinçli:
+ * `core/client-pricing.ts` bunu uyguluyor. Motorun kendisi hâlâ metinle çalışmaz — bu bilinçli:
  * motor saf kalır, tip sözleşmesi `Date` der. Aşağıdaki testler hem tuzağı hem çözümü kilitler.
  */
 import { describe, expect, it } from "vitest";

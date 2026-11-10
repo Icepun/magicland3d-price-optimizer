@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { sikKomisyonlar } from "@/lib/hizli-hesap";
+import { sikKomisyonlar } from "@/core/hizli-hesap";
 
 export const dynamic = "force-dynamic";
 

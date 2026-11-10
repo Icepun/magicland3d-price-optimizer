@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { fiyatDagilimi, hizliHesapla, sayiOku, sikKomisyonlar, type HizliHesapBaglam, type HizliHesapGirdi } from "./hizli-hesap";
-import { simulatePrice } from "../core/pricing-engine";
-import { resolveProductCost, packagingScopeInput } from "../core/product-cost";
+import { simulatePrice } from "./pricing-engine";
+import { resolveProductCost, packagingScopeInput } from "./product-cost";
 
 const settings = {
   costMachineWearPerHour: "4.6",

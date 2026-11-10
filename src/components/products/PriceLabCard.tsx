@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
-import type { PriceLab } from "@/lib/client-pricing";
+import type { PriceLab } from "@/core/client-pricing";
 
 /** Ürünler listesinde hesaplanan "küçük zam, büyük kazanç" önerisi. */
 export interface PriceThresholdInfo {

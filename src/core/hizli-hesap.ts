@@ -11,8 +11,8 @@
  * pazaryerinde tanımlı kural varsa o) kullanılır.
  */
 import { computePriceLab, computeProfitPreview, type ClientPricingInput } from "./client-pricing";
-import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput, SimulationResult } from "../core/types";
-import { belowShopifyMinBasket } from "../core/platform-rules";
+import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput, SimulationResult } from "./types";
+import { belowShopifyMinBasket } from "./platform-rules";
 
 export type HizliPlatform = "trendyol" | "hepsiburada" | "shopify";
 

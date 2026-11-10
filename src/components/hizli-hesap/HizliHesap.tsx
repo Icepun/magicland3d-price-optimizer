@@ -3,8 +3,9 @@
  * HIZLI HESAP — her sayfadan açılan yan çekmece: ürünü kaydetmeden fiyat dene.
  *
  * Gramaj, filament, süre, desi ve komisyonu gir → yazdığın satış fiyatında net kâr ve marj ANINDA.
- * Hesap ürün ekranının kendisi (`lib/hizli-hesap` → `client-pricing`), yani rakamlar Ürünler
- * sayfasıyla birebir aynı. Girdiler bu cihazda hatırlanır (bir sonraki ürün aynı ayarlarla başlar).
+ * Hesap ürün ekranının kendisi (`core/hizli-hesap` → `core/client-pricing`), yani rakamlar Ürünler
+ * sayfasıyla ve telefondaki Hızlı hesapla birebir aynı. Girdiler bu cihazda hatırlanır (bir sonraki
+ * ürün aynı ayarlarla başlar).
  *
  * Açma: `openHizliHesap()` (kenar çubuğu, Panel, komut paleti).
  */
@@ -21,7 +22,7 @@ import { parsePackagingSettings } from "@/core/packaging";
 import {
   fiyatDagilimi, hizliHesapla, sayiOku,
   type HizliHesapBaglam, type HizliHesapGirdi, type HizliPlatform,
-} from "@/lib/hizli-hesap";
+} from "@/core/hizli-hesap";
 import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput } from "@/core/types";
 
 const ACMA_OLAYI = "hizli-hesap:ac";

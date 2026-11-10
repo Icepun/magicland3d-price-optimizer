@@ -44,7 +44,7 @@ import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRule
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
 import { ekFilamentleriOku, ekFilamentleriYaz } from "@/core/filament-karisimi";
 import { belowShopifyMinBasket } from "@/core/platform-rules";
-import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/lib/client-pricing";
+import { computeProfitPreview, computePriceLab, type ProfitPreview } from "@/core/client-pricing";
 import { fetchJson } from "@/lib/fetch-json";
 
 interface FilamentType {
