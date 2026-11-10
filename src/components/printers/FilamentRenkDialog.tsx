@@ -5,12 +5,15 @@
  * Yazıcı ekranları sabit bir paletle sınırlı; burada her renk seçilebilir. Önce kullanıcının
  * stoğundaki makara renkleri (Filament sayfası) gelir — çoğu zaman takılan makara oradadır.
  * Kaydedilen değer yazıcıdan geri okunarak doğrulanır (sunucu tarafı).
+ *
+ * ETİKET MODU (U1, `etiket` verilince): kayıt makaranın etiketine bağlanır
+ * (api/printers/[id]/makara-etiketi) — makara bir daha nereye takılırsa takılsın renk kendiliğinden gelir.
  */
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, Check, Loader2, Palette } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Palette, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BAMBU_FILAMENT_TIPLERI, renkKodu, U1_FILAMENT_TIPLERI } from "@/core/printers/filament-tipleri";
 
@@ -38,7 +41,7 @@ const TEMEL_RENKLER: { ad: string; hex: string }[] = [
 ];
 
 export function FilamentRenkDialog({
-  printerId, printerName, isBambu, slot, mevcut, onClose,
+  printerId, printerName, isBambu, slot, mevcut, etiket, onClose,
 }: {
   printerId: string;
   /** Başlıkta gösterilir (baskı başlatma penceresinden açılınca verilmez). */
@@ -46,6 +49,8 @@ export function FilamentRenkDialog({
   isBambu: boolean;
   slot: number;
   mevcut: { color: string; type: string };
+  /** Makara etiketi (U1): yeni = ilk kez takıldı, henüz tanıtılmadı. */
+  etiket?: { uid: string; yeni: boolean };
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -53,7 +58,10 @@ export function FilamentRenkDialog({
   const tipler: readonly string[] = isBambu ? BAMBU_FILAMENT_TIPLERI : U1_FILAMENT_TIPLERI;
   const [renk, setRenk] = useState(baslangicRenk);
   const [hexYazi, setHexYazi] = useState(baslangicRenk.slice(1));
-  const [tip, setTip] = useState<string>(mevcut.type && tipler.includes(mevcut.type) ? mevcut.type : "");
+  // Yeni etikette tür boş bırakılamaz: en sık kullanılan (PLA) önden seçili gelir.
+  const [tip, setTip] = useState<string>(
+    mevcut.type && tipler.includes(mevcut.type) ? mevcut.type : etiket?.yeni ? "PLA" : "",
+  );
   const [durum, setDurum] = useState<"bos" | "kaydediliyor" | "tamam">("bos");
   const [hata, setHata] = useState<string | null>(null);
 
@@ -87,22 +95,29 @@ export function FilamentRenkDialog({
     setHexYazi(hex.slice(1).toUpperCase());
     setHata(null);
   };
-  const degisti = renk.toUpperCase() !== baslangicRenk.toUpperCase() || (tip !== "" && tip !== mevcut.type);
-  const etiket = isBambu ? `Makara ${slot + 1}` : `${slot + 1}. kafa`;
+  // Yeni etiket her zaman kaydedilebilir: gösterilen renk zaten doğruysa da tanıtılmalı.
+  const degisti = !!etiket?.yeni || renk.toUpperCase() !== baslangicRenk.toUpperCase() || (tip !== "" && tip !== mevcut.type);
+  const yuvaAdi = isBambu ? `Makara ${slot + 1}` : `${slot + 1}. kafa`;
 
   const kaydet = async () => {
     setDurum("kaydediliyor");
     setHata(null);
     try {
-      const r = await fetch(`/api/printers/${printerId}/filament-ayar`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          slot,
-          renk: renk.toUpperCase() !== baslangicRenk.toUpperCase() ? renk : null,
-          tip: tip && tip !== mevcut.type ? tip : null,
-        }),
-      });
+      const r = etiket
+        ? await fetch(`/api/printers/${printerId}/makara-etiketi`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kanal: slot, uid: etiket.uid, renk, tip: tip || mevcut.type || "PLA" }),
+          })
+        : await fetch(`/api/printers/${printerId}/filament-ayar`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              slot,
+              renk: renk.toUpperCase() !== baslangicRenk.toUpperCase() ? renk : null,
+              tip: tip && tip !== mevcut.type ? tip : null,
+            }),
+          });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}) as { error?: string });
         throw new Error((j as { error?: string }).error || "Kaydedilemedi.");
@@ -122,8 +137,17 @@ export function FilamentRenkDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Palette className="h-4 w-4 text-primary" /> {printerName ? `${etiket} — ${printerName}` : etiket}
+            {etiket ? <Tag className="h-4 w-4 text-primary" /> : <Palette className="h-4 w-4 text-primary" />}
+            {etiket?.yeni ? "Yeni makara" : yuvaAdi}
+            {printerName ? ` — ${printerName}` : ""}
           </DialogTitle>
+          {etiket && (
+            <p className="text-xs text-muted-foreground motion-safe:animate-in motion-safe:fade-in duration-300">
+              {etiket.yeni
+                ? `${yuvaAdi}: rengini seç — bu makara bir daha takılınca kendiliğinden tanınır.`
+                : "Etiketli makara — değişiklik makaraya kaydedilir."}
+            </p>
+          )}
         </DialogHeader>
 
         <div className="space-y-4">
@@ -216,6 +240,8 @@ export function FilamentRenkDialog({
               <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> Kaydediliyor…</>
             ) : durum === "tamam" ? (
               <><Check className="h-3.5 w-3.5 mr-1 motion-safe:animate-in motion-safe:zoom-in-50" /> Kaydedildi</>
+            ) : etiket ? (
+              "Makaraya kaydet"
             ) : (
               "Yazıcıya kaydet"
             )}

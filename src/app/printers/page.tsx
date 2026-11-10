@@ -13,7 +13,7 @@ import {
   Check, X, Search, Package, Link2, ArrowRight, AlertTriangle,
   Upload, FileBox, Weight, ChevronLeft, ChevronRight, FolderOpen, HardDrive,
   Lightbulb, Gauge, Rotate3d, Minus, Hourglass, Eye, RectangleHorizontal, Activity, Scissors, Camera,
-  ArrowUpFromLine,
+  ArrowUpFromLine, Tag,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -1038,7 +1038,15 @@ function PrinterCardInner({
   const [renkCipi, setRenkCipi] = useState<SlotChip | null>(null);
   const renkDuzenlenebilir =
     isReal && online && transport.canStart && (printer.type === "bambu" || printer.brand === "snapmaker");
-  const renkSec = renkDuzenlenebilir ? (c: SlotChip) => { if (!c.empty) setRenkCipi(c); } : undefined;
+  // Etiketli makara (U1): yazıcı çevrimiçiyse baskı sürerken bile tanıtılabilir — kayıt saklanır,
+  // yazıcıya baskı bitince gider.
+  const etiketVar = isReal && online && printer.brand === "snapmaker";
+  const renkSec = renkDuzenlenebilir || etiketVar
+    ? (c: SlotChip) => {
+        if (c.etiket && etiketVar) setRenkCipi(c);
+        else if (renkDuzenlenebilir && !c.empty) setRenkCipi(c);
+      }
+    : undefined;
   const kartQc = useQueryClient();
 
   return (
@@ -1453,6 +1461,7 @@ function PrinterCardInner({
           isBambu={printer.type === "bambu"}
           slot={renkCipi.slot}
           mevcut={{ color: renkCipi.color, type: renkCipi.type }}
+          etiket={renkCipi.etiket ? { uid: renkCipi.etiket.uid, yeni: renkCipi.etiket.durum === "yeni" } : undefined}
           onClose={() => setRenkCipi(null)}
         />
       )}
@@ -2496,19 +2505,23 @@ function SlotStrip({ chips, className, onSec }: { chips: SlotChip[]; className?:
   if (chips.length === 0) return null;
   return (
     <div className={cn("flex flex-wrap items-center gap-1", className)}>
-      {chips.map((c) => (
+      {chips.map((c) => {
+        const yeni = c.etiket?.durum === "yeni";
+        const tiklanir = !!onSec && (!c.empty || !!c.etiket);
+        return (
         <span
           key={c.slot}
-          role={onSec && !c.empty ? "button" : undefined}
-          tabIndex={onSec && !c.empty ? 0 : undefined}
-          title={onSec && !c.empty ? "Rengini değiştir" : undefined}
-          onClick={onSec && !c.empty ? () => onSec(c) : undefined}
-          onKeyDown={onSec && !c.empty ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSec(c); } } : undefined}
+          role={tiklanir ? "button" : undefined}
+          tabIndex={tiklanir ? 0 : undefined}
+          title={!tiklanir ? undefined : yeni ? "Yeni makara — tanıt" : c.etiket ? "Etiketli makara — değiştir" : "Rengini değiştir"}
+          onClick={tiklanir ? () => onSec!(c) : undefined}
+          onKeyDown={tiklanir ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSec!(c); } } : undefined}
           className={cn(
             "inline-flex items-center gap-1 rounded-full border py-0.5 pl-1 pr-1.5 text-[10px] font-semibold tabular-nums transition-[opacity,background-color,border-color,transform] duration-200",
-            c.active ? "opacity-100" : "opacity-45",
-            c.empty ? "border-dashed text-muted-foreground" : "text-foreground/80",
-            onSec && !c.empty && "cursor-pointer hover:opacity-100 hover:border-primary/50 hover:bg-primary/10 active:scale-95",
+            c.active || yeni ? "opacity-100" : "opacity-45",
+            c.empty && !c.etiket ? "border-dashed text-muted-foreground" : "text-foreground/80",
+            yeni && "border-primary/60 bg-primary/10 motion-safe:animate-pulse",
+            tiklanir && "cursor-pointer hover:opacity-100 hover:border-primary/50 hover:bg-primary/10 active:scale-95",
           )}
         >
           <span
@@ -2518,9 +2531,13 @@ function SlotStrip({ chips, className, onSec }: { chips: SlotChip[]; className?:
           {/* Yazıcının kendi ekranı ve AMS etiketleri 1'den başlıyor → GÖSTERİM 1 tabanlı.
               İç veri (renk dizisi, activeSlots, kafa indeksi) 0 tabanlı kalır. */}
           {slotLabel(c.slot)}
-          <span className="font-normal text-muted-foreground">{c.empty ? "boş" : c.type}</span>
+          {c.etiket && <Tag className={cn("h-2.5 w-2.5", yeni ? "text-primary" : "text-muted-foreground")} aria-hidden />}
+          <span className={cn("font-normal", yeni ? "text-primary font-semibold" : "text-muted-foreground")}>
+            {yeni ? "Tanıt" : c.empty ? "boş" : c.type}
+          </span>
         </span>
-      ))}
+        );
+      })}
     </div>
   );
 }

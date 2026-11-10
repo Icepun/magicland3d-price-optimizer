@@ -31,6 +31,8 @@ export const ABONE_NESNELER: Record<string, string[] | null> = {
   gcode_move: ["gcode_position", "speed_factor"],
   motion_report: ["live_position"],
   exclude_object: ["current_object", "excluded_objects"],
+  // Makara etiketi (U1): takılan makaranın etiket kimliği anında gelsin — bkz. makara-etiketi.ts.
+  filament_detect: ["info"],
 };
 
 /** Bu süre içinde mesaj gelmediyse bağlantıya güvenilmez → HTTP'ye düşülür. */

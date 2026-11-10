@@ -27,6 +27,7 @@ export { klipperParamKacisla } from "./exclude-object";
 import { aktarimBasladi, aktarimBitti } from "./transfer-state";
 import { ufpAdi, ufpPaketle, ufpUygunMu } from "./ufp";
 import { renkKodu, U1_FILAMENT_TIPLERI } from "./filament-tipleri";
+import { filamentDetectEtiketleri, type KanalEtiketi } from "./makara-etiketi";
 import http from "node:http";
 import crypto from "node:crypto";
 import { pickProgress, type ProgressSource } from "./eta";
@@ -85,6 +86,8 @@ export interface MoonrakerStatus {
   currentObject: string | null;
   /** Şimdiye kadar hariç tutulmuş nesne adları. */
   excludedObjects: string[];
+  /** Makara etiketleri (U1 `filament_detect`) — etiketsiz kanal yok. Bkz. makara-etiketi.ts. */
+  etiketler?: KanalEtiketi[];
 }
 
 /** Tek bir kafanın sıcaklığı. */
@@ -123,7 +126,7 @@ export interface MoonrakerFile {
 // seçimli hâli 145 bayt. Poligonlar 5 saniyelik sıcak yola BİNMEZ; ayrı ve tek seferlik
 // okunur (fetchMoonrakerExcludeObjects).
 const QUERY =
-  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&motion_report=live_position&exclude_object=current_object,excluded_objects";
+  "print_stats&virtual_sdcard=progress,file_position,file_size&display_status=progress&extruder=temperature,target&extruder1=temperature,target&extruder2=temperature,target&extruder3=temperature,target&toolhead=extruder&heater_bed=temperature,target&gcode_move=gcode_position,speed_factor&motion_report=live_position&exclude_object=current_object,excluded_objects&filament_detect=info";
 
 /** host → çalışan Moonraker portu (runtime önbelleği). */
 const portCache = processSingleton("mr_portCache", () => new Map<string, number>());
@@ -507,6 +510,7 @@ export function parseStatus(status: any): MoonrakerStatus {
     excludedObjects: Array.isArray(eo.excluded_objects)
       ? eo.excluded_objects.filter((x: unknown): x is string => typeof x === "string")
       : [],
+    etiketler: filamentDetectEtiketleri(status.filament_detect),
   };
 }
 
@@ -2670,6 +2674,39 @@ export async function moonrakerFilamentAyarla(
   // TEYİT: komut kabul edilmiş olabilir ama kaydedilmemiş olabilir.
   const sonra = await oku();
   if ((renk && sonra.renk !== renk) || (tip && sonra.tip !== tip)) throw new Error(HATA);
+}
+
+/**
+ * MAKARA ETİKETİ (U1, topluluk "Extended Firmware"i): kanala filament bilgisini dışarıdan yaz —
+ * `POST /printer/filament_detect/set` {channel, info}. Firmware bunu etiketten okunmuş gibi
+ * işler: ekran ve dilimleyici rengi görür, `print_task_config` da güncellenir. Stok yazılımda
+ * bu uç yok (404). `info`'yu `makara-etiketi.ts filamentDetectBilgisi` üretir.
+ */
+export async function moonrakerEtiketBilgisiYaz(
+  host: string,
+  port: number,
+  kanal: number,
+  info: Record<string, unknown>,
+): Promise<void> {
+  if (!Number.isInteger(kanal) || kanal < 0 || kanal > 3) throw new Error("Kafa tanınmadı.");
+  let res: Response;
+  try {
+    res = await mreq(
+      host, port,
+      `/printer/filament_detect/set`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel: kanal, info }) },
+      8000,
+    );
+  } catch (e) {
+    console.warn("[moonraker] makara etiketi yazılamadı:", e);
+    throw new Error("Yazıcıya ulaşılamadı — makara bilgisi gönderilemedi.");
+  }
+  if (res.status === 404) throw new Error("Bu yazıcının yazılımı makara etiketini desteklemiyor.");
+  const govde = unwrap(await res.json().catch(() => null));
+  if (!res.ok || govde?.state === "error") {
+    console.warn("[moonraker] filament_detect/set reddedildi:", res.status, JSON.stringify(govde)?.slice(0, 200));
+    throw new Error("Makara bilgisi yazıcıya kaydedilemedi.");
+  }
 }
 
 /** Filament boşaltma akışının olayları (arayüz ilerlemesi için). */

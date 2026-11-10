@@ -58,6 +58,8 @@ export interface PanelSlot {
   color: string;
   type: string;
   empty: boolean;
+  /** Makara etiketi (U1): tanımlı ya da ilk kez takılmış (tanıtılmayı bekliyor). */
+  etiket?: { uid: string; durum: "tanimli" | "yeni" };
 }
 
 export interface PanelPrinter {
@@ -389,6 +391,7 @@ export interface SlotChip {
   empty: boolean;
   /** Bu baskıda kullanılıyor → vurgulu; kullanılmıyor → soluk. */
   active: boolean;
+  etiket?: PanelSlot["etiket"];
 }
 
 /** Slot şeridi. Slot bildirmeyen yazıcıda dilimleyicinin rengiyle tek çip üretilir. */
@@ -407,6 +410,7 @@ export function buildSlotChips(
       empty: s.empty,
       // Hiç aktif slot bildirilmediyse hepsi eşit görünsün (yanlışlıkla hepsini soluklaştırma).
       active: active.size === 0 ? true : active.has(s.slot),
+      ...(s.etiket ? { etiket: s.etiket } : {}),
     }));
   }
   // Slot bildirmeyen yazıcıda da numaralandırma tabanı AYNI kalmalı (0) — yoksa aynı panelde

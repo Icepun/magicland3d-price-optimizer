@@ -48,6 +48,7 @@ import { startKameraAktarici } from "./camera-relay";
 import { vizDurumu } from "./viz-relay";
 import { slotToolColors } from "./tool-colors";
 import { durumOrnegiYaz } from "./durum-ornegi";
+import { makaraEtiketleriniIsle } from "./makara-etiketi-izleyici";
 
 const TICK_MS = 10_000;
 /** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
@@ -288,6 +289,11 @@ async function buildSnapshot(
   // Moonraker
   const st = await getMoonrakerStatusCached(c.host, c.port);
   if (!st.online) return offlineSnap(c);
+  // Makara etiketi: tanımlı etiketli makara takıldıysa rengini/türünü yazıcıya gönder (U1).
+  // Beklenmez — yoklamayı yavaşlatmasın; hata kendi içinde yutulur.
+  if (st.etiketler?.length) {
+    void makaraEtiketleriniIsle(c.host, c.port, st.etiketler, st.state === "printing" || st.state === "paused").catch(() => {});
+  }
   const status = moonrakerStatusName(st.state);
   let productName: string | null = null;
   let productImage: string | null = null;

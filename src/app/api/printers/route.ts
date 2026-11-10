@@ -1,3 +1,5 @@
+import { etiketDurumu, etiketKarari } from "@/core/printers/makara-etiketi";
+import { makaraEtiketKayitlari } from "@/core/printers/makara-etiketi-izleyici";
 import { NextResponse, type NextRequest } from "next/server";
 import { asamaOlcer } from "@/lib/server-perf-log";
 import { prisma } from "@/lib/prisma";
@@ -125,7 +127,7 @@ export interface PanelPrinter {
   /** Spagetti / kirli tabla gözetimi (yalnız destekleyen yazıcıda). */
   defectWatch: { supported: boolean; enabled: boolean; spaghetti: boolean; cleanBed: boolean } | null;
   /** Yüklü filamentler — renk + tip + doluluk (MADDE 12). */
-  slots: { slot: number; color: string; type: string; empty: boolean }[];
+  slots: { slot: number; color: string; type: string; empty: boolean; etiket?: { uid: string; durum: "tanimli" | "yeni" } }[];
   job: PrinterJob | null;
 }
 
@@ -506,6 +508,13 @@ export async function GET(req: NextRequest) {
 
       const status = mapState(st.state);
       const extras = await getMoonrakerExtrasCached(c.host, c.port);
+      // Makara etiketi (U1): kafadaki etiket tanımlı mı, yoksa ilk kez mi takıldı.
+      const etiketKayitlari = st.etiketler?.length ? await makaraEtiketKayitlari() : {};
+      const kanalEtiketi = (slot: number) => {
+        const e = st.etiketler?.find((x) => x.kanal === slot);
+        const durum = e ? etiketDurumu(etiketKarari(e, etiketKayitlari[e.uid])) : null;
+        return e && durum ? { uid: e.uid, durum } : undefined;
+      };
       const hasJob = !!st.filename && (st.state === "printing" || st.state === "paused" || st.state === "complete");
       let job: PrinterJob | null = null;
       let matchedId: string | null = null;
@@ -638,7 +647,10 @@ export async function GET(req: NextRequest) {
         light: extras.light,
         pauseAtLayer: extras.pauseAtLayer,
         defectWatch: extras.defectWatch.supported ? extras.defectWatch : null,
-        slots: extras.slots,
+        slots: extras.slots.map((s) => {
+          const etiket = kanalEtiketi(s.slot);
+          return etiket ? { ...s, etiket } : s;
+        }),
         // Boşsa GÖNDERME — arayüz eşleme yokken kimliğe düşer (tek kafalı yazıcılar).
         toolMap: extras.toolMap.length ? extras.toolMap : undefined,
         // Nesne tanımlı değilse alan HİÇ gönderilmez → arayüz düğmeyi çizmez.
