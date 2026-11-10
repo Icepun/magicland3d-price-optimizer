@@ -6,6 +6,7 @@ import { SplashScreen } from "@/components/layout/SplashScreen";
 import { Toaster } from "@/components/ui/sonner";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { CommandPalette } from "@/components/ui/command-palette";
+import { HizliHesap } from "@/components/hizli-hesap/HizliHesap";
 
 /**
  * Yazı tipleri REPODAN gelir, derleme anında Google'dan indirilmez.
@@ -64,6 +65,8 @@ export default function RootLayout({
           </main>
           {/* Ctrl/Cmd + K ile her sayfadan açılan hızlı arama. */}
           <CommandPalette />
+          {/* Kenar çubuğu / Panel'den açılan hızlı fiyat hesabı. */}
+          <HizliHesap />
           <Toaster richColors position="top-right" />
         </QueryProvider>
       </body>

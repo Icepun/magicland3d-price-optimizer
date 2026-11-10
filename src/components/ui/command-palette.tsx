@@ -32,6 +32,7 @@ import {
   Truck,
   type LucideIcon,
 } from "lucide-react";
+import { openHizliHesap } from "@/components/hizli-hesap/HizliHesap";
 import { cn } from "@/lib/utils";
 import { fetchJson } from "@/lib/fetch-json";
 import { thumbUrl } from "@/lib/image";
@@ -498,6 +499,7 @@ interface OrdersCacheShape {
 
 const HAZIRLIK_ID = "sayfa:hazirlik";
 const TUM_URUNLER_ID = "eylem:tum-urunler";
+const HIZLI_HESAP_ID = "eylem:hizli-hesap";
 
 const PAGE_ITEMS: PaletteItem[] = [
   { id: "sayfa:/", kind: "sayfa", title: "Panel", subtitle: "Günün özeti", href: "/", icon: LayoutDashboard, terms: ["ana sayfa", "gosterge", "ozet"] },
@@ -508,6 +510,7 @@ const PAGE_ITEMS: PaletteItem[] = [
   { id: "sayfa:/planner", kind: "sayfa", title: "Üretim", subtitle: "Ne basılmalı planı", href: "/planner", icon: Factory, terms: ["plan", "uretim kuyrugu"] },
   { id: HAZIRLIK_ID, kind: "sayfa", title: "Hazırlık Listesi", subtitle: "Bugün gönderilecek ürünler, adetleriyle", href: "/orders", icon: PackageCheck, terms: ["paketleme", "toplama", "gonderilecek", "kargo hazirlik"] },
   { id: "sayfa:/spools", kind: "sayfa", title: "Filament", subtitle: "Makara stoğu ve renkler", href: "/spools", icon: Disc3, terms: ["makara", "renk", "gram"] },
+  { id: HIZLI_HESAP_ID, kind: "sayfa", title: "Hızlı hesap", subtitle: "Ürünü kaydetmeden fiyat ve kâr", icon: CalculatorIcon, terms: ["fiyat belirle", "kar", "marj", "hesap makinesi", "komisyon"] },
   { id: "sayfa:/models", kind: "sayfa", title: "Modeller", subtitle: "Tasarım dosyaların", href: "/models", icon: Boxes, terms: ["tasarim", "dosya"] },
   { id: "sayfa:/cost-templates", kind: "sayfa", title: "Maliyet & Paketleme", subtitle: "Kutu, koli ve maliyet şablonları", href: "/cost-templates", icon: CalculatorIcon, terms: ["kutu", "koli", "sablon"] },
   { id: "sayfa:/commission-rules", kind: "sayfa", title: "Komisyonlar", subtitle: "Platform kesinti oranları", href: "/commission-rules", icon: Percent, terms: ["oran", "kesinti"] },
@@ -780,6 +783,10 @@ export function CommandPalette() {
       if (item.kind === "siparis") {
         requestOrdersView({ search: item.title, view: "liste" });
         router.push("/orders");
+        return;
+      }
+      if (item.id === HIZLI_HESAP_ID) {
+        openHizliHesap();
         return;
       }
       if (item.id === HAZIRLIK_ID) {

@@ -20,7 +20,9 @@ import {
   ChevronDown,
   Printer,
   Disc3,
+  Calculator,
 } from "lucide-react";
+import { openHizliHesap } from "@/components/hizli-hesap/HizliHesap";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1644,16 +1646,22 @@ export default function DashboardPage() {
             guncellenemedi={guncellenemedi}
           />
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={yenile}
-          disabled={yenileniyor}
-          className="gap-2 shrink-0"
-        >
-          <RefreshCw className={cn("h-4 w-4", yenileniyor && "animate-spin")} />
-          {yenileniyor ? "Yenileniyor…" : "Yenile"}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button size="sm" onClick={openHizliHesap} className="gap-2 shadow-[0_0_20px_-6px_oklch(0.66_0.2_278/70%)] transition-all hover:-translate-y-px active:scale-95">
+            <Calculator className="h-4 w-4" />
+            Hızlı hesap
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={yenile}
+            disabled={yenileniyor}
+            className="gap-2"
+          >
+            <RefreshCw className={cn("h-4 w-4", yenileniyor && "animate-spin")} />
+            {yenileniyor ? "Yenileniyor…" : "Yenile"}
+          </Button>
+        </div>
       </div>
 
       {/* Günün yapılacakları — gönderilecek, boştaki yazıcı, biten filament */}

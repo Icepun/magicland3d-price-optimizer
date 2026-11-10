@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Search,
+  Calculator,
   LayoutDashboard,
   BarChart3,
   Package,
@@ -24,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { UpdateWidget } from "./UpdateWidget";
 import { NotificationBell } from "./NotificationBell";
 import { openCommandPalette } from "@/components/ui/command-palette";
+import { openHizliHesap } from "@/components/hizli-hesap/HizliHesap";
 import { useIsClient } from "@/lib/client-state";
 
 const navItems = [
@@ -99,6 +101,15 @@ export function Sidebar() {
           <kbd className="rounded border border-sidebar-border/70 px-1 py-0.5 text-[9px] font-medium tabular-nums text-sidebar-foreground/55">
             {macKisayolu ? "⌘K" : "Ctrl K"}
           </kbd>
+        </button>
+        <button
+          type="button"
+          onClick={openHizliHesap}
+          title="Ürünü kaydetmeden fiyat ve kâr hesapla"
+          className="group mt-1.5 flex w-full items-center gap-2 rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-sidebar-foreground/80 transition-all duration-200 hover:border-primary/50 hover:bg-primary/20 hover:text-sidebar-foreground hover:shadow-[0_0_16px_-6px_oklch(0.66_0.2_278/70%)] active:scale-[0.98]"
+        >
+          <Calculator className="h-3.5 w-3.5 shrink-0 text-primary transition-transform duration-200 group-hover:scale-110" />
+          <span className="flex-1 text-left">Hızlı hesap</span>
         </button>
       </div>
 
