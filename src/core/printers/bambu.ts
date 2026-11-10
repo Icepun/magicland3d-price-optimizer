@@ -632,25 +632,62 @@ export async function bambuFilamentAyarla(
   if (durum === "printing" || durum === "paused") throw new Error("Baskı sürerken değiştirilemez.");
 
   const { komut, yeniRenk, yeniTip } = bambuFilamentKomutu(conn.print, slot, { renk, tip });
-  const sentAfterMs = conn.lastMessageAt;
-  // QoS 0 — diğer kontrol komutlarıyla aynı hayalet-komut koruması (bkz. bambuControl).
-  await new Promise<void>((resolve, reject) => {
-    conn.client.publish(`device/${serial}/request`, JSON.stringify(komut), { qos: 0 }, (err) =>
-      err ? reject(new Error("Komut yazıcıya iletilemedi.")) : resolve(),
-    );
-  });
-  publishPushall(conn, serial);
-  const son = Date.now() + 8000;
-  while (Date.now() < son) {
-    if (conn.lastMessageAt > sentAfterMs) {
-      const simdi = amsMakarasiBul(conn.print, slot)?.tray;
-      const renkTamam = typeof simdi?.tray_color === "string" && simdi.tray_color.slice(0, 6).toUpperCase() === yeniRenk;
-      const tipTamam = simdi?.tray_type === yeniTip;
-      if (renkTamam && tipTamam) return;
+  // Yazıcı bu komuta AYRI bir yanıt döner ({command, result, err_code}); eşleştirmek için benzersiz
+  // sıra numarası. Ret sessiz değil — 10 Kas 2026'da üç yazıcı da 0x05024001 ile reddetti
+  // ("bu baskı işinde mevcut filament kullanılacak") ve uygulama yalnız "güncellemedi" diyebiliyordu.
+  const seq = String(20000 + Math.floor(Math.random() * 9_000_000));
+  komut.print.sequence_id = seq;
+  let yanit: Record<string, unknown> | null = null;
+  const dinle = (_topic: string, payload: Buffer) => {
+    try {
+      const p = JSON.parse(payload.toString())?.print;
+      if (p?.command === "ams_filament_setting" && (p.sequence_id == null || String(p.sequence_id) === seq)) yanit = p;
+    } catch { /* JSON olmayan mesaj */ }
+  };
+  conn.client.on("message", dinle);
+  try {
+    const sentAfterMs = conn.lastMessageAt;
+    // QoS 0 — diğer kontrol komutlarıyla aynı hayalet-komut koruması (bkz. bambuControl).
+    await new Promise<void>((resolve, reject) => {
+      conn.client.publish(`device/${serial}/request`, JSON.stringify(komut), { qos: 0 }, (err) =>
+        err ? reject(new Error("Komut yazıcıya iletilemedi.")) : resolve(),
+      );
+    });
+    publishPushall(conn, serial);
+    const son = Date.now() + 8000;
+    while (Date.now() < son) {
+      const ret = bambuKomutReddi(yanit, serial);
+      if (ret) throw new Error(ret);
+      if (conn.lastMessageAt > sentAfterMs) {
+        const simdi = amsMakarasiBul(conn.print, slot)?.tray;
+        const renkTamam = typeof simdi?.tray_color === "string" && simdi.tray_color.slice(0, 6).toUpperCase() === yeniRenk;
+        const tipTamam = simdi?.tray_type === yeniTip;
+        if (renkTamam && tipTamam) return;
+      }
+      await new Promise((r) => setTimeout(r, 400));
     }
-    await new Promise((r) => setTimeout(r, 400));
+    // Yazıcı "tamam" dedi ama rapor henüz yansıtmadı → kabul et (Studio da raporu bir süre bekletir).
+    if ((yanit as Record<string, unknown> | null)?.result === "success") return;
+    throw new Error("Yazıcı yanıt vermedi — ekranını kontrol et.");
+  } finally {
+    conn.client.off("message", dinle);
   }
-  throw new Error("Komut gönderildi ama yazıcı makarayı güncellemedi — ekranını kontrol et.");
+}
+
+/**
+ * `ams_filament_setting` yanıtı ret ise kullanıcıya dönük mesaj, değilse null (saf — test edilir).
+ * Kod, uygulamadaki resmi Bambu sözlüğünden açıklanır.
+ */
+export function bambuKomutReddi(yanit: Record<string, unknown> | null | undefined, serial?: string | null): string | null {
+  if (!yanit || String(yanit.result ?? "").toLowerCase() !== "fail") return null;
+  const sayi = Number(yanit.err_code);
+  const kod = Number.isFinite(sayi) ? bambuHataKodu(sayi) : null;
+  if (kod === "05024001") return "Yazıcı bir baskı işinde — filament ayarı baskı bitince değiştirilebilir.";
+  if (kod) {
+    const aciklama = bambuHataAciklamasi(sayi, bambuModelOneki(serial));
+    return aciklama ? `Yazıcı kabul etmedi: ${aciklama}` : `Yazıcı kabul etmedi (kod ${kod}).`;
+  }
+  return "Yazıcı bu ayarı kabul etmedi.";
 }
 
 /**

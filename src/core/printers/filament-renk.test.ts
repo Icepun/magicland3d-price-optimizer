@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMoonrakerCaps, clearMoonrakerPort, moonrakerFilamentAyarla } from "./moonraker";
-import { bambuFilamentKomutu } from "./bambu";
+import { bambuFilamentKomutu, bambuKomutReddi } from "./bambu";
 
 /* ── U1 ────────────────────────────────────────────────────────────────────── */
 
@@ -132,5 +132,14 @@ describe("Bambu AMS makarası rengi / türü", () => {
     const print = { ams: { ams: [{ id: "0", tray: [tray(0, { tag_uid: "A1B2C3D4E5F60708" })] }] } };
     expect(() => bambuFilamentKomutu(print, 0, { renk: "000000", tip: null })).toThrow(/etiketinden/);
     expect(() => bambuFilamentKomutu(print, 7, { renk: "000000", tip: null })).toThrow(/bulunamadı/);
+  });
+  it("yazıcının ret yanıtı kodundan açıklanır (sahada görülen 0x05024001 dahil)", () => {
+    // 10 Kas 2026, A2L + A1: {"result":"fail","err_code":84033537,"reason":"error string"}
+    expect(bambuKomutReddi({ command: "ams_filament_setting", result: "fail", err_code: 84033537, reason: "error string" }, "26A1XXXX"))
+      .toMatch(/baskı işinde/);
+    expect(bambuKomutReddi({ result: "fail" })).toBe("Yazıcı bu ayarı kabul etmedi.");
+    expect(bambuKomutReddi({ result: "fail", err_code: 0x0bad0001 })).toMatch(/kod 0BAD0001/);
+    expect(bambuKomutReddi({ result: "success" })).toBeNull();
+    expect(bambuKomutReddi(null)).toBeNull();
   });
 });
