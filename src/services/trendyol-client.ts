@@ -489,4 +489,34 @@ export class TrendyolClient {
       `/integration/order/sellers/${this.credentials.sellerId}/v2/orders?${searchParams.toString()}`
     );
   }
+
+  /**
+   * ORTAK ETİKET (kargo etiketi, yalnız ZPL). Trendyol Express ve "Trendyol öder" Aras
+   * gönderilerinde çalışır. Oluşturma GÖVDESİZ 200 döner; etiket ayrıca `getCommonLabel` ile
+   * alınır. Pakete durum YAZMAZ (Berke'nin kararı: durum değişmesin).
+   * Kaynak: developers.trendyol.com/reference/createcommonlabel · getcommonlabel
+   */
+  async createCommonLabel(cargoTrackingNumber: string, boxQuantity = 1): Promise<void> {
+    await this.request<unknown>(
+      `/integration/sellers/${this.credentials.sellerId}/common-label/${encodeURIComponent(cargoTrackingNumber)}`,
+      { method: "POST", body: JSON.stringify({ format: "ZPL", boxQuantity }) }
+    );
+  }
+
+  /** Oluşturulmuş etiket(ler) — koli başına bir ZPL. Henüz yoksa boş dizi gelebilir. */
+  async getCommonLabel(cargoTrackingNumber: string): Promise<string[]> {
+    const body = await this.request<{ data?: Array<{ label?: unknown; format?: unknown }> }>(
+      `/integration/sellers/${this.credentials.sellerId}/common-label/${encodeURIComponent(cargoTrackingNumber)}`
+    );
+    const data = Array.isArray(body?.data) ? body.data : [];
+    return data
+      .map((d) => {
+        const ham = typeof d?.label === "string" ? d.label : "";
+        if (ham.includes("^XA")) return ham;
+        // Doküman düz ZPL diyor; base64 gelirse de kaybetme.
+        const cozulmus = ham ? Buffer.from(ham, "base64").toString("utf8") : "";
+        return cozulmus.includes("^XA") ? cozulmus : "";
+      })
+      .filter(Boolean);
+  }
 }

@@ -138,6 +138,8 @@ export interface UnifiedOrder {
   inputVatCredit?: number | null;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  /** Hepsiburada paket numarası (paketlendiyse) — kargo etiketi bununla istenir. */
+  packageNumber?: string | null;
   /**
    * Siparişin kalem/tutar bilgisi platformdan alınamadı. Listede görünür ama ciro/kâr
    * toplamlarına ve finans geçmişine GİRMEZ — yoksa ₺0'lık sahte bir sipariş gibi sayılır.
@@ -599,6 +601,7 @@ async function computeOrdersBodyInner(
     lines: RawLine[];
     trackingNumber: string | null;
     cargoProvider: string | null;
+    packageNumber?: string | null;
     /** Kısmi iade veya API satır sınırı nedeniyle hesaplanan kâr kesin değildir. */
     forceProfitPartial?: boolean;
     /** Kalem/tutar bilgisi hiç alınamadı → ciro/kâr toplamlarına ve finans geçmişine girmez. */
@@ -841,7 +844,15 @@ async function computeOrdersBodyInner(
       },
       hbLineRaw
     );
-    type HbAgg = { status: string; date: string | null; customer: string | null; lines: RawLine[] | null };
+    type HbAgg = {
+      status: string;
+      date: string | null;
+      customer: string | null;
+      lines: RawLine[] | null;
+      paketNo: string | null;
+      teslimatNo: string | null;
+      kargoFirmasi: string | null;
+    };
     const agg = new Map<string, HbAgg>();
     for (const [on, s] of hbSiparisler) {
       agg.set(on, {
@@ -849,6 +860,9 @@ async function computeOrdersBodyInner(
         date: s.date == null ? null : new Date(s.date).toISOString(),
         customer: s.customer,
         lines: s.lines,
+        paketNo: s.paketNo ?? null,
+        teslimatNo: s.teslimatNo ?? null,
+        kargoFirmasi: s.kargoFirmasi ?? null,
       });
     }
 
@@ -907,8 +921,9 @@ async function computeOrdersBodyInner(
         currency: "TRY",
         customer: e.customer,
         lines,
-        trackingNumber: null,
-        cargoProvider: null,
+        trackingNumber: e.teslimatNo,
+        cargoProvider: e.kargoFirmasi,
+        packageNumber: e.paketNo,
         dataIncomplete,
       });
     }
@@ -1345,6 +1360,7 @@ async function computeOrdersBodyInner(
       inputVatCredit: pr.inputVatCredit,
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
+      packageNumber: r.packageNumber ?? null,
       dataIncomplete: r.dataIncomplete,
       statusUnknown: r.statusUnknown,
       returnedLineCount: r.returnedLineCount,

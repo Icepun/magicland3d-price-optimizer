@@ -77,6 +77,13 @@ import { siparisListedeKalir } from "@/core/order-window";
 import { cn } from "@/lib/utils";
 import { SatirMaliyetiDialog, type SatirMaliyetiHedefi } from "@/components/orders/SatirMaliyetiDialog";
 import { UrunBaglaDialog, type UrunBaglaHedefi } from "@/components/orders/UrunBaglaDialog";
+import {
+  EtiketBasildiIsareti,
+  EtiketModuDugmesi,
+  EtiketSaglayici,
+  EtiketSecimKutusu,
+  EtiketYazdirDugmesi,
+} from "./etiket-yazdirma";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
 type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "manual";
@@ -131,6 +138,8 @@ interface UnifiedOrder {
   orderRevenueAdjustment?: number;
   trackingNumber: string | null;
   cargoProvider: string | null;
+  /** Hepsiburada paket numarası (paketlendiyse) — kargo etiketi için. */
+  packageNumber?: string | null;
   /** Kalem/tutar bilgisi platformdan alınamadı → üstteki toplamlara girmez. */
   dataIncomplete?: boolean;
   /** Durumu tanınmadı → satış mı iade mi bilinmiyor, toplamlara girmez. */
@@ -799,6 +808,7 @@ export default function OrdersPage() {
     vItems.length > 0 ? Math.max(0, rowVirtualizer.getTotalSize() - vItems[vItems.length - 1].end) : 0;
 
   return (
+    <EtiketSaglayici siparisler={orders} gorunenler={filtered}>
     <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Başlık */}
       <div className="flex items-start justify-between gap-4">
@@ -1124,8 +1134,11 @@ export default function OrdersPage() {
         {statusChips.map(({ kind, count }) => (
           <StatusChip key={kind} active={status === kind} onClick={() => setStatus(kind)} label={STATUS_STYLE[kind].label} count={count} dot={STATUS_STYLE[kind].dot} />
         ))}
+        {/* Trendyol kargo etiketi: seçim modunu açar (uygun sipariş yoksa görünmez). */}
+        <div className="ml-auto flex items-center gap-2">
+        <EtiketModuDugmesi />
         {/* Liste yoğunluğu (bu bilgisayarda hatırlanır): rahat kartlar ya da ekrana 2 kat sipariş. */}
-        <div role="group" aria-label="Liste yoğunluğu" className="ml-auto flex items-center gap-0.5 rounded-full border p-0.5">
+        <div role="group" aria-label="Liste yoğunluğu" className="flex items-center gap-0.5 rounded-full border p-0.5">
           {(
             [
               ["rahat", "Rahat"],
@@ -1145,6 +1158,7 @@ export default function OrdersPage() {
               {etiket}
             </button>
           ))}
+        </div>
         </div>
       </div>
       )}
@@ -1312,6 +1326,7 @@ export default function OrdersPage() {
         }}
       />
     </div>
+    </EtiketSaglayici>
   );
 }
 
@@ -2140,7 +2155,9 @@ const OrderRow = memo(function OrderRow({
         isNew && "border-primary/60 bg-primary/[0.06] ring-2 ring-primary/35"
       )}
     >
-      <button onClick={() => setOpen((v) => !v)} className="w-full text-left">
+      <div className="flex">
+      <EtiketSecimKutusu siparis={order} />
+      <button onClick={() => setOpen((v) => !v)} className="min-w-0 flex-1 text-left">
         <div className={cn("flex items-center gap-3 px-3", sik ? "py-1.5" : "py-3")}>
           {/* Ürün görseli / çeşit kutusu + adet & platform rozeti */}
           <div className="relative shrink-0">
@@ -2175,6 +2192,7 @@ const OrderRow = memo(function OrderRow({
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-sm tabular-nums">{order.orderNumber}</span>
               <span className="text-[11px] text-muted-foreground">{fmtDate(order.date)}</span>
+              <EtiketBasildiIsareti siparis={order} />
               {isNew && (
                 <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground animate-in fade-in zoom-in-95 duration-300">
                   Yeni
@@ -2256,6 +2274,7 @@ const OrderRow = memo(function OrderRow({
           <ChevronDown className={cn("h-4 w-4 text-muted-foreground shrink-0 transition-transform", open && "rotate-180")} />
         </div>
       </button>
+      </div>
 
       {open && (
         <div className="px-3 pb-3.5 pt-0.5 border-t border-border/50 bg-muted/20 animate-in fade-in slide-in-from-top-1 duration-200">
@@ -2437,6 +2456,7 @@ const OrderRow = memo(function OrderRow({
                 ) : (
                   <div className="text-muted-foreground">Takip numarası yok</div>
                 )}
+                <EtiketYazdirDugmesi siparis={order} />
                 <div className="flex items-center justify-between pt-1.5 border-t border-border/40">
                   <span className="text-muted-foreground">Ciro</span>
                   <span

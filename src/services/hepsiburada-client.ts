@@ -218,6 +218,28 @@ export class HepsiburadaClient {
   }
 
   /**
+   * KARGO ETİKETİ ("Ortak Barkod") — paketlenmiş paket için, HepsiJET/Aras.
+   * `GET /packages/merchantid/{mid}/packagenumber/{pn}/labels?format=png|zpl|base64zpl|pdf`
+   * Yanıt `{ format, data: string[] (koli başına), hasMerchantMutualBarcode }`.
+   *
+   * Ölçüldü 13 Kas 2026 (paket 5543138988, hepsiJET): zpl → ^PW/^LL YOK, içerik y≈1180'e
+   * iniyor; png → 812×1218 RGBA = 203 dpi'da 100×150 mm. Yani 100×100 etikete DOĞRUDAN
+   * basılamaz, küçültülmesi gerekir (bkz. lib/etiket/zpl-resim.ts). Paketin durumunu değiştirmez.
+   */
+  async getPackageLabel(
+    packageNumber: string,
+    format: "png" | "zpl" = "png"
+  ): Promise<{ format: string; data: string[] }> {
+    const mid = encodeURIComponent(this.credentials.merchantId);
+    const body = await this.request<{ format?: unknown; data?: unknown }>(
+      `${this.hosts.oms}/packages/merchantid/${mid}/packagenumber/${encodeURIComponent(packageNumber)}/labels?format=${format}`,
+      { signal: AbortSignal.timeout(30_000) }
+    );
+    const data = Array.isArray(body?.data) ? body.data.filter((d): d is string => typeof d === "string" && d.length > 0) : [];
+    return { format: typeof body?.format === "string" ? body.format : format, data };
+  }
+
+  /**
    * İPTAL / İADE edilen siparişler.
    *
    * NEDEN: teslim edilmiş bir sipariş sonradan iade edilince diğer listelerden düşüyor, bizim
