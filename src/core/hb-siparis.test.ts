@@ -142,6 +142,43 @@ describe("paket listeleri", () => {
     expect(paketCiftleri).toEqual([{ orderNo: "4733", packageNo: "5523" }]);
   });
 
+  /**
+   * GERÇEK VAKA (13 Kas 2026, sipariş 4631543492): panelde "Gönderime hazır" olan paket statüsüz
+   * listede `status: "Open"` geliyor → uygulama "Yeni Sipariş" gösteriyordu. Paketlenmiştir.
+   */
+  it("statüsüz paket listesindeki 'Open' paket PAKETLENMİŞ sayılır ve kargo bilgisi taşınır", async () => {
+    const { siparisler } = await topla(
+      uclar({
+        paket: {
+          "": [
+            {
+              status: "Open",
+              packageNumber: "5543138988",
+              barcode: "62755431389885",
+              cargoCompany: "hepsiJET",
+              items: [{ orderNumber: "4631543492", productName: "Stand", quantity: 1 }],
+            },
+          ],
+        },
+      })
+    );
+    const s = siparisler.get("4631543492");
+    expect(s?.status).toBe("Packaged");
+    expect(s?.paketNo).toBe("5543138988");
+    expect(s?.teslimatNo).toBe("62755431389885");
+    expect(s?.kargoFirmasi).toBe("hepsiJET");
+  });
+
+  it("kargodaki pakette ilerideki durum kalır, paket/teslimat no eklenir", async () => {
+    const { siparisler } = await topla(
+      uclar({ paket: { shipped: [{ OrderNumber: "4700", PackageNumber: "5500", Barcode: "6270000000001" }] } })
+    );
+    const s = siparisler.get("4700");
+    expect(s?.status).toBe("Shipped");
+    expect(s?.paketNo).toBe("5500");
+    expect(s?.teslimatNo).toBe("6270000000001");
+  });
+
   it("teslim/kargo listelerindeki büyük harfli PackageNumber da kopya temizliği için eşlenir", async () => {
     const { paketCiftleri } = await topla(
       uclar({ paket: { delivered: [{ OrderNumber: "4740", PackageNumber: "5522" }] } })

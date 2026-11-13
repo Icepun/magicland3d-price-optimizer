@@ -45,7 +45,8 @@ export const TRENDYOL_STATUS_KINDS: Record<string, StatusInfo> = {
 export const HEPSIBURADA_STATUS_KINDS: Record<string, StatusInfo> = {
   Open: { kind: "pending", label: "Yeni Sipariş" },
   New: { kind: "pending", label: "Yeni Sipariş" },
-  Packaged: { kind: "processing", label: "Paketlendi" },
+  // HB panelindeki adla aynı: paketlenmiş, kargoya verilmeyi bekliyor.
+  Packaged: { kind: "processing", label: "Gönderime Hazır" },
   ReadyToShip: { kind: "processing", label: "Kargoya Hazır" },
   Shipped: { kind: "shipped", label: "Kargoda" },
   // Aynı duruma iki ad verilmesin: "Yolda" da kargodaki siparişti, ekranda iki farklı

@@ -216,6 +216,22 @@ export interface HbToplananSiparis<K> {
   customer: string | null;
   /** null = özet listeden geldi; kalem ve tutar sipariş detayından çekilecek. */
   lines: K[] | null;
+  /** Paketlendiyse paket numarası — HB kargo etiketi bununla istenir. */
+  paketNo?: string | null;
+  /** Teslimat (takip) numarası — paketin `barcode`'u. */
+  teslimatNo?: string | null;
+  /** Kargo firması (statüsüz paket listesinde `cargoCompany`, ör. "hepsiJET"). */
+  kargoFirmasi?: string | null;
+}
+
+/** Paket kaydındaki kargo bilgisini siparişe işle (eksik alanı doldurur, doluyu ezmez). */
+function paketBilgisiIsle<K>(s: HbToplananSiparis<K>, p: Record<string, unknown>): void {
+  const paketNo = hbPaketNo(p);
+  const teslimatNo = hbStr(p.barcode, p.Barcode);
+  const kargo = hbStr(p.cargoCompany, p.CargoCompany);
+  if (paketNo && !s.paketNo) s.paketNo = paketNo;
+  if (teslimatNo && !s.teslimatNo) s.teslimatNo = teslimatNo;
+  if (kargo && !s.kargoFirmasi) s.kargoFirmasi = kargo;
 }
 
 /**
@@ -333,22 +349,35 @@ export async function hbSiparisleriTopla<K>(
       if (tamSiparis) {
         const packageNo = paketNo || hbStr(p.id);
         const key = orderNo || packageNo;
-        if (!key || siparisler.has(key)) continue;
-        siparisler.set(key, {
-          status: hbStr(p.status) || etiket,
+        if (!key) continue;
+        const mevcut = siparisler.get(key);
+        if (mevcut) {
+          paketBilgisiIsle(mevcut, p);
+          continue;
+        }
+        const yeni: HbToplananSiparis<K> = {
+          // 🔴 Bu listedeki her paket PAKETLENMİŞ (HB panelinde "Gönderime hazır") ama HB paketin
+          // kendi durumunu yine "Open" gönderiyor (ölçüldü 13 Kas 2026, sipariş 4631543492) →
+          // sipariş "Yeni Sipariş" görünüyordu. İleri olan kazanır: Open → Packaged.
+          status: hbSonDurum(hbStr(p.status) || etiket, etiket),
           date: hbPaketVerilisMs(p),
           customer: hbStr(p.recipientName, p.customerName) || null,
           lines: hbArray(p, ["items", "lines", "orderItems"]).map(kalemCevir),
-        });
+        };
+        paketBilgisiIsle(yeni, p);
+        siparisler.set(key, yeni);
       } else {
         if (!orderNo) continue;
         const mevcut = siparisler.get(orderNo);
         if (mevcut) {
           // Aynı sipariş birden çok listede: İLERİDEKİ durum kazanır (teslim, kargoyu ezer).
           mevcut.status = hbSonDurum(mevcut.status, etiket);
+          paketBilgisiIsle(mevcut, p);
           continue;
         }
-        siparisler.set(orderNo, { status: etiket, date: hbPaketVerilisMs(p), customer: null, lines: null });
+        const yeni: HbToplananSiparis<K> = { status: etiket, date: hbPaketVerilisMs(p), customer: null, lines: null };
+        paketBilgisiIsle(yeni, p);
+        siparisler.set(orderNo, yeni);
       }
     }
   }
