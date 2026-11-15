@@ -2,8 +2,77 @@ import { describe, expect, it } from "vitest";
 import { FINANCE_CALCULATION_VERSION } from "@/core/finance-version";
 import {
   canonicalFinanceOrderId,
+  resolveSnapshotWriteData,
   shouldReplaceCapturedProfit,
+  type ExistingSnapshotRow,
+  type FinanceSnapshotOrder,
 } from "./order-finance-snapshots";
+
+describe("mikro ihracat — yakalanmış kâr yalnız bu bilgi değişince yenilenir", () => {
+  const kayitli: ExistingSnapshotRow = {
+    orderNumber: "11830532104",
+    orderedAt: new Date("2026-11-14T10:00:00Z"),
+    revenueKurus: 38_249,
+    profitKurus: 5_000,
+    profitPartial: false,
+    profitSource: "calculated",
+    estimatedCommissionKurus: 7_650,
+    actualCommissionKurus: null,
+    outputVatKurus: 6_375,
+    inputVatCreditKurus: 2_000,
+    microExportCountry: null,
+    statusKind: "pending",
+    currency: "TRY",
+    calculationVersion: FINANCE_CALCULATION_VERSION,
+  };
+  const siparis = (over: Partial<FinanceSnapshotOrder>): FinanceSnapshotOrder => ({
+    platform: "trendyol",
+    id: "ty-1",
+    orderNumber: "11830532104",
+    date: "2026-11-14T10:00:00.000Z",
+    total: 382.49,
+    profit: 113.75,
+    profitPartial: false,
+    statusKind: "pending",
+    currency: "TRY",
+    outputVat: 0,
+    inputVatCredit: 20,
+    ...over,
+  });
+
+  it("mikro olduğu ilk kez öğrenilince kâr ve KDV yeniden yazılır", () => {
+    const yeni = resolveSnapshotWriteData(kayitli, siparis({ microExport: { ulke: "SA" } }), kayitli.orderedAt);
+    expect(yeni.microExportCountry).toBe("SA");
+    expect(yeni.profitKurus).toBe(11_375);
+    expect(yeni.outputVatKurus).toBe(0);
+  });
+
+  it("yurt içi sipariş (null) ve bilgisiz çağrı (undefined) yakalanmış kâra DOKUNMAZ", () => {
+    const yurtIci = resolveSnapshotWriteData(kayitli, siparis({ microExport: null }), kayitli.orderedAt);
+    expect(yurtIci.profitKurus).toBe(5_000);
+    const bilgisiz = resolveSnapshotWriteData(
+      { ...kayitli, microExportCountry: "SA" },
+      siparis({ microExport: undefined }),
+      kayitli.orderedAt
+    );
+    // Shopify/HB ya da eski çağrı yeri kayıtlı ülkeyi silmez.
+    expect(bilgisiz.microExportCountry).toBe("SA");
+    expect(bilgisiz.profitKurus).toBe(5_000);
+  });
+
+  it("ülke bilinmeyen mikro sipariş 'XX' olarak saklanır", () => {
+    const yeni = resolveSnapshotWriteData(kayitli, siparis({ microExport: { ulke: null } }), kayitli.orderedAt);
+    expect(yeni.microExportCountry).toBe("XX");
+  });
+
+  it("karar fonksiyonu: undefined karşılaştırmaya girmez", () => {
+    const tam = { ...kayitli };
+    expect(shouldReplaceCapturedProfit(tam, { revenueKurus: 38_249, profitKurus: 1, profitPartial: false })).toBe(false);
+    expect(
+      shouldReplaceCapturedProfit(tam, { revenueKurus: 38_249, profitKurus: 1, profitPartial: false, microExportCountry: "SA" })
+    ).toBe(true);
+  });
+});
 
 describe("finance snapshot order ids", () => {
   it("masaüstü ve mobil Shopify kimliklerini aynı kanonik kimliğe çevirir", () => {

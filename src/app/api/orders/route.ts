@@ -7,6 +7,7 @@ import {
   type OrderStatusKind,
 } from "@/core/order-status-kind";
 import { hbArray, hbSiparisleriTopla, hbStr, hbTarihMs } from "@/core/hb-siparis";
+import { trendyolMikroIhracat, type MikroIhracat } from "@/core/mikro-ihracat";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
@@ -140,6 +141,11 @@ export interface UnifiedOrder {
   cargoProvider: string | null;
   /** Hepsiburada paket numarası (paketlendiyse) — kargo etiketi bununla istenir. */
   packageNumber?: string | null;
+  /**
+   * Mikro ihracat (Trendyol `micro`): müşterinin ülkesi. null = yurt içi; Trendyol dışı
+   * platformlarda alan yok (undefined → finans özetindeki kayıtlı değer korunur).
+   */
+  microExport?: MikroIhracat | null;
   /**
    * Siparişin kalem/tutar bilgisi platformdan alınamadı. Listede görünür ama ciro/kâr
    * toplamlarına ve finans geçmişine GİRMEZ — yoksa ₺0'lık sahte bir sipariş gibi sayılır.
@@ -602,6 +608,8 @@ async function computeOrdersBodyInner(
     trackingNumber: string | null;
     cargoProvider: string | null;
     packageNumber?: string | null;
+    /** Trendyol mikro ihracat — satış KDV'den istisna (bkz. core/mikro-ihracat). */
+    microExport?: MikroIhracat | null;
     /** Kısmi iade veya API satır sınırı nedeniyle hesaplanan kâr kesin değildir. */
     forceProfitPartial?: boolean;
     /** Kalem/tutar bilgisi hiç alınamadı → ciro/kâr toplamlarına ve finans geçmişine girmez. */
@@ -799,6 +807,8 @@ async function computeOrdersBodyInner(
         })),
         trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
         cargoProvider: o.cargoProviderName ?? null,
+        // Mikro ihracat (yurt dışı müşteri) — ölçüldü 15 Kas 2026: alan her pakette geliyor.
+        microExport: trendyolMikroIhracat(o),
       });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
@@ -1314,6 +1324,8 @@ async function computeOrdersBodyInner(
         orderedAt: r.date ? new Date(r.date) : null,
         // Reklam payı: platformun bütçesi, siparişin KENDİ tarihindeki dönemden.
         adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
+        // Mikro ihracat satışı KDV'den istisna → cirodan KDV ayrılmaz (Berke'nin onayı, 15 Kas 2026).
+        saleVatExempt: r.microExport != null,
       },
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),
@@ -1361,6 +1373,8 @@ async function computeOrdersBodyInner(
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
       packageNumber: r.packageNumber ?? null,
+      // Trendyol'da null ya da ülke; diğer platformlarda undefined (özet kaydı korunur).
+      ...(r.platform === "trendyol" ? { microExport: r.microExport ?? null } : {}),
       dataIncomplete: r.dataIncomplete,
       statusUnknown: r.statusUnknown,
       returnedLineCount: r.returnedLineCount,

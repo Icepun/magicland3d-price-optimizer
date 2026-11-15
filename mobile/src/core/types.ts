@@ -92,6 +92,12 @@ export interface SimulationInput {
    */
   vatRate?: number;
   /**
+   * SATIŞIN KDV oranı — verilmezse `vatRate`. Yalnız satış gelirinin içindeki KDV'yi ayırır;
+   * girdilerden (komisyon, kargo, paketleme, malzeme) indirilecek KDV yine `vatRate` ile
+   * hesaplanır. Mikro ihracat KDV'den istisna → 0 verilir (bkz. core/mikro-ihracat.ts).
+   */
+  saleVatRate?: number;
+  /**
    * Kampanya indirim payı (yüzde). Default 0 = indirim yok.
    * Net kâr `salePrice * (1 - discountBuffer/100)` üzerinden hesaplanır.
    * Listelenen fiyat değişmez ama kâr hesabı kampanya inse bile garanti olur.

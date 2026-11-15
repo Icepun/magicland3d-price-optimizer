@@ -199,6 +199,8 @@ function isoOrNull(value: string | number | undefined): string | null {
  *      kârlar yukarıdaki dört koşulun hiçbirine girmediği için asla düzelmiyordu
  *      (bkz. core/finance-version.ts). Tek seferlik yeniden yazmayı bu madde açar.
  * Değiştirirken masaüstü karşılığını da güncelle; parite testi ikisini karşılaştırır.
+ * İSTİSNA (bilinçli): masaüstündeki "mikro ihracat bilgisi değişti" maddesi burada YOK — telefon
+ * `microExportCountry` kolonunu yazmıyor; o satırları masaüstünün ilk yenilemesi düzeltir.
  */
 const REPLACE_PROFIT_SQL = `
   "OrderFinanceSnapshot"."revenueKurus" <> excluded."revenueKurus"

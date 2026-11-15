@@ -50,6 +50,8 @@ export interface UnifiedOrder {
   dataIncomplete?: boolean;
   profit?: number | null;
   profitPartial?: boolean;
+  /** Mikro ihracat (Trendyol `micro`) — satış KDV'den istisna; masaüstüyle aynı kâr kuralı. */
+  microExport?: { ulke: string | null } | null;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;

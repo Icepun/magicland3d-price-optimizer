@@ -43,7 +43,9 @@ import {
   Copy,
   Link2,
   Printer,
+  Globe,
 } from "lucide-react";
+import { ulkeAdi } from "@/core/mikro-ihracat";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -140,6 +142,8 @@ interface UnifiedOrder {
   cargoProvider: string | null;
   /** Hepsiburada paket numarası (paketlendiyse) — kargo etiketi için. */
   packageNumber?: string | null;
+  /** Mikro ihracat (Trendyol) — müşterinin ülkesi; satış KDV'siz hesaplanır. */
+  microExport?: { ulke: string | null } | null;
   /** Kalem/tutar bilgisi platformdan alınamadı → üstteki toplamlara girmez. */
   dataIncomplete?: boolean;
   /** Durumu tanınmadı → satış mı iade mi bilinmiyor, toplamlara girmez. */
@@ -2193,6 +2197,15 @@ const OrderRow = memo(function OrderRow({
               <span className="font-semibold text-sm tabular-nums">{order.orderNumber}</span>
               <span className="text-[11px] text-muted-foreground">{fmtDate(order.date)}</span>
               <EtiketBasildiIsareti siparis={order} />
+              {order.microExport && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-sky-500/12 px-1.5 py-px text-[9px] font-semibold text-sky-500 animate-in fade-in zoom-in-95 duration-300"
+                  title="Yurt dışı sipariş · satış KDV'siz hesaplanır"
+                >
+                  <Globe className="h-2.5 w-2.5" />
+                  Mikro ihracat{order.microExport.ulke ? ` · ${ulkeAdi(order.microExport.ulke)}` : ""}
+                </span>
+              )}
               {isNew && (
                 <span className="rounded-full bg-primary px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-primary-foreground animate-in fade-in zoom-in-95 duration-300">
                   Yeni

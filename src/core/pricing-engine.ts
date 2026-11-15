@@ -141,8 +141,10 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
   const discountMultiplier = 1 - (discountBuffer || 0) / 100;
   const effectiveSalePrice = salePrice * discountMultiplier;
 
-  // KDV ayrıştırması — etkili fiyattan.
-  const vatMultiplier = 1 + (vatRate || 0) / 100;
+  // KDV ayrıştırması — etkili fiyattan. Satışın oranı ayrı verilebilir (mikro ihracat = 0);
+  // girdilerin indirilecek KDV'si aşağıda yine `vatRate` ile hesaplanır.
+  const saleVatRate = input.saleVatRate ?? vatRate;
+  const vatMultiplier = 1 + (saleVatRate || 0) / 100;
   const salePriceExVat = vatMultiplier > 0 ? effectiveSalePrice / vatMultiplier : effectiveSalePrice;
   const vatAmount = effectiveSalePrice - salePriceExVat;
 

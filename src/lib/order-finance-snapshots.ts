@@ -107,6 +107,11 @@ export interface FinanceSnapshotOrder {
   outputVat?: number | null;
   /** Girdilerden indirilecek KDV — TL. Aynı motor çıktısı. */
   inputVatCredit?: number | null;
+  /**
+   * Mikro ihracat (Trendyol `micro`): `{ ulke }` ya da null (yurt içi). VERİLMEZSE (undefined)
+   * kayıtlı değer korunur — Shopify/HB ya da bilgiyi taşımayan çağrı yeri onu silmesin.
+   */
+  microExport?: { ulke: string | null } | null;
 }
 
 /** Tek kaynak çekirdekte (telefon ve siparişe özel maliyet de aynı biçimi kullanıyor). */
@@ -123,6 +128,7 @@ export function shouldReplaceCapturedProfit(
     actualCommissionKurus?: number | null;
     /** Satırın yazıldığı hesap sürümü — eskiyse formül/girdi değişmiş demektir. */
     calculationVersion?: number;
+    microExportCountry?: string | null;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -130,6 +136,8 @@ export function shouldReplaceCapturedProfit(
     profitPartial: boolean;
     profitSource?: string;
     actualCommissionKurus?: number | null;
+    /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
+    microExportCountry?: string | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -137,6 +145,17 @@ export function shouldReplaceCapturedProfit(
   // daha sonra tamamlanırsa yeni değeri kabul ederiz.
   if (!existing || existing.revenueKurus !== incoming.revenueKurus) return true;
   if (existing.profitKurus == null && incoming.profitKurus != null) return true;
+  /**
+   * MİKRO İHRACAT bilgisi değişti → yeniden hesapla. Satış KDV'den istisna olduğu için kâr
+   * farklıdır; bu bilgi gelmeden yakalanmış kâr (KDV düşülmüş) kalıcı olurdu. Yalnız bu
+   * siparişleri açar — genel hesap sürümünü artırmak TÜM geçmişi bugünkü maliyetle yazardı.
+   */
+  if (
+    incoming.microExportCountry !== undefined &&
+    (existing.microExportCountry ?? null) !== incoming.microExportCountry
+  ) {
+    return true;
+  }
   /**
    * ESKİ HESAP SÜRÜMÜYLE yazılmış satır → yeniden hesapla.
    *
@@ -178,6 +197,7 @@ type SnapshotWriteData = {
   actualCommissionKurus: number | null;
   outputVatKurus: number | null;
   inputVatCreditKurus: number | null;
+  microExportCountry: string | null;
   statusKind: string;
   currency: string;
   calculationVersion: number;
@@ -217,6 +237,9 @@ export function snapshotChangedFields(
   if (existing.outputVatKurus !== next.outputVatKurus) changed.push("outputVatKurus");
   if (existing.inputVatCreditKurus !== next.inputVatCreditKurus) {
     changed.push("inputVatCreditKurus");
+  }
+  if ((existing.microExportCountry ?? null) !== (next.microExportCountry ?? null)) {
+    changed.push("microExportCountry");
   }
   if (existing.statusKind !== next.statusKind) changed.push("statusKind");
   if (existing.currency !== next.currency) changed.push("currency");
@@ -270,9 +293,9 @@ function snapshotStatement(
     sql: `INSERT INTO "OrderFinanceSnapshot" (
             "id","platform","externalOrderId","orderNumber","orderedAt","revenueKurus","profitKurus",
             "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
-            "outputVatKurus","inputVatCreditKurus",
+            "outputVatKurus","inputVatCreditKurus","microExportCountry",
             "statusKind","currency","calculationVersion","syncedAt"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId") DO UPDATE SET
             "orderNumber" = excluded."orderNumber",
             "orderedAt" = excluded."orderedAt",
@@ -284,6 +307,7 @@ function snapshotStatement(
             "actualCommissionKurus" = excluded."actualCommissionKurus",
             "outputVatKurus" = excluded."outputVatKurus",
             "inputVatCreditKurus" = excluded."inputVatCreditKurus",
+            "microExportCountry" = excluded."microExportCountry",
             "statusKind" = excluded."statusKind",
             "currency" = excluded."currency",
             "calculationVersion" = excluded."calculationVersion",
@@ -302,6 +326,7 @@ function snapshotStatement(
       data.actualCommissionKurus,
       data.outputVatKurus,
       data.inputVatCreditKurus,
+      data.microExportCountry,
       data.statusKind,
       data.currency,
       data.calculationVersion,
@@ -482,6 +507,13 @@ function toIncomingSnapshot(order: FinanceSnapshotOrder) {
     outputVatKurus: order.outputVat == null ? null : tlToKurus(order.outputVat),
     inputVatCreditKurus:
       order.inputVatCredit == null ? null : tlToKurus(order.inputVatCredit),
+    // undefined = bilgi yok (kayıtlı korunur); null = yurt içi; "XX" = mikro ama ülke bilinmiyor.
+    microExportCountry:
+      order.microExport === undefined
+        ? undefined
+        : order.microExport === null
+          ? null
+          : order.microExport.ulke ?? "XX",
   };
 }
 
@@ -527,6 +559,10 @@ export function resolveSnapshotWriteData(
     inputVatCreditKurus: replaceProfit
       ? incoming.inputVatCreditKurus ?? existing?.inputVatCreditKurus ?? null
       : existing?.inputVatCreditKurus ?? incoming.inputVatCreditKurus,
+    microExportCountry:
+      incoming.microExportCountry !== undefined
+        ? incoming.microExportCountry
+        : existing?.microExportCountry ?? null,
     statusKind: order.statusKind,
     currency: order.currency || "TRY",
     calculationVersion: replaceProfit
@@ -579,6 +615,7 @@ export async function persistOrderFinanceSnapshots(
     estimatedCommissionKurus: number | null;
     outputVatKurus: number | null;
     inputVatCreditKurus: number | null;
+    microExportCountry: string | null;
     statusKind: string;
     currency: string;
   }> = [];
@@ -599,6 +636,7 @@ export async function persistOrderFinanceSnapshots(
         estimatedCommissionKurus: true,
         outputVatKurus: true,
         inputVatCreditKurus: true,
+        microExportCountry: true,
         statusKind: true,
         currency: true,
       },
@@ -954,6 +992,7 @@ type RecalcSnapshotRow = {
   actualCommissionKurus: number | null;
   outputVatKurus: number | null;
   inputVatCreditKurus: number | null;
+  microExportCountry: string | null;
   calculationVersion: number;
   statusKind: string;
   currency: string;
@@ -1188,6 +1227,7 @@ export async function recalculateFinanceMonths(
         actualCommissionKurus: true,
         outputVatKurus: true,
         inputVatCreditKurus: true,
+        microExportCountry: true,
         calculationVersion: true,
         statusKind: true,
         currency: true,
@@ -1319,6 +1359,8 @@ export async function recalculateFinanceMonths(
           orderedAt: row.orderedAt ?? null,
           // Reklam payı — Siparişler ekranıyla AYNI kaynak; yoksa Raporlar farklı kâr gösterirdi.
           adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
+          // Mikro ihracat satışı KDV'den istisna — kayıtlı bilgiyle (Siparişler ekranıyla aynı kâr).
+          saleVatExempt: row.microExportCountry != null,
         },
         {
           statusKind: row.statusKind,
@@ -1356,6 +1398,7 @@ export async function recalculateFinanceMonths(
         // KDV: motorun bu turdaki çıktısı. Geçmiş ayların KDV'si kapsama böyle girer.
         outputVat: resolved.outputVat,
         inputVatCredit: resolved.inputVatCredit,
+        microExport: row.microExportCountry == null ? null : { ulke: row.microExportCountry },
         statusKind: row.statusKind,
         currency: row.currency,
       });

@@ -89,6 +89,13 @@ export interface OrderProfitInput {
    * Geçilmezse 0 — reklam bütçesi olmayan dönem/platform etkilenmez.
    */
   adRate?: number;
+  /**
+   * Satış KDV'den İSTİSNA mı (mikro ihracat — Trendyol `micro: true`)? Öyleyse cironun içinden
+   * KDV ayrılmaz ve hesaplanan KDV 0 olur; komisyon/kargo/paketleme gibi girdilerin içindeki KDV
+   * yine indirilecek KDV sayılır (ihracatta yüklenilen KDV indirilir/iade alınır).
+   * Berke'nin onayıyla, 15 Kas 2026. Verilmezse false (eski davranış).
+   */
+  saleVatExempt?: boolean;
 }
 
 export interface OrderProfitResult {
@@ -143,8 +150,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const vatRate = vatRateOf(settings);
   // Bir maliyetin içindeki KDV payı (indirilecek KDV) — kargo/gider için aynı formül.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  // SATIŞIN KDV oranı — mikro ihracatta 0 (istisna); girdilerin KDV'si `vatRate`/`vatFactor` ile kalır.
+  const saleVatRate = input.saleVatExempt ? 0 : vatRate;
   // Fiyatın içindeki KDV'yi ayıran çarpan — simulatePrice ile AYNI (salePriceExVat = fiyat / bu).
-  const vatMultiplier = 1 + (vatRate > 0 ? vatRate / 100 : 0);
+  const vatMultiplier = 1 + (saleVatRate > 0 ? saleVatRate / 100 : 0);
 
   const platCargo = filterRulesByPlatform(cargoRules, platform);
   // SABİT gider satır hesabından ÇIKARILIR → aşağıda siparişe bir kez uygulanır.
@@ -243,6 +252,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       cargoRules: platCargo,
       expenseRules: perUnit, // YALNIZ yüzdesel — sabit gider siparişe bir kez
       vatRate,
+      saleVatRate,
       ...commissionOverride,
       cargoCostOverride: 0, // kargo sipariş düzeyinde
       minOrderQty: quantity, // adet motorun İÇİNDE (dıştan × qty YOK)

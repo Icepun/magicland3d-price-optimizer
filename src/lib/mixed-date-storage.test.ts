@@ -46,7 +46,8 @@ const SNAPSHOT_DDL = `
     "estimatedCommissionKurus" INTEGER,
     "actualCommissionKurus" INTEGER,
     "outputVatKurus" INTEGER,
-    "inputVatCreditKurus" INTEGER
+    "inputVatCreditKurus" INTEGER,
+    "microExportCountry" TEXT
   )`;
 
 /** Test siparişleri: yarısı ESKİ biçimde (tamsayı), yarısı kanonik biçimde (ISO metin). */

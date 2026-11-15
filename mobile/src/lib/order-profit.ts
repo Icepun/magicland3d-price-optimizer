@@ -249,6 +249,8 @@ export function computeOrderProfit(
         order.platform,
         order.date != null ? new Date(order.date).getTime() : Date.now()
       ),
+      // Mikro ihracat satışı KDV'den istisna — masaüstüyle aynı kural.
+      saleVatExempt: order.microExport != null,
     },
     {
       forceProfitPartial: !!order.financialPartial,

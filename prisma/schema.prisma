@@ -388,6 +388,9 @@ model OrderFinanceSnapshot {
   // Eski satırlar null kalır; "bu ayı yeniden hesapla" ile dolar.
   outputVatKurus           Int?
   inputVatCreditKurus      Int?
+  // Mikro ihracat (Trendyol `micro`) — müşterinin ülkesi (ISO, "XX" = bilinmiyor); null = yurt içi
+  // ya da bilinmiyor. Satış KDV'den istisna → yeniden hesapta da KDV ayrılmasın diye saklanır.
+  microExportCountry       String?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])

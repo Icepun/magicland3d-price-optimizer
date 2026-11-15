@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v54: Mikro ihracat — `OrderFinanceSnapshot.microExportCountry` (Trendyol `micro`, müşterinin
+//      ülkesi). Satış KDV'den istisna; yeniden hesap da bunu bilsin diye saklanır. NULLABLE,
+//      varsayılansız → telefonun INSERT'ü kolonu saymasa da kırılmaz, eski sürüm cihaz okumaz.
 // v53: Telefondan parça iptali — `PrintCommand.param` (exclude komutunun parça adı). Eski sürüm
 //      masaüstü bu kolonu okumaz; telefon kolonu yalnız `exclude` komutunda yazar.
 // v52: Yazıcı doluluğu — `PrinterStatusSample` (yazıcı × 5 dakikalık dilim → durum). Relay
@@ -100,7 +103,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "53";
+const CURRENT_SCHEMA_VERSION = "54";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1122,6 +1125,8 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // v38: KDV. Nullable ve VARSAYILANSIZ — eski satırlarda değer YOKTUR ve uydurulmaz.
     await ensureColumn("OrderFinanceSnapshot", "outputVatKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "inputVatCreditKurus", "INTEGER");
+    // v54: Mikro ihracat ülkesi. Nullable, varsayılansız (yurt içi = null).
+    await ensureColumn("OrderFinanceSnapshot", "microExportCountry", "TEXT");
     // v37: Sipariş KALEMLERİ. Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu
     // yanıtlamıyordu ve platform penceresi (30-60 gün) dolunca o bilgi kalıcı olarak kayboluyordu.
     // Tekilleştirme (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.

@@ -5,6 +5,7 @@ import { buildTrendyolWindows } from "@core/trendyol-windows";
 import { trendyolOrderId } from "@core/trendyol-order-id";
 import { anahtarListesi } from "@core/order-match";
 import { TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
+import { trendyolMikroIhracat } from "@core/mikro-ihracat";
 import {
   trendyolIadeDurumu,
   trendyolIadeleri,
@@ -45,6 +46,9 @@ interface TyOrder {
   customerLastName?: string;
   totalPrice?: number;
   grossAmount?: number;
+  /** Mikro ihracat siparişi (yurt dışı müşteri) — bkz. @core/mikro-ihracat. */
+  micro?: boolean;
+  orderCountryCode?: string;
   lines?: {
     productName?: string;
     quantity?: number;
@@ -157,6 +161,8 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         customer: [o.customerFirstName, o.customerLastName].filter(Boolean).join(" ") || null,
         // Masaüstüyle birebir savunmalı alanlar (totalPrice gelmezse NaN ciroya bulaşmasın).
         total: Number(o.totalPrice ?? o.grossAmount ?? 0),
+        // Mikro ihracat → satış KDV'siz (masaüstü route.ts ile aynı çekirdek fonksiyonu).
+        microExport: trendyolMikroIhracat(o),
         items: (o.lines ?? []).map((l) => ({
           name: l.productName ?? l.barcode ?? "Ürün",
           quantity: Number(l.quantity ?? 1),
