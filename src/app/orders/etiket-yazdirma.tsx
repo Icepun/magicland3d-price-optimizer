@@ -31,7 +31,7 @@ import {
   etiketBasilabilir,
   etiketIstegi,
   type EtiketSiparisi,
-} from "./etiket-uygunluk";
+} from "@/core/etiket-uygunluk";
 
 /**
  * Trendyol kargo etiketi — Siparişler ekranı.

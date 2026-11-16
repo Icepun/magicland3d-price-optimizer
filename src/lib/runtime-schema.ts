@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v55: Telefondan kargo etiketi — `LabelPrintRequest`. Telefon isteği yazar, etiket yazıcısı bağlı
+//      masaüstü koşullu güncellemeyle SAHİPLENİP basar (iki masaüstü açıkken çift baskı olmaz);
+//      masaüstünden basılanlar da buraya "done" yazılır → telefon "basıldı" işaretini görür.
+//      Yeni tablo → eski sürüm cihazlar etkilenmez.
 // v54: Mikro ihracat — `OrderFinanceSnapshot.microExportCountry` (Trendyol `micro`, müşterinin
 //      ülkesi). Satış KDV'den istisna; yeniden hesap da bunu bilsin diye saklanır. NULLABLE,
 //      varsayılansız → telefonun INSERT'ü kolonu saymasa da kırılmaz, eski sürüm cihaz okumaz.
@@ -103,7 +107,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "54";
+const CURRENT_SCHEMA_VERSION = "55";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1607,6 +1611,29 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     );
     // v53: telefondan parça iptali — `exclude` komutunun parça adı.
     await ensureColumn("PrintCommand", "param", "TEXT");
+    // v55: telefondan kargo etiketi (bkz. lib/etiket/telefon-istekleri).
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "LabelPrintRequest" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "orderNumber" TEXT NOT NULL,
+        "labelKey" TEXT NOT NULL,
+        "trackingNumber" TEXT,
+        "packageNumber" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'pending',
+        "error" TEXT,
+        "source" TEXT,
+        "printedBy" TEXT,
+        "createdAtMs" REAL NOT NULL,
+        "processedAtMs" REAL
+      )
+    `);
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "LabelPrintRequest_status_idx" ON "LabelPrintRequest"("status")`
+    );
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "LabelPrintRequest_labelKey_idx" ON "LabelPrintRequest"("labelKey")`
+    );
 
     // Kalıcı bildirimler (v21) — olay-anı uyarıları (stoğu biten/sipariş-üzerine ürüne sipariş).
     // id = tekilleştirme anahtarı (createMany skipDuplicates ile tekrar yazılmaz).

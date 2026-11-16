@@ -675,6 +675,33 @@ model PrinterSnapshot {
  * aynı anda çalışsa da (ikisi de relay) aynı dilim TEK satır olur, iki kez sayılmaz.
  * 30 günden eskiler relay tarafından silinir.
  */
+/**
+ * Kargo etiketi baskıları: telefonun istediği (masaüstü basar) ve masaüstünden basılanlar.
+ * Telefon "basıldı" işaretini buradan okur. Tarihler epoch-ms — istemciler arası biçim derdi yok.
+ */
+model LabelPrintRequest {
+  id             String  @id @default(cuid())
+  /** trendyol | hepsiburada */
+  platform       String
+  orderNumber    String
+  /** "Basıldı" işaretinin anahtarı: takip/teslimat no, yoksa paket no (`@/core/etiket-uygunluk`). */
+  labelKey       String
+  trackingNumber String?
+  packageNumber  String?
+  /** pending | running | done | error | cancelled */
+  status         String  @default("pending")
+  error          String?
+  /** mobile | desktop */
+  source         String?
+  /** Basan bilgisayarın adı (iki masaüstü açıkken hangisinin bastığı). */
+  printedBy      String?
+  createdAtMs    Float
+  processedAtMs  Float?
+
+  @@index([status])
+  @@index([labelKey])
+}
+
 model PrinterStatusSample {
   printerConfigId String
   /** Dilim başlangıcı — epoch-ms, 5 dakikanın katı. */

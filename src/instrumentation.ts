@@ -22,6 +22,14 @@ export async function register() {
       console.error("[instrumentation] sipariş izleyici başlatılamadı:", e);
     }
 
+    // Telefondan kargo etiketi: telefonun isteğini etiket yazıcısı bağlı bu bilgisayar basar.
+    try {
+      const { startEtiketIstekleri } = await import("./lib/etiket/telefon-istekleri");
+      startEtiketIstekleri();
+    } catch (e) {
+      console.error("[instrumentation] etiket istekleri başlatılamadı:", e);
+    }
+
     // Ağır sayfaların (Raporlar, Panel, Ürünler) sunucu önbelleği boşsa açılıştan kısa süre sonra
     // sırayla doldurulur — güncellemeden sonraki ilk ziyaret 4 sn beklemesin.
     try {

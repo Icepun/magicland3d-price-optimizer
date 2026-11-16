@@ -42,13 +42,17 @@ describe("etiket uygunluğu", () => {
     expect(etiketAnahtari(hb)).toBe("62755431389885");
     expect(etiketIstegi(hb)).toEqual({
       url: "/api/hepsiburada/etiket",
-      govde: { paketNo: "5543138988", takipNo: "62755431389885" },
+      govde: { paketNo: "5543138988", takipNo: "62755431389885", siparisNo: hb.orderNumber },
     });
     // Paketlenmemiş (paket no yok) → etiket yok.
     expect(etiketBasilabilir(s({ platform: "hepsiburada", packageNumber: null, trackingNumber: null }))).toBe(false);
   });
 
   it("Trendyol isteği takip numarasıyla gider", () => {
-    expect(etiketIstegi(s({}))).toEqual({ url: "/api/trendyol/etiket", govde: { takipNo: "7330039048986936" } });
+    const ty = s({});
+    expect(etiketIstegi(ty)).toEqual({
+      url: "/api/trendyol/etiket",
+      govde: { takipNo: "7330039048986936", siparisNo: ty.orderNumber },
+    });
   });
 });
