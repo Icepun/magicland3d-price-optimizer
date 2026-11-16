@@ -52,6 +52,12 @@ export interface UnifiedOrder {
   profitPartial?: boolean;
   /** Mikro ihracat (Trendyol `micro`) — satış KDV'den istisna; masaüstüyle aynı kâr kuralı. */
   microExport?: { ulke: string | null } | null;
+  /** Kargo takip / teslimat numarası (Trendyol, HB teslimat no, Shopify gönderisi). */
+  trackingNumber?: string | null;
+  /** Kargo firması (ör. "Trendyol Express", "hepsiJET") — masaüstü "Kargo & Kâr" ile aynı. */
+  cargoProvider?: string | null;
+  /** Hepsiburada paket numarası (paketlendiyse) — HB kargo etiketi bununla basılır. */
+  packageNumber?: string | null;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;

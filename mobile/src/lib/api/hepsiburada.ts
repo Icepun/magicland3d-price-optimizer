@@ -294,6 +294,10 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
       // Detayı alınamayan (ya da çekim sınırının dışında kalan) sipariş: tutarı bilinmiyor.
       // Gerçek bir siparişin sıfır kalemi olmaz — boş liste de aynı anlama gelir (masaüstüyle aynı).
       dataIncomplete: lines.length === 0,
+      // Paket listelerinden (masaüstü route.ts ile aynı alanlar) — HB etiketi paket no ile basılır.
+      trackingNumber: e.teslimatNo ?? null,
+      cargoProvider: e.kargoFirmasi ?? null,
+      packageNumber: e.paketNo ?? null,
     });
   }
   return orders;

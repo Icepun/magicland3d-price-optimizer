@@ -48,7 +48,7 @@ const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
     pageInfo{ hasNextPage endCursor }
     edges{ node{
       id name createdAt displayFulfillmentStatus displayFinancialStatus cancelledAt test
-      fulfillments(first:10){ status displayStatus deliveredAt }
+      fulfillments(first:10){ status displayStatus deliveredAt trackingInfo{ number company } }
       currentTotalPriceSet{ shopMoney{ amount currencyCode } }
       customer{ firstName lastName }
       lineItems(first:20){
@@ -62,6 +62,12 @@ const ORDERS_QUERY = `query($first:Int!,$after:String,$query:String){
   }
 }`;
 
+/** Gönderinin kargo bilgisi (masaüstü shopify-client ile aynı alanlar). */
+interface ShTakip {
+  number?: string | null;
+  company?: string | null;
+}
+
 interface ShEdge {
   node: {
     id: string;
@@ -73,7 +79,7 @@ interface ShEdge {
     /** Shopify'ın test siparişi — satış değildir (masaüstüyle aynı: listeye hiç girmez). */
     test?: boolean | null;
     /** Teslim bilgisi burada — sipariş durumu teslim edilince de FULFILLED kalır. */
-    fulfillments?: ShopifyGonderim[] | null;
+    fulfillments?: (ShopifyGonderim & { trackingInfo?: ShTakip[] | null })[] | null;
     currentTotalPriceSet?: {
       shopMoney?: { amount?: string; currencyCode?: string };
     };
@@ -199,5 +205,12 @@ export async function getShopifyOrders(
         skus: anahtarListesi(e.node.variant?.sku, e.node.sku),
       };
     }),
+    trackingNumber: ilkTakip(node.fulfillments)?.number ?? null,
+    cargoProvider: ilkTakip(node.fulfillments)?.company ?? null,
   }));
+}
+
+/** İlk takip numarası olan gönderim (masaüstü shopify-client ile aynı: ilkinde yoksa sonrakiler). */
+function ilkTakip(gonderimler: { trackingInfo?: ShTakip[] | null }[] | null | undefined): ShTakip | undefined {
+  return (gonderimler ?? []).map((f) => f.trackingInfo?.[0]).find((t): t is ShTakip => !!t?.number);
 }

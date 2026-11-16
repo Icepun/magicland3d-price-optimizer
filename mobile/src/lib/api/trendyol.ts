@@ -49,6 +49,9 @@ interface TyOrder {
   /** Mikro ihracat siparişi (yurt dışı müşteri) — bkz. @core/mikro-ihracat. */
   micro?: boolean;
   orderCountryCode?: string;
+  /** Kargo takip numarası (masaüstü route.ts ile aynı kaynak). */
+  cargoTrackingNumber?: number | string | null;
+  cargoProviderName?: string | null;
   lines?: {
     productName?: string;
     quantity?: number;
@@ -163,6 +166,8 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         total: Number(o.totalPrice ?? o.grossAmount ?? 0),
         // Mikro ihracat → satış KDV'siz (masaüstü route.ts ile aynı çekirdek fonksiyonu).
         microExport: trendyolMikroIhracat(o),
+        trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
+        cargoProvider: o.cargoProviderName ?? null,
         items: (o.lines ?? []).map((l) => ({
           name: l.productName ?? l.barcode ?? "Ürün",
           quantity: Number(l.quantity ?? 1),

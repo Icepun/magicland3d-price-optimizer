@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { router } from "expo-router";
+import { SymbolView } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 
@@ -45,6 +46,8 @@ import {
 } from "@/lib/api/orders";
 import { orderWindowCutoff } from "@/lib/api/window";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
+import { basilanEtiketler } from "@/lib/db/etiket";
+import { basilabilirEtiketAnahtari } from "@/lib/etiket";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
@@ -90,6 +93,8 @@ export default function OrdersScreen() {
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  // Basılan kargo etiketleri (masaüstü ve telefon) — satırdaki yazıcı işareti.
+  const { data: basilanlar } = useQuery({ queryKey: ["etiket-basilanlar"], queryFn: basilanEtiketler, staleTime: 30_000 });
 
   const [arama, setArama] = useState("");
   const [platform, setPlatform] = useState<"hepsi" | OrderPlatform>("hepsi");
@@ -311,7 +316,14 @@ export default function OrdersScreen() {
                 </View>
               );
             }
-            const card = <OrderRow order={item.siparis} profit={profitOf.get(item.siparis.id)} />;
+            const etiketAnahtari = basilabilirEtiketAnahtari(item.siparis);
+            const card = (
+              <OrderRow
+                order={item.siparis}
+                profit={profitOf.get(item.siparis.id)}
+                etiketBasildi={etiketAnahtari != null && basilanlar?.[etiketAnahtari] != null}
+              />
+            );
             // Giriş animasyonu yalnız ilk ekrandaki öğelerde — derin kaydırmada kasmasın.
             if (index >= 12) return card;
             return <FadeInView index={index}>{card}</FadeInView>;
@@ -489,7 +501,15 @@ function PhotoBox({ profit, accent, orderId }: { profit?: OrderProfit; accent: s
   );
 }
 
-function OrderRow({ order, profit }: { order: UnifiedOrder; profit?: OrderProfit }) {
+function OrderRow({
+  order,
+  profit,
+  etiketBasildi,
+}: {
+  order: UnifiedOrder;
+  profit?: OrderProfit;
+  etiketBasildi?: boolean;
+}) {
   const accent = ORDER_PLATFORM_COLOR[order.platform];
   const st = statusInfo(order);
   const first = order.items[0];
@@ -513,6 +533,15 @@ function OrderRow({ order, profit }: { order: UnifiedOrder; profit?: OrderProfit
             {order.orderNumber}
           </Txt>
           {order.isManual ? <Pill color={color.manual}>Manuel</Pill> : null}
+          {order.microExport ? <Pill color={color.info}>Mikro ihracat</Pill> : null}
+          {etiketBasildi ? (
+            <SymbolView
+              name="printer.fill"
+              tintColor={color.good}
+              style={{ width: 13, height: 13 }}
+              accessibilityLabel="Kargo etiketi basıldı"
+            />
+          ) : null}
         </View>
         <Txt v="small" tone="dim" numberOfLines={1}>
           {order.customer ?? "—"} · {formatDate(order.date)}

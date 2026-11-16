@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { StyleSheet, View } from "react-native";
 
+import { KargoKarti } from "@/components/KargoKarti";
 import { Pill } from "@/components/kit/Chip";
 import {
   Button,
@@ -21,9 +22,12 @@ import {
 } from "@/components/kit";
 import { getAllOrders, isIncompleteOrder, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
+import { basilanEtiketler } from "@/lib/db/etiket";
+import { basilabilirEtiketAnahtari } from "@/lib/etiket";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { thumbUrl } from "@/lib/image";
+import { ulkeAdi } from "@core/mikro-ihracat";
 import { TUM_SIPARISLER } from "@core/order-line-cost";
 import {
   computeOrderProfit,
@@ -55,6 +59,8 @@ export default function OrderDetailScreen() {
   const { data: products } = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  // Masaüstünden ya da telefondan basılan kargo etiketleri ("basıldı" işareti).
+  const { data: basilanlar } = useQuery({ queryKey: ["etiket-basilanlar"], queryFn: basilanEtiketler, staleTime: 30_000 });
 
   if (ordersLoading) {
     return (
@@ -91,6 +97,7 @@ export default function OrderDetailScreen() {
 
   const accent = ORDER_PLATFORM_COLOR[order.platform];
   const st = statusInfo(order);
+  const etiketAnahtari = basilabilirEtiketAnahtari(order);
   const pm = getProductMap(products ?? []);
   // Tutarı alınamayan siparişte ciro/kâr/marj BİLİNMİYOR ("—"); ₺0 ve eksi kâr gösterilmez.
   const tutarYok = isIncompleteOrder(order);
@@ -99,6 +106,7 @@ export default function OrderDetailScreen() {
   const margin = profit && profit.profit != null && order.total > 0 ? profit.profit / order.total : null;
   const notlar: string[] = [];
   if (tutarYok) notlar.push("Sipariş tutarı alınamadı; yenileyince tekrar denenecek.");
+  if (order.microExport) notlar.push("Mikro ihracat (yurt dışı): satış KDV'siz hesaplandı.");
   if (profit?.partial) notlar.push("Bazı ürünler eşleşmedi, kâr kısmi (~).");
   if (profit?.desiEstimated) {
     notlar.push(
@@ -127,6 +135,11 @@ export default function OrderDetailScreen() {
         <Txt v="body" tone="dim" numberOfLines={1}>
           {order.customer ?? "Müşteri adı yok"}
         </Txt>
+        {order.microExport ? (
+          <Pill color={color.info} style={{ marginTop: space.xs }}>
+            {`Mikro ihracat${order.microExport.ulke ? ` · ${ulkeAdi(order.microExport.ulke) ?? order.microExport.ulke}` : ""}`}
+          </Pill>
+        ) : null}
       </FadeInView>
 
       {order.isManual && order.editHref ? (
@@ -206,6 +219,8 @@ export default function OrderDetailScreen() {
           ))}
         </Tint>
       ) : null}
+
+      <KargoKarti order={order} basildiAt={etiketAnahtari ? basilanlar?.[etiketAnahtari] : undefined} />
 
       {/* Satırlar */}
       <Txt v="label" tone="faint" style={styles.section}>
