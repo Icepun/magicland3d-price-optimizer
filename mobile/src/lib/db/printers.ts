@@ -42,7 +42,54 @@ export interface PrinterSnapshot {
 let detayKolonuYokAn = 0;
 const DETAY_YENIDEN_DENEME_MS = 5 * 60_000;
 
-type SnapSatiri = Omit<PrinterSnapshot, "detay"> & { detail?: string | null };
+type SnapSatiri = Omit<PrinterSnapshot, "detay" | "productImage"> & { detail?: string | null };
+
+/**
+ * PLAKA GÖRSELİ YOKLAMADA TAŞINMAZ (19 Kas 2026 denetimi).
+ *
+ * `productImage` U1 işlerinde ~30-40 KB'lık bir data-URL; yoklama 4 sn'de bir onu da indiriyordu —
+ * iki U1 basarken saatte 25-70 MB mobil veri. Ekranlar ise önce `detay.plateUrl`'i kullanıyor;
+ * görsel yalnız o yokken gerekiyor. Artık yoklama görselsiz; gereken yazıcının görseli AYRI ve
+ * iş başına BİR KEZ okunur (iş = dosya adı + ürün). Masaüstü görseli sonradan doldurabildiği için
+ * boş sonuç 60 sn sonra yeniden sorulur.
+ */
+const gorselBellegi = new Map<string, { anahtar: string; gorsel: string | null; at: number }>();
+const BOS_GORSEL_YENIDEN_MS = 60_000;
+
+async function eksikGorselleriDoldur(satirlar: PrinterSnapshot[]): Promise<void> {
+  const simdi = Date.now();
+  const sorulacak: string[] = [];
+  for (const s of satirlar) {
+    if (s.detay?.plateUrl) continue; // ekran görseli buradan alıyor
+    const anahtar = `${s.currentFilename ?? ""}|${s.productName ?? ""}`;
+    const b = gorselBellegi.get(s.printerConfigId);
+    if (b && b.anahtar === anahtar && (b.gorsel != null || simdi - b.at < BOS_GORSEL_YENIDEN_MS)) {
+      s.productImage = b.gorsel;
+      continue;
+    }
+    sorulacak.push(s.printerConfigId);
+  }
+  if (sorulacak.length === 0) return;
+  try {
+    const gelen = await query<{ printerConfigId: string; productImage: string | null }>(
+      `SELECT printerConfigId, productImage FROM PrinterSnapshot WHERE printerConfigId IN (${sorulacak.map(() => "?").join(",")})`,
+      sorulacak
+    );
+    const harita = new Map(gelen.map((g) => [g.printerConfigId, g.productImage ?? null]));
+    for (const s of satirlar) {
+      if (!sorulacak.includes(s.printerConfigId)) continue;
+      const gorsel = harita.get(s.printerConfigId) ?? null;
+      gorselBellegi.set(s.printerConfigId, {
+        anahtar: `${s.currentFilename ?? ""}|${s.productName ?? ""}`,
+        gorsel,
+        at: simdi,
+      });
+      s.productImage = gorsel;
+    }
+  } catch {
+    /* görsel alınamadı → ekran yer tutucu gösterir; durum bilgisi etkilenmez */
+  }
+}
 
 export async function getPrinterSnapshots(): Promise<PrinterSnapshot[]> {
   // statusMessage: hata/duraklama NEDENİ. Masaüstü aktarıcısı bu kolonu yazıyor ama mobil
@@ -50,7 +97,7 @@ export async function getPrinterSnapshots(): Promise<PrinterSnapshot[]> {
   const sql = (ek: string) =>
     `SELECT s.printerConfigId, s.name, s.brand, c.model AS model, c.type AS type,
             s.status, s.statusMessage, s.online,
-            s.productName, s.productImage,
+            s.productName,
             s.progress, s.nozzle, s.bed, s.currentFilename, s.etaSec, s.updatedAt${ek}
        FROM PrinterSnapshot s
        JOIN PrinterConfig c ON c.id = s.printerConfigId AND c.enabled = 1
@@ -67,7 +114,13 @@ export async function getPrinterSnapshots(): Promise<PrinterSnapshot[]> {
   } else {
     rows = await query<SnapSatiri>(sql(""));
   }
-  return rows.map(({ detail, ...r }) => ({ ...r, detay: yaziciDetayOku(detail ?? null) }));
+  const sonuc: PrinterSnapshot[] = rows.map(({ detail, ...r }) => ({
+    ...r,
+    productImage: null,
+    detay: yaziciDetayOku(detail ?? null),
+  }));
+  await eksikGorselleriDoldur(sonuc);
+  return sonuc;
 }
 
 // ── Kamera (masaüstü LAN'dan R2'ye kare taşır — sözleşme @core/printer-camera) ────────────────
@@ -184,7 +237,7 @@ export async function getPrintableModels(printerConfigId: string): Promise<Print
 export type PrintAction = "start" | "pause" | "resume" | "cancel" | "exclude";
 
 /** Telefondan komut gönder → masaüstü relay'i ~10sn içinde uygular. Komut id'sini döndürür
- *  (getRecentCommands ile durumu — pending/done/error — izlenebilsin). */
+ *  (getCommandStatus ile durumu — pending/done/error — izlenebilsin). */
 export async function sendPrintCommand(
   printerConfigId: string,
   action: PrintAction,
@@ -220,11 +273,16 @@ export interface RecentCommand {
   createdAt: string;
 }
 
-export async function getRecentCommands(): Promise<RecentCommand[]> {
-  return query<RecentCommand>(
-    `SELECT id, printerConfigId, action, status, error, createdAt
-       FROM PrintCommand ORDER BY createdAt DESC LIMIT 20`
+/**
+ * TEK komutun durumu — birincil anahtarla. Komut gönderen ekranlar yalnız KENDİ komutuna bakıyor;
+ * eskiden 3 sn'de bir son 20 komut okunuyordu (createdAt indeksi yok → tablonun tamamı sıralanıyordu).
+ */
+export async function getCommandStatus(id: string): Promise<RecentCommand | null> {
+  const satirlar = await query<RecentCommand>(
+    `SELECT id, printerConfigId, action, status, error, createdAt FROM PrintCommand WHERE id = ?`,
+    [id]
   );
+  return satirlar[0] ?? null;
 }
 
 /** Özel baskı arşivi — ürüne bağlı OLMAYAN yüklenmiş baskı dosyaları (sentinel productId='__custom__').

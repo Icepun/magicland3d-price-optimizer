@@ -112,7 +112,25 @@ function diskeYaz(qc: QueryClient): void {
  */
 export function startOfflineCachePersist(qc: QueryClient): () => void {
   let zamanlayici: ReturnType<typeof setTimeout> | null = null;
-  const abone = qc.getQueryCache().subscribe(() => {
+  /**
+   * YALNIZ KALICI VERİ DEĞİŞİNCE (19 Kas 2026 denetimi): abonelik her önbellek olayında
+   * tetikleniyordu — yazıcı (4 sn) ve kamera (1,5 sn) yoklamaları dahil. Yazıcı ekranı açıkken
+   * kalıcı verinin tamamı her 4 sn'de baştan dizgeye çevrilip diske yazılıyordu. Artık yalnız
+   * diske yazılan sorgulardan birinin verisi GERÇEKTEN değiştiğinde (yeni referans) yazılır.
+   */
+  const sonVeri = new Map<string, unknown>();
+  const abone = qc.getQueryCache().subscribe((olay) => {
+    const q = olay.query;
+    if (!kaliciSorguMu(q.queryKey)) return;
+    if (olay.type === "updated") {
+      if (q.state.status !== "success") return;
+      if (sonVeri.get(q.queryHash) === q.state.data) return; // içerik aynı (yapısal paylaşım)
+      sonVeri.set(q.queryHash, q.state.data);
+    } else if (olay.type === "removed") {
+      sonVeri.delete(q.queryHash);
+    } else {
+      return;
+    }
     if (zamanlayici) return;
     zamanlayici = setTimeout(() => {
       zamanlayici = null;

@@ -62,7 +62,10 @@ SplashScreen.setOptions({ duration: 300, fade: true });
  */
 function SplashGate({ fontsReady }: { fontsReady: boolean }) {
   const qc = useQueryClient();
-  const [dataReady, setDataReady] = useState(false);
+  // Diskte (önceki oturumdan) Panel verisi varsa açılış AĞI BEKLEMEZ: veri ilk karede hazır, tazeleme
+  // arkada sürer ve ekrandaki yaş damgası ne zamanki veri olduğunu söyler. Eskiden disk verisi 5 dk'dan
+  // eskiyse en ağır sorgu bekleniyordu — önbellekli her soğuk açılışta 0,5-3 sn (19 Kas 2026 denetimi).
+  const [dataReady, setDataReady] = useState(() => qc.getQueryData(["dashboard-data"]) !== undefined);
   const [zamanAsimi, setZamanAsimi] = useState(false);
   const [basladi] = useState(() => Date.now());
 

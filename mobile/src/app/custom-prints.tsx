@@ -5,7 +5,7 @@ import { Alert, StyleSheet, View } from "react-native";
 
 import { Pill } from "@/components/kit/Chip";
 import { Button, EmptyState, FadeInView, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
-import { getCustomPrints, getPrinterSnapshots, getRecentCommands, sendPrintCommand, type CustomPrint } from "@/lib/db/printers";
+import { getCustomPrints, getPrinterSnapshots, getCommandStatus, sendPrintCommand, type CustomPrint } from "@/lib/db/printers";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatNumber } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";
@@ -58,13 +58,13 @@ export default function CustomPrintsScreen() {
 
   const [sent, setSent] = useState<{ id: string; name: string; at: number } | null>(null);
   const cmdTimedOut = !!sent && now - sent.at > 90_000;
-  const { data: cmds = [] } = useQuery({
-    queryKey: ["recent-commands"],
-    queryFn: getRecentCommands,
+  // Yalnız gönderilen komut — birincil anahtarla (bkz. getCommandStatus).
+  const { data: sentCmd = null } = useQuery({
+    queryKey: ["command-status", sent?.id ?? ""],
+    queryFn: () => getCommandStatus(sent!.id),
     refetchInterval: sent && !cmdTimedOut ? 3000 : false,
     enabled: !!sent && !cmdTimedOut,
   });
-  const sentCmd = sent ? cmds.find((c) => c.id === sent.id) : null;
   const cmdSettled = sentCmd?.status === "done" || sentCmd?.status === "error";
   useEffect(() => {
     if (cmdSettled || cmdTimedOut) {
@@ -83,7 +83,7 @@ export default function CustomPrintsScreen() {
           try {
             const id = await sendPrintCommand(it.printerConfigId, "start", it.id);
             setSent({ id, name: it.originalName, at: Date.now() });
-            qc.invalidateQueries({ queryKey: ["recent-commands"] });
+            qc.invalidateQueries({ queryKey: ["command-status", id] });
           } catch {
             Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
           }

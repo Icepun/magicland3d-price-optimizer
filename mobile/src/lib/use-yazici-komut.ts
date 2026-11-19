@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 
-import { getRecentCommands, sendPrintCommand, type PrintAction } from "@/lib/db/printers";
+import { getCommandStatus, sendPrintCommand, type PrintAction } from "@/lib/db/printers";
 import { color } from "@/theme/tokens";
 
 export const KOMUT_ADI: Record<PrintAction, string> = {
@@ -32,13 +32,12 @@ export function useYaziciKomutu(simdi: number) {
   const qc = useQueryClient();
   const [gonderilen, setGonderilen] = useState<{ id: string; ad: string; at: number } | null>(null);
   const zamanAsimi = !!gonderilen && simdi - gonderilen.at > ZAMAN_ASIMI_MS;
-  const { data: komutlar = [] } = useQuery({
-    queryKey: ["recent-commands"],
-    queryFn: getRecentCommands,
+  const { data: komut = null } = useQuery({
+    queryKey: ["command-status", gonderilen?.id ?? ""],
+    queryFn: () => getCommandStatus(gonderilen!.id),
     refetchInterval: gonderilen && !zamanAsimi ? 3000 : false,
     enabled: !!gonderilen && !zamanAsimi,
   });
-  const komut = gonderilen ? komutlar.find((c) => c.id === gonderilen.id) : null;
   const sonuclandi = komut?.status === "done" || komut?.status === "error";
   useEffect(() => {
     if (!sonuclandi && !zamanAsimi) return;
@@ -58,7 +57,7 @@ export function useYaziciKomutu(simdi: number) {
       try {
         const id = await sendPrintCommand(yazici.printerConfigId, eylem, undefined, param);
         setGonderilen({ id, ad: `${yazici.name}: ${KOMUT_ADI[eylem]}`, at: Date.now() });
-        qc.invalidateQueries({ queryKey: ["recent-commands"] });
+        qc.invalidateQueries({ queryKey: ["command-status", id] });
       } catch {
         Alert.alert("Hata", "Komut gönderilemedi (bağlantı sorunu).");
       }
