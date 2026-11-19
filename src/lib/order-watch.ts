@@ -1,11 +1,13 @@
-import { prisma, remotePrisma } from "./prisma";
+import { remotePrisma } from "./prisma";
 import { matchByPriority, uniqueIndex } from "./listing-index";
 import { ensureRuntimeSchema } from "./runtime-schema";
 import { toDbDate } from "./sqlite-date";
 import { buildFilamentAlerts, groupSpools, type SpoolLike } from "@/core/filament-groups";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { trendyolDateToUtc } from "@/core/trendyol-date";
-import { notifyNewOrders, type NotifyOrder } from "./order-notify";
+import { notifyNewOrders, yeniSiparisAdayKimlikleri, type NotifyOrder } from "./order-notify";
+import { processSingleton } from "@/core/printers/process-singleton";
+import { perfYaz } from "./server-perf-log";
 import { loadFilamentSettings } from "@/lib/filament-settings";
 import { ShopifyClient } from "@/services/shopify-client";
 import { getShopifyCredentials } from "@/services/shopify-settings";
@@ -381,7 +383,7 @@ async function loadScanProducts(orders: ScanOrder[]): Promise<ScanProduct[]> {
   if (keys.size === 0 && names.size === 0) return [];
   const keyArray = [...keys];
   const nameArray = [...names];
-  const rows = await prisma.product.findMany({
+  const rows = await remotePrisma.product.findMany({
     where: {
       OR: [
         { barcode: { in: keyArray } },
@@ -415,7 +417,7 @@ async function loadScanProducts(orders: ScanOrder[]): Promise<ScanProduct[]> {
 
 /** Düşük stok / sitede tükenen / azalan filament — bildirim ucundaki eşiklerle BİREBİR aynı. */
 async function loadInventory(): Promise<ScanInventory> {
-  const lowStock = await prisma.product.findMany({
+  const lowStock = await remotePrisma.product.findMany({
     // "Sipariş üzerine üretilir" ürünlerde stok TANIMI GEREĞİ 0'dır → hepsi kalıcı KRİTİK
     // "Stok bitti" satırı doğururdu ve zil sürekli kırmızı kalırdı. Panel de bunları
     // dışlıyor (api/dashboard: !madeToOrder) — aynı kural.
@@ -423,7 +425,7 @@ async function loadInventory(): Promise<ScanInventory> {
     select: { id: true, name: true, stock: true },
     take: 50,
   });
-  const listings = await prisma.listing
+  const listings = await remotePrisma.listing
     .findMany({
       where: {
         platform: "shopify",
@@ -436,7 +438,7 @@ async function loadInventory(): Promise<ScanInventory> {
     })
     .catch(() => null); // okunamadı → o türün satırlarına DOKUNULMAZ (aşağıya bak)
   // Zilin (/api/notifications) okuduğu ALAN LİSTESİYLE aynı — gruplama bu alanlara dayanıyor.
-  const spoolRows = await prisma.filamentSpool
+  const spoolRows = await remotePrisma.filamentSpool
     .findMany({
       where: { isActive: true },
       select: {
@@ -485,7 +487,7 @@ async function loadInventory(): Promise<ScanInventory> {
 async function persistNotifications(rows: WatchNotification[]): Promise<void> {
   if (rows.length === 0) return;
   const ids = rows.map((r) => r.id);
-  const existing = await prisma.notification
+  const existing = await remotePrisma.notification
     .findMany({ where: { id: { in: ids } }, select: { id: true } })
     .catch(() => [] as Array<{ id: string }>);
   const known = new Set(existing.map((e) => e.id));
@@ -508,7 +510,7 @@ async function persistNotifications(rows: WatchNotification[]): Promise<void> {
       n.href,
       simdi,
     ]);
-    await prisma
+    await remotePrisma
       .$executeRawUnsafe(
         `INSERT OR IGNORE INTO "Notification" ("id","type","severity","title","body","href","createdAt") VALUES ${placeholders}`,
         ...params
@@ -532,12 +534,67 @@ async function clearResolvedInventory(
   readTypes: string[]
 ): Promise<void> {
   if (readTypes.length === 0) return;
-  await prisma.notification
+  await remotePrisma.notification
     .deleteMany({ where: { type: { in: readTypes }, id: { notIn: validIds } } })
     .catch(() => ({ count: 0 }));
 }
 
 // ── Turlar ──────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Bildirimi ZATEN yazılmış sipariş kimlikleri — süreç geneli hafıza.
+ *
+ * NEDEN (19 Kas 2026, Turso dökümü): tur, aksiyon bekleyen tek bir sipariş bile varsa ürün
+ * eşleştirme sorgusunu atıyordu (Product tam tarama + her ürün için Listing yoklaması = 4.600
+ * satır), günde ~1.500 kez — oysa o siparişlerin neredeyse hepsi çoktan bildirilmişti. Artık
+ * ürün sorgusu yalnız GERÇEKTEN yeni bir sipariş görülünce çalışır.
+ */
+const bilinenSiparisBildirimleri = processSingleton("ow_bilinenSiparisBildirimleri", () => new Set<string>());
+const BILINEN_TAVAN = 5_000;
+
+/**
+ * Bu siparişlerin içinde bildirimi henüz YAZILMAMIŞ olan var mı?
+ * Hafızada olmayan kimlikler veritabanına bir kez sorulur (başka cihaz ya da önceki oturum
+ * bildirmiş olabilir); bulunanlar hafızaya alınır.
+ */
+export async function bildirilmemisSiparisVarMi(
+  orders: readonly ScanOrder[],
+  simdi: number,
+  veritabanindaOlanlar: (idler: string[]) => Promise<string[]>
+): Promise<boolean> {
+  const bilinmeyen = yeniSiparisAdayKimlikleri(orders, simdi).filter((id) => !bilinenSiparisBildirimleri.has(id));
+  if (bilinmeyen.length === 0) return false;
+  if (bilinenSiparisBildirimleri.size > BILINEN_TAVAN) bilinenSiparisBildirimleri.clear();
+  for (const id of await veritabanindaOlanlar(bilinmeyen)) bilinenSiparisBildirimleri.add(id);
+  return bilinmeyen.some((id) => !bilinenSiparisBildirimleri.has(id));
+}
+
+/** Testler için. */
+export function bilinenSiparisleriSifirla(): void {
+  bilinenSiparisBildirimleri.clear();
+  envanterIzi.iz = "";
+  envanterIzi.at = 0;
+}
+
+/**
+ * Envanter bildirimlerinin son yazılan hâli. Değişmediyse "var olanları oku" sorgusu ve
+ * "çözülenleri sil" yazması atlanır — eskiden her 90 sn'de çalışıyorlardı (silme günde 873 kez,
+ * her seferinde tüm bildirim tablosunu tarayarak; neredeyse hiçbirinde silinecek şey yoktu).
+ * Başka cihazın yaptığı değişikliği kaçırmamak için belirli aralıkla yine de tam eşitlenir.
+ */
+const envanterIzi = processSingleton("ow_envanterIzi", () => ({ iz: "", at: 0 }));
+const ENVANTER_TAM_ESITLEME_MS = 10 * 60_000;
+
+/** Saf: bu tur envanter bildirimleri veritabanıyla eşitlenmeli mi? */
+export function envanterEsitlenmeliMi(
+  onceki: { iz: string; at: number },
+  iz: string,
+  simdi: number
+): boolean {
+  return onceki.iz !== iz || simdi - onceki.at >= ENVANTER_TAM_ESITLEME_MS;
+}
+
+const sonHataGunlugu = processSingleton("ow_sonHataGunlugu", () => new Map<string, number>());
 
 /** HIZLI TUR — bildirim doğuran tek yol budur; kâr hesabına hiç dokunmaz. */
 async function scanTick(): Promise<void> {
@@ -547,16 +604,33 @@ async function scanTick(): Promise<void> {
     await ensureRuntimeSchema();
     const orders = await fetchScanOrders();
     if (dbPaused()) return; // ağ çekimi sürerken uyku geldiyse DB'ye dokunma
-    if (orders.some((o) => o.actionable)) {
+    const yeniVar = await bildirilmemisSiparisVarMi(orders, Date.now(), async (idler) =>
+      (await remotePrisma.notification.findMany({ where: { id: { in: idler } }, select: { id: true } })).map((r) => r.id)
+    );
+    if (yeniVar) {
       const products = await loadScanProducts(orders);
       // Yeni sipariş → geldiği andaki stokla TEK bildirim (masaüstü + telefon).
       await notifyNewOrders(matchScanOrders(orders, products));
     }
     const inventory = await loadInventory();
-    await persistNotifications(buildInventoryNotifications(inventory));
-    await clearResolvedInventory(inventoryNotificationIds(inventory), inventory.readTypes);
-  } catch {
-    /* ağ yok / pazaryeri meşgul — sonraki tur dener */
+    const bildirimler = buildInventoryNotifications(inventory);
+    const iz = JSON.stringify([bildirimler.map((b) => b.id), inventory.readTypes]);
+    if (envanterEsitlenmeliMi(envanterIzi, iz, Date.now())) {
+      await persistNotifications(bildirimler);
+      await clearResolvedInventory(bildirimler.map((b) => b.id), inventory.readTypes);
+      envanterIzi.iz = iz;
+      envanterIzi.at = Date.now();
+    }
+  } catch (e) {
+    // Ağ yok / pazaryeri meşgul → sonraki tur dener. Ama SESSİZ kalma: kalıcı bir hata
+    // (veritabanı, kod) bildirimleri iz bırakmadan durdururdu. Aynı hata 10 dk'da bir yazılır.
+    const mesaj = String((e as Error)?.message ?? e).slice(0, 160);
+    const son = sonHataGunlugu.get(mesaj) ?? 0;
+    if (Date.now() - son > 10 * 60_000) {
+      if (sonHataGunlugu.size > 50) sonHataGunlugu.clear();
+      sonHataGunlugu.set(mesaj, Date.now());
+      perfYaz(`SIPARIS-TARAMA hata: ${mesaj}`);
+    }
   } finally {
     scanning = false;
   }

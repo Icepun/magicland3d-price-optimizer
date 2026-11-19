@@ -7,6 +7,7 @@
  * Seçim GPU'dan: görünen neyse o seçilir (bkz. lib/gcode-viz/parca-sahne).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 import * as THREE from "three";
 import type { ParsedGcode } from "@/lib/gcode-viz/viz-pack";
 import { buildParcaSahnesi, parcaCapalari, type ParcaSahnesi } from "@/lib/gcode-viz/parca-sahne";
@@ -200,7 +201,7 @@ export function ParcaSecici3B({
     let ilk = true;
     const dongu = (t: number) => {
       raf = requestAnimationFrame(dongu);
-      if (document.hidden) { sonT = t; return; }
+      if (pencereGizliMi()) { sonT = t; return; }
       const dt = Math.min(0.1, (t - sonT) / 1000);
       sonT = t;
 

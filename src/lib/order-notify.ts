@@ -184,14 +184,35 @@ async function yaz(n: OrderNotification, sessiz: boolean): Promise<boolean> {
  * Siparişlerden yenilerini bildirir. Hata FIRLATMAZ (çağıranlar arka planda ateşler).
  * Dönen değer: bildirilen (sessiz olmayan) sipariş sayısı.
  */
+/** Bildirim adayı olmak için gereken alanlar (eşleştirmeden ÖNCE de bilinir). */
+type AdaySiparis = Pick<NotifyOrder, "platform" | "orderNumber" | "orderedAtMs" | "actionable"> & {
+  lines: readonly unknown[];
+};
+
+/** Saf: bu sipariş "yeni sipariş" bildirimine ADAY mı? (aksiyon bekliyor, numarası var, yeterince yeni) */
+export function bildirimAdayiMi(o: AdaySiparis, simdi: number): boolean {
+  if (!o.actionable || o.lines.length === 0) return false;
+  if (!orderNumberLabel(o.orderNumber) || o.orderNumber === "—") return false;
+  if (o.orderedAtMs != null && simdi - o.orderedAtMs > NEW_ORDER_WINDOW_MS) return false;
+  return true;
+}
+
+/**
+ * Saf: aday siparişlerin bildirim kimlikleri (tekil). `notifyNewOrders` ile AYNI süzgeç —
+ * sipariş taraması, hepsi zaten bildirilmişse ürün sorgusunu hiç atmamak için bunu kullanır.
+ */
+export function yeniSiparisAdayKimlikleri(orders: readonly AdaySiparis[], simdi: number): string[] {
+  const idler = new Set<string>();
+  for (const o of orders) if (bildirimAdayiMi(o, simdi)) idler.add(newOrderNotificationId(o));
+  return [...idler];
+}
+
 export async function notifyNewOrders(orders: NotifyOrder[]): Promise<number> {
   try {
     const simdi = Date.now();
     const adaylar = new Map<string, NotifyOrder>();
     for (const o of orders) {
-      if (!o.actionable || o.lines.length === 0) continue;
-      if (!orderNumberLabel(o.orderNumber) || o.orderNumber === "—") continue;
-      if (o.orderedAtMs != null && simdi - o.orderedAtMs > NEW_ORDER_WINDOW_MS) continue;
+      if (!bildirimAdayiMi(o, simdi)) continue;
       const id = newOrderNotificationId(o);
       if (!adaylar.has(id)) adaylar.set(id, o);
     }

@@ -52,6 +52,7 @@ import { durumOrnegiYaz } from "./durum-ornegi";
 import { makaraEtiketleriniIsle } from "./makara-etiketi-izleyici";
 import { anlikDurumAnahtari, yazmaKarari, yazmaIfadeleri, type YazmaKalemi } from "./anlik-durum-yazma";
 import { batchWriteDurumu } from "@/lib/libsql-batch";
+import { nabizDinle, nabizSonAt, startTelefonNabzi } from "./telefon-nabzi";
 
 const TICK_MS = 10_000;
 /** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
@@ -190,6 +191,13 @@ export function startPrinterRelay() {
     const durum = lastStatus.get(id);
     return durum != null && durum !== "offline";
   });
+  // Telefondan baskı komutu: ortak nabız bekleyen komut olduğunu söyleyince (ya da sayımı
+  // okuyamayınca) işlenir. Eskiden her 10 sn'lik turda sorgulanıyordu; şimdi ≤3 sn'de alınır.
+  nabizDinle("komut", (nabiz) => {
+    if (nabiz != null && nabiz.komut === 0) return;
+    komutlariIsle();
+  });
+  startTelefonNabzi();
 }
 
 interface SnapFields {
@@ -714,18 +722,29 @@ async function tick(): Promise<void> {
     // Durum/bildirim hafızasını kalıcılaştır (değiştiyse) → uygulama kapansa bile geçişler kaybolmaz.
     await saveNotifyState();
 
-    // 2) Bekleyen komutlar — tick'ten AYRIK (fire-and-forget + kendi guard'ı). Uzun bir komut
-    // (R2 indirme + 180sn'lik yazıcıya upload) eskiden ticking=true'yu tutup snapshot/heartbeat'i
-    // durduruyordu → telefon KENDİ komutu işlenirken "masaüstü kapalı" alarmı veriyordu.
-    if (!commandsRunningKutu.v) {
-      commandsRunningKutu.v = true;
-      void processPendingCommands(configs)
-        .catch(() => { /* komut döngüsü kendi hatasını komuta yazar */ })
-        .finally(() => { commandsRunningKutu.v = false; });
-    }
+    // 2) Bekleyen komutlar artık ortak NABIZLA (3 sn) fark ediliyor — bkz. startPrinterRelay.
+    // Burada yalnız emniyet: nabız bir süredir dönmüyorsa (başlamadı / takıldı) komutlar yine
+    // de bu turdan işlenir; telefon komutu asla sahipsiz kalmaz.
+    if (Date.now() - nabizSonAt() > NABIZ_SUSTU_MS) komutlariIsle(configs);
   } finally {
     tickingKutu.v = false;
   }
+}
+
+/** Nabız bu kadar süre dönmediyse relay turu komutları kendisi yoklar. */
+const NABIZ_SUSTU_MS = 30_000;
+
+/**
+ * Bekleyen telefon komutlarını işle — turdan AYRIK (beklenmez + kendi koruması). Uzun bir komut
+ * (R2 indirme + 180 sn'lik yazıcıya yükleme) eskiden tur kilidini tutup snapshot/heartbeat'i
+ * durduruyordu → telefon KENDİ komutu işlenirken "masaüstü kapalı" alarmı veriyordu.
+ */
+function komutlariIsle(configs?: Cfg[]): void {
+  if (commandsRunningKutu.v) return;
+  commandsRunningKutu.v = true;
+  void (async () => processPendingCommands(configs ?? (await getEnabledPrinterConfigs())))()
+    .catch(() => { /* komut döngüsü kendi hatasını komuta yazar */ })
+    .finally(() => { commandsRunningKutu.v = false; });
 }
 
 type BekleyenYazma = YazmaKalemi & { anahtar: string };

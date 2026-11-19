@@ -1,5 +1,6 @@
 "use client";
 
+import { gizlilikAbone, pencereGizliMi } from "./pencere-gorunur";
 import { useSyncExternalStore } from "react";
 
 const subscribeClient = () => () => {};
@@ -31,12 +32,11 @@ export function usePrefersReducedMotion(): boolean {
 }
 
 function subscribePageHidden(onChange: () => void): () => void {
-  document.addEventListener("visibilitychange", onChange);
-  return () => document.removeEventListener("visibilitychange", onChange);
+  return gizlilikAbone(onChange);
 }
 
 function getPageHiddenSnapshot(): boolean {
-  return document.hidden;
+  return pencereGizliMi();
 }
 
 /**

@@ -197,3 +197,93 @@ describe("buildInventoryNotifications", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * 19 Kas 2026 — tarama her 90 sn'de, aksiyon bekleyen tek sipariş bile varsa ürün eşleştirme
+ * sorgusunu (4.600 satır) atıyordu; siparişlerin neredeyse hepsi çoktan bildirilmişti.
+ * Buradaki testler iki yönü de kilitler: bildirilmiş siparişte sorgu ATILMAZ, yeni siparişte
+ * bildirim KAÇMAZ.
+ */
+describe("yeni sipariş yokken ürün sorgusu atılmaz", () => {
+  const SIMDI = Date.parse("2026-11-19T12:00:00Z");
+  const siparis = (no: string, over: Partial<ScanOrder> = {}): ScanOrder => ({
+    platform: "trendyol",
+    id: no,
+    orderNumber: no,
+    orderedAtMs: SIMDI - 3_600_000,
+    actionable: true,
+    lines: [{ name: "Vazo", quantity: 1, barcodes: ["869"], externalIds: [], skus: [] }],
+    ...over,
+  });
+
+  it("hepsi veritabanında kayıtlıysa yeni yok; ikinci turda veritabanına HİÇ sorulmaz", async () => {
+    const { bildirilmemisSiparisVarMi, bilinenSiparisleriSifirla } = await import("./order-watch");
+    bilinenSiparisleriSifirla();
+    const sor = vi.fn(async (idler: string[]) => idler); // hepsi zaten yazılmış
+    const orders = [siparis("100"), siparis("101")];
+    expect(await bildirilmemisSiparisVarMi(orders, SIMDI, sor)).toBe(false);
+    expect(sor).toHaveBeenCalledTimes(1);
+    expect(await bildirilmemisSiparisVarMi(orders, SIMDI + 90_000, sor)).toBe(false);
+    expect(await bildirilmemisSiparisVarMi(orders, SIMDI + 180_000, sor)).toBe(false);
+    expect(sor, "bilinen siparişler için tekrar sorgu yok").toHaveBeenCalledTimes(1);
+  });
+
+  it("yeni sipariş gelince fark edilir; bildirim yazıldıktan sonra yine sessizleşir", async () => {
+    const { bildirilmemisSiparisVarMi, bilinenSiparisleriSifirla } = await import("./order-watch");
+    bilinenSiparisleriSifirla();
+    const yazilmis = new Set(["order-new:trendyol:100"]);
+    const sor = vi.fn(async (idler: string[]) => idler.filter((id) => yazilmis.has(id)));
+    expect(await bildirilmemisSiparisVarMi([siparis("100")], SIMDI, sor)).toBe(false);
+
+    const yeniyle = [siparis("100"), siparis("200")];
+    expect(await bildirilmemisSiparisVarMi(yeniyle, SIMDI, sor)).toBe(true);
+    expect(sor).toHaveBeenLastCalledWith(["order-new:trendyol:200"]); // yalnız bilinmeyen sorulur
+    // Bildirim henüz yazılmadıysa (ör. yazma düştü) bir sonraki tur YENİDEN dener.
+    expect(await bildirilmemisSiparisVarMi(yeniyle, SIMDI, sor)).toBe(true);
+    yazilmis.add("order-new:trendyol:200"); // notifyNewOrders yazdı
+    expect(await bildirilmemisSiparisVarMi(yeniyle, SIMDI, sor)).toBe(false);
+    const cagri = sor.mock.calls.length;
+    expect(await bildirilmemisSiparisVarMi(yeniyle, SIMDI, sor)).toBe(false);
+    expect(sor.mock.calls.length).toBe(cagri);
+  });
+
+  it("aday olmayan siparişler (kapanmış, eski, numarasız, kalemsiz) için sorgu atılmaz", async () => {
+    const { bildirilmemisSiparisVarMi, bilinenSiparisleriSifirla } = await import("./order-watch");
+    bilinenSiparisleriSifirla();
+    const sor = vi.fn(async () => [] as string[]);
+    const orders = [
+      siparis("1", { actionable: false }),
+      siparis("2", { orderedAtMs: SIMDI - 3 * 86_400_000 }),
+      siparis("—"),
+      siparis("4", { lines: [] }),
+    ];
+    expect(await bildirilmemisSiparisVarMi(orders, SIMDI, sor)).toBe(false);
+    expect(sor).not.toHaveBeenCalled();
+  });
+
+  it("aday süzgeci bildirimi yazan fonksiyonunkiyle AYNI", async () => {
+    const { bildirimAdayiMi, yeniSiparisAdayKimlikleri, newOrderNotificationId } = await import("./order-notify");
+    const hepsi = [
+      siparis("10"),
+      siparis("#11", { platform: "shopify" }),
+      siparis("12", { actionable: false }),
+      siparis("13", { orderedAtMs: null }), // tarihi bilinmeyen aday SAYILIR
+      siparis("14", { orderedAtMs: SIMDI - 2 * 86_400_000 - 1 }),
+      siparis("10"), // çift
+    ];
+    const beklenen = [...new Set(hepsi.filter((o) => bildirimAdayiMi(o, SIMDI)).map((o) => newOrderNotificationId(o)))];
+    expect(yeniSiparisAdayKimlikleri(hepsi, SIMDI)).toEqual(beklenen);
+    expect(beklenen).toEqual(["order-new:trendyol:10", "order-new:shopify:11", "order-new:trendyol:13"]);
+  });
+});
+
+describe("envanter bildirimleri yalnız değişince eşitlenir", () => {
+  it("içerik aynıyken beklenir, değişince ya da 10 dakikada bir eşitlenir", async () => {
+    const { envanterEsitlenmeliMi } = await import("./order-watch");
+    const T = 1_800_000_000_000;
+    expect(envanterEsitlenmeliMi({ iz: "", at: 0 }, "a", T), "ilk tur").toBe(true);
+    expect(envanterEsitlenmeliMi({ iz: "a", at: T }, "a", T + 90_000)).toBe(false);
+    expect(envanterEsitlenmeliMi({ iz: "a", at: T }, "b", T + 90_000), "stok eşiği geçildi").toBe(true);
+    expect(envanterEsitlenmeliMi({ iz: "a", at: T }, "a", T + 10 * 60_000), "başka cihazın değişikliği için").toBe(true);
+  });
+});

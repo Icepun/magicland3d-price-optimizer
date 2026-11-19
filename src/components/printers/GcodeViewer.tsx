@@ -15,6 +15,7 @@
  *    aşamaları yüzdeyle gösterilir.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -275,7 +276,7 @@ function YolIzleyiciDialog({
       son = t;
       // Pencere gizliyken çizme: Electron'da `backgroundThrottling: false` olduğu için tarayıcının
       // doğal freni yok, dönen model tepside de GPU harcardı.
-      if (document.hidden) return;
+      if (pencereGizliMi()) return;
 
       // CANLI AKIŞ: takip açıkken nozul yazıcının gerçek konumunda, katman içinde de akar.
       const tk = takipciRef.current;

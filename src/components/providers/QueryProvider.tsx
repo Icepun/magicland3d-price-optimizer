@@ -1,7 +1,8 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
+import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { gizlilikAbone, pencereGizliMi, pencereSinyaliVar } from "@/lib/pencere-gorunur";
 import { StartupSync } from "./StartupSync";
 import { GlobalBusyOverlay } from "@/components/ui/global-busy-overlay";
 import { PerfHud } from "@/components/perf/PerfHud";
@@ -29,6 +30,19 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
         },
       })
   );
+
+  // Masaüstünde "odak" = pencere GERÇEKTEN görünür (tepside / küçültülmüş / ekran kilitli değil).
+  // Aralıklı yoklamalar odak yokken kendiliğinden durur; pencere geri gelince, bunu isteyen
+  // sorgular (yazıcı paneli, zil) hemen tazelenir. Tarayıcıda varsayılan davranış korunur.
+  useEffect(() => {
+    if (!pencereSinyaliVar()) return;
+    focusManager.setEventListener((odakla) => {
+      const bildir = () => odakla(!pencereGizliMi());
+      const birak = gizlilikAbone(bildir);
+      bildir();
+      return birak;
+    });
+  }, []);
 
   return (
     <QueryClientProvider client={queryClient}>

@@ -11,6 +11,7 @@
  *  • Hareket azaltma isteyen kullanıcıda kart dönmez, yalnız ilerleme değişince çizilir.
  */
 import { useEffect, useMemo, useRef } from "react";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 import * as THREE from "three";
 import type { VizPack, YolZamani } from "@/lib/gcode-viz/viz-pack";
 import { buildKartSahnesi, paketOkuyucu } from "@/lib/gcode-viz/kart-sahne";
@@ -119,7 +120,7 @@ export function KartUcBoyut({
     let hazir = false;
     const dongu = (t: number) => {
       raf = requestAnimationFrame(dongu);
-      if (document.hidden || !gorunur) { sonT = t; return; }
+      if (pencereGizliMi() || !gorunur) { sonT = t; return; }
       if (t - sonCizim < KARE_ARALIGI) return;
       const dt = Math.min(0.1, (t - sonT) / 1000);
       sonT = t;

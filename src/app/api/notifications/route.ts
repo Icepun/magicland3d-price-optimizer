@@ -6,6 +6,7 @@ import { swr } from "@/lib/route-cache";
 import { buildFilamentAlerts, groupSpools } from "@/core/filament-groups";
 import { loadFilamentSettings } from "@/lib/filament-settings";
 import { masaustuKapaliOku, masaustundeKapali } from "@/lib/bildirim-tercihleri";
+import { okunmamisBildirimBellegi } from "@/lib/okunmamis-bildirimler";
 
 /**
  * Bildirim ucu — zil bunu SIK yoklar (~20 sn), bu yüzden turu ucuz tutulur:
@@ -179,11 +180,19 @@ async function printerAlerts(): Promise<AppAlert[]> {
   return alerts;
 }
 
-/** Kalıcı olay-anı bildirimleri (sipariş, baskı, eşiği geçen stok/filament) — okunmamışlar. */
+/**
+ * Kalıcı olay-anı bildirimleri (sipariş, baskı, eşiği geçen stok/filament) — okunmamışlar.
+ *
+ * Aynı listeyi iki yoklayıcı okuyor: masaüstü bildirimini üreten ana süreç (12 sn) ve zil
+ * (20 sn) — günde 6.180 sorgu (Turso dökümü, 18 Kas 2026). Birkaç saniyelik ortak bellek ikisini
+ * tek okumaya indirir; ana sürecin yoklaması her seferinde taze okuduğu için bildirim gecikmez.
+ */
 async function storedAlerts(): Promise<AppAlert[]> {
-  const stored = await remotePrisma.notification
-    .findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: "desc" }, take: 100 })
-    .catch(() => []);
+  const stored = await okunmamisBildirimBellegi.al(() =>
+    remotePrisma.notification
+      .findMany({ where: { acknowledgedAt: null }, orderBy: { createdAt: "desc" }, take: 100 })
+      .catch(() => [])
+  );
   return stored.map((n) => ({
     id: n.id,
     type: alertTypeOf(n.type),
@@ -268,6 +277,7 @@ export async function POST(req: Request) {
         where: { id: { in: ids } },
         data: { acknowledgedAt: new Date() },
       });
+      okunmamisBildirimBellegi.dusur(); // okundu işareti zilde hemen görünsün
     }
   } catch {
     /* ignore */

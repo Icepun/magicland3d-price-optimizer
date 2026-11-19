@@ -39,6 +39,31 @@ const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000; // sunucunun istediği en uzun be
 // çalışmaya devam eder → bildirimler uygulama "kapalıyken" de zamanında düşer.
 let tray = null;
 let trayBalloonShown = false; // "arka planda çalışıyor" bilgisi oturumda bir kez
+
+/**
+ * PENCERE GÖRÜNÜR MÜ? — arayüze açık sinyal.
+ *
+ * `backgroundThrottling: false` (aşağıda) pencere tepsideyken/küçültülmüşken de sayfayı tam
+ * hızda çalıştırıyor; sayfa kendi başına "gizlendim" bilgisini güvenilir biçimde alamıyor.
+ * Sonuç (19 Kas 2026 denetimi): kimse bakmazken yazıcı paneli 2 sn'de bir, zil 20 sn'de bir
+ * yoklamaya devam ediyordu — hepsi ana iş parçacığında ve veritabanı şeridinde.
+ * Masaüstü bildirimleri bu süreçten çıktığı için arayüzün gizliyken yoklamasına gerek yok.
+ */
+let ekranKilitli = false;
+function pencereGorunurMu(w) {
+  try {
+    return Boolean(w) && !w.isDestroyed() && w.isVisible() && !w.isMinimized() && !ekranKilitli;
+  } catch {
+    return true; // emin değilsek "görünür" de — arayüz yoklamayı kesmesin
+  }
+}
+function pencereGorunurBildir() {
+  try {
+    const w = BrowserWindow.getAllWindows()[0];
+    if (w && !w.isDestroyed()) w.webContents.send("window:visible", pencereGorunurMu(w));
+  } catch { /* pencere kapanıyor olabilir */ }
+}
+ipcMain.handle("window:is-visible", () => pencereGorunurMu(BrowserWindow.getAllWindows()[0]));
 let quitRequested = false; // tepsiden "Çık" → gerçek kapanış niyeti
 let updateState = {
   status: "idle",
@@ -1091,6 +1116,7 @@ async function createWindow() {
   });
 
   win.once("ready-to-show", () => { try { win.show(); } catch { /* ignore */ } });
+  for (const olay of ["show", "hide", "minimize", "restore"]) win.on(olay, pencereGorunurBildir);
   // Fail-safe: her ne olursa olsun 15sn'de pencere görünür (ready-to-show gelmezse bile).
   setTimeout(() => {
     try { if (!win.isDestroyed() && !win.isVisible()) win.show(); } catch { /* ignore */ }
@@ -1165,6 +1191,9 @@ async function createWindow() {
       finally { clearTimeout(t); }
     };
 
+    // Ekran kilitliyken de kimse bakmıyor → arayüz yoklamayı bıraksın.
+    powerMonitor.on("lock-screen", () => { ekranKilitli = true; pencereGorunurBildir(); });
+    powerMonitor.on("unlock-screen", () => { ekranKilitli = false; pencereGorunurBildir(); });
     powerMonitor.on("suspend", () => {
       powerGen++; // bekleyen TÜM resume timer'larını geçersiz kıl (dark-wake yarışı engellenir)
       globalThis.__MLHUB_DB_PAUSED__ = true;

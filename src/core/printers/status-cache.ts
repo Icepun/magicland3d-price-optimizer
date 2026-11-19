@@ -370,6 +370,20 @@ export async function getMoonrakerMetaCached(host: string, port: number, filenam
 // Snapshot'a yazıcının LAN IP'sine işaret eden URL yazılıyordu → telefon LAN dışındayken görsel
 // KIRIK. Küçük thumbnail bir kez indirilip data-URL olarak gömülür (dosya başına önbellekli).
 const thumbCache = processSingleton("sc_thumbCache", () => new Map<string, string>());
+/**
+ * "Bu dosyanın görseli alınamıyor" hafızası (anahtar → yeniden deneme zamanı).
+ * Eskiden yalnız BAŞARILI sonuç saklanıyordu: sınırdan büyük ya da alınamayan görsel, baskı
+ * boyunca her 10 sn'lik relay turunda yazıcıdan yeniden indiriliyordu — Wi-Fi'si zayıf U1'e
+ * gereksiz yük (19 Kas 2026 denetimi).
+ */
+const thumbYok = processSingleton("sc_thumbYok", () => new Map<string, number>());
+const THUMB_BUYUK_BEKLEME_MS = 10 * 60_000; // dosya aynı adla yeniden dilimlenirse en geç bu kadar sonra yeniden bakılır
+const THUMB_HATA_BEKLEME_MS = 60_000;
+function thumbYokYaz(k: string, beklemeMs: number): null {
+  if (thumbYok.size > 200) thumbYok.clear();
+  thumbYok.set(k, Date.now() + beklemeMs);
+  return null;
+}
 
 /**
  * Snapshot satırına gömülecek görselin ÜST SINIRI (bayt).
@@ -386,15 +400,20 @@ export async function getMoonrakerThumbDataUrl(
   const k = `${host}|${filename}|${maxBytes}`;
   const hit = thumbCache.get(k);
   if (hit) return hit;
+  const yokVadesi = thumbYok.get(k);
+  if (yokVadesi != null) {
+    if (Date.now() < yokVadesi) return null;
+    thumbYok.delete(k);
+  }
   try {
     const url = moonrakerThumbUrl(host, port, filename, relPath);
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 4000);
     try {
       const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
-      if (!res.ok) return null;
+      if (!res.ok) return thumbYokYaz(k, THUMB_HATA_BEKLEME_MS);
       const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > maxBytes) return null; // büyük görseli Turso satırına gömme
+      if (buf.length > maxBytes) return thumbYokYaz(k, THUMB_BUYUK_BEKLEME_MS); // büyük görseli Turso satırına gömme
       const dataUrl = `data:image/png;base64,${buf.toString("base64")}`;
       if (thumbCache.size > 100) thumbCache.clear();
       thumbCache.set(k, dataUrl);
@@ -403,7 +422,7 @@ export async function getMoonrakerThumbDataUrl(
       clearTimeout(t);
     }
   } catch {
-    return null;
+    return thumbYokYaz(k, THUMB_HATA_BEKLEME_MS);
   }
 }
 

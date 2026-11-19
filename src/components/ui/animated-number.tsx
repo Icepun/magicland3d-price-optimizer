@@ -2,15 +2,13 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { usePrefersReducedMotion } from "@/lib/client-state";
+import { gizlilikAbone, pencereGizliMi } from "@/lib/pencere-gorunur";
 import { UNKNOWN_DASH } from "@/lib/format";
 
-/** Pencere görünürlüğünü dinle — `document.hidden` değişince bileşen yeniden çizilsin. */
-function gorunurlugeAbone(onChange: () => void): () => void {
-  document.addEventListener("visibilitychange", onChange);
-  return () => document.removeEventListener("visibilitychange", onChange);
-}
+/** Pencere görünürlüğünü dinle — gizlenince/geri gelince bileşen yeniden çizilsin. */
+const gorunurlugeAbone = gizlilikAbone;
 
-const pencereGizli = () => document.hidden;
+const pencereGizli = pencereGizliMi;
 const sunucudaGizliDegil = () => false;
 
 /**

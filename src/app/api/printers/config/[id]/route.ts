@@ -1,3 +1,4 @@
+import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma, remotePrisma } from "@/lib/prisma";
@@ -81,6 +82,8 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     }
     // İlişkili ürün eşleştirmelerini + son-bilinen slot snapshot'ını da temizle (yetim satır kalmasın)
     await prisma.printFileProduct.deleteMany({ where: { printerConfigId: id } });
+    bayatOnbellegiDusur(BAYAT_ONBELLEK.eslesmeler);
+    bayatOnbellegiDusur(BAYAT_ONBELLEK.eslesenUrunler);
     await prisma.appSetting.deleteMany({
       where: { key: { in: [`slotSnapshot:${id}`, `printerStorageCapacity:${id}`] } },
     });

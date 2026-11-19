@@ -31,9 +31,8 @@ import { snapmakerKameraAkisi, snapmakerKameraVar } from "./snapmaker-camera";
 import { moonrakerBase } from "./moonraker";
 import { aktarimSuruyor } from "./transfer-state";
 import { printerCfgCached } from "./config-cache";
+import { nabizDinle, startTelefonNabzi } from "./telefon-nabzi";
 
-/** İstekler bu aralıkla yoklanır — telefonda "açılıyor" süresinin üst sınırını belirler. */
-const TUR_MS = 3_000;
 /** İki kare yüklemesi arası en az süre. U1 ~480 ms'de, Bambu ~2,5 sn'de bir kare üretiyor. */
 export const KARE_ARALIK_MS = 1_500;
 /** R2'de tutulan son kare sayısı — telefon bir öncekini indirirken silinmesin. */
@@ -133,11 +132,16 @@ function sayiya(v: unknown): number | null {
 export function startKameraAktarici(ulasilabilir: (yaziciId: string) => boolean): void {
   if (durumKutu.basladi) return;
   durumKutu.basladi = true;
-  setInterval(() => {
-    void kameraTuru(ulasilabilir).catch(() => {
+  // İstekler ortak nabızla (3 sn) fark edilir — telefonda "açılıyor" süresinin üst sınırı bu.
+  // Kendi sorgusunu yalnız gerektiğinde atar: istek varsa, açık oturum varsa (kapanması
+  // gerekebilir), nabız okunamadıysa ya da açılış süpürmesi henüz yapılmadıysa.
+  nabizDinle("kamera", (nabiz) => {
+    if (nabiz != null && nabiz.kamera === 0 && oturumlar.size === 0 && durumKutu.supuruldu) return;
+    return kameraTuru(ulasilabilir).catch(() => {
       /* ağ/veritabanı anlık hatası — sonraki tur dener */
     });
-  }, TUR_MS);
+  });
+  startTelefonNabzi();
 }
 
 async function kameraTuru(ulasilabilir: (yaziciId: string) => boolean): Promise<void> {

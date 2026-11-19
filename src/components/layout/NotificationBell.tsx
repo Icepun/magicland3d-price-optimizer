@@ -138,6 +138,9 @@ export function NotificationBell() {
     // bir dakika daha binmesin diye kısa tutuldu (uç tarafı bu sıklık için ucuzlatıldı).
     refetchInterval: 20_000,
     staleTime: 10_000,
+    // Pencere gizliyken yoklama durur (masaüstü bildirimi ana süreçten gelir); geri gelince
+    // zil beklemeden güncellensin.
+    refetchOnWindowFocus: true,
   });
   const alerts = useMemo(() => data?.alerts ?? [], [data?.alerts]);
 

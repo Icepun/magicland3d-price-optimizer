@@ -1,5 +1,6 @@
 "use client";
 
+import { gizlilikAbone, pencereGizliMi } from "./pencere-gorunur";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { refreshChangedStocks } from "@/lib/products-cache";
@@ -29,13 +30,13 @@ export function useFreshStocks(listeAlindi: number | undefined): void {
     };
     tazele();
     const gorunurOldu = () => {
-      if (document.visibilityState === "visible") tazele();
+      if (!pencereGizliMi()) tazele();
     };
     window.addEventListener("focus", tazele);
-    document.addEventListener("visibilitychange", gorunurOldu);
+    const aboneligiBirak = gizlilikAbone(gorunurOldu);
     return () => {
       window.removeEventListener("focus", tazele);
-      document.removeEventListener("visibilitychange", gorunurOldu);
+      aboneligiBirak();
     };
   }, [qc, listeAlindi]);
 }

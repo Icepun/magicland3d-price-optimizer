@@ -9,6 +9,7 @@
  * Model bağlı değilse bu bileşen hiç açılmaz — `GcodeViewerDialog` yol çizen eski izleyiciye düşer.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -155,7 +156,7 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
       id = requestAnimationFrame(dongu);
       const dt = Math.min(0.05, Math.max(0, (t - son) / 1000));
       son = t;
-      if (document.hidden) return;
+      if (pencereGizliMi()) return;
       kontrol.autoRotate = donmeRef.current && !tutuyor && t - birakti > DONME_BEKLEME_MS;
       /**
        * BOŞTA ÇİZME. `OrbitControls.update()` kamera hâlâ hareket ediyorsa true döner;

@@ -1,3 +1,4 @@
+import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -72,6 +73,8 @@ export async function DELETE(req: NextRequest) {
     const cfg = await prisma.printerConfig.findUnique({ where: { id: printerConfigId }, select: { id: true } });
     if (!cfg) {
       await prisma.printFileProduct.deleteMany({ where: { printerConfigId } });
+      bayatOnbellegiDusur(BAYAT_ONBELLEK.eslesmeler);
+      bayatOnbellegiDusur(BAYAT_ONBELLEK.eslesenUrunler);
       await prisma.printerSnapshot.deleteMany({ where: { printerConfigId } });
       await prisma.printCommand.deleteMany({ where: { printerConfigId } });
       await prisma.appSetting.deleteMany({ where: { key: `slotSnapshot:${printerConfigId}` } });

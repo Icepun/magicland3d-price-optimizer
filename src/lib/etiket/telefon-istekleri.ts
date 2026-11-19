@@ -5,6 +5,7 @@ import { etiketIstegiBayat } from "@/core/etiket-uygunluk";
 import { yaziciDurumu } from "@/lib/etiket/ham-yazici";
 import { EtiketBasilamadi, hbEtiketiBas, trendyolEtiketiBas } from "@/lib/etiket/bas";
 import { takipNoTemizle } from "@/lib/etiket/kayit";
+import { nabizDinle, startTelefonNabzi } from "@/core/printers/telefon-nabzi";
 
 /**
  * TELEFONDAN KARGO ETİKETİ — masaüstü tarafı.
@@ -22,7 +23,6 @@ import { takipNoTemizle } from "@/lib/etiket/kayit";
  *   işaretini görür. 60 günden eski kayıtlar süpürülür (yerel kopyalarla aynı süre).
  */
 
-const ARALIK_MS = 5_000;
 const SUPURME_ARALIGI_MS = 60 * 60_000;
 const SAKLAMA_MS = 60 * 24 * 60 * 60_000;
 
@@ -33,8 +33,14 @@ let sonSupurme = 0;
 export function startEtiketIstekleri(): void {
   if (g.__MLHUB_ETIKET_ISTEKLERI__) return;
   g.__MLHUB_ETIKET_ISTEKLERI__ = true;
-  const zamanlayici = setInterval(() => void tur(), ARALIK_MS);
-  zamanlayici.unref?.();
+  // Ortak nabız (3 sn) bekleyen istek olduğunu söyleyince çalışır — eskiden 5 sn'de bir kendi
+  // sorgusunu atıyordu (günde 9.900 sorgu, neredeyse hepsi boş). Nabız okunamadıysa ya da
+  // saatlik süpürmenin vadesi geldiyse yine çalışır.
+  nabizDinle("etiket", (nabiz) => {
+    if (nabiz != null && nabiz.etiket === 0 && Date.now() - sonSupurme <= SUPURME_ARALIGI_MS) return;
+    return tur();
+  });
+  startTelefonNabzi();
 }
 
 async function tur(): Promise<void> {

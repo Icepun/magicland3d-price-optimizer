@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatCurrency } from "@/lib/utils";
-import { usePrefersReducedMotion } from "@/lib/client-state";
+import { usePageHidden, usePrefersReducedMotion } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import { toast } from "sonner";
 import { uploadCustomModel, type UploadProgress } from "@/lib/upload-model";
@@ -308,11 +308,12 @@ export default function PrintersPage() {
   // Duraklatılmış baskı da "aktif": üstteki hatırlatma sayacı onunla ilerliyor.
   const anyActive = (data?.printers ?? []).some((p) => p.status === "printing" || p.status === "paused");
   const [now, setNow] = useState(0);
+  const pencereGizli = usePageHidden();
   useEffect(() => {
-    if (!anyActive) return;
+    if (!anyActive || pencereGizli) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [anyActive]);
+  }, [anyActive, pencereGizli]);
   // Yeni baskı uzun bir boşluktan sonra başlarsa önceki baskıdan kalmış saati bir kare bile
   // kullanma; son veri zamanını alt sınır yap, 1 sn'lik sayaç oradan devam etsin.
   const clockNow = anyActive ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;

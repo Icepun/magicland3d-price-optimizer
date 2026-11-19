@@ -25,6 +25,10 @@ declare global {
   interface Window {
     trendyolPriceOptimizer?: {
       platform: NodeJS.Platform;
+      pencere?: {
+        gorunurMu: () => Promise<boolean>;
+        onGorunur: (callback: (gorunur: boolean) => void) => () => void;
+      };
       updater?: {
         getStatus: () => Promise<UpdaterState>;
         getLogPath: () => Promise<string>;
