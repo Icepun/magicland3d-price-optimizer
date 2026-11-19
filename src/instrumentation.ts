@@ -60,5 +60,12 @@ export async function register() {
     } catch {
       /* warmup hatası kullanıcıyı etkilemez */
     }
+    // Önizleme görseli tabloda son kolon mu? (bkz. lib/buyuk-kolon-sonda.ts) Açılış telaşı
+    // geçtikten sonra, kimseyi bekletmeden. Normalde tek hafif sorgu; hata yutulur.
+    setTimeout(() => {
+      void import("./lib/buyuk-kolon-bakimi")
+        .then((m) => m.buyukKolonBakimi())
+        .catch(() => {});
+    }, 45_000);
   })();
 }

@@ -701,6 +701,9 @@ async function tick(): Promise<void> {
           where: { printerConfigId: c.id },
           create: { printerConfigId: c.id, ...snap },
           update,
+          // Yanıt kullanılmıyor. `select` olmadan her yazma satırın TAMAMINI (plaka görseli
+          // dahil) geri döndürüyordu — günde ~12 bin kez (19 Kas 2026, Turso dökümü).
+          select: { printerConfigId: true },
         });
         lastWriteAt.set(c.id, nowMs);
         lastImage.set(c.id, snap.productImage);

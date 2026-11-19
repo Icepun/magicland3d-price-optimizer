@@ -1527,14 +1527,21 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await ensureColumn("ProductModelFile", "colorsJson", "TEXT");
     await ensureColumn("ProductModelFile", "sliced", "BOOLEAN");
     await ensureColumn("ProductModelFile", "plateJson", "TEXT");
-    // v29: dilimleyici önizleme görseli (Özel Baskılar arşivi)
-    await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
     await ensureColumn("ProductModelFile", "contentMd5", "TEXT"); // v30: içerik kimliği (reuse)
     // v47: parça başına KAYNAK MODEL (görüntüleme için; baskıya gönderilmez).
     await ensureColumn("ProductModelFile", "meshR2Key", "TEXT");
     await ensureColumn("ProductModelFile", "meshName", "TEXT");
     await ensureColumn("ProductModelFile", "meshType", "TEXT");
     await ensureColumn("ProductModelFile", "meshSizeBytes", "INTEGER");
+    // v29: dilimleyici önizleme görseli (Özel Baskılar arşivi).
+    //
+    // ⚠️ BU SATIR HEP EN SONDA KALMALI — bu tabloya yeni kolon eklersen ÜSTÜNE ekle.
+    // Görsel büyük (toplam 24 MB) ve SQLite, bir kolonu okumak için ondan önceki bütün baytları
+    // geçer. Görsel satırın ortasında kalırsa arkasındaki her kolonu okuyan sorgu, baktığı her
+    // satırda görselin tamamını okur (19 Kas 2026: eşleştirme sorgusu 40 sn, uygulama kullanılamaz).
+    // Bu sıra yalnız YENİ kurulan veritabanını korur; var olan veritabanında yeni kolon yine
+    // sona eklenir — onu açılıştaki bakım düzeltir (bkz. lib/buyuk-kolon-sonda.ts).
+    await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

@@ -55,6 +55,15 @@ describe("açılış şema göçü", () => {
     }
   });
 
+  it("model dosyası tablosunda önizleme görseli EN SON kolondur", async () => {
+    // Görsel büyük; satırın ortasında kalırsa arkasındaki kolonları okuyan her sorgu görseli de
+    // okur (bkz. lib/buyuk-kolon-sonda.ts). Bu test kırıldıysa: yeni kolonu runtime-schema.ts'te
+    // `thumbnail` satırının ÜSTÜNE ekle.
+    const kolonlar = await db.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("ProductModelFile")`);
+    expect(kolonlar.at(-1)?.name).toBe("thumbnail");
+    expect(kolonlar.map((k) => k.name)).toContain("contentMd5");
+  });
+
   it("sipariş kalemi geçmişi tablosunu ve indekslerini kurar", async () => {
     expect(await tableNames()).toContain("OrderItemSnapshot");
 

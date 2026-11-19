@@ -36,7 +36,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     // uzak veritabanında her ek sorgu ~96 ms ve sıralı.
     const [mf] = await prisma.$queryRawUnsafe<Satir[]>(
       `SELECT id, r2Key, storedPath, fileType, gramaj, estPrintMin,
-              (thumbnail IS NOT NULL AND thumbnail <> '') AS gorselVar
+              (typeof(thumbnail) = 'text') AS gorselVar
          FROM ProductModelFile WHERE id = ?`,
       id,
     );

@@ -55,7 +55,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const thumbIds = new Set(
       (
         await prisma.$queryRawUnsafe<{ id: string }[]>(
-          `SELECT id FROM ProductModelFile WHERE productId = ? AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+          `SELECT id FROM ProductModelFile WHERE productId = ? AND typeof(thumbnail) = 'text'`,
           id,
         )
       ).map((r) => r.id),

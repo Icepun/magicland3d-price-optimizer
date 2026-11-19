@@ -33,7 +33,7 @@ export async function GET() {
     const thumbIds = new Set(
       (
         await prisma.$queryRawUnsafe<{ id: string }[]>(
-          `SELECT id FROM ProductModelFile WHERE productId = ? AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+          `SELECT id FROM ProductModelFile WHERE productId = ? AND typeof(thumbnail) = 'text'`,
           CUSTOM_PID,
         )
       ).map((r) => r.id),

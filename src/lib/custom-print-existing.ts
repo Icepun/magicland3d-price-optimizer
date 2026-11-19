@@ -36,7 +36,7 @@ export async function mevcutOzelBaskiOzeti(
   // Önizleme görseli satırda data URL olarak duruyor ve yüzlerce KB — burada taşınmaz, kalıcı
   // önbellekli önizleme ucunun adresi verilir. Görsel yoksa uç 404 döner, ekran yedek simgeyi çizer.
   const gorselVar = await prisma.$queryRaw<{ var_mi: number }[]>`
-    SELECT (thumbnail IS NOT NULL AND thumbnail != '') AS var_mi FROM ProductModelFile WHERE id = ${satir.id} LIMIT 1
+    SELECT (typeof(thumbnail) = 'text') AS var_mi FROM ProductModelFile WHERE id = ${satir.id} LIMIT 1
   `;
   let renkSayisi = 0;
   try {

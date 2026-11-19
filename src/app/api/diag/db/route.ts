@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { dbOlaylari, dbFetchTimeoutMs, dbYavasEsikMs } from "@/lib/db-fetch-timeout";
+import { dbOlaylari, dbSorguOzeti, dbFetchTimeoutMs, dbYavasEsikMs } from "@/lib/db-fetch-timeout";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +28,8 @@ export async function GET() {
       p90: yuzdelik(0.9),
       enUzun: yavaslar.at(-1) ?? null,
     },
+    // En çok zaman yiyen sorgular (yavaş + iptal) — suçlu sorgu burada adıyla görünür.
+    sorgular: dbSorguOzeti(10),
     // Son 20 olay — zaman damgasıyla, hangi ana denk geldiği görülsün.
     sonOlaylar: olaylar.slice(-20),
   });

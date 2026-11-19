@@ -82,9 +82,13 @@ export async function resolvePrintModel(printerId: string, filename: string): Pr
    *
    * ⚠️ `select: { thumbnail: true }` YETMEZ: o da 285 KB'ı Turso'dan çeker (ve her sorgu
    * tek mutex'te sıralı). Bu yüzden ham SQL ile yalnız boolean okunuyor.
+   *
+   * ⚠️ `typeof()` BİLEREK: SQLite yalnız bu işlev için kolonun içeriğini okumaz (türüne
+   * bakar). `thumbnail IS NOT NULL AND thumbnail <> ''` aynı sonucu verir ama görselin
+   * TAMAMINI okur — tablo taramalarında 24 MB (19 Kas 2026). Boş metin hiç yazılmıyor.
    */
   const satir = await prisma.$queryRaw<{ var_mi: number }[]>`
-    SELECT (thumbnail IS NOT NULL AND thumbnail != '') AS var_mi
+    SELECT (typeof(thumbnail) = 'text') AS var_mi
     FROM ProductModelFile WHERE id = ${hit.id} LIMIT 1
   `;
   return {

@@ -227,3 +227,119 @@ describe("olay kuyruğu paketler arasında PAYLAŞILIYOR", () => {
     expect(birinci.dbOlaylari().olaylar.length).toBe(0); // sıfırlama da ortak
   });
 });
+
+/**
+ * 19 Kas 2026 — "hiçbir şey açılmıyor". Sunucu yavaşlayınca her zaman aşımı + yeniden deneme,
+ * sunucuda süren İKİ sorgu bırakıyordu (istemci kesse de Turso çalıştırmaya devam ediyor);
+ * üst üste bindikçe en basit sorgu bile saniyelerce bekledi. Suçlu sorgu ise ancak Turso'nun
+ * panelinden bulunabildi — uygulamanın kendi kaydında sorgunun adı yoktu.
+ */
+describe("sunucu yavaşken yük ikiye katlanmaz", () => {
+  const iptalEden = () => {
+    let cagri = 0;
+    const sahte = async () => {
+      cagri++;
+      throw Object.assign(new Error("aborted"), { name: "AbortError" });
+    };
+    return { sahte, sayi: () => cagri };
+  };
+
+  it("yeniden deneme de başarısız olduysa sonraki iptaller YENİDEN DENENMEZ", async () => {
+    const m = await import("./db-fetch-timeout");
+    m.dbOlaylariSifirla();
+    const ilk = iptalEden();
+    await expect(m.withDbFetchTimeout(ilk.sahte, 50)("http://x", { body: "SELECT 1" })).rejects.toThrow();
+    expect(ilk.sayi(), "ilk istek bir kez yeniden denenir").toBe(2);
+
+    const ikinci = iptalEden();
+    await expect(m.withDbFetchTimeout(ikinci.sahte, 50)("http://x", { body: "SELECT 2" })).rejects.toThrow();
+    expect(ikinci.sayi(), "soğuma süresinde ısrar edilmez").toBe(1);
+    expect(m.dbOlaylari().ozet["yeniden-atlandi"]).toBe(1);
+  });
+
+  it("soğuma süresi dolunca yeniden deneme geri gelir", async () => {
+    const m = await import("./db-fetch-timeout");
+    m.dbOlaylariSifirla();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const ilk = iptalEden();
+      await expect(m.withDbFetchTimeout(ilk.sahte, 50)("http://x", { body: "SELECT 1" })).rejects.toThrow();
+      vi.setSystemTime(Date.now() + m.YENIDEN_SOGUTMA_MS + 1);
+      const sonra = iptalEden();
+      await expect(m.withDbFetchTimeout(sonra.sahte, 50)("http://x", { body: "SELECT 1" })).rejects.toThrow();
+      expect(sonra.sayi()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("BAŞARILI yeniden deneme freni tetiklemez (ölü bağlantı her seferinde kurtarılır)", async () => {
+    const m = await import("./db-fetch-timeout");
+    m.dbOlaylariSifirla();
+    for (let tur = 0; tur < 3; tur++) {
+      let cagri = 0;
+      const sahte = async () => {
+        cagri++;
+        if (cagri === 1) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+        return { ok: true };
+      };
+      await expect(m.withDbFetchTimeout(sahte, 50)("http://x", { body: "SELECT 1" })).resolves.toEqual({ ok: true });
+      expect(cagri).toBe(2);
+    }
+    expect(m.dbOlaylari().ozet["yeniden-atlandi"]).toBe(0);
+  });
+});
+
+describe("yavaş ve iptal olan sorgu ADIYLA kaydedilir", () => {
+  it("gövdeden yalnız SQL metnini alır — parametre değerlerini ALMAZ", async () => {
+    const { sorguBasi } = await import("./db-fetch-timeout");
+    const govde = JSON.stringify({
+      baton: null,
+      requests: [
+        { type: "execute", stmt: { sql: 'SELECT "id"\n  FROM "Product"   WHERE "barcode" = ?', args: [{ type: "text", value: "GIZLI-8690000000001" }] } },
+        { type: "close" },
+      ],
+    });
+    const bas = sorguBasi(govde);
+    expect(bas).toBe('SELECT "id" FROM "Product" WHERE "barcode" = ?');
+    expect(bas).not.toContain("GIZLI");
+    expect(sorguBasi("SELECT 1")).toBe("SELECT 1");
+    expect(sorguBasi('{"requests":[{"type":"close"}]}')).toBeUndefined();
+    expect(sorguBasi(null)).toBeUndefined();
+    expect(sorguBasi("x".repeat(500))?.length).toBe(160);
+  });
+
+  it("iptal olan Request isteğinin sorgusu özetin başında görünür", async () => {
+    const m = await import("./db-fetch-timeout");
+    m.dbOlaylariSifirla();
+    const sahte = async (input: unknown, init?: { signal?: AbortSignal }) => {
+      await new Request(input as Request, init as RequestInit).text();
+      return takilanFetch(init);
+    };
+    const istek = new Request("https://db.example/v3/pipeline", {
+      method: "POST",
+      body: JSON.stringify({ requests: [{ type: "execute", stmt: { sql: "SELECT id, contentMd5 FROM ProductModelFile", args: [] } }] }),
+    });
+    await expect(m.withDbFetchTimeout(sahte, 40)(istek)).rejects.toThrow();
+    const ozet = m.dbSorguOzeti();
+    expect(ozet[0]?.sql).toBe("SELECT id, contentMd5 FROM ProductModelFile");
+    expect(ozet[0]?.iptal).toBe(1);
+    expect(ozet[0]?.toplamMs).toBeGreaterThanOrEqual(30);
+  });
+
+  it("yavaş ama başarılı sorgu da adıyla kaydedilir", async () => {
+    const m = await import("./db-fetch-timeout");
+    m.dbOlaylariSifirla();
+    process.env.MLHUB_DB_SLOW_MS = "300";
+    try {
+      const sahte = async () => {
+        await new Promise((r) => setTimeout(r, 330));
+        return { ok: true };
+      };
+      await m.withDbFetchTimeout(sahte, 5_000)("http://x", { body: "SELECT * FROM PrinterStatusSample" });
+    } finally {
+      delete process.env.MLHUB_DB_SLOW_MS;
+    }
+    expect(m.dbSorguOzeti()[0]).toMatchObject({ sql: "SELECT * FROM PrinterStatusSample", adet: 1, iptal: 0 });
+  });
+});

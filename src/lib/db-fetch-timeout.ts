@@ -25,6 +25,18 @@
  *      alması, yeniden denemenin tutacağının kanıtı.
  *   2) Tavan 20 sn → 6 sn. Retry olmadan süreyi düşürmek "yavaş"ı "bozuk"a çevirirdi.
  *
+ * ── 19 Kas 2026 ÖLÇÜMÜ: zaman aşımı sunucudaki sorguyu DURDURMAZ ────────────────────────
+ * İstemci bağlantıyı kesince Turso sorguyu çalıştırmaya DEVAM ediyor (kendi dökümünde 6 sn'de
+ * kestiğimiz sorgular ortalama 40 sn sürmüş görünüyor). Yani sunucu yavaşken her zaman aşımı
+ * + yeniden deneme, sunucuda süren İKİ sorgu bırakıyor; bunlar üst üste bindikçe sunucu daha
+ * da yavaşlıyor ve daha çok istek zaman aşımına uğruyor. O gün uygulama kapatılınca sunucu
+ * anında düzeldi (en basit sorgu 113 ms → 0-2 ms).
+ *
+ * Bu yüzden: yeniden deneme de başarısız olursa kısa bir süre YENİDEN DENENMEZ. Ölü bağlantı
+ * ilk denemede kurtulur; kurtulmadıysa sorun bağlantı değil sunucudur ve ısrar yükü ikiye
+ * katlamaktan başka işe yaramaz. Ayrıca yavaş/iptal olayları sorgunun BAŞIYLA kaydedilir —
+ * suçlu sorguyu bulmak için artık Turso paneline gitmek gerekmez (`/api/diag/db`).
+ *
  * ⚠️ YENİDEN DENEME YALNIZ OKUMADA. İptal edilen bir istek sunucuda UYGULANMIŞ olabilir;
  * yazmayı tekrarlamak satırı iki kez ekler/günceller. Gövdede yazma ifadesi görülürse
  * yeniden denenmez — bu güvence koda gömülü, ayara bırakılmadı.
@@ -50,7 +62,9 @@ type FetchLike = (input: unknown, init?: { signal?: AbortSignal; body?: unknown 
 export interface DbOlay {
   at: number;
   ms: number;
-  tur: "yavas" | "iptal" | "yeniden-denendi" | "yeniden-deneme-basarili";
+  tur: "yavas" | "iptal" | "yeniden-denendi" | "yeniden-deneme-basarili" | "yeniden-atlandi";
+  /** Sorgunun başı (yalnız SQL metni; parametre DEĞERLERİ kaydedilmez). */
+  sql?: string;
 }
 const OLAY_TAVANI = 500;
 /**
@@ -67,14 +81,16 @@ const OLAY_TAVANI = 500;
 const olaylar: DbOlay[] = ((globalThis as unknown as { __mlhub_db_olaylar?: DbOlay[] })
   .__mlhub_db_olaylar ??= []);
 
-function olayEkle(tur: DbOlay["tur"], ms: number): void {
-  olaylar.push({ at: Date.now(), ms: Math.round(ms), tur });
+function olayEkle(tur: DbOlay["tur"], ms: number, sql?: string): void {
+  olaylar.push({ at: Date.now(), ms: Math.round(ms), tur, ...(sql ? { sql } : {}) });
   if (olaylar.length > OLAY_TAVANI) olaylar.splice(0, olaylar.length - OLAY_TAVANI);
 }
 
 /** Teşhis: son olaylar + özet. */
 export function dbOlaylari(): { olaylar: DbOlay[]; ozet: Record<string, number> } {
-  const ozet: Record<string, number> = { yavas: 0, iptal: 0, "yeniden-denendi": 0, "yeniden-deneme-basarili": 0 };
+  const ozet: Record<string, number> = {
+    yavas: 0, iptal: 0, "yeniden-denendi": 0, "yeniden-deneme-basarili": 0, "yeniden-atlandi": 0,
+  };
   for (const o of olaylar) ozet[o.tur] = (ozet[o.tur] ?? 0) + 1;
   return { olaylar: [...olaylar], ozet };
 }
@@ -82,6 +98,72 @@ export function dbOlaylari(): { olaylar: DbOlay[]; ozet: Record<string, number> 
 /** Testler için. */
 export function dbOlaylariSifirla(): void {
   olaylar.length = 0;
+  yenidenDurumu.basarisizAt = 0;
+}
+
+/**
+ * Hangi sorgu ne kadar zaman yedi? Yavaş ve iptal olayları sorgu başına toplanır, en çok
+ * süre harcayan üstte. 19 Kas 2026'da suçlu (tek bir eşleştirme sorgusu, günde 1,8 saat)
+ * ancak Turso'nun panelinden bulunabilmişti.
+ */
+export function dbSorguOzeti(limit = 10): Array<{ sql: string; adet: number; iptal: number; toplamMs: number; enUzunMs: number }> {
+  const harita = new Map<string, { sql: string; adet: number; iptal: number; toplamMs: number; enUzunMs: number }>();
+  for (const o of olaylar) {
+    if (o.tur !== "yavas" && o.tur !== "iptal") continue;
+    const sql = o.sql ?? "(bilinmiyor)";
+    const k = harita.get(sql) ?? { sql, adet: 0, iptal: 0, toplamMs: 0, enUzunMs: 0 };
+    k.adet++;
+    if (o.tur === "iptal") k.iptal++;
+    k.toplamMs += o.ms;
+    k.enUzunMs = Math.max(k.enUzunMs, o.ms);
+    harita.set(sql, k);
+  }
+  return [...harita.values()].sort((a, b) => b.toplamMs - a.toplamMs).slice(0, limit);
+}
+
+/** Yeniden denemenin de başarısız olduğu son an — süreç genelinde ortak (bkz. `olaylar`). */
+const yenidenDurumu: { basarisizAt: number } = ((globalThis as unknown as { __mlhub_db_yeniden?: { basarisizAt: number } })
+  .__mlhub_db_yeniden ??= { basarisizAt: 0 });
+
+/** Yeniden deneme de başarısız olduktan sonra bu süre boyunca yeniden denenmez. */
+export const YENIDEN_SOGUTMA_MS = 15_000;
+
+const SQL_BASI_UZUNLUK = 160;
+
+/**
+ * Gövdedeki İLK SQL ifadesinin başı — teşhis için. Yalnız `sql` metni alınır; parametre
+ * değerleri (`args`) ayrı alanda durur ve buraya HİÇ girmez.
+ */
+export function sorguBasi(govde: string | null | undefined): string | undefined {
+  if (!govde) return undefined;
+  const bas = govde.slice(0, 4_000); // gövde MB'larca olabilir; SQL en başta
+  const m = /"sql"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(bas);
+  let metin: string;
+  if (m) {
+    try {
+      metin = JSON.parse(`"${m[1]}"`) as string;
+    } catch {
+      metin = m[1];
+    }
+  } else if (!bas.trimStart().startsWith("{")) {
+    metin = bas; // düz metin gövde
+  } else {
+    return undefined;
+  }
+  return metin.replace(/\s+/g, " ").trim().slice(0, SQL_BASI_UZUNLUK) || undefined;
+}
+
+/** Teşhis için gövdeyi oku — asıl nesneyi tüketmez; okunamazsa null (ölçüm isteği asla düşürmez). */
+async function govdeOku(yedek: Request | null, init?: { body?: unknown }): Promise<string | null> {
+  try {
+    if (yedek) return yedek.body == null ? null : await yedek.clone().text();
+    const b = init?.body;
+    if (typeof b === "string") return b;
+    if (b instanceof Uint8Array) return new TextDecoder().decode(b);
+  } catch {
+    /* okunamadı */
+  }
+  return null;
 }
 
 /**
@@ -159,11 +241,12 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
     try {
       const r = await birKez(input, init);
       const gecen = Date.now() - bas;
-      if (gecen >= dbYavasEsikMs()) olayEkle("yavas", gecen);
+      if (gecen >= dbYavasEsikMs()) olayEkle("yavas", gecen, sorguBasi(await govdeOku(yedek, init)));
       return r;
     } catch (e) {
       const gecen = Date.now() - bas;
-      olayEkle("iptal", gecen);
+      const sql = sorguBasi(await govdeOku(yedek, init));
+      olayEkle("iptal", gecen, sql);
 
       const disIptal = init?.signal?.aborted === true || istek?.signal?.aborted === true;
       if (yenidenKapali || disIptal) throw e;
@@ -174,10 +257,21 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
        * TAZE BAĞLANTIYLA TEK DENEME. Ölçüm: uygulama 18-20 sn takılıyken ayrı süreç aynı
        * sorguyu 72-73 ms'de aldı — yani ölen bağlantıydı, hizmet değil.
        */
-      olayEkle("yeniden-denendi", gecen);
-      const r = await birKez(yedek ?? input, init);
-      olayEkle("yeniden-deneme-basarili", Date.now() - bas);
-      return r;
+      // Az önce bir yeniden deneme de başarısız olduysa sorun bağlantı değil sunucudur:
+      // ısrar etmek sunucuda süren sorgu sayısını ikiye katlar (bkz. dosya başı, 19 Kas 2026).
+      if (Date.now() - yenidenDurumu.basarisizAt < YENIDEN_SOGUTMA_MS) {
+        olayEkle("yeniden-atlandi", gecen, sql);
+        throw e;
+      }
+      olayEkle("yeniden-denendi", gecen, sql);
+      try {
+        const r = await birKez(yedek ?? input, init);
+        olayEkle("yeniden-deneme-basarili", Date.now() - bas, sql);
+        return r;
+      } catch (e2) {
+        yenidenDurumu.basarisizAt = Date.now();
+        throw e2;
+      }
     }
   };
 }

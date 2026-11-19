@@ -159,7 +159,7 @@ async function computeModels() {
   const thumbIds = new Set(
     (
       await prisma.$queryRawUnsafe<{ id: string }[]>(
-        `SELECT id FROM ProductModelFile WHERE thumbnail IS NOT NULL AND thumbnail <> ''`,
+        `SELECT id FROM ProductModelFile WHERE typeof(thumbnail) = 'text'`,
       )
     ).map((r) => r.id),
   );

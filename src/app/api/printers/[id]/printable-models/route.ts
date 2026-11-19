@@ -62,12 +62,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     }
     const tekil = [...urunBasina.values()].flatMap((liste) => dedupeFiles(liste));
     // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler (içerik ayrı uçtan, uzun önbellekle).
+    // `typeof()` görselin içeriğini OKUMAZ; `<> ''` yazılsaydı her satırda görselin tamamı okunurdu.
     const gorselli = new Set(
       aile.length
         ? (
             await prisma.$queryRawUnsafe<{ id: string }[]>(
               `SELECT id FROM ProductModelFile WHERE printerConfigId IN (${aile.map(() => "?").join(",")})
-                 AND thumbnail IS NOT NULL AND thumbnail <> ''`,
+                 AND typeof(thumbnail) = 'text'`,
               ...aile,
             )
           ).map((r) => r.id)
