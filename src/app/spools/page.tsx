@@ -73,7 +73,7 @@ export default function SpoolsPage() {
     staleTime: 10 * 60_000,
   });
   const { data: settings } = useQuery<Record<string, string>>({
-    queryKey: ["settings"],
+    queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
     staleTime: 5 * 60_000,
   });
@@ -159,7 +159,7 @@ export default function SpoolsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["app-settings"] }),
   });
 
   /**

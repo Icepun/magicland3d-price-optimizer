@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dbEpochMs } from "@/core/sqlite-date";
-import { bustProductViewCaches } from "@/lib/cache-busting";
+import { bustStockCaches } from "@/lib/cache-busting";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +38,8 @@ export async function GET(req: NextRequest) {
       Math.floor(since),
     );
     const items = rows.map((r) => ({ id: r.id, stock: Number(r.stock) }));
-    if (items.length > 0) bustProductViewCaches();
+    // Yalnız stok değişti (telefondan / pazaryerinden) → model kütüphanesine dokunma.
+    if (items.length > 0) bustStockCaches();
     return NextResponse.json({ now: simdi, items });
   } catch (error) {
     return jsonError(error);

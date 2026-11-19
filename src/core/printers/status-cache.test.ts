@@ -167,3 +167,86 @@ describe("fresh mount hafif olmalı", () => {
     expect(h.extras.mock.calls.length, "tam bump extras'ı düşürmeli").toBeGreaterThan(ilk);
   });
 });
+
+/**
+ * 19 Kas 2026 — yazıcı Wi-Fi'dan düşünce ilk başarısız yoklama 5,5 sn sürüyor ve sonunda
+ * histerezis gereği ZATEN önceki değeri döndürüyordu: panel 5,5 sn bekleyip aynı şeyi
+ * gösteriyordu (Kasım'da 217 yanıt). Elde son bilinen durum varken yoklama bütçeyle beklenir.
+ */
+describe("sorunlu yazıcı paneli bekletmez", () => {
+  it("bayat durum + YAVAŞ yoklama → bütçe dolunca son bilinen durum döner, yoklama arkada biter", async () => {
+    h.probe.mockResolvedValueOnce(ONLINE);
+    await getMoonrakerStatusCached("10.0.0.2", 7125);
+    vi.setSystemTime(Date.now() + 7_000); // taze pencere geçti
+
+    let coz: (v: unknown) => void = () => {};
+    h.probe.mockImplementationOnce(() => new Promise((r) => (coz = r)));
+    const p = getMoonrakerStatusCached("10.0.0.2", 7125);
+    await vi.advanceTimersByTimeAsync(800);
+    expect(await p).toEqual(ONLINE); // 5,5 sn değil, 0,8 sn sonra
+    // Yoklama arkada bitince sonuç önbelleğe yazılır; sonraki tur onu görür.
+    const BITTI = { online: true, state: "complete" };
+    coz(BITTI);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await getMoonrakerStatusCached("10.0.0.2", 7125)).toEqual(BITTI);
+    expect(h.probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("bayat durum + HIZLI yoklama → yeni durum hemen verilir (eskisi gösterilmez)", async () => {
+    h.probe.mockResolvedValueOnce(ONLINE);
+    await getMoonrakerStatusCached("10.0.0.3", 7125);
+    vi.setSystemTime(Date.now() + 7_000);
+    const DURAKLADI = { online: true, state: "paused" };
+    h.probe.mockResolvedValueOnce(DURAKLADI);
+    expect(await getMoonrakerStatusCached("10.0.0.3", 7125)).toEqual(DURAKLADI);
+  });
+
+  it("hiç veri yokken yoklama bütçesiz beklenir (gösterecek eski durum yok)", async () => {
+    let coz: (v: unknown) => void = () => {};
+    h.probe.mockImplementationOnce(() => new Promise((r) => (coz = r)));
+    let dondu = false;
+    const p = getMoonrakerStatusCached("10.0.0.4", 7125).then((v) => { dondu = true; return v; });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(dondu).toBe(false);
+    coz(ONLINE);
+    expect(await p).toEqual(ONLINE);
+  });
+
+  it("komut sonrası (tam bump) yoklama yine BEKLENİR — kart eski duruma zıplamaz", async () => {
+    h.probe.mockResolvedValueOnce(ONLINE);
+    await getMoonrakerStatusCached("10.0.0.6", 7125);
+    bumpMoonrakerStatus("10.0.0.6", 7125);
+    const DURAKLADI = { online: true, state: "paused" };
+    let coz: (v: unknown) => void = () => {};
+    h.probe.mockImplementationOnce(() => new Promise((r) => (coz = r)));
+    let dondu = false;
+    const p = getMoonrakerStatusCached("10.0.0.6", 7125).then((v) => { dondu = true; return v; });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(dondu, "komuttan sonra eski 'basıyor' durumu verilmemeli").toBe(false);
+    coz(DURAKLADI);
+    expect(await p).toEqual(DURAKLADI);
+  });
+
+  it("sayfa açılışı (hafif bump) çevrimdışı geri çekilmesini kırar ama bütçeyle bekler", async () => {
+    const { bumpMoonrakerStatusOnly } = await import("./status-cache");
+    h.probe.mockResolvedValueOnce(OFFLINE);
+    await getMoonrakerStatusCached("10.0.0.7", 7125);
+    expect(h.probe).toHaveBeenCalledTimes(1);
+
+    // Yazıcı geri geldi ve hızlı yanıt veriyor → açılışta HEMEN çevrimiçi görünür.
+    bumpMoonrakerStatusOnly("10.0.0.7", 7125);
+    h.probe.mockResolvedValueOnce(ONLINE);
+    expect(await getMoonrakerStatusCached("10.0.0.7", 7125)).toEqual(ONLINE);
+
+    // Yazıcı yine düştü ve yoklama takılıyor → açılış 0,8 sn'den fazla beklemez.
+    vi.setSystemTime(Date.now() + 7_000);
+    h.probe.mockResolvedValueOnce(OFFLINE);
+    await getMoonrakerStatusCached("10.0.0.7", 7125); // histerezis: önceki "çevrimiçi" bir kez daha
+    vi.setSystemTime(Date.now() + 30_000);
+    h.probe.mockImplementationOnce(() => new Promise(() => {}));
+    bumpMoonrakerStatusOnly("10.0.0.7", 7125);
+    const p = getMoonrakerStatusCached("10.0.0.7", 7125);
+    await vi.advanceTimersByTimeAsync(800);
+    await expect(p).resolves.toBeDefined();
+  });
+});

@@ -33,6 +33,10 @@ vi.mock("@/lib/orders-cache", () => ({
   isOrdersRefreshing: () => false,
   setOrdersRefreshing: () => {},
   computeOrdersShared: (compute: () => Promise<any>) => compute(),
+  // Ham çekim yeniden kullanımı bu testlerin konusu değil: her çağrı canlı çeker.
+  hamCekimAl: () => null,
+  hamCekimYaz: () => {},
+  HAM_YENIDEN_KULLANIM_MS: 0,
 }));
 vi.mock("@/lib/push-notify", () => ({ pushToAllDevices: vi.fn(async () => {}) }));
 vi.mock("@/lib/order-finance-snapshots", () => ({

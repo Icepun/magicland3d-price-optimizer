@@ -34,7 +34,7 @@ type TestState =
  */
 export function R2StorageCard() {
   const { data: settings } = useQuery<Record<string, string>>({
-    queryKey: ["app-settings-r2"],
+    queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
   return (
@@ -75,7 +75,6 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
         }),
       });
       if (!save.ok) throw new Error("Ayarlar kaydedilemedi");
-      qc.invalidateQueries({ queryKey: ["app-settings-r2"] });
       qc.invalidateQueries({ queryKey: ["app-settings"] });
 
       if (!configured) {

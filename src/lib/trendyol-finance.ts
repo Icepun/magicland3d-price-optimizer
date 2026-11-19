@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { tlToKurus } from "@/lib/monthly-finance";
 import { batchWrite } from "@/lib/libsql-batch";
+import { toDbDate } from "@/lib/sqlite-date";
 import { applyActualCommissionToProfit } from "@/core/platform-financials";
 import { vatRateOf } from "@/core/vat";
 import {
@@ -275,6 +276,69 @@ export async function syncTrendyolActualCommissions(
   });
   const syncedAt = new Date();
 
+  await komisyonKayitlariniYaz(aggregates, syncedAt);
+
+  const appliedOrders = await gercekKomisyonlariKayitlaraIsle();
+
+  return {
+    fetchedTransactions: unique.length,
+    storedOrders: aggregates.length,
+    appliedOrders,
+    skippedTransactions,
+    days,
+    syncedAt: syncedAt.toISOString(),
+  };
+}
+
+/**
+ * Settlement toplamlarını `PlatformOrderFinancial`'a yazar — TEK istekte.
+ *
+ * NEDEN (19 Kas 2026 denetimi): 300-500 satır 50'lik `$transaction` dilimlerinde TEK TEK upsert
+ * ediliyordu. Her ifade ayrı gidiş-dönüş ve işlem boyunca kullanıcı şeridinin kilidi tutuluyordu
+ * (en az 30-50 sn boyunca uygulamadaki her sorgu bekliyordu). Yazılan satırlar AYNI — eşitlik
+ * testi: trendyol-finance-yazma.test.ts. Toplu yazma yoksa (yerel mod) eski yol çalışır.
+ */
+export async function komisyonKayitlariniYaz(aggregates: TrendyolCommissionAggregate[], syncedAt: Date): Promise<void> {
+  if (aggregates.length === 0) return;
+  if (await batchWrite(komisyonYazmaIfadeleri(aggregates, syncedAt))) return;
+  await komisyonKayitlariniPrismaIleYaz(aggregates, syncedAt);
+}
+
+/** Saf: Prisma `upsert`'ün yazdığının AYNISINI yazan ifadeler (tarihler Prisma biçiminde). */
+export function komisyonYazmaIfadeleri(
+  aggregates: TrendyolCommissionAggregate[],
+  syncedAt: Date
+): Array<{ sql: string; args: unknown[] }> {
+  const sync = toDbDate(syncedAt);
+  return aggregates.map((row) => ({
+    sql: `INSERT INTO "PlatformOrderFinancial"
+            ("id", "platform", "externalOrderId", "orderNumber", "grossRevenueKurus", "commissionKurus",
+             "sellerRevenueKurus", "transactionCount", "sourceUpdatedAt", "syncedAt")
+          VALUES (?, 'trendyol', ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
+            "orderNumber" = excluded."orderNumber",
+            "grossRevenueKurus" = excluded."grossRevenueKurus",
+            "commissionKurus" = excluded."commissionKurus",
+            "sellerRevenueKurus" = excluded."sellerRevenueKurus",
+            "transactionCount" = excluded."transactionCount",
+            "sourceUpdatedAt" = excluded."sourceUpdatedAt",
+            "syncedAt" = excluded."syncedAt"`,
+    args: [
+      `pof:trendyol:${row.externalOrderId}`,
+      row.externalOrderId,
+      row.orderNumber,
+      tlToKurus(row.grossRevenue),
+      tlToKurus(row.commission),
+      tlToKurus(row.sellerRevenue),
+      row.transactionCount,
+      row.sourceUpdatedAt ? toDbDate(row.sourceUpdatedAt) : null,
+      sync,
+    ],
+  }));
+}
+
+/** Eski yol (toplu yazmanın olmadığı mod için) — davranışı değişmedi. */
+export async function komisyonKayitlariniPrismaIleYaz(aggregates: TrendyolCommissionAggregate[], syncedAt: Date): Promise<void> {
   for (let offset = 0; offset < aggregates.length; offset += 50) {
     const chunk = aggregates.slice(offset, offset + 50);
     await prisma.$transaction(
@@ -311,17 +375,6 @@ export async function syncTrendyolActualCommissions(
       )
     );
   }
-
-  const appliedOrders = await gercekKomisyonlariKayitlaraIsle();
-
-  return {
-    fetchedTransactions: unique.length,
-    storedOrders: aggregates.length,
-    appliedOrders,
-    skippedTransactions,
-    days,
-    syncedAt: syncedAt.toISOString(),
-  };
 }
 
 /** Gerçek komisyonu henüz işlenmemiş, kârı TAM hesaplanmış kayıt + o siparişin netleşmiş ödemesi. */

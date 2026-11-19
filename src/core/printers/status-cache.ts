@@ -66,7 +66,32 @@ const OFFLINE_MAX_MS = 20_000;
 const BOOST_WINDOW_MS = 10_000;
 const BOOST_FRESH_MS = 700;
 
-interface Entry<T> { at: number; value: T; offline: boolean; suspect: boolean; fails: number }
+interface Entry<T> {
+  at: number; value: T; offline: boolean; suspect: boolean; fails: number;
+  /** Sayfa açılışı tazelemesi istendi: çevrimdışı olsa da yoklama (bütçeyle) beklenir. */
+  zorla?: boolean;
+}
+
+/**
+ * Elde son bilinen durum varken yeni yoklama EN ÇOK bu kadar beklenir; aşarsa son bilinen
+ * durum verilir, yoklama arkada biter ve bir sonraki turda görünür.
+ *
+ * NEDEN (19 Kas 2026 denetimi): U1 Wi-Fi'dan düşünce ilk başarısız yoklama 5,5 sn sürüyor
+ * (4000 + 1500 ms) ve sonunda zaten histerezis gereği ÖNCEKİ değeri döndürüyordu — yani panel
+ * 5,5 sn bekleyip aynı şeyi gösteriyordu. Kasım'da 217 panel yanıtı bu yüzden 3-6 sn sürdü.
+ * Sağlıklı yoklama ~300 ms'nin altında; bütçe yalnız sorunlu yazıcıyı keser.
+ */
+const YANIT_BUTCESI_MS = 800;
+
+function butceyleBekle<T>(p: Promise<T>, butceMs: number, yedek: T): Promise<T> {
+  return new Promise<T>((coz, reddet) => {
+    const t = setTimeout(() => coz(yedek), butceMs);
+    p.then(
+      (v) => { clearTimeout(t); coz(v); },
+      (e) => { clearTimeout(t); reddet(e); },
+    );
+  });
+}
 const statusCache = processSingleton("sc_statusCache", () => new Map<string, Entry<unknown>>());
 const inflight = processSingleton("sc_inflight", () => new Map<string, Promise<unknown>>());
 /** Anahtar → hızlı-yoklama penceresinin bitiş zamanı. */
@@ -136,10 +161,12 @@ async function withCache<T>(
 
   // ÇEVRİMDIŞI + elde son bilinen durum var → ARKA PLANDA tazele, çağıranı BEKLETME.
   // (Kapalı yazıcının 1.5–3sn'lik zaman aşımı paneli bekletmesin.)
-  if (e && e.offline) {
+  if (e && e.offline && !e.zorla) {
     void probeOnce(key, probe, isOffline, e).catch(() => {});
     return e.value;
   }
+  // Elde son bilinen durum var → yoklama en çok bütçe kadar beklenir (bkz. YANIT_BUTCESI_MS).
+  if (e) return butceyleBekle(probeOnce(key, probe, isOffline, e), YANIT_BUTCESI_MS, e.value);
   return probeOnce(key, probe, isOffline, e);
 }
 
@@ -216,7 +243,10 @@ export function bumpPrinterStatus(key: string): void {
  * yoklamada düzeliyor; yazıcının DURUMU etkilenmiyor.
  */
 export function bumpStatusOnly(key: string): void {
-  statusCache.delete(key);
+  // Kaydı SİLME, bayat işaretle: silinince sayfa açılışı yoklamayı (sorunlu yazıcıda 5,5 sn)
+  // bekliyordu. Bayat + "zorla" → yoklama bütçeyle beklenir; çevrimdışı geri çekilmesi de kırılır.
+  const e = statusCache.get(key);
+  if (e) statusCache.set(key, { ...e, at: 0, fails: 0, zorla: true });
   boostUntil.set(key, Date.now() + BOOST_WINDOW_MS);
 }
 

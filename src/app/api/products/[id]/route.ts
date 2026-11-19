@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches } from "@/lib/cache-busting";
+import { bustProductCaches, bustProductViewCaches, bustProfitInputCaches, bustStockCaches } from "@/lib/cache-busting";
 import { bustCache } from "@/lib/route-cache";
 import { cleanupProductOrphans } from "@/lib/orphan-cleanup";
 import { shopifyVaryantlari, yoksayilanlariGuncelle } from "@/lib/shopify-katalog-sunucu";
@@ -254,6 +254,9 @@ async function patchProduct(
   // kâr gövdesine girmediğinden önbelleği KORUR.
   if (productPatchAffectsProfit({ ...productData, cost })) {
     bustProfitInputCaches();
+  } else if (cost === undefined && Object.keys(productData).every((k) => k === "stock")) {
+    // En sık yazma: Ürünler'deki stok +/-. Model kütüphanesi düşmez, Panel/Ürünler arkada dolar.
+    bustStockCaches();
   } else {
     // Kâra girmeyen alanlar (stok, gizli, takma ad, görsel) yine de listede ve Panel
     // sayaçlarında görünüyor → o iki gövde tazelenmeli, pahalı sipariş gövdesi KORUNUR.

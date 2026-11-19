@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Search,
@@ -136,6 +136,7 @@ export function Sidebar() {
                 animationFillMode: "forwards",
               } as React.CSSProperties}
             >
+              <GecisIzi />
               {/* Aktif item için sol kenar mor çizgi */}
               {isActive && (
                 <span
@@ -169,5 +170,25 @@ export function Sidebar() {
 
       <UpdateWidget />
     </aside>
+  );
+}
+
+/**
+ * Tıklanan menü öğesi, sayfa sunucudan gelene kadar ANINDA vurgulanır.
+ *
+ * Ön yükleme bilerek kapalı (ana iş parçacığını yormasın); ana süreç meşgulken tıklama birkaç
+ * yüz ms "ölü" görünüyordu — eski sayfa ve eski vurgu yerinde kalıyordu (19 Kas 2026 denetimi).
+ * Sunucuya ek iş yok: yalnız bağlantının bekleme durumu okunur.
+ */
+function GecisIzi() {
+  const { pending } = useLinkStatus();
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-0 rounded-lg bg-sidebar-accent/70 transition-opacity duration-150",
+        pending ? "opacity-100 motion-safe:animate-pulse" : "opacity-0"
+      )}
+    />
   );
 }

@@ -3,6 +3,7 @@
 import {
   type ReactNode,
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -699,6 +700,34 @@ export default function OrdersPage() {
   });
 
   /**
+   * Satır işleyicileri SABİT referanslı. Eskiden her satıra her çizimde yeni fonksiyon
+   * veriliyordu; `OrderRow`'un `memo`'su bu yüzden hiç tutmuyor, kaydırırken (sanallaştırıcı her
+   * adımda sayfayı yeniden çizer) görünen bütün satırlar baştan çiziliyordu (19 Kas 2026 denetimi).
+   */
+  const deleteManualMutate = deleteManualMutation.mutate;
+  const manuelSiparisiDuzenle = useCallback((o: UnifiedOrder) => {
+    setEditingManual({
+      id: o.id,
+      manualOrderId: o.manualOrderId,
+      editHref: o.editHref,
+      orderNumber: o.orderNumber,
+      date: o.date,
+      customer: o.customer,
+      statusKind: o.statusKind === "other" ? "processing" : o.statusKind,
+      total: o.total,
+      items: o.items,
+    });
+  }, []);
+  const manuelSiparisiSil = useCallback(
+    (o: UnifiedOrder) => {
+      if (window.confirm(`"${o.orderNumber}" manuel siparişini silmek istiyor musun? Bu işlem geri alınamaz.`)) {
+        deleteManualMutate(o);
+      }
+    },
+    [deleteManualMutate]
+  );
+
+  /**
    * Durum DIŞINDAKİ tüm filtreler uygulanmış ara liste. Kurallar siparis-filtre.ts'te:
    * çipler, "maliyet eksik" bağlantısı ve liste artık AYNI kümeden üretiliyor.
    */
@@ -1243,31 +1272,8 @@ export default function OrdersPage() {
                     deleteManualMutation.isPending &&
                     deleteManualMutation.variables?.id === o.id
                   }
-                  onEdit={() =>
-                    setEditingManual({
-                      id: o.id,
-                      manualOrderId: o.manualOrderId,
-                      editHref: o.editHref,
-                      orderNumber: o.orderNumber,
-                      date: o.date,
-                      customer: o.customer,
-                      statusKind:
-                        o.statusKind === "other"
-                          ? "processing"
-                          : o.statusKind,
-                      total: o.total,
-                      items: o.items,
-                    })
-                  }
-                  onDelete={() => {
-                    if (
-                      window.confirm(
-                        `"${o.orderNumber}" manuel siparişini silmek istiyor musun? Bu işlem geri alınamaz.`
-                      )
-                    ) {
-                      deleteManualMutation.mutate(o);
-                    }
-                  }}
+                  onEdit={manuelSiparisiDuzenle}
+                  onDelete={manuelSiparisiSil}
                 />
               </div>
             );
@@ -2077,8 +2083,9 @@ const OrderRow = memo(function OrderRow({
   sik = false,
 }: {
   order: UnifiedOrder;
-  onEdit: () => void;
-  onDelete: () => void;
+  /** Sabit referanslı olmalı (memo) — siparişi parametre olarak alır. */
+  onEdit: (order: UnifiedOrder) => void;
+  onDelete: (order: UnifiedOrder) => void;
   deleting: boolean;
   /** Bu sipariş son yenilemede geldi → kısa süre vurgulanır. */
   isNew?: boolean;
@@ -2430,7 +2437,7 @@ const OrderRow = memo(function OrderRow({
                       <button
                         key={i}
                         type="button"
-                        onClick={onEdit}
+                        onClick={() => onEdit(order)}
                         className={cn(rowCls, "w-full text-left")}
                         title="Bu ürünün maliyetini gir"
                       >
@@ -2603,7 +2610,7 @@ const OrderRow = memo(function OrderRow({
                     {isManualOrder && (
                       <button
                         type="button"
-                        onClick={onEdit}
+                        onClick={() => onEdit(order)}
                         className="ml-1 font-medium text-amber-500 underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80"
                       >
                         Maliyeti gir
@@ -2642,7 +2649,7 @@ const OrderRow = memo(function OrderRow({
                 variant="outline"
                 className="h-8 gap-1.5"
                 disabled={deleting}
-                onClick={onEdit}
+                onClick={() => onEdit(order)}
               >
                 <Pencil className="h-3.5 w-3.5" />
                 Düzenle
@@ -2653,7 +2660,7 @@ const OrderRow = memo(function OrderRow({
                 variant="ghost"
                 className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 disabled={deleting}
-                onClick={onDelete}
+                onClick={() => onDelete(order)}
               >
                 {deleting ? (
                   <RefreshCw className="h-3.5 w-3.5 animate-spin" />

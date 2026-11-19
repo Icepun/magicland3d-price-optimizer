@@ -59,6 +59,50 @@ export function bustProductViewCaches(): void {
 }
 
 /**
+ * YALNIZ STOK değişti (Ürünler'deki +/-, telefondan gelen stok, iade).
+ *
+ * `bustProductViewCaches`'ten iki farkı var (19 Kas 2026 denetimi):
+ *   1) Model Kütüphanesi gövdesine (`models:`) DOKUNMAZ — orada stok yok; en sık yazma olan
+ *      stok değişikliği o pahalı gövdeyi boşuna yeniden hesaplatıyordu.
+ *   2) Düşen Panel ve Ürünler gövdeleri birkaç saniye sonra ARKADA yeniden doldurulur.
+ *      Silinen kayıt bayat servis edilemediği için sonraki ziyaret soğuk hesabı bekliyordu
+ *      (ölçüm: Panel 4,0 sn, Ürünler 2,6 sn). Art arda +/- tıklamaları tek dolduruşta birleşir.
+ */
+export function bustStockCaches(): void {
+  bustCaches(["products:", "dashboard:", "notifications-inventory:", "planner-queue:"]);
+  arkadaYenidenDoldur();
+}
+
+const YENIDEN_DOLDURULACAK = ["/api/dashboard", "/api/products?filter=active"] as const;
+const DOLDURMA_GECIKMESI_MS = 3_000;
+const dolduruCubugu = ((globalThis as unknown as { __mlhub_stok_doldur?: { t: ReturnType<typeof setTimeout> | null } })
+  .__mlhub_stok_doldur ??= { t: null });
+
+/** Düşen ağır gövdeleri arka planda sırayla yeniden hesaplat (açılış ısıtmasıyla aynı yol). */
+function arkadaYenidenDoldur(): void {
+  const port = process.env.MLHUB_PORT;
+  if (!port || process.env.MLHUB_DISABLE_BACKGROUND_TASKS === "1") return;
+  if (dolduruCubugu.t) clearTimeout(dolduruCubugu.t);
+  dolduruCubugu.t = setTimeout(() => {
+    dolduruCubugu.t = null;
+    void (async () => {
+      for (const yol of YENIDEN_DOLDURULACAK) {
+        try {
+          const yanit = await fetch(`http://127.0.0.1:${port}${yol}`, {
+            signal: AbortSignal.timeout(60_000),
+            headers: { "x-mlhub-isitma": "1" },
+          });
+          await yanit.arrayBuffer();
+        } catch {
+          /* doldurma yalnız hızlandırmadır; düşerse ilk ziyaret kendisi hesaplar */
+        }
+      }
+    })();
+  }, DOLDURMA_GECIKMESI_MS);
+  dolduruCubugu.t.unref?.();
+}
+
+/**
  * Stok / filament UYARI taraması değişti (bildirim zilinin beslediği tarama).
  *
  * Bu tarama 90 saniyelik kısa ömürlü bir önbellekten geliyor — zil 20 saniyede bir yokladığı

@@ -13,6 +13,9 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import {
   ayniPencereGunuMu,
   computeOrdersShared,
+  hamCekimAl,
+  hamCekimYaz,
+  HAM_YENIDEN_KULLANIM_MS,
   getOrdersCache,
   isOrdersRefreshing,
   setOrdersRefreshing,
@@ -512,16 +515,14 @@ export async function GET(req: NextRequest) {
     // Önbellek YALNIZ aynı UTC gününde hesaplanmışsa anında verilir: gün değişince 30 günlük
     // pencere kayar ve dünkü hesap yanlış pencereyi anlatır (bkz. ayniPencereGunuMu).
     if (!fresh && cached && ayniPencereGunuMu(cached.at)) {
-      if (Date.now() - cached.at > ORDERS_SOFT_MS && !isOrdersRefreshing()) {
-        setOrdersRefreshing(true);
-        void computeOrdersShared(computeOrdersBody)
-          .catch(() => {})
-          .finally(() => { setOrdersRefreshing(false); });
-      }
+      if (Date.now() - cached.at > ORDERS_SOFT_MS) arkadaCanliTazele();
       return NextResponse.json(cached.body);
     }
     try {
-      return NextResponse.json(await computeOrdersShared(computeOrdersBody));
+      // "Yenile" (fresh) her zaman canlı çeker. Değilse — kâr girdisi az önce değiştiği için
+      // önbellek düştüyse — birkaç dakikalık ham çekim yeniden kullanılır: yalnız kâr hesaplanır.
+      const hamYasSiniriMs = fresh ? 0 : HAM_YENIDEN_KULLANIM_MS;
+      return NextResponse.json(await computeOrdersShared(() => computeOrdersBody({ hamYasSiniriMs })));
     } catch (error) {
       // Taze hesap düşerse (ör. ağ yok) dünkü pencere de olsa eldeki sonuç boş ekrandan iyidir;
       // gövde kendi `computedAt` damgasını taşıdığı için ekran ne zaman hesaplandığını yazar.
@@ -533,17 +534,27 @@ export async function GET(req: NextRequest) {
   }
 }
 
-async function computeOrdersBody(): Promise<Record<string, unknown>> {
+/** Bayat gövdeyi arka planda CANLI çekimle tazele (ham çekim yeniden kullanılmaz). */
+function arkadaCanliTazele(): void {
+  if (isOrdersRefreshing()) return;
+  setOrdersRefreshing(true);
+  void computeOrdersShared(() => computeOrdersBody({ hamYasSiniriMs: 0 }))
+    .catch(() => {})
+    .finally(() => { setOrdersRefreshing(false); });
+}
+
+async function computeOrdersBody(secenek: { hamYasSiniriMs: number }): Promise<Record<string, unknown>> {
   const runId = beginOrdersFetchStage();
   try {
-    return await computeOrdersBodyInner(runId);
+    return await computeOrdersBodyInner(runId, secenek.hamYasSiniriMs);
   } finally {
     finishOrdersFetchStage(runId);
   }
 }
 
 async function computeOrdersBodyInner(
-  runId: number
+  runId: number,
+  hamYasSiniriMs: number
 ): Promise<Record<string, unknown>> {
   await ensureRuntimeSchema();
 
@@ -625,6 +636,20 @@ async function computeOrdersBodyInner(
     for (const row of rows) raws.push(row);
   };
 
+  // AŞAMA 1'i ATLA: kâr girdisi az önce değiştiyse ve birkaç dakikalık TAM bir ham çekim varsa
+  // pazaryerlerine yeniden gidilmez (bkz. lib/orders-cache "AŞAMA 1"). Ham veri derin kopyadır.
+  type HamCekimVerisi = { raws: Raw[]; shopify: PlatformStatus; trendyol: PlatformStatus; hepsiburada: PlatformStatus };
+  const hazirHam = hamCekimAl<HamCekimVerisi>(hamYasSiniriMs);
+  if (hazirHam) {
+    commitRaws(hazirHam.veri.raws);
+    ({ shopify, trendyol, hepsiburada } = hazirHam.veri);
+    markOrdersSource(runId, "shopify", "done", shopify.count);
+    markOrdersSource(runId, "trendyol", "done", trendyol.count);
+    markOrdersSource(runId, "hepsiburada", "done", hepsiburada.count);
+    // Ham veri bir dakikadan eskiyse kâr gövdesi yayınlandıktan hemen sonra canlı tazelensin.
+    if (Date.now() - hazirHam.at > ORDERS_SOFT_MS) setTimeout(arkadaCanliTazele, 0);
+  }
+
   // Üç platformu PARALEL çek — toplam gecikme = en yavaş tek platform (sıralı toplam DEĞİL).
   // Bloklar bağımsız: her biri kendi durum değişkenini atar (yarış yok).
   //
@@ -632,7 +657,7 @@ async function computeOrdersBodyInner(
   // ekleniyordu. Ortada bir hata olursa platform kartı "alınamadı" derken özette o platformun
   // EKSİK cirosu duruyor, kullanıcı da onu tam sanıyordu. Artık her platform önce kendi yerel
   // tamponunu doldurur; yalnızca çekim SORUNSUZ bittiğinde tampon ortak listeye aktarılır.
-  await Promise.all([
+  if (!hazirHam) await Promise.all([
    (async () => {
    const buffer: Raw[] = [];
    // Kimlik bilgisi adımı AYRI. Burada "eksik" hatası = kurulu değil; başka her hata (ör.
@@ -971,6 +996,11 @@ async function computeOrdersBodyInner(
   }
    })(),
   ]);
+
+  // TAM bir canlı çekimi sakla (bir pazaryeri alınamadıysa saklanmaz: sonraki hesap yeniden dener).
+  if (!hazirHam && [shopify, trendyol, hepsiburada].every((p) => p.ok || p.notConfigured)) {
+    hamCekimYaz({ raws, shopify, trendyol, hepsiburada } satisfies HamCekimVerisi);
+  }
 
   // Finans geçmişi için son 60 günü yeniden değerlendir (tarihsiz olanları da tut).
   // Kullanıcıya dönen liste/özet aşağıda yine son 30 güne kırpılır.
@@ -1668,7 +1698,8 @@ async function computeOrdersBodyInner(
     dataComplete: missingSources.length === 0,
     // Bu verinin hesaplandığı an — arayüz "X dakika önce güncellendi" bilgisini bundan üretir
     // (önbellekten dönen yanıt da kendi hesap zamanını taşır).
-    computedAt: new Date().toISOString(),
+    // Ham çekim yeniden kullanıldıysa verinin GERÇEK yaşı o çekimin zamanıdır.
+    computedAt: new Date(hazirHam?.at ?? Date.now()).toISOString(),
     orders: visibleOrders,
     summary: {
       days: WINDOW_DAYS,

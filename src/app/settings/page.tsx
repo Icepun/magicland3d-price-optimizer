@@ -31,7 +31,7 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
 
   const { data: settings } = useQuery<Record<string, string>>({
-    queryKey: ["settings"],
+    queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
 
@@ -57,7 +57,6 @@ export default function SettingsPage() {
         body: JSON.stringify({ vatRate: String(data.vatRate) }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
       clearPricingQueryCache(queryClient);
       toast.success("Ayarlar kaydedildi — tüm ürünlere uygulandı");

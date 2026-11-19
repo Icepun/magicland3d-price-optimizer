@@ -44,7 +44,8 @@ vi.mock("@/lib/runtime-schema", () => ({ ensureRuntimeSchema: vi.fn(async () => 
 vi.mock("@/lib/route-cache", () => ({
   swr: (_key: string, _ms: number, fn: () => any) => fn(),
 }));
-vi.mock("@/lib/orders-cache", () => ({
+vi.mock("@/lib/orders-cache", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/orders-cache")>()),
   getOrdersCache: () => null,
   isOrdersRefreshing: () => false,
   setOrdersRefreshing: () => {},
@@ -184,7 +185,9 @@ async function fetchOrders(): Promise<any> {
   return res.json();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Bir testin canlı çekimi sonrakine ham veri olarak sızmasın.
+  (await import("@/lib/orders-cache")).hamCekimDusur();
   h.state.shopifyOrders = [];
   h.state.trendyolPages = [];
   h.state.trendyolCall = 0;
@@ -741,5 +744,52 @@ describe("finans geçmişi hatası kullanıcıya ulaşır", () => {
 
     expect(body.financeHistory.ok).toBe(true);
     expect(body.financeHistory.error).toBeUndefined();
+  });
+});
+
+/**
+ * KÂR EŞİTLİĞİ (19 Kas 2026): "Maliyet gir" / "Ürüne bağla" sonrası pazaryerleri baştan çekiliyordu.
+ * Artık birkaç dakikalık ham çekim yeniden kullanılıp YALNIZ kâr hesaplanıyor. Aynı ham veriyle
+ * üretilen gövde — sipariş listesi, özetler, kâr, finans geçmişi — canlı çekimle BİREBİR aynı olmalı.
+ */
+describe("ham çekim yeniden kullanımı", () => {
+  const govdeKarsilastir = (b: any) => ({ ...b, computedAt: undefined });
+
+  it("kâr girdisi değişince pazaryerine yeniden gidilmez ve gövde canlı çekimle AYNI çıkar", async () => {
+    h.state.trendyolPages = [[trendyolOrder(), { ...trendyolOrder(), id: 2, orderNumber: "TY-2", totalPrice: 120, lines: [{ barcode: "BAR-2", productName: "İkinci", quantity: 2, price: 60 }] }]];
+    h.state.shopifyOrders = [];
+    const canli = await fetchOrders(); // "Yenile": canlı çeker ve ham veriyi saklar
+    const cagriSonrasi = h.state.trendyolCall;
+    expect(canli.trendyol).toMatchObject({ ok: true, count: 2 });
+
+    // Kâr girdisi değişti → kâr gövdesi düştü → normal (fresh olmayan) istek.
+    const res = await GET(new Request("http://localhost/api/orders") as NextRequest);
+    const yeniden = await res.json();
+
+    expect(h.state.trendyolCall, "pazaryerine yeniden gidilmemeli").toBe(cagriSonrasi);
+    expect(govdeKarsilastir(yeniden)).toEqual(govdeKarsilastir(canli));
+    // Verinin gerçek yaşı canlı çekimin zamanı olarak görünür (yeni hesap zamanı değil).
+    expect(Date.parse(yeniden.computedAt)).toBeLessThanOrEqual(Date.parse(canli.computedAt) + 1000);
+  });
+
+  it("'Yenile' her zaman canlı çeker (saklanan ham veri kullanılmaz)", async () => {
+    h.state.trendyolPages = [[trendyolOrder()], [trendyolOrder()]];
+    await fetchOrders();
+    const ilk = h.state.trendyolCall;
+    await fetchOrders();
+    expect(h.state.trendyolCall).toBeGreaterThan(ilk);
+  });
+
+  it("bir pazaryeri alınamadıysa ham çekim SAKLANMAZ — sonraki hesap yeniden dener", async () => {
+    h.state.trendyolPages = [new Error("bağlantı koptu")];
+    const eksik = await fetchOrders();
+    expect(eksik.trendyol.ok).toBe(false);
+    h.state.trendyolCall = 0;
+    const ilk = h.state.trendyolCall;
+    h.state.trendyolPages = [[trendyolOrder()]];
+    const res = await GET(new Request("http://localhost/api/orders") as NextRequest);
+    const sonra = await res.json();
+    expect(h.state.trendyolCall, "yeniden denemeli").toBeGreaterThan(ilk);
+    expect(sonra.trendyol).toMatchObject({ ok: true, count: 1 });
   });
 });

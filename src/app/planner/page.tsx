@@ -256,7 +256,7 @@ export default function PlannerPage() {
   // Hedef stok DB'de (AppSetting) saklanır → masaüstü/telefon senkron
   const qc = useQueryClient();
   const { data: settings } = useQuery<Record<string, string>>({
-    queryKey: ["settings"],
+    queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
     staleTime: 60_000,
   });
@@ -314,7 +314,7 @@ export default function PlannerPage() {
     if (refreshing) return;
     const tasks = [
       qc.invalidateQueries({ queryKey: ["products"] }),
-      qc.invalidateQueries({ queryKey: ["settings"] }),
+      qc.invalidateQueries({ queryKey: ["app-settings"] }),
       qc.invalidateQueries({ queryKey: ["planner-insights"] }),
       qc.invalidateQueries({ queryKey: ["planner-queue"] }),
     ];
@@ -340,7 +340,7 @@ export default function PlannerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["app-settings"] }),
   });
 
   /** Süzgeçten ÖNCEKİ plan satırları — rozet sayıları buradan çıkar. */

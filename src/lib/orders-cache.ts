@@ -151,6 +151,35 @@ export function setOrdersCache(body: Record<string, unknown>, expectedGeneration
   persistDiskCache(cache);
   return true;
 }
+// ── AŞAMA 1: ham pazaryeri çekimi ────────────────────────────────────────────────────
+// /api/orders iki aşamalı: (1) üç pazaryerinden ham siparişleri çek (10-20 sn), (2) ürünlerle
+// eşleştir + kârı hesapla (1-2 sn). Kâr girdisi değişince ("Maliyet gir", "Ürüne bağla", ürün
+// maliyeti, kural) eskiden İKİSİ birden yeniden koşuyordu; oysa değişen yalnız (2). Ham çekim kısa
+// süre saklanır ve `invalidateOrdersCache()` onu DÜŞÜRMEZ — yalnız kâr gövdesini düşürür.
+//
+// KÂR EŞİTLİĞİ: (2) ham veriyi yalnız okur; aynı ham veriyle aynı kuralları uygular. Saklanan veri
+// her kullanımda DERİN KOPYALANIR — bir aşama ileride ham nesneyi değiştirse bile ötekini bozamaz.
+// Tazelik: ham veri en çok `HAM_YENIDEN_KULLANIM_MS` yaşındadır ve aynı UTC gününe aittir.
+export const HAM_YENIDEN_KULLANIM_MS = 3 * 60_000;
+let hamCekim: { at: number; veri: unknown } | null = null;
+
+/** Yaşı sınırın içinde ve AYNI günden ham çekim varsa derin kopyasını ver. */
+export function hamCekimAl<T>(maxYasMs: number, simdi: number = Date.now()): { at: number; veri: T } | null {
+  if (!hamCekim || maxYasMs <= 0) return null;
+  if (simdi - hamCekim.at > maxYasMs || !ayniPencereGunuMu(hamCekim.at, simdi)) return null;
+  return { at: hamCekim.at, veri: structuredClone(hamCekim.veri) as T };
+}
+
+/** Tam (eksiksiz) bir ham çekimi sakla. */
+export function hamCekimYaz(veri: unknown, at: number = Date.now()): void {
+  hamCekim = { at, veri: structuredClone(veri) };
+}
+
+/** "Yenile" ya da test — saklanan ham çekimi at. */
+export function hamCekimDusur(): void {
+  hamCekim = null;
+}
+
 /** Fiyatlama girdisi değişti → önbeleği düş, sonraki /api/orders yeni kurallarla hesaplasın. */
 export function invalidateOrdersCache(): void {
   generation += 1;
