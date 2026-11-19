@@ -670,6 +670,9 @@ function ensureCredentialKey() {
   if (!process.env.HEPSIBURADA_SETTINGS_FILE) {
     process.env.HEPSIBURADA_SETTINGS_FILE = `${slashedUserData}/hepsiburada-settings.json`;
   }
+  if (!process.env.HEPSIJET_SETTINGS_FILE) {
+    process.env.HEPSIJET_SETTINGS_FILE = `${slashedUserData}/hepsijet-settings.json`;
+  }
   if (!process.env.MLHUB_ORDERS_CACHE_FILE) {
     process.env.MLHUB_ORDERS_CACHE_FILE = `${slashedUserData}/orders-cache.json`;
   }

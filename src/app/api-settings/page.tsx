@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { baglantiDurumu, type BaglantiTonu } from "@/lib/baglanti-ozeti";
-import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store } from "lucide-react";
+import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store, Truck, CheckCircle2 } from "lucide-react";
 
 interface TrendyolPublicSettings {
   sellerId: string;
@@ -779,6 +779,168 @@ function HepsiburadaTab() {
   );
 }
 
+// ───────────── HepsiJet (kargo) ─────────────
+interface HepsijetAcikAyarlar {
+  ortam: "test" | "prod";
+  test: { kullaniciAdi: string; sifreVar: boolean };
+  prod: { kullaniciAdi: string; sifreVar: boolean };
+}
+
+function HepsijetTab() {
+  const qc = useQueryClient();
+  const { data: ayarlar } = useQuery<HepsijetAcikAyarlar>({
+    queryKey: ["hepsijet-settings"],
+    queryFn: () => fetchJson("/api/hepsijet/settings"),
+  });
+  // Seçim yapılana kadar kayıtlı ortam; test ve canlının bilgileri ayrı tutulur.
+  const [secilenOrtam, setSecilenOrtam] = useState<"test" | "prod" | null>(null);
+  const ortam = secilenOrtam ?? ayarlar?.ortam ?? "test";
+  const kayitli = ayarlar?.[ortam];
+  // Yazılanlar ortama bağlıdır: ortam değişince öbür ortamın taslağı görünmez.
+  const [taslak, setTaslak] = useState<{ ortam: string; kullaniciAdi: string | null; sifre: string }>({
+    ortam: "", kullaniciAdi: null, sifre: "",
+  });
+  const buTaslak = taslak.ortam === ortam ? taslak : { ortam, kullaniciAdi: null, sifre: "" };
+  const kullaniciAdi = buTaslak.kullaniciAdi ?? kayitli?.kullaniciAdi ?? "";
+  const sifre = buTaslak.sifre;
+  const [sonuc, setSonuc] = useState<{ ortam: "test" | "prod"; sirket: string | null; sube: string | null } | null>(null);
+
+  const kaydet = useMutation({
+    mutationFn: () =>
+      fetchJson<HepsijetAcikAyarlar>("/api/hepsijet/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ortam, kullaniciAdi, sifre: sifre || undefined }),
+      }),
+    onSuccess: (d) => {
+      qc.setQueryData(["hepsijet-settings"], d);
+      setTaslak({ ortam: "", kullaniciAdi: null, sifre: "" });
+      setSecilenOrtam(null);
+      setSonuc(null);
+      toast.success("HepsiJet bilgileri kaydedildi");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const dene = useMutation({
+    mutationFn: () =>
+      fetchJson<{ ok: boolean; ortam: "test" | "prod"; sirket: string | null; sube: string | null }>(
+        "/api/hepsijet/test",
+        { method: "POST" }
+      ),
+    onSuccess: (d) => {
+      setSonuc({ ortam: d.ortam, sirket: d.sirket, sube: d.sube });
+      toast.success("HepsiJet bağlantısı çalışıyor");
+    },
+    onError: (e: Error) => {
+      setSonuc(null);
+      toast.error(e.message);
+    },
+  });
+
+  const kaydedilmemis =
+    ortam !== ayarlar?.ortam || kullaniciAdi !== (kayitli?.kullaniciAdi ?? "") || sifre !== "";
+  const denenebilir = !kaydedilmemis && !!kayitli?.kullaniciAdi && !!kayitli.sifreVar;
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Truck className="h-4 w-4" /> HepsiJet Bağlantısı
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            HepsiJet&apos;in gönderdiği kullanıcı adı ve şifreyi gir. Şifre yalnız bu bilgisayarda saklanır.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              kaydet.mutate();
+            }}
+            className="space-y-3"
+          >
+            <div>
+              <Label className="text-xs">Ortam</Label>
+              <div className="mt-1 grid grid-cols-2 gap-1 rounded-lg border bg-muted/30 p-1">
+                {(["test", "prod"] as const).map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    onClick={() => {
+                      setSecilenOrtam(o);
+                      setSonuc(null);
+                    }}
+                    className={cn(
+                      "rounded-md py-1.5 text-xs font-medium transition-all duration-200 active:scale-[0.98]",
+                      ortam === o
+                        ? o === "prod"
+                          ? "bg-green-600 text-white shadow-sm"
+                          : "bg-primary text-primary-foreground shadow-sm"
+                        : "text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    {o === "test" ? "Test" : "Canlı"}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Kullanıcı Adı</Label>
+              <Input
+                value={kullaniciAdi}
+                onChange={(e) => setTaslak({ ortam, kullaniciAdi: e.target.value, sifre })}
+                autoComplete="off"
+                placeholder="HepsiJet kullanıcı adı"
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Şifre</Label>
+              <Input
+                type="password"
+                value={sifre}
+                onChange={(e) => setTaslak({ ortam, kullaniciAdi: buTaslak.kullaniciAdi, sifre: e.target.value })}
+                autoComplete="new-password"
+                placeholder={kayitli?.sifreVar ? "•••••••• (kayıtlı)" : "HepsiJet şifresi"}
+              />
+            </div>
+            <Button type="submit" size="sm" disabled={kaydet.isPending || !kullaniciAdi.trim() || !kaydedilmemis}>
+              {kaydet.isPending ? "Kaydediliyor…" : "Kaydet"}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Button
+        variant="outline"
+        className="w-full"
+        disabled={dene.isPending || !denenebilir}
+        onClick={() => dene.mutate()}
+      >
+        <PlugZap className={`h-4 w-4 mr-2 ${dene.isPending ? "animate-spin" : ""}`} />
+        {dene.isPending ? "Deneniyor…" : "Bağlantıyı Dene"}
+      </Button>
+
+      {sonuc && (
+        <Card className="border-green-500/40 bg-green-500/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <CardContent className="flex items-start gap-3 py-4">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-green-500 animate-in zoom-in-50 duration-300" />
+            <div className="min-w-0 text-sm">
+              <p className="font-semibold">Bağlandı{sonuc.ortam === "test" ? " (test ortamı)" : ""}</p>
+              {(sonuc.sirket || sonuc.sube) && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {[sonuc.sirket, sonuc.sube ? `Şube: ${sonuc.sube}` : null].filter(Boolean).join(" · ")}
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 // ───────────── Ana Sayfa ─────────────
 export default function ApiSettingsPage() {
   return (
@@ -806,6 +968,9 @@ export default function ApiSettingsPage() {
           <TabsTrigger value="hepsiburada">
             <Store className="h-3.5 w-3.5 mr-1.5" /> Hepsiburada
           </TabsTrigger>
+          <TabsTrigger value="hepsijet">
+            <Truck className="h-3.5 w-3.5 mr-1.5" /> HepsiJet
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="shopify">
@@ -816,6 +981,9 @@ export default function ApiSettingsPage() {
         </TabsContent>
         <TabsContent value="hepsiburada">
           <HepsiburadaTab />
+        </TabsContent>
+        <TabsContent value="hepsijet">
+          <HepsijetTab />
         </TabsContent>
       </Tabs>
     </div>
