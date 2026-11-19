@@ -85,6 +85,20 @@ export interface ShopifyOrder {
   delivered: boolean;
 }
 
+/** Kargo oluşturma ekranı için sipariş özeti (teslimat adresi müşterinin yazdığı ham hâliyle). */
+export interface ShopifyKargoBilgisi {
+  id: string;
+  ad: string;
+  iptal: boolean;
+  adres: {
+    ad: string | null; soyad: string | null; address1: string | null; address2: string | null;
+    city: string | null; province: string | null; zip: string | null; phone: string | null;
+  } | null;
+  /** Gönderim açılabilecek emirler (boşsa sipariş zaten gönderilmiş / iptal). */
+  acikGonderimEmirleri: string[];
+  gonderimler: { id: string; takipNo: string | null; teslimEdildi: boolean }[];
+}
+
 /** Client ID/Secret tanımlı değilken fırlatılır — UI "kimlik bilgileri gerekli" gösterir. */
 export class ShopifyAdminTokenMissingError extends Error {
   constructor() {
@@ -628,4 +642,132 @@ export class ShopifyClient {
       };
     });
   }
+
+  // ── KARGO (gönderim) ────────────────────────────────────────────────────────────────────
+  // Berke'nin panelde elle yaptığının aynısı (19 Kas 2026, canlı kayıtlardan doğrulandı):
+  // "Gönderildi olarak işaretle" = fulfillmentCreate (takip no + bağlantı, kargo şirketi "Diğer"
+  // → API'de "Other", müşteriye bildir açık); "Teslim edildi" = DELIVERED gönderim olayı.
+  // ⚠️ Bunlar uygulamanın Shopify'a YAZDIĞI tek yer — yalnız kullanıcı onayladığı kargo için.
+  // ⚠️ Kişisel veri: adres döner ama hiçbir yerde günlüğe yazılmaz.
+
+  /** Kargo oluşturmak için: teslimat adresi + açılabilecek gönderim emirleri (yalnız okuma). */
+  async kargoBilgisi(siparisId: string): Promise<ShopifyKargoBilgisi | null> {
+    const yanit = await this.adminGraphql<{
+      data?: {
+        order: {
+          id: string;
+          name: string;
+          cancelledAt: string | null;
+          shippingAddress: {
+            firstName: string | null; lastName: string | null; address1: string | null; address2: string | null;
+            city: string | null; province: string | null; zip: string | null; phone: string | null;
+          } | null;
+          fulfillmentOrders: { nodes: Array<{ id: string; supportedActions: Array<{ action: string }> }> };
+          fulfillments: Array<{ id: string; status: string | null; displayStatus: string | null; trackingInfo: Array<{ number: string | null }> | null }>;
+        } | null;
+      };
+    }>(
+      `query KargoBilgisi($id: ID!) {
+        order(id: $id) {
+          id name cancelledAt
+          shippingAddress { firstName lastName address1 address2 city province zip phone }
+          fulfillmentOrders(first: 10) { nodes { id supportedActions { action } } }
+          fulfillments(first: 10) { id status displayStatus trackingInfo { number } }
+        }
+      }`,
+      { id: siparisId }
+    );
+    const o = yanit.data?.order;
+    if (!o) return null;
+    const a = o.shippingAddress;
+    return {
+      id: o.id,
+      ad: o.name,
+      iptal: o.cancelledAt != null,
+      adres: a
+        ? {
+            ad: a.firstName, soyad: a.lastName, address1: a.address1, address2: a.address2,
+            city: a.city, province: a.province, zip: a.zip, phone: a.phone,
+          }
+        : null,
+      acikGonderimEmirleri: o.fulfillmentOrders.nodes
+        .filter((n) => n.supportedActions.some((x) => x.action === "CREATE_FULFILLMENT"))
+        .map((n) => n.id),
+      gonderimler: (o.fulfillments ?? [])
+        .filter((f) => f.status !== "CANCELLED")
+        .map((f) => ({
+          id: f.id,
+          takipNo: f.trackingInfo?.[0]?.number ?? null,
+          teslimEdildi: f.displayStatus === "DELIVERED",
+        })),
+    };
+  }
+
+  /** "Gönderildi olarak işaretle": gönderimi takip numarasıyla aç. Dönen: gönderim kimliği. */
+  async gonderimAc(girdi: {
+    gonderimEmirleri: string[];
+    takipNo: string;
+    takipUrl: string;
+    musteriyeBildir: boolean;
+  }): Promise<string> {
+    if (girdi.gonderimEmirleri.length === 0) throw new Error("Bu siparişte gönderilecek ürün kalmamış.");
+    const yanit = await this.adminGraphql<{
+      data?: {
+        fulfillmentCreate: {
+          fulfillment: { id: string } | null;
+          userErrors: Array<{ message: string }>;
+        } | null;
+      };
+    }>(
+      `mutation GonderimAc($fulfillment: FulfillmentInput!) {
+        fulfillmentCreate(fulfillment: $fulfillment) {
+          fulfillment { id }
+          userErrors { field message }
+        }
+      }`,
+      {
+        fulfillment: {
+          lineItemsByFulfillmentOrder: girdi.gonderimEmirleri.map((id) => ({ fulfillmentOrderId: id })),
+          notifyCustomer: girdi.musteriyeBildir,
+          trackingInfo: { number: girdi.takipNo, url: girdi.takipUrl, company: "Other" },
+        },
+      }
+    );
+    const sonuc = yanit.data?.fulfillmentCreate;
+    const hata = sonuc?.userErrors?.[0]?.message;
+    if (hata || !sonuc?.fulfillment?.id) {
+      throw new Error(`Shopify gönderimi açmadı${hata ? `: ${hata}` : "."}`);
+    }
+    return sonuc.fulfillment.id;
+  }
+
+  /** "Teslim edildi olarak işaretle": gönderime DELIVERED olayı ekler. */
+  async teslimEdildiIsaretle(gonderimId: string, zaman: Date = new Date()): Promise<void> {
+    const yanit = await this.adminGraphql<{
+      data?: {
+        fulfillmentEventCreate: {
+          fulfillmentEvent: { id: string } | null;
+          userErrors: Array<{ message: string }>;
+        } | null;
+      };
+    }>(
+      `mutation TeslimEdildi($olay: FulfillmentEventInput!) {
+        fulfillmentEventCreate(fulfillmentEvent: $olay) {
+          fulfillmentEvent { id status }
+          userErrors { field message }
+        }
+      }`,
+      { olay: { fulfillmentId: gonderimId, status: "DELIVERED", happenedAt: zaman.toISOString() } }
+    );
+    const sonuc = yanit.data?.fulfillmentEventCreate;
+    const hata = sonuc?.userErrors?.[0]?.message;
+    if (hata || !sonuc?.fulfillmentEvent?.id) {
+      throw new Error(`Shopify teslim işaretini kaydetmedi${hata ? `: ${hata}` : "."}`);
+    }
+  }
+}
+
+/** HepsiJet'in herkese açık takip sayfası — Berke'nin Shopify'a elle yazdığı bağlantı. */
+export function hepsijetTakipUrl(barkod: string): string {
+  return `https://hepsijet.com/gonderi-takibi/${encodeURIComponent(barkod)}`;
 }
