@@ -65,7 +65,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     // ?allVariants=1 → "Tüm varyantlara uygula" AÇIKKEN silme: aynı dosyayı (ortak r2Key/storedPath)
     // paylaşan TÜM varyant satırlarını sil (kullanıcı kutucuk seçiliyken hepsinden gitsin bekliyor).
     const allVariants = new URL(req.url).searchParams.get("allVariants") === "1";
-    const mf = await prisma.productModelFile.findUnique({ where: { id } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id }, omit: { thumbnail: true } });
     if (!mf) return NextResponse.json({ ok: true });
 
     if (allVariants && mf.r2Key) {

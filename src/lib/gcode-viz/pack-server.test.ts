@@ -27,7 +27,7 @@ vi.mock("@/lib/model-files", () => ({
   }),
 }));
 
-const { getVizPack, packCacheKey, vizPaketiCokBuyuk } = await import("./pack-server");
+const { getVizPack, packCacheKey, vizPaketiCokBuyuk, silinecekPaketler } = await import("./pack-server");
 const { decodeVizPack, ModelCokBuyukHatasi } = await import("./parse-gcode");
 
 function gcode(katman: number): string {
@@ -97,5 +97,44 @@ describe("sunucu paket üreticisi", () => {
     expect(h.indirme).toBe(0);
     await new Promise((r) => setTimeout(r, 20));
     expect(fs.existsSync(path.join(vizDir, `${key}.mlvz`))).toBe(false);
+  });
+});
+
+
+/**
+ * 19 Kas 2026: önbellek 40 dosyayla sınırlıydı ve son 3 günde 67 farklı dosya basılmıştı → yeniden
+ * basılan dosya baştan indirilip taranıyordu. Artık boyutla sınırlı; en yeni paketler hep kalır.
+ */
+describe("paket önbelleği boyutla budanır", () => {
+  const p = (ad: string, mb: number, zaman: number) => ({ ad, boyut: mb * 1024 * 1024, zaman });
+  it("sınırın altındayken hiçbir şey silinmez", () => {
+    expect(silinecekPaketler([p("a", 100, 1), p("b", 100, 2)], 600 * 1024 * 1024, 1)).toEqual([]);
+  });
+  it("sınır aşılınca EN ESKİLER silinir, en yeniler kalır", () => {
+    const paketler = [p("eski", 300, 1), p("orta", 300, 2), p("yeni", 300, 3)];
+    expect(silinecekPaketler(paketler, 600 * 1024 * 1024, 1)).toEqual(["eski"]);
+  });
+  it("boyut ne olursa olsun en yeni asgari sayıda paket tutulur", () => {
+    const paketler = [p("a", 500, 1), p("b", 500, 2), p("c", 500, 3)];
+    expect(silinecekPaketler(paketler, 100 * 1024 * 1024, 2)).toEqual(["a"]);
+  });
+});
+
+describe("ilk baskıda anahtar değişince paket yeniden taranmaz", () => {
+  it("içerik özeti sonradan kaydedilen dosyanın eski anahtarlı paketi yeni ada taşınır", async () => {
+    uc3mfYaz(6);
+    const ozet = h.mf!.contentMd5;
+    // İlk açılış: özet henüz yok → paket "file-…" anahtarıyla üretilir.
+    h.mf = { ...h.mf!, contentMd5: "" };
+    const ilk = await getVizPack("mf1");
+    expect(ilk.fromCache).toBe(false);
+    expect(h.indirme).toBe(1);
+    // İlk baskı özeti kaydetti → anahtar "md5-…"e döndü. Aynı dosya YENİDEN indirilip taranmamalı.
+    h.mf = { ...h.mf!, contentMd5: ozet };
+    const ikinci = await getVizPack("mf1");
+    expect(ikinci.fromCache).toBe(true);
+    expect(ikinci.cacheKey).toBe(packCacheKey(h.mf!));
+    expect(h.indirme).toBe(1);
+    expect(Buffer.from(ikinci.bytes).equals(Buffer.from(ilk.bytes))).toBe(true);
   });
 });

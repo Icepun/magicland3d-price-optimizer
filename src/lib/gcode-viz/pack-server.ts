@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { prisma } from "@/lib/prisma";
+import { processSingleton } from "@/core/printers/process-singleton";
 import { getUserDataDir } from "@/lib/storage";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import { zipDizini } from "@/lib/slicer-preview";
@@ -26,7 +27,15 @@ import { PACK_ANAHTAR_ETIKETI } from "./viz-pack";
 
 const CACHE_DIR_NAME = "viz-packs";
 const CHUNK = 4 * 1024 * 1024;
-const MAX_CACHE_FILES = 40;
+/**
+ * Paket önbelleği BOYUTLA sınırlanır (eskiden 40 dosya). 19 Kas 2026 ölçümü: klasörde tam 40 paket
+ * vardı ve hepsi son 2,2 günde kullanılmıştı; son 3 günde 67 farklı dosya basıldı → yeniden basılan
+ * dosya her seferinde baştan indirilip taranıyordu. Paketlerin ortalaması ~2,6 MB; 600 MB ≈ 230 paket.
+ * Çok büyük tek paket sınırı zaten AZAMI_PAKET_BAYT.
+ */
+const ONBELLEK_AZAMI_BAYT = 600 * 1024 * 1024;
+/** Boyut sınırına bakmadan en az bu kadar son paket tutulur. */
+const ONBELLEK_ASGARI_DOSYA = 40;
 /** Bundan büyük paket ne kartta ne telefonda rahat çizilir → "çok büyük" sayılır. */
 export const AZAMI_PAKET_BAYT = 40 * 1024 * 1024;
 
@@ -163,34 +172,63 @@ async function scanFileToPack(file: string, declaredSize: number): Promise<Uint8
   return scan3mfToPack(file, boyut);
 }
 
+/** Saf: hangi paketler silinmeli? (en eski önce; en yeni `asgari` dosya ve sınır içi kalanlar tutulur) */
+export function silinecekPaketler(
+  paketler: ReadonlyArray<{ ad: string; boyut: number; zaman: number }>,
+  azamiBayt: number,
+  asgari: number
+): string[] {
+  const yeniden = [...paketler].sort((a, b) => b.zaman - a.zaman);
+  let toplam = 0;
+  const sil: string[] = [];
+  yeniden.forEach((p, i) => {
+    toplam += p.boyut;
+    if (i >= asgari && toplam > azamiBayt) sil.push(p.ad);
+  });
+  return sil;
+}
+
 /** En eski paketleri sil (disk şişmesin). */
 function pruneCache(dir: string): void {
   try {
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".mlvz"));
-    if (files.length <= MAX_CACHE_FILES) return;
-    const rows = files
-      .map((f) => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
-      .sort((a, b) => a.t - b.t);
-    for (const r of rows.slice(0, rows.length - MAX_CACHE_FILES)) {
-      try { fs.unlinkSync(path.join(dir, r.f)); } catch { /* önemsiz */ }
+    const paketler = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".mlvz"))
+      .map((f) => {
+        const st = fs.statSync(path.join(dir, f));
+        return { ad: f, boyut: st.size, zaman: st.mtimeMs };
+      });
+    for (const ad of silinecekPaketler(paketler, ONBELLEK_AZAMI_BAYT, ONBELLEK_ASGARI_DOSYA)) {
+      try { fs.unlinkSync(path.join(dir, ad)); } catch { /* önemsiz */ }
     }
   } catch { /* budama kritik değil */ }
 }
 
 // Aynı dosya için eşzamanlı istekler tek taramada birleşir (aynı anda iki 178 MB taraması olmasın).
-const inflight = new Map<string, Promise<PackResult>>();
+// ⚠️ Süreç geneli ŞART: Next, telefon aktarıcısını (relay) ve kartın rotasını AYRI paketlere
+// derliyor; modül kapsamındaki harita iki kopya oluyor ve her yeni baskıda aynı dosya iki kez
+// indirilip taranıyordu (19 Kas 2026 denetimi: derleme çıktısında iki ayrı modül).
+const inflight = processSingleton("viz_paket_ucusta", () => new Map<string, Promise<PackResult>>());
 
 /** Model dosyasının görselleştirme paketini getir (diskte varsa oradan, yoksa üretip yazar). */
 export function getVizPack(modelFileId: string): Promise<PackResult> {
   const existing = inflight.get(modelFileId);
   if (existing) return existing;
   const job = (async (): Promise<PackResult> => {
-    const mf = await prisma.productModelFile.findUnique({ where: { id: modelFileId } });
+    // Önizleme görseli (ortalama 38 KB) burada kullanılmıyor — satırla birlikte çekilmesin.
+    const mf = await prisma.productModelFile.findUnique({ where: { id: modelFileId }, omit: { thumbnail: true } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
 
     const key = packCacheKey(mf);
     const dir = cacheDir();
     const out = path.join(dir, `${key}.mlvz`);
+    // İLK BASKIDA ANAHTAR DEĞİŞİYOR: dosyanın içerik özeti ilk baskıda kaydediliyor ve anahtar
+    // "file-<kimlik>-<boyut>"tan "md5-…"a dönüyor. Aynı dosyanın paketi eski anahtarla zaten
+    // üretildiyse yeniden taranmaz, yeni ada taşınır (kayıt kimliği aynı = içerik aynı).
+    if (mf.contentMd5 && !fs.existsSync(out)) {
+      const eski = path.join(dir, `${packCacheKey({ id: mf.id, sizeBytes: mf.sizeBytes })}.mlvz`);
+      if (eski !== out && fs.existsSync(eski)) await fs.promises.rename(eski, out).catch(() => {});
+    }
     // Önce "çok büyük" işareti: dosya indirilmez, taranmaz. (Aynı ada konmuş yer tutucu paket
     // de temizlenir — işaret varken paket asla doğru değildir.)
     if (fs.existsSync(buyukIsaretYolu(dir, key))) {

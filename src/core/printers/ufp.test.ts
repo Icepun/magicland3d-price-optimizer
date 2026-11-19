@@ -220,9 +220,23 @@ describe("U1'e aktarım (sahte Moonraker)", () => {
 
   it("Snapmaker dışı Moonraker yazıcısında dosya eskisi gibi ham ve tek seferde gider", async () => {
     const gcode = ornekGcode(300_000);
-    await moonrakerUploadAndPrint("127.0.0.1", port, gcode, "Parca-9f.gcode", {});
+    const sonuc = await moonrakerUploadAndPrint("127.0.0.1", port, gcode, "Parca-9f.gcode", {});
     expect(yuklemeler).toHaveLength(1);
     expect(yuklemeler[0]).toMatchObject({ ad: "Parca-9f.gcode", print: "true", bayt: gcode.length });
+    // Eşleme dosyaya yazılabildiği için "yazıcıda hazır" kısayoluna boyut bildirilmez.
+    expect(sonuc.yaziciBoyutu).toBeNull();
+  });
+
+  /**
+   * "Yazıcıda hazır" kısayolu (19 Kas 2026): U1'e giden dosya parça iptali komutlarıyla büyüyebiliyor;
+   * kısayol yazıcıdaki dosyayı ÖZGÜN boyutla karşılaştırdığı için hiç tutmuyordu. Yükleme artık
+   * yazıcıdaki dosyanın GERÇEK boyutunu bildiriyor — sıkıştırılarak gittiyse yazıcının açtığı boyut.
+   */
+  it("U1'de yazıcıdaki dosyanın gerçek boyutu bildirilir (sıkıştırılmış gitse de)", async () => {
+    const gcode = ornekGcode(2 * 1024 * 1024);
+    const sonuc = await moonrakerUploadAndPrint("127.0.0.1", port, gcode, "Vazo-1a2b3c.gcode", { brand: "Snapmaker" });
+    expect(yuklemeler[0].ad).toBe("Vazo-1a2b3c.ufp");
+    expect(sonuc.yaziciBoyutu).toBe(kart.get("Vazo-1a2b3c.gcode")?.length);
   });
 
   it("MLHUB_UFP=0 sıkıştırmayı kapatır", async () => {

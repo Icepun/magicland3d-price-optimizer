@@ -138,6 +138,38 @@ function sayiOku(satir: string, harf: string): number | null {
  * dönüştürülmüş bir dosyayı yazıcıya göndermekten iyidir.
  */
 export function excludeObjectEkle(buf: Buffer): { cikti: Buffer; parcalar: ParcaKutu[] } | null {
+  const tarayici = excludeObjectTara(buf);
+  let adim = tarayici.next();
+  while (!adim.done) adim = tarayici.next();
+  return adim.value;
+}
+
+/**
+ * `excludeObjectEkle`'nin AYNISI, ama büyük dosyada ana iş parçacığını kilitlemez.
+ *
+ * NEDEN (19 Kas 2026 denetimi): sunucu Electron'un ana sürecinde çalışıyor; 211 MB'lık G-code'da
+ * tek parça ~1,8 sn donma = o sırada bütün API yanıtları ve pencere komutları bekliyordu (ölçüm:
+ * 81 MB ≈ 700 ms). Her ~8 MB'ta bir olay döngüsüne nefes aldırılır. Mantık ortak üreteçte — çıktı
+ * eşzamanlı sürümle birebir aynı (testli).
+ */
+export async function excludeObjectEkleAsync(
+  buf: Buffer,
+  nefesBayt = 8 * 1024 * 1024
+): Promise<{ cikti: Buffer; parcalar: ParcaKutu[] } | null> {
+  const tarayici = excludeObjectTara(buf, nefesBayt);
+  let adim = tarayici.next();
+  while (!adim.done) {
+    await new Promise<void>((r) => setImmediate(r));
+    adim = tarayici.next();
+  }
+  return adim.value;
+}
+
+/** Ortak gövde: her `nefesBayt`'ta bir `yield` eder (eşzamanlı sürüm bunu yok sayar). */
+function* excludeObjectTara(
+  buf: Buffer,
+  nefesBayt = Number.POSITIVE_INFINITY
+): Generator<void, { cikti: Buffer; parcalar: ParcaKutu[] } | null, void> {
   if (excludeObjectKomutuVar(buf)) return null;
   if (!buf.includes(BAS_YORUM)) return null;
 
@@ -149,7 +181,12 @@ export function excludeObjectEkle(buf: Buffer): { cikti: Buffer; parcalar: Parca
   let aktif: ParcaKutu | null = null;
 
   let satirBas = 0;
+  let sonrakiNefes = nefesBayt;
   while (satirBas < buf.length) {
+    if (satirBas >= sonrakiNefes) {
+      sonrakiNefes = satirBas + nefesBayt;
+      yield;
+    }
     let satirSon = buf.indexOf(NL, satirBas);
     if (satirSon < 0) satirSon = buf.length;
     const ilk = buf[satirBas];

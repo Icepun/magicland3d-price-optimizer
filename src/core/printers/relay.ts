@@ -19,6 +19,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { resolveModelFileLocal } from "@/lib/model-files";
 import {
   moonrakerControl, moonrakerUploadAndPrint, moonrakerExcludeObject, fetchMoonrakerObjects,
+  moonrakerFileSize, moonrakerStartExisting,
   type MoonrakerMeta, type MoonrakerState,
 } from "./moonraker";
 import { bambuControl, bambuSkipObjects, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
@@ -42,7 +43,10 @@ import {
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
 import { pushToAllDevices } from "@/lib/push-notify";
-import { yarimKalanAktarimlariBildir } from "@/lib/print-transfer";
+import { baskiAktarimiBaslat, yarimKalanAktarimlariBildir } from "@/lib/print-transfer";
+import { buildSignedUploadName } from "@/lib/print-file-signature";
+import { yuklenenBoyutOku, yuklenenBoyutYaz } from "@/lib/yuklenen-boyut";
+import crypto from "node:crypto";
 import { dbEpochMs, toDbDate } from "@/lib/sqlite-date";
 import { sameFamily } from "./printer-family";
 import { startKameraAktarici } from "./camera-relay";
@@ -433,7 +437,7 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
   if (cmd.action === "start") {
     if (!cmd.modelFileId) throw new Error("Model dosyası belirtilmedi");
     if (c.type !== "moonraker") throw new Error("Bambu'da uzaktan baskı başlatma henüz desteklenmiyor");
-    const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId }, omit: { thumbnail: true } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
     // Dosya bu yazıcı ya da AYNI AİLEDEN bir yazıcı için yüklenmiş olmalı (iki U1 aynı dosyayı
     // basar). Eskiden hiç bakılmıyordu: telefondan gelen komut her dosyayı her yazıcıya gönderebilirdi.
@@ -452,25 +456,56 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
     // KİLİT: masaüstü print rotasıyla AYNI yazıcı-başına kilit — telefon + masaüstü aynı anda
     // başlatırsa ikincisi net "meşgul" hatası alır (çift upload/start yarışı yok).
     if (!tryAcquirePrintLock(c.id)) throw new Error("Yazıcıda şu an başka bir baskı başlatılıyor");
+    /**
+     * Masaüstü baskı rotasıyla AYNI korumalar (19 Kas 2026 denetimi — telefondan başlatma bunları
+     * atlıyordu): gönderim sürerken uyku/güncelleme engeli, baskı günlüğü ve başarısızlıkta kalıcı
+     * "Baskı başlamadı" bildirimi; dosya İÇERİK İMZALI adla yüklenir (kart dosyayı tanır, sonraki
+     * baskılarda "yazıcıda hazır" kısayolu çalışır).
+     */
+    const aktarimBitti = baskiAktarimiBaslat({ printerId: c.id, printerName: c.name, label: mf.originalName, fileId: mf.id });
+    let eslesmeAdi = mf.originalName;
     try {
-      const local = await resolveModelFileLocal(mf);
-      try {
-        // async oku — readFileSync büyük gcode'da (100MB+) Electron ana event-loop'unu donduruyordu.
-        const buf = await fs.promises.readFile(local.path);
-        // brand ŞART: Snapmaker U1 native WITH_PARAMETERS akışına girmezse print_task_config boş
-        // kalır → sahte "filament runout" (id=523), nozzle ısınmaz. (Eski çağrı brand'siz →
-        // telefondan U1'e her "Tekrar bas" bu hataya çakılıyordu.)
-        await moonrakerUploadAndPrint(c.host, c.port, buf, mf.originalName, { brand: c.brand });
-      } finally {
-        local.cleanup();
+      // YAZICIDA HAZIR MI? (masaüstüyle aynı kimlik: imzalı ad + birebir boyut) → indirme/yükleme yok.
+      let hazir = false;
+      if (mf.contentMd5) {
+        const upName = buildSignedUploadName(mf.originalName, mf.contentMd5);
+        const boyut = await moonrakerFileSize(c.host, c.port, upName).catch(() => null);
+        const yuklenmis = boyut != null && boyut !== mf.sizeBytes ? await yuklenenBoyutOku(upName) : null;
+        if (boyut != null && (boyut === mf.sizeBytes || boyut === yuklenmis)) {
+          await moonrakerStartExisting(c.host, c.port, upName, c.brand ?? undefined);
+          eslesmeAdi = upName.replace(/\.[^.]+$/, "");
+          hazir = true;
+        }
       }
+      if (!hazir) {
+        const local = await resolveModelFileLocal(mf);
+        try {
+          // async oku — readFileSync büyük gcode'da (100MB+) Electron ana event-loop'unu donduruyordu.
+          const buf = await fs.promises.readFile(local.path);
+          const upName = buildSignedUploadName(mf.originalName, crypto.createHash("md5").update(buf).digest("hex"));
+          // brand ŞART: Snapmaker U1 native WITH_PARAMETERS akışına girmezse print_task_config boş
+          // kalır → sahte "filament runout" (id=523), nozzle ısınmaz. (Eski çağrı brand'siz →
+          // telefondan U1'e her "Tekrar bas" bu hataya çakılıyordu.)
+          const yukleme = await moonrakerUploadAndPrint(c.host, c.port, buf, upName, { brand: c.brand });
+          eslesmeAdi = upName.replace(/\.[^.]+$/, "");
+          if (yukleme.yaziciBoyutu != null && yukleme.yaziciBoyutu !== buf.length) {
+            void yuklenenBoyutYaz(upName, yukleme.yaziciBoyutu);
+          }
+        } finally {
+          local.cleanup();
+        }
+      }
+      await aktarimBitti({ ok: true }).catch(() => {});
+    } catch (e) {
+      await aktarimBitti({ ok: false, sebep: e instanceof Error ? e.message : String(e) }).catch(() => {});
+      throw e;
     } finally {
       releasePrintLock(c.id);
     }
     try {
       await prisma.printFileProduct.upsert({
-        where: { printerConfigId_filename: { printerConfigId: c.id, filename: mf.originalName } },
-        create: { printerConfigId: c.id, filename: mf.originalName, productId: mf.productId },
+        where: { printerConfigId_filename: { printerConfigId: c.id, filename: eslesmeAdi } },
+        create: { printerConfigId: c.id, filename: eslesmeAdi, productId: mf.productId },
         update: { productId: mf.productId },
       });
       invalidatePrintFileMatches(); // panel yeni eşleşmeyi 30sn TTL beklemeden görsün

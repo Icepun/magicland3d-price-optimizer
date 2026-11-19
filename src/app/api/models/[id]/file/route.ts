@@ -15,7 +15,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const mf = await prisma.productModelFile.findUnique({ where: { id } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id }, omit: { thumbnail: true } });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
 
     let buf: Buffer | null = null;

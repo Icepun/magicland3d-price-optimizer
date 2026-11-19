@@ -8,6 +8,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, getObjectBytesWithProgress, type R2Config } from "@/lib/r2";
 import { moonrakerUploadAndPrint, moonrakerStartExisting, moonrakerFileSize, moonrakerBaslangictaAtla } from "@/core/printers/moonraker";
+import { yuklenenBoyutOku, yuklenenBoyutYaz } from "@/lib/yuklenen-boyut";
 import { bambuUploadAndPrint, bambuStartExisting, bambuRemoteFileSize, getBambuStatus, getBambuAmsDurumu, mapBambuState, bambuRaporBekle, bambuBaslangictaAtla } from "@/core/printers/bambu";
 import { amsKarari } from "@/core/printers/ams-karari";
 import { readModelColors, is3mfSliced, readBambuPrintMeta, readModelMeta } from "@/core/printers/model-colors";
@@ -169,7 +170,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                 }
               } else {
                 const size = await moonrakerFileSize(printer.host, printer.port, upName);
-                if (size != null && size === mf.sizeBytes) {
+                // U1'e giden dosyaya parça iptali komutları ekleniyor (~%0,9 büyür): özgün boyut
+                // tutmaz. Bu adla daha önce yüklenen dosyanın gerçek boyutu da kabul edilir.
+                const yuklenmis = size != null && size !== mf.sizeBytes ? await yuklenenBoyutOku(upName) : null;
+                if (size != null && (size === mf.sizeBytes || size === yuklenmis)) {
                   send({ stage: "upload", pct: 100, cached: true });
                   await moonrakerStartExisting(printer.host, printer.port, upName, printer.brand ?? undefined, prefs, amsMapping);
                   matchFilename = upName.replace(/\.[^.]+$/, "");
@@ -294,7 +298,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               matchFilename = r.matchName; // yazıcının raporlayacağı subtask_name = eşleştirme anahtarı
             } else {
               // Snapmaker: kafa seçimi native MAP_TABLE ile; Elegoo: atomik print=true. Gerçek % raporlanır.
-              await moonrakerUploadAndPrint(printer.host, printer.port, buf, upName, {
+              const yukleme = await moonrakerUploadAndPrint(printer.host, printer.port, buf, upName, {
                 headMapping: amsMapping, prefs, brand: printer.brand,
                 // U1: dosya önce sıkıştırılır (~3 kat az veri) — bu aşamanın da gerçek yüzdesi var.
                 onPack: (pct) => send({ stage: "pack", pct }),
@@ -303,6 +307,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                 onRetry: (deneme, toplam) => send({ stage: "upload", pct: 0, retry: deneme, of: toplam }),
               });
               matchFilename = upName.replace(/\.[^.]+$/, "");
+              // Sonraki baskıda "yazıcıda hazır" kısayolu bu boyutu tanısın (beklenmez).
+              if (yukleme.yaziciBoyutu != null && yukleme.yaziciBoyutu !== buf.length) {
+                void yuklenenBoyutYaz(upName, yukleme.yaziciBoyutu);
+              }
             }
 
             // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa çıkar.

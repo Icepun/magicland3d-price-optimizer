@@ -20,7 +20,7 @@
 import { processSingleton } from "./process-singleton";
 import { klipperMesajiCevir } from "../yazici-uyari";
 import { timelapseKapakSec } from "./timelapse-name";
-import { excludeObjectEkle, klipperParamKacisla } from "./exclude-object";
+import { excludeObjectEkleAsync, klipperParamKacisla } from "./exclude-object";
 // Kaçışlama `exclude-object.ts`e taşındı (dosya üretimi de aynı kuralı kullanıyor);
 // eski içe aktarmalar kırılmasın diye buradan yeniden dışa açılıyor.
 export { klipperParamKacisla } from "./exclude-object";
@@ -1411,7 +1411,7 @@ export async function moonrakerUploadAndPrint(
     /** Aktarım koptu ve yeniden deneniyor (deneme no, toplam). */
     onRetry?: (deneme: number, toplam: number) => void;
   } = {}
-): Promise<void> {
+): Promise<{ yaziciBoyutu: number | null }> {
   const isSnapmaker = (opts.brand || "").toLowerCase() === "snapmaker";
   // Yüklemeden ÖNCE boşta-kontrolü — meşgul yazıcıya upload etmek boşa bant genişliği + Elegoo'da
   // (print=true) sessizce basmayan sahte-başarı üretiyordu.
@@ -1449,7 +1449,8 @@ export async function moonrakerUploadAndPrint(
    */
   if (isGcode) {
     try {
-      const eklendi = excludeObjectEkle(body);
+      // Eşzamansız sürüm: büyük dosyada ana süreç saniyelerce kilitlenmesin (çıktı aynı).
+      const eklendi = await excludeObjectEkleAsync(body);
       if (eklendi) body = eklendi.cikti;
     } catch {
       // Dönüşüm başarısızsa ÖZGÜN dosya gönderilir — baskıyı riske atmaktansa özellik kapalı kalsın.
@@ -1508,7 +1509,7 @@ export async function moonrakerUploadAndPrint(
       const st = await yaziciAgaDonsun(host, port);
       if (!st) throw e;
       // Elegoo (print=true) kopuşa rağmen dosyayı alıp basmaya başlamış olabilir: tekrar gönderme.
-      if (!isSnapmaker && (st.state === "printing" || st.state === "paused") && st.filename === filename) return;
+      if (!isSnapmaker && (st.state === "printing" || st.state === "paused") && st.filename === filename) return { yaziciBoyutu: null };
       if (st.state === "printing" || st.state === "paused") throw e;
       opts.onProgress?.(0);
     }
@@ -1519,7 +1520,9 @@ export async function moonrakerUploadAndPrint(
     if (uploadResp && (uploadResp as { print_started?: boolean }).print_started === false) {
       throw new Error("Yazıcı dosyayı aldı ama baskıyı başlatmadı — ekranından hazır olduğunu kontrol et.");
     }
-    return;
+    // Snapmaker dışında araç eşlemesi DOSYAYA yazılıyor olabilir → yazıcıdaki dosya o eşlemeye özel;
+    // "yazıcıda hazır" kısayolu için boyutu bildirmiyoruz (yanlış eşlemeyle başlatmasın).
+    return { yaziciBoyutu: null };
   }
 
   // Snapmaker: native start_print_advanced replikası → print_task_config dolar, sahte runout önlenir.
@@ -1530,6 +1533,9 @@ export async function moonrakerUploadAndPrint(
   }
   // toolMap geçilir → metadata dizileri (filament_type/nozzle_temp/…) fiziksel kafalara hizalanır.
   await moonrakerGcodeScript(host, port, buildSnapmakerStartScript(filename, meta, opts.prefs, activeToolMap));
+  // Yazıcıdaki dosya = parça iptali komutları eklenmiş G-code (sıkıştırılmış gittiyse yazıcı açar).
+  // Kafa eşlemesi dosyada DEĞİL başlatma komutunda → bu boyut her eşlemede aynı dosyayı gösterir.
+  return { yaziciBoyutu: body.length };
 }
 
 export async function moonrakerFiles(host: string, port: number): Promise<MoonrakerFile[]> {
