@@ -330,20 +330,41 @@ export default function PrintersPage() {
    * kısa aralıklarla birkaç kez deneniyor.
    */
   const oncekiDurum = useRef<Map<string, string>>(new Map());
+  // Yeniden deneme zamanlayıcıları ETKİNİN DIŞINDA tutulur. Eskiden etkinin temizliği onları
+  // siliyordu; etki her yoklamada (`data` değişince) yeniden çalıştığı için başka bir yazıcı
+  // basarken 2 sn içinde üçü de iptal oluyor, geriye çoğu zaman boş dönen ilk deneme kalıyordu.
+  const timelapseZamanlayicilari = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  useEffect(() => {
+    const kume = timelapseZamanlayicilari.current;
+    return () => {
+      for (const z of kume) clearTimeout(z);
+      kume.clear();
+    };
+  }, []);
   useEffect(() => {
     const liste = data?.printers ?? [];
-    const zamanlayicilar: ReturnType<typeof setTimeout>[] = [];
     for (const p of liste) {
       const onceki = oncekiDurum.current.get(p.id);
       oncekiDurum.current.set(p.id, p.status);
+      // Depolama şeridi baskı BAŞLAYINCA (dosya yazıcıya yüklendi) ve BİTİNCE (kamera kaydı)
+      // değişir. Eskiden sayfa açılışında bir kez okunuyor, gün boyu sabahki değeri gösteriyordu.
+      const basladi = onceki !== undefined && onceki !== "printing" && onceki !== "paused" && p.status === "printing";
+      if (basladi || baskiYeniBittiMi(onceki, p.status)) {
+        void qc.invalidateQueries({ queryKey: ["printer-storage", p.id] });
+      }
       if (!baskiYeniBittiMi(onceki, p.status)) continue;
       // Şerit ekranda MONTELİ olduğu için `invalidateQueries` onu yeniden çeker
       // (pasif sorguda `removeQueries` gerekirdi — bkz. fiyat önbelleği dersi).
       const tazele = () => qc.invalidateQueries({ queryKey: ["timelapse", p.id] });
       tazele();
-      for (const gecikme of [8_000, 30_000, 90_000]) zamanlayicilar.push(setTimeout(tazele, gecikme));
+      for (const gecikme of [8_000, 30_000, 90_000]) {
+        const z = setTimeout(() => {
+          timelapseZamanlayicilari.current.delete(z);
+          void tazele();
+        }, gecikme);
+        timelapseZamanlayicilari.current.add(z);
+      }
     }
-    return () => { for (const z of zamanlayicilar) clearTimeout(z); };
   }, [data, qc]);
 
   const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
@@ -1379,7 +1400,7 @@ function PrinterCardInner({
               )}
 
               {/* KAMERA — yalnız gerçekten kamerası olan yazıcıda çizilir. */}
-              <CameraButton printerId={printer.id} printerName={printer.name} />
+              <CameraButton printerId={printer.id} printerName={printer.name} online={printer.online} />
 
               {/* FİLAMENT BOŞALT — U1'de yazıcı başında beklemeden (yalnız boştayken). */}
               {printer.brand === "snapmaker" && transport.canStart && (
@@ -1859,10 +1880,12 @@ function FilamentBosaltButton({ printerId, printerName, disabled }: { printerId:
   );
 }
 
-function CameraButton({ printerId, printerName }: { printerId: string; printerName: string }) {
+function CameraButton({ printerId, printerName, online }: { printerId: string; printerName: string; online: boolean }) {
   const [acik, setAcik] = useState(false);
   const { data, isLoading } = useQuery({
-    queryKey: ["camera-var", printerId],
+    // `online` anahtarda: sayfa açılırken kapalı olan yazıcı açılınca kamera yeniden sorulur.
+    // Eskiden tek sefer soruluyordu ve düğme gün boyu sönük kalabiliyordu.
+    queryKey: ["camera-var", printerId, online],
     queryFn: () => fetchJson<{ var: boolean; neden?: string | null }>(`/api/printers/${printerId}/camera?bilgi=1`),
     // Kamera var/yok bilgisi sık değişmez; yazıcıyı boşuna yormayalım.
     staleTime: 5 * 60_000,
@@ -2293,6 +2316,18 @@ function JobVisual({
    */
   const [ucHazirPaket, setUcHazirPaket] = useState<VizPack | null>(null);
   const [ucHataPaket, setUcHataPaket] = useState<VizPack | null>(null);
+  // Bağlam kaybı çoğu zaman GEÇİCİDİR (izleyici açılıp başka bağlamlar alındı). Eskiden o baskı
+  // bitene kadar kart düz resme kilitleniyordu; artık 30 sn sonra 3B bir kez daha denenir. Aynı
+  // paket ikinci kez düşerse resimde kalır (gerçekten WebGL yoksa döngüye girmesin).
+  const ucYenidenDenendi = useRef<VizPack | null>(null);
+  useEffect(() => {
+    if (!ucHataPaket || ucYenidenDenendi.current === ucHataPaket) return;
+    const t = setTimeout(() => {
+      ucYenidenDenendi.current = ucHataPaket;
+      setUcHataPaket(null);
+    }, 30_000);
+    return () => clearTimeout(t);
+  }, [ucHataPaket]);
   const ucAcik = useUcBoyutAcik();
   const ucGoster = ucAcik && !!uc && ucHataPaket !== uc.pack;
   const ucHazir = ucGoster && ucHazirPaket === uc?.pack;

@@ -343,3 +343,69 @@ describe("yavaş ve iptal olan sorgu ADIYLA kaydedilir", () => {
     expect(m.dbSorguOzeti()[0]).toMatchObject({ sql: "SELECT * FROM PrinterStatusSample", adet: 1, iptal: 0 });
   });
 });
+
+/**
+ * GÖVDE BEKÇİSİ (19 Kas 2026): zaman aşımı yanıt başlıkları gelince bitiyordu; gövde inerken
+ * soket ölürse istek dakikalarca asılı kalıyor ve kilit bütün sorguları bekletiyordu.
+ */
+describe("yanıt gövdesi yarıda kalırsa istek asılı kalmaz", () => {
+  /** Başlıkları hemen veren, gövdesini elle akıtan sahte yanıt. */
+  function akanYanit() {
+    let denetci!: ReadableStreamDefaultController<Uint8Array>;
+    const govde = new ReadableStream<Uint8Array>({ start(c) { denetci = c; } });
+    const yanit = new Response(govde, { status: 200, headers: { "content-type": "application/json" } });
+    const kodla = (s: string) => new TextEncoder().encode(s);
+    return { yanit, gonder: (s: string) => denetci.enqueue(kodla(s)), bitir: () => denetci.close() };
+  }
+
+  it("gövde hiç akmazsa okuyan taraf sessizlik süresi dolunca hata alır", async () => {
+    const { govdeBekcisi } = await import("./db-fetch-timeout");
+    const { yanit, gonder } = akanYanit();
+    gonder('{"yarim":');
+    const sarili = govdeBekcisi(yanit, new AbortController(), 60) as Response;
+    const bas = Date.now();
+    await expect(sarili.text()).rejects.toThrow(/yarıda kaldı/);
+    expect(Date.now() - bas).toBeLessThan(1_000);
+  });
+
+  it("yavaş ama AKAN gövde kesilmez (her parça sayacı sıfırlar)", async () => {
+    const { govdeBekcisi } = await import("./db-fetch-timeout");
+    const { yanit, gonder, bitir } = akanYanit();
+    const sarili = govdeBekcisi(yanit, new AbortController(), 80) as Response;
+    const okuma = sarili.json();
+    for (const parca of ['{"satir', 'lar":[1,', "2,3]}"]) {
+      await new Promise((r) => setTimeout(r, 50)); // her aralık sessizlik süresinden kısa, toplamı uzun
+      gonder(parca);
+    }
+    bitir();
+    expect(await okuma).toEqual({ satirlar: [1, 2, 3] });
+  });
+
+  it("sağlıklı yanıt durum, başlık ve içerik olarak aynen geçer", async () => {
+    const { withDbFetchTimeout } = await import("./db-fetch-timeout");
+    const sahte = async () => new Response('{"ok":true}', { status: 200, headers: { "x-ornek": "1" } });
+    const r = (await withDbFetchTimeout(sahte, 5_000)("https://ornek", { body: "SELECT 1" })) as Response;
+    expect(r.status).toBe(200);
+    expect(r.ok).toBe(true);
+    expect(r.headers.get("x-ornek")).toBe("1");
+    expect(await r.json()).toEqual({ ok: true });
+  });
+
+  it("gövdesiz yanıt ve yanıt olmayan değerler dokunulmadan döner", async () => {
+    const { govdeBekcisi } = await import("./db-fetch-timeout");
+    const bos = new Response(null, { status: 204 });
+    expect(govdeBekcisi(bos, new AbortController(), 50)).toBe(bos);
+    const duz = { ok: true };
+    expect(govdeBekcisi(duz, new AbortController(), 50)).toBe(duz);
+  });
+
+  it("okuyan taraf vazgeçerse (iptal) alttaki akış da bırakılır, sayaç kalmaz", async () => {
+    const { govdeBekcisi } = await import("./db-fetch-timeout");
+    let birakildi = false;
+    const govde = new ReadableStream<Uint8Array>({ pull() {}, cancel() { birakildi = true; } });
+    const sarili = govdeBekcisi(new Response(govde), new AbortController(), 40) as Response;
+    await sarili.body!.cancel("artık gerek yok");
+    expect(birakildi).toBe(true);
+    await new Promise((r) => setTimeout(r, 60)); // sayaç kaldıysa burada patlardı
+  });
+});

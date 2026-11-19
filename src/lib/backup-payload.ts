@@ -58,6 +58,41 @@ function makeRunner(sequential: boolean) {
   };
 }
 
+/** Önizleme görselleri bu kadarlık parçalarla okunur (~20 × 38 KB ≈ 0,8 MB / istek). */
+const GORSEL_PARCA = 20;
+
+/**
+ * Model dosyası kayıtları — İÇERİK AYNI, okuma PARÇALI.
+ *
+ * NEDEN (19 Kas 2026 denetimi): tablo tek sorguda okunuyordu; içinde 647 önizleme görseli var
+ * (24 MB). Tek istek yavaş ağda saniyelerce sürüyor ve o sırada aynı şeritteki her sorgu
+ * bekliyordu. Şimdi önce görselsiz kolonlar (küçük), sonra görseller 20'şerlik parçalarla, arka
+ * plan şeridinden okunur; parçalar arasında başka sorgular araya girebilir.
+ */
+export async function modelDosyalariniOku() {
+  const satirlar = await remotePrisma.productModelFile.findMany({ omit: { thumbnail: true } });
+  // `typeof()` görselin içeriğini OKUMAZ (bkz. lib/buyuk-kolon-sonda.ts).
+  const gorselliler = (
+    await remotePrisma.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT "id" FROM "ProductModelFile" WHERE typeof("thumbnail") = 'text'`
+    )
+  ).map((r) => String(r.id));
+  const gorseller = new Map<string, string | null>();
+  for (let i = 0; i < gorselliler.length; i += GORSEL_PARCA) {
+    const parca = await remotePrisma.productModelFile.findMany({
+      where: { id: { in: gorselliler.slice(i, i + GORSEL_PARCA) } },
+      select: { id: true, thumbnail: true },
+    });
+    for (const p of parca) gorseller.set(p.id, p.thumbnail);
+  }
+  return satirlar.map((satir) => ({
+    ...satir,
+    thumbnail: gorseller.has(satir.id)
+      ? (gorseller.get(satir.id) ?? null)
+      : ((satir as { thumbnail?: string | null }).thumbnail ?? null),
+  }));
+}
+
 /**
  * Uygulamanın taşınabilir verisini tek bir JSON gövdesi olarak üretir.
  * Fiziksel yerel model dosyaları gövdeye gömülmez; R2 kayıtlarında yalnız uzaktaki
@@ -115,7 +150,7 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     q(() => prisma.priceHistory.findMany()),
     q(() => prisma.printerConfig.findMany()),
     q(() => prisma.printFileProduct.findMany()),
-    q(() => prisma.productModelFile.findMany()),
+    q(() => modelDosyalariniOku()),
     // Ürün bazlı satış geçmişi. Yedeğe girmezse geri yükleme onu KALICI olarak siler ve
     // Üretim Planı'ndaki satış hızı / ölü stok boşalır (geri getirilemez).
     q(() =>

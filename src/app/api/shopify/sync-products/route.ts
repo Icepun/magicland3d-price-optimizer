@@ -1,3 +1,4 @@
+import { bustCache } from "@/lib/route-cache";
 import { randomUUID } from "node:crypto";
 import { batchWrite } from "@/lib/libsql-batch";
 import { bustProductCaches } from "@/lib/cache-busting";
@@ -276,6 +277,9 @@ export async function POST(req: NextRequest) {
     // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
     // (Bu olmadan "Yenile" bitiyor ama liste 2 dakika ESKİ fiyatı gösteriyordu.)
     bustProductCaches();
+    // "Son eşitleme" saati ayarlar ucunun önbelleğinde (settings:v1) duruyor; düşmezse API Ayarları
+    // bir dakika boyunca önceki saati gösteriyordu.
+    bustCache("settings:");
     return NextResponse.json({ mode, totalProducts: shopifyProducts.length, totalVariants, ...result });
   } catch (error) {
     return jsonError(error);

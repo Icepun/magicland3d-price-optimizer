@@ -6,6 +6,21 @@ contextBridge.exposeInMainWorld("trendyolPriceOptimizer", {
   platform: process.platform,
   // Pencere görünür mü (tepside / küçültülmüş / ekran kilitli değil)? Arayüz gizliyken
   // yoklamayı ve çizimi bununla durdurur.
+  // Bilgisayar uyandı: arayüz verilerini tazeler ve ana sürece "tamam" der. Demezse (donmuş /
+  // eski sayfa) ana süreç sayfayı baştan yükler.
+  uygulama: {
+    onUyanis: (callback) => {
+      const listener = () => {
+        try {
+          callback();
+        } finally {
+          ipcRenderer.send("app:uyanis-tamam");
+        }
+      };
+      ipcRenderer.on("app:uyanis", listener);
+      return () => ipcRenderer.removeListener("app:uyanis", listener);
+    },
+  },
   pencere: {
     gorunurMu: () => ipcRenderer.invoke("window:is-visible"),
     onGorunur: (callback) => {

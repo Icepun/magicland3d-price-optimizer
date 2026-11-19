@@ -177,6 +177,10 @@ export function MeshViewerDialog({ fileId, name, onClose, liveLayer, layerTotal,
       kontrol.dispose();
       sahne.serbestBirak();
       renderer.dispose();
+      // Bağlamı HEMEN bırak: `dispose()` GL bağlamını çöp toplamaya bırakıyor. Tarayıcı aynı anda
+      // ~16 bağlama izin veriyor; izleyici art arda açılınca en eski bağlam (bir yazıcı kartı)
+      // düşüyordu (günlükte 212 "Too many active WebGL contexts"). Kayıp dinleyicisi önce kalktı.
+      renderer.forceContextLoss();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
       sahneRef.current = null;
       rendererRef.current = null;

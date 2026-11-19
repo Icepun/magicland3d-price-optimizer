@@ -54,7 +54,8 @@ export function bustProfitInputCaches(): void {
 /** Yalnız ürün GÖRÜNÜMLERİ değişti (kâr/eşleşme etkilenmiyor) — ör. görsel, sıralama. */
 export function bustProductViewCaches(): void {
   // stok değiştiyse zildeki "stok kritik" uyarısı da tazelensin — hepsi tek taramada.
-  bustCaches(["products:", "dashboard:", "notifications-inventory:", "models:"]);
+  // Üretim Planı'nın yazıcı kuyruğu da stoğa göre hesaplanıyor (talep modu) — eski stokla kalmasın.
+  bustCaches(["products:", "dashboard:", "notifications-inventory:", "models:", "planner-queue:"]);
 }
 
 /**

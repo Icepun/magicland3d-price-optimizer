@@ -300,6 +300,24 @@ function extractNumericId(gid: string): number {
   return match ? Number(match[1]) : 0;
 }
 
+/** Tek bir Shopify isteğinin tavan süresi (yanıt gövdesi dahil). */
+const SHOPIFY_ZAMAN_ASIMI_MS = 30_000;
+
+/**
+ * Zaman aşımlı fetch. ZAMAN AŞIMI (19 Kas 2026 denetimi): Shopify isteklerinde hiç yoktu;
+ * yarı ölü bir soket sipariş hesabını ve sipariş taramasını dakikalarca kilitliyordu → yeni
+ * sipariş bildirimi gecikiyordu (Trendyol istemcisinde 20 sn vardı).
+ */
+async function shopifyFetch(url: string, init: RequestInit): Promise<Response> {
+  const sureSinyali = AbortSignal.timeout(SHOPIFY_ZAMAN_ASIMI_MS);
+  try {
+    return await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, sureSinyali]) : sureSinyali });
+  } catch (error) {
+    if (sureSinyali.aborted) throw new Error("Shopify 30 saniye içinde yanıt vermedi. Biraz sonra tekrar deneyin.");
+    throw error;
+  }
+}
+
 export class ShopifyClient {
   constructor(private credentials: ShopifyCredentials) {}
 
@@ -325,7 +343,7 @@ export class ShopifyClient {
   }
 
   private async graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-    const res = await fetch(this.endpoint(), {
+    const res = await shopifyFetch(this.endpoint(), {
       method: "POST",
       headers: {
         ...this.authHeaders(),
@@ -455,7 +473,7 @@ export class ShopifyClient {
     const cached = adminTokenCache.get(cacheKey);
     if (cached && Date.now() < cached.expiresAt - 60_000) return cached.token;
 
-    const res = await fetch(`https://${shopDomain}/admin/oauth/access_token`, {
+    const res = await shopifyFetch(`https://${shopDomain}/admin/oauth/access_token`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -518,7 +536,7 @@ export class ShopifyClient {
 
   private async adminGraphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
     const request = (token: string) =>
-      fetch(this.adminEndpoint(), {
+      shopifyFetch(this.adminEndpoint(), {
         method: "POST",
         headers: {
           "X-Shopify-Access-Token": token,

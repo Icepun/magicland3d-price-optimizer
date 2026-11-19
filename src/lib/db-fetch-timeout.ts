@@ -153,6 +153,76 @@ export function sorguBasi(govde: string | null | undefined): string | undefined 
   return metin.replace(/\s+/g, " ").trim().slice(0, SQL_BASI_UZUNLUK) || undefined;
 }
 
+/**
+ * Yanıt gövdesinde bu kadar süre HİÇ veri gelmezse istek kesilir. Toplam süre değil, sessizlik:
+ * büyük ama akan bir yanıt (yedek, 25 MB) kesilmez.
+ */
+export function dbGovdeSessizlikMs(): number {
+  return Math.max(5_000, Number(process.env.MLHUB_DB_BODY_IDLE_MS) || 15_000);
+}
+
+/** Gövdesi olamayan durum kodları — bunlarla `new Response(gövde)` kurulamaz. */
+const GOVDESIZ_DURUM = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * GÖVDE BEKÇİSİ — zaman aşımı yanıtın BAŞLIKLARI gelince bitiyordu; gövde indirilirken soket
+ * ölürse istek, çalışma ortamının sınırına kadar (dakikalarca) asılı kalıyor ve adaptörün
+ * kilidi o süre boyunca bütün sorguları bekletiyordu (19 Kas 2026 denetimi; panel günlüğünde
+ * 71 ve 167 saniyelik adımlar var). Gövde akarken her parçada sayaç sıfırlanır; sayaç dolarsa
+ * istek iptal edilir ve okuyan tarafa hata verilir.
+ *
+ * Bu aşamada YENİDEN DENEME YOK: yanıt çağırana çoktan teslim edildi. Okuma hatası sorguyu
+ * düşürür; çağıranın kendi yeniden deneme / sonraki tur mantığı devreye girer.
+ */
+export function govdeBekcisi(r: unknown, ctrl: AbortController, sessizlikMs: number): unknown {
+  if (typeof Response === "undefined" || !(r instanceof Response) || !r.body || GOVDESIZ_DURUM.has(r.status)) return r;
+  const okuyucu = r.body.getReader();
+  let zamanlayici: ReturnType<typeof setTimeout> | undefined;
+  let bitti = false;
+  const temizle = () => {
+    if (zamanlayici) clearTimeout(zamanlayici);
+    zamanlayici = undefined;
+  };
+  const govde = new ReadableStream<Uint8Array>({
+    async pull(denetci) {
+      temizle();
+      zamanlayici = setTimeout(() => {
+        if (bitti) return;
+        bitti = true;
+        try {
+          denetci.error(Object.assign(new Error("Veritabanı yanıtı yarıda kaldı."), { name: "AbortError" }));
+        } catch {
+          /* akış zaten kapanmış */
+        }
+        ctrl.abort();
+        okuyucu.cancel().catch(() => {});
+      }, sessizlikMs);
+      try {
+        const { done, value } = await okuyucu.read();
+        temizle();
+        if (bitti) return;
+        if (done) {
+          bitti = true;
+          denetci.close();
+        } else {
+          denetci.enqueue(value);
+        }
+      } catch (e) {
+        temizle();
+        if (bitti) return;
+        bitti = true;
+        denetci.error(e);
+      }
+    },
+    cancel(neden) {
+      temizle();
+      bitti = true;
+      return okuyucu.cancel(neden);
+    },
+  });
+  return new Response(govde, { status: r.status, statusText: r.statusText, headers: r.headers });
+}
+
 /** Teşhis için gövdeyi oku — asıl nesneyi tüketmez; okunamazsa null (ölçüm isteği asla düşürmez). */
 async function govdeOku(yedek: Request | null, init?: { body?: unknown }): Promise<string | null> {
   try {
@@ -230,7 +300,9 @@ export function withDbFetchTimeout(temel?: FetchLike, timeoutMs?: number): Fetch
       if (disSinyal.aborted) ctrl.abort();
       else disSinyal.addEventListener("abort", () => ctrl.abort(), { once: true });
     }
-    return alt(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+    return alt(input, { ...init, signal: ctrl.signal })
+      .then((r) => govdeBekcisi(r, ctrl, dbGovdeSessizlikMs()))
+      .finally(() => clearTimeout(timer));
   };
 
   return async (input, init) => {

@@ -124,10 +124,23 @@ function suranHesaplariGecersizKil(eslesir: (key: string) => boolean): void {
   }
 }
 
-export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<T>): Promise<T> {
+export interface SwrSecenek {
+  /**
+   * Bayat veri en çok bu yaşa kadar ANINDA verilir; daha eskiyse taze hesap BEKLENİR.
+   * Verilmezse sınır yok (ürün listesi, Panel gibi "eski de olsa hemen göster" ekranları).
+   *
+   * NEDEN (19 Kas 2026 denetimi): Üretim Planı'nın yazıcı kuyruğu diskten 8 günlük bir gövdeyle
+   * açılabiliyordu — eski stok, eski yazıcı durumu, çoktan geçmiş bitiş saatleri. Canlı duruma
+   * bağlı ekranlar için "dünkü kuyruk" hiç yoktan kötüdür.
+   */
+  bayatSiniriMs?: number;
+}
+
+export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<T>, secenek?: SwrSecenek): Promise<T> {
   loadDiskOnce(key);
   const now = Date.now();
-  const hit = store.get(key);
+  const kayit = store.get(key);
+  const hit = kayit && secenek?.bayatSiniriMs != null && now - kayit.at > secenek.bayatSiniriMs ? undefined : kayit;
 
   if (hit) {
     if (now - hit.at < ttlMs) return hit.data as T; // taze

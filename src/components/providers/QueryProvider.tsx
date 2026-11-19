@@ -44,6 +44,15 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  // Bilgisayar uyanınca sayfa silinmez; görünen bütün veriler arka planda tazelenir.
+  useEffect(() => {
+    const kopru = typeof window === "undefined" ? undefined : window.trendyolPriceOptimizer?.uygulama;
+    if (!kopru) return;
+    return kopru.onUyanis(() => {
+      void queryClient.invalidateQueries();
+    });
+  }, [queryClient]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <StartupSync />

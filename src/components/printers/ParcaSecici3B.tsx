@@ -269,6 +269,10 @@ export function ParcaSecici3B({
       tuval.removeEventListener("webglcontextlost", kayboldu);
       sahne.dispose();
       renderer.dispose();
+      // Bağlamı HEMEN bırak: `dispose()` GL bağlamını çöp toplamaya bırakıyor. Tarayıcı aynı anda
+      // ~16 bağlama izin veriyor; izleyici art arda açılınca en eski bağlam (bir yazıcı kartı)
+      // düşüyordu (günlükte 212 "Too many active WebGL contexts"). Kayıp dinleyicisi önce kalktı.
+      renderer.forceContextLoss();
       if (tuval.parentNode === kutu) kutu.removeChild(tuval);
       sahneRef.current = null;
     };

@@ -25,6 +25,9 @@ declare global {
   interface Window {
     trendyolPriceOptimizer?: {
       platform: NodeJS.Platform;
+      uygulama?: {
+        onUyanis: (callback: () => void) => () => void;
+      };
       pencere?: {
         gorunurMu: () => Promise<boolean>;
         onGorunur: (callback: (gorunur: boolean) => void) => () => void;

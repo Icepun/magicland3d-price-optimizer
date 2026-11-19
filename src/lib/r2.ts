@@ -95,6 +95,11 @@ function yeniIstemci(cfg: R2Config): S3Client {
     requestChecksumCalculation: "WHEN_REQUIRED",
     responseChecksumValidation: "WHEN_REQUIRED",
     credentials: { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey },
+    // ZAMAN AŞIMI (19 Kas 2026 denetimi): hiç yoktu. Uyku/uyanma ya da ağ değişiminde ölü kalan
+    // bir soket, baskı başlatmayı (yazıcı kilidi + uyku engeli) ve relay turunu süresiz
+    // kilitleyebiliyordu. TOPLAM süre sınırı BİLEREK yok — 200 MB'lık dosya yavaş ağda uzun
+    // sürebilir; yalnız bağlantı kurulamazsa ya da veri akışı 30 sn durursa kesilir.
+    requestHandler: { connectionTimeout: 10_000, socketTimeout: 30_000 },
   });
 }
 

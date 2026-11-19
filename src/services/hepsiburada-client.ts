@@ -103,6 +103,9 @@ const HB_ORDER_DETAIL_CACHE_MAX = 4000;
 const HB_ORDER_DETAIL_CACHE_TTL_MS = 30 * 60_000;
 const hbOrderDetailCache = new Map<string, { at: number; detail: unknown }>();
 
+/** Tek bir Hepsiburada isteğinin tavan süresi (yanıt gövdesi dahil). */
+const HB_ZAMAN_ASIMI_MS = 30_000;
+
 export class HepsiburadaClient {
   private readonly hosts: ReturnType<typeof hepsiburadaHosts>;
   /** Denenmiş iptal/iade yolları: yol = çalışan aday, null = hiçbiri yok (bir daha deneme). */
@@ -147,11 +150,25 @@ export class HepsiburadaClient {
   }
 
   private async request<T>(url: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(url, {
-      ...init,
-      cache: "no-store",
-      headers: { ...this.headers(), ...(init?.headers ?? {}) },
-    });
+    // ZAMAN AŞIMI (19 Kas 2026 denetimi): hiç yoktu. Yarı ölü bir soket sipariş hesabını ve
+    // sipariş taramasını dakikalarca kilitliyordu → yeni sipariş bildirimi gecikiyordu.
+    // Trendyol istemcisiyle aynı kalıp; çağıranın kendi sinyali (ör. etiket) korunur.
+    const sureSinyali = AbortSignal.timeout(HB_ZAMAN_ASIMI_MS);
+    const signal = init?.signal ? AbortSignal.any([init.signal, sureSinyali]) : sureSinyali;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        signal,
+        cache: "no-store",
+        headers: { ...this.headers(), ...(init?.headers ?? {}) },
+      });
+    } catch (error) {
+      if (sureSinyali.aborted) {
+        throw new HepsiburadaApiError(408, "Hepsiburada 30 saniye içinde yanıt vermedi. Biraz sonra tekrar deneyin.", null);
+      }
+      throw error;
+    }
     const text = await res.text();
     const body = this.parseBody(text);
     if (!res.ok) {

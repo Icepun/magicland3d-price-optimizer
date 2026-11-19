@@ -162,7 +162,8 @@ export function snapmakerKameraAkisi(
   const kareCek = async () => {
     if (kapandi) return;
     try {
-      const r = await fetch(kareUrl(host, port));
+      // Yanıt takılırsa döngü donar ve "görüntü gelmiyor" denetimleri hiç çalışmaz → 3 sn sınır.
+      const r = await fetch(kareUrl(host, port), { signal: AbortSignal.timeout(3_000) });
       if (r.ok) {
         const b = Buffer.from(await r.arrayBuffer());
         if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8) {

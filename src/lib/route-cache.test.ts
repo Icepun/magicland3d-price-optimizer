@@ -170,4 +170,50 @@ describe("route cache", () => {
     mod.bustCaches([""]);
     expect(fs.readdirSync(dir)).toHaveLength(1);
   });
+
+  it("bayatlık sınırı aşılan diskteki gövdeyi ANINDA vermez, taze hesabı bekler (Üretim Planı kuyruğu)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-11T09:00:00Z"));
+      const ilk = await import("./route-cache");
+      await ilk.swr("planner-queue:test", 20_000, async () => ({ kuyruk: "8 gün önceki" }), { bayatSiniriMs: 300_000 });
+
+      vi.resetModules();
+      vi.setSystemTime(new Date("2026-11-19T09:00:00Z")); // uygulama 8 gün sonra açıldı
+      const ikinci = await import("./route-cache");
+      expect(await ikinci.swr("planner-queue:test", 20_000, async () => ({ kuyruk: "bugünkü" }), { bayatSiniriMs: 300_000 }))
+        .toEqual({ kuyruk: "bugünkü" });
+
+      // Sınırın İÇİNDEKİ bayat gövde ise eskisi gibi anında verilir (arkada tazelenir).
+      vi.setSystemTime(new Date("2026-11-19T09:01:00Z"));
+      let arkada = 0;
+      expect(await ikinci.swr("planner-queue:test", 20_000, async () => { arkada++; return { kuyruk: "yeni" }; }, { bayatSiniriMs: 300_000 }))
+        .toEqual({ kuyruk: "bugünkü" });
+      await new Promise((r) => setImmediate(r));
+      expect(arkada).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bayatlık sınırı verilmeyen anahtarlar eskisi gibi eski gövdeyi anında verir", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mlhub-route-cache-"));
+    tempDirs.push(dir);
+    process.env.MLHUB_ROUTE_CACHE_DIR = dir;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-11T09:00:00Z"));
+      const ilk = await import("./route-cache");
+      await ilk.swr("products:test2", 60_000, async () => ({ urun: "eski" }));
+      vi.resetModules();
+      vi.setSystemTime(new Date("2026-11-19T09:00:00Z"));
+      const ikinci = await import("./route-cache");
+      expect(await ikinci.swr("products:test2", 60_000, async () => ({ urun: "yeni" }))).toEqual({ urun: "eski" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

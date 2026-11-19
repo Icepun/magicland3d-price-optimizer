@@ -104,9 +104,25 @@ function getStartupLogPath() {
     return null;
   }
 }
+/**
+ * Hatanın `cause` zincirini de yaz. Ekim–Kasım 2026'da 135 kez "UNHANDLED REJECTION: terminated"
+ * görüldü ama yığında uygulama satırı yoktu: Node'un fetch'i asıl nedeni (kopan soket, uzak
+ * adres, hata kodu) `cause` içinde taşıyor ve günlük onu hiç yazmıyordu.
+ */
+function hataMetni(a, derinlik = 0) {
+  if (!(a instanceof Error)) return String(a);
+  let metin = `${a.message}\n${a.stack}`;
+  const ek = ["code", "errno", "syscall", "address", "port"]
+    .filter((k) => a[k] != null)
+    .map((k) => `${k}=${a[k]}`)
+    .join(" ");
+  if (ek) metin += `\n  [${ek}]`;
+  if (a.cause != null && derinlik < 3) metin += `\n  neden: ${hataMetni(a.cause, derinlik + 1)}`;
+  return metin;
+}
 function logStartup(...args) {
   const line = `[${new Date().toISOString()}] ${args
-    .map((a) => (a instanceof Error ? `${a.message}\n${a.stack}` : String(a)))
+    .map((a) => hataMetni(a))
     .join(" ")}\n`;
   console.log("[startup]", ...args);
   const p = getStartupLogPath();
@@ -1153,8 +1169,32 @@ async function createWindow() {
       logStartup("[renderer]", `(${level}) ${message} @ ${sourceId}:${line}`);
     }
   });
+  // ARAYÜZ ÇÖKERSE KENDİLİĞİNDEN GERİ GELSİN (19 Kas 2026 denetimi): yalnız günlüğe yazılıyordu;
+  // pencere boş kalıyor, kullanıcı uygulamayı elle yeniden başlatana kadar (sahada 2-76 dk)
+  // hiçbir şey görünmüyordu. Döngüye girmesin diye 5 dakikada en çok 3 deneme.
+  const cokmeler = [];
   win.webContents.on("render-process-gone", (_e, details) => {
     logStartup("[renderer] render-process-gone:", JSON.stringify(details));
+    const neden = details && details.reason;
+    if (neden === "clean-exit" || neden === "killed") return; // bilinçli kapanış
+    if (isShuttingDown || isQuittingForUpdate || quitRequested) return;
+    const simdi = Date.now();
+    while (cokmeler.length && simdi - cokmeler[0] > 5 * 60_000) cokmeler.shift();
+    if (cokmeler.length >= 3) {
+      logStartup("[renderer] 5 dakikada 3 kez çöktü — otomatik yenileme durduruldu");
+      return;
+    }
+    cokmeler.push(simdi);
+    setTimeout(() => {
+      try {
+        if (!win.isDestroyed()) {
+          win.webContents.reload();
+          logStartup("[renderer] çökme sonrası yeniden yüklendi");
+        }
+      } catch (e) {
+        logStartup("[renderer] çökme sonrası yeniden yükleme başarısız:", String(e));
+      }
+    }, 1000);
   });
   win.webContents.on("unresponsive", () => {
     logStartup("[renderer] unresponsive");
@@ -1205,11 +1245,27 @@ async function createWindow() {
       // Bazı işletim sistemi/uyku akışlarında suspend olayı kaçsa bile relay çevrimdışı açılmasın.
       globalThis.__MLHUB_DB_PAUSED__ = true;
       logStartup("[power] resume → DB duraklı, ağ kontrolü (gen " + myGen + ")");
-      // Renderer'ı erken tazele (yerel okuma → ağ beklemez) — donmuş UI hızlı kurtulur.
+      // Uyanınca arayüzün VERİLERİNİ tazele — sayfayı silmeden. Eskiden her uyanışta sayfa baştan
+      // yükleniyordu (sahada 85 kez): açık pencere, yazılmakta olan form, kaydırma yeri gidiyordu.
+      // Arayüz 5 sn içinde "tazeledim" demezse (donmuşsa / eski sayfa) eskisi gibi baştan yüklenir.
       setTimeout(() => {
         if (myGen !== powerGen) return; // araya yeni power olayı girdi → iptal
         const w = BrowserWindow.getAllWindows()[0];
-        if (w && !w.isDestroyed()) { w.webContents.reload(); logStartup("[power] renderer tazelendi"); }
+        if (!w || w.isDestroyed()) return;
+        let yanitladi = false;
+        const onay = (e) => { if (e.sender === w.webContents) yanitladi = true; };
+        ipcMain.on("app:uyanis-tamam", onay);
+        try { w.webContents.send("app:uyanis"); } catch { /* pencere kapanıyor */ }
+        setTimeout(() => {
+          ipcMain.removeListener("app:uyanis-tamam", onay);
+          if (myGen !== powerGen || w.isDestroyed()) return;
+          if (yanitladi) {
+            logStartup("[power] veriler tazelendi (sayfa yenilenmedi)");
+          } else {
+            w.webContents.reload();
+            logStartup("[power] arayüz yanıt vermedi → sayfa yenilendi");
+          }
+        }, 5000);
       }, 1500);
       // Relay'i SADECE Turso erişilince sürdür. Araya suspend/resume girerse iptal.
       const startedAt = Date.now();

@@ -22,7 +22,9 @@ export async function GET(req: NextRequest) {
     const data = await swr(
       `planner-queue:v2:${target ?? "auto"}:${mod}:${kapsamGun}`,
       20_000,
-      () => computeQueue(target, { mod, kapsamGun })
+      () => computeQueue(target, { mod, kapsamGun }),
+      // Kuyruk canlı stok ve yazıcı durumuna bağlı: birkaç dakikadan eski gövde ANINDA verilmez.
+      { bayatSiniriMs: 5 * 60_000 }
     );
     return NextResponse.json(data);
   } catch (error) {

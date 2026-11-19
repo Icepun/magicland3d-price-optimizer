@@ -1,3 +1,4 @@
+import { bustCache } from "@/lib/route-cache";
 import { batchWrite } from "@/lib/libsql-batch";
 import { bustProductCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
@@ -415,6 +416,9 @@ export async function POST(req: NextRequest) {
 
     // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
     bustProductCaches();
+    // "Son eşitleme" saati ayarlar ucunun önbelleğinde (settings:v1) duruyor; düşmezse API Ayarları
+    // bir dakika boyunca önceki saati gösteriyordu.
+    bustCache("settings:");
     return NextResponse.json({ mode: input.mode, totalElements, ...result });
   } catch (error) {
     return jsonError(error);
