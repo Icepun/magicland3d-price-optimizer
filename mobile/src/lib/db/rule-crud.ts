@@ -1,3 +1,4 @@
+import { toDbDate } from "@core/sqlite-date";
 import { yururluktekiDonemBaslangiciMs } from "@core/tariff-period";
 import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureCargoVatSchema } from "@/lib/db/schema";
@@ -210,6 +211,9 @@ export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
 async function yururluktekiDonemBaslangici(platform: string | null): Promise<number | null> {
   if (!platform) return null;
   // Ham SQL kolonu sayı da metin de olabiliyor; çekirdek ikisini de çözüyor.
+  // `validTo >= <sayı>` BİLEREK gevşek: SQLite'ta metin her sayıdan büyük sayılır, yani metin
+  // satırların hepsi gelir ve asıl eleme çekirdekte yapılır. Parametreyi metne çevirmek sayı
+  // biçimli satırları sessizce DIŞARIDA bırakır — çevirme.
   const satirlar = await query<{ validFrom: string | number | null; validTo: string | number | null }>(
     `SELECT validFrom, validTo FROM CargoRule
       WHERE platform = ? AND (validTo IS NULL OR validTo >= ?)`,
@@ -220,7 +224,10 @@ async function yururluktekiDonemBaslangici(platform: string | null): Promise<num
 
 export async function createCargoRule(d: CargoDraft): Promise<void> {
   await ensureCargoVatSchema();
-  const validFrom = await yururluktekiDonemBaslangici(d.platform);
+  const basMs = await yururluktekiDonemBaslangici(d.platform);
+  // Masaüstüyle AYNI biçimde yaz (toDbDate). Ham ms sayısı yazılırsa kolon karışık biçimli olur;
+  // tarih filtreleri karışık kolonda satırları sessizce eleyebiliyor (Raporlar'ın %78'i böyle kaybolmuştu).
+  const validFrom = basMs == null ? null : toDbDate(new Date(basMs));
   await execute(
     `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, validFrom, priority, isActive)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
