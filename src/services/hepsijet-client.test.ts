@@ -64,16 +64,60 @@ describe("giriş", () => {
   });
 
   it("yanlış şifre / token'sız yanıt → anlaşılır mesaj; sunucu hatası ve ağ kopması ayrı", async () => {
-    yanitla = () => ({ status: 401, body: { status: "FAIL" } });
+    // Sahadaki yanıt (19 Kas 2026): 401 {"status":"FAIL","message":"Kullanıcı Adı veya Parola Hatalı"}
+    yanitla = () => ({ status: 401, body: { status: "FAIL", message: "Kullanıcı Adı veya Parola Hatalı" } });
     await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/kabul etmedi/);
+    hepsijetTokenlariniTemizle();
     yanitla = () => ({ status: 200, body: { status: "FAIL", message: "Bad credentials" } });
     await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/kabul etmedi/);
+    hepsijetTokenlariniTemizle();
     yanitla = () => ({ status: 503 });
     await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/yanıt vermiyor/);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("ECONNRESET"); }));
     const hata = await new HepsijetClient(kimlik).girisYap().catch((e) => e);
     expect(hata).toBeInstanceOf(HepsijetHatasi);
     expect(hata.message).toMatch(/ulaşılamadı/);
+  });
+});
+
+describe("hesap kilitlenmesin", () => {
+  it("reddedilen bilgi yeniden SUNUCUYA GİTMEZ; şifre değişince hemen denenir", async () => {
+    yanitla = () => ({ status: 401, body: { status: "FAIL" } });
+    await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/kabul etmedi/);
+    await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/az önce reddedildi/);
+    // Arka plan yolu (liste isteği → giriş) da aynı kilide takılır.
+    await expect(new HepsijetClient(kimlik).iller()).rejects.toThrow(/az önce reddedildi/);
+    expect(cagrilar).toHaveLength(1);
+
+    yanitla = () => ({ status: 200, body: girisYaniti });
+    await new HepsijetClient({ ...kimlik, sifre: "duzeltilmis-sifre" }).girisYap();
+    expect(cagrilar).toHaveLength(2);
+  });
+
+  it("süre dolunca aynı bilgi yeniden denenebilir; başarılı giriş kilidi kaldırır", async () => {
+    vi.useFakeTimers();
+    try {
+      yanitla = () => ({ status: 401, body: { status: "FAIL" } });
+      await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/kabul etmedi/);
+      vi.advanceTimersByTime(5 * 60_000 + 1000);
+      yanitla = () => ({ status: 200, body: girisYaniti });
+      await new HepsijetClient(kimlik).girisYap();
+      await new HepsijetClient(kimlik).girisYap();
+      expect(cagrilar).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("askıya alınmış hesap (423) ayrı söylenir ve yarım saat hiç denenmez", async () => {
+    // Sahadaki yanıt: 423 {"status":"FAIL","message":"Hesabınız askıya alınmıştır! …"}
+    yanitla = () => ({ status: 423, body: { status: "FAIL", message: "Hesabınız askıya alınmıştır!" } });
+    const hata = await new HepsijetClient(kimlik).girisYap().catch((e) => e);
+    expect(hata).toBeInstanceOf(HepsijetHatasi);
+    expect(hata.message).toMatch(/askıya almış/);
+    expect(hata.durum).toBe(423);
+    await expect(new HepsijetClient(kimlik).girisYap()).rejects.toThrow(/askıya almış/);
+    expect(cagrilar).toHaveLength(1);
   });
 });
 

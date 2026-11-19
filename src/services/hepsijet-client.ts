@@ -12,6 +12,7 @@
  *
  * ⚠️ Kişisel veri: müşteri adı / adresi / telefonu bu katmanda ASLA günlüğe yazılmaz.
  */
+import crypto from "node:crypto";
 import { processSingleton } from "@/core/printers/process-singleton";
 
 export type HepsijetOrtami = "test" | "prod";
@@ -38,6 +39,20 @@ export class HepsijetHatasi extends Error {
 /** Token 60 dk geçerli; 50. dakikada yenilenir. Relay ile rotalar ayrı paket → süreç geneli tek kopya. */
 const TOKEN_OMRU_MS = 50 * 60_000;
 const tokenlar = processSingleton("hj_tokenlar", () => new Map<string, { token: string; alindi: number }>());
+
+/**
+ * REDDEDİLEN GİRİŞ KİLİDİ. HepsiJet birkaç hatalı girişten sonra hesabı ASKIYA ALIYOR (HTTP 423,
+ * "yönetici ile iletişime geçin") — 19 Kas 2026'da test hesabı böyle kilitlendi. Aynı bilgilerle
+ * yeniden denemek yalnız zarar verir; reddedilen bilgi bir süre sunucuya HİÇ gönderilmez. Bilgi
+ * değişirse (yeni şifre) kilit onu etkilemez. Arka plan işleri de bu yoldan geçtiği için
+ * yanlış şifreyle dönen bir yoklama hesabı kilitleyemez.
+ */
+const RET_BEKLEME_MS = 5 * 60_000;
+const ASKI_BEKLEME_MS = 30 * 60_000;
+const reddedilenler = processSingleton("hj_reddedilenler", () => new Map<string, { zaman: number; aski: boolean }>());
+
+const ASKI_MESAJI = "HepsiJet bu hesabı askıya almış. HepsiJet'ten yeniden açmasını iste.";
+const RET_MESAJI = "HepsiJet kullanıcı adını ya da şifreyi kabul etmedi.";
 
 export interface HepsijetHesabi {
   /** HepsiJet'in tanımladığı mağaza adı ve kısa kodu — gönderi isteklerinin `company` bloğu. */
@@ -66,6 +81,14 @@ export class HepsijetClient {
     return `${this.kimlik.ortam}:${this.kimlik.kullaniciAdi}`;
   }
 
+  /** Ortam + kullanıcı + şifrenin özeti — şifrenin kendisi bellekte ayrıca tutulmaz. */
+  private get kimlikOzeti(): string {
+    return crypto
+      .createHash("sha256")
+      .update(`${this.kimlik.ortam}\n${this.kimlik.kullaniciAdi}\n${this.kimlik.sifre}`)
+      .digest("hex");
+  }
+
   private async cagir(yol: string, init: RequestInit, zamanAsimiMs = 15_000): Promise<{ durum: number; govde: unknown }> {
     let res: Response;
     try {
@@ -81,6 +104,21 @@ export class HepsijetClient {
 
   /** Giriş yap: token + hesabın şirket / şube bilgisi. Token önbelleğe alınır. */
   async girisYap(): Promise<HepsijetHesabi> {
+    const ozet = this.kimlikOzeti;
+    const ret = reddedilenler.get(ozet);
+    if (ret) {
+      const kalanMs = ret.zaman + (ret.aski ? ASKI_BEKLEME_MS : RET_BEKLEME_MS) - Date.now();
+      if (kalanMs > 0) {
+        const dk = Math.max(1, Math.ceil(kalanMs / 60_000));
+        throw new HepsijetHatasi(
+          ret.aski
+            ? ASKI_MESAJI
+            : `Bu bilgiler az önce reddedildi. Tekrar denemek hesabı kilitleyebilir — bilgileri kontrol et ya da ${dk} dk bekle.`,
+          ret.aski ? 423 : 401,
+        );
+      }
+      reddedilenler.delete(ozet);
+    }
     const { durum, govde } = await this.cagir("/auth/token", {
       method: "POST",
       headers: {
@@ -93,11 +131,18 @@ export class HepsijetClient {
     });
     const veri = (govde as { data?: Record<string, unknown> } | null)?.data;
     const token = metin(veri?.token);
+    if (durum === 423) {
+      tokenlar.delete(this.tokenAnahtari);
+      reddedilenler.set(ozet, { zaman: Date.now(), aski: true });
+      throw new HepsijetHatasi(ASKI_MESAJI, 423);
+    }
     if (durum === 401 || durum === 403 || (durum < 500 && !token)) {
       tokenlar.delete(this.tokenAnahtari);
-      throw new HepsijetHatasi("HepsiJet kullanıcı adını ya da şifreyi kabul etmedi.", 401);
+      reddedilenler.set(ozet, { zaman: Date.now(), aski: false });
+      throw new HepsijetHatasi(RET_MESAJI, 401);
     }
     if (!token) throw new HepsijetHatasi("HepsiJet şu an yanıt vermiyor. Biraz sonra tekrar dene.");
+    reddedilenler.delete(ozet);
     tokenlar.set(this.tokenAnahtari, { token, alindi: Date.now() });
     const sirket = (veri?.company ?? {}) as Record<string, unknown>;
     const aktarma = (veri?.xdock ?? {}) as Record<string, unknown>;
@@ -175,4 +220,5 @@ export function yerListesi(govde: unknown): HepsijetYer[] {
 /** Testler için: token önbelleğini boşalt. */
 export function hepsijetTokenlariniTemizle(): void {
   tokenlar.clear();
+  reddedilenler.clear();
 }
