@@ -66,3 +66,52 @@ export function dolulukOzeti(
   });
   return { yazicilar, pencereDilim, olcumBaslangici: ilk };
 }
+
+/** Sunucuda toplanmış satır: bir yazıcının bir durumdaki dilim sayısı + o grubun en eski dilimi. */
+export interface DolulukSayimi {
+  printerConfigId: string;
+  status: string;
+  adet: number;
+  ilk: number;
+}
+
+/**
+ * `dolulukOzeti` ile AYNI sonucu, tek tek örnekler yerine sunucunun topladığı sayımlardan üretir.
+ *
+ * NEDEN: uç her çağrıda son 7 günün bütün örneklerini indiriyordu — 9.700 satır, 1,26 MB,
+ * günde 273 kez (Turso dökümü, 18 Kas 2026). Özet ise yalnız "yazıcı × durum → adet" ve en
+ * eski dilime bakıyor; ikisi de veritabanında toplanabilir (~30 satır).
+ *
+ * Sayımlar ÖNCEDEN pencereye süzülmüş olmalı: `bucketMs >= nowMs - gun gün` ve
+ * `bucketMs <= dilimBasi(nowMs)` — uç böyle sorguluyor. Eşitlik testle kilitli.
+ */
+export function dolulukOzetiSayimdan(
+  sayimlar: readonly DolulukSayimi[],
+  yaziciIdleri: readonly string[],
+  nowMs: number,
+  gun: number
+): { yazicilar: YaziciDolulugu[]; pencereDilim: number; olcumBaslangici: number | null } {
+  const bitis = dilimBasi(nowMs);
+  const baslangic = bitis - gun * 86_400_000;
+  const ilk = sayimlar.reduce<number | null>((m, s) => (s.adet > 0 && (m == null || s.ilk < m) ? s.ilk : m), null);
+  const etkinBaslangic = ilk == null ? bitis : Math.max(baslangic, ilk);
+  const pencereDilim = Math.max(0, Math.round((bitis - etkinBaslangic) / DILIM_MS) + 1);
+  const harita = new Map(
+    yaziciIdleri.map((id) => [id, { basiyor: 0, bosta: 0, sorun: 0, cevrimdisi: 0 } as Record<DolulukSinifi, number>])
+  );
+  for (const s of sayimlar) {
+    const h = harita.get(s.printerConfigId);
+    if (h) h[durumSinifi(s.status)] += s.adet;
+  }
+  const yazicilar = yaziciIdleri.map((id) => {
+    const s = harita.get(id)!;
+    const bilinen = s.basiyor + s.bosta + s.sorun + s.cevrimdisi;
+    return {
+      printerConfigId: id,
+      ...s,
+      bilinmiyor: Math.max(0, pencereDilim - bilinen),
+      basmaOrani: bilinen > 0 ? s.basiyor / bilinen : null,
+    };
+  });
+  return { yazicilar, pencereDilim, olcumBaslangici: ilk };
+}

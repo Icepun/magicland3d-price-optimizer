@@ -11,6 +11,7 @@
  * dosya silmeye kalkışmak anlamsız (ve `deleteMany` ile yapılırsa yıkıcı), o yüzden boş yol
  * her zaman elenir.
  */
+import { bustModelCaches } from "@/lib/cache-busting";
 import fs from "node:fs";
 import { prisma } from "./prisma";
 import { getR2Config, deleteObject } from "./r2";
@@ -61,6 +62,7 @@ export async function modelSatirlariniSil(
   const idler = satirlar.map((r) => r.id);
   // Tek deleteMany — dosya başına ayrı yazma yüzlerce dosyada dakikalar sürüyordu.
   await prisma.productModelFile.deleteMany({ where: { id: { in: idler } } });
+  bustModelCaches(); // kütüphane listesi + yazıcı kartının dosya haritası
 
   const anahtarlar = [
     ...new Set(satirlar.flatMap((r) => [r.r2Key, r.meshR2Key]).filter((k): k is string => !!k)),

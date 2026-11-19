@@ -29,8 +29,9 @@ export function DolulukSeridi() {
   const { data, isError } = useQuery<Yanit>({
     queryKey: ["yazici-doluluk", 7],
     queryFn: ({ signal }) => fetchJson("/api/yazici-doluluk?gun=7", { signal }),
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
+    // 7 günlük pencerede tek dilim %0,05 — 15 dakikada bir tazelemek gözle ayırt edilemez.
+    staleTime: 15 * 60_000,
+    refetchInterval: 15 * 60_000,
   });
   if (isError || !data || data.yazicilar.length === 0) return null;
   const olcumSaat = data.olcumBaslangici == null ? 0 : (data.pencereDilim * DILIM_MS) / 3_600_000;

@@ -37,6 +37,7 @@ import {
   getMoonrakerStatusCached, getBambuStatusCached, getMoonrakerMetaCached,
   getMoonrakerThumbDataUrl, getPrintFileMatches, invalidatePrintFileMatches,
   getMoonrakerExtrasCached, getBambuSlotsCached,
+  getEnabledPrinterConfigs, getMatchedProducts,
   SNAPSHOT_IMAGE_MAX_BYTES,
 } from "./status-cache";
 import { runStorageJanitor } from "@/lib/storage-janitor";
@@ -49,16 +50,17 @@ import { vizDurumu } from "./viz-relay";
 import { slotToolColors } from "./tool-colors";
 import { durumOrnegiYaz } from "./durum-ornegi";
 import { makaraEtiketleriniIsle } from "./makara-etiketi-izleyici";
+import { anlikDurumAnahtari, yazmaKarari, yazmaIfadeleri, type YazmaKalemi } from "./anlik-durum-yazma";
+import { batchWriteDurumu } from "@/lib/libsql-batch";
 
 const TICK_MS = 10_000;
 /** Telefonun okuduğu yetenek listesi (AppSetting `printRelayCaps`). */
 const RELAY_CAPS = "r2start,heartbeat,cmdttl,camera,detail";
 /** Gcode'a gömülü küçük resmin data-URL karakter sınırı (base64 ≈ bayt × 4/3). */
 const SNAPSHOT_IMAGE_MAX_CHARS = Math.round((SNAPSHOT_IMAGE_MAX_BYTES * 4) / 3);
-/** Heartbeat aralığı: snapshot İÇERİK değişmese de updatedAt en geç bu aralıkla tazelenir.
- *  (Eski davranış yalnız değişince yazıyordu → boşta/duraklamış yazıcıda updatedAt yaşlanıyor,
- *  mobil 90sn'de yanlış "masaüstü kapalı" alarmı verip kontrolleri/tekrar-bas'ı kilitliyordu.) */
-const HEARTBEAT_MS = 30_000;
+/** Turun toplu yazması en çok bu kadar beklenir; aşarsa tur bırakır, sonraki tur yeniden yazar.
+ *  (Tur `tickingKutu` kilidini tutuyor — asılı bir yazma relay'i süresiz durdurmamalı.) */
+const TUR_YAZMA_UST_SINIR_MS = 15_000;
 /** Bu süreden eski pending komutlar UYGULANMAZ → zaman aşımı. (Masaüstü kapalıyken gönderilen
  *  "start"ın saatler sonra kimse beklemiyorken baskı başlatması / bayat "cancel"ın yeni baskıyı
  *  öldürmesi güvenlik riskiydi.) Baskı BAŞLATAN/SÜRDÜREN komutlar (start/resume) daha da kısa:
@@ -77,6 +79,7 @@ const commandsRunningKutu = processSingleton("relay_commandsRunning", () => ({ v
 const tickCountKutu = processSingleton("relay_tickCount", () => ({ v: 0 })); // yalnız düşük öncelikli ilk-tick işlerini açılıştan uzaklaştırmak için
 const lastKey = processSingleton("relay_lastKey", () => new Map<string, string>());
 const lastWriteAt = processSingleton("relay_lastWriteAt", () => new Map<string, number>()); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
+const lastFullWriteAt = processSingleton("relay_lastFullWriteAt", () => new Map<string, number>()); // yazıcı başına son TAM satır yazması (kendini onarma aralığı için)
 const lastImage = processSingleton("relay_lastImage", () => new Map<string, string | null>()); // buluta EN SON yazılan görsel (aynıysa tekrar gönderilmez)
 const lastStatus = processSingleton("relay_lastStatus", () => new Map<string, string>()); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
 // Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
@@ -224,7 +227,7 @@ function moonrakerStatusName(s: MoonrakerState): string {
 async function buildSnapshot(
   c: Cfg,
   matchMap: Map<string, string>,
-  productMap: Map<string, { name: string; imageUrl: string | null }>
+  productMap: ReadonlyMap<string, { name: string; imageUrl: string | null }>
 ): Promise<SnapFields | null> {
   const baseName = c.name;
   if (c.type === "bambu") {
@@ -627,22 +630,25 @@ async function tick(): Promise<void> {
     // ARKA PLAN ŞERİDİ: relay 10 saniyede bir dönüyor. Ana istemci uzak-HTTP libSQL'de
     // TEK mutex kullandığı için bu turlar, kullanıcının açtığı sayfanın sorgularının
     // önüne geçiyordu. Relay'in birkaç yüz ms geç kalması kimseyi etkilemez.
-    const configs = (await remotePrisma.printerConfig.findMany({ where: { enabled: true } })) as Cfg[];
+    //
+    // Yazıcı listesi ve eşleşen ürünler panelle ORTAK önbellekten gelir (süreç geneli kutu;
+    // yazıcı ekleme/kapama ve eşleştirme yazmaları onu anında düşürür). Eskiden ikisi de her
+    // tur veritabanından okunuyordu: günde 4.600 + 2.800 sorgu (Turso dökümü, 18 Kas 2026).
+    const configs: Cfg[] = await getEnabledPrinterConfigs();
 
     // Ürün eşleştirmeleri (snapshot'ta ürün adı/görseli için). Anahtar NORMALİZE (fileMatchKey):
     // print rotası eşleştirmeyi uzantısız kaydediyor, yazıcı ham adla raporluyor — ham anahtarla
     // eşleşme kaçıyor, telefonda ürün adı/görseli yerine dosya adı görünüyordu.
     const matches = configs.length ? await getPrintFileMatches() : [];
     const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
-    const pids = [...new Set(matches.map((m) => m.productId))];
-    const products = pids.length
-      ? await remotePrisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
-      : [];
-    const productMap = new Map(products.map((p) => [p.id, { name: p.name, imageUrl: p.imageUrl }]));
+    const productMap: ReadonlyMap<string, { name: string; imageUrl: string | null }> = configs.length
+      ? await getMatchedProducts()
+      : new Map();
 
     // suspend yukarıdaki (yerel) okumalar sırasında geldiyse buluta yazmaları da atla — defense in depth.
     if ((globalThis as { __MLHUB_DB_PAUSED__?: boolean }).__MLHUB_DB_PAUSED__) return;
     // 1) Snapshot'lar — PARALEL (çevrimdışı/yavaş yazıcı diğerlerini bekletmesin; toplam süre = en yavaş yazıcı)
+    const yazilacaklar: BekleyenYazma[] = [];
     await Promise.all(configs.map(async (c) => {
       let snap: SnapFields | null = null;
       try { snap = await buildSnapshot(c, matchMap, productMap); } catch { snap = null; }
@@ -674,11 +680,6 @@ async function tick(): Promise<void> {
           void notifyPrintFault(c, snap).catch(() => {});
         }
       }
-      // etaSec 30sn KOVASI: saniye hassasiyetinde her tick "değişti" sayılıp baskı boyunca
-      // 10sn'de bir Turso bulut yazması üretiyordu; 30sn kovası yazmaları ~1/3'e indirir
-      // (telefon zaten kalan süreyi dakika hassasiyetinde gösteriyor).
-      const etaBucket = snap.etaSec == null ? "-" : String(Math.round(snap.etaSec / 30));
-      const key = [snap.status, snap.online, Math.round(snap.progress * 100), snap.currentFilename, snap.nozzle, snap.bed, snap.productName, etaBucket, snap.statusMessage, snap.detail].join("|");
       // HEARTBEAT: içerik değişmese de updatedAt en geç 30sn'de bir tazelenir. Telefon
       // "masaüstü açık mı?" tespitini updatedAt yaşından yapıyor; salt-değişince-yaz davranışı
       // boşta/duraklamış yazıcıda (değerler sabit) yanlış "Canlı değil" alarmı + kontrol/tekrar-bas
@@ -686,29 +687,29 @@ async function tick(): Promise<void> {
       const nowMs = Date.now();
       // Doluluk örneği (5 dk'da bir, satır değişmese de) — beklenmez, relay'i yavaşlatmaz.
       void durumOrnegiYaz(c.id, snap.status, nowMs);
-      const unchanged = lastKey.get(c.id) === key;
-      const fresh = nowMs - (lastWriteAt.get(c.id) ?? 0) < HEARTBEAT_MS;
-      if (unchanged && fresh) return;
-      lastKey.set(c.id, key);
-      // GÖRSELİ TEKRAR GÖNDERME: plaka görüntüsü baskı boyunca DEĞİŞMEZ, ama her tick/heartbeat
-      // yazmasında aynı data-URL yeniden buluta gidiyordu. Değişmediyse update'ten çıkarılır
-      // (create'te kalır — ilk satırda görsel yine yazılır).
-      const imageUnchanged = lastImage.get(c.id) === snap.productImage;
-      const update: Partial<SnapFields> = { ...snap };
-      if (imageUnchanged) delete update.productImage;
-      try {
-        await remotePrisma.printerSnapshot.upsert({
-          where: { printerConfigId: c.id },
-          create: { printerConfigId: c.id, ...snap },
-          update,
-          // Yanıt kullanılmıyor. `select` olmadan her yazma satırın TAMAMINI (plaka görseli
-          // dahil) geri döndürüyordu — günde ~12 bin kez (19 Kas 2026, Turso dökümü).
-          select: { printerConfigId: true },
-        });
-        lastWriteAt.set(c.id, nowMs);
-        lastImage.set(c.id, snap.productImage);
-      } catch { /* yazılamadıysa sonraki tick dener */ }
+      // NE yazılacağı burada kararlaştırılır, yazma turun sonunda TEK istekte yapılır
+      // (bkz. anlik-durum-yazma.ts — eskiden yazıcı başına ayrı istek, günde 28.800 yazma).
+      const anahtar = anlikDurumAnahtari(snap);
+      const tur = yazmaKarari({
+        yazilanAnahtar: lastKey.get(c.id),
+        anahtar,
+        sonYazma: lastWriteAt.get(c.id),
+        sonTam: lastFullWriteAt.get(c.id),
+        simdi: nowMs,
+      });
+      if (tur === "yok") return;
+      yazilacaklar.push({
+        printerConfigId: c.id,
+        durum: snap,
+        tur,
+        // GÖRSELİ TEKRAR GÖNDERME: plaka görüntüsü baskı boyunca DEĞİŞMEZ; değişmediyse kısmi
+        // güncellemenin gövdesine hiç girmez.
+        gorselDegisti: lastImage.get(c.id) !== snap.productImage,
+        anahtar,
+      });
     }));
+
+    await anlikDurumlariYaz(yazilacaklar, Date.now());
 
     // Durum/bildirim hafızasını kalıcılaştır (değiştiyse) → uygulama kapansa bile geçişler kaybolmaz.
     await saveNotifyState();
@@ -724,6 +725,45 @@ async function tick(): Promise<void> {
     }
   } finally {
     tickingKutu.v = false;
+  }
+}
+
+type BekleyenYazma = YazmaKalemi & { anahtar: string };
+
+/**
+ * Turun anlık durum yazmalarını TEK istekte gönderir (tek işlem). Başarılıysa "ne yazıldı"
+ * hafızası güncellenir; başarısızsa hafıza değişmez ve bir sonraki tur aynı farkı yeniden yazar.
+ */
+async function anlikDurumlariYaz(kalemler: BekleyenYazma[], nowMs: number): Promise<void> {
+  if (kalemler.length === 0) return;
+  const yazildi = (k: BekleyenYazma, tur: BekleyenYazma["tur"]) => {
+    lastWriteAt.set(k.printerConfigId, nowMs);
+    if (tur === "kalp") return; // yalnız damga tazelendi; içerik hafızası aynı
+    lastKey.set(k.printerConfigId, k.anahtar);
+    if (tur === "tam") lastFullWriteAt.set(k.printerConfigId, nowMs);
+    if (tur === "tam" || k.gorselDegisti) lastImage.set(k.printerConfigId, k.durum.productImage);
+  };
+
+  const sonuc = await batchWriteDurumu(yazmaIfadeleri(kalemler, toDbDate(new Date(nowMs))), TUR_YAZMA_UST_SINIR_MS);
+  if (sonuc === "ok") {
+    for (const k of kalemler) yazildi(k, k.tur);
+    return;
+  }
+  if (sonuc === "basarisiz") return; // ağ/zaman aşımı → sonraki tur yeniden dener
+
+  // Toplu yazmanın olmadığı mod (yerel SQLite / gömülü replika): yazıcı başına eski yol.
+  for (const k of kalemler) {
+    try {
+      const update: Partial<SnapFields> = { ...k.durum };
+      if (!k.gorselDegisti) delete update.productImage;
+      await remotePrisma.printerSnapshot.upsert({
+        where: { printerConfigId: k.printerConfigId },
+        create: { printerConfigId: k.printerConfigId, ...k.durum },
+        update,
+        select: { printerConfigId: true }, // yanıt kullanılmıyor; satırın tamamı geri gelmesin
+      });
+      yazildi(k, "tam");
+    } catch { /* yazılamadıysa sonraki tick dener */ }
   }
 }
 

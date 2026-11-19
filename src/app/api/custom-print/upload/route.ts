@@ -1,3 +1,4 @@
+import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
@@ -145,6 +146,8 @@ export async function POST(req: NextRequest) {
           sortOrder: 0,
         },
       });
+      // Yazıcı kartı bu dosyayı basarken görselini bulabilsin (dosya haritası uzun önbellekli).
+      bayatOnbellegiDusur(BAYAT_ONBELLEK.modelDosyalari);
       return NextResponse.json({
         fileId: saved.id,
         originalName,

@@ -1,3 +1,4 @@
+import { bustModelCaches } from "@/lib/cache-busting";
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import { z } from "zod";
@@ -29,6 +30,7 @@ export async function POST(req: NextRequest) {
     if (rows.length === 0) return NextResponse.json({ deleted: 0 });
 
     await prisma.productModelFile.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+    bustModelCaches(); // yazıcı kartının dosya haritası silinenleri göstermesin
 
     // Dosya temizliği — referans kalmadıysa (özel baskılarda paylaşım yok ama yine de kontrol).
     const r2Keys = [...new Set(rows.map((r) => r.r2Key).filter((k): k is string => !!k))];

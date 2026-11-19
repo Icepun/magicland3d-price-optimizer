@@ -41,6 +41,7 @@ import { getBambuStatus, getBambuAmsSlots, type BambuStatus, type BambuSlot } fr
   * yalnız ayrı soket ve ayrı kuyruk.
   */
 import { remotePrisma as prisma } from "@/lib/prisma";
+import { bayatOnbellek, BAYAT_ONBELLEK } from "./bayat-onbellek";
 
 /**
  * ⚠️ 4000 DEĞİL — panel 5 saniyede bir yokluyor, tazelik penceresi ondan KÜÇÜKSE önbellek
@@ -245,8 +246,9 @@ export function resetPrinterStatusCache(): void {
   bambuSlotsCache.clear();
   bambuSlotsInflight.clear();
   metaHata.clear();
-  matchesKutu.v = null;
-  matchedProductsKutu.v = null;
+  invalidatePrintFileMatches();
+  invalidatePrinterConfigs();
+  invalidateModelFilesForPreview();
 }
 
 // ── Yan bilgiler (ışık, slot renkleri, katman duraklatması, gözetim) ────────────────────────
@@ -417,49 +419,42 @@ type MatchRow = { printerConfigId: string; filename: string; productId: string }
  * Bu kutulama, aşağıdaki TTL yükseltmesinin ÖN KOŞULU: paylaşım olmadan 30 → 120 sn
  * yapmak o pencereyi dört katına çıkarırdı.
  */
-const matchesKutu = processSingleton("sc_matchesCache", () => ({
-  v: null as { at: number; rows: MatchRow[] } | null,
-}));
 /** Panel 5 sn'de bir çağırıyor; tablo yalnız eşleştirme yazıldığında değişiyor ve o yol
  *  `invalidatePrintFileMatches()` çağırıyor → uzun TTL güvenli. */
 const MATCHES_TTL_MS = 120_000;
 
-export async function getPrintFileMatches(): Promise<MatchRow[]> {
-  const matchesCache = matchesKutu.v;
-  if (matchesCache && Date.now() - matchesCache.at < MATCHES_TTL_MS) return matchesCache.rows;
-  const rows = await prisma.printFileProduct.findMany({
+const eslesmeOnbellegi = bayatOnbellek<MatchRow[]>(BAYAT_ONBELLEK.eslesmeler, MATCHES_TTL_MS, () =>
+  prisma.printFileProduct.findMany({
     select: { printerConfigId: true, filename: true, productId: true },
-  });
-  matchesKutu.v = { at: Date.now(), rows };
-  return rows;
+  })
+);
+
+export function getPrintFileMatches(): Promise<MatchRow[]> {
+  return eslesmeOnbellegi.al();
 }
 
 /** Eşleştirme yazan herkes çağırır (match modalı / baskı başlatma) → panel yeni eşleşmeyi ANINDA görür. */
 export function invalidatePrintFileMatches(): void {
-  matchesKutu.v = null;
-  matchedProductsKutu.v = null;
+  eslesmeOnbellegi.gecersizKil();
+  eslesenUrunOnbellegi.gecersizKil();
 }
 
 // ── Eşleşen ürünler (ad + görsel) — panelin İKİNCİ bulut sorgusu ────────────────────────────
 // MADDE 20: panel 5sn'de bir hem eşleştirmeleri hem ürünleri sorguluyordu. Uzak-HTTP libSQL'de
 // her sorgu ~96ms ve SIRALI → boşta duran panel bile dakikada 24 gereksiz bulut sorgusu üretiyordu.
 type MatchedProduct = { id: string; name: string; imageUrl: string | null };
-const matchedProductsKutu = processSingleton("sc_matchedProductsCache", () => ({
-  v: null as { at: number; rows: MatchedProduct[] } | null,
-}));
-
-export async function getMatchedProducts(): Promise<Map<string, MatchedProduct>> {
-  const matchedProductsCache = matchedProductsKutu.v;
-  if (matchedProductsCache && Date.now() - matchedProductsCache.at < MATCHES_TTL_MS) {
-    return new Map(matchedProductsCache.rows.map((p) => [p.id, p]));
-  }
+const eslesenUrunOnbellegi = bayatOnbellek<Map<string, MatchedProduct>>(BAYAT_ONBELLEK.eslesenUrunler, MATCHES_TTL_MS, async () => {
   const matches = await getPrintFileMatches();
   const pids = [...new Set(matches.map((m) => m.productId))];
   const rows = pids.length
     ? await prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, name: true, imageUrl: true } })
     : [];
-  matchedProductsKutu.v = { at: Date.now(), rows };
   return new Map(rows.map((p) => [p.id, p]));
+});
+
+/** Dönen harita PAYLAŞILIR — çağıran değiştirmemeli (panel ve relay yalnız okuyor). */
+export function getMatchedProducts(): Promise<ReadonlyMap<string, MatchedProduct>> {
+  return eslesenUrunOnbellegi.al();
 }
 
 // ── Yazıcı yapılandırmaları — 60sn TTL ───────────────────────────────────────────────────────
@@ -469,24 +464,25 @@ export type CachedPrinterConfig = {
   host: string; port: number; accessCode: string | null; serial: string | null;
   accent: string | null; enabled: boolean; sortOrder: number; createdAt: Date;
 };
-let configsCache: { at: number; rows: CachedPrinterConfig[] } | null = null;
 /** Yazıcı satırları neredeyse hiç değişmiyor ve her değişiklik `invalidatePrinterConfigs()`
- *  çağırıyor. Relay bu fonksiyonu HİÇ çağırmıyor → iki-paket bayatlığı riski yok. */
+ *  çağırıyor. Relay de buradan okur (kutu süreç geneli → geçersiz kılma ona da ulaşır);
+ *  başka cihazda (Mac) yapılan değişiklik en geç bu süre + bir tur sonra görünür. */
 const CONFIGS_TTL_MS = 60_000;
 
-export async function getEnabledPrinterConfigs(): Promise<CachedPrinterConfig[]> {
-  if (configsCache && Date.now() - configsCache.at < CONFIGS_TTL_MS) return configsCache.rows;
-  const rows = (await prisma.printerConfig.findMany({
+const yapilandirmaOnbellegi = bayatOnbellek<CachedPrinterConfig[]>(BAYAT_ONBELLEK.yapilandirmalar, CONFIGS_TTL_MS, async () =>
+  (await prisma.printerConfig.findMany({
     where: { enabled: true },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  })) as unknown as CachedPrinterConfig[];
-  configsCache = { at: Date.now(), rows };
-  return rows;
+  })) as unknown as CachedPrinterConfig[]
+);
+
+export function getEnabledPrinterConfigs(): Promise<CachedPrinterConfig[]> {
+  return yapilandirmaOnbellegi.al();
 }
 
 /** Yazıcı ekleme/düzenleme/silme sonrası çağrılmalı — panel yeni yapılandırmayı ANINDA görür. */
 export function invalidatePrinterConfigs(): void {
-  configsCache = null;
+  yapilandirmaOnbellegi.gecersizKil();
   printerCfgCacheClear(); // tek-yazıcı önbelleği de burada düşer — ayrı çağrı yeri unutulmasın
 }
 
@@ -501,17 +497,12 @@ export function invalidatePrinterConfigs(): void {
  */
 type ModelFileRow = { id: string; productId: string; printerConfigId: string | null; originalName: string };
 /**
- * ⚠️ TTL'i `MATCHES_TTL_MS`'ten AYRI. Bu önbelleğin geçersiz kılma fonksiyonu YOK — süre
- * dolması tek tazelenme yolu. Eşleştirme TTL'i 120 sn'ye çıkarken bunu da çıkarmak, yeni
- * yüklenen bir model dosyasının kart görselini iki dakika geciktirirdi.
+ * Tablo yalnız dosya yüklenince/silinince değişir ve o yollar `invalidateModelFilesForPreview()`
+ * çağırır → uzun TTL güvenli. Eskiden geçersiz kılma yoktu ve TTL 30 sn'ydi: 797 satırlık
+ * tablonun tamamı günde 2.510 kez okunuyordu (Turso dökümü, 18 Kas 2026: 1,98 M satır).
+ * TTL yalnız BAŞKA cihazda (Mac) yüklenen dosya içindir: kart görseli en geç bu kadar gecikir.
  */
-const MODEL_FILES_TTL_MS = 30_000;
-let modelFilesCache: {
-  at: number;
-  rows: ModelFileRow[];
-  /** yazıcı → aynı ailedeki yazıcılar (kendisi dahil) — bkz. core/printers/printer-family */
-  aile: Map<string, string[]>;
-} | null = null;
+const MODEL_FILES_TTL_MS = 10 * 60_000;
 
 /**
  * ⚠️ ÜRÜNE GÖRE SEÇMEK YETMEZ. Bir ürünün aynı yazıcıda birden çok parçası olabiliyor
@@ -529,25 +520,41 @@ export interface OnizlemeDosyalari {
   urune: Map<string, string>;
 }
 
-export async function getModelFilesForPreview(): Promise<OnizlemeDosyalari> {
-  if (!modelFilesCache || Date.now() - modelFilesCache.at >= MODEL_FILES_TTL_MS) {
-    const [rows, yazicilar] = await Promise.all([
-      prisma.productModelFile.findMany({
-        select: { id: true, productId: true, printerConfigId: true, originalName: true },
-      }),
-      prisma.printerConfig.findMany({ select: { id: true, type: true, brand: true, model: true } }),
-    ]);
-    const aile = new Map(yazicilar.map((y) => [y.id, familyMemberIds(yazicilar, y.id)]));
-    modelFilesCache = { at: Date.now(), rows, aile };
-  }
+const modelDosyaOnbellegi = bayatOnbellek<OnizlemeDosyalari>(BAYAT_ONBELLEK.modelDosyalari, MODEL_FILES_TTL_MS, async () => {
+  const [rows, yazicilar] = await Promise.all([
+    prisma.productModelFile.findMany({
+      select: { id: true, productId: true, printerConfigId: true, originalName: true },
+    }),
+    prisma.printerConfig.findMany({ select: { id: true, type: true, brand: true, model: true } }),
+  ]);
+  const aile = new Map(yazicilar.map((y) => [y.id, familyMemberIds(yazicilar, y.id)]));
+  // Haritalar YÜKLEMEDE bir kez kurulur — eskiden panelin her yoklamasında (2-5 sn'de bir)
+  // 797 satırdan baştan kuruluyordu.
+  return onizlemeHaritalariniKur(rows, aile);
+});
 
+/** Dönen haritalar PAYLAŞILIR — çağıran değiştirmemeli. */
+export function getModelFilesForPreview(): Promise<OnizlemeDosyalari> {
+  return modelDosyaOnbellegi.al();
+}
+
+/** Model dosyası ekleyen/silen/yeniden adlandıran her yol çağırır → kart görseli anında güncellenir. */
+export function invalidateModelFilesForPreview(): void {
+  modelDosyaOnbellegi.gecersizKil();
+}
+
+/** Saf: satırlardan "yazıcı::dosya → kimlik" ve "ürün|yazıcı → tek dosya" haritalarını kurar. */
+export function onizlemeHaritalariniKur(
+  rows: readonly ModelFileRow[],
+  aile: ReadonlyMap<string, string[]>
+): OnizlemeDosyalari {
   const dosyaya = new Map<string, string>();
   const sayac = new Map<string, { id: string; adet: number; tekil: Set<string> }>();
-  for (const r of modelFilesCache.rows) {
+  for (const r of rows) {
     if (!r.printerConfigId) continue;
     // AİLE: dosya aynı ailedeki HER yazıcı adına kaydedilir — U1 Üst, U1 Alt'ın dosyasını
     // basınca kart görseli yine bulunur. Önce dosyanın kendi yazıcısı yazılır (öncelik onun).
-    const uyeler = modelFilesCache.aile.get(r.printerConfigId) ?? [r.printerConfigId];
+    const uyeler = aile.get(r.printerConfigId) ?? [r.printerConfigId];
     for (const yaziciId of uyeler) {
       if (r.originalName) {
         // İki anahtar da yazılır: Bambu dosyaları `Parça.gcode.3mf` adlanıyor ve yazıcı bazen

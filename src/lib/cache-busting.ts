@@ -15,6 +15,7 @@
  */
 import { bustCache, bustCaches } from "@/lib/route-cache";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
+import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 
 /**
  * Ürün verisi toplu değişti (pazaryeri senkronu, içe aktarma, toplu düzenleme).
@@ -152,4 +153,8 @@ export async function bustFinanceCachesAfterOrderSnapshots(
  */
 export function bustModelCaches(): void {
   bustCache("models:");
+  // Yazıcı kartının "basılan dosya → kütüphanedeki model" haritası (status-cache). Eskiden
+  // geçersiz kılınmıyor, 30 sn'de bir tablonun tamamı yeniden okunuyordu; artık yalnız burada
+  // düşüyor. Ağır modülü içe aktarmamak için adla düşürülür.
+  bayatOnbellegiDusur(BAYAT_ONBELLEK.modelDosyalari);
 }

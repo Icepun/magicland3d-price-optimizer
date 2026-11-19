@@ -1,3 +1,4 @@
+import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -1531,6 +1532,8 @@ async function runImport(data: ImportPayload, emit: Emit) {
 
   // Yedekten geri yükleme HER TABLOYU değiştirir → tüm önbellek katmanları (bellek + disk) gitsin.
   bustCache();
+  // Yazıcı paneli/relay'in süreç içi önbellekleri de eski veriyi tutmasın (geri yükleme her şeyi değiştirir).
+  for (const ad of Object.values(BAYAT_ONBELLEK)) bayatOnbellegiDusur(ad);
   invalidateOrdersCache();
 
   return {
