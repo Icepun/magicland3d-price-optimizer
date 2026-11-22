@@ -460,6 +460,9 @@ model OrderItemSnapshot {
   syncedAt         DateTime
   // Siparişte kesilen komisyon oranı (KESİR, 0.132). null = pazaryeri bildirmedi / eski kalem.
   commissionRate   Float?
+  // Satırın satış KDV oranı (%) ve kargoya verme süresi (gün) — pazaryeri bildirdiyse.
+  vatRate          Float?
+  dispatchDays     Int?
 
   @@unique([platform, externalOrderId, lineIndex])
   @@index([orderedAt])

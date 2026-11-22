@@ -2,6 +2,7 @@ import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
 import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
+import { hbHizmetBedeli } from "@core/hb-kesinti";
 import { satirMaliyetiBul, satirMaliyetliUrun, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { bagliUrunKimligi, type SatirBaglari } from "@core/order-line-link";
 
@@ -180,9 +181,14 @@ export function computeOrderProfit(
         )
       : null;
     // Siparişte kesilen oran varsa komisyon ondan hesaplanır (öncelik çekirdekte — masaüstüyle aynı).
-    const orderCommissionRate = line.commissionRate ?? null;
+    const satirEk = {
+      orderCommissionRate: line.commissionRate ?? null,
+      saleVatRate: line.saleVatRate ?? null,
+      paymentFee: line.paymentFee ?? null,
+      stoppage: line.stoppage ?? null,
+    };
     if (ozelUrun) {
-      return { unitPrice: line.unitPrice, quantity: line.quantity, product: ozelUrun, orderCommissionRate };
+      return { unitPrice: line.unitPrice, quantity: line.quantity, product: ozelUrun, ...satirEk };
     }
     const resolved = p
       ? resolveProductCost(
@@ -195,7 +201,7 @@ export function computeOrderProfit(
     return {
       unitPrice: line.unitPrice,
       quantity: line.quantity,
-      orderCommissionRate,
+      ...satirEk,
       product:
         p && resolved
           ? {
@@ -256,6 +262,8 @@ export function computeOrderProfit(
       ),
       // Mikro ihracat satışı KDV'den istisna — masaüstüyle aynı kural.
       saleVatExempt: order.microExport != null,
+      // Hepsiburada hizmet bedelini her siparişe kesmiyor — masaüstüyle AYNI çekirdek kuralı.
+      orderFee: order.platform === "hepsiburada" ? hbHizmetBedeli(order.items, settings) : undefined,
     },
     {
       forceProfitPartial: !!order.financialPartial,

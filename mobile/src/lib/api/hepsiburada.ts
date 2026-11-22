@@ -8,7 +8,7 @@ import {
   type HbTalepTuru,
 } from "@core/hb-siparis";
 import { anahtarListesi } from "@core/order-match";
-import { hbSiparisKomisyonOrani } from "@core/order-commission";
+import { hbKalemHesabi } from "@core/hb-kesinti";
 
 import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
@@ -76,10 +76,13 @@ function hbNum(v: unknown): number {
 function hbLineRaw(li: Record<string, unknown>): OrderItem {
   const qty = Math.max(1, Math.floor(hbNum(li.quantity ?? li.amount ?? 1)));
   const unit = hbNum(li.unitPrice ?? li.price) || hbNum(li.totalPrice) / qty;
+  // Kesinti kuralları çekirdekte — masaüstü hbLineRaw ile AYNI fonksiyon. `unit` müşterinin
+  // ödediği; satıcının geliri (HB indirimi dahil) `h.unitPrice`.
+  const h = hbKalemHesabi(li, qty, unit);
   return {
     name: hbStr(li.productName, li.name, li.title, li.barcode, li.merchantSku) || "Ürün",
     quantity: qty,
-    unitPrice: unit,
+    unitPrice: h.unitPrice,
     // Masaüstü route.ts:151 ile birebir anahtar listesi (hbSku dahil).
     matchKeys: [li.merchantSku, li.hbSku, li.sku, li.barcode, li.stockCode, li.hepsiburadaSku].filter(
       (k): k is string => typeof k === "string" && !!k
@@ -88,8 +91,11 @@ function hbLineRaw(li: Record<string, unknown>): OrderItem {
     barcodes: anahtarListesi(li.barcode),
     externalIds: anahtarListesi(li.hbSku, li.hepsiburadaSku),
     skus: anahtarListesi(li.merchantSku, li.sku, li.stockCode),
-    // Siparişte kesilen komisyon — masaüstü hbLineRaw ile AYNI çekirdek fonksiyonu.
-    commissionRate: hbSiparisKomisyonOrani(li, unit),
+    commissionRate: h.commissionRate,
+    saleVatRate: h.saleVatRate,
+    paymentFee: h.paymentFee,
+    stoppage: h.stoppage,
+    dispatchDays: h.dispatchDays,
   };
 }
 

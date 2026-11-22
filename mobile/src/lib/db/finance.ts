@@ -38,6 +38,9 @@ export interface OrderItemSnapshotInput {
   unitPrice: number;
   /** Siparişte kesilen komisyon oranı (kesir). Boşsa kayıtlı değer korunur. */
   commissionRate?: number | null;
+  /** Satırın satış KDV oranı (%) ve kargoya verme süresi (gün). Boşsa kayıtlı değer korunur. */
+  vatRate?: number | null;
+  dispatchDays?: number | null;
 }
 
 export interface ActualExpense {
@@ -388,10 +391,12 @@ export async function syncOrderFinanceSnapshots(
         sql: `INSERT INTO "OrderItemSnapshot" (
                 "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
                 "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt",
-                "commissionRate"
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                "commissionRate","vatRate","dispatchDays"
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
                 "commissionRate" = COALESCE(excluded."commissionRate", "OrderItemSnapshot"."commissionRate"),
+                "vatRate" = COALESCE(excluded."vatRate", "OrderItemSnapshot"."vatRate"),
+                "dispatchDays" = COALESCE(excluded."dispatchDays", "OrderItemSnapshot"."dispatchDays"),
                 "orderedAt" = excluded."orderedAt",
                 "productId" = excluded."productId",
                 "productName" = excluded."productName",
@@ -417,6 +422,12 @@ export async function syncOrderFinanceSnapshots(
           snapshot.currency ?? "TRY",
           now,
           gecerliSiparisOrani(item.commissionRate),
+          typeof item.vatRate === "number" && Number.isFinite(item.vatRate) && item.vatRate >= 0 && item.vatRate < 100
+            ? item.vatRate
+            : null,
+          typeof item.dispatchDays === "number" && Number.isFinite(item.dispatchDays) && item.dispatchDays >= 0
+            ? Math.round(item.dispatchDays)
+            : null,
         ],
       }))
     );

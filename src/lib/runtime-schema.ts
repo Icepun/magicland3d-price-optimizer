@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v57: Hepsiburada kesinti doğruluğu — `OrderItemSnapshot.vatRate` (satırın satış KDV oranı, %) ve
+//      `OrderItemSnapshot.dispatchDays` (kargoya verme süresi). Pazaryeri kalemde bildiriyor; satış
+//      KDV'si artık ilanın kendi oranıyla ayrılıyor, hizmet bedeli de yalnız kesildiği siparişte
+//      düşülüyor. "Yeniden hesapla" aynı sonucu versin diye kalemle saklanır. İkisi de NULLABLE.
 // v56: Siparişte kesilen komisyon oranı — `OrderItemSnapshot.commissionRate` (KESİR). Trendyol
 //      sipariş satırında, Hepsiburada sipariş kaleminde o satışa uygulanan oranı bildiriyor;
 //      sipariş kârı artık ondan hesaplanıyor ve "yeniden hesapla" pazaryeri penceresi kapandıktan
@@ -112,7 +116,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "56";
+const CURRENT_SCHEMA_VERSION = "57";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1154,12 +1158,17 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "statusKind" TEXT NOT NULL,
         "currency" TEXT NOT NULL DEFAULT 'TRY',
         "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        "commissionRate" REAL
+        "commissionRate" REAL,
+        "vatRate" REAL,
+        "dispatchDays" INTEGER
       )
     `);
     // v56: siparişte kesilen komisyon oranı (kesir). Nullable, varsayılansız — eski kalemlerde
     // değer YOKTUR ve uydurulmaz (o satırlar ilanın varsayılan oranıyla hesaplanmaya devam eder).
     await ensureColumn("OrderItemSnapshot", "commissionRate", "REAL");
+    // v57: satırın satış KDV oranı ve kargoya verme süresi. Nullable; eski kalemlerde uydurulmaz.
+    await ensureColumn("OrderItemSnapshot", "vatRate", "REAL");
+    await ensureColumn("OrderItemSnapshot", "dispatchDays", "INTEGER");
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "OrderItemSnapshot_platform_externalOrderId_lineIndex_key"
        ON "OrderItemSnapshot"("platform", "externalOrderId", "lineIndex")`

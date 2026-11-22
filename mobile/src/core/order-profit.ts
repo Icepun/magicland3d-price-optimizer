@@ -69,6 +69,24 @@ export interface OrderProfitLine {
    * null/undefined/geçersiz → eski sıra (ilan → ürün → kural) aynen çalışır.
    */
   orderCommissionRate?: number | null;
+  /**
+   * Satırın KENDİ satış KDV oranı — YÜZDE (10, 20). Pazaryeri sipariş kaleminde bildirir; ilanın
+   * KDV oranıdır ve faturaya o yansır. Verilmezse genel oran (ayarlardaki KDV) kullanılır.
+   * Ölçüldü (22 Kas 2026): Hepsiburada'da 152 kalemin 48'i %10; hepsini %20 saymak o satışlarda
+   * kârı fiyatın ~%7,6'sı kadar eksik gösteriyordu. Girdilerin KDV'si bundan ETKİLENMEZ.
+   */
+  saleVatRate?: number | null;
+  /**
+   * Bu satır için pazaryerinin kestiği tahsilat (ödeme hizmeti) bedeli — BRÜT TL, satırın tamamı.
+   * Platforma özel kural çağıran tarafta hesaplanır (core/hb-kesinti.ts); çekirdek yalnız düşer.
+   * Maliyeti bilinmeyen satırınki kâra girmez (komisyonla aynı kural).
+   */
+  paymentFee?: number | null;
+  /**
+   * Bu satırdan kesilen stopaj (TL) — YALNIZ BİLGİ. Vergiden mahsup edilen bir ön ödemedir;
+   * kârdan DÜŞÜLMEZ (Berke'nin kararı, 22 Kas 2026), dökümde ayrı satırda gösterilir.
+   */
+  stoppage?: number | null;
 }
 
 export interface OrderProfitInput {
@@ -104,6 +122,13 @@ export interface OrderProfitInput {
    * Berke'nin onayıyla, 15 Kas 2026. Verilmezse false (eski davranış).
    */
   saleVatExempt?: boolean;
+  /**
+   * Siparişe BİR KEZ kesilen sabit bedel (brüt TL) — verilirse gider KURALLARINDAKİ sabit bedelin
+   * YERİNE geçer (0 = bu siparişte kesilmiyor). Hepsiburada hizmet bedelini her siparişe değil,
+   * yalnız bazılarına kesiyor (ölçüldü: 152 kalemin 34'ü); kural "her siparişe" dediği için
+   * çoğu siparişte fazladan gider düşülüyordu. Verilmezse (undefined/null) kurallar aynen çalışır.
+   */
+  orderFee?: number | null;
 }
 
 export interface OrderProfitResult {
@@ -122,6 +147,12 @@ export interface OrderProfitResult {
    * `matchedLines` ile eşitse siparişin komisyonu tamamen pazaryerinin bildirdiği orandandır.
    */
   orderRateLines: number;
+  /** Siparişe bir kez düşülen sabit bedel (brüt) — kuraldan ya da orderFee girdisinden. */
+  fixedExpense: number;
+  /** Düşülen tahsilat bedeli toplamı (brüt) — yalnız kâra giren satırlar. */
+  paymentFee: number;
+  /** Stopaj toplamı — BİLGİ; kâra girmedi. */
+  stoppage: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
   /**
@@ -167,6 +198,20 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const saleVatRate = input.saleVatExempt ? 0 : vatRate;
   // Fiyatın içindeki KDV'yi ayıran çarpan — simulatePrice ile AYNI (salePriceExVat = fiyat / bu).
   const vatMultiplier = 1 + (saleVatRate > 0 ? saleVatRate / 100 : 0);
+  // Satırın KENDİ satış KDV oranı (pazaryeri bildirdiyse); ihracat istisnası her şeyin önündedir.
+  const satirKdvOrani = (line: OrderProfitLine): number => {
+    if (input.saleVatExempt) return 0;
+    const oran = line.saleVatRate;
+    return typeof oran === "number" && Number.isFinite(oran) && oran >= 0 && oran < 100
+      ? oran
+      : saleVatRate;
+  };
+  // En az bir satır genel orandan FARKLI oran taşıyorsa sipariş düzeyi KDV ayrıştırması satır
+  // toplamından yapılır; taşımıyorsa eski formül BİREBİR çalışır (eşitlik).
+  let ozelKdvVar = false;
+  let lineOutputVat = 0;
+  let paymentFee = 0;
+  let stoppage = 0;
 
   const platCargo = filterRulesByPlatform(cargoRules, platform);
   // SABİT gider satır hesabından ÇIKARILIR → aşağıda siparişe bir kez uygulanır.
@@ -217,6 +262,13 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     const unitPrice = Number.isFinite(line.unitPrice) ? Math.max(0, line.unitPrice) : 0;
     const lineGross = unitPrice * quantity;
     lineRevenueGross += lineGross;
+    const satirKdv = satirKdvOrani(line);
+    if (satirKdv !== saleVatRate) ozelKdvVar = true;
+    lineOutputVat += lineGross - lineGross / (1 + satirKdv / 100);
+    // Stopaj bilgi amaçlıdır → kâra girmez; siparişin TAMAMI için toplanır (maliyetsiz satır dahil).
+    if (typeof line.stoppage === "number" && Number.isFinite(line.stoppage)) {
+      stoppage += Math.max(0, line.stoppage);
+    }
     // "Maliyet eksik" kararı ÜRETİM payına bakar: paketleme her üründe otomatik eklendiği için
     // tutarların toplamı hiçbir zaman 0 olmuyor ve maliyeti girilmemiş satır kâra dahil oluyordu.
     if (!p || !p.productionCostKnown) {
@@ -273,7 +325,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       cargoRules: platCargo,
       expenseRules: perUnit, // YALNIZ yüzdesel — sabit gider siparişe bir kez
       vatRate,
-      saleVatRate,
+      saleVatRate: satirKdv,
       ...commissionOverride,
       cargoCostOverride: 0, // kargo sipariş düzeyinde
       minOrderQty: quantity, // adet motorun İÇİNDE (dıştan × qty YOK)
@@ -284,6 +336,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     // Döküm için: ürün + paketleme maliyeti (sipariş ölçeğinde).
     urunVePaketleme += sim.productCost + sim.packagingCost;
     estimatedCommission += sim.commissionCost;
+    if (typeof line.paymentFee === "number" && Number.isFinite(line.paymentFee)) {
+      paymentFee += Math.max(0, line.paymentFee);
+    }
     matchedRevenueGross += lineGross;
     commissionRateRevenue +=
       lineGross *
@@ -301,7 +356,15 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   // HESAPLANAN KDV: cironun tamamı üzerinden, motorun kendi ayrıştırmasıyla. Maliyeti
   // bilinmeyen satırlar da müşteriye satılmıştır; satış KDV'si maliyet bilgisine bağlı değildir.
   const grossRevenue = Number.isFinite(orderTotal) ? orderTotal : lineRevenueGross;
-  const outputVat = grossRevenue - grossRevenue / vatMultiplier;
+  // Satırlar kendi oranlarını taşıyorsa: satır KDV'leri toplanır, sipariş toplamı ile satırlar
+  // arasındaki fark (kargo geliri / sipariş indirimi) satırların ORTALAMA çarpanıyla ayrılır.
+  const etkinCarpan =
+    ozelKdvVar && lineRevenueGross > 0 && lineRevenueGross > lineOutputVat
+      ? lineRevenueGross / (lineRevenueGross - lineOutputVat)
+      : vatMultiplier;
+  const outputVat = ozelKdvVar
+    ? lineOutputVat + (grossRevenue - lineRevenueGross) * (1 - 1 / etkinCarpan)
+    : grossRevenue - grossRevenue / vatMultiplier;
 
   if (matchedLines === 0) {
     return {
@@ -311,6 +374,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       productAndPackagingCost: 0,
       estimatedCommission: 0,
       orderRateLines: 0,
+      fixedExpense: 0,
+      paymentFee: 0,
+      stoppage,
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
       cargoRuleMissing: false,
@@ -342,7 +408,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const orderRevenueAdjustment = Number.isFinite(orderTotal)
     ? orderTotal - lineRevenueGross
     : 0;
-  const adjustmentRevenueExVat = orderRevenueAdjustment / vatMultiplier;
+  const adjustmentRevenueExVat = orderRevenueAdjustment / etkinCarpan;
   const adjustmentCommissionRate =
     matchedRevenueGross > 0 ? commissionRateRevenue / matchedRevenueGross : 0;
   const adjustmentCommission = orderRevenueAdjustment * adjustmentCommissionRate;
@@ -356,15 +422,26 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
 
   // SABİT GİDER — siparişe BİR KEZ (kargoyla simetrik: aynı taban, aynı KDV formülü).
   const categories = [...matchedCategories];
-  const orderFixed = Math.max(
-    0,
-    ...categories.map(
-      (categoryName) => calculateExpenses(perOrder, orderTotal, categoryName).fixed
-    )
-  );
+  // orderFee verildiyse (pazaryerine özel bilgi: bu siparişte kesiliyor mu, ne kadar) kuralın
+  // YERİNE geçer; verilmediyse kurallar eskisi gibi çalışır.
+  const orderFixed =
+    typeof input.orderFee === "number" && Number.isFinite(input.orderFee)
+      ? Math.max(0, input.orderFee)
+      : Math.max(
+          0,
+          ...categories.map(
+            (categoryName) => calculateExpenses(perOrder, orderTotal, categoryName).fixed
+          )
+        );
   profit -= orderFixed;
   profit += orderFixed * vatFactor;
   inputVatCredit += orderFixed * vatFactor;
+
+  // TAHSİLAT BEDELİ — pazaryerinin ödeme hizmeti kesintisi (brüt). Fatura KDV'lidir → içindeki KDV
+  // indirilir; sabit giderle aynı formül.
+  profit -= paymentFee;
+  profit += paymentFee * vatFactor;
+  inputVatCredit += paymentFee * vatFactor;
 
   // Kart/sticker gibi sipariş ve kutu/bant gibi gönderi kalemleri, aynı bileşen için
   // siparişte yalnız bir kez uygulanır. Farklı ürün seçimlerinde pahalı olan kazanır.
@@ -477,6 +554,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     productAndPackagingCost: urunVePaketleme + sharedPackagingCost,
     estimatedCommission,
     orderRateLines,
+    fixedExpense: orderFixed,
+    paymentFee,
+    stoppage,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
     // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.

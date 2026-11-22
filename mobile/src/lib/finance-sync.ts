@@ -77,6 +77,8 @@ export function buildFinanceSnapshots(
         unitPrice: it.unitPrice,
         // Siparişte kesilen oran — "yeniden hesapla" pencere kapandıktan sonra da onu kullansın.
         commissionRate: it.commissionRate ?? null,
+        vatRate: it.saleVatRate ?? null,
+        dispatchDays: it.dispatchDays ?? null,
       })),
     });
   }

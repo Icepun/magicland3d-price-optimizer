@@ -37,19 +37,30 @@ async function ensureSnapshotCommissionColumns(): Promise<void> {
 }
 
 /**
- * `OrderItemSnapshot.commissionRate` — siparişte kesilen komisyon oranı (masaüstü şeması v56).
- * Telefon masaüstünden ÖNCE güncellenirse kolon henüz yoktur ve kalem yazımı "no such column" ile
- * tümden düşerdi. Tabloyu masaüstü kurar; tablo hiç yoksa burada bir şey yapılmaz.
+ * `OrderItemSnapshot`'ın sonradan eklenen kolonları — masaüstü şeması v56 (`commissionRate`:
+ * siparişte kesilen komisyon oranı) ve v57 (`vatRate`: satırın satış KDV oranı, `dispatchDays`:
+ * kargoya verme süresi). Telefon masaüstünden ÖNCE güncellenirse kolonlar henüz yoktur ve kalem
+ * yazımı "no such column" ile tümden düşerdi. Tabloyu masaüstü kurar; tablo hiç yoksa burada bir
+ * şey yapılmaz.
  */
 async function ensureItemCommissionColumn(): Promise<void> {
+  const wanted: [string, string][] = [
+    ["commissionRate", "REAL"],
+    ["vatRate", "REAL"],
+    ["dispatchDays", "INTEGER"],
+  ];
   const columns = await query<{ name: string }>(`PRAGMA table_info("OrderItemSnapshot")`);
-  if (columns.length === 0 || columns.some((c) => c.name === "commissionRate")) return;
-  try {
-    await execute(`ALTER TABLE "OrderItemSnapshot" ADD COLUMN "commissionRate" REAL`);
-  } catch (error) {
-    // İki cihaz aynı anda güncellerse ikinci ALTER "duplicate column" dönebilir.
-    const refreshed = await query<{ name: string }>(`PRAGMA table_info("OrderItemSnapshot")`);
-    if (!refreshed.some((c) => c.name === "commissionRate")) throw error;
+  if (columns.length === 0) return;
+  const have = new Set(columns.map((c) => c.name));
+  for (const [name, definition] of wanted) {
+    if (have.has(name)) continue;
+    try {
+      await execute(`ALTER TABLE "OrderItemSnapshot" ADD COLUMN "${name}" ${definition}`);
+    } catch (error) {
+      // İki cihaz aynı anda güncellerse ikinci ALTER "duplicate column" dönebilir.
+      const refreshed = await query<{ name: string }>(`PRAGMA table_info("OrderItemSnapshot")`);
+      if (!refreshed.some((c) => c.name === name)) throw error;
+    }
   }
 }
 

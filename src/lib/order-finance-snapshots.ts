@@ -33,6 +33,7 @@ import {
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { gecerliSiparisOrani } from "@/core/order-commission";
+import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
 import { bustCache } from "./route-cache";
 
 /**
@@ -92,6 +93,10 @@ export interface FinanceSnapshotItem {
    * Verilmezse/boşsa kayıtlı değer KORUNUR (bilgiyi taşımayan bir çağrı onu silmez).
    */
   commissionRate?: number | null;
+  /** Satırın satış KDV oranı (%) — pazaryeri bildirdiyse. Boşsa kayıtlı değer korunur. */
+  vatRate?: number | null;
+  /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli tahmini için. Boşsa kayıtlı korunur. */
+  dispatchDays?: number | null;
 }
 
 export interface FinanceSnapshotOrder {
@@ -268,7 +273,16 @@ type ItemWriteData = {
   currency: string;
   /** Siparişte kesilen komisyon oranı (kesir); bilinmiyorsa null. */
   commissionRate: number | null;
+  /** Satırın satış KDV oranı (%); bilinmiyorsa null. */
+  vatRate: number | null;
+  /** Kargoya verme süresi (gün); bilinmiyorsa null. */
+  dispatchDays: number | null;
 };
+
+const kdvYaDaNull = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 100 ? v : null;
+const gunYaDaNull = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : null;
 
 type ExistingItemRow = ItemWriteData & { lineIndex: number };
 
@@ -293,6 +307,10 @@ function itemChangedFields(existing: ExistingItemRow, next: ItemWriteData): stri
       Math.abs(existing.commissionRate - next.commissionRate) > 1e-9)
   ) {
     changed.push("commissionRate");
+  }
+  if (next.vatRate != null && existing.vatRate !== next.vatRate) changed.push("vatRate");
+  if (next.dispatchDays != null && existing.dispatchDays !== next.dispatchDays) {
+    changed.push("dispatchDays");
   }
   return changed;
 }
@@ -364,10 +382,12 @@ function itemStatement(
     sql: `INSERT INTO "OrderItemSnapshot" (
             "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
             "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt",
-            "commissionRate"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            "commissionRate","vatRate","dispatchDays"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
             "commissionRate" = COALESCE(excluded."commissionRate", "OrderItemSnapshot"."commissionRate"),
+            "vatRate" = COALESCE(excluded."vatRate", "OrderItemSnapshot"."vatRate"),
+            "dispatchDays" = COALESCE(excluded."dispatchDays", "OrderItemSnapshot"."dispatchDays"),
             "orderedAt" = excluded."orderedAt",
             "productId" = excluded."productId",
             "productName" = excluded."productName",
@@ -392,6 +412,8 @@ function itemStatement(
       data.currency,
       toDbDate(syncedAt),
       data.commissionRate,
+      data.vatRate,
+      data.dispatchDays,
     ],
   };
 }
@@ -468,7 +490,8 @@ async function readExistingItems(
     const slice = externalIds.slice(offset, offset + READ_CHUNK);
     const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
       `SELECT "platform","externalOrderId","lineIndex","orderedAt","productId","productName",
-              "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","commissionRate"
+              "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","commissionRate",
+              "vatRate","dispatchDays"
          FROM "OrderItemSnapshot"
         WHERE "externalOrderId" IN (${slice.map(() => "?").join(",")})`,
       ...slice
@@ -489,6 +512,8 @@ async function readExistingItems(
         currency: String(row.currency ?? "TRY"),
         commissionRate:
           row.commissionRate == null ? null : gecerliSiparisOrani(Number(row.commissionRate)),
+        vatRate: row.vatRate == null ? null : kdvYaDaNull(Number(row.vatRate)),
+        dispatchDays: row.dispatchDays == null ? null : gunYaDaNull(toInt(row.dispatchDays)),
       });
       byOrder.set(key, list);
     }
@@ -728,6 +753,8 @@ export async function persistOrderFinanceSnapshots(
           statusKind: order.statusKind,
           currency: order.currency || "TRY",
           commissionRate: gecerliSiparisOrani(line.commissionRate),
+          vatRate: kdvYaDaNull(line.vatRate),
+          dispatchDays: gunYaDaNull(line.dispatchDays),
         });
       }
       itemPlans.push({ platform: order.platform, externalOrderId, rows });
@@ -1331,7 +1358,22 @@ export async function recalculateFinanceMonths(
       const profitLines: OrderProfitLine[] = lines.map((line) => {
         // Siparişte kesilen oran kalem geçmişinde kayıtlıysa yeniden hesap da ONU kullanır;
         // kayıtlı değilse (eski kalem) ilanın/ürünün bugünkü varsayılan oranına düşülür.
-        const orderCommissionRate = line.commissionRate;
+        // Hepsiburada: tahsilat ve stopaj kayıtlı kalemden yeniden türetilir (kayıtlı birim fiyat
+        // satıcının geliridir; indirim payı ayrıca saklanmadığı için taban olarak o kullanılır).
+        const hbEk =
+          row.platform === "hepsiburada"
+            ? hbKalemHesabi(
+                line.vatRate == null ? {} : { vatRate: line.vatRate },
+                line.quantity,
+                kurusToTl(line.unitPriceKurus)
+              )
+            : null;
+        const satirEk = {
+          orderCommissionRate: line.commissionRate,
+          saleVatRate: line.vatRate,
+          paymentFee: hbEk?.paymentFee ?? null,
+          stoppage: hbEk?.stoppage ?? null,
+        };
         const urunId = kalemUrunu(row.platform, line);
         const match = urunId ? productById.get(urunId) ?? null : null;
         // Kalem geçmişinde eşleşen üründe ürün kimliği, eşleşmeyende satır adı tutuluyor — sipariş
@@ -1358,16 +1400,16 @@ export async function recalculateFinanceMonths(
             )
           : null;
         if (ozelUrun) {
-          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: ozelUrun, orderCommissionRate };
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: ozelUrun, ...satirEk };
         }
         if (!match) {
-          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null, orderCommissionRate };
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null, ...satirEk };
         }
         const { listingByPlatform, ...product } = match;
         return {
           unitPrice: kurusToTl(line.unitPriceKurus),
           quantity: line.quantity,
-          orderCommissionRate,
+          ...satirEk,
           // Komisyon/kargo override'ı siparişin platformundaki ilandan gelir (Ürünler ile aynı kaynak).
           product: { ...product, listing: listingByPlatform[row.platform] ?? null },
         };
@@ -1389,6 +1431,8 @@ export async function recalculateFinanceMonths(
           adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
           // Mikro ihracat satışı KDV'den istisna — kayıtlı bilgiyle (Siparişler ekranıyla aynı kâr).
           saleVatExempt: row.microExportCountry != null,
+          // Hepsiburada hizmet bedeli: kayıtlı kargoya verme süresine göre (Siparişler ekranıyla aynı kural).
+          orderFee: row.platform === "hepsiburada" ? hbHizmetBedeli(lines, settings) : undefined,
         },
         {
           statusKind: row.statusKind,

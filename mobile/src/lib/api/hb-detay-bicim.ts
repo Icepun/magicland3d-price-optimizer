@@ -21,6 +21,10 @@ export interface HbKalem {
   skus?: string[];
   /** Siparişte kesilen komisyon oranı (kesir); HB bildirmediyse null. */
   commissionRate?: number | null;
+  saleVatRate?: number | null;
+  paymentFee?: number | null;
+  stoppage?: number | null;
+  dispatchDays?: number | null;
 }
 
 export interface HbDetayKaydi {
@@ -34,8 +38,10 @@ export interface HbDetayKaydi {
  * 2: kaleme `commissionRate` eklendi. Eski dosyadaki kalemlerde oran yok; okunsaydı o siparişlerin
  * kârı telefonda varsayılan oranla, masaüstünde siparişin kendi oranıyla hesaplanır ve iki cihaz
  * ayrışırdı. Dosya bir kez yeniden indirilir.
+ * 3: birim fiyat artık satıcının geliri (HB indirimi dahil), oran KDV dahil; kaleme satış KDV'si,
+ * tahsilat, stopaj ve kargoya verme süresi eklendi. Eski kayıtlar eski anlamı taşır → okunmaz.
  */
-export const HB_DETAY_BICIMI = 2;
+export const HB_DETAY_BICIMI = 3;
 
 const metinDizisi = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
@@ -52,9 +58,9 @@ function kalemMi(v: unknown): v is HbKalem {
     (k.barcodes === undefined || metinDizisi(k.barcodes)) &&
     (k.externalIds === undefined || metinDizisi(k.externalIds)) &&
     (k.skus === undefined || metinDizisi(k.skus)) &&
-    (k.commissionRate === undefined ||
-      k.commissionRate === null ||
-      (typeof k.commissionRate === "number" && Number.isFinite(k.commissionRate)))
+    [k.commissionRate, k.saleVatRate, k.paymentFee, k.stoppage, k.dispatchDays].every(
+      (alan) => alan === undefined || alan === null || (typeof alan === "number" && Number.isFinite(alan))
+    )
   );
 }
 

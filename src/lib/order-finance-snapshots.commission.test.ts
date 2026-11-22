@@ -168,6 +168,7 @@ describe("yeniden hesap — siparişin KENDİ oranını kullanır", () => {
       "hb-k1"
     );
     await recalculate(MONTH);
-    expect((await ozet()).estimatedCommissionKurus).toBe(15_000); // 500 × %30
+    // Hepsiburada'da ilana girilen oran KDV HARİÇTİR → kesilen 500 × %30 × 1,2 = 180.
+    expect((await ozet()).estimatedCommissionKurus).toBe(18_000);
   });
 });

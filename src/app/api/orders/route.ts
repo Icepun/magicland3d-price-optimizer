@@ -49,7 +49,8 @@ import { trendyolIadeDurumu } from "@/core/trendyol-iade";
 import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
 import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
-import { hbSiparisKomisyonOrani, siparisKomisyonKesri } from "@/core/order-commission";
+import { siparisKomisyonKesri } from "@/core/order-commission";
+import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
@@ -127,6 +128,12 @@ export interface UnifiedOrder {
   commissionFromOrder?: boolean;
   /** Siparişin satırlarında kesilen oranlar — KESİR, tekrarsız (dökümde gösterilir). */
   orderCommissionRates?: number[];
+  /** Siparişe bir kez düşülen sabit bedel (hizmet bedeli) — brüt TL. */
+  fixedExpense?: number;
+  /** Düşülen tahsilat bedeli — brüt TL. */
+  paymentFee?: number;
+  /** Stopaj — yalnız bilgi; kâra girmedi. */
+  stoppage?: number;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
@@ -341,6 +348,14 @@ type RawLine = {
    * kaydı) boş kalır ve kâr hesabı ilanın/ürünün varsayılan oranına düşer.
    */
   commissionRate?: number | null;
+  /** Satırın kendi satış KDV oranı (%) — pazaryeri bildirdiyse. */
+  saleVatRate?: number | null;
+  /** Satırın tahsilat bedeli (brüt TL) — Hepsiburada. */
+  paymentFee?: number | null;
+  /** Satırın stopajı (TL) — yalnız bilgi, kâra girmez. */
+  stoppage?: number | null;
+  /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
+  dispatchDays?: number | null;
 };
 
 const matchKeyList = (...values: unknown[]): string[] =>
@@ -350,17 +365,22 @@ const matchKeyList = (...values: unknown[]): string[] =>
 function hbLineRaw(li: Record<string, any>): RawLine {
   const qty = Math.max(1, Math.floor(hbNum(li.quantity ?? li.amount ?? 1)));
   const unit = hbNum(li.unitPrice ?? li.price) || (hbNum(li.totalPrice) / qty);
+  // Kesinti kuralları (komisyon KDV'si, HB indirimi, tahsilat, stopaj, hizmet bedeli) çekirdekte —
+  // telefon da aynı fonksiyonu çağırır. `unit` müşterinin ödediği; satıcının geliri `h.unitPrice`.
+  const h = hbKalemHesabi(li, qty, unit);
   return {
     name: hbStr(li.productName, li.name, li.title, li.barcode, li.merchantSku) || "Ürün",
     quantity: qty,
-    unitPrice: unit,
+    unitPrice: h.unitPrice,
     image: null,
     barcodes: matchKeyList(li.barcode),
     externalIds: matchKeyList(li.hbSku, li.hepsiburadaSku),
     skus: matchKeyList(li.merchantSku, li.sku, li.stockCode),
-    // Hepsiburada kalemde kesilen tutarı ve oranı verir; HB indirimi varsa komisyon indirim
-    // öncesi fiyattan kesildiği için KESİLEN TUTAR esas alınır (bkz. core/order-commission).
-    commissionRate: hbSiparisKomisyonOrani(li, unit),
+    commissionRate: h.commissionRate,
+    saleVatRate: h.saleVatRate,
+    paymentFee: h.paymentFee,
+    stoppage: h.stoppage,
+    dispatchDays: h.dispatchDays,
   };
 }
 /** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
@@ -1266,6 +1286,8 @@ async function computeOrdersBodyInner(
         quantity: l.quantity,
         unitPrice: l.unitPrice,
         commissionRate: l.commissionRate ?? null,
+        vatRate: l.saleVatRate ?? null,
+        dispatchDays: l.dispatchDays ?? null,
       });
 
       // Kâr hesabı için satırı topla — hesabın tamamı aşağıda computeOrderProfit'te (tek çağrı).
@@ -1293,6 +1315,9 @@ async function computeOrdersBodyInner(
         quantity: l.quantity,
         // Siparişte kesilen oran varsa komisyon ondan hesaplanır (çekirdek önceliği uygular).
         orderCommissionRate: l.commissionRate ?? null,
+        saleVatRate: l.saleVatRate ?? null,
+        paymentFee: l.paymentFee ?? null,
+        stoppage: l.stoppage ?? null,
         product:
           ozelUrun ??
           (m && katalog
@@ -1374,6 +1399,8 @@ async function computeOrdersBodyInner(
         adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
         // Mikro ihracat satışı KDV'den istisna → cirodan KDV ayrılmaz (Berke'nin onayı, 15 Kas 2026).
         saleVatExempt: r.microExport != null,
+        // Hepsiburada hizmet bedelini her siparişe kesmiyor → kural yerine siparişin kendi durumu.
+        orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined,
       },
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),
@@ -1415,6 +1442,9 @@ async function computeOrdersBodyInner(
             .filter((oran): oran is number => typeof oran === "number" && Number.isFinite(oran))
         ),
       ],
+      fixedExpense: pr.fixedExpense,
+      paymentFee: pr.paymentFee,
+      stoppage: pr.stoppage,
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,

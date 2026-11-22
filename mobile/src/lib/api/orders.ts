@@ -33,6 +33,14 @@ export interface OrderItem {
    * bildirmediyse (Shopify, eski önbellek kaydı) boş kalır → ilanın varsayılan oranına düşülür.
    */
   commissionRate?: number | null;
+  /** Satırın kendi satış KDV oranı (%) — pazaryeri bildirdiyse (masaüstü RawLine ile birebir). */
+  saleVatRate?: number | null;
+  /** Satırın tahsilat bedeli (brüt TL) — Hepsiburada. */
+  paymentFee?: number | null;
+  /** Satırın stopajı (TL) — yalnız bilgi, kâra girmez. */
+  stoppage?: number | null;
+  /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
+  dispatchDays?: number | null;
 }
 
 export interface UnifiedOrder {

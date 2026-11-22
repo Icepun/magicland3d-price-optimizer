@@ -93,9 +93,12 @@ describe("siparişte kesilen komisyon oranı — telefon", () => {
     const masaustuUc = oku("src/app/api/orders/route.ts");
     for (const [kaynak, ifade] of [
       [oku("mobile/src/lib/api/trendyol.ts"), "commissionRate: siparisKomisyonKesri(l.commission)"],
-      [oku("mobile/src/lib/api/hepsiburada.ts"), "commissionRate: hbSiparisKomisyonOrani(li, unit)"],
+      // Hepsiburada: kesinti kurallarının TAMAMI tek çekirdek fonksiyonunda (core/hb-kesinti).
+      [oku("mobile/src/lib/api/hepsiburada.ts"), "const h = hbKalemHesabi(li, qty, unit);"],
+      [oku("mobile/src/lib/api/hepsiburada.ts"), "commissionRate: h.commissionRate,"],
       [masaustuUc, "commissionRate: siparisKomisyonKesri(l.commission)"],
-      [masaustuUc, "commissionRate: hbSiparisKomisyonOrani(li, unit)"],
+      [masaustuUc, "const h = hbKalemHesabi(li, qty, unit);"],
+      [masaustuUc, "commissionRate: h.commissionRate,"],
     ] as const) {
       expect(kaynak).toContain(ifade);
     }
@@ -103,9 +106,17 @@ describe("siparişte kesilen komisyon oranı — telefon", () => {
 
   it("kâr hesabı oranı çekirdeğe geçirir — özel maliyetli satır dahil iki yolda da", () => {
     const sarmalayici = oku("mobile/src/lib/order-profit.ts");
-    expect(sarmalayici).toContain("const orderCommissionRate = line.commissionRate ?? null;");
-    expect(sarmalayici).toContain("product: ozelUrun, orderCommissionRate }");
-    expect(sarmalayici.match(/orderCommissionRate,\n/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    expect(sarmalayici).toContain("orderCommissionRate: line.commissionRate ?? null,");
+    expect(sarmalayici).toContain("saleVatRate: line.saleVatRate ?? null,");
+    expect(sarmalayici).toContain("paymentFee: line.paymentFee ?? null,");
+    expect(sarmalayici).toContain("product: ozelUrun, ...satirEk }");
+    expect(sarmalayici.match(/\.\.\.satirEk,\n/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    // Hizmet bedeli kuralı iki cihazda aynı çekirdek fonksiyonundan.
+    const hizmet = 'orderFee: order.platform === "hepsiburada" ? hbHizmetBedeli(order.items, settings) : undefined';
+    expect(sarmalayici).toContain(hizmet);
+    expect(oku("src/app/api/orders/route.ts")).toContain(
+      'orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined'
+    );
     // Masaüstü de aynı alanı çekirdeğe geçiriyor.
     expect(oku("src/app/api/orders/route.ts")).toContain("orderCommissionRate: l.commissionRate ?? null");
   });
@@ -116,7 +127,10 @@ describe("siparişte kesilen komisyon oranı — telefon", () => {
 
   it("telefon masaüstünden ÖNCE güncellenirse kolonu kendisi ekler (yazım 'no such column' ile düşmez)", () => {
     const sema = oku("mobile/src/lib/db/schema.ts");
-    expect(sema).toContain('ALTER TABLE "OrderItemSnapshot" ADD COLUMN "commissionRate" REAL');
+    expect(sema).toContain('ALTER TABLE "OrderItemSnapshot" ADD COLUMN "${name}" ${definition}');
+    for (const kolon of ['["commissionRate", "REAL"]', '["vatRate", "REAL"]', '["dispatchDays", "INTEGER"]']) {
+      expect(sema).toContain(kolon);
+    }
     expect(sema).toContain("await ensureItemCommissionColumn();");
   });
 

@@ -131,6 +131,12 @@ interface UnifiedOrder {
   commissionFromOrder?: boolean;
   /** Siparişin satırlarında kesilen oranlar — kesir, tekrarsız. */
   orderCommissionRates?: number[];
+  /** Siparişe bir kez düşülen hizmet bedeli (brüt). */
+  fixedExpense?: number;
+  /** Düşülen tahsilat bedeli (brüt). */
+  paymentFee?: number;
+  /** Stopaj — yalnız bilgi; kâra girmedi. */
+  stoppage?: number;
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -2590,6 +2596,35 @@ const OrderRow = memo(function OrderRow({
                     </span>
                     <span className="tabular-nums text-muted-foreground">
                       −{fmtMoney2(order.cargoCost ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {/* Pazaryerinin sipariş başına kestiği bedeller — yalnız kesildiği siparişte görünür. */}
+                {!isCancelled && (order.fixedExpense ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Hizmet bedeli</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.fixedExpense ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {!isCancelled && (order.paymentFee ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Tahsilat bedeli</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.paymentFee ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {/* Stopaj vergiden mahsup edilir → kârdan düşülmez, yalnız bilgi olarak gösterilir. */}
+                {!isCancelled && (order.stoppage ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground/80">
+                      Stopaj
+                      <span className="ml-1 text-muted-foreground/60">kâra girmez</span>
+                    </span>
+                    <span className="tabular-nums text-muted-foreground/80">
+                      {fmtMoney2(order.stoppage ?? 0, orderCurrency)}
                     </span>
                   </div>
                 )}
