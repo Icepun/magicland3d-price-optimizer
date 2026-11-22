@@ -48,9 +48,10 @@ import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { trendyolIadeDurumu } from "@/core/trendyol-iade";
 import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
 import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
-import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import { gercekKesintiToplami, resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
 import { siparisKomisyonKesri } from "@/core/order-commission";
 import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
+import { tyKalemHesabi } from "@/core/ty-kesinti";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
@@ -132,8 +133,12 @@ export interface UnifiedOrder {
   fixedExpense?: number;
   /** Düşülen tahsilat bedeli — brüt TL. */
   paymentFee?: number;
+  /** Düşülen uluslararası hizmet bedeli — brüt TL (Trendyol mikro ihracat). */
+  internationalFee?: number;
   /** Stopaj — yalnız bilgi; kâra girmedi. */
   stoppage?: number;
+  /** Komisyon dışındaki gerçek kesintilerin toplamı (TL) — kayıtlı kârın yenilenmesi için. */
+  actualFees?: number | null;
   /** Bu kalemler pazaryerinin GERÇEK kaydından mı geldi? (dökümde "gerçek" etiketi) */
   actualOrderFee?: boolean;
   actualPaymentFee?: boolean;
@@ -358,6 +363,8 @@ type RawLine = {
   paymentFee?: number | null;
   /** Satırın stopajı (TL) — yalnız bilgi, kâra girmez. */
   stoppage?: number | null;
+  /** Uluslararası hizmet bedeli (brüt TL) — Trendyol mikro ihracat. */
+  internationalFee?: number | null;
   /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
   dispatchDays?: number | null;
 };
@@ -842,6 +849,7 @@ async function computeOrdersBodyInner(
       } else if (iadeDurumu === "kismi" && iade) {
         returnedLineCount = Math.max(returnedLineCount, iade.satirSayisi);
       }
+      const mikroIhracat = trendyolMikroIhracat(o);
       buffer.push({
         platform: "trendyol",
         // Paket id'si henüz yoksa GEÇİCİ kimlik: listede görünür, kalıcı kayda yazılmaz.
@@ -868,11 +876,13 @@ async function computeOrdersBodyInner(
           skus: matchKeyList(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
           // Trendyol satırda o satışın oranını YÜZDE verir (21; kampanyada 13.2 gibi kesirli).
           commissionRate: siparisKomisyonKesri(l.commission),
+          // Satış KDV'si, stopaj ve (mikro ihracatta) uluslararası hizmet bedeli — core/ty-kesinti.
+          ...tyKalemHesabi(l, Number(l.price ?? 0) * Number(l.quantity ?? 1), { mikroIhracat: mikroIhracat != null }),
         })),
         trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
         cargoProvider: o.cargoProviderName ?? null,
         // Mikro ihracat (yurt dışı müşteri) — ölçüldü 15 Kas 2026: alan her pakette geliyor.
-        microExport: trendyolMikroIhracat(o),
+        microExport: mikroIhracat,
       });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
@@ -1343,6 +1353,7 @@ async function computeOrdersBodyInner(
         orderCommissionRate: l.commissionRate ?? null,
         saleVatRate: l.saleVatRate ?? null,
         paymentFee: l.paymentFee ?? null,
+        internationalFee: l.internationalFee ?? null,
         stoppage: l.stoppage ?? null,
         product:
           ozelUrun ??
@@ -1479,6 +1490,7 @@ async function computeOrdersBodyInner(
       ],
       fixedExpense: pr.fixedExpense,
       paymentFee: pr.paymentFee,
+      internationalFee: pr.internationalFee,
       stoppage: pr.stoppage,
       actualOrderFee: pr.actualOrderFee != null,
       actualPaymentFee: pr.actualPaymentFee != null,
@@ -1494,6 +1506,8 @@ async function computeOrdersBodyInner(
       // KDV motorun çıktısından aynen taşınır — snapshot'a yazılıp aylık özete girer.
       outputVat: pr.outputVat,
       inputVatCredit: pr.inputVatCredit,
+      // Kargo faturası gibi komisyondan sonra gelen gerçek kesinti → kayıtlı kâr yenilensin.
+      actualFees: gercekKesintiToplami(pr),
       trackingNumber: r.trackingNumber,
       cargoProvider: r.cargoProvider,
       packageNumber: r.packageNumber ?? null,

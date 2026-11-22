@@ -135,6 +135,8 @@ interface UnifiedOrder {
   fixedExpense?: number;
   /** Düşülen tahsilat bedeli (brüt). */
   paymentFee?: number;
+  /** Düşülen uluslararası hizmet bedeli (brüt) — yurt dışı siparişi. */
+  internationalFee?: number;
   /** Stopaj — yalnız bilgi; kâra girmedi. */
   stoppage?: number;
   /** Bu kalemler pazaryerinin gerçek kaydından mı geldi? */
@@ -2639,6 +2641,14 @@ const OrderRow = memo(function OrderRow({
                     </span>
                     <span className="tabular-nums text-muted-foreground">
                       −{fmtMoney2(order.paymentFee ?? 0, orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {!isCancelled && (order.internationalFee ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">Uluslararası hizmet bedeli</span>
+                    <span className="tabular-nums text-muted-foreground">
+                      −{fmtMoney2(order.internationalFee ?? 0, orderCurrency)}
                     </span>
                   </div>
                 )}

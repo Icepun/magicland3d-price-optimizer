@@ -7,6 +7,7 @@ import { anahtarListesi } from "@core/order-match";
 import { TRENDYOL_STATUS_KINDS } from "@core/order-status-kind";
 import { trendyolMikroIhracat } from "@core/mikro-ihracat";
 import { siparisKomisyonKesri } from "@core/order-commission";
+import { tyKalemHesabi } from "@core/ty-kesinti";
 import {
   trendyolIadeDurumu,
   trendyolIadeleri,
@@ -62,6 +63,8 @@ interface TyOrder {
     price?: number;
     /** Bu satışa uygulanan komisyon oranı — YÜZDE (21, 13.2). */
     commission?: number;
+    /** Satırın satış KDV oranı (%). */
+    vatRate?: number;
   }[];
 }
 
@@ -185,6 +188,10 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
           skus: anahtarListesi(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
           // Siparişte kesilen oran (masaüstü route.ts ile aynı çekirdek çevirici).
           commissionRate: siparisKomisyonKesri(l.commission),
+          // Satış KDV'si, stopaj, uluslararası hizmet bedeli — masaüstüyle AYNI çekirdek kuralı.
+          ...tyKalemHesabi(l, Number(l.price ?? 0) * Number(l.quantity ?? 1), {
+            mikroIhracat: trendyolMikroIhracat(o) != null,
+          }),
         })),
       });
     }

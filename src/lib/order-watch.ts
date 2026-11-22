@@ -697,13 +697,12 @@ async function financeTick(): Promise<void> {
   finansCalisiyor = true;
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 120_000);
+    const t = setTimeout(() => ctrl.abort(), 240_000);
     try {
-      await fetch(`${baseUrl()}/api/finance/hepsiburada-financials?days=35`, {
-        method: "POST",
-        signal: ctrl.signal,
-        cache: "no-store",
-      });
+      // Pazaryerleri sırayla (uzak veritabanı yazımları zaten sıralı); biri düşerse öteki yine çalışır.
+      for (const yol of ["/api/finance/hepsiburada-financials?days=35", "/api/finance/trendyol-commissions?days=45"]) {
+        await fetch(`${baseUrl()}${yol}`, { method: "POST", signal: ctrl.signal, cache: "no-store" }).catch(() => {});
+      }
     } finally {
       clearTimeout(t);
     }

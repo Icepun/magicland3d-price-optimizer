@@ -395,6 +395,10 @@ model OrderFinanceSnapshot {
   // Mikro ihracat (Trendyol `micro`) — müşterinin ülkesi (ISO, "XX" = bilinmiyor); null = yurt içi
   // ya da bilinmiyor. Satış KDV'den istisna → yeniden hesapta da KDV ayrılmasın diye saklanır.
   microExportCountry       String?
+  // Komisyon dışındaki gerçek kesintilerin toplamı (kuruş) — kâr hangi kayıtla yakalandı; null = yok.
+  actualFeesKurus          Int?
+  // Kâra giren kargo (brüt, kuruş) — sonradan gelen gerçek kargonun yalnız FARKI işlenebilsin diye.
+  cargoKurus               Int?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])

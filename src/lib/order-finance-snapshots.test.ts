@@ -21,6 +21,8 @@ describe("mikro ihracat — yakalanmış kâr yalnız bu bilgi değişince yenil
     outputVatKurus: 6_375,
     inputVatCreditKurus: 2_000,
     microExportCountry: null,
+    actualFeesKurus: null,
+    cargoKurus: null,
     statusKind: "pending",
     currency: "TRY",
     calculationVersion: FINANCE_CALCULATION_VERSION,
@@ -160,5 +162,27 @@ describe("finance snapshot order ids", () => {
         actualCommissionKurus: 1_850,
       })
     ).toBe(true);
+  });
+});
+
+describe("komisyondan sonra gelen gerçek kesinti (kargo faturası) kayıtlı kârı yeniler", () => {
+  const kayitli = {
+    revenueKurus: 72_199, profitKurus: 20_000, profitPartial: false, profitSource: "platform",
+    actualCommissionKurus: 14_440, calculationVersion: FINANCE_CALCULATION_VERSION, actualFeesKurus: null,
+  };
+  const gelen = (actualFeesKurus: number | null | undefined) => ({
+    revenueKurus: 72_199, profitKurus: 21_500, profitPartial: false, profitSource: "platform",
+    actualCommissionKurus: 14_440, actualFeesKurus,
+  });
+  it("kargo faturası ilk kez geldi → yenilenir; aynı tutar tekrar gelirse yenilenmez", () => {
+    expect(shouldReplaceCapturedProfit(kayitli, gelen(12_864))).toBe(true);
+    expect(shouldReplaceCapturedProfit({ ...kayitli, actualFeesKurus: 12_864 }, gelen(12_864))).toBe(false);
+  });
+  it("bilgi taşımayan çağrı (undefined/null) donmuş kârı oynatmaz", () => {
+    expect(shouldReplaceCapturedProfit(kayitli, gelen(undefined))).toBe(false);
+    expect(shouldReplaceCapturedProfit({ ...kayitli, actualFeesKurus: 12_864 }, gelen(null))).toBe(false);
+  });
+  it("tahmini kâr (platform kaynaklı değil) bu kuralla yenilenmez", () => {
+    expect(shouldReplaceCapturedProfit({ ...kayitli, profitSource: "calculated", actualCommissionKurus: null }, { ...gelen(12_864), profitSource: "calculated", actualCommissionKurus: null })).toBe(false);
   });
 });

@@ -28,6 +28,10 @@ export interface TrendyolCommissionAggregate {
 export interface TrendyolCommissionSyncResult {
   fetchedTransactions: number;
   storedOrders: number;
+  /** Gerçek kargo bedeli yazılan sipariş sayısı. */
+  cargoOrders: number;
+  /** Gerçek kargosu bu turda KAYITLI kâra işlenen sipariş sayısı. */
+  appliedCargoOrders: number;
   /** Gerçek komisyonu bu turda KAYITLI kâra işlenen sipariş sayısı. */
   appliedOrders: number;
   skippedTransactions: number;
@@ -68,6 +72,15 @@ function orderKeyOf(item: TrendyolSettlementItem): string | null {
 export interface TrendyolSettlementAdjustments {
   coupons?: TrendyolSettlementItem[];
   couponCancels?: TrendyolSettlementItem[];
+  /**
+   * SATICI İNDİRİMİ ("İndirim") — kuponla AYNI biçimde ayrı hareket: satış kaydı indirimsiz fiyatı ve
+   * onun komisyonunu taşır, indirim borç olarak düşülür ve indirimin komisyonu geri verilir.
+   * Ölçüldü (22 Kas 2026): satış 649,99 / komisyon 136,50 + indirim 32,50 / komisyon iadesi 6,83.
+   * Netlenmeyince ödeme siparişten büyük görünüyor ve gerçek komisyon kâra HİÇ işlenemiyordu
+   * (son 14 günde 50 indirim kaydı).
+   */
+  discounts?: TrendyolSettlementItem[];
+  discountCancels?: TrendyolSettlementItem[];
 }
 
 export function aggregateTrendyolSaleSettlements(
@@ -84,6 +97,8 @@ export function aggregateTrendyolSaleSettlements(
   for (const [list, direction] of [
     [adjustments.coupons ?? [], -1],
     [adjustments.couponCancels ?? [], 1],
+    [adjustments.discounts ?? [], -1],
+    [adjustments.discountCancels ?? [], 1],
   ] as const) {
     for (const item of list) {
       const key = orderKeyOf(item);
@@ -220,7 +235,7 @@ async function fetchSettlements(
   client: TrendyolClient,
   startDate: number,
   endDate: number,
-  transactionType: "Sale" | "Coupon" | "CouponCancel"
+  transactionType: "Sale" | "Coupon" | "CouponCancel" | "Discount" | "DiscountCancel"
 ): Promise<TrendyolSettlementItem[]> {
   const items: TrendyolSettlementItem[] = [];
 
@@ -264,30 +279,131 @@ export async function syncTrendyolActualCommissions(
   const startDate = endDate - days * DAY_MS;
   // Satış + satıcı kuponu (ve iptali): kupon ayrı hareket olarak düşülüyor — netlenmezse ödeme
   // siparişten büyük görünür ve gerçek komisyon kâra işlenemez (bkz. aggregateTrendyolSaleSettlements).
-  const [sales, coupons, couponCancels] = await Promise.all([
+  const [sales, coupons, couponCancels, discounts, discountCancels] = await Promise.all([
     fetchSettlements(client, startDate, endDate, "Sale"),
     fetchSettlements(client, startDate, endDate, "Coupon"),
     fetchSettlements(client, startDate, endDate, "CouponCancel"),
+    fetchSettlements(client, startDate, endDate, "Discount"),
+    fetchSettlements(client, startDate, endDate, "DiscountCancel"),
   ]);
   const unique = uniqueSettlements(sales);
   const { aggregates, skippedTransactions } = aggregateTrendyolSaleSettlements(unique, {
     coupons: uniqueSettlements(coupons),
     couponCancels: uniqueSettlements(couponCancels),
+    discounts: uniqueSettlements(discounts),
+    discountCancels: uniqueSettlements(discountCancels),
   });
   const syncedAt = new Date();
 
   await komisyonKayitlariniYaz(aggregates, syncedAt);
 
+  // GERÇEK KARGO — haftalık kargo faturalarının sipariş kalemleri. Bu adımın hatası komisyonu
+  // geri almaz (kargo tahminde kalır).
+  let cargoOrders = 0;
+  let appliedCargoOrders = 0;
+  try {
+    const kargo = await kargoFaturaKalemleri(client, startDate, endDate);
+    cargoOrders = await kargoKayitlariniYaz(aggregates, kargo);
+  } catch (hata) {
+    console.warn("[trendyol-finance] kargo faturaları alınamadı:", hata instanceof Error ? hata.message : hata);
+  }
+
   const appliedOrders = await gercekKomisyonlariKayitlaraIsle();
+  // Kargo faturası siparişten ~4 hafta sonra kesiliyor: çoğu sipariş artık listede değil, kayıtlı
+  // kârına yalnız FARK işlenir. Hata komisyon işlemesini geri almaz.
+  try {
+    appliedCargoOrders = await gercekKargolariKayitlaraIsle();
+  } catch (hata) {
+    console.warn("[trendyol-finance] gerçek kargo kayıtlı kâra işlenemedi:", hata instanceof Error ? hata.message : hata);
+  }
 
   return {
     fetchedTransactions: unique.length,
     storedOrders: aggregates.length,
+    cargoOrders,
+    appliedCargoOrders,
     appliedOrders,
     skippedTransactions,
     days,
     syncedAt: syncedAt.toISOString(),
   };
+}
+
+/**
+ * SAF: kargo faturası kalemlerinden sipariş no → GİDİŞ kargosu toplamı (TL).
+ * Yalnız "Gönderi" türü alınır; iade kargosu iade edilen siparişin zararıdır, ayrıca ele alınacak.
+ */
+export function kargoKalemleriniTopla(kalemler: Array<Record<string, unknown>>): Map<string, number> {
+  const toplam = new Map<string, number>();
+  for (const k of kalemler) {
+    const no = cleanId(k.orderNumber);
+    const tutar = finiteNumber(k.amount);
+    const tur = String(k.shipmentPackageType ?? "");
+    if (!no || tutar == null || tutar <= 0 || !/Gönderi/i.test(tur)) continue;
+    toplam.set(no, Math.round(((toplam.get(no) ?? 0) + tutar) * 100) / 100);
+  }
+  return toplam;
+}
+
+/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu. */
+async function kargoFaturaKalemleri(
+  client: TrendyolClient,
+  startDate: number,
+  endDate: number
+): Promise<Map<string, number>> {
+  const faturalar: string[] = [];
+  for (let bas = startDate; bas <= endDate; bas += MAX_WINDOW_MS) {
+    const bit = Math.min(endDate, bas + MAX_WINDOW_MS - 1);
+    const sayfa = await client.listOtherFinancials({ startDate: bas, endDate: bit, transactionType: "DeductionInvoices" });
+    for (const k of sayfa.content ?? []) {
+      const id = cleanId(k.id);
+      if (id && /Kargo/i.test(String(k.transactionType ?? "")) && !faturalar.includes(id)) faturalar.push(id);
+    }
+  }
+  const kalemler: Array<Record<string, unknown>> = [];
+  for (const id of faturalar) {
+    for (let p = 0; p < 20; p++) {
+      const y = await client.listCargoInvoiceItems(id, { page: p, size: 500 });
+      const c = y.content ?? [];
+      kalemler.push(...c);
+      if (c.length < 500) break;
+    }
+  }
+  return kargoKalemleriniTopla(kalemler);
+}
+
+/**
+ * Gerçek kargoyu ilgili siparişin kaydına yazar. Kargo faturası sipariş NUMARASIYLA geliyor;
+ * aynı numaranın birden çok paketi varsa hangisine ait olduğu bilinmez → yazılmaz (tahmin kalır).
+ */
+export function kargoYazmaIfadeleri(
+  aggregates: TrendyolCommissionAggregate[],
+  kargo: ReadonlyMap<string, number>
+): Array<{ sql: string; args: unknown[] }> {
+  const paketSayisi = new Map<string, number>();
+  for (const a of aggregates) paketSayisi.set(a.orderNumber, (paketSayisi.get(a.orderNumber) ?? 0) + 1);
+  const ifadeler: Array<{ sql: string; args: unknown[] }> = [];
+  for (const a of aggregates) {
+    const tutar = kargo.get(a.orderNumber);
+    if (tutar == null || paketSayisi.get(a.orderNumber) !== 1) continue;
+    ifadeler.push({
+      sql: `UPDATE "PlatformOrderFinancial" SET "cargoKurus" = ?
+             WHERE "platform" = 'trendyol' AND "externalOrderId" = ? AND "cargoKurus" IS NOT ?`,
+      args: [tlToKurus(tutar), a.externalOrderId, tlToKurus(tutar)],
+    });
+  }
+  return ifadeler;
+}
+
+async function kargoKayitlariniYaz(
+  aggregates: TrendyolCommissionAggregate[],
+  kargo: ReadonlyMap<string, number>
+): Promise<number> {
+  const ifadeler = kargoYazmaIfadeleri(aggregates, kargo);
+  if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
+    for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
+  }
+  return ifadeler.length;
 }
 
 /**
@@ -375,6 +491,93 @@ export async function komisyonKayitlariniPrismaIleYaz(aggregates: TrendyolCommis
       )
     );
   }
+}
+
+/** Kayıtlı kârı gerçek komisyonla yakalanmış, kâra giren kargosu bilinen kayıt + gerçek kargo. */
+export interface KargoBekleyenKayit {
+  id: string;
+  profitKurus: number;
+  /** Kayıtlı kâra giren kargo (brüt kuruş). */
+  cargoKurus: number;
+  inputVatCreditKurus: number | null;
+  /** Gerçek kargo (brüt kuruş). */
+  actualCargoKurus: number;
+}
+
+/**
+ * SAF: gerçek kargonun kayıtlı kâra FARK olarak işlenmesi. Kargo faturası KDV'lidir: tahmini kargonun
+ * içindeki KDV geri alınır, gerçeğinki indirilir — kâr (tahmin − gerçek) × (1 − KDV payı) kadar değişir.
+ */
+export function gercekKargoGuncellemeleri(
+  kayitlar: KargoBekleyenKayit[],
+  vatRate: number
+): Array<{ id: string; profitKurus: number; inputVatCreditKurus: number | null; cargoKurus: number }> {
+  const pay = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  return kayitlar
+    .filter((k) => k.actualCargoKurus !== k.cargoKurus)
+    .map((k) => {
+      const fark = k.cargoKurus - k.actualCargoKurus;
+      return {
+        id: k.id,
+        profitKurus: Math.round(k.profitKurus + fark * (1 - pay)),
+        inputVatCreditKurus:
+          k.inputVatCreditKurus == null ? null : Math.round(k.inputVatCreditKurus - fark * pay),
+        cargoKurus: k.actualCargoKurus,
+      };
+    });
+}
+
+/**
+ * Gerçek kargoyu, listeden düşmüş siparişlerin KAYITLI kârına işler (listedekiler sipariş ekranında
+ * zaten gerçek kargoyla hesaplanıyor). Yalnız kârı gerçek komisyonla yakalanmış ve kâra giren kargosu
+ * saklanmış kayıtlar — eski kayıtlarda kargo saklı değil; onlar "Bu ayı yeniden hesapla" ile düzelir.
+ */
+export async function gercekKargolariKayitlaraIsle(): Promise<number> {
+  const [satirlar, ayarlar] = await Promise.all([
+    prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `SELECT s."id", s."profitKurus", s."cargoKurus", s."inputVatCreditKurus", f."cargoKurus" AS "gercekKargo"
+         FROM "OrderFinanceSnapshot" s
+         JOIN "PlatformOrderFinancial" f
+           ON f."platform" = 'trendyol' AND f."externalOrderId" = s."externalOrderId"
+        WHERE s."platform" = 'trendyol' AND s."profitSource" = 'platform'
+          AND s."statusKind" <> 'cancelled' AND s."profitKurus" IS NOT NULL AND s."profitPartial" = 0
+          AND s."cargoKurus" IS NOT NULL AND f."cargoKurus" IS NOT NULL
+          AND (s."actualFeesKurus" IS NULL OR s."actualFeesKurus" <> f."cargoKurus")`
+    ),
+    prisma.appSetting.findMany(),
+  ]);
+  const sayi = (v: unknown) => (typeof v === "bigint" ? Number(v) : Number(v));
+  const guncellemeler = gercekKargoGuncellemeleri(
+    satirlar.map((r) => ({
+      id: String(r.id),
+      profitKurus: sayi(r.profitKurus),
+      cargoKurus: sayi(r.cargoKurus),
+      inputVatCreditKurus: r.inputVatCreditKurus == null ? null : sayi(r.inputVatCreditKurus),
+      actualCargoKurus: sayi(r.gercekKargo),
+    })),
+    vatRateOf(Object.fromEntries(ayarlar.map((row) => [row.key, row.value])))
+  );
+  // Kargosu zaten gerçeğe eşit olanlar: yalnız "işlendi" damgası (bir daha bakılmasın).
+  const damga = satirlar
+    .filter((r) => sayi(r.cargoKurus) === sayi(r.gercekKargo))
+    .map((r) => ({
+      sql: `UPDATE "OrderFinanceSnapshot" SET "actualFeesKurus" = ? WHERE "id" = ?`,
+      args: [sayi(r.gercekKargo), String(r.id)] as unknown[],
+    }));
+  const ifadeler = [
+    ...guncellemeler.map((g) => ({
+      sql: `UPDATE "OrderFinanceSnapshot"
+               SET "profitKurus" = ?, "inputVatCreditKurus" = ?, "cargoKurus" = ?, "actualFeesKurus" = ?
+             WHERE "id" = ? AND "profitSource" = 'platform'`,
+      args: [g.profitKurus, g.inputVatCreditKurus, g.cargoKurus, g.cargoKurus, g.id] as unknown[],
+    })),
+    ...damga,
+  ];
+  if (ifadeler.length === 0) return 0;
+  if (!(await batchWrite(ifadeler))) {
+    for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...ifade.args);
+  }
+  return guncellemeler.length;
 }
 
 /** Gerçek komisyonu henüz işlenmemiş, kârı TAM hesaplanmış kayıt + o siparişin netleşmiş ödemesi. */

@@ -39,6 +39,8 @@ export interface OrderItem {
   paymentFee?: number | null;
   /** Satırın stopajı (TL) — yalnız bilgi, kâra girmez. */
   stoppage?: number | null;
+  /** Uluslararası hizmet bedeli (brüt TL) — Trendyol mikro ihracat. */
+  internationalFee?: number | null;
   /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
   dispatchDays?: number | null;
 }

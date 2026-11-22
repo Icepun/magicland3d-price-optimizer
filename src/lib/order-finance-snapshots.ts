@@ -12,6 +12,7 @@ import { filamentFiyatlariOku } from "./filament-fiyatlari";
 import { satirMaliyetleriniOku } from "./order-line-costs";
 import { satirBaglariniOku } from "./order-line-links";
 import {
+  gercekKesintiToplami,
   resolveOrderProfit,
   type OrderProfitFinancial,
   type OrderProfitLine,
@@ -35,6 +36,7 @@ import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { gecerliSiparisOrani } from "@/core/order-commission";
 import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
+import { tyKalemHesabi } from "@/core/ty-kesinti";
 import { bustCache } from "./route-cache";
 
 /**
@@ -121,6 +123,17 @@ export interface FinanceSnapshotOrder {
   /** Girdilerden indirilecek KDV — TL. Aynı motor çıktısı. */
   inputVatCredit?: number | null;
   /**
+   * Komisyon dışındaki GERÇEK kesintilerin toplamı (hizmet bedeli + tahsilat + kargo, TL) — pazaryeri
+   * kaydından geldiyse; yoksa null. Bu tutar değişince (ör. kargo faturası komisyondan sonra geldi)
+   * yakalanmış kâr yenilenir. undefined = çağıran bilmiyor (karşılaştırmaya girmez).
+   */
+  actualFees?: number | null;
+  /**
+   * Kâra giren kargo (brüt TL) — tahmin ya da gerçek. Saklanır ki kargo faturası sipariş listeden
+   * düştükten SONRA gelirse kayıtlı kâra yalnız FARK işlenebilsin (lib/trendyol-finance).
+   */
+  cargoCost?: number | null;
+  /**
    * Mikro ihracat (Trendyol `micro`): `{ ulke }` ya da null (yurt içi). VERİLMEZSE (undefined)
    * kayıtlı değer korunur — Shopify/HB ya da bilgiyi taşımayan çağrı yeri onu silmesin.
    */
@@ -142,6 +155,7 @@ export function shouldReplaceCapturedProfit(
     /** Satırın yazıldığı hesap sürümü — eskiyse formül/girdi değişmiş demektir. */
     calculationVersion?: number;
     microExportCountry?: string | null;
+    actualFeesKurus?: number | null;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -151,6 +165,8 @@ export function shouldReplaceCapturedProfit(
     actualCommissionKurus?: number | null;
     /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
     microExportCountry?: string | null;
+    /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
+    actualFeesKurus?: number | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -187,6 +203,16 @@ export function shouldReplaceCapturedProfit(
   ) {
     return true;
   }
+  // Komisyon dışındaki gerçek kesintiler (kargo faturası, hizmet bedeli…) sonradan gelebilir —
+  // Trendyol kargo faturası haftalık kesiliyor, komisyondan günler sonra. Tutar değişince yenile.
+  if (
+    incoming.profitSource === "platform" &&
+    incoming.actualFeesKurus !== undefined &&
+    incoming.actualFeesKurus !== null &&
+    (existing.actualFeesKurus ?? null) !== incoming.actualFeesKurus
+  ) {
+    return true;
+  }
   return (
     existing.profitPartial &&
     !incoming.profitPartial &&
@@ -211,6 +237,8 @@ type SnapshotWriteData = {
   outputVatKurus: number | null;
   inputVatCreditKurus: number | null;
   microExportCountry: string | null;
+  actualFeesKurus: number | null;
+  cargoKurus: number | null;
   statusKind: string;
   currency: string;
   calculationVersion: number;
@@ -254,6 +282,10 @@ export function snapshotChangedFields(
   if ((existing.microExportCountry ?? null) !== (next.microExportCountry ?? null)) {
     changed.push("microExportCountry");
   }
+  if ((existing.actualFeesKurus ?? null) !== (next.actualFeesKurus ?? null)) {
+    changed.push("actualFeesKurus");
+  }
+  if ((existing.cargoKurus ?? null) !== (next.cargoKurus ?? null)) changed.push("cargoKurus");
   if (existing.statusKind !== next.statusKind) changed.push("statusKind");
   if (existing.currency !== next.currency) changed.push("currency");
   if (existing.calculationVersion !== next.calculationVersion) {
@@ -331,8 +363,8 @@ function snapshotStatement(
             "id","platform","externalOrderId","orderNumber","orderedAt","revenueKurus","profitKurus",
             "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
             "outputVatKurus","inputVatCreditKurus","microExportCountry",
-            "statusKind","currency","calculationVersion","syncedAt"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            "statusKind","currency","calculationVersion","syncedAt","actualFeesKurus","cargoKurus"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId") DO UPDATE SET
             "orderNumber" = excluded."orderNumber",
             "orderedAt" = excluded."orderedAt",
@@ -348,7 +380,9 @@ function snapshotStatement(
             "statusKind" = excluded."statusKind",
             "currency" = excluded."currency",
             "calculationVersion" = excluded."calculationVersion",
-            "syncedAt" = excluded."syncedAt"`,
+            "syncedAt" = excluded."syncedAt",
+            "actualFeesKurus" = excluded."actualFeesKurus",
+            "cargoKurus" = excluded."cargoKurus"`,
     args: [
       `finance:${platform}:${externalOrderId}`,
       platform,
@@ -368,6 +402,8 @@ function snapshotStatement(
       data.currency,
       data.calculationVersion,
       toDbDate(data.syncedAt),
+      data.actualFeesKurus,
+      data.cargoKurus,
     ],
   };
 }
@@ -563,6 +599,10 @@ function toIncomingSnapshot(order: FinanceSnapshotOrder) {
         : order.microExport === null
           ? null
           : order.microExport.ulke ?? "XX",
+    actualFeesKurus:
+      order.actualFees === undefined ? undefined : order.actualFees === null ? null : tlToKurus(order.actualFees),
+    cargoKurus:
+      order.cargoCost == null || !Number.isFinite(order.cargoCost) ? null : tlToKurus(order.cargoCost),
   };
 }
 
@@ -612,6 +652,16 @@ export function resolveSnapshotWriteData(
       incoming.microExportCountry !== undefined
         ? incoming.microExportCountry
         : existing?.microExportCountry ?? null,
+    // Kâr yenilendiyse o kârın dayandığı gerçek kesinti toplamı; yenilenmediyse kayıtlı değer.
+    actualFeesKurus: replaceProfit
+      ? incoming.actualFeesKurus ?? null
+      : existing?.actualFeesKurus ?? incoming.actualFeesKurus ?? null,
+    // Kârla BİRLİKTE yazılır: kayıtlı kâr hangi kargoyla hesaplandıysa o (fark işlemenin dayanağı).
+    // Kâr yenilenmediyse bugünkü kargo tahmini YAZILMAZ: donmuş kâr eski tahminle hesaplandı; yeni
+    // tahmini dayanak saymak, sonradan gelen gerçek kargonun farkını yanlış işletirdi.
+    cargoKurus: replaceProfit
+      ? incoming.cargoKurus ?? existing?.cargoKurus ?? null
+      : existing?.cargoKurus ?? null,
     statusKind: order.statusKind,
     currency: order.currency || "TRY",
     calculationVersion: replaceProfit
@@ -665,6 +715,8 @@ export async function persistOrderFinanceSnapshots(
     outputVatKurus: number | null;
     inputVatCreditKurus: number | null;
     microExportCountry: string | null;
+    actualFeesKurus: number | null;
+    cargoKurus: number | null;
     statusKind: string;
     currency: string;
   }> = [];
@@ -686,6 +738,8 @@ export async function persistOrderFinanceSnapshots(
         outputVatKurus: true,
         inputVatCreditKurus: true,
         microExportCountry: true,
+        actualFeesKurus: true,
+        cargoKurus: true,
         statusKind: true,
         currency: true,
       },
@@ -1045,6 +1099,8 @@ type RecalcSnapshotRow = {
   outputVatKurus: number | null;
   inputVatCreditKurus: number | null;
   microExportCountry: string | null;
+  actualFeesKurus: number | null;
+  cargoKurus: number | null;
   calculationVersion: number;
   statusKind: string;
   currency: string;
@@ -1150,6 +1206,7 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
     orderNumber: string;
     grossRevenueKurus: number;
     commissionKurus: number;
+    cargoKurus: number | null;
   }> = [];
   for (let offset = 0; offset < trendyol.length; offset += READ_CHUNK) {
     const slice = trendyol.slice(offset, offset + READ_CHUNK);
@@ -1167,6 +1224,7 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
           orderNumber: true,
           grossRevenueKurus: true,
           commissionKurus: true,
+          cargoKurus: true,
         },
       }))
     );
@@ -1192,6 +1250,8 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
     result.set(snapshotKey(row.platform, row.externalOrderId), {
       actualCommission: kurusToTl(financial.commissionKurus),
       settlementRevenue: kurusToTl(financial.grossRevenueKurus),
+      // Gerçek kargo (kargo faturası kalemi) — yoksa tahmin kalır.
+      actualCargo: financial.cargoKurus == null ? null : kurusToTl(financial.cargoKurus),
     });
   }
   return result;
@@ -1308,6 +1368,8 @@ export async function recalculateFinanceMonths(
         outputVatKurus: true,
         inputVatCreditKurus: true,
         microExportCountry: true,
+        actualFeesKurus: true,
+        cargoKurus: true,
         calculationVersion: true,
         statusKind: true,
         currency: true,
@@ -1397,11 +1459,21 @@ export async function recalculateFinanceMonths(
                 kurusToTl(line.unitPriceKurus)
               )
             : null;
+        // Trendyol: stopaj ve (mikro ihracatta) uluslararası hizmet bedeli kayıtlı kalemden türetilir.
+        const tyEk =
+          row.platform === "trendyol"
+            ? tyKalemHesabi(
+                { vatRate: line.vatRate },
+                kurusToTl(line.unitPriceKurus) * line.quantity,
+                { mikroIhracat: row.microExportCountry != null }
+              )
+            : null;
         const satirEk = {
           orderCommissionRate: line.commissionRate,
-          saleVatRate: line.vatRate,
+          saleVatRate: tyEk ? tyEk.saleVatRate : line.vatRate,
           paymentFee: hbEk?.paymentFee ?? null,
-          stoppage: hbEk?.stoppage ?? null,
+          internationalFee: tyEk?.internationalFee ?? null,
+          stoppage: hbEk?.stoppage ?? tyEk?.stoppage ?? null,
         };
         const urunId = kalemUrunu(row.platform, line);
         const match = urunId ? productById.get(urunId) ?? null : null;
@@ -1500,6 +1572,8 @@ export async function recalculateFinanceMonths(
         outputVat: resolved.outputVat,
         inputVatCredit: resolved.inputVatCredit,
         microExport: row.microExportCountry == null ? null : { ulke: row.microExportCountry },
+        actualFees: gercekKesintiToplami(resolved),
+        cargoCost: resolved.cargoCost,
         statusKind: row.statusKind,
         currency: row.currency,
       });

@@ -83,6 +83,11 @@ export interface OrderProfitLine {
    */
   paymentFee?: number | null;
   /**
+   * Uluslararası hizmet bedeli (brüt TL, satırın tamamı) — Trendyol mikro ihracat siparişi.
+   * Kural çağıran tarafta (`core/ty-kesinti.ts`); çekirdek yalnız düşer (fatura KDV'li, KDV'si indirilir).
+   */
+  internationalFee?: number | null;
+  /**
    * Bu satırdan kesilen stopaj (TL) — YALNIZ BİLGİ. Vergiden mahsup edilen bir ön ödemedir;
    * kârdan DÜŞÜLMEZ (Berke'nin kararı, 22 Kas 2026), dökümde ayrı satırda gösterilir.
    */
@@ -153,6 +158,8 @@ export interface OrderProfitResult {
   fixedExpense: number;
   /** Düşülen tahsilat bedeli toplamı (brüt) — yalnız kâra giren satırlar. */
   paymentFee: number;
+  /** Düşülen uluslararası hizmet bedeli toplamı (brüt) — yalnız kâra giren satırlar. */
+  internationalFee: number;
   /** Stopaj toplamı — BİLGİ; kâra girmedi. */
   stoppage: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
@@ -213,6 +220,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let ozelKdvVar = false;
   let lineOutputVat = 0;
   let paymentFee = 0;
+  let internationalFee = 0;
   let stoppage = 0;
 
   const platCargo = filterRulesByPlatform(cargoRules, platform);
@@ -341,6 +349,9 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     if (typeof line.paymentFee === "number" && Number.isFinite(line.paymentFee)) {
       paymentFee += Math.max(0, line.paymentFee);
     }
+    if (typeof line.internationalFee === "number" && Number.isFinite(line.internationalFee)) {
+      internationalFee += Math.max(0, line.internationalFee);
+    }
     matchedRevenueGross += lineGross;
     commissionRateRevenue +=
       lineGross *
@@ -379,6 +390,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       orderRateLines: 0,
       fixedExpense: 0,
       paymentFee: 0,
+      internationalFee: 0,
       stoppage,
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
@@ -445,6 +457,11 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   profit -= paymentFee;
   profit += paymentFee * vatFactor;
   inputVatCredit += paymentFee * vatFactor;
+
+  // ULUSLARARASI HİZMET BEDELİ — Trendyol'un mikro ihracat gönderisi başına faturası; aynı formül.
+  profit -= internationalFee;
+  profit += internationalFee * vatFactor;
+  inputVatCredit += internationalFee * vatFactor;
 
   // Kart/sticker gibi sipariş ve kutu/bant gibi gönderi kalemleri, aynı bileşen için
   // siparişte yalnız bir kez uygulanır. Farklı ürün seçimlerinde pahalı olan kazanır.
@@ -560,6 +577,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     orderRateLines,
     fixedExpense: orderFixed,
     paymentFee,
+    internationalFee,
     stoppage,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
@@ -618,6 +636,16 @@ export interface ResolvedOrderProfit extends OrderProfitResult {
   actualOrderFee: number | null;
   actualPaymentFee: number | null;
   actualCargo: number | null;
+}
+
+/** Komisyon dışındaki uygulanmış gerçek kesintilerin toplamı (TL); hiçbiri yoksa null. */
+export function gercekKesintiToplami(r: {
+  actualOrderFee: number | null;
+  actualPaymentFee: number | null;
+  actualCargo: number | null;
+}): number | null {
+  if (r.actualOrderFee == null && r.actualPaymentFee == null && r.actualCargo == null) return null;
+  return Math.round(((r.actualOrderFee ?? 0) + (r.actualPaymentFee ?? 0) + (r.actualCargo ?? 0)) * 100) / 100;
 }
 
 /**

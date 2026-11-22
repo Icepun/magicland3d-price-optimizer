@@ -100,14 +100,11 @@ export async function getRules(): Promise<Rules> {
     const entry: OrderProfitFinancial = {
       actualCommission: Number(row.commissionKurus) / 100,
       settlementRevenue: Number(row.grossRevenueKurus) / 100,
-      // Hepsiburada: komisyon dışındaki gerçek kesintiler (masaüstü /api/orders ile aynı alanlar).
-      ...(hepsiburada
-        ? {
-            actualOrderFee: tlYaDaNull(row.serviceFeeKurus),
-            actualPaymentFee: tlYaDaNull(row.paymentFeeKurus),
-            actualCargo: tlYaDaNull(row.cargoKurus),
-          }
-        : {}),
+      // Komisyon dışındaki gerçek kesintiler (masaüstü /api/orders ile aynı alanlar): Hepsiburada'da
+      // hizmet bedeli + tahsilat + kargo, Trendyol'da kargo faturası kalemi.
+      actualOrderFee: hepsiburada ? tlYaDaNull(row.serviceFeeKurus) : null,
+      actualPaymentFee: hepsiburada ? tlYaDaNull(row.paymentFeeKurus) : null,
+      actualCargo: tlYaDaNull(row.cargoKurus),
     };
     financialByExternalId.set(String(row.externalOrderId), entry);
     // Sipariş numarasıyla yedek eşleşme yalnız Trendyol içindir.

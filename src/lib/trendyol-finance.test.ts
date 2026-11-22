@@ -168,3 +168,78 @@ describe("gerçek komisyonun KAYITLI kâra işlenmesi", () => {
     expect(g.inputVatCreditKurus).toBeNull();
   });
 });
+
+describe("Trendyol satıcı indirimi ve gerçek kargo", () => {
+  it("satıcı indirimi kupon gibi netlenir — ödeme sipariş tutarıyla tutar", () => {
+    const base = { orderNumber: "11800000001", shipmentPackageId: 777 };
+    const { aggregates } = aggregateTrendyolSaleSettlements(
+      [{ ...base, id: "s", credit: 649.99, commissionAmount: 136.5 }],
+      { discounts: [{ ...base, id: "d", debt: 32.5, credit: 0, commissionAmount: 6.83 }] }
+    );
+    expect(aggregates[0]).toMatchObject({ grossRevenue: 617.49, commission: 129.67 });
+  });
+
+  it("indirim iptali indirimi geri alır", () => {
+    const base = { orderNumber: "1", shipmentPackageId: 9 };
+    const { aggregates } = aggregateTrendyolSaleSettlements(
+      [{ ...base, id: "s", credit: 100, commissionAmount: 20 }],
+      {
+        discounts: [{ ...base, id: "d", debt: 10, commissionAmount: 2 }],
+        discountCancels: [{ ...base, id: "x", credit: 10, commissionAmount: 2 }],
+      }
+    );
+    expect(aggregates[0]).toMatchObject({ grossRevenue: 100, commission: 20 });
+  });
+
+  it("kargo faturası kalemleri: yalnız gidiş kargosu, sipariş başına toplanır", async () => {
+    const { kargoKalemleriniTopla } = await import("./trendyol-finance");
+    const toplam = kargoKalemleriniTopla([
+      { shipmentPackageType: "Gönderi Kargo Bedeli", orderNumber: "11697516497", amount: 98.34, desi: 1 },
+      { shipmentPackageType: "Gönderi Kargo Bedeli", orderNumber: "11699305901", amount: 128.64, desi: 4 },
+      { shipmentPackageType: "İade Kargo Bedeli", orderNumber: "11697516497", amount: 98.34 },
+      { shipmentPackageType: "Gönderi Kargo Bedeli", orderNumber: "11699305901", amount: 10 },
+      { shipmentPackageType: "Gönderi Kargo Bedeli", orderNumber: "", amount: 5 },
+    ]);
+    expect(Object.fromEntries(toplam)).toEqual({ "11697516497": 98.34, "11699305901": 138.64 });
+  });
+
+  it("kargo yalnız tek paketli siparişin kaydına yazılır; değişmeyen değer yeniden yazılmaz", async () => {
+    const { kargoYazmaIfadeleri } = await import("./trendyol-finance");
+    const satir = (externalOrderId: string, orderNumber: string) => ({
+      externalOrderId, orderNumber, grossRevenue: 100, commission: 20, sellerRevenue: 80, transactionCount: 1, sourceUpdatedAt: null,
+    });
+    const ifadeler = kargoYazmaIfadeleri(
+      [satir("ty-1", "A"), satir("ty-2", "B"), satir("ty-3", "B"), satir("ty-4", "C")],
+      new Map([["A", 98.34], ["B", 50], ["Z", 1]])
+    );
+    expect(ifadeler).toHaveLength(1);
+    expect(ifadeler[0].args).toEqual([9834, "ty-1", 9834]);
+    expect(ifadeler[0].sql).toContain('"cargoKurus" IS NOT ?');
+  });
+});
+
+describe("gerçek kargonun kayıtlı kâra FARK olarak işlenmesi", () => {
+  it("tahmin 88,00 → gerçek 77,49: kâr 10,51 × 5/6 artar, indirilecek KDV 10,51/6 azalır", async () => {
+    const { gercekKargoGuncellemeleri } = await import("./trendyol-finance");
+    const [g] = gercekKargoGuncellemeleri(
+      [{ id: "s1", profitKurus: 3_023, cargoKurus: 8_800, inputVatCreditKurus: 4_000, actualCargoKurus: 7_749 }],
+      20
+    );
+    expect(g.profitKurus).toBe(Math.round(3_023 + 1_051 * (5 / 6)));
+    expect(g.inputVatCreditKurus).toBe(Math.round(4_000 - 1_051 / 6));
+    expect(g.cargoKurus).toBe(7_749);
+  });
+  it("gerçek kargo tahminden pahalıysa kâr düşer; eşitse güncelleme üretmez; KDV bilinmiyorsa bilinmiyor kalır", async () => {
+    const { gercekKargoGuncellemeleri } = await import("./trendyol-finance");
+    const sonuc = gercekKargoGuncellemeleri(
+      [
+        { id: "a", profitKurus: 20_000, cargoKurus: 9_834, inputVatCreditKurus: null, actualCargoKurus: 12_864 },
+        { id: "b", profitKurus: 20_000, cargoKurus: 9_834, inputVatCreditKurus: 1, actualCargoKurus: 9_834 },
+      ],
+      20
+    );
+    expect(sonuc).toHaveLength(1);
+    expect(sonuc[0].profitKurus).toBe(Math.round(20_000 - 3_030 * (5 / 6)));
+    expect(sonuc[0].inputVatCreditKurus).toBeNull();
+  });
+});

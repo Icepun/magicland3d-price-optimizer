@@ -185,6 +185,7 @@ export function computeOrderProfit(
       orderCommissionRate: line.commissionRate ?? null,
       saleVatRate: line.saleVatRate ?? null,
       paymentFee: line.paymentFee ?? null,
+      internationalFee: line.internationalFee ?? null,
       stoppage: line.stoppage ?? null,
     };
     if (ozelUrun) {

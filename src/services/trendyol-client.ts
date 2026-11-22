@@ -183,6 +183,8 @@ export interface TrendyolOrderLine {
   amount?: number;
   /** Bu satışa uygulanan komisyon oranı — YÜZDE (21, 13.2). Kampanyada ürünün oranından farklıdır. */
   commission?: number;
+  /** Satırın satış KDV oranı (%). */
+  vatRate?: number;
   /**
    * SATIR bazlı durum (paket durumundan AYRI): çok kalemli bir siparişte tek kalem iade
    * edilirse paket "Delivered" kalır ama bu alan "Returned"/"Cancelled" olur. Paket tutarı
@@ -445,6 +447,44 @@ export class TrendyolClient {
 
     return this.request<TrendyolSettlementPage>(
       `/integration/finance/che/sellers/${this.credentials.sellerId}/settlements?${searchParams.toString()}`
+    );
+  }
+
+  /**
+   * Diğer finans kayıtları — kesinti faturaları (`DeductionInvoices`: Komisyon Faturası, Platform
+   * Hizmet Bedeli, Kargo Fatura, Uluslararası Hizmet Bedeli, Reklam Bedeli …), stopaj, ödemeler.
+   * Tarih aralığı en çok 14 gün. (DOĞRULANDI canlı, 22 Kas 2026.)
+   */
+  async listOtherFinancials(params: {
+    startDate: number;
+    endDate: number;
+    transactionType: string;
+    page?: number;
+    size?: number;
+  }): Promise<TrendyolSettlementPage> {
+    const q = new URLSearchParams({
+      startDate: String(params.startDate),
+      endDate: String(params.endDate),
+      transactionType: params.transactionType,
+      page: String(params.page ?? 0),
+      size: String(params.size ?? 500),
+    });
+    return this.request<TrendyolSettlementPage>(
+      `/integration/finance/che/sellers/${this.credentials.sellerId}/otherfinancials?${q.toString()}`
+    );
+  }
+
+  /**
+   * Kargo faturasının kalemleri — sipariş başına gerçek kargo bedeli.
+   * Yanıt `{ content: [{ shipmentPackageType: "Gönderi Kargo Bedeli" | …, parcelUniqueId, orderNumber,
+   * amount, desi }] }`. `invoiceSerialNumber` = kesinti faturası kaydının `id`'si.
+   */
+  async listCargoInvoiceItems(
+    invoiceSerialNumber: string,
+    params: { page?: number; size?: number } = {}
+  ): Promise<{ content?: Array<Record<string, unknown>>; totalPages?: number }> {
+    return this.request(
+      `/integration/finance/che/sellers/${this.credentials.sellerId}/cargo-invoice/${encodeURIComponent(invoiceSerialNumber)}/items?page=${params.page ?? 0}&size=${params.size ?? 500}`
     );
   }
 
