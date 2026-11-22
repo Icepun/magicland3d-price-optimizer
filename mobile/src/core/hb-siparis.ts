@@ -235,6 +235,46 @@ function paketBilgisiIsle<K>(s: HbToplananSiparis<K>, p: Record<string, unknown>
 }
 
 /**
+ * TALEBİN SİPARİŞE ETKİSİ — `/claims` kaydı her zaman iade DEĞİLDİR.
+ *
+ * Ölçüldü (22 Kas 2026, mağazanın 133 talebi): `claimType` ∈ Return, UndeliveredProduct, MissingPart,
+ * MissingItem, MissingInvoice, RenewProduct; `status` ∈ NewRequest, Accepted, Refunded, Cancelled,
+ * Rejected. Eskiden HER talep "İade" sayılıyordu: eksik parça gönderilen sipariş (ürün müşteride
+ * kaldı, Hepsiburada ödemeyi geri almadı) ve henüz kabul edilmemiş iade talebi de cirodan düşüyordu.
+ *
+ *   • İade / teslim edilemedi + Kabul edildi ya da Para iadesi yapıldı → İADE (cirodan düşer)
+ *   • İade talebi henüz sonuçlanmadı                                     → "İade talebi" (ciroda kalır)
+ *   • Eksik parça / eksik ürün / eksik fatura / ürün değişimi            → satış geçerli (teslim edildi)
+ *   • Talep iptal edildi ya da reddedildi                               → satış geçerli
+ *
+ * `oncelik`: aynı sipariş için birden çok talep olabilir (önce eksik parça, sonra iade); büyük olan kazanır.
+ * Kayıtta `claimType` yoksa (iptal listesi) null döner — çağıran eski kuralı uygular.
+ */
+export function hbTalepEtkisi(
+  p: Record<string, unknown>
+): { status: string; oncelik: 1 | 2 | 3 } | null {
+  const tur = hbStr(p.claimType, p.ClaimType);
+  if (!tur) return null;
+  const durum = hbStr(p.status, p.Status, p.claimStatus);
+  if (durum === "Cancelled" || durum === "Rejected") return { status: "Delivered", oncelik: 1 };
+  const sonuclandi = durum === "Accepted" || durum === "Refunded";
+  if (tur === "Return") return sonuclandi ? { status: "Returned", oncelik: 3 } : { status: "ReturnRequested", oncelik: 2 };
+  if (tur === "UndeliveredProduct") return sonuclandi ? { status: "UnDelivered", oncelik: 3 } : { status: "ReturnRequested", oncelik: 2 };
+  if (tur === "MissingPart" || tur === "MissingItem" || tur === "MissingInvoice" || tur === "RenewProduct") {
+    return { status: "Delivered", oncelik: 1 };
+  }
+  // Tanınmayan talep türü: ciroyu sessizce silmesin, ama gözden de kaçmasın.
+  return { status: "ReturnRequested", oncelik: 2 };
+}
+
+/** Siparişin şu anki durumunun talep karşısındaki ağırlığı (hbTalepEtkisi.oncelik ile karşılaştırılır). */
+function durumAgirligi(status: string): number {
+  if (HEPSIBURADA_STATUS_KINDS[status]?.kind === "cancelled") return 3;
+  if (status === "ReturnRequested") return 2;
+  return 0;
+}
+
+/**
  * İptal/iade kayıtlarını sipariş haritasına uygula.
  *
  * ⚠️ GÜVENLİK FRENİ: sipariş başka bir listede de görünüyorsa, ancak KAYDIN KENDİ durumu
@@ -250,6 +290,20 @@ export function hbTalepleriUygula<K>(
   for (const p of kayitlar) {
     const on = hbSiparisNo(p);
     if (!on) continue;
+    // TALEP KAYDI (türü belli): etkisi türüne ve durumuna göre — bkz. hbTalepEtkisi.
+    const etki = hbTalepEtkisi(p);
+    if (etki) {
+      const mevcut = siparisler.get(on);
+      if (!mevcut) {
+        siparisler.set(on, { status: etki.status, date: hbTalepVerilisMs(p), customer: null, lines: null });
+      } else if (etki.oncelik >= 2) {
+        if (etki.oncelik >= durumAgirligi(mevcut.status)) mevcut.status = etki.status;
+      } else if (durumAgirligi(mevcut.status) === 0) {
+        // Sonuçlanmamış/iade olmayan talep: sipariş teslim edilmiştir; geri götürmez, ileri taşır.
+        mevcut.status = hbSonDurum(mevcut.status, etki.status);
+      }
+      continue;
+    }
     const kendi = hbStr(p.status, p.Status, p.packageStatus, p.claimStatus);
     const kendiIptal = kendi ? HEPSIBURADA_STATUS_KINDS[kendi]?.kind === "cancelled" : false;
     const mevcut = siparisler.get(on);

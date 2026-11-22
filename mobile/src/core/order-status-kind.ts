@@ -58,6 +58,9 @@ export const HEPSIBURADA_STATUS_KINDS: Record<string, StatusInfo> = {
   CancelledByMerchant: { kind: "cancelled", label: "İptal (Satıcı)" },
   CancelledByCustomer: { kind: "cancelled", label: "İptal (Müşteri)" },
   Returned: { kind: "cancelled", label: "İade" },
+  // Müşteri iade talebi açtı ama Hepsiburada henüz kabul etmedi/para iadesi yapmadı: satış hâlâ
+  // geçerli (ciroda kalır). Talep kabul edilince "İade"ye döner, reddedilirse "Teslim Edildi"ye.
+  ReturnRequested: { kind: "delivered", label: "İade talebi" },
 };
 
 // ⚠️ Etiketler manuel sipariş penceresindeki durum listesiyle AYNI olmak zorunda

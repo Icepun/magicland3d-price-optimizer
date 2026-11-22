@@ -311,3 +311,86 @@ describe("iptal/iade yol denemesi", () => {
     expect(n).toBe(ilk);
   });
 });
+
+/**
+ * TALEP TÜRÜ — `/claims` kaydı her zaman iade değildir (ölçüldü 22 Kas 2026, 133 talep).
+ * Saha örneği: BMW M3 GTR siparişinde EKSİK PARÇA talebi açılmış, ürün müşteride kalmış, satıcı
+ * ek kargo göndermiş; uygulama siparişi "İade" gösterip cirodan düşüyordu.
+ */
+describe("talep türü — iade, eksik parça, sonuçlanmamış talep", () => {
+  const talep = (no: string, claimType: string, status: string, ek: Satir = {}) => ({
+    orderNumber: no, claimType, status, orderDate: gunOnce(10), claimDate: gunOnce(2), ...ek,
+  });
+
+  it("hbTalepEtkisi: tür × durum tablosu", async () => {
+    const { hbTalepEtkisi } = await import("./hb-siparis");
+    const e = (t: string, d: string) => hbTalepEtkisi({ claimType: t, status: d })?.status;
+    expect(e("Return", "Refunded")).toBe("Returned");
+    expect(e("Return", "Accepted")).toBe("Returned");
+    expect(e("Return", "NewRequest")).toBe("ReturnRequested");
+    expect(e("Return", "Cancelled")).toBe("Delivered");
+    expect(e("Return", "Rejected")).toBe("Delivered");
+    expect(e("UndeliveredProduct", "Refunded")).toBe("UnDelivered");
+    for (const tur of ["MissingPart", "MissingItem", "MissingInvoice", "RenewProduct"]) {
+      expect(e(tur, "Accepted")).toBe("Delivered");
+    }
+    expect(e("BilinmeyenTur", "Accepted")).toBe("ReturnRequested");
+    expect(hbTalepEtkisi({ status: "Returned" })).toBeNull(); // türsüz kayıt → eski kural
+  });
+
+  it("EKSİK PARÇA talebi açılan sipariş satış olarak kalır (iade değil)", async () => {
+    const { siparisler } = await topla(uclar({ talep: { returned: [talep("M3", "MissingPart", "Accepted")] } }));
+    expect(siparisler.get("M3")).toMatchObject({ status: "Delivered", date: Date.parse(gunOnce(10)) });
+  });
+
+  it("kabul edilmiş / parası iade edilmiş iade talebi İADE olur — teslim listesinde olsa bile", async () => {
+    const { siparisler } = await topla(
+      uclar({
+        paket: { delivered: [{ OrderNumber: "R1", orderDate: gunOnce(3) }] },
+        talep: { returned: [talep("R1", "Return", "Refunded"), talep("R2", "Return", "Accepted")] },
+      })
+    );
+    expect(siparisler.get("R1")?.status).toBe("Returned");
+    expect(siparisler.get("R2")?.status).toBe("Returned");
+  });
+
+  it("henüz sonuçlanmamış iade talebi 'İade talebi' görünür ve CİRODA kalır", async () => {
+    const { HEPSIBURADA_STATUS_KINDS } = await import("./order-status-kind");
+    const { siparisler } = await topla(uclar({ talep: { returned: [talep("N1", "Return", "NewRequest")] } }));
+    expect(siparisler.get("N1")?.status).toBe("ReturnRequested");
+    expect(HEPSIBURADA_STATUS_KINDS.ReturnRequested).toEqual({ kind: "delivered", label: "İade talebi" });
+  });
+
+  it("aynı siparişte önce eksik parça sonra iade: iade kazanır (sıra fark etmez)", async () => {
+    for (const sira of [
+      [talep("X", "MissingPart", "Accepted"), talep("X", "Return", "Refunded")],
+      [talep("X", "Return", "Refunded"), talep("X", "MissingPart", "Accepted")],
+    ]) {
+      const { siparisler } = await topla(uclar({ talep: { returned: sira } }));
+      expect(siparisler.get("X")?.status).toBe("Returned");
+    }
+  });
+
+  it("reddedilen/iptal edilen talep siparişi geri götürmez; kargodaki sipariş teslim sayılır", async () => {
+    const { siparisler } = await topla(
+      uclar({
+        paket: { shipped: [{ OrderNumber: "K1", orderDate: gunOnce(4) }], "": [{ orderNumber: "P1", status: "Open", orderDate: gunOnce(1) }] },
+        talep: { returned: [talep("K1", "Return", "Rejected"), talep("P1", "MissingInvoice", "Accepted")] },
+      })
+    );
+    expect(siparisler.get("K1")?.status).toBe("Delivered");
+    expect(siparisler.get("P1")?.status).toBe("Delivered");
+  });
+
+  it("iptal listesindeki müşteri iptali talepten etkilenmez", async () => {
+    const { siparisler } = await topla(
+      uclar({
+        talep: {
+          cancelled: [{ orderNumber: "I1", status: "CancelledByCustomer", orderDate: gunOnce(5) }],
+          returned: [talep("I1", "MissingPart", "Accepted")],
+        },
+      })
+    );
+    expect(siparisler.get("I1")?.status).toBe("CancelledByCustomer");
+  });
+});
