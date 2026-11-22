@@ -64,12 +64,14 @@ export function hepsiburadaHosts(env: HbEnvironment) {
         omsStub: "https://oms-external.hepsiburada.com", // canlıda test sipariş üretimi yok
         listing: "https://listing-external.hepsiburada.com",
         mpop: "https://mpop.hepsiburada.com",
+        finance: "https://mpfinance-external.hepsiburada.com", // muhasebe kayıtları (DOĞRULANDI canlı)
       }
     : {
         oms: "https://oms-external-sit.hepsiburada.com",
         omsStub: "https://oms-stub-external-sit.hepsiburada.com", // sadece TEST sipariş üretimi (DOĞRULANDI)
         listing: "https://listing-external-sit.hepsiburada.com", // DOĞRULANDI
         mpop: "https://mpop-sit.hepsiburada.com",
+        finance: "https://mpfinance-external-sit.hepsiburada.com",
       };
 }
 
@@ -200,6 +202,30 @@ export class HepsiburadaClient {
     const limit = params.limit ?? 50;
     return this.request<unknown>(
       `${this.hosts.oms}/orders/merchantid/${encodeURIComponent(this.credentials.merchantId)}?offset=${offset}&limit=${limit}`
+    );
+  }
+
+  /**
+   * MUHASEBE KAYITLARI (kayıt bazlı) — sipariş teslim edildikten sonra oluşan kesintiler:
+   * Payment, Commission, ProcessingFeeExpense (hizmet bedeli), ShipmentCostSharingExpense (kargo),
+   * PaymentServiceCostReflection (tahsilat), Stoppage, CampaignDiscount (HB indirimi) …
+   * Yanıt `{ count, items:[{ id, transactionType, orderNumber, amount:{value}, taxAmount, … }] }`;
+   * gider tutarları NEGATİF. Sipariş tarihi aralığı en çok ~7 gün (35 gün 400 döner), sayfa ≤ 100.
+   * (DOĞRULANDI canlı, 22 Kas 2026 — panelin "Sipariş kayıtları" ekranıyla kuruşu kuruşuna aynı.)
+   */
+  async listTransactions(params: {
+    offset?: number;
+    limit?: number;
+    /** YYYY-AA-GG */
+    orderDateStart: string;
+    orderDateEnd: string;
+  }): Promise<unknown> {
+    const offset = params.offset ?? 0;
+    const limit = Math.min(100, params.limit ?? 100);
+    return this.request<unknown>(
+      `${this.hosts.finance}/transactions/merchantid/${encodeURIComponent(this.credentials.merchantId)}` +
+        `?Offset=${offset}&Limit=${limit}` +
+        `&OrderDateStart=${encodeURIComponent(params.orderDateStart)}&OrderDateEnd=${encodeURIComponent(params.orderDateEnd)}`
     );
   }
 

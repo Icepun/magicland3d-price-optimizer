@@ -134,6 +134,10 @@ export interface UnifiedOrder {
   paymentFee?: number;
   /** Stopaj — yalnız bilgi; kâra girmedi. */
   stoppage?: number;
+  /** Bu kalemler pazaryerinin GERÇEK kaydından mı geldi? (dökümde "gerçek" etiketi) */
+  actualOrderFee?: boolean;
+  actualPaymentFee?: boolean;
+  actualCargo?: boolean;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
@@ -1067,6 +1071,11 @@ async function computeOrdersBodyInner(
     orderNumber: string;
     grossRevenueKurus: number;
     commissionKurus: number;
+    platform: string;
+    /** Komisyon dışındaki gerçek kesintiler (Hepsiburada) — kuruş; null = kayıt yok. */
+    serviceFeeKurus: number | null;
+    paymentFeeKurus: number | null;
+    cargoKurus: number | null;
   };
   const financialByExternalId = new Map<string, PlatformFinancial>();
   const financialByOrderNumber = new Map<string, PlatformFinancial[]>();
@@ -1166,18 +1175,33 @@ async function computeOrdersBodyInner(
       prisma.expenseRule.findMany({ where: { isActive: true } }),
       prisma.appSetting.findMany(),
       prisma.platformOrderFinancial.findMany({
+        // TEK sorgu, iki pazaryeri: Trendyol gerçek komisyonu + Hepsiburada gerçek kesintileri.
         where: {
-          platform: "trendyol",
           OR: [
-            { externalOrderId: { in: trendyolRows.map((row) => row.id) } },
-            { orderNumber: { in: trendyolRows.map((row) => row.orderNumber) } },
+            {
+              platform: "trendyol",
+              OR: [
+                { externalOrderId: { in: trendyolRows.map((row) => row.id) } },
+                { orderNumber: { in: trendyolRows.map((row) => row.orderNumber) } },
+              ],
+            },
+            {
+              platform: "hepsiburada",
+              externalOrderId: {
+                in: historyRows.filter((row) => row.platform === "hepsiburada").map((row) => row.id),
+              },
+            },
           ],
         },
         select: {
+          platform: true,
           externalOrderId: true,
           orderNumber: true,
           grossRevenueKurus: true,
           commissionKurus: true,
+          serviceFeeKurus: true,
+          paymentFeeKurus: true,
+          cargoKurus: true,
         },
       }),
     ]);
@@ -1192,6 +1216,8 @@ async function computeOrdersBodyInner(
     adSnap = await adRateSnapshot();
     for (const financial of platformFinancials) {
       financialByExternalId.set(financial.externalOrderId, financial);
+      // Sipariş numarasıyla yedek eşleşme yalnız Trendyol içindir (paket kimliği eksik gelebiliyor).
+      if (financial.platform !== "trendyol") continue;
       const rows = financialByOrderNumber.get(financial.orderNumber) ?? [];
       rows.push(financial);
       financialByOrderNumber.set(financial.orderNumber, rows);
@@ -1368,9 +1394,11 @@ async function computeOrdersBodyInner(
     // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil aynı fonksiyon): adet başına ürün/
     // komisyon/yüzdesel gider; siparişe BİR KEZ kargo + SABİT gider (Platform Hizmet Bedeli).
     let platformFinancial =
-      r.platform === "trendyol"
+      r.platform === "trendyol" || r.platform === "hepsiburada"
         ? financialByExternalId.get(r.id) ?? null
         : null;
+    // Kimlikler pazaryerine özgü önek taşır ama yine de başka pazaryerinin kaydı kullanılmasın.
+    if (platformFinancial && platformFinancial.platform !== r.platform) platformFinancial = null;
     // Eski/eksik settlement kayıtlarında shipmentPackageId gelmeyebilir. Aynı sipariş
     // numarası hem sipariş listesinde hem finans tablosunda TEKİLSE güvenli fallback yap.
     if (
@@ -1409,6 +1437,13 @@ async function computeOrdersBodyInner(
           ? {
               actualCommission: kurusToTl(platformFinancial.commissionKurus),
               settlementRevenue: kurusToTl(platformFinancial.grossRevenueKurus),
+              // Hepsiburada: hizmet bedeli, tahsilat ve kargo da gerçek kayıttan (boşsa tahmin kalır).
+              actualOrderFee:
+                platformFinancial.serviceFeeKurus == null ? null : kurusToTl(platformFinancial.serviceFeeKurus),
+              actualPaymentFee:
+                platformFinancial.paymentFeeKurus == null ? null : kurusToTl(platformFinancial.paymentFeeKurus),
+              actualCargo:
+                platformFinancial.cargoKurus == null ? null : kurusToTl(platformFinancial.cargoKurus),
             }
           : null,
       }
@@ -1445,6 +1480,9 @@ async function computeOrdersBodyInner(
       fixedExpense: pr.fixedExpense,
       paymentFee: pr.paymentFee,
       stoppage: pr.stoppage,
+      actualOrderFee: pr.actualOrderFee != null,
+      actualPaymentFee: pr.actualPaymentFee != null,
+      actualCargo: pr.actualCargo != null,
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,

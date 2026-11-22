@@ -147,6 +147,8 @@ export interface OrderProfitResult {
    * `matchedLines` ile eşitse siparişin komisyonu tamamen pazaryerinin bildirdiği orandandır.
    */
   orderRateLines: number;
+  /** Düşülen kargonun içindeki indirilecek KDV (gerçek kargo geldiğinde yer değiştirmek için). */
+  cargoInputVat: number;
   /** Siparişe bir kez düşülen sabit bedel (brüt) — kuraldan ya da orderFee girdisinden. */
   fixedExpense: number;
   /** Düşülen tahsilat bedeli toplamı (brüt) — yalnız kâra giren satırlar. */
@@ -371,6 +373,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       profit: null,
       adCost: 0,
       cargoCost: 0,
+      cargoInputVat: 0,
       productAndPackagingCost: 0,
       estimatedCommission: 0,
       orderRateLines: 0,
@@ -551,6 +554,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     profit,
     adCost,
     cargoCost: cargo.gross,
+    cargoInputVat: cargo.inputVat,
     productAndPackagingCost: urunVePaketleme + sharedPackagingCost,
     estimatedCommission,
     orderRateLines,
@@ -583,6 +587,15 @@ export interface OrderProfitFinancial {
   actualCommission: number;
   /** Settlement'taki brüt ciro — sipariş cirosuyla uyuşmazsa uygulanmaz. */
   settlementRevenue: number;
+  /**
+   * Komisyon DIŞINDAKİ gerçek kesintiler (brüt TL, KDV dahil) — pazaryerinin muhasebe kaydından.
+   * Verilen her biri (0 dahil: "bu siparişte kesilmedi") TAHMİNİ karşılığının yerine geçer;
+   * verilmeyen (null/undefined) kalem tahmininde kalır. Yalnız gerçek komisyon uygulanabildiğinde
+   * (ciro tutuyor, maliyet tam) devreye girer — aynı kaydın parçalarıdır.
+   */
+  actualOrderFee?: number | null;
+  actualPaymentFee?: number | null;
+  actualCargo?: number | null;
 }
 
 export interface ResolveOrderProfitOptions {
@@ -601,6 +614,10 @@ export interface ResolvedOrderProfit extends OrderProfitResult {
   profitSource: "calculated" | "platform";
   /** Uygulanan gerçek komisyon; uygulanmadıysa null. */
   actualCommission: number | null;
+  /** Uygulanan gerçek hizmet bedeli / tahsilat bedeli / kargo; uygulanmadıysa null (tahmin geçerli). */
+  actualOrderFee: number | null;
+  actualPaymentFee: number | null;
+  actualCargo: number | null;
 }
 
 /**
@@ -624,7 +641,15 @@ export function resolveOrderProfit(
 
   // Settlement yok veya sipariş iptal → kural-tabanlı kâr aynen kalır.
   if (financial == null || options.statusKind === "cancelled") {
-    return { ...base, profitPartial, profitSource: "calculated", actualCommission: null };
+    return {
+      ...base,
+      profitPartial,
+      profitSource: "calculated",
+      actualCommission: null,
+      actualOrderFee: null,
+      actualPaymentFee: null,
+      actualCargo: null,
+    };
   }
 
   const vatRate = vatRateOf(input.settings);
@@ -641,17 +666,57 @@ export function resolveOrderProfit(
   // Kâr gerçek komisyonla düzeltildiyse, o komisyonun içindeki indirilecek KDV de gerçek
   // tutara göre değişir — kârın düzeltmesiyle AYNI pay, aynı yönde taşınır.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
-  const inputVatCredit = applied.applied
+  let inputVatCredit = applied.applied
     ? base.inputVatCredit +
       (financial.actualCommission - base.estimatedCommission) * vatFactor
     : base.inputVatCredit;
 
+  // KOMİSYON DIŞINDAKİ GERÇEK KESİNTİLER — tahmini gider geri alınır, gerçek tutar düşülür.
+  // Faturaları KDV'lidir: içlerindeki KDV indirilir (tahminle aynı formül), fark kâra yansır.
+  let profit = applied.profit;
+  let fixedExpense = base.fixedExpense;
+  let paymentFee = base.paymentFee;
+  let cargoCost = base.cargoCost;
+  let cargoInputVat = base.cargoInputVat;
+  let cargoRuleMissing = base.cargoRuleMissing;
+  let actualOrderFee: number | null = null;
+  let actualPaymentFee: number | null = null;
+  let actualCargo: number | null = null;
+  if (applied.applied && profit != null) {
+    const yerineKoy = (gercek: number | null | undefined, tahminiBrut: number, tahminiKdv: number) => {
+      if (typeof gercek !== "number" || !Number.isFinite(gercek) || gercek < 0) return null;
+      const gercekKdv = gercek * vatFactor;
+      profit = (profit as number) + (tahminiBrut - tahminiKdv) - (gercek - gercekKdv);
+      inputVatCredit += gercekKdv - tahminiKdv;
+      return gercek;
+    };
+    actualOrderFee = yerineKoy(financial.actualOrderFee, base.fixedExpense, base.fixedExpense * vatFactor);
+    if (actualOrderFee != null) fixedExpense = actualOrderFee;
+    actualPaymentFee = yerineKoy(financial.actualPaymentFee, base.paymentFee, base.paymentFee * vatFactor);
+    if (actualPaymentFee != null) paymentFee = actualPaymentFee;
+    actualCargo = yerineKoy(financial.actualCargo, base.cargoCost, base.cargoInputVat);
+    if (actualCargo != null) {
+      cargoCost = actualCargo;
+      cargoInputVat = actualCargo * vatFactor;
+      // Gerçek kargo biliniyor → "kargo kuralı yok, 0 sayıldı" uyarısı artık geçersiz.
+      cargoRuleMissing = false;
+    }
+  }
+
   return {
     ...base,
-    profit: applied.profit,
+    profit,
     inputVatCredit,
+    fixedExpense,
+    paymentFee,
+    cargoCost,
+    cargoInputVat,
+    cargoRuleMissing,
     profitPartial,
     profitSource: applied.applied ? "platform" : "calculated",
     actualCommission: applied.applied ? financial.actualCommission : null,
+    actualOrderFee,
+    actualPaymentFee,
+    actualCargo,
   };
 }

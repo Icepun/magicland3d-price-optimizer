@@ -235,8 +235,12 @@ export function computeOrderProfit(
   const siparisNoHaritasi =
     rules.financialByOrderNumber instanceof Map ? rules.financialByOrderNumber : null;
 
+  // Hepsiburada kaydı sipariş kimliğiyle (`hb-<no>`) birebir eşleşir; önekler pazaryerine özgü
+  // olduğu için başka pazaryerinin kaydına düşmez.
   let financial =
-    order.platform === "trendyol" ? disKimlikHaritasi?.get(order.id) ?? null : null;
+    order.platform === "trendyol" || order.platform === "hepsiburada"
+      ? disKimlikHaritasi?.get(order.id) ?? null
+      : null;
   if (!financial && order.platform === "trendyol") {
     const candidates = siparisNoHaritasi?.get(order.orderNumber) ?? [];
     if (candidates.length === 1) financial = candidates[0];

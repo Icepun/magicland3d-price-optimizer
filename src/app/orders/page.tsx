@@ -137,6 +137,10 @@ interface UnifiedOrder {
   paymentFee?: number;
   /** Stopaj — yalnız bilgi; kâra girmedi. */
   stoppage?: number;
+  /** Bu kalemler pazaryerinin gerçek kaydından mı geldi? */
+  actualOrderFee?: boolean;
+  actualPaymentFee?: boolean;
+  actualCargo?: boolean;
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -284,6 +288,18 @@ interface FetchStage {
 const _fmtTRY0 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const _fmtTRY2 = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const _fmtDT = new Intl.DateTimeFormat("tr-TR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+/** Kesinti satırının yanında: tutar pazaryerinin kendi kaydından (tahmin değil). */
+function GercekRozeti() {
+  return (
+    <span
+      className="ml-1 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-semibold text-emerald-400 transition-colors"
+      title="Pazaryerinin kestiği gerçek tutar"
+    >
+      gerçek
+    </span>
+  );
+}
+
 function fmtMoney(amount: number, currency = "TRY") {
   try {
     if (currency === "TRY") return _fmtTRY0.format(amount);
@@ -2590,8 +2606,12 @@ const OrderRow = memo(function OrderRow({
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">
                       Kargo
-                      {order.desiEstimated && (
-                        <span className="ml-1 text-amber-400/80">tahmini desi</span>
+                      {order.actualCargo ? (
+                        <GercekRozeti />
+                      ) : (
+                        order.desiEstimated && (
+                          <span className="ml-1 text-amber-400/80">tahmini desi</span>
+                        )
                       )}
                     </span>
                     <span className="tabular-nums text-muted-foreground">
@@ -2602,7 +2622,10 @@ const OrderRow = memo(function OrderRow({
                 {/* Pazaryerinin sipariş başına kestiği bedeller — yalnız kesildiği siparişte görünür. */}
                 {!isCancelled && (order.fixedExpense ?? 0) > 0 && (
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-muted-foreground">Hizmet bedeli</span>
+                    <span className="text-muted-foreground">
+                      Hizmet bedeli
+                      {order.actualOrderFee && <GercekRozeti />}
+                    </span>
                     <span className="tabular-nums text-muted-foreground">
                       −{fmtMoney2(order.fixedExpense ?? 0, orderCurrency)}
                     </span>
@@ -2610,7 +2633,10 @@ const OrderRow = memo(function OrderRow({
                 )}
                 {!isCancelled && (order.paymentFee ?? 0) > 0 && (
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-muted-foreground">Tahsilat bedeli</span>
+                    <span className="text-muted-foreground">
+                      Tahsilat bedeli
+                      {order.actualPaymentFee && <GercekRozeti />}
+                    </span>
                     <span className="tabular-nums text-muted-foreground">
                       −{fmtMoney2(order.paymentFee ?? 0, orderCurrency)}
                     </span>

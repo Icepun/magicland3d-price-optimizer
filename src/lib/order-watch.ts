@@ -682,9 +682,43 @@ async function warmTick(): Promise<void> {
   }
 }
 
+/** Gerçek kesinti kayıtları: açılıştan kısa süre sonra ve ardından 3 saatte bir. */
+const FINANS_MS = 3 * 60 * 60_000;
+const FIRST_FINANS_MS = 4 * 60_000;
+let finansCalisiyor = false;
+
+/**
+ * FİNANS TURU — Hepsiburada'nın teslim edilen siparişler için yazdığı gerçek kesintileri çeker.
+ * Sipariş hattından AYRI: Siparişler ekranı hiçbir zaman muhasebe servisini beklemez. Kimlik
+ * bilgisi yoksa uç hata döner ve sessizce geçilir.
+ */
+async function financeTick(): Promise<void> {
+  if (finansCalisiyor || dbPaused()) return;
+  finansCalisiyor = true;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 120_000);
+    try {
+      await fetch(`${baseUrl()}/api/finance/hepsiburada-financials?days=35`, {
+        method: "POST",
+        signal: ctrl.signal,
+        cache: "no-store",
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  } catch {
+    /* ağ yok / sunucu meşgul — sonraki tur dener */
+  } finally {
+    finansCalisiyor = false;
+  }
+}
+
 export function startOrderWatch(): void {
   if (started) return;
   started = true;
+  setTimeout(() => { void financeTick(); }, FIRST_FINANS_MS);
+  setInterval(() => { void financeTick(); }, FINANS_MS);
   setTimeout(() => { void scanTick(); }, FIRST_SCAN_MS);
   setInterval(() => { void scanTick(); }, SCAN_MS);
   setTimeout(() => { void warmTick(); }, FIRST_WARM_MS);

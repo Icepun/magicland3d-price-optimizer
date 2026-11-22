@@ -5,6 +5,7 @@ import { platformMinOrderQty, shopifyCargoOverride } from "@core/platform-rules"
 import { packagingScopeInput, resolveProductCost } from "@core/product-cost";
 import type { FilamentFiyatlari } from "@core/filament-karisimi";
 import type { SatirMaliyetKaydi } from "@core/order-line-cost";
+import type { OrderProfitFinancial } from "@core/order-profit";
 import {
   withProductCommissionRule,
   resolveListingCommissionOverride,
@@ -75,9 +76,9 @@ export interface Rules {
    * Masaüstü bunu kâra uyguluyordu, mobil uygulamıyordu → aynı sipariş iki cihazda farklı
    * kâr gösteriyordu. Artık iki taraf da çekirdekteki resolveOrderProfit'i besliyor.
    */
-  financialByExternalId?: Map<string, { actualCommission: number; settlementRevenue: number }>;
+  financialByExternalId?: Map<string, OrderProfitFinancial>;
   /** Aynı sipariş numarası TEKİLSE güvenli fallback (settlement'ta shipmentPackageId yoksa). */
-  financialByOrderNumber?: Map<string, { actualCommission: number; settlementRevenue: number }[]>;
+  financialByOrderNumber?: Map<string, OrderProfitFinancial[]>;
 }
 
 /**

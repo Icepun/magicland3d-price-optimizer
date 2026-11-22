@@ -485,6 +485,13 @@ model PlatformOrderFinancial {
   transactionCount     Int      @default(0)
   sourceUpdatedAt      DateTime?
   syncedAt             DateTime @updatedAt
+  // Komisyon dışındaki GERÇEK kesintiler (Hepsiburada muhasebe kaydı) — kuruş, pozitif.
+  // null = bu pazaryeri/kayıt o kalemi bildirmiyor (tahmin geçerli); 0 = kesilmedi.
+  serviceFeeKurus       Int?
+  paymentFeeKurus       Int?
+  cargoKurus            Int?
+  stoppageKurus         Int?
+  platformDiscountKurus Int?
 
   @@unique([platform, externalOrderId])
   @@index([platform, orderNumber])

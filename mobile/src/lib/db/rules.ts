@@ -1,6 +1,7 @@
 import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
 // Tarih biçimi bilgisi TEK yerde (ortak çekirdek) — karşılaştırmalar biçimden bağımsız olsun diye.
 import { dbEpochMs } from "@core/sqlite-date";
+import type { OrderProfitFinancial } from "@core/order-profit";
 import { filamentFiyatHaritasi } from "@core/filament-karisimi";
 import { satirMaliyetiHaritaAnahtari, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { satirBaglariHaritasi, type SatirBagiKaydi } from "@core/order-line-link";
@@ -66,9 +67,12 @@ export async function getRules(): Promise<Rules> {
               FROM ExpenseRule WHERE isActive = 1`,
     },
     {
-      // Trendyol GERÇEK komisyonu (settlement). Aynı batch'te → ekstra round-trip YOK.
-      sql: `SELECT externalOrderId, orderNumber, commissionKurus, grossRevenueKurus
-              FROM PlatformOrderFinancial WHERE platform = 'trendyol'`,
+      // Pazaryerinin GERÇEK kayıtları: Trendyol komisyonu + Hepsiburada kesintileri (hizmet bedeli,
+      // tahsilat, kargo). Aynı batch'te → ekstra round-trip YOK.
+      // ⚠️ Kolonlar ADLA SEÇİLMEZ: Hepsiburada kolonları masaüstü şeması v58 ile geldi; telefon
+      // masaüstünden önce güncellenirse adla seçim "no such column" ile TÜM batch'i düşürürdü
+      // (kurallar hiç yüklenmez). `*` var olan kolonları verir, eksik olan boş kalır.
+      sql: `SELECT * FROM PlatformOrderFinancial WHERE platform IN ('trendyol', 'hepsiburada')`,
     },
     {
       // Filament gram fiyatları — çoklu filamentli ürünlerin ek filamentleri (masaüstüyle aynı).
@@ -77,26 +81,37 @@ export async function getRules(): Promise<Rules> {
   ]);
 
   // Settlement haritaları — masaüstü /api/orders ile aynı iki anahtar (kimlik + tekil sipariş no).
-  const financialByExternalId = new Map<
-    string,
-    { actualCommission: number; settlementRevenue: number }
-  >();
-  const financialByOrderNumber = new Map<
-    string,
-    { actualCommission: number; settlementRevenue: number }[]
-  >();
+  const financialByExternalId = new Map<string, OrderProfitFinancial>();
+  const financialByOrderNumber = new Map<string, OrderProfitFinancial[]>();
   type FinancialRow = {
+    platform?: string;
     externalOrderId: string;
     orderNumber: string;
     commissionKurus: number;
     grossRevenueKurus: number;
+    serviceFeeKurus?: number | null;
+    paymentFeeKurus?: number | null;
+    cargoKurus?: number | null;
   };
+  const tlYaDaNull = (kurus: number | null | undefined) =>
+    kurus == null || !Number.isFinite(Number(kurus)) ? null : Number(kurus) / 100;
   for (const row of (f?.rows ?? []) as unknown as FinancialRow[]) {
-    const entry = {
+    const hepsiburada = row.platform === "hepsiburada";
+    const entry: OrderProfitFinancial = {
       actualCommission: Number(row.commissionKurus) / 100,
       settlementRevenue: Number(row.grossRevenueKurus) / 100,
+      // Hepsiburada: komisyon dışındaki gerçek kesintiler (masaüstü /api/orders ile aynı alanlar).
+      ...(hepsiburada
+        ? {
+            actualOrderFee: tlYaDaNull(row.serviceFeeKurus),
+            actualPaymentFee: tlYaDaNull(row.paymentFeeKurus),
+            actualCargo: tlYaDaNull(row.cargoKurus),
+          }
+        : {}),
     };
     financialByExternalId.set(String(row.externalOrderId), entry);
+    // Sipariş numarasıyla yedek eşleşme yalnız Trendyol içindir.
+    if (hepsiburada) continue;
     const list = financialByOrderNumber.get(String(row.orderNumber));
     if (list) list.push(entry);
     else financialByOrderNumber.set(String(row.orderNumber), [entry]);

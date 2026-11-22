@@ -61,6 +61,10 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v58: Hepsiburada GERÇEK kesintileri — `PlatformOrderFinancial`'a serviceFeeKurus, paymentFeeKurus,
+//      cargoKurus, stoppageKurus, platformDiscountKurus. Teslimden sonra muhasebe servisinden gelen
+//      hizmet bedeli / tahsilat / kargo / stopaj / HB indirimi; kâr tahmin yerine bunlarla hesaplanır.
+//      Hepsi NULLABLE (Trendyol satırlarında boş kalır) → eski sürüm cihazlar etkilenmez.
 // v57: Hepsiburada kesinti doğruluğu — `OrderItemSnapshot.vatRate` (satırın satış KDV oranı, %) ve
 //      `OrderItemSnapshot.dispatchDays` (kargoya verme süresi). Pazaryeri kalemde bildiriyor; satış
 //      KDV'si artık ilanın kendi oranıyla ayrılıyor, hizmet bedeli de yalnız kesildiği siparişte
@@ -116,7 +120,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "57";
+const CURRENT_SCHEMA_VERSION = "58";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1236,9 +1240,20 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "sellerRevenueKurus" INTEGER NOT NULL,
         "transactionCount" INTEGER NOT NULL DEFAULT 0,
         "sourceUpdatedAt" DATETIME,
-        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "serviceFeeKurus" INTEGER,
+        "paymentFeeKurus" INTEGER,
+        "cargoKurus" INTEGER,
+        "stoppageKurus" INTEGER,
+        "platformDiscountKurus" INTEGER
       )
     `);
+    // v58: komisyon dışındaki gerçek kesintiler. Nullable, varsayılansız (boş = bilinmiyor).
+    await ensureColumn("PlatformOrderFinancial", "serviceFeeKurus", "INTEGER");
+    await ensureColumn("PlatformOrderFinancial", "paymentFeeKurus", "INTEGER");
+    await ensureColumn("PlatformOrderFinancial", "cargoKurus", "INTEGER");
+    await ensureColumn("PlatformOrderFinancial", "stoppageKurus", "INTEGER");
+    await ensureColumn("PlatformOrderFinancial", "platformDiscountKurus", "INTEGER");
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_externalOrderId_key"
        ON "PlatformOrderFinancial"("platform", "externalOrderId")`

@@ -13,6 +13,7 @@ import { satirMaliyetleriniOku } from "./order-line-costs";
 import { satirBaglariniOku } from "./order-line-links";
 import {
   resolveOrderProfit,
+  type OrderProfitFinancial,
   type OrderProfitLine,
   type OrderProfitProduct,
 } from "@/core/order-profit";
@@ -1105,10 +1106,38 @@ async function readRecalcProducts(
 
 /** Trendyol'un bildirdiği GERÇEK komisyon — sipariş kimliğiyle, yoksa tekil sipariş numarasıyla. */
 async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
-  Map<string, { actualCommission: number; settlementRevenue: number }>
+  Map<string, OrderProfitFinancial>
 > {
+  const result = new Map<string, OrderProfitFinancial>();
+
+  // ── Hepsiburada: muhasebe kaydı sipariş kimliğiyle birebir eşleşir (`hb-<sipariş no>`).
+  // Komisyonla birlikte hizmet bedeli, tahsilat ve kargo da gerçek kayıttan gelir.
+  const hepsiburada = rows.filter((row) => row.platform === "hepsiburada");
+  for (let offset = 0; offset < hepsiburada.length; offset += READ_CHUNK) {
+    const slice = hepsiburada.slice(offset, offset + READ_CHUNK);
+    const kayitlar = await prisma.platformOrderFinancial.findMany({
+      where: { platform: "hepsiburada", externalOrderId: { in: slice.map((row) => row.externalOrderId) } },
+      select: {
+        externalOrderId: true,
+        grossRevenueKurus: true,
+        commissionKurus: true,
+        serviceFeeKurus: true,
+        paymentFeeKurus: true,
+        cargoKurus: true,
+      },
+    });
+    for (const kayit of kayitlar) {
+      result.set(snapshotKey("hepsiburada", kayit.externalOrderId), {
+        actualCommission: kurusToTl(kayit.commissionKurus),
+        settlementRevenue: kurusToTl(kayit.grossRevenueKurus),
+        actualOrderFee: kayit.serviceFeeKurus == null ? null : kurusToTl(kayit.serviceFeeKurus),
+        actualPaymentFee: kayit.paymentFeeKurus == null ? null : kurusToTl(kayit.paymentFeeKurus),
+        actualCargo: kayit.cargoKurus == null ? null : kurusToTl(kayit.cargoKurus),
+      });
+    }
+  }
+
   const trendyol = rows.filter((row) => row.platform === "trendyol");
-  const result = new Map<string, { actualCommission: number; settlementRevenue: number }>();
   if (trendyol.length === 0) return result;
 
   const orderNumberCounts = new Map<string, number>();
