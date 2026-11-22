@@ -31,6 +31,9 @@ export interface ListingRow {
   barcode: string | null; // platform-bazlı listing barkodu (Trendyol/HB) — sipariş eşleştirmede masaüstü byKey ile birebir
   /** SQLite 0/1. UI listeleri yalnız aktif listing'i hesaba katar; sipariş eşleştirmesi HEPSİNİ kullanır. */
   isActive?: number | boolean | null;
+  /** Kargoya verme süresi (gün) ve ilanın satış KDV oranı (%) — Hepsiburada (masaüstü şeması v59). */
+  dispatchDays?: number | null;
+  vatRate?: number | null;
 }
 
 export interface ProductDetail {
@@ -98,9 +101,9 @@ async function urunDetayiniOku(id: string, ekFilamentli: boolean): Promise<Produ
       args: [id],
     },
     {
-      sql: `SELECT id, platform, salePrice, stock, commissionRate, commissionFixed,
-                   cargoCost, externalId, externalSku, barcode
-              FROM Listing WHERE productId = ? AND isActive = 1`,
+      // Kolonlar ADLA SEÇİLMEZ: dispatchDays/vatRate masaüstü şeması v59 ile geldi; telefon önce
+      // güncellenirse adla seçim "no such column" ile sorguyu düşürürdü. Tablo küçük kolonlu.
+      sql: `SELECT * FROM Listing WHERE productId = ? AND isActive = 1`,
       args: [id],
     },
   ]);

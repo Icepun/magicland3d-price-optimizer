@@ -125,3 +125,24 @@ export function hbHizmetBedeli(
   const ayar = Number(settings?.hbServiceFee);
   return Number.isFinite(ayar) && ayar > 0 ? ayar : HB_HIZMET_BEDELI;
 }
+
+/**
+ * SATIŞ ÖNCESİ (Ürünler ekranı, Panel, fiyat hesabı): bir Hepsiburada ilanının fiyat motoruna
+ * taşıdığı kesintiler. Sipariş kârıyla AYNI kurallar; fark yalnız verinin ilandan gelmesi.
+ *
+ *   • tahsilat bedeli : KDV hariç fiyatın %0,96'sı — her ilanda
+ *   • hizmet bedeli   : kargoya verme süresi 2+ gün ise; süre bilinmiyorsa kesilmez sayılır
+ *                       (gider kuralındaki "her ilana" sabit bedelin YERİNE geçer)
+ *   • satış KDV'si    : ilanın kendi oranı biliniyorsa o; bilinmiyorsa genel oran
+ */
+export function hbSatisOncesiKesintiler(
+  ilan: { dispatchDays?: number | null; vatRate?: number | null },
+  settings?: Record<string, string | undefined>
+): { paymentFeeRate: number; fixedExpenseOverride: number; saleVatRate?: number } {
+  const kdv = ilan.vatRate;
+  return {
+    paymentFeeRate: HB_TAHSILAT_ORANI,
+    fixedExpenseOverride: hbHizmetBedeli([{ dispatchDays: ilan.dispatchDays ?? null }], settings),
+    ...(typeof kdv === "number" && Number.isFinite(kdv) && kdv >= 0 && kdv < 100 ? { saleVatRate: kdv } : {}),
+  };
+}

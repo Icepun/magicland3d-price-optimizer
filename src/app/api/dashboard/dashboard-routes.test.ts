@@ -265,8 +265,9 @@ describe("GET /api/dashboard", () => {
     expect(hb.activeListings).toBe(3); // eskiden 1 idi: maliyeti eksik ürünün ilanı hiç sayılmıyordu
     expect(hb.missingCostListings).toBe(2);
     expect(body.missingCost).toBe(2);
-    // Kâr yalnız maliyeti bilinen ilandan gelir.
-    expect(hb.totalProfit).toBeCloseTo(400 / 1.2 - 100, 6);
+    // Kâr yalnız maliyeti bilinen ilandan gelir. Hepsiburada ilanında tahsilat bedeli de düşülür
+    // (KDV hariç fiyatın %0,96'sı; içindeki KDV indirilir) — bkz. core/hb-kesinti.
+    expect(hb.totalProfit).toBeCloseTo(400 / 1.2 - 100 - (400 / 1.2) * 0.0096 * (5 / 6), 6);
   });
 
   it("ortalama marj CİROYA GÖRE ağırlıklı — düz ortalamadan farklı çıkar", async () => {
@@ -279,8 +280,10 @@ describe("GET /api/dashboard", () => {
 
     const revenueBig = 1000 / 1.2;
     const revenueSmall = 10 / 1.2;
-    const profitBig = revenueBig - 100;
-    const profitSmall = revenueSmall - 100;
+    // Hepsiburada tahsilat bedeli: KDV hariç fiyatın %0,96'sı, KDV'si indirilerek (× 5/6).
+    const tahsilatNet = (gelir: number) => gelir * 0.0096 * (5 / 6);
+    const profitBig = revenueBig - 100 - tahsilatNet(revenueBig);
+    const profitSmall = revenueSmall - 100 - tahsilatNet(revenueSmall);
 
     const weighted = (profitBig + profitSmall) / (revenueBig + revenueSmall);
     const flat = (profitBig / revenueBig + profitSmall / revenueSmall) / 2;

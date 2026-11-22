@@ -49,6 +49,9 @@ export interface PricingListing {
   commissionFixed: number | null;
   cargoCost: number | null;
   isActive: boolean;
+  /** Kargoya verme süresi (gün) ve ilanın satış KDV oranı (%) — Hepsiburada; yoksa boş. */
+  dispatchDays?: number | null;
+  vatRate?: number | null;
 }
 
 export interface PricingProduct {
@@ -281,7 +284,13 @@ function priceLabFromBase(b: PricingBase): PriceLab {
       discountBuffer,
       ...resolveListingCommissionOverride(
         listing
-          ? { platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }
+          ? {
+              platform,
+              commissionRate: listing.commissionRate,
+              commissionFixed: listing.commissionFixed,
+              dispatchDays: listing.dispatchDays ?? null,
+              vatRate: listing.vatRate ?? null,
+            }
           : { platform, commissionRate: null, commissionFixed: null },
         b.settings
       ),

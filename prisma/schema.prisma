@@ -95,6 +95,10 @@ model Listing {
   commissionFixed   Float?
   /** Bu platform için özel kargo override (TL). Null ise cargoRules kullanılır. */
   cargoCost     Float?
+  /** Kargoya verme süresi (gün) — Hepsiburada ilanından; hizmet bedeli buna göre kesilir. */
+  dispatchDays  Int?
+  /** İlanın satış KDV oranı (%) — Hepsiburada muhasebe kayıtlarından öğrenilir. */
+  vatRate       Float?
   isActive      Boolean  @default(true)
   lastSyncedAt  DateTime?
   createdAt     DateTime @default(now())

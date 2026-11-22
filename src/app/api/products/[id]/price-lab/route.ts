@@ -65,7 +65,13 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   function simFor(
     platform: string,
-    listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null } | null,
+    listing: {
+      commissionRate: number | null;
+      commissionFixed: number | null;
+      cargoCost: number | null;
+      dispatchDays?: number | null;
+      vatRate?: number | null;
+    } | null,
     salePrice: number,
     discountBuffer = 0
   ) {
@@ -82,7 +88,16 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       vatRate,
       discountBuffer,
       ...(listing
-        ? resolveListingCommissionOverride({ platform, commissionRate: listing.commissionRate, commissionFixed: listing.commissionFixed }, settingsMap)
+        ? resolveListingCommissionOverride(
+            {
+              platform,
+              commissionRate: listing.commissionRate,
+              commissionFixed: listing.commissionFixed,
+              dispatchDays: listing.dispatchDays ?? null,
+              vatRate: listing.vatRate ?? null,
+            },
+            settingsMap
+          )
         : resolveListingCommissionOverride({ platform, commissionRate: null, commissionFixed: null }, settingsMap)),
       // Platform kuralları TEK kaynaktan (core/platform-rules). Eşiğe müşterinin GERÇEKTEN
       // ödediği tutar girer → kampanyada indirim UYGULANDIKTAN sonraki fiyat. Sepet minimumu

@@ -110,6 +110,8 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
             commissionRate: true,
             commissionFixed: true,
             cargoCost: true,
+            dispatchDays: true,
+            vatRate: true,
           },
         },
       },
@@ -163,6 +165,8 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
         commissionRate: number | null;
         commissionFixed: number | null;
         cargoCost: number | null;
+        dispatchDays?: number | null;
+        vatRate?: number | null;
       } | null,
       price: number
     ) =>
@@ -182,6 +186,8 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
             platform,
             commissionRate: listing?.commissionRate ?? null,
             commissionFixed: listing?.commissionFixed ?? null,
+            dispatchDays: listing?.dispatchDays ?? null,
+            vatRate: listing?.vatRate ?? null,
           },
           settingsMap
         ),

@@ -31,6 +31,9 @@ export interface HbMuhasebeKaydi {
   transactionType?: string;
   orderNumber?: string | number;
   amount?: { value?: number } | number | null;
+  taxAmount?: { value?: number } | number | null;
+  /** Hepsiburada ürün numarası (ilanın `externalId`'si). */
+  sku?: string | null;
   invoiceDate?: string | null;
   orderDate?: string | null;
   [key: string]: unknown;
@@ -59,6 +62,12 @@ function tutar(kayit: HbMuhasebeKaydi): number {
   const a = kayit.amount;
   const n = typeof a === "number" ? a : Number(a?.value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function vergi(kayit: HbMuhasebeKaydi): number {
+  const a = kayit.taxAmount;
+  const n = typeof a === "number" ? a : Number(a?.value);
+  return Number.isFinite(n) ? n : Number.NaN;
 }
 
 const KOMISYON = new Set(["Commission", "CommissionRefund", "CommissionInvoiceRefund", "CommissionCorrection"]);
@@ -153,6 +162,104 @@ export function sonHizmetBedeli(kayitlar: HbMuhasebeKaydi[]): number | null {
     if (!son || t > son.t) son = { t, a };
   }
   return son ? Math.round(son.a * 100) / 100 : null;
+}
+
+/**
+ * SAF: muhasebe kayıtlarından ürün (Hepsiburada ürün no) → satış KDV oranı (%).
+ * Ödeme kaydındaki KDV / KDV hariç tutar; aynı ürün için EN SON kayıt kazanır.
+ */
+export function hbUrunKdvOranlari(kayitlar: HbMuhasebeKaydi[]): Map<string, number> {
+  const son = new Map<string, { t: number; oran: number }>();
+  for (const k of kayitlar) {
+    if (k.transactionType !== "Payment") continue;
+    const sku = typeof k.sku === "string" ? k.sku.trim() : "";
+    const brut = tutar(k);
+    const kdv = vergi(k);
+    if (!sku || !(brut > 0) || !(kdv >= 0) || brut <= kdv) continue;
+    const oran = Math.round((kdv / (brut - kdv)) * 100);
+    if (!(oran >= 0 && oran < 100)) continue;
+    const t = Date.parse(String(k.invoiceDate ?? k.orderDate ?? "")) || 0;
+    const onceki = son.get(sku);
+    if (!onceki || t >= onceki.t) son.set(sku, { t, oran });
+  }
+  return new Map([...son].map(([sku, e]) => [sku, e.oran]));
+}
+
+export interface HbIlanSatiri {
+  id: string;
+  externalId: string | null;
+  externalSku: string | null;
+  dispatchDays: number | null;
+  vatRate: number | null;
+}
+
+/**
+ * SAF: ilanların kargoya verme süresi ve KDV oranı için yalnız DEĞİŞEN satırların güncellemeleri.
+ * Yeni bilgi yoksa kayıtlı değer korunur (bilinmeyen, bilineni silmez). `updatedAt`'e dokunulmaz —
+ * bu bir kullanıcı düzenlemesi değil, sıralamaları oynatmasın.
+ */
+export function hbIlanGuncellemeIfadeleri(
+  ilanlar: HbIlanSatiri[],
+  sureler: { bySku: ReadonlyMap<string, number>; byMerchantSku: ReadonlyMap<string, number> },
+  kdvler: ReadonlyMap<string, number>
+): Array<{ sql: string; args: unknown[] }> {
+  const ifadeler: Array<{ sql: string; args: unknown[] }> = [];
+  for (const ilan of ilanlar) {
+    const sure =
+      (ilan.externalId ? sureler.bySku.get(ilan.externalId) : undefined) ??
+      (ilan.externalSku ? sureler.byMerchantSku.get(ilan.externalSku) : undefined) ??
+      ilan.dispatchDays;
+    const kdv = (ilan.externalId ? kdvler.get(ilan.externalId) : undefined) ?? ilan.vatRate;
+    if ((sure ?? null) === (ilan.dispatchDays ?? null) && (kdv ?? null) === (ilan.vatRate ?? null)) continue;
+    ifadeler.push({
+      sql: `UPDATE "Listing" SET "dispatchDays" = ?, "vatRate" = ? WHERE "id" = ?`,
+      args: [sure ?? null, kdv ?? null, ilan.id],
+    });
+  }
+  return ifadeler;
+}
+
+/** Hepsiburada ilanlarının kargoya verme süreleri (gün) — ürün no ve satıcı stok koduna göre. */
+async function ilanSureleriniCek(client: HepsiburadaClient) {
+  const bySku = new Map<string, number>();
+  const byMerchantSku = new Map<string, number>();
+  for (let offset = 0; offset < 10_000; offset += SAYFA) {
+    const yanit = (await client.listListings({ offset, limit: SAYFA })) as {
+      listings?: Array<Record<string, unknown>>;
+    } | null;
+    const ilanlar = Array.isArray(yanit?.listings) ? yanit.listings : [];
+    for (const ilan of ilanlar) {
+      const gun = Number(ilan.dispatchTime);
+      if (!Number.isFinite(gun) || gun < 0) continue;
+      if (typeof ilan.hepsiburadaSku === "string" && ilan.hepsiburadaSku) bySku.set(ilan.hepsiburadaSku, Math.round(gun));
+      if (typeof ilan.merchantSku === "string" && ilan.merchantSku) byMerchantSku.set(ilan.merchantSku, Math.round(gun));
+    }
+    if (ilanlar.length < SAYFA) break;
+  }
+  return { bySku, byMerchantSku };
+}
+
+/**
+ * İlanların kargoya verme süresini (ilan servisinden) ve KDV oranını (muhasebe kayıtlarından)
+ * `Listing`'e işler — Ürünler ekranındaki satış öncesi kâr bunları kullanır. Yazılan satır sayısını döner.
+ */
+async function ilanBilgileriniGuncelle(client: HepsiburadaClient, kayitlar: HbMuhasebeKaydi[]): Promise<number> {
+  const sureler = await ilanSureleriniCek(client);
+  const satirlar = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT "id", "externalId", "externalSku", "dispatchDays", "vatRate" FROM "Listing" WHERE "platform" = 'hepsiburada'`
+  );
+  const ilanlar: HbIlanSatiri[] = satirlar.map((s) => ({
+    id: String(s.id),
+    externalId: s.externalId == null ? null : String(s.externalId),
+    externalSku: s.externalSku == null ? null : String(s.externalSku),
+    dispatchDays: s.dispatchDays == null ? null : Number(s.dispatchDays),
+    vatRate: s.vatRate == null ? null : Number(s.vatRate),
+  }));
+  const ifadeler = hbIlanGuncellemeIfadeleri(ilanlar, sureler, hbUrunKdvOranlari(kayitlar));
+  if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
+    for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
+  }
+  return ifadeler.length;
 }
 
 /** Uygulamanın sipariş kimliği (Siparişler ucu `hb-<sipariş no>` kullanıyor). */
@@ -277,6 +384,8 @@ export interface HbFinansSyncSonucu {
   /** Bu turda yazılan (yeni ya da değişen) sipariş. */
   storedOrders: number;
   skippedOrders: number;
+  /** Kargoya verme süresi / KDV oranı güncellenen ilan sayısı. */
+  updatedListings: number;
   days: number;
   syncedAt: string;
 }
@@ -340,11 +449,20 @@ export async function syncHepsiburadaFinancials(requestedDays = 35): Promise<HbF
     }
   }
 
+  // İlan bilgileri (satış öncesi kâr için). Bu adımın hatası gerçek kesintilerin yazımını geri almaz.
+  let updatedListings = 0;
+  try {
+    updatedListings = await ilanBilgileriniGuncelle(client, kayitlar);
+  } catch (hata) {
+    console.warn("[hepsiburada-finance] ilan bilgileri güncellenemedi:", hata instanceof Error ? hata.message : hata);
+  }
+
   return {
     fetchedTransactions: kayitlar.length,
     totalOrders: aggregates.length,
     storedOrders: ifadeler.length,
     skippedOrders,
+    updatedListings,
     days,
     syncedAt: syncedAt.toISOString(),
   };

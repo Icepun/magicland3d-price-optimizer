@@ -96,9 +96,8 @@ async function urunKumesiniOku(
              ${productWhere}`,
     },
     {
-      sql: `SELECT id, productId, platform, salePrice, stock, commissionRate,
-                   commissionFixed, cargoCost, externalId, externalSku, barcode, isActive
-              FROM Listing ${listingWhere}`,
+      // Kolonlar ADLA SEÇİLMEZ (bkz. product-detail.ts): yeni kolon yoksa sorgu düşmesin.
+      sql: `SELECT * FROM Listing ${listingWhere}`,
     },
   ]);
 

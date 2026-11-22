@@ -118,6 +118,16 @@ export interface SimulationInput {
    */
   cargoCostOverride?: number;
   /**
+   * Gider KURALLARINDAN gelen sabit bedelin YERİNE geçen tutar (brüt TL, siparişe bir kez; 0 = yok).
+   * Pazaryeri sabit bedeli her ilana kesmiyorsa (Hepsiburada hizmet bedeli) kural yerine bu verilir.
+   */
+  fixedExpenseOverride?: number;
+  /**
+   * Tahsilat (ödeme hizmeti) bedeli oranı: KDV HARİÇ satış fiyatının bu kadarı gider olarak
+   * düşülür (tutar KDV dahildir, içindeki KDV indirilir). Verilmezse 0.
+   */
+  paymentFeeRate?: number;
+  /**
    * KDV indirimine tabi ÜRÜN maliyeti payı (TL, birim) — şu an = filament malzeme maliyeti.
    * Komisyon/kargo/gider zaten KDV dahil sayılır; bu alan malzeme tarafının (filament) KDV'li
    * kısmını da iade hesabına katar. Verilmezse 0 (malzeme iadesi yok; komisyon/kargo/gider iadesi

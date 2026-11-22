@@ -188,10 +188,21 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
 
   // Sabit ve değişken giderler (gider kuralları)
   const {
-    fixed: fixedExpenses,
-    variable: variableExpenses,
+    fixed: kuralSabitGideri,
+    variable: kuralDegiskenGideri,
     applied: appliedExpenseRules,
   } = calculateExpenses(expenseRules, effectiveSalePrice, categoryName);
+  // Sabit bedel pazaryerine özel bilgiyle verildiyse kuralın yerine geçer (0 = bu ilanda kesilmiyor).
+  const fixedExpenses =
+    typeof input.fixedExpenseOverride === "number" && Number.isFinite(input.fixedExpenseOverride)
+      ? Math.max(0, input.fixedExpenseOverride)
+      : kuralSabitGideri;
+  // Tahsilat bedeli: KDV hariç fiyatın oranı — adet başına değişken gider gibi işler (KDV'si indirilir).
+  const paymentFeeRate =
+    typeof input.paymentFeeRate === "number" && Number.isFinite(input.paymentFeeRate)
+      ? Math.max(0, input.paymentFeeRate)
+      : 0;
+  const variableExpenses = kuralDegiskenGideri + salePriceExVat * paymentFeeRate;
 
   // SİPARİŞ bazlı toplam: per-unit kalemler (ürün/paketleme/komisyon/değişken gider) × qty;
   // KARGO ve sabit gider TEK kez (N ürün tek pakette gider). qty=1 → davranış aynı.

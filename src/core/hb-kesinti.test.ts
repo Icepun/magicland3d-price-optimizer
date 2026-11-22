@@ -209,14 +209,60 @@ describe("ilana girilen Hepsiburada oranı KDV hariçtir", () => {
     expect(sh.commissionRateOverride).toBe(0.03);
   });
 
-  it("oran girilmemişse eski davranış: Hepsiburada'da kural yoluna düşer", async () => {
+  it("yalnız komisyon (sipariş kârı yolu): oran girilmemişse kural yoluna düşer; sabit komisyon çevrilmez", async () => {
+    const { resolveListingCommissionOnly } = await import("./product-commission");
+    expect(resolveListingCommissionOnly({ platform: "hepsiburada", commissionRate: null, commissionFixed: null }, {})).toEqual({});
+    expect(resolveListingCommissionOnly({ platform: "hepsiburada", commissionRate: null, commissionFixed: 5 }, {})).toEqual({
+      commissionRateOverride: undefined,
+      commissionFixedOverride: 5,
+    });
+  });
+});
+
+/**
+ * SATIŞ ÖNCESİ (Ürünler ekranı, Panel, fiyat hesabı): ilanın fiyat motoruna taşıdığı kesintiler
+ * sipariş kârıyla AYNI kurallardan gelir — yoksa ürün ekranındaki kâr ile satış gerçekleşince
+ * görülen kâr birbirini tutmaz.
+ */
+describe("satış öncesi Hepsiburada kârı", () => {
+  const KURALLAR = [
+    { id: "e", name: "Platform Hizmet Bedeli", platform: "hepsiburada", categoryName: null, type: "fixed", value: 11.4, minPrice: 0, maxPrice: 999999, priority: 0, isActive: true },
+  ] as never;
+  async function kar(ilan: Record<string, unknown>, platform = "hepsiburada") {
     const { resolveListingCommissionOverride } = await import("./product-commission");
-    expect(resolveListingCommissionOverride({ platform: "hepsiburada", commissionRate: null, commissionFixed: null }, {})).toEqual({});
+    const { simulatePrice } = await import("./pricing-engine");
+    return simulatePrice({
+      salePrice: 199.99, productCost: 20, packagingCost: 0, categoryName: "Genel", desi: 1,
+      commissionRules: [], cargoRules: [], expenseRules: KURALLAR, vatRate: 20, cargoCostOverride: 0,
+      ...resolveListingCommissionOverride({ platform, commissionRate: 0.1, commissionFixed: null, ...ilan }, {}),
+    });
+  }
+
+  it("tahsilat bedeli her ilanda; hizmet bedeli süre bilinmiyorsa/1 günse DÜŞÜLMEZ (kural 11,40 devre dışı)", async () => {
+    const r = await kar({});
+    expect(r.commissionCost).toBeCloseTo(24.0, 2); // %10 × 1,2
+    expect(r.fixedExpenses).toBe(0);
+    expect(r.variableExpenses).toBeCloseTo(1.6, 2); // tahsilat: 199,99 / 1,2 × %0,96
+    // Sipariş kârıyla aynı sonuç (kargo hariç): 199,99/1,2 − 20 − (24 + 1,60) × 5/6.
+    expect(r.netProfit).toBeCloseTo(199.99 / 1.2 - 20 - (24 + 1.6) * (5 / 6), 2);
+    expect((await kar({ dispatchDays: 1 })).fixedExpenses).toBe(0);
   });
 
-  it("sabit komisyon KDV'ye çevrilmez (tutar zaten brüt girilir)", async () => {
+  it("kargoya verme süresi 2+ gün olan ilanda hizmet bedeli 13,19", async () => {
+    expect((await kar({ dispatchDays: 2 })).fixedExpenses).toBe(13.19);
+  });
+
+  it("ilanın KDV oranı %10 ise satış KDV'si %10 ayrılır; tahsilat tabanı da ona göre", async () => {
+    const r = await kar({ vatRate: 10 });
+    expect(r.salePriceExVat).toBeCloseTo(199.99 / 1.1, 4);
+    expect(r.variableExpenses).toBeCloseTo((199.99 / 1.1) * 0.0096, 4);
+  });
+
+  it("Trendyol ilanı ETKİLENMEZ: tahsilat yok, sabit bedel kuraldan", async () => {
     const { resolveListingCommissionOverride } = await import("./product-commission");
-    const r = resolveListingCommissionOverride({ platform: "hepsiburada", commissionRate: null, commissionFixed: 5 }, {});
-    expect(r).toEqual({ commissionRateOverride: undefined, commissionFixedOverride: 5 });
+    expect(resolveListingCommissionOverride({ platform: "trendyol", commissionRate: 0.21, commissionFixed: null, dispatchDays: 3, vatRate: 10 }, {})).toEqual({
+      commissionRateOverride: 0.21,
+      commissionFixedOverride: undefined,
+    });
   });
 });

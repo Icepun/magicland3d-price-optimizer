@@ -206,6 +206,8 @@ async function computeProducts(urlString: string) {
               commissionRate: true,
               commissionFixed: true,
               cargoCost: true,
+              dispatchDays: true,
+              vatRate: true,
             },
           },
           // _count: grubun TAM varyant sayısı. Liste bir grubun yalnız bir kısmını gösterdiğinde
@@ -301,7 +303,7 @@ async function computeProducts(urlString: string) {
     // farklı bir satış fiyatı verir (eşik önerisi bunu kullanır).
     const simulateAtPrice = (
       platform: string,
-      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null } | null,
+      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null; dispatchDays?: number | null; vatRate?: number | null } | null,
       price: number
     ) =>
       simulatePrice({
@@ -326,6 +328,8 @@ async function computeProducts(urlString: string) {
             platform,
             commissionRate: listing?.commissionRate ?? null,
             commissionFixed: listing?.commissionFixed ?? null,
+            dispatchDays: listing?.dispatchDays ?? null,
+            vatRate: listing?.vatRate ?? null,
           },
           settingsMap
         ),
@@ -414,7 +418,7 @@ async function computeProducts(urlString: string) {
     // karşılaştırmak zorunda — yoksa iki rakam farklı platformları anlatır.
     let profitBasis: {
       platform: string;
-      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null } | null;
+      listing: { commissionRate: number | null; commissionFixed: number | null; cargoCost: number | null; dispatchDays?: number | null; vatRate?: number | null } | null;
       price: number;
       orderQty: number;
     } | null = null;

@@ -232,3 +232,45 @@ describe("gerçek kesintiler kâra uygulanır", () => {
     expect(h.unitPrice).toBe(199.99);
   });
 });
+
+/**
+ * SATIŞ ÖNCESİ kâr için ilan bilgileri: kargoya verme süresi ilan servisinden, satış KDV oranı
+ * muhasebe kayıtlarından öğrenilir ve `Listing`'e yalnız DEĞİŞEN satır yazılır.
+ */
+describe("ilan bilgileri (kargoya verme süresi + KDV oranı)", () => {
+  it("hbUrunKdvOranlari ödeme kaydından oranı çıkarır; aynı üründe en son kayıt kazanır", async () => {
+    const { hbUrunKdvOranlari } = await import("./hepsiburada-finance");
+    const oranlar = hbUrunKdvOranlari([
+      kayit("1", "Payment", 199.99, { sku: "HB-A", taxAmount: { value: 33.33 } }),
+      kayit("2", "Payment", 379.99, { sku: "HB-B", taxAmount: { value: 34.54 } }),
+      // Aynı ürün daha sonra %20 ile faturalanmış → güncel oran o.
+      kayit("3", "Payment", 379.99, { sku: "HB-B", taxAmount: { value: 63.33 }, invoiceDate: "2026-11-22T00:00:00" }),
+      kayit("4", "Commission", -24, { sku: "HB-A", taxAmount: { value: -4 } }),
+      kayit("5", "Payment", 100, { sku: "", taxAmount: { value: 10 } }),
+    ]);
+    expect(Object.fromEntries(oranlar)).toEqual({ "HB-A": 20, "HB-B": 20 });
+    expect(hbUrunKdvOranlari([kayit("2", "Payment", 379.99, { sku: "HB-B", taxAmount: { value: 34.54 } })]).get("HB-B")).toBe(10);
+  });
+
+  it("hbIlanGuncellemeIfadeleri yalnız değişen ilanı yazar; bilinmeyen bilineni silmez", async () => {
+    const { hbIlanGuncellemeIfadeleri } = await import("./hepsiburada-finance");
+    const ilanlar = [
+      { id: "l1", externalId: "HB-A", externalSku: "SKU-A", dispatchDays: null, vatRate: null },
+      { id: "l2", externalId: "HB-B", externalSku: "SKU-B", dispatchDays: 2, vatRate: 10 },
+      { id: "l3", externalId: "HB-C", externalSku: "SKU-C", dispatchDays: 1, vatRate: 20 },
+      { id: "l4", externalId: null, externalSku: "SKU-D", dispatchDays: null, vatRate: null },
+    ];
+    const ifadeler = hbIlanGuncellemeIfadeleri(
+      ilanlar,
+      { bySku: new Map([["HB-A", 1], ["HB-B", 2]]), byMerchantSku: new Map([["SKU-D", 3]]) },
+      new Map([["HB-A", 20]])
+    );
+    // l1: iki alan da ilk kez doluyor · l2: aynı → yazılmaz · l3: yeni bilgi yok → korunur, yazılmaz
+    // l4: ürün numarası yok, satıcı stok koduyla eşleşir.
+    expect(ifadeler.map((i) => i.args)).toEqual([
+      [1, 20, "l1"],
+      [3, null, "l4"],
+    ]);
+    expect(ifadeler[0].sql).not.toContain("updatedAt");
+  });
+});

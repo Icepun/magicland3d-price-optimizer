@@ -5,7 +5,7 @@ import {
   resolveVatableCost,
 } from "./pricing-engine";
 import { vatRateOf } from "./vat";
-import { withProductCommissionRule, resolveListingCommissionOverride } from "./product-commission";
+import { withProductCommissionRule, resolveListingCommissionOnly } from "./product-commission";
 import { applyActualCommissionToProfit } from "./platform-financials";
 import { gecerliSiparisOrani } from "./order-commission";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
@@ -315,7 +315,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     const commissionOverride =
       siparisOrani != null
         ? { commissionRateOverride: siparisOrani }
-        : resolveListingCommissionOverride(lst, settings);
+        : resolveListingCommissionOnly(lst, settings);
     if (siparisOrani != null) orderRateLines++;
     const sim = simulatePrice({
       salePrice: unitPrice,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bustActualCommissionCaches } from "@/lib/cache-busting";
+import { bustActualCommissionCaches, bustProfitInputCaches } from "@/lib/cache-busting";
 import { syncHepsiburadaFinancials } from "@/lib/hepsiburada-finance";
 
 // Aynı anda tek tur: arka plan zamanlayıcısı ile elle tetikleme çakışırsa ikisi de aynı turu bekler.
@@ -18,6 +18,8 @@ export async function POST(req: NextRequest) {
     const result = await activeSync;
     // Yeni gerçek kayıt yazıldıysa sipariş ve rapor önbellekleri düşer; yazılmadıysa dokunulmaz.
     if (result.storedOrders > 0) bustActualCommissionCaches();
+    // İlan bilgisi (kargoya verme süresi / KDV) değiştiyse Ürünler ve Panel yeniden hesaplansın.
+    if (result.updatedListings > 0) bustProfitInputCaches();
 
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

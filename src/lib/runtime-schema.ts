@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v59: Satış öncesi Hepsiburada kârı — `Listing.dispatchDays` (kargoya verme süresi) ve
+//      `Listing.vatRate` (ilanın satış KDV oranı). Arka plandaki finans turu Hepsiburada'dan doldurur;
+//      Ürünler ekranı hizmet bedelini ve KDV'yi sipariş kârıyla AYNI kuralla hesaplar. NULLABLE.
 // v58: Hepsiburada GERÇEK kesintileri — `PlatformOrderFinancial`'a serviceFeeKurus, paymentFeeKurus,
 //      cargoKurus, stoppageKurus, platformDiscountKurus. Teslimden sonra muhasebe servisinden gelen
 //      hizmet bedeli / tahsilat / kargo / stopaj / HB indirimi; kâr tahmin yerine bunlarla hesaplanır.
@@ -120,7 +123,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "58";
+const CURRENT_SCHEMA_VERSION = "59";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1455,6 +1458,8 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "commissionRate" REAL,
         "commissionFixed" REAL,
         "cargoCost" REAL,
+        "dispatchDays" INTEGER,
+        "vatRate" REAL,
         "isActive" BOOLEAN NOT NULL DEFAULT true,
         "lastSyncedAt" DATETIME,
         "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1462,6 +1467,9 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE CASCADE
       )
     `);
+    // v59: kargoya verme süresi + ilanın KDV oranı (Hepsiburada). Nullable; boş = bilinmiyor.
+    await ensureColumn("Listing", "dispatchDays", "INTEGER");
+    await ensureColumn("Listing", "vatRate", "REAL");
     await bufDDL(`
       CREATE UNIQUE INDEX IF NOT EXISTS "Listing_productId_platform_key" ON "Listing"("productId", "platform")
     `);
