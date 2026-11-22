@@ -9,6 +9,7 @@ import { trendyolMikroIhracat } from "@core/mikro-ihracat";
 import { siparisKomisyonKesri } from "@core/order-commission";
 import { tyKalemHesabi } from "@core/ty-kesinti";
 import { trendyolKargoBaglami } from "@core/siparis-kargo";
+import { trendyolGecikmesi } from "@core/trendyol-gecikme";
 import {
   trendyolIadeDurumu,
   trendyolIadeleri,
@@ -57,6 +58,7 @@ interface TyOrder {
   cargoProviderName?: string | null;
   /** Hızlı teslimat işareti, söz verilen kargoya verme anı, paket geçmişi — kargo tarifesi için. */
   fastDelivery?: boolean;
+  fastDeliveryType?: string;
   agreedDeliveryDate?: number;
   packageHistories?: unknown;
   lines?: {
@@ -181,6 +183,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         cargoProvider: o.cargoProviderName ?? null,
         // Kargo tarifesi: hızlı teslimat + zamanında → avantajlı tablo (masaüstüyle aynı çekirdek).
         kargo: trendyolKargoBaglami(o),
+        gecikme: trendyolGecikmesi(o, Date.now()),
         items: (o.lines ?? []).map((l) => ({
           name: l.productName ?? l.barcode ?? "Ürün",
           quantity: Number(l.quantity ?? 1),

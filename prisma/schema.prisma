@@ -405,6 +405,9 @@ model OrderFinanceSnapshot {
   returnLossVatKurus       Int?
   // Kargo tarifesinin fiyat seçtiği bilgiler (JSON: firma, hızlı teslimat, süre, barem tutarı).
   cargoContext             String?
+  // Trendyol termin gecikme bedeli (kuruş) — kârdan düşülür; gecikme bilgisi (JSON).
+  penaltyKurus             Int?
+  delayInfo                String?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])
@@ -508,6 +511,10 @@ model PlatformOrderFinancial {
   platformDiscountKurus Int?
   // İade edilen siparişin gerçek dönüş kargosu (kuruş); null = kayıt yok.
   returnCargoKurus      Int?
+  // Pazaryerinin kestiği desi (Trendyol fatura kalemi; Hepsiburada tutardan); null = bilinmiyor.
+  chargedDesi           Float?
+  // Kargo faturasındaki paket (takip) numarası — Trendyol desi itirazı bununla yapılır.
+  parcelNo              String?
 
   @@unique([platform, externalOrderId])
   @@index([platform, orderNumber])

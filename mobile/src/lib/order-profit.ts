@@ -277,6 +277,8 @@ export function computeOrderProfit(
       orderFee: order.platform === "hepsiburada" ? hbHizmetBedeli(order.items, settings) : undefined,
       // Pazaryeri kargo tarifesinin fiyat seçtiği bilgiler — masaüstüyle aynı çekirdek.
       kargo: order.kargo ?? null,
+      // Trendyol termin gecikme bedeli (haftalık faturayla eşleşmiş) — masaüstüyle aynı.
+      penalty: order.gecikmeSonucu?.ceza ?? 0,
   };
   const r = resolveOrderProfit(
     profitInput,

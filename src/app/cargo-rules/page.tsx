@@ -2,7 +2,7 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import {
 import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight, CalendarClock } from "lucide-react";
 import { NewTariffDialog } from "./new-tariff-dialog";
 import { PazaryeriTarifesi } from "./pazaryeri-tarifesi";
+import { KargoDenetimiGorunumu } from "./kargo-denetimi";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -54,6 +55,7 @@ interface CargoRule {
 }
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
+type Sekme = Platform | "denetim";
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
@@ -720,7 +722,14 @@ function AdvancedRules({
 }
 
 export default function CargoRulesPage() {
-  const [tab, setTab] = useState<Platform>("trendyol");
+  // Bildirimden gelince (?sekme=denetim) doğrudan denetim sekmesi açılır; kullanıcı seçince o kazanır.
+  const sekmeAdresi = useSyncExternalStore(
+    () => () => {},
+    () => new URLSearchParams(window.location.search).get("sekme"),
+    () => null
+  );
+  const [secilenSekme, setTab] = useState<Sekme | null>(null);
+  const tab: Sekme = secilenSekme ?? (sekmeAdresi === "denetim" ? "denetim" : "trendyol");
   /**
    * Geçerlilik penceresi için TEK bir "şimdi" — sayfa açıkken sabit kalır.
    * Her render'da yeniden okunsaydı hesap saf olmazdı; tarifeler zaten aylık ölçekte değişiyor,
@@ -822,11 +831,12 @@ export default function CargoRulesPage() {
           sayfanın söylemediği en önemli şey buydu. */}
       <CargoCoverageCard />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as Platform)}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Sekme)}>
         <TabsList>
           <TabsTrigger value="trendyol" className="data-[state=active]:text-primary">Trendyol</TabsTrigger>
           <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-400">Hepsiburada</TabsTrigger>
           <TabsTrigger value="shopify" className="data-[state=active]:text-emerald-500">Shopify</TabsTrigger>
+          <TabsTrigger value="denetim" className="data-[state=active]:text-violet-400">Denetim</TabsTrigger>
         </TabsList>
 
         {/* SHOPIFY — temiz barem görünümü (flag yok) */}
@@ -874,6 +884,14 @@ export default function CargoRulesPage() {
           <Card>
             <CardContent className="pt-4">
               <PazaryeriTarifesi platform="hepsiburada" maxDesi={kapsam?.maxDesi ?? null} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="denetim" className="space-y-4 mt-4">
+          <Card>
+            <CardContent className="pt-4">
+              <KargoDenetimiGorunumu />
             </CardContent>
           </Card>
         </TabsContent>

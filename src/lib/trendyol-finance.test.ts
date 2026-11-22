@@ -280,3 +280,30 @@ describe("Trendyol ilan terminleri", () => {
     expect(ifadeler.map((i) => i.args)).toEqual([[1, "l1"], [2, "l3"]]);
   });
 });
+
+describe("Trendyol kesilen desi ve gecikme faturaları", () => {
+  it("gidiş kalemlerinin en büyük desisi ve paket numarası alınır", async () => {
+    const { kargoDesileriniTopla } = await import("./trendyol-finance");
+    const m = kargoDesileriniTopla([
+      { orderNumber: "1", shipmentPackageType: "Gönderi Kargo Bedeli", desi: 4, parcelUniqueId: "7330001" },
+      { orderNumber: "1", shipmentPackageType: "İade Kargo Bedeli", desi: 9, parcelUniqueId: "7330009" },
+      { orderNumber: "2", shipmentPackageType: "Gönderi Kargo Bedeli", desi: 1, parcelUniqueId: 7330002 },
+    ]);
+    expect(m.get("1")).toEqual({ desi: 4, paket: "7330001" });
+    expect(m.get("2")).toEqual({ desi: 1, paket: "7330002" });
+  });
+
+  it("gecikme faturaları birleştirilir, tekrar edenler bir kez, 200 günden eskiler atılır", async () => {
+    const { gecikmeFaturalariniBirlestir } = await import("./trendyol-finance");
+    const an = Date.parse("2026-11-23T00:00:00Z");
+    const gun = 86_400_000;
+    const sonuc = gecikmeFaturalariniBirlestir(
+      { bas: an - 90 * gun, faturalar: [{ tarih: an - 300 * gun, tutar: 50 }, { tarih: an - 40 * gun, tutar: 180 }] },
+      [{ tarih: an - 40 * gun, tutar: 180 }, { tarih: an - 10 * gun, tutar: 100 }],
+      an - 45 * gun,
+      an
+    );
+    expect(sonuc.faturalar.map((f) => f.tutar)).toEqual([180, 100]);
+    expect(sonuc.bas).toBe(an - 90 * gun);
+  });
+});

@@ -52,7 +52,9 @@ const SNAPSHOT_DDL = `
     "cargoKurus" INTEGER,
     "returnLossKurus" INTEGER,
     "returnLossVatKurus" INTEGER,
-    "cargoContext" TEXT
+    "cargoContext" TEXT,
+    "penaltyKurus" INTEGER,
+    "delayInfo" TEXT
   )`;
 
 /** Test siparişleri: yarısı ESKİ biçimde (tamsayı), yarısı kanonik biçimde (ISO metin). */

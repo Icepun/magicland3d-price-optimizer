@@ -19,6 +19,7 @@ import {
   ShoppingBag,
   Smartphone,
   Trash2,
+  Truck,
   Users,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -64,6 +65,7 @@ const TUR_IKON: Record<BildirimTuru, ComponentType<{ className?: string }>> = {
   "baski-sorun": PauseCircle,
   stok: Package,
   filament: Disc3,
+  kargo: Truck,
 };
 const TUR_RENK: Record<BildirimTuru, string> = {
   siparis: "text-emerald-500",
@@ -71,6 +73,7 @@ const TUR_RENK: Record<BildirimTuru, string> = {
   "baski-sorun": "text-amber-500",
   stok: "text-rose-500",
   filament: "text-violet-500",
+  kargo: "text-sky-400",
 };
 
 /**

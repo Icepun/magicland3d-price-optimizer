@@ -39,6 +39,8 @@ vi.mock("@/lib/api/trendyol", () => ({ getTrendyolOrders: async () => [] }));
 vi.mock("@/lib/api/hepsiburada", () => ({ getHepsiburadaOrders: async () => [] }));
 vi.mock("@/lib/api/window", () => ({ orderWindowCutoff: () => 0 }));
 vi.mock("@/lib/db/manual-orders", () => ({ getManualOrdersSince: async () => [] }));
+// Gecikme faturaları AppSetting'ten okunur — bu testte boş.
+vi.mock("@/lib/turso", () => ({ query: async () => [] }));
 // `@/lib/api/orders` kökte YOK → gerçek telefon modülüne yönlendir (kararlar gerçek kalsın).
 vi.mock("@/lib/api/orders", () => import(/* @vite-ignore */ yol.siparisler));
 vi.mock("@/lib/db/finance", () => ({ syncOrderFinanceSnapshots: vi.fn(async () => {}) }));

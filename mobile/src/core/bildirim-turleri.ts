@@ -9,7 +9,7 @@
  * ve bildirim listesi aynı eşlemeyi kullanır.
  */
 
-export type BildirimTuru = "siparis" | "baski-bitti" | "baski-sorun" | "stok" | "filament";
+export type BildirimTuru = "siparis" | "baski-bitti" | "baski-sorun" | "stok" | "filament" | "kargo";
 
 export interface BildirimTuruBilgisi {
   anahtar: BildirimTuru;
@@ -29,6 +29,7 @@ export const MASAUSTU_BILDIRIM_TURLERI: readonly BildirimTuruBilgisi[] = [
   ...TELEFON_BILDIRIM_TURLERI,
   { anahtar: "stok", ad: "Stok", aciklama: "Bir ürünün stoğu bitince" },
   { anahtar: "filament", ad: "Filament", aciklama: "Bir filament bitince" },
+  { anahtar: "kargo", ad: "Kargo itirazı", aciklama: "Pazaryeri fazla desi kesince" },
 ];
 
 const GECERLI = new Set<string>(MASAUSTU_BILDIRIM_TURLERI.map((t) => t.anahtar));
@@ -77,6 +78,7 @@ export function bildirimTuruBul(b: { id: string; type?: string | null }): Bildir
     return "baski-sorun";
   }
   if (tip === "stock" || tip === "site-stock" || id.startsWith("stock-") || id.startsWith("site-stock-")) return "stok";
+  if (tip === "kargo" || id.startsWith("kargo-")) return "kargo";
   if (tip === "filament" || tip === "spool" || id.startsWith("filament-") || id.startsWith("spool-")) {
     return "filament";
   }

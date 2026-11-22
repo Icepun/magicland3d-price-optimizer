@@ -21,6 +21,7 @@ const TUR_RENK: Record<BildirimTuru, string> = {
   "baski-sorun": color.warn,
   stok: color.bad,
   filament: color.accentBright,
+  kargo: color.info,
 };
 
 /**

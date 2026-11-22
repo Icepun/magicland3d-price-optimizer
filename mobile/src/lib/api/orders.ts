@@ -5,6 +5,13 @@ import {
 } from "@core/order-status-kind";
 import { siparisListedeKalir } from "@core/order-window";
 import type { KargoBaglami } from "@core/kargo-tarife";
+import {
+  gecikmeleriFaturalarlaEsle,
+  tyGecikmeFaturalariOku,
+  type TyGecikme,
+  type TyGecikmeSonucu,
+} from "@core/trendyol-gecikme";
+import { query } from "@/lib/turso";
 
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
@@ -78,6 +85,10 @@ export interface UnifiedOrder {
   packageNumber?: string | null;
   /** Kargo tarifesinin fiyat seçtiği bilgiler (firma, hızlı teslimat, süre) — masaüstüyle aynı çekirdek. */
   kargo?: KargoBaglami | null;
+  /** Trendyol termin gecikmesi (@core/trendyol-gecikme). */
+  gecikme?: TyGecikme | null;
+  /** Gecikme bedelinin haftalık faturayla eşleşmiş hâli — kâr bunu düşer (masaüstüyle aynı). */
+  gecikmeSonucu?: TyGecikmeSonucu | null;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;
@@ -127,7 +138,28 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
 
   // Tarihsiz (null) siparişler masaüstüyle aynı şekilde EN ALTA düşer.
   recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
+  await gecikmeleriEsle(orders);
   return { orders: recent, errors };
+}
+
+/**
+ * Trendyol gecikme bedelleri — haftalık faturayla eşleştirme TÜM siparişler üzerinden (masaüstü
+ * Siparişler ucuyla aynı çekirdek). Fatura ayarı okunamazsa tahmin kalır; hata fırlatmaz.
+ */
+async function gecikmeleriEsle(orders: UnifiedOrder[]): Promise<void> {
+  const adaylar = orders.flatMap((o) => (o.platform === "trendyol" && o.gecikme ? [{ id: o.id, g: o.gecikme }] : []));
+  if (adaylar.length === 0) return;
+  let metin: string | null = null;
+  try {
+    const [satir] = await query<{ value: string | null }>(`SELECT value FROM AppSetting WHERE key = ?`, ["tyGecikmeFaturalari"]);
+    metin = satir?.value ?? null;
+  } catch {
+    metin = null;
+  }
+  const sonuc = gecikmeleriFaturalarlaEsle(adaylar, tyGecikmeFaturalariOku(metin), Date.now());
+  for (const o of orders) {
+    if (o.platform === "trendyol") o.gecikmeSonucu = sonuc.get(o.id) ?? null;
+  }
 }
 
 function manualOrderToUnified(order: ManualOrder): UnifiedOrder {

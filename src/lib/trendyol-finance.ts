@@ -6,10 +6,16 @@ import { toDbDate } from "@/lib/sqlite-date";
 import { applyActualCommissionToProfit } from "@/core/platform-financials";
 import { vatRateOf } from "@/core/vat";
 import {
+  tyGecikmeFaturalariOku,
+  type TyGecikmeFaturalari,
+  type TyGecikmeFaturasi,
+} from "@/core/trendyol-gecikme";
+import {
   TrendyolClient,
   type TrendyolSettlementItem,
 } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
+import { kargoDenetimBildirimleri } from "./kargo-denetim";
 
 const DAY_MS = 86_400_000;
 const MAX_WINDOW_MS = 14 * DAY_MS;
@@ -304,6 +310,17 @@ export async function syncTrendyolActualCommissions(
   try {
     const kargo = await kargoFaturaKalemleri(client, startDate, endDate);
     cargoOrders = await kargoKayitlariniYaz(aggregates, kargo);
+    // Haftalık gecikme bedeli faturaları → ayar (sipariş ekranı geciken siparişlerle eşleştirir).
+    const ayar = await prisma.appSetting.findUnique({ where: { key: "tyGecikmeFaturalari" } });
+    const birlesik = gecikmeFaturalariniBirlestir(tyGecikmeFaturalariOku(ayar?.value), kargo.gecikme, startDate, endDate);
+    const metin = JSON.stringify(birlesik);
+    if (metin !== ayar?.value) {
+      await prisma.appSetting.upsert({
+        where: { key: "tyGecikmeFaturalari" },
+        update: { value: metin },
+        create: { key: "tyGecikmeFaturalari", value: metin },
+      });
+    }
   } catch (hata) {
     console.warn("[trendyol-finance] kargo faturaları alınamadı:", hata instanceof Error ? hata.message : hata);
   }
@@ -316,6 +333,8 @@ export async function syncTrendyolActualCommissions(
   } catch (hata) {
     console.warn("[trendyol-finance] gerçek kargo kayıtlı kâra işlenemedi:", hata instanceof Error ? hata.message : hata);
   }
+  // Fazla desi kesilen yeni siparişler → masaüstü bildirimi (hata fırlatmaz).
+  await kargoDenetimBildirimleri();
   // İlan terminleri (satış öncesi kargo tahmini için). Hatası diğer adımları geri almaz.
   try {
     await tyIlanTerminleriniGuncelle(client);
@@ -427,19 +446,68 @@ export function iadeKargoKalemleriniTopla(kalemler: Array<Record<string, unknown
   return toplam;
 }
 
-/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu (+ `iade` haritası). */
+/**
+ * SAF: kargo faturası kalemlerinden sipariş no → KESİLEN DESİ (gidiş kalemlerinin en büyüğü).
+ * Fazla desi itirazı için: ürünün desisinden büyükse fazladan ödenmiştir.
+ */
+export function kargoDesileriniTopla(
+  kalemler: Array<Record<string, unknown>>
+): Map<string, { desi: number; paket: string | null }> {
+  const desi = new Map<string, { desi: number; paket: string | null }>();
+  for (const k of kalemler) {
+    const no = cleanId(k.orderNumber);
+    const d = finiteNumber(k.desi);
+    if (!no || d == null || d < 0 || !/Gönderi/i.test(String(k.shipmentPackageType ?? ""))) continue;
+    const onceki = desi.get(no);
+    if (!onceki || d > onceki.desi) desi.set(no, { desi: d, paket: cleanId(k.parcelUniqueId) });
+  }
+  return desi;
+}
+
+/**
+ * Kesilen desiyi siparişin kaydına yazar — sipariş NUMARASIYLA, numaranın tek kaydı varsa
+ * (iade kargosuyla aynı kural; fatura satıştan haftalar sonra geliyor).
+ */
+export function kargoDesiYazmaIfadeleri(
+  desi: ReadonlyMap<string, { desi: number; paket: string | null }>
+): Array<{ sql: string; args: unknown[] }> {
+  return [...desi].map(([no, { desi: d, paket }]) => ({
+    sql: `UPDATE "PlatformOrderFinancial" SET "chargedDesi" = ?, "parcelNo" = ?
+           WHERE "platform" = 'trendyol' AND "orderNumber" = ?
+             AND ("chargedDesi" IS NOT ? OR "parcelNo" IS NOT ?)
+             AND (SELECT COUNT(*) FROM "PlatformOrderFinancial" p
+                   WHERE p."platform" = 'trendyol' AND p."orderNumber" = ?) = 1`,
+    args: [d, paket, no, d, paket, no],
+  }));
+}
+
+/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu (+ iade, desi, gecikme faturaları). */
 async function kargoFaturaKalemleri(
   client: TrendyolClient,
   startDate: number,
   endDate: number
-): Promise<Map<string, number> & { iade: Map<string, number> }> {
+): Promise<
+  Map<string, number> & {
+    iade: Map<string, number>;
+    desi: Map<string, { desi: number; paket: string | null }>;
+    gecikme: TyGecikmeFaturasi[];
+  }
+> {
   const faturalar: string[] = [];
+  const gecikme: TyGecikmeFaturasi[] = [];
   for (let bas = startDate; bas <= endDate; bas += MAX_WINDOW_MS) {
     const bit = Math.min(endDate, bas + MAX_WINDOW_MS - 1);
     const sayfa = await client.listOtherFinancials({ startDate: bas, endDate: bit, transactionType: "DeductionInvoices" });
     for (const k of sayfa.content ?? []) {
       const id = cleanId(k.id);
-      if (id && /Kargo/i.test(String(k.transactionType ?? "")) && !faturalar.includes(id)) faturalar.push(id);
+      const tur = String(k.transactionType ?? "");
+      if (id && /Kargo/i.test(tur) && !faturalar.includes(id)) faturalar.push(id);
+      // Haftalık "Termin Gecikme Bedeli" — siparişe bağlı gelmiyor, haftanın gecikmeleriyle eşleştirilir.
+      const tarih = finiteNumber(k.transactionDate);
+      const tutar = finiteNumber(k.debt);
+      if (/Gecikme/i.test(tur) && tarih != null && tutar != null && tutar > 0 && !gecikme.some((g) => g.tarih === tarih && g.tutar === tutar)) {
+        gecikme.push({ tarih, tutar });
+      }
     }
   }
   const kalemler: Array<Record<string, unknown>> = [];
@@ -451,7 +519,32 @@ async function kargoFaturaKalemleri(
       if (c.length < 500) break;
     }
   }
-  return Object.assign(kargoKalemleriniTopla(kalemler), { iade: iadeKargoKalemleriniTopla(kalemler) });
+  return Object.assign(kargoKalemleriniTopla(kalemler), {
+    iade: iadeKargoKalemleriniTopla(kalemler),
+    desi: kargoDesileriniTopla(kalemler),
+    gecikme,
+  });
+}
+
+/**
+ * SAF: saklı gecikme faturalarıyla bu turda görülenleri birleştirir. Senkron 3 saatte bir aynı
+ * pencereyi okuduğu için kapsam kesintisiz kalır; 200 günden eskiler atılır.
+ */
+export function gecikmeFaturalariniBirlestir(
+  eski: TyGecikmeFaturalari | null,
+  yeni: TyGecikmeFaturasi[],
+  pencereBas: number,
+  an: number
+): TyGecikmeFaturalari {
+  const sinir = an - 200 * DAY_MS;
+  const hepsi = new Map<string, TyGecikmeFaturasi>();
+  for (const f of [...(eski?.faturalar ?? []), ...yeni]) {
+    if (f.tarih >= sinir) hepsi.set(`${f.tarih}:${f.tutar}`, f);
+  }
+  return {
+    bas: Math.max(sinir, Math.min(eski?.bas ?? pencereBas, pencereBas)),
+    faturalar: [...hepsi.values()].sort((a, b) => a.tarih - b.tarih),
+  };
 }
 
 /**
@@ -494,9 +587,16 @@ export function iadeKargoYazmaIfadeleri(iade: ReadonlyMap<string, number>): Arra
 
 async function kargoKayitlariniYaz(
   aggregates: TrendyolCommissionAggregate[],
-  kargo: ReadonlyMap<string, number> & { iade?: ReadonlyMap<string, number> }
+  kargo: ReadonlyMap<string, number> & {
+    iade?: ReadonlyMap<string, number>;
+    desi?: ReadonlyMap<string, { desi: number; paket: string | null }>;
+  }
 ): Promise<number> {
-  const ifadeler = [...kargoYazmaIfadeleri(aggregates, kargo), ...iadeKargoYazmaIfadeleri(kargo.iade ?? new Map())];
+  const ifadeler = [
+    ...kargoYazmaIfadeleri(aggregates, kargo),
+    ...iadeKargoYazmaIfadeleri(kargo.iade ?? new Map()),
+    ...kargoDesiYazmaIfadeleri(kargo.desi ?? new Map()),
+  ];
   if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
     for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
   }

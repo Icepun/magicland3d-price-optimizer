@@ -137,3 +137,25 @@ describe("iade edilen siparişin zararı", () => {
     expect(z.returnCargo).toBeCloseTo(94.2, 6);
   });
 });
+
+describe("gecikme bedeli", () => {
+  it("bedelin tamamı kârdan düşer (KDV indirimi yok)", () => {
+    const yok = computeOrderProfit(girdi());
+    const var_ = computeOrderProfit(girdi({ penalty: 180 }));
+    expect((yok.profit ?? 0) - (var_.profit ?? 0)).toBeCloseTo(180, 6);
+    expect(var_.penalty).toBe(180);
+    expect(var_.inputVatCredit).toBeCloseTo(yok.inputVatCredit, 6);
+  });
+
+  it("iade edilen siparişte de geri verilmez", () => {
+    const z = computeReturnLoss(girdi({ orderTotal: 259.99, penalty: 100 }));
+    const zYok = computeReturnLoss(girdi({ orderTotal: 259.99 }));
+    expect(z.penalty).toBe(100);
+    expect(z.loss - zYok.loss).toBeCloseTo(100, 6);
+  });
+
+  it("negatif ya da bozuk bedel 0 sayılır", () => {
+    expect(computeOrderProfit(girdi({ penalty: -5 })).penalty).toBe(0);
+    expect(computeOrderProfit(girdi({ penalty: Number.NaN })).penalty).toBe(0);
+  });
+});

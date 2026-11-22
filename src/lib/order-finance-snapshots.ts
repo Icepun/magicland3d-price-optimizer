@@ -153,6 +153,13 @@ export interface FinanceSnapshotOrder {
    * undefined = çağıran bilmiyor (kayıtlı değer korunur).
    */
   cargoContext?: KargoBaglami | null;
+  /**
+   * Kârdan düşülen ceza (Trendyol termin gecikme bedeli, TL). Değişince kayıtlı kâr yenilenir —
+   * gecikme sipariş yakalandıktan sonra ortaya çıkıyor. undefined = çağıran bilmiyor.
+   */
+  penalty?: number | null;
+  /** Gecikme bilgisi (Kargo → Denetim listesi için). undefined = çağıran bilmiyor. */
+  delayInfo?: Record<string, unknown> | null;
 }
 
 /** Saklanan kargo bağlamı (JSON metin) → nesne; bozuksa null. */
@@ -193,6 +200,7 @@ export function shouldReplaceCapturedProfit(
     calculationVersion?: number;
     microExportCountry?: string | null;
     actualFeesKurus?: number | null;
+    penaltyKurus?: number | null;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -204,6 +212,8 @@ export function shouldReplaceCapturedProfit(
     microExportCountry?: string | null;
     /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
     actualFeesKurus?: number | null;
+    /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
+    penaltyKurus?: number | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -250,6 +260,14 @@ export function shouldReplaceCapturedProfit(
   ) {
     return true;
   }
+  // Gecikme bedeli sipariş yakalandıktan SONRA ortaya çıkıyor (geç kargolanınca, fatura haftalar sonra) —
+  // tutarı değişince kayıtlı kâr yenilenir; bedelsiz satırda (0/boş) eşit sayılır.
+  if (
+    incoming.penaltyKurus !== undefined &&
+    (existing.penaltyKurus ?? 0) !== (incoming.penaltyKurus ?? 0)
+  ) {
+    return true;
+  }
   return (
     existing.profitPartial &&
     !incoming.profitPartial &&
@@ -279,6 +297,8 @@ type SnapshotWriteData = {
   returnLossKurus: number | null;
   returnLossVatKurus: number | null;
   cargoContext: string | null;
+  penaltyKurus: number | null;
+  delayInfo: string | null;
   statusKind: string;
   currency: string;
   calculationVersion: number;
@@ -331,6 +351,8 @@ export function snapshotChangedFields(
     changed.push("returnLossVatKurus");
   }
   if ((existing.cargoContext ?? null) !== (next.cargoContext ?? null)) changed.push("cargoContext");
+  if ((existing.penaltyKurus ?? null) !== (next.penaltyKurus ?? null)) changed.push("penaltyKurus");
+  if ((existing.delayInfo ?? null) !== (next.delayInfo ?? null)) changed.push("delayInfo");
   if (existing.statusKind !== next.statusKind) changed.push("statusKind");
   if (existing.currency !== next.currency) changed.push("currency");
   if (existing.calculationVersion !== next.calculationVersion) {
@@ -409,8 +431,8 @@ function snapshotStatement(
             "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
             "outputVatKurus","inputVatCreditKurus","microExportCountry",
             "statusKind","currency","calculationVersion","syncedAt","actualFeesKurus","cargoKurus",
-            "returnLossKurus","returnLossVatKurus","cargoContext"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            "returnLossKurus","returnLossVatKurus","cargoContext","penaltyKurus","delayInfo"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId") DO UPDATE SET
             "orderNumber" = excluded."orderNumber",
             "orderedAt" = excluded."orderedAt",
@@ -431,7 +453,9 @@ function snapshotStatement(
             "cargoKurus" = excluded."cargoKurus",
             "returnLossKurus" = excluded."returnLossKurus",
             "returnLossVatKurus" = excluded."returnLossVatKurus",
-            "cargoContext" = excluded."cargoContext"`,
+            "cargoContext" = excluded."cargoContext",
+            "penaltyKurus" = excluded."penaltyKurus",
+            "delayInfo" = excluded."delayInfo"`,
     args: [
       `finance:${platform}:${externalOrderId}`,
       platform,
@@ -456,6 +480,8 @@ function snapshotStatement(
       data.returnLossKurus,
       data.returnLossVatKurus,
       data.cargoContext,
+      data.penaltyKurus,
+      data.delayInfo,
     ],
   };
 }
@@ -669,6 +695,14 @@ function toIncomingSnapshot(order: FinanceSnapshotOrder) {
           ? null
           : tlToKurus(order.returnLoss.inputVatCredit),
     cargoContext: order.cargoContext === undefined ? undefined : kargoBaglamiYaz(order.cargoContext),
+    penaltyKurus:
+      order.penalty === undefined
+        ? undefined
+        : order.penalty == null || !Number.isFinite(order.penalty) || order.penalty <= 0
+          ? null
+          : tlToKurus(order.penalty),
+    delayInfo:
+      order.delayInfo === undefined ? undefined : order.delayInfo === null ? null : JSON.stringify(order.delayInfo),
   };
 }
 
@@ -738,6 +772,13 @@ export function resolveSnapshotWriteData(
         : existing?.returnLossVatKurus ?? null,
     cargoContext:
       incoming.cargoContext !== undefined ? incoming.cargoContext : existing?.cargoContext ?? null,
+    // Kârla BİRLİKTE yazılır (kayıtlı kâr hangi bedelle hesaplandıysa o).
+    penaltyKurus: replaceProfit
+      ? incoming.penaltyKurus !== undefined
+        ? incoming.penaltyKurus
+        : existing?.penaltyKurus ?? null
+      : existing?.penaltyKurus ?? null,
+    delayInfo: incoming.delayInfo !== undefined ? incoming.delayInfo : existing?.delayInfo ?? null,
     statusKind: order.statusKind,
     currency: order.currency || "TRY",
     calculationVersion: replaceProfit
@@ -796,6 +837,8 @@ export async function persistOrderFinanceSnapshots(
     returnLossKurus: number | null;
     returnLossVatKurus: number | null;
     cargoContext: string | null;
+    penaltyKurus: number | null;
+    delayInfo: string | null;
     statusKind: string;
     currency: string;
   }> = [];
@@ -806,6 +849,8 @@ export async function persistOrderFinanceSnapshots(
         returnLossKurus: true,
         returnLossVatKurus: true,
         cargoContext: true,
+        penaltyKurus: true,
+        delayInfo: true,
         platform: true,
         externalOrderId: true,
         orderNumber: true,
@@ -1186,6 +1231,8 @@ type RecalcSnapshotRow = {
   returnLossKurus: number | null;
   returnLossVatKurus: number | null;
   cargoContext: string | null;
+  penaltyKurus: number | null;
+  delayInfo: string | null;
   calculationVersion: number;
   statusKind: string;
   currency: string;
@@ -1476,6 +1523,8 @@ export async function recalculateFinanceMonths(
         returnLossKurus: true,
         returnLossVatKurus: true,
         cargoContext: true,
+        penaltyKurus: true,
+        delayInfo: true,
         calculationVersion: true,
         statusKind: true,
         currency: true,
@@ -1645,6 +1694,8 @@ export async function recalculateFinanceMonths(
         // Hepsiburada hizmet bedeli: kayıtlı kargoya verme süresine göre (Siparişler ekranıyla aynı kural).
         orderFee: row.platform === "hepsiburada" ? hbHizmetBedeli(lines, settings) : undefined,
         kargo,
+        // Kayıtlı gecikme bedeli (Siparişler ekranının hesapladığı; yeniden hesap gecikmeyi bilmez).
+        penalty: row.penaltyKurus == null ? 0 : kurusToTl(row.penaltyKurus),
       };
       const resolved = resolveOrderProfit(profitInput, {
         statusKind: row.statusKind,

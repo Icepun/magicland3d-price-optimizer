@@ -14,6 +14,9 @@
  *     VARSA ve sipariş zamanında kargoya verildiyse. Ölçüldü: 10/10 hızlı + zamanında → avantajlı;
  *     hızlı ama geç kalan 1 sipariş → standart; hızlı işareti olmayan 76 sipariş → standart.
  *     Hızlı işaretli siparişlerin hepsi ~1 günlük terminli → ürün ekranında termin 1 gün = avantajlı.
+ *   • Resmi listeler (23 Kas 2026, ikisi de bu tabloyla kuruşu kuruşuna aynı): Trendyol panel → Kargo
+ *     İşlemleri → Kargo Fiyatları & Desi → "Güncel Kargo Fiyatları" (PDF, 5 Ekim 2026); Hepsiburada
+ *     images.hepsiburada.net/cst/assets/solutioncenterui/downloads/cargo.pdf (5 Ekim 2026).
  *   • 350 TL ve üstü ya da 10 desi üstü → firmanın desi listesi (panelden okundu; faturalarla birebir:
  *     81,95 / 100,20 / 107,20 / 114,10 / 133,41 / 142,32 / 150,64 / 164,18 / 173,42 / 182,20 / 206,03 / 213,82).
  *   • İADE kargosu baremden değil DESİ listesinden kesiliyor (11 iade faturası: ≤2 desi 81,95,
@@ -126,9 +129,35 @@ const TRENDYOL_2026_08: TarifeDonemi = {
       194.84, 202.03, 213.36, 224.62, 235.95, 247.24, 252.09, 264.8, 276.4, 287.97, 298.26, 308.5, 322.85,
       335.94, 347.66, 361.09, 371.34,
     ],
+    // Aşağıdakiler Trendyol'un resmi listesinden ("Güncel Kargo Fiyatları", 5 Ekim 2026).
+    dhl: [
+      97.99, 97.99, 97.99, 110.99, 124.99, 137.99, 150.99, 159.99, 169.99, 179.99, 189.99, 199.99, 209.99, 219.99,
+      229.99, 244.98, 264.99, 280.99, 299.99, 315.99, 334.99, 361.99, 383.99, 410.99, 437.99, 464.99, 491.99,
+      518.99, 545.99, 572.99, 599.99,
+    ],
+    kolaygelsin: [
+      96.59, 96.59, 96.59, 107.09, 118.64, 128.09, 138.59, 148.04, 158.54, 167.99, 179.54, 190.04, 201.59, 212.09,
+      223.64, 235.19, 246.74, 258.29, 269.84, 281.39, 292.94, 304.49, 316.04, 327.59, 339.14, 350.69, 362.24,
+      373.79, 385.34, 396.89, 408.44,
+    ],
+    ptt: [
+      81.95, 81.95, 81.95, 100.0, 105.6, 110.61, 120.83, 129.17, 138.3, 150.0, 169.84, 178.21, 187.17, 196.16,
+      205.14, 214.08, 223.04, 232.02, 240.98, 249.97, 258.94, 267.9, 276.87, 285.83, 294.79, 303.77, 312.75,
+      321.71, 330.67, 339.64, 348.6,
+    ],
+    surat: [
+      95.54, 95.54, 95.54, 106.45, 116.4, 122.41, 134.48, 143.61, 152.6, 161.73, 170.86, 182.99, 193.34, 201.11,
+      206.02, 213.51, 220.73, 232.45, 244.17, 255.75, 267.46, 279.46, 290.36, 300.98, 311.75, 322.37, 332.73,
+      343.09, 353.45, 363.79, 374.15,
+    ],
+    yurtici: [
+      121.75, 121.75, 121.75, 132.56, 135.41, 157.16, 164.75, 186.34, 193.5, 205.5, 214.59, 228.48, 242.84,
+      250.52, 270.13, 284.54, 292.69, 308.96, 324.29, 331.02, 338.15, 357.33, 368.35, 382.26, 389.91, 416.23,
+      455.06, 476.59, 498.16, 515.42, 520.7,
+    ],
   },
   iade: "desi",
-  kontrol: "22 Kasım 2026",
+  kontrol: "23 Kasım 2026",
 };
 
 const HEPSIBURADA_2026_08: TarifeDonemi = {
@@ -182,7 +211,7 @@ const HEPSIBURADA_2026_08: TarifeDonemi = {
     ],
   },
   iade: "gidis",
-  kontrol: "22 Kasım 2026",
+  kontrol: "23 Kasım 2026",
 };
 
 /** Dönemler — eskiden yeniye. Yeni tarife: sona ekle, öncekine `bitis` ver. */
@@ -331,6 +360,26 @@ export function iadeKargoTahmini(
   if (!donem) return null;
   if (donem.iade === "gidis") return kargoTahmini(platform, siparisTutari, desi, tarih, baglam);
   return desiTahmini(donem, firmaSec(donem, baglam?.firma), desi);
+}
+
+/**
+ * Kesilen kargo tutarından (KDV HARİÇ) hangi desiden fiyatlandığını bulur — firmanın desi listesinde
+ * tam eşleşen EN KÜÇÜK desi (0–2 aynı fiyatsa 2 değil 1 döner). Barem fiyatı ya da listede olmayan
+ * tutar → null (desi bilgisi taşımaz). Hepsiburada kesilen desiyi bildirmediği için gerekli.
+ */
+export function desiFiyatindanDesi(
+  platform: string,
+  firma: string | null | undefined,
+  tarih: Date,
+  fiyatKdvHaric: number
+): number | null {
+  const donem = tarifeDonemiBul(platform, tarih);
+  if (!donem || !Number.isFinite(fiyatKdvHaric)) return null;
+  const liste = donem.desi[firmaSec(donem, firma)] ?? donem.desi[donem.varsayilanFirma]!;
+  for (let d = 1; d < liste.length; d++) {
+    if (Math.abs(liste[d] - fiyatKdvHaric) < 0.02) return d;
+  }
+  return null;
 }
 
 /** Bir tahminin kısa açıklaması (sipariş dökümü için, son kullanıcı dili). */

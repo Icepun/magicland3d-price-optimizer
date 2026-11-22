@@ -61,6 +61,9 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v62: Kargo denetimi — `PlatformOrderFinancial.chargedDesi` + `parcelNo` (itiraz için paket no) (pazaryerinin kestiği desi: Trendyol kargo
+//      faturası kalemi, Hepsiburada tutardan), `OrderFinanceSnapshot.penaltyKurus` (Trendyol termin gecikme
+//      bedeli, kârdan düşülür) ve `delayInfo` (gecikme bilgisi, JSON). NULLABLE.
 // v61: Kargo tarifesi + iade zararı — `PlatformOrderFinancial.returnCargoKurus` (gerçek dönüş kargosu),
 //      `OrderFinanceSnapshot.returnLossKurus` / `returnLossVatKurus` (kargolanıp geri gelen siparişin
 //      zararı; ciroya girmez, kârdan düşer) ve `cargoContext` (yeniden hesapta tarifenin aynı fiyatı
@@ -131,7 +134,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "61";
+const CURRENT_SCHEMA_VERSION = "62";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1163,6 +1166,9 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await ensureColumn("OrderFinanceSnapshot", "returnLossKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "returnLossVatKurus", "INTEGER");
     await ensureColumn("OrderFinanceSnapshot", "cargoContext", "TEXT");
+    // v62: gecikme bedeli (kuruş) ve gecikme bilgisi (JSON). Nullable, varsayılansız.
+    await ensureColumn("OrderFinanceSnapshot", "penaltyKurus", "INTEGER");
+    await ensureColumn("OrderFinanceSnapshot", "delayInfo", "TEXT");
     // v37: Sipariş KALEMLERİ. Sipariş düzeyi özet "hangi üründen kaç adet sattık" sorusunu
     // yanıtlamıyordu ve platform penceresi (30-60 gün) dolunca o bilgi kalıcı olarak kayboluyordu.
     // Tekilleştirme (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.
@@ -1265,7 +1271,9 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "cargoKurus" INTEGER,
         "stoppageKurus" INTEGER,
         "platformDiscountKurus" INTEGER,
-        "returnCargoKurus" INTEGER
+        "returnCargoKurus" INTEGER,
+        "chargedDesi" REAL,
+        "parcelNo" TEXT
       )
     `);
     // v58: komisyon dışındaki gerçek kesintiler. Nullable, varsayılansız (boş = bilinmiyor).
@@ -1277,6 +1285,9 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // v61: iade edilen siparişin gerçek DÖNÜŞ kargosu (Trendyol iade kargo faturası / Hepsiburada
     // ikinci kargo kaydı). Nullable — boş = kayıt yok, tahmin geçerli.
     await ensureColumn("PlatformOrderFinancial", "returnCargoKurus", "INTEGER");
+    // v62: pazaryerinin kestiği desi (fazla desi itirazı için). Nullable.
+    await ensureColumn("PlatformOrderFinancial", "chargedDesi", "REAL");
+    await ensureColumn("PlatformOrderFinancial", "parcelNo", "TEXT");
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "PlatformOrderFinancial_platform_externalOrderId_key"
        ON "PlatformOrderFinancial"("platform", "externalOrderId")`

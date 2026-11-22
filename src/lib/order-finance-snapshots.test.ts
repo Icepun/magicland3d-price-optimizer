@@ -26,6 +26,8 @@ describe("mikro ihracat — yakalanmış kâr yalnız bu bilgi değişince yenil
     returnLossKurus: null,
     returnLossVatKurus: null,
     cargoContext: null,
+    penaltyKurus: null,
+    delayInfo: null,
     statusKind: "pending",
     currency: "TRY",
     calculationVersion: FINANCE_CALCULATION_VERSION,

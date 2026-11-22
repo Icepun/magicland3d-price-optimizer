@@ -57,6 +57,14 @@ import {
 } from "@/core/order-profit";
 import { kargoTahminiEtiketi, type KargoBaglami } from "@/core/kargo-tarife";
 import { hepsiburadaKargoBaglami, kargoluIadeMi, trendyolKargoBaglami } from "@/core/siparis-kargo";
+import { fazlaDesiBul } from "@/core/kargo-denetim";
+import {
+  gecikmeleriFaturalarlaEsle,
+  trendyolGecikmesi,
+  tyGecikmeFaturalariOku,
+  type TyGecikme,
+  type TyGecikmeDurumu,
+} from "@/core/trendyol-gecikme";
 import { siparisKomisyonKesri } from "@/core/order-commission";
 import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
 import { tyKalemHesabi } from "@/core/ty-kesinti";
@@ -175,7 +183,22 @@ export interface UnifiedOrder {
     outboundActual: boolean;
     returnActual: boolean;
     serviceFeeActual: boolean;
+    penalty: number;
   } | null;
+  /** Kârdan düşülen ceza (Trendyol termin gecikme bedeli, TL). */
+  penalty?: number;
+  /** Trendyol termin gecikmesi — finans geçmişine yazılır, Kargo → Denetim listesi buradan. */
+  delayInfo?: {
+    sonGun: string;
+    tolerans: string;
+    kargolanma: number | null;
+    gecikti: boolean;
+    kargolanmadi: boolean;
+    ceza: number;
+    durum: TyGecikmeDurumu;
+  } | null;
+  /** Pazaryeri ürünün desisinden büyük desiyle kesti ve kargo pahalandı (itiraz edilebilir). */
+  excessDesi?: { bizimDesi: number; kesilenDesi: number; fazla: number } | null;
   /** Bu siparişe düşen reklam payı (TL). 0 = reklam bütçesi yok. */
   adCost?: number;
   /** Siparişe düşen kargo bedeli (TL). */
@@ -709,6 +732,8 @@ async function computeOrdersBodyInner(
     kargo?: KargoBaglami | null;
     /** Kargoya verildikten sonra geri geldi → iki yön kargo zararı (core/order-profit computeReturnLoss). */
     kargoIadesi?: boolean;
+    /** Trendyol: termin gecikmesi (core/trendyol-gecikme) — bedel haftalık faturayla eşleştirilir. */
+    gecikme?: TyGecikme | null;
   };
   const raws: Raw[] = [];
   /** Yerel tamponu ana listeye aktar (spread yerine döngü: binlerce satırda argüman sınırı yok). */
@@ -922,6 +947,7 @@ async function computeOrdersBodyInner(
         // Kargo tarifesi: hızlı teslimat + zamanında → avantajlı tablo (core/kargo-tarife).
         kargo: trendyolKargoBaglami(o),
         kargoIadesi: kargoluIadeMi("trendyol", o.status, iadeDurumu === "tam"),
+        gecikme: trendyolGecikmesi(o, Date.now()),
       });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
@@ -1130,6 +1156,8 @@ async function computeOrdersBodyInner(
     cargoKurus: number | null;
     /** İade edilen siparişin dönüş kargosu (gerçek kayıt) — kuruş; null = kayıt yok. */
     returnCargoKurus: number | null;
+    /** Pazaryerinin kestiği desi; null = bilinmiyor. */
+    chargedDesi: number | null;
   };
   const financialByExternalId = new Map<string, PlatformFinancial>();
   const financialByOrderNumber = new Map<string, PlatformFinancial[]>();
@@ -1257,6 +1285,7 @@ async function computeOrdersBodyInner(
           paymentFeeKurus: true,
           cargoKurus: true,
           returnCargoKurus: true,
+          chargedDesi: true,
         },
       }),
     ]);
@@ -1346,6 +1375,14 @@ async function computeOrdersBodyInner(
   // SİPARİŞE ÖZEL MALİYET: kataloğa eklenmemiş / maliyeti girilmemiş ürünün yalnız o siparişteki
   // maliyeti (Siparişler → "Maliyet gir"). Hesap katalog ürünüyle AYNI çekirdekten geçer.
   const satirMaliyetleri = await satirMaliyetleriniOku(historyRows);
+
+  // TRENDYOL GECİKME BEDELİ — geciken paketler haftalık "Termin Gecikme Bedeli" faturasıyla eşleştirilir
+  // (fatura siparişe bağlı gelmiyor). Fatura geldiyse gerçek; beklenen sürede gelmediyse kesilmedi.
+  const gecikmeSonuclari = gecikmeleriFaturalarlaEsle(
+    historyRows.flatMap((r) => (r.platform === "trendyol" && r.gecikme ? [{ id: r.id, g: r.gecikme }] : [])),
+    tyGecikmeFaturalariOku(settingsMap.tyGecikmeFaturalari),
+    Date.now()
+  );
 
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of historyRows) {
@@ -1486,6 +1523,8 @@ async function computeOrdersBodyInner(
       orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined,
       // Pazaryeri kargo tarifesinin fiyatı seçtiği bilgiler (firma, hızlı teslimat, süre, barem tutarı).
       kargo: r.kargo ?? null,
+      // Trendyol termin gecikme bedeli (tahmini ya da haftalık faturayla doğrulanmış).
+      penalty: gecikmeSonuclari.get(r.id)?.ceza ?? 0,
     };
     // İADE (kargolanıp geri gelen) sipariş: ciro ve komisyon geri verildi, iki yön kargo + hizmet
     // bedeli kesildi → siparişin kârı bu zarardır. Gerçek kayıt varsa tahminin yerine geçer.
@@ -1501,6 +1540,7 @@ async function computeOrdersBodyInner(
               : null,
         })
       : null;
+    const gecikmeSonucu = gecikmeSonuclari.get(r.id) ?? null;
     const pr = resolveOrderProfit(
       profitInput,
       {
@@ -1574,8 +1614,33 @@ async function computeOrdersBodyInner(
             outboundActual: returnLoss.outboundActual,
             returnActual: returnLoss.returnActual,
             serviceFeeActual: returnLoss.serviceFeeActual,
+            penalty: returnLoss.penalty,
           }
         : null,
+      penalty: pr.penalty,
+      ...(r.platform === "trendyol"
+        ? {
+            delayInfo:
+              r.gecikme && gecikmeSonucu
+                ? {
+                    sonGun: r.gecikme.sonGun,
+                    tolerans: r.gecikme.tolerans,
+                    kargolanma: r.gecikme.kargolanma,
+                    gecikti: r.gecikme.gecikti,
+                    kargolanmadi: r.gecikme.kargolanmadi,
+                    ceza: gecikmeSonucu.ceza,
+                    durum: gecikmeSonucu.durum,
+                  }
+                : null,
+          }
+        : {}),
+      // FAZLA DESİ — pazaryeri ürünün desisinden büyük desiyle kesti ve bu fiyatı artırdı → itiraz edilebilir.
+      excessDesi: fazlaDesiBul({
+        kesilenDesi: platformFinancial?.chargedDesi ?? null,
+        bizimDesi: pr.cargoDetail?.desi ?? null,
+        gercekKargo: pr.actualCargo,
+        tahminiKargo: pr.estimatedCargoCost,
+      }),
       adCost: pr.adCost,
       cargoCost: pr.cargoCost,
       productAndPackagingCost: pr.productAndPackagingCost,

@@ -34,6 +34,7 @@ import {
   KeyRound,
   TrendingUp,
   TrendingDown,
+  Clock,
   Pencil,
   Plus,
   Trash2,
@@ -161,7 +162,22 @@ interface UnifiedOrder {
     outboundActual: boolean;
     returnActual: boolean;
     serviceFeeActual: boolean;
+    penalty?: number;
   } | null;
+  /** Kârdan düşülen gecikme bedeli (Trendyol, TL). */
+  penalty?: number;
+  /** Trendyol termin gecikmesi. */
+  delayInfo?: {
+    sonGun: string;
+    tolerans: string;
+    kargolanma: number | null;
+    gecikti: boolean;
+    kargolanmadi: boolean;
+    ceza: number;
+    durum: "zamaninda" | "muaf" | "tahmini" | "gercek" | "kesilmedi";
+  } | null;
+  /** Pazaryeri ürün desisinden büyük desiyle kesti (itiraz edilebilir). */
+  excessDesi?: { bizimDesi: number; kesilenDesi: number; fazla: number } | null;
   /** Bu siparişe düşen reklam payı (TL). */
   adCost?: number;
   /** Siparişe düşen kargo bedeli (TL). */
@@ -2299,6 +2315,23 @@ const OrderRow = memo(function OrderRow({
                   Yeni
                 </span>
               )}
+              {order.delayInfo?.gecikti && order.delayInfo.durum !== "kesilmedi" && order.delayInfo.durum !== "muaf" && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-1.5 py-px text-[9px] font-semibold text-red-300 animate-in fade-in zoom-in-95 duration-300"
+                  title={order.delayInfo.kargolanmadi ? "Termin geçti, henüz kargoya verilmedi" : "Geç kargolandı · gecikme bedeli"}
+                >
+                  <Clock className="h-2.5 w-2.5" />
+                  {order.delayInfo.kargolanmadi ? "Termin geçti" : "Gecikti"}
+                </span>
+              )}
+              {order.excessDesi && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-violet-500/15 px-1.5 py-px text-[9px] font-semibold text-violet-300 animate-in fade-in zoom-in-95 duration-300"
+                  title="Fazla desi kesildi · itiraz edilebilir"
+                >
+                  Fazla desi
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground truncate mt-0.5">
               {order.customer ? <span className="text-foreground/80">{order.customer}</span> : "Müşteri —"}
@@ -2669,6 +2702,7 @@ const OrderRow = memo(function OrderRow({
                       { ad: "Gidiş kargosu", tutar: order.returnLoss.outboundCargo, gercek: order.returnLoss.outboundActual },
                       { ad: "Dönüş kargosu", tutar: order.returnLoss.returnCargo, gercek: order.returnLoss.returnActual },
                       { ad: "Hizmet bedeli", tutar: order.returnLoss.serviceFee, gercek: order.returnLoss.serviceFeeActual },
+                      { ad: "Gecikme bedeli", tutar: order.returnLoss.penalty ?? 0, gercek: order.delayInfo?.durum === "gercek" },
                     ]
                       .filter((k) => k.tutar > 0)
                       .map((k) => (
@@ -2723,6 +2757,32 @@ const OrderRow = memo(function OrderRow({
                       −{fmtMoney2(order.cargoCost ?? 0, orderCurrency)}
                     </span>
                   </div>
+                )}
+                {/* Fazla desi: pazaryeri ürün desisinden büyük kesti — itiraz edilebilir. */}
+                {!isCancelled && order.excessDesi && (
+                  <div className="flex items-center justify-between text-[10px] animate-in fade-in duration-300">
+                    <span className="text-violet-300">
+                      Fazla desi · {order.excessDesi.bizimDesi} yerine {order.excessDesi.kesilenDesi} desi
+                    </span>
+                    <span className="tabular-nums text-red-300">+{fmtMoney2(order.excessDesi.fazla, orderCurrency)}</span>
+                  </div>
+                )}
+                {/* Trendyol termin gecikme bedeli — tahmini, haftalık faturayla kesinleşir. */}
+                {!isCancelled && (order.penalty ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">
+                      Gecikme bedeli
+                      {order.delayInfo?.durum === "gercek" ? (
+                        <GercekRozeti />
+                      ) : (
+                        <span className="ml-1 text-muted-foreground/60">tahmini</span>
+                      )}
+                    </span>
+                    <span className="tabular-nums text-red-300">−{fmtMoney2(order.penalty ?? 0, orderCurrency)}</span>
+                  </div>
+                )}
+                {!isCancelled && order.delayInfo?.gecikti && order.delayInfo.durum === "kesilmedi" && (
+                  <p className="text-[10px] text-muted-foreground/70">Geç kargolandı · bedel kesilmedi.</p>
                 )}
                 {/* Pazaryerinin sipariş başına kestiği bedeller — yalnız kesildiği siparişte görünür. */}
                 {!isCancelled && (order.fixedExpense ?? 0) > 0 && (

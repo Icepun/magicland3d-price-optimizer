@@ -15,6 +15,8 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { HB_HIZMET_BEDELI } from "@/core/hb-kesinti";
+import { desiFiyatindanDesi } from "@/core/kargo-tarife";
+import { kargoDenetimBildirimleri } from "./kargo-denetim";
 import { batchWrite } from "./libsql-batch";
 import { toDbDate } from "./sqlite-date";
 import { tlToKurus } from "./monthly-finance";
@@ -50,6 +52,11 @@ export interface HbSiparisGercegi {
   paymentFee: number;
   /** Kargo kesintisi; kaydı henüz yoksa null (tahmin geçerli kalır). */
   cargo: number | null;
+  /**
+   * Kesilen desi — Hepsiburada bildirmiyor; kargo tutarı hepsiJET desi listesinde aranır
+   * (barem fiyatı desi bilgisi taşımaz → null). Fazla desi itirazı için.
+   */
+  chargedDesi: number | null;
   stoppage: number;
   platformDiscount: number;
   /** Net tutar — kayıtların toplamı (panelin "Net tutar" kolonu). */
@@ -114,6 +121,7 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
     iadeTutari: number;
     kargoVar: boolean;
     kargoKayitlari: Array<{ t: number; a: number }>;
+    siparisTarihi: number | null;
     kimlikler: Set<string>;
   };
   const siparisler = new Map<string, Ara>();
@@ -124,9 +132,10 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
     const s =
       siparisler.get(no) ??
       ({
-        orderNumber: no, grossRevenue: 0, commission: 0, serviceFee: 0, paymentFee: 0, cargo: null,
+        orderNumber: no, grossRevenue: 0, commission: 0, serviceFee: 0, paymentFee: 0, cargo: null, chargedDesi: null,
         stoppage: 0, platformDiscount: 0, sellerRevenue: 0, transactionCount: 0, sourceUpdatedAt: null,
-        odeme: 0, iade: false, iadeTutari: 0, kargoVar: false, kargoKayitlari: [], kimlikler: new Set<string>(),
+        odeme: 0, iade: false, iadeTutari: 0, kargoVar: false, kargoKayitlari: [], siparisTarihi: null,
+        kimlikler: new Set<string>(),
       } satisfies Ara);
     siparisler.set(no, s);
     // Pencere sınırında aynı kayıt iki kez gelebilir → kimliğe göre tek sayılır.
@@ -136,6 +145,10 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
       s.kimlikler.add(kimlik);
     }
     const a = tutar(kayit);
+    if (s.siparisTarihi == null && kayit.orderDate) {
+      const st = Date.parse(String(kayit.orderDate));
+      if (Number.isFinite(st)) s.siparisTarihi = st;
+    }
     s.sellerRevenue += a;
     s.transactionCount++;
     if (tip === "Payment") s.odeme += a;
@@ -189,6 +202,10 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
       serviceFee: yuvarla(Math.max(0, s.serviceFee)),
       paymentFee: yuvarla(Math.max(0, s.paymentFee)),
       cargo: s.kargoVar ? yuvarla(Math.max(0, s.cargo ?? 0)) : null,
+      chargedDesi:
+        s.kargoVar && s.siparisTarihi != null
+          ? desiFiyatindanDesi("hepsiburada", null, new Date(s.siparisTarihi), yuvarla(Math.max(0, s.cargo ?? 0) / 1.2))
+          : null,
       stoppage: yuvarla(Math.max(0, s.stoppage)),
       platformDiscount: yuvarla(Math.max(0, s.platformDiscount)),
       sellerRevenue: yuvarla(s.sellerRevenue),
@@ -374,6 +391,7 @@ type KayitliSatir = {
   cargoKurus: number | null;
   stoppageKurus: number | null;
   platformDiscountKurus: number | null;
+  chargedDesi: number | null;
 };
 
 function kurusSatiri(row: HbSiparisGercegi): KayitliSatir {
@@ -388,12 +406,13 @@ function kurusSatiri(row: HbSiparisGercegi): KayitliSatir {
     cargoKurus: row.cargo == null ? null : tlToKurus(row.cargo),
     stoppageKurus: tlToKurus(row.stoppage),
     platformDiscountKurus: tlToKurus(row.platformDiscount),
+    chargedDesi: row.chargedDesi,
   };
 }
 
 const ALANLAR = [
   "grossRevenueKurus", "commissionKurus", "sellerRevenueKurus", "transactionCount",
-  "serviceFeeKurus", "paymentFeeKurus", "cargoKurus", "stoppageKurus", "platformDiscountKurus",
+  "serviceFeeKurus", "paymentFeeKurus", "cargoKurus", "stoppageKurus", "platformDiscountKurus", "chargedDesi",
 ] as const;
 
 /** SAF: yalnız DEĞİŞEN/yeni satırlar için yazma ifadeleri (uzak veritabanında her yazma sıralıdır). */
@@ -412,8 +431,9 @@ export function hbGercekYazmaIfadeleri(
       sql: `INSERT INTO "PlatformOrderFinancial"
               ("id", "platform", "externalOrderId", "orderNumber", "grossRevenueKurus", "commissionKurus",
                "sellerRevenueKurus", "transactionCount", "sourceUpdatedAt", "syncedAt",
-               "serviceFeeKurus", "paymentFeeKurus", "cargoKurus", "stoppageKurus", "platformDiscountKurus")
-            VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               "serviceFeeKurus", "paymentFeeKurus", "cargoKurus", "stoppageKurus", "platformDiscountKurus",
+               "chargedDesi")
+            VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
               "orderNumber" = excluded."orderNumber",
               "grossRevenueKurus" = excluded."grossRevenueKurus",
@@ -426,7 +446,8 @@ export function hbGercekYazmaIfadeleri(
               "paymentFeeKurus" = excluded."paymentFeeKurus",
               "cargoKurus" = excluded."cargoKurus",
               "stoppageKurus" = excluded."stoppageKurus",
-              "platformDiscountKurus" = excluded."platformDiscountKurus"`,
+              "platformDiscountKurus" = excluded."platformDiscountKurus",
+              "chargedDesi" = excluded."chargedDesi"`,
       args: [
         `pof:hepsiburada:${yeni.externalOrderId}`,
         yeni.externalOrderId,
@@ -442,6 +463,7 @@ export function hbGercekYazmaIfadeleri(
         yeni.cargoKurus,
         yeni.stoppageKurus,
         yeni.platformDiscountKurus,
+        yeni.chargedDesi,
       ],
     });
   }
@@ -524,6 +546,7 @@ export async function syncHepsiburadaFinancials(requestedDays = 35): Promise<HbF
         cargoKurus: sayi(s.cargoKurus),
         stoppageKurus: sayi(s.stoppageKurus),
         platformDiscountKurus: sayi(s.platformDiscountKurus),
+        chargedDesi: sayi(s.chargedDesi),
       });
     }
   }
@@ -569,6 +592,9 @@ export async function syncHepsiburadaFinancials(requestedDays = 35): Promise<HbF
       });
     }
   }
+
+  // Fazla desi kesilen yeni siparişler → masaüstü bildirimi (hata fırlatmaz).
+  await kargoDenetimBildirimleri();
 
   // İlan bilgileri (satış öncesi kâr için). Bu adımın hatası gerçek kesintilerin yazımını geri almaz.
   let updatedListings = 0;

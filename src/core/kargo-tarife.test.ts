@@ -44,8 +44,20 @@ describe("kargo tarifesi — Trendyol", () => {
     expect(ty(259.99, 2, { firma: "DHL eCommerce Marketplace" })).toMatchObject({ fiyat: 94.99, firma: "dhl" });
   });
 
-  it("desi listesi bilinmeyen firma varsayılanın (TEX) listesiyle", () => {
-    expect(ty(500, 3, { firma: "DHL eCommerce Marketplace" })).toMatchObject({ fiyat: 100.2, firma: "tex", tur: "desi" });
+  it("firmanın kendi desi listesi (resmi liste: DHL 3 desi 110,99)", () => {
+    expect(ty(500, 3, { firma: "DHL eCommerce Marketplace" })).toMatchObject({ fiyat: 110.99, firma: "dhl", tur: "desi" });
+  });
+
+  it("tanınmayan firma varsayılanın (TEX) listesiyle", () => {
+    expect(ty(500, 3, { firma: "CEVA Lojistik" })).toMatchObject({ fiyat: 100.2, firma: "tex", tur: "desi" });
+  });
+
+  it("kesilen tutardan desi bulunur (HB 107,99 → 4 desi; barem tutarı → null)", async () => {
+    const { desiFiyatindanDesi } = await import("./kargo-tarife");
+    expect(desiFiyatindanDesi("hepsiburada", "hepsiJET", EKIM, 107.99)).toBe(4);
+    expect(desiFiyatindanDesi("hepsiburada", null, EKIM, 81.99)).toBe(1);
+    expect(desiFiyatindanDesi("hepsiburada", null, EKIM, 75.99)).toBeNull();
+    expect(desiFiyatindanDesi("trendyol", "Trendyol Express", EKIM, 150.64)).toBe(9);
   });
 
   it("iade kargosu baremden değil desi listesinden (81,95; Aras 109,90)", () => {

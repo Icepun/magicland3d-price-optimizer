@@ -148,6 +148,11 @@ export interface OrderProfitInput {
    * tedbirli varsayımlarla (standart tablo; Hepsiburada'da süre bilinmiyorsa desi listesi).
    */
   kargo?: KargoBaglami | null;
+  /**
+   * Pazaryerinin bu siparişe kestiği ceza (TL) — Trendyol termin gecikme bedeli
+   * (`core/trendyol-gecikme.ts`). "Tazmin bedeli" olarak faturalanır, KDV indirimi yoktur.
+   */
+  penalty?: number | null;
 }
 
 export interface OrderProfitResult {
@@ -176,6 +181,8 @@ export interface OrderProfitResult {
   internationalFee: number;
   /** Stopaj toplamı — BİLGİ; kâra girmedi. */
   stoppage: number;
+  /** Düşülen ceza (gecikme bedeli, TL). */
+  penalty: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
   /**
@@ -210,6 +217,11 @@ export interface OrderProfitResult {
    * Kâr kısmi ise (bazı satırların maliyeti bilinmiyor) bu tutar da eksik kalır.
    */
   inputVatCredit: number;
+}
+
+/** Ceza girdisi → geçerli tutar (negatif/bozuk → 0). */
+function cezaTutari(v: number | null | undefined): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
@@ -408,6 +420,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       paymentFee: 0,
       internationalFee: 0,
       stoppage,
+      penalty: cezaTutari(input.penalty),
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
       cargoRuleMissing: false,
@@ -593,6 +606,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   // deseni kopyalayıp KDV eklemek kârı yapay olarak yükseltirdi.
   profit -= adCost;
 
+  // CEZA (gecikme bedeli) — tazmin bedeli; KDV'si yok, tamamı kârdan düşer.
+  const penalty = cezaTutari(input.penalty);
+  profit -= penalty;
+
   return {
     profit,
     adCost,
@@ -605,6 +622,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     paymentFee,
     internationalFee,
     stoppage,
+    penalty,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
     // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.
@@ -665,6 +683,8 @@ export interface ResolvedOrderProfit extends OrderProfitResult {
   actualOrderFee: number | null;
   actualPaymentFee: number | null;
   actualCargo: number | null;
+  /** Gerçek kargo gelmeden önceki tahmin (brüt TL) — fazla desi karşılaştırması için. */
+  estimatedCargoCost: number;
 }
 
 /** İade edilen siparişin pazaryeri kayıtları (brüt TL) — verilen her biri tahminin yerine geçer. */
@@ -683,6 +703,8 @@ export interface ReturnLoss {
   returnCargo: number;
   /** Geri verilmeyen sabit hizmet bedeli (brüt TL). */
   serviceFee: number;
+  /** Kesilen gecikme bedeli (TL, KDV'siz) — iade edilse de geri verilmez. */
+  penalty: number;
   /** Bu kalemlerin içindeki indirilecek KDV. */
   inputVatCredit: number;
   outboundActual: boolean;
@@ -755,11 +777,13 @@ export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossAc
   const returnCargo = donusGercek ?? donusTahmini;
   const serviceFee = hizmetGercek ?? hizmetTahmini;
   const brut = outboundCargo + returnCargo + serviceFee;
+  const penalty = cezaTutari(input.penalty);
   return {
-    loss: brut * (1 - vatFactor),
+    loss: brut * (1 - vatFactor) + penalty,
     outboundCargo,
     returnCargo,
     serviceFee,
+    penalty,
     inputVatCredit: brut * vatFactor,
     outboundActual: gidisGercek != null,
     returnActual: donusGercek != null,
@@ -808,6 +832,7 @@ export function resolveOrderProfit(
       actualOrderFee: null,
       actualPaymentFee: null,
       actualCargo: null,
+      estimatedCargoCost: base.cargoCost,
     };
   }
 
@@ -877,5 +902,6 @@ export function resolveOrderProfit(
     actualOrderFee,
     actualPaymentFee,
     actualCargo,
+    estimatedCargoCost: base.cargoCost,
   };
 }

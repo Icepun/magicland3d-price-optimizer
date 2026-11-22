@@ -105,7 +105,8 @@ describe("hbGercekYazmaIfadeleri — yalnız değişen yazılır", () => {
     // Kuruş: ciro, komisyon, net, adet … hizmet, tahsilat, kargo, stopaj, indirim.
     const a = ifadeler.find((i) => i.args[1] === "hb-4845254772")!;
     expect(a.args.slice(3, 7)).toEqual([19999, 2400, 11993, 5]);
-    expect(a.args.slice(9)).toEqual([0, 160, 5279, 167, 0]);
+    // Son alan kesilen desi: 52,79 TL = 43,99 + KDV barem fiyatı → desi bilgisi yok (null).
+    expect(a.args.slice(9)).toEqual([0, 160, 5279, 167, 0, null]);
   });
   it("birebir aynı kayıt yeniden yazılmaz; bir alan değişince yazılır", () => {
     const kayitli = new Map(
@@ -118,6 +119,7 @@ describe("hbGercekYazmaIfadeleri — yalnız değişen yazılır", () => {
           serviceFeeKurus: Math.round(r.serviceFee * 100), paymentFeeKurus: Math.round(r.paymentFee * 100),
           cargoKurus: r.cargo == null ? null : Math.round(r.cargo * 100), stoppageKurus: Math.round(r.stoppage * 100),
           platformDiscountKurus: Math.round(r.platformDiscount * 100),
+          chargedDesi: r.chargedDesi,
         },
       ])
     );
