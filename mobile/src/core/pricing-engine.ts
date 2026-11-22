@@ -1,6 +1,7 @@
 import { findCommissionRule, calculateCommission } from "./commission-calculator";
 import { categoryMatches } from "./category";
 import { findCargoRule } from "./cargo-calculator";
+import { kargoTahmini } from "./kargo-tarife";
 import type {
   SimulationInput,
   SimulationResult,
@@ -166,12 +167,26 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
       : 0;
   }
 
-  // Kargo — önce override, sonra rules
+  // Kargo — önce override, sonra pazaryeri tarifesi, sonra rules
   let cargoCost = 0;
   let cargoVatIncluded = true;
   let appliedCargoRule;
+  const tarifeKargo =
+    cargoCostOverride === undefined && input.kargoTarifesi
+      ? kargoTahmini(
+          input.kargoTarifesi.platform,
+          effectiveSalePrice * qty,
+          normalizedDesi * qty, // N adetlik sipariş tek pakette → birleşik desi
+          simulationDate,
+          input.kargoTarifesi
+        )
+      : null;
   if (cargoCostOverride !== undefined) {
     cargoCost = cargoCostOverride;
+  } else if (tarifeKargo) {
+    // Tarife fiyatları KDV HARİÇ.
+    cargoCost = tarifeKargo.fiyat;
+    cargoVatIncluded = false;
   } else {
     appliedCargoRule = findCargoRule(
       cargoRules,
@@ -265,6 +280,7 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
     minOrderQty: qty,
     appliedCommissionRule,
     appliedCargoRule,
+    cargoDetail: tarifeKargo,
     appliedExpenseRules,
   };
 }

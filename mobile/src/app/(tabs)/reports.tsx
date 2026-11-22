@@ -85,6 +85,12 @@ export default function ReportsScreen() {
       // (satış mı iade mi bilinmiyor) sipariş toplama katılmaz — masaüstü özetiyle aynı.
       if (isExcludedFromTotals(o)) {
         if (isUnknownStatusOrder(o)) unknownStatusOrders++;
+        // İADE ZARARI — masaüstüyle aynı: ciroya girmez, kârdan düşer.
+        if (op.returnLoss != null && (o.currency ?? "TRY").trim().toUpperCase() === "TRY") {
+          profit -= op.returnLoss;
+          const ib = byPlat[o.platform];
+          if (ib) ib.profit -= op.returnLoss;
+        }
         continue;
       }
       if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") {

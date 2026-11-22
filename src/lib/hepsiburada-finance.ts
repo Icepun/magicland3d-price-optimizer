@@ -86,11 +86,36 @@ const IADE = new Set(["Return", "BnplRefund"]);
  * siparişte ciro ve kesintiler kısmen geri alınmıştır; yanlış bir "gerçek kâr" üretmektense
  * siparişin durumuna göre çalışan mevcut kurallara bırakılır.
  */
+/** TAM iade edilen siparişin gerçek kargo kayıtları — TL, pozitif. */
+export interface HbIadeGercegi {
+  orderNumber: string;
+  /** Gidiş kargosu (ilk kargo kaydı). */
+  outboundCargo: number;
+  /** Dönüş kargosu (sonraki kargo kayıtları); henüz kesilmediyse null. */
+  returnCargo: number | null;
+  /** Kesilen (iade edilmeyen) hizmet bedeli. */
+  serviceFee: number;
+  grossRevenue: number;
+  commission: number;
+  sellerRevenue: number;
+  transactionCount: number;
+  sourceUpdatedAt: Date | null;
+}
+
 export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
   aggregates: HbSiparisGercegi[];
   skippedOrders: number;
+  /** Tam iade edilmiş, kargo kaydı olan siparişler (iade zararı için). */
+  returns: HbIadeGercegi[];
 } {
-  type Ara = HbSiparisGercegi & { odeme: number; iade: boolean; kargoVar: boolean; kimlikler: Set<string> };
+  type Ara = HbSiparisGercegi & {
+    odeme: number;
+    iade: boolean;
+    iadeTutari: number;
+    kargoVar: boolean;
+    kargoKayitlari: Array<{ t: number; a: number }>;
+    kimlikler: Set<string>;
+  };
   const siparisler = new Map<string, Ara>();
   for (const kayit of kayitlar) {
     const no = kayit.orderNumber == null ? "" : String(kayit.orderNumber).trim();
@@ -101,7 +126,7 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
       ({
         orderNumber: no, grossRevenue: 0, commission: 0, serviceFee: 0, paymentFee: 0, cargo: null,
         stoppage: 0, platformDiscount: 0, sellerRevenue: 0, transactionCount: 0, sourceUpdatedAt: null,
-        odeme: 0, iade: false, kargoVar: false, kimlikler: new Set<string>(),
+        odeme: 0, iade: false, iadeTutari: 0, kargoVar: false, kargoKayitlari: [], kimlikler: new Set<string>(),
       } satisfies Ara);
     siparisler.set(no, s);
     // Pencere sınırında aynı kayıt iki kez gelebilir → kimliğe göre tek sayılır.
@@ -118,9 +143,14 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
     else if (KOMISYON.has(tip)) s.commission -= a;
     else if (HIZMET.has(tip)) s.serviceFee -= a;
     else if (TAHSILAT.has(tip)) s.paymentFee -= a;
-    else if (KARGO.has(tip)) { s.cargo = (s.cargo ?? 0) - a; s.kargoVar = true; }
+    else if (KARGO.has(tip)) {
+      s.cargo = (s.cargo ?? 0) - a;
+      s.kargoVar = true;
+      const t = Date.parse(String(kayit.invoiceDate ?? kayit.orderDate ?? "")) || 0;
+      s.kargoKayitlari.push({ t, a: -a });
+    }
     else if (STOPAJ.has(tip)) s.stoppage -= a;
-    else if (IADE.has(tip)) s.iade = true;
+    else if (IADE.has(tip)) { s.iade = true; s.iadeTutari -= a; }
     const tarih = kayit.invoiceDate ? new Date(String(kayit.invoiceDate)) : null;
     if (tarih && Number.isFinite(tarih.getTime()) && (!s.sourceUpdatedAt || tarih > s.sourceUpdatedAt)) {
       s.sourceUpdatedAt = tarih;
@@ -128,8 +158,26 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
   }
   const yuvarla = (n: number) => Math.round(n * 100) / 100;
   const aggregates: HbSiparisGercegi[] = [];
+  const returns: HbIadeGercegi[] = [];
   let skippedOrders = 0;
   for (const s of siparisler.values()) {
+    // TAM İADE (iade tutarı ödemenin tamamı) + kargo kaydı: iki yön kargo ve hizmet bedeli kaldı.
+    // Kayıtlar tarih sırasıyla: ilki gidiş, sonrakiler dönüş (ölçüldü: 43,99 + 43,99 · 81,99 + 81,99).
+    if (s.iade && s.odeme > 0 && s.iadeTutari >= s.odeme - 0.01 && s.kargoKayitlari.length > 0) {
+      const sirali = [...s.kargoKayitlari].sort((x, y) => x.t - y.t);
+      const donus = sirali.slice(1).reduce((t, k) => t + k.a, 0);
+      returns.push({
+        orderNumber: s.orderNumber,
+        outboundCargo: yuvarla(Math.max(0, sirali[0].a)),
+        returnCargo: sirali.length > 1 ? yuvarla(Math.max(0, donus)) : null,
+        serviceFee: yuvarla(Math.max(0, s.serviceFee)),
+        grossRevenue: yuvarla(s.odeme + s.platformDiscount),
+        commission: yuvarla(s.commission),
+        sellerRevenue: yuvarla(s.sellerRevenue),
+        transactionCount: s.transactionCount,
+        sourceUpdatedAt: s.sourceUpdatedAt,
+      });
+    }
     if (s.iade || s.odeme <= 0 || s.commission <= 0) {
       skippedOrders++;
       continue;
@@ -148,7 +196,57 @@ export function hbKayitlariniTopla(kayitlar: HbMuhasebeKaydi[]): {
       sourceUpdatedAt: s.sourceUpdatedAt,
     });
   }
-  return { aggregates, skippedOrders };
+  return { aggregates, skippedOrders, returns };
+}
+
+/**
+ * SAF: tam iade edilen siparişlerin gerçek kargo/hizmet bedeli yazımı. Satır varsa yalnız bu üç
+ * alan güncellenir (teslimde yazılmış komisyon vb. korunur); yoksa satır açılır. Değişmeyen yazılmaz.
+ */
+export function hbIadeYazmaIfadeleri(
+  iadeler: HbIadeGercegi[],
+  kayitli: ReadonlyMap<string, { cargoKurus: number | null; returnCargoKurus: number | null; serviceFeeKurus: number | null }>,
+  syncedAt: Date
+): Array<{ sql: string; args: unknown[] }> {
+  const sync = toDbDate(syncedAt);
+  const ifadeler: Array<{ sql: string; args: unknown[] }> = [];
+  for (const r of iadeler) {
+    const kimlik = hbFinansKimligi(r.orderNumber);
+    const gidis = tlToKurus(r.outboundCargo);
+    const donus = r.returnCargo == null ? null : tlToKurus(r.returnCargo);
+    const hizmet = tlToKurus(r.serviceFee);
+    const eski = kayitli.get(kimlik);
+    if (eski && eski.cargoKurus === gidis && (eski.returnCargoKurus ?? null) === donus && eski.serviceFeeKurus === hizmet) {
+      continue;
+    }
+    ifadeler.push({
+      sql: `INSERT INTO "PlatformOrderFinancial"
+              ("id", "platform", "externalOrderId", "orderNumber", "grossRevenueKurus", "commissionKurus",
+               "sellerRevenueKurus", "transactionCount", "sourceUpdatedAt", "syncedAt",
+               "serviceFeeKurus", "cargoKurus", "returnCargoKurus")
+            VALUES (?, 'hepsiburada', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
+              "serviceFeeKurus" = excluded."serviceFeeKurus",
+              "cargoKurus" = excluded."cargoKurus",
+              "returnCargoKurus" = excluded."returnCargoKurus",
+              "syncedAt" = excluded."syncedAt"`,
+      args: [
+        `pof:hepsiburada:${kimlik}`,
+        kimlik,
+        r.orderNumber,
+        tlToKurus(r.grossRevenue),
+        tlToKurus(r.commission),
+        tlToKurus(r.sellerRevenue),
+        r.transactionCount,
+        r.sourceUpdatedAt ? toDbDate(r.sourceUpdatedAt) : null,
+        sync,
+        hizmet,
+        gidis,
+        donus,
+      ],
+    });
+  }
+  return ifadeler;
 }
 
 /** Kayıtlarda görülen EN SON hizmet bedeli tutarı (TL, pozitif); hiç yoksa null. */
@@ -399,7 +497,7 @@ export async function syncHepsiburadaFinancials(requestedDays = 35): Promise<HbF
   await ensureRuntimeSchema();
   const client = new HepsiburadaClient(await getHepsiburadaCredentials());
   const kayitlar = await kayitlariCek(client, days);
-  const { aggregates, skippedOrders } = hbKayitlariniTopla(kayitlar);
+  const { aggregates, skippedOrders, returns } = hbKayitlariniTopla(kayitlar);
   const syncedAt = new Date();
 
   // Önce karşılaştır: çoğu turda hiçbir şey değişmez; değişmeyen satıra yazma YOK.
@@ -429,7 +527,30 @@ export async function syncHepsiburadaFinancials(requestedDays = 35): Promise<HbF
       });
     }
   }
-  const ifadeler = hbGercekYazmaIfadeleri(aggregates, kayitli, syncedAt);
+  // İADE edilen siparişlerin gerçek gidiş/dönüş kargosu ve hizmet bedeli (iade zararı için).
+  const iadeKayitli = new Map<string, { cargoKurus: number | null; returnCargoKurus: number | null; serviceFeeKurus: number | null }>();
+  const iadeKimlikleri = returns.map((r) => hbFinansKimligi(r.orderNumber));
+  for (let i = 0; i < iadeKimlikleri.length; i += 400) {
+    const dilim = iadeKimlikleri.slice(i, i + 400);
+    const satirlar = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `SELECT "externalOrderId", "cargoKurus", "returnCargoKurus", "serviceFeeKurus"
+         FROM "PlatformOrderFinancial"
+        WHERE "platform" = 'hepsiburada' AND "externalOrderId" IN (${dilim.map(() => "?").join(",")})`,
+      ...dilim
+    );
+    const sayi = (v: unknown) => (v == null ? null : Number(v));
+    for (const s of satirlar) {
+      iadeKayitli.set(String(s.externalOrderId), {
+        cargoKurus: sayi(s.cargoKurus),
+        returnCargoKurus: sayi(s.returnCargoKurus),
+        serviceFeeKurus: sayi(s.serviceFeeKurus),
+      });
+    }
+  }
+  const ifadeler = [
+    ...hbGercekYazmaIfadeleri(aggregates, kayitli, syncedAt),
+    ...hbIadeYazmaIfadeleri(returns, iadeKayitli, syncedAt),
+  ];
   if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
     for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
   }

@@ -35,6 +35,12 @@ type SnapshotInput = {
   outputVatKurus?: number | null;
   /** Girdilerden indirilecek KDV — kuruş. Yalnız outputVatKurus biliniyorsa anlamlıdır. */
   inputVatCreditKurus?: number | null;
+  /**
+   * İade edilen (kargolanıp geri gelen) siparişin zararı — net kuruş, pozitif. Sipariş iptal
+   * kovasında kalır (ciroya girmez) ama bu tutar kârdan DÜŞÜLÜR; içindeki KDV indirilecek KDV'ye eklenir.
+   */
+  returnLossKurus?: number | null;
+  returnLossVatKurus?: number | null;
 };
 
 type ManualOrderFinanceInput = {
@@ -82,6 +88,9 @@ type MonthKurus = {
   vatPartialOrders: number;
   vatUnknownOrders: number;
   vatUnknownRevenueKurus: number;
+  /** Kârdan düşülen iade zararı (net kuruş) ve sipariş sayısı. */
+  returnLossKurus: number;
+  returnLossOrders: number;
   byPlatform: Record<string, PlatformKurus>;
 };
 
@@ -119,6 +128,9 @@ export interface MonthlyFinanceItem {
   missingProfitOrders: number;
   excludedOrders: number;
   unsupportedCurrencyOrders: number;
+  /** Kargolanıp geri gelen siparişlerin kârdan düşülen zararı (TL, net) ve sayısı. */
+  returnLoss: number;
+  returnLossOrders: number;
   vat: MonthlyVatSummary;
   byPlatform: Record<
     string,
@@ -256,6 +268,8 @@ export function aggregateMonthlyFinance({
         vatPartialOrders: 0,
         vatUnknownOrders: 0,
         vatUnknownRevenueKurus: 0,
+        returnLossKurus: 0,
+        returnLossOrders: 0,
         byPlatform: {
           shopify: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
           trendyol: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
@@ -271,6 +285,21 @@ export function aggregateMonthlyFinance({
     if (!bucket) return;
     if (snapshot.statusKind === "cancelled") {
       bucket.excludedOrders++;
+      // İADE ZARARI: kargolanıp geri gelen siparişte iki yön kargo + hizmet bedeli kesildi.
+      // Ciroya ve sipariş sayısına girmez; kârdan düşülür, içindeki KDV indirilir.
+      const zarar = snapshot.returnLossKurus;
+      if (zarar != null && zarar > 0 && (snapshot.currency || "TRY").trim().toUpperCase() === "TRY") {
+        bucket.orderProfitKurus -= zarar;
+        bucket.returnLossKurus += zarar;
+        bucket.returnLossOrders++;
+        bucket.inputVatCreditKurus += Math.max(0, snapshot.returnLossVatKurus ?? 0);
+        const platform = (bucket.byPlatform[snapshot.platform] ??= {
+          revenueKurus: 0,
+          orderProfitKurus: 0,
+          orderCount: 0,
+        });
+        platform.orderProfitKurus -= zarar;
+      }
       return;
     }
     if ((snapshot.currency || "TRY").trim().toUpperCase() !== "TRY") {
@@ -354,6 +383,8 @@ export function aggregateMonthlyFinance({
       missingProfitOrders: bucket.missingProfitOrders,
       excludedOrders: bucket.excludedOrders,
       unsupportedCurrencyOrders: bucket.unsupportedCurrencyOrders,
+      returnLoss: kurusToTl(bucket.returnLossKurus),
+      returnLossOrders: bucket.returnLossOrders,
       vat: {
         outputVat: kurusToTl(bucket.outputVatKurus),
         inputVatCredit: kurusToTl(bucket.inputVatCreditKurus),
@@ -498,11 +529,22 @@ export function aggregateWeeklyFinance({
     starts.map((start) => [start, { revenueKurus: 0, orderProfitKurus: 0, expensesKurus: 0, orderCount: 0 }])
   );
   const gunFmt = new Intl.DateTimeFormat("tr-TR", { timeZone: "UTC", day: "numeric", month: "short" });
-  const addOrder = (row: { orderedAt: Date; revenueKurus: number; profitKurus: number | null; statusKind: string; currency: string | null }) => {
+  const addOrder = (row: {
+    orderedAt: Date;
+    revenueKurus: number;
+    profitKurus: number | null;
+    statusKind: string;
+    currency: string | null;
+    returnLossKurus?: number | null;
+  }) => {
     const bucket = buckets.get(weekStartNaive(row.orderedAt, timeZone));
     if (!bucket) return;
-    if (row.statusKind === "cancelled") return;
     if ((row.currency || "TRY").trim().toUpperCase() !== "TRY") return;
+    if (row.statusKind === "cancelled") {
+      // İade zararı: aylık özetle aynı kural — ciroya girmez, kârdan düşer.
+      if (row.returnLossKurus != null && row.returnLossKurus > 0) bucket.orderProfitKurus -= row.returnLossKurus;
+      return;
+    }
     bucket.revenueKurus += row.revenueKurus;
     bucket.orderProfitKurus += row.profitKurus ?? 0;
     bucket.orderCount++;

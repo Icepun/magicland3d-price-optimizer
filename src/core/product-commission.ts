@@ -1,5 +1,6 @@
 import type { CommissionRuleInput } from "./types";
 import { HB_KOMISYON_KDV, hbSatisOncesiKesintiler } from "./hb-kesinti";
+import type { KargoBaglami } from "./kargo-tarife";
 
 /** Shopify sabit komisyon oranı (kesir, örn. 0.032). AppSetting'ten okunur, default %3.2. */
 export function getShopifyCommissionRate(
@@ -25,6 +26,8 @@ export interface ListingPricingOverride {
   paymentFeeRate?: number;
   /** Kuraldaki sabit bedelin yerine geçen tutar (0 = bu ilanda kesilmiyor). */
   fixedExpenseOverride?: number;
+  /** Pazaryeri kargo tarifesi girdisi (Trendyol / Hepsiburada ilanı). */
+  kargoTarifesi?: { platform: string } & KargoBaglami;
 }
 
 /** İlandan okunan, fiyat hesabını etkileyen alanlar. Son ikisi yalnız Hepsiburada'da anlamlı. */
@@ -49,8 +52,26 @@ export function resolveListingCommissionOverride(
   settings: Record<string, string | undefined>
 ): ListingPricingOverride {
   const komisyon = resolveListingCommissionOnly(listing, settings);
+  if (listing.platform === "trendyol") {
+    return { ...komisyon, kargoTarifesi: ilanKargoTarifesi(listing) };
+  }
   if (listing.platform !== "hepsiburada") return komisyon;
-  return { ...komisyon, ...hbSatisOncesiKesintiler(listing, settings) };
+  return { ...komisyon, ...hbSatisOncesiKesintiler(listing, settings), kargoTarifesi: ilanKargoTarifesi(listing) };
+}
+
+/**
+ * İlanın satış öncesi kargo tarifesi girdisi:
+ *  • Trendyol: termini 1 gün (ya da aynı gün) olan ürünün siparişleri hızlı teslimat işaretli geliyor
+ *    → avantajlı tablo (ölçüldü 22 Kas 2026: hızlı işaretli siparişlerin hepsi ~1 gün terminli).
+ *    Termin bilinmiyorsa standart tablo (tedbirli).
+ *  • Hepsiburada: barem kargoya verme süresi ≤ 1 günse; bilinmiyorsa desi listesi (tedbirli).
+ */
+export function ilanKargoTarifesi(listing: { platform: string; dispatchDays?: number | null }): {
+  platform: string;
+} & KargoBaglami {
+  const gun = typeof listing.dispatchDays === "number" && Number.isFinite(listing.dispatchDays) ? listing.dispatchDays : null;
+  if (listing.platform === "trendyol") return { platform: "trendyol", hizliTeslimat: gun != null && gun <= 1 };
+  return { platform: listing.platform, kargoyaVermeGunu: gun };
 }
 
 /** Yalnız komisyon (eski davranış) — sipariş kârı satırlarında kullanılır. */

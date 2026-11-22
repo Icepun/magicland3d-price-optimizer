@@ -118,6 +118,12 @@ export interface SimulationInput {
    */
   cargoCostOverride?: number;
   /**
+   * PAZARYERİ KARGO TARİFESİ (Trendyol / Hepsiburada) — verilirse ve `simulationDate`'te tarife
+   * varsa kargo kural tablosu yerine pazaryerinin listesinden hesaplanır (`core/kargo-tarife.ts`).
+   * Barem tutarı etkili fiyat × adet, desi birleşik desi. İlandan gelir (resolveListingCommissionOverride).
+   */
+  kargoTarifesi?: { platform: string } & import("./kargo-tarife").KargoBaglami;
+  /**
    * Gider KURALLARINDAN gelen sabit bedelin YERİNE geçen tutar (brüt TL, siparişe bir kez; 0 = yok).
    * Pazaryeri sabit bedeli her ilana kesmiyorsa (Hepsiburada hizmet bedeli) kural yerine bu verilir.
    */
@@ -180,5 +186,7 @@ export interface SimulationResult {
   minOrderQty: number;
   appliedCommissionRule?: CommissionRuleInput;
   appliedCargoRule?: CargoRuleInput;
+  /** Kargo pazaryeri tarifesinden geldiyse nasıl (tablo, firma, desi); değilse null/undefined. */
+  cargoDetail?: import("./kargo-tarife").KargoTahmini | null;
   appliedExpenseRules: AppliedExpenseRule[];
 }

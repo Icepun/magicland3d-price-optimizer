@@ -48,7 +48,15 @@ import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { trendyolIadeDurumu } from "@/core/trendyol-iade";
 import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
 import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
-import { gercekKesintiToplami, resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import {
+  computeReturnLoss,
+  gercekKesintiToplami,
+  resolveOrderProfit,
+  type OrderProfitInput,
+  type OrderProfitLine,
+} from "@/core/order-profit";
+import { kargoTahminiEtiketi, type KargoBaglami } from "@/core/kargo-tarife";
+import { hepsiburadaKargoBaglami, kargoluIadeMi, trendyolKargoBaglami } from "@/core/siparis-kargo";
 import { siparisKomisyonKesri } from "@/core/order-commission";
 import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
 import { tyKalemHesabi } from "@/core/ty-kesinti";
@@ -150,6 +158,24 @@ export interface UnifiedOrder {
   desiEstimated?: boolean;
   /** true = bu siparişin desi/tutarına uyan kargo kuralı yok; kargo 0 sayıldı, kâr yüksek görünüyor. */
   cargoRuleMissing?: boolean;
+  /** Kargo pazaryeri tarifesinden tahmin edildiyse kısa açıklaması ("Trendyol Express · sabit fiyat"). */
+  cargoLabel?: string | null;
+  /** Kargo tarifesinin fiyatı seçtiği bilgiler — finans geçmişine yazılır (yeniden hesap aynı fiyatı seçsin). */
+  cargoContext?: KargoBaglami | null;
+  /**
+   * İADE (kargolanıp geri gelen) siparişin zararı — ciroya girmez ama kâr toplamından DÜŞÜLÜR.
+   * Tutarlar brüt; `loss` indirilecek KDV düşülmüş net etki.
+   */
+  returnLoss?: {
+    loss: number;
+    outboundCargo: number;
+    returnCargo: number;
+    serviceFee: number;
+    inputVatCredit: number;
+    outboundActual: boolean;
+    returnActual: boolean;
+    serviceFeeActual: boolean;
+  } | null;
   /** Bu siparişe düşen reklam payı (TL). 0 = reklam bütçesi yok. */
   adCost?: number;
   /** Siparişe düşen kargo bedeli (TL). */
@@ -232,6 +258,9 @@ interface SummaryQuality {
   unknownStatuses: Array<{ status: string; orderCount: number }>;
   /** İçinde iade edilmiş kalem bulunan sipariş sayısı (ciro platformdan geldiği gibi). */
   partialReturnOrders: number;
+  /** Kargolanıp geri gelen (zararı kârdan düşülen) sipariş sayısı ve toplam zarar (TL, net). */
+  returnLossOrders: number;
+  returnLossTotal: number;
   /**
    * Verisi ALINAMAYAN kaynakların adları. Boş değilse toplamlar EKSİK bir veriyle
    * hesaplanmıştır — arayüz bunu rakamın yanında açıkça söyler.
@@ -367,6 +396,8 @@ type RawLine = {
   internationalFee?: number | null;
   /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
   dispatchDays?: number | null;
+  /** Müşterinin ödediği birim fiyat (Hepsiburada: indirim öncesi değil) — kargo bareminin tutarı. */
+  paidUnitPrice?: number | null;
 };
 
 const matchKeyList = (...values: unknown[]): string[] =>
@@ -392,6 +423,7 @@ function hbLineRaw(li: Record<string, any>): RawLine {
     paymentFee: h.paymentFee,
     stoppage: h.stoppage,
     dispatchDays: h.dispatchDays,
+    paidUnitPrice: h.paidUnitPrice,
   };
 }
 /** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
@@ -673,6 +705,10 @@ async function computeOrdersBodyInner(
     statusUnknown?: boolean;
     /** İade/iptal işaretli kalem sayısı (paket tutarına dokunulmaz). */
     returnedLineCount?: number;
+    /** Kargo tarifesinin fiyatı seçtiği bilgiler (firma, hızlı teslimat, kargoya verme süresi). */
+    kargo?: KargoBaglami | null;
+    /** Kargoya verildikten sonra geri geldi → iki yön kargo zararı (core/order-profit computeReturnLoss). */
+    kargoIadesi?: boolean;
   };
   const raws: Raw[] = [];
   /** Yerel tamponu ana listeye aktar (spread yerine döngü: binlerce satırda argüman sınırı yok). */
@@ -883,6 +919,9 @@ async function computeOrdersBodyInner(
         cargoProvider: o.cargoProviderName ?? null,
         // Mikro ihracat (yurt dışı müşteri) — ölçüldü 15 Kas 2026: alan her pakette geliyor.
         microExport: mikroIhracat,
+        // Kargo tarifesi: hızlı teslimat + zamanında → avantajlı tablo (core/kargo-tarife).
+        kargo: trendyolKargoBaglami(o),
+        kargoIadesi: kargoluIadeMi("trendyol", o.status, iadeDurumu === "tam"),
       });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
@@ -1009,6 +1048,9 @@ async function computeOrdersBodyInner(
         cargoProvider: e.kargoFirmasi,
         packageNumber: e.paketNo,
         dataIncomplete,
+        // Kargo baremi: en uzun kargoya verme süresi + müşterinin ödediği tutar (core/kargo-tarife).
+        kargo: hepsiburadaKargoBaglami(lines, e.kargoFirmasi),
+        kargoIadesi: kargoluIadeMi("hepsiburada", e.status),
       });
     }
     // e) Anahtar değişiminden kalan kalıntı satırları temizle. Eskiden aynı sipariş paketlenirken
@@ -1086,6 +1128,8 @@ async function computeOrdersBodyInner(
     serviceFeeKurus: number | null;
     paymentFeeKurus: number | null;
     cargoKurus: number | null;
+    /** İade edilen siparişin dönüş kargosu (gerçek kayıt) — kuruş; null = kayıt yok. */
+    returnCargoKurus: number | null;
   };
   const financialByExternalId = new Map<string, PlatformFinancial>();
   const financialByOrderNumber = new Map<string, PlatformFinancial[]>();
@@ -1212,6 +1256,7 @@ async function computeOrdersBodyInner(
           serviceFeeKurus: true,
           paymentFeeKurus: true,
           cargoKurus: true,
+          returnCargoKurus: true,
         },
       }),
     ]);
@@ -1422,25 +1467,42 @@ async function computeOrdersBodyInner(
     }
     // Kâr hesabının TAMAMI çekirdekte (masaüstü + mobil AYNI fonksiyon) — kural-tabanlı kâr
     // + Trendyol gerçek komisyonu düzeltmesi tek yerde.
+    const profitInput: OrderProfitInput = {
+      platform: r.platform,
+      orderTotal: r.total,
+      lines: profitLines,
+      commissionRules,
+      cargoRules,
+      expenseRules,
+      settings: settingsMap,
+      // Kargo kuralı siparişin KENDİ tarihine göre seçilsin: tarife değişince geçmiş
+      // siparişlerin kârı yeni fiyata kaymasın.
+      orderedAt: r.date ? new Date(r.date) : null,
+      // Reklam payı: platformun bütçesi, siparişin KENDİ tarihindeki dönemden.
+      adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
+      // Mikro ihracat satışı KDV'den istisna → cirodan KDV ayrılmaz (Berke'nin onayı, 15 Kas 2026).
+      saleVatExempt: r.microExport != null,
+      // Hepsiburada hizmet bedelini her siparişe kesmiyor → kural yerine siparişin kendi durumu.
+      orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined,
+      // Pazaryeri kargo tarifesinin fiyatı seçtiği bilgiler (firma, hızlı teslimat, süre, barem tutarı).
+      kargo: r.kargo ?? null,
+    };
+    // İADE (kargolanıp geri gelen) sipariş: ciro ve komisyon geri verildi, iki yön kargo + hizmet
+    // bedeli kesildi → siparişin kârı bu zarardır. Gerçek kayıt varsa tahminin yerine geçer.
+    const returnLoss = r.kargoIadesi
+      ? computeReturnLoss(profitInput, {
+          outboundCargo: platformFinancial?.cargoKurus == null ? null : kurusToTl(platformFinancial.cargoKurus),
+          returnCargo:
+            platformFinancial?.returnCargoKurus == null ? null : kurusToTl(platformFinancial.returnCargoKurus),
+          // Hepsiburada hizmet bedeli muhasebe kaydından (iade edilmez); Trendyol'unki kuraldan.
+          serviceFee:
+            r.platform === "hepsiburada" && platformFinancial?.serviceFeeKurus != null
+              ? kurusToTl(platformFinancial.serviceFeeKurus)
+              : null,
+        })
+      : null;
     const pr = resolveOrderProfit(
-      {
-        platform: r.platform,
-        orderTotal: r.total,
-        lines: profitLines,
-        commissionRules,
-        cargoRules,
-        expenseRules,
-        settings: settingsMap,
-        // Kargo kuralı siparişin KENDİ tarihine göre seçilsin: tarife değişince geçmiş
-        // siparişlerin kârı yeni fiyata kaymasın.
-        orderedAt: r.date ? new Date(r.date) : null,
-        // Reklam payı: platformun bütçesi, siparişin KENDİ tarihindeki dönemden.
-        adRate: adRateFor(adSnap, r.platform, r.date ? new Date(r.date) : null),
-        // Mikro ihracat satışı KDV'den istisna → cirodan KDV ayrılmaz (Berke'nin onayı, 15 Kas 2026).
-        saleVatExempt: r.microExport != null,
-        // Hepsiburada hizmet bedelini her siparişe kesmiyor → kural yerine siparişin kendi durumu.
-        orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined,
-      },
+      profitInput,
       {
         forceProfitPartial: Boolean(r.forceProfitPartial),
         statusKind: r.statusKind,
@@ -1499,6 +1561,21 @@ async function computeOrdersBodyInner(
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
       cargoRuleMissing: pr.cargoRuleMissing,
+      // Kargo pazaryeri tarifesinden geldiyse hangi fiyat (gerçek kargo biliniyorsa gösterilmez).
+      cargoLabel: pr.actualCargo == null && pr.cargoDetail ? kargoTahminiEtiketi(pr.cargoDetail) : null,
+      ...(r.platform === "trendyol" || r.platform === "hepsiburada" ? { cargoContext: r.kargo ?? null } : {}),
+      returnLoss: returnLoss
+        ? {
+            loss: returnLoss.loss,
+            outboundCargo: returnLoss.outboundCargo,
+            returnCargo: returnLoss.returnCargo,
+            serviceFee: returnLoss.serviceFee,
+            inputVatCredit: returnLoss.inputVatCredit,
+            outboundActual: returnLoss.outboundActual,
+            returnActual: returnLoss.returnActual,
+            serviceFeeActual: returnLoss.serviceFeeActual,
+          }
+        : null,
       adCost: pr.adCost,
       cargoCost: pr.cargoCost,
       productAndPackagingCost: pr.productAndPackagingCost,
@@ -1709,11 +1786,29 @@ async function computeOrdersBodyInner(
   const unknownStatuses = new Map<string, number>();
   let incompleteDataOrders = 0;
   let partialReturnOrders = 0;
+  let returnLossOrders = 0;
+  let returnLossTotal = 0;
+  const bucketOf = (platform: string): SummaryBucket =>
+    platform === "shopify"
+      ? sShopify
+      : platform === "trendyol"
+        ? sTrendyol
+        : platform === "hepsiburada"
+          ? sHepsiburada
+          : sManual;
   for (const o of visibleOrders) {
     // Özet YALNIZ son 30 günde verilen siparişleri sayar; listede kalan eski açık elle sipariş
     // kendi ayının cirosunda zaten sayıldı.
     if (o.outsideWindow) continue;
-    if (o.statusKind === "cancelled") continue;
+    if (o.statusKind === "cancelled") {
+      // İADE edilen siparişin kargo zararı: ciroya ve sipariş sayısına girmez, kârdan DÜŞER.
+      if (o.returnLoss && !o.dataIncomplete && normalizedCurrency(o.currency) === "TRY") {
+        bucketOf(o.platform).profit -= o.returnLoss.loss;
+        returnLossOrders += 1;
+        returnLossTotal += o.returnLoss.loss;
+      }
+      continue;
+    }
     // Kalem/tutar bilgisi alınamamış sipariş toplamlara ₺0 ekler ve ciroyu olduğundan düşük,
     // sipariş sayısını olduğundan yüksek gösterir. Listede kalır, özet dışında tutulur.
     if (o.dataIncomplete) {
@@ -1734,14 +1829,7 @@ async function computeOrdersBodyInner(
       unsupportedCurrencies.set(currency, (unsupportedCurrencies.get(currency) ?? 0) + 1);
       continue;
     }
-    const bucket =
-      o.platform === "shopify"
-        ? sShopify
-        : o.platform === "trendyol"
-          ? sTrendyol
-          : o.platform === "hepsiburada"
-            ? sHepsiburada
-            : sManual;
+    const bucket = bucketOf(o.platform);
     bucket.revenue += o.total;
     bucket.profit += o.profit ?? 0;
     bucket.orderCount += 1;
@@ -1797,6 +1885,8 @@ async function computeOrdersBodyInner(
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([status, orderCount]) => ({ status, orderCount })),
     partialReturnOrders,
+    returnLossOrders,
+    returnLossTotal,
     missingSources,
   };
 

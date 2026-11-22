@@ -22,7 +22,7 @@ import {
   Txt,
   type TxtTone,
 } from "@/components/kit";
-import { getAllOrders, isExcludedFromTotals, ORDERS_STALE_MS } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, isExcludedFromTotals, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getExpenseTotalSince } from "@/lib/db/finance";
@@ -105,6 +105,7 @@ export default function DashboardScreen() {
       // durumu ciroya girmez (Raporlar da aynı fonksiyonu kullanır).
       sayilmazMi: isExcludedFromTotals,
       hesapla: (o) => computeOrderProfit(o, pm, rules, settings),
+      iadeMi: isCancelledOrder,
     });
   }, [ordersData, matchProducts, rules, settings, donem, ordersAt]);
 

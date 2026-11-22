@@ -1,7 +1,8 @@
 import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
-import { resolveOrderProfit, type OrderProfitLine } from "@core/order-profit";
+import { computeReturnLoss, resolveOrderProfit, type OrderProfitInput, type OrderProfitLine } from "@core/order-profit";
+import { kargoluIadeMi } from "@core/siparis-kargo";
 import { hbHizmetBedeli } from "@core/hb-kesinti";
 import { satirMaliyetiBul, satirMaliyetliUrun, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { bagliUrunKimligi, type SatirBaglari } from "@core/order-line-link";
@@ -122,6 +123,11 @@ export interface OrderProfit {
   missingDesiCount: number;
   desiEstimated: boolean;
   orderRevenueAdjustment: number;
+  /**
+   * İade edilen (kargolanıp geri gelen) siparişin zararı — net TL, pozitif. Ciroya girmez ama kâr
+   * toplamından DÜŞÜLÜR (masaüstü Siparişler/Raporlar ile aynı kural). Değilse null.
+   */
+  returnLoss: number | null;
 }
 
 export function computeOrderProfit(
@@ -149,6 +155,7 @@ export function computeOrderProfit(
       missingDesiCount: 0,
       desiEstimated: false,
       orderRevenueAdjustment: 0,
+      returnLoss: null,
     };
   }
 
@@ -247,8 +254,7 @@ export function computeOrderProfit(
     if (candidates.length === 1) financial = candidates[0];
   }
 
-  const r = resolveOrderProfit(
-    {
+  const profitInput: OrderProfitInput = {
       platform: order.platform,
       orderTotal: order.total,
       lines,
@@ -269,7 +275,11 @@ export function computeOrderProfit(
       saleVatExempt: order.microExport != null,
       // Hepsiburada hizmet bedelini her siparişe kesmiyor — masaüstüyle AYNI çekirdek kuralı.
       orderFee: order.platform === "hepsiburada" ? hbHizmetBedeli(order.items, settings) : undefined,
-    },
+      // Pazaryeri kargo tarifesinin fiyat seçtiği bilgiler — masaüstüyle aynı çekirdek.
+      kargo: order.kargo ?? null,
+  };
+  const r = resolveOrderProfit(
+    profitInput,
     {
       forceProfitPartial: !!order.financialPartial,
       // İptal siparişe gerçek komisyon uygulanmaz (masaüstü statusKind==='cancelled' ile aynı).
@@ -293,5 +303,14 @@ export function computeOrderProfit(
     missingDesiCount: r.missingDesiLines,
     desiEstimated: r.desiEstimated,
     orderRevenueAdjustment: r.orderRevenueAdjustment,
+    // Kargolanıp geri gelen sipariş: iki yön kargo + hizmet bedeli (gerçek kayıt varsa o).
+    returnLoss:
+      isCancelledOrder(order) && !order.dataIncomplete && kargoluIadeMi(order.platform, order.status)
+        ? computeReturnLoss(profitInput, {
+            outboundCargo: financial?.actualCargo ?? null,
+            returnCargo: financial?.actualReturnCargo ?? null,
+            serviceFee: order.platform === "hepsiburada" ? financial?.actualOrderFee ?? null : null,
+          }).loss
+        : null,
   };
 }

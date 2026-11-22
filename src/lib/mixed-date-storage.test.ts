@@ -49,7 +49,10 @@ const SNAPSHOT_DDL = `
     "inputVatCreditKurus" INTEGER,
     "microExportCountry" TEXT,
     "actualFeesKurus" INTEGER,
-    "cargoKurus" INTEGER
+    "cargoKurus" INTEGER,
+    "returnLossKurus" INTEGER,
+    "returnLossVatKurus" INTEGER,
+    "cargoContext" TEXT
   )`;
 
 /** Test siparişleri: yarısı ESKİ biçimde (tamsayı), yarısı kanonik biçimde (ISO metin). */

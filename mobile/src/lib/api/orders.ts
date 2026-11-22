@@ -4,6 +4,7 @@ import {
   TRENDYOL_STATUS_KINDS,
 } from "@core/order-status-kind";
 import { siparisListedeKalir } from "@core/order-window";
+import type { KargoBaglami } from "@core/kargo-tarife";
 
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
@@ -43,6 +44,8 @@ export interface OrderItem {
   internationalFee?: number | null;
   /** Kargoya verme süresi (gün) — Hepsiburada hizmet bedeli buna göre kesiliyor. */
   dispatchDays?: number | null;
+  /** Müşterinin ödediği birim fiyat (Hepsiburada) — kargo bareminin tutarı (masaüstü RawLine ile birebir). */
+  paidUnitPrice?: number | null;
 }
 
 export interface UnifiedOrder {
@@ -73,6 +76,8 @@ export interface UnifiedOrder {
   cargoProvider?: string | null;
   /** Hepsiburada paket numarası (paketlendiyse) — HB kargo etiketi bununla basılır. */
   packageNumber?: string | null;
+  /** Kargo tarifesinin fiyat seçtiği bilgiler (firma, hızlı teslimat, süre) — masaüstüyle aynı çekirdek. */
+  kargo?: KargoBaglami | null;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;

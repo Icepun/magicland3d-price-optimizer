@@ -258,11 +258,17 @@ describe("satış öncesi Hepsiburada kârı", () => {
     expect(r.variableExpenses).toBeCloseTo((199.99 / 1.1) * 0.0096, 4);
   });
 
-  it("Trendyol ilanı ETKİLENMEZ: tahsilat yok, sabit bedel kuraldan", async () => {
+  it("Trendyol ilanı: tahsilat yok, sabit bedel kuraldan; kargo tarifesi termine göre", async () => {
     const { resolveListingCommissionOverride } = await import("./product-commission");
     expect(resolveListingCommissionOverride({ platform: "trendyol", commissionRate: 0.21, commissionFixed: null, dispatchDays: 3, vatRate: 10 }, {})).toEqual({
       commissionRateOverride: 0.21,
       commissionFixedOverride: undefined,
+      // Termin 3 gün → hızlı teslimat yok → standart tablo.
+      kargoTarifesi: { platform: "trendyol", hizliTeslimat: false },
     });
+    expect(
+      resolveListingCommissionOverride({ platform: "trendyol", commissionRate: 0.21, commissionFixed: null, dispatchDays: 1 }, {})
+        .kargoTarifesi
+    ).toEqual({ platform: "trendyol", hizliTeslimat: true });
   });
 });

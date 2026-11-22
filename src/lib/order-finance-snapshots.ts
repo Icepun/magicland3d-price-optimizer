@@ -12,12 +12,17 @@ import { filamentFiyatlariOku } from "./filament-fiyatlari";
 import { satirMaliyetleriniOku } from "./order-line-costs";
 import { satirBaglariniOku } from "./order-line-links";
 import {
+  computeReturnLoss,
   gercekKesintiToplami,
   resolveOrderProfit,
   type OrderProfitFinancial,
+  type OrderProfitInput,
   type OrderProfitLine,
   type OrderProfitProduct,
+  type ReturnLossActual,
 } from "@/core/order-profit";
+import type { KargoBaglami } from "@/core/kargo-tarife";
+import { hepsiburadaKargoBaglami } from "@/core/siparis-kargo";
 import type {
   CargoRuleInput,
   CommissionRuleInput,
@@ -138,6 +143,38 @@ export interface FinanceSnapshotOrder {
    * kayıtlı değer korunur — Shopify/HB ya da bilgiyi taşımayan çağrı yeri onu silmesin.
    */
   microExport?: { ulke: string | null } | null;
+  /**
+   * İade edilen (kargolanıp geri gelen) siparişin zararı — `loss` net TL (pozitif), `inputVatCredit`
+   * içindeki KDV. null = iade zararı yok; undefined = çağıran bilmiyor (kayıtlı değer korunur).
+   */
+  returnLoss?: { loss: number; inputVatCredit: number } | null;
+  /**
+   * Kargo tarifesinin fiyat seçtiği bilgiler — yeniden hesap aynı fiyatı seçebilsin diye saklanır.
+   * undefined = çağıran bilmiyor (kayıtlı değer korunur).
+   */
+  cargoContext?: KargoBaglami | null;
+}
+
+/** Saklanan kargo bağlamı (JSON metin) → nesne; bozuksa null. */
+export function kargoBaglamiOku(metin: string | null | undefined): KargoBaglami | null {
+  if (!metin) return null;
+  try {
+    const v = JSON.parse(metin) as unknown;
+    return v && typeof v === "object" ? (v as KargoBaglami) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Kargo bağlamı → saklanacak metin; boş alanlar atılır (aynı bağlam hep aynı metni üretsin). */
+export function kargoBaglamiYaz(baglam: KargoBaglami | null | undefined): string | null {
+  if (!baglam) return null;
+  const temiz: Record<string, unknown> = {};
+  for (const anahtar of ["firma", "hizliTeslimat", "gecKargolandi", "kargoyaVermeGunu", "baremTutari"] as const) {
+    const deger = baglam[anahtar];
+    if (deger !== undefined && deger !== null && deger !== "") temiz[anahtar] = deger;
+  }
+  return Object.keys(temiz).length > 0 ? JSON.stringify(temiz) : null;
 }
 
 /** Tek kaynak çekirdekte (telefon ve siparişe özel maliyet de aynı biçimi kullanıyor). */
@@ -239,6 +276,9 @@ type SnapshotWriteData = {
   microExportCountry: string | null;
   actualFeesKurus: number | null;
   cargoKurus: number | null;
+  returnLossKurus: number | null;
+  returnLossVatKurus: number | null;
+  cargoContext: string | null;
   statusKind: string;
   currency: string;
   calculationVersion: number;
@@ -286,6 +326,11 @@ export function snapshotChangedFields(
     changed.push("actualFeesKurus");
   }
   if ((existing.cargoKurus ?? null) !== (next.cargoKurus ?? null)) changed.push("cargoKurus");
+  if ((existing.returnLossKurus ?? null) !== (next.returnLossKurus ?? null)) changed.push("returnLossKurus");
+  if ((existing.returnLossVatKurus ?? null) !== (next.returnLossVatKurus ?? null)) {
+    changed.push("returnLossVatKurus");
+  }
+  if ((existing.cargoContext ?? null) !== (next.cargoContext ?? null)) changed.push("cargoContext");
   if (existing.statusKind !== next.statusKind) changed.push("statusKind");
   if (existing.currency !== next.currency) changed.push("currency");
   if (existing.calculationVersion !== next.calculationVersion) {
@@ -363,8 +408,9 @@ function snapshotStatement(
             "id","platform","externalOrderId","orderNumber","orderedAt","revenueKurus","profitKurus",
             "profitPartial","profitSource","estimatedCommissionKurus","actualCommissionKurus",
             "outputVatKurus","inputVatCreditKurus","microExportCountry",
-            "statusKind","currency","calculationVersion","syncedAt","actualFeesKurus","cargoKurus"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            "statusKind","currency","calculationVersion","syncedAt","actualFeesKurus","cargoKurus",
+            "returnLossKurus","returnLossVatKurus","cargoContext"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId") DO UPDATE SET
             "orderNumber" = excluded."orderNumber",
             "orderedAt" = excluded."orderedAt",
@@ -382,7 +428,10 @@ function snapshotStatement(
             "calculationVersion" = excluded."calculationVersion",
             "syncedAt" = excluded."syncedAt",
             "actualFeesKurus" = excluded."actualFeesKurus",
-            "cargoKurus" = excluded."cargoKurus"`,
+            "cargoKurus" = excluded."cargoKurus",
+            "returnLossKurus" = excluded."returnLossKurus",
+            "returnLossVatKurus" = excluded."returnLossVatKurus",
+            "cargoContext" = excluded."cargoContext"`,
     args: [
       `finance:${platform}:${externalOrderId}`,
       platform,
@@ -404,6 +453,9 @@ function snapshotStatement(
       toDbDate(data.syncedAt),
       data.actualFeesKurus,
       data.cargoKurus,
+      data.returnLossKurus,
+      data.returnLossVatKurus,
+      data.cargoContext,
     ],
   };
 }
@@ -603,6 +655,20 @@ function toIncomingSnapshot(order: FinanceSnapshotOrder) {
       order.actualFees === undefined ? undefined : order.actualFees === null ? null : tlToKurus(order.actualFees),
     cargoKurus:
       order.cargoCost == null || !Number.isFinite(order.cargoCost) ? null : tlToKurus(order.cargoCost),
+    // undefined = bilgi yok (kayıtlı korunur); null = iade zararı yok.
+    returnLossKurus:
+      order.returnLoss === undefined
+        ? undefined
+        : order.returnLoss === null || !Number.isFinite(order.returnLoss.loss)
+          ? null
+          : tlToKurus(order.returnLoss.loss),
+    returnLossVatKurus:
+      order.returnLoss === undefined
+        ? undefined
+        : order.returnLoss === null || !Number.isFinite(order.returnLoss.inputVatCredit)
+          ? null
+          : tlToKurus(order.returnLoss.inputVatCredit),
+    cargoContext: order.cargoContext === undefined ? undefined : kargoBaglamiYaz(order.cargoContext),
   };
 }
 
@@ -662,6 +728,16 @@ export function resolveSnapshotWriteData(
     cargoKurus: replaceProfit
       ? incoming.cargoKurus ?? existing?.cargoKurus ?? null
       : existing?.cargoKurus ?? null,
+    // İade zararı dondurulmaz: tahminden gerçek kayda geçtiğinde (kargo faturası haftalar sonra
+    // geliyor) güncellenir. Bilgiyi taşımayan çağrı (undefined) kayıtlıyı silmez.
+    returnLossKurus:
+      incoming.returnLossKurus !== undefined ? incoming.returnLossKurus : existing?.returnLossKurus ?? null,
+    returnLossVatKurus:
+      incoming.returnLossVatKurus !== undefined
+        ? incoming.returnLossVatKurus
+        : existing?.returnLossVatKurus ?? null,
+    cargoContext:
+      incoming.cargoContext !== undefined ? incoming.cargoContext : existing?.cargoContext ?? null,
     statusKind: order.statusKind,
     currency: order.currency || "TRY",
     calculationVersion: replaceProfit
@@ -717,6 +793,9 @@ export async function persistOrderFinanceSnapshots(
     microExportCountry: string | null;
     actualFeesKurus: number | null;
     cargoKurus: number | null;
+    returnLossKurus: number | null;
+    returnLossVatKurus: number | null;
+    cargoContext: string | null;
     statusKind: string;
     currency: string;
   }> = [];
@@ -724,6 +803,9 @@ export async function persistOrderFinanceSnapshots(
     const rows = await prisma.orderFinanceSnapshot.findMany({
       where: { externalOrderId: { in: externalIds.slice(offset, offset + READ_CHUNK) } },
       select: {
+        returnLossKurus: true,
+        returnLossVatKurus: true,
+        cargoContext: true,
         platform: true,
         externalOrderId: true,
         orderNumber: true,
@@ -1101,6 +1183,9 @@ type RecalcSnapshotRow = {
   microExportCountry: string | null;
   actualFeesKurus: number | null;
   cargoKurus: number | null;
+  returnLossKurus: number | null;
+  returnLossVatKurus: number | null;
+  cargoContext: string | null;
   calculationVersion: number;
   statusKind: string;
   currency: string;
@@ -1160,11 +1245,17 @@ async function readRecalcProducts(
   return byId;
 }
 
-/** Trendyol'un bildirdiği GERÇEK komisyon — sipariş kimliğiyle, yoksa tekil sipariş numarasıyla. */
+/**
+ * Trendyol'un bildirdiği GERÇEK komisyon — sipariş kimliğiyle, yoksa tekil sipariş numarasıyla.
+ * `iade`: iade edilen siparişlerin gerçek gidiş/dönüş kargosu ve (Hepsiburada) hizmet bedeli.
+ */
 async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
-  Map<string, OrderProfitFinancial>
+  Map<string, OrderProfitFinancial> & { iade: Map<string, ReturnLossActual> }
 > {
-  const result = new Map<string, OrderProfitFinancial>();
+  const result = Object.assign(new Map<string, OrderProfitFinancial>(), {
+    iade: new Map<string, ReturnLossActual>(),
+  });
+  const tl = (k: number | null | undefined) => (k == null ? null : kurusToTl(k));
 
   // ── Hepsiburada: muhasebe kaydı sipariş kimliğiyle birebir eşleşir (`hb-<sipariş no>`).
   // Komisyonla birlikte hizmet bedeli, tahsilat ve kargo da gerçek kayıttan gelir.
@@ -1180,15 +1271,22 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
         serviceFeeKurus: true,
         paymentFeeKurus: true,
         cargoKurus: true,
+        returnCargoKurus: true,
       },
     });
     for (const kayit of kayitlar) {
-      result.set(snapshotKey("hepsiburada", kayit.externalOrderId), {
+      const anahtar = snapshotKey("hepsiburada", kayit.externalOrderId);
+      result.set(anahtar, {
         actualCommission: kurusToTl(kayit.commissionKurus),
         settlementRevenue: kurusToTl(kayit.grossRevenueKurus),
-        actualOrderFee: kayit.serviceFeeKurus == null ? null : kurusToTl(kayit.serviceFeeKurus),
-        actualPaymentFee: kayit.paymentFeeKurus == null ? null : kurusToTl(kayit.paymentFeeKurus),
-        actualCargo: kayit.cargoKurus == null ? null : kurusToTl(kayit.cargoKurus),
+        actualOrderFee: tl(kayit.serviceFeeKurus),
+        actualPaymentFee: tl(kayit.paymentFeeKurus),
+        actualCargo: tl(kayit.cargoKurus),
+      });
+      result.iade.set(anahtar, {
+        outboundCargo: tl(kayit.cargoKurus),
+        returnCargo: tl(kayit.returnCargoKurus),
+        serviceFee: tl(kayit.serviceFeeKurus),
       });
     }
   }
@@ -1207,6 +1305,7 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
     grossRevenueKurus: number;
     commissionKurus: number;
     cargoKurus: number | null;
+    returnCargoKurus: number | null;
   }> = [];
   for (let offset = 0; offset < trendyol.length; offset += READ_CHUNK) {
     const slice = trendyol.slice(offset, offset + READ_CHUNK);
@@ -1225,6 +1324,7 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
           grossRevenueKurus: true,
           commissionKurus: true,
           cargoKurus: true,
+          returnCargoKurus: true,
         },
       }))
     );
@@ -1247,12 +1347,15 @@ async function readRecalcFinancials(rows: RecalcSnapshotRow[]): Promise<
       if (candidates.length === 1) financial = candidates[0];
     }
     if (!financial) continue;
-    result.set(snapshotKey(row.platform, row.externalOrderId), {
+    const anahtar = snapshotKey(row.platform, row.externalOrderId);
+    result.set(anahtar, {
       actualCommission: kurusToTl(financial.commissionKurus),
       settlementRevenue: kurusToTl(financial.grossRevenueKurus),
       // Gerçek kargo (kargo faturası kalemi) — yoksa tahmin kalır.
-      actualCargo: financial.cargoKurus == null ? null : kurusToTl(financial.cargoKurus),
+      actualCargo: tl(financial.cargoKurus),
     });
+    // Trendyol hizmet bedeli sipariş başına kayıtta yok → kuraldan (null).
+    result.iade.set(anahtar, { outboundCargo: tl(financial.cargoKurus), returnCargo: tl(financial.returnCargoKurus) });
   }
   return result;
 }
@@ -1370,6 +1473,9 @@ export async function recalculateFinanceMonths(
         microExportCountry: true,
         actualFeesKurus: true,
         cargoKurus: true,
+        returnLossKurus: true,
+        returnLossVatKurus: true,
+        cargoContext: true,
         calculationVersion: true,
         statusKind: true,
         currency: true,
@@ -1516,30 +1622,40 @@ export async function recalculateFinanceMonths(
         };
       });
 
-      const resolved = resolveOrderProfit(
-        {
-          platform: row.platform,
-          // Ciro kayıtlı özetten gelir; yeniden hesap ciroyu DEĞİŞTİRMEZ.
-          orderTotal: kurusToTl(row.revenueKurus),
-          lines: profitLines,
-          commissionRules: commissionRules as CommissionRuleInput[],
-          cargoRules: cargoRules as CargoRuleInput[],
-          expenseRules: expenseRules as ExpenseRuleInput[],
-          settings,
-          // Yeniden hesapta da siparişin kendi tarihi: geçmiş özetler güncel tarifeye kaymasın.
-          orderedAt: row.orderedAt ?? null,
-          // Reklam payı — Siparişler ekranıyla AYNI kaynak; yoksa Raporlar farklı kâr gösterirdi.
-          adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
-          // Mikro ihracat satışı KDV'den istisna — kayıtlı bilgiyle (Siparişler ekranıyla aynı kâr).
-          saleVatExempt: row.microExportCountry != null,
-          // Hepsiburada hizmet bedeli: kayıtlı kargoya verme süresine göre (Siparişler ekranıyla aynı kural).
-          orderFee: row.platform === "hepsiburada" ? hbHizmetBedeli(lines, settings) : undefined,
-        },
-        {
-          statusKind: row.statusKind,
-          financial: financialByOrder.get(key) ?? null,
-        }
-      );
+      // Kargo tarifesinin fiyatı seçtiği bilgiler: kayıtlıysa o; yoksa (eski satır) Hepsiburada'da
+      // kalemlerin kargoya verme süresinden, Trendyol'da standart tablo (tedbirli).
+      const kargo: KargoBaglami | null =
+        kargoBaglamiOku(row.cargoContext) ??
+        (row.platform === "hepsiburada" ? hepsiburadaKargoBaglami(lines, null) : null);
+      const profitInput: OrderProfitInput = {
+        platform: row.platform,
+        // Ciro kayıtlı özetten gelir; yeniden hesap ciroyu DEĞİŞTİRMEZ.
+        orderTotal: kurusToTl(row.revenueKurus),
+        lines: profitLines,
+        commissionRules: commissionRules as CommissionRuleInput[],
+        cargoRules: cargoRules as CargoRuleInput[],
+        expenseRules: expenseRules as ExpenseRuleInput[],
+        settings,
+        // Yeniden hesapta da siparişin kendi tarihi: geçmiş özetler güncel tarifeye kaymasın.
+        orderedAt: row.orderedAt ?? null,
+        // Reklam payı — Siparişler ekranıyla AYNI kaynak; yoksa Raporlar farklı kâr gösterirdi.
+        adRate: adRateFor(adSnap, row.platform, row.orderedAt ?? null),
+        // Mikro ihracat satışı KDV'den istisna — kayıtlı bilgiyle (Siparişler ekranıyla aynı kâr).
+        saleVatExempt: row.microExportCountry != null,
+        // Hepsiburada hizmet bedeli: kayıtlı kargoya verme süresine göre (Siparişler ekranıyla aynı kural).
+        orderFee: row.platform === "hepsiburada" ? hbHizmetBedeli(lines, settings) : undefined,
+        kargo,
+      };
+      const resolved = resolveOrderProfit(profitInput, {
+        statusKind: row.statusKind,
+        financial: financialByOrder.get(key) ?? null,
+      });
+      // İade zararı yalnız canlı listede "kargolanıp geri geldi" diye işaretlenmiş (zararı kayıtlı)
+      // siparişlerde yeniden hesaplanır — iptalin kargolu iade olup olmadığını kalem geçmişi söylemez.
+      const iadeZarari =
+        row.statusKind === "cancelled" && row.returnLossKurus != null
+          ? computeReturnLoss(profitInput, financialByOrder.iade.get(key) ?? null)
+          : undefined;
 
       // Ürün katalogdan silinmişse yeni hesap "maliyet bilinmiyor" der. Daha önce yakalanmış
       // gerçek bir kârı bu yüzden SİLMEYİZ — yeniden hesap bilgi kaybettirmemeli.
@@ -1574,6 +1690,7 @@ export async function recalculateFinanceMonths(
         microExport: row.microExportCountry == null ? null : { ulke: row.microExportCountry },
         actualFees: gercekKesintiToplami(resolved),
         cargoCost: resolved.cargoCost,
+        ...(iadeZarari ? { returnLoss: { loss: iadeZarari.loss, inputVatCredit: iadeZarari.inputVatCredit } } : {}),
         statusKind: row.statusKind,
         currency: row.currency,
       });

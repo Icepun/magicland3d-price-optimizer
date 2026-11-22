@@ -42,7 +42,9 @@ export function panelCirosu<O extends PanelSiparis>(
     platformlar: readonly string[];
     /** Ciroya girmeyecek sipariş: iptal/iade, tutarı alınamayan ve (pazaryerinde) tanınmayan durum. */
     sayilmazMi: (o: O) => boolean;
-    hesapla: (o: O) => { revenue: number; profit: number | null };
+    hesapla: (o: O) => { revenue: number; profit: number | null; returnLoss?: number | null };
+    /** İade (kargolanıp geri gelen) sipariş mi? Öyleyse ciroya girmez, zararı kârdan düşer. */
+    iadeMi?: (o: O) => boolean;
   }
 ): PanelCiroSonucu {
   const { gun, simdi } = opts;
@@ -59,9 +61,14 @@ export function panelCirosu<O extends PanelSiparis>(
   const ilkGun = Math.floor(kesim / GUN_MS);
   for (const o of orders) {
     if (o.date != null && o.date < kesim) continue;
-    if (opts.sayilmazMi(o)) continue;
     // Döviz çevrimi yok: TL dışı sipariş TL toplamına eklenmez (masaüstü özeti de aynı).
-    if ((o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
+    const tl = (o.currency ?? "TRY").trim().toUpperCase() === "TRY";
+    if (opts.sayilmazMi(o)) {
+      // İADE ZARARI — masaüstü özetiyle aynı: ciroya ve sayıya girmez, kârdan düşer.
+      if (tl && opts.iadeMi?.(o)) profit -= opts.hesapla(o).returnLoss ?? 0;
+      continue;
+    }
+    if (!tl) continue;
     const op = opts.hesapla(o);
     total += op.revenue;
     const b = byPlat[o.platform];

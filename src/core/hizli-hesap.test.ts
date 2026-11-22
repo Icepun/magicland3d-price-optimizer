@@ -59,11 +59,14 @@ describe("hızlı hesap", () => {
       commissionRules: [], cargoRules: baglam.cargoRules.filter((r) => r.platform === "trendyol"),
       expenseRules: baglam.expenseRules, vatRate: 20, commissionRateOverride: 0.21,
       minOrderQty: 1, vatableProductCost: cozulen.filamentCost,
+      // Trendyol kargosu pazaryeri tarifesinden (termin bilinmiyor → standart tablo).
+      kargoTarifesi: { platform: "trendyol", hizliTeslimat: false },
     });
     expect(maliyet.toplam).toBeCloseTo(cozulen.totalCost, 6);
     expect(sonuc?.netProfit).toBeCloseTo(beklenen.netProfit, 6);
     expect(sonuc?.profitMargin).toBeCloseTo(beklenen.profitMargin, 6);
-    expect(sonuc?.cargoCost).toBe(52.5);
+    // 349,90 → 200–349,99 bandı standart barem 78,74 + KDV.
+    expect(sonuc?.cargoCost).toBeCloseTo(78.74 * 1.2, 6);
     expect(sonuc?.commissionCost).toBeCloseTo(349.9 * 0.21, 6);
     expect(sonuc?.fixedExpenses).toBe(13.19);
   });
@@ -101,8 +104,15 @@ describe("hızlı hesap", () => {
     expect(r.desiVarsayildi).toBe(true);
   });
 
-  it("uyan kargo fiyatı yoksa söylenir (5 desi, tarifede yok)", () => {
-    expect(hizliHesapla(girdi({ desi: 5 }), baglam).kargoFiyatiYok).toBe(true);
+  it("uyan kargo fiyatı yoksa söylenir (Shopify kuralı 30 desiye kadar, 40 desi)", () => {
+    expect(hizliHesapla(girdi({ platform: "shopify", komisyonPct: null, fiyat: 400, desi: 40 }), baglam).kargoFiyatiYok).toBe(true);
+  });
+
+  it("Trendyol kargosu pazaryeri tarifesinden: her desinin fiyatı var, uyarı çıkmaz", () => {
+    const r = hizliHesapla(girdi({ desi: 5, fiyat: 400 }), baglam);
+    expect(r.kargoFiyatiYok).toBe(false);
+    // 350 TL üstü → TEX desi listesi, 5 desi 114,10 + KDV.
+    expect(r.sonuc?.cargoCost).toBeCloseTo(114.1 * 1.2, 6);
   });
 
   it("fiyat dağılımı ciroyu tam böler; zararda kâr 0, zarar ayrı", () => {

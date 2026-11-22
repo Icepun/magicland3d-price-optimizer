@@ -127,7 +127,12 @@ export function hizliHesapla(
     hedefler,
     desiVarsayildi: desi == null,
     // Ürün ekranıyla aynı kural: kargo kuralı eşleşmedi ve Shopify'ın ücretsiz kargo eşiği altı değil.
-    kargoFiyatiYok: !!sonuc && !sonuc.appliedCargoRule && !belowShopifyMinBasket(g.platform, sonuc.effectiveSalePrice),
+    // Pazaryeri tarifesinden gelen kargo (Trendyol / Hepsiburada) eksik sayılmaz.
+    kargoFiyatiYok:
+      !!sonuc &&
+      !sonuc.appliedCargoRule &&
+      !sonuc.cargoDetail &&
+      !belowShopifyMinBasket(g.platform, sonuc.effectiveSalePrice),
   };
 }
 

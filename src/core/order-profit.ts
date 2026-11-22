@@ -9,6 +9,13 @@ import { withProductCommissionRule, resolveListingCommissionOnly } from "./produ
 import { applyActualCommissionToProfit } from "./platform-financials";
 import { gecerliSiparisOrani } from "./order-commission";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
+import {
+  fiyatDesisi,
+  iadeKargoTahmini,
+  kargoTahmini,
+  type KargoBaglami,
+  type KargoTahmini,
+} from "./kargo-tarife";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "./types";
 import type {
   PackagingComponentKey,
@@ -134,6 +141,13 @@ export interface OrderProfitInput {
    * çoğu siparişte fazladan gider düşülüyordu. Verilmezse (undefined/null) kurallar aynen çalışır.
    */
   orderFee?: number | null;
+  /**
+   * Siparişin kargo bilgileri (firma, hızlı teslimat, kargoya verme süresi, barem tutarı).
+   * Trendyol ve Hepsiburada'da kargo pazaryerinin TARİFESİNDEN hesaplanır (`core/kargo-tarife.ts`);
+   * bu bilgiler fiyatın hangi tablodan geleceğini belirler. Verilmezse tarife yine kullanılır ama
+   * tedbirli varsayımlarla (standart tablo; Hepsiburada'da süre bilinmiyorsa desi listesi).
+   */
+  kargo?: KargoBaglami | null;
 }
 
 export interface OrderProfitResult {
@@ -169,6 +183,8 @@ export interface OrderProfitResult {
    * Kâr bu yüzden olduğundan yüksek. Arayüz kısmi kâr uyarısını buna da bakarak gösterir.
    */
   cargoRuleMissing: boolean;
+  /** Kargo pazaryeri tarifesinden hesaplandıysa nasıl (tablo, firma, desi); kuraldan geldiyse null. */
+  cargoDetail: KargoTahmini | null;
   matchedLines: number;
   unmatchedLines: number;
   unmatchedQty: number;
@@ -395,6 +411,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
       cargoRuleMissing: false,
+      cargoDetail: null,
       matchedLines: 0,
       unmatchedLines,
       unmatchedQty,
@@ -493,7 +510,13 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     matchedQty === 1 &&
     unmatchedLines === 0 &&
     soloCargo != null;
-  const appliedCargoRule = canUseSoloCargo
+  // PAZARYERİ TARİFESİ (Trendyol / Hepsiburada) — siparişin tarihinde tarife varsa kural tablosunun
+  // yerine geçer: fiyat; tutar bandı, desi, firma, hızlı teslimat ve kargoya verme süresine göre
+  // pazaryerinin kendi listesinden gelir. Tarife öncesi siparişler ve Shopify eski kurallarla.
+  const cargoDetail = canUseSoloCargo
+    ? null
+    : kargoTahmini(platform, orderTotal, baremDesi, kuralTarihi, input.kargo);
+  const appliedCargoRule = canUseSoloCargo || cargoDetail
     ? null
     : categories
         .map((categoryName) =>
@@ -531,14 +554,17 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
    * kapsıyor, Shopify'da ise ölçüldüğünde 40 hesaplanabilir siparişin hiçbiri bant boşluğuna
    * düşmüyordu. Bu bir emniyet ağı: tarife değişip bir bant açıkta kalırsa sessiz kalmasın.
    */
-  const cargoRuleMissing = !canUseSoloCargo && appliedCargoRule == null;
+  const cargoRuleMissing = !canUseSoloCargo && !cargoDetail && appliedCargoRule == null;
   const rawCargoCost =
     canUseSoloCargo
       ? (soloCargo ?? 0)
-      : (appliedCargoRule?.cargoCost ?? 0);
+      : cargoDetail
+        ? cargoDetail.fiyat
+        : (appliedCargoRule?.cargoCost ?? 0);
   const cargo = resolveVatableCost(
     rawCargoCost,
-    appliedCargoRule?.vatIncluded !== false,
+    // Tarife fiyatları KDV HARİÇ.
+    cargoDetail ? false : appliedCargoRule?.vatIncluded !== false,
     vatRate
   );
   profit -= cargo.gross;
@@ -584,6 +610,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.
     partial: unmatchedLines > 0,
     cargoRuleMissing,
+    cargoDetail,
     matchedLines,
     unmatchedLines,
     unmatchedQty,
@@ -614,6 +641,8 @@ export interface OrderProfitFinancial {
   actualOrderFee?: number | null;
   actualPaymentFee?: number | null;
   actualCargo?: number | null;
+  /** İade edilen siparişin gerçek dönüş kargosu (brüt TL) — yalnız `computeReturnLoss` kullanır. */
+  actualReturnCargo?: number | null;
 }
 
 export interface ResolveOrderProfitOptions {
@@ -636,6 +665,108 @@ export interface ResolvedOrderProfit extends OrderProfitResult {
   actualOrderFee: number | null;
   actualPaymentFee: number | null;
   actualCargo: number | null;
+}
+
+/** İade edilen siparişin pazaryeri kayıtları (brüt TL) — verilen her biri tahminin yerine geçer. */
+export interface ReturnLossActual {
+  outboundCargo?: number | null;
+  returnCargo?: number | null;
+  serviceFee?: number | null;
+}
+
+export interface ReturnLoss {
+  /** Kâra etkisi: bu kadar ZARAR (pozitif TL, indirilecek KDV düşülmüş). */
+  loss: number;
+  /** Gidiş kargosu (brüt TL). */
+  outboundCargo: number;
+  /** Dönüş kargosu (brüt TL). */
+  returnCargo: number;
+  /** Geri verilmeyen sabit hizmet bedeli (brüt TL). */
+  serviceFee: number;
+  /** Bu kalemlerin içindeki indirilecek KDV. */
+  inputVatCredit: number;
+  outboundActual: boolean;
+  returnActual: boolean;
+  serviceFeeActual: boolean;
+  /** Tarifeden hesaplandıysa nasıl (tahminde); yoksa null. */
+  outboundDetail: KargoTahmini | null;
+  returnDetail: KargoTahmini | null;
+}
+
+/**
+ * İADE EDİLEN SİPARİŞİN ZARARI — kargoya verilmiş, sonra geri gelmiş sipariş.
+ *
+ * Ölçüldü (22 Kas 2026): pazaryeri satış tutarını ve komisyonu geri veriyor (iade kaydı), ama
+ * GİDİŞ ve DÖNÜŞ kargosunu ve sabit hizmet bedelini kesiyor. Trendyol panelinde iade edilen bir
+ * sipariş: Kargo −98,34 + İade Kargo −98,34 + Platform Hizmet Bedeli −13,19 = net −209,87.
+ * Hepsiburada'da da komisyon/tahsilat/stopaj iade, iki kargo kaydı kalıyor.
+ *
+ * Ürün geri geldiği için ürün maliyeti zarar sayılmaz. Kargo pazaryeri tarifesinden (iade bacağı
+ * Trendyol'da desi listesinden, Hepsiburada'da gidişle aynı); tarife yoksa kargo kuralından.
+ * Fatura kalemleri KDV'lidir → zarar indirilecek KDV düşülmüş tutardır (kâr hesabıyla aynı ölçü).
+ */
+export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossActual | null): ReturnLoss {
+  const { platform, orderTotal, settings } = input;
+  const kuralTarihi = input.orderedAt ?? new Date();
+  const vatRate = vatRateOf(settings);
+  const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
+  const tutar = Number.isFinite(orderTotal) ? orderTotal : 0;
+
+  // Paketin desisi: ürün desisi biliniyorsa o, bilinmiyorsa adet başına 1.
+  let toplamDesi = 0;
+  const kategoriler = new Set<string>();
+  for (const line of input.lines) {
+    const adet = Number.isFinite(line.quantity) && line.quantity > 0 ? line.quantity : 0;
+    if (adet <= 0) continue;
+    const d = line.product?.desi;
+    toplamDesi += (d != null && d >= 0 ? d : 1) * adet;
+    if (line.product?.categoryName) kategoriler.add(line.product.categoryName);
+  }
+  const desi = fiyatDesisi(toplamDesi);
+  const kategoriListesi = kategoriler.size > 0 ? [...kategoriler] : [""];
+
+  const gidisDetay = kargoTahmini(platform, tutar, desi, kuralTarihi, input.kargo);
+  let gidisTahmini = 0;
+  if (gidisDetay) {
+    gidisTahmini = resolveVatableCost(gidisDetay.fiyat, false, vatRate).gross;
+  } else {
+    const kurallar = filterRulesByPlatform(input.cargoRules, platform);
+    for (const kategori of kategoriListesi) {
+      const kural = findCargoRule(kurallar, tutar, kategori, desi, kuralTarihi);
+      if (!kural) continue;
+      gidisTahmini = Math.max(gidisTahmini, resolveVatableCost(kural.cargoCost, kural.vatIncluded !== false, vatRate).gross);
+    }
+  }
+  const donusDetay = iadeKargoTahmini(platform, tutar, desi, kuralTarihi, input.kargo);
+  const donusTahmini = donusDetay ? resolveVatableCost(donusDetay.fiyat, false, vatRate).gross : gidisTahmini;
+
+  const { perOrder } = splitExpenseRulesByScope(filterRulesByPlatform(input.expenseRules, platform));
+  const hizmetTahmini =
+    typeof input.orderFee === "number" && Number.isFinite(input.orderFee)
+      ? Math.max(0, input.orderFee)
+      : Math.max(0, ...kategoriListesi.map((k) => calculateExpenses(perOrder, tutar, k).fixed));
+
+  const gercek = (v: number | null | undefined): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+  const gidisGercek = gercek(actual?.outboundCargo);
+  const donusGercek = gercek(actual?.returnCargo);
+  const hizmetGercek = gercek(actual?.serviceFee);
+  const outboundCargo = gidisGercek ?? gidisTahmini;
+  const returnCargo = donusGercek ?? donusTahmini;
+  const serviceFee = hizmetGercek ?? hizmetTahmini;
+  const brut = outboundCargo + returnCargo + serviceFee;
+  return {
+    loss: brut * (1 - vatFactor),
+    outboundCargo,
+    returnCargo,
+    serviceFee,
+    inputVatCredit: brut * vatFactor,
+    outboundActual: gidisGercek != null,
+    returnActual: donusGercek != null,
+    serviceFeeActual: hizmetGercek != null,
+    outboundDetail: gidisGercek != null ? null : gidisDetay,
+    returnDetail: donusGercek != null ? null : donusDetay,
+  };
 }
 
 /** Komisyon dışındaki uygulanmış gerçek kesintilerin toplamı (TL); hiçbiri yoksa null. */

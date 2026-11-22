@@ -395,7 +395,9 @@ async function computeProducts(urlString: string) {
         const cargoMissing =
           listing.cargoCost == null &&
           !(listing.platform === "shopify" && listing.salePrice < 150) &&
-          !sim.appliedCargoRule;
+          !sim.appliedCargoRule &&
+          // Trendyol / Hepsiburada kargosu pazaryeri tarifesinden geldiyse eksik değildir.
+          !sim.cargoDetail;
 
         return {
           platform: listing.platform as PlatformSummary["platform"],

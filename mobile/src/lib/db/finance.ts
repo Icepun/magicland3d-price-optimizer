@@ -90,6 +90,8 @@ interface SnapshotRow {
   statusKind: string;
   currency: string;
   syncedAt: string | number;
+  /** İade edilen siparişin zararı (net kuruş) — masaüstü v61; eski veritabanında kolon yok → undefined. */
+  returnLossKurus?: number | null;
 }
 
 interface ExpenseRow {
@@ -518,8 +520,9 @@ export async function getMonthlyFinanceSummary(
   await Promise.all([ensureFinanceSchema(), ensureManualOrderSchema()]);
   const [snapshots, manualOrders, expenses] = await Promise.all([
     query<SnapshotRow>(
-      `SELECT "orderedAt", "revenueKurus", "profitKurus", "profitPartial",
-              "statusKind", "currency", "syncedAt"
+      // SELECT * — yeni kolon (returnLossKurus, masaüstü şema v61) henüz açılmamış bir veritabanında
+      // adıyla istenirse sorgu düşer ve Raporlar boş kalırdı.
+      `SELECT *
          FROM "OrderFinanceSnapshot"
         WHERE "platform" <> 'manual'
         ORDER BY "orderedAt" ASC`
@@ -559,7 +562,15 @@ export async function getMonthlyFinanceSummary(
 
   const financeOrders: SnapshotRow[] = [...snapshots, ...manualOrders];
   for (const snapshot of financeOrders) {
-    if (snapshot.statusKind === "cancelled") continue;
+    if (snapshot.statusKind === "cancelled") {
+      // İADE ZARARI — masaüstüyle aynı kural: ciroya girmez, kârdan düşer.
+      const zarar = Number(snapshot.returnLossKurus);
+      const iadeKovasi = byMonth.get(monthKey(snapshot.orderedAt) ?? "");
+      if (iadeKovasi && Number.isFinite(zarar) && zarar > 0 && (snapshot.currency || "TRY").trim().toUpperCase() === "TRY") {
+        iadeKovasi.orderProfitKurus -= zarar;
+      }
+      continue;
+    }
     const bucket = byMonth.get(monthKey(snapshot.orderedAt) ?? "");
     if (!bucket) continue;
     if ((snapshot.currency || "TRY").trim().toUpperCase() !== "TRY") {

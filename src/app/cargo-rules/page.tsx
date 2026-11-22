@@ -2,7 +2,7 @@
 
 /* eslint-disable react/no-unescaped-entities */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight, CalendarClock } from "lucide-react";
 import { NewTariffDialog } from "./new-tariff-dialog";
+import { PazaryeriTarifesi } from "./pazaryeri-tarifesi";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { useForm, useWatch } from "react-hook-form";
@@ -53,11 +54,11 @@ interface CargoRule {
 }
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
-type CargoMode = "standart" | "avantajli";
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
-  platform: z.enum(["trendyol", "shopify", "hepsiburada"]).default("trendyol"),
+  // Trendyol / Hepsiburada kargosu pazaryeri tarifesinden; elle kural yalnız Shopify için.
+  platform: z.enum(["shopify"]).default("shopify"),
   cargoProvider: z.string().optional(),
   categoryName: z.string().optional(),
   minPrice: z.coerce.number().min(0).default(0),
@@ -84,7 +85,7 @@ function RuleForm({
   const form = useForm<FormData>({
     resolver: zodResolver(Schema),
     defaultValues: {
-      platform: "trendyol",
+      platform: "shopify",
       minPrice: 0,
       maxPrice: 999999,
       minDesi: 0,
@@ -97,7 +98,6 @@ function RuleForm({
   });
   const isActive = useWatch({ control: form.control, name: "isActive" });
   const vatIncluded = useWatch({ control: form.control, name: "vatIncluded" });
-  const platform = useWatch({ control: form.control, name: "platform" });
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
@@ -107,16 +107,10 @@ function RuleForm({
           <Input {...form.register("name")} />
         </div>
         <div>
-          <Label>Platform *</Label>
-          <select
-            value={platform}
-            onChange={(e) => form.setValue("platform", e.target.value as Platform)}
-            className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="trendyol">Trendyol</option>
-            <option value="shopify">Shopify</option>
-            <option value="hepsiburada">Hepsiburada</option>
-          </select>
+          <Label>Platform</Label>
+          <div className="flex h-9 items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground">
+            Shopify
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -272,13 +266,6 @@ function RulesTable({
   );
 }
 
-interface HbCargo {
-  mode: CargoMode;
-  applied: boolean;
-  desiBrackets: { fromDesi: number; toDesi: number; cost: number }[];
-  flatTiers: { minPrice: number; maxPrice: number; cost: number }[];
-}
-
 interface FlatTier { minPrice: number; maxPrice: number; cost: number }
 interface DesiBracket { fromDesi: number; toDesi: number; cost: number }
 
@@ -290,35 +277,6 @@ function desiLabel(from: number, to: number): string {
 }
 
 const priceLabel = (v: number) => (v >= 999999 ? "∞" : Math.ceil(v));
-
-/** "Kargo desteğinden yararlanıyor musun?" anahtarı — tüm platformlarda aynı dil. */
-function CargoSupportFlag({
-  mode,
-  onChange,
-  disabled,
-}: {
-  mode: CargoMode;
-  onChange: (m: CargoMode) => void;
-  disabled?: boolean;
-}) {
-  const on = mode === "avantajli";
-  return (
-    <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3.5 py-3 gap-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">Kargo desteğinden yararlanıyor musun?</p>
-        <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-          Açık → avantajlı barem (sipariş tutarına göre ucuz sabit ücret). Kapalı → standart desi baremi.
-        </p>
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <span className="text-xs text-muted-foreground w-16 text-right">
-          {on ? "Avantajlı" : "Standart"}
-        </span>
-        <Switch checked={on} disabled={disabled} onCheckedChange={(v) => onChange(v ? "avantajli" : "standart")} />
-      </div>
-    </div>
-  );
-}
 
 /** Tek, ortak kargo barem görünümü: düz tutar kademeleri + desi tablosu. Üç platform da bunu kullanır. */
 function CargoBaremView({
@@ -793,80 +751,10 @@ export default function CargoRulesPage() {
     queryFn: () => fetchJson("/api/cargo-rules"),
   });
 
-  const { data: hb } = useQuery<HbCargo>({
-    queryKey: ["hb-cargo"],
-    queryFn: () => fetchJson("/api/cargo-rules/hepsiburada"),
-  });
-
-  const applyHb = useMutation({
-    mutationFn: (mode: CargoMode) =>
-      fetchJson("/api/cargo-rules/hepsiburada", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      }),
-    onSuccess: (_d, mode) => {
-      queryClient.invalidateQueries({ queryKey: ["hb-cargo"] });
-      queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      bustPricingQueries();
-      toast.success(mode === "avantajli" ? "Avantajlı barem uygulandı" : "Standart barem uygulandı");
-    },
-    onError: () => toast.error("Barem uygulanamadı"),
-  });
-
-  // İlk kurulumda HB baremi hiç yazılmadıysa mevcut modu otomatik uygula → HB kargosu hemen çalışsın.
-  useEffect(() => {
-    if (hb && !hb.applied && !applyHb.isPending) applyHb.mutate(hb.mode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hb?.applied]);
-
-  // ── Platform bazlı kural setleri (TEX = Trendyol; kalan platform-bazlı/eski null kurallar Shopify) ──
-  const trendyolRules = rules.filter((r) => r.platform === "trendyol" || isTex(r));
+  // ── Shopify kuralları (platform-bazlı + eski platformsuz kurallar; TEX'li olanlar Trendyol'undu) ──
+  // Trendyol ve Hepsiburada kargosu artık pazaryeri tarifesinden (düzenlenmez) — kural tablosundaki
+  // eski satırları yalnız tarife öncesi siparişler kullanır; burada gösterilmez.
   const shopifyRules = rules.filter((r) => r.platform === "shopify" || (!r.platform && !isTex(r)));
-  // Mod YÜRÜRLÜKTEKİ kurallardan okunur: süresi dolmuş bir "Avantajlı" kural açık kalmışsa
-  // düğme yanlış tarafta görünürdü (sunucu tarafı zaten yalnız yürürlüktekini çeviriyor).
-  const trendyolMode: CargoMode = trendyolRules.some(
-    (r) => /avantaj/i.test(r.name) && r.isActive && yururlukteMi(r, simdiMs)
-  )
-    ? "avantajli"
-    : "standart";
-
-  // Trendyol kargo desteği: TEX düz baremlerinin isActive'ini çevirir (optimistic → anında).
-  const applyTrendyol = useMutation({
-    mutationFn: (mode: CargoMode) =>
-      fetchJson("/api/cargo-rules/trendyol", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      }),
-    onMutate: async (mode: CargoMode) => {
-      await queryClient.cancelQueries({ queryKey: ["cargo-rules"] });
-      const prev = queryClient.getQueryData<CargoRule[]>(["cargo-rules"]);
-      queryClient.setQueryData<CargoRule[]>(["cargo-rules"], (old) =>
-        Array.isArray(old)
-          ? old.map((r) => {
-              // Süresi dolmuş kurallara DOKUNMA — sunucu da dokunmuyor (`validTo: null` şartı).
-              // Yoksa önizleme geçmiş tarifeyi de çevirmiş gibi gösterir, sonra geri döner.
-              if (!isTex(r) || !yururlukteMi(r, simdiMs)) return r;
-              if (/avantaj/i.test(r.name)) return { ...r, isActive: mode === "avantajli" };
-              if (/standart/i.test(r.name)) return { ...r, isActive: mode === "standart" };
-              return r;
-            })
-          : old
-      );
-      return { prev };
-    },
-    onError: (_e, _m, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(["cargo-rules"], ctx.prev);
-      toast.error("Mod değiştirilemedi");
-    },
-    onSuccess: (_d, mode) =>
-      toast.success(mode === "avantajli" ? "Avantajlı barem aktif" : "Standart barem aktif"),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
-      bustPricingQueries();
-    },
-  });
 
   const createMutation = useMutation({
     mutationFn: (data: FormData) =>
@@ -912,10 +800,7 @@ export default function CargoRulesPage() {
   const onToggleRule = (r: CargoRule, v: boolean) =>
     updateMutation.mutate({ id: r.id, data: { isActive: v } as Partial<FormData> as FormData });
 
-  const trendyolBarem = deriveBarem(trendyolRules, simdiMs);
   const shopifyBarem = deriveBarem(shopifyRules, simdiMs);
-  const hepsiburadaRules = rules.filter((r) => r.platform === "hepsiburada");
-  const hepsiburadaBarem = deriveBarem(hepsiburadaRules, simdiMs);
   const vatNote = (platformRules: CargoRule[]) => {
     const active = platformRules.filter((rule) => rule.isActive && yururlukteMi(rule, simdiMs));
     if (active.length === 0) return undefined;
@@ -927,9 +812,9 @@ export default function CargoRulesPage() {
   return (
     <div className="p-6 space-y-5 mx-auto w-full max-w-6xl">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Kargo Kuralları</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Kargo</h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          Her platformun kargo baremi ayrı. Kural yalnızca kendi platformunun siparişlerine uygulanır.
+          Trendyol ve Hepsiburada fiyatları pazaryerinin kendi listesi. Shopify kargonu buradan düzenlersin.
         </p>
       </div>
 
@@ -939,9 +824,9 @@ export default function CargoRulesPage() {
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Platform)}>
         <TabsList>
+          <TabsTrigger value="trendyol" className="data-[state=active]:text-primary">Trendyol</TabsTrigger>
+          <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-400">Hepsiburada</TabsTrigger>
           <TabsTrigger value="shopify" className="data-[state=active]:text-emerald-500">Shopify</TabsTrigger>
-          <TabsTrigger value="trendyol" className="data-[state=active]:text-orange-500">Trendyol</TabsTrigger>
-          <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-500">Hepsiburada</TabsTrigger>
         </TabsList>
 
         {/* SHOPIFY — temiz barem görünümü (flag yok) */}
@@ -976,81 +861,19 @@ export default function CargoRulesPage() {
           </Card>
         </TabsContent>
 
-        {/* TRENDYOL — temiz barem + kargo desteği flag'i (TEX) */}
+        {/* TRENDYOL / HEPSİBURADA — pazaryerinin fiyat listesi; düzenlenmez (core/kargo-tarife). */}
         <TabsContent value="trendyol" className="space-y-4 mt-4">
           <Card>
-            <CardContent className="pt-4 space-y-4">
-              <CargoSupportFlag
-                mode={trendyolMode}
-                disabled={applyTrendyol.isPending || isLoading}
-                onChange={(m) => applyTrendyol.mutate(m)}
-              />
-              <CargoBaremView
-                maxDesi={kapsam?.maxDesi ?? null}
-                provider={trendyolBarem.provider}
-                vatNote={vatNote(trendyolRules)}
-                flatTiers={trendyolBarem.flat}
-                desiBrackets={trendyolBarem.desi}
-                desiThreshold={trendyolBarem.desiThreshold}
-                loading={isLoading}
-              />
-              {!isLoading && (
-                <YeniTarifeAksiyonu platform="trendyol" platformAdi="Trendyol" rules={trendyolRules} simdiMs={simdiMs} />
-              )}
-              {!isLoading && <YaklasanTarifeler rules={trendyolRules} simdiMs={simdiMs} />}
-              {!isLoading && <GecmisTarifeler rules={trendyolRules} simdiMs={simdiMs} />}
-              {!isLoading && (
-                <AdvancedRules
-                  rules={trendyolRules}
-                  simdiMs={simdiMs}
-                  onAdd={() => setOpen(true)}
-                  onEdit={setEditing}
-                  onDelete={(id) => deleteMutation.mutate(id)}
-                  onToggle={onToggleRule}
-                />
-              )}
+            <CardContent className="pt-4">
+              <PazaryeriTarifesi platform="trendyol" maxDesi={kapsam?.maxDesi ?? null} />
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* HEPSIBURADA — HepsiJet baremi + kargo desteği flag'i */}
         <TabsContent value="hepsiburada" className="space-y-4 mt-4">
           <Card>
-            <CardContent className="pt-4 space-y-4">
-              <CargoSupportFlag
-                mode={hb?.mode ?? "standart"}
-                disabled={applyHb.isPending || !hb}
-                onChange={(m) => applyHb.mutate(m)}
-              />
-              <CargoBaremView
-                maxDesi={kapsam?.maxDesi ?? null}
-                provider="HepsiJet"
-                vatNote={`Fiyatlar KDV dahil (%20)${applyHb.isPending ? " · uygulanıyor…" : ""}`}
-                flatTiers={hepsiburadaBarem.flat}
-                desiBrackets={hepsiburadaBarem.desi}
-                desiThreshold={hepsiburadaBarem.desiThreshold}
-                loading={isLoading || applyHb.isPending}
-              />
-              {!isLoading && (
-                <div className="space-y-1.5">
-                  <p className="text-[10px] text-muted-foreground">
-                    Kargo fiyatı değişince buradan güncelle. Üstteki desteği açıp kapatmak baremi resmi tarifeye sıfırlar.
-                  </p>
-                  {!isLoading && (
-                    <YeniTarifeAksiyonu platform="hepsiburada" platformAdi="Hepsiburada" rules={hepsiburadaRules} simdiMs={simdiMs} />
-                  )}
-                  {!isLoading && <YaklasanTarifeler rules={hepsiburadaRules} simdiMs={simdiMs} />}
-                  {!isLoading && <GecmisTarifeler rules={hepsiburadaRules} simdiMs={simdiMs} />}
-                  <AdvancedRules
-                    rules={hepsiburadaRules}
-                    simdiMs={simdiMs}
-                    onAdd={() => setOpen(true)}
-                    onEdit={setEditing}
-                    onDelete={(id) => deleteMutation.mutate(id)}
-                    onToggle={onToggleRule}
-                  />
-                </div>
-              )}
+            <CardContent className="pt-4">
+              <PazaryeriTarifesi platform="hepsiburada" maxDesi={kapsam?.maxDesi ?? null} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1062,7 +885,7 @@ export default function CargoRulesPage() {
             <DialogTitle>Kargo Kuralı Ekle</DialogTitle>
           </DialogHeader>
           <RuleForm
-            defaultValues={{ platform: tab }}
+            defaultValues={{ platform: "shopify" }}
             onSubmit={(d) => createMutation.mutate(d)}
             isPending={createMutation.isPending}
           />
@@ -1078,7 +901,7 @@ export default function CargoRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
-                platform: (editing.platform as Platform) ?? "trendyol",
+                platform: "shopify",
                 cargoProvider: editing.cargoProvider ?? undefined,
                 categoryName: editing.categoryName ?? undefined,
               }}

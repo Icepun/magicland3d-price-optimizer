@@ -33,6 +33,7 @@ import {
   Package,
   KeyRound,
   TrendingUp,
+  TrendingDown,
   Pencil,
   Plus,
   Trash2,
@@ -148,6 +149,19 @@ interface UnifiedOrder {
   desiEstimated?: boolean;
   /** Bu siparişin desi/tutarına uyan kargo kuralı yok → kargo 0 sayıldı, kâr yüksek görünüyor. */
   cargoRuleMissing?: boolean;
+  /** Kargo pazaryeri tarifesinden tahmin edildiyse hangi fiyat ("Trendyol Express · sabit fiyat"). */
+  cargoLabel?: string | null;
+  /** İade edilen (kargolanıp geri gelen) siparişin zararı — kârdan düşülür. Tutarlar brüt, `loss` net. */
+  returnLoss?: {
+    loss: number;
+    outboundCargo: number;
+    returnCargo: number;
+    serviceFee: number;
+    inputVatCredit: number;
+    outboundActual: boolean;
+    returnActual: boolean;
+    serviceFeeActual: boolean;
+  } | null;
   /** Bu siparişe düşen reklam payı (TL). */
   adCost?: number;
   /** Siparişe düşen kargo bedeli (TL). */
@@ -196,6 +210,9 @@ interface SummaryQuality {
   unknownStatuses?: Array<{ status: string; orderCount: number }>;
   /** İçinde iade edilmiş kalem bulunan sipariş sayısı. */
   partialReturnOrders?: number;
+  /** Kargolanıp geri gelen sipariş sayısı ve kârdan düşülen toplam zarar (TL). */
+  returnLossOrders?: number;
+  returnLossTotal?: number;
   /** Verisi alınamayan kaynaklar — doluysa toplamlar eksik. */
   missingSources?: string[];
 }
@@ -358,7 +375,18 @@ function bucketForDay(orders: UnifiedOrder[], key: string | null): DayBucket {
     if (!order.date) continue;
     const date = new Date(order.date);
     if (Number.isNaN(date.getTime()) || dayKey(date) !== key) continue;
-    if (!countsInSummary(order)) continue;
+    if (!countsInSummary(order)) {
+      // İade edilen siparişin kargo zararı: ciroya girmez, kârdan düşer (30 günlük özetle aynı kural).
+      if (
+        order.statusKind === "cancelled" &&
+        order.returnLoss &&
+        !order.dataIncomplete &&
+        (order.currency || "TRY").trim().toUpperCase() === "TRY"
+      ) {
+        bucket.profit -= order.returnLoss.loss;
+      }
+      continue;
+    }
     bucket.orderCount += 1;
     bucket.revenue += order.total;
     bucket.profit += order.profit ?? 0;
@@ -1055,6 +1083,26 @@ export default function OrdersPage() {
               <p className="text-xs text-muted-foreground mt-0.5">
                 Ciro platformun bildirdiği tutar — iade edilen ürün düşülmedi.
               </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      {(summary?.quality?.returnLossOrders ?? 0) > 0 && (
+        <Card className="border-red-500/30 bg-red-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+          <CardContent className="py-3 flex items-start gap-3">
+            <TrendingDown className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium text-red-400">
+                {summary?.quality?.returnLossOrders} iade siparişin kargo zararı:{" "}
+                <span className="tabular-nums">
+                  −
+                  <AnimatedNumber
+                    value={summary?.quality?.returnLossTotal ?? 0}
+                    format={(n) => fmtMoney2(n, "TRY")}
+                  />
+                </span>
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">Net kâra dahil edildi.</p>
             </div>
           </CardContent>
         </Card>
@@ -2275,9 +2323,19 @@ const OrderRow = memo(function OrderRow({
               {fmtMoney2(order.total, order.currency)}
             </span>
             {isCancelled ? (
-              <span className="text-[10px] font-medium text-muted-foreground">
-                Toplama girmiyor
-              </span>
+              order.returnLoss && isTryOrder ? (
+                // Kargolanıp geri gelen sipariş: ciro yok ama iki yön kargo kârdan düşüldü.
+                <span
+                  className="flex items-center gap-0.5 text-[11px] font-semibold tabular-nums text-red-400 animate-in fade-in slide-in-from-right-1 duration-300"
+                  title="İade zararı · kârdan düşüldü"
+                >
+                  <TrendingDown className="h-3 w-3" />−{fmtMoney2(order.returnLoss.loss, orderCurrency)}
+                </span>
+              ) : (
+                <span className="text-[10px] font-medium text-muted-foreground">
+                  Toplama girmiyor
+                </span>
+              )
             ) : order.statusUnknown ? (
               // Durumu tanımadığımız sipariş toplamların dışında — satırda da görünsün ki
               // ekrandaki iki rakam neden tutmuyor belli olsun.
@@ -2526,7 +2584,7 @@ const OrderRow = memo(function OrderRow({
                 </div>
                 {/* Komisyon: pazaryeri GERÇEK tutarı bildirdiyse o gösterilir ve tahminden
                     farkı belirtilir. Rakama dokunulmaz — yalnız görünür kılınır. */}
-                {isTryOrder && commission != null && (
+                {isTryOrder && commission != null && !(isCancelled && order.returnLoss) && (
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-muted-foreground">
                       Komisyon
@@ -2573,8 +2631,18 @@ const OrderRow = memo(function OrderRow({
                   </div>
                 )}
                 <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Net kâr</span>
-                  {isCancelled ? (
+                  <span className="text-muted-foreground">
+                    {isCancelled && order.returnLoss && isTryOrder ? "İade zararı" : "Net kâr"}
+                  </span>
+                  {isCancelled && order.returnLoss && isTryOrder ? (
+                    <span className="tabular-nums font-semibold text-red-400">
+                      −
+                      <AnimatedNumber
+                        value={order.returnLoss.loss}
+                        format={(n) => fmtMoney2(n, orderCurrency)}
+                      />
+                    </span>
+                  ) : isCancelled ? (
                     <span className="text-muted-foreground">
                       — {order.statusLabel.toLocaleLowerCase("tr-TR")}, toplama girmiyor
                     </span>
@@ -2594,6 +2662,39 @@ const OrderRow = memo(function OrderRow({
                     <span className="text-muted-foreground">— maliyet girilmemiş</span>
                   )}
                 </div>
+                {/* İADE ZARARI — satış ve komisyon geri verildi; kargo iki yön ve hizmet bedeli kaldı. */}
+                {isCancelled && order.returnLoss && isTryOrder && (
+                  <div className="space-y-1 animate-in fade-in slide-in-from-top-1 duration-300">
+                    {[
+                      { ad: "Gidiş kargosu", tutar: order.returnLoss.outboundCargo, gercek: order.returnLoss.outboundActual },
+                      { ad: "Dönüş kargosu", tutar: order.returnLoss.returnCargo, gercek: order.returnLoss.returnActual },
+                      { ad: "Hizmet bedeli", tutar: order.returnLoss.serviceFee, gercek: order.returnLoss.serviceFeeActual },
+                    ]
+                      .filter((k) => k.tutar > 0)
+                      .map((k) => (
+                        <div key={k.ad} className="flex items-center justify-between text-[10px]">
+                          <span className="text-muted-foreground">
+                            {k.ad}
+                            {k.gercek ? (
+                              <GercekRozeti />
+                            ) : (
+                              <span className="ml-1 text-muted-foreground/60">tahmini</span>
+                            )}
+                          </span>
+                          <span className="tabular-nums text-muted-foreground">−{fmtMoney2(k.tutar, orderCurrency)}</span>
+                        </div>
+                      ))}
+                    {order.returnLoss.inputVatCredit > 0 && (
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-muted-foreground">KDV indirimi</span>
+                        <span className="tabular-nums text-muted-foreground">
+                          +{fmtMoney2(order.returnLoss.inputVatCredit, orderCurrency)}
+                        </span>
+                      </div>
+                    )}
+                    <p className="text-[10px] text-muted-foreground/70">Satış tutarı ve komisyon iade edildi.</p>
+                  </div>
+                )}
                 {/* MALİYET KALEMLERİ — "neye ne kadar gidiyor" tek bakışta görünsün.
                     Kargo eskiden hiçbir yerde yazmıyordu; düşülüp düşülmediği anlaşılmıyordu. */}
                 {!isCancelled && (order.productAndPackagingCost ?? 0) > 0 && (
@@ -2610,9 +2711,11 @@ const OrderRow = memo(function OrderRow({
                       Kargo
                       {order.actualCargo ? (
                         <GercekRozeti />
+                      ) : order.desiEstimated ? (
+                        <span className="ml-1 text-amber-400/80">tahmini desi</span>
                       ) : (
-                        order.desiEstimated && (
-                          <span className="ml-1 text-amber-400/80">tahmini desi</span>
+                        order.cargoLabel && (
+                          <span className="ml-1 text-muted-foreground/60">{order.cargoLabel}</span>
                         )
                       )}
                     </span>

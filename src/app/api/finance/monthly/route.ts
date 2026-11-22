@@ -93,6 +93,9 @@ type SnapshotRow = {
   currency: string;
   outputVatKurus: number | null;
   inputVatCreditKurus: number | null;
+  /** İade edilen siparişin zararı (net kuruş) ve içindeki KDV — kârdan düşülür. */
+  returnLossKurus: number | null;
+  returnLossVatKurus: number | null;
   calculationVersion: number;
 };
 
@@ -100,7 +103,8 @@ type SnapshotRow = {
 async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
   const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
     `SELECT "platform","externalOrderId","orderedAt","revenueKurus","profitKurus","profitPartial",
-            "statusKind","currency","outputVatKurus","inputVatCreditKurus","calculationVersion"
+            "statusKind","currency","outputVatKurus","inputVatCreditKurus","calculationVersion",
+            "returnLossKurus","returnLossVatKurus"
        FROM "OrderFinanceSnapshot"
       WHERE "platform" <> 'manual'
         AND ${dbEpochMs("orderedAt")} >= ?`,
@@ -122,6 +126,8 @@ async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
       currency: String(row.currency ?? "TRY"),
       outputVatKurus: toNullableInt(row.outputVatKurus),
       inputVatCreditKurus: toNullableInt(row.inputVatCreditKurus),
+      returnLossKurus: toNullableInt(row.returnLossKurus),
+      returnLossVatKurus: toNullableInt(row.returnLossVatKurus),
       calculationVersion: toInt(row.calculationVersion),
     });
   }

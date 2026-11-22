@@ -243,3 +243,40 @@ describe("gerçek kargonun kayıtlı kâra FARK olarak işlenmesi", () => {
     expect(sonuc[0].inputVatCreditKurus).toBeNull();
   });
 });
+
+describe("Trendyol iade kargo faturası kalemleri", () => {
+  it("yalnız 'İade Kargo Bedeli' kalemleri sipariş no başına toplanır", async () => {
+    const { iadeKargoKalemleriniTopla, kargoKalemleriniTopla } = await import("./trendyol-finance");
+    const kalemler = [
+      { orderNumber: "11826876568", shipmentPackageType: "Gönderi Kargo Bedeli", amount: 98.34 },
+      { orderNumber: "11826876568", shipmentPackageType: "İade Kargo Bedeli", amount: 98.34 },
+      { orderNumber: "2", shipmentPackageType: "Gönderi Kargo Bedeli", amount: 94.49 },
+    ];
+    expect([...iadeKargoKalemleriniTopla(kalemler)]).toEqual([["11826876568", 98.34]]);
+    expect(kargoKalemleriniTopla(kalemler).get("11826876568")).toBe(98.34);
+  });
+
+  it("iade kargosu sipariş numarasıyla, tek kaydı olan siparişe yazılır", async () => {
+    const { iadeKargoYazmaIfadeleri } = await import("./trendyol-finance");
+    const [ifade] = iadeKargoYazmaIfadeleri(new Map([["11826876568", 98.34]]));
+    expect(ifade.sql).toContain('"returnCargoKurus" = ?');
+    expect(ifade.sql).toContain("COUNT(*)");
+    expect(ifade.args).toEqual([9834, "11826876568", 9834, "11826876568"]);
+  });
+});
+
+describe("Trendyol ilan terminleri", () => {
+  it("yalnız değişen ilan yazılır; bilinmeyen termin kayıtlıyı silmez", async () => {
+    const { tyIlanTerminIfadeleri } = await import("./trendyol-finance");
+    const ifadeler = tyIlanTerminIfadeleri(
+      [
+        { id: "l1", externalId: "V1", barcode: "B1", dispatchDays: 2 },
+        { id: "l2", externalId: "V2", barcode: "B2", dispatchDays: 1 },
+        { id: "l3", externalId: null, barcode: "B3", dispatchDays: null },
+        { id: "l4", externalId: "V4", barcode: "B4", dispatchDays: 2 },
+      ],
+      { byId: new Map([["V1", 1], ["V2", 1]]), byBarcode: new Map([["B3", 2]]) }
+    );
+    expect(ifadeler.map((i) => i.args)).toEqual([[1, "l1"], [2, "l3"]]);
+  });
+});

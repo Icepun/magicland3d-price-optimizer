@@ -92,6 +92,7 @@ export async function getRules(): Promise<Rules> {
     serviceFeeKurus?: number | null;
     paymentFeeKurus?: number | null;
     cargoKurus?: number | null;
+    returnCargoKurus?: number | null;
   };
   const tlYaDaNull = (kurus: number | null | undefined) =>
     kurus == null || !Number.isFinite(Number(kurus)) ? null : Number(kurus) / 100;
@@ -105,6 +106,8 @@ export async function getRules(): Promise<Rules> {
       actualOrderFee: hepsiburada ? tlYaDaNull(row.serviceFeeKurus) : null,
       actualPaymentFee: hepsiburada ? tlYaDaNull(row.paymentFeeKurus) : null,
       actualCargo: tlYaDaNull(row.cargoKurus),
+      // İade edilen siparişin gerçek dönüş kargosu (masaüstü şema v61; eski kayıtta yok → null).
+      actualReturnCargo: tlYaDaNull(row.returnCargoKurus),
     };
     financialByExternalId.set(String(row.externalOrderId), entry);
     // Sipariş numarasıyla yedek eşleşme yalnız Trendyol içindir.

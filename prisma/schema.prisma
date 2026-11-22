@@ -399,6 +399,12 @@ model OrderFinanceSnapshot {
   actualFeesKurus          Int?
   // Kâra giren kargo (brüt, kuruş) — sonradan gelen gerçek kargonun yalnız FARKI işlenebilsin diye.
   cargoKurus               Int?
+  // İade edilen (kargolanıp geri gelen) siparişin zararı — net kuruş (pozitif) ve içindeki KDV.
+  // statusKind 'cancelled' kalır (ciroya girmez); raporlar bu zararı kârdan düşer.
+  returnLossKurus          Int?
+  returnLossVatKurus       Int?
+  // Kargo tarifesinin fiyat seçtiği bilgiler (JSON: firma, hızlı teslimat, süre, barem tutarı).
+  cargoContext             String?
 
   @@unique([platform, externalOrderId])
   @@index([orderedAt])
@@ -500,6 +506,8 @@ model PlatformOrderFinancial {
   cargoKurus            Int?
   stoppageKurus         Int?
   platformDiscountKurus Int?
+  // İade edilen siparişin gerçek dönüş kargosu (kuruş); null = kayıt yok.
+  returnCargoKurus      Int?
 
   @@unique([platform, externalOrderId])
   @@index([platform, orderNumber])

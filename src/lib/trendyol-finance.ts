@@ -316,6 +316,12 @@ export async function syncTrendyolActualCommissions(
   } catch (hata) {
     console.warn("[trendyol-finance] gerçek kargo kayıtlı kâra işlenemedi:", hata instanceof Error ? hata.message : hata);
   }
+  // İlan terminleri (satış öncesi kargo tahmini için). Hatası diğer adımları geri almaz.
+  try {
+    await tyIlanTerminleriniGuncelle(client);
+  } catch (hata) {
+    console.warn("[trendyol-finance] ilan terminleri güncellenemedi:", hata instanceof Error ? hata.message : hata);
+  }
 
   return {
     fetchedTransactions: unique.length,
@@ -345,12 +351,88 @@ export function kargoKalemleriniTopla(kalemler: Array<Record<string, unknown>>):
   return toplam;
 }
 
-/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu. */
+export interface TyIlanSatiri {
+  id: string;
+  externalId: string | null;
+  barcode: string | null;
+  dispatchDays: number | null;
+}
+
+/**
+ * SAF: Trendyol ilanlarının termini (kargoya veriliş süresi, gün) için yalnız DEĞİŞEN satırların
+ * güncellemeleri. Termin bilinmiyorsa kayıtlı değer korunur. `updatedAt`'e dokunulmaz.
+ * Ürünler ekranındaki satış öncesi kargo bununla seçilir (termin 1 gün → hızlı teslimat fiyatı).
+ */
+export function tyIlanTerminIfadeleri(
+  ilanlar: TyIlanSatiri[],
+  terminler: { byId: ReadonlyMap<string, number>; byBarcode: ReadonlyMap<string, number> }
+): Array<{ sql: string; args: unknown[] }> {
+  const ifadeler: Array<{ sql: string; args: unknown[] }> = [];
+  for (const ilan of ilanlar) {
+    const termin =
+      (ilan.externalId ? terminler.byId.get(ilan.externalId) : undefined) ??
+      (ilan.barcode ? terminler.byBarcode.get(ilan.barcode) : undefined);
+    if (termin == null || termin === ilan.dispatchDays) continue;
+    ifadeler.push({ sql: `UPDATE "Listing" SET "dispatchDays" = ? WHERE "id" = ?`, args: [termin, ilan.id] });
+  }
+  return ifadeler;
+}
+
+/** Onaylı ürünlerin terminleri → Listing.dispatchDays (Trendyol). Yazılan satır sayısını döner. */
+async function tyIlanTerminleriniGuncelle(client: TrendyolClient): Promise<number> {
+  const byId = new Map<string, number>();
+  const byBarcode = new Map<string, number>();
+  for (let sayfa = 0; sayfa < 50; sayfa++) {
+    const y = await client.listApprovedProducts({ page: sayfa, size: 100 });
+    for (const u of y.content ?? []) {
+      const gun = Number(u.deliveryDuration);
+      if (u.deliveryDuration == null || !Number.isFinite(gun) || gun < 0) continue;
+      if (u.id) byId.set(String(u.id), Math.round(gun));
+      if (u.barcode) byBarcode.set(String(u.barcode).trim(), Math.round(gun));
+    }
+    if ((y.content ?? []).length === 0 || (y.totalPages != null && sayfa >= y.totalPages - 1)) break;
+  }
+  if (byId.size === 0 && byBarcode.size === 0) return 0;
+  const satirlar = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT "id", "externalId", "barcode", "dispatchDays" FROM "Listing" WHERE "platform" = 'trendyol'`
+  );
+  const ifadeler = tyIlanTerminIfadeleri(
+    satirlar.map((s) => ({
+      id: String(s.id),
+      externalId: s.externalId == null ? null : String(s.externalId),
+      barcode: s.barcode == null ? null : String(s.barcode).trim(),
+      dispatchDays: s.dispatchDays == null ? null : Number(s.dispatchDays),
+    })),
+    { byId, byBarcode }
+  );
+  if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
+    for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
+  }
+  return ifadeler.length;
+}
+
+/**
+ * SAF: kargo faturası kalemlerinden sipariş no → İADE (dönüş) kargosu toplamı (TL).
+ * Ölçüldü: iade edilen siparişte "İade Kargo Bedeli" ayrı kalem olarak geliyor (desi listesinden).
+ */
+export function iadeKargoKalemleriniTopla(kalemler: Array<Record<string, unknown>>): Map<string, number> {
+  const toplam = new Map<string, number>();
+  for (const k of kalemler) {
+    const no = cleanId(k.orderNumber);
+    const tutar = finiteNumber(k.amount);
+    const tur = String(k.shipmentPackageType ?? "");
+    if (!no || tutar == null || tutar <= 0 || !/İade|Iade/i.test(tur)) continue;
+    toplam.set(no, Math.round(((toplam.get(no) ?? 0) + tutar) * 100) / 100);
+  }
+  return toplam;
+}
+
+/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu (+ `iade` haritası). */
 async function kargoFaturaKalemleri(
   client: TrendyolClient,
   startDate: number,
   endDate: number
-): Promise<Map<string, number>> {
+): Promise<Map<string, number> & { iade: Map<string, number> }> {
   const faturalar: string[] = [];
   for (let bas = startDate; bas <= endDate; bas += MAX_WINDOW_MS) {
     const bit = Math.min(endDate, bas + MAX_WINDOW_MS - 1);
@@ -369,7 +451,7 @@ async function kargoFaturaKalemleri(
       if (c.length < 500) break;
     }
   }
-  return kargoKalemleriniTopla(kalemler);
+  return Object.assign(kargoKalemleriniTopla(kalemler), { iade: iadeKargoKalemleriniTopla(kalemler) });
 }
 
 /**
@@ -395,11 +477,26 @@ export function kargoYazmaIfadeleri(
   return ifadeler;
 }
 
+/**
+ * İade kargosunu siparişin kaydına yazar. İade faturası satıştan haftalarca sonra geldiği için
+ * bu turun satış penceresine bakılmaz: kayıt sipariş NUMARASIYLA bulunur — numaranın tek paketi
+ * (tek kaydı) varsa. Değer aynıysa yazılmaz.
+ */
+export function iadeKargoYazmaIfadeleri(iade: ReadonlyMap<string, number>): Array<{ sql: string; args: unknown[] }> {
+  return [...iade].map(([no, tutar]) => ({
+    sql: `UPDATE "PlatformOrderFinancial" SET "returnCargoKurus" = ?
+           WHERE "platform" = 'trendyol' AND "orderNumber" = ? AND "returnCargoKurus" IS NOT ?
+             AND (SELECT COUNT(*) FROM "PlatformOrderFinancial" p
+                   WHERE p."platform" = 'trendyol' AND p."orderNumber" = ?) = 1`,
+    args: [tlToKurus(tutar), no, tlToKurus(tutar), no],
+  }));
+}
+
 async function kargoKayitlariniYaz(
   aggregates: TrendyolCommissionAggregate[],
-  kargo: ReadonlyMap<string, number>
+  kargo: ReadonlyMap<string, number> & { iade?: ReadonlyMap<string, number> }
 ): Promise<number> {
-  const ifadeler = kargoYazmaIfadeleri(aggregates, kargo);
+  const ifadeler = [...kargoYazmaIfadeleri(aggregates, kargo), ...iadeKargoYazmaIfadeleri(kargo.iade ?? new Map())];
   if (ifadeler.length > 0 && !(await batchWrite(ifadeler))) {
     for (const ifade of ifadeler) await prisma.$executeRawUnsafe(ifade.sql, ...(ifade.args as never[]));
   }

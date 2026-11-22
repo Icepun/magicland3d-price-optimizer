@@ -37,6 +37,13 @@ const LINE = 101.46175;             // paketleme KDV iadesi dahil satır kârı 
 const FIX_NET = 13.19 * (5 / 6);    // 10,9917 — sabit giderin KDV sonrası net etkisi
 const CARGO_NET = 34.16 * (5 / 6);  // 28,4667
 
+/**
+ * Bu dosya kapsam kurallarını KARGO KURALI tablosuyla sınar. Trendyol tarifesi (core/kargo-tarife)
+ * 31 Tem 2026'dan itibaren kuralın yerine geçtiği için siparişler o tarihten önceye konur;
+ * tarifeli hesap `order-profit-tarife.test.ts`'te.
+ */
+const KURAL_DONEMI = new Date("2026-07-01T10:00:00Z");
+
 function run(lines: OrderProfitLine[], opts: { cargo?: CargoRuleInput[]; expense?: ExpenseRuleInput[]; total?: number } = {}) {
   return computeOrderProfit({
     platform: "trendyol",
@@ -46,6 +53,7 @@ function run(lines: OrderProfitLine[], opts: { cargo?: CargoRuleInput[]; expense
     cargoRules: opts.cargo ?? [],
     expenseRules: opts.expense ?? FIXED_13_19,
     settings: SETTINGS,
+    orderedAt: KURAL_DONEMI,
   });
 }
 

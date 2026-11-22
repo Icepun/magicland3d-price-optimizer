@@ -149,7 +149,8 @@ function cargoRuleMissingFor(
   listing: Pick<Listing, "cargoCost"> | null,
   result: SimulationResult | null
 ): boolean {
-  if (!result || result.appliedCargoRule) return false;
+  // Kargo pazaryeri tarifesinden geldiyse (Trendyol / Hepsiburada) eksik değildir.
+  if (!result || result.appliedCargoRule || result.cargoDetail) return false;
   if (listing?.cargoCost != null) return false;
   return !belowShopifyMinBasket(platform, result.effectiveSalePrice);
 }

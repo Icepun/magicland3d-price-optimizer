@@ -9,6 +9,7 @@ import {
 } from "@core/hb-siparis";
 import { anahtarListesi } from "@core/order-match";
 import { hbKalemHesabi } from "@core/hb-kesinti";
+import { hepsiburadaKargoBaglami } from "@core/siparis-kargo";
 
 import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
@@ -96,6 +97,7 @@ function hbLineRaw(li: Record<string, unknown>): OrderItem {
     paymentFee: h.paymentFee,
     stoppage: h.stoppage,
     dispatchDays: h.dispatchDays,
+    paidUnitPrice: h.paidUnitPrice,
   };
 }
 
@@ -307,6 +309,8 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
       trackingNumber: e.teslimatNo ?? null,
       cargoProvider: e.kargoFirmasi ?? null,
       packageNumber: e.paketNo ?? null,
+      // Kargo baremi: en uzun kargoya verme süresi + müşterinin ödediği tutar (masaüstüyle aynı).
+      kargo: hepsiburadaKargoBaglami(lines, e.kargoFirmasi ?? null),
     });
   }
   return orders;

@@ -25,6 +25,8 @@ export interface HbKalem {
   paymentFee?: number | null;
   stoppage?: number | null;
   dispatchDays?: number | null;
+  /** Müşterinin ödediği birim fiyat — kargo bareminin tutarı. */
+  paidUnitPrice?: number | null;
 }
 
 export interface HbDetayKaydi {
@@ -40,8 +42,10 @@ export interface HbDetayKaydi {
  * ayrışırdı. Dosya bir kez yeniden indirilir.
  * 3: birim fiyat artık satıcının geliri (HB indirimi dahil), oran KDV dahil; kaleme satış KDV'si,
  * tahsilat, stopaj ve kargoya verme süresi eklendi. Eski kayıtlar eski anlamı taşır → okunmaz.
+ * 4: kaleme müşterinin ödediği birim fiyat eklendi (kargo baremi bu tutara bakıyor). Eski kayıtta
+ * yoktu; okunsaydı indirimli siparişte telefon masaüstünden farklı kargo bandı seçebilirdi.
  */
-export const HB_DETAY_BICIMI = 3;
+export const HB_DETAY_BICIMI = 4;
 
 const metinDizisi = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
@@ -58,7 +62,7 @@ function kalemMi(v: unknown): v is HbKalem {
     (k.barcodes === undefined || metinDizisi(k.barcodes)) &&
     (k.externalIds === undefined || metinDizisi(k.externalIds)) &&
     (k.skus === undefined || metinDizisi(k.skus)) &&
-    [k.commissionRate, k.saleVatRate, k.paymentFee, k.stoppage, k.dispatchDays].every(
+    [k.commissionRate, k.saleVatRate, k.paymentFee, k.stoppage, k.dispatchDays, k.paidUnitPrice].every(
       (alan) => alan === undefined || alan === null || (typeof alan === "number" && Number.isFinite(alan))
     )
   );

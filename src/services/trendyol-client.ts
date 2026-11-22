@@ -31,6 +31,8 @@ export interface TrendyolProduct {
   images?: Array<{ url?: string }>;
   /** Trendyol'un bildirdiği komisyon oranı (v2). Biçimi yüzde (örn. 21.0) — kesire ÇEVRİLİR. */
   commission?: number;
+  /** Termin — kargoya veriliş süresi (gün). Kargo tarifesinin avantajlı/standart seçimine girer. */
+  deliveryDuration?: number;
 }
 
 /**
@@ -57,6 +59,8 @@ interface TrendyolV2Variant {
   commission?: number;
   price?: { salePrice?: number; listPrice?: number; priceSeenByCustomer?: number };
   stock?: { quantity?: number };
+  /** Termin (kargoya veriliş süresi, gün): 0 = bugün kargoda, 1 = en geç yarın. */
+  deliveryOptions?: { deliveryDuration?: number; fastDeliveryType?: string };
 }
 
 export interface TrendyolV2Content {
@@ -112,6 +116,7 @@ function duzlestirOnayli(c: TrendyolV2Content): TrendyolProduct[] {
       listPrice: v.price?.listPrice ?? (v as { listPrice?: number }).listPrice,
       quantity: v.stock?.quantity ?? (v as { quantity?: number }).quantity,
       commission: v.commission,
+      deliveryDuration: v.deliveryOptions?.deliveryDuration,
       onSale: v.onSale,
       archived: v.archived,
       blacklisted: v.blacklisted,

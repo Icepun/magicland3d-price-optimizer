@@ -9,9 +9,8 @@ vi.mock("@/lib/prisma", () => ({ prisma: {} }));
 vi.mock("@/lib/runtime-schema", () => ({ ensureRuntimeSchema: vi.fn(async () => {}) }));
 vi.mock("@/services/hepsiburada-settings", () => ({ getHepsiburadaCredentials: vi.fn() }));
 
-const { hbKayitlariniTopla, hbGercekYazmaIfadeleri, sonHizmetBedeli, hbFinansKimligi } = await import(
-  "./hepsiburada-finance"
-);
+const { hbKayitlariniTopla, hbGercekYazmaIfadeleri, hbIadeYazmaIfadeleri, sonHizmetBedeli, hbFinansKimligi } =
+  await import("./hepsiburada-finance");
 const { hbHizmetBedeli, hbKalemHesabi } = await import("@/core/hb-kesinti");
 const { resolveOrderProfit } = await import("@/core/order-profit");
 
@@ -161,7 +160,9 @@ describe("gerçek kesintiler kâra uygulanır", () => {
           ],
           expenseRules: [],
           settings: { vatRate: "20" },
-          orderedAt: new Date("2026-11-19T10:00:00Z"),
+          // Kargo TAHMİNİ bu testte kural tablosundan (94,20) — Hepsiburada tarifesi (24 Ağu 2026)
+          // öncesine konur; tarifeli tahmin `order-profit-tarife.test.ts`'te.
+          orderedAt: new Date("2026-08-10T10:00:00Z"),
           orderFee: hbHizmetBedeli([h]),
         },
         {
@@ -223,6 +224,8 @@ describe("gerçek kesintiler kâra uygulanır", () => {
       platform: "trendyol", orderTotal: 199.99,
       lines: [{ unitPrice: 199.99, quantity: 1, product: { id: "p", name: "Ü", categoryName: "G", desi: 1, commissionRate: 0.2, productionCost: 10, packagingCost: 0, packagingComponents: null, filamentCost: 0, productionCostKnown: true, listing: null } }],
       commissionRules: [], cargoRules: [], expenseRules: [], settings: { vatRate: "20" },
+      // Kargo tarifesi öncesi (kargosuz) — burada yalnız komisyonun değiştiği sınanıyor.
+      orderedAt: new Date("2026-07-10T10:00:00Z"),
     };
     const r = resolveOrderProfit(girdi, { financial: { actualCommission: 30, settlementRevenue: 199.99 } });
     expect(r.actualOrderFee).toBeNull();
@@ -272,5 +275,48 @@ describe("ilan bilgileri (kargoya verme süresi + KDV oranı)", () => {
       [3, null, "l4"],
     ]);
     expect(ifadeler[0].sql).not.toContain("updatedAt");
+  });
+});
+
+describe("iade edilen siparişin gerçek kargo kayıtları", () => {
+  it("tam iadede gidiş = ilk kargo kaydı, dönüş = sonrakiler; hizmet bedeli kalır", () => {
+    const { aggregates, returns } = hbKayitlariniTopla([
+      kayit("IADE1", "Payment", 339.99),
+      kayit("IADE1", "Commission", -40.8),
+      kayit("IADE1", "ProcessingFeeExpense", -13.19),
+      kayit("IADE1", "ShipmentCostSharingExpense", -98.39, { invoiceDate: "2026-11-14T00:00:00" }),
+      kayit("IADE1", "Return", -339.99),
+      kayit("IADE1", "CommissionInvoiceRefund", 40.8),
+      kayit("IADE1", "ShipmentCostSharingExpense", -98.38, { invoiceDate: "2026-11-21T00:00:00" }),
+    ]);
+    expect(aggregates.find((a) => a.orderNumber === "IADE1")).toBeUndefined();
+    expect(returns).toEqual([
+      expect.objectContaining({ orderNumber: "IADE1", outboundCargo: 98.39, returnCargo: 98.38, serviceFee: 13.19 }),
+    ]);
+  });
+
+  it("dönüş kaydı henüz yoksa returnCargo null; kısmi iade atlanır", () => {
+    const { returns } = hbKayitlariniTopla([
+      kayit("IADE2", "Payment", 199.99),
+      kayit("IADE2", "ShipmentCostSharingExpense", -52.79),
+      kayit("IADE2", "Return", -199.99),
+      kayit("KISMI", "Payment", 1399.98),
+      kayit("KISMI", "ShipmentCostSharingExpense", -129.59),
+      kayit("KISMI", "Return", -699.99),
+    ]);
+    expect(returns.map((r) => [r.orderNumber, r.returnCargo])).toEqual([["IADE2", null]]);
+  });
+
+  it("değişmeyen iade kaydı yeniden yazılmaz; değişen yalnız kargo/hizmet alanlarını günceller", () => {
+    const iade = {
+      orderNumber: "IADE3", outboundCargo: 52.79, returnCargo: 52.79, serviceFee: 0,
+      grossRevenue: 199.99, commission: 0, sellerRevenue: -105.58, transactionCount: 6, sourceUpdatedAt: null,
+    };
+    const ayni = new Map([[hbFinansKimligi("IADE3"), { cargoKurus: 5279, returnCargoKurus: 5279, serviceFeeKurus: 0 }]]);
+    expect(hbIadeYazmaIfadeleri([iade], ayni, new Date())).toHaveLength(0);
+    const yeni = hbIadeYazmaIfadeleri([iade], new Map(), new Date());
+    expect(yeni).toHaveLength(1);
+    expect(yeni[0].sql).toContain('"returnCargoKurus" = excluded."returnCargoKurus"');
+    expect(yeni[0].sql).not.toContain('"commissionKurus" = excluded');
   });
 });
