@@ -7,6 +7,7 @@ import {
 import { vatRateOf } from "./vat";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "./product-commission";
 import { applyActualCommissionToProfit } from "./platform-financials";
+import { gecerliSiparisOrani } from "./order-commission";
 import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "./types";
 import type {
@@ -61,6 +62,13 @@ export interface OrderProfitLine {
   quantity: number;
   /** null = ürün eşleşmedi / maliyeti girilmemiş → kâra girmez. */
   product: OrderProfitProduct | null;
+  /**
+   * SİPARİŞTE KESİLEN komisyon oranı — KESİR (0.132). Pazaryeri siparişin kendisinde bildirir
+   * (`core/order-commission.ts`). Varsa ilana elle girilen oranın, ürün oranının ve kategori
+   * kurallarının ÖNÜNE geçer: kampanya günü ya da tarife değişikliği o siparişe aynen yansır.
+   * null/undefined/geçersiz → eski sıra (ilan → ürün → kural) aynen çalışır.
+   */
+  orderCommissionRate?: number | null;
 }
 
 export interface OrderProfitInput {
@@ -109,6 +117,11 @@ export interface OrderProfitResult {
   productAndPackagingCost: number;
   /** Kural/listing üzerinden siparişe düşülen brüt komisyon. */
   estimatedCommission: number;
+  /**
+   * Komisyonu SİPARİŞTE KESİLEN orandan hesaplanan (kâra giren) satır sayısı.
+   * `matchedLines` ile eşitse siparişin komisyonu tamamen pazaryerinin bildirdiği orandandır.
+   */
+  orderRateLines: number;
   /** true = bazı satırlar kâra girmedi (kısmi hesap). */
   partial: boolean;
   /**
@@ -170,6 +183,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let matchedRevenueGross = 0;
   let commissionRateRevenue = 0;
   let estimatedCommission = 0;
+  let orderRateLines = 0;
   let missingDesiLines = 0;
   let missingDesiQty = 0;
   let totalDesi = 0;
@@ -241,7 +255,14 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
         });
       }
     }
-    const commissionOverride = resolveListingCommissionOverride(lst, settings);
+    // KOMİSYON ÖNCELİĞİ: siparişte kesilen oran > ilana elle girilen > ürün oranı > kategori kuralı.
+    // Siparişin kendi oranı o satışta GERÇEKTEN uygulanan orandır; diğerleri satış öncesi tahmindir.
+    const siparisOrani = gecerliSiparisOrani(line.orderCommissionRate);
+    const commissionOverride =
+      siparisOrani != null
+        ? { commissionRateOverride: siparisOrani }
+        : resolveListingCommissionOverride(lst, settings);
+    if (siparisOrani != null) orderRateLines++;
     const sim = simulatePrice({
       salePrice: unitPrice,
       productCost: p.productionCost,
@@ -289,6 +310,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       cargoCost: 0,
       productAndPackagingCost: 0,
       estimatedCommission: 0,
+      orderRateLines: 0,
       partial: false,
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
       cargoRuleMissing: false,
@@ -454,6 +476,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     cargoCost: cargo.gross,
     productAndPackagingCost: urunVePaketleme + sharedPackagingCost,
     estimatedCommission,
+    orderRateLines,
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
     // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.

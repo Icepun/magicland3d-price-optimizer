@@ -37,6 +37,23 @@ async function ensureSnapshotCommissionColumns(): Promise<void> {
 }
 
 /**
+ * `OrderItemSnapshot.commissionRate` — siparişte kesilen komisyon oranı (masaüstü şeması v56).
+ * Telefon masaüstünden ÖNCE güncellenirse kolon henüz yoktur ve kalem yazımı "no such column" ile
+ * tümden düşerdi. Tabloyu masaüstü kurar; tablo hiç yoksa burada bir şey yapılmaz.
+ */
+async function ensureItemCommissionColumn(): Promise<void> {
+  const columns = await query<{ name: string }>(`PRAGMA table_info("OrderItemSnapshot")`);
+  if (columns.length === 0 || columns.some((c) => c.name === "commissionRate")) return;
+  try {
+    await execute(`ALTER TABLE "OrderItemSnapshot" ADD COLUMN "commissionRate" REAL`);
+  } catch (error) {
+    // İki cihaz aynı anda güncellerse ikinci ALTER "duplicate column" dönebilir.
+    const refreshed = await query<{ name: string }>(`PRAGMA table_info("OrderItemSnapshot")`);
+    if (!refreshed.some((c) => c.name === "commissionRate")) throw error;
+  }
+}
+
+/**
  * Mobil uygulama masaüstü açılmadan önce güncellenebilir. Bu yüzden kargo KDV kolonunu
  * ilk kargo sorgusundan önce Turso'da da güvenle hazırlarız.
  */
@@ -123,6 +140,7 @@ export function ensureFinanceSchema(): Promise<void> {
       // olmadan) oluşturulmuşsa kolonları ayrıca ekle — yoksa snapshot yazımı "no such column"
       // ile patlar. Masaüstündeki runtime-schema ensureColumn'un mobil karşılığı.
       await ensureSnapshotCommissionColumns();
+      await ensureItemCommissionColumn();
       await execute(
         `CREATE INDEX IF NOT EXISTS "OrderFinanceSnapshot_orderedAt_idx"
            ON "OrderFinanceSnapshot"("orderedAt")`

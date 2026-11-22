@@ -28,6 +28,11 @@ export interface OrderItem {
   /** Platform ürün/varyant kimliği (Listing.externalId ile eşleşir). */
   externalIds?: string[];
   skus?: string[];
+  /**
+   * Siparişte kesilen komisyon oranı — KESİR (masaüstü RawLine ile birebir). Pazaryeri
+   * bildirmediyse (Shopify, eski önbellek kaydı) boş kalır → ilanın varsayılan oranına düşülür.
+   */
+  commissionRate?: number | null;
 }
 
 export interface UnifiedOrder {

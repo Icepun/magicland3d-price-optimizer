@@ -8,6 +8,7 @@ import {
   type HbTalepTuru,
 } from "@core/hb-siparis";
 import { anahtarListesi } from "@core/order-match";
+import { hbSiparisKomisyonOrani } from "@core/order-commission";
 
 import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
@@ -87,6 +88,8 @@ function hbLineRaw(li: Record<string, unknown>): OrderItem {
     barcodes: anahtarListesi(li.barcode),
     externalIds: anahtarListesi(li.hbSku, li.hepsiburadaSku),
     skus: anahtarListesi(li.merchantSku, li.sku, li.stockCode),
+    // Siparişte kesilen komisyon — masaüstü hbLineRaw ile AYNI çekirdek fonksiyonu.
+    commissionRate: hbSiparisKomisyonOrani(li, unit),
   };
 }
 

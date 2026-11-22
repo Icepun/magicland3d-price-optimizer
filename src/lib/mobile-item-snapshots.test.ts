@@ -73,3 +73,54 @@ describe("mobil kalem anlık görüntüsü", () => {
     expect(blok).toContain('s.platform !== "manual"');
   });
 });
+
+/**
+ * SİPARİŞTE KESİLEN KOMİSYON ORANI — telefon masaüstüyle AYNI oranı okumalı, hesaba katmalı ve
+ * kalıcı geçmişe yazmalı. Biri eksik kalırsa aynı sipariş iki cihazda farklı kâr gösterir
+ * (v0.19.131'de yaşanan hata sınıfı: çekirdek aynı, sarmalayıcı farklı).
+ */
+describe("siparişte kesilen komisyon oranı — telefon", () => {
+  const COALESCE =
+    '"commissionRate" = COALESCE(excluded."commissionRate", "OrderItemSnapshot"."commissionRate")';
+
+  it("kalem yazımı oranı taşır; boş gelen değer kayıtlı oranı EZMEZ (iki cihazda aynı ifade)", () => {
+    expect(MOBIL).toContain(COALESCE);
+    expect(MASAUSTU).toContain(COALESCE);
+    expect(MOBIL).toContain("gecerliSiparisOrani(item.commissionRate)");
+  });
+
+  it("Trendyol ve Hepsiburada satırı oranı ÇEKİRDEK çeviriciyle okur (masaüstüyle aynı fonksiyon)", () => {
+    const masaustuUc = oku("src/app/api/orders/route.ts");
+    for (const [kaynak, ifade] of [
+      [oku("mobile/src/lib/api/trendyol.ts"), "commissionRate: siparisKomisyonKesri(l.commission)"],
+      [oku("mobile/src/lib/api/hepsiburada.ts"), "commissionRate: hbSiparisKomisyonOrani(li, unit)"],
+      [masaustuUc, "commissionRate: siparisKomisyonKesri(l.commission)"],
+      [masaustuUc, "commissionRate: hbSiparisKomisyonOrani(li, unit)"],
+    ] as const) {
+      expect(kaynak).toContain(ifade);
+    }
+  });
+
+  it("kâr hesabı oranı çekirdeğe geçirir — özel maliyetli satır dahil iki yolda da", () => {
+    const sarmalayici = oku("mobile/src/lib/order-profit.ts");
+    expect(sarmalayici).toContain("const orderCommissionRate = line.commissionRate ?? null;");
+    expect(sarmalayici).toContain("product: ozelUrun, orderCommissionRate }");
+    expect(sarmalayici.match(/orderCommissionRate,\n/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
+    // Masaüstü de aynı alanı çekirdeğe geçiriyor.
+    expect(oku("src/app/api/orders/route.ts")).toContain("orderCommissionRate: l.commissionRate ?? null");
+  });
+
+  it("senkron girdisi oranı kaleme aktarır", () => {
+    expect(oku("mobile/src/lib/finance-sync.ts")).toContain("commissionRate: it.commissionRate ?? null");
+  });
+
+  it("telefon masaüstünden ÖNCE güncellenirse kolonu kendisi ekler (yazım 'no such column' ile düşmez)", () => {
+    const sema = oku("mobile/src/lib/db/schema.ts");
+    expect(sema).toContain('ALTER TABLE "OrderItemSnapshot" ADD COLUMN "commissionRate" REAL');
+    expect(sema).toContain("await ensureItemCommissionColumn();");
+  });
+
+  it("çekirdek kopyası telefonda da var", () => {
+    expect(oku("mobile/src/core/order-commission.ts")).toBe(oku("src/core/order-commission.ts"));
+  });
+});

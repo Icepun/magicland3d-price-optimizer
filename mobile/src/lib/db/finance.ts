@@ -1,6 +1,7 @@
 import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
+import { gecerliSiparisOrani } from "@core/order-commission";
 import { dbEpochMs } from "@core/sqlite-date";
 
 const ISTANBUL_TZ = "Europe/Istanbul";
@@ -35,6 +36,8 @@ export interface OrderItemSnapshotInput {
   productName: string;
   quantity: number;
   unitPrice: number;
+  /** Siparişte kesilen komisyon oranı (kesir). Boşsa kayıtlı değer korunur. */
+  commissionRate?: number | null;
 }
 
 export interface ActualExpense {
@@ -384,9 +387,11 @@ export async function syncOrderFinanceSnapshots(
       (snapshot.items ?? []).map((item, lineIndex) => ({
         sql: `INSERT INTO "OrderItemSnapshot" (
                 "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
-                "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt"
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt",
+                "commissionRate"
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
+                "commissionRate" = COALESCE(excluded."commissionRate", "OrderItemSnapshot"."commissionRate"),
                 "orderedAt" = excluded."orderedAt",
                 "productId" = excluded."productId",
                 "productName" = excluded."productName",
@@ -411,6 +416,7 @@ export async function syncOrderFinanceSnapshots(
           snapshot.statusKind,
           snapshot.currency ?? "TRY",
           now,
+          gecerliSiparisOrani(item.commissionRate),
         ],
       }))
     );

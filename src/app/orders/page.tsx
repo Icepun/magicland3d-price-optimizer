@@ -127,6 +127,10 @@ interface UnifiedOrder {
   estimatedCommission?: number;
   /** Pazaryerinin bildirdiği GERÇEK komisyon — yoksa null. Hesaba burada dokunulmaz, gösterilir. */
   actualCommission?: number | null;
+  /** Komisyon siparişte kesilen orandan hesaplandı (tahmin değil). */
+  commissionFromOrder?: boolean;
+  /** Siparişin satırlarında kesilen oranlar — kesir, tekrarsız. */
+  orderCommissionRates?: number[];
   unmatchedCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -2147,6 +2151,11 @@ const OrderRow = memo(function OrderRow({
   // Maliyeti eksik siparişte tahmin YALNIZ eşleşen satırları kapsıyor; sipariş toplamının
   // yanında tam komisyonmuş gibi durmasın diye "kısmi" olduğu yazılır.
   const commissionPartial = order.actualCommission == null && order.profitPartial === true;
+  // Siparişte kesilen oran(lar) — "%13,2" ya da "%13 · %21". Tek sipariş en çok birkaç farklı oran taşır.
+  const orderRateText = (order.orderCommissionRates ?? [])
+    .slice(0, 3)
+    .map((oran) => `%${(oran * 100).toLocaleString("tr-TR", { maximumFractionDigits: 2 })}`)
+    .join(" · ");
   const commissionGap =
     order.actualCommission != null &&
     Math.abs(order.actualCommission - (order.estimatedCommission ?? 0)) >= 0.01
@@ -2500,6 +2509,13 @@ const OrderRow = memo(function OrderRow({
                       {order.actualCommission != null ? (
                         <span className="ml-1 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-semibold text-emerald-400">
                           gerçek
+                        </span>
+                      ) : order.commissionFromOrder && !commissionPartial ? (
+                        <span
+                          className="ml-1 rounded bg-sky-500/15 px-1 py-px text-[9px] font-semibold text-sky-300 transition-colors"
+                          title="Pazaryerinin bu siparişte kestiği oran"
+                        >
+                          siparişte kesilen{orderRateText ? ` ${orderRateText}` : ""}
                         </span>
                       ) : (
                         <span className="ml-1 text-[10px] text-muted-foreground/70">

@@ -61,6 +61,11 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v56: Siparişte kesilen komisyon oranı — `OrderItemSnapshot.commissionRate` (KESİR). Trendyol
+//      sipariş satırında, Hepsiburada sipariş kaleminde o satışa uygulanan oranı bildiriyor;
+//      sipariş kârı artık ondan hesaplanıyor ve "yeniden hesapla" pazaryeri penceresi kapandıktan
+//      sonra da aynı oranı kullanabilsin diye kalemle birlikte saklanıyor. NULLABLE, varsayılansız
+//      → telefonun INSERT'ü kolonu saymasa da kırılmaz, eski kalemlerde değer uydurulmaz.
 // v55: Telefondan kargo etiketi — `LabelPrintRequest`. Telefon isteği yazar, etiket yazıcısı bağlı
 //      masaüstü koşullu güncellemeyle SAHİPLENİP basar (iki masaüstü açıkken çift baskı olmaz);
 //      masaüstünden basılanlar da buraya "done" yazılır → telefon "basıldı" işaretini görür.
@@ -107,7 +112,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "55";
+const CURRENT_SCHEMA_VERSION = "56";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1148,9 +1153,13 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
         "lineRevenueKurus" INTEGER NOT NULL,
         "statusKind" TEXT NOT NULL,
         "currency" TEXT NOT NULL DEFAULT 'TRY',
-        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        "syncedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "commissionRate" REAL
       )
     `);
+    // v56: siparişte kesilen komisyon oranı (kesir). Nullable, varsayılansız — eski kalemlerde
+    // değer YOKTUR ve uydurulmaz (o satırlar ilanın varsayılan oranıyla hesaplanmaya devam eder).
+    await ensureColumn("OrderItemSnapshot", "commissionRate", "REAL");
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "OrderItemSnapshot_platform_externalOrderId_lineIndex_key"
        ON "OrderItemSnapshot"("platform", "externalOrderId", "lineIndex")`

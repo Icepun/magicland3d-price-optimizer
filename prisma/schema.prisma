@@ -458,6 +458,8 @@ model OrderItemSnapshot {
   statusKind       String
   currency         String   @default("TRY")
   syncedAt         DateTime
+  // Siparişte kesilen komisyon oranı (KESİR, 0.132). null = pazaryeri bildirmedi / eski kalem.
+  commissionRate   Float?
 
   @@unique([platform, externalOrderId, lineIndex])
   @@index([orderedAt])

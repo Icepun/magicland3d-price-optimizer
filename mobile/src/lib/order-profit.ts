@@ -179,7 +179,11 @@ export function computeOrderProfit(
           fiyatlar
         )
       : null;
-    if (ozelUrun) return { unitPrice: line.unitPrice, quantity: line.quantity, product: ozelUrun };
+    // Siparişte kesilen oran varsa komisyon ondan hesaplanır (öncelik çekirdekte — masaüstüyle aynı).
+    const orderCommissionRate = line.commissionRate ?? null;
+    if (ozelUrun) {
+      return { unitPrice: line.unitPrice, quantity: line.quantity, product: ozelUrun, orderCommissionRate };
+    }
     const resolved = p
       ? resolveProductCost(
           p.cost ? { ...p.cost, tapeUsed: !!p.cost.tapeUsed } : null,
@@ -191,6 +195,7 @@ export function computeOrderProfit(
     return {
       unitPrice: line.unitPrice,
       quantity: line.quantity,
+      orderCommissionRate,
       product:
         p && resolved
           ? {

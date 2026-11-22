@@ -495,3 +495,80 @@ describe("yanıt damgası", () => {
     expect(Number.isFinite(new Date(body.computedAt).getTime())).toBe(true);
   });
 });
+
+/**
+ * SİPARİŞTE KESİLEN KOMİSYON — uçtan uca: Trendyol satırındaki oran sipariş kârına, yanıta ve
+ * kalıcı kalem geçmişine ulaşmalı. İlana elle girilen oran (ürün eklenirken girilen varsayılan)
+ * yalnız pazaryeri oran bildirmediğinde kullanılır. (Berke'nin kararı, 22 Kas 2026.)
+ */
+describe("siparişte kesilen komisyon", () => {
+  const maliyetliUrun = () =>
+    product({
+      id: "p-kom",
+      barcode: "KOM-1",
+      cost: {
+        costMode: "manual",
+        manualCost: 40,
+        totalCost: 40,
+        packagingCost: null,
+        filamentWeight: null,
+        ekFilamentlerJson: null,
+      },
+      // İlana elle girilen varsayılan oran: %21.
+      listings: [{ platform: "trendyol", commissionRate: 0.21, commissionFixed: null, cargoCost: null }],
+    });
+
+  it("satırdaki oran (%13,2) ilandaki %21'in yerine geçer ve yanıtta görünür", async () => {
+    h.state.products = [maliyetliUrun()];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1", commission: 13.2 })];
+
+    const siparis = (await fetchOrders()).orders[0];
+
+    expect(siparis.estimatedCommission).toBeCloseTo(200 * 0.132, 6);
+    expect(siparis.commissionFromOrder).toBe(true);
+    expect(siparis.orderCommissionRates).toEqual([0.132]);
+  });
+
+  it("pazaryeri oran bildirmediyse ilana elle girilen varsayılan oran kullanılır (eski davranış)", async () => {
+    h.state.products = [maliyetliUrun()];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1" })];
+
+    const siparis = (await fetchOrders()).orders[0];
+
+    expect(siparis.estimatedCommission).toBeCloseTo(200 * 0.21, 6);
+    expect(siparis.commissionFromOrder).toBe(false);
+    expect(siparis.orderCommissionRates).toEqual([]);
+  });
+
+  it("kampanya oranı kârı tam komisyon farkı kadar (KDV'si indirilerek) artırır", async () => {
+    h.state.products = [maliyetliUrun()];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1" })];
+    const varsayilan = (await fetchOrders()).orders[0].profit;
+
+    h.state.trendyolCall = 0;
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1", commission: 13.2 })];
+    const kampanya = (await fetchOrders()).orders[0].profit;
+
+    // Komisyon farkı 200 × (%21 − %13,2) = 15,60; içindeki KDV (%20 varsayılan) indirilir → × 5/6.
+    expect(kampanya - varsayilan).toBeCloseTo(200 * (0.21 - 0.132) * (5 / 6), 6);
+  });
+
+  it("oran kalıcı kalem geçmişine yazılmak üzere gönderilir", async () => {
+    h.state.products = [maliyetliUrun()];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1", commission: 13.2 })];
+
+    await fetchOrders();
+
+    expect(h.state.persistedItems?.get("ty-1")?.[0]).toMatchObject({ commissionRate: 0.132 });
+  });
+
+  it("geçersiz oran (0) yok sayılır; kalem geçmişine de boş gider", async () => {
+    h.state.products = [maliyetliUrun()];
+    h.state.trendyolOrders = [trendyolOrder({ barcode: "KOM-1", commission: 0 })];
+
+    const siparis = (await fetchOrders()).orders[0];
+
+    expect(siparis.estimatedCommission).toBeCloseTo(200 * 0.21, 6);
+    expect(h.state.persistedItems?.get("ty-1")?.[0].commissionRate).toBeNull();
+  });
+});

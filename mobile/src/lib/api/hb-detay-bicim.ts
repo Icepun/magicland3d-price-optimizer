@@ -19,6 +19,8 @@ export interface HbKalem {
   barcodes?: string[];
   externalIds?: string[];
   skus?: string[];
+  /** Siparişte kesilen komisyon oranı (kesir); HB bildirmediyse null. */
+  commissionRate?: number | null;
 }
 
 export interface HbDetayKaydi {
@@ -27,8 +29,13 @@ export interface HbDetayKaydi {
   date: number | null;
 }
 
-/** Biçim değişince artır — eski dosya okunmaz. */
-export const HB_DETAY_BICIMI = 1;
+/**
+ * Biçim değişince artır — eski dosya okunmaz.
+ * 2: kaleme `commissionRate` eklendi. Eski dosyadaki kalemlerde oran yok; okunsaydı o siparişlerin
+ * kârı telefonda varsayılan oranla, masaüstünde siparişin kendi oranıyla hesaplanır ve iki cihaz
+ * ayrışırdı. Dosya bir kez yeniden indirilir.
+ */
+export const HB_DETAY_BICIMI = 2;
 
 const metinDizisi = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
 
@@ -44,7 +51,10 @@ function kalemMi(v: unknown): v is HbKalem {
     metinDizisi(k.matchKeys) &&
     (k.barcodes === undefined || metinDizisi(k.barcodes)) &&
     (k.externalIds === undefined || metinDizisi(k.externalIds)) &&
-    (k.skus === undefined || metinDizisi(k.skus))
+    (k.skus === undefined || metinDizisi(k.skus)) &&
+    (k.commissionRate === undefined ||
+      k.commissionRate === null ||
+      (typeof k.commissionRate === "number" && Number.isFinite(k.commissionRate)))
   );
 }
 

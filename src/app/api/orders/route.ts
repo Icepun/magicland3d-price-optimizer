@@ -49,6 +49,7 @@ import { trendyolIadeDurumu } from "@/core/trendyol-iade";
 import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
 import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
 import { resolveOrderProfit, type OrderProfitLine } from "@/core/order-profit";
+import { hbSiparisKomisyonOrani, siparisKomisyonKesri } from "@/core/order-commission";
 import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
 import type { CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import type { PackagingBreakdown } from "@/core/packaging";
@@ -122,6 +123,10 @@ export interface UnifiedOrder {
   profitSource: "calculated" | "platform" | "manual";
   estimatedCommission: number;
   actualCommission: number | null;
+  /** Komisyon tamamen SİPARİŞTE KESİLEN orandan hesaplandı (pazaryeri satırda bildirdi). */
+  commissionFromOrder?: boolean;
+  /** Siparişin satırlarında kesilen oranlar — KESİR, tekrarsız (dökümde gösterilir). */
+  orderCommissionRates?: number[];
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
@@ -331,6 +336,11 @@ type RawLine = {
   /** Platform ürün/varyant kimliği (Listing.externalId ile eşleşir). */
   externalIds: string[];
   skus: string[];
+  /**
+   * Siparişte kesilen komisyon oranı — KESİR. Pazaryeri bildirmediyse (Shopify, eski önbellek
+   * kaydı) boş kalır ve kâr hesabı ilanın/ürünün varsayılan oranına düşer.
+   */
+  commissionRate?: number | null;
 };
 
 const matchKeyList = (...values: unknown[]): string[] =>
@@ -348,6 +358,9 @@ function hbLineRaw(li: Record<string, any>): RawLine {
     barcodes: matchKeyList(li.barcode),
     externalIds: matchKeyList(li.hbSku, li.hepsiburadaSku),
     skus: matchKeyList(li.merchantSku, li.sku, li.stockCode),
+    // Hepsiburada kalemde kesilen tutarı ve oranı verir; HB indirimi varsa komisyon indirim
+    // öncesi fiyattan kesildiği için KESİLEN TUTAR esas alınır (bkz. core/order-commission).
+    commissionRate: hbSiparisKomisyonOrani(li, unit),
   };
 }
 /** items'i en çok `limit` eşzamanlı çalışan worker ile işle (orders route'u kilitlemeden detay çek). */
@@ -829,6 +842,8 @@ async function computeOrdersBodyInner(
           barcodes: matchKeyList(l.barcode),
           externalIds: [],
           skus: matchKeyList(l.sku, l.merchantSku).filter((k) => k !== "merchantSku"),
+          // Trendyol satırda o satışın oranını YÜZDE verir (21; kampanyada 13.2 gibi kesirli).
+          commissionRate: siparisKomisyonKesri(l.commission),
         })),
         trackingNumber: o.cargoTrackingNumber ? String(o.cargoTrackingNumber) : null,
         cargoProvider: o.cargoProviderName ?? null,
@@ -1250,6 +1265,7 @@ async function computeOrdersBodyInner(
         productName: elleBagli ? l.name : m?.name || l.name,
         quantity: l.quantity,
         unitPrice: l.unitPrice,
+        commissionRate: l.commissionRate ?? null,
       });
 
       // Kâr hesabı için satırı topla — hesabın tamamı aşağıda computeOrderProfit'te (tek çağrı).
@@ -1275,6 +1291,8 @@ async function computeOrdersBodyInner(
       profitLines.push({
         unitPrice: l.unitPrice,
         quantity: l.quantity,
+        // Siparişte kesilen oran varsa komisyon ondan hesaplanır (çekirdek önceliği uygular).
+        orderCommissionRate: l.commissionRate ?? null,
         product:
           ozelUrun ??
           (m && katalog
@@ -1389,6 +1407,14 @@ async function computeOrdersBodyInner(
       profitSource: pr.profitSource,
       estimatedCommission: pr.estimatedCommission,
       actualCommission: pr.actualCommission,
+      commissionFromOrder: pr.matchedLines > 0 && pr.orderRateLines === pr.matchedLines,
+      orderCommissionRates: [
+        ...new Set(
+          r.lines
+            .map((l) => l.commissionRate)
+            .filter((oran): oran is number => typeof oran === "number" && Number.isFinite(oran))
+        ),
+      ],
       unmatchedCount: pr.unmatchedLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,

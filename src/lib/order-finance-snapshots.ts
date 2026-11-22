@@ -32,6 +32,7 @@ import {
 // "Bu satır güncel hesapla mı yazılmış?" — karşılaştırma TEK yerde (bkz. core/finance-version.ts).
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
+import { gecerliSiparisOrani } from "@/core/order-commission";
 import { bustCache } from "./route-cache";
 
 /**
@@ -85,6 +86,12 @@ export interface FinanceSnapshotItem {
   quantity: number;
   /** Adet fiyatı (TL). */
   unitPrice: number;
+  /**
+   * Siparişte kesilen komisyon oranı — KESİR. Kalıcı geçmişe yazılır ki pazaryeri penceresi
+   * kapandıktan sonra da "yeniden hesapla" o siparişin KENDİ oranını kullanabilsin.
+   * Verilmezse/boşsa kayıtlı değer KORUNUR (bilgiyi taşımayan bir çağrı onu silmez).
+   */
+  commissionRate?: number | null;
 }
 
 export interface FinanceSnapshotOrder {
@@ -259,6 +266,8 @@ type ItemWriteData = {
   lineRevenueKurus: number;
   statusKind: string;
   currency: string;
+  /** Siparişte kesilen komisyon oranı (kesir); bilinmiyorsa null. */
+  commissionRate: number | null;
 };
 
 type ExistingItemRow = ItemWriteData & { lineIndex: number };
@@ -276,6 +285,15 @@ function itemChangedFields(existing: ExistingItemRow, next: ItemWriteData): stri
   if (existing.lineRevenueKurus !== next.lineRevenueKurus) changed.push("lineRevenueKurus");
   if (existing.statusKind !== next.statusKind) changed.push("statusKind");
   if (existing.currency !== next.currency) changed.push("currency");
+  // Oran yalnız GELDİĞİNDE karşılaştırılır: boş gelen (eski önbellek, Shopify) kayıtlıyı silmez
+  // ve her turda "değişti" sayılıp boşuna yazım üretmez.
+  if (
+    next.commissionRate != null &&
+    (existing.commissionRate == null ||
+      Math.abs(existing.commissionRate - next.commissionRate) > 1e-9)
+  ) {
+    changed.push("commissionRate");
+  }
   return changed;
 }
 
@@ -345,9 +363,11 @@ function itemStatement(
   return {
     sql: `INSERT INTO "OrderItemSnapshot" (
             "id","platform","externalOrderId","lineIndex","orderedAt","productId","productName",
-            "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt"
-          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","syncedAt",
+            "commissionRate"
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT("platform","externalOrderId","lineIndex") DO UPDATE SET
+            "commissionRate" = COALESCE(excluded."commissionRate", "OrderItemSnapshot"."commissionRate"),
             "orderedAt" = excluded."orderedAt",
             "productId" = excluded."productId",
             "productName" = excluded."productName",
@@ -371,6 +391,7 @@ function itemStatement(
       data.statusKind,
       data.currency,
       toDbDate(syncedAt),
+      data.commissionRate,
     ],
   };
 }
@@ -447,7 +468,7 @@ async function readExistingItems(
     const slice = externalIds.slice(offset, offset + READ_CHUNK);
     const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
       `SELECT "platform","externalOrderId","lineIndex","orderedAt","productId","productName",
-              "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency"
+              "quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency","commissionRate"
          FROM "OrderItemSnapshot"
         WHERE "externalOrderId" IN (${slice.map(() => "?").join(",")})`,
       ...slice
@@ -466,6 +487,8 @@ async function readExistingItems(
         lineRevenueKurus: toInt(row.lineRevenueKurus),
         statusKind: String(row.statusKind ?? ""),
         currency: String(row.currency ?? "TRY"),
+        commissionRate:
+          row.commissionRate == null ? null : gecerliSiparisOrani(Number(row.commissionRate)),
       });
       byOrder.set(key, list);
     }
@@ -704,6 +727,7 @@ export async function persistOrderFinanceSnapshots(
           lineRevenueKurus: unitPriceKurus * quantity,
           statusKind: order.statusKind,
           currency: order.currency || "TRY",
+          commissionRate: gecerliSiparisOrani(line.commissionRate),
         });
       }
       itemPlans.push({ platform: order.platform, externalOrderId, rows });
@@ -1305,6 +1329,9 @@ export async function recalculateFinanceMonths(
         continue;
       }
       const profitLines: OrderProfitLine[] = lines.map((line) => {
+        // Siparişte kesilen oran kalem geçmişinde kayıtlıysa yeniden hesap da ONU kullanır;
+        // kayıtlı değilse (eski kalem) ilanın/ürünün bugünkü varsayılan oranına düşülür.
+        const orderCommissionRate = line.commissionRate;
         const urunId = kalemUrunu(row.platform, line);
         const match = urunId ? productById.get(urunId) ?? null : null;
         // Kalem geçmişinde eşleşen üründe ürün kimliği, eşleşmeyende satır adı tutuluyor — sipariş
@@ -1331,15 +1358,16 @@ export async function recalculateFinanceMonths(
             )
           : null;
         if (ozelUrun) {
-          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: ozelUrun };
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: ozelUrun, orderCommissionRate };
         }
         if (!match) {
-          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null };
+          return { unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, product: null, orderCommissionRate };
         }
         const { listingByPlatform, ...product } = match;
         return {
           unitPrice: kurusToTl(line.unitPriceKurus),
           quantity: line.quantity,
+          orderCommissionRate,
           // Komisyon/kargo override'ı siparişin platformundaki ilandan gelir (Ürünler ile aynı kaynak).
           product: { ...product, listing: listingByPlatform[row.platform] ?? null },
         };
