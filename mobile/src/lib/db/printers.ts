@@ -57,13 +57,15 @@ const gorselBellegi = new Map<string, { anahtar: string; gorsel: string | null; 
 const BOS_GORSEL_YENIDEN_MS = 60_000;
 
 async function eksikGorselleriDoldur(satirlar: PrinterSnapshot[]): Promise<void> {
-  const simdi = Date.now();
+  // Bellek içi tazelik damgası — veritabanına YAZILMAZ (adı bu yüzden "simdi/now" değil:
+  // tarih yazım denetimi o adları ham SQL'e bağlanan damga sayıyor).
+  const an = Date.now();
   const sorulacak: string[] = [];
   for (const s of satirlar) {
     if (s.detay?.plateUrl) continue; // ekran görseli buradan alıyor
     const anahtar = `${s.currentFilename ?? ""}|${s.productName ?? ""}`;
     const b = gorselBellegi.get(s.printerConfigId);
-    if (b && b.anahtar === anahtar && (b.gorsel != null || simdi - b.at < BOS_GORSEL_YENIDEN_MS)) {
+    if (b && b.anahtar === anahtar && (b.gorsel != null || an - b.at < BOS_GORSEL_YENIDEN_MS)) {
       s.productImage = b.gorsel;
       continue;
     }
@@ -82,7 +84,7 @@ async function eksikGorselleriDoldur(satirlar: PrinterSnapshot[]): Promise<void>
       gorselBellegi.set(s.printerConfigId, {
         anahtar: `${s.currentFilename ?? ""}|${s.productName ?? ""}`,
         gorsel,
-        at: simdi,
+        at: an,
       });
       s.productImage = gorsel;
     }
