@@ -1,3 +1,4 @@
+import { isSealed, materialFamily, spoolGroupKey } from "@core/filament-groups";
 import { execute, query, writeBatch } from "@/lib/turso";
 
 export interface Spool {
@@ -17,12 +18,27 @@ export interface Spool {
   openedAt: string | null;
 }
 
-export type SpoolStatus = "empty" | "low" | "ok";
+/**
+ * Makaranın kendi hâli: bitti / kapalı / açık — masaüstü Filament penceresindeki rozetle AYNI.
+ * "Azaldı / sipariş ver" kararı makara başına gramla DEĞİL, renk başına KAPALI makara sayısıyla
+ * verilir (`@core/filament-stok`). Eski gram eşiği (`reorderGrams`) v37'den beri kullanılmıyordu;
+ * telefon onunla masaüstünden farklı "bitti/yeterli" diyordu (denetim, 23 Kas 2026).
+ */
+export type SpoolStatus = "empty" | "sealed" | "open";
 
 export function spoolStatus(s: Spool): SpoolStatus {
   if (s.remainingGrams <= 0) return "empty";
-  if (s.remainingGrams <= s.reorderGrams) return "low";
-  return "ok";
+  return isSealed(s) ? "sealed" : "open";
+}
+
+/** İzleme kaydı (`filamentWatch:<grup>`) — son makara silinse de zil "bitti" diyebilsin (masaüstüyle aynı). */
+function izlemeIfadesi(s: SpoolInput): { sql: string; args: (string | number | null)[] } {
+  const key = `filamentWatch:${spoolGroupKey({ id: "", ...s })}`;
+  const etiket = `${(s.colorName ?? "").trim()} ${materialFamily(s.material)}`.trim() || key;
+  return {
+    sql: `INSERT INTO AppSetting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    args: [key, etiket],
+  };
 }
 
 /** Aktif makaralar — azalan kalan grama göre (en kritik üstte). Masaüstü /api/spools ile aynı. */
@@ -88,24 +104,41 @@ export interface SpoolInput {
 
 export async function createSpool(s: SpoolInput): Promise<void> {
   const now = new Date().toISOString();
-  await execute(
-    `INSERT INTO FilamentSpool
-       (id, name, material, colorName, colorHex, brand, totalGrams, remainingGrams, spoolCost, reorderGrams, colorKey, openedAt, isActive, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)`,
-    [genId(), s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, s.colorKey ?? null, now, now]
-  );
+  // Makara + izleme kaydı TEK istekte (masaüstü toplu ekleme de grubu izlemeye alıyor).
+  await writeBatch([
+    {
+      sql: `INSERT INTO FilamentSpool
+         (id, name, material, colorName, colorHex, brand, totalGrams, remainingGrams, spoolCost, reorderGrams, colorKey, openedAt, isActive, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)`,
+      args: [genId(), s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, s.colorKey ?? null, now, now],
+    },
+    izlemeIfadesi(s),
+  ]);
 }
 
 export async function updateSpool(id: string, s: SpoolInput): Promise<void> {
-  await execute(
-    `UPDATE FilamentSpool SET name=?, material=?, colorName=?, colorHex=?, brand=?,
-            totalGrams=?, remainingGrams=?, spoolCost=?, reorderGrams=?, colorKey=?, updatedAt=? WHERE id=?`,
-    [s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, s.colorKey ?? null, new Date().toISOString(), id]
-  );
+  const now = new Date().toISOString();
+  await writeBatch([
+    {
+      // Açık/kapalı damgası gramla tutarlı kalır (masaüstü PATCH ile aynı kural, 1 g tolerans):
+      // kalan toplama eşitlenince KAPALI, eksilince AÇIK (ilk açılış tarihi korunur).
+      sql: `UPDATE FilamentSpool SET name=?, material=?, colorName=?, colorHex=?, brand=?,
+              totalGrams=?, remainingGrams=?, spoolCost=?, reorderGrams=?, colorKey=?, updatedAt=?,
+              openedAt = CASE WHEN ? >= ? - 1 THEN NULL ELSE COALESCE(openedAt, ?) END
+            WHERE id=?`,
+      args: [s.name, s.material, s.colorName, s.colorHex, s.brand, s.totalGrams, s.remainingGrams, s.spoolCost, s.reorderGrams, s.colorKey ?? null, now,
+        s.remainingGrams, s.totalGrams, now, id],
+    },
+    izlemeIfadesi(s),
+  ]);
 }
 
+/** Makara + tüketim kayıtları TEK istekte (tabloda yabancı anahtar yok, kendiliğinden silinmez). */
 export async function deleteSpool(id: string): Promise<void> {
-  await execute(`DELETE FROM FilamentSpool WHERE id = ?`, [id]);
+  await writeBatch([
+    { sql: `DELETE FROM FilamentUsage WHERE spoolId = ?`, args: [id] },
+    { sql: `DELETE FROM FilamentSpool WHERE id = ?`, args: [id] },
+  ]);
 }
 
 /**

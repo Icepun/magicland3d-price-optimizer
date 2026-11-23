@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import {
-  DEFAULT_LOW_SPOOL_COUNT,
-  parseThreshold,
+  filamentAyarlariniCoz,
   type FilamentAlertOptions,
   type WatchedGroup,
 } from "@/core/filament-groups";
@@ -42,28 +41,8 @@ export async function loadFilamentSettings(): Promise<FilamentSettings> {
     .findMany({ where: { key: { startsWith: FILAMENT_SETTING_PREFIX } } })
     .catch(() => [] as Array<{ key: string; value: string }>);
 
-  let threshold = DEFAULT_LOW_SPOOL_COUNT;
-  const groupThresholds: Record<string, number> = {};
-  const watchedGroups: WatchedGroup[] = [];
-  const mutedGroups: string[] = [];
-
-  for (const row of rows) {
-    if (row.key === KEY_LOW_SPOOL_COUNT) {
-      threshold = parseThreshold(row.value);
-    } else if (row.key.startsWith(PREFIX_THRESHOLD)) {
-      const key = row.key.slice(PREFIX_THRESHOLD.length);
-      const n = Number(String(row.value ?? "").trim());
-      if (key && isFinite(n) && n >= 0) groupThresholds[key] = Math.floor(n);
-    } else if (row.key.startsWith(PREFIX_WATCH)) {
-      const key = row.key.slice(PREFIX_WATCH.length);
-      if (key) watchedGroups.push({ key, label: (row.value ?? "").trim() || undefined });
-    } else if (row.key.startsWith(PREFIX_MUTE)) {
-      const key = row.key.slice(PREFIX_MUTE.length);
-      if (key && row.value !== "0") mutedGroups.push(key);
-    }
-  }
-
-  return { threshold, groupThresholds, watchedGroups, mutedGroups };
+  // Okuma kuralı çekirdekte TEK yerde (telefon zili ve Atölye de aynısını kullanır).
+  return filamentAyarlariniCoz(Object.fromEntries(rows.map((r) => [r.key, r.value])));
 }
 
 /**

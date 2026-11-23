@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   Disc3, Plus, Trash2, Pencil, X, PackageOpen, Copy, Search, Bell, Check, Minus,
+  CircleOff, TrendingDown, Hourglass, AlertTriangle, RefreshCw,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,14 +20,15 @@ import { formatNumber } from "@/lib/format";
 import type { FilamentTuketimi } from "@/lib/filament-tuketim";
 import { cn } from "@/lib/utils";
 import {
-  FILAMENT_BRANDS, FILAMENT_COLORS, DEFAULT_LOW_SPOOL_COUNT, MIN_LOW_SPOOL_COUNT,
-  groupSpools, isSealed, isEmptySpool, parseThreshold,
+  FILAMENT_BRANDS, FILAMENT_COLORS, MIN_LOW_SPOOL_COUNT,
+  esikBul, isSealed, isEmptySpool, ozelEsikVarMi,
   type FilamentGroup, type SpoolLike,
 } from "@/core/filament-groups";
 import {
-  alisverisListesi, bolumlere, filtrele, renkCipleri, stokOzeti, TEMEL_RENKLER,
+  alisverisListesi, bolumlere, filamentStokDurumu, filtrele,
   type RenkCip, type StokFiltre,
 } from "./spools-view";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 
 /**
  * FİLAMENT — KAPALI MAKARA STOĞU.
@@ -54,6 +56,44 @@ const MATERIALS = ["PLA", "PETG", "ABS", "ASA", "TPU", "Reçine"];
 const WEIGHTS = [1000, 750, 500, 2000, 5000];
 const KEY_THRESHOLD = "filamentLowSpoolCount";
 
+const KART = "rounded-2xl bg-card ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none";
+const BIRINCIL = "h-9 gap-2 rounded-xl border-0 bg-gradient-to-br from-[#8B6CFF] to-[#5B8CFF] px-3.5 text-white shadow-[0_10px_24px_-12px_rgba(122,126,255,0.95)] transition hover:-translate-y-px hover:brightness-110 active:scale-[0.97] motion-reduce:hover:translate-y-0";
+
+/** "Ne kadar yeter" kutusunun üzerine gelince görünen kısa açıklama. */
+function tuketimAciklamasi(t: FilamentTuketimi): string {
+  return [
+    `Son ${t.olculenGun} günde ~${formatNumber(t.toplamGram / 1000, 1)} kg filament kullanıldı`,
+    `günde ~${formatNumber(t.gunlukGram, 0)} g`,
+    `elde ~${formatNumber(t.stokGram / 1000, 1)} kg`,
+    t.gramsizAdet > 0 ? `${formatNumber(t.gramsizAdet, 0)} satışta gramaj girilmemiş` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function OzetKutusu({ sira, ikon, baslik, ton, children }: { sira: number; ikon: React.ReactNode; baslik: string; ton?: "kotu"; children: React.ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "group relative flex min-w-0 flex-col justify-between overflow-hidden rounded-2xl bg-card p-4 ring-1 ring-white/[0.07] transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 hover:ring-white/[0.12] hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.55)] animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none motion-reduce:hover:translate-y-0",
+        ton === "kotu" && "ring-rose-400/25"
+      )}
+      style={{ animationDelay: `${sira * 60}ms` }}
+    >
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className={cn(
+          "grid size-7 place-items-center rounded-lg bg-white/[0.05] text-[#C9D2F2] ring-1 ring-white/[0.08] transition-colors group-hover:bg-[#7A7EFF]/15",
+          ton === "kotu" && "bg-rose-500/10 text-rose-300 ring-rose-400/25"
+        )}>
+          {ikon}
+        </span>
+        {baslik}
+      </span>
+      <div className="mt-3 min-w-0">{children}</div>
+    </div>
+  );
+}
+
 /** Grup satırları `SpoolLike` taşır; fiyat farkı yalnız listeden gelen kayıtlarda dolu olur. */
 function emptiedGroup(group: FilamentGroup): FilamentGroup {
   return {
@@ -67,10 +107,14 @@ function emptiedGroup(group: FilamentGroup): FilamentGroup {
 export default function SpoolsPage() {
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery<Spool[]>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<Spool[]>({
     queryKey: ["spools"],
     queryFn: () => fetchJson("/api/spools"),
-    staleTime: 10 * 60_000,
+    // Telefondan eklenen/silinen makara da görünsün: girişte tazele, açıkken dakikada bir yokla
+    // (pencere gizliyken yoklama durur). Eskiden sayfa açık kaldıkça eski sayıları gösteriyordu.
+    staleTime: 60_000,
+    refetchOnMount: true,
+    refetchInterval: () => (pencereGizliMi() ? false : 60_000),
   });
   const { data: settings } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
@@ -78,88 +122,72 @@ export default function SpoolsPage() {
     staleTime: 5 * 60_000,
   });
   // Satış hızından "elimdeki filament kaç gün yeter" (renk bazında veri yok; bkz. filament-tuketim).
-  const { data: tuketim } = useQuery<FilamentTuketimi>({
-    queryKey: ["spools", "tuketim"],
+  // AYRI anahtar: ["spools"] düşünce (her makara yazmasında) bu satış taraması yeniden koşmasın.
+  const { data: tuketim, isError: tuketimHatasi } = useQuery<FilamentTuketimi>({
+    queryKey: ["spools-tuketim"],
     queryFn: () => fetchJson("/api/spools/tuketim"),
     staleTime: 10 * 60_000,
   });
+  /** Veri hiç gelmediyse ekran "her şey bitti" DEMEZ — hata + Tekrar dene gösterir. */
+  const veriYok = isError && !data;
 
   const spools = useMemo(() => (Array.isArray(data) ? data : []), [data]);
-  const groups = useMemo(() => groupSpools(spools), [spools]);
   const [search, setSearch] = useState("");
   const [filtre, setFiltre] = useState<StokFiltre>("hepsi");
 
-  const threshold = parseThreshold(settings?.[KEY_THRESHOLD], DEFAULT_LOW_SPOOL_COUNT);
-  const groupThresholds = useMemo(() => {
-    const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(settings ?? {})) {
-      if (k.startsWith("filamentThreshold:")) {
-        const n = Number(v);
-        if (isFinite(n) && n >= 0) out[k.slice("filamentThreshold:".length)] = n;
-      }
-    }
-    return out;
-  }, [settings]);
-  const mutedGroups = useMemo(
-    () =>
-      Object.entries(settings ?? {})
-        .filter(([k, v]) => k.startsWith("filamentMute:") && v !== "0")
-        .map(([k]) => k.slice("filamentMute:".length)),
-    [settings]
-  );
-
   /**
-   * İZLENEN GRUPLAR — son makarası biten renkler.
-   *
-   * Bu liste geçilmezse sayfa ile zil AYNI gerçeği farklı söyler: zil (/api/notifications)
-   * ayarların tamamını geçtiği için "Siyah PLA bitti" der, sayfada ise o rengin kartı hiç
-   * kalmadığı için ne uyarı ne rozet görünür — kullanıcı alışverişe zilde yazan rengi
-   * listesinde bulamadan gider.
+   * Stok durumu çekirdekten — telefon Filament ekranı ve Panel AYNI fonksiyonu kullanır, eşik
+   * kuralları (renge özel, izlenen, susturulan) tek yerde okunur.
    */
-  const watchedGroups = useMemo(
-    () =>
-      Object.entries(settings ?? {})
-        .filter(([k]) => k.startsWith("filamentWatch:"))
-        .map(([k, v]) => ({
-          key: k.slice("filamentWatch:".length),
-          label: (v ?? "").trim() || undefined,
-        })),
-    [settings]
-  );
-
-  /** Renk çipleri — temel renkler ve izlenen renkler stok yokken bile listede kalır. */
-  const ciplerHam = useMemo(
-    () =>
-      renkCipleri(
-        groups,
-        (g) => groupThresholds[g.key] ?? threshold,
-        threshold,
-        // Tam olarak Siyah / Gri / Beyaz. Aileyle seçilseydi "Mermer", "Fildişi", "Gümüş"
-        // gibi tonlar da üst bölüme sızardı.
-        FILAMENT_COLORS.filter((c) => (TEMEL_RENKLER as readonly string[]).includes(c.key)),
-        watchedGroups
-      ),
-    [groups, groupThresholds, threshold, watchedGroups]
-  );
-  const ozet = useMemo(() => stokOzeti(ciplerHam), [ciplerHam]);
+  const durum = useMemo(() => filamentStokDurumu(spools, settings ?? {}), [spools, settings]);
+  const { ayar, groups } = durum;
+  const threshold = ayar.threshold;
+  const mutedGroups = ayar.mutedGroups;
+  const ciplerHam = useMemo(() => (veriYok ? [] : durum.cipler), [veriYok, durum]);
+  const ozet = durum.ozet;
   const bolumler = useMemo(
     () => bolumlere(filtrele(ciplerHam, filtre, search)),
     [ciplerHam, filtre, search]
   );
+  const bos = isLoading || veriYok;
 
   const [adding, setAdding] = useState<Partial<AddPrefill> | null>(null);
   const [detail, setDetail] = useState<FilamentGroup | null>(null);
   const [editing, setEditing] = useState<Spool | null>(null);
   const [deleting, setDeleting] = useState<SpoolLike | null>(null);
 
-  const saveSetting = useMutation({
-    mutationFn: (body: Record<string, string>) =>
+  /**
+   * Eşik kaydı İYİMSER: ekrandaki değer hemen değişir, hızlı art arda +/- tıklamaları kaybolmaz
+   * (eskiden üç tık da aynı eski değeri gönderiyordu). Hata olursa geri alınır ve söylenir.
+   * null → anahtar silinir (renge özel eşiği "Sıfırla").
+   */
+  const saveSetting = useMutation<unknown, Error, Record<string, string | null>, { prev: Record<string, string> | undefined }>({
+    mutationFn: (body) =>
       fetchJson("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["app-settings"] }),
+    onMutate: async (body) => {
+      await qc.cancelQueries({ queryKey: ["app-settings"] });
+      const prev = qc.getQueryData<Record<string, string>>(["app-settings"]);
+      qc.setQueryData<Record<string, string>>(["app-settings"], (o) => {
+        const yeni = { ...(o ?? {}) };
+        for (const [k, v] of Object.entries(body)) {
+          if (v === null) delete yeni[k];
+          else yeni[k] = v;
+        }
+        return yeni;
+      });
+      return { prev };
+    },
+    onError: (_e, _b, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["app-settings"], ctx.prev);
+      toast.error("Eşik kaydedilemedi");
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["app-settings"] });
+    },
   });
 
   /**
@@ -189,7 +217,10 @@ export default function SpoolsPage() {
       qc.removeQueries({ queryKey: ["spool-usage", id] });
       toast.success("Makara silindi");
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ["spools"] }),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["spools"] });
+      void qc.invalidateQueries({ queryKey: ["spools-tuketim"] }); // elde kalan gram değişti
+    },
   });
 
   /** Açık detay penceresi HER ZAMAN canlı veriden beslenir (bkz. `emptiedGroup`). */
@@ -212,111 +243,140 @@ export default function SpoolsPage() {
   }
 
   return (
-    <div className="p-6 space-y-4 mx-auto w-full max-w-[1600px]">
-      {/* ── Üst şerit: ne kadar var, neyi sipariş etmeli ────────────────────────── */}
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Disc3 className="h-6 w-6 text-primary" /> Filament
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Stoktaki kapalı makaralar. Azalanı görüp sipariş ver.
-          </p>
+    <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
+      {/* ── Başlık ─────────────────────────────────────────────────────────────── */}
+      <header className="flex flex-wrap items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <Disc3 className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Filament</h1>
+            <p className="text-xs text-muted-foreground">Stoktaki kapalı makaralar — azalanı görüp sipariş ver.</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <ThresholdControl
             value={threshold}
             onChange={(v) => saveSetting.mutate({ [KEY_THRESHOLD]: String(v) })}
           />
-          <Button size="sm" className="gap-2" onClick={() => setAdding({})}>
+          <Button size="sm" className={BIRINCIL} onClick={() => setAdding({})}>
             <Plus className="h-4 w-4" /> Makara Ekle
           </Button>
         </div>
+      </header>
+
+      {/* ── Özet: kaç makara, kaç renk bitti/azaldı, ne kadar yeter ─────────────── */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <OzetKutusu sira={0} ikon={<Disc3 className="size-3.5" />} baslik="Kapalı makara">
+          <p className="text-2xl font-semibold tracking-tight tabular-nums">
+            {bos ? "—" : <AnimatedNumber value={ozet.toplam} format={(n) => formatNumber(n, 0)} />}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{bos ? "\u00a0" : `${formatNumber(ozet.renk, 0)} renk`}</p>
+        </OzetKutusu>
+        <OzetKutusu sira={1} ikon={<CircleOff className="size-3.5" />} baslik="Biten renk" ton={!bos && ozet.biten > 0 ? "kotu" : undefined}>
+          <p className={cn("text-2xl font-semibold tracking-tight tabular-nums", !bos && ozet.biten > 0 && "text-rose-300")}>
+            {bos ? "—" : <AnimatedNumber value={ozet.biten} format={(n) => formatNumber(n, 0)} />}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{bos ? "\u00a0" : ozet.biten > 0 ? "kapalı makara kalmadı" : "hepsi stokta"}</p>
+        </OzetKutusu>
+        <OzetKutusu sira={2} ikon={<TrendingDown className="size-3.5" />} baslik="Azalan renk">
+          <p className={cn("text-2xl font-semibold tracking-tight tabular-nums", !bos && ozet.azalan > 0 && "text-[#C9D2F2]")}>
+            {bos ? "—" : <AnimatedNumber value={ozet.azalan} format={(n) => formatNumber(n, 0)} />}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">eşik: {formatNumber(threshold, 0)} makara ve altı</p>
+        </OzetKutusu>
+        <OzetKutusu sira={3} ikon={<Hourglass className="size-3.5" />} baslik="Ne kadar yeter">
+          <p
+            className={cn("text-2xl font-semibold tracking-tight tabular-nums", tuketim?.kacGun != null && tuketim.kacGun < 21 && "text-[#C9D2F2]")}
+            title={tuketim?.kacGun != null ? tuketimAciklamasi(tuketim) : undefined}
+          >
+            {tuketim?.kacGun != null ? (
+              <>
+                ~<AnimatedNumber value={Math.round(tuketim.kacGun)} format={(n) => formatNumber(n, 0)} />
+                <span className="text-base font-medium text-muted-foreground"> gün</span>
+              </>
+            ) : (
+              "—"
+            )}
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {tuketim?.kacGun != null
+              ? "bu satış hızıyla"
+              : tuketimHatasi
+                ? "şu an hesaplanamadı"
+                : !tuketim
+                  ? "hesaplanıyor…"
+                  : !tuketim.hazir
+                    ? "satış geçmişi henüz kısa"
+                    : "son satışlarda tüketim yok"}
+          </p>
+        </OzetKutusu>
       </div>
 
-      {/* Tek satırlık durum: toplam + sipariş gerekenler + filtre. Eskiden dört büyük
-          kart vardı ve ekranın üçte birini yiyordu; asıl iş renkleri görmek. */}
-      <div className="flex items-center gap-2 flex-wrap rounded-xl border bg-card px-3 py-2">
-        <span className="font-mono text-sm tabular-nums">
-          <b className="text-base">
-            <AnimatedNumber value={ozet.toplam} format={(n) => formatNumber(n, 0)} />
-          </b>
-          <span className="text-muted-foreground"> makara · {ozet.renk} renk</span>
-        </span>
-        {ozet.biten > 0 && (
-          <span className="font-mono text-sm tabular-nums text-destructive">
-            · <AnimatedNumber value={ozet.biten} format={(n) => formatNumber(n, 0)} /> renk bitti
-          </span>
-        )}
-        {ozet.azalan > 0 && (
-          <span className="font-mono text-sm tabular-nums text-amber-400">
-            · <AnimatedNumber value={ozet.azalan} format={(n) => formatNumber(n, 0)} /> renk azaldı
-          </span>
-        )}
-        {tuketim?.kacGun != null && (
-          <span
-            className={cn(
-              "font-mono text-sm tabular-nums",
-              tuketim.kacGun < 21 ? "text-amber-400" : "text-muted-foreground"
-            )}
-            title={[
-              `Son ${tuketim.olculenGun} günde satılan ürünlerin reçetesi ~${formatNumber(tuketim.toplamGram / 1000, 1)} kg filament`,
-              `günde ~${formatNumber(tuketim.gunlukGram, 0)} g`,
-              `elde ~${formatNumber(tuketim.stokGram / 1000, 1)} kg`,
-              tuketim.gramsizAdet > 0 ? `${tuketim.gramsizAdet} satılan adette gramaj girilmemiş — hesap o kadar eksik` : null,
-              "Renk bazında değil: makara açılış tarihi tutulmuyor",
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          >
-            · bu satış hızıyla ~{formatNumber(Math.round(tuketim.kacGun), 0)} gün yeter
-          </span>
-        )}
-        <div className="ml-auto flex items-center gap-1.5 flex-wrap">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Renk ara…"
-              className="h-8 w-36 pl-8 text-sm"
-            />
-          </div>
-          {/* Eşiği 0 yapma numarasının yerine GERÇEK filtre: "sadece bitenler" artık
-              eşiği bozmadan görülebiliyor (Berke eşiği bunun için 0'da tutuyordu). */}
+      {/* ── Ara + filtre ─────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl bg-card px-3 py-2.5 ring-1 ring-white/[0.07] animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Renk ara…"
+            className="h-8 w-44 rounded-xl border-white/[0.08] bg-white/[0.03] pl-8 text-sm dark:bg-white/[0.03] focus-visible:border-[#7A7EFF]/50 focus-visible:ring-[#7A7EFF]/25"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          {/* Eşiği 0 yapma numarasının yerine GERÇEK filtre: "sadece bitenler" eşiği bozmadan görülür. */}
           {([
-            ["hepsi", "Hepsi"],
-            ["azalan", "Azalan"],
-            ["biten", "Biten"],
-          ] as Array<[StokFiltre, string]>).map(([k, l]) => (
+            ["hepsi", "Hepsi", ozet.renk],
+            ["azalan", "Azalan", ozet.azalan],
+            ["biten", "Biten", ozet.biten],
+          ] as Array<[StokFiltre, string, number]>).map(([k, l, n]) => (
             <FilterChip key={k} active={filtre === k} onClick={() => setFiltre(k)}>
               {l}
+              <span className="ml-1 tabular-nums opacity-70">{formatNumber(n, 0)}</span>
             </FilterChip>
           ))}
-          {ozet.sorunlu > 0 && (
-            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={copyShoppingList}>
-              <Copy className="h-3.5 w-3.5" /> Liste
-            </Button>
-          )}
         </div>
+        {ozet.sorunlu > 0 && (
+          <Button size="sm" variant="outline" className="ml-auto h-8 gap-1.5 rounded-xl border-white/[0.1] bg-white/[0.03] transition active:scale-[0.97]" onClick={copyShoppingList}>
+            <Copy className="h-3.5 w-3.5" /> Eksik listesini kopyala
+          </Button>
+        )}
       </div>
 
       {isLoading ? (
-        <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(140px,1fr))]">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <Skeleton key={i} className="h-[104px] rounded-xl" />
-          ))}
+        <div className="rounded-2xl bg-card p-4 ring-1 ring-white/[0.07]">
+          <div className="grid gap-2.5 grid-cols-[repeat(auto-fill,minmax(140px,1fr))]">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <Skeleton key={i} className="h-[104px] rounded-xl" />
+            ))}
+          </div>
+        </div>
+      ) : veriYok ? (
+        <div className="flex flex-col items-center gap-3 rounded-2xl bg-rose-500/[0.05] px-4 py-12 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+          <AlertTriangle className="h-8 w-8 text-rose-300/80" />
+          <p className="font-medium">Makaralar yüklenemedi</p>
+          <p className="text-sm text-muted-foreground">Bağlantını kontrol edip tekrar dene.</p>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-xl" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} /> Tekrar dene
+          </Button>
         </div>
       ) : (
         <div className="space-y-4">
-          {bolumler.map((bolum) => (
-            <div key={bolum.baslik}>
-              <div className="flex items-baseline gap-2 mb-2">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {bolumler.map((bolum, bi) => (
+            <section
+              key={bolum.baslik}
+              className={cn(KART, "p-4")}
+              style={{ animationDelay: `${120 + bi * 80}ms` }}
+            >
+              <div className="mb-3 flex items-baseline gap-2">
+                <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+                  <span className="size-1.5 rounded-full bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF]" />
                   {bolum.baslik}
                 </h2>
                 {bolum.aciklama && (
-                  <span className="text-[11px] text-muted-foreground/70">{bolum.aciklama}</span>
+                  <span className="text-xs text-muted-foreground">{bolum.aciklama}</span>
                 )}
               </div>
               {bolum.cipler.length === 0 ? (
@@ -337,7 +397,7 @@ export default function SpoolsPage() {
                   ))}
                 </div>
               )}
-            </div>
+            </section>
           ))}
         </div>
       )}
@@ -346,10 +406,11 @@ export default function SpoolsPage() {
       {detail && detailGroup && (
         <GroupDetailDialog
           group={detailGroup}
-          threshold={groupThresholds[detail.key] ?? threshold}
+          threshold={esikBul(detail.key, ayar)}
           generalThreshold={threshold}
+          custom={ozelEsikVarMi(detail.key, ayar)}
           onSetThreshold={(v) =>
-            saveSetting.mutate({ [`filamentThreshold:${detail.key}`]: v === null ? "" : String(v) })
+            saveSetting.mutate({ [`filamentThreshold:${detail.key}`]: v === null ? null : String(v) })
           }
           onClose={() => setDetail(null)}
           onEdit={(s) => setEditing(s as Spool)}
@@ -400,27 +461,32 @@ export default function SpoolsPage() {
 function RenkCipi({ cip, index, onClick }: { cip: RenkCip; index: number; onClick: () => void }) {
   const biten = cip.durum === "biten";
   const azalan = cip.durum === "azalan";
+  // Kapalı makara kalmadı ama yazıcıda açık makara var — zil de "Son makara açık" diyor.
+  const sonAcik = biten && (cip.group?.openCount ?? 0) > 0;
+  const ad = cip.turuGoster && cip.material ? `${cip.colorName} · ${cip.material}` : cip.colorName;
   return (
     <button
       type="button"
       onClick={onClick}
       title={
         cip.group
-          ? `${cip.colorName} — ${cip.sealed} kapalı makara`
-          : `${cip.colorName} — stokta yok, eklemek için tıkla`
+          ? sonAcik
+            ? `${ad} — kapalı makara kalmadı, yazıcıda açık makara var`
+            : `${ad} — ${cip.sealed} kapalı makara`
+          : `${ad} — stokta yok, eklemek için tıkla`
       }
       style={{ animationDelay: `${Math.min(index, 18) * 22}ms` }}
       className={cn(
-        "group relative flex flex-col items-center gap-1.5 rounded-xl border p-2.5 text-center text-foreground",
-        "transition-all hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group relative flex flex-col items-center gap-1.5 rounded-xl bg-white/[0.02] p-2.5 text-center text-foreground ring-1 ring-white/[0.06]",
+        "transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/[0.04] active:scale-[0.97] motion-reduce:hover:translate-y-0",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
         "animate-in fade-in zoom-in-95 fill-mode-both duration-300",
         // Renkli zemin YALNIZ bitenlere ayrıldı. Eşik 1'ken tek makarası kalan on renk birden
         // "azalan" olur; hepsine kehribar zemin verilince ekranın yarısı uyarıya döner ve asıl
         // acil olan üç renk kaybolur. Azalan artık yalnız etiketiyle konuşuyor.
-        biten && "border-destructive/50 hover:border-destructive/80",
-        azalan && "hover:border-amber-500/60",
-        !biten && !azalan && "hover:border-primary/35 hover:shadow-[0_4px_16px_oklch(0.66_0.2_278_/_10%)]"
+        biten && "bg-rose-500/[0.05] ring-rose-400/40 hover:ring-rose-400/70",
+        azalan && "hover:ring-[#7A7EFF]/55",
+        !biten && !azalan && "hover:ring-white/[0.14] hover:shadow-[0_10px_24px_-16px_rgba(122,126,255,0.6)]"
       )}
     >
       {/* Makara halkası: renk gerçek filament rengi, göbeğindeki sayı kapalı makara adedi. */}
@@ -428,7 +494,7 @@ function RenkCipi({ cip, index, onClick }: { cip: RenkCip; index: number; onClic
         {/* Biten renkte halkanın ardında yumuşak bir hale. Bilerek yavaş ve sönük: bu sayfa
             her gün açılıyor, sürekli çarpan bir uyarı kısa sürede rahatsız ederdi. */}
         {biten && (
-          <span className="absolute -inset-1 rounded-full bg-destructive/20 blur-md animate-pulse motion-reduce:animate-none" />
+          <span className="absolute -inset-1 rounded-full bg-rose-500/20 blur-md animate-pulse motion-reduce:animate-none" />
         )}
         <SpoolDisk
           colorHex={cip.colorHex}
@@ -439,18 +505,18 @@ function RenkCipi({ cip, index, onClick }: { cip: RenkCip; index: number; onClic
           className="relative group-hover:scale-105 motion-reduce:group-hover:scale-100"
         />
       </span>
-      <span className="w-full truncate text-[11px] font-medium leading-tight">{cip.colorName}</span>
+      <span className="w-full truncate text-[11px] font-medium leading-tight">{ad}</span>
       {/* Durum etiketi TEK KELİME: iki kelimeye taşınca satır kayıyor ve çip komşularından
           uzun kalıyordu, ızgara tırtıklı görünüyordu. */}
       <span
         className={cn(
           "text-[9px] font-semibold uppercase tracking-wide whitespace-nowrap",
-          biten && "text-destructive",
-          azalan && "text-amber-400",
+          biten && "text-rose-300",
+          azalan && "text-[#A9AEFF]",
           !biten && !azalan && "font-normal text-muted-foreground"
         )}
       >
-        {biten ? (cip.group ? "bitti" : "yok") : azalan ? "azalıyor" : "makara"}
+        {biten ? (sonAcik ? "son açık" : cip.group ? "bitti" : "yok") : azalan ? "azalıyor" : "makara"}
       </span>
     </button>
   );
@@ -463,10 +529,10 @@ function FilterChip({
     <button
       onClick={onClick}
       className={cn(
-        "text-xs px-2.5 py-1 rounded-full border transition-all active:scale-95",
+        "rounded-full px-2.5 py-1 text-xs ring-1 transition-all duration-200 active:scale-95",
         active
-          ? "bg-primary text-primary-foreground border-primary"
-          : "bg-background hover:bg-muted border-border text-muted-foreground hover:text-foreground"
+          ? "bg-[#7A7EFF]/20 font-medium text-[#E4E7FF] ring-[#7A7EFF]/55 shadow-[0_6px_18px_-10px_rgba(122,126,255,0.9)]"
+          : "bg-white/[0.02] text-muted-foreground ring-white/[0.08] hover:bg-white/[0.05] hover:text-foreground"
       )}
     >
       {children}
@@ -478,13 +544,13 @@ function ThresholdControl({ value, onChange }: { value: number; onChange: (v: nu
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
-      <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setOpen((v) => !v)}>
-        <Bell className="h-3.5 w-3.5" /> Uyarı eşiği: {value}
+      <Button size="sm" variant="outline" className="h-9 gap-1.5 rounded-xl border-white/[0.1] bg-white/[0.03] transition active:scale-[0.97]" onClick={() => setOpen((v) => !v)}>
+        <Bell className="h-3.5 w-3.5 text-[#A9AEFF]" /> Uyarı eşiği: <span className="tabular-nums">{value}</span>
       </Button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <Card className="absolute right-0 top-10 z-50 w-64 shadow-lg animate-in fade-in zoom-in-95 duration-200">
+          <Card className="absolute right-0 top-11 z-50 w-64 rounded-2xl border-0 ring-1 ring-white/[0.1] shadow-[0_24px_60px_-24px_rgba(0,0,0,0.9)] animate-in fade-in zoom-in-95 duration-200">
             <CardContent className="p-3 space-y-2">
               <p className="text-xs text-muted-foreground">
                 Bir renkte bu sayıda veya daha az <b>kapalı</b> makara kalınca uyarılırsın.
@@ -518,8 +584,8 @@ function Modal({
 }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 animate-in fade-in" onClick={onClose} />
-      <Card className={cn("relative w-full animate-in fade-in zoom-in-95 duration-200", wide ? "max-w-2xl" : "max-w-md")}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px] animate-in fade-in" onClick={onClose} />
+      <Card className={cn("relative w-full rounded-2xl border-0 ring-1 ring-white/[0.09] shadow-[0_30px_80px_-30px_rgba(0,0,0,0.95)] animate-in fade-in zoom-in-95 duration-200", wide ? "max-w-2xl" : "max-w-md")}>
         <CardContent className="p-5 space-y-4 max-h-[85vh] overflow-y-auto">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold">{title}</h2>
@@ -574,7 +640,7 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
 
   const save = useMutation({
     mutationFn: () =>
-      fetch("/api/spools/batch", {
+      fetchJson<{ count: number }>("/api/spools/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -589,12 +655,10 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
           spoolCost: spoolCost ? Number(spoolCost) : undefined,
           vendorUrl: vendorUrl.trim() || undefined,
         }),
-      }).then((r) => {
-        if (!r.ok) throw new Error("Kaydedilemedi");
-        return r.json();
       }),
     onSuccess: (res: { count: number }) => {
       qc.invalidateQueries({ queryKey: ["spools"] });
+      qc.invalidateQueries({ queryKey: ["spools-tuketim"] });
       toast.success(`${formatNumber(res.count, 0)} makara eklendi`);
       if (keepOpenRef.current) {
         keepOpenRef.current = false;
@@ -622,7 +686,7 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
     <Modal title="Makara Ekle" onClose={onClose} wide>
       <div className="space-y-4">
         {sessionCount > 0 && (
-          <p className="text-xs text-green-400 flex items-center gap-1 animate-in fade-in slide-in-from-top-1 duration-300">
+          <p className="text-xs text-emerald-300 flex items-center gap-1 animate-in fade-in slide-in-from-top-1 duration-300">
             <Check className="h-3.5 w-3.5" /> Bu oturumda eklenen:{" "}
             <AnimatedNumber value={sessionCount} format={(n) => formatNumber(n, 0)} className="font-semibold" />
           </p>
@@ -649,7 +713,7 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
                 className={cn(
                   "flex flex-col items-center gap-1 p-1.5 rounded-lg border transition-all active:scale-95",
                   "animate-in fade-in zoom-in-95 fill-mode-both duration-200",
-                  colorKey === c.key ? "border-primary bg-primary/10 scale-[1.03]" : "border-transparent hover:bg-muted"
+                  colorKey === c.key ? "border-[#7A7EFF]/60 bg-[#7A7EFF]/10 scale-[1.03]" : "border-transparent hover:bg-white/[0.05]"
                 )}
                 style={{ animationDelay: `${Math.min(i, 16) * 15}ms` }}
                 title={c.name}
@@ -758,13 +822,13 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
           </div>
         )}
 
-        <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs transition-colors">
+        <div className="rounded-xl bg-white/[0.03] px-3 py-2 text-xs ring-1 ring-white/[0.06] transition-colors">
           <span className="text-muted-foreground">Eklenecek: </span>
           <span className="font-medium">{preview}</span>
         </div>
 
         <div className="flex gap-2">
-          <Button className="flex-1" disabled={!canSave || save.isPending} onClick={() => save.mutate()}>
+          <Button className={cn(BIRINCIL, "h-9 flex-1")} disabled={!canSave || save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? "Kaydediliyor…" : `${formatNumber(qty, 0)} Makara Ekle`}
           </Button>
           <Button variant="outline" disabled={!canSave || save.isPending} onClick={saveAndNew}>
@@ -777,15 +841,13 @@ function AddSpoolDialog({ prefill, onClose }: { prefill: Partial<AddPrefill>; on
 }
 
 function GroupDetailDialog({
-  group: g, threshold, generalThreshold, onSetThreshold, onClose, onEdit, onDelete, onAdd,
+  group: g, threshold, generalThreshold, custom, onSetThreshold, onClose, onEdit, onDelete, onAdd,
 }: {
-  group: FilamentGroup; threshold: number; generalThreshold: number;
+  group: FilamentGroup; threshold: number; generalThreshold: number; custom: boolean;
   onSetThreshold: (v: number | null) => void;
   onClose: () => void; onEdit: (s: SpoolLike) => void;
   onDelete: (s: SpoolLike) => void; onAdd: () => void;
 }) {
-  const custom = threshold !== generalThreshold;
-
   return (
     <Modal title={g.label} onClose={onClose} wide>
       <div className="space-y-4">
@@ -804,7 +866,7 @@ function GroupDetailDialog({
           </div>
         </div>
 
-        <div className="rounded-lg border p-3 flex items-center justify-between gap-3">
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.02] p-3 ring-1 ring-white/[0.07]">
           <div className="text-xs">
             <p className="font-medium">Bu renk için eşik</p>
             <p className="text-muted-foreground">
@@ -886,15 +948,10 @@ function DeleteSpoolDialog({
             </p>
           </div>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Bu makara listeden kalkacak ve tüketim geçmişi silinecek. Geri alınamaz.
-        </p>
-        <p className="text-[11px] text-muted-foreground">
-          Biten makarayı silmek yerine listede bırakabilirsin.
-        </p>
+        <p className="text-sm text-muted-foreground">Bu makara listeden kalkacak. Geri alınamaz.</p>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose}>İptal</Button>
-          <Button variant="destructive" className="gap-1.5" onClick={onConfirm}>
+          <Button className="gap-1.5 bg-rose-500 text-white hover:bg-rose-500/90 active:scale-[0.97]" onClick={onConfirm}>
             <Trash2 className="h-4 w-4" /> Sil
           </Button>
         </div>
@@ -916,7 +973,7 @@ function SpoolRow({
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card transition-colors hover:bg-muted/40",
+        "rounded-xl bg-white/[0.02] ring-1 ring-white/[0.06] transition-colors hover:bg-white/[0.04]",
         "animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300"
       )}
       style={{ animationDelay: `${Math.min(index, 10) * 30}ms` }}
@@ -934,9 +991,9 @@ function SpoolRow({
         </div>
         <span className={cn(
           "text-[11px] px-1.5 py-0.5 rounded border shrink-0",
-          empty ? "bg-destructive/15 text-destructive border-destructive/30"
-            : sealed ? "bg-green-500/15 text-green-400 border-green-500/30"
-              : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+          empty ? "bg-rose-500/15 text-rose-300 border-rose-400/30"
+            : sealed ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+              : "bg-[#7A7EFF]/15 text-[#C9D2F2] border-[#7A7EFF]/30"
         )}>
           {empty ? "Bitti" : sealed ? "Kapalı" : "Açık"}
         </span>
@@ -946,7 +1003,7 @@ function SpoolRow({
           <Button size="icon" variant="ghost" className="h-7 w-7" title="Düzenle" onClick={onEdit}>
             <Pencil className="h-3.5 w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive" title="Sil"
+          <Button size="icon" variant="ghost" className="h-7 w-7 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200" title="Sil"
             onClick={onDelete}>
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
@@ -967,9 +1024,30 @@ function EditSpoolDialog({ spool, onClose }: { spool: Spool; onClose: () => void
   const [remainingGrams, setRemainingGrams] = useState(String(spool.remainingGrams));
   const [spoolCost, setSpoolCost] = useState(spool.spoolCost != null ? String(spool.spoolCost) : "");
 
+  // BOŞ ≠ SIFIR: "Kalan" silinip kaydedilince makara 0 g / bitti oluyordu (denetim, 23 Kas 2026).
+  const sayi = (t: string) => {
+    const v = t.trim().replace(",", ".");
+    if (!v) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const toplamG = sayi(totalGrams);
+  const kalanG = sayi(remainingGrams);
+  const fiyat = spoolCost.trim() ? sayi(spoolCost) : null;
+  const hata =
+    toplamG == null || toplamG <= 0
+      ? "Toplam gram girilmeli"
+      : kalanG == null || kalanG < 0
+        ? "Kalan gram girilmeli"
+        : kalanG > toplamG
+          ? "Kalan toplamdan büyük olamaz"
+          : spoolCost.trim() && (fiyat == null || fiyat < 0)
+            ? "Fiyat geçersiz"
+            : null;
+
   const save = useMutation({
     mutationFn: () =>
-      fetch(`/api/spools/${spool.id}`, {
+      fetchJson(`/api/spools/${spool.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -977,13 +1055,14 @@ function EditSpoolDialog({ spool, onClose }: { spool: Spool; onClose: () => void
           brand: brand.trim() || null,
           colorName: colorName.trim() || null,
           colorHex,
-          totalGrams: Number(totalGrams) || spool.totalGrams,
-          remainingGrams: Number(remainingGrams),
-          spoolCost: spoolCost ? Number(spoolCost) : null,
+          totalGrams: toplamG,
+          remainingGrams: kalanG,
+          spoolCost: fiyat,
         }),
-      }).then((r) => { if (!r.ok) throw new Error("Kaydedilemedi"); return r.json(); }),
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["spools"] });
+      qc.invalidateQueries({ queryKey: ["spools-tuketim"] });
       toast.success("Makara güncellendi");
       onClose();
     },
@@ -1020,21 +1099,25 @@ function EditSpoolDialog({ spool, onClose }: { spool: Spool; onClose: () => void
         <div className="grid grid-cols-3 gap-2">
           <div>
             <Label className="text-xs">Toplam (g)</Label>
-            <Input type="number" value={totalGrams} onChange={(e) => setTotalGrams(e.target.value)} />
+            <Input inputMode="decimal" value={totalGrams} onChange={(e) => setTotalGrams(e.target.value)} />
           </div>
           <div>
             <Label className="text-xs">Kalan (g)</Label>
-            <Input type="number" value={remainingGrams} onChange={(e) => setRemainingGrams(e.target.value)} />
+            <Input inputMode="decimal" value={remainingGrams} onChange={(e) => setRemainingGrams(e.target.value)} />
           </div>
           <div>
             <Label className="text-xs">Fiyat (₺)</Label>
-            <Input type="number" value={spoolCost} onChange={(e) => setSpoolCost(e.target.value)} />
+            <Input inputMode="decimal" value={spoolCost} onChange={(e) => setSpoolCost(e.target.value)} />
           </div>
         </div>
-        <p className="text-[11px] text-muted-foreground">
-          Kalan gram toplamla eşitlenirse makara otomatik <b>kapalı</b> sayılır.
-        </p>
-        <Button className="w-full" disabled={save.isPending} onClick={() => save.mutate()}>
+        {hata ? (
+          <p className="text-[11px] font-medium text-rose-300 animate-in fade-in duration-200">{hata}</p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            Kalan toplama eşitse makara <b>kapalı</b> sayılır.
+          </p>
+        )}
+        <Button className={cn(BIRINCIL, "h-9 w-full")} disabled={save.isPending || hata != null} onClick={() => save.mutate()}>
           {save.isPending ? "Kaydediliyor…" : "Kaydet"}
         </Button>
       </div>

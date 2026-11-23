@@ -5,6 +5,7 @@ import { jsonError } from "@/lib/api-error";
 import { DAY_MS, EXCLUDED_STATUS, SALES_WINDOW_DAYS, coverageStart, toInt } from "@/lib/planner-insights";
 import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
 import { filamentTuketimi } from "@/lib/filament-tuketim";
+import { swr } from "@/lib/route-cache";
 
 /**
  * Filament sayfası "kaç gün yeter": satılan ürünlerin reçete gramajından günlük tüketim.
@@ -15,8 +16,10 @@ export async function GET() {
     await ensureRuntimeSchema();
     const now = Date.now();
     const toNum = (v: unknown) => (v == null ? null : Number(v));
+    // Satış taraması tüm satış tablosunu okuyor: 10 dk önbellekte tutulur. Makara gramı ise her
+    // istekte taze (az önce eklenen makara "elde kalan"a hemen yansısın).
     const [rows, spools] = await Promise.all([
-      prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      swr("spools:tuketim-satis", 10 * 60_000, () => prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
         // Satış satırları önce TAKMA ADSIZ alt sorguda süzülür: dbEpochMs kolon adını kendisi
         // tırnaklıyor, "i.orderedAt" gibi bir ad bozulurdu.
         `SELECT 0 AS "kind", s."quantity" AS "quantity", c."filamentWeight" AS "filamentWeight",
@@ -32,7 +35,7 @@ export async function GET() {
           GROUP BY "platform"`,
         EXCLUDED_STATUS,
         now - SALES_WINDOW_DAYS * DAY_MS
-      ),
+      )),
       prisma.filamentSpool.findMany({ where: { isActive: true }, select: { totalGrams: true, remainingGrams: true } }),
     ]);
     const stokGram = spools.reduce((t, s) => t + Math.max(0, s.remainingGrams ?? s.totalGrams ?? 0), 0);

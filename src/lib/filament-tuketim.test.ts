@@ -13,8 +13,8 @@ const k = (quantity: number, filamentWeight: number | null, ek: string | null = 
 
 describe("filament kaç gün yeter (satış hızından)", () => {
   it("reçete gramı × adet, fire dahil; 90 güne bölünür", () => {
-    // 900 g + (100 g ×1,1 fire)×9 = 900 + 990 = 1890 g / 90 gün = 21 g/gün; stok 2100 g → 100 gün.
-    const t = filamentTuketimi([k(9, 100), k(9, 100, null, 10)], 2100, SIMDI - 300 * GUN, SIMDI);
+    // fire ORAN (0,1 = %10). 900 g + (100 g ×1,1 fire)×9 = 900 + 990 = 1890 g / 90 gün = 21 g/gün; stok 2100 g → 100 gün.
+    const t = filamentTuketimi([k(9, 100), k(9, 100, null, 0.1)], 2100, SIMDI - 300 * GUN, SIMDI);
     expect(t.toplamGram).toBeCloseTo(1890, 6);
     expect(t.gunlukGram).toBeCloseTo(21, 6);
     expect(t.kacGun).toBeCloseTo(100, 6);

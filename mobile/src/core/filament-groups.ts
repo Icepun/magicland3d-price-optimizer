@@ -515,3 +515,55 @@ export function parseGroupThresholds(raw: string | null | undefined): Record<str
     return {};
   }
 }
+
+// ─────────────────────────── Ayar okuma (TEK KURAL) ───────────────────────────
+
+export interface FilamentAyarlari {
+  threshold: number;
+  groupThresholds: Record<string, number>;
+  watchedGroups: WatchedGroup[];
+  mutedGroups: string[];
+}
+
+/**
+ * AppSetting anahtar/değerlerinden filament ayarları. Masaüstü sunucu, Filament sayfası, telefon
+ * zili, Atölye ve telefon Filament ekranı AYNI fonksiyonu kullanır. Eskiden dört ayrı kopya vardı
+ * ve ayrışmıştı: boş renk eşiğini ("") sayfa 0, zil 1 okuyordu; Atölye ayarı hiç okumuyordu
+ * (denetim, 23 Kas 2026). Boş eşik = renge özel eşik YOK (genel eşik geçerli).
+ */
+export function filamentAyarlariniCoz(ayarlar: Record<string, string | null | undefined> | null | undefined): FilamentAyarlari {
+  const groupThresholds: Record<string, number> = {};
+  const watchedGroups: WatchedGroup[] = [];
+  const mutedGroups: string[] = [];
+  for (const [anahtar, ham] of Object.entries(ayarlar ?? {})) {
+    const deger = String(ham ?? "").trim();
+    if (anahtar.startsWith("filamentThreshold:")) {
+      const key = anahtar.slice("filamentThreshold:".length);
+      const n = Number(deger);
+      if (key && deger && Number.isFinite(n) && n >= 0) groupThresholds[key] = Math.floor(n);
+    } else if (anahtar.startsWith("filamentWatch:")) {
+      const key = anahtar.slice("filamentWatch:".length);
+      if (key) watchedGroups.push({ key, label: deger || undefined });
+    } else if (anahtar.startsWith("filamentMute:")) {
+      const key = anahtar.slice("filamentMute:".length);
+      if (key && deger !== "0") mutedGroups.push(key);
+    }
+  }
+  return {
+    threshold: parseThreshold(ayarlar?.filamentLowSpoolCount ?? null),
+    groupThresholds,
+    watchedGroups,
+    mutedGroups,
+  };
+}
+
+/** Bir grubun geçerli eşiği (renge özel varsa o, yoksa genel; en az 1) — uyarılarla AYNI kural. */
+export function esikBul(groupKey: string, opts: FilamentAlertOptions): number {
+  return thresholdFor(groupKey, opts);
+}
+
+/** Renge özel eşik tanımlı mı (Filament penceresindeki "Özel" / "Sıfırla"). */
+export function ozelEsikVarMi(groupKey: string, opts: FilamentAlertOptions): boolean {
+  const per = opts.groupThresholds?.[groupKey];
+  return typeof per === "number" && Number.isFinite(per) && per >= 0;
+}

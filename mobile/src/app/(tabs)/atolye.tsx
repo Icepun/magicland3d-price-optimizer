@@ -5,7 +5,8 @@ import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
-import { buildFilamentAlerts, groupSpools } from "@core/filament-groups";
+import { buildFilamentAlerts, filamentAyarlariniCoz, groupSpools } from "@core/filament-groups";
+import { getSettingsMap } from "@/lib/db/rules";
 import { Pill } from "@/components/kit/Chip";
 import {
   Count,
@@ -149,6 +150,8 @@ export default function AtolyeScreen() {
     return () => clearInterval(t);
   }, []);
   const spools = useQuery({ queryKey: ["spools"], queryFn: getSpools });
+  // Eşik / susturma / izlenen renkler — zil ve Filament ekranıyla AYNI ayarlar (eskiden hiç okunmuyordu).
+  const ayarlar = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { refreshing, onRefresh } = useManualRefresh(async () => {
     await Promise.all([printers.refetch(), spools.refetch()]);
   });
@@ -162,7 +165,7 @@ export default function AtolyeScreen() {
 
   // Filament uyarıları ortak çekirdekten — zil ve Filament ekranıyla AYNI kural.
   const gruplar = groupSpools(spools.data ?? []);
-  const uyarilar = buildFilamentAlerts(gruplar);
+  const uyarilar = buildFilamentAlerts(gruplar, filamentAyarlariniCoz(ayarlar.data ?? {}));
 
   /** Hazırlık rozeti: kaç ürün satırı toplanmayı bekliyor (işaretler masaüstüyle ortak). */
   const orders = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });

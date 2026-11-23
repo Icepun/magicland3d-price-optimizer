@@ -5,6 +5,8 @@ import { useState } from "react";
 import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 
 import { slugifyTr } from "@/core/filament-groups";
+import { filamentStokDurumu } from "@/core/filament-stok";
+import { getSettingsMap } from "@/lib/db/rules";
 import { Chip, Pill } from "@/components/kit/Chip";
 import {
   Button,
@@ -39,8 +41,8 @@ import { color, radius, space } from "@/theme/tokens";
 
 const STATUS = {
   empty: { label: "Bitti", color: color.bad },
-  low: { label: "Sipariş ver", color: color.warn },
-  ok: { label: "Yeterli", color: color.good },
+  open: { label: "Açık", color: color.accentBright },
+  sealed: { label: "Kapalı", color: color.good },
 } as const;
 
 const MATERIALS = ["PLA", "PLA+", "PETG", "ABS", "ASA", "TPU", "Reçine"];
@@ -54,24 +56,28 @@ const SWATCHES = [
 
 /**
  * FİLAMENT MAKARALARI — iki sütun kart, renk şeridi, doluluk çubuğu, gram düş / dolu işaretle,
- * ekle/düzenle formu. İyimser güncellemeler ve v37 renk adı koruması öncekiyle aynı.
+ * ekle/düzenle formu. "Bitti / azaldı" kararı masaüstüyle AYNI çekirdekten (`filamentStokDurumu`):
+ * renk başına KAPALI makara sayısı + Filament sayfasındaki eşikler.
  */
 export default function SpoolsScreen() {
   const qc = useQueryClient();
   const { data, isLoading, refetch, error, isFetching } = useQuery({ queryKey: ["spools"], queryFn: getSpools });
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { refreshing, onRefresh } = useManualRefresh(refetch);
   const [consumeTarget, setConsumeTarget] = useState<Spool | null>(null);
   const [formTarget, setFormTarget] = useState<Spool | "new" | null>(null);
 
-  const alertCount = (data ?? []).filter((s) => spoolStatus(s) !== "ok").length;
+  const { ozet } = filamentStokDurumu(data ?? [], settings ?? {});
+  const sorunlu = ozet.biten + ozet.azalan;
 
   const patchSpool = (id: string, patch: Partial<Spool>) =>
     qc.setQueryData<Spool[]>(["spools"], (o) => (o ? o.map((s) => (s.id === id ? { ...s, ...patch } : s)) : o));
-  const bumpNotif = () => qc.invalidateQueries({ queryKey: ["notifications"] });
+  /** Yazma BİTTİKTEN sonra liste ve zil tazelenir (eskiden yazma sürerken tazeleniyordu). */
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["spools"] });
-    bumpNotif();
+    void qc.invalidateQueries({ queryKey: ["spools"] });
+    void qc.invalidateQueries({ queryKey: ["notifications"] });
   };
+  const yazmaHatasi = () => Alert.alert("Kaydedilemedi", "Bağlantını kontrol edip tekrar dene.");
 
   const refill = useMutation({
     mutationFn: markSpoolFull,
@@ -79,11 +85,14 @@ export default function SpoolsScreen() {
       await qc.cancelQueries({ queryKey: ["spools"] });
       const prev = qc.getQueryData<Spool[]>(["spools"]);
       const sp = prev?.find((s) => s.id === id);
-      if (sp) patchSpool(id, { remainingGrams: sp.totalGrams });
-      bumpNotif();
+      if (sp) patchSpool(id, { remainingGrams: sp.totalGrams, openedAt: null });
       return { prev };
     },
-    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(["spools"], ctx.prev),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["spools"], ctx.prev);
+      yazmaHatasi();
+    },
+    onSettled: invalidate,
   });
 
   const consumeMut = useMutation({
@@ -92,11 +101,14 @@ export default function SpoolsScreen() {
       await qc.cancelQueries({ queryKey: ["spools"] });
       const prev = qc.getQueryData<Spool[]>(["spools"]);
       const sp = prev?.find((s) => s.id === id);
-      if (sp) patchSpool(id, { remainingGrams: Math.max(0, sp.remainingGrams - grams) });
-      bumpNotif();
+      if (sp) patchSpool(id, { remainingGrams: Math.max(0, sp.remainingGrams - grams), openedAt: sp.openedAt ?? new Date().toISOString() });
       return { prev };
     },
-    onError: (_e, _v, ctx) => ctx?.prev && qc.setQueryData(["spools"], ctx.prev),
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["spools"], ctx.prev);
+      yazmaHatasi();
+    },
+    onSettled: invalidate,
   });
 
   return (
@@ -106,7 +118,7 @@ export default function SpoolsScreen() {
       header={
         <SubHeader
           title="Filament"
-          subtitle={data ? `${formatNumber(data.length)} makara${alertCount ? ` · ${alertCount} uyarı` : ""}` : undefined}
+          subtitle={data ? `${formatNumber(ozet.toplam)} kapalı makara · ${formatNumber(ozet.renk)} renk` : undefined}
           right={<IconButton icon="plus" accent onPress={() => setFormTarget("new")} accessibilityLabel="Makara ekle" />}
         />
       }
@@ -127,11 +139,21 @@ export default function SpoolsScreen() {
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={color.accentBright} />}
           ListHeaderComponent={
-            alertCount > 0 ? (
-              <Tint strong style={styles.alert}>
-                <SymbolView name="exclamationmark.triangle.fill" tintColor={color.warn} style={{ width: 16, height: 16 }} />
-                <Txt v="smallStrong" tone="warn" style={{ flex: 1 }}>
-                  {alertCount} makara azaldı ya da bitti — sipariş ver
+            sorunlu > 0 ? (
+              <Tint strong style={[styles.alert, { borderColor: (ozet.biten > 0 ? color.bad : color.warn) + "66" }]}>
+                <SymbolView
+                  name="exclamationmark.triangle.fill"
+                  tintColor={ozet.biten > 0 ? color.bad : color.warn}
+                  style={{ width: 16, height: 16 }}
+                />
+                <Txt v="smallStrong" tone={ozet.biten > 0 ? "bad" : "warn"} style={{ flex: 1 }}>
+                  {[
+                    ozet.biten > 0 ? `${ozet.biten} renk bitti` : null,
+                    ozet.azalan > 0 ? `${ozet.azalan} renk azaldı` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}{" "}
+                  — sipariş ver
                 </Txt>
               </Tint>
             ) : null
@@ -257,12 +279,28 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new"; on
   const [colorName, setColorName] = useState(initial?.colorName ?? "");
   const [total, setTotal] = useState(initial ? String(initial.totalGrams) : "1000");
   const [remaining, setRemaining] = useState(initial ? String(initial.remainingGrams) : "1000");
-  const [reorder, setReorder] = useState(initial ? String(initial.reorderGrams) : "200");
   const [cost, setCost] = useState(initial?.spoolCost != null ? String(initial.spoolCost) : "");
   const [busy, setBusy] = useState(false);
 
-  const num = (s: string) => Number(s.replace(",", ".")) || 0;
-  const valid = name.trim().length > 0 && num(total) > 0;
+  /** Boş ya da geçersiz → null (BOŞ ≠ SIFIR: boş "Kalan" makarayı 0 g / bitti yapıyordu). */
+  const num = (s: string): number | null => {
+    const t = s.trim().replace(",", ".");
+    if (!t) return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  };
+  const toplamG = num(total);
+  // Yeni makarada kalan boşsa = toplam (kapalı makara); düzenlemede boş bırakılamaz.
+  const kalanG = remaining.trim() ? num(remaining) : editing ? null : toplamG;
+  const hata =
+    toplamG == null || toplamG <= 0
+      ? "Toplam gram girilmeli"
+      : kalanG == null || kalanG < 0
+        ? "Kalan gram girilmeli"
+        : kalanG > toplamG
+          ? "Kalan toplamdan büyük olamaz"
+          : null;
+  const valid = name.trim().length > 0 && hata == null;
 
   async function submit() {
     if (!valid) return;
@@ -274,9 +312,10 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new"; on
       colorHex,
       colorKey: colorName.trim() ? slugifyTr(colorName.trim()) : (initial?.colorKey ?? null),
       brand: brand.trim() || null,
-      totalGrams: num(total),
-      remainingGrams: num(remaining || total),
-      reorderGrams: num(reorder),
+      totalGrams: toplamG ?? 0,
+      remainingGrams: kalanG ?? 0,
+      // Kolon duruyor (eski sürümler okuyor) ama uyarıya girmiyor — mevcut değer korunur.
+      reorderGrams: initial?.reorderGrams ?? 200,
       spoolCost: cost.trim() ? num(cost) : null,
     };
     try {
@@ -290,7 +329,15 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new"; on
     }
   }
 
-  async function remove() {
+  function remove() {
+    if (!initial) return;
+    Alert.alert("Makarayı sil", "Bu makara listeden kalkacak. Geri alınamaz.", [
+      { text: "Vazgeç", style: "cancel" },
+      { text: "Sil", style: "destructive", onPress: () => void sil() },
+    ]);
+  }
+
+  async function sil() {
     if (!initial) return;
     setBusy(true);
     try {
@@ -349,7 +396,7 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new"; on
                 ))}
               </View>
             </Alan>
-            <Alan label="Renk adı (gruplama için)">
+            <Alan label="Renk adı">
               <Input value={colorName} onChangeText={setColorName} placeholder="Siyah, Yeşil, Koyu Yeşil…" />
             </Alan>
             <Alan label="Marka (isteğe bağlı)">
@@ -363,14 +410,14 @@ function SpoolFormModal({ target, onClose, onDone }: { target: Spool | "new"; on
                 <Input value={remaining} onChangeText={setRemaining} numeric suffix="g" />
               </Alan>
             </View>
-            <View style={styles.twoCol}>
-              <Alan label="Uyarı eşiği" flex>
-                <Input value={reorder} onChangeText={setReorder} numeric suffix="g" />
-              </Alan>
-              <Alan label="Maliyet (isteğe bağlı)" flex>
-                <Input value={cost} onChangeText={setCost} numeric suffix="₺" />
-              </Alan>
-            </View>
+            <Alan label="Maliyet (isteğe bağlı)">
+              <Input value={cost} onChangeText={setCost} numeric suffix="₺" />
+            </Alan>
+            {hata && (name.trim() || editing) ? (
+              <Txt v="small" tone="bad">
+                {hata}
+              </Txt>
+            ) : null}
             {editing ? <Button label="Makarayı sil" variant="danger" onPress={remove} disabled={busy} /> : null}
           </ScrollView>
           <View style={styles.modalActions}>

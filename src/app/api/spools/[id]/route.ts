@@ -33,6 +33,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const current = await prisma.filamentSpool.findUnique({ where: { id } });
     if (!current) return NextResponse.json({ error: "Makara bulunamadı" }, { status: 404 });
+    // Kalan toplamdan büyük olamaz (yanlış girişte makara "taşan" görünüyordu).
+    const sonToplam = input.totalGrams ?? current.totalGrams;
+    const sonKalan = input.remainingGrams ?? current.remainingGrams;
+    if (sonKalan > sonToplam) {
+      return NextResponse.json({ error: "Kalan gram toplamdan büyük olamaz." }, { status: 400 });
+    }
 
     // Renk adı değişirse gruplama anahtarı da onunla birlikte yazılmalı — yoksa makara eski
     // grupta asılı kalır ve kullanıcı rengi düzeltmesine rağmen kart değişmez.

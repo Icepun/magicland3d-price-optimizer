@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -6,6 +7,8 @@ import { jsonError } from "@/lib/api-error";
 import { SpoolInputSchema, buildSpoolFields } from "@/lib/filament-spool-input";
 import { watchFilamentGroup } from "@/lib/filament-settings";
 import { bustInventoryAlertCaches } from "@/lib/cache-busting";
+import { batchWrite } from "@/lib/libsql-batch";
+import { toDbDate } from "@/lib/sqlite-date";
 
 /**
  * TOPLU makara ekleme — "3 × Yeşil PLA (Polyture, 1 kg)" tek istekte.
@@ -28,14 +31,29 @@ export async function POST(req: NextRequest) {
     const { quantity, ...spoolInput } = input;
     const { fields, groupKey, label } = buildSpoolFields(spoolInput);
 
-    const created = await prisma.$transaction(
-      Array.from({ length: quantity }, () => prisma.filamentSpool.create({ data: fields }))
-    );
+    // TEK istekte yaz: uzak veritabanında her yazma ayrı tur, ve tüm sorgular tek kuyrukta sırayla
+    // koşuyor — 20 makara ≈ 2 sn uygulamanın geri kalanını bekletiyordu (denetim, 23 Kas 2026).
+    const simdi = toDbDate(new Date());
+    const ifadeler = Array.from({ length: quantity }, () => ({
+      sql: `INSERT INTO "FilamentSpool" ("id", "name", "material", "colorName", "colorHex", "brand", "totalGrams",
+              "remainingGrams", "spoolCost", "vendorUrl", "colorKey", "openedAt", "isActive", "createdAt", "updatedAt")
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)`,
+      args: [
+        `spl_${randomUUID().replace(/-/g, "")}`,
+        fields.name, fields.material, fields.colorName, fields.colorHex, fields.brand, fields.totalGrams,
+        fields.remainingGrams, fields.spoolCost, fields.vendorUrl, fields.colorKey, simdi, simdi,
+      ] as unknown[],
+    }));
+    if (!(await batchWrite(ifadeler))) {
+      await prisma.$transaction(
+        Array.from({ length: quantity }, () => prisma.filamentSpool.create({ data: fields }))
+      );
+    }
 
     await watchFilamentGroup(groupKey, label);
     bustInventoryAlertCaches(); // yeni makaralar → "filament azaldı" uyarısı 90 sn bayat kalmasın
 
-    return NextResponse.json({ count: created.length, spools: created }, { status: 201 });
+    return NextResponse.json({ count: quantity }, { status: 201 });
   } catch (error) {
     return jsonError(error);
   }

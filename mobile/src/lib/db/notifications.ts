@@ -1,7 +1,7 @@
 import {
   buildFilamentAlerts,
   groupSpools,
-  parseThreshold,
+  filamentAyarlariniCoz,
   type SpoolLike,
 } from "@/core/filament-groups";
 import { toDbDate } from "@core/sqlite-date";
@@ -173,26 +173,9 @@ export async function getNotifications(): Promise<NotificationsResult> {
     for (const row of filamentSettingsRes.rows as unknown as { key: string; value: string }[]) {
       settings[row.key] = row.value;
     }
-    const groupThresholds: Record<string, number> = {};
-    const watchedGroups: { key: string; label?: string }[] = [];
-    const mutedGroups: string[] = [];
-    for (const [k, v] of Object.entries(settings)) {
-      if (k.startsWith("filamentThreshold:")) {
-        const n = Number(v);
-        if (isFinite(n) && n >= 0) groupThresholds[k.slice("filamentThreshold:".length)] = Math.floor(n);
-      } else if (k.startsWith("filamentWatch:")) {
-        watchedGroups.push({ key: k.slice("filamentWatch:".length), label: v || undefined });
-      } else if (k.startsWith("filamentMute:") && v !== "0") {
-        mutedGroups.push(k.slice("filamentMute:".length));
-      }
-    }
     const spools = spoolRes.rows as unknown as SpoolLike[];
-    const filamentAlerts = buildFilamentAlerts(groupSpools(spools), {
-      threshold: parseThreshold(settings["filamentLowSpoolCount"]),
-      groupThresholds,
-      watchedGroups,
-      mutedGroups,
-    });
+    // Ayar okuma kuralı çekirdekte TEK yerde (masaüstü sunucu ve Filament sayfasıyla aynı).
+    const filamentAlerts = buildFilamentAlerts(groupSpools(spools), filamentAyarlariniCoz(settings));
     for (const a of filamentAlerts) {
       alerts.push({
         id: a.id,

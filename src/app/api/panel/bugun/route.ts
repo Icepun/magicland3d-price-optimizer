@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { jsonError } from "@/lib/api-error";
 import { prisma, remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { FILAMENT_COLORS, groupSpools } from "@/core/filament-groups";
+import { FILAMENT_COLORS, esikBul, groupSpools } from "@/core/filament-groups";
 import { renkCipleri, TEMEL_RENKLER } from "@/app/spools/spools-view";
 import { loadFilamentSettings } from "@/lib/filament-settings";
 import { yaziciOzeti } from "@/lib/panel-bugun";
@@ -45,8 +45,8 @@ export async function GET() {
     // kalmayan + hiç kaydı olmayan temel renkler). Ayrı bir tanım iki ekranda farklı sayı verirdi.
     const bitenRenkler = renkCipleri(
       groupSpools(spools),
-      (g) => filamentSettings.groupThresholds[g.key] ?? filamentSettings.threshold,
-      filamentSettings.threshold,
+      (g) => esikBul(g.key, filamentSettings),
+      esikBul("", filamentSettings),
       FILAMENT_COLORS.filter((c) => (TEMEL_RENKLER as readonly string[]).includes(c.key)),
       filamentSettings.watchedGroups ?? []
     )

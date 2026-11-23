@@ -45,7 +45,9 @@ export function filamentTuketimi(
       gramsizAdet += k.quantity;
       continue;
     }
-    toplamGram += gram * (1 + Math.max(0, k.wasteRate ?? 0) / 100) * k.quantity;
+    // Fire ORAN olarak saklanır (0,1 = %10; maliyet hesabıyla aynı). Eskiden /100 ile 100 kat
+    // küçük sayılıyor, "kaç gün yeter" olduğundan iyimser çıkıyordu (denetim, 23 Kas 2026).
+    toplamGram += gram * (1 + Math.min(1, Math.max(0, k.wasteRate ?? 0))) * k.quantity;
   }
   const gecmisGun = kapsamBaslangicMs == null ? 0 : Math.max(0, Math.floor((nowMs - kapsamBaslangicMs) / DAY_MS));
   const olculenGun = Math.max(1, Math.min(gecmisGun, SALES_WINDOW_DAYS));
