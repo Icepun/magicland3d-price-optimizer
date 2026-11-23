@@ -23,6 +23,7 @@ import {
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
 import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
+import { adRateFor, adRateSnapshot } from "@/lib/ad-rate";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 
@@ -130,6 +131,11 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
   ]);
 
   const filamentFiyatlari = await filamentFiyatlariOku();
+  // REKLAM PAYI — ürün detayı ve telefonla AYNI: bugünün yürürlükteki bütçesinin oranı. Eksikken
+  // reklam bütçesi girildiği gün liste/Panel/Raporlar detaydan yüksek kâr gösterirdi (denetim,
+  // 23 Kas 2026). Oran okunamazsa 0 (bütçe yokken de 0) — önbellekli, ek sorgu yok gibi.
+  const reklamAni = await adRateSnapshot().catch(() => null);
+  const reklamOrani = (platform: string) => (reklamAni ? adRateFor(reklamAni, platform, null) : 0);
   const settingsMap = Object.fromEntries(settings.map((row) => [row.key, row.value]));
   const vatRate = vatRateOf(settingsMap);
   type CargoRuleInput = Parameters<typeof simulatePrice>[0]["cargoRules"];
@@ -172,6 +178,7 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
       price: number
     ) =>
       simulatePrice({
+        adRate: reklamOrani(platform),
         salePrice: price,
         productCost,
         packagingCost,

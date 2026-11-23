@@ -1,4 +1,5 @@
 import { reviveRuleDates } from "./rule-dates";
+import { komisyonBilinmiyor } from "./komisyon-bilinmiyor";
 import { simulatePrice } from "./pricing-engine";
 import {
   belowShopifyMinBasket,
@@ -100,6 +101,11 @@ interface PlatformTarget {
   currentPrice: number;
   currentMargin: number;
   rows: TargetRow[];
+  /**
+   * Bu ilanın komisyonu BİLİNMİYOR (`komisyonBilinmiyor`): marj ve hedef fiyatlar komisyonu 0
+   * sayardı → şişkin marj, fazla düşük hedef. O zaman marj NaN, hedefler boş; ekran "Komisyon gir" der.
+   */
+  komisyonEksik?: boolean;
 }
 interface CampaignRow {
   discount: number;
@@ -329,11 +335,20 @@ function priceLabFromBase(b: PricingBase): PriceLab {
   const targets = targetPlatforms.map((platform) => {
     const listing = b.activeListings.find((l) => l.platform === platform) ?? null;
     const currentPrice = listing?.salePrice ?? b.product.currentSalePrice;
+    const simdiki = simFor(platform, listing, currentPrice);
+    const komisyonEksik = komisyonBilinmiyor(
+      { platform, commissionRate: listing ? listing.commissionRate : null },
+      simdiki
+    );
     return {
       platform,
       currentPrice,
-      currentMargin: simFor(platform, listing, currentPrice).profitMargin,
-      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(platform, listing, m / 100, currentPrice) })),
+      currentMargin: komisyonEksik ? Number.NaN : simdiki.profitMargin,
+      rows: MARGINS.map((m) => ({
+        margin: m,
+        price: komisyonEksik ? null : priceForMargin(platform, listing, m / 100, currentPrice),
+      })),
+      komisyonEksik,
     };
   });
 

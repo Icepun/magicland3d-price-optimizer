@@ -18,6 +18,7 @@ import {
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr, swrKayitZamani } from "@/lib/route-cache";
 import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
+import { adRateFor, adRateSnapshot } from "@/lib/ad-rate";
 import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
 
@@ -70,7 +71,8 @@ export async function GET(req: NextRequest) {
       !url.searchParams.has("ayarOnizleme");
 
     // v3: komisyonu bilinmeyen ilanda kâr yok (null) — eski disk kopyası şişkin kârı göstermesin.
-    const anahtar = `products:v3:${url.searchParams.toString()}`;
+    // v4: reklam payı düşülüyor — reklamsız hesaplanmış eski disk kopyası kullanılmasın.
+    const anahtar = `products:v4:${url.searchParams.toString()}`;
     const TTL = 2 * 60_000;
     // Gövdenin HESAPLANDIĞI an: istemcinin stok tazelemesi buradan devam eder. Önbellekte kayıt
     // varsa swr onu döndürür (bayat olsa da) → an kaydınki; yoksa şimdi hesaplanır.
@@ -247,6 +249,11 @@ async function computeProducts(urlString: string) {
     ]);
 
   const filamentFiyatlari = await filamentFiyatlariOku();
+  // REKLAM PAYI — ürün detayı ve telefonla AYNI: bugünün yürürlükteki bütçesinin oranı. Eksikken
+  // reklam bütçesi girildiği gün liste/Panel/Raporlar detaydan yüksek kâr gösterirdi (denetim,
+  // 23 Kas 2026). Oran okunamazsa 0 (bütçe yokken de 0) — önbellekli, ek sorgu yok gibi.
+  const reklamAni = await adRateSnapshot().catch(() => null);
+  const reklamOrani = (platform: string) => (reklamAni ? adRateFor(reklamAni, platform, null) : 0);
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
@@ -318,6 +325,7 @@ async function computeProducts(urlString: string) {
       price: number
     ) =>
       simulatePrice({
+        adRate: reklamOrani(platform),
         salePrice: price,
         productCost,
         packagingCost,
@@ -368,6 +376,7 @@ async function computeProducts(urlString: string) {
         }
 
         const sim = simulatePrice({
+          adRate: reklamOrani(listing.platform),
           salePrice: listing.salePrice,
           productCost,
           packagingCost,
@@ -466,6 +475,7 @@ async function computeProducts(urlString: string) {
               ? product.source
               : "shopify";
         const sim = simulatePrice({
+          adRate: reklamOrani(fallbackPlatform),
           salePrice: product.currentSalePrice,
           productCost,
           packagingCost,

@@ -4,7 +4,7 @@ import { fetchJson } from "@/lib/fetch-json";
 import { memo } from "react";
 import dynamic from "next/dynamic";
 import { useQuery } from "@tanstack/react-query";
-import { LineChart as LineChartIcon } from "lucide-react";
+import { LineChart as LineChartIcon, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,14 +30,14 @@ interface PriceHistoryEntry {
 
 /** changeSource → platform etiketi + renk (Shopify yeşil, Trendyol turuncu, manuel mor). */
 const SOURCE_META: Record<string, { label: string; color: string }> = {
-  shopify_sync: { label: "Shopify", color: "oklch(0.60 0.16 152)" }, // yeşil
-  trendyol_sync: { label: "Trendyol", color: "oklch(0.72 0.17 60)" }, // turuncu (sarı-turuncu)
-  hepsiburada_sync: { label: "Hepsiburada", color: "oklch(0.64 0.21 30)" }, // turuncu-kırmızı (HB)
-  manual: { label: "Manuel", color: "oklch(0.62 0.20 278)" }, // mor
+  shopify_sync: { label: "Shopify", color: "#34D399" }, // yeşil
+  trendyol_sync: { label: "Trendyol", color: "#F27A1A" }, // Trendyol turuncusu (marka rengi)
+  hepsiburada_sync: { label: "Hepsiburada", color: "#4F8CFF" }, // turuncu-kırmızı (HB)
+  manual: { label: "Manuel", color: "#C9D2F2" }, // mor
 };
 
 function sourceMeta(src: string) {
-  return SOURCE_META[src] ?? { label: src, color: "oklch(0.62 0.20 278)" };
+  return SOURCE_META[src] ?? { label: src, color: "#C9D2F2" };
 }
 
 function fmtDate(iso: string) {
@@ -56,7 +56,7 @@ function fmtDateTime(iso: string) {
 // memo: Recharts grafiği pahalı — detay cache'i her değişince (madeToOrder/maliyet) yeniden çizilmesin.
 export const PriceHistoryCard = memo(PriceHistoryCardImpl);
 function PriceHistoryCardImpl({ productId }: { productId: string }) {
-  const { data, isLoading } = useQuery<PriceHistoryEntry[]>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<PriceHistoryEntry[]>({
     queryKey: ["price-history", productId],
     queryFn: () =>
       fetchJson(`/api/products/${productId}/price-history?days=365&limit=300`),
@@ -74,7 +74,7 @@ function PriceHistoryCardImpl({ productId }: { productId: string }) {
 
   return (
     <Card
-      className="animate-in fade-in slide-in-from-bottom-2 duration-500"
+      className="detay-kart rounded-2xl animate-in fade-in slide-in-from-bottom-2 duration-500"
       style={{ animationDelay: "80ms", animationFillMode: "both" }}
     >
       <CardHeader className="pb-3 border-b border-border/50">
@@ -91,6 +91,19 @@ function PriceHistoryCardImpl({ productId }: { productId: string }) {
       <CardContent className="pt-4">
         {isLoading ? (
           <Skeleton className="h-[240px] w-full" />
+        ) : isError && history.length === 0 ? (
+          // Hata "geçmiş yok" gibi gösterilmez — yeniden denetir.
+          <div className="flex flex-col items-center gap-2.5 py-10 text-center text-sm text-muted-foreground">
+            Fiyat geçmişi şu an yüklenemedi.
+            <button
+              type="button"
+              onClick={() => void refetch()}
+              disabled={isFetching}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-white/10 transition hover:bg-white/[0.1] active:scale-[0.97] disabled:opacity-60"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} /> Tekrar dene
+            </button>
+          </div>
         ) : history.length === 0 ? (
           <EmptyState
             icon={LineChartIcon}
@@ -137,7 +150,7 @@ function PriceHistoryCardImpl({ productId }: { productId: string }) {
                         <span
                           className={cn(
                             "font-medium w-16 text-right",
-                            up ? "text-green-500" : "text-destructive"
+                            up ? "text-emerald-400" : "text-rose-400"
                           )}
                         >
                           {up ? "+" : ""}

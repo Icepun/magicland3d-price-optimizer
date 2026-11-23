@@ -405,9 +405,9 @@ function CostEditorImpl({
   // Başlıktaki tek satırlık durum — üç ayrı yerde tekrarlanan uyarıların yerini alır ve
   // toplam rakamla birlikte kart boyunca ekranda kalır.
   const durum = hasFieldError
-    ? { metin: "Kırmızı alanı düzelt", renk: "text-destructive" }
+    ? { metin: "Kırmızı alanı düzelt", renk: "text-rose-400" }
     : !productionKnown
-      ? { metin: "Filament ve ağırlık gir", renk: "text-amber-500" }
+      ? { metin: "Filament ve ağırlık gir", renk: "text-[#A9AEFF]" }
       : savePending
         ? { metin: "Kaydediliyor…", renk: "text-muted-foreground" }
         : { metin: "Otomatik kaydedilir", renk: "text-muted-foreground" };
@@ -416,11 +416,11 @@ function CostEditorImpl({
     // overflow-visible ŞART: Card'ın varsayılan `overflow-hidden`'ı kartı kendi kaydırma kutusu
     // yapar ve içindeki sticky başlık yapışmaz (toplam ekrandan kaçardı).
     <Card
-      className="overflow-visible animate-in fade-in slide-in-from-bottom-2 duration-500"
+      className="detay-kart rounded-2xl overflow-visible animate-in fade-in slide-in-from-bottom-2 duration-500"
       style={{ animationFillMode: "both" }}
     >
       {/* Toplam BAŞLIĞA sabit: kartta aşağı inip gramaj/süre değiştirirken etkilenen rakam ekranda kalır. */}
-      <CardHeader className="sticky top-0 z-20 -mt-4 pt-4 border-b border-border/60 bg-card/95 backdrop-blur-sm">
+      <CardHeader className="sticky top-0 z-20 -mt-4 pt-4 rounded-t-2xl border-b border-white/[0.06] bg-card/95 backdrop-blur-sm">
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
             <CardTitle className="text-sm">Üretim Maliyeti</CardTitle>
@@ -472,7 +472,7 @@ function CostEditorImpl({
                 aria-invalid={Boolean(fieldErrors.filamentWeight)}
               />
               {fieldErrors.filamentWeight && (
-                <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.filamentWeight}</p>
+                <p className="text-[10px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.filamentWeight}</p>
               )}
             </div>
             <div>
@@ -486,7 +486,7 @@ function CostEditorImpl({
                 aria-invalid={Boolean(fieldErrors.printTimeHours)}
               />
               {fieldErrors.printTimeHours && (
-                <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.printTimeHours}</p>
+                <p className="text-[10px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.printTimeHours}</p>
               )}
             </div>
           </div>
@@ -530,7 +530,7 @@ function CostEditorImpl({
                   aria-invalid={Boolean(ekGramHatalari[i])}
                 />
                 {ekGramHatalari[i] && (
-                  <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">
+                  <p className="text-[10px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200">
                     {ekGramHatalari[i]}
                   </p>
                 )}
@@ -541,7 +541,7 @@ function CostEditorImpl({
                   touch();
                   setEkler((l) => l.filter((x) => x.anahtar !== e.anahtar));
                 }}
-                className="mt-6 grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive active:scale-90"
+                className="mt-6 grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-rose-400 active:scale-90"
                 title="Bu filamenti kaldır"
                 aria-label="Bu filamenti kaldır"
               >
@@ -579,7 +579,7 @@ function CostEditorImpl({
               aria-invalid={Boolean(fieldErrors.wasteRate)}
             />
             {fieldErrors.wasteRate && (
-              <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.wasteRate}</p>
+              <p className="text-[10px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.wasteRate}</p>
             )}
           </div>
         </Bolum>
@@ -661,7 +661,7 @@ function CostEditorImpl({
               aria-invalid={Boolean(fieldErrors.desi)}
             />
             {fieldErrors.desi ? (
-              <p className="text-[10px] text-destructive mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.desi}</p>
+              <p className="text-[10px] text-rose-400 mt-1 animate-in fade-in slide-in-from-top-1 duration-200">{fieldErrors.desi}</p>
             ) : (
               <p className="text-[10px] text-muted-foreground mt-1">
                 Kargo ücreti desiye göre otomatik hesaplanır.
@@ -683,7 +683,7 @@ function CostEditorImpl({
           {calcLabor > 0 && <DokumSatiri ad="İşçilik" tutar={calcLabor} />}
           <DokumSatiri ad="Paketleme" tutar={calcPackaging} />
           {calcWaste > 0 && (
-            <DokumSatiri ad="Fire" tutar={calcWaste} isaret="+" className="text-amber-500" />
+            <DokumSatiri ad="Fire" tutar={calcWaste} isaret="+" className="text-[#A9AEFF]" />
           )}
         </div>
 

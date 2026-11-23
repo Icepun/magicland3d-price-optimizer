@@ -150,6 +150,19 @@ describe("computeClientPricing", () => {
     expect(preview.platforms).toHaveLength(1);
   });
 
+  it("Fiyat Lab: komisyonu BİLİNMEYEN pazaryeri ilanında marj ve hedef fiyat yok", () => {
+    const input = baseInput();
+    const ty = input.product.listings.find((l) => l.platform === "trendyol")!;
+    ty.commissionRate = null;
+    const { priceLab } = computeClientPricing({ ...input, commissionRules: [] });
+    const hedef = priceLab.targets?.find((t) => t.platform === "trendyol");
+    expect(hedef?.komisyonEksik).toBe(true);
+    expect(Number.isNaN(hedef?.currentMargin)).toBe(true);
+    expect(hedef?.rows.every((r) => r.price === null)).toBe(true);
+    // Shopify etkilenmez.
+    expect(priceLab.targets?.find((t) => t.platform === "shopify")?.komisyonEksik).toBe(false);
+  });
+
   it("Fiyat Lab: hasCost olunca hedef marjlar + Shopify kampanya döner", () => {
     const { priceLab } = computeClientPricing(baseInput());
     expect(priceLab.hasCost).toBe(true);
@@ -176,6 +189,8 @@ describe("computeClientPricing", () => {
     });
     input.product.listings[0].salePrice = 120; // Shopify <150 → kargo 0
     input.product.listings[1].salePrice = 50; // Trendyol → minOrderQty 2
+    // Komisyon BİLİNİYOR olmalı: bilinmeyen komisyonda Lab marj göstermez (aşağıdaki test).
+    input.product.listings[1].commissionRate = 0.2;
 
     const { preview, priceLab } = computeClientPricing(input);
     for (const platform of ["shopify", "trendyol"]) {

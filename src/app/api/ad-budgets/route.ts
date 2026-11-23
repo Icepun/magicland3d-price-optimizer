@@ -58,7 +58,9 @@ export async function GET() {
     );
     return NextResponse.json({ butceler, oranlar, pencereGun: REKLAM_PENCERE_GUN });
   } catch {
-    return NextResponse.json({ butceler: [], oranlar: {}, pencereGun: REKLAM_PENCERE_GUN });
+    // Boş yanıt "reklam bütçesi yok" demekti → kâr reklam payı düşülmeden (yüksek) görünüyordu.
+    // Hata açıkça bildirilir; ekran "hesaplanamadı · tekrar dene" der.
+    return NextResponse.json({ error: "Reklam bütçesi şu an okunamadı" }, { status: 503 });
   }
 }
 

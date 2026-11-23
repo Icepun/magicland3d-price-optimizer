@@ -21,6 +21,7 @@ import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@core/cargo-c
 import type { ProductDetail, ListingRow } from "@/lib/db/product-detail";
 import { kuralFilamentFiyatlari, type Rules } from "@/lib/profit";
 import type { Platform } from "@/lib/platforms";
+import { komisyonBilinmiyor } from "@core/komisyon-bilinmiyor";
 
 const MARGINS = [20, 30, 40, 50];
 const DISCOUNTS = [10, 15, 20, 25, 30];
@@ -30,6 +31,8 @@ export interface PriceLabTarget {
   currentPrice: number;
   currentMargin: number;
   rows: { margin: number; price: number | null }[];
+  /** Komisyon BİLİNMİYOR (masaüstüyle aynı kural): marj NaN, hedefler boş, ekran "Komisyon gir" der. */
+  komisyonEksik?: boolean;
 }
 export interface PriceLabCampaign {
   rows: { discount: number; effectivePrice: number; profit: number; margin: number }[];
@@ -134,11 +137,14 @@ export function computePriceLab(
     };
     const currentPrice = real?.salePrice ?? detail.currentSalePrice;
     const cur = simFor(listing, currentPrice);
+    // Komisyonu bilinmeyen ilanda komisyon 0 sayılıp şişkin marj / fazla düşük hedef çıkıyordu.
+    const komisyonEksik = komisyonBilinmiyor({ platform, commissionRate: listing.commissionRate }, cur);
     return {
       platform,
       currentPrice,
-      currentMargin: cur.profitMargin,
-      rows: MARGINS.map((m) => ({ margin: m, price: priceForMargin(listing, m, currentPrice) })),
+      currentMargin: komisyonEksik ? Number.NaN : cur.profitMargin,
+      rows: MARGINS.map((m) => ({ margin: m, price: komisyonEksik ? null : priceForMargin(listing, m, currentPrice) })),
+      komisyonEksik,
     };
   });
 

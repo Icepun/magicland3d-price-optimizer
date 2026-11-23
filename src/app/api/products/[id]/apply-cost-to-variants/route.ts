@@ -47,20 +47,28 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       };
     }
 
-    // Her üyeye uygula: maliyet upsert + (verildiyse) desi.
-    for (const m of members) {
-      await prisma.productCost.upsert({
-        where: { productId: m.id },
-        create: { productId: m.id, ...finalCost },
-        update: finalCost,
-      });
-      if (desi !== undefined) {
-        await prisma.product.update({ where: { id: m.id }, data: { desi } }).catch(() => {});
-      }
-    }
+    // TEK İŞLEM, en çok 3 yazma (ya hepsi ya hiçbiri). Eskiden üye başına sıralı 2 yazma vardı:
+    // 28 varyantta 56 uzak istek, tüm uygulama o süre kuyrukta; desi hatası yutulup yine
+    // "hepsine uygulandı" deniyordu (denetim, 23 Kas 2026). Telefon da tek işlemde yapıyor.
+    const ids = members.map((m) => m.id);
+    const varolan = new Set(
+      (await prisma.productCost.findMany({ where: { productId: { in: ids } }, select: { productId: true } })).map(
+        (r) => r.productId
+      )
+    );
+    const yeni = ids.filter((pid) => !varolan.has(pid));
+    await prisma.$transaction([
+      ...(varolan.size > 0
+        ? [prisma.productCost.updateMany({ where: { productId: { in: [...varolan] } }, data: finalCost })]
+        : []),
+      ...(yeni.length > 0
+        ? [prisma.productCost.createMany({ data: yeni.map((productId) => ({ productId, ...finalCost })) })]
+        : []),
+      ...(desi !== undefined ? [prisma.product.updateMany({ where: { id: { in: ids } }, data: { desi } })] : []),
+    ]);
 
     bustProfitInputCaches();
-    return NextResponse.json({ ok: true, count: members.length });
+    return NextResponse.json({ ok: true, count: ids.length });
   } catch (error) {
     return jsonError(error);
   }

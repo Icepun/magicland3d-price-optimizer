@@ -134,11 +134,11 @@ function KartHatasi({
 }) {
   return (
     <div
-      className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-300"
+      className="flex items-center gap-2 rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/10 px-3 py-2 animate-in fade-in slide-in-from-top-1 duration-300"
       role="alert"
     >
-      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
-      <span className="flex-1 text-xs text-amber-400">{mesaj}</span>
+      <AlertTriangle className="h-4 w-4 shrink-0 text-[#A9AEFF]" />
+      <span className="flex-1 text-xs text-[#C9D2F2]">{mesaj}</span>
       <Button
         size="sm"
         variant="outline"
@@ -314,7 +314,7 @@ function ModelFilesCardImpl({ productId, variantGroup }: { productId: string; va
   };
 
   return (
-    <Card ref={kartRef} className="animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationFillMode: "both" }}>
+    <Card ref={kartRef} className="detay-kart rounded-2xl animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationFillMode: "both" }}>
       <CardHeader className="pb-3 border-b border-border/50">
         <CardTitle className="text-sm flex items-center gap-2">
           <FileBox className="h-4 w-4 text-primary" /> Baskı Dosyaları
@@ -764,7 +764,7 @@ function ParcaSatiri({ part, sira, yeni, okunuyor, siliniyor, onAd, onSil, onIzl
       >
         <Box className="h-3.5 w-3.5" />
       </Button>
-      <Button size="icon" variant="ghost" className="h-7 w-7 text-destructive/60 hover:text-destructive shrink-0 transition-transform active:scale-90" disabled={siliniyor} onClick={onSil} title="Parçayı sil">
+      <Button size="icon" variant="ghost" className="h-7 w-7 text-rose-400/60 hover:text-rose-400 shrink-0 transition-transform active:scale-90" disabled={siliniyor} onClick={onSil} title="Parçayı sil">
         {siliniyor ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
       </Button>
     </div>

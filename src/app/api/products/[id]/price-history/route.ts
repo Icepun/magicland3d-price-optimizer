@@ -21,9 +21,11 @@ export async function GET(
       productId: id,
       changedAt: { gte: since },
     },
-    orderBy: { changedAt: "asc" },
+    // EN YENİLER alınır, sonra eskiden yeniye çevrilir: "asc + take" sınırı aşan geçmişte en yeni
+    // değişiklikleri kesiyordu (denetim, 23 Kas 2026).
+    orderBy: { changedAt: "desc" },
     take: limit,
   });
 
-  return NextResponse.json(history);
+  return NextResponse.json(history.reverse());
 }

@@ -315,6 +315,20 @@
     0 0 0 1px oklch(0.66 0.20 278 / 8%);
 }
 
+/* ÜRÜN DETAYI KARTLARI — Raporlar görünümü: başlıktaki ilk simge gradyanlı kutuya oturur.
+   Katmansız: kartlardaki `text-primary` gibi simge renkleri bunu ezmesin. */
+.detay-kart [data-slot="card-title"] > svg:first-child {
+  box-sizing: content-box;
+  width: 1rem;
+  height: 1rem;
+  padding: 0.45rem;
+  flex-shrink: 0;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, rgb(155 92 255 / 0.22), rgb(79 140 255 / 0.14));
+  color: #c9d2f2;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1);
+}
+
 /* Baskı karesi çapraz geçişi `printers/page.tsx` içinde (önceki/şimdiki kare) çözülür —
    burada ikinci bir kural TUTULMAZ, iki opaklık kuralı çakışınca kare göz kırpıyor. */
 

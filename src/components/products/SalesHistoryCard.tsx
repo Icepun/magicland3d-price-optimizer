@@ -11,10 +11,10 @@ import { stokKacGunYeter, type UrunSatisOzeti } from "@/lib/urun-satis";
 
 /** Platform renkleri — Panel ve fiyat geçmişiyle aynı aile. */
 const PLATFORM: Record<string, { ad: string; renk: string }> = {
-  shopify: { ad: "Shopify", renk: "oklch(0.60 0.16 152)" },
-  trendyol: { ad: "Trendyol", renk: "oklch(0.72 0.17 60)" },
-  hepsiburada: { ad: "Hepsiburada", renk: "oklch(0.64 0.21 30)" },
-  manual: { ad: "Manuel", renk: "oklch(0.62 0.20 278)" },
+  shopify: { ad: "Shopify", renk: "#34D399" },
+  trendyol: { ad: "Trendyol", renk: "#F27A1A" },
+  hepsiburada: { ad: "Hepsiburada", renk: "#4F8CFF" },
+  manual: { ad: "Manuel", renk: "#C9D2F2" },
 };
 const SIRA = ["shopify", "trendyol", "hepsiburada", "manual"];
 
@@ -34,7 +34,7 @@ export function SalesHistoryCard({ productId, stok }: { productId: string; stok:
   const stokGunu = data ? stokKacGunYeter(stok, data.kacGundeBir) : null;
 
   return (
-    <Card>
+    <Card className="detay-kart rounded-2xl animate-in fade-in slide-in-from-bottom-2 duration-500" style={{ animationDelay: "60ms", animationFillMode: "both" }}>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center gap-2">
           <ShoppingBag className="h-4 w-4 text-primary" />
@@ -45,7 +45,7 @@ export function SalesHistoryCard({ productId, stok }: { productId: string; stok:
         {isLoading ? (
           <Skeleton className="h-[150px] w-full" />
         ) : isError || !data ? (
-          <div className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-sm">
+          <div className="flex items-center justify-between gap-3 rounded-md border border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06] px-3 py-2 text-sm">
             <span>Satış geçmişi alınamadı.</span>
             <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
               Tekrar dene
@@ -117,7 +117,7 @@ function Ozet({ ust, alt, vurgu }: { ust: string; alt: string; vurgu?: boolean }
   return (
     <div className="rounded-md border bg-muted/20 px-3 py-2">
       <p className="text-[11px] text-muted-foreground">{ust}</p>
-      <p className={vurgu ? "text-sm font-semibold text-amber-500" : "text-sm font-semibold"}>{alt}</p>
+      <p className={vurgu ? "text-sm font-semibold text-[#A9AEFF]" : "text-sm font-semibold"}>{alt}</p>
     </div>
   );
 }

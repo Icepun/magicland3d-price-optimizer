@@ -186,7 +186,7 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get("section") === "profitability") {
     try {
       await ensureRuntimeSchema();
-      const data = await swr("products:profitability:v1", 2 * 60_000, () =>
+      const data = await swr("products:profitability:v2", 2 * 60_000, () =>
         readProductProfitability()
       );
       return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });

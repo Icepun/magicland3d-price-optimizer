@@ -22,12 +22,12 @@ export interface PriceThresholdInfo {
 }
 
 const PLATFORM = {
-  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
-  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
+  shopify: { label: "Shopify", color: "#34D399" },
+  trendyol: { label: "Trendyol", color: "#F27A1A" },
 } as const;
 
 function platformInfo(p: string) {
-  return PLATFORM[p as keyof typeof PLATFORM] ?? { label: p, color: "oklch(0.62 0.20 278)" };
+  return PLATFORM[p as keyof typeof PLATFORM] ?? { label: p, color: "#C9D2F2" };
 }
 
 /**
@@ -106,7 +106,7 @@ function PriceLabCardImpl({
 
   return (
     <Card
-      className="animate-in fade-in slide-in-from-bottom-2 duration-500"
+      className="detay-kart rounded-2xl animate-in fade-in slide-in-from-bottom-2 duration-500"
       style={{ animationDelay: "40ms", animationFillMode: "both" }}
     >
       <CardHeader className="pb-3 border-b border-border/50">
@@ -118,8 +118,8 @@ function PriceLabCardImpl({
       <CardContent className="pt-4">
         {failed ? (
           <div className="flex flex-col items-center gap-3 py-6 text-center animate-in fade-in duration-300">
-            <span className="rounded-full bg-amber-500/10 p-2.5">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
+            <span className="rounded-full bg-[#7A7EFF]/12 p-2.5">
+              <AlertTriangle className="h-5 w-5 text-[#A9AEFF]" />
             </span>
             <p className="text-sm text-muted-foreground max-w-xs">
               Fiyat önerileri hesaplanamadı.
@@ -138,7 +138,7 @@ function PriceLabCardImpl({
         ) : isLoading ? (
           <TargetsSkeleton />
         ) : !data?.hasCost ? (
-          <div className="flex items-center gap-2 text-sm text-amber-500 py-2 animate-in fade-in duration-300">
+          <div className="flex items-center gap-2 text-sm text-[#A9AEFF] py-2 animate-in fade-in duration-300">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             Maliyet girilmeden hedef fiyat hesaplanamaz.
           </div>
@@ -146,7 +146,7 @@ function PriceLabCardImpl({
           <div className="space-y-5">
             {/* Eşik uyarısı — küçük zam, belirgin kazanç. Yalnızca anlamlı fark varsa görünür. */}
             {hint && (
-              <div className="flex items-center gap-2 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-400 animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 animate-in fade-in slide-in-from-top-1 duration-300">
                 <TrendingUp className="h-4 w-4 shrink-0" />
                 <span>
                   Fiyatı{" "}
@@ -188,9 +188,16 @@ function PriceLabCardImpl({
                           {info.label}
                         </span>
                         <span className="text-[11px] text-muted-foreground tabular-nums">
-                          Şu an {formatCurrency(t.currentPrice)} · marj {formatPercent(t.currentMargin)}
+                          Şu an {formatCurrency(t.currentPrice)}
+                          {t.komisyonEksik ? "" : ` · marj ${formatPercent(t.currentMargin)}`}
                         </span>
                       </div>
+                      {t.komisyonEksik ? (
+                        <div className="flex items-center gap-2 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                          Komisyon girilmemiş — hedef fiyat hesaplanamıyor.
+                        </div>
+                      ) : (
                       <div className="grid grid-cols-4 gap-1.5">
                         {t.rows.map((r) => {
                           // Renk: hedef fiyatı güncel satış fiyatıyla kıyasla. ±%5 içinde → nötr;
@@ -208,9 +215,9 @@ function PriceLabCardImpl({
                               className={cn(
                                 "rounded-lg border px-2 py-1.5 text-center transition-colors",
                                 tone === "green"
-                                  ? "border-green-500/40 bg-green-500/10"
+                                  ? "border-emerald-400/30 bg-emerald-500/10"
                                   : tone === "red"
-                                    ? "border-destructive/40 bg-destructive/10"
+                                    ? "border-rose-400/35 bg-rose-500/10"
                                     : "border-border bg-muted/30"
                               )}
                             >
@@ -223,9 +230,9 @@ function PriceLabCardImpl({
                                 className={cn(
                                   "block text-xs font-bold tabular-nums mt-0.5 transition-colors",
                                   tone === "green"
-                                    ? "text-green-500"
+                                    ? "text-emerald-400"
                                     : tone === "red"
-                                      ? "text-destructive"
+                                      ? "text-rose-400"
                                       : "text-foreground"
                                 )}
                               />
@@ -233,6 +240,7 @@ function PriceLabCardImpl({
                           );
                         })}
                       </div>
+                      )}
                     </div>
                   );
                 })}
@@ -277,14 +285,14 @@ function PriceLabCardImpl({
                             value={r.profit}
                             durationMs={380}
                             format={(n) => formatCurrency(n)}
-                            className={cn("text-right font-semibold", loss ? "text-destructive" : "text-green-500")}
+                            className={cn("text-right font-semibold", loss ? "text-rose-400" : "text-emerald-400")}
                           />
-                          <span className={cn("text-right", loss && "text-destructive")}>{formatPercent(r.margin)}</span>
+                          <span className={cn("text-right", loss && "text-rose-400")}>{formatPercent(r.margin)}</span>
                         </div>
                         {/* Kâr bu satırda ARTMIŞ görünebilir — sayı doğru, sebebi kargonun el
                             değiştirmesi. Açıklamasız bırakılırsa hesap hatası sanılır. */}
                         {r.crossesFreeShipping && (
-                          <p className="px-1 pb-1 text-[10px] leading-snug text-amber-400">
+                          <p className="px-1 pb-1 text-[10px] leading-snug text-[#C9D2F2]">
                             Bu fiyatta sepet 150₺&apos;nin altına iniyor — kargo sana kalmıyor, kâr bu yüzden yükseliyor.
                           </p>
                         )}

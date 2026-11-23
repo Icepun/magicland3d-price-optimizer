@@ -25,6 +25,12 @@ import { markStockWritePending, patchProductsInCache, patchStocksInCache } from 
 export function useStockWriter() {
   const qc = useQueryClient();
   const pending = useRef<Map<string, number>>(new Map());
+  /**
+   * +/- ile biriken FARK (mutlak değer bekleyen üründe kullanılmaz). Fark atomik yazılır
+   * (`stockDelta`) → telefonda aynı anda yapılan değişiklik ezilmez. Farkı TEKRAR DENEMEYİZ:
+   * istek sunucuda uygulanmış olabilir, ikinci kez göndermek stoğu iki kez değiştirir.
+   */
+  const pendingDelta = useRef<Map<string, number>>(new Map());
   const timers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const inFlight = useRef<Set<string>>(new Set());
 
@@ -35,10 +41,11 @@ export function useStockWriter() {
   useEffect(() => {
     const timersMap = timers.current;
     const pendingMap = pending.current;
+    const deltaMap = pendingDelta.current;
     return () => {
       timersMap.forEach((tm, id) => {
         clearTimeout(tm);
-        if (pendingMap.has(id)) flushRef.current(id);
+        if (pendingMap.has(id) || deltaMap.has(id)) flushRef.current(id);
       });
       timersMap.clear();
     };
@@ -62,7 +69,29 @@ export function useStockWriter() {
       inFlight.current.add(id);
       let failed = false;
       try {
-        while (pending.current.has(id)) {
+        // Önce biriken fark (yalnız mutlak değer beklemiyorsa).
+        while (!pending.current.has(id) && pendingDelta.current.has(id)) {
+          const fark = pendingDelta.current.get(id) as number;
+          pendingDelta.current.delete(id);
+          if (fark === 0) continue;
+          try {
+            const r = await fetch(`/api/products/${id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ stockDelta: fark }),
+            });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const govde = (await r.json().catch(() => null)) as { stock?: number } | null;
+            // Sunucunun güncel stoğu (telefondaki değişiklik dahil) — beklenen başka fark yoksa yaz.
+            if (typeof govde?.stock === "number" && !pending.current.has(id) && !pendingDelta.current.has(id)) {
+              patchStocksInCache(qc, [{ id, stock: govde.stock }]);
+            }
+          } catch {
+            failed = true;
+            break;
+          }
+        }
+        while (!failed && pending.current.has(id)) {
           const stock = pending.current.get(id) as number;
           let saved = false;
 
@@ -98,7 +127,7 @@ export function useStockWriter() {
       } finally {
         inFlight.current.delete(id);
         // Yazım bitti → uzaktan gelen stok tazelemesi artık bu ürünü güncelleyebilir.
-        if (!pending.current.has(id)) markStockWritePending(id, false);
+        if (!pending.current.has(id) && !pendingDelta.current.has(id)) markStockWritePending(id, false);
       }
 
       if (failed) {
@@ -120,6 +149,8 @@ export function useStockWriter() {
   const setStock = useCallback(
     (id: string, value: number) => {
       const stock = Math.max(0, Math.round(value));
+      // Elle yazılan değer bilinçli bir "şu olsun" isteği: biriken fark geçersizleşir.
+      pendingDelta.current.delete(id);
       pending.current.set(id, stock);
       markStockWritePending(id, true);
       applyOptimistic(id, stock);
@@ -142,10 +173,29 @@ export function useStockWriter() {
    */
   const adjustStock = useCallback(
     (id: string, delta: number, current: number) => {
-      const base = pending.current.has(id) ? (pending.current.get(id) as number) : current;
-      setStock(id, base + delta);
+      // Mutlak değer bekliyorsa onun üstüne ekle (yine mutlak).
+      if (pending.current.has(id)) {
+        setStock(id, (pending.current.get(id) as number) + delta);
+        return;
+      }
+      // Fark modu: ekranda anında görünür, arka planda biriken fark tek istekte atomik yazılır.
+      const birikmis = pendingDelta.current.get(id) ?? 0;
+      const yeniFark = birikmis + delta;
+      const gorunen = Math.max(0, current + delta);
+      pendingDelta.current.set(id, yeniFark);
+      markStockWritePending(id, true);
+      applyOptimistic(id, gorunen);
+      const prev = timers.current.get(id);
+      if (prev) clearTimeout(prev);
+      timers.current.set(
+        id,
+        setTimeout(() => {
+          timers.current.delete(id);
+          void flush(id);
+        }, 450)
+      );
     },
-    [setStock]
+    [setStock, applyOptimistic, flush]
   );
 
   return { setStock, adjustStock };

@@ -35,7 +35,8 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { useFreshStocks } from "@/lib/use-fresh-stocks";
-import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle, Pencil, EyeOff, Eye } from "lucide-react";
+import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
+import { ArrowLeft, Package, AlertTriangle, Plus, Trash2, Minus, Camera, RefreshCw, PauseCircle, Pencil, EyeOff, Eye, Store } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -130,9 +131,9 @@ interface CostSaveAttempt {
 }
 
 const PLATFORM_INFO = {
-  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
-  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
-  hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
+  shopify: { label: "Shopify", color: "#34D399" },
+  trendyol: { label: "Trendyol", color: "#F27A1A" },
+  hepsiburada: { label: "Hepsiburada", color: "#4F8CFF" },
 } as const;
 
 /** Kâr hesabının durumu — "veri yok" ile "hesaplanamadı" ayrı ekranlar gösterir. */
@@ -159,7 +160,7 @@ function cargoRuleMissingFor(
 function ProfitUnavailable({ onRetry }: { onRetry: () => void }) {
   return (
     <div className="space-y-2 animate-in fade-in duration-300">
-      <div className="flex items-start gap-2 text-xs text-amber-500">
+      <div className="flex items-start gap-2 text-xs text-[#A9AEFF]">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
         <span>Kâr hesaplanamadı.</span>
       </div>
@@ -194,13 +195,13 @@ function ProfitAssumptionNotes({
       )}
     >
       {desiMissing && (
-        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-amber-500">
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-[#A9AEFF]">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
           <span>Desi girilmedi — kargo 1 desi sayıldı, kâr olduğundan yüksek olabilir.</span>
         </p>
       )}
       {cargoRuleMissing && (
-        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-destructive font-medium">
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-rose-400 font-medium">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" />
           <span>Bu ürüne uyan kargo fiyatı yok — kargo ₺0 sayıldı, kâr gerçekte daha düşük.</span>
         </p>
@@ -223,21 +224,26 @@ export default function ProductDetailPage({
     isError,
     refetch: refetchProduct,
     dataUpdatedAt: detayAlindi,
+    isFetching: detayCekiliyor,
   } = useQuery<ProductDetail>({
     queryKey: ["product", id],
     queryFn: () => fetchJson(`/api/products/${id}`),
+    // Açılışta HER ZAMAN tazele (uç hafif: iki paralel sorgu). Önbellekten açılan detay telefonda
+    // değişen maliyeti göstermiyor, form eski değerle açılıyordu (denetim, 23 Kas 2026).
+    refetchOnMount: "always",
+    networkMode: "always", // yerel sunucu — internet kopukken de ulaşılır
   });
   // Önbellekten açılan detay da telefonda değişen stoğu göstersin (tek küçük sorgu).
   useFreshStocks(detayAlindi || undefined);
 
-  const { data: filaments = [] } = useQuery<FilamentType[]>({
+  const { data: filaments = [], isError: filamentsFailed } = useQuery<FilamentType[]>({
     queryKey: ["filament-types"],
     queryFn: () => fetchJson("/api/filament-types"),
     // Filament türleri nadir değişir → uzun taze; ekleme/düzenleme mutasyonları invalidate eder.
     staleTime: 10 * 60_000,
   });
 
-  const { data: globalSettings = {} } = useQuery<Record<string, string>>({
+  const { data: globalSettings = {}, isError: settingsFailed } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
@@ -257,7 +263,7 @@ export default function ProductDetailPage({
     staleTime: 5 * 60_000,
   });
   // Reklam payı oranı (platform → oran). Ürün ekranı ileriye dönük baktığı için BUGÜNKÜ bütçe.
-  const { data: adBudgetData } = useQuery<{ oranlar: Record<string, { oran: number }> }>({
+  const { data: adBudgetData, isError: adBudgetsFailed } = useQuery<{ oranlar: Record<string, { oran: number }> }>({
     queryKey: ["ad-budgets"],
     queryFn: () => fetchJson("/api/ad-budgets"),
     staleTime: 5 * 60_000,
@@ -270,11 +276,18 @@ export default function ProductDetailPage({
   });
   // Kural sorgularında retry KAPALI (QueryProvider) → biri düşerse kâr/hedef fiyat asla
   // hesaplanamaz. Bu durumda kartlar "Hesaplanıyor" demeye devam etmemeli: gerçek durumu yazarız.
-  const pricingRulesFailed = commissionRulesFailed || cargoRulesFailed || expenseRulesFailed;
+  // Ayarlar / filament fiyatları / reklam oranı da kârın girdisi: biri gelmezse eksik girdiyle
+  // hesaplamak (elektrik, paketleme, reklam 0; filament "girilmedi") sessizce YANLIŞ kâr gösteriyordu
+  // (denetim, 23 Kas 2026). Onlar da "hesaplanamadı · tekrar dene"ye düşer.
+  const pricingRulesFailed =
+    commissionRulesFailed || cargoRulesFailed || expenseRulesFailed || settingsFailed || filamentsFailed || adBudgetsFailed;
   const retryPricingRules = useCallback(() => {
     void queryClient.refetchQueries({ queryKey: ["commission-rules"] });
     void queryClient.refetchQueries({ queryKey: ["cargo-rules"] });
     void queryClient.refetchQueries({ queryKey: ["expense-rules"] });
+    void queryClient.refetchQueries({ queryKey: ["app-settings"] });
+    void queryClient.refetchQueries({ queryKey: ["filament-types"] });
+    void queryClient.refetchQueries({ queryKey: ["ad-budgets"] });
   }, [queryClient]);
 
   // Kimlik formu state (maliyet formu artık izole CostEditor'da → yazarken bu dev sayfa render olmaz)
@@ -296,14 +309,19 @@ export default function ProductDetailPage({
   // ── İzole maliyet formu ⇄ parent köprüsü ──
   // CostEditor tüm input state'ini LOCAL tutar; 250ms debounce'la buraya bildirir. Böylece tuşa
   // basınca yalnız o küçük kart render olur; bu dev sayfa (3 platform kartı + grafikler) DEĞİL.
+  // FORM NESLİ: sunucudan taze maliyet geldiğinde (Yenile / açılış tazelemesi) ve yazılmamış yerel
+  // değişiklik YOKSA form yeniden tohumlanır. Eskiden form yalnız ürün kimliği değişince doluyordu:
+  // telefonda değişen maliyet görünmüyor, tek alana dokunmak telefondaki düzenlemeyi eziyordu.
+  const [formNesli, setFormNesli] = useState(0);
   const seededCostValues = useMemo<CostValues | null>(() => {
     if (!product) return null;
     // Seed, "değişti mi?" karşılaştırması ve flush AYNI dönüşümü kullanır (costValuesOf) —
     // üçü ayrı yazıldığında desi 0 gibi kenar durumlar sessizce ayrışıyordu.
     return costValuesOf(product);
-    // Yalnız ürün kimliği değişince seed et; aynı üründeki cache güncellemesi formu ezmemeli.
+    // Yalnız ürün kimliği ya da form nesli değişince seed et; aynı üründeki cache güncellemesi
+    // (iyimser kayıt) formu ezmemeli.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.id]);
+  }, [product?.id, formNesli]);
   const [costDraft, setCostDraft] = useState<{ productId: string; values: CostValues } | null>(null);
   const costValues = costDraft?.productId === productKey ? costDraft.values : seededCostValues;
   const latestCostRef = useRef<CostValues | null>(null);
@@ -336,7 +354,7 @@ export default function ProductDetailPage({
       desiInput: product?.desi != null ? String(product.desi) : "",
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product?.id]);
+  }, [product?.id, formNesli]);
 
   // Ürün değişince autosave revizyonlarını sıfırla; form değeri render sırasında ürün anahtarından türetilir.
   useEffect(() => {
@@ -345,8 +363,16 @@ export default function ProductDetailPage({
     attemptedCostRevisionRef.current = 0;
   }, [productKey, seededCostValues]);
 
+  // En son GÖNDERİLEN kayıt revizyonu. Tekrar denemesi bekleyen eski bir kayıt (A), sayfadan
+  // çıkarken gönderilen yeni kayıttan (B) sonra varırsa eski değerleri yazıyordu (denetim).
+  const sonGonderilenRevizyonRef = useRef(0);
+  const sonKayitBasarisizRef = useRef(false);
   const saveCostMutation = useMutation({
-    mutationFn: async ({ productId, values: v }: CostSaveAttempt) => {
+    mutationFn: async ({ productId, values: v, revision }: CostSaveAttempt) => {
+      if (revision < sonGonderilenRevizyonRef.current) {
+        throw Object.assign(new Error("eskidi"), { eskidi: true, status: 409 });
+      }
+      sonGonderilenRevizyonRef.current = revision;
       // Timeout: ağ ölürse istek asılı kalmasın → başarısız say (sonra retry / rollback).
       const ctrl = new AbortController();
       const to = setTimeout(() => ctrl.abort(), 12_000);
@@ -384,6 +410,7 @@ export default function ProductDetailPage({
     // Geçici kopmada otomatik tekrar (PATCH idempotent → çift-yazma riski yok). Ama sunucu
     // "bu değer geçersiz" dediyse (4xx) tekrar denemek anlamsız — aynı cevap gelir.
     retry: (attempt, error) => {
+      if ((error as { eskidi?: boolean })?.eskidi) return false;
       const status = (error as { status?: number })?.status ?? 0;
       if (status >= 400 && status < 500) return false;
       return attempt < 2;
@@ -415,7 +442,11 @@ export default function ProductDetailPage({
       );
       return { prev, productId };
     },
-    onError: (e: Error, _v, ctx) => {
+    onError: (e: Error, vars, ctx) => {
+      // Daha yeni bir kayıt zaten gönderildi → bu eski deneme sessizce bırakılır, geri alma YOK
+      // (geri alma yeni kaydın iyimser değerini A öncesine çevirirdi).
+      if ((e as { eskidi?: boolean }).eskidi || vars.revision < sonGonderilenRevizyonRef.current) return;
+      sonKayitBasarisizRef.current = true;
       // Sunucudaki/cache'teki kayıtlı değeri geri al. CostEditor yerel alanları korur; kullanıcı
       // bağlantı geldikten sonra küçük bir düzenlemeyle tekrar kaydetmeyi tetikleyebilir.
       if (ctx?.prev) queryClient.setQueryData(["product", ctx.productId], ctx.prev);
@@ -427,6 +458,9 @@ export default function ProductDetailPage({
       );
     },
     onSuccess: (_data, { productId }) => {
+      sonKayitBasarisizRef.current = false;
+      // Panel'in ilan sağlığı da bu ürünün kârını içeriyor (staleTime: Infinity → işaretlenmezse eski kalır).
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       toast.success("Maliyet kaydedildi");
       // Önizleme + Fiyat Lab zaten İSTEMCİDE (optimistic cost'tan) günceldir → ekstra okuma YOK.
       // Listede yalnız bu ürünü tazele (tüm 368 değil → minimum okuma, donma yok).
@@ -460,6 +494,8 @@ export default function ProductDetailPage({
     },
     meta: { blocking: true }, // çok varyanta yayılan ağır yazma → bitene dek ekranı kibarca bloke et
     onSuccess: (d: { count?: number }) => {
+      // Panel'in ilan sağlığı da bu ürünün kârını içeriyor (staleTime: Infinity → işaretlenmezse eski kalır).
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       // Maliyet grup üyelerine uygulandı.
       const groupIds = product?.variantGroup?.products.map((p) => p.id) ?? [];
       const siblingIds = groupIds.filter((gid) => gid !== id);
@@ -512,15 +548,21 @@ export default function ProductDetailPage({
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
         old ? { ...old, alias } : old
       );
-      // Alias listede gösterilir → orada da optimistic yamala (fetch YOK).
-      queryClient.setQueriesData<Array<{ id: string; alias?: string | null }>>(
-        { queryKey: ["products"] },
-        (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, alias } : p)) : old)
+      // Alias listede gösterilir → orada da optimistic yamala (fetch YOK). Bayat işareti korunur.
+      const eskiAlias = prev?.alias ?? null;
+      urunListesiniYamala<{ id: string; alias?: string | null }>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, alias } : p))
       );
-      return { prev };
+      return { prev, eskiAlias };
     },
     onError: (e: Error, _v, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      // Listedeki yama da geri alınır (eskiden detay geri dönüyor, liste yanlış kalıyordu).
+      if (ctx) {
+        urunListesiniYamala<{ id: string; alias?: string | null }>(queryClient, (old) =>
+          old.map((p) => (p.id === id ? { ...p, alias: ctx.eskiAlias } : p))
+        );
+      }
       toast.error(e?.message || "Kaydedilemedi");
     },
     onSuccess: () => {
@@ -612,15 +654,17 @@ export default function ProductDetailPage({
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) =>
         old ? { ...old, madeToOrder } : old
       );
-      // M2O kâr-etkilemez → listede de optimistic yamala (fetch YOK, anında doğru).
-      queryClient.setQueriesData<Array<{ id: string; madeToOrder?: boolean }>>(
-        { queryKey: ["products"] },
-        (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, madeToOrder } : p)) : old)
+      // M2O kâr-etkilemez → listede de optimistic yamala (fetch YOK, anında doğru). Bayat işareti korunur.
+      urunListesiniYamala<{ id: string; madeToOrder?: boolean }>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, madeToOrder } : p))
       );
       return { prev };
     },
-    onError: (_e, _v, ctx) => {
+    onError: (_e, madeToOrder, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(["product", id], ctx.prev);
+      urunListesiniYamala<{ id: string; madeToOrder?: boolean }>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, madeToOrder: !madeToOrder } : p))
+      );
       toast.error("Kaydedilemedi — bağlantını kontrol et (geri alındı)");
     },
     onSuccess: (_d, madeToOrder) =>
@@ -703,9 +747,13 @@ export default function ProductDetailPage({
       settings: globalSettings,
       commissionRules,
       cargoRules,
+      // Platform kartlarıyla AYNI reklam payı — eksikken Lab kartlardan yüksek marj gösteriyordu.
+      adRates: Object.fromEntries(
+        Object.entries(adBudgetData?.oranlar ?? {}).map(([p, o]) => [p, o.oran])
+      ),
       expenseRules,
     });
-  }, [product, deferredCost, filaments, globalSettings, commissionRules, cargoRules, expenseRules]);
+  }, [product, deferredCost, filaments, globalSettings, commissionRules, cargoRules, expenseRules, adBudgetData]);
 
   // Maliyet OTOMATİK kaydedilir (costValues değişince 800ms sonra) — optimistic, "Kaydet" butonu yok.
   // Form, ürünün kayıtlı maliyetiyle aynıysa kaydetmez (ilk yükleme / değişiklik yok → gereksiz yazma yok).
@@ -747,6 +795,36 @@ export default function ProductDetailPage({
     },
     [queryClient, saveCostMutate]
   );
+
+  /**
+   * Sunucudan TAZE ürün geldi (açılış tazelemesi / Yenile): yazılmamış yerel değişiklik yoksa ve
+   * kayıtlı maliyet formdakinden farklıysa (ör. telefonda değişti) formu yeniden tohumla.
+   * Yerel değişiklik varsa dokunulmaz — kullanıcının yazdığı asla ezilmez.
+   */
+  const savePendingRef = useRef(false);
+  useEffect(() => {
+    savePendingRef.current = saveCostMutation.isPending;
+  }, [saveCostMutation.isPending]);
+  const formuTazeVeriyleEsle = useCallback((taze: ProductDetail | undefined) => {
+    if (!taze) return;
+    const yazilmamis =
+      savePendingRef.current ||
+      sonKayitBasarisizRef.current ||
+      costRevisionRef.current > attemptedCostRevisionRef.current;
+    if (yazilmamis) return;
+    const form = latestCostRef.current;
+    if (form && costValuesEqual(costValuesOf(taze), form)) return;
+    setCostDraft(null);
+    setFormNesli((n) => n + 1);
+  }, []);
+  const oncekiCekiliyorRef = useRef(false);
+  useEffect(() => {
+    // Bir çekim az önce BİTTİ (iyimser kayıt değil, gerçek sunucu yanıtı).
+    if (oncekiCekiliyorRef.current && !detayCekiliyor) {
+      formuTazeVeriyleEsle(queryClient.getQueryData<ProductDetail>(["product", id]));
+    }
+    oncekiCekiliyorRef.current = detayCekiliyor;
+  }, [detayCekiliyor, formuTazeVeriyleEsle, queryClient, id]);
 
   // CostEditor'a STABİL onApply ver (memo bozulmasın) — mutate referansı zaten sabit.
   const applyMutate = applyCostToVariantsMutation.mutate;
@@ -822,7 +900,7 @@ export default function ProductDetailPage({
       <div className="p-6 max-w-xl">
         <Card>
           <CardContent className="py-10 text-center space-y-4">
-            <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto" />
+            <AlertTriangle className="h-8 w-8 text-[#A9AEFF] mx-auto" />
             <div>
               <h1 className="font-semibold">Ürün yüklenemedi</h1>
               <p className="text-sm text-muted-foreground mt-1">
@@ -846,15 +924,21 @@ export default function ProductDetailPage({
   return (
     <div className="p-6 space-y-6 mx-auto w-full max-w-[1600px]">
       {/* Header */}
-      <div className="flex items-start gap-4">
-        <Link href="/products" className={buttonVariants({ variant: "ghost", size: "icon" })}>
+      <header className="relative flex items-start gap-4 overflow-hidden rounded-2xl bg-card p-4 ring-1 ring-white/[0.07] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.85)] animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        {/* Hafif marka ışıltısı — başlık kartı sayfanın geri kalanından ayrılsın. */}
+        <span aria-hidden className="pointer-events-none absolute -left-24 -top-24 size-64 rounded-full bg-[#7A7EFF]/[0.08] blur-3xl" />
+        <Link
+          href="/products"
+          title="Ürünlere dön"
+          className={cn(buttonVariants({ variant: "ghost", size: "icon" }), "relative rounded-xl bg-white/[0.04] ring-1 ring-white/[0.08] hover:bg-white/[0.08]")}
+        >
           <ArrowLeft className="h-4 w-4" />
         </Link>
         <button
           type="button"
           onClick={() => setImageEditorOpen(true)}
           title="Görseli düzenle"
-          className="group relative w-16 h-16 rounded-lg border bg-muted flex items-center justify-center flex-shrink-0 overflow-hidden focus:outline-none focus:ring-2 focus:ring-primary/40"
+          className="group relative w-16 h-16 rounded-2xl bg-white ring-1 ring-white/15 shadow-[0_12px_30px_-14px_rgba(122,126,255,0.8)] flex items-center justify-center flex-shrink-0 overflow-hidden transition-transform duration-200 hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-[#7A7EFF]/60 motion-reduce:hover:scale-100"
         >
           {product.imageUrl ? (
             /* eslint-disable-next-line @next/next/no-img-element */
@@ -888,7 +972,7 @@ export default function ProductDetailPage({
             <h1
               onClick={() => setAdTaslak(product.name)}
               title="Adı değiştirmek için tıkla"
-              className="group cursor-text text-xl font-bold tracking-tight line-clamp-2 leading-tight rounded transition-colors hover:text-primary"
+              className="group cursor-text text-xl font-semibold tracking-tight line-clamp-2 leading-tight rounded transition-colors hover:text-[#C9D2F2]"
             >
               {product.name}
               <Pencil className="ml-2 inline h-3.5 w-3.5 align-baseline opacity-0 transition-opacity duration-150 group-hover:opacity-60" />
@@ -911,7 +995,7 @@ export default function ProductDetailPage({
                 }}
                 maxLength={80}
                 placeholder="örn. kırmızı vazo"
-                className="h-7 w-44 text-xs"
+                className="h-7 w-44 rounded-lg border-white/[0.08] bg-white/[0.03] text-xs dark:bg-white/[0.03]"
               />
             </div>
             <div className="flex items-center gap-1.5">
@@ -923,7 +1007,7 @@ export default function ProductDetailPage({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-7 w-7 transition-transform active:scale-90"
+                    className="h-7 w-7 rounded-lg border-white/10 bg-white/[0.03] transition hover:bg-[#7A7EFF]/15 active:scale-90"
                     disabled={product.stock <= 0}
                     onClick={() => adjustStock(id, -1, product.stock)}
                   >
@@ -938,7 +1022,7 @@ export default function ProductDetailPage({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="h-7 w-7 transition-transform active:scale-90"
+                    className="h-7 w-7 rounded-lg border-white/10 bg-white/[0.03] transition hover:bg-[#7A7EFF]/15 active:scale-90"
                     onClick={() => adjustStock(id, 1, product.stock)}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -947,7 +1031,7 @@ export default function ProductDetailPage({
                     <span
                       className={cn(
                         "text-[11px] ml-0.5",
-                        product.stock === 0 ? "text-destructive" : "text-amber-500"
+                        product.stock === 0 ? "text-rose-400" : "text-[#A9AEFF]"
                       )}
                     >
                       {product.stock === 0 ? "⚠ tükendi" : "⚠ kritik"}
@@ -961,7 +1045,12 @@ export default function ProductDetailPage({
               <Button
                 variant={product.madeToOrder ? "default" : "outline"}
                 size="sm"
-                className="h-7 text-xs transition-transform active:scale-95"
+                className={cn(
+                  "h-7 rounded-lg text-xs transition active:scale-95",
+                  product.madeToOrder
+                    ? "border-0 bg-gradient-to-br from-[#8B6CFF] to-[#5B8CFF] text-white"
+                    : "border-white/10 bg-white/[0.03] hover:bg-white/[0.08]"
+                )}
                 disabled={setMadeToOrderMutation.isPending}
                 onClick={() => setMadeToOrderMutation.mutate(!product.madeToOrder)}
               >
@@ -974,7 +1063,7 @@ export default function ProductDetailPage({
         <Button
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 shrink-0 transition-transform active:scale-95"
+          className="relative h-9 gap-1.5 shrink-0 rounded-xl border-0 bg-white/[0.04] px-3 ring-1 ring-white/[0.08] transition hover:bg-white/[0.08] active:scale-95"
           disabled={refreshing}
           onClick={handleRefresh}
           title="Bu ürünün verilerini sunucudan tazele"
@@ -983,7 +1072,7 @@ export default function ProductDetailPage({
           Yenile
         </Button>
         {kaldirSor ? (
-          <div className="flex shrink-0 items-center gap-1 rounded-md border bg-card p-1 animate-in fade-in slide-in-from-right-1 duration-200">
+          <div className="relative flex shrink-0 items-center gap-1 rounded-xl bg-white/[0.04] p-1 ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-right-1 duration-200">
             {product.hidden ? (
               <Button
                 variant="ghost"
@@ -1011,7 +1100,7 @@ export default function ProductDetailPage({
             <Button
               variant="destructive"
               size="sm"
-              className="h-7 gap-1.5"
+              className="h-7 gap-1.5 rounded-lg bg-rose-500/90 text-white hover:bg-rose-500"
               disabled={kaldirMutation.isPending}
               onClick={() => kaldirMutation.mutate("sil")}
               title="Kalıcı olarak sil"
@@ -1027,7 +1116,7 @@ export default function ProductDetailPage({
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 shrink-0 text-muted-foreground transition-transform hover:text-destructive active:scale-95"
+            className="relative h-9 gap-1.5 shrink-0 rounded-xl border-0 bg-white/[0.04] px-3 text-muted-foreground ring-1 ring-white/[0.08] transition hover:bg-rose-500/10 hover:text-rose-300 active:scale-95"
             onClick={() => setKaldirSor(true)}
             title="Ürünü gizle ya da sil"
           >
@@ -1035,7 +1124,7 @@ export default function ProductDetailPage({
             Kaldır
           </Button>
         )}
-      </div>
+      </header>
 
       {/* KARAR ÖNCE, AYRINTI SONRA: maliyet · her platformdaki kâr · kaça satmalı — hepsi tek ekranda.
           Fiyat Laboratuvarı sağ sütunun altındaki boşluğu doldurur (eskiden iki ekran aşağıdaydı). */}
@@ -1043,7 +1132,7 @@ export default function ProductDetailPage({
         {/* Sol: Maliyet formu (izole — yazarken sadece bu kart render olur) */}
         <div className="space-y-4 xl:col-span-1">
           <CostEditor
-            key={id}
+            key={`${id}:${formNesli}`}
             productId={id}
             initial={initialCost}
             filaments={filaments}
@@ -1060,11 +1149,14 @@ export default function ProductDetailPage({
 
         {/* Sağ: 3 Platform Yan Yana + hemen altında hedef fiyatlar */}
         <div className="xl:col-span-2 space-y-4">
-          <div className="animate-in fade-in duration-500">
-            <h2 className="text-base font-semibold mb-1">Platform Kâr/Zarar Durumu</h2>
-            <p className="text-xs text-muted-foreground">
-              Her platform için ayrı kâr hesabı — KDV, kargo ve komisyon dahil.
-            </p>
+          <div className="flex items-center gap-3 animate-in fade-in duration-500">
+            <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-[#9B5CFF]/22 to-[#4F8CFF]/14 text-[#C9D2F2] ring-1 ring-white/10">
+              <Store className="size-4" />
+            </span>
+            <div>
+              <h2 className="text-base font-semibold">Platform kâr/zarar durumu</h2>
+              <p className="text-xs text-muted-foreground">KDV, kargo ve komisyon dahil — her platform ayrı.</p>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
@@ -1127,9 +1219,8 @@ export default function ProductDetailPage({
               old ? { ...old, imageUrl: url, imageManual: url != null } : old
             );
             // Görsel kâr-etkilemez → listede de optimistic yamala (fetch YOK).
-            queryClient.setQueriesData<Array<{ id: string; imageUrl?: string | null }>>(
-              { queryKey: ["products"] },
-              (old) => (Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, imageUrl: url } : p)) : old)
+            urunListesiniYamala<{ id: string; imageUrl?: string | null }>(queryClient, (old) =>
+              old.map((p) => (p.id === id ? { ...p, imageUrl: url } : p))
             );
           }}
         />
@@ -1209,7 +1300,8 @@ function PlatformProfitCardImpl({
   const listingSource = {
     key: `${productId}:${listing?.id ?? "new"}:${listing?.salePrice ?? ""}:${listing?.commissionRate ?? ""}:${listing?.barcode ?? ""}`,
     salePrice: listing?.salePrice ? String(listing.salePrice) : "",
-    commissionRate: listing?.commissionRate ? String(listing.commissionRate * 100) : "",
+    // %0 GEÇERLİ bir orandır: eskiden kutu boş görünüyor, kaydedilince "girilmemiş"e dönüyordu.
+    commissionRate: listing?.commissionRate != null ? String(Math.round(listing.commissionRate * 10000) / 100) : "",
     listingBarcode: listing?.barcode ?? "",
   };
   const [listingDraft, setListingDraft] = useState(listingSource);
@@ -1238,7 +1330,7 @@ function PlatformProfitCardImpl({
           productId,
           platform,
           salePrice: parseFloat(salePrice) || 0,
-          commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
+          commissionRate: commissionRate.trim() !== "" && Number.isFinite(parseFloat(commissionRate)) ? parseFloat(commissionRate) / 100 : null,
           cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
@@ -1250,6 +1342,8 @@ function PlatformProfitCardImpl({
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
       patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
+      // Panel'in ilan sağlığı da bu ürünün kârını içeriyor (staleTime: Infinity → işaretlenmezse eski kalır).
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       toast.success(`${info.label} listing'i eklendi`);
       setEditing(false);
     },
@@ -1263,8 +1357,8 @@ function PlatformProfitCardImpl({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           salePrice: parseFloat(salePrice) || 0,
-          commissionRate: commissionRate ? parseFloat(commissionRate) / 100 : null,
-          cargoCost: null, // kargo her zaman otomatik (manuel override kaldırıldı)
+          commissionRate: commissionRate.trim() !== "" && Number.isFinite(parseFloat(commissionRate)) ? parseFloat(commissionRate) / 100 : null,
+          // cargoCost GÖNDERİLMEZ: her kayıtta null yazılıp ilandaki kargo bedeli siliniyordu (denetim).
           ...(showBarcodeField ? { barcode: listingBarcode.trim() || null } : {}),
         }),
       }),
@@ -1275,26 +1369,34 @@ function PlatformProfitCardImpl({
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
       patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
+      // Panel'in ilan sağlığı da bu ürünün kârını içeriyor (staleTime: Infinity → işaretlenmezse eski kalır).
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       toast.success("Güncellendi");
       setEditing(false);
     },
     onError: () => toast.error("Güncellenemedi"),
   });
 
+  // İlan silme geri alınamaz (komisyon ve barkod da gider) → iki adımlı onay.
+  const [silmeSor, setSilmeSor] = useState(false);
   const deleteListing = useMutation({
     mutationFn: () => fetchJson(`/api/listings/${listing!.id}`, { method: "DELETE" }),
+    onError: () => toast.error("İlan kaldırılamadı, tekrar dene"),
+    onSettled: () => setSilmeSor(false),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["product", productId] });
       queryClient.invalidateQueries({ queryKey: ["profit-preview", productId] });
       queryClient.invalidateQueries({ queryKey: ["price-lab", productId] });
       patchProductsInCache(queryClient, [productId]); // listede yalnız bu ürün (tüm liste değil)
+      // Panel'in ilan sağlığı da bu ürünün kârını içeriyor (staleTime: Infinity → işaretlenmezse eski kalır).
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
       toast.success(`${info.label} listing kaldırıldı`);
     },
   });
 
   if (!listing) {
     return (
-      <Card className="border-dashed">
+      <Card className="detay-kart rounded-2xl border-dashed border-white/[0.1] bg-transparent">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-2">
             <span
@@ -1413,24 +1515,21 @@ function PlatformProfitCardImpl({
   // Pasif ilan canlı önizlemeye HİÇ girmez (yalnız aktif ilanlar hesaplanır) → sonucu beklemek
   // sonsuza kadar "Hesaplanıyor" demek olurdu. Durumu açıkça yaz.
   const listingPaused = !listing.isActive;
-  const isLoss = result && result.netProfit < 0;
-  const isThin = result && !isLoss && result.profitMargin < 0.1;
-  // Pazaryerinde (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar.
-  // Shopify sabit komisyonlu → uyarı gerekmez.
+  // Pazaryerinde (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → uyar ve
+  // KÂR GÖSTERME; kart da şişkin kâra göre yeşil/kırmızı boyanmasın (lib/komisyon-bilinmiyor).
   const commissionMissing =
-    (platform === "trendyol" || platform === "hepsiburada") &&
-    Boolean(result) &&
-    !result?.appliedCommissionRule &&
-    (listing?.commissionRate == null);
+    Boolean(result) && komisyonBilinmiyor({ platform, commissionRate: listing?.commissionRate }, result ?? {});
+  const isLoss = result && !commissionMissing && result.netProfit < 0;
+  const isThin = result && !commissionMissing && !isLoss && result.profitMargin < 0.1;
 
   return (
     <Card
       className={cn(
-        "border-2 transition-colors",
-        isLoss && "border-destructive/40",
-        !isLoss && isThin && "border-amber-500/40",
-        result && !isLoss && !isThin && "border-green-500/30",
-        !result && "border-muted"
+        "detay-kart rounded-2xl transition-colors duration-300",
+        isLoss && "border-rose-400/40 bg-[linear-gradient(180deg,rgba(244,63,94,0.07),transparent_45%),var(--card)]",
+        !isLoss && isThin && "border-[#7A7EFF]/40 bg-[linear-gradient(180deg,rgba(122,126,255,0.07),transparent_45%),var(--card)]",
+        result && !commissionMissing && !isLoss && !isThin && "border-emerald-400/30 bg-[linear-gradient(180deg,rgba(52,211,153,0.07),transparent_45%),var(--card)]",
+        (!result || commissionMissing) && "border-white/[0.08]"
       )}
       style={
         result
@@ -1465,11 +1564,17 @@ function PlatformProfitCardImpl({
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-destructive/70 hover:text-destructive"
-              onClick={() => deleteListing.mutate()}
-              title="Sil"
+              className={cn(
+                "h-6 w-6 text-rose-400/70 hover:text-rose-400 transition-all",
+                silmeSor && "w-auto px-2 text-[11px] font-medium text-rose-300 bg-rose-500/15 hover:bg-rose-500/25"
+              )}
+              disabled={deleteListing.isPending}
+              onClick={() => (silmeSor ? deleteListing.mutate() : setSilmeSor(true))}
+              onBlur={() => setSilmeSor(false)}
+              title={silmeSor ? "Kaldırmak için tekrar tıkla" : "İlanı kaldır"}
             >
               <Trash2 className="h-3 w-3" />
+              {silmeSor && <span className="animate-in fade-in duration-150">Emin misin?</span>}
             </Button>
           </div>
         </div>
@@ -1544,16 +1649,16 @@ function PlatformProfitCardImpl({
                 {listing.barcode ? (
                   <span className="font-mono text-foreground">{listing.barcode}</span>
                 ) : (
-                  <span className="text-amber-500">girilmedi — siparişler eşleşmeyebilir</span>
+                  <span className="text-[#A9AEFF]">girilmedi — siparişler eşleşmeyebilir</span>
                 )}
               </div>
             )}
 
             {commissionMissing && (
-              <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-2 font-medium">
+              <div className="flex items-start gap-2 text-xs text-rose-300 bg-rose-500/10 border border-rose-400/30 rounded-md px-2.5 py-2 font-medium">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>
-                  {info.label} komisyonu girilmemiş, kâr hesaplanamıyor.
+                  {`${info.label} komisyonu girilmemiş, kâr hesaplanamıyor. `}
                   Düzenle&apos;den komisyon oranını gir veya Komisyon Kuralları&apos;na ekle.
                 </span>
               </div>
@@ -1575,7 +1680,7 @@ function PlatformProfitCardImpl({
               </div>
             ) : commissionMissing ? null : missingCost ? (
               // Komisyonu bilinmeyen ilanda kâr gösterilmez (lib/komisyon-bilinmiyor) — uyarı yukarıda.
-              <div className="flex items-start gap-2 text-xs text-amber-500">
+              <div className="flex items-start gap-2 text-xs text-[#A9AEFF]">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>Üretim maliyeti girilmedi — net kâr hesaplanamaz</span>
               </div>
@@ -1595,10 +1700,10 @@ function PlatformProfitCardImpl({
                       className={cn(
                         "block text-lg font-bold tabular-nums transition-colors",
                         isLoss
-                          ? "text-destructive"
+                          ? "text-rose-400"
                           : isThin
-                            ? "text-amber-500"
-                            : "text-green-500"
+                            ? "text-[#A9AEFF]"
+                            : "text-emerald-400"
                       )}
                     />
                   </div>
@@ -1622,7 +1727,7 @@ function PlatformProfitCardImpl({
 
                 {result.minOrderQty > 1 && (
                   <div
-                    className="rounded-md bg-amber-500/10 text-amber-400 px-2 py-1 text-[11px] font-medium"
+                    className="rounded-md bg-[#7A7EFF]/12 text-[#C9D2F2] px-2 py-1 text-[11px] font-medium"
                     title="Trendyol min sipariş adedi — kâr bu adetlik sipariş üzerinden hesaplandı"
                   >
                     Trendyol min sipariş: {result.minOrderQty} adet · kâr {formatCurrency(result.salePrice * result.minOrderQty)} ciro üzerinden
@@ -1697,7 +1802,7 @@ function PlatformProfitCardImpl({
                     ))}
                   {result.inputVatCredit > 0 && (
                     <div
-                      className="flex justify-between text-green-500 font-medium pt-0.5"
+                      className="flex justify-between text-emerald-400 font-medium pt-0.5"
                       title="Komisyon, kargo, platform ve filament faturalarındaki indirilebilen KDV"
                     >
                       <span>KDV İadesi</span>

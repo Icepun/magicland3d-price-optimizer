@@ -53,8 +53,19 @@ export default function ProductDetailScreen() {
     isRefetching: productRefetching,
     refetch: refetchProduct,
   } = useQuery({ queryKey: ["product", id], queryFn: () => getProductDetail(id) });
-  const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const { data: rules, isError: kurallarHata, refetch: kurallariYenile } = useQuery({ queryKey: ["rules"], queryFn: getRules });
+  const { data: settings, isError: ayarlarHata, refetch: ayarlariYenile } = useQuery({
+    queryKey: ["settings"],
+    queryFn: getSettingsMap,
+  });
+  // Kurallar/ayarlar gelmeden kâr HESAPLANMAZ: eskiden bu sırada "Maliyet girilmemiş" ve "Maliyet
+  // ekle" görünüyordu (yanlış). Yüklenirken iskelet, gelmezse "tekrar dene" (denetim, 23 Kas 2026).
+  const kurallarHazir = !!rules && !!settings;
+  const kurallarDustu = !kurallarHazir && (kurallarHata || ayarlarHata);
+  const kurallariTekrarDene = () => {
+    void kurallariYenile();
+    void ayarlariYenile();
+  };
   const { data: priceHistory } = useQuery({ queryKey: ["price-history", id], queryFn: () => getPriceHistory(id) });
   const { data: variantGroup } = useQuery({
     queryKey: ["variant-group", product?.variantGroupId],
@@ -281,7 +292,18 @@ export default function ProductDetailScreen() {
 
       {/* Maliyet */}
       <FadeInView index={3}>
-        {profit?.hasCost ? (
+        {!kurallarHazir ? (
+          kurallarDustu ? (
+            <Tint style={styles.section}>
+              <Txt v="body" tone="dim">
+                Kâr bilgisi şu an yüklenemedi.
+              </Txt>
+              <Button label="Tekrar dene" icon="arrow.clockwise" size="sm" variant="secondary" onPress={kurallariTekrarDene} />
+            </Tint>
+          ) : (
+            <ShimmerCard height={120} />
+          )
+        ) : profit?.hasCost ? (
           <Tint strong style={styles.section}>
             <View style={styles.rowBetween}>
               <Txt v="label" tone="faint" style={styles.kicker}>
@@ -303,7 +325,7 @@ export default function ProductDetailScreen() {
       <Txt v="label" tone="faint" style={styles.sectionTitle}>
         PLATFORM KÂR / ZARAR
       </Txt>
-      {profit?.hasCost && profit.platforms.length > 0 ? (
+      {!kurallarHazir ? null : profit?.hasCost && profit.platforms.length > 0 ? (
         profit.platforms.map((p, i) => (
           <FadeInView key={p.listingId} index={i + 4}>
             <PlatformCard p={p} />
@@ -336,6 +358,12 @@ export default function ProductDetailScreen() {
                     {formatPercent(t.currentMargin)}
                   </Txt>
                 </View>
+                {t.komisyonEksik ? (
+                  <Txt v="small" tone="bad">
+                    Komisyon girilmemiş — hedef fiyat hesaplanamıyor.
+                  </Txt>
+                ) : (
+                <>
                 <Txt v="small" tone="faint">
                   Hedef marj için satış fiyatı (KDV dahil)
                 </Txt>
@@ -351,6 +379,8 @@ export default function ProductDetailScreen() {
                     </View>
                   ))}
                 </View>
+                </>
+                )}
               </Tint>
             );
           })}
@@ -501,15 +531,16 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
       {p.commissionMissing ? null : (
       <>
       <View style={styles.divider} />
-      <Dokum label={`KDV (%${r.vatRate})`} value={r.vatAmount} />
+      {/* Satırlar SİPARİŞ toplamıdır (×N adet): toplamları net kârı verir. Eskiden KDV ve gider
+          satırları adet başınaydı ve reklam payı satırı yoktu (denetim, 23 Kas 2026). */}
+      <Dokum label={`KDV (%${r.vatRate})`} value={r.vatAmount * r.minOrderQty} />
       <Dokum label="Ürün + paketleme" value={r.productCost + r.packagingCost} />
       <Dokum label="Komisyon" value={r.commissionCost} />
       <Dokum label="Kargo" value={r.cargoCost} />
-      {r.appliedExpenseRules
-        .filter((e) => e.amount !== 0)
-        .map((e) => (
-          <Dokum key={e.id} label={e.name} value={e.amount} />
-        ))}
+      {r.fixedExpenses + r.variableExpenses !== 0 ? (
+        <Dokum label="Platform giderleri" value={r.fixedExpenses + r.variableExpenses} />
+      ) : null}
+      {r.adCost > 0 ? <Dokum label="Reklam payı" value={r.adCost} /> : null}
       {r.inputVatCredit > 0 ? <Dokum label="KDV iadesi" value={r.inputVatCredit} positive /> : null}
       </>
       )}

@@ -12,7 +12,7 @@ import { BosDurum, DolanCubuk, RaporKart } from "./rapor-ortak";
 
 /** Marka renkleri yerine uygulamanın paleti (turuncu yok). */
 export const PLATFORM_RENGI: Record<PlatformAnahtari, string> = {
-  trendyol: "#7A7EFF",
+  trendyol: "#F27A1A", // Trendyol marka turuncusu — Berke: "trendyol her yerde turuncu olmalı"
   hepsiburada: "#4F8CFF",
   shopify: "#34D399",
   manual: "#C9D2F2",

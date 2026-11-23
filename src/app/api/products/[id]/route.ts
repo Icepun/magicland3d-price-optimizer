@@ -9,6 +9,7 @@ import { productPatchAffectsProfit } from "@/lib/pricing-inputs";
 import { detayliMaliyetOnbellegi, maliyetGovdesiniKolonlaraCevir } from "@/lib/product-cost-cache";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import { jsonError } from "@/lib/api-error";
+import { toDbDate } from "@/lib/sqlite-date";
 import { z } from "zod";
 
 const UpdateProductSchema = z.object({
@@ -140,6 +141,27 @@ async function patchProduct(
 
   const { id } = await params;
   const body = await req.json();
+
+  // ATOMİK STOK FARKI (+/- düğmeleri) — telefonla AYNI yöntem: `stock = MAX(0, stock + fark)`.
+  // Mutlak değer yazmak, sayfa açıkken telefonda yapılan değişikliği eziyordu (masaüstünde +1 →
+  // "eski stok + 1"; telefonun −1'i kaybolur — denetim, 23 Kas 2026). Yanıt güncel stoğu döner.
+  if (body && typeof body === "object" && "stockDelta" in body) {
+    const fark = Number((body as { stockDelta: unknown }).stockDelta);
+    if (!Number.isInteger(fark) || Math.abs(fark) > 1_000_000) {
+      return NextResponse.json({ error: "Geçersiz stok değişimi" }, { status: 400 });
+    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Product" SET "stock" = MAX(0, COALESCE("stock", 0) + ?), "updatedAt" = ? WHERE "id" = ?`,
+      fark,
+      toDbDate(new Date()),
+      id
+    );
+    const satir = await prisma.product.findUnique({ where: { id }, select: { stock: true } });
+    if (!satir) return NextResponse.json({ error: "Ürün bulunamadı" }, { status: 404 });
+    bustStockCaches();
+    return NextResponse.json({ id, stock: satir.stock });
+  }
+
   const { cost, ...productData } = UpdateProductSchema.parse(body);
 
   // Boş takma ad → null (DB'de tutarlı). Barkod trim'lendi (şemada).

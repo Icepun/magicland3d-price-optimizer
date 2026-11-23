@@ -3,6 +3,7 @@ import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
 import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
+import { adRateFor, adRateSnapshot } from "@/lib/ad-rate";
 import { platformMinOrderQty, shopifyCargoOverride } from "@/core/platform-rules";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
@@ -37,7 +38,8 @@ const LOW_STOCK_LIMIT = 60;
 const PROBLEM_LIMIT = 30;
 
 /** SWR önbellek anahtarı — gövdenin ANLAMI değişince sürümü artır (aşağıdaki nota bak). */
-const CACHE_KEY = "dashboard:v3";
+// v4: reklam payı + komisyonu bilinmeyen ilan kuralı — eski disk kopyası kullanılmasın.
+const CACHE_KEY = "dashboard:v4";
 
 /**
  * Panel verisini SWR önbelleğiyle sun: kullanıcı uygulamayı açtığında (açılışta ısıtılır) veya
@@ -85,6 +87,11 @@ async function computeDashboard() {
     ]);
 
   const filamentFiyatlari = await filamentFiyatlariOku();
+  // REKLAM PAYI — ürün detayı ve telefonla AYNI: bugünün yürürlükteki bütçesinin oranı. Eksikken
+  // reklam bütçesi girildiği gün liste/Panel/Raporlar detaydan yüksek kâr gösterirdi (denetim,
+  // 23 Kas 2026). Oran okunamazsa 0 (bütçe yokken de 0) — önbellekli, ek sorgu yok gibi.
+  const reklamAni = await adRateSnapshot().catch(() => null);
+  const reklamOrani = (platform: string) => (reklamAni ? adRateFor(reklamAni, platform, null) : 0);
   const settingsMap = Object.fromEntries(
     settings.map((s) => [s.key, s.value])
   );
@@ -189,6 +196,7 @@ async function computeDashboard() {
       }
 
       const sim = simulatePrice({
+        adRate: reklamOrani(listing.platform),
         salePrice: listing.salePrice,
         productCost,
         packagingCost,
