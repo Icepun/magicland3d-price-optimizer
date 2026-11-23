@@ -19,13 +19,18 @@ export interface TrendyolIadeTalebi {
   orderNumber?: string | number | null;
   /** İadesi istenen ASIL gönderi paketi. */
   orderOutboundPackageId?: string | number | null;
+  /** Talebin açıldığı / son değiştiği an (ms) — kusurlu ürün bedelinin haftası (`core/trendyol-kusurlu`). */
+  claimDate?: number | string | null;
+  lastModifiedDate?: number | string | null;
   items?:
     | {
-        orderLine?: { id?: string | number | null } | null;
+        orderLine?: { id?: string | number | null; price?: number | string | null } | null;
         claimItems?:
           | {
               id?: string | number | null;
               claimItemStatus?: { name?: string | null } | null;
+              customerClaimItemReason?: { name?: string | null } | null;
+              trendyolClaimItemReason?: { name?: string | null } | null;
             }[]
           | null;
       }[]
@@ -53,11 +58,18 @@ export const TRENDYOL_TALEP_SAYFA_TAVANI = 20;
 
 const KABUL = "accepted";
 
-function paketAnahtari(raw: unknown): string | null {
+/** Talep kalemi kabul edilmiş (parası iade edilmiş) mi? */
+export function talepKalemiKabulMu(durum: { name?: string | null } | null | undefined): boolean {
+  return (durum?.name ?? "").trim().toLowerCase() === KABUL;
+}
+
+/** Talepteki asıl gönderi paketi → sipariş kimliği (`ty-<paket id>`); geçersizse null. */
+export function trendyolPaketAnahtari(raw: unknown): string | null {
   if (raw == null) return null;
   const s = String(raw).trim();
   return /^[1-9]\d*$/.test(s) ? `ty-${s}` : null;
 }
+const paketAnahtari = trendyolPaketAnahtari;
 
 /**
  * Talepleri paket başına KABUL EDİLMİŞ iadeye indir. Anahtar sipariş kimliğiyle aynı biçimde:
@@ -76,7 +88,7 @@ export function trendyolIadeleri(
     for (const [satirSirasi, kalem] of (talep.items ?? []).entries()) {
       const satirKimligi = kalem?.orderLine?.id == null ? `sira-${satirSirasi}` : String(kalem.orderLine.id);
       for (const [kalemSirasi, ci] of (kalem?.claimItems ?? []).entries()) {
-        if ((ci?.claimItemStatus?.name ?? "").trim().toLowerCase() !== KABUL) continue;
+        if (!talepKalemiKabulMu(ci?.claimItemStatus)) continue;
         const kalemKimligi =
           ci?.id == null ? `${anahtar}:${satirKimligi}:${kalemSirasi}` : String(ci.id);
         if (gorulen.has(kalemKimligi)) continue;

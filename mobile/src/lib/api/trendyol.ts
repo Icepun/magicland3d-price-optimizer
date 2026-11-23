@@ -10,6 +10,7 @@ import { siparisKomisyonKesri } from "@core/order-commission";
 import { tyKalemHesabi } from "@core/ty-kesinti";
 import { trendyolKargoBaglami } from "@core/siparis-kargo";
 import { trendyolGecikmesi } from "@core/trendyol-gecikme";
+import { trendyolKusurluIadeleri, type TyKusurluIade } from "@core/trendyol-kusurlu";
 import {
   trendyolIadeDurumu,
   trendyolIadeleri,
@@ -111,7 +112,10 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
    * "Delivered" bırakıyor; iade yalnız bu uçta görünüyor. Siparişlerle aynı anda istenir; alınamazsa
    * siparişler etkilenmez, yalnız bu turda iade işlenmez.
    */
-  const iadelerSozu: Promise<Map<string, TrendyolPaketIadesi>> = trendyolTalepleriniTopla(
+  const iadelerSozu: Promise<{
+    iadeler: Map<string, TrendyolPaketIadesi>;
+    kusurlular: Map<string, TyKusurluIade>;
+  }> = trendyolTalepleriniTopla(
     async (page, size) => {
       const res = await fetchT(
         `https://apigw.trendyol.com/integration/order/sellers/${SELLER}/claims?startDate=${cutoff}&endDate=${Date.now()}&page=${page}&size=${size}`,
@@ -121,8 +125,9 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
       return (await res.json()) as TrendyolTalepSayfasi;
     }
   )
-    .then(trendyolIadeleri)
-    .catch(() => new Map<string, TrendyolPaketIadesi>());
+    // Satıcı kusurlu iadeler → kusurlu ürün bedeli (masaüstüyle aynı çekirdek).
+    .then((talepler) => ({ iadeler: trendyolIadeleri(talepler), kusurlular: trendyolKusurluIadeleri(talepler) }))
+    .catch(() => ({ iadeler: new Map<string, TrendyolPaketIadesi>(), kusurlular: new Map<string, TyKusurluIade>() }));
   const perChunk = await Promise.all(
     pencereler.map(async ({ startDate, endDate }) => {
       const rows: { key: string; o: TyOrder }[] = [];
@@ -149,7 +154,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
     })
   );
 
-  const iadeler = await iadelerSozu;
+  const { iadeler, kusurlular } = await iadelerSozu;
   for (const rows of perChunk) {
     // Masaüstü route.ts:318 ile birebir: PAKET id'siyle tekilleştir (orderNumber DEĞİL).
     // Bölünmüş siparişte (UnPacked/kısmi iptal) aynı orderNumber'ın iki paketi iki kayıttır;
@@ -184,6 +189,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
         // Kargo tarifesi: hızlı teslimat + zamanında → avantajlı tablo (masaüstüyle aynı çekirdek).
         kargo: trendyolKargoBaglami(o),
         gecikme: trendyolGecikmesi(o, Date.now()),
+        kusurlu: kusurlular.get(key) ?? null,
         items: (o.lines ?? []).map((l) => ({
           name: l.productName ?? l.barcode ?? "Ürün",
           quantity: Number(l.quantity ?? 1),

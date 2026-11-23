@@ -164,8 +164,15 @@ interface UnifiedOrder {
     serviceFeeActual: boolean;
     penalty?: number;
   } | null;
-  /** Kârdan düşülen gecikme bedeli (Trendyol, TL). */
+  /** Kârdan düşülen ceza: gecikme + kusurlu ürün bedeli (Trendyol, TL). */
   penalty?: number;
+  /** Trendyol kusurlu ürün bedeli (satıcı kusurlu iade). */
+  defectInfo?: {
+    sebep: string;
+    adet: number;
+    ceza: number;
+    durum: "tahmini" | "gercek" | "kesilmedi";
+  } | null;
   /** Trendyol termin gecikmesi. */
   delayInfo?: {
     sonGun: string;
@@ -2332,6 +2339,15 @@ const OrderRow = memo(function OrderRow({
                   Fazla desi
                 </span>
               )}
+              {order.defectInfo && order.defectInfo.durum !== "kesilmedi" && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-1.5 py-px text-[9px] font-semibold text-red-300 animate-in fade-in zoom-in-95 duration-300"
+                  title={`${order.defectInfo.sebep} · kusurlu ürün bedeli`}
+                >
+                  <PackageX className="h-2.5 w-2.5" />
+                  Kusurlu
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground truncate mt-0.5">
               {order.customer ? <span className="text-foreground/80">{order.customer}</span> : "Müşteri —"}
@@ -2702,7 +2718,12 @@ const OrderRow = memo(function OrderRow({
                       { ad: "Gidiş kargosu", tutar: order.returnLoss.outboundCargo, gercek: order.returnLoss.outboundActual },
                       { ad: "Dönüş kargosu", tutar: order.returnLoss.returnCargo, gercek: order.returnLoss.returnActual },
                       { ad: "Hizmet bedeli", tutar: order.returnLoss.serviceFee, gercek: order.returnLoss.serviceFeeActual },
-                      { ad: "Gecikme bedeli", tutar: order.returnLoss.penalty ?? 0, gercek: order.delayInfo?.durum === "gercek" },
+                      {
+                        ad: "Gecikme bedeli",
+                        tutar: Math.max(0, (order.returnLoss.penalty ?? 0) - (order.defectInfo?.ceza ?? 0)),
+                        gercek: order.delayInfo?.durum === "gercek",
+                      },
+                      { ad: "Kusurlu ürün bedeli", tutar: order.defectInfo?.ceza ?? 0, gercek: order.defectInfo?.durum === "gercek" },
                     ]
                       .filter((k) => k.tutar > 0)
                       .map((k) => (
@@ -2768,7 +2789,7 @@ const OrderRow = memo(function OrderRow({
                   </div>
                 )}
                 {/* Trendyol termin gecikme bedeli — tahmini, haftalık faturayla kesinleşir. */}
-                {!isCancelled && (order.penalty ?? 0) > 0 && (
+                {!isCancelled && (order.penalty ?? 0) - (order.defectInfo?.ceza ?? 0) > 0 && (
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">
                       Gecikme bedeli
@@ -2778,7 +2799,23 @@ const OrderRow = memo(function OrderRow({
                         <span className="ml-1 text-muted-foreground/60">tahmini</span>
                       )}
                     </span>
-                    <span className="tabular-nums text-red-300">−{fmtMoney2(order.penalty ?? 0, orderCurrency)}</span>
+                    <span className="tabular-nums text-red-300">
+                      −{fmtMoney2((order.penalty ?? 0) - (order.defectInfo?.ceza ?? 0), orderCurrency)}
+                    </span>
+                  </div>
+                )}
+                {/* Trendyol kusurlu ürün bedeli — satıcı kusurlu iadede, haftalık faturayla kesinleşir. */}
+                {!isCancelled && (order.defectInfo?.ceza ?? 0) > 0 && (
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">
+                      Kusurlu ürün bedeli
+                      {order.defectInfo?.durum === "gercek" ? (
+                        <GercekRozeti />
+                      ) : (
+                        <span className="ml-1 text-muted-foreground/60">tahmini</span>
+                      )}
+                    </span>
+                    <span className="tabular-nums text-red-300">−{fmtMoney2(order.defectInfo?.ceza ?? 0, orderCurrency)}</span>
                   </div>
                 )}
                 {!isCancelled && order.delayInfo?.gecikti && order.delayInfo.durum === "kesilmedi" && (

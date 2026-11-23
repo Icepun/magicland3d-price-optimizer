@@ -11,6 +11,7 @@ import {
   type TyGecikme,
   type TyGecikmeSonucu,
 } from "@core/trendyol-gecikme";
+import { kusurluIadeleriFaturalarlaEsle, type TyKusurluIade, type TyKusurluSonucu } from "@core/trendyol-kusurlu";
 import { query } from "@/lib/turso";
 
 import { getShopifyOrders } from "@/lib/api/shopify";
@@ -89,6 +90,10 @@ export interface UnifiedOrder {
   gecikme?: TyGecikme | null;
   /** Gecikme bedelinin haftalık faturayla eşleşmiş hâli — kâr bunu düşer (masaüstüyle aynı). */
   gecikmeSonucu?: TyGecikmeSonucu | null;
+  /** Trendyol satıcı kusurlu iadesi (@core/trendyol-kusurlu). */
+  kusurlu?: TyKusurluIade | null;
+  /** Kusurlu ürün bedelinin haftalık faturayla eşleşmiş hâli — kâr bunu düşer (masaüstüyle aynı). */
+  kusurluSonucu?: TyKusurluSonucu | null;
   isManual?: boolean;
   manualOrderId?: string;
   editHref?: string;
@@ -143,22 +148,31 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
 }
 
 /**
- * Trendyol gecikme bedelleri — haftalık faturayla eşleştirme TÜM siparişler üzerinden (masaüstü
- * Siparişler ucuyla aynı çekirdek). Fatura ayarı okunamazsa tahmin kalır; hata fırlatmaz.
+ * Trendyol gecikme ve kusurlu ürün bedelleri — haftalık faturayla eşleştirme TÜM siparişler üzerinden
+ * (masaüstü Siparişler ucuyla aynı çekirdek). Fatura ayarı okunamazsa tahmin kalır; hata fırlatmaz.
  */
 async function gecikmeleriEsle(orders: UnifiedOrder[]): Promise<void> {
   const adaylar = orders.flatMap((o) => (o.platform === "trendyol" && o.gecikme ? [{ id: o.id, g: o.gecikme }] : []));
-  if (adaylar.length === 0) return;
-  let metin: string | null = null;
+  const kusurlular = new Map(
+    orders.flatMap((o) => (o.platform === "trendyol" && o.kusurlu ? [[o.id, o.kusurlu] as const] : []))
+  );
+  if (adaylar.length === 0 && kusurlular.size === 0) return;
+  const ayar: Record<string, string | null> = {};
   try {
-    const [satir] = await query<{ value: string | null }>(`SELECT value FROM AppSetting WHERE key = ?`, ["tyGecikmeFaturalari"]);
-    metin = satir?.value ?? null;
+    const satirlar = await query<{ key: string; value: string | null }>(
+      `SELECT key, value FROM AppSetting WHERE key IN (?, ?)`,
+      ["tyGecikmeFaturalari", "tyKusurluFaturalari"]
+    );
+    for (const s of satirlar) ayar[s.key] = s.value ?? null;
   } catch {
-    metin = null;
+    // Fatura bilgisi yoksa bedeller tahmin kalır.
   }
-  const sonuc = gecikmeleriFaturalarlaEsle(adaylar, tyGecikmeFaturalariOku(metin), Date.now());
+  const sonuc = gecikmeleriFaturalarlaEsle(adaylar, tyGecikmeFaturalariOku(ayar.tyGecikmeFaturalari), Date.now());
+  const kusurluSonuc = kusurluIadeleriFaturalarlaEsle(kusurlular, tyGecikmeFaturalariOku(ayar.tyKusurluFaturalari), Date.now());
   for (const o of orders) {
-    if (o.platform === "trendyol") o.gecikmeSonucu = sonuc.get(o.id) ?? null;
+    if (o.platform !== "trendyol") continue;
+    o.gecikmeSonucu = sonuc.get(o.id) ?? null;
+    o.kusurluSonucu = kusurluSonuc.get(o.id) ?? null;
   }
 }
 

@@ -520,14 +520,20 @@ export class TrendyolClient {
     status?: string;
     startDate?: number;
     endDate?: number;
-    orderByField?: string;
+    /**
+     * null = sıralama gönderilmez. Ölçüldü (23 Kas 2026): `PackageLastModifiedDate` ile ~3 aydan eski
+     * pencereler hep BOŞ dönüyor; sıralamasız istek sipariş tarihine göre eski siparişleri veriyor.
+     */
+    orderByField?: string | null;
     orderByDirection?: "ASC" | "DESC";
   } = {}): Promise<TrendyolOrderPage> {
     const searchParams = new URLSearchParams();
     searchParams.set("page", String(params.page ?? 0));
     searchParams.set("size", String(params.size ?? 50));
-    searchParams.set("orderByField", params.orderByField ?? "PackageLastModifiedDate");
-    searchParams.set("orderByDirection", params.orderByDirection ?? "DESC");
+    if (params.orderByField !== null) {
+      searchParams.set("orderByField", params.orderByField ?? "PackageLastModifiedDate");
+      searchParams.set("orderByDirection", params.orderByDirection ?? "DESC");
+    }
     if (params.status) searchParams.set("status", params.status);
     if (params.startDate) searchParams.set("startDate", String(params.startDate));
     if (params.endDate) searchParams.set("endDate", String(params.endDate));

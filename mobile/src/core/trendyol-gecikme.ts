@@ -135,32 +135,34 @@ function haftaPazartesi(gun: string): number {
 /** Fatura haftası pay: fatura Çarşamba kesiliyor; birkaç gün gecikebilir. */
 const FATURA_BEKLEME_GUN = 16;
 
+/** Haftalık faturayla kesinleşen bir bedel: `gun` bedelin hangi haftaya yazıldığını belirler (Türkiye, YYYY-AA-GG). */
+export interface TyHaftalikBedel {
+  id: string;
+  gun: string;
+  ceza: number;
+}
+
+export type TyFaturaDurumu = "tahmini" | "gercek" | "kesilmedi";
+
 /**
- * Gecikmeleri haftalık faturalarla eşleştirir.
+ * Haftalık (Çarşamba) tazmin faturalarıyla eşleştirme — gecikme ve kusurlu ürün bedeli aynı düzende
+ * kesiliyor: fatura, bir önceki Pazartesi–Pazar haftasına düşen bedellerin toplamı.
  *  • Haftanın faturası tahminle aynıysa → hepsi "gerçek".
- *  • Fatura var ama farklı: haftada tek gecikme varsa faturadaki tutar o siparişin; değilse tahmin kalır.
+ *  • Fatura var ama farklı: haftada tek bedel varsa faturadaki tutar onun; değilse tahmin kalır.
  *  • Fatura beklenen süre geçtiği hâlde gelmediyse → "kesilmedi" (bedel 0).
  *  • Henüz fatura zamanı gelmediyse ya da o haftanın faturaları bilinmiyorsa → "tahmini".
  */
-export function gecikmeleriFaturalarlaEsle(
-  gecikmeler: readonly { id: string; g: TyGecikme }[],
+export function haftalikFaturalarlaEsle(
+  bedeller: readonly TyHaftalikBedel[],
   faturalar: TyGecikmeFaturalari | null | undefined,
   an: number
-): Map<string, TyGecikmeSonucu> {
-  const sonuc = new Map<string, TyGecikmeSonucu>();
-  const haftalar = new Map<number, { id: string; g: TyGecikme }[]>();
-  for (const k of gecikmeler) {
-    if (!k.g.gecikti) {
-      sonuc.set(k.id, { ceza: 0, durum: "zamaninda" });
-      continue;
-    }
-    if (k.g.muaf || k.g.ceza <= 0) {
-      sonuc.set(k.id, { ceza: 0, durum: "muaf" });
-      continue;
-    }
-    const h = haftaPazartesi(k.g.tolerans);
+): Map<string, { ceza: number; durum: TyFaturaDurumu }> {
+  const sonuc = new Map<string, { ceza: number; durum: TyFaturaDurumu }>();
+  const haftalar = new Map<number, TyHaftalikBedel[]>();
+  for (const b of bedeller) {
+    const h = haftaPazartesi(b.gun);
     const liste = haftalar.get(h) ?? [];
-    liste.push(k);
+    liste.push(b);
     haftalar.set(h, liste);
   }
   const faturaToplami = (pazartesi: number) =>
@@ -172,22 +174,42 @@ export function gecikmeleriFaturalarlaEsle(
       })
       .reduce((t, f) => t + f.tutar, 0);
   for (const [pazartesi, liste] of haftalar) {
-    const tahmin = liste.reduce((t, k) => t + k.g.ceza, 0);
+    const tahmin = liste.reduce((t, b) => t + b.ceza, 0);
     const bilinir = faturalar != null && pazartesi + 7 * GUN_MS >= faturalar.bas;
     const fatura = bilinir ? faturaToplami(pazartesi) : 0;
     const beklemeBitti = an > pazartesi + FATURA_BEKLEME_GUN * GUN_MS;
-    for (const k of liste) {
+    for (const b of liste) {
       if (bilinir && fatura > 0) {
-        if (Math.abs(fatura - tahmin) < 0.01) sonuc.set(k.id, { ceza: k.g.ceza, durum: "gercek" });
-        else if (liste.length === 1) sonuc.set(k.id, { ceza: Math.round(fatura * 100) / 100, durum: "gercek" });
-        else sonuc.set(k.id, { ceza: k.g.ceza, durum: "tahmini" });
+        if (Math.abs(fatura - tahmin) < 0.01) sonuc.set(b.id, { ceza: b.ceza, durum: "gercek" });
+        else if (liste.length === 1) sonuc.set(b.id, { ceza: Math.round(fatura * 100) / 100, durum: "gercek" });
+        else sonuc.set(b.id, { ceza: b.ceza, durum: "tahmini" });
       } else if (bilinir && beklemeBitti) {
-        sonuc.set(k.id, { ceza: 0, durum: "kesilmedi" });
+        sonuc.set(b.id, { ceza: 0, durum: "kesilmedi" });
       } else {
-        sonuc.set(k.id, { ceza: k.g.ceza, durum: "tahmini" });
+        sonuc.set(b.id, { ceza: b.ceza, durum: "tahmini" });
       }
     }
   }
+  return sonuc;
+}
+
+/**
+ * Gecikmeleri haftalık "Termin Gecikme Bedeli" faturalarıyla eşleştirir (kural: `haftalikFaturalarlaEsle`;
+ * bedelin haftası tolerans günü). Zamanında ve muaf paketler faturaya girmez.
+ */
+export function gecikmeleriFaturalarlaEsle(
+  gecikmeler: readonly { id: string; g: TyGecikme }[],
+  faturalar: TyGecikmeFaturalari | null | undefined,
+  an: number
+): Map<string, TyGecikmeSonucu> {
+  const sonuc = new Map<string, TyGecikmeSonucu>();
+  const bedeller: TyHaftalikBedel[] = [];
+  for (const k of gecikmeler) {
+    if (!k.g.gecikti) sonuc.set(k.id, { ceza: 0, durum: "zamaninda" });
+    else if (k.g.muaf || k.g.ceza <= 0) sonuc.set(k.id, { ceza: 0, durum: "muaf" });
+    else bedeller.push({ id: k.id, gun: k.g.tolerans, ceza: k.g.ceza });
+  }
+  for (const [id, s] of haftalikFaturalarlaEsle(bedeller, faturalar, an)) sonuc.set(id, s);
   return sonuc;
 }
 

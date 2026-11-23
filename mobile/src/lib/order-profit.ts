@@ -4,6 +4,7 @@ import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match"
 import { computeReturnLoss, resolveOrderProfit, type OrderProfitInput, type OrderProfitLine } from "@core/order-profit";
 import { kargoluIadeMi } from "@core/siparis-kargo";
 import { hbHizmetBedeli } from "@core/hb-kesinti";
+import { tyCezaToplami } from "@core/trendyol-kusurlu";
 import { satirMaliyetiBul, satirMaliyetliUrun, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { bagliUrunKimligi, type SatirBaglari } from "@core/order-line-link";
 
@@ -277,8 +278,8 @@ export function computeOrderProfit(
       orderFee: order.platform === "hepsiburada" ? hbHizmetBedeli(order.items, settings) : undefined,
       // Pazaryeri kargo tarifesinin fiyat seçtiği bilgiler — masaüstüyle aynı çekirdek.
       kargo: order.kargo ?? null,
-      // Trendyol termin gecikme bedeli (haftalık faturayla eşleşmiş) — masaüstüyle aynı.
-      penalty: order.gecikmeSonucu?.ceza ?? 0,
+      // Trendyol termin gecikme + kusurlu ürün bedeli (haftalık faturayla eşleşmiş) — masaüstüyle aynı.
+      penalty: tyCezaToplami(order.gecikmeSonucu?.ceza, order.kusurluSonucu?.ceza),
   };
   const r = resolveOrderProfit(
     profitInput,

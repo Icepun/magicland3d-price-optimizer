@@ -306,4 +306,27 @@ describe("Trendyol kesilen desi ve gecikme faturaları", () => {
     expect(sonuc.faturalar.map((f) => f.tutar)).toEqual([180, 100]);
     expect(sonuc.bas).toBe(an - 90 * gun);
   });
+
+  it("kesinti faturaları türüne göre ayrılır: kargo, gecikme, kusurlu ürün (gerçek kayıt biçimi)", async () => {
+    const { kesintiFaturalariniAyir } = await import("./trendyol-finance");
+    const kayit = (id: string, transactionType: string, transactionDate: number, debt: number) => ({
+      id,
+      transactionType,
+      transactionDate,
+      debt,
+      credit: 0,
+      description: "Tazmin bedelidir.",
+    });
+    const f = kesintiFaturalariniAyir([
+      kayit("KF1", "Kargo Fatura", 1786510800000, 812.4),
+      kayit("DDF2026018279239", "Kusurlu Ürün Faturası", 1786510835128, 180),
+      kayit("DDF2026018279239", "Kusurlu Ürün Faturası", 1786510835128, 180),
+      kayit("TG1", "Termin Gecikme Bedeli", 1786510830000, 100),
+      kayit("KM1", "Komisyon Faturası", 1786510800000, 2400),
+      kayit("RB1", "Reklam Bedeli", 1786510800000, 500),
+    ]);
+    expect(f.kargo).toEqual(["KF1"]);
+    expect(f.kusurlu).toEqual([{ tarih: 1786510835128, tutar: 180 }]);
+    expect(f.gecikme).toEqual([{ tarih: 1786510830000, tutar: 100 }]);
+  });
 });

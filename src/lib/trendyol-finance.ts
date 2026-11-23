@@ -16,6 +16,7 @@ import {
 } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { kargoDenetimBildirimleri } from "./kargo-denetim";
+import { tyCezaGecmisiniIsle } from "./ty-ceza-gecmisi";
 
 const DAY_MS = 86_400_000;
 const MAX_WINDOW_MS = 14 * DAY_MS;
@@ -310,17 +311,9 @@ export async function syncTrendyolActualCommissions(
   try {
     const kargo = await kargoFaturaKalemleri(client, startDate, endDate);
     cargoOrders = await kargoKayitlariniYaz(aggregates, kargo);
-    // Haftalık gecikme bedeli faturaları → ayar (sipariş ekranı geciken siparişlerle eşleştirir).
-    const ayar = await prisma.appSetting.findUnique({ where: { key: "tyGecikmeFaturalari" } });
-    const birlesik = gecikmeFaturalariniBirlestir(tyGecikmeFaturalariOku(ayar?.value), kargo.gecikme, startDate, endDate);
-    const metin = JSON.stringify(birlesik);
-    if (metin !== ayar?.value) {
-      await prisma.appSetting.upsert({
-        where: { key: "tyGecikmeFaturalari" },
-        update: { value: metin },
-        create: { key: "tyGecikmeFaturalari", value: metin },
-      });
-    }
+    // Haftalık gecikme ve kusurlu ürün bedeli faturaları → ayar (sipariş ekranı siparişlerle eşleştirir).
+    await haftalikFaturalariSakla("tyGecikmeFaturalari", kargo.gecikme, startDate, endDate);
+    await haftalikFaturalariSakla("tyKusurluFaturalari", kargo.kusurlu, startDate, endDate);
   } catch (hata) {
     console.warn("[trendyol-finance] kargo faturaları alınamadı:", hata instanceof Error ? hata.message : hata);
   }
@@ -333,6 +326,8 @@ export async function syncTrendyolActualCommissions(
   } catch (hata) {
     console.warn("[trendyol-finance] gerçek kargo kayıtlı kâra işlenemedi:", hata instanceof Error ? hata.message : hata);
   }
+  // Pencere dışına düşmüş siparişlerin gecikme / kusurlu ürün bedeli ve iade zararı (hata fırlatmaz).
+  await tyCezaGecmisiniIsle(client);
   // Fazla desi kesilen yeni siparişler → masaüstü bildirimi (hata fırlatmaz).
   await kargoDenetimBildirimleri();
   // İlan terminleri (satış öncesi kargo tahmini için). Hatası diğer adımları geri almaz.
@@ -481,7 +476,67 @@ export function kargoDesiYazmaIfadeleri(
   }));
 }
 
-/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu (+ iade, desi, gecikme faturaları). */
+/** Kesinti faturası listesi (`DeductionInvoices`): kargo faturası kimlikleri + haftalık tazmin faturaları. */
+export interface KesintiFaturalari {
+  kargo: string[];
+  /** "Termin Gecikme Bedeli" — siparişe bağlı gelmiyor, haftanın gecikmeleriyle eşleştirilir. */
+  gecikme: TyGecikmeFaturasi[];
+  /** "Kusurlu Ürün Faturası" — siparişe bağlı gelmiyor, haftanın satıcı kusurlu iadeleriyle eşleştirilir. */
+  kusurlu: TyGecikmeFaturasi[];
+}
+
+/** SAF: kesinti faturası kayıtlarını türüne göre ayırır (aynı kayıt iki pencerede gelse de bir kez). */
+export function kesintiFaturalariniAyir(kayitlar: Array<Record<string, unknown>>): KesintiFaturalari {
+  const sonuc: KesintiFaturalari = { kargo: [], gecikme: [], kusurlu: [] };
+  const ekle = (liste: TyGecikmeFaturasi[], tarih: number | null, tutar: number | null) => {
+    if (tarih != null && tutar != null && tutar > 0 && !liste.some((g) => g.tarih === tarih && g.tutar === tutar)) {
+      liste.push({ tarih, tutar });
+    }
+  };
+  for (const k of kayitlar) {
+    const id = cleanId(k.id);
+    const tur = String(k.transactionType ?? "");
+    if (id && /Kargo/i.test(tur) && !sonuc.kargo.includes(id)) sonuc.kargo.push(id);
+    const tarih = finiteNumber(k.transactionDate);
+    const tutar = finiteNumber(k.debt);
+    if (/Gecikme/i.test(tur)) ekle(sonuc.gecikme, tarih, tutar);
+    else if (/Kusurlu/i.test(tur)) ekle(sonuc.kusurlu, tarih, tutar);
+  }
+  return sonuc;
+}
+
+/** Aralıktaki kesinti faturalarını listeler (14 günlük pencerelerle). */
+export async function kesintiFaturalariniOku(
+  client: TrendyolClient,
+  startDate: number,
+  endDate: number
+): Promise<KesintiFaturalari> {
+  const kayitlar: Array<Record<string, unknown>> = [];
+  for (let bas = startDate; bas <= endDate; bas += MAX_WINDOW_MS) {
+    const bit = Math.min(endDate, bas + MAX_WINDOW_MS - 1);
+    const sayfa = await client.listOtherFinancials({ startDate: bas, endDate: bit, transactionType: "DeductionInvoices" });
+    for (const k of sayfa.content ?? []) kayitlar.push(k as unknown as Record<string, unknown>);
+  }
+  return kesintiFaturalariniAyir(kayitlar);
+}
+
+/** Haftalık tazmin faturalarını ayara yazar (eskilerle birleştirilir; değişmediyse yazılmaz). */
+export async function haftalikFaturalariSakla(
+  anahtar: "tyGecikmeFaturalari" | "tyKusurluFaturalari",
+  yeni: TyGecikmeFaturasi[],
+  pencereBas: number,
+  an: number
+): Promise<TyGecikmeFaturalari> {
+  const ayar = await prisma.appSetting.findUnique({ where: { key: anahtar } });
+  const birlesik = gecikmeFaturalariniBirlestir(tyGecikmeFaturalariOku(ayar?.value), yeni, pencereBas, an);
+  const metin = JSON.stringify(birlesik);
+  if (metin !== ayar?.value) {
+    await prisma.appSetting.upsert({ where: { key: anahtar }, update: { value: metin }, create: { key: anahtar, value: metin } });
+  }
+  return birlesik;
+}
+
+/** Pencere içindeki tüm kargo faturalarının kalemleri → sipariş no → gidiş kargosu (+ iade, desi, tazmin faturaları). */
 async function kargoFaturaKalemleri(
   client: TrendyolClient,
   startDate: number,
@@ -491,25 +546,10 @@ async function kargoFaturaKalemleri(
     iade: Map<string, number>;
     desi: Map<string, { desi: number; paket: string | null }>;
     gecikme: TyGecikmeFaturasi[];
+    kusurlu: TyGecikmeFaturasi[];
   }
 > {
-  const faturalar: string[] = [];
-  const gecikme: TyGecikmeFaturasi[] = [];
-  for (let bas = startDate; bas <= endDate; bas += MAX_WINDOW_MS) {
-    const bit = Math.min(endDate, bas + MAX_WINDOW_MS - 1);
-    const sayfa = await client.listOtherFinancials({ startDate: bas, endDate: bit, transactionType: "DeductionInvoices" });
-    for (const k of sayfa.content ?? []) {
-      const id = cleanId(k.id);
-      const tur = String(k.transactionType ?? "");
-      if (id && /Kargo/i.test(tur) && !faturalar.includes(id)) faturalar.push(id);
-      // Haftalık "Termin Gecikme Bedeli" — siparişe bağlı gelmiyor, haftanın gecikmeleriyle eşleştirilir.
-      const tarih = finiteNumber(k.transactionDate);
-      const tutar = finiteNumber(k.debt);
-      if (/Gecikme/i.test(tur) && tarih != null && tutar != null && tutar > 0 && !gecikme.some((g) => g.tarih === tarih && g.tutar === tutar)) {
-        gecikme.push({ tarih, tutar });
-      }
-    }
-  }
+  const { kargo: faturalar, gecikme, kusurlu } = await kesintiFaturalariniOku(client, startDate, endDate);
   const kalemler: Array<Record<string, unknown>> = [];
   for (const id of faturalar) {
     for (let p = 0; p < 20; p++) {
@@ -523,6 +563,7 @@ async function kargoFaturaKalemleri(
     iade: iadeKargoKalemleriniTopla(kalemler),
     desi: kargoDesileriniTopla(kalemler),
     gecikme,
+    kusurlu,
   });
 }
 

@@ -7,6 +7,7 @@ import {
   type TrendyolPaketIadesi,
   type TrendyolTalepSayfasi,
 } from "@/core/trendyol-iade";
+import { trendyolKusurluIadeleri, type TyKusurluIade } from "@/core/trendyol-kusurlu";
 
 /**
  * TRENDYOL İADE TALEPLERİ — paket durumu iadeyi GÖSTERMEDİĞİ için ayrıca okunur (kural ve ölçüm:
@@ -18,7 +19,13 @@ import {
  */
 const IADE_GERIYE_GUN = 150;
 const IADE_TAZE_MS = 10 * 60_000;
-let onbellek: { at: number; iadeler: Map<string, TrendyolPaketIadesi> } | null = null;
+
+/** Talep ucundan çıkan iki sonuç: kabul edilmiş iadeler + satıcı kusurlu iadeler (kusurlu ürün bedeli). */
+export interface TrendyolTalepSonuclari {
+  iadeler: Map<string, TrendyolPaketIadesi>;
+  kusurlular: Map<string, TyKusurluIade>;
+}
+let onbellek: ({ at: number } & TrendyolTalepSonuclari) | null = null;
 
 /** Talep ucunu açan istemcinin bu modülün kullandığı kısmı. */
 export interface TrendyolTalepIstemcisi {
@@ -37,22 +44,29 @@ export interface TrendyolTalepIstemcisi {
 export async function trendyolIadeleriniOku(
   client: TrendyolTalepIstemcisi
 ): Promise<Map<string, TrendyolPaketIadesi>> {
-  if (onbellek && Date.now() - onbellek.at < IADE_TAZE_MS) return onbellek.iadeler;
+  return (await trendyolTalepSonuclariniOku(client)).iadeler;
+}
+
+/**
+ * İade talepleri → kabul edilmiş iadeler + satıcı kusurlu iadeler (aynı istek, aynı önbellek).
+ * Hata FIRLATMAZ: uç alınamazsa eldeki son sonuç (yoksa boş) döner.
+ */
+export async function trendyolTalepSonuclariniOku(client: TrendyolTalepIstemcisi): Promise<TrendyolTalepSonuclari> {
+  if (onbellek && Date.now() - onbellek.at < IADE_TAZE_MS) return onbellek;
   try {
     const endDate = Date.now();
     const startDate = endDate - IADE_GERIYE_GUN * 86_400_000;
     const talepler = await trendyolTalepleriniTopla((page, size) =>
       client.listClaims({ startDate, endDate, page, size })
     );
-    const iadeler = trendyolIadeleri(talepler);
-    onbellek = { at: Date.now(), iadeler };
-    return iadeler;
+    onbellek = { at: Date.now(), iadeler: trendyolIadeleri(talepler), kusurlular: trendyolKusurluIadeleri(talepler) };
+    return onbellek;
   } catch (error) {
     console.error(
       "[trendyol-iade] iade talepleri alınamadı:",
       error instanceof Error ? error.message : error
     );
-    return onbellek?.iadeler ?? new Map();
+    return onbellek ?? { iadeler: new Map(), kusurlular: new Map() };
   }
 }
 

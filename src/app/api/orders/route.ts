@@ -47,7 +47,13 @@ import { trendyolOrderId } from "@/core/trendyol-order-id";
 import { buildTrendyolWindows } from "@/lib/trendyol-windows";
 import { trendyolIadeDurumu } from "@/core/trendyol-iade";
 import { ACIK_SIPARIS_TURLERI, siparisListedeKalir } from "@/core/order-window";
-import { trendyolIadeleriniGecmiseIsle, trendyolIadeleriniOku } from "@/lib/trendyol-iadeleri";
+import { trendyolIadeleriniGecmiseIsle, trendyolTalepSonuclariniOku } from "@/lib/trendyol-iadeleri";
+import {
+  kusurluIadeleriFaturalarlaEsle,
+  tyCezaToplami,
+  type TyKusurluIade,
+  type TyKusurluSonucu,
+} from "@/core/trendyol-kusurlu";
 import {
   computeReturnLoss,
   gercekKesintiToplami,
@@ -185,7 +191,7 @@ export interface UnifiedOrder {
     serviceFeeActual: boolean;
     penalty: number;
   } | null;
-  /** Kârdan düşülen ceza (Trendyol termin gecikme bedeli, TL). */
+  /** Kârdan düşülen ceza (Trendyol termin gecikme + kusurlu ürün bedeli, TL). */
   penalty?: number;
   /** Trendyol termin gecikmesi — finans geçmişine yazılır, Kargo → Denetim listesi buradan. */
   delayInfo?: {
@@ -197,6 +203,8 @@ export interface UnifiedOrder {
     ceza: number;
     durum: TyGecikmeDurumu;
   } | null;
+  /** Trendyol kusurlu ürün bedeli (satıcı kusurlu iade) — kâra giren tutar `ceza`. */
+  defectInfo?: { sebep: string; adet: number; ceza: number; durum: TyKusurluSonucu["durum"] } | null;
   /** Pazaryeri ürünün desisinden büyük desiyle kesti ve kargo pahalandı (itiraz edilebilir). */
   excessDesi?: { bizimDesi: number; kesilenDesi: number; fazla: number } | null;
   /** Bu siparişe düşen reklam payı (TL). 0 = reklam bütçesi yok. */
@@ -734,6 +742,8 @@ async function computeOrdersBodyInner(
     kargoIadesi?: boolean;
     /** Trendyol: termin gecikmesi (core/trendyol-gecikme) — bedel haftalık faturayla eşleştirilir. */
     gecikme?: TyGecikme | null;
+    /** Trendyol: satıcı kusurlu iade (core/trendyol-kusurlu) — bedel haftalık faturayla eşleştirilir. */
+    kusurlu?: TyKusurluIade | null;
   };
   const raws: Raw[] = [];
   /** Yerel tamponu ana listeye aktar (spread yerine döngü: binlerce satırda argüman sınırı yok). */
@@ -869,7 +879,7 @@ async function computeOrdersBodyInner(
     // sessizce kırpar (bkz. o dosyadaki olay kaydı).
     const tyWindows = buildTrendyolWindows(Date.now(), historyCutoff);
     // İade talepleri siparişlerle AYNI ANDA istenir — bekleme eklemez, hata fırlatmaz.
-    const iadelerSozu = trendyolIadeleriniOku(client);
+    const iadelerSozu = trendyolTalepSonuclariniOku(client);
     // Sonuçlar dilim sırasında toplanır (yeni → eski): eşzamanlı çekim listenin sırasını bozmasın.
     const tyByWindow: TrendyolOrder[][] = tyWindows.map(() => []);
     await mapLimit(
@@ -885,7 +895,7 @@ async function computeOrdersBodyInner(
         }
       }
     );
-    const iadeler = await iadelerSozu;
+    const { iadeler, kusurlular } = await iadelerSozu;
     const seenTy = new Set<string>();
     for (const [rowIndex, o] of tyByWindow.flat().entries()) {
       // Paket id'si 0 olan yeni siparişler (Trendyol ilk saniyelerde böyle veriyor) artık "0"
@@ -948,6 +958,7 @@ async function computeOrdersBodyInner(
         kargo: trendyolKargoBaglami(o),
         kargoIadesi: kargoluIadeMi("trendyol", o.status, iadeDurumu === "tam"),
         gecikme: trendyolGecikmesi(o, Date.now()),
+        kusurlu: kusurlular.get(id) ?? null,
       });
     }
     // Tüm pencereler ve sayfalar sorunsuz bittiyse ancak o zaman ortak listeye aktar.
@@ -1383,6 +1394,12 @@ async function computeOrdersBodyInner(
     tyGecikmeFaturalariOku(settingsMap.tyGecikmeFaturalari),
     Date.now()
   );
+  // TRENDYOL KUSURLU ÜRÜN BEDELİ — satıcı kusurlu iade, haftalık "Kusurlu Ürün Faturası"yla aynı düzende.
+  const kusurluSonuclari: Map<string, TyKusurluSonucu> = kusurluIadeleriFaturalarlaEsle(
+    new Map(historyRows.flatMap((r) => (r.platform === "trendyol" && r.kusurlu ? [[r.id, r.kusurlu] as const] : []))),
+    tyGecikmeFaturalariOku(settingsMap.tyKusurluFaturalari),
+    Date.now()
+  );
 
   // Zenginleştirilmiş birleşik siparişler ───────────────────────────────────
   for (const r of historyRows) {
@@ -1523,8 +1540,8 @@ async function computeOrdersBodyInner(
       orderFee: r.platform === "hepsiburada" ? hbHizmetBedeli(r.lines, settingsMap) : undefined,
       // Pazaryeri kargo tarifesinin fiyatı seçtiği bilgiler (firma, hızlı teslimat, süre, barem tutarı).
       kargo: r.kargo ?? null,
-      // Trendyol termin gecikme bedeli (tahmini ya da haftalık faturayla doğrulanmış).
-      penalty: gecikmeSonuclari.get(r.id)?.ceza ?? 0,
+      // Trendyol termin gecikme + kusurlu ürün bedeli (tahmini ya da haftalık faturayla doğrulanmış).
+      penalty: tyCezaToplami(gecikmeSonuclari.get(r.id)?.ceza, kusurluSonuclari.get(r.id)?.ceza),
     };
     // İADE (kargolanıp geri gelen) sipariş: ciro ve komisyon geri verildi, iki yön kargo + hizmet
     // bedeli kesildi → siparişin kârı bu zarardır. Gerçek kayıt varsa tahminin yerine geçer.
@@ -1541,6 +1558,7 @@ async function computeOrdersBodyInner(
         })
       : null;
     const gecikmeSonucu = gecikmeSonuclari.get(r.id) ?? null;
+    const kusurluSonucu = kusurluSonuclari.get(r.id) ?? null;
     const pr = resolveOrderProfit(
       profitInput,
       {
@@ -1631,6 +1649,11 @@ async function computeOrdersBodyInner(
                     ceza: gecikmeSonucu.ceza,
                     durum: gecikmeSonucu.durum,
                   }
+                : null,
+            // Kusurlu ürün bedeli — yalnız ekranda (kayıtlı ceza toplamın içinde).
+            defectInfo:
+              r.kusurlu && kusurluSonucu
+                ? { sebep: r.kusurlu.sebep, adet: r.kusurlu.adet, ceza: kusurluSonucu.ceza, durum: kusurluSonucu.durum }
                 : null,
           }
         : {}),
