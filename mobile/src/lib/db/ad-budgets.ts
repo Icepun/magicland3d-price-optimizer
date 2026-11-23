@@ -1,6 +1,7 @@
 import { execute, query, writeBatch } from "@/lib/turso";
 import { dbEpochMs } from "@core/sqlite-date";
 import { tarifeDonemSiniri } from "@core/tariff-period";
+import type { ReklamZorlama } from "@/lib/db/finance";
 
 /**
  * REKLAM BÜTÇESİ — platform başına günlük reklam harcaması.
@@ -67,7 +68,7 @@ export async function saveAdBudget(input: {
   platform: AdPlatform;
   dailyAmount: number;
   startsAt: Date;
-}): Promise<void> {
+}): Promise<ReklamZorlama> {
   const { platform, dailyAmount, startsAt } = input;
   if (!Number.isFinite(dailyAmount) || dailyAmount < 0) {
     throw new Error("Günlük tutar 0 veya daha büyük olmalı.");
@@ -91,6 +92,21 @@ export async function saveAdBudget(input: {
     );
   }
 
+  // Kapanacak dönemler: sınırları değiştiği için oranları da değişir → Raporlar'da yeniden
+  // yazılacak aralık onların başından başlar (masaüstüyle aynı kural).
+  const kayitAniMs = Date.now();
+  const kapanacaklar = await query<{ bas: number | null }>(
+    `SELECT ${dbEpochMs("validFrom")} AS bas FROM AdBudget
+      WHERE platform = ? AND (validTo IS NULL OR ${dbEpochMs("validTo")} >= ?)`,
+    [platform, kayitAniMs]
+  );
+  const etkiBaslangici = Math.min(
+    basMs,
+    ...(kapanacaklar as unknown as { bas: number | null }[])
+      .map((r) => (r.bas == null ? Number.NaN : Number(r.bas)))
+      .filter((n) => Number.isFinite(n))
+  );
+
   // ⚠️ TARİHLER ISO METİN (masaüstü Prisma da öyle yazıyor). Epoch-ms sayı yazılırsa SQLite'ta
   // tamsayı < metin olduğu için dönem filtreleri bu satırları sessizce eler.
   // TEK PARÇA: eski dönem kapanıp yenisi yazılamazsa reklam bütçesi tamamen kaybolurdu.
@@ -98,7 +114,7 @@ export async function saveAdBudget(input: {
     {
       sql: `UPDATE AdBudget SET validTo = ?
              WHERE platform = ? AND (validTo IS NULL OR ${dbEpochMs("validTo")} >= ?)`,
-      args: [eskiBitis.toISOString(), platform, Date.now()],
+      args: [eskiBitis.toISOString(), platform, kayitAniMs],
     },
     {
       sql: `INSERT INTO AdBudget (id, platform, dailyAmount, validFrom, validTo, isActive, createdAt)
@@ -108,16 +124,29 @@ export async function saveAdBudget(input: {
         platform,
         dailyAmount,
         startsAt.toISOString(),
-        new Date().toISOString(),
+        new Date(kayitAniMs).toISOString(),
       ],
     },
   ]);
+  return { baslangicMs: etkiBaslangici, platform };
 }
 
-/** Bütçeyi kapat (reklam durdu): dönem SİLİNMEZ, bugünle biter. */
-export async function stopAdBudget(id: string): Promise<void> {
-  await execute(`UPDATE AdBudget SET validTo = ?, isActive = 0 WHERE id = ?`, [
-    new Date().toISOString(),
-    id,
-  ]);
+/**
+ * Bütçeyi kapat (reklam durdu): dönem SİLİNMEZ, bugünle biter.
+ *
+ * ⚠️ YALNIZ `validTo` YAZILIR, `isActive` 1 KALIR (denetim, 23 Kas 2026). Eskiden `isActive = 0`
+ * yapılıyordu; okuyucular (masaüstü + telefon) yalnız etkin dönemleri gördüğü için durdurulan
+ * dönemin TÜM reklam payı geriye dönük siliniyor, o dönemdeki siparişler reklamsız (yüksek) kâr
+ * gösteriyordu. Masaüstü de dönemi böyle kapatır: bitişten önceki siparişler payını taşımaya devam eder.
+ *
+ * Döner: Raporlar'da yeniden yazılacak aralık (dönemin başından itibaren).
+ */
+export async function stopAdBudget(id: string): Promise<ReklamZorlama | null> {
+  const satir = (await query<{ bas: number | null; platform: string }>(
+    `SELECT ${dbEpochMs("validFrom")} AS bas, platform FROM AdBudget WHERE id = ?`,
+    [id]
+  )) as unknown as { bas: number | null; platform: string }[];
+  await execute(`UPDATE AdBudget SET validTo = ? WHERE id = ?`, [new Date().toISOString(), id]);
+  const bas = satir[0]?.bas == null ? Number.NaN : Number(satir[0].bas);
+  return Number.isFinite(bas) ? { baslangicMs: bas, platform: String(satir[0].platform) } : null;
 }

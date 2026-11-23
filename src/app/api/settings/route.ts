@@ -8,6 +8,7 @@ import { invalidateR2Config } from "@/lib/r2";
 import { batchWrite } from "@/lib/libsql-batch";
 import { jsonError } from "@/lib/api-error";
 import { isSecretSettingKey } from "@/lib/backup-payload";
+import { DONEMLI_AYAR_ANAHTARLARI, donemliGecmiseEkle, gecmisAnahtari } from "@/core/donemli-oran";
 
 /** Maliyet girdisi olan sayısal ayarlar — negatif ya da sayı olmayan değer KAYDEDİLMEZ. */
 const SAYISAL_MALIYET_ANAHTARLARI = new Set([
@@ -89,10 +90,21 @@ export async function POST(req: NextRequest) {
   let silinen: string[] = Object.entries(body).filter(([, v]) => v === null).map(([k]) => k);
   try {
     if (anahtarlar.length) {
-      const mevcut = await prisma.appSetting.findMany({ where: { key: { in: anahtarlar } }, select: { key: true, value: true } });
+      const donemliGelen = DONEMLI_AYAR_ANAHTARLARI.filter((k) => body[k] != null);
+      const okunacak = [...new Set([...anahtarlar, ...donemliGelen.map(gecmisAnahtari)])];
+      const mevcut = await prisma.appSetting.findMany({ where: { key: { in: okunacak } }, select: { key: true, value: true } });
       const eski = new Map(mevcut.map((m) => [m.key, m.value]));
       degisen = degisen.filter(([k, v]) => eski.get(k) !== v);
       silinen = silinen.filter((k) => eski.has(k));
+      // DÖNEMLİ AYAR (KDV, Shopify komisyonu): değişince geçmişe yeni dönem eklenir → bu andan
+      // önceki siparişler eski oranla kalır (Berke'nin onayı, 23 Kas 2026). Aynı atomik yazımda.
+      const an = new Date();
+      for (const anahtar of donemliGelen) {
+        const yeni = degisen.find(([k]) => k === anahtar)?.[1];
+        if (yeni === undefined) continue;
+        const gecmis = donemliGecmiseEkle(eski.get(gecmisAnahtari(anahtar)), eski.get(anahtar), yeni, an);
+        if (gecmis) degisen.push([gecmisAnahtari(anahtar), gecmis]);
+      }
     }
     if (degisen.length || silinen.length) {
       const ifadeler = [

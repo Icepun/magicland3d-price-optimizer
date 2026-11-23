@@ -26,7 +26,7 @@ import {
   type ManualOrderStatusKind,
 } from "@/core/manual-order";
 import { computeFullProductCost } from "@/core/cost-calculator";
-import { filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { baremDesisi, filterRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
 import { resolveVatableCost } from "@/core/pricing-engine";
 import type { CargoRuleInput } from "@/core/types";
 import { thumbUrl } from "@/lib/image";
@@ -992,7 +992,7 @@ export function ManualOrderDialog({
       shopifyRules,
       saleTotal,
       "",
-      freeformTotalDesi || 1,
+      baremDesisi(freeformTotalDesi),
       new Date(orderedAtPayload(form.orderedAt))
     );
     const resolved = matched

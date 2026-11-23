@@ -9,7 +9,7 @@ import {
   type ManualOrderStatusKind,
 } from "@core/manual-order";
 import { computeFullProductCost } from "@core/cost-calculator";
-import { filterRulesByPlatform, findCargoRule } from "@core/cargo-calculator";
+import { baremDesisi, filterRulesByPlatform, findCargoRule } from "@core/cargo-calculator";
 import { resolveVatableCost } from "@core/pricing-engine";
 import type { CargoRuleInput } from "@core/types";
 
@@ -318,7 +318,7 @@ export function resolveFreeformCargo(
     filterRulesByPlatform(cargoRules, "shopify"),
     Math.max(0, saleTotal),
     "",
-    totalDesi || 1,
+    baremDesisi(totalDesi),
     orderedAt ?? undefined
   );
   const resolved = rule

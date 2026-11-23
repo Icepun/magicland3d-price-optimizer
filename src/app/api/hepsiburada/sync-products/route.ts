@@ -47,6 +47,13 @@ function num(v: unknown): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
+/** Fiyat: alan yoksa ya da sayı değilse NaN (bilinmiyor) — eksik fiyat 0 TL diye yazılmasın. */
+function fiyatOku(v: unknown): number {
+  if (v == null || v === "") return Number.NaN;
+  if (typeof v === "object" && "amount" in (v as any)) return fiyatOku((v as any).amount);
+  const n = typeof v === "number" ? v : Number(v);
+  return Number.isFinite(n) ? n : Number.NaN;
+}
 function firstStr(...vals: unknown[]): string {
   for (const v of vals) {
     if (typeof v === "string" && v.trim()) return v.trim();
@@ -98,11 +105,17 @@ export async function POST(req: NextRequest) {
     }
 
     // 2) LISTING'ler (fiyat/stok/aktiflik) — sayfalı; SADECE AKTİF + katalogla join. Key = merchantSku.
+    // SAYFALAMA totalCount ile: Hepsiburada sayfa başına istenenden AZ kayıt dönebiliyor (paket
+    // ucunda en çok 50); "istenenden az geldiyse son sayfa" varsayımı listenin geri kalanını
+    // sessizce kaybettirirdi. totalCount yoksa eski kural.
     const fetched = new Map<string, FetchedHb>();
+    let offset = 0;
     for (let page = 0; page < input.maxPages; page += 1) {
-      const res = await client.listListings({ offset: page * input.limit, limit: input.limit });
+      const res = (await client.listListings({ offset, limit: input.limit })) as any;
       const items = arrField(res, ["listings", "items", "data", "content", "products", "result"]);
       if (items.length === 0) break;
+      offset += items.length;
+      const toplam = Number(res?.totalCount ?? res?.total ?? res?.data?.totalCount);
       for (const it of items as any[]) {
         if (!isActiveHbListing(it)) continue;
         const msku = firstStr(it.merchantSku, it.stockCode, it.sku);
@@ -114,11 +127,12 @@ export async function POST(req: NextRequest) {
           hbSku: firstStr(it.hepsiburadaSku, it.listingId, it.productId) || msku,
           name: firstStr(cat?.productName) || msku,
           categoryName: firstStr(cat?.categoryName) || "Hepsiburada",
-          price: num(it.price ?? it.salePrice ?? it.listingPrice),
+          // Fiyat alanı yoksa NaN (bilinmiyor) — 0 sayılmaz; aşağıda yazılmaz.
+          price: fiyatOku(it.price ?? it.salePrice ?? it.listingPrice),
           stock: Math.max(0, Math.floor(num(it.availableStock ?? it.stock ?? it.quantity))),
         });
       }
-      if (items.length < input.limit) break;
+      if (Number.isFinite(toplam) && toplam > 0 ? offset >= toplam : items.length < input.limit) break;
     }
 
     async function refreshPrices() {
@@ -140,13 +154,22 @@ export async function POST(req: NextRequest) {
        */
       const writes: { sql: string; args: unknown[] }[] = [];
       const FIYAT_SQL = `UPDATE Listing SET salePrice = ?, stock = ?, lastSyncedAt = ${nowDbDateSql()}, updatedAt = ${nowDbDateSql()} WHERE id = ?`;
+      let atlananSifir = 0;
       for (const row of rows) {
         const f = (row.externalSku && fetched.get(row.externalSku)) || (row.barcode && byBarcode.get(row.barcode)) || null;
         if (!f) continue;
+        // SIFIR FİYAT KORUMASI (Trendyol'daki gibi): tükenmiş ilanda HB fiyatı 0 dönebiliyor, alan adı
+        // kayarsa da her ilan 0 olur. Geçersiz fiyat ASLA yazılmaz — kâr ve fiyat geçmişi bozulmasın.
+        if (!Number.isFinite(f.price) || f.price <= 0) { atlananSifir++; continue; }
         if (Math.abs(f.price - row.salePrice) <= 0.001) continue;
         history.push({ productId: row.productId, oldPrice: row.salePrice, newPrice: f.price, changeSource: "hepsiburada_sync" });
         writes.push({ sql: FIYAT_SQL, args: [f.price, f.stock, row.listingId] });
         changed++;
+      }
+      // TOPLU BOZULMA FRENİ: eşleşenlerin neredeyse hepsi geçersizse sorun yanıt biçimindedir.
+      const eslesen = atlananSifir + changed;
+      if (eslesen >= 10 && atlananSifir > eslesen * 0.9) {
+        throw new Error("Hepsiburada'dan gelen fiyatların neredeyse tamamı geçersiz. Fiyatlar güncellenmedi.");
       }
       if (writes.length && !(await batchWrite(writes))) {
         for (const w of writes) await prisma.$executeRawUnsafe(w.sql, ...(w.args as never[]));
@@ -181,7 +204,9 @@ export async function POST(req: NextRequest) {
         // HB barkodu VEYA merchantSku ürünün barcode/sku'suyla tutarsa otomatik bağla; tutmazsa havuz.
         const productId = keyToProductId.get(f.hbBarcode) || keyToProductId.get(f.merchantSku);
         if (productId) {
-          if (!listedSet.has(productId)) {
+          // Fiyatı bilinmeyen (0 / eksik) ilan şimdilik bağlanmaz: 0 TL'lik ilan kârı yanlış gösterirdi.
+          // Fiyat geldiği ilk senkronda bağlanır.
+          if (!listedSet.has(productId) && Number.isFinite(f.price) && f.price > 0) {
             writes.push({
               sql: LISTING_SQL,
               args: [`listing_${productId}_hepsiburada`, productId, f.hbSku, f.merchantSku, f.hbBarcode, f.price, f.stock],
@@ -192,7 +217,7 @@ export async function POST(req: NextRequest) {
         } else {
           writes.push({
             sql: UNMATCHED_SQL,
-            args: [`unmatched_hepsiburada_${f.hbSku || f.merchantSku}`, f.hbSku, f.merchantSku, f.hbBarcode, f.name, f.categoryName, f.price, f.stock],
+            args: [`unmatched_hepsiburada_${f.hbSku || f.merchantSku}`, f.hbSku, f.merchantSku, f.hbBarcode, f.name, f.categoryName, Number.isFinite(f.price) ? f.price : 0, f.stock],
           });
           unmatched++;
         }

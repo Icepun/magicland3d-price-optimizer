@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { bustProfitInputCaches } from "@/lib/cache-busting";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { yururluktekiDonemBaslangiciMs } from "@/core/tariff-period";
+import { yeniKuralBaslangiciMs } from "@/core/tariff-period";
 import { jsonError } from "@/lib/api-error";
+import { kuralSonrasiSiparisleriTazele } from "@/lib/kural-sonrasi-tazele";
 
 const Schema = z.object({
   name: z.string().trim().min(1, "Kural adı gerekli"),
@@ -37,17 +38,16 @@ export async function GET() {
 }
 
 /**
- * Yeni kural, platformun YÜRÜRLÜKTEKİ döneminin başlangıcını devralır.
- * Kararın kendisi çekirdekte (`core/tariff-period.ts`) — mobil de aynı tanımı kullanıyor.
+ * Yeni kural BU AYIN 1'inden başlar (yürürlükteki dönem bu aydan sonra başladıysa dönemin başından)
+ * — Berke'nin kararı: "tüm kasıma etki etsin, öncesine değil". Kural çekirdekte
+ * (`core/tariff-period.ts`), telefon da aynısını kullanıyor.
  */
-async function yururluktekiDonemBaslangici(platform: string | null | undefined): Promise<Date | null> {
-  if (!platform) return null;
+async function yeniKuralBaslangici(platform: string): Promise<Date> {
   const acikKurallar = await prisma.cargoRule.findMany({
-    where: { platform, OR: [{ validTo: null }, { validTo: { gte: new Date() } }] },
+    where: { platform },
     select: { validFrom: true, validTo: true },
   });
-  const ms = yururluktekiDonemBaslangiciMs(acikKurallar, Date.now());
-  return ms == null ? null : new Date(ms);
+  return new Date(yeniKuralBaslangiciMs(acikKurallar, Date.now()));
 }
 
 export async function POST(req: NextRequest) {
@@ -55,9 +55,16 @@ export async function POST(req: NextRequest) {
     await ensureRuntimeSchema();
     const body = await req.json();
     const data = Schema.parse(body);
-    const validFrom = await yururluktekiDonemBaslangici(data.platform);
-    const rule = await prisma.cargoRule.create({ data: { ...data, validFrom } });
+    // Platformsuz kural her şema göçünde Trendyol'a taşınıyor ve Shopify'da kargosuz kalıyordu:
+    // platform ZORUNLU (düzenlenebilir kurallar yalnız Shopify'da; pazaryerleri tarifeden gelir).
+    const platform = data.platform ?? "shopify";
+    const validFrom = await yeniKuralBaslangici(platform);
+    const rule = await prisma.cargoRule.create({ data: { ...data, platform, validFrom } });
     bustProfitInputCaches(); // kargo kuralı değişti → sipariş kârı taze hesaplansın
+    // Bu ayın kayıtlı kârları da yeni kuralı görsün (Panel/Raporlar ↔ Siparişler aynı rakam).
+    void kuralSonrasiSiparisleriTazele(platform, validFrom).catch((err) =>
+      console.warn("[kargo-kuralı] yeniden hesap düştü:", err instanceof Error ? err.message : err)
+    );
     return NextResponse.json(rule, { status: 201 });
   } catch (error) {
     return jsonError(error, 400);

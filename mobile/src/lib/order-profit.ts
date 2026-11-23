@@ -121,6 +121,8 @@ export interface OrderProfit {
   totalQty: number; // toplam adet
   /** Maliyeti bilinmeyen satırların cirosu — kâra girmedi (uyarı için). */
   unmatchedRevenue: number;
+  /** Komisyonu bilinmediği için kâra girmeyen satır sayısı (masaüstüyle aynı çekirdek kuralı). */
+  commissionUnknownCount: number;
   missingDesiCount: number;
   desiEstimated: boolean;
   orderRevenueAdjustment: number;
@@ -153,6 +155,7 @@ export function computeOrderProfit(
       distinctCount: order.items.length,
       totalQty,
       unmatchedRevenue: order.profit == null ? order.total : 0,
+      commissionUnknownCount: 0,
       missingDesiCount: 0,
       desiEstimated: false,
       orderRevenueAdjustment: 0,
@@ -303,6 +306,7 @@ export function computeOrderProfit(
     distinctCount,
     totalQty: r.totalQty,
     unmatchedRevenue: r.unmatchedRevenue,
+    commissionUnknownCount: r.commissionUnknownLines,
     missingDesiCount: r.missingDesiLines,
     desiEstimated: r.desiEstimated,
     orderRevenueAdjustment: r.orderRevenueAdjustment,

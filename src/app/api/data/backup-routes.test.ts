@@ -19,6 +19,9 @@ let importBackup: typeof import("./import/route").POST;
 let exportBackup: typeof import("./export/route").GET;
 let consumeSpool: typeof import("../spools/[id]/consume/route").POST;
 let db: typeof import("@/lib/prisma").prisma;
+// Yedek modülü prisma'yı içe aktarır → üstteki geçici DATABASE_URL'den ÖNCE yüklenmemeli (dinamik).
+let BACKUP_FORMAT_VERSION: number;
+let YEDEK_ESKI_UYARISI: string;
 
 async function postBackup(payload: unknown) {
   const request = new Request("http://localhost/api/data/import", {
@@ -61,6 +64,7 @@ beforeAll(async () => {
   ({ GET: exportBackup } = await import("./export/route"));
   ({ POST: consumeSpool } = await import("../spools/[id]/consume/route"));
   ({ prisma: db } = await import("@/lib/prisma"));
+  ({ BACKUP_FORMAT_VERSION, YEDEK_ESKI_UYARISI } = await import("@/lib/backup-payload"));
 });
 
 afterAll(async () => {
@@ -308,7 +312,9 @@ describe("portable backup routes", () => {
     expect(result.stats.orderFinanceSnapshots).toBe(1);
     expect(result.stats.platformOrderFinancials).toBe(1);
     expect(result.stats.manualOrders).toBe(1);
-    expect(result.warnings).toHaveLength(1);
+    // Biçim 2 yedek: "eski sürüm" satırı + yerel model dosyası uyarısı.
+    expect(result.warnings).toHaveLength(2);
+    expect(result.warnings[0]).toBe(YEDEK_ESKI_UYARISI);
 
     const product = await db.product.findUniqueOrThrow({
       where: { barcode: "same-barcode" },
@@ -384,7 +390,7 @@ describe("portable backup routes", () => {
     const exported = await exportBackup();
     expect(exported.status).toBe(200);
     const backup = await exported.json();
-    expect(backup.version).toBe(3);
+    expect(backup.version).toBe(BACKUP_FORMAT_VERSION);
     expect(backup.appVersion).toBe(packageJson.version);
     expect(backup.priceHistory).toHaveLength(1);
     expect(backup.filamentSpools).toHaveLength(1);

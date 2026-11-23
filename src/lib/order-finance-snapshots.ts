@@ -1,4 +1,4 @@
-import { adRateSnapshot, adRateFor } from "@/lib/ad-rate";
+import { adRateSnapshot, adRateFor, reklamOraniYakindaOkunamadi } from "@/lib/ad-rate";
 import { prisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
 import type { FilamentFiyatlari } from "@/core/filament-karisimi";
@@ -1049,6 +1049,8 @@ const queue: SnapshotJob[] = [];
 let running: Promise<void> | null = null;
 let lastStatus: FinanceSnapshotWriteStatus | null = null;
 let droppedJobs = 0;
+/** Reklam bütçesi okunamadığı için yazılmadan bırakılan tur sayısı. */
+let reklamBekleyenTurlar = 0;
 
 /**
  * Süreç ömrü boyunca ARTAN yazım sayaçları.
@@ -1129,6 +1131,14 @@ export function scheduleOrderFinanceSnapshots(
   itemsByOrderId?: ReadonlyMap<string, FinanceSnapshotItem[]>
 ): void {
   if (orders.length === 0) return;
+  // Reklam bütçesi az önce OKUNAMADIYSA bu siparişlerin kârı reklamsız hesaplanmış olabilir: ilk kez
+  // yakalanan kâr donduğu için öyle kalırdı. Tur yazılmadan bırakılır; sipariş ekranı bir sonraki
+  // turda (≈1 dk) yeniden hesaplayıp yazar. Bilinmeyen ≠ sıfır.
+  if (reklamOraniYakindaOkunamadi()) {
+    reklamBekleyenTurlar++;
+    console.warn("[finance-snapshot] reklam bütçesi okunamadı; bu tur yazılmadı, sonraki turda denenecek.");
+    return;
+  }
   // Çağıranın dizisi/haritası biz yazarken değişebilir → anlık kopya alınır (sığ kopya yeter,
   // satır nesneleri bu noktadan sonra değişmiyor).
   queue.push({
@@ -1175,6 +1185,11 @@ export async function flushOrderFinanceSnapshots(): Promise<void> {
 /** Yer darlığından düşürülen tur sayısı (tanılama). */
 export function droppedOrderFinanceSnapshotJobs(): number {
   return droppedJobs;
+}
+
+/** Reklam bütçesi okunamadığı için yazılmadan bırakılan tur sayısı (tanılama). */
+export function adRateDeferredSnapshotJobs(): number {
+  return reklamBekleyenTurlar;
 }
 
 // ── Bir ayı yeniden hesaplama ───────────────────────────────────────────────────────────
@@ -1587,6 +1602,11 @@ export async function recalculateFinanceMonths(
   // Reklam oranı BİR KEZ okunur (5dk önbellekli) — sipariş başına çağrılsaydı yeniden
   // hesap turu yüzlerce ek sorgu açardı.
   const adSnap = await adRateSnapshot();
+  // Reklam bütçesi OKUNAMADI → oran 0 değil, BİLİNMİYOR. Bu tur yazılsaydı seçilen ayların bütün
+  // kârları reklamsız (yüksek) donardı. Hiçbir şey yazmadan durulur; tur yeniden denenebilir.
+  if (adSnap.bilinmiyor) {
+    throw new Error("Reklam bütçesi okunamadı; yeniden hesap yapılmadı. Biraz sonra tekrar dene.");
+  }
   const commissionRules = await prisma.commissionRule.findMany({ where: { isActive: true } });
   const cargoRules = await prisma.cargoRule.findMany({ where: { isActive: true } });
   const expenseRules = await prisma.expenseRule.findMany({ where: { isActive: true } });
@@ -1843,6 +1863,14 @@ export interface FinanceRecalcState {
 
 let recalcState: FinanceRecalcState | null = null;
 let recalcRunning: Promise<void> | null = null;
+/** Süren turun sipariş süzgecinin imzası ("" = ayların tamamı) — "aynı istek mi" kararı için. */
+let recalcYalnizImza = "";
+
+/** Sipariş süzgecinin sıradan bağımsız imzası. */
+function yalnizSiparisImzasi(list: FinanceRecalcOptions["yalnizSiparisler"]): string {
+  if (!list) return "";
+  return [...new Set(list.map((s) => snapshotKey(s.platform, s.externalOrderId)))].sort().join("|");
+}
 
 /**
  * "Şu an başka bir tur sürüyor" hatası.
@@ -1893,21 +1921,30 @@ export function startFinanceMonthRecalc(
  */
 export function startFinanceRecalc(
   months: string[],
-  options: { onDone?: () => void; dryRun?: boolean } = {}
+  options: {
+    onDone?: () => void;
+    dryRun?: boolean;
+    /** Yalnız bu siparişler (ör. reklam bütçesi aralığı) — ayların geri kalanına dokunulmaz. */
+    yalnizSiparisler?: FinanceRecalcOptions["yalnizSiparisler"];
+  } = {}
 ): FinanceRecalcState {
   const scope = [...new Set(months)].sort();
   if (scope.length === 0) throw new Error("Yeniden hesaplanacak ay verilmedi.");
   const dryRun = options.dryRun === true;
+  const yalnizImza = yalnizSiparisImzasi(options.yalnizSiparisler);
   if (recalcRunning && recalcState) {
     // AYNI istek yeniden geldiyse (arayüz yeniden yoklamış olabilir) mevcut durum döner.
     // FARKLI bir istek — özellikle prova sürerken gelen GERÇEK tur — sessizce başkasının
-    // durumunu almamalı; yoksa hiç yazılmamış bir tur "bitti" sanılır.
+    // durumunu almamalı; yoksa hiç yazılmamış bir tur "bitti" sanılır. Sipariş süzgeci de
+    // kapsamın parçasıdır: aynı aylardaki başka bir sipariş kümesi aynı istek sayılmaz.
     const ayniKapsam =
       recalcState.months.length === scope.length &&
-      recalcState.months.every((month, index) => month === scope[index]);
+      recalcState.months.every((month, index) => month === scope[index]) &&
+      recalcYalnizImza === yalnizImza;
     if (ayniKapsam && recalcState.dryRun === dryRun) return recalcState;
     throw new FinanceRecalcBusyError(recalcState);
   }
+  recalcYalnizImza = yalnizImza;
   const startedAt = new Date().toISOString();
   recalcState = {
     month: scope.length === 1 ? scope[0] : `${scope[0]}…${scope[scope.length - 1]}`,
@@ -1925,6 +1962,7 @@ export function startFinanceRecalc(
     try {
       const result = await recalculateFinanceMonths(scope, {
         dryRun,
+        ...(options.yalnizSiparisler ? { yalnizSiparisler: options.yalnizSiparisler } : {}),
         onProgress: (phase, processed, total) => {
           if (!recalcState) return;
           recalcState = { ...recalcState, phase, processed, total };

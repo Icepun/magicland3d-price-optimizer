@@ -15,6 +15,8 @@ vi.mock("@/lib/libsql-batch", () => ({ batchWrite }));
 vi.mock("@/lib/cache-busting", () => ({ bustProfitInputCaches: vi.fn(), bustInventoryAlertCaches: vi.fn() }));
 vi.mock("@/lib/route-cache", () => ({ bustCache: vi.fn(), swr: vi.fn() }));
 vi.mock("@/lib/r2", () => ({ invalidateR2Config: vi.fn() }));
+vi.mock("@/lib/runtime-schema", () => ({ ensureRuntimeSchema: vi.fn() }));
+vi.mock("@/lib/kural-sonrasi-tazele", () => ({ kuralSonrasiSiparisleriTazele: vi.fn(async () => {}) }));
 
 const { komisyonOzeti } = await import("./komisyon-ozeti");
 const kurallar = await import("@/app/api/commission-rules/route");

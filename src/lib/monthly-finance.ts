@@ -1,3 +1,5 @@
+import { giderKdvAyir } from "@/core/gider-kdv";
+
 export const FINANCE_TIME_ZONE = "Europe/Istanbul";
 // Tek kaynak çekirdekte — mobil de aynı sabiti kullanır (sürüm damgası sürüklenmesin).
 export { FINANCE_CALCULATION_VERSION } from "@/core/finance-version";
@@ -63,9 +65,16 @@ type ManualOrderFinanceInput = {
 
 type ExpenseInput = {
   paidAt: Date;
+  /** Ödenen tutar — KDV DAHİL (kuruş). */
   amountKurus: number;
   /** Gider kategorisi (boşsa "Diğer"). */
   category?: string | null;
+  /**
+   * Giderin KDV oranı (%). Boş = KDV indirilmez: net kârdan tutarın tamamı düşer (eski kayıtlar).
+   * Doluysa net kârdan KDV HARİÇ tutar düşer, KDV o ayın indirilecek KDV'sine eklenir
+   * (kural tek yerde: `core/gider-kdv.ts`).
+   */
+  vatRate?: number | null;
 };
 
 type PlatformKurus = {
@@ -109,7 +118,7 @@ type MonthKurus = {
 export interface MonthlyVatSummary {
   /** Satıştan doğan (hesaplanan) KDV. */
   outputVat: number;
-  /** Girdilerden indirilecek KDV. */
+  /** Girdilerden indirilecek KDV (KDV oranı girilmiş gider ödemelerinin KDV'si dahil). */
   inputVatCredit: number;
   /** Fark. Eksi değer "sonraki aya devreden" demektir. */
   payable: number;
@@ -386,10 +395,14 @@ export function aggregateMonthlyFinance({
   for (const expense of expenses) {
     const bucket = months.get(monthKey(expense.paidAt, timeZone));
     if (!bucket) continue;
-    bucket.expensesKurus += expense.amountKurus;
+    // KDV oranı girilmiş giderde net kârdan KDV HARİÇ tutar düşer, KDV indirilecek KDV'ye girer
+    // (sipariş maliyetleriyle aynı muamele). Oranı boş gider eskisi gibi tutarın tamamıyla düşer.
+    const { netKurus, kdvKurus } = giderKdvAyir(expense.amountKurus, expense.vatRate);
+    bucket.expensesKurus += netKurus;
+    bucket.inputVatCreditKurus += kdvKurus;
     const kategori = expense.category?.trim() || "Diğer";
     const k = bucket.expenseCategories.get(kategori) ?? { kurus: 0, count: 0 };
-    k.kurus += expense.amountKurus;
+    k.kurus += netKurus;
     k.count++;
     bucket.expenseCategories.set(kategori, k);
   }
@@ -587,7 +600,8 @@ export function aggregateWeeklyFinance({
   for (const order of manualOrders) addOrder(order);
   for (const expense of expenses) {
     const bucket = buckets.get(weekStartNaive(expense.paidAt, timeZone));
-    if (bucket) bucket.expensesKurus += expense.amountKurus;
+    // Aylık özetle aynı kural: KDV oranı girilmiş giderden net kârdan KDV hariç tutar düşer.
+    if (bucket) bucket.expensesKurus += giderKdvAyir(expense.amountKurus, expense.vatRate).netKurus;
   }
   return starts.map((start) => {
     const b = buckets.get(start)!;

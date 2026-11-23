@@ -12,7 +12,7 @@ import type {
   ExpenseRuleInput,
 } from "@core/types";
 import type { Rules } from "@/lib/profit";
-import { ensureCargoVatSchema } from "@/lib/db/schema";
+import { ensureCargoVatSchema, ensureCommissionPlatformSchema } from "@/lib/db/schema";
 
 function parseRuleDate(value: unknown): Date | null {
   if (value == null || value === "") return null;
@@ -47,12 +47,27 @@ function ruleMs(v: unknown): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
+/**
+ * Reklam bütçesi okunamadığında kurallara eklenen işaret. Veride durur (önbellek ve kalıcı
+ * önbellekte kaybolmaz); `Rules` tipine ait değildir, yalnız aşağıdaki yardımcıyla okunur.
+ */
+export type ReklamIsareti = { reklamBilinmiyor?: true };
+
+/**
+ * Bu kurallarla hesaplanan kâr reklam payını BİLMİYOR mu? (bütçe okunamadı — oran 0 değil.)
+ * Finans geçmişini yazan yol bu durumda turu atlar; masaüstünde de aynı kural var.
+ */
+export function kurallarReklamBilinmiyor(rules: Rules | null | undefined): boolean {
+  return (rules as (Rules & ReklamIsareti) | null | undefined)?.reklamBilinmiyor === true;
+}
+
 export async function getRules(): Promise<Rules> {
-  await ensureCargoVatSchema();
+  await Promise.all([ensureCargoVatSchema(), ensureCommissionPlatformSchema()]);
   const [c, k, e, f, ft] = await batch([
     {
+      // platform + dönem: kural yalnız kendi pazaryerine ve kendi tarih aralığına uyar (masaüstüyle aynı).
       sql: `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
-                   fixedCommission, validFrom, validTo, priority, isActive
+                   fixedCommission, validFrom, validTo, priority, isActive, platform
               FROM CommissionRule WHERE isActive = 1
              ORDER BY priority DESC, name ASC`,
     },
@@ -122,6 +137,7 @@ export async function getRules(): Promise<Rules> {
   // "son 30 gün" oranı kullanılsaydı pencere her gün kayacağı için GEÇMİŞ siparişlerin
   // payı da her gün değişirdi (masaüstünde ölçüldü: 2,5 kat fark).
   let adBudgets: DonemliButce[] = [];
+  let reklamIsareti: ReklamIsareti = {};
   try {
     const b = await query<Record<string, unknown>>(
       `SELECT platform, dailyAmount, validFrom, validTo, isActive
@@ -195,8 +211,10 @@ export async function getRules(): Promise<Rules> {
       });
     });
   } catch {
-    // Reklam payı isteğe bağlı: tablo yoksa/okunamazsa kâr eskisi gibi (reklamsız) hesaplanır.
+    // Reklam payı okunamadı: ekranlar reklamsız gösterebilir ama oran 0 DEĞİL, BİLİNMİYOR —
+    // kurallar işaretlenir, finans geçmişi bu kurallarla YAZILMAZ (bkz. kurallarReklamBilinmiyor).
     adBudgets = [];
+    reklamIsareti = { reklamBilinmiyor: true };
   }
 
   // SİPARİŞE ÖZEL MALİYETLER (masaüstü Siparişler → "Maliyet gir"). Ayrı sorgu: tablo masaüstü
@@ -231,6 +249,7 @@ export async function getRules(): Promise<Rules> {
     financialByExternalId,
     financialByOrderNumber,
     adBudgets,
+    ...reklamIsareti,
     filamentFiyatlari: filamentFiyatHaritasi(
       (ft?.rows ?? []) as unknown as { id: string; costPerGram: number }[]
     ),
@@ -241,9 +260,10 @@ export async function getRules(): Promise<Rules> {
 
 /** Aktif komisyon kuralları (öncelik sırasıyla). */
 export async function getCommissionRules(): Promise<CommissionRuleInput[]> {
+  await ensureCommissionPlatformSchema();
   const rows = await query<CommissionRuleInput>(
     `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate,
-            fixedCommission, validFrom, validTo, priority, isActive
+            fixedCommission, validFrom, validTo, priority, isActive, platform
        FROM CommissionRule WHERE isActive = 1
       ORDER BY priority DESC, name ASC`
   );

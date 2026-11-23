@@ -125,7 +125,8 @@ export async function POST(req: NextRequest) {
         }`;
         const data: FetchedVariant = {
           identifier: id,
-          price: Number(variant.price) || 0,
+          // Fiyat okunamazsa NaN (bilinmiyor) — 0 TL diye yazılmaz (aşağıdaki koruma).
+          price: variant.price != null && String(variant.price).trim() !== "" && Number.isFinite(Number(variant.price)) ? Number(variant.price) : Number.NaN,
           sku: variant.sku || id,
           stock: variant.inventory_quantity ?? 0,
           name,
@@ -172,6 +173,7 @@ export async function POST(req: NextRequest) {
       const bySku = uniqueIndex(all, (f) => f.sku);
 
       let changed = 0;
+      let atlananSifir = 0;
       let imagesFixed = 0;
       const writes: Write[] = [];
       const history: { productId: string; oldPrice: number; newPrice: number; changeSource: string }[] = [];
@@ -198,6 +200,9 @@ export async function POST(req: NextRequest) {
         if (f.stock !== row.listingStock) {
           writes.push({ sql: LISTING_STOCK_SQL, args: [f.stock, row.listingId] });
         }
+        // SIFIR FİYAT KORUMASI (Trendyol'daki gibi): yanıt biçimi değişirse her varyant 0 gelir;
+        // geçersiz fiyat ilana, ürüne ve fiyat geçmişine ASLA yazılmaz.
+        if (!Number.isFinite(f.price) || f.price <= 0) { atlananSifir++; continue; }
         const listingChanged = Math.abs(f.price - row.listingPrice) > 0.001;
         const productChanged = Math.abs(f.price - row.productPrice) > 0.001;
         if (!listingChanged && !productChanged) continue;
@@ -216,6 +221,11 @@ export async function POST(req: NextRequest) {
         changed++;
       }
 
+      // TOPLU BOZULMA FRENİ: eşleşenlerin neredeyse hepsi geçersizse sorun yanıt biçimindedir.
+      const eslesen = atlananSifir + changed;
+      if (eslesen >= 10 && atlananSifir > eslesen * 0.9) {
+        throw new Error("Shopify'dan gelen fiyatların neredeyse tamamı geçersiz. Fiyatlar güncellenmedi.");
+      }
       await flushWrites(writes);
       // Fiyat geçmişi — yalnızca değişenler, tek round-trip (Turso yazma maliyeti).
       if (history.length) await prisma.priceHistory.createMany({ data: history });
@@ -234,6 +244,8 @@ export async function POST(req: NextRequest) {
       const writes: Write[] = [];
       for (const [id, f] of fetched) {
         if (existingSet.has(id)) continue;
+        // Fiyatı okunamayan varyant eklenmez (0 TL'lik ürün kârı yanlış gösterirdi); fiyat gelince eklenir.
+        if (!Number.isFinite(f.price) || f.price <= 0) continue;
         const productId = `shp_${randomUUID().replace(/-/g, "")}`;
         writes.push({
           sql: PRODUCT_SQL,

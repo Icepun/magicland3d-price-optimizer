@@ -78,7 +78,7 @@ export function ilanKargoTarifesi(listing: { platform: string; dispatchDays?: nu
 export function resolveListingCommissionOnly(
   listing: { platform: string; commissionRate: number | null; commissionFixed: number | null },
   settings: Record<string, string | undefined>
-): { commissionRateOverride?: number; commissionFixedOverride?: number } {
+): { commissionRateOverride?: number; commissionFixedOverride?: number; commissionPlatform?: string } {
   if (listing.commissionRate != null || listing.commissionFixed != null) {
     // HEPSİBURADA ORANLARI KDV HARİÇTİR. Hepsiburada komisyonu "%10 + KDV" diye bildirir ve ilana
     // da o girilir; kesilen tutar oran × 1,2'dir (ölçüldü 22 Kas 2026: 152 kalemde birebir, panel
@@ -94,6 +94,10 @@ export function resolveListingCommissionOnly(
   }
   if (listing.platform === "shopify") {
     return { commissionRateOverride: getShopifyCommissionRate(settings) };
+  }
+  // Oran yok → kurallara düşülür: yalnız BU pazaryerinin kuralları (motor girdisine yayılır).
+  if (listing.platform === "trendyol" || listing.platform === "hepsiburada") {
+    return { commissionPlatform: listing.platform };
   }
   return {};
 }
@@ -117,6 +121,9 @@ export function withProductCommissionRule<T extends { id: string; name: string; 
       fixedCommission: 0,
       priority: 10_000,
       isActive: true,
+      // Ürün oranı Trendyol'dan gelir (senkron yazar; ölçüldü 23 Kas 2026: 48/48 kaynak Trendyol).
+      // Hepsiburada ilanı bunu devralmaz — oranı yoksa komisyonu bilinmiyor sayılır.
+      platform: "trendyol",
     },
     ...commissionRules,
   ];

@@ -12,6 +12,7 @@ import {
   type KategoriDilimi,
   type PeriyotTipi,
 } from "@/lib/expense-view";
+import { GIDER_KDV_ORANLARI, giderKdvEtiketi } from "@/core/gider-kdv";
 
 /**
  * Gider Ödemeleri sayfasının görsel parçaları.
@@ -19,6 +20,62 @@ import {
  * Sayfa dosyası zaten uzun; grafik ve seçiciler burada duruyor. Hepsi SAF sunum —
  * veri türetmesi `@/lib/expense-view` içinde, testleri de orada.
  */
+
+/* ─────────────────────────── KDV seçici ─────────────────────────── */
+
+/**
+ * Giderin KDV oranı: Yok / %1 / %10 / %20. Tutar KDV DAHİL girilir; oran seçilince net kârdan
+ * KDV hariç tutar düşer (kural `core/gider-kdv.ts`). "Yok" varsayılan — eski davranış.
+ */
+export function KdvSecici({
+  value,
+  onChange,
+  id,
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  id?: string;
+}) {
+  const secenekler: { deger: number | null; ad: string }[] = [
+    { deger: null, ad: "Yok" },
+    ...GIDER_KDV_ORANLARI.map((o) => ({ deger: o as number, ad: `%${o}` })),
+  ];
+  return (
+    <div id={id} role="radiogroup" aria-label="KDV" className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 w-fit">
+      {secenekler.map((s) => {
+        const secili = (value ?? null) === s.deger;
+        return (
+          <button
+            key={s.ad}
+            type="button"
+            role="radio"
+            aria-checked={secili}
+            onClick={() => onChange(s.deger)}
+            className={cn(
+              "px-3 py-1 text-xs font-medium rounded-sm tabular-nums transition-all duration-200 active:scale-[0.96] motion-reduce:transition-none",
+              secili
+                ? "bg-background shadow-sm text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {s.ad}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Listede KDV'li gidere küçük etiket ("KDV %20"). KDV yoksa hiçbir şey çizmez. */
+export function KdvEtiketi({ oran }: { oran: number | null | undefined }) {
+  const metin = giderKdvEtiketi(oran);
+  if (!metin) return null;
+  return (
+    <span className="inline-flex items-center text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded-full border bg-[#7A7EFF]/10 text-[#C9D2F2] border-[#7A7EFF]/30 tabular-nums animate-in fade-in duration-300 motion-reduce:animate-none">
+      {metin}
+    </span>
+  );
+}
 
 /* ─────────────────────────── Dönem seçici ─────────────────────────── */
 

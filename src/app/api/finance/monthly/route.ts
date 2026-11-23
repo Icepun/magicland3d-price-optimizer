@@ -350,7 +350,8 @@ async function computeMonthlyFinance(monthCount: number) {
     }),
     remotePrisma.actualExpense.findMany({
       where: { paidAt: { gte: windowStart } },
-      select: { paidAt: true, amountKurus: true, category: true },
+      // vatRate: KDV oranı girilmiş giderde net kârdan KDV hariç tutar düşer (boş = eskisi gibi).
+      select: { paidAt: true, amountKurus: true, category: true, vatRate: true },
     }),
     // Başlıktaki sayı "indirilen komisyon KAYDI" değil, "gerçek komisyonla HESAPLANMIŞ sipariş"
     // olmalı — ikisi aynı değil (canlı: 193 kayıt, 101 uygulanmış sipariş). Gerekçe ve ölçüm:

@@ -92,6 +92,8 @@ beforeAll(async () => {
       categoryName: "Dekorasyon",
       currentSalePrice: 300,
       desi: 1,
+      // Komisyonu bilinmeyen satır kâra girmez (onay, 23 Kas 2026) → ürünün Trendyol oranı.
+      commissionRate: 0.21,
     },
   });
   await db.productCost.create({
@@ -168,10 +170,10 @@ describe("recalculateFinanceMonth — maliyet düzeltmesi geçmiş aya yansır",
     const row = await snapshotOf("ty-r1");
     // %20 KDV: ₺300 cironun içindeki hesaplanan KDV ₺50.
     expect(row.outputVatKurus).toBe(5_000);
-    // İndirilecek KDV de KAYDEDİLİR ("bilinmiyor" olarak kalmaz). Bu test veritabanında
-    // komisyon/kargo/gider kuralı ve KDV'li malzeme yok → motorun sonucu ₺0'dır.
+    // İndirilecek KDV de KAYDEDİLİR ("bilinmiyor" olarak kalmaz). Bu test veritabanında kargo/gider
+    // kuralı ve KDV'li malzeme yok; tek girdi ürünün %21 komisyonu: ₺63'ün içindeki KDV ₺10,50.
     expect(row.inputVatCreditKurus).not.toBeNull();
-    expect(row.inputVatCreditKurus).toBe(0);
+    expect(row.inputVatCreditKurus).toBe(1_050);
   });
 
   it("eski hesap sürümüyle yazılmış satırı güncel sürüme taşır", async () => {

@@ -6,7 +6,9 @@ import {
   isUnknownStatusOrder,
   type OrdersResult,
 } from "@/lib/api/orders";
-import { syncOrderFinanceSnapshots } from "@/lib/db/finance";
+import { syncOrderFinanceSnapshots, type ReklamZorlama } from "@/lib/db/finance";
+// Yalnız TİP: çalışma anında kural modülünü (ağır, Turso'ya bağlı) bu dosyaya çekmez.
+import type { ReklamIsareti } from "@/lib/db/rules";
 import { computeOrderProfit, getProductMap, type OrderProfit } from "@/lib/order-profit";
 import type { Rules } from "@/lib/profit";
 import type { ProductDetail } from "@/lib/db/product-detail";
@@ -99,11 +101,13 @@ let sonImza = "";
  * Önbellekteki veriyle finans geçmişini yaz. Ağ isteği AÇMAZ, veri yoksa sessizce çıkar.
  * `zorla` yalnız Raporlar ekranı için: kullanıcı oradayken beklemesin.
  * `zorlaKarYaz` reklam bütçesi değiştiğinde: donmuş kârlar yeni reklam payıyla yeniden yazılır,
- * yoksa Raporlar eski (reklamsız, yüksek) kârı göstermeye devam eder.
+ * yoksa Raporlar eski (reklamsız, yüksek) kârı göstermeye devam eder. YALNIZ bütçe aralığındaki
+ * siparişler (başlangıçtan sonrası, platformu tutan) — eskiden önbellekteki TÜM siparişler bugünkü
+ * maliyetle yeniden donuyordu (denetim, 23 Kas 2026).
  */
 export async function syncFinanceFromCache(
   qc: QueryClient,
-  { zorla = false, zorlaKarYaz = false }: { zorla?: boolean; zorlaKarYaz?: boolean } = {}
+  { zorla = false, zorlaKarYaz = false }: { zorla?: boolean; zorlaKarYaz?: ReklamZorlama | false } = {}
 ): Promise<void> {
   if (calisiyor) return;
   const simdi = Date.now();
@@ -114,6 +118,10 @@ export async function syncFinanceFromCache(
   const rules = qc.getQueryData<Rules>(["rules"]);
   const settings = qc.getQueryData<Record<string, string>>(["settings"]);
   if (!orders || !products || !rules || !settings) return; // veri yok → ağ açma, bekle
+  // Reklam bütçesi OKUNAMADI → oran 0 değil, bilinmiyor. Bu turda yazılan kârlar reklamsız donardı;
+  // yazmadan çıkılır, kurallar bir sonraki tazelemede yeniden okunur (masaüstüyle aynı kural).
+  // İşareti `getRules` koyar (db/rules.ts → kurallarReklamBilinmiyor ile aynı alan).
+  if ((rules as Rules & ReklamIsareti).reklamBilinmiyor === true) return;
 
   const snapshots = buildFinanceSnapshots(orders.orders, products, rules, settings);
   if (snapshots.length === 0) return;

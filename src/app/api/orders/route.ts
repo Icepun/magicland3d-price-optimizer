@@ -169,6 +169,8 @@ export interface UnifiedOrder {
   actualCargo?: boolean;
   /** Maliyeti bilinmediği için kâra girmeyen satır sayısı (0 = tam hesap). */
   unmatchedCount?: number;
+  /** Komisyonu bilinmediği için kâra girmeyen satır sayısı (oran ne siparişte ne ilanda ne kuralda). */
+  commissionUnknownCount?: number;
   /** Desisi olmadığı için kargosu 1 desi varsayılan satır sayısı. */
   missingDesiCount?: number;
   desiEstimated?: boolean;
@@ -192,6 +194,8 @@ export interface UnifiedOrder {
     returnActual: boolean;
     serviceFeeActual: boolean;
     penalty: number;
+    /** Gidiş kargosuna uyan kural/tarife yok → kargo 0 sayıldı, zarar eksik. */
+    cargoRuleMissing?: boolean;
   } | null;
   /** Kârdan düşülen ceza (Trendyol termin gecikme + kusurlu ürün bedeli, TL). */
   penalty?: number;
@@ -1691,6 +1695,7 @@ async function computeOrdersBodyInner(
       actualPaymentFee: pr.actualPaymentFee != null,
       actualCargo: pr.actualCargo != null,
       unmatchedCount: pr.unmatchedLines,
+      commissionUnknownCount: pr.commissionUnknownLines,
       missingDesiCount: pr.missingDesiLines,
       desiEstimated: pr.desiEstimated,
       cargoRuleMissing: pr.cargoRuleMissing,
@@ -1708,6 +1713,7 @@ async function computeOrdersBodyInner(
             returnActual: returnLoss.returnActual,
             serviceFeeActual: returnLoss.serviceFeeActual,
             penalty: returnLoss.penalty,
+            cargoRuleMissing: returnLoss.cargoRuleMissing,
           }
         : null,
       penalty: pr.penalty,

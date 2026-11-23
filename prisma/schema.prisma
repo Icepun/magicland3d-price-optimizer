@@ -250,6 +250,8 @@ model CommissionRule {
   validTo         DateTime?
   priority        Int       @default(10)
   isActive        Boolean   @default(true)
+  /** "trendyol" | "hepsiburada" — kural yalnız o pazaryerinin ilanına uyar. Null = eski kural (Trendyol). */
+  platform        String?
 }
 
 model CargoRule {
@@ -328,6 +330,8 @@ model ActualExpense {
   recurringId String?
   /// Kuralın hangi dönemi için üretildi ("2026-08"). Aynı dönem iki kez eklenmesin diye.
   periodKey   String?
+  /// Giderin KDV oranı (%). Boş = KDV indirilmez (eski kayıtlar böyle kalır).
+  vatRate     Float?
 
   @@unique([recurringId, periodKey])
   @@index([paidAt])
@@ -349,10 +353,21 @@ model RecurringExpense {
   endsAt      DateTime?
   isActive    Boolean   @default(true)
   note        String?
+  /// Üretilen kayıtların KDV oranı (%). Boş = KDV indirilmez.
+  vatRate     Float?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   @@index([isActive])
+}
+
+/// Kullanıcının sildiği otomatik sabit gider dönemi — üretim bu dönemi bir daha açmaz (v64).
+model RecurringExpenseSkip {
+  recurringId String
+  periodKey   String
+  createdAt   DateTime @default(now())
+
+  @@id([recurringId, periodKey])
 }
 
 /// Kullanıcının kendi belirlediği gider kategorileri — grafikteki renk buradan gelir.

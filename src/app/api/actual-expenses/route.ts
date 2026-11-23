@@ -8,10 +8,12 @@ import {
   actualExpenseResponse,
   actualExpenseValidationError,
   expenseRowResponse,
+  kayitKdvOrani,
   optionalExpenseText,
 } from "@/lib/actual-expenses";
 import { ensureRecurringExpenses } from "@/lib/recurring-expense-run";
 import { dbEpochMs } from "@/lib/sqlite-date";
+import { giderNetKurus } from "@/core/gider-kdv";
 
 export async function GET(req: NextRequest) {
   await ensureRuntimeSchema();
@@ -28,18 +30,24 @@ export async function GET(req: NextRequest) {
     if (!Number.isFinite(fromMs)) {
       return NextResponse.json({ error: "Dönem başlangıcı anlaşılmadı." }, { status: 400 });
     }
+    // Net kârdan düşen tutar: KDV oranı girilmiş giderde KDV HARİÇ (aylık rapordaki kuralın
+    // aynısı, `core/gider-kdv.ts`). Oranı boş gider tutarın tamamıyla düşer — eski toplamla aynı.
     const rows = await remotePrisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT COALESCE(SUM("amountKurus"), 0) AS "toplam", COUNT(*) AS "adet"
+      `SELECT "amountKurus","vatRate"
          FROM "ActualExpense"
         WHERE ${dbEpochMs("paidAt")} >= ? AND ${dbEpochMs("paidAt")} <= ?`,
       fromMs,
       Date.now()
     );
+    const toplamKurus = rows.reduce(
+      (t, r) => t + giderNetKurus(Number(r.amountKurus ?? 0), r.vatRate),
+      0
+    );
     return NextResponse.json(
       {
         from: new Date(fromMs).toISOString(),
-        toplam: kurusToTl(Number(rows[0]?.toplam ?? 0)),
-        adet: Number(rows[0]?.adet ?? 0),
+        toplam: kurusToTl(toplamKurus),
+        adet: rows.length,
       },
       { headers: { "Cache-Control": "no-store" } }
     );
@@ -49,7 +57,7 @@ export async function GET(req: NextRequest) {
   // Sıralama `dbEpochMs` ile: kolonda hem epoch-ms tamsayı hem ISO metin bulunabiliyor ve
   // düz sıralamada tamsayı her zaman metinden küçük sayılır (bkz. src/lib/sqlite-date.ts).
   const rows = await remotePrisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT "id","name","category","amountKurus","paidAt","note","recurringId",
+    `SELECT "id","name","category","amountKurus","paidAt","note","recurringId","vatRate",
             "createdAt","updatedAt"
        FROM "ActualExpense"
       ORDER BY ${dbEpochMs("paidAt")} DESC, ${dbEpochMs("createdAt")} DESC`
@@ -70,6 +78,7 @@ export async function POST(req: NextRequest) {
         amountKurus: tlToKurus(data.amount),
         paidAt: data.paidAt,
         note: optionalExpenseText(data.note),
+        vatRate: kayitKdvOrani(data.vatRate),
       },
     });
     // Gerçek gider aylık net kâra girer → finans geçmişi önbelleği tazelensin

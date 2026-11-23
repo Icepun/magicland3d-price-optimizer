@@ -40,7 +40,11 @@ export function categoryMatches(
 
 /**
  * Eşleşme gücü — birden çok kural uyduğunda EN ÖZEL olanı seçmek için.
- * 0 = hiç uymuyor. Tam eşleşme > kapsayan eşleşme > kapsanan eşleşme.
+ * 0 = hiç uymuyor. Tam eşleşme > kapsayan eşleşme (kural metni ürün kategorisinin içinde).
+ *
+ * TERS YÖN YOK (Berke'nin onayı, 23 Kas 2026): eskiden "Masa Lambası" kuralı, kategorisi yalnız
+ * "Lamba" olan ürüne de uyuyordu (kural metni ürün kategorisini kapsıyor diye). Gider ve kargo
+ * kuralları (`categoryMatches`) bunu zaten yapmıyordu; artık komisyon da aynı kuralı izler.
  */
 export function categoryMatchScore(
   ruleCategoryName: string | null | undefined,
@@ -54,7 +58,6 @@ export function categoryMatchScore(
   if (!ruleCategory || !productCategory) return 0;
   if (productCategory === ruleCategory) return 10_000 + ruleCategory.length;
   if (productCategory.includes(ruleCategory)) return 1_000 + ruleCategory.length;
-  if (ruleCategory.includes(productCategory)) return 500 + productCategory.length;
 
   return 0;
 }

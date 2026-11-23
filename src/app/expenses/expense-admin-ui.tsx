@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { formatCurrency } from "@/lib/utils";
 import { KATEGORI_RENKLERI } from "@/lib/expense-admin-shared";
 import { uretilecekler } from "@/lib/recurring-expense";
+import { KdvEtiketi, KdvSecici } from "./expense-ui";
 
 /**
  * Gider Ödemeleri sayfasının yönetim ekranları: kategoriler ve tekrarlayan sabit giderler.
@@ -145,6 +146,8 @@ export interface TekrarKaydi {
   amount: number;
   dayOfMonth: number;
   isActive: boolean;
+  /** Üretilen kayıtların KDV oranı (%) — boş = KDV indirilmez. */
+  vatRate?: number | null;
 }
 
 /**
@@ -175,6 +178,7 @@ export function SabitGiderYonetimi({
     amount: number;
     dayOfMonth: number;
     startsAt: string;
+    vatRate: number | null;
   }) => Promise<unknown> | void;
   onSil: (id: string) => void;
 }) {
@@ -183,6 +187,7 @@ export function SabitGiderYonetimi({
   const [gun, setGun] = useState("1");
   const [kategori, setKategori] = useState("");
   const [baslangic, setBaslangic] = useState(() => ayBasiInput(bugun));
+  const [kdv, setKdv] = useState<number | null>(null);
   const tutarSayi = Number(tutar);
   const gecerli = ad.trim().length > 0 && Number.isFinite(tutarSayi) && tutarSayi > 0;
 
@@ -280,6 +285,12 @@ export function SabitGiderYonetimi({
             className={ALAN}
           />
         </div>
+        <div className="sm:col-span-2">
+          <label className="text-[11px] text-muted-foreground">KDV (tutara dahil)</label>
+          <div className="mt-1">
+            <KdvSecici value={kdv} onChange={setKdv} />
+          </div>
+        </div>
       </div>
 
       {/* Kaydetmeden önce ne olacağını göster: geçmiş bir tarih seçmek o ayların
@@ -330,6 +341,7 @@ export function SabitGiderYonetimi({
               amount: tutarSayi,
               dayOfMonth: Math.min(31, Math.max(1, Number(gun) || 1)),
               startsAt: `${baslangic}T00:00:00+03:00`,
+              vatRate: kdv,
             })
           ).then(
             () => {
@@ -352,7 +364,10 @@ export function SabitGiderYonetimi({
           {kayitlar.map((r) => (
             <div key={r.id} className="flex items-center gap-2 rounded-lg border p-2">
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{r.name}</p>
+                <div className="flex items-center gap-2 min-w-0">
+                  <p className="text-sm font-medium truncate">{r.name}</p>
+                  <KdvEtiketi oran={r.vatRate} />
+                </div>
                 <p className="text-[11px] text-muted-foreground tabular-nums">
                   {`Her ayın ${r.dayOfMonth}. günü · ${formatCurrency(r.amount)}`}
                   {r.category ? ` · ${r.category}` : ""}

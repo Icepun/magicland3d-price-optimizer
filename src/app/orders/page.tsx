@@ -151,6 +151,8 @@ interface UnifiedOrder {
   actualPaymentFee?: boolean;
   actualCargo?: boolean;
   unmatchedCount?: number;
+  /** Komisyonu bilinmediği için kâra girmeyen satır sayısı. */
+  commissionUnknownCount?: number;
   missingDesiCount?: number;
   desiEstimated?: boolean;
   /** Bu siparişin desi/tutarına uyan kargo kuralı yok → kargo 0 sayıldı, kâr yüksek görünüyor. */
@@ -168,6 +170,8 @@ interface UnifiedOrder {
     returnActual: boolean;
     serviceFeeActual: boolean;
     penalty?: number;
+    /** Gidiş kargosuna uyan kural yok → kargo 0 sayıldı. */
+    cargoRuleMissing?: boolean;
   } | null;
   /** Kârdan düşülen ceza: gecikme + kusurlu ürün bedeli (Trendyol, TL). */
   penalty?: number;
@@ -2578,7 +2582,9 @@ const OrderRow = memo(function OrderRow({
                         siparişte kargonun tahmin edildiği de söylenmeli — yoksa kâr, olduğundan
                         yüksek olabileceği hiç belirtilmeden kesin rakam gibi duruyor. */}
                     {[
-                      order.profitPartial ? `${order.unmatchedCount ?? 1} üründe maliyet yok` : null,
+                      order.profitPartial && (order.unmatchedCount ?? 0) > 0 ? `${order.unmatchedCount} üründe maliyet yok` : null,
+                      order.profitPartial && (order.commissionUnknownCount ?? 0) > 0 ? `${order.commissionUnknownCount} üründe komisyon bilinmiyor` : null,
+                      order.profitPartial && !(order.unmatchedCount ?? 0) && !(order.commissionUnknownCount ?? 0) ? "kısmi hesap" : null,
                       order.desiEstimated ? "kargo tahmini" : null,
                       // Kargo kuralı bulunamadıysa kargo SIFIR sayıldı; kâr olduğundan yüksek.
                       // Eskiden bu durum hiçbir iz bırakmadan geçiyordu.
@@ -2912,6 +2918,9 @@ const OrderRow = memo(function OrderRow({
                         </span>
                       </div>
                     )}
+                    {order.returnLoss.cargoRuleMissing && (
+                      <p className="text-[10px] text-[#C9D2F2]">Gidiş kargosu için kural yok — zarar eksik olabilir.</p>
+                    )}
                     <p className="text-[10px] text-muted-foreground/70">Satış tutarı ve komisyon iade edildi.</p>
                   </div>
                 )}
@@ -3058,7 +3067,13 @@ const OrderRow = memo(function OrderRow({
                 )}
                 {!isCancelled && order.profitPartial && (
                   <p className="text-[10px] text-muted-foreground/70">
-                    {order.unmatchedCount ?? 1} ürünün maliyeti girilmemiş — kâra dahil değil.
+                    {[
+                      (order.unmatchedCount ?? 0) > 0 ? `${order.unmatchedCount} ürünün maliyeti girilmemiş` : null,
+                      (order.commissionUnknownCount ?? 0) > 0 ? `${order.commissionUnknownCount} ürünün komisyonu bilinmiyor` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "Bazı ürünler"}{" "}
+                    — kâra dahil değil.
                     {isManualOrder && (
                       <button
                         type="button"

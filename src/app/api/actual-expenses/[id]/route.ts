@@ -5,9 +5,13 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { tlToKurus } from "@/lib/monthly-finance";
 import {
   ActualExpenseInput,
+  TekParcaYazilamadi,
   actualExpenseResponse,
   actualExpenseValidationError,
+  giderSilmeIfadeleri,
+  kayitKdvOrani,
   optionalExpenseText,
+  tekParcaYaz,
 } from "@/lib/actual-expenses";
 
 const UpdateActualExpenseInput = ActualExpenseInput.partial().refine(
@@ -33,6 +37,7 @@ export async function PATCH(
         ...(data.amount !== undefined ? { amountKurus: tlToKurus(data.amount) } : {}),
         ...(data.paidAt !== undefined ? { paidAt: data.paidAt } : {}),
         ...(data.note !== undefined ? { note: optionalExpenseText(data.note) } : {}),
+        ...(data.vatRate !== undefined ? { vatRate: kayitKdvOrani(data.vatRate) } : {}),
       },
     });
     bustFinanceCaches(); // gider aylık net kâra girer
@@ -58,19 +63,20 @@ export async function DELETE(
 ) {
   await ensureRuntimeSchema();
   const { id } = await params;
+  const mevcut = await remotePrisma.actualExpense.findUnique({ where: { id }, select: { id: true } });
+  if (!mevcut) {
+    return NextResponse.json({ error: "Gider kaydı bulunamadı" }, { status: 404 });
+  }
   try {
-    await remotePrisma.actualExpense.delete({ where: { id } });
-    bustFinanceCaches(); // gider silindi → aylık net kâr değişti
-    return NextResponse.json({ ok: true });
+    // Silme + (otomatik sabit giderse) "bu ayı bir daha açma" kaydı TEK işlemde: biri yazılıp
+    // diğeri düşerse silinen gider bir sonraki açılışta geri gelirdi.
+    await tekParcaYaz(giderSilmeIfadeleri(id));
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "P2025"
-    ) {
-      return NextResponse.json({ error: "Gider kaydı bulunamadı" }, { status: 404 });
+    if (error instanceof TekParcaYazilamadi) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
     }
     throw error;
   }
+  bustFinanceCaches(); // gider silindi → aylık net kâr değişti
+  return NextResponse.json({ ok: true });
 }

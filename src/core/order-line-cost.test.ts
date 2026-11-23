@@ -165,7 +165,8 @@ describe("sipariş kârına girişi", () => {
   const siparis = (urun: OrderProfitInput["lines"][number]["product"]): OrderProfitInput => ({
     platform: "trendyol",
     orderTotal: 400,
-    lines: [{ unitPrice: 200, quantity: 2, product: urun }],
+    // Trendyol sipariş satırı kesilen oranı taşır (komisyonu bilinmeyen satır kâra girmez).
+    lines: [{ unitPrice: 200, quantity: 2, product: urun, orderCommissionRate: 0.2 }],
     commissionRules: [],
     cargoRules: [],
     expenseRules: [],

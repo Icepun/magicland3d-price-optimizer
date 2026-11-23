@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 
-import { DeleteButton, Field, PrimaryButton, TextField } from "@/components/form";
+import { DeleteButton, Field, PrimaryButton, Segmented, TextField } from "@/components/form";
 import { ErrorState, Screen, SubHeader, Tint } from "@/components/kit";
 import { FormShimmer } from "@/components/kit/FormShimmer";
 import {
@@ -62,6 +62,10 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
   const [minP, setMinP] = useState(existing ? String(existing.minPrice) : "0");
   const [maxP, setMaxP] = useState(existing ? String(existing.maxPrice) : "999999");
   const [priority, setPriority] = useState(String(existing?.priority ?? 10));
+  // Kural yalnız bu pazaryerinin ilanına uyar (masaüstüyle aynı alan).
+  const [platform, setPlatform] = useState<"trendyol" | "hepsiburada">(
+    existing?.platform === "hepsiburada" ? "hepsiburada" : "trendyol"
+  );
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["commission-rules-all"] });
@@ -100,6 +104,7 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
         minPrice: parsedMinPrice,
         maxPrice: parsedMaxPrice,
         priority: parsedPriority,
+        platform,
       };
       if (isNew) await createCommissionRule(draft);
       else await updateCommissionRule(id, draft);
@@ -113,7 +118,7 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
   });
 
   const remove = useMutation({
-    mutationFn: () => deleteCommissionRule(id),
+    mutationFn: (tamamen: boolean) => deleteCommissionRule(id, tamamen),
     onSuccess: () => {
       invalidate();
       router.back();
@@ -126,6 +131,16 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
       <Tint strong style={styles.card}>
         <Field label="Kural adı">
           <TextField value={name} onChange={setName} placeholder="Trendyol Oyuncak" />
+        </Field>
+        <Field label="Pazaryeri">
+          <Segmented
+            items={[
+              { key: "trendyol", label: "Trendyol" },
+              { key: "hepsiburada", label: "Hepsiburada" },
+            ]}
+            selected={platform}
+            onSelect={setPlatform}
+          />
         </Field>
         <Field label="Kategori (isteğe bağlı)">
           <TextField value={category} onChange={setCategory} placeholder="Boş = tüm kategoriler" />
@@ -163,9 +178,10 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
       {!isNew ? (
         <DeleteButton
           onPress={() =>
-            Alert.alert("Kuralı sil?", existing?.name ?? "", [
+            Alert.alert("Kural kaldırılsın mı?", "Bu ayın başından itibaren uygulanmaz. Önceki aylar değişmez.", [
               { text: "Vazgeç", style: "cancel" },
-              { text: "Sil", style: "destructive", onPress: () => remove.mutate() },
+              { text: "Bu aydan kaldır", onPress: () => remove.mutate(false) },
+              { text: "Geçmişten de sil", style: "destructive", onPress: () => remove.mutate(true) },
             ])
           }
         />

@@ -102,6 +102,32 @@ export function ensureCargoVatSchema(): Promise<void> {
   return cargoVatSchemaPromise;
 }
 
+let commissionPlatformPromise: Promise<void> | null = null;
+
+/**
+ * v64: `CommissionRule.platform` (kural hangi pazaryerinin). Telefon masaüstünden önce
+ * güncellenirse kolon henüz yoktur; komisyon sorgusundan önce idempotent olarak eklenir.
+ */
+export function ensureCommissionPlatformSchema(): Promise<void> {
+  if (!commissionPlatformPromise) {
+    commissionPlatformPromise = (async () => {
+      const columns = await query<{ name: string }>(`PRAGMA table_info("CommissionRule")`);
+      if (columns.length === 0 || columns.some((c) => c.name === "platform")) return;
+      try {
+        await execute(`ALTER TABLE "CommissionRule" ADD COLUMN "platform" TEXT`);
+      } catch (error) {
+        // İki cihaz aynı anda güncellerse ikinci ALTER "duplicate column" dönebilir.
+        const refreshed = await query<{ name: string }>(`PRAGMA table_info("CommissionRule")`);
+        if (!refreshed.some((c) => c.name === "platform")) throw error;
+      }
+    })().catch((error) => {
+      commissionPlatformPromise = null;
+      throw error;
+    });
+  }
+  return commissionPlatformPromise;
+}
+
 /**
  * Finans geçmişi masaüstü açılmadan önce de kullanılabilsin diye gerekli tabloları
  * mobilde idempotent olarak hazırlar. AppSetting.schemaVersion masaüstü migration

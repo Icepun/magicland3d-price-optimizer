@@ -18,6 +18,9 @@
 export const FINANCIAL_SETTING_KEYS: ReadonlySet<string> = new Set([
   "vatRate",
   "shopifyCommissionRate",
+  // dönemli ayarların geçmişi (core/donemli-oran) — sipariş kendi tarihindeki oranı kullanır
+  "vatRateGecmisi",
+  "shopifyCommissionRateGecmisi",
   // maliyet (detailed mod saatlik oranları)
   "costElectricityIncluded",
   "costElectricityPerHour",

@@ -107,7 +107,13 @@ export default function OrderDetailScreen() {
   const notlar: string[] = [];
   if (tutarYok) notlar.push("Sipariş tutarı alınamadı; yenileyince tekrar denenecek.");
   if (order.microExport) notlar.push("Mikro ihracat (yurt dışı): satış KDV'siz hesaplandı.");
-  if (profit?.partial) notlar.push("Bazı ürünler eşleşmedi, kâr kısmi (~).");
+  if (profit?.partial) {
+    notlar.push(
+      profit.commissionUnknownCount > 0
+        ? `${profit.commissionUnknownCount} ürünün komisyonu bilinmiyor, kâr kısmi (~).`
+        : "Bazı ürünler eşleşmedi, kâr kısmi (~)."
+    );
+  }
   if (profit?.desiEstimated) {
     notlar.push(
       profit.missingDesiCount > 0

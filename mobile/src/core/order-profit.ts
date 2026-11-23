@@ -8,7 +8,9 @@ import { vatRateOf } from "./vat";
 import { withProductCommissionRule, resolveListingCommissionOnly } from "./product-commission";
 import { applyActualCommissionToProfit } from "./platform-financials";
 import { gecerliSiparisOrani } from "./order-commission";
-import { filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
+import { baremDesisi, filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
+import { findCommissionRule } from "./commission-calculator";
+import { donemliAyarlar } from "./donemli-oran";
 import {
   fiyatDesisi,
   iadeKargoTahmini,
@@ -153,6 +155,12 @@ export interface OrderProfitInput {
    * (`core/trendyol-gecikme.ts`). "Tazmin bedeli" olarak faturalanır, KDV indirimi yoktur.
    */
   penalty?: number | null;
+  /**
+   * İÇ KULLANIM (resolveOrderProfit): komisyonu hiçbir kaynaktan bulunamayan satırları 0
+   * komisyonla kâra kat. Yalnız pazaryerinin gerçek komisyon kaydı siparişin TAMAMINI
+   * düzeltebildiğinde kullanılır; çağıranlar geçmez.
+   */
+  bilinmeyenKomisyonSifir?: boolean;
 }
 
 export interface OrderProfitResult {
@@ -197,6 +205,12 @@ export interface OrderProfitResult {
   unmatchedQty: number;
   /** Maliyeti bilinmeyen satırların cirosu — kâra GİRMEDİ (UI uyarısı için). */
   unmatchedRevenue: number;
+  /**
+   * Komisyonu BİLİNMEYEN satır sayısı (Trendyol/Hepsiburada: ne siparişte oran, ne ilanda oran,
+   * ne de uyan bir kural var). Bu satırlar 0 komisyonla kâra katılmaz; sipariş kısmi sayılır
+   * (bilinmeyen ≠ sıfır — Berke'nin onayı, 23 Kas 2026). Gerçek komisyon kaydı geldiyse sıfırlanır.
+   */
+  commissionUnknownLines: number;
   totalQty: number;
   missingDesiLines: number;
   missingDesiQty: number;
@@ -225,9 +239,11 @@ function cezaTutari(v: number | null | undefined): number {
 }
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
-  const { platform, orderTotal, lines, commissionRules, cargoRules, expenseRules, settings } = input;
+  const { platform, orderTotal, lines, commissionRules, cargoRules, expenseRules } = input;
   // Kural seçimi siparişin KENDİ tarihine göre; geçilmediyse bugün (eski davranış).
   const kuralTarihi = input.orderedAt ?? new Date();
+  // KDV ve Shopify komisyonu da siparişin tarihindeki değerle (dönemli ayar; geçmiş yoksa aynı harita).
+  const settings = donemliAyarlar(input.settings, input.orderedAt ?? null);
   const vatRate = vatRateOf(settings);
   // Bir maliyetin içindeki KDV payı (indirilecek KDV) — kargo/gider için aynı formül.
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
@@ -261,6 +277,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   let unmatchedLines = 0;
   let unmatchedQty = 0;
   let unmatchedRevenue = 0;
+  let commissionUnknownLines = 0;
+  let commissionUnknownDesi = 0;
   let totalQty = 0;
   let lineRevenueGross = 0;
   let matchedRevenueGross = 0;
@@ -352,6 +370,22 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       siparisOrani != null
         ? { commissionRateOverride: siparisOrani }
         : resolveListingCommissionOnly(lst, settings);
+    const satirKurallari = withProductCommissionRule(p, commissionRules);
+    // KOMİSYON BİLİNMİYOR (Trendyol/Hepsiburada): siparişte, ilanda ve kurallarda hiçbir oran yok.
+    // Eskiden 0 sayılıp kâr şişiyordu; artık bu satır kâra katılmaz, sipariş kısmi olur. Desisi
+    // bilindiği için kargo hesabına yine girer. Ücretsiz (0 ₺) satırın komisyonu zaten 0'dır.
+    if (
+      !input.bilinmeyenKomisyonSifir &&
+      (platform === "trendyol" || platform === "hepsiburada") &&
+      unitPrice > 0 &&
+      commissionOverride.commissionRateOverride === undefined &&
+      commissionOverride.commissionFixedOverride === undefined &&
+      !findCommissionRule(satirKurallari, unitPrice, p.categoryName, kuralTarihi, platform)
+    ) {
+      commissionUnknownLines++;
+      commissionUnknownDesi += lineDesi * quantity;
+      continue;
+    }
     if (siparisOrani != null) orderRateLines++;
     const sim = simulatePrice({
       salePrice: unitPrice,
@@ -359,7 +393,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       packagingCost: unitPackaging,
       categoryName: p.categoryName,
       desi: lineDesi,
-      commissionRules: withProductCommissionRule(p, commissionRules),
+      commissionRules: satirKurallari,
+      // Kural seçimi siparişin tarihine ve pazaryerine göre (dönemli + platforma özel kurallar).
+      simulationDate: kuralTarihi,
+      commissionPlatform: platform,
       cargoRules: platCargo,
       expenseRules: perUnit, // YALNIZ yüzdesel — sabit gider siparişe bir kez
       vatRate,
@@ -429,6 +466,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       unmatchedLines,
       unmatchedQty,
       unmatchedRevenue,
+      commissionUnknownLines,
       totalQty,
       missingDesiLines,
       missingDesiQty,
@@ -446,6 +484,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   if (unmatchedQty > 0) {
     totalDesi += Math.ceil((totalDesi / matchedQty) * unmatchedQty);
   }
+  // Komisyonu bilinmeyen satırların desisi BİLİNİYOR → kutuya aynen girer.
+  totalDesi += commissionUnknownDesi;
 
   // Shopify gibi platformlarda müşteri tarafından ödenen kargo, satır fiyatlarına değil sipariş
   // toplamına girer. Tersine sipariş-geneli indirim de satır toplamını aşağı çekebilir. Farkı KDV
@@ -514,7 +554,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
    * Yuvarlama YUKARI değil, en yakına: kullanıcı "4,1 ise 4, 4,5 ise 5" dedi.
    * Sonuç 0'a düşerse (tek 0,1 desilik ürün) en az 1 sayılır — kargo bedava değildir.
    */
-  const baremDesi = Math.max(1, Math.round(totalDesi));
+  const baremDesi = baremDesisi(totalDesi);
 
   // KARGO — siparişe BİR KEZ. Tek ürünlü ve eksiksiz siparişte listing'e ELLE girilen bedel kazanır
   // (Ürünler ekranı da onu kullanıyor → iki ekran aynı rakamı gösterir).
@@ -522,6 +562,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     matchedLines === 1 &&
     matchedQty === 1 &&
     unmatchedLines === 0 &&
+    commissionUnknownLines === 0 &&
     soloCargo != null;
   // PAZARYERİ TARİFESİ (Trendyol / Hepsiburada) — siparişin tarihinde tarife varsa kural tablosunun
   // yerine geçer: fiyat; tutar bandı, desi, firma, hızlı teslimat ve kargoya verme süresine göre
@@ -626,13 +667,15 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     // `partial`ın anlamı korunuyor: "bazı SATIRLARIN maliyeti bilinmiyor". Kargo kuralının
     // bulunamaması ayrı bir eksiklik ve ayrı bayrakla taşınır — `partial`a bağlansaydı kargo
     // kuralı hiç tanımlanmamış bir platformdaki TÜM siparişler kısmi görünür, anlam bulanırdı.
-    partial: unmatchedLines > 0,
+    // Komisyonu bilinmeyen satır da kâra girmediği için kısmidir.
+    partial: unmatchedLines > 0 || commissionUnknownLines > 0,
     cargoRuleMissing,
     cargoDetail,
     matchedLines,
     unmatchedLines,
     unmatchedQty,
     unmatchedRevenue,
+    commissionUnknownLines,
     totalQty,
     missingDesiLines,
     missingDesiQty,
@@ -713,6 +756,12 @@ export interface ReturnLoss {
   /** Tarifeden hesaplandıysa nasıl (tahminde); yoksa null. */
   outboundDetail: KargoTahmini | null;
   returnDetail: KargoTahmini | null;
+  /**
+   * true = gidiş kargosu için ne tarife ne kargo kuralı ne de gerçek kayıt var → kargo 0 sayıldı,
+   * zarar olduğundan KÜÇÜK. Arayüz "kargo kuralı yok" uyarısı gösterir (sipariş kârındaki
+   * `cargoRuleMissing` ile aynı anlam).
+   */
+  cargoRuleMissing: boolean;
 }
 
 /**
@@ -728,8 +777,9 @@ export interface ReturnLoss {
  * Fatura kalemleri KDV'lidir → zarar indirilecek KDV düşülmüş tutardır (kâr hesabıyla aynı ölçü).
  */
 export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossActual | null): ReturnLoss {
-  const { platform, orderTotal, settings } = input;
+  const { platform, orderTotal } = input;
   const kuralTarihi = input.orderedAt ?? new Date();
+  const settings = donemliAyarlar(input.settings, input.orderedAt ?? null);
   const vatRate = vatRateOf(settings);
   const vatFactor = vatRate > 0 ? vatRate / (100 + vatRate) : 0;
   const tutar = Number.isFinite(orderTotal) ? orderTotal : 0;
@@ -749,6 +799,7 @@ export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossAc
 
   const gidisDetay = kargoTahmini(platform, tutar, desi, kuralTarihi, input.kargo);
   let gidisTahmini = 0;
+  let kuralBulundu = gidisDetay != null;
   if (gidisDetay) {
     gidisTahmini = resolveVatableCost(gidisDetay.fiyat, false, vatRate).gross;
   } else {
@@ -756,6 +807,7 @@ export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossAc
     for (const kategori of kategoriListesi) {
       const kural = findCargoRule(kurallar, tutar, kategori, desi, kuralTarihi);
       if (!kural) continue;
+      kuralBulundu = true;
       gidisTahmini = Math.max(gidisTahmini, resolveVatableCost(kural.cargoCost, kural.vatIncluded !== false, vatRate).gross);
     }
   }
@@ -790,6 +842,8 @@ export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossAc
     serviceFeeActual: hizmetGercek != null,
     outboundDetail: gidisGercek != null ? null : gidisDetay,
     returnDetail: donusGercek != null ? null : donusDetay,
+    // Gerçek gidiş kaydı varsa kural gerekmez; yoksa ve hiçbir kural/tarife uymadıysa eksik.
+    cargoRuleMissing: gidisGercek == null && !kuralBulundu,
   };
 }
 
@@ -818,9 +872,25 @@ export function resolveOrderProfit(
   input: OrderProfitInput,
   options: ResolveOrderProfitOptions = {}
 ): ResolvedOrderProfit {
-  const base = computeOrderProfit(input);
-  const profitPartial = base.partial || Boolean(options.forceProfitPartial);
   const financial = options.financial ?? null;
+  let base = computeOrderProfit(input);
+  // Komisyonu bilinmeyen satır var ama pazaryerinin GERÇEK komisyon kaydı geldiyse: kayıt siparişin
+  // tamamının komisyonudur → satırlar 0 komisyonla katılıp gerçek tutarla düzeltilir (eski davranış).
+  // Kayıt uygulanamıyorsa (ciro tutmuyor, maliyet eksik, iptal) satırlar bilinmiyor olarak kalır.
+  if (base.commissionUnknownLines > 0 && financial != null && options.statusKind !== "cancelled") {
+    const tam = computeOrderProfit({ ...input, bilinmeyenKomisyonSifir: true });
+    const deneme = applyActualCommissionToProfit({
+      profit: tam.profit,
+      profitPartial: tam.partial || Boolean(options.forceProfitPartial),
+      orderRevenue: input.orderTotal,
+      estimatedCommission: tam.estimatedCommission,
+      actualCommission: financial.actualCommission,
+      settlementRevenue: financial.settlementRevenue,
+      vatRate: vatRateOf(donemliAyarlar(input.settings, input.orderedAt ?? null)),
+    });
+    if (deneme.applied) base = tam;
+  }
+  const profitPartial = base.partial || Boolean(options.forceProfitPartial);
 
   // Settlement yok veya sipariş iptal → kural-tabanlı kâr aynen kalır.
   if (financial == null || options.statusKind === "cancelled") {
@@ -836,7 +906,7 @@ export function resolveOrderProfit(
     };
   }
 
-  const vatRate = vatRateOf(input.settings);
+  const vatRate = vatRateOf(donemliAyarlar(input.settings, input.orderedAt ?? null));
   const applied = applyActualCommissionToProfit({
     profit: base.profit,
     profitPartial,

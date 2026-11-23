@@ -4,11 +4,19 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { batchWrite } from "@/lib/libsql-batch";
-import { ensureRuntimeSchema } from "@/lib/runtime-schema";
+import { ensureRuntimeSchema, KARGO_PLATFORM_GOCU_ANAHTARI } from "@/lib/runtime-schema";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { bustCache } from "@/lib/route-cache";
 import { validateManualOrderCapturedFinance } from "@/lib/manual-orders";
 import { toDbDate } from "@/lib/sqlite-date";
+import {
+  backupColumns,
+  backupVersionInfo,
+  backupVersionVerdict,
+  type BackupModel,
+  YEDEK_DAHA_YENI_HATASI,
+  YEDEK_ESKI_UYARISI,
+} from "@/lib/backup-payload";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +25,23 @@ const finite = z.number().finite();
 const integer = finite.int();
 const sqliteInt = integer.min(-2_147_483_648).max(2_147_483_647);
 const nullableString = z.string().nullable().optional();
+const nullableFinite = finite.nullable().optional();
+const nullableInt = sqliteInt.nullable().optional();
 const optionalDate = z.coerce.date().optional();
 const nullableDate = z.coerce.date().nullable().optional();
 
-const VariantGroupSchema = z.object({
+/**
+ * Tablo şeması. `.passthrough()`: burada adı geçmeyen alanlar ATILMAZ — şemaya sonradan eklenen
+ * bir kolon, geri yüklemede Prisma alan listesi üzerinden (`backupColumns`) kendiliğinden yazılır.
+ * Yine de bilinen her kolon burada TİPİYLE durur (doğrulama + tarih çevirisi).
+ *
+ * ⚠️ TARİH kolonu burada `z.coerce.date()` ile TANIMLANMALI. Tanımlanmayan tarih düz metin olarak
+ * yazılır ve karışık tarih biçimi doğar (Prisma'nın `gte` filtresi o satırları sessizce eler).
+ * `yedek-gidis-donus.test.ts` her tarih kolonunun depolama biçimini denetler, unutulursa kırılır.
+ */
+const table = <T extends z.ZodRawShape>(shape: T) => z.object(shape).passthrough();
+
+const VariantGroupSchema = table({
   id,
   name: z.string(),
   shareModels: z.boolean().optional(),
@@ -28,7 +49,7 @@ const VariantGroupSchema = z.object({
   updatedAt: optionalDate,
 });
 
-const ProductSchema = z.object({
+const ProductSchema = table({
   id,
   barcode: id,
   sku: z.string().optional(),
@@ -36,10 +57,10 @@ const ProductSchema = z.object({
   alias: nullableString,
   categoryName: z.string().optional(),
   currentSalePrice: finite,
-  listPrice: finite.nullable().optional(),
+  listPrice: nullableFinite,
   stock: integer.optional(),
-  desi: finite.nullable().optional(),
-  weight: finite.nullable().optional(),
+  desi: nullableFinite,
+  weight: nullableFinite,
   imageUrl: nullableString,
   imageManual: z.boolean().optional(),
   isActive: z.boolean().optional(),
@@ -50,43 +71,44 @@ const ProductSchema = z.object({
   productMainId: nullableString,
   variantGroupId: nullableString,
   variantLabel: nullableString,
-  commissionRate: finite.nullable().optional(),
+  commissionRate: nullableFinite,
   commissionSource: nullableString,
   commissionUpdatedAt: nullableDate,
   createdAt: optionalDate,
   updatedAt: optionalDate,
 });
 
-const ProductCostSchema = z.object({
+const ProductCostSchema = table({
   id,
   productId: id,
   costMode: z.string().optional(),
+  // Kaldırılan maliyet şablonu özelliğinin kalıntısı: eski yedeklerde durur, içe aktarılmaz.
   templateId: nullableString,
   filamentTypeId: nullableString,
-  filamentWeight: finite.nullable().optional(),
+  filamentWeight: nullableFinite,
   ekFilamentlerJson: nullableString,
-  printTimeHours: finite.nullable().optional(),
-  wasteRate: finite.nullable().optional(),
-  packagingPoset: finite.nullable().optional(),
-  packagingNaylon: finite.nullable().optional(),
-  packagingBant: finite.nullable().optional(),
-  packagingKart: finite.nullable().optional(),
+  printTimeHours: nullableFinite,
+  wasteRate: nullableFinite,
+  packagingPoset: nullableFinite,
+  packagingNaylon: nullableFinite,
+  packagingBant: nullableFinite,
+  packagingKart: nullableFinite,
   packagingOptionId: nullableString,
   nylonLevel: nullableString,
   tapeUsed: z.boolean().nullable().optional(),
-  manualCost: finite.nullable().optional(),
-  materialWeight: finite.nullable().optional(),
-  materialCost: finite.nullable().optional(),
-  electricityCost: finite.nullable().optional(),
-  machineWearCost: finite.nullable().optional(),
-  laborCost: finite.nullable().optional(),
-  packagingCost: finite.nullable().optional(),
-  otherCost: finite.nullable().optional(),
-  totalCost: finite.nullable().optional(),
+  manualCost: nullableFinite,
+  materialWeight: nullableFinite,
+  materialCost: nullableFinite,
+  electricityCost: nullableFinite,
+  machineWearCost: nullableFinite,
+  laborCost: nullableFinite,
+  packagingCost: nullableFinite,
+  otherCost: nullableFinite,
+  totalCost: nullableFinite,
   updatedAt: optionalDate,
 });
 
-const ListingSchema = z.object({
+const ListingSchema = table({
   id,
   productId: id,
   platform: id,
@@ -94,25 +116,27 @@ const ListingSchema = z.object({
   externalSku: nullableString,
   barcode: nullableString,
   salePrice: finite,
-  listPrice: finite.nullable().optional(),
+  listPrice: nullableFinite,
   stock: integer.optional(),
-  commissionRate: finite.nullable().optional(),
-  commissionFixed: finite.nullable().optional(),
-  cargoCost: finite.nullable().optional(),
+  commissionRate: nullableFinite,
+  commissionFixed: nullableFinite,
+  cargoCost: nullableFinite,
+  dispatchDays: nullableInt,
+  vatRate: nullableFinite,
   isActive: z.boolean().optional(),
   lastSyncedAt: nullableDate,
   createdAt: optionalDate,
   updatedAt: optionalDate,
 });
 
-const FilamentTypeSchema = z.object({
+const FilamentTypeSchema = table({
   id,
   name: z.string(),
   costPerGram: finite,
   isActive: z.boolean().optional(),
 });
 
-const FilamentSpoolSchema = z.object({
+const FilamentSpoolSchema = table({
   id,
   name: z.string(),
   material: z.string().optional(),
@@ -121,18 +145,17 @@ const FilamentSpoolSchema = z.object({
   brand: nullableString,
   totalGrams: finite.optional(),
   remainingGrams: finite.optional(),
-  spoolCost: finite.nullable().optional(),
+  spoolCost: nullableFinite,
   reorderGrams: finite.optional(),
   vendorUrl: nullableString,
-  // v37: envanter gruplaması + kapalı/açık durumu. Opsiyonel → eski (v3) yedekler aynen yüklenir.
   colorKey: nullableString,
-  openedAt: optionalDate.nullable(),
+  openedAt: nullableDate,
   isActive: z.boolean().optional(),
   createdAt: optionalDate,
   updatedAt: optionalDate,
 });
 
-const FilamentUsageSchema = z.object({
+const FilamentUsageSchema = table({
   id,
   spoolId: id,
   productId: nullableString,
@@ -147,7 +170,7 @@ const AppSettingSchema = z.object({
   value: z.string(),
 });
 
-const CommissionRuleSchema = z.object({
+const CommissionRuleSchema = table({
   id,
   name: z.string(),
   categoryName: nullableString,
@@ -159,9 +182,10 @@ const CommissionRuleSchema = z.object({
   validTo: nullableDate,
   priority: integer.optional(),
   isActive: z.boolean().optional(),
+  platform: nullableString,
 });
 
-const CargoRuleSchema = z.object({
+const CargoRuleSchema = table({
   id,
   name: z.string(),
   platform: nullableString,
@@ -179,7 +203,17 @@ const CargoRuleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const ExpenseRuleSchema = z.object({
+const AdBudgetSchema = table({
+  id,
+  platform: id,
+  dailyAmount: finite,
+  validFrom: z.coerce.date(),
+  validTo: nullableDate,
+  isActive: z.boolean().optional(),
+  createdAt: optionalDate,
+});
+
+const ExpenseRuleSchema = table({
   id,
   name: z.string(),
   platform: nullableString,
@@ -192,37 +226,80 @@ const ExpenseRuleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const ActualExpenseSchema = z.object({
+const ActualExpenseSchema = table({
   id,
   name: z.string().trim().min(1),
   category: nullableString,
   amountKurus: integer.positive().max(2_147_483_647),
   paidAt: z.coerce.date(),
   note: nullableString,
+  recurringId: nullableString,
+  periodKey: nullableString,
+  vatRate: nullableFinite,
   createdAt: optionalDate,
   updatedAt: optionalDate,
 });
 
-const OrderFinanceSnapshotSchema = z.object({
+const RecurringExpenseSchema = table({
+  id,
+  name: z.string().trim().min(1),
+  category: nullableString,
+  amountKurus: sqliteInt,
+  dayOfMonth: integer.min(1).max(31),
+  startsAt: z.coerce.date(),
+  endsAt: nullableDate,
+  isActive: z.boolean().optional(),
+  note: nullableString,
+  vatRate: nullableFinite,
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
+});
+
+const RecurringExpenseSkipSchema = table({
+  recurringId: id,
+  periodKey: z.string().trim().min(1),
+  createdAt: optionalDate,
+});
+
+const ExpenseCategorySchema = table({
+  id,
+  name: z.string().trim().min(1),
+  color: nullableString,
+  sortOrder: sqliteInt.optional(),
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
+});
+
+const OrderFinanceSnapshotSchema = table({
   id,
   platform: id,
   externalOrderId: id,
   orderNumber: z.string(),
   orderedAt: z.coerce.date(),
   revenueKurus: integer.nonnegative().max(2_147_483_647),
-  profitKurus: sqliteInt.nullable().optional(),
+  profitKurus: nullableInt,
   profitPartial: z.boolean().optional(),
   statusKind: z.string(),
   currency: z.string().optional(),
   syncedAt: optionalDate,
   calculationVersion: integer.positive().optional(),
   profitSource: z.enum(["calculated", "platform"]).optional(),
-  estimatedCommissionKurus: sqliteInt.nullable().optional(),
-  actualCommissionKurus: sqliteInt.nullable().optional(),
+  estimatedCommissionKurus: nullableInt,
+  actualCommissionKurus: nullableInt,
+  outputVatKurus: nullableInt,
+  inputVatCreditKurus: nullableInt,
+  microExportCountry: nullableString,
+  actualFeesKurus: nullableInt,
+  cargoKurus: nullableInt,
+  returnLossKurus: nullableInt,
+  returnLossVatKurus: nullableInt,
+  cargoContext: nullableString,
+  penaltyKurus: nullableInt,
+  delayInfo: nullableString,
 });
 
-/** Ürün bazlı satış geçmişi — yedeğe bu oturumda eklendi, eski yedeklerde YOK (opsiyonel). */
-const OrderItemSnapshotSchema = z.object({
+/** Ürün bazlı satış geçmişi — eski yedeklerde YOK (opsiyonel). */
+const OrderItemSnapshotSchema = table({
   id,
   platform: id,
   externalOrderId: id,
@@ -235,29 +312,37 @@ const OrderItemSnapshotSchema = z.object({
   lineRevenueKurus: sqliteInt,
   statusKind: z.string(),
   currency: z.string().optional(),
+  syncedAt: optionalDate,
+  commissionRate: nullableFinite,
+  vatRate: nullableFinite,
+  dispatchDays: nullableInt,
 });
 
-/** Siparişe özel maliyet — bu sürümde eklendi, eski yedeklerde YOK (opsiyonel). */
-const OrderLineCostSchema = z.object({
+/** Siparişe özel maliyet — eski yedeklerde YOK (opsiyonel). */
+const OrderLineCostSchema = table({
   id,
   platform: id,
   externalOrderId: id,
   lineKey: z.string().min(1),
   lineName: z.string().optional(),
   costJson: z.string(),
-  desi: finite.nullable().optional(),
+  desi: nullableFinite,
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
 });
 
-/** Elle ürün bağı ("Ürüne bağla") — bu sürümde eklendi, eski yedeklerde YOK (opsiyonel). */
-const OrderLineLinkSchema = z.object({
+/** Elle ürün bağı ("Ürüne bağla") — eski yedeklerde YOK (opsiyonel). */
+const OrderLineLinkSchema = table({
   id,
   platform: id,
   lineKey: z.string().min(1),
   lineName: z.string().optional(),
   productId: id,
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
 });
 
-const PlatformOrderFinancialSchema = z.object({
+const PlatformOrderFinancialSchema = table({
   id,
   platform: id,
   externalOrderId: id,
@@ -266,52 +351,49 @@ const PlatformOrderFinancialSchema = z.object({
   commissionKurus: integer.nonnegative().max(2_147_483_647),
   sellerRevenueKurus: integer.nonnegative().max(2_147_483_647),
   transactionCount: integer.nonnegative().optional(),
-  sourceUpdatedAt: optionalDate,
+  sourceUpdatedAt: nullableDate,
   syncedAt: optionalDate,
+  serviceFeeKurus: nullableInt,
+  paymentFeeKurus: nullableInt,
+  cargoKurus: nullableInt,
+  stoppageKurus: nullableInt,
+  platformDiscountKurus: nullableInt,
+  returnCargoKurus: nullableInt,
+  chargedDesi: nullableFinite,
+  parcelNo: nullableString,
 });
 
-const ManualOrderSchema = z
-  .object({
-    id,
-    orderNumber: z.string().trim().min(1).max(80),
-    mode: z.enum(["catalog", "freeform"]),
-    orderedAt: z.coerce.date(),
-    statusKind: z.enum([
-      "pending",
-      "processing",
-      "shipped",
-      "delivered",
-      "cancelled",
-    ]),
-    customerName: z.string().max(160).nullable().optional(),
-    currency: z.literal("TRY"),
-    revenueKurus: integer.nonnegative().max(2_147_483_647),
-    netRevenueKurus: integer.nonnegative().max(2_147_483_647),
-    totalCostKurus: integer.nonnegative().max(2_147_483_647),
-    inputVatCreditKurus: integer.nonnegative().max(2_147_483_647),
-    profitKurus: sqliteInt.nullable(),
-    profitPartial: z.boolean(),
-    itemsJson: z.string().min(1).max(5_000_000),
-    breakdownJson: z.string().min(1).max(5_000_000),
-    calculationVersion: integer.positive(),
-    note: z.string().max(1_000).nullable().optional(),
-    createdAt: optionalDate,
-    updatedAt: optionalDate,
-  })
-  .superRefine((order, ctx) => {
-    try {
-      validateManualOrderCapturedFinance(order);
-    } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Manuel sipariş hesap kaydı geçersiz.",
-        path: ["breakdownJson"],
-      });
-    }
-  });
+const ManualOrderSchema = table({
+  id,
+  orderNumber: z.string().trim().min(1).max(80),
+  mode: z.enum(["catalog", "freeform"]),
+  orderedAt: z.coerce.date(),
+  statusKind: z.enum(["pending", "processing", "shipped", "delivered", "cancelled"]),
+  customerName: z.string().max(160).nullable().optional(),
+  currency: z.literal("TRY"),
+  revenueKurus: integer.nonnegative().max(2_147_483_647),
+  netRevenueKurus: integer.nonnegative().max(2_147_483_647),
+  totalCostKurus: integer.nonnegative().max(2_147_483_647),
+  inputVatCreditKurus: integer.nonnegative().max(2_147_483_647),
+  profitKurus: sqliteInt.nullable(),
+  profitPartial: z.boolean(),
+  itemsJson: z.string().min(1).max(5_000_000),
+  breakdownJson: z.string().min(1).max(5_000_000),
+  calculationVersion: integer.positive(),
+  note: z.string().max(1_000).nullable().optional(),
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
+}).superRefine((order, ctx) => {
+  try {
+    validateManualOrderCapturedFinance(order);
+  } catch (error) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: error instanceof Error ? error.message : "Manuel sipariş hesap kaydı geçersiz.",
+      path: ["breakdownJson"],
+    });
+  }
+});
 
 const CostTemplateSchema = z.object({
   id,
@@ -326,7 +408,7 @@ const CostTemplateSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const PriceHistorySchema = z.object({
+const PriceHistorySchema = table({
   id,
   productId: id,
   oldPrice: finite,
@@ -336,7 +418,7 @@ const PriceHistorySchema = z.object({
   note: nullableString,
 });
 
-const PrinterConfigSchema = z.object({
+const PrinterConfigSchema = table({
   id,
   name: z.string(),
   brand: z.string(),
@@ -353,7 +435,7 @@ const PrinterConfigSchema = z.object({
   updatedAt: optionalDate,
 });
 
-const PrintFileProductSchema = z.object({
+const PrintFileProductSchema = table({
   id,
   printerConfigId: id,
   filename: id,
@@ -362,7 +444,7 @@ const PrintFileProductSchema = z.object({
   updatedAt: optionalDate,
 });
 
-const ProductModelFileSchema = z.object({
+const ProductModelFileSchema = table({
   id,
   productId: id,
   printerConfigId: id,
@@ -372,13 +454,17 @@ const ProductModelFileSchema = z.object({
   r2Key: nullableString,
   fileType: z.string(),
   sizeBytes: integer.optional(),
-  gramaj: finite.nullable().optional(),
+  gramaj: nullableFinite,
   estPrintMin: integer.nullable().optional(),
   colorsJson: nullableString,
   sliced: z.boolean().nullable().optional(),
   plateJson: nullableString,
   thumbnail: nullableString,
   contentMd5: nullableString,
+  meshR2Key: nullableString,
+  meshName: nullableString,
+  meshType: nullableString,
+  meshSizeBytes: nullableInt,
   sortOrder: integer.optional(),
   createdAt: optionalDate,
   updatedAt: optionalDate,
@@ -388,6 +474,7 @@ const ProductModelFileSchema = z.object({
 
 const ImportSchema = z.object({
   version: z.number().int().positive().optional(),
+  schemaVersion: z.number().int().nonnegative().nullable().optional(),
   exportedAt: z.string().optional(),
   appVersion: z.string().optional(),
   metadata: z
@@ -406,16 +493,18 @@ const ImportSchema = z.object({
   appSettings: z.array(AppSettingSchema).optional(),
   commissionRules: z.array(CommissionRuleSchema).optional(),
   cargoRules: z.array(CargoRuleSchema).optional(),
+  // Biçim 4 ile eklenen tablolar — eski yedeklerde YOK; yokken mevcut kayıtlara DOKUNULMAZ.
+  adBudgets: z.array(AdBudgetSchema).optional().default([]),
   expenseRules: z.array(ExpenseRuleSchema).optional(),
   actualExpenses: z.array(ActualExpenseSchema).optional().default([]),
+  recurringExpenses: z.array(RecurringExpenseSchema).optional().default([]),
+  recurringExpenseSkips: z.array(RecurringExpenseSkipSchema).optional().default([]),
+  expenseCategories: z.array(ExpenseCategorySchema).optional().default([]),
   orderFinanceSnapshots: z.array(OrderFinanceSnapshotSchema).optional().default([]),
   orderItemSnapshots: z.array(OrderItemSnapshotSchema).optional().default([]),
   orderLineCosts: z.array(OrderLineCostSchema).optional().default([]),
   orderLineLinks: z.array(OrderLineLinkSchema).optional().default([]),
-  platformOrderFinancials: z
-    .array(PlatformOrderFinancialSchema)
-    .optional()
-    .default([]),
+  platformOrderFinancials: z.array(PlatformOrderFinancialSchema).optional().default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
   // ESKİ YEDEKLER İÇİN TOLERANS: maliyet şablonu özelliği kaldırıldı (arayüzü hiç yoktu).
   // Alan kabul edilir ama İÇE AKTARILMAZ — eski bir yedek yüklenirken hata vermesin diye durur.
@@ -429,13 +518,19 @@ const ImportSchema = z.object({
 type ImportPayload = z.infer<typeof ImportSchema>;
 
 const CUSTOM_PRINT_PRODUCT_ID = "__custom__";
-/** Migration kilidi yedekten geri gelirse açılış migration'ını 3 dakika bloklar → asla yazma. */
 /**
  * Geri yüklenmeyen İÇ DURUM anahtarları. `schemaVersion` başka sürümün yedeğinden gelirse açılış
  * göçü "zaten güncel" sanıp DDL'i atlıyor (no such column); `orderNotifyBaseline` yeni veritabanında
  * son günlerin siparişlerini telefona "yeni sipariş" diye düşürüyordu (denetim, 23 Kas 2026).
+ * Migration kilidi yedekten geri gelirse açılış göçünü 3 dakika bloklar. Kargo platform göçü
+ * bayrağı geri gelirse eski yedekten dönen kargo kuralları hiç göç ettirilmez.
  */
-const SKIPPED_SETTING_KEYS = new Set(["schemaMigrationLock", "schemaVersion", "orderNotifyBaseline"]);
+const SKIPPED_SETTING_KEYS = new Set([
+  "schemaMigrationLock",
+  "schemaVersion",
+  "orderNotifyBaseline",
+  KARGO_PLATFORM_GOCU_ANAHTARI,
+]);
 /** Tek libSQL isteğine konacak ifade sayısı (batch içinde de 500'lük dilim var). */
 const CHUNK = 500;
 
@@ -493,18 +588,42 @@ function upsert(table: string, conflict: string[], insert: Row, update: Row): St
 
 function updateById(table: string, keyColumn: string, keyValue: string, fields: Row): Stmt {
   const cols = Object.keys(fields);
+  // Yedekte güncellenecek alan kalmadıysa satıra dokunmayan geçerli bir ifade üret.
+  if (cols.length === 0) {
+    return {
+      sql: `UPDATE "${table}" SET "${keyColumn}" = "${keyColumn}" WHERE "${keyColumn}" = ?`,
+      args: [keyValue],
+    };
+  }
   return {
     sql: `UPDATE "${table}" SET ${cols.map((c) => `"${c}" = ?`).join(", ")} WHERE "${keyColumn}" = ?`,
     args: [...cols.map((c) => toArg(fields[c])), keyValue],
   };
 }
 
-/** Yalnız tanımlı alanları hedefe kopyala (yedekte olmayan alan mevcut değeri EZMESİN). */
-function putDefined(target: Row, source: Row, keys: string[]): Row {
-  for (const key of keys) {
-    if (source[key] !== undefined) target[key] = source[key];
+/**
+ * Yedek satırından modelin kolonlarını kopyalar (`putDefined` deseni, HER tabloda).
+ *
+ * Kolon listesi Prisma şemasından gelir (`backupColumns`), yani şemaya eklenen yeni kolon burada
+ * kendiliğinden taşınır. YEDEKTE ALAN YOKSA (eski ya da yabancı yedek) hedefe KONMAZ:
+ * güncellemede mevcut değer korunur, yeni satırda şemanın varsayılanı kullanılır. Alan açıkça
+ * `null` ise null yazılır — alan o yedeğin sürümünde vardı ve gerçekten boştu.
+ *
+ * NEDEN (23 Kas 2026 denetimi, madde 20): tablolar `?? null` / `?? varsayılan` ile yazılıyordu;
+ * eski bir yedek ek filamentleri siliyor, siparişin hesap sürümünü 1'e, kâr kaynağını
+ * "calculated"a döndürüyor, gerçek komisyonu siliyor, makaranın kalan gramını 1000 yapıyordu.
+ */
+function columnsFrom(model: BackupModel, source: Row, skip: readonly string[] = []): Row {
+  const out: Row = {};
+  for (const column of backupColumns(model)) {
+    if (skip.includes(column)) continue;
+    const value = source[column];
+    if (value === undefined) continue;
+    // Kolon değeri düz olmalı; nesne/dizi taşıyan (bozuk ya da yabancı) alan yazılmaz.
+    if (value !== null && typeof value === "object" && !(value instanceof Date)) continue;
+    out[column] = value;
   }
-  return target;
+  return out;
 }
 
 interface ImportStats {
@@ -518,8 +637,12 @@ interface ImportStats {
   appSettings: number;
   commissionRules: number;
   cargoRules: number;
+  adBudgets: number;
   expenseRules: number;
   actualExpenses: number;
+  recurringExpenses: number;
+  recurringExpenseSkips: number;
+  expenseCategories: number;
   orderFinanceSnapshots: number;
   orderFinanceSnapshotsSkipped: number;
   orderItemSnapshots: number;
@@ -546,18 +669,32 @@ async function readRows<T extends Row>(sql: string): Promise<T[]> {
   return (await prisma.$queryRawUnsafe<T[]>(sql)) ?? [];
 }
 
+/** Bu veritabanının şema damgası (açılış göçü yazar); okunamazsa null → şema karşılaştırması atlanır. */
+async function readAppSchemaVersion(): Promise<number | null> {
+  try {
+    const rows = await readRows<{ value: unknown }>(
+      `SELECT value FROM AppSetting WHERE key = 'schemaVersion'`
+    );
+    const value = Number(rows[0]?.value);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Yedeği geri yükler. Tek dev transaction YOK: tablolar bağımlılık sırasına göre işlenir,
  * yazımlar 500'lük gruplar hâlinde tek libSQL isteğine toplanır (uzak modda her ifade ~96ms
  * ve tüm uygulama boyunca sıralı olduğundan satır-satır yazım dakikalar sürüp zaman aşımına
  * düşüyordu). Referansı bulunamayan satır hata vermez; atlanır ve sayılır.
  */
-async function runImport(data: ImportPayload, emit: Emit) {
+async function runImport(data: ImportPayload, emit: Emit, options: { oldBackup: boolean }) {
   const localModelFiles = (data.productModelFiles ?? []).filter((file) => !file.r2Key);
   const legacyManualSnapshots = data.orderFinanceSnapshots.filter(
     (snapshot) => snapshot.platform === "manual"
   );
   const warnings = [...new Set(data.metadata?.warnings ?? [])];
+  if (options.oldBackup) warnings.unshift(YEDEK_ESKI_UYARISI);
   if (localModelFiles.length > 0) {
     warnings.push(
       `${localModelFiles.length} yerel model kaydı geri yüklenmedi: JSON yedeği fiziksel dosya baytlarını içermez.`
@@ -580,8 +717,12 @@ async function runImport(data: ImportPayload, emit: Emit) {
     appSettings: 0,
     commissionRules: 0,
     cargoRules: 0,
+    adBudgets: 0,
     expenseRules: 0,
     actualExpenses: 0,
+    recurringExpenses: 0,
+    recurringExpenseSkips: 0,
+    expenseCategories: 0,
     orderFinanceSnapshots: 0,
     orderFinanceSnapshotsSkipped: legacyManualSnapshots.length,
     orderItemSnapshots: 0,
@@ -600,6 +741,11 @@ async function runImport(data: ImportPayload, emit: Emit) {
   /** Eski bağlantısı kurulamadığı için bağsız geri yüklenen satırlar. */
   let droppedLinks = 0;
   const stamp = new Date();
+  /** Güncellemede @updatedAt kolonu: yedekteki değer, yoksa şimdi (Prisma da her güncellemede damgalar). */
+  const touched = (update: Row, source: Row, column = "updatedAt"): Row => {
+    update[column] = source[column] ?? stamp;
+    return update;
+  };
 
   // ── Eşleme haritaları: gereken her anahtar TEK sorguyla okunur ────────────
   const products = data.products ?? [];
@@ -619,7 +765,10 @@ async function runImport(data: ImportPayload, emit: Emit) {
     priceHistory.length > 0 ||
     filamentUsages.length > 0 ||
     printFileProducts.length > 0 ||
-    modelFiles.length > 0;
+    modelFiles.length > 0 ||
+    data.orderItemSnapshots.length > 0 ||
+    data.orderLineCosts.length > 0 ||
+    data.orderLineLinks.length > 0;
 
   const barcodeToProductId = new Map<string, string>();
   const productIds = new Set<string>();
@@ -683,8 +832,8 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Maliyet ayarları",
     statKey: "filamentTypes",
     stmts: (data.filamentTypes ?? []).map((f) => {
-      const fields = { name: f.name, costPerGram: f.costPerGram, isActive: f.isActive ?? true };
-      return upsert("FilamentType", ["id"], { id: f.id, ...fields }, fields);
+      const update = columnsFrom("FilamentType", f, ["id"]);
+      return upsert("FilamentType", ["id"], { id: f.id, isActive: true, ...update }, update);
     }),
   });
   stats.filamentTypes = jobs[jobs.length - 1].stmts.length;
@@ -698,19 +847,21 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Kurallar",
     statKey: "commissionRules",
     stmts: (data.commissionRules ?? []).map((rule) => {
-      const fields = {
-        name: rule.name,
-        categoryName: rule.categoryName ?? null,
-        minPrice: rule.minPrice ?? 0,
-        maxPrice: rule.maxPrice ?? 999_999,
-        commissionRate: rule.commissionRate,
-        fixedCommission: rule.fixedCommission ?? 0,
-        validFrom: rule.validFrom ?? null,
-        validTo: rule.validTo ?? null,
-        priority: rule.priority ?? 10,
-        isActive: rule.isActive ?? true,
-      };
-      return upsert("CommissionRule", ["id"], { id: rule.id, ...fields }, fields);
+      const update = columnsFrom("CommissionRule", rule, ["id"]);
+      return upsert(
+        "CommissionRule",
+        ["id"],
+        {
+          id: rule.id,
+          minPrice: 0,
+          maxPrice: 999_999,
+          fixedCommission: 0,
+          priority: 10,
+          isActive: true,
+          ...update,
+        },
+        update
+      );
     }),
   });
   stats.commissionRules = jobs[jobs.length - 1].stmts.length;
@@ -719,74 +870,131 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Kurallar",
     statKey: "cargoRules",
     stmts: (data.cargoRules ?? []).map((rule) => {
-      const fields = {
-        name: rule.name,
-        platform: rule.platform ?? null,
-        cargoProvider: rule.cargoProvider ?? null,
-        categoryName: rule.categoryName ?? null,
-        minPrice: rule.minPrice ?? 0,
-        maxPrice: rule.maxPrice ?? 999_999,
-        minDesi: rule.minDesi ?? 0,
-        maxDesi: rule.maxDesi ?? 999,
-        cargoCost: rule.cargoCost,
-        vatIncluded:
-          rule.vatIncluded ??
-          !(
+      const update = columnsFrom("CargoRule", rule, ["id"]);
+      return upsert(
+        "CargoRule",
+        ["id"],
+        {
+          id: rule.id,
+          minPrice: 0,
+          maxPrice: 999_999,
+          minDesi: 0,
+          maxDesi: 999,
+          // Yalnız YENİ kayıtta tahmin edilir (eski yedekte alan yok); mevcut kuralın değeri korunur.
+          vatIncluded: !(
             rule.cargoProvider?.toUpperCase().includes("TEX") ||
             rule.name.toUpperCase().includes("TEX")
           ),
-        validFrom: rule.validFrom ?? null,
-        validTo: rule.validTo ?? null,
-        priority: rule.priority ?? 10,
-        isActive: rule.isActive ?? true,
-      };
-      return upsert("CargoRule", ["id"], { id: rule.id, ...fields }, fields);
+          priority: 10,
+          isActive: true,
+          ...update,
+        },
+        update
+      );
     }),
   });
   stats.cargoRules = jobs[jobs.length - 1].stmts.length;
 
   jobs.push({
+    label: "Reklam bütçesi",
+    statKey: "adBudgets",
+    stmts: data.adBudgets.map((budget) => {
+      const update = columnsFrom("AdBudget", budget, ["id"]);
+      return upsert(
+        "AdBudget",
+        ["id"],
+        { id: budget.id, isActive: true, createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.adBudgets = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
     label: "Kurallar",
     statKey: "expenseRules",
     stmts: (data.expenseRules ?? []).map((rule) => {
-      const fields = {
-        name: rule.name,
-        platform: rule.platform ?? null,
-        type: rule.type,
-        value: rule.value,
-        categoryName: rule.categoryName ?? null,
-        minPrice: rule.minPrice ?? 0,
-        maxPrice: rule.maxPrice ?? 999_999,
-        priority: rule.priority ?? 10,
-        isActive: rule.isActive ?? true,
-      };
-      return upsert("ExpenseRule", ["id"], { id: rule.id, ...fields }, fields);
+      const update = columnsFrom("ExpenseRule", rule, ["id"]);
+      return upsert(
+        "ExpenseRule",
+        ["id"],
+        { id: rule.id, minPrice: 0, maxPrice: 999_999, priority: 10, isActive: true, ...update },
+        update
+      );
     }),
   });
   stats.expenseRules = jobs[jobs.length - 1].stmts.length;
 
+  // ── Giderler ──────────────────────────────────────────────────────────────
+  // Kategoriler giderlere ADIYLA bağlı (ad tekil) → aynı adlı kategori varsa o kayıt güncellenir.
+  const categoryIdByName = new Map<string, string>();
+  if (data.expenseCategories.length) {
+    for (const row of await readRows<{ id: string; name: string }>(
+      `SELECT id, name FROM ExpenseCategory`
+    )) {
+      categoryIdByName.set(row.name, row.id);
+    }
+  }
+  jobs.push({
+    label: "Giderler",
+    statKey: "expenseCategories",
+    stmts: data.expenseCategories.map((category) => {
+      const update = touched(columnsFrom("ExpenseCategory", category, ["id"]), category);
+      const existingId = categoryIdByName.get(category.name);
+      if (existingId) return updateById("ExpenseCategory", "id", existingId, update);
+      categoryIdByName.set(category.name, category.id);
+      return upsert(
+        "ExpenseCategory",
+        ["id"],
+        { id: category.id, sortOrder: 0, createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.expenseCategories = jobs[jobs.length - 1].stmts.length;
+
+  jobs.push({
+    label: "Giderler",
+    statKey: "recurringExpenses",
+    stmts: data.recurringExpenses.map((rule) => {
+      const update = touched(columnsFrom("RecurringExpense", rule, ["id"]), rule);
+      return upsert(
+        "RecurringExpense",
+        ["id"],
+        { id: rule.id, isActive: true, createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.recurringExpenses = jobs[jobs.length - 1].stmts.length;
+
+  // Silinen otomatik gider dönemleri: geri gelmezse sabit gider o dönemi bir sonraki açılışta yeniden açar.
+  jobs.push({
+    label: "Giderler",
+    statKey: "recurringExpenseSkips",
+    stmts: data.recurringExpenseSkips.map((skip) => {
+      const update = columnsFrom("RecurringExpenseSkip", skip, ["recurringId", "periodKey"]);
+      return upsert(
+        "RecurringExpenseSkip",
+        ["recurringId", "periodKey"],
+        { recurringId: skip.recurringId, periodKey: skip.periodKey, createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.recurringExpenseSkips = jobs[jobs.length - 1].stmts.length;
+
+  // Aynı sabit giderin aynı dönemi hedefte BAŞKA kimlikle zaten varsa tekil indeks çakışır ve
+  // satır atlanır (hedefsiz ON CONFLICT DO NOTHING) → o ayın gideri ikiye katlanmaz.
   jobs.push({
     label: "Giderler",
     statKey: "actualExpenses",
     stmts: data.actualExpenses.map((expense) => {
-      const fields: Row = {
-        name: expense.name,
-        category: expense.category ?? null,
-        amountKurus: expense.amountKurus,
-        paidAt: expense.paidAt,
-        note: expense.note ?? null,
-      };
-      const update = putDefined({ ...fields }, expense, ["createdAt"]);
-      update.updatedAt = expense.updatedAt ?? stamp;
+      const update = touched(columnsFrom("ActualExpense", expense, ["id"]), expense);
       return upsert(
         "ActualExpense",
         ["id"],
-        {
-          id: expense.id,
-          ...fields,
-          createdAt: expense.createdAt ?? stamp,
-          updatedAt: expense.updatedAt ?? stamp,
-        },
+        { id: expense.id, createdAt: stamp, ...update },
         update
       );
     }),
@@ -797,29 +1005,18 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Yazıcılar",
     statKey: "printerConfigs",
     stmts: printerConfigs.map((printer) => {
-      const fields: Row = {
-        name: printer.name,
-        brand: printer.brand,
-        model: printer.model ?? null,
-        type: printer.type ?? "moonraker",
-        host: printer.host,
-        port: printer.port ?? 7125,
-        accent: printer.accent ?? null,
-        accessCode: printer.accessCode ?? null,
-        serial: printer.serial ?? null,
-        enabled: printer.enabled ?? true,
-        sortOrder: printer.sortOrder ?? 0,
-      };
-      const update = putDefined({ ...fields }, printer, ["createdAt"]);
-      update.updatedAt = printer.updatedAt ?? stamp;
+      const update = touched(columnsFrom("PrinterConfig", printer, ["id"]), printer);
       return upsert(
         "PrinterConfig",
         ["id"],
         {
           id: printer.id,
-          ...fields,
-          createdAt: printer.createdAt ?? stamp,
-          updatedAt: printer.updatedAt ?? stamp,
+          type: "moonraker",
+          port: 7125,
+          enabled: true,
+          sortOrder: 0,
+          createdAt: stamp,
+          ...update,
         },
         update
       );
@@ -831,34 +1028,20 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Filament makaraları",
     statKey: "filamentSpools",
     stmts: filamentSpools.map((spool) => {
-      const fields: Row = {
-        name: spool.name,
-        material: spool.material ?? "PLA",
-        colorName: spool.colorName ?? null,
-        colorHex: spool.colorHex ?? "#9ca3af",
-        brand: spool.brand ?? null,
-        totalGrams: spool.totalGrams ?? 1000,
-        remainingGrams: spool.remainingGrams ?? 1000,
-        spoolCost: spool.spoolCost ?? null,
-        reorderGrams: spool.reorderGrams ?? 200,
-        vendorUrl: spool.vendorUrl ?? null,
-        // v37: zod'a eklemek YETMEZ — burada da yazılmazsa geri yüklemede SESSİZCE kaybolur.
-        // `fields` hem INSERT hem UPDATE'e gittiği için iki yol da kapsanır; `openedAt` bir Date
-        // olduğundan `toArg()` onu epoch-ms'e çevirir (createdAt/updatedAt ile aynı yol).
-        colorKey: spool.colorKey ?? null,
-        openedAt: spool.openedAt ?? null,
-        isActive: spool.isActive ?? true,
-      };
-      const update = putDefined({ ...fields }, spool, ["createdAt"]);
-      update.updatedAt = spool.updatedAt ?? stamp;
+      const update = touched(columnsFrom("FilamentSpool", spool, ["id"]), spool);
       return upsert(
         "FilamentSpool",
         ["id"],
         {
           id: spool.id,
-          ...fields,
-          createdAt: spool.createdAt ?? stamp,
-          updatedAt: spool.updatedAt ?? stamp,
+          material: "PLA",
+          colorHex: "#9ca3af",
+          totalGrams: 1000,
+          remainingGrams: 1000,
+          reorderGrams: 200,
+          isActive: true,
+          createdAt: stamp,
+          ...update,
         },
         update
       );
@@ -882,24 +1065,15 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Siparişler",
     statKey: "orderFinanceSnapshots",
     stmts: snapshots.map((snapshot) => {
-      const fields: Row = {
-        orderNumber: snapshot.orderNumber,
-        orderedAt: snapshot.orderedAt,
-        revenueKurus: snapshot.revenueKurus,
-        profitKurus: snapshot.profitKurus ?? null,
-        profitPartial: snapshot.profitPartial ?? false,
-        statusKind: snapshot.statusKind,
-        currency: snapshot.currency ?? "TRY",
-        syncedAt: snapshot.syncedAt ?? stamp,
-        calculationVersion: snapshot.calculationVersion ?? 1,
-        profitSource: snapshot.profitSource ?? "calculated",
-        estimatedCommissionKurus: snapshot.estimatedCommissionKurus ?? null,
-        actualCommissionKurus: snapshot.actualCommissionKurus ?? null,
-      };
+      const update = touched(
+        columnsFrom("OrderFinanceSnapshot", snapshot, ["id", "platform", "externalOrderId"]),
+        snapshot,
+        "syncedAt"
+      );
       const existingId = snapshotIdByKey.get(
         `${snapshot.platform}\u0000${snapshot.externalOrderId}`
       );
-      if (existingId) return updateById("OrderFinanceSnapshot", "id", existingId, fields);
+      if (existingId) return updateById("OrderFinanceSnapshot", "id", existingId, update);
       return upsert(
         "OrderFinanceSnapshot",
         ["platform", "externalOrderId"],
@@ -907,126 +1081,17 @@ async function runImport(data: ImportPayload, emit: Emit) {
           id: snapshot.id,
           platform: snapshot.platform,
           externalOrderId: snapshot.externalOrderId,
-          ...fields,
+          profitPartial: false,
+          currency: "TRY",
+          calculationVersion: 1,
+          profitSource: "calculated",
+          ...update,
         },
-        fields
+        update
       );
     }),
   });
   stats.orderFinanceSnapshots = jobs[jobs.length - 1].stmts.length;
-
-  // Ürün bazlı satış geçmişi. Yedeğe bu oturumda eklendi → eski yedeklerde bu dizi boştur ve
-  // mevcut kayıtlara DOKUNULMAZ (silme yok, yalnız ekleme/güncelleme).
-  const itemSnapshots = data.orderItemSnapshots.filter((row) => row.platform !== "manual");
-  const itemIdByKey = new Map<string, string>();
-  if (itemSnapshots.length) {
-    for (const row of await readRows<{
-      id: string;
-      platform: string;
-      externalOrderId: string;
-      lineIndex: number;
-    }>(`SELECT id, platform, externalOrderId, lineIndex FROM OrderItemSnapshot`)) {
-      itemIdByKey.set(
-        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`,
-        row.id
-      );
-    }
-  }
-  jobs.push({
-    label: "Satış geçmişi",
-    statKey: "orderItemSnapshots",
-    stmts: itemSnapshots.map((row) => {
-      const fields: Row = {
-        orderedAt: row.orderedAt,
-        productId: row.productId ?? null,
-        productName: row.productName,
-        quantity: row.quantity,
-        unitPriceKurus: row.unitPriceKurus,
-        lineRevenueKurus: row.lineRevenueKurus,
-        statusKind: row.statusKind,
-        currency: row.currency ?? "TRY",
-        syncedAt: stamp,
-      };
-      const existingId = itemIdByKey.get(
-        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`
-      );
-      if (existingId) return updateById("OrderItemSnapshot", "id", existingId, fields);
-      return upsert(
-        "OrderItemSnapshot",
-        ["platform", "externalOrderId", "lineIndex"],
-        {
-          id: row.id,
-          platform: row.platform,
-          externalOrderId: row.externalOrderId,
-          lineIndex: row.lineIndex,
-          ...fields,
-        },
-        fields
-      );
-    }),
-  });
-  stats.orderItemSnapshots = jobs[jobs.length - 1].stmts.length;
-
-  // Siparişe özel maliyetler. Satır anahtarı katalog ürününe bağlıysa ("p:<ürün>") ürün kimliği
-  // bu veritabanındaki karşılığına taşınır; eşleşmeyen ürünün anahtarı olduğu gibi kalır.
-  jobs.push({
-    label: "Siparişe özel maliyetler",
-    statKey: "orderLineCosts",
-    stmts: data.orderLineCosts.map((row) => {
-      const lineKey = row.lineKey.startsWith("p:")
-        ? `p:${resolveProduct(row.lineKey.slice(2)) ?? row.lineKey.slice(2)}`
-        : row.lineKey;
-      const fields: Row = {
-        lineName: row.lineName ?? "",
-        costJson: row.costJson,
-        desi: row.desi ?? null,
-        updatedAt: stamp,
-      };
-      return upsert(
-        "OrderLineCost",
-        ["platform", "externalOrderId", "lineKey"],
-        {
-          id: row.id,
-          platform: row.platform,
-          externalOrderId: row.externalOrderId,
-          lineKey,
-          createdAt: stamp,
-          ...fields,
-        },
-        fields
-      );
-    }),
-  });
-  stats.orderLineCosts = jobs[jobs.length - 1].stmts.length;
-
-  // Elle ürün bağları. Ürün kimliği bu veritabanındaki karşılığına taşınır; karşılığı olmayan
-  // ürüne giden bağ anlamsız → atlanır (satır yeniden "Ürüne bağla" der).
-  const baglar = data.orderLineLinks.flatMap((row) => {
-    const productId = resolveProduct(row.productId);
-    if (!productId) {
-      stats.skipped++;
-      return [];
-    }
-    return [{ ...row, productId }];
-  });
-  jobs.push({
-    label: "Ürün bağları",
-    statKey: "orderLineLinks",
-    stmts: baglar.map((row) => {
-      const fields: Row = {
-        lineName: row.lineName ?? "",
-        productId: row.productId,
-        updatedAt: stamp,
-      };
-      return upsert(
-        "OrderLineLink",
-        ["platform", "lineKey"],
-        { id: row.id, platform: row.platform, lineKey: row.lineKey, createdAt: stamp, ...fields },
-        fields
-      );
-    }),
-  });
-  stats.orderLineLinks = jobs[jobs.length - 1].stmts.length;
 
   const financialIdByKey = new Map<string, string>();
   if (data.platformOrderFinancials.length) {
@@ -1040,19 +1105,15 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Siparişler",
     statKey: "platformOrderFinancials",
     stmts: data.platformOrderFinancials.map((financial) => {
-      const fields: Row = {
-        orderNumber: financial.orderNumber,
-        grossRevenueKurus: financial.grossRevenueKurus,
-        commissionKurus: financial.commissionKurus,
-        sellerRevenueKurus: financial.sellerRevenueKurus,
-        transactionCount: financial.transactionCount ?? 0,
-        sourceUpdatedAt: financial.sourceUpdatedAt ?? null,
-        syncedAt: financial.syncedAt ?? stamp,
-      };
+      const update = touched(
+        columnsFrom("PlatformOrderFinancial", financial, ["id", "platform", "externalOrderId"]),
+        financial,
+        "syncedAt"
+      );
       const existingId = financialIdByKey.get(
         `${financial.platform}\u0000${financial.externalOrderId}`
       );
-      if (existingId) return updateById("PlatformOrderFinancial", "id", existingId, fields);
+      if (existingId) return updateById("PlatformOrderFinancial", "id", existingId, update);
       return upsert(
         "PlatformOrderFinancial",
         ["platform", "externalOrderId"],
@@ -1060,9 +1121,10 @@ async function runImport(data: ImportPayload, emit: Emit) {
           id: financial.id,
           platform: financial.platform,
           externalOrderId: financial.externalOrderId,
-          ...fields,
+          transactionCount: 0,
+          ...update,
         },
-        fields
+        update
       );
     }),
   });
@@ -1082,26 +1144,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Siparişler",
     statKey: "manualOrders",
     stmts: data.manualOrders.map((order) => {
-      const fields: Row = {
-        orderNumber: order.orderNumber,
-        mode: order.mode,
-        orderedAt: order.orderedAt,
-        statusKind: order.statusKind,
-        customerName: order.customerName ?? null,
-        currency: order.currency,
-        revenueKurus: order.revenueKurus,
-        netRevenueKurus: order.netRevenueKurus,
-        totalCostKurus: order.totalCostKurus,
-        inputVatCreditKurus: order.inputVatCreditKurus,
-        profitKurus: order.profitKurus,
-        profitPartial: order.profitPartial,
-        itemsJson: order.itemsJson,
-        breakdownJson: order.breakdownJson,
-        calculationVersion: order.calculationVersion,
-        note: order.note ?? null,
-      };
-      const update = putDefined({ ...fields }, order, ["createdAt"]);
-      update.updatedAt = order.updatedAt ?? stamp;
+      const update = touched(columnsFrom("ManualOrder", order, ["id"]), order);
       const existingId = manualOrderIds.has(order.id)
         ? order.id
         : manualOrderIdByNumber.get(order.orderNumber);
@@ -1111,12 +1154,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
       return upsert(
         "ManualOrder",
         ["orderNumber"],
-        {
-          id: order.id,
-          ...fields,
-          createdAt: order.createdAt ?? stamp,
-          updatedAt: order.updatedAt ?? stamp,
-        },
+        { id: order.id, createdAt: stamp, ...update },
         update
       );
     }),
@@ -1128,18 +1166,11 @@ async function runImport(data: ImportPayload, emit: Emit) {
     label: "Varyant grupları",
     statKey: "variantGroups",
     stmts: variantGroups.map((group) => {
-      const fields: Row = { name: group.name, shareModels: group.shareModels ?? false };
-      const update = putDefined({ ...fields }, group, ["createdAt"]);
-      update.updatedAt = group.updatedAt ?? stamp;
+      const update = touched(columnsFrom("VariantGroup", group, ["id"]), group);
       return upsert(
         "VariantGroup",
         ["id"],
-        {
-          id: group.id,
-          ...fields,
-          createdAt: group.createdAt ?? stamp,
-          updatedAt: group.updatedAt ?? stamp,
-        },
+        { id: group.id, shareModels: false, createdAt: stamp, ...update },
         update
       );
     }),
@@ -1155,33 +1186,11 @@ async function runImport(data: ImportPayload, emit: Emit) {
       droppedLinks++;
     }
 
-    const common: Row = {
-      sku: product.sku ?? product.barcode,
-      name: product.name ?? product.barcode,
-      categoryName: product.categoryName ?? "Imported",
-      currentSalePrice: product.currentSalePrice,
-    };
-    const update = putDefined({ ...common }, product, [
-      "alias",
-      "listPrice",
-      "stock",
-      "desi",
-      "weight",
-      "imageUrl",
-      "imageManual",
-      "isActive",
-      "hidden",
-      "madeToOrder",
-      "source",
-      "trendyolId",
-      "productMainId",
-      "variantLabel",
-      "commissionRate",
-      "commissionSource",
-      "commissionUpdatedAt",
-    ]);
+    const update = touched(
+      columnsFrom("Product", product, ["id", "barcode", "variantGroupId"]),
+      product
+    );
     if (product.variantGroupId !== undefined) update.variantGroupId = variantGroupId;
-    update.updatedAt = product.updatedAt ?? stamp;
 
     const existingId = barcodeToProductId.get(product.barcode);
     if (existingId) {
@@ -1198,30 +1207,19 @@ async function runImport(data: ImportPayload, emit: Emit) {
         {
           id: newId,
           barcode: product.barcode,
-          sku: product.sku ?? product.barcode,
-          name: product.name ?? product.barcode,
-          alias: product.alias ?? null,
-          categoryName: product.categoryName ?? "Imported",
-          currentSalePrice: product.currentSalePrice,
-          listPrice: product.listPrice ?? null,
-          stock: product.stock ?? 0,
-          desi: product.desi ?? null,
-          weight: product.weight ?? null,
-          imageUrl: product.imageUrl ?? null,
-          imageManual: product.imageManual ?? false,
-          isActive: product.isActive ?? true,
-          hidden: product.hidden ?? false,
-          madeToOrder: product.madeToOrder ?? false,
-          source: product.source ?? "imported",
-          trendyolId: product.trendyolId ?? null,
-          productMainId: product.productMainId ?? null,
+          // Zorunlu kolonlar yedekte yoksa (eski/yabancı yedek) yalnız YENİ kayıtta doldurulur.
+          sku: product.barcode,
+          name: product.barcode,
+          categoryName: "Imported",
+          stock: 0,
+          imageManual: false,
+          isActive: true,
+          hidden: false,
+          madeToOrder: false,
+          source: "imported",
+          createdAt: stamp,
+          ...update,
           variantGroupId,
-          variantLabel: product.variantLabel ?? null,
-          commissionRate: product.commissionRate ?? null,
-          commissionSource: product.commissionSource ?? null,
-          commissionUpdatedAt: product.commissionUpdatedAt ?? null,
-          createdAt: product.createdAt ?? stamp,
-          updatedAt: product.updatedAt ?? stamp,
         },
         update
       )
@@ -1233,7 +1231,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
   jobs.push({ label: "Ürünler", statKey: "products", stmts: productStmts });
   stats.products = productStmts.length;
 
-  // ── Ürüne bağlı tablolar ──────────────────────────────────────────────────
+  // ── Ürüne bağlı tablolar (ürün kimlik eşlemesi ARTIK hazır) ──────────────
   const costIdByProduct = new Map<string, string>();
   if (productCosts.length) {
     for (const row of await readRows<{ id: string; productId: string }>(
@@ -1249,38 +1247,19 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    const fields: Row = {
-      costMode: cost.costMode ?? "manual",
-      filamentTypeId: cost.filamentTypeId ?? null,
-      filamentWeight: cost.filamentWeight ?? null,
-      ekFilamentlerJson: cost.ekFilamentlerJson ?? null,
-      printTimeHours: cost.printTimeHours ?? null,
-      wasteRate: cost.wasteRate ?? null,
-      packagingPoset: cost.packagingPoset ?? null,
-      packagingNaylon: cost.packagingNaylon ?? null,
-      packagingBant: cost.packagingBant ?? null,
-      packagingKart: cost.packagingKart ?? null,
-      packagingOptionId: cost.packagingOptionId ?? null,
-      nylonLevel: cost.nylonLevel ?? null,
-      tapeUsed: cost.tapeUsed ?? null,
-      manualCost: cost.manualCost ?? null,
-      materialWeight: cost.materialWeight ?? null,
-      materialCost: cost.materialCost ?? null,
-      electricityCost: cost.electricityCost ?? null,
-      machineWearCost: cost.machineWearCost ?? null,
-      laborCost: cost.laborCost ?? null,
-      packagingCost: cost.packagingCost ?? null,
-      otherCost: cost.otherCost ?? null,
-      totalCost: cost.totalCost ?? null,
-      updatedAt: cost.updatedAt ?? stamp,
-    };
+    const update = touched(columnsFrom("ProductCost", cost, ["id", "productId"]), cost);
     const existingId = costIdByProduct.get(productId);
     if (existingId) {
-      costStmts.push(updateById("ProductCost", "id", existingId, fields));
+      costStmts.push(updateById("ProductCost", "id", existingId, update));
     } else {
       costIdByProduct.set(productId, cost.id);
       costStmts.push(
-        upsert("ProductCost", ["productId"], { id: cost.id, productId, ...fields }, fields)
+        upsert(
+          "ProductCost",
+          ["productId"],
+          { id: cost.id, productId, costMode: "manual", ...update },
+          update
+        )
       );
     }
   }
@@ -1302,21 +1281,10 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    const fields: Row = {
-      externalId: listing.externalId ?? null,
-      externalSku: listing.externalSku ?? null,
-      barcode: listing.barcode ?? null,
-      salePrice: listing.salePrice,
-      listPrice: listing.listPrice ?? null,
-      stock: listing.stock ?? 0,
-      commissionRate: listing.commissionRate ?? null,
-      commissionFixed: listing.commissionFixed ?? null,
-      cargoCost: listing.cargoCost ?? null,
-      isActive: listing.isActive ?? true,
-      lastSyncedAt: listing.lastSyncedAt ?? null,
-    };
-    const update = putDefined({ ...fields }, listing, ["createdAt"]);
-    update.updatedAt = listing.updatedAt ?? stamp;
+    const update = touched(
+      columnsFrom("Listing", listing, ["id", "productId", "platform"]),
+      listing
+    );
     const key = `${productId}\u0000${listing.platform}`;
     const existingId = listingIdByKey.get(key);
     if (existingId) {
@@ -1331,9 +1299,10 @@ async function runImport(data: ImportPayload, emit: Emit) {
             id: listing.id,
             productId,
             platform: listing.platform,
-            ...fields,
-            createdAt: listing.createdAt ?? stamp,
-            updatedAt: listing.updatedAt ?? stamp,
+            stock: 0,
+            isActive: true,
+            createdAt: stamp,
+            ...update,
           },
           update
         )
@@ -1350,15 +1319,9 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    const fields: Row = {
-      productId,
-      oldPrice: history.oldPrice,
-      newPrice: history.newPrice,
-      changeSource: history.changeSource,
-      changedAt: history.changedAt,
-      note: history.note ?? null,
-    };
-    historyStmts.push(upsert("PriceHistory", ["id"], { id: history.id, ...fields }, fields));
+    const update = columnsFrom("PriceHistory", history, ["id", "productId"]);
+    update.productId = productId;
+    historyStmts.push(upsert("PriceHistory", ["id"], { id: history.id, ...update }, update));
   }
   jobs.push({ label: "Fiyat geçmişi", statKey: "priceHistory", stmts: historyStmts });
   stats.priceHistory = historyStmts.length;
@@ -1378,36 +1341,15 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    const fields: Row = {
-      productId,
-      printerConfigId: file.printerConfigId,
-      label: file.label ?? null,
-      originalName: file.originalName,
-      storedPath: "",
-      r2Key: file.r2Key ?? null,
-      fileType: file.fileType,
-      sizeBytes: file.sizeBytes ?? 0,
-      gramaj: file.gramaj ?? null,
-      estPrintMin: file.estPrintMin ?? null,
-      colorsJson: file.colorsJson ?? null,
-      sliced: file.sliced ?? null,
-      plateJson: file.plateJson ?? null,
-      // Önizleme görseli model dosyası satırına DEĞİL, kendi tablosuna yazılır (aşağıda; v63).
-      contentMd5: file.contentMd5 ?? null,
-      sortOrder: file.sortOrder ?? 0,
-    };
-    const update = putDefined({ ...fields }, file, ["createdAt"]);
-    update.updatedAt = file.updatedAt ?? stamp;
+    // `storedPath` bilinçli olarak yedeğe girmez (yerel yol): yeni kayıtta boş, mevcutta korunur.
+    // Önizleme görseli model dosyası satırına DEĞİL, kendi tablosuna yazılır (aşağıda; v63).
+    const update = touched(columnsFrom("ProductModelFile", file, ["id", "productId"]), file);
+    update.productId = productId;
     modelStmts.push(
       upsert(
         "ProductModelFile",
         ["id"],
-        {
-          id: file.id,
-          ...fields,
-          createdAt: file.createdAt ?? stamp,
-          updatedAt: file.updatedAt ?? stamp,
-        },
+        { id: file.id, storedPath: "", sizeBytes: 0, sortOrder: 0, createdAt: stamp, ...update },
         update
       )
     );
@@ -1436,9 +1378,11 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    const fields: Row = { productId };
-    const update = putDefined({ ...fields }, mapping, ["createdAt"]);
-    update.updatedAt = mapping.updatedAt ?? stamp;
+    const update = touched(
+      columnsFrom("PrintFileProduct", mapping, ["id", "printerConfigId", "filename", "productId"]),
+      mapping
+    );
+    update.productId = productId;
     const key = `${mapping.printerConfigId}\u0000${mapping.filename}`;
     const existingId = mappingIdByKey.get(key);
     if (existingId) {
@@ -1453,9 +1397,8 @@ async function runImport(data: ImportPayload, emit: Emit) {
             id: mapping.id,
             printerConfigId: mapping.printerConfigId,
             filename: mapping.filename,
-            ...fields,
-            createdAt: mapping.createdAt ?? stamp,
-            updatedAt: mapping.updatedAt ?? stamp,
+            createdAt: stamp,
+            ...update,
           },
           update
         )
@@ -1471,31 +1414,141 @@ async function runImport(data: ImportPayload, emit: Emit) {
       stats.skipped++;
       continue;
     }
-    let productId: string | null = null;
-    if (usage.productId) {
-      productId = resolveProduct(usage.productId);
-      // Ürün silinmişse kullanım kaydı yine korunur (gram düşümü geçmişi kaybolmasın).
-      if (!productId) droppedLinks++;
+    const update = columnsFrom("FilamentUsage", usage, ["id", "productId"]);
+    if (usage.productId !== undefined) {
+      let productId: string | null = null;
+      if (usage.productId) {
+        productId = resolveProduct(usage.productId);
+        // Ürün silinmişse kullanım kaydı yine korunur (gram düşümü geçmişi kaybolmasın).
+        if (!productId) droppedLinks++;
+      }
+      update.productId = productId;
     }
-    const fields: Row = {
-      spoolId: usage.spoolId,
-      productId,
-      productName: usage.productName ?? null,
-      grams: usage.grams,
-      note: usage.note ?? null,
-    };
-    const update = putDefined({ ...fields }, usage, ["createdAt"]);
     usageStmts.push(
-      upsert(
-        "FilamentUsage",
-        ["id"],
-        { id: usage.id, ...fields, createdAt: usage.createdAt ?? stamp },
-        update
-      )
+      upsert("FilamentUsage", ["id"], { id: usage.id, createdAt: stamp, ...update }, update)
     );
   }
   jobs.push({ label: "Filament kullanımları", statKey: "filamentUsages", stmts: usageStmts });
   stats.filamentUsages = usageStmts.length;
+
+  // ── Sipariş kalemleri (ürün kimliği eşlendikten SONRA) ────────────────────
+  // ⚠️ Bunlar eskiden ürünlerden ÖNCE hazırlanıyordu: yeni veritabanına geri yüklemede ürünler
+  // henüz eşlenmemiş olduğundan "Ürüne bağla" bağlarının TAMAMI atlanıyor, kalem ve maliyet
+  // satırlarındaki ürün kimliği de bu veritabanındaki karşılığına çevrilmiyordu.
+
+  // Ürün bazlı satış geçmişi. Eski yedeklerde bu dizi boştur ve mevcut kayıtlara DOKUNULMAZ
+  // (silme yok, yalnız ekleme/güncelleme).
+  const itemSnapshots = data.orderItemSnapshots.filter((row) => row.platform !== "manual");
+  const itemIdByKey = new Map<string, string>();
+  if (itemSnapshots.length) {
+    for (const row of await readRows<{
+      id: string;
+      platform: string;
+      externalOrderId: string;
+      lineIndex: number;
+    }>(`SELECT id, platform, externalOrderId, lineIndex FROM OrderItemSnapshot`)) {
+      itemIdByKey.set(
+        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`,
+        row.id
+      );
+    }
+  }
+  jobs.push({
+    label: "Satış geçmişi",
+    statKey: "orderItemSnapshots",
+    stmts: itemSnapshots.map((row) => {
+      const update = columnsFrom("OrderItemSnapshot", row, [
+        "id",
+        "platform",
+        "externalOrderId",
+        "lineIndex",
+        "productId",
+      ]);
+      // Ürün bu veritabanında başka kimlikle duruyorsa ona taşınır; karşılığı yoksa kimlik
+      // olduğu gibi kalır (satış geçmişi ürün adıyla birlikte korunur).
+      if (row.productId !== undefined) {
+        update.productId = row.productId ? (resolveProduct(row.productId) ?? row.productId) : null;
+      }
+      const existingId = itemIdByKey.get(
+        `${row.platform}\u0000${row.externalOrderId}\u0000${row.lineIndex}`
+      );
+      if (existingId) return updateById("OrderItemSnapshot", "id", existingId, update);
+      return upsert(
+        "OrderItemSnapshot",
+        ["platform", "externalOrderId", "lineIndex"],
+        {
+          id: row.id,
+          platform: row.platform,
+          externalOrderId: row.externalOrderId,
+          lineIndex: row.lineIndex,
+          currency: "TRY",
+          syncedAt: stamp,
+          ...update,
+        },
+        update
+      );
+    }),
+  });
+  stats.orderItemSnapshots = jobs[jobs.length - 1].stmts.length;
+
+  // Siparişe özel maliyetler. Satır anahtarı katalog ürününe bağlıysa ("p:<ürün>") ürün kimliği
+  // bu veritabanındaki karşılığına taşınır; eşleşmeyen ürünün anahtarı olduğu gibi kalır.
+  jobs.push({
+    label: "Siparişe özel maliyetler",
+    statKey: "orderLineCosts",
+    stmts: data.orderLineCosts.map((row) => {
+      const lineKey = row.lineKey.startsWith("p:")
+        ? `p:${resolveProduct(row.lineKey.slice(2)) ?? row.lineKey.slice(2)}`
+        : row.lineKey;
+      const update = touched(
+        columnsFrom("OrderLineCost", row, ["id", "platform", "externalOrderId", "lineKey"]),
+        row
+      );
+      return upsert(
+        "OrderLineCost",
+        ["platform", "externalOrderId", "lineKey"],
+        {
+          id: row.id,
+          platform: row.platform,
+          externalOrderId: row.externalOrderId,
+          lineKey,
+          lineName: "",
+          createdAt: stamp,
+          ...update,
+        },
+        update
+      );
+    }),
+  });
+  stats.orderLineCosts = jobs[jobs.length - 1].stmts.length;
+
+  // Elle ürün bağları. Ürün kimliği bu veritabanındaki karşılığına taşınır; karşılığı olmayan
+  // ürüne giden bağ anlamsız → atlanır (satır yeniden "Ürüne bağla" der).
+  const baglar = data.orderLineLinks.flatMap((row) => {
+    const productId = resolveProduct(row.productId);
+    if (!productId) {
+      stats.skipped++;
+      return [];
+    }
+    return [{ ...row, productId }];
+  });
+  jobs.push({
+    label: "Ürün bağları",
+    statKey: "orderLineLinks",
+    stmts: baglar.map((row) => {
+      const update = touched(
+        columnsFrom("OrderLineLink", row, ["id", "platform", "lineKey"]),
+        row
+      );
+      return upsert(
+        "OrderLineLink",
+        ["platform", "lineKey"],
+        { id: row.id, platform: row.platform, lineKey: row.lineKey, lineName: "", createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.orderLineLinks = jobs[jobs.length - 1].stmts.length;
 
   // ── Yazım: 500'lük gruplar, tek istek; başarısızsa satır satır güvenli yol ─
   const total = jobs.reduce((sum, job) => sum + job.stmts.length, 0);
@@ -1570,12 +1623,27 @@ function errorMessage(error: unknown): string {
  *  - Normal çağrı → tek JSON yanıt (eski davranış birebir korunur).
  *  - `?stream=1` veya `Accept: application/x-ndjson` → NDJSON ilerleme akışı:
  *      {stage:"step",label,done,total,pct} · {stage:"done",stats,warnings} · {stage:"error",message}
+ *
+ * Sürüm denetimi (madde 20): bu uygulamadan DAHA YENİ bir sürümün yedeği reddedilir (tanımadığımız
+ * alanlar sessizce düşmesin); eski yedek alınır ama yanıtta kısa bir uyarı satırı taşır.
  */
 export async function POST(req: NextRequest) {
   let data: ImportPayload;
+  let oldBackup = false;
   try {
     await ensureRuntimeSchema();
-    data = ImportSchema.parse(await req.json());
+    const raw: unknown = await req.json();
+    // Sürüm, biçim doğrulamasından ÖNCE: daha yeni sürümün yedeği tanınmayan bir alan yüzünden
+    // "biçim geçersiz" yerine anlaşılır mesajla reddedilsin.
+    const verdict = backupVersionVerdict(backupVersionInfo(raw), await readAppSchemaVersion());
+    if (verdict === "yeni") {
+      return NextResponse.json(
+        { ok: false, complete: false, error: YEDEK_DAHA_YENI_HATASI },
+        { status: 400 }
+      );
+    }
+    oldBackup = verdict === "eski";
+    data = ImportSchema.parse(raw);
   } catch (error) {
     // Doğrulama akıştan ÖNCE yapılır → bozuk yedek hâlâ net bir hata yanıtı döner.
     return NextResponse.json(
@@ -1597,7 +1665,7 @@ export async function POST(req: NextRequest) {
 
   if (!wantsStream) {
     try {
-      return NextResponse.json(await runImport(data, () => {}));
+      return NextResponse.json(await runImport(data, () => {}, { oldBackup }));
     } catch (error) {
       return NextResponse.json(
         { ok: false, complete: false, error: errorMessage(error) },
@@ -1617,7 +1685,7 @@ export async function POST(req: NextRequest) {
         }
       };
       try {
-        const result = await runImport(data, send);
+        const result = await runImport(data, send, { oldBackup });
         send({ stage: "done", ...result });
       } catch (error) {
         send({ stage: "error", message: errorMessage(error) });

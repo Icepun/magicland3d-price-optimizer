@@ -5,7 +5,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  Plus, Pencil, Search, Trash2, Percent, SearchX, ShoppingBag, AlertTriangle, RefreshCw, Layers,
+  Plus, Pencil, Search, Trash2, Percent, SearchX, ShoppingBag, AlertTriangle, RefreshCw, Layers, ChevronDown,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -39,6 +38,31 @@ interface CommissionRule {
   fixedCommission: number;
   priority: number;
   isActive: boolean;
+  /** "trendyol" | "hepsiburada"; boş = eski kural (Trendyol). */
+  platform: string | null;
+  validFrom: string | null;
+  validTo: string | null;
+}
+
+type Pazaryeri = "trendyol" | "hepsiburada";
+const PAZARYERLERI: { key: Pazaryeri; ad: string; renk: string }[] = [
+  { key: "trendyol", ad: "Trendyol", renk: "#F27A1A" },
+  { key: "hepsiburada", ad: "Hepsiburada", renk: "#4F8CFF" },
+];
+const pazaryeriOf = (r: CommissionRule): Pazaryeri => (r.platform === "hepsiburada" ? "hepsiburada" : "trendyol");
+
+/** Kural şu an yürürlükte mi (çekirdekteki tanımla aynı: aktif + tarih aralığında). */
+function yururlukte(r: CommissionRule, an = Date.now()): boolean {
+  if (!r.isActive) return false;
+  const bas = r.validFrom ? Date.parse(r.validFrom) : null;
+  const bit = r.validTo ? Date.parse(r.validTo) : null;
+  return (bas == null || !Number.isFinite(bas) || bas <= an) && (bit == null || !Number.isFinite(bit) || bit >= an);
+}
+
+function tarihMetni(iso: string | null): string {
+  if (!iso) return "başlangıçtan";
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
 /** "Üst sınır yok" — boş bırakılan max fiyat. */
@@ -80,7 +104,7 @@ const FormSemasi = z
     commissionRate: z.string(),
     fixedCommission: z.string(),
     priority: z.string(),
-    isActive: z.boolean(),
+    platform: z.enum(["trendyol", "hepsiburada"]),
   })
   .superRefine((d, ctx) => {
     const oran = sayi(d.commissionRate);
@@ -107,7 +131,7 @@ interface KuralGovdesi {
   commissionRate: number;
   fixedCommission: number;
   priority: number;
-  isActive: boolean;
+  platform: Pazaryeri;
 }
 
 function govdeyeCevir(d: FormVerisi): KuralGovdesi {
@@ -119,7 +143,7 @@ function govdeyeCevir(d: FormVerisi): KuralGovdesi {
     commissionRate: (sayi(d.commissionRate) ?? 0) / 100,
     fixedCommission: d.fixedCommission.trim() ? (sayi(d.fixedCommission) ?? 0) : 0,
     priority: d.priority.trim() ? Math.trunc(sayi(d.priority) ?? 10) : 10,
-    isActive: d.isActive,
+    platform: d.platform,
   };
 }
 
@@ -132,7 +156,7 @@ function formaCevir(r: CommissionRule | null): FormVerisi {
     commissionRate: r ? yuzdeMetni(r.commissionRate) : "",
     fixedCommission: r && r.fixedCommission ? String(r.fixedCommission).replace(".", ",") : "",
     priority: String(r?.priority ?? 10),
-    isActive: r?.isActive ?? true,
+    platform: r ? pazaryeriOf(r) : "trendyol",
   };
 }
 
@@ -162,7 +186,7 @@ function RuleForm({
   onKirli: (kirli: boolean) => void;
 }) {
   const form = useForm<FormVerisi>({ resolver: zodResolver(FormSemasi), defaultValues: formaCevir(kural) });
-  const isActive = useWatch({ control: form.control, name: "isActive" });
+  const platform = useWatch({ control: form.control, name: "platform" });
   const e = form.formState.errors;
   const kayit = (ad: keyof FormVerisi) =>
     form.register(ad, { onChange: () => onKirli(true) });
@@ -171,6 +195,27 @@ function RuleForm({
     <form onSubmit={form.handleSubmit((d) => onSubmit(govdeyeCevir(d)))} className="space-y-3">
       <Alan etiket="Kural adı" hata={e.name?.message}>
         <Input className={GIRDI} {...kayit("name")} placeholder="ör. Trendyol Oyuncak" />
+      </Alan>
+      <Alan etiket="Pazaryeri" ipucu="Kural yalnız bu pazaryerinin ilanlarına uygulanır.">
+        <div className="grid grid-cols-2 gap-1 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.08]">
+          {PAZARYERLERI.map((pz) => (
+            <button
+              key={pz.key}
+              type="button"
+              onClick={() => {
+                form.setValue("platform", pz.key);
+                onKirli(true);
+              }}
+              className={cn(
+                "flex items-center justify-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-all duration-200 active:scale-[0.98]",
+                platform === pz.key ? "bg-white/[0.08] font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <span className="size-1.5 rounded-full" style={{ background: pz.renk }} />
+              {pz.ad}
+            </button>
+          ))}
+        </div>
       </Alan>
       <Alan etiket="Kategori" ipucu="Boş bırakırsan tüm kategorilere uygulanır.">
         <Input className={GIRDI} {...kayit("categoryName")} placeholder="ör. Gamepad Standı" />
@@ -191,27 +236,29 @@ function RuleForm({
           <Input className={GIRDI} inputMode="decimal" {...kayit("fixedCommission")} placeholder="0" />
         </Alan>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Alan etiket="Öncelik" hata={e.priority?.message} ipucu="Aynı ürüne birden çok kural uyarsa yüksek olan geçerli.">
-          <Input className={GIRDI} inputMode="numeric" {...kayit("priority")} />
-        </Alan>
-        <div className="flex items-center gap-2 pt-6">
-          <Switch
-            checked={isActive}
-            onCheckedChange={(v) => {
-              form.setValue("isActive", v);
-              onKirli(true);
-            }}
-          />
-          <Label>Aktif</Label>
-        </div>
-      </div>
+      <Alan etiket="Öncelik" hata={e.priority?.message} ipucu="Aynı ürüne birden çok kural uyarsa yüksek olan geçerli.">
+        <Input className={GIRDI} inputMode="numeric" {...kayit("priority")} />
+      </Alan>
+      <p className="text-[11px] text-muted-foreground">Değişiklik bu ayın başından geçerli olur; önceki aylar değişmez.</p>
       <DialogFooter>
         <Button type="submit" className={BIRINCIL} disabled={isPending}>
           {isPending ? "Kaydediliyor…" : "Kaydet"}
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+
+function PazaryeriRozeti({ platform }: { platform: Pazaryeri }) {
+  const pz = PAZARYERLERI.find((x) => x.key === platform)!;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1"
+      style={{ color: pz.renk, background: `${pz.renk}14`, ["--tw-ring-color" as string]: `${pz.renk}40` }}
+    >
+      <span className="size-1.5 rounded-full" style={{ background: pz.renk }} />
+      {pz.ad}
+    </span>
   );
 }
 
@@ -236,6 +283,7 @@ export default function CommissionRulesPage() {
   const [kapatSor, setKapatSor] = useState(false);
   const [silinecek, setSilinecek] = useState<CommissionRule | null>(null);
   const [search, setSearch] = useState("");
+  const [gecmisAcik, setGecmisAcik] = useState(false);
   const queryClient = useQueryClient();
 
   const {
@@ -295,15 +343,27 @@ export default function CommissionRulesPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => fetchJson(`/api/commission-rules/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      sonrasi("Kural silindi");
+    mutationFn: ({ id, tamamen }: { id: string; tamamen: boolean }) =>
+      fetchJson<{ kapatildi?: boolean }>(`/api/commission-rules/${id}${tamamen ? "?tamamen=1" : ""}`, { method: "DELETE" }),
+    onSuccess: (r) => {
+      sonrasi(r?.kapatildi ? "Kural bu aydan itibaren kaldırıldı" : "Kural silindi");
       setSilinecek(null);
     },
     onError: (e: Error) => toast.error(e.message || "Kural silinemedi"),
   });
 
-  const filteredRules = useMemo(() => {
+  const yeniden = useMutation({
+    mutationFn: (id: string) =>
+      fetchJson(`/api/commission-rules/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: true }),
+      }),
+    onSuccess: () => sonrasi("Kural yeniden açıldı"),
+    onError: (e: Error) => toast.error(e.message || "Kural açılamadı"),
+  });
+
+  const aranan = useMemo(() => {
     const q = search.trim().toLocaleLowerCase("tr-TR");
     if (!q) return rules;
     return rules.filter((rule) =>
@@ -312,6 +372,10 @@ export default function CommissionRulesPage() {
         .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(q))
     );
   }, [rules, search]);
+  // Yürürlükteki kurallar listede; kapanmış dönemler geçmiş siparişler için ayrı, kapalı bölümde.
+  const filteredRules = useMemo(() => aranan.filter((r) => yururlukte(r)), [aranan]);
+  const gecmisKurallar = useMemo(() => aranan.filter((r) => !yururlukte(r)), [aranan]);
+  const yururlukteSayisi = useMemo(() => rules.filter((r) => yururlukte(r)).length, [rules]);
 
   const kaydet = (govde: KuralGovdesi) => {
     if (pencere === "yeni") {
@@ -389,7 +453,7 @@ export default function CommissionRulesPage() {
           </div>
         ) : veriYok ? (
           <HataKarti baslik="Kurallar yüklenemedi" yukleniyor={isFetching} onRetry={() => void refetch()} />
-        ) : rules.length === 0 ? (
+        ) : yururlukteSayisi === 0 && !search.trim() ? (
           <EmptyState
             icon={Percent}
             title="Henüz komisyon kuralı yok"
@@ -409,17 +473,14 @@ export default function CommissionRulesPage() {
                 key={rule.id}
                 className={cn(
                   "group flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.02] px-3 py-2.5 ring-1 ring-white/[0.06] transition-colors hover:bg-white/[0.04]",
-                  "animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300",
-                  !rule.isActive && "opacity-50"
+                  "animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300"
                 )}
                 style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
               >
                 <div className="min-w-0 flex-1">
                   <p className="flex items-center gap-2 text-sm font-medium">
+                    <PazaryeriRozeti platform={pazaryeriOf(rule)} />
                     {rule.name}
-                    {!rule.isActive && (
-                      <span className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">Pasif</span>
-                    )}
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                     {rule.categoryName ?? "Tüm kategoriler"} · {formatCurrency(rule.minPrice, { decimals: 0 })} –{" "}
@@ -446,6 +507,45 @@ export default function CommissionRulesPage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {gecmisKurallar.length > 0 && (
+          <div className="border-t border-white/[0.06] pt-3">
+            <button
+              type="button"
+              onClick={() => setGecmisAcik((v) => !v)}
+              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ChevronDown className={cn("size-3.5 transition-transform duration-200", gecmisAcik && "rotate-180")} />
+              Geçmiş kurallar ({gecmisKurallar.length})
+            </button>
+            {gecmisAcik && (
+              <div className="mt-2 grid gap-1.5 animate-in fade-in slide-in-from-top-1 duration-300">
+                {gecmisKurallar.map((rule) => (
+                  <div key={rule.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-white/[0.015] px-3 py-2 ring-1 ring-white/[0.05]">
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <PazaryeriRozeti platform={pazaryeriOf(rule)} />
+                        {rule.name}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground/80 tabular-nums">
+                        {tarihMetni(rule.validFrom)} – {rule.validTo ? tarihMetni(rule.validTo) : "açık"} · {oranMetni(rule.commissionRate)}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 rounded-lg text-xs text-[#A9AEFF] hover:bg-[#7A7EFF]/10"
+                      disabled={yeniden.isPending}
+                      onClick={() => yeniden.mutate(rule.id)}
+                    >
+                      Yeniden aç
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -488,21 +588,30 @@ export default function CommissionRulesPage() {
       <Dialog open={silinecek != null} onOpenChange={(o) => !o && !deleteMutation.isPending && setSilinecek(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-base text-rose-300">Kural silinsin mi?</DialogTitle>
+            <DialogTitle className="text-base">Kural kaldırılsın mı?</DialogTitle>
           </DialogHeader>
           {silinecek && <p className="text-sm font-medium">{silinecek.name}</p>}
-          <p className="text-xs text-muted-foreground">Bu işlem geri alınamaz. İstersen düzenleyip pasif yapabilirsin.</p>
-          <DialogFooter className="gap-2">
+          <p className="text-xs text-muted-foreground">Bu ayın başından itibaren uygulanmaz. Önceki aylar değişmez.</p>
+          <DialogFooter className="flex-wrap gap-2">
             <Button variant="outline" size="sm" disabled={deleteMutation.isPending} onClick={() => setSilinecek(null)}>
               Vazgeç
             </Button>
             <Button
+              variant="ghost"
               size="sm"
-              className="bg-rose-500 text-white hover:bg-rose-500/90"
+              className="text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
               disabled={deleteMutation.isPending}
-              onClick={() => silinecek && deleteMutation.mutate(silinecek.id)}
+              onClick={() => silinecek && deleteMutation.mutate({ id: silinecek.id, tamamen: true })}
             >
-              {deleteMutation.isPending ? "Siliniyor…" : "Sil"}
+              Geçmişten de sil
+            </Button>
+            <Button
+              size="sm"
+              className={BIRINCIL}
+              disabled={deleteMutation.isPending}
+              onClick={() => silinecek && deleteMutation.mutate({ id: silinecek.id, tamamen: false })}
+            >
+              {deleteMutation.isPending ? "Kaldırılıyor…" : "Bu aydan kaldır"}
             </Button>
           </DialogFooter>
         </DialogContent>

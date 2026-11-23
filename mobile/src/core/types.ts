@@ -23,6 +23,8 @@ export interface CommissionRuleInput {
   validFrom?: Date | null;
   validTo?: Date | null;
   isActive: boolean;
+  /** "trendyol" | "hepsiburada" — kural yalnız o pazaryerine uyar. Boş = eski kural → Trendyol. */
+  platform?: string | null;
 }
 
 export interface CargoRuleInput {
@@ -85,6 +87,11 @@ export interface SimulationInput {
   cargoRules: CargoRuleInput[];
   expenseRules: ExpenseRuleInput[];
   simulationDate?: Date;
+  /**
+   * Komisyon kuralı hangi pazaryeri için aranıyor ("trendyol" | "hepsiburada"). Verilirse yalnız o
+   * pazaryerinin kuralları uyar (Hepsiburada ilanı Trendyol kuralını devralmaz). Verilmezse eski davranış.
+   */
+  commissionPlatform?: string;
   /**
    * KDV oranı (yüzde olarak, 20 = %20 KDV).
    * Belirtildiğinde salePrice KDV dahil sayılır;

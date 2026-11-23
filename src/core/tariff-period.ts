@@ -1,3 +1,5 @@
+import { ayBasi } from "./siparis-listesi";
+
 /**
  * TARİFE DÖNEMİ SINIRI — yeni bir kargo tarifesi başlarken eski dönem ne zaman kapanır?
  *
@@ -48,6 +50,21 @@ function msDeger(deger: DonemliKural["validFrom"]): number | null {
  * yürürlüktedir. Kapanmış saymak, yeni kuralı sessizce "sınırsız" doğurup tüm geçmişe
  * uygulardı — tam da engellemeye çalıştığımız şey.
  */
+/**
+ * YENİ EKLENEN KURALIN başlangıcı (ms): BU AYIN 1'i (Türkiye takvimi) — ama yürürlükteki dönem
+ * bu aydan sonra başladıysa dönemin başı.
+ *
+ * Berke'nin kararı (23 Kas 2026): "yeni eklenen kargo kuralı tüm kasıma etki etsin, öncesine
+ * değil". Eskiden kural yürürlükteki dönemin başını devralıyordu: dönem 1 Ekim'de başladıysa
+ * 23 Kasım'da eklenen kural Ekim'i de değiştiriyordu; dönemi hiç tarihlenmemiş Shopify'da ise
+ * TÜM geçmişe uyuyordu. Komisyon kuralları da aynı başlangıcı kullanır.
+ */
+export function yeniKuralBaslangiciMs(kurallar: readonly DonemliKural[], simdiMs: number): number {
+  const ay = ayBasi(simdiMs);
+  const donem = yururluktekiDonemBaslangiciMs(kurallar, simdiMs);
+  return donem != null && donem > ay ? donem : ay;
+}
+
 export function yururluktekiDonemBaslangiciMs(
   kurallar: readonly DonemliKural[],
   simdiMs: number

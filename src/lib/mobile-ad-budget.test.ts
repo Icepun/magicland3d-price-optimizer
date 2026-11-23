@@ -51,7 +51,8 @@ describe("mobil reklam bütçesi yazması", () => {
 
 describe("bütçe değişince donmuş kârlar yeniden yazılır", () => {
   it("zorlama bayrağı senkrona ulaşıyor", () => {
-    expect(EKRAN).toContain("syncFinanceFromCache(qc, { zorlaKarYaz: true })");
+    // 23 Kas 2026: zorlama artık bütçe ARALIĞINI taşır (yalnız o siparişler yeniden yazılır).
+    expect(EKRAN).toContain("syncFinanceFromCache(qc, { zorlaKarYaz: etki })");
     expect(oku("mobile/src/lib/finance-sync.ts")).toContain(
       "syncOrderFinanceSnapshots(snapshots, { zorlaKarYaz })"
     );

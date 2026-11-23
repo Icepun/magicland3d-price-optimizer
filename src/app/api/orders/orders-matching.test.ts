@@ -224,7 +224,7 @@ describe("siparişe özel maliyet", () => {
     JSON.stringify({ mod: "tutar", tutar, ekFilamentler: [], packagingOptionId: null, nylonLevel: null, tapeUsed: null });
 
   it("eşleşmeyen satır: özel maliyet uygulanır, kâr eksik kalmaz", async () => {
-    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1" })];
+    h.state.trendyolOrders = [trendyolOrder({ commission: 21, barcode: "ESKI-1" })];
     const once = await fetchOrders();
     const satir = once.orders[0].items[0];
     expect(satir.costMissing).toBe(true);
@@ -318,7 +318,7 @@ describe("elle ürün bağı", () => {
 
   it("eşleşmeyen satır adıyla bağlıysa ürüne eşlenir ve o ürünün maliyetiyle hesaplanır", async () => {
     h.state.products = [maliyetli({ id: "p-20", name: "Piston Kupası — 20 cm", barcode: "YENI-1" })];
-    h.state.trendyolOrders = [trendyolOrder({ barcode: "ESKI-1", productName: ESKI_AD })];
+    h.state.trendyolOrders = [trendyolOrder({ commission: 21, barcode: "ESKI-1", productName: ESKI_AD })];
     const once = await fetchOrders();
     expect(once.orders[0].items[0]).toMatchObject({ productId: null, costMissing: true });
     expect(once.orders[0].profit).toBeNull();
@@ -399,7 +399,7 @@ describe("tüm siparişlere uygulanan maliyet (hediye paketi)", () => {
   });
 
   it("aynı adla gelen HER siparişte kullanılır, kâr eksik kalmaz", async () => {
-    h.state.trendyolOrders = [trendyolOrder({ barcode: "HP-YOK", productName: "Hediye Paketi" })];
+    h.state.trendyolOrders = [trendyolOrder({ commission: 21, barcode: "HP-YOK", productName: "Hediye Paketi" })];
     h.state.lineCosts = [genelKayit("trendyol")];
     const r = await fetchOrders();
     expect(r.orders[0].items[0]).toMatchObject({

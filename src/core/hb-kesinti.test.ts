@@ -211,7 +211,7 @@ describe("ilana girilen Hepsiburada oranı KDV hariçtir", () => {
 
   it("yalnız komisyon (sipariş kârı yolu): oran girilmemişse kural yoluna düşer; sabit komisyon çevrilmez", async () => {
     const { resolveListingCommissionOnly } = await import("./product-commission");
-    expect(resolveListingCommissionOnly({ platform: "hepsiburada", commissionRate: null, commissionFixed: null }, {})).toEqual({});
+    expect(resolveListingCommissionOnly({ platform: "hepsiburada", commissionRate: null, commissionFixed: null }, {})).toEqual({ commissionPlatform: "hepsiburada" });
     expect(resolveListingCommissionOnly({ platform: "hepsiburada", commissionRate: null, commissionFixed: 5 }, {})).toEqual({
       commissionRateOverride: undefined,
       commissionFixedOverride: 5,

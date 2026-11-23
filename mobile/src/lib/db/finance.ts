@@ -2,7 +2,9 @@ import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
 import { gecerliSiparisOrani } from "@core/order-commission";
-import { dbEpochMs } from "@core/sqlite-date";
+import { dbEpochMs, toDbDate } from "@core/sqlite-date";
+import { TUM_PLATFORMLAR } from "@core/ad-cost";
+import { gecerliGiderKdvOrani, giderNetKurus } from "@core/gider-kdv";
 
 const ISTANBUL_TZ = "Europe/Istanbul";
 
@@ -52,6 +54,10 @@ export interface ActualExpense {
   note: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Dolu ise kayıt masaüstündeki sabit gider kuralından OTOMATİK açıldı (rozet). */
+  recurringId: string | null;
+  /** Giderin KDV oranı (%) — boş = KDV indirilmez (kural: `@core/gider-kdv`). */
+  vatRate: number | null;
 }
 
 export interface ActualExpenseInput {
@@ -60,6 +66,17 @@ export interface ActualExpenseInput {
   amountKurus: number;
   paidAt: string;
   note?: string | null;
+  /** KDV oranı (%): null = Yok. Tutar KDV DAHİL girilir. */
+  vatRate?: number | null;
+}
+
+/**
+ * Reklam bütçesi değişince donmuş kârların zorla yeniden yazılacağı aralık: başlangıçtan
+ * sonraki, platformu tutan siparişler ("all" = hepsi). Aralık dışı siparişlere dokunulmaz.
+ */
+export interface ReklamZorlama {
+  baslangicMs: number;
+  platform: string;
 }
 
 export interface MonthlyFinance {
@@ -97,6 +114,8 @@ interface SnapshotRow {
 interface ExpenseRow {
   paidAt: string | number;
   amountKurus: number;
+  /** v64 kolonu — masaüstü henüz güncellenmediyse yok (undefined). */
+  vatRate?: number | null;
 }
 
 interface ManualFinanceRow extends SnapshotRow {
@@ -240,10 +259,18 @@ const FORCE_PROFIT_SQL = `
 /** Erişilebilen platform verisini kuruş cinsinden kalıcı finans geçmişine işler. */
 export async function syncOrderFinanceSnapshots(
   snapshots: OrderFinanceSnapshotInput[],
-  { zorlaKarYaz = false }: { zorlaKarYaz?: boolean } = {}
+  { zorlaKarYaz = false }: { zorlaKarYaz?: ReklamZorlama | false } = {}
 ): Promise<void> {
   await ensureFinanceSchema();
   if (snapshots.length === 0) return;
+  /**
+   * Zorlama YALNIZ bütçe aralığındaki siparişlere: başlangıçtan sonra ve platformu tutan. Eskiden
+   * önbellekteki TÜM siparişler bugünkü maliyetle yeniden donuyordu (denetim, 23 Kas 2026).
+   */
+  const zorlaBu = (s: OrderFinanceSnapshotInput): boolean =>
+    zorlaKarYaz !== false &&
+    asDate(s.orderedAt).getTime() >= zorlaKarYaz.baslangicMs &&
+    (zorlaKarYaz.platform === TUM_PLATFORMLAR || s.platform === zorlaKarYaz.platform);
 
   // DEĞİŞEN-ONLY: Raporlar ekranı her açılışta (ve her kural/ayar tazelemesinde) 60 GÜNLÜK
   // tüm siparişleri yeniden yazıyordu — telefondan uzak Turso'ya yüzlerce gereksiz yazma.
@@ -278,7 +305,7 @@ export async function syncOrderFinanceSnapshots(
     if (!e) return true;
     // Reklam bütçesi değiştiğinde kâr değişir ama yukarıdaki dört koşulun HİÇBİRİNE girmez;
     // yeniden yazılmazsa Raporlar (donmuş kâr) eski, reklamsız rakamı göstermeye devam eder.
-    if (zorlaKarYaz) return true;
+    if (zorlaBu(s)) return true;
     return (
       e.rev !== tlToKurus(s.revenue) ||
       e.profit !== (s.profit == null ? null : tlToKurus(s.profit)) ||
@@ -325,7 +352,8 @@ export async function syncOrderFinanceSnapshots(
   const statements = changed
     .filter((snapshot) => snapshot.platform !== "manual")
     .filter((snapshot) => Number.isFinite(asDate(snapshot.orderedAt).getTime()))
-    .map((snapshot) => ({
+    .map((snapshot) => ({ snapshot, kosul: zorlaBu(snapshot) ? replaceSql : REPLACE_PROFIT_SQL }))
+    .map(({ snapshot, kosul }) => ({
       // DEĞİŞTİRME KOŞULU masaüstündeki shouldReplaceCapturedProfit ile BİREBİR olmalı
       // (src/lib/order-finance-snapshots.ts). Eskiden mobilde "platform kaynaklı kâr" maddesi
       // YOKTU ve profitSource/komisyon kolonlarına hiç yazılmıyordu → mobil, masaüstünün gerçek
@@ -339,17 +367,17 @@ export async function syncOrderFinanceSnapshots(
             ON CONFLICT ("platform", "externalOrderId") DO UPDATE SET
               "orderNumber" = excluded."orderNumber",
               "orderedAt" = excluded."orderedAt",
-              "profitKurus" = CASE WHEN ${replaceSql}
+              "profitKurus" = CASE WHEN ${kosul}
                 THEN excluded."profitKurus" ELSE "OrderFinanceSnapshot"."profitKurus" END,
-              "profitPartial" = CASE WHEN ${replaceSql}
+              "profitPartial" = CASE WHEN ${kosul}
                 THEN excluded."profitPartial" ELSE "OrderFinanceSnapshot"."profitPartial" END,
-              "calculationVersion" = CASE WHEN ${replaceSql}
+              "calculationVersion" = CASE WHEN ${kosul}
                 THEN excluded."calculationVersion" ELSE "OrderFinanceSnapshot"."calculationVersion" END,
-              "profitSource" = CASE WHEN ${replaceSql}
+              "profitSource" = CASE WHEN ${kosul}
                 THEN excluded."profitSource" ELSE "OrderFinanceSnapshot"."profitSource" END,
-              "estimatedCommissionKurus" = CASE WHEN ${replaceSql}
+              "estimatedCommissionKurus" = CASE WHEN ${kosul}
                 THEN excluded."estimatedCommissionKurus" ELSE "OrderFinanceSnapshot"."estimatedCommissionKurus" END,
-              "actualCommissionKurus" = CASE WHEN ${replaceSql}
+              "actualCommissionKurus" = CASE WHEN ${kosul}
                 THEN excluded."actualCommissionKurus" ELSE "OrderFinanceSnapshot"."actualCommissionKurus" END,
               "revenueKurus" = excluded."revenueKurus",
               "statusKind" = excluded."statusKind",
@@ -440,13 +468,63 @@ export async function syncOrderFinanceSnapshots(
   }
 }
 
+/**
+ * Giderin v64 kolonları (KDV oranı + silinen sabit gider dönemi tablosu) telefonda da hazır olsun:
+ * telefon masaüstünden ÖNCE güncellenirse KDV'li gider yazımı "no such column" ile düşerdi.
+ * Masaüstü şeması aynı ifadeleri `IF NOT EXISTS` / kolon kontrolüyle koşar — çakışmaz.
+ */
+let giderSemasi: Promise<void> | null = null;
+function ensureExpenseVatSchema(): Promise<void> {
+  if (!giderSemasi) {
+    giderSemasi = (async () => {
+      await ensureFinanceSchema();
+      const kolonlar = await query<{ name: string }>(`PRAGMA table_info("ActualExpense")`);
+      if (!kolonlar.some((c) => c.name === "vatRate")) {
+        try {
+          await execute(`ALTER TABLE "ActualExpense" ADD COLUMN "vatRate" REAL`);
+        } catch (error) {
+          // İki cihaz aynı anda eklerse ikinci ALTER "duplicate column" döner.
+          const yeniden = await query<{ name: string }>(`PRAGMA table_info("ActualExpense")`);
+          if (!yeniden.some((c) => c.name === "vatRate")) throw error;
+        }
+      }
+      await execute(
+        `CREATE TABLE IF NOT EXISTS "RecurringExpenseSkip" (
+          "recurringId" TEXT NOT NULL,
+          "periodKey" TEXT NOT NULL,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY ("recurringId", "periodKey")
+        )`
+      );
+    })().catch((error) => {
+      giderSemasi = null; // bir sonraki çağrı yeniden denesin
+      throw error;
+    });
+  }
+  return giderSemasi;
+}
+
 export async function getActualExpenses(): Promise<ActualExpense[]> {
   await ensureFinanceSchema();
-  return query<ActualExpense>(
-    `SELECT "id", "name", "category", "amountKurus", "paidAt", "note", "createdAt", "updatedAt"
-       FROM "ActualExpense"
-      ORDER BY "paidAt" DESC, "createdAt" DESC`
+  // SELECT * — `recurringId` / `vatRate` masaüstü şemasıyla geldi; adıyla istenirse henüz
+  // güncellenmemiş bir veritabanında sorgu düşer ve liste boş kalırdı.
+  const rows = await query<Record<string, unknown>>(
+    `SELECT * FROM "ActualExpense"
+      ORDER BY ${dbEpochMs("paidAt")} DESC, ${dbEpochMs("createdAt")} DESC`
   );
+  return rows.map((r) => ({
+    id: String(r.id ?? ""),
+    name: String(r.name ?? ""),
+    category: r.category == null ? null : String(r.category),
+    amountKurus: Number(r.amountKurus ?? 0),
+    paidAt: isoOrNull(r.paidAt as string | number | undefined) ?? String(r.paidAt ?? ""),
+    note: r.note == null ? null : String(r.note),
+    createdAt: isoOrNull(r.createdAt as string | number | undefined) ?? String(r.createdAt ?? ""),
+    updatedAt: isoOrNull(r.updatedAt as string | number | undefined) ?? String(r.updatedAt ?? ""),
+    // Gerçek bağ okunur: telefon eskiden `null` sabit yazıyor, "sabit" rozeti hiç görünmüyordu.
+    recurringId: r.recurringId == null ? null : String(r.recurringId),
+    vatRate: gecerliGiderKdvOrani(r.vatRate),
+  }));
 }
 
 /**
@@ -492,22 +570,24 @@ export async function kayitliSiparisKarlari(baslangicMs: number): Promise<Map<st
 
 export async function getExpenseTotalSince(fromMs: number, nowMs = Date.now()): Promise<number> {
   await ensureFinanceSchema();
-  const rows = await query<{ toplam: number | null }>(
-    `SELECT COALESCE(SUM("amountKurus"), 0) AS "toplam" FROM "ActualExpense"
+  // Net kârdan düşen tutar — KDV oranı girilmiş giderde KDV HARİÇ (masaüstüyle aynı çekirdek kural).
+  // SELECT *: `vatRate` kolonu masaüstü güncellenene kadar olmayabilir (yoksa tutarın tamamı düşer).
+  const rows = await query<ExpenseRow>(
+    `SELECT * FROM "ActualExpense"
       WHERE ${dbEpochMs("paidAt")} >= ? AND ${dbEpochMs("paidAt")} <= ?`,
     [fromMs, nowMs]
   );
-  return Number(rows[0]?.toplam ?? 0);
+  return rows.reduce((t, r) => t + giderNetKurus(Number(r.amountKurus) || 0, r.vatRate), 0);
 }
 
 export async function createActualExpense(input: ActualExpenseInput): Promise<void> {
-  await ensureFinanceSchema();
+  await ensureExpenseVatSchema();
   validateExpenseInput(input);
   const now = new Date().toISOString();
   await execute(
     `INSERT INTO "ActualExpense"
-       ("id", "name", "category", "amountKurus", "paidAt", "note", "createdAt", "updatedAt")
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       ("id", "name", "category", "amountKurus", "paidAt", "note", "vatRate", "createdAt", "updatedAt")
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       genId("ae:"),
       input.name.trim(),
@@ -515,6 +595,7 @@ export async function createActualExpense(input: ActualExpenseInput): Promise<vo
       Math.round(input.amountKurus),
       input.paidAt,
       input.note?.trim() || null,
+      gecerliGiderKdvOrani(input.vatRate),
       now,
       now,
     ]
@@ -525,12 +606,12 @@ export async function updateActualExpense(
   id: string,
   input: ActualExpenseInput
 ): Promise<void> {
-  await ensureFinanceSchema();
+  await ensureExpenseVatSchema();
   validateExpenseInput(input);
   await execute(
     `UPDATE "ActualExpense"
         SET "name" = ?, "category" = ?, "amountKurus" = ?, "paidAt" = ?,
-            "note" = ?, "updatedAt" = ?
+            "note" = ?, "vatRate" = ?, "updatedAt" = ?
       WHERE "id" = ?`,
     [
       input.name.trim(),
@@ -538,15 +619,40 @@ export async function updateActualExpense(
       Math.round(input.amountKurus),
       input.paidAt,
       input.note?.trim() || null,
+      gecerliGiderKdvOrani(input.vatRate),
       new Date().toISOString(),
       id,
     ]
   );
 }
 
+/**
+ * Gider kaydını sil. Kayıt masaüstündeki SABİT GİDER kuralından otomatik açıldıysa aynı işlemde
+ * "bu dönemi bir daha açma" satırı da yazılır — yoksa masaüstü bir sonraki açılışta aynı ayı geri
+ * getiriyordu (masaüstü silme ucuyla birebir aynı iki ifade, tek parça).
+ */
 export async function deleteActualExpense(id: string): Promise<void> {
   await ensureFinanceSchema();
-  await execute(`DELETE FROM "ActualExpense" WHERE "id" = ?`, [id]);
+  // SELECT *: `recurringId` kolonu eski bir veritabanında olmayabilir.
+  const satir = (await query<Record<string, unknown>>(
+    `SELECT * FROM "ActualExpense" WHERE "id" = ?`,
+    [id]
+  ))[0];
+  const otomatik = satir != null && satir.recurringId != null && satir.periodKey != null;
+  if (!otomatik) {
+    await execute(`DELETE FROM "ActualExpense" WHERE "id" = ?`, [id]);
+    return;
+  }
+  await ensureExpenseVatSchema();
+  await writeBatch([
+    {
+      sql: `INSERT OR IGNORE INTO "RecurringExpenseSkip" ("recurringId", "periodKey", "createdAt")
+            SELECT "recurringId", "periodKey", ? FROM "ActualExpense"
+             WHERE "id" = ? AND "recurringId" IS NOT NULL AND "periodKey" IS NOT NULL`,
+      args: [toDbDate(new Date()), id],
+    },
+    { sql: `DELETE FROM "ActualExpense" WHERE "id" = ?`, args: [id] },
+  ]);
 }
 
 export async function getMonthlyFinanceSummary(
@@ -570,7 +676,9 @@ export async function getMonthlyFinanceSummary(
         ORDER BY "orderedAt" ASC`
     ),
     query<ExpenseRow>(
-      `SELECT "paidAt", "amountKurus"
+      // SELECT *: `vatRate` (masaüstü v64) henüz açılmamış bir veritabanında adıyla istenirse
+      // sorgu düşer ve Raporlar boş kalırdı.
+      `SELECT *
          FROM "ActualExpense"
         ORDER BY "paidAt" ASC`
     ),
@@ -622,7 +730,8 @@ export async function getMonthlyFinanceSummary(
   }
   for (const expense of expenses) {
     const bucket = byMonth.get(monthKey(expense.paidAt) ?? "");
-    if (bucket) bucket.expensesKurus += Number(expense.amountKurus) || 0;
+    // KDV oranı girilmiş gider net kârdan KDV HARİÇ düşer — masaüstüyle aynı çekirdek kural.
+    if (bucket) bucket.expensesKurus += giderNetKurus(Number(expense.amountKurus) || 0, expense.vatRate);
   }
 
   const periods = keys.map((key) => {

@@ -37,12 +37,31 @@ export function findCargoRule(
     return true;
   });
 
+  // KESİN sıra (Berke'nin onayı, 23 Kas 2026): kategorili → öncelik → dar desi bandı → dar fiyat
+  // bandı → kimlik. Eşitlikte listenin geliş sırası kazanıyordu; iki uç dahil olduğu için 0–150 ve
+  // 150–300 bantları tam 150 ₺'de ikisi de uyuyor, masaüstü ile telefon farklı kural seçebiliyordu.
   const sorted = active.sort((a, b) => {
     const aSpecific = a.categoryName?.trim() ? 1 : 0;
     const bSpecific = b.categoryName?.trim() ? 1 : 0;
     if (aSpecific !== bSpecific) return bSpecific - aSpecific;
-    return b.priority - a.priority;
+    if (a.priority !== b.priority) return b.priority - a.priority;
+    const aDesi = a.maxDesi - a.minDesi;
+    const bDesi = b.maxDesi - b.minDesi;
+    if (aDesi !== bDesi) return aDesi - bDesi;
+    const aFiyat = a.maxPrice - a.minPrice;
+    const bFiyat = b.maxPrice - b.minPrice;
+    if (aFiyat !== bFiyat) return aFiyat - bFiyat;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
 
   return sorted[0];
+}
+
+/**
+ * Kargo baremi için desi: en yakın tam sayı, en az 1 (`kargo-tarife.fiyatDesisi` ile aynı kural).
+ * Sipariş kârı, Ürünler/Fiyat Lab ve elle sipariş AYNI desiyle barem arasın: Shopify baremleri
+ * 0–4 / 5–10 diye tam sayı, 4,1 desi hiçbir banda uymuyor, kargo 0 sayılıyordu (onay, 23 Kas 2026).
+ */
+export function baremDesisi(desi: number): number {
+  return Math.max(1, Math.round(Number.isFinite(desi) && desi > 0 ? desi : 1));
 }

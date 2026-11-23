@@ -1,7 +1,14 @@
 import { toDbDate } from "@core/sqlite-date";
-import { yururluktekiDonemBaslangiciMs } from "@core/tariff-period";
+import { yeniKuralBaslangiciMs } from "@core/tariff-period";
+import {
+  komisyonKuraliGuncellemePlani,
+  komisyonKuraliSilmePlani,
+  komisyonKuraliYenidenAcmaPlani,
+  kuralYururlukte as kuralYururluktedir,
+  type KomisyonKuraliKaydi,
+} from "@core/komisyon-kurali-donem";
 import { execute, query, writeBatch } from "@/lib/turso";
-import { ensureCargoVatSchema } from "@/lib/db/schema";
+import { ensureCargoVatSchema, ensureCommissionPlatformSchema } from "@/lib/db/schema";
 
 function newId(): string {
   return (
@@ -89,6 +96,9 @@ export async function updateSettings(entries: Record<string, string>): Promise<v
 }
 
 // ===================== KOMİSYON KURALLARI =====================
+// DÖNEMLİ (masaüstüyle aynı çekirdek plan, `core/komisyon-kurali-donem.ts`): geçmişte başlamış
+// kuralın oranı değişince eski kural bugün kapanır, yenisi bugünden başlar; silme/kapatma da
+// geçmişi silmez, bugün kapatır. Yeni kural bu ayın 1'inden başlar.
 
 export interface CommissionRuleFull {
   id: string;
@@ -100,6 +110,11 @@ export interface CommissionRuleFull {
   fixedCommission: number;
   priority: number;
   isActive: number;
+  /** "trendyol" | "hepsiburada"; boş = eski kural (Trendyol). */
+  platform: string | null;
+  /** Epoch-ms sayı ya da ISO metin olabilir (`kuralTarihMs`). */
+  validFrom: unknown;
+  validTo: unknown;
 }
 
 export interface CommissionDraft {
@@ -111,36 +126,133 @@ export interface CommissionDraft {
   maxPrice: number;
   /** Aynı ürüne birden çok kural uyarsa yüksek olan geçerli (masaüstüyle aynı alan). */
   priority?: number;
+  /** "trendyol" | "hepsiburada" — verilmezse Trendyol. */
+  platform?: string;
 }
 
+const KOMISYON_KOLONLARI =
+  "id, name, categoryName, minPrice, maxPrice, commissionRate, fixedCommission, priority, isActive, platform, validFrom, validTo";
+
 export async function getAllCommissionRules(): Promise<CommissionRuleFull[]> {
+  await ensureCommissionPlatformSchema();
   return query<CommissionRuleFull>(
-    `SELECT id, name, categoryName, minPrice, maxPrice, commissionRate, fixedCommission, priority, isActive
-       FROM CommissionRule ORDER BY priority DESC, name ASC`
+    `SELECT ${KOMISYON_KOLONLARI} FROM CommissionRule ORDER BY priority DESC, name ASC`
   );
+}
+
+function satirdanKayit(r: CommissionRuleFull): KomisyonKuraliKaydi {
+  const tarih = (v: unknown) => {
+    const ms = kuralTarihMs(v);
+    return ms == null ? null : new Date(ms);
+  };
+  return {
+    id: r.id,
+    name: r.name,
+    categoryName: r.categoryName,
+    minPrice: Number(r.minPrice),
+    maxPrice: Number(r.maxPrice),
+    commissionRate: Number(r.commissionRate),
+    fixedCommission: Number(r.fixedCommission),
+    priority: Number(r.priority),
+    isActive: Number(r.isActive) === 1,
+    platform: r.platform ?? null,
+    validFrom: tarih(r.validFrom),
+    validTo: tarih(r.validTo),
+  };
+}
+
+async function komisyonKuraliOku(id: string): Promise<KomisyonKuraliKaydi> {
+  await ensureCommissionPlatformSchema();
+  const [r] = await query<CommissionRuleFull>(`SELECT ${KOMISYON_KOLONLARI} FROM CommissionRule WHERE id = ?`, [id]);
+  if (!r) throw new Error("Kural bulunamadı — silinmiş olabilir");
+  return satirdanKayit(r);
+}
+
+function yeniKuralIfadesi(k: Omit<KomisyonKuraliKaydi, "id">): { sql: string; args: (string | number | null)[] } {
+  return {
+    sql: `INSERT INTO CommissionRule (id, name, categoryName, minPrice, maxPrice, commissionRate, fixedCommission, priority, isActive, platform, validFrom, validTo)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      newId(), k.name, k.categoryName, k.minPrice, k.maxPrice, k.commissionRate, k.fixedCommission, k.priority,
+      k.isActive ? 1 : 0, k.platform, k.validFrom ? toDbDate(k.validFrom) : null, k.validTo ? toDbDate(k.validTo) : null,
+    ],
+  };
 }
 
 export async function createCommissionRule(d: CommissionDraft): Promise<void> {
-  await execute(
-    `INSERT INTO CommissionRule (id, name, categoryName, minPrice, maxPrice, commissionRate, fixedCommission, priority, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    [newId(), d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission, d.priority ?? 10]
-  );
+  await ensureCommissionPlatformSchema();
+  const an = Date.now();
+  const ifade = yeniKuralIfadesi({
+    name: d.name,
+    categoryName: d.categoryName,
+    minPrice: d.minPrice,
+    maxPrice: d.maxPrice,
+    commissionRate: d.commissionRate,
+    fixedCommission: d.fixedCommission,
+    priority: d.priority ?? 10,
+    isActive: true,
+    platform: d.platform ?? "trendyol",
+    validFrom: new Date(yeniKuralBaslangiciMs([], an)),
+    validTo: null,
+  });
+  await execute(ifade.sql, ifade.args);
 }
 
 export async function updateCommissionRule(id: string, d: CommissionDraft): Promise<void> {
-  await execute(
-    `UPDATE CommissionRule SET name=?, categoryName=?, minPrice=?, maxPrice=?, commissionRate=?, fixedCommission=?, priority=COALESCE(?, priority) WHERE id=?`,
-    [d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission, d.priority ?? null, id]
+  const eski = await komisyonKuraliOku(id);
+  const plan = komisyonKuraliGuncellemePlani(
+    eski,
+    {
+      name: d.name,
+      categoryName: d.categoryName,
+      minPrice: d.minPrice,
+      maxPrice: d.maxPrice,
+      commissionRate: d.commissionRate,
+      fixedCommission: d.fixedCommission,
+      ...(d.priority != null ? { priority: d.priority } : {}),
+      ...(d.platform ? { platform: d.platform } : {}),
+    },
+    new Date()
   );
+  if (plan.tur === "yerinde") {
+    const v = { ...eski, ...plan.veri };
+    await execute(
+      `UPDATE CommissionRule SET name=?, categoryName=?, minPrice=?, maxPrice=?, commissionRate=?, fixedCommission=?, priority=?, platform=? WHERE id=?`,
+      [v.name, v.categoryName, v.minPrice, v.maxPrice, v.commissionRate, v.fixedCommission, v.priority, v.platform, id]
+    );
+    return;
+  }
+  // Tek parça: eski dönem kapanır + yeni dönem açılır (biri düşerse ikisi de yazılmaz).
+  await writeBatch([
+    { sql: `UPDATE CommissionRule SET validTo=? WHERE id=?`, args: [toDbDate(plan.kapat.validTo), id] },
+    yeniKuralIfadesi(plan.yeni),
+  ]);
 }
 
-export async function deleteCommissionRule(id: string): Promise<void> {
-  await execute(`DELETE FROM CommissionRule WHERE id=?`, [id]);
+/**
+ * Bu aydan önce başlamış kural ayın 1'inden itibaren kapanır (geçmiş aylar korunur); bu ay eklenmiş
+ * kural gerçekten silinir. `tamamen` = kullanıcı geçmişten de kaldırmayı seçti.
+ */
+export async function deleteCommissionRule(id: string, tamamen = false): Promise<void> {
+  const eski = await komisyonKuraliOku(id);
+  const plan = komisyonKuraliSilmePlani(eski, new Date(), tamamen);
+  if (plan.tur === "sil") await execute(`DELETE FROM CommissionRule WHERE id=?`, [id]);
+  else await execute(`UPDATE CommissionRule SET validTo=? WHERE id=?`, [toDbDate(plan.validTo), id]);
 }
 
+/** Kapat = ayın 1'inden kapat (geçmiş aylar korunur); aç = kapanmış kuralın ayın 1'inden başlayan kopyası. */
 export async function setCommissionRuleActive(id: string, active: boolean): Promise<void> {
-  await execute(`UPDATE CommissionRule SET isActive=? WHERE id=?`, [active ? 1 : 0, id]);
+  const eski = await komisyonKuraliOku(id);
+  const an = new Date();
+  if (!active) return deleteCommissionRule(id);
+  if (kuralYururluktedir(eski, an)) return;
+  const ifade = yeniKuralIfadesi(komisyonKuraliYenidenAcmaPlani(eski, an));
+  await execute(ifade.sql, ifade.args);
+}
+
+/** Komisyon kuralı şu an yürürlükte mi (liste "geçerli" ve "geçmiş" diye ikiye ayrılır). */
+export function komisyonKuraliYururlukte(r: CommissionRuleFull, simdiMs: number = Date.now()): boolean {
+  return kuralYururluktedir(satirdanKayit(r), new Date(simdiMs));
 }
 
 // ===================== KARGO KURALLARI =====================
@@ -208,32 +320,30 @@ export async function getAllCargoRules(): Promise<CargoRuleFull[]> {
 }
 
 /**
- * Yeni kuralın katılacağı dönemin başlangıcı — karar çekirdekte, masaüstüyle AYNI tanım.
+ * Yeni kuralın başlangıcı: BU AYIN 1'i (dönem bu aydan sonra başladıysa dönemin başı) — karar
+ * çekirdekte, masaüstüyle AYNI tanım (Berke: "tüm kasıma etki etsin, öncesine değil").
  */
-async function yururluktekiDonemBaslangici(platform: string | null): Promise<number | null> {
-  if (!platform) return null;
-  // Ham SQL kolonu sayı da metin de olabiliyor; çekirdek ikisini de çözüyor.
-  // `validTo >= <sayı>` BİLEREK gevşek: SQLite'ta metin her sayıdan büyük sayılır, yani metin
-  // satırların hepsi gelir ve asıl eleme çekirdekte yapılır. Parametreyi metne çevirmek sayı
-  // biçimli satırları sessizce DIŞARIDA bırakır — çevirme.
+async function yeniKuralBaslangici(platform: string): Promise<number> {
+  // Ham SQL kolonu sayı da metin de olabiliyor; çekirdek ikisini de çözüyor (eleme çekirdekte).
   const satirlar = await query<{ validFrom: string | number | null; validTo: string | number | null }>(
-    `SELECT validFrom, validTo FROM CargoRule
-      WHERE platform = ? AND (validTo IS NULL OR validTo >= ?)`,
-    [platform, Date.now()]
+    `SELECT validFrom, validTo FROM CargoRule WHERE platform = ?`,
+    [platform]
   );
-  return yururluktekiDonemBaslangiciMs(satirlar, Date.now());
+  return yeniKuralBaslangiciMs(satirlar, Date.now());
 }
 
 export async function createCargoRule(d: CargoDraft): Promise<void> {
   await ensureCargoVatSchema();
-  const basMs = await yururluktekiDonemBaslangici(d.platform);
+  // Platformsuz kural şema göçlerinde Trendyol'a taşınıyordu → telefonda düzenlenebilir kural Shopify.
+  const platform = d.platform ?? "shopify";
+  const basMs = await yeniKuralBaslangici(platform);
   // Masaüstüyle AYNI biçimde yaz (toDbDate). Ham ms sayısı yazılırsa kolon karışık biçimli olur;
   // tarih filtreleri karışık kolonda satırları sessizce eleyebiliyor (Raporlar'ın %78'i böyle kaybolmuştu).
-  const validFrom = basMs == null ? null : toDbDate(new Date(basMs));
+  const validFrom = toDbDate(new Date(basMs));
   await execute(
     `INSERT INTO CargoRule (id, name, platform, categoryName, minPrice, maxPrice, minDesi, maxDesi, cargoCost, vatIncluded, validFrom, priority, isActive)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 10, 1)`,
-    [newId(), d.name, d.platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0, validFrom]
+    [newId(), d.name, platform, d.categoryName, d.minPrice, d.maxPrice, d.minDesi, d.maxDesi, d.cargoCost, d.vatIncluded ? 1 : 0, validFrom]
   );
 }
 

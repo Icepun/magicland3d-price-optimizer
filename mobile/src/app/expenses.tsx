@@ -3,7 +3,7 @@ import * as Haptics from "expo-haptics";
 import { useMemo, useState } from "react";
 import { Alert, ScrollView, StyleSheet, View } from "react-native";
 
-import { Chip } from "@/components/kit/Chip";
+import { Chip, Pill } from "@/components/kit/Chip";
 import { Button, EmptyState, ErrorState, FadeInView, Glass, IconButton, Input, Money, Progress, Screen, Segmented, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
 import {
   PERIYOTLAR,
@@ -15,6 +15,7 @@ import {
   type GiderSatiri,
   type PeriyotTipi,
 } from "@core/expense-view";
+import { GIDER_KDV_ORANLARI, giderKdvEtiketi } from "@core/gider-kdv";
 import {
   createActualExpense,
   deleteActualExpense,
@@ -35,7 +36,15 @@ interface Draft {
   paidDate: string;
   category: string;
   note: string;
+  /** KDV oranı (%) — null = Yok. Tutar KDV dahil girilir. */
+  vatRate: number | null;
 }
+
+/** KDV seçenekleri — masaüstü formuyla aynı (Yok / %1 / %10 / %20). */
+const KDV_SECENEKLERI: { deger: number | null; ad: string }[] = [
+  { deger: null, ad: "Yok" },
+  ...GIDER_KDV_ORANLARI.map((o) => ({ deger: o as number, ad: `%${o}` })),
+];
 
 function todayInIstanbul(): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -49,7 +58,7 @@ function todayInIstanbul(): string {
 }
 
 function emptyDraft(): Draft {
-  return { id: null, name: "", amount: "", paidDate: todayInIstanbul(), category: "", note: "" };
+  return { id: null, name: "", amount: "", paidDate: todayInIstanbul(), category: "", note: "", vatRate: null };
 }
 
 function expenseDraft(expense: ActualExpense): Draft {
@@ -64,6 +73,7 @@ function expenseDraft(expense: ActualExpense): Draft {
     paidDate,
     category: expense.category ?? "",
     note: expense.note ?? "",
+    vatRate: expense.vatRate ?? null,
   };
 }
 
@@ -110,6 +120,7 @@ export default function ExpensesScreen() {
         paidAt,
         category: value.category.trim() || null,
         note: value.note.trim() || null,
+        vatRate: value.vatRate,
       };
       if (value.id) await updateActualExpense(value.id, input);
       else await createActualExpense(input);
@@ -151,7 +162,7 @@ export default function ExpensesScreen() {
       amount: e.amountKurus / 100,
       paidAt: e.paidAt,
       note: e.note,
-      recurringId: null,
+      recurringId: e.recurringId,
       kaynak: e,
     }));
     const aralik = periyotAraligi(periyot, simdi || 0);
@@ -235,6 +246,18 @@ export default function ExpensesScreen() {
                 <Input value={draft.paidDate} onChangeText={(paidDate) => setDraft({ ...draft, paidDate })} placeholder="YYYY-AA-GG" maxLength={10} />
               </Alan>
             </View>
+            <Alan label="KDV (tutara dahil)">
+              <View style={styles.kdvSatir} accessibilityRole="radiogroup">
+                {KDV_SECENEKLERI.map((k) => (
+                  <Chip
+                    key={k.ad}
+                    label={k.ad}
+                    selected={draft.vatRate === k.deger}
+                    onPress={() => setDraft({ ...draft, vatRate: k.deger })}
+                  />
+                ))}
+              </View>
+            </Alan>
             <Alan label="Kategori (isteğe bağlı)">
               <Input value={draft.category} onChangeText={(category) => setDraft({ ...draft, category })} placeholder="Örn. yazılım" maxLength={60} />
               {kategoriler.length > 0 ? (
@@ -294,6 +317,15 @@ export default function ExpensesScreen() {
                     <Txt v="bodyStrong" numberOfLines={1}>
                       {expense.name}
                     </Txt>
+                    {expense.recurringId || expense.vatRate != null ? (
+                      <View style={styles.rozetler}>
+                        {/* Otomatik açılan kayıt: "bunu ben mi girdim" tereddüdü olmasın (masaüstüyle aynı rozet). */}
+                        {expense.recurringId ? <Pill color={color.accentBright}>Sabit</Pill> : null}
+                        {giderKdvEtiketi(expense.vatRate) ? (
+                          <Pill color={color.textFaint}>{giderKdvEtiketi(expense.vatRate)}</Pill>
+                        ) : null}
+                      </View>
+                    ) : null}
                     <Txt v="small" tone="dim" numberOfLines={1}>
                       {new Date(expense.paidAt).toLocaleDateString("tr-TR", { day: "2-digit", month: "short", year: "numeric", timeZone: "Europe/Istanbul" })}
                       {expense.category ? ` · ${expense.category}` : ""}
@@ -313,10 +345,14 @@ export default function ExpensesScreen() {
                       haptic="orta"
                       accessibilityLabel="Ödemeyi sil"
                       onPress={() =>
-                        Alert.alert("Ödemeyi sil?", expense.name, [
+                        Alert.alert(
+                          "Ödemeyi sil?",
+                          expense.recurringId ? `${expense.name}\nBu ay bir daha otomatik eklenmez.` : expense.name,
+                          [
                           { text: "Vazgeç", style: "cancel" },
                           { text: "Sil", style: "destructive", onPress: () => remove.mutate(expense.id) },
-                        ])
+                          ]
+                        )
                       }
                     />
                   </View>
@@ -362,6 +398,8 @@ const styles = StyleSheet.create({
   form: { gap: space.md, borderColor: color.accent + "66" },
   twoCol: { flexDirection: "row", gap: space.sm },
   katChips: { flexDirection: "row", gap: space.xs, paddingTop: space.sm, paddingRight: space.xs },
+  kdvSatir: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
+  rozetler: { flexDirection: "row", flexWrap: "wrap", gap: space.xs, marginTop: 2 },
   card: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   cardRight: { alignItems: "flex-end", gap: space.xs },
 });

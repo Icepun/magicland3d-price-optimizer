@@ -28,7 +28,7 @@ vi.mock("@/lib/turso", () => ({
   execute: db.execute,
   writeBatch: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/db/schema", () => ({ ensureCargoVatSchema: vi.fn(async () => {}) }));
+vi.mock("@/lib/db/schema", () => ({ ensureCargoVatSchema: vi.fn(async () => {}), ensureCommissionPlatformSchema: vi.fn(async () => {}) }));
 
 type KuralModulu = {
   createCargoRule: (d: {
@@ -62,22 +62,36 @@ afterEach(() => {
   setDbDateStorage(null);
 });
 
-describe("telefon: yeni kargo kuralının dönem başlangıcı", () => {
-  it("masaüstünün yazdığı ISO metinle birebir aynı biçimde yazılır", async () => {
+describe("telefon: yeni kargo kuralının başlangıcı (Berke, 23 Kas 2026: bu ayın 1'inden)", () => {
+  // Saat sabit: 23 Kasım 2026 akşamı (Türkiye). Bu ayın 1'i = 2026-10-31T21:00Z.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-23T17:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("dönem bu aydan önce başladıysa bu ayın 1'i — masaüstüyle aynı ISO metin biçiminde", async () => {
     db.satirlar = [
       { validFrom: null, validTo: "2026-07-31T20:59:59.999+00:00" }, // kapanmış dönem
       { validFrom: "2026-07-31T21:00:00.000+00:00", validTo: null }, // yürürlükte
     ];
-    expect(await yazilanBaslangic()).toBe("2026-07-31T21:00:00.000+00:00");
+    expect(await yazilanBaslangic()).toBe("2026-10-31T21:00:00.000+00:00");
   });
 
-  it("eski (sayı biçimli) kayıttan devralsa da metin yazar", async () => {
+  it("eski (sayı biçimli) kayıtta da metin yazar", async () => {
     db.satirlar = [{ validFrom: Date.parse("2026-07-31T21:00:00.000Z"), validTo: null }];
-    expect(await yazilanBaslangic()).toBe("2026-07-31T21:00:00.000+00:00");
+    expect(await yazilanBaslangic()).toBe("2026-10-31T21:00:00.000+00:00");
   });
 
-  it("dönemsiz platformda boş kalır", async () => {
+  it("dönemsiz platformda da bu ayın 1'i (eskiden boş kalıp TÜM geçmişe uyuyordu)", async () => {
     db.satirlar = [{ validFrom: null, validTo: null }];
-    expect(await yazilanBaslangic()).toBeNull();
+    expect(await yazilanBaslangic()).toBe("2026-10-31T21:00:00.000+00:00");
+  });
+
+  it("dönem bu ay içinde başladıysa dönemin başı", async () => {
+    db.satirlar = [{ validFrom: "2026-11-15T21:00:00.000+00:00", validTo: null }];
+    expect(await yazilanBaslangic()).toBe("2026-11-15T21:00:00.000+00:00");
   });
 });

@@ -1,5 +1,7 @@
+import { Prisma } from "@/generated/prisma/client";
 import { prisma, remotePrisma } from "./prisma";
 import { ensureRuntimeSchema } from "./runtime-schema";
+import { parseDbDate } from "./sqlite-date";
 import packageJson from "../../package.json";
 
 /**
@@ -31,6 +33,171 @@ const SECRET_KEY_PATTERN =
 export function isSecretSettingKey(key: string): boolean {
   if ((SECRET_SETTING_KEYS as readonly string[]).includes(key)) return true;
   return SECRET_KEY_PATTERN.test(key);
+}
+
+// ── Yedeğin kapsamı: TEK KAYNAK Prisma şeması ───────────────────────────────
+//
+// NEDEN (23 Kas 2026 denetimi, madde 19): yedek, şemaya sonradan eklenen tabloları (gider
+// kategorileri, sabit giderler, reklam bütçesi) ve onlarca kolonu (KDV, gerçek kesintiler, kargo,
+// iade zararı, mesh…) hiç taşımıyordu; geri yükleme de tanımadığı alanları atıyordu. Artık:
+//  - Her Prisma modeli ya `BACKUP_TABLES`'ta ya da gerekçesiyle `BACKUP_EXCLUDED_MODELS`'tadır.
+//    Yeni model eklenip ikisine de yazılmazsa `yedek-gidis-donus.test.ts` KIRILIR.
+//  - Kolon listesi Prisma'nın ürettiği alan listesinden okunur (`backupColumns`); şemaya eklenen
+//    yeni kolon hem dışa hem içe aktarmaya KENDİLİĞİNDEN girer. Bilinçli dışlanan kolonlar
+//    `BACKUP_EXCLUDED_FIELDS`'ta gerekçesiyle durur.
+
+/**
+ * Yedek gövdesinin biçim sürümü.
+ *  3: eski biçim (gider tabloları ve sonradan eklenen kolonlar yok).
+ *  4 (23 Kas 2026): şemanın tamamı + `schemaVersion` alanı.
+ * Geri yükleme bundan BÜYÜK sürümü reddeder, küçüğünü uyarıyla alır.
+ */
+export const BACKUP_FORMAT_VERSION = 4;
+
+/** Yedeğe giren modeller → yedek gövdesindeki anahtarları (anahtarlar eski yedeklerle uyumlu kalır). */
+export const BACKUP_TABLES = {
+  VariantGroup: "variantGroups",
+  Product: "products",
+  ProductCost: "productCosts",
+  Listing: "listings",
+  FilamentType: "filamentTypes",
+  FilamentSpool: "filamentSpools",
+  FilamentUsage: "filamentUsages",
+  AppSetting: "appSettings",
+  CommissionRule: "commissionRules",
+  CargoRule: "cargoRules",
+  AdBudget: "adBudgets",
+  ExpenseRule: "expenseRules",
+  ActualExpense: "actualExpenses",
+  RecurringExpense: "recurringExpenses",
+  RecurringExpenseSkip: "recurringExpenseSkips",
+  ExpenseCategory: "expenseCategories",
+  OrderFinanceSnapshot: "orderFinanceSnapshots",
+  PlatformOrderFinancial: "platformOrderFinancials",
+  ManualOrder: "manualOrders",
+  PriceHistory: "priceHistory",
+  PrinterConfig: "printerConfigs",
+  PrintFileProduct: "printFileProducts",
+  ProductModelFile: "productModelFiles",
+  OrderItemSnapshot: "orderItemSnapshots",
+  OrderLineCost: "orderLineCosts",
+  OrderLineLink: "orderLineLinks",
+} as const satisfies Partial<Record<Prisma.ModelName, string>>;
+
+export type BackupModel = keyof typeof BACKUP_TABLES;
+
+/** BİLİNÇLİ olarak yedeğe girmeyen modeller ve gerekçeleri. */
+export const BACKUP_EXCLUDED_MODELS = {
+  UnmatchedListing: "Pazaryerinden her senkronda yeniden çekilir; eşleştirilenler zaten Listing'e taşınır.",
+  ProductModelFileThumb: "Önizleme görseli productModelFiles[].thumbnail içinde taşınır.",
+  PrinterSnapshot: "Yazıcının anlık canlı durumu; masaüstü sürekli yeniden yazar.",
+  LabelPrintRequest: "Kargo etiketi baskı kuyruğu (geçici iş kaydı).",
+  PrinterStatusSample: "Yazıcı doluluk örnekleri; 30 günden eskileri zaten silinir.",
+  PrinterCamera: "Telefonun anlık kamera isteği.",
+  PrintCommand: "Telefondan gelen anlık baskı komutu kuyruğu.",
+  Notification: "Anlık bildirim kaydı.",
+  PushToken: "Cihaza özel bildirim kimliği; başka kurulumda anlamsız ve gizli tutulmalı.",
+  PrepDone: "Günlük paketleme 'hazırlandı' işaretleri (geçici).",
+} as const satisfies Partial<Record<Prisma.ModelName, string>>;
+
+/** BİLİNÇLİ olarak gidiş-dönüşte korunmayan kolonlar ve gerekçeleri. */
+export const BACKUP_EXCLUDED_FIELDS: Partial<Record<BackupModel, Readonly<Record<string, string>>>> = {
+  ProductModelFile: {
+    storedPath:
+      "Bu bilgisayardaki mutlak dosya yolu: başka cihazda geçersiz ve kullanıcı klasörünü ifşa eder. Yedekte boş yazılır, geri yüklemede yeni kayda boş girer.",
+  },
+};
+
+/**
+ * Ham SQL ile okunan tabloların tarih kolonları. Ham sonuçta tarih, depolama biçimine göre
+ * sayı ya da metin gelir; gövdeye her zaman ISO metin olarak yazılsın diye burada çevrilir.
+ * (Gidiş-dönüş testi bu listeyi şemadaki DateTime alanlarıyla karşılaştırır.)
+ */
+export const RAW_DATE_COLUMNS = {
+  OrderItemSnapshot: ["orderedAt", "syncedAt"],
+} as const satisfies Partial<Record<BackupModel, readonly string[]>>;
+
+/** Modelin Prisma skaler alanları (üretilmiş istemciden — şema değişince kendiliğinden güncellenir). */
+export function modelColumns(model: Prisma.ModelName): string[] {
+  const fields = (Prisma as unknown as Record<string, Record<string, string> | undefined>)[
+    `${model}ScalarFieldEnum`
+  ];
+  if (!fields) throw new Error(`Prisma alan listesi bulunamadı: ${model}`);
+  return Object.values(fields);
+}
+
+const kolonOnbellegi = new Map<BackupModel, readonly string[]>();
+
+/** Yedeğin taşıdığı ve geri yüklemenin yazdığı kolonlar (bilinçli dışlananlar hariç). */
+export function backupColumns(model: BackupModel): readonly string[] {
+  let kolonlar = kolonOnbellegi.get(model);
+  if (!kolonlar) {
+    const excluded = BACKUP_EXCLUDED_FIELDS[model] ?? {};
+    kolonlar = modelColumns(model).filter((column) => !(column in excluded));
+    kolonOnbellegi.set(model, kolonlar);
+  }
+  return kolonlar;
+}
+
+// ── Sürüm denetimi ───────────────────────────────────────────────────────────
+
+export const YEDEK_DAHA_YENI_HATASI = "Bu yedek daha yeni bir sürümden. Önce uygulamayı güncelle.";
+export const YEDEK_ESKI_UYARISI =
+  "Bu yedek eski bir sürümden; yedekte olmayan bilgiler olduğu gibi bırakıldı.";
+
+/** Ayar satırlarındaki şema damgası (`schemaVersion`) → sayı; yoksa/bozuksa null. */
+export function settingsSchemaVersion(
+  settings: ReadonlyArray<{ key: string; value: string }> | undefined
+): number | null {
+  const raw = settings?.find((setting) => setting.key === "schemaVersion")?.value;
+  const value = Number(raw);
+  return raw != null && Number.isInteger(value) && value > 0 ? value : null;
+}
+
+export interface BackupVersionInfo {
+  version?: number | null;
+  schemaVersion?: number | null;
+  appSettings?: ReadonlyArray<{ key: string; value: string }>;
+}
+
+/**
+ * Ham (henüz doğrulanmamış) yedek gövdesinden sürüm bilgisini okur. Biçim doğrulamasından ÖNCE
+ * çağrılır: daha yeni bir sürümün yedeği "biçim geçersiz" yerine anlaşılır bir mesajla reddedilsin.
+ */
+export function backupVersionInfo(raw: unknown): BackupVersionInfo {
+  if (!raw || typeof raw !== "object") return {};
+  const body = raw as Record<string, unknown>;
+  const sayi = (value: unknown) =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  const appSettings = Array.isArray(body.appSettings)
+    ? body.appSettings.filter(
+        (setting): setting is { key: string; value: string } =>
+          !!setting &&
+          typeof setting === "object" &&
+          typeof (setting as { key?: unknown }).key === "string" &&
+          typeof (setting as { value?: unknown }).value === "string"
+      )
+    : undefined;
+  return { version: sayi(body.version), schemaVersion: sayi(body.schemaVersion), appSettings };
+}
+
+/**
+ * Yedek bu uygulamaya göre "yeni" (reddedilir), "eski" (uyarıyla alınır) ya da "uyumlu" mu?
+ *  - Biçim sürümü bizimkinden büyükse ya da şema damgası bu veritabanınınkinden büyükse → yeni.
+ *    Böyle bir yedekte bu sürümün tanımadığı alanlar olur; sessizce düşmesinler.
+ *  - Biçim sürümü yoksa ya da küçükse → eski: yedekte bulunmayan alanlara dokunulmaz.
+ * `appSchemaVersion` bilinmiyorsa (damga okunamadı) şema karşılaştırması atlanır.
+ */
+export function backupVersionVerdict(
+  backup: BackupVersionInfo,
+  appSchemaVersion: number | null
+): "yeni" | "eski" | "uyumlu" {
+  const format = backup.version ?? null;
+  const schema = backup.schemaVersion ?? settingsSchemaVersion(backup.appSettings);
+  if (format != null && format > BACKUP_FORMAT_VERSION) return "yeni";
+  if (schema != null && appSchemaVersion != null && schema > appSchemaVersion) return "yeni";
+  if (format == null || format < BACKUP_FORMAT_VERSION) return "eski";
+  return "uyumlu";
 }
 
 export interface BuildBackupOptions {
@@ -123,8 +290,12 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     rawAppSettings,
     commissionRules,
     cargoRules,
+    adBudgets,
     expenseRules,
     actualExpenses,
+    recurringExpenses,
+    recurringExpenseSkips,
+    expenseCategories,
     orderFinanceSnapshots,
     platformOrderFinancials,
     manualOrders,
@@ -146,8 +317,13 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     q(() => prisma.appSetting.findMany()),
     q(() => prisma.commissionRule.findMany()),
     q(() => prisma.cargoRule.findMany()),
+    q(() => prisma.adBudget.findMany()),
     q(() => prisma.expenseRule.findMany()),
     q(() => remotePrisma.actualExpense.findMany()),
+    // Gider tabloları telefondan da yazılıyor → ActualExpense gibi uzak istemciden okunur.
+    q(() => remotePrisma.recurringExpense.findMany()),
+    q(() => remotePrisma.recurringExpenseSkip.findMany()),
+    q(() => remotePrisma.expenseCategory.findMany()),
     // Manual orders are their own captured finance source. Exporting a second
     // "manual" platform snapshot would make older backups easy to double-count.
     q(() =>
@@ -163,14 +339,9 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     q(() => modelDosyalariniOku()),
     // Ürün bazlı satış geçmişi. Yedeğe girmezse geri yükleme onu KALICI olarak siler ve
     // Üretim Planı'ndaki satış hızı / ölü stok boşalır (geri getirilemez).
-    q(() =>
-      prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-        `SELECT "id","platform","externalOrderId","lineIndex","orderedAt","productId",
-                "productName","quantity","unitPriceKurus","lineRevenueKurus","statusKind","currency"
-           FROM "OrderItemSnapshot"
-          WHERE "platform" <> 'manual'`
-      )
-    ),
+    // Kolonlar elle yazılmaz, Prisma alan listesinden gelir: elle yazılmış liste komisyon oranı /
+    // KDV / kargoya verme süresini dışarıda bırakıyordu.
+    q(() => satisGecmisiniOku()),
     // Siparişe özel maliyetler (kullanıcının elle girdiği) — yedeğe girmezse geri yükleme onları siler.
     q(() => prisma.orderLineCost.findMany()),
     // Elle ürün bağları ("Ürüne bağla") — yedeğe girmezse geri yükleme eski siparişleri yeniden koparır.
@@ -203,7 +374,9 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
   }
 
   return {
-    version: 3,
+    version: BACKUP_FORMAT_VERSION,
+    // Yedeği üreten veritabanının şema sürümü: geri yükleme daha yeni şemalı yedeği reddeder.
+    schemaVersion: settingsSchemaVersion(rawAppSettings),
     exportedAt: new Date().toISOString(),
     appVersion: packageJson.version,
     metadata: {
@@ -227,8 +400,12 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     appSettings,
     commissionRules,
     cargoRules,
+    adBudgets,
     expenseRules,
     actualExpenses,
+    recurringExpenses,
+    recurringExpenseSkips,
+    expenseCategories,
     orderFinanceSnapshots,
     platformOrderFinancials,
     manualOrders,
@@ -240,6 +417,27 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     orderLineCosts,
     orderLineLinks,
   };
+}
+
+/**
+ * Satış geçmişi ham SQL ile okunur (diğer tüm okuyucuları da ham SQL; tarih kolonları karışık
+ * biçimde yazılmış olabilir). Kolon listesi Prisma alanlarından gelir; tarihler depolama
+ * biçiminden bağımsız olarak ISO metne çevrilir ki gövde her tabloda aynı biçimi taşısın.
+ */
+async function satisGecmisiniOku(): Promise<Array<Record<string, unknown>>> {
+  const kolonlar = backupColumns("OrderItemSnapshot");
+  const satirlar = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+    `SELECT ${kolonlar.map((k) => `"${k}"`).join(", ")}
+       FROM "OrderItemSnapshot"
+      WHERE "platform" <> 'manual'`
+  );
+  return (satirlar ?? []).map((satir) => {
+    const kopya: Record<string, unknown> = { ...satir };
+    for (const kolon of RAW_DATE_COLUMNS.OrderItemSnapshot) {
+      if (kopya[kolon] != null) kopya[kolon] = parseDbDate(kopya[kolon]) ?? kopya[kolon];
+    }
+    return kopya;
+  });
 }
 
 export type BackupPayload = Awaited<ReturnType<typeof buildBackupPayload>>;

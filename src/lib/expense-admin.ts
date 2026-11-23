@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { remotePrisma } from "@/lib/prisma";
 import { parseDbDate, toDbDate } from "@/lib/sqlite-date";
+import { gecerliGiderKdvOrani } from "@/core/gider-kdv";
+import { GiderKdvOraniInput, tekParcaYaz } from "./actual-expenses";
 import { KATEGORI_RENKLERI } from "./expense-admin-shared";
 
 /**
@@ -84,6 +86,8 @@ export const RecurringInput = z.object({
   endsAt: z.coerce.date().nullable().optional(),
   isActive: z.boolean().optional(),
   note: z.string().trim().max(500).nullable().optional(),
+  /** Üretilen kayıtların KDV oranı (Yok / %1 / %10 / %20). Boş = KDV indirilmez. */
+  vatRate: GiderKdvOraniInput,
 });
 
 export interface TekrarSatiri {
@@ -96,6 +100,7 @@ export interface TekrarSatiri {
   endsAt: string | null;
   isActive: boolean;
   note: string | null;
+  vatRate: number | null;
 }
 
 function tekrarSatiri(r: Record<string, unknown>): TekrarSatiri {
@@ -110,12 +115,13 @@ function tekrarSatiri(r: Record<string, unknown>): TekrarSatiri {
     endsAt: parseDbDate(r.endsAt)?.toISOString() ?? null,
     isActive: Number(r.isActive ?? 0) !== 0,
     note: r.note == null ? null : String(r.note),
+    vatRate: gecerliGiderKdvOrani(r.vatRate),
   };
 }
 
 export async function listRecurring(): Promise<TekrarSatiri[]> {
   const rows = await remotePrisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT "id","name","category","amountKurus","dayOfMonth","startsAt","endsAt","isActive","note"
+    `SELECT "id","name","category","amountKurus","dayOfMonth","startsAt","endsAt","isActive","note","vatRate"
        FROM "RecurringExpense" ORDER BY "isActive" DESC, "name" ASC`
   );
   return rows.map(tekrarSatiri);
@@ -125,8 +131,8 @@ export async function createRecurring(input: z.infer<typeof RecurringInput>) {
   const now = toDbDate(new Date());
   await remotePrisma.$executeRawUnsafe(
     `INSERT INTO "RecurringExpense"
-       ("id","name","category","amountKurus","dayOfMonth","startsAt","endsAt","isActive","note","createdAt","updatedAt")
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+       ("id","name","category","amountKurus","dayOfMonth","startsAt","endsAt","isActive","note","vatRate","createdAt","updatedAt")
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     randomUUID(),
     input.name,
     input.category ?? null,
@@ -136,6 +142,7 @@ export async function createRecurring(input: z.infer<typeof RecurringInput>) {
     input.endsAt ? toDbDate(input.endsAt) : null,
     input.isActive === false ? 0 : 1,
     input.note ?? null,
+    gecerliGiderKdvOrani(input.vatRate),
     now,
     now
   );
@@ -146,7 +153,7 @@ export async function updateRecurring(id: string, input: z.infer<typeof Recurrin
   await remotePrisma.$executeRawUnsafe(
     `UPDATE "RecurringExpense"
         SET "name"=?, "category"=?, "amountKurus"=?, "dayOfMonth"=?, "startsAt"=?, "endsAt"=?,
-            "isActive"=?, "note"=?, "updatedAt"=?
+            "isActive"=?, "note"=?, "vatRate"=?, "updatedAt"=?
       WHERE "id"=?`,
     input.name,
     input.category ?? null,
@@ -156,6 +163,7 @@ export async function updateRecurring(id: string, input: z.infer<typeof Recurrin
     input.endsAt ? toDbDate(input.endsAt) : null,
     input.isActive === false ? 0 : 1,
     input.note ?? null,
+    gecerliGiderKdvOrani(input.vatRate),
     toDbDate(new Date()),
     id
   );
@@ -163,16 +171,30 @@ export async function updateRecurring(id: string, input: z.infer<typeof Recurrin
 }
 
 /**
- * Kuralı siler. Şimdiye kadar ÜRETİLMİŞ gider kayıtlarına DOKUNMAZ — onlar gerçekten
- * ödenmiş paradır; kural kaldırıldı diye geçmiş aylardaki kâr değişmemeli. Yalnız
- * bağları koparılır ki kayıtlar artık "otomatik" rozetiyle görünmesin.
+ * Kuralı silen ifadeler — TEK işlemde uygulanmalı (`tekParcaYaz`).
+ *
+ * Şimdiye kadar ÜRETİLMİŞ gider kayıtlarına DOKUNMAZ — onlar gerçekten ödenmiş paradır; kural
+ * kaldırıldı diye geçmiş aylardaki kâr değişmemeli. Yalnız bağları koparılır ki kayıtlar artık
+ * "otomatik" rozetiyle görünmesin; kuralın "bu ayı açma" (atla) satırları da gider.
+ *
+ * ⚠️ SIRA ve TEK PARÇA (denetim, 23 Kas 2026): eskiden önce bağ koparılıp sonra kural ayrı istekle
+ * siliniyordu. İkincisi düşerse kural kalıyor, bağsız kayıtları artık "kendi dönemi" saymıyor ve
+ * tüm ayları YENİDEN açıyordu → aynı gider iki kez sayılıyordu. Şimdi hepsi tek işlemde; işlem
+ * dışı bir yolda bile önce kural gider (bağı kalan kayıt zararsızdır, kuralı kalan bağsız kayıt değil).
  */
+export function kuralSilmeIfadeleri(id: string) {
+  return [
+    { sql: `DELETE FROM "RecurringExpense" WHERE "id"=?`, args: [id] },
+    {
+      sql: `UPDATE "ActualExpense" SET "recurringId"=NULL, "periodKey"=NULL WHERE "recurringId"=?`,
+      args: [id],
+    },
+    { sql: `DELETE FROM "RecurringExpenseSkip" WHERE "recurringId"=?`, args: [id] },
+  ];
+}
+
 export async function deleteRecurring(id: string) {
-  await remotePrisma.$executeRawUnsafe(
-    `UPDATE "ActualExpense" SET "recurringId"=NULL, "periodKey"=NULL WHERE "recurringId"=?`,
-    id
-  );
-  await remotePrisma.$executeRawUnsafe(`DELETE FROM "RecurringExpense" WHERE "id"=?`, id);
+  await tekParcaYaz(kuralSilmeIfadeleri(id));
   return listRecurring();
 }
 

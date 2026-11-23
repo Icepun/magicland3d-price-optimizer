@@ -139,7 +139,16 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "63";
+// v64: Onaylanan kâr düzeltmeleri (23 Kas 2026) — `CommissionRule.platform` (kural hangi pazaryerinin;
+//      boş = eski kural, Trendyol sayılır; Hepsiburada ilanı Trendyol kuralını devralmasın),
+//      `RecurringExpenseSkip` (silinen otomatik sabit gider dönemi bir sonraki açılışta geri gelmesin),
+//      `ActualExpense.vatRate` / `RecurringExpense.vatRate` (giderin KDV oranı; boş = indirilmez, eski
+//      kayıtların rakamı değişmez). Kargo platform/TEX göçü tek seferlik bayrağa bağlandı.
+//      Hepsi NULLABLE / yeni tablo → eski sürüm cihazlar etkilenmez.
+const CURRENT_SCHEMA_VERSION = "64";
+
+/** Kargo kuralı platform/TEX göçü bir kez koştu mu (iç durum; yedekten geri yüklenmez). */
+export const KARGO_PLATFORM_GOCU_ANAHTARI = "gocKargoPlatformTamam";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -996,6 +1005,8 @@ export function ensureRuntimeSchema(): Promise<void> {
         "isActive" BOOLEAN NOT NULL DEFAULT true
       )
     `);
+    // v64: kuralın pazaryeri ("trendyol" | "hepsiburada"). Boş = eski kural → Trendyol sayılır.
+    await ensureColumn("CommissionRule", "platform", "TEXT");
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "CargoRule" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -1118,6 +1129,18 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ActualExpense_category_idx" ON "ActualExpense"("category")`
     );
+    // v64: giderin KDV oranı (%). Boş = KDV indirilmez → eski kayıtların rakamı değişmez.
+    await ensureColumn("ActualExpense", "vatRate", "REAL");
+    await ensureColumn("RecurringExpense", "vatRate", "REAL");
+    // v64: kullanıcının SİLDİĞİ otomatik sabit gider dönemi. Üretim bu dönemi bir daha açmaz.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "RecurringExpenseSkip" (
+        "recurringId" TEXT NOT NULL,
+        "periodKey" TEXT NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY ("recurringId", "periodKey")
+      )
+    `);
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "OrderFinanceSnapshot" (
         "id" TEXT NOT NULL PRIMARY KEY,
@@ -1447,7 +1470,13 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // CHECKPOINT: canlı UPDATE, tamponlanan CargoRule.platform/vatIncluded ALTER'larına
     // bağımlı → önce tamponu boşalt (kolonlar primary'de var olsun).
     await flushSchemaBuffer();
-    if (await tableExists("CargoRule")) {
+    // v64: TEK SEFERLİK. Eskiden her sürüm artışında koşuyordu: kullanıcının sonradan eklediği
+    // platformsuz kural Trendyol'a taşınıp Shopify siparişleri kargosuz kalıyordu, adında "TEX"
+    // geçen her kural da zorla "KDV hariç" yapılıyordu (denetim, 23 Kas 2026).
+    if (
+      (await tableExists("CargoRule")) &&
+      (await prisma.appSetting.findUnique({ where: { key: KARGO_PLATFORM_GOCU_ANAHTARI } })) == null
+    ) {
       await prisma.$executeRawUnsafe(
         `UPDATE "CargoRule" SET "platform" = 'trendyol' WHERE "platform" IS NULL`
       );
@@ -1456,6 +1485,11 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
             SET "vatIncluded" = false
           WHERE ("cargoProvider" LIKE '%TEX%' OR "name" LIKE '%TEX%')`
       );
+      await prisma.appSetting.upsert({
+        where: { key: KARGO_PLATFORM_GOCU_ANAHTARI },
+        create: { key: KARGO_PLATFORM_GOCU_ANAHTARI, value: "1" },
+        update: { value: "1" },
+      });
     }
 
     // ExpenseRule platform alanı. NOT: backfill YOK — null = tüm platformlar

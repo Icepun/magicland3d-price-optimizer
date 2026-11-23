@@ -4,6 +4,7 @@ import { bustFinanceCaches } from "@/lib/cache-busting";
 import { monthKey, tlToKurus } from "@/lib/monthly-finance";
 import { parseDbDate } from "@/core/sqlite-date";
 import { recalculateFinanceMonths } from "@/lib/order-finance-snapshots";
+import { adRateSnapshot } from "@/lib/ad-rate";
 import { trendyolTalepSonuclariniOku } from "@/lib/trendyol-iadeleri";
 import { trendyolOrderId } from "@/core/trendyol-order-id";
 import {
@@ -311,6 +312,12 @@ export async function tyCezaGecmisiniIsle(client: TrendyolClient): Promise<numbe
           });
 
     if (guncellemeler.length > 0) {
+      // Reklam bütçesi şu an okunamıyorsa hiçbir şey yazılmaz: ceza yazılıp kâr yeniden hesaplanamazsa
+      // sonraki tur cezayı "zaten yazılmış" görüp kârı hiç güncellemezdi. Tur bütünüyle sonra yinelenir.
+      if ((await adRateSnapshot()).bilinmiyor) {
+        console.warn("[ty-ceza-gecmisi] reklam bütçesi okunamadı; tur sonraya bırakıldı");
+        return 0;
+      }
       const ifadeler = guncellemeler.map((u) => ({
         sql: `UPDATE "OrderFinanceSnapshot" SET "penaltyKurus" = ?, "delayInfo" = ?, "returnLossKurus" = ?
                WHERE "platform" = 'trendyol' AND "externalOrderId" = ?`,

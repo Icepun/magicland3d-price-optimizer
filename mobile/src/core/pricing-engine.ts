@@ -1,6 +1,6 @@
 import { findCommissionRule, calculateCommission } from "./commission-calculator";
 import { categoryMatches } from "./category";
-import { findCargoRule } from "./cargo-calculator";
+import { baremDesisi, findCargoRule } from "./cargo-calculator";
 import { kargoTahmini } from "./kargo-tarife";
 import type {
   SimulationInput,
@@ -160,7 +160,8 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
       commissionRules,
       effectiveSalePrice,
       categoryName,
-      simulationDate
+      simulationDate,
+      input.commissionPlatform
     );
     commissionCost = appliedCommissionRule
       ? calculateCommission(effectiveSalePrice, appliedCommissionRule)
@@ -192,7 +193,8 @@ export function simulatePrice(input: SimulationInput): SimulationResult {
       cargoRules,
       effectiveSalePrice,
       categoryName,
-      normalizedDesi * qty, // N adetlik sipariş tek pakette → birleşik desiyle barem
+      // N adetlik sipariş tek pakette → birleşik desiyle barem; sipariş kârıyla AYNI yuvarlama.
+      baremDesisi(normalizedDesi * qty),
       simulationDate
     );
     cargoCost = appliedCargoRule ? appliedCargoRule.cargoCost : 0;

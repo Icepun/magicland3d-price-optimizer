@@ -8,6 +8,7 @@ import {
   updateRecurring,
 } from "@/lib/expense-admin";
 import { ensureRecurringExpenses } from "@/lib/recurring-expense-run";
+import { TekParcaYazilamadi } from "@/lib/actual-expenses";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -28,7 +29,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   await ensureRuntimeSchema();
   const { id } = await params;
-  const rows = await deleteRecurring(id);
-  bustFinanceCaches();
-  return NextResponse.json(rows);
+  try {
+    // Kural + bağlar + atla satırları TEK işlemde (bkz. kuralSilmeIfadeleri).
+    const rows = await deleteRecurring(id);
+    bustFinanceCaches();
+    return NextResponse.json(rows);
+  } catch (error) {
+    if (error instanceof TekParcaYazilamadi) {
+      return NextResponse.json({ error: error.message }, { status: 503 });
+    }
+    throw error;
+  }
 }

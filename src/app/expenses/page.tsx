@@ -27,7 +27,7 @@ import {
   type PeriyotTipi,
 } from "@/lib/expense-view";
 import { donemAnahtari } from "@/lib/recurring-expense";
-import { KategoriGrafigi, OzetSerit, PeriyotSecici } from "./expense-ui";
+import { KategoriGrafigi, KdvEtiketi, KdvSecici, OzetSerit, PeriyotSecici } from "./expense-ui";
 import {
   KategoriYonetimi,
   SabitGiderYonetimi,
@@ -46,6 +46,8 @@ interface ActualExpense {
   updatedAt: string;
   /** Dolu ise bu kayıt tekrarlayan sabit gider kuralından OTOMATİK açıldı. */
   recurringId: string | null;
+  /** KDV oranı (%) — boş = KDV indirilmez. */
+  vatRate?: number | null;
 }
 
 interface ExpenseFormState {
@@ -54,6 +56,8 @@ interface ExpenseFormState {
   amount: string;
   paidAt: string;
   note: string;
+  /** KDV oranı (%) — null = Yok. */
+  vatRate: number | null;
 }
 
 const EMPTY_FORM: ExpenseFormState = {
@@ -62,6 +66,7 @@ const EMPTY_FORM: ExpenseFormState = {
   amount: "",
   paidAt: "",
   note: "",
+  vatRate: null,
 };
 
 function todayInputValue() {
@@ -121,6 +126,7 @@ function ExpenseForm({
           amount: String(initial.amount),
           paidAt: paidAtInputValue(initial.paidAt),
           note: initial.note ?? "",
+          vatRate: initial.vatRate ?? null,
         }
       : { ...EMPTY_FORM, paidAt: todayInputValue() }
   );
@@ -177,6 +183,13 @@ function ExpenseForm({
             value={form.paidAt}
             onChange={(event) => update("paidAt", event.target.value)}
           />
+        </div>
+        <div className="sm:col-span-2">
+          <Label htmlFor="expense-vat">KDV</Label>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <KdvSecici id="expense-vat" value={form.vatRate} onChange={(v) => update("vatRate", v)} />
+            <span className="text-[11px] text-muted-foreground">Tutar KDV dahil girilir.</span>
+          </div>
         </div>
         <div className="sm:col-span-2">
           <Label htmlFor="expense-category">Kategori</Label>
@@ -331,6 +344,7 @@ export default function ExpensesPage() {
       amount: Number(form.amount),
       paidAt: `${form.paidAt}T00:00:00+03:00`,
       note: form.note.trim() || null,
+      vatRate: form.vatRate,
     };
   }
 
@@ -554,6 +568,7 @@ export default function ExpensesPage() {
                             <Repeat className="h-3 w-3" /> sabit
                           </span>
                         )}
+                        <KdvEtiketi oran={expense.vatRate} />
                       </div>
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-0.5 text-xs text-muted-foreground">
                         <span className="inline-flex items-center gap-1">
@@ -578,7 +593,13 @@ export default function ExpensesPage() {
                         variant="ghost" size="icon" className="h-8 w-8 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200" title="Sil"
                         disabled={deleteMutation.isPending}
                         onClick={() => {
-                          if (window.confirm(`"${expense.name}" giderini silmek istiyor musun?`)) {
+                          if (
+                            window.confirm(
+                              expense.recurringId
+                                ? `"${expense.name}" silinsin mi? Bu ay bir daha otomatik eklenmez.`
+                                : `"${expense.name}" giderini silmek istiyor musun?`
+                            )
+                          ) {
                             deleteMutation.mutate(expense.id);
                           }
                         }}

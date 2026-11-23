@@ -5,7 +5,7 @@ import { prisma, remotePrisma } from "@/lib/prisma";
 import { resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatHaritasi } from "@/core/filament-karisimi";
 import { computeFullProductCost } from "@/core/cost-calculator";
-import { filterCargoRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
+import { baremDesisi, filterCargoRulesByPlatform, findCargoRule } from "@/core/cargo-calculator";
 import { resolveVatableCost } from "@/core/pricing-engine";
 import {
   calculateManualOrder,
@@ -873,7 +873,7 @@ async function resolveManualOrderInput(
     // ⚠️ Kural SİPARİŞİN KENDİ TARİHİNE göre seçilir. Tarih geçilmezse arama bugünle yapılır ve
     // eski tarihli bir manuel siparişi düzenleyip kaydetmek kargoyu BUGÜNÜN tarifesiyle yeniden
     // çözer — o siparişin kârı sessizce değişirdi.
-    const rule = findCargoRule(shopifyCargoRules, input.saleTotal, "", totalDesi || 1, input.orderedAt);
+    const rule = findCargoRule(shopifyCargoRules, input.saleTotal, "", baremDesisi(totalDesi), input.orderedAt);
     const resolvedCargo = rule
       ? resolveVatableCost(rule.cargoCost, rule.vatIncluded !== false, vatRate)
       : { gross: 0, inputVat: 0 };

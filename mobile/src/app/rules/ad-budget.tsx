@@ -43,13 +43,14 @@ export default function AdBudgetScreen() {
     mutationFn: async () => {
       const deger = trTutarOku(tutar);
       if (deger == null || deger < 0) throw new Error("Geçersiz tutar.");
-      await saveAdBudget({ platform, dailyAmount: deger, startsAt: new Date() });
+      return saveAdBudget({ platform, dailyAmount: deger, startsAt: new Date() });
     },
-    onSuccess: async () => {
+    onSuccess: async (etki) => {
       setTutar("");
       await qc.invalidateQueries({ queryKey: ["ad-budgets"] });
       await qc.invalidateQueries({ queryKey: ["rules"] });
-      void syncFinanceFromCache(qc, { zorlaKarYaz: true });
+      // Yalnız bütçe aralığındaki siparişler yeniden yazılır (önceki siparişler olduğu gibi kalır).
+      void syncFinanceFromCache(qc, { zorlaKarYaz: etki });
       Alert.alert("Bütçe kaydedildi", "Bu andan itibaren siparişler yeni reklam payını taşıyor. Raporlardaki kârlar arka planda güncelleniyor.");
     },
     onError: (e) => {
@@ -59,10 +60,10 @@ export default function AdBudgetScreen() {
 
   const durdur = useMutation({
     mutationFn: (id: string) => stopAdBudget(id),
-    onSuccess: async () => {
+    onSuccess: async (etki) => {
       await qc.invalidateQueries({ queryKey: ["ad-budgets"] });
       await qc.invalidateQueries({ queryKey: ["rules"] });
-      void syncFinanceFromCache(qc, { zorlaKarYaz: true });
+      if (etki) void syncFinanceFromCache(qc, { zorlaKarYaz: etki });
     },
     onError: () => Alert.alert("Durdurulamadı", "Bağlantını kontrol edip tekrar dene."),
   });
