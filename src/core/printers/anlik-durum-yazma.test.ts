@@ -139,6 +139,23 @@ describe("veritabanında eski yöntemle aynı satır", () => {
     expect({ ...(await satir("b")) }).toEqual(beklenen("b", b, "t2"));
   });
 
+  it("kalp atışı kalan süreyi de yazar (telefonda bitiş +30 sn zıplamasın), tek ifadede", async () => {
+    const a = durum({ etaSec: 1200 }), b = durum({ name: "A1", etaSec: null });
+    await yaz([
+      { printerConfigId: "a", durum: a, tur: "tam", gorselDegisti: true },
+      { printerConfigId: "b", durum: b, tur: "tam", gorselDegisti: true },
+    ], "t1");
+    const ifadeler = yazmaIfadeleri([
+      { printerConfigId: "a", durum: { ...a, etaSec: 1170 }, tur: "kalp", gorselDegisti: false },
+      { printerConfigId: "b", durum: b, tur: "kalp", gorselDegisti: false },
+    ], "t2");
+    expect(ifadeler).toHaveLength(1);
+    await db.batch(ifadeler as never, "write");
+    expect((await satir("a")).etaSec).toBe(1170);
+    expect((await satir("a")).updatedAt).toBe("t2");
+    expect((await satir("b")).etaSec).toBeNull();
+  });
+
   it("karışık bir tur: her yazıcı için sonuç, satırın tamamını yazmakla AYNI", async () => {
     const ad = ["a", "b", "c", "d", "e"];
     const son = new Map<string, AnlikDurum>();

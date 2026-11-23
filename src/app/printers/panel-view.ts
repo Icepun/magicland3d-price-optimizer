@@ -75,6 +75,8 @@ export interface PanelPrinter {
   connection: "ok" | "offline" | "unconfigured" | "unsupported";
   statusMessage: string | null;
   warnings: PanelWarning[];
+  /** Bambu: yazıcının son raporundan bu yana geçen süre (sn) — uzunsa kart "bilgi X sn önce" der. */
+  raporYasiSn?: number | null;
   currentFilename: string | null;
   matchedProductId: string | null;
   temps: { nozzle: number; nozzleTarget: number; bed: number; bedTarget: number; nozzles?: { index: number; temp: number; target: number; active: boolean }[] };

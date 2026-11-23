@@ -4,7 +4,7 @@
 import { TimelapseStrip } from "@/components/printers/TimelapseGallery";
 import { ViewerLoadingShell } from "@/components/printers/ViewerLoadingShell";
 import { DolulukSeridi } from "@/components/printers/DolulukSeridi";
-import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -70,7 +70,7 @@ import {
 } from "./panel-controls";
 // Komut durumu YAZICI BAŞINA tutulur — tek mutation gözlemcisi eşzamanlı komutları karıştırıyordu.
 import {
-  NO_PENDING, addPending, anyPending, pendingFor, removePending, type PendingMap,
+  NO_PENDING, addPending, pendingFor, removePending, type PendingMap,
 } from "./pending-actions";
 
 // 3B izleyici three (~539KB) çeker → yalnız açıldığında yüklensin.
@@ -165,6 +165,38 @@ const EMPTY_PAUSED_SINCE: Record<string, number> = {};
  * Bu yüzden metin ALT SINIR olarak yazılır (`pausedReminder`), kesin süre gibi değil.
  * Dış depo olarak tutulur (render sırasında ref okumadan, effect'te setState etmeden).
  */
+/** Yazıcı başına son bilinen parça bilgisi — aynı dosya sürerken kısa boşlukları kapatır. */
+type KaliciParca = { dosya: string | null; parts: NonNullable<PanelPrinter["parts"]> };
+const EMPTY_KALICI_PARCA: ReadonlyMap<string, KaliciParca> = new Map();
+function createKaliciParcaStore() {
+  let snap: ReadonlyMap<string, KaliciParca> = EMPTY_KALICI_PARCA;
+  const dinleyiciler = new Set<() => void>();
+  return {
+    subscribe: (f: () => void) => { dinleyiciler.add(f); return () => { dinleyiciler.delete(f); }; },
+    getSnapshot: () => snap,
+    update: (printers: PanelPrinter[]) => {
+      let degisti = false;
+      const sonraki = new Map(snap);
+      for (const p of printers) {
+        const basiyor = p.status === "printing" || p.status === "paused";
+        const onceki = sonraki.get(p.id);
+        if (p.parts && basiyor) {
+          if (!onceki || onceki.parts !== p.parts || onceki.dosya !== p.currentFilename) {
+            sonraki.set(p.id, { dosya: p.currentFilename, parts: p.parts });
+            degisti = true;
+          }
+        } else if (onceki && (!basiyor || onceki.dosya !== p.currentFilename)) {
+          sonraki.delete(p.id);
+          degisti = true;
+        }
+      }
+      if (!degisti) return;
+      snap = sonraki;
+      for (const f of dinleyiciler) f();
+    },
+  };
+}
+
 function createPausedSinceStore() {
   let snapshot = EMPTY_PAUSED_SINCE;
   const listeners = new Set<() => void>();
@@ -192,7 +224,8 @@ function createPausedSinceStore() {
 }
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-const alpha = (oklch: string, pct: number) => oklch.replace(")", ` / ${pct}%)`);
+/** Rengin saydam hâli — oklch, onaltılık, rgb hepsiyle çalışır. */
+const alpha = (renk: string, pct: number) => `color-mix(in oklch, ${renk} ${pct}%, transparent)`;
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init);
@@ -268,7 +301,14 @@ export default function PrintersPage() {
   // Komut YOLDAYKEN yoklama durur: iyimser durum (ör. "iptal edildi") 5 saniye sonra gelen
   // henüz-değişmemiş gerçekle EZİLİYOR, kart iki kez zıplıyordu (Moonraker iptali 65sn sürebilir).
   const [pendingMap, setPendingMap] = useState<PendingMap<ActionKind>>(NO_PENDING);
-  const commandInFlight = anyPending(pendingMap);
+  /**
+   * İYİMSER DURUM YAZICI BAŞINA ve verinin ÜSTÜNDE tutulur (önbelleğe yazılmaz).
+   * Eskiden komut yoldayken TÜM yazıcıların yoklaması duruyordu (iptal 65 sn sürebilir; bu arada
+   * başka yazıcıdaki filament-bitti duraklaması görünmüyordu) ve hata olunca tıklama anındaki
+   * görüntü bütün listeye geri yazılıyordu (denetim, 23 Kas 2026). Artık yoklama sürer, gelen
+   * henüz-değişmemiş veri iyimser durumu ezemez; komut bitince yama kalkar.
+   */
+  const [iyimserYamalar, setIyimserYamalar] = useState<Record<string, (p: PanelPrinter) => Partial<PanelPrinter>>>({});
   /** Bu mount'taki İLK çekim mi? Yalnız o istek sunucu önbelleğini atlar. */
   const ilkCekimRef = useRef(true);
   const { data, dataUpdatedAt, isLoading, isError, error, isFetching, refetch } = useQuery<PrintersResponse>({
@@ -287,7 +327,6 @@ export default function PrintersPage() {
      * her tur yazıcıya sorgu, ürün eşleştirmesi ve panel işi demek.
      */
     refetchInterval: (q) => {
-      if (commandInFlight) return false;
       const basan = (q.state.data?.printers ?? []).some((p) => p.status === "printing" || p.status === "paused");
       return basan ? 2000 : 15000;
     },
@@ -314,9 +353,22 @@ export default function PrintersPage() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [anyActive, pencereGizli]);
+  /**
+   * BAYAT VERİ — yoklama düştüyse ya da duraksadıysa kartlar son haliyle DONUYORDU ve geri sayım
+   * "Tamamlanıyor…"ya kadar akmaya devam ediyordu (denetim, 23 Kas 2026). Veri yaşı yoklama
+   * aralığının birkaç katını geçerse üstte şerit çıkar, sayım son veride durur, kartlar soluklaşır.
+   */
+  const [yasTik, setYasTik] = useState(0);
+  useEffect(() => {
+    if (!data || pencereGizli) return;
+    const t = setInterval(() => setYasTik(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, [data, pencereGizli]);
+  const veriYasiMs = dataUpdatedAt > 0 ? Math.max(now, yasTik) - dataUpdatedAt : 0;
+  const bayat = !!data && dataUpdatedAt > 0 && (isError || veriYasiMs > (anyActive ? 12_000 : 45_000));
   // Yeni baskı uzun bir boşluktan sonra başlarsa önceki baskıdan kalmış saati bir kare bile
   // kullanma; son veri zamanını alt sınır yap, 1 sn'lik sayaç oradan devam etsin.
-  const clockNow = anyActive ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
+  const clockNow = anyActive && !bayat ? Math.max(now, dataUpdatedAt) : dataUpdatedAt;
 
   /**
    * BASKI BİTİNCE TIMELAPSE LİSTESİNİ TAZELE.
@@ -368,7 +420,13 @@ export default function PrintersPage() {
   }, [data, qc]);
 
   const [manualRefresh, setManualRefresh] = useState(false); // "Yenile" butonunun kendi durumu (arka-plan poll'undan bağımsız)
-  const retryNow = () => { setManualRefresh(true); refetch().finally(() => setManualRefresh(false)); };
+  // ?fresh=1 ile: çevrimdışı geri çekilmesini ve durum önbelleğini atlar — eskiden yazıcı açıldıktan
+  // sonra basılan "Tekrar dene" 15-35 sn boyunca hâlâ "ulaşılamadı" gösteriyordu.
+  const retryNow = () => {
+    ilkCekimRef.current = true;
+    setManualRefresh(true);
+    refetch().finally(() => setManualRefresh(false));
+  };
   const [manageOpen, setManageOpen] = useState(false);
   const [matchTarget, setMatchTarget] = useState<{ id: string; filename: string } | null>(null);
   const [startTarget, setStartTarget] = useState<{ id: string; name: string; brand: string } | null>(null);
@@ -378,18 +436,36 @@ export default function PrintersPage() {
   const ucAcik = useUcBoyutAcik();
   const [libraryOpen, setLibraryOpen] = useState(false);
 
-  const printers = useMemo(() => data?.printers ?? [], [data]);
+  // Parça bilgisi (Moonraker) parçalar arasında / katman değişiminde bir yoklama boyunca gelmeyebiliyor;
+  // düğme sönüp açık seçici kapanıyordu. Aynı dosyanın son bilinen parça bilgisi kısa boşlukları kapatır.
+  const [kaliciParcaStore] = useState(createKaliciParcaStore);
+  useEffect(() => { kaliciParcaStore.update(data?.printers ?? []); }, [data, kaliciParcaStore]);
+  const kaliciParcalar = useSyncExternalStore(kaliciParcaStore.subscribe, kaliciParcaStore.getSnapshot, () => EMPTY_KALICI_PARCA);
+  const printers = useMemo(() => {
+    const liste = data?.printers ?? [];
+    return liste.map((p) => {
+      let q = p;
+      const yama = iyimserYamalar[p.id];
+      if (yama) q = { ...q, ...yama(q) };
+      const kalici = kaliciParcalar.get(p.id);
+      if (!q.parts && kalici && kalici.dosya === q.currentFilename && (q.status === "printing" || q.status === "paused")) {
+        q = { ...q, parts: kalici.parts };
+      }
+      return q;
+    });
+  }, [data, iyimserYamalar, kaliciParcalar]);
   const simulated = data?.simulated ?? false;
   const onlineCount = printers.filter((p) => p.online).length;
   const printingCount = printers.filter((p) => p.status === "printing").length;
   const idleCount = printers.filter((p) => p.online && p.status === "idle").length;
+  const pausedCount = printers.filter((p) => p.status === "paused").length;
 
   // MADDE 18: duraklatmanın NE ZAMAN başladığı hiçbir uçtan gelmiyor → ilk görüldüğü an damgalanır.
   const [pausedStore] = useState(createPausedSinceStore);
   useEffect(() => { pausedStore.update(data?.printers ?? []); }, [data, pausedStore]);
   const pausedSince = useSyncExternalStore(pausedStore.subscribe, pausedStore.getSnapshot, () => EMPTY_PAUSED_SINCE);
 
-  const action = useMutation<ActionResult, Error, ActionVars, { prev?: PrintersResponse }>({
+  const action = useMutation<ActionResult, Error, ActionVars, Record<string, never>>({
     mutationFn: (v) =>
       fetchJson<ActionResult>(`/api/printers/${v.id}/action`, {
         method: "POST",
@@ -402,29 +478,39 @@ export default function PrintersPage() {
     // hata olursa eski durum geri gelir + zaten sonraki poll gerçeği getirir.
     onMutate: async (v) => {
       setPendingMap((m) => addPending(m, v.id, v.action));
-      await qc.cancelQueries({ queryKey: ["printers"] });
-      const prev = qc.getQueryData<PrintersResponse>(["printers"]);
       const patch = optimisticPatch(v);
-      if (patch) {
-        qc.setQueryData<PrintersResponse>(["printers"], (old) =>
-          old ? { ...old, printers: old.printers.map((p) => (p.id === v.id ? { ...p, ...patch(p) } : p)) } : old,
-        );
-      }
-      return { prev };
+      if (patch) setIyimserYamalar((m) => ({ ...m, [v.id]: patch }));
+      return {};
     },
-    onSuccess: (res, v) => {
+    onSuccess: (_res, v) => {
       toast.success(SUCCESS_LABEL[v.action]);
-      // MADDE 6: sunucu komut sonrası kendi önbelleğini attı → paneli HEMEN tazele. Yazıcı durumu
-      // birkaç saniye sonra oturabildiği için kısa bir doğrulama yoklaması daha yapılır.
-      qc.invalidateQueries({ queryKey: ["printers"] });
-      if (!res?.verified) setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 1500);
     },
-    onError: (e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(["printers"], ctx.prev);
+    onError: (e) => {
       toast.error(e.message);
     },
-    // Kilit YALNIZ komutu gönderilen yazıcıda ve YALNIZ o komut bitince açılır.
-    onSettled: (_d, _e, v) => { setPendingMap((m) => removePending(m, v.id, v.action)); },
+    // Kilit YALNIZ komutu gönderilen yazıcıda ve YALNIZ o komut bitince açılır. İyimser yama,
+    // gerçek durum gelince (doğrulanmadıysa 1,5 sn sonraki ikinci yoklamada) kalkar; hata olunca
+    // yalnız O yazıcınınki hemen kalkar — diğer yazıcıların taze verisine dokunulmaz.
+    onSettled: (res, err, v) => {
+      setPendingMap((m) => removePending(m, v.id, v.action));
+      const yamayiKaldir = () =>
+        setIyimserYamalar((m) => {
+          if (!(v.id in m)) return m;
+          const kalan = { ...m };
+          delete kalan[v.id];
+          return kalan;
+        });
+      if (err) {
+        yamayiKaldir();
+        void qc.invalidateQueries({ queryKey: ["printers"] });
+        return;
+      }
+      // MADDE 6: sunucu komut sonrası kendi önbelleğini attı → paneli HEMEN tazele.
+      void qc.invalidateQueries({ queryKey: ["printers"] }).finally(() => {
+        if (res?.verified) return yamayiKaldir();
+        setTimeout(() => { void qc.invalidateQueries({ queryKey: ["printers"] }).finally(yamayiKaldir); }, 1500);
+      });
+    },
   });
 
   const cancelTarget = cancelId ? printers.find((p) => p.id === cancelId) ?? null : null;
@@ -455,26 +541,37 @@ export default function PrintersPage() {
     <div className="p-4 sm:p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Dar pencerede düğmeler EKRAN DIŞINA taşmasın: hem satır hem düğme grubu sarar,
           böylece yazıcı eklemenin tek yolu olan “Yönet” her genişlikte görünür kalır. */}
-      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Printer className="h-6 w-6 text-primary" /> Yazıcılar
-            {simulated && (
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-primary/12 text-primary border border-primary/25">
-                Demo
-              </span>
-            )}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {simulated
-              ? "Örnek görünüm — gerçek bağlantı için “Yönet”ten yazıcı ekleyin."
-              : "Yazıcılarınızın canlı baskı durumu."}
-          </p>
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <Printer className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              Yazıcılar
+              {simulated && (
+                <span className="rounded-md bg-[#7A7EFF]/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#C9D2F2] ring-1 ring-[#7A7EFF]/30">
+                  Demo
+                </span>
+              )}
+            </h1>
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              {!simulated && (
+                <span className="relative flex size-1.5">
+                  <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60 motion-safe:animate-ping" />
+                  <span className="relative inline-flex size-1.5 rounded-full bg-emerald-400" />
+                </span>
+              )}
+              {simulated
+                ? "Örnek görünüm — gerçek bağlantı için “Yönet”ten yazıcı ekleyin."
+                : "Canlı baskı durumu"}
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           {/* Yalnız ELLE yenilemede döner/kilitler — eski isFetching her 5sn'lik arka-plan
               poll'unda butonu yanıp söndürüyordu. */}
-          <Button variant="outline" size="sm" disabled={manualRefresh} onClick={retryNow} className="gap-2">
+          <Button variant="outline" size="sm" disabled={manualRefresh} onClick={retryNow} className={UST_DUGME}>
             <RefreshCw className={cn("h-4 w-4", manualRefresh && "animate-spin")} />
             Yenile
           </Button>
@@ -490,14 +587,14 @@ export default function PrintersPage() {
             }}
             aria-pressed={ucAcik}
             title={ucAcik ? "Kartlardaki canlı 3B çizimleri kapat (işlemciyi rahatlatır)" : "Kartlardaki canlı 3B çizimleri aç"}
-            className={cn("gap-2 transition-colors", !ucAcik && "text-muted-foreground")}
+            className={cn(UST_DUGME, !ucAcik && "text-muted-foreground")}
           >
-            <Rotate3d className={cn("h-4 w-4 transition-transform duration-300", ucAcik ? "text-primary" : "opacity-60")} />
+            <Rotate3d className={cn("h-4 w-4 transition-transform duration-300", ucAcik ? "text-[#A9AEFF]" : "opacity-60")} />
             3B
             <span
               className={cn(
                 "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-200",
-                ucAcik ? "bg-primary" : "bg-muted-foreground/30"
+                ucAcik ? "bg-gradient-to-r from-[#9B5CFF] to-[#4F8CFF]" : "bg-muted-foreground/30"
               )}
               aria-hidden
             >
@@ -509,45 +606,92 @@ export default function PrintersPage() {
               />
             </span>
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className="gap-2" disabled={simulated || printers.length === 0}>
+          <Button variant="outline" size="sm" onClick={() => setCustomOpen(true)} className={UST_DUGME} disabled={simulated || printers.length === 0}>
             <Upload className="h-4 w-4" /> Özel Baskı
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setLibraryOpen(true)} className="gap-2">
+          <Button variant="outline" size="sm" onClick={() => setLibraryOpen(true)} className={UST_DUGME}>
             <FolderOpen className="h-4 w-4" /> Özel Baskılar
           </Button>
-          <Button size="sm" onClick={() => setManageOpen(true)} className="gap-2">
+          <Button
+            size="sm"
+            onClick={() => setManageOpen(true)}
+            className="h-9 gap-2 rounded-xl border-0 bg-gradient-to-br from-[#8B6CFF] to-[#5B8CFF] px-3.5 text-white shadow-[0_10px_24px_-12px_rgba(122,126,255,0.95)] transition hover:-translate-y-px hover:brightness-110 active:scale-[0.97] motion-reduce:hover:translate-y-0"
+          >
             <Settings2 className="h-4 w-4" /> Yönet
           </Button>
         </div>
-      </div>
+      </header>
 
-      {!isLoading && (
-        <div className="flex flex-wrap gap-2 text-xs">
-          <SummaryChip icon={Printer} label={`${printers.length} yazıcı`} />
-          {!simulated && <SummaryChip icon={Power} label={`${onlineCount} çevrimiçi`} />}
-          <SummaryChip icon={Loader2} label={`${printingCount} yazdırıyor`} spin={printingCount > 0} accent />
-          <SummaryChip icon={Power} label={`${idleCount} hazır`} muted />
-          {/* MADDE 18: hangi yazıcı önce boşalacak — dört kartı okumadan, geri sayarak. */}
-          {nextFinish && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-medium bg-card border-border text-foreground/80 motion-safe:animate-in motion-safe:fade-in duration-300">
-              <Hourglass className="h-3.5 w-3.5 text-primary" />
-              Sıradaki bitiş
-              <span className="tabular-nums font-semibold">
-                {formatRemaining(nextFinish.remainingSec)}
-              </span>
-              <span className="text-muted-foreground truncate max-w-[9rem]">· {nextFinish.name}</span>
-            </span>
-          )}
-          {/* Sorun varsa tıklanınca ilgili karta götürür. */}
-          {troubles.map((t) => (
-            <TroubleChip key={t.id} item={t} onClick={() => focusCard(t.id)} />
+      {isLoading ? (
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-[112px] w-full rounded-2xl" />
           ))}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            <OzetKutusu sira={0} ikon={<Printer className="size-3.5" />} baslik="Yazıcılar">
+              <p className="text-2xl font-semibold tracking-tight tabular-nums">
+                <AnimatedNumber value={printers.length} />{" "}
+                <span className="text-base font-medium text-muted-foreground">yazıcı</span>
+              </p>
+              <p className={cn("mt-0.5 text-xs", !simulated && onlineCount < printers.length ? "text-rose-300" : "text-muted-foreground")}>
+                {simulated
+                  ? "örnek görünüm"
+                  : onlineCount < printers.length
+                    ? `${printers.length - onlineCount} yazıcıya ulaşılamıyor`
+                    : "hepsi çevrimiçi"}
+              </p>
+            </OzetKutusu>
+            <OzetKutusu
+              sira={1}
+              ikon={<Loader2 className={cn("size-3.5", printingCount > 0 && !reduceMotion && "animate-spin")} />}
+              baslik="Yazdırıyor"
+              vurgu={printingCount > 0}
+            >
+              <p className="text-2xl font-semibold tracking-tight tabular-nums">
+                <AnimatedNumber value={printingCount} />{" "}
+                <span className="text-base font-medium text-muted-foreground">yazıcı</span>
+              </p>
+              <p className={cn("mt-0.5 text-xs", pausedCount > 0 ? "text-[#C9D2F2]" : "text-muted-foreground")}>
+                {pausedCount > 0 ? `${pausedCount} baskı duraklatıldı` : printingCount > 0 ? "şu an basıyor" : "basan yok"}
+              </p>
+            </OzetKutusu>
+            <OzetKutusu sira={2} ikon={<Power className="size-3.5" />} baslik="Hazır">
+              <p className="text-2xl font-semibold tracking-tight tabular-nums">
+                <AnimatedNumber value={idleCount} />{" "}
+                <span className="text-base font-medium text-muted-foreground">yazıcı</span>
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">{idleCount > 0 ? "yeni baskıya hazır" : "boşta yazıcı yok"}</p>
+            </OzetKutusu>
+            {/* MADDE 18: hangi yazıcı önce boşalacak — kartları okumadan, geri sayarak. Tıkla → o kart. */}
+            <OzetKutusu
+              sira={3}
+              ikon={<Hourglass className="size-3.5" />}
+              baslik="Sıradaki bitiş"
+              onClick={nextFinish ? () => focusCard(nextFinish.id) : undefined}
+            >
+              <p className="truncate text-2xl font-semibold tracking-tight tabular-nums">
+                {nextFinish ? formatRemaining(nextFinish.remainingSec) : "—"}
+              </p>
+              <p className="mt-0.5 truncate text-xs text-muted-foreground">{nextFinish ? nextFinish.name : "süren baskı yok"}</p>
+            </OzetKutusu>
+          </div>
+          {/* Sorun varsa tıklanınca ilgili karta götürür. */}
+          {troubles.length > 0 && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              {troubles.map((t) => (
+                <TroubleChip key={t.id} item={t} onClick={() => focusCard(t.id)} />
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {simulated && !isLoading && (
-        <div className="rounded-lg border border-primary/25 bg-primary/[0.04] px-4 py-3 text-sm flex items-start gap-3">
-          <Link2 className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+        <div className="flex items-start gap-3 rounded-2xl bg-[#7A7EFF]/[0.06] px-4 py-3 text-sm ring-1 ring-[#7A7EFF]/25">
+          <Link2 className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
           <div>
             <p className="font-medium">Henüz gerçek yazıcı bağlı değil — bu kartlar örnektir.</p>
             <p className="text-muted-foreground text-xs mt-0.5">
@@ -557,22 +701,32 @@ export default function PrintersPage() {
         </div>
       )}
 
-      {/* Son 7 gün doluluk — yazıcıya bağlanmaz, relay'in örneklerini okur. */}
-      <DolulukSeridi />
+      {/* Veri eskidiyse SÖYLE — donmuş kart canlı gibi görünmesin. */}
+      {bayat && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#7A7EFF]/[0.06] px-4 py-2.5 ring-1 ring-[#7A7EFF]/25 animate-in fade-in slide-in-from-top-1 duration-300">
+          <p className="flex min-w-0 items-center gap-2 text-xs font-medium text-[#C9D2F2]">
+            <WifiOff className="h-3.5 w-3.5 shrink-0 text-[#A9AEFF]" />
+            Yazıcı bilgisi güncellenemiyor — son güncelleme {formatRemaining(Math.max(1, veriYasiMs / 1000))} önce.
+          </p>
+          <Button variant="outline" size="sm" className="h-7 shrink-0 rounded-lg text-xs" disabled={manualRefresh} onClick={retryNow}>
+            <RefreshCw className={cn("h-3.5 w-3.5", manualRefresh && "animate-spin")} /> Tekrar dene
+          </Button>
+        </div>
+      )}
 
       {isLoading ? (
         // İskelet gerçek kart yüksekliğine yakın olmalı — 130 px kısa iskelet veri gelince
         // sayfayı zıplatıyordu.
         <div className="grid gap-4 grid-cols-1 xl:grid-cols-2 min-[1700px]:grid-cols-3">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[392px] w-full rounded-xl" />
+            <Skeleton key={i} className="h-[392px] w-full rounded-2xl" />
           ))}
         </div>
       ) : isError && !data ? (
         // Hata "yazıcı yok" DEĞİLDİR: istek düşünce boş liste gösterilirse 4 yazıcısı olan
         // kullanıcı onları silinmiş sanıp yeniden eklemeye kalkar (9 Eki 2026 denetimi).
-        <div className="rounded-xl border border-dashed border-amber-500/40 bg-amber-500/[0.04] py-16 text-center">
-          <AlertTriangle className="h-10 w-10 mx-auto text-amber-500/70" />
+        <div className="rounded-2xl bg-rose-500/[0.05] py-16 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+          <AlertTriangle className="h-10 w-10 mx-auto text-rose-300/80" />
           <p className="mt-3 font-medium">Yazıcılara ulaşılamadı</p>
           <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
             {error instanceof Error && error.message && !/failed to fetch|load failed|networkerror/i.test(error.message)
@@ -585,7 +739,7 @@ export default function PrintersPage() {
           </Button>
         </div>
       ) : printers.length === 0 ? (
-        <div className="rounded-xl border border-dashed py-16 text-center">
+        <div className="rounded-2xl py-16 text-center ring-1 ring-white/[0.07] animate-in fade-in duration-300">
           <Printer className="h-10 w-10 mx-auto text-muted-foreground/30" />
           <p className="mt-3 font-medium">Yazıcı yok</p>
           <p className="text-sm text-muted-foreground mt-1">“Yönet”ten ilk yazıcını ekle.</p>
@@ -594,7 +748,7 @@ export default function PrintersPage() {
           </Button>
         </div>
       ) : (
-        <div className="grid gap-4 grid-cols-1 xl:grid-cols-2 min-[1700px]:grid-cols-3">
+        <div className={cn("grid gap-4 grid-cols-1 xl:grid-cols-2 min-[1700px]:grid-cols-3 transition-[opacity,filter] duration-500", bayat && "opacity-70 saturate-[.6]")}>
           {printers.map((p, i) => (
             <PrinterCard
               key={p.id}
@@ -616,6 +770,10 @@ export default function PrintersPage() {
           ))}
         </div>
       )}
+
+      {/* Son 7 gün doluluk — sık bakılan bir yer değil, en altta (Berke, 23 Kas 2026).
+          Yazıcıya bağlanmaz, relay'in örneklerini okur. */}
+      <DolulukSeridi />
 
       {manageOpen && <ManageModal onClose={() => setManageOpen(false)} />}
       {matchTarget && <MatchModal target={matchTarget} onClose={() => setMatchTarget(null)} />}
@@ -831,17 +989,48 @@ function FallbackImage({
   );
 }
 
-function SummaryChip({ icon: Icon, label, spin, accent, muted }: { icon: React.ElementType; label: string; spin?: boolean; accent?: boolean; muted?: boolean }) {
+/** Üst düğmeler — Siparişler/Ürünler ile aynı yüzey. */
+const UST_DUGME =
+  "h-9 gap-2 rounded-xl border-0 bg-white/[0.04] px-3.5 ring-1 ring-white/[0.08] transition hover:bg-white/[0.08] active:scale-[0.97]";
+
+/** Kart içi düğmeler — sakin yüzey, basınca hafif çökme. */
+const KART_DUGME =
+  "rounded-lg border-white/[0.08] bg-white/[0.03] dark:bg-white/[0.03] transition-[background-color,transform,border-color] hover:border-white/[0.14] hover:bg-white/[0.07] active:scale-[0.97]";
+
+/** Panel ve Siparişler'deki özet kutularıyla aynı görünüm. */
+function OzetKutusu({
+  sira, ikon, baslik, vurgu, onClick, children,
+}: {
+  sira: number; ikon: React.ReactNode; baslik: string; vurgu?: boolean; onClick?: () => void; children: React.ReactNode;
+}) {
+  const Kok = onClick ? "button" : "div";
   return (
-    <span className={cn(
-      "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-medium",
-      accent ? "bg-primary/10 border-primary/25 text-primary"
-        : muted ? "bg-muted/50 border-border text-muted-foreground"
-          : "bg-card border-border text-foreground/80"
-    )}>
-      <Icon className={cn("h-3.5 w-3.5", spin && "animate-spin")} />
-      {label}
-    </span>
+    <Kok
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={cn(
+        "group relative flex min-w-0 flex-col justify-between overflow-hidden rounded-2xl p-4 text-left ring-1 outline-hidden",
+        "transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
+        "animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none",
+        "focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
+        vurgu
+          ? "bg-gradient-to-br from-[#9B5CFF]/20 to-[#4F8CFF]/10 ring-[#7A7EFF]/30 hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.7)]"
+          : "bg-card ring-white/[0.07] hover:ring-white/[0.12] hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.55)]",
+        onClick && "cursor-pointer active:scale-[0.98]",
+      )}
+      style={{ animationDelay: `${sira * 60}ms` }}
+    >
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className="grid size-7 place-items-center rounded-lg bg-white/[0.05] text-[#C9D2F2] ring-1 ring-white/[0.08] transition-colors group-hover:bg-[#7A7EFF]/15">
+          {ikon}
+        </span>
+        {baslik}
+        {onClick && (
+          <ArrowRight className="ml-auto size-3.5 opacity-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:opacity-60" />
+        )}
+      </span>
+      <div className="mt-3 min-w-0">{children}</div>
+    </Kok>
   );
 }
 
@@ -1070,6 +1259,21 @@ function PrinterCardInner({
       }
     : undefined;
   const kartQc = useQueryClient();
+  // Pencereler KARTTA tutulur: eskiden düğmelerin içindeydi ve yazıcı tek bir yoklamada yanıt
+  // vermeyince (kontrol bloğu sökülünce) açık kamera / filament / katman penceresi kapanıyordu.
+  const [pencere, setPencere] = useState<"kamera" | "bosalt" | "katman" | null>(null);
+  const baglantiTesti = useBaglantiTesti(printer.id);
+  // "Parça seç" listesi: eskiden satır içi fonksiyondu → kart saniyede bir yeniden çizildikçe pencere
+  // listeyi baştan istiyor, yavaş Wi-Fi'da yanıt hiç yerine ulaşmıyordu.
+  const yaziciId = printer.id;
+  const fetchParts = useCallback(async () => {
+    const r = await fetch(`/api/printers/${yaziciId}/parts`);
+    if (!r.ok) throw new Error("Parça listesi alınamadı.");
+    const j = (await r.json()) as { parts?: PartPolygon[]; neden?: string };
+    // Parça yoksa sunucu NEDENİNİ söyler (etiketsiz dosya, kütüphanede olmayan dosya…).
+    if (!j.parts?.length && j.neden) throw new Error(j.neden);
+    return j.parts ?? [];
+  }, [yaziciId]);
 
   return (
     <Card
@@ -1078,7 +1282,8 @@ function PrinterCardInner({
       tabIndex={-1}
       aria-label={printer.name}
       className={cn(
-        "relative overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-primary/50 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 duration-500",
+        "relative gap-0 py-0 overflow-hidden rounded-2xl border-white/[0.07] outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/50 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3 duration-500",
+        "shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-white/[0.12] motion-reduce:hover:translate-y-0",
         offline && "opacity-80"
       )}
       style={{
@@ -1160,7 +1365,7 @@ function PrinterCardInner({
         {/* Üst: marka + durum */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex items-center justify-center h-9 w-9 rounded-lg shrink-0" style={{ backgroundColor: alpha(accent, 14), border: `1px solid ${alpha(accent, 30)}` }}>
+            <div className="flex items-center justify-center h-9 w-9 rounded-xl shrink-0" style={{ background: `linear-gradient(135deg, ${alpha(accent, 22)}, ${alpha(accent, 8)})`, border: `1px solid ${alpha(accent, 32)}` }}>
               <Printer className="h-4 w-4" style={{ color: accent }} />
             </div>
             <div className="min-w-0">
@@ -1205,7 +1410,7 @@ function PrinterCardInner({
                 )}
                 {/* "Ulaşılamadı" tek cümlesi üç ayrı durumu birden anlatıyordu; test hangisi
                     olduğunu söyler. Hiçbir şeyi değiştirmez, yalnız okur. */}
-                {isReal && <ConnectionTestButton printerId={printer.id} />}
+                {isReal && <ConnectionTestButton test={baglantiTesti} />}
               </div>
             </div>
           </div>
@@ -1242,6 +1447,11 @@ function PrinterCardInner({
               <SlotStrip chips={slotChips} onSec={renkSec} />
               <CardBadges printer={printer} speedView={speedView} />
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground tabular-nums">
+                {printingNow && (printer.raporYasiSn ?? 0) > 30 && (
+                  <span className="inline-flex items-center gap-1 font-medium text-[#C9D2F2] motion-safe:animate-in motion-safe:fade-in duration-300" title="Yazıcı bir süredir yeni bilgi göndermiyor">
+                    <WifiOff className="h-3.5 w-3.5 text-[#A9AEFF]" /> bilgi {formatRemaining(printer.raporYasiSn ?? 0)} önce
+                  </span>
+                )}
                 {!preparing && isPrinting && elapsedSec > 0 && (
                   <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> {formatRemaining(elapsedSec)} geçti</span>
                 )}
@@ -1281,7 +1491,7 @@ function PrinterCardInner({
         {/* Progress — HAZIRLIKTA belirsiz bar + "hazırlanıyor" (çöp %/ETA gösterme); gerçek baskıda %/ETA */}
         {job && !offline && (
           <div className="space-y-1.5">
-            <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted">
+            <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
               {preparing ? (
                 reduceMotion
                   ? <div className="absolute inset-y-0 left-0 h-full w-1/4 rounded-full" style={{ background: sv.color, opacity: 0.6 }} />
@@ -1346,13 +1556,13 @@ function PrinterCardInner({
 
         {/* Kontroller — sadece gerçek + çevrimiçi yazıcılarda */}
         {isReal && online && (
-          <div className="pt-2 mt-1 border-t border-border/50 space-y-2">
+          <div className="pt-3 mt-1 border-t border-white/[0.06] space-y-2">
             {/* Birincil eylemler */}
             <div className="flex items-center gap-1.5 flex-wrap">
               {/* MADDE 6: duraklamışken düğme "Devam et" der; uygun olmayan yön ETKİSİZ. */}
               {(isPrinting || isPaused) && (
                 <Button
-                  size="sm" variant="outline" className="h-7 gap-1 text-xs min-w-[6.5rem]"
+                  size="sm" variant="outline" className={cn("h-7 gap-1 text-xs min-w-[6.5rem]", KART_DUGME)}
                   disabled={busy || !(transport.canPause || transport.canResume)}
                   onClick={() => onCommand({ id: printer.id, action: transport.canResume ? "resume" : "pause" })}
                   title={transport.canResume ? "Baskıya devam et" : "Baskıyı duraklat"}
@@ -1367,7 +1577,7 @@ function PrinterCardInner({
                 </Button>
               )}
               {transport.canStart && (
-                <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" disabled={busy} onClick={onStart}>
+                <Button size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)} disabled={busy} onClick={onStart}>
                   <Play className="h-3.5 w-3.5" /> Baskı Başlat
                 </Button>
               )}
@@ -1400,11 +1610,11 @@ function PrinterCardInner({
               )}
 
               {/* KAMERA — yalnız gerçekten kamerası olan yazıcıda çizilir. */}
-              <CameraButton printerId={printer.id} printerName={printer.name} online={printer.online} />
+              <CameraButton printerId={printer.id} online={printer.online} onAc={() => setPencere("kamera")} />
 
               {/* FİLAMENT BOŞALT — U1'de yazıcı başında beklemeden (yalnız boştayken). */}
               {printer.brand === "snapmaker" && transport.canStart && (
-                <FilamentBosaltButton printerId={printer.id} printerName={printer.name} disabled={busy} />
+                <FilamentBosaltButton disabled={busy} onAc={() => setPencere("bosalt")} />
               )}
 
               {/* MADDE 17 — katmanda duraklat.
@@ -1416,7 +1626,7 @@ function PrinterCardInner({
                   current={printer.pauseAtLayer}
                   busy={busy}
                   pending={pending === "pauseAtLayer"}
-                  onSet={(layer) => onCommand({ id: printer.id, action: "pauseAtLayer", layer })}
+                  onAc={() => setPencere("katman")}
                 />
               )}
 
@@ -1432,7 +1642,7 @@ function PrinterCardInner({
                 });
                 return (
                   <Button
-                    size="sm" variant="outline" className="h-7 gap-1 text-xs"
+                    size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)}
                     disabled={busy || !pd.acik}
                     title={pd.ipucu}
                     onClick={() => pd.acik && setPartPicker(true)}
@@ -1458,7 +1668,7 @@ function PrinterCardInner({
                   <div className="ml-auto pl-3 border-l border-border/50">
                     <Button
                       size="sm" variant="ghost"
-                      className="h-7 gap-1 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      className="h-7 gap-1 rounded-lg text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 active:scale-[0.97]"
                       disabled={busy} onClick={onCancel}
                     >
                       {pending === "cancel"
@@ -1475,6 +1685,23 @@ function PrinterCardInner({
         {/* Yazıcı yerel depolaması: doluluk barı + temizleme (tıkla → dosya listesi) */}
         {isReal && online && <PrinterStorageStrip printerId={printer.id} accent={accent} activeFile={printer.currentFilename} />}
       </CardContent>
+
+      {pencere === "kamera" && (
+        <CameraDialog printerId={printer.id} printerName={printer.name} onClose={() => setPencere(null)} />
+      )}
+      {pencere === "bosalt" && (
+        <FilamentBosaltDialog printerId={printer.id} printerName={printer.name} onClose={() => setPencere(null)} />
+      )}
+      {pencere === "katman" && (
+        <KatmanDuraklatPenceresi
+          range={layerRange}
+          current={printer.pauseAtLayer}
+          busy={busy}
+          onSet={(layer) => onCommand({ id: printer.id, action: "pauseAtLayer", layer })}
+          onClose={() => setPencere(null)}
+        />
+      )}
+      <BaglantiTestiPenceresi test={baglantiTesti} />
 
       {renkCipi && (
         <FilamentRenkDialog
@@ -1495,14 +1722,7 @@ function PrinterCardInner({
           currentName={printer.parts.current}
           excluded={printer.parts.excluded}
           onClose={() => setPartPicker(false)}
-          fetchParts={async () => {
-            const r = await fetch(`/api/printers/${printer.id}/parts`);
-            if (!r.ok) throw new Error("Parça listesi alınamadı.");
-            const j = (await r.json()) as { parts?: PartPolygon[]; neden?: string };
-            // Parça yoksa sunucu NEDENİNİ söyler (etiketsiz dosya, kütüphanede olmayan dosya…).
-            if (!j.parts?.length && j.neden) throw new Error(j.neden);
-            return j.parts ?? [];
-          }}
+          fetchParts={fetchParts}
           // Bambu'da atlanan parça geri getirilemiyor — "Geri al" gösterilmez.
           geriAlinabilir={printer.type !== "bambu"}
           model3d={viewer}
@@ -1593,7 +1813,11 @@ interface TestSonucu {
   oneri: string;
 }
 
-function ConnectionTestButton({ printerId }: { printerId: string }) {
+/**
+ * Bağlantı testi durumu KARTTA tutulur: düğme yalnız "ulaşılamadı" dalında çizilir; yazıcı geri
+ * gelince o dal kalkıyor ve açık test penceresi de kapanıyordu.
+ */
+function useBaglantiTesti(printerId: string) {
   const [acik, setAcik] = useState(false);
   const [sonuc, setSonuc] = useState<TestSonucu | null>(null);
   const [calisiyor, setCalisiyor] = useState(false);
@@ -1620,26 +1844,36 @@ function ConnectionTestButton({ printerId }: { printerId: string }) {
     }
   };
 
+  return { acik, setAcik, sonuc, calisiyor, testEt };
+}
+type BaglantiTesti = ReturnType<typeof useBaglantiTesti>;
+
+function ConnectionTestButton({ test }: { test: BaglantiTesti }) {
+  return (
+    <Button
+      size="sm" variant="outline" className={cn("h-7 gap-1.5 text-xs", KART_DUGME)}
+      disabled={test.calisiyor}
+      onClick={() => void test.testEt()}
+    >
+      {test.calisiyor
+        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        : <Activity className="h-3.5 w-3.5" />}
+      Bağlantıyı test et
+    </Button>
+  );
+}
+
+function BaglantiTestiPenceresi({ test }: { test: BaglantiTesti }) {
+  const { acik, setAcik, sonuc, calisiyor } = test;
   const renk =
     sonuc?.sonuc === "calisiyor"
-      ? "var(--panel-green, oklch(0.72 0.16 155))"
+      ? "#34D399"
       : sonuc?.sonuc === "yazilim-durmus"
-        ? "var(--panel-amber)"
-        : "oklch(0.65 0.2 25)";
+        ? "#A9AEFF"
+        : "#FB7185";
 
   return (
     <>
-      <Button
-        size="sm" variant="outline" className="h-7 gap-1.5 text-xs"
-        disabled={calisiyor}
-        onClick={testEt}
-      >
-        {calisiyor
-          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          : <Activity className="h-3.5 w-3.5" />}
-        Bağlantıyı test et
-      </Button>
-
       <Dialog open={acik} onOpenChange={(o) => !o && setAcik(false)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -1663,8 +1897,8 @@ function ConnectionTestButton({ printerId }: { printerId: string }) {
                     style={{ animationDelay: `${i * 70}ms`, animationFillMode: "backwards" }}
                   >
                     {a.durum === "ok"
-                      ? <Check className="h-4 w-4 shrink-0" style={{ color: "var(--panel-green, oklch(0.72 0.16 155))" }} />
-                      : <X className="h-4 w-4 shrink-0 text-destructive" />}
+                      ? <Check className="h-4 w-4 shrink-0" style={{ color: "#34D399" }} />
+                      : <X className="h-4 w-4 shrink-0 text-rose-400" />}
                     <span className="flex-1 min-w-0 truncate">{a.ad}</span>
                     <span className="text-xs text-muted-foreground tabular-nums shrink-0">
                       {a.aciklama} · {a.sureMs}ms
@@ -1685,7 +1919,7 @@ function ConnectionTestButton({ printerId }: { printerId: string }) {
 
           <DialogFooter className="gap-2">
             <Button variant="outline" size="sm" onClick={() => setAcik(false)}>Kapat</Button>
-            <Button size="sm" disabled={calisiyor} onClick={testEt}>Yeniden test et</Button>
+            <Button size="sm" disabled={calisiyor} onClick={() => void test.testEt()}>Yeniden test et</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1708,9 +1942,9 @@ function tempPhase(temp: number, target: number): TempPhase {
 }
 
 const PHASE_COLOR: Record<TempPhase, string | undefined> = {
-  heating: "var(--panel-amber)",
-  ready: "oklch(0.65 0.2 35)",
-  cooling: "oklch(0.62 0.09 40)",
+  heating: "#A9AEFF",
+  ready: "#FB7185",
+  cooling: "rgb(251 113 133 / 60%)",
   cold: undefined,
 };
 
@@ -1732,7 +1966,7 @@ function TempChip({
     <span
       title={title}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border border-border/70 bg-muted/40 px-1.5 py-0.5",
+        "inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-1.5 py-0.5",
         "text-[11px] font-medium tabular-nums transition-all duration-500",
         "motion-safe:animate-in motion-safe:fade-in",
         dim && "opacity-55",
@@ -1781,7 +2015,7 @@ function SpeedControl({
 }: { view: SpeedView; busy: boolean; pending: boolean; onPick: (value: number) => void }) {
   return (
     <div
-      className="inline-flex items-center h-7 rounded-md border border-input overflow-hidden"
+      className="inline-flex items-center h-7 rounded-lg border border-white/[0.08] bg-white/[0.03] overflow-hidden"
       title={view.hint ? `Baskı hızı · ${view.hint}` : "Baskı hızı"}
     >
       <button
@@ -1825,7 +2059,7 @@ function LightControl({
   const on = light.readable ? light.on === true : null;
   return (
     <Button
-      size="sm" variant="outline" className="h-7 gap-1 text-xs"
+      size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)}
       disabled={busy}
       onClick={() => onToggle(light.readable ? !on : "toggle")}
       title={light.readable ? (on ? "Işığı kapat" : "Işığı aç") : "Işığı değiştir"}
@@ -1863,25 +2097,20 @@ const FilamentRenkDialog = dynamic(
   { ssr: false },
 );
 
-function FilamentBosaltButton({ printerId, printerName, disabled }: { printerId: string; printerName: string; disabled?: boolean }) {
-  const [acik, setAcik] = useState(false);
+function FilamentBosaltButton({ disabled, onAc }: { disabled?: boolean; onAc: () => void }) {
   return (
-    <>
-      <Button
-        size="sm" variant="outline" className="h-7 gap-1 text-xs"
-        disabled={disabled}
-        onClick={() => setAcik(true)}
-        title="Kafalardaki filamenti geri çek"
-      >
-        <ArrowUpFromLine className="h-3.5 w-3.5" /> Filament boşalt
-      </Button>
-      {acik && <FilamentBosaltDialog printerId={printerId} printerName={printerName} onClose={() => setAcik(false)} />}
-    </>
+    <Button
+      size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)}
+      disabled={disabled}
+      onClick={onAc}
+      title="Kafalardaki filamenti geri çek"
+    >
+      <ArrowUpFromLine className="h-3.5 w-3.5" /> Filament boşalt
+    </Button>
   );
 }
 
-function CameraButton({ printerId, printerName, online }: { printerId: string; printerName: string; online: boolean }) {
-  const [acik, setAcik] = useState(false);
+function CameraButton({ printerId, online, onAc }: { printerId: string; online: boolean; onAc: () => void }) {
   const { data, isLoading } = useQuery({
     // `online` anahtarda: sayfa açılırken kapalı olan yazıcı açılınca kamera yeniden sorulur.
     // Eskiden tek sefer soruluyordu ve düğme gün boyu sönük kalabiliyordu.
@@ -1899,54 +2128,59 @@ function CameraButton({ printerId, printerName, online }: { printerId: string; p
    */
   const kullanilabilir = data?.var === true;
   return (
-    <>
-      <Button
-        size="sm" variant="outline" className="h-7 gap-1 text-xs"
-        disabled={!kullanilabilir}
-        onClick={() => setAcik(true)}
-        title={kullanilabilir ? "Canlı kamera" : (data?.neden || "Kamera kontrol ediliyor…")}
-      >
-        {isLoading
-          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          : <Camera className="h-3.5 w-3.5" />}
-        Kamera
-      </Button>
-      {acik && (
-        <CameraDialog printerId={printerId} printerName={printerName} onClose={() => setAcik(false)} />
-      )}
-    </>
+    <Button
+      size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)}
+      disabled={!kullanilabilir}
+      onClick={onAc}
+      title={kullanilabilir ? "Canlı kamera" : (data?.neden || "Kamera kontrol ediliyor…")}
+    >
+      {isLoading
+        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        : <Camera className="h-3.5 w-3.5" />}
+      Kamera
+    </Button>
   );
 }
 
 // ── MADDE 17 — katmanda duraklat ───────────────────────────────────────────
 
 function PauseAtLayerControl({
-  range, current, busy, pending, onSet,
+  range, current, busy, pending, onAc,
 }: {
   range: LayerRange | null;
-  current: number | null; busy: boolean; pending: boolean; onSet: (layer: number | null) => void;
+  current: number | null; busy: boolean; pending: boolean; onAc: () => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // Kurulu duraklatmayı KALDIRMAK katman aralığı gerektirmez.
+  const canOpen = !!range || current != null;
+  return (
+    <Button
+      size="sm" variant="outline" className={cn("h-7 gap-1 text-xs", KART_DUGME)}
+      disabled={busy || !canOpen} onClick={onAc}
+      title={range ? "Seçilen katmanda duraklat" : current != null ? "Kurulu duraklatmayı kaldır" : "Katman bilgisi yok"}
+    >
+      {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
+      {current != null ? `${current}. katmanda dur` : "Katmanda duraklat"}
+    </Button>
+  );
+}
+
+/** Katmanda duraklat penceresi — kartta açılır (kontrol bloğu bir yoklamada sökülse de kapanmaz). */
+function KatmanDuraklatPenceresi({
+  range, current, busy, onSet, onClose,
+}: {
+  range: LayerRange | null;
+  current: number | null; busy: boolean; onSet: (layer: number | null) => void; onClose: () => void;
+}) {
   const [value, setValue] = useState(range?.suggested ?? 1);
-  const openPicker = () => { setValue(range?.suggested ?? 1); setOpen(true); };
+  const setOpen = (acik: boolean) => { if (!acik) onClose(); };
   // Seçici açıkken baskı ilerliyor (`range.min` büyüyor). Değer render sırasında kırpılır ki
   // ekrandaki sayı ile kaydırıcının topuzu ayrılmasın ve sunucunun reddedeceği değer gönderilmesin.
   const safe = range ? clampLayerValue(value, range) : value;
-  // Kurulu duraklatmayı KALDIRMAK katman aralığı gerektirmez.
   const canOpen = !!range || current != null;
 
   return (
     <>
-      <Button
-        size="sm" variant="outline" className="h-7 gap-1 text-xs"
-        disabled={busy || !canOpen} onClick={openPicker}
-        title={range ? "Seçilen katmanda duraklat" : current != null ? "Kurulu duraklatmayı kaldır" : "Katman bilgisi yok"}
-      >
-        {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Layers className="h-3.5 w-3.5" />}
-        {current != null ? `${current}. katmanda dur` : "Katmanda duraklat"}
-      </Button>
-
-      {open && canOpen && (
+      {canOpen && (
         <Dialog open onOpenChange={(o) => !o && setOpen(false)}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
@@ -2630,7 +2864,7 @@ function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: str
     <>
       <button
         onClick={() => setOpen(true)}
-        className="w-full flex items-center gap-2 pt-2 mt-1 border-t border-border/50 text-[11px] text-muted-foreground hover:text-foreground transition-colors group"
+        className="w-full flex items-center gap-2 pt-2.5 mt-1 border-t border-white/[0.06] text-[11px] text-muted-foreground hover:text-foreground transition-colors group"
         title="Yazıcı depolamasını görüntüle / temizle"
       >
         <HardDrive className="h-3.5 w-3.5 shrink-0" />
@@ -2640,12 +2874,12 @@ function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: str
           <span className="flex-1 text-left">Depolama okunamadı</span>
         ) : pctUsed != null ? (
           <>
-            <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+            <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
               <span
                 className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-700 ease-out"
                 style={{
                   width: `${pctUsed}%`,
-                  background: pctUsed >= 90 ? "oklch(0.63 0.2 25)" : pctUsed >= 75 ? "oklch(0.75 0.15 75)" : alpha(accent, 80),
+                  background: pctUsed >= 90 ? "#FB7185" : pctUsed >= 75 ? "#A9AEFF" : alpha(accent, 80),
                 }}
               />
             </span>
@@ -2656,7 +2890,7 @@ function PrinterStorageStrip({ printerId, accent, activeFile }: { printerId: str
         ) : st.kind === "bambu" && st.used != null ? (
           // Kart boyutu girilmemiş: GERÇEK doluluk (kamera kayıtları dahil) + kısa yönlendirme.
           <span className="flex-1 text-left tabular-nums">
-            {fmtKart(st.used)} dolu <span className="text-primary/80">· kart boyutunu gir</span>
+            {fmtKart(st.used)} dolu <span className="text-[#A9AEFF]">· kart boyutunu gir</span>
           </span>
         ) : (
           <span className="flex-1 text-left tabular-nums">{st.files.length} dosya · {fmtBytes(filesBytes)}</span>
@@ -2901,7 +3135,7 @@ function BambuKartBolumu({ printerId, st }: { printerId: string; st: PrinterStor
               style={{ animationDelay: `${i * 50}ms`, animationFillMode: "both" }}
             >
               <span className="w-36 shrink-0 truncate text-muted-foreground">{b.label}</span>
-              <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <span className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
                 <span
                   className="absolute inset-y-0 left-0 rounded-full bg-primary/60 transition-[width] duration-700 ease-out"
                   style={{ width: `${used > 0 ? Math.max(2, Math.round((b.bytes / used) * 100)) : 0}%` }}
@@ -2958,7 +3192,7 @@ const BRANDS = [
 
 function ManageModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
-  const { data: configs = [], isLoading } = useQuery<PrinterConfig[]>({
+  const { data: configs = [], isLoading, isError: configHata, isFetching: configYenileniyor, refetch: configYenile } = useQuery<PrinterConfig[]>({
     queryKey: ["printer-configs"],
     queryFn: () => fetchJson<PrinterConfig[]>("/api/printers/config"),
   });
@@ -3025,6 +3259,14 @@ function ManageModal({ onClose }: { onClose: () => void }) {
           <div className="space-y-3">
             {isLoading ? (
               <div className="py-6 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
+            ) : configHata ? (
+              // Okunamadı ≠ yazıcı yok: "Henüz yazıcı eklenmedi" yazınca yazıcılar yeniden eklenip kopya doğabiliyordu.
+              <div className="flex flex-col items-center gap-3 rounded-xl bg-rose-500/[0.06] px-4 py-6 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+                <p className="text-sm font-medium text-rose-300">Yazıcı listesi yüklenemedi</p>
+                <Button variant="outline" size="sm" disabled={configYenileniyor} onClick={() => void configYenile()}>
+                  <RefreshCw className={cn("h-3.5 w-3.5", configYenileniyor && "animate-spin")} /> Tekrar dene
+                </Button>
+              </div>
             ) : configs.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4 text-center">Henüz yazıcı eklenmedi.</p>
             ) : (

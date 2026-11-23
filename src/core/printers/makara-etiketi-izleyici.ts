@@ -10,8 +10,9 @@
  * makara sayısı kadar (onlarca). Önbellek `processSingleton`: relay ile rotalar AYRI pakette
  * derlendiği için modül kapsamındaki önbellek iki kopya olur ve kayıttan sonra relay eskiyi görürdü.
  */
-import { prisma } from "@/lib/prisma";
+import { prisma, remotePrisma } from "@/lib/prisma";
 import { processSingleton } from "./process-singleton";
+import { bayatOnbellek, bayatOnbellegiDusur } from "./bayat-onbellek";
 import {
   etiketKarari, filamentDetectBilgisi, kayitlariCoz,
   type KanalEtiketi, type MakaraEtiketKaydi,
@@ -23,23 +24,27 @@ const ONBELLEK_MS = 60_000;
 /** Aynı kanala aynı bilgiyi art arda göndermeyi önler (WS gecikmesi / ret durumunda döngü). */
 const TEKRAR_BEKLEME_MS = 30_000;
 
-const onbellek = processSingleton("me_kayitlar", () => ({
-  at: 0,
-  deger: null as Record<string, MakaraEtiketKaydi> | null,
-}));
 const sonDeneme = processSingleton("me_sonDeneme", () => new Map<string, number>());
 
+/**
+ * Bayatı HEMEN ver, arkada ayrı bağlantıdan (`remotePrisma`) tazele. Eskiden süre dolunca panelin
+ * 2 sn'lik yoklaması ana veritabanı kuyruğunda bu sorguyu BEKLİYOR, hata olunca her yoklama yeniden
+ * deniyordu (denetim, 23 Kas 2026). Kayıttan sonra önbellek düşürülür → yeni eşleşme anında görünür.
+ */
+const ONBELLEK_ADI = "makaraEtiketleri";
+const kayitOnbellegi = bayatOnbellek(ONBELLEK_ADI, ONBELLEK_MS, async () => {
+  const row = await remotePrisma.appSetting.findUnique({ where: { key: AYAR_ANAHTARI } });
+  return kayitlariCoz(row?.value);
+});
+
 export async function makaraEtiketKayitlari(): Promise<Record<string, MakaraEtiketKaydi>> {
-  if (onbellek.deger && Date.now() - onbellek.at < ONBELLEK_MS) return onbellek.deger;
   try {
-    const row = await prisma.appSetting.findUnique({ where: { key: AYAR_ANAHTARI } });
-    onbellek.deger = kayitlariCoz(row?.value);
-    onbellek.at = Date.now();
+    return await kayitOnbellegi.al();
   } catch {
-    // Veritabanı o an yanıt vermedi: eldeki kayıtlarla devam (yoksa boş — etiket "yeni" görünür).
-    return onbellek.deger ?? {};
+    // Hiç okunamadı (ilk açılış + veritabanı yanıt vermedi): boş — etiket "yeni" görünür, sonraki
+    // yoklama yeniden dener (10 sn bekleme bayat-onbellek'te).
+    return {};
   }
-  return onbellek.deger;
 }
 
 export async function makaraEtiketiKaydet(uid: string, ayar: { renk: string; tip: string }): Promise<MakaraEtiketKaydi> {
@@ -49,8 +54,7 @@ export async function makaraEtiketiKaydet(uid: string, ayar: { renk: string; tip
   tum[uid] = kayit;
   const value = JSON.stringify(tum);
   await prisma.appSetting.upsert({ where: { key: AYAR_ANAHTARI }, create: { key: AYAR_ANAHTARI, value }, update: { value } });
-  onbellek.deger = tum;
-  onbellek.at = Date.now();
+  bayatOnbellegiDusur(ONBELLEK_ADI);
   return kayit;
 }
 
@@ -87,7 +91,6 @@ export async function makaraEtiketleriniIsle(
 
 /** Testler için. */
 export function makaraEtiketiOnbellekSifirla(): void {
-  onbellek.at = 0;
-  onbellek.deger = null;
+  bayatOnbellegiDusur(ONBELLEK_ADI);
   sonDeneme.clear();
 }

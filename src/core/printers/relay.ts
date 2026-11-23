@@ -22,7 +22,8 @@ import {
   moonrakerFileSize, moonrakerStartExisting,
   type MoonrakerMeta, type MoonrakerState,
 } from "./moonraker";
-import { bambuControl, bambuSkipObjects, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
+import { bambuControl, bambuDurumMesaji, bambuSkipObjects, mapBambuState, BAMBU_SPEED_LEVELS } from "./bambu";
+import { bitisCapasi } from "./bitis-capasi";
 import { moonrakerTelefonParcalari, bambuTelefonParcalari } from "./telefon-parcalar";
 import {
   BOS_DETAY, dakikayaYuvarla, katmanTahmini, type YaziciDetay,
@@ -70,7 +71,11 @@ const TUR_YAZMA_UST_SINIR_MS = 15_000;
  *  "start"ın saatler sonra kimse beklemiyorken baskı başlatması / bayat "cancel"ın yeni baskıyı
  *  öldürmesi güvenlik riskiydi.) Baskı BAŞLATAN/SÜRDÜREN komutlar (start/resume) daha da kısa:
  *  kimse 3 dakikadan uzun süredir beklemiyorsa o baskı artık istenmiyordur. */
-const COMMAND_TTL_MS = 10 * 60_000;
+// 10 dk idi: telefon 90 sn'de "uygulanmadı" deyip vazgeçiyor, masaüstü uyanınca eski iptal/duraklatmayı
+// yine uyguluyordu (yazıcının başında yeni başlatılan baskıyı öldürebilir). Telefon artık vazgeçtiği
+// komutu kendisi de iptal ediyor; bu süre yalnız telefon o an kapalıysa devreye girer. Telefonun saati
+// birkaç saniye kayabildiği için 90 sn'ye eşitlenmedi (createdAt telefon saatiyle yazılıyor).
+const COMMAND_TTL_MS = 3 * 60_000;
 const START_TTL_MS = 3 * 60_000;
 /** Bu oturumda ZATEN yürütülen komutlar — durum-yazması (done/error) buluta gidemese bile aynı
  *  komut bir sonraki tick'te YENİDEN yürütülmez (çift baskı başlatma koruması). */
@@ -86,7 +91,22 @@ const lastKey = processSingleton("relay_lastKey", () => new Map<string, string>(
 const lastWriteAt = processSingleton("relay_lastWriteAt", () => new Map<string, number>()); // yazıcı başına son snapshot yazma zamanı (heartbeat için)
 const lastFullWriteAt = processSingleton("relay_lastFullWriteAt", () => new Map<string, number>()); // yazıcı başına son TAM satır yazması (kendini onarma aralığı için)
 const lastImage = processSingleton("relay_lastImage", () => new Map<string, string | null>()); // buluta EN SON yazılan görsel (aynıysa tekrar gönderilmez)
-const lastStatus = processSingleton("relay_lastStatus", () => new Map<string, string>()); // baskı-bitti GEÇİŞİNİ yakalamak için yazıcı başına önceki durum
+const lastStatus = processSingleton("relay_lastStatus", () => new Map<string, string>()); // yazıcının SON turdaki durumu (kamera sahipliği: "offline" değilse bu makine ulaşıyor)
+/**
+ * Bildirim GEÇİŞİ için son ÇEVRİMİÇİ durum — "offline" bunu EZMEZ.
+ *
+ * NEDEN (denetim, 23 Kas 2026): çevrimdışı tur önceki durumu "offline" yapıyordu. Yazıcı Wi-Fi'dan
+ * 15-20 sn düşüp o arada baskı biterse / filament biterse geçiş offline→finished görünüyor ve
+ * "baskı bitti/durdu" bildirimi (masaüstü + telefon) hiç gitmiyordu. Kalıcı hafızaya da bu yazılır.
+ */
+const gecisDurumu = processSingleton("relay_gecisDurumu", () => new Map<string, string>());
+
+/** Geçiş kararı için önceki durumu verir ve haritayı günceller — "offline" önceki durumu SİLMEZ. */
+export function gecisIcinOncekiDurum(harita: Map<string, string>, id: string, simdiki: string): string | undefined {
+  const onceki = harita.get(id);
+  if (simdiki !== "offline") harita.set(id, simdiki);
+  return onceki;
+}
 // Mükerrer "baskı bitti" koruması: aynı iş için 30dk içinde ikinci bildirim atma (dosya adı
 // snapshot'lar arasında uzantılı/uzantısız değişince sahte ikinci "finished" geçişi görülebiliyor).
 const lastDoneNotify = processSingleton("relay_lastDoneNotify", () => new Map<string, { key: string; at: number }>());
@@ -120,7 +140,7 @@ let notifyStateSerialized = "";
 
 function serializeNotifyState(): string {
   const printers: Record<string, NotifyState> = {};
-  for (const [id, status] of lastStatus) printers[id] = { status };
+  for (const [id, status] of gecisDurumu) printers[id] = { status };
   for (const [id, d] of lastDoneNotify) printers[id] = { ...(printers[id] ?? {}), doneKey: d.key, doneAt: d.at };
   for (const [id, f] of lastFaultNotify) printers[id] = { ...(printers[id] ?? {}), faultKey: f.key, faultAt: f.at };
   return JSON.stringify(printers);
@@ -137,7 +157,7 @@ async function loadNotifyState(): Promise<void> {
     if (!parsed?.printers || typeof parsed.at !== "number") return;
     if (Date.now() - parsed.at > NOTIFY_STATE_TTL_MS) return;
     for (const [id, s] of Object.entries(parsed.printers)) {
-      if (typeof s?.status === "string") lastStatus.set(id, s.status);
+      if (typeof s?.status === "string" && s.status !== "offline") gecisDurumu.set(id, s.status);
       if (typeof s?.doneKey === "string" && typeof s?.doneAt === "number") {
         lastDoneNotify.set(id, { key: s.doneKey, at: s.doneAt });
       }
@@ -250,9 +270,7 @@ async function buildSnapshot(
     const matchedId = bs.filename ? matchMap.get(`${c.id}::${fileMatchKey(bs.filename)}`) : undefined;
     const matched = matchedId ? productMap.get(matchedId) : undefined;
     // MADDE 14: duraklatma/hata nedeni telefona da AYNI metinle gitsin.
-    const statusMessage =
-      bs.statusReason ??
-      (status === "error" ? `Baskı hatayla durdu${bs.printError ? ` (kod: ${bs.printError})` : ""}` : null);
+    const statusMessage = bambuDurumMesaji(status, bs);
     // MADDE 1: kalan süre yazıcının KENDİ değerinden (mc_remaining_time) — panelle aynı hesap.
     const picked = pickProgress({ printerPercent: bs.percent });
     const eta = resolveEta({
@@ -296,7 +314,13 @@ async function buildSnapshot(
       productImage: matched?.imageUrl ?? null,
       progress: picked.progress,
       nozzle: bs.nozzle, bed: bs.bed,
-      currentFilename: bs.filename, etaSec: eta.remainingSec,
+      currentFilename: bs.filename,
+      // Bitiş anı yazıcının dakikalık değeri DEĞİŞİNCE kurulur (panelle aynı çapa) → telefona giden
+      // kalan süre yazma anına göre doğru; kalp atışında +30 sn zıplamaz.
+      etaSec: (() => {
+        const bitis = bitisCapasi(`${c.id}|${bs.filename ?? ""}`, bs.remainingSec, eta.remainingSec, Date.now());
+        return bitis == null ? eta.remainingSec : Math.max(0, Math.round((bitis - Date.now()) / 1000));
+      })(),
       detail: JSON.stringify(detay),
     };
   }
@@ -699,7 +723,7 @@ async function tick(): Promise<void> {
       // BASKI BİTTİ geçişi (… → finished) → bir kez bildirim + mobil push. Önceki durum kalıcı
       // hafızadan gelir (loadNotifyState) → uygulama kapalıyken biten baskı da açılışta bildirilir;
       // 24 saatten eski hafıza kullanılmaz, o yüzden çok eski baskılar sahte bildirim üretmez.
-      const prevStatus = lastStatus.get(c.id);
+      const prevStatus = gecisIcinOncekiDurum(gecisDurumu, c.id, snap.status);
       lastStatus.set(c.id, snap.status);
       // YALNIZ gerçek baskı bitişinde bildir: printing/paused → finished. Eski koşul
       // (≠finished → finished) offline→online dalgalanmasında da tetikleniyordu — FINISH durumu

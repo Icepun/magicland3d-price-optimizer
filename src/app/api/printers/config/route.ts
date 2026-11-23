@@ -22,11 +22,16 @@ const CreateSchema = z.object({
 });
 
 export async function GET() {
-  await ensureRuntimeSchema();
-  const list = await prisma.printerConfig.findMany({
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  });
-  return NextResponse.json(list);
+  try {
+    await ensureRuntimeSchema();
+    const list = await prisma.printerConfig.findMany({
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    return NextResponse.json(list);
+  } catch (error) {
+    // Okunamadı ≠ yazıcı yok: arayüz hata gösterir ("Henüz yazıcı eklenmedi" değil).
+    return jsonError(error);
+  }
 }
 
 export async function POST(req: NextRequest) {

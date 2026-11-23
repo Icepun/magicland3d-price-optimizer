@@ -5,7 +5,8 @@ import { asamaOlcer } from "@/lib/server-perf-log";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { moonrakerThumbUrl, type MoonrakerState } from "@/core/printers/moonraker";
-import { mapBambuState, bambuAtlananlar, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
+import { mapBambuState, bambuAtlananlar, bambuDurumMesaji, BAMBU_SPEED_LEVELS, type BambuWarning } from "@/core/printers/bambu";
+import { bitisCapasi } from "@/core/printers/bitis-capasi";
 import { fileMatchKey, deepFileMatchKey } from "@/core/printers/file-match";
 import { pickProgress, resolveEta, type EtaSource, type ProgressSource } from "@/core/printers/eta";
 import { etaHafizasiOku, etaHafizasiYaz } from "@/core/printers/eta-memory";
@@ -99,6 +100,8 @@ export interface PanelPrinter {
   statusMessage: string | null;
   /** Baskı sırasındaki uyarılar (Bambu HMS) — eskiden panele hiç düşmüyordu. */
   warnings: PanelWarning[];
+  /** Bambu: yazıcının son raporundan bu yana geçen süre (sn). Uzunsa kart "bilgi X sn önce" der. */
+  raporYasiSn?: number | null;
   /** Çalışan baskının ham gcode dosya adı (eşleştirme + kontrol için — KİMLİK, temizlenmez). */
   currentFilename: string | null;
   matchedProductId: string | null;
@@ -131,13 +134,17 @@ export interface PanelPrinter {
   job: PrinterJob | null;
 }
 
+// Kimlik renkleri Magicland paletinden — turuncu YOK (Trendyol'a ayrıldı, 23 Kas 2026).
+/** Panel ek bilgileri (eşleşme, model dosyası, ürün) bu süreyi aşarsa beklenmez. */
+const ZENGINLESTIRME_BUTCE_MS = 1500;
+
 const ACCENTS = [
-  "oklch(0.70 0.15 162)",
-  "oklch(0.63 0.21 25)",
-  "oklch(0.69 0.17 50)",
-  "oklch(0.62 0.14 235)",
-  "oklch(0.65 0.20 300)",
-  "oklch(0.72 0.17 60)",
+  "#34D399",
+  "#FB7185",
+  "#A78BFA",
+  "#4F8CFF",
+  "#E879F9",
+  "#22D3EE",
 ];
 
 /**
@@ -326,15 +333,24 @@ export async function GET(req: NextRequest) {
 
   // Ürün eşleştirmeleri (printerConfigId::filename → productId) — 30sn TTL önbellek
   // (eskiden her 5sn'de sınırsız findMany; tablo baskı geçmişiyle büyüyor).
-  const matches = await getPrintFileMatches();
-  olcer.damga("matches");
-  // Plan D: kart görseli slicer'ın gömülü render'ı. Yazıcıdan gelmiyorsa KENDİ
-  // kütüphanemizdeki dosyadan çıkarılır (Bambu'da tek yol bu).
-  const modelFileMap = await getModelFilesForPreview();
-  olcer.damga("modelFiles");
+  // ZENGİNLEŞTİRME (eşleşme, model dosyası, ürün) PARALEL ve BÜTÇELİ: eskiden sırayla bekleniyordu ve
+  // biri düşünce (Turso 502) yazıcılar ağda erişilebilirken bütün panel "Yazıcılara ulaşılamadı"
+  // diyordu. Artık gecikirse/düşerse boş haritayla devam edilir — kart dosya adını gösterir, süren
+  // yükleme bitince sonraki yoklama tamamlar (denetim, 23 Kas 2026).
+  const butceli = <T,>(soz: Promise<T>, yedek: T): Promise<T> =>
+    Promise.race([
+      soz.catch(() => yedek),
+      new Promise<T>((r) => setTimeout(() => r(yedek), ZENGINLESTIRME_BUTCE_MS)),
+    ]);
+  const [matches, modelFileMap, productMap] = await Promise.all([
+    butceli(getPrintFileMatches(), [] as Awaited<ReturnType<typeof getPrintFileMatches>>),
+    // Plan D: kart görseli slicer'ın gömülü render'ı. Yazıcıdan gelmiyorsa KENDİ
+    // kütüphanemizdeki dosyadan çıkarılır (Bambu'da tek yol bu).
+    butceli(getModelFilesForPreview(), { dosyaya: new Map(), urune: new Map() } as Awaited<ReturnType<typeof getModelFilesForPreview>>),
+    butceli(getMatchedProducts(), new Map() as Awaited<ReturnType<typeof getMatchedProducts>>),
+  ]);
+  olcer.damga("zenginlestirme");
   const matchMap = new Map(matches.map((m) => [`${m.printerConfigId}::${fileMatchKey(m.filename)}`, m.productId]));
-  const productMap = await getMatchedProducts();
-  olcer.damga("products");
 
   const nowMs = Date.now();
 
@@ -411,8 +427,11 @@ export async function GET(req: NextRequest) {
             slicerEstimateSec: null,
             printerRemainingSec: bs.remainingSec,
           });
-          const remaining = eta.remainingSec ?? 0;
-          const endMs = nowMs + remaining * 1000;
+          // Bitiş anı yazıcının DAKİKALIK kalan süresi değişince kurulur — eskiden her yoklamada
+          // "şimdi + kalan" kuruluyordu ve sayaç bir dakika boyunca 2 sn'de bir geri zıplıyordu.
+          const capa = bitisCapasi(`${c.id}|${bs.filename}`, bs.remainingSec, eta.remainingSec, nowMs);
+          const endMs = capa ?? nowMs + (eta.remainingSec ?? 0) * 1000;
+          const remaining = Math.max(0, (endMs - nowMs) / 1000);
           // Geçen süre bilinmiyorsa BAŞLANGIÇ "şimdi"dir. `endMs` yazmak başlangıcı GELECEĞE
           // taşıyordu (hazırlık aşamasındaki A1'de: başlangıç = şimdi + 90dk) ve panel baskı
           // boyunca 0 geçen süre gösteriyordu.
@@ -464,11 +483,9 @@ export async function GET(req: NextRequest) {
           connection: "ok",
           status: bStatus,
           // Hata/duraklatma nedeni ve uyarılar kartta görünsün (mobilde vardı, masaüstünde yoktu).
-          statusMessage:
-            bs.statusReason ??
-            (bStatus === "error"
-              ? `Baskı hatayla durdu${bs.printError ? ` (kod 0x${(bs.printError >>> 0).toString(16).toUpperCase()})` : ""}`
-              : null),
+          statusMessage: bambuDurumMesaji(bStatus, bs),
+          // Bağlantı açık ama yazıcı susmuşsa kart "bilgi X sn önce" der (yüzde donmuş olabilir).
+          raporYasiSn: bs.raporYasiMs != null ? Math.round(bs.raporYasiMs / 1000) : null,
           warnings: bs.warnings.map((w: BambuWarning) => ({ code: w.code, level: w.level, text: w.text })),
           currentFilename: bs.filename,
           matchedProductId: bMatchedId,

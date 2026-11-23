@@ -14,11 +14,11 @@ interface Yanit {
 }
 
 const DILIMLER: { anahtar: keyof Pick<YaziciDolulugu, "basiyor" | "bosta" | "sorun" | "cevrimdisi" | "bilinmiyor">; ad: string; renk: string }[] = [
-  { anahtar: "basiyor", ad: "Bastı", renk: "var(--status-printing, oklch(0.62 0.20 278))" },
-  { anahtar: "bosta", ad: "Boşta", renk: "oklch(0.70 0.02 265 / 55%)" },
-  { anahtar: "sorun", ad: "Durdu/hata", renk: "oklch(0.75 0.16 60)" },
-  { anahtar: "cevrimdisi", ad: "Çevrimdışı", renk: "oklch(0.45 0.02 265 / 70%)" },
-  { anahtar: "bilinmiyor", ad: "Ölçülmedi", renk: "oklch(0.50 0.01 265 / 22%)" },
+  { anahtar: "basiyor", ad: "Bastı", renk: "linear-gradient(90deg, #9B5CFF, #4F8CFF)" },
+  { anahtar: "bosta", ad: "Boşta", renk: "rgb(201 210 242 / 32%)" },
+  { anahtar: "sorun", ad: "Durdu/hata", renk: "#FB7185" },
+  { anahtar: "cevrimdisi", ad: "Çevrimdışı", renk: "rgb(120 128 150 / 45%)" },
+  { anahtar: "bilinmiyor", ad: "Ölçülmedi", renk: "rgb(255 255 255 / 6%)" },
 ];
 
 /**
@@ -37,10 +37,12 @@ export function DolulukSeridi() {
   const olcumSaat = data.olcumBaslangici == null ? 0 : (data.pencereDilim * DILIM_MS) / 3_600_000;
 
   return (
-    <div className="rounded-xl border bg-card px-4 py-3 space-y-2.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <Activity className="h-4 w-4 text-primary" />
-        <span className="text-sm font-semibold">Son {data.gun} gün doluluk</span>
+    <section className="space-y-3 rounded-2xl bg-card px-5 py-4 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/20 text-[#C9D2F2] ring-1 ring-white/10">
+          <Activity className="h-4 w-4" />
+        </span>
+        <span className="text-sm font-semibold tracking-tight">Son {data.gun} gün doluluk</span>
         <span className="text-[11px] text-muted-foreground">
           {data.olcumBaslangici == null
             ? "Ölçüm başladı — ilk veriler birkaç dakika içinde görünür"
@@ -50,19 +52,26 @@ export function DolulukSeridi() {
         </span>
       </div>
       {data.olcumBaslangici != null && (
-        <div className="grid gap-2 sm:grid-cols-2">
-          {data.yazicilar.map((y) => {
+        <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+          {data.yazicilar.map((y, i) => {
             const toplam = Math.max(1, data.pencereDilim);
             return (
-              <div key={y.printerConfigId} className="min-w-0 space-y-1">
+              <div key={y.printerConfigId} className="min-w-0 space-y-1.5">
                 <div className="flex items-baseline justify-between gap-2 text-xs">
                   <span className="truncate font-medium">{y.ad}</span>
                   <span className="shrink-0 tabular-nums text-muted-foreground">
-                    {y.basmaOrani == null ? "veri yok" : `%${Math.round(y.basmaOrani * 100)} bastı`}
+                    {y.basmaOrani == null ? (
+                      "veri yok"
+                    ) : (
+                      <>
+                        <span className="font-semibold text-[#C9D2F2]">%{Math.round(y.basmaOrani * 100)}</span> bastı
+                      </>
+                    )}
                   </span>
                 </div>
                 <div
-                  className="flex h-2 w-full overflow-hidden rounded-full bg-muted/40"
+                  className="flex h-2 w-full origin-left overflow-hidden rounded-full bg-white/[0.05] [animation:panel-bar-fill_0.8s_cubic-bezier(.2,.8,.2,1)_both] motion-reduce:[animation:none]"
+                  style={{ animationDelay: `${120 + i * 70}ms` }}
                   role="img"
                   aria-label={DILIMLER.map((d) => `${d.ad} ${Math.round((y[d.anahtar] / toplam) * 100)}%`).join(", ")}
                 >
@@ -70,7 +79,7 @@ export function DolulukSeridi() {
                     y[d.anahtar] > 0 ? (
                       <div
                         key={d.anahtar}
-                        style={{ width: `${(y[d.anahtar] / toplam) * 100}%`, backgroundColor: d.renk }}
+                        style={{ width: `${(y[d.anahtar] / toplam) * 100}%`, background: d.renk }}
                         title={`${d.ad}: ${Math.round((y[d.anahtar] * DILIM_MS) / 3_600_000)} sa`}
                       />
                     ) : null
@@ -84,11 +93,11 @@ export function DolulukSeridi() {
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
         {DILIMLER.map((d) => (
           <span key={d.anahtar} className="inline-flex items-center gap-1">
-            <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: d.renk }} />
+            <span className="h-2 w-2 rounded-sm" style={{ background: d.renk }} />
             {d.ad}
           </span>
         ))}
       </div>
-    </div>
+    </section>
   );
 }

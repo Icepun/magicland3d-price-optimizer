@@ -279,6 +279,20 @@ export interface RecentCommand {
  * TEK komutun durumu — birincil anahtarla. Komut gönderen ekranlar yalnız KENDİ komutuna bakıyor;
  * eskiden 3 sn'de bir son 20 komut okunuyordu (createdAt indeksi yok → tablonun tamamı sıralanıyordu).
  */
+/**
+ * Telefon "uygulanmadı" deyip vazgeçtiği komutu GERİ ÇEKER: hâlâ bekliyorsa iptal edilir, böylece
+ * masaüstü sonradan uyanınca eski iptal/duraklatmayı uygulamaz (yazıcının başında yeni başlatılan
+ * baskıyı öldürebiliyordu — denetim, 23 Kas 2026). Masaüstü komutu çoktan aldıysa (çalışıyor/bitti)
+ * dokunulmaz → `false`.
+ */
+export async function bekleyenKomutuGeriCek(id: string): Promise<boolean> {
+  const r = await execute(
+    `UPDATE PrintCommand SET status = 'error', error = ?, processedAt = ? WHERE id = ? AND status = 'pending'`,
+    ["Zaman aşımı — telefon vazgeçti, uygulanmadı", toDbDate(new Date()), id]
+  );
+  return Number((r as { rowsAffected?: number } | null | undefined)?.rowsAffected ?? 0) > 0;
+}
+
 export async function getCommandStatus(id: string): Promise<RecentCommand | null> {
   const satirlar = await query<RecentCommand>(
     `SELECT id, printerConfigId, action, status, error, createdAt FROM PrintCommand WHERE id = ?`,

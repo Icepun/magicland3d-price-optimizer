@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { Image } from "expo-image";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { buildFilamentAlerts, groupSpools } from "@core/filament-groups";
@@ -27,6 +27,7 @@ import { getPrepDone } from "@/lib/db/prep";
 import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
 import { thumbUrl } from "@/lib/image";
 import { durumBilgisi, kalanSure, yazicilariSirala } from "@/lib/yazici-durum";
+import { satirBayatMi } from "@/lib/yazici-tazelik";
 import { getSpools } from "@/lib/db/spools";
 import { formatNumber } from "@/lib/format";
 import { prepItemsFromOrders } from "@/lib/prep";
@@ -40,9 +41,10 @@ import { color, radius, space } from "@/theme/tokens";
 
 
 /** Tek yazıcı kartı: görsel (ilerleme halkasında baskının resmi), durum, iş, kalan süre, ısılar. */
-function YaziciKarti({ s }: { s: PrinterSnapshot }) {
-  const info = durumBilgisi(s.status, Boolean(s.online));
-  const cevrimdisi = !s.online || s.status === "offline";
+function YaziciKarti({ s, bayat }: { s: PrinterSnapshot; bayat: boolean }) {
+  // Satır eskiyse (masaüstü kapalı / uyuyor) durum BİLİNMİYOR: eski "%45 basıyor" canlı gibi gösterilmez.
+  const info = bayat ? { label: "Canlı değil", color: color.textFaint } : durumBilgisi(s.status, Boolean(s.online));
+  const cevrimdisi = bayat || !s.online || s.status === "offline";
   const aktif = !cevrimdisi && (s.status === "printing" || s.status === "paused");
   const isVar = !cevrimdisi && (aktif || s.status === "finished" || s.status === "error");
   const oran = s.status === "finished" ? 1 : Math.max(0, Math.min(1, s.progress || 0));
@@ -73,7 +75,7 @@ function YaziciKarti({ s }: { s: PrinterSnapshot }) {
           <Pill color={info.color}>{info.label}</Pill>
         </View>
         <Txt v="small" tone="dim" numberOfLines={1}>
-          {isVar ? s.productName ?? s.currentFilename ?? "Baskı" : cevrimdisi ? "Bağlantı yok" : "Yeni baskıya hazır"}
+          {isVar ? s.productName ?? s.currentFilename ?? "Baskı" : bayat ? "Masaüstü açık mı?" : cevrimdisi ? "Bağlantı yok" : "Yeni baskıya hazır"}
         </Txt>
         {s.statusMessage && (s.status === "error" || s.status === "paused") ? (
           <Txt v="small" tone={s.status === "error" ? "bad" : "warn"} numberOfLines={2}>
@@ -139,18 +141,24 @@ function Kisayol({
 }
 
 export default function AtolyeScreen() {
-  const printers = useQuery({ queryKey: ["printer-snapshots"], queryFn: getPrinterSnapshots });
+  // 4 sn'de bir — Yazıcılar ekranıyla aynı anahtar ve aralık. Eskiden Atölye hiç yoklamıyordu.
+  const printers = useQuery({ queryKey: ["printer-snapshots"], queryFn: getPrinterSnapshots, refetchInterval: 4000 });
+  const [simdi, setSimdi] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setSimdi(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, []);
   const spools = useQuery({ queryKey: ["spools"], queryFn: getSpools });
   const { refreshing, onRefresh } = useManualRefresh(async () => {
     await Promise.all([printers.refetch(), spools.refetch()]);
   });
 
   const snaps = printers.data ?? [];
-  const basanlar = snaps.filter((s) => s.online && (s.status === "printing" || s.status === "paused"));
+  const basanlar = snaps.filter((s) => s.online && !satirBayatMi(s.updatedAt, simdi) && (s.status === "printing" || s.status === "paused"));
   // Atölye DÖRT YAZICININ DÖRDÜNÜ gösterir. Bir tur yalnız basan ve hatalı olanlar listeleniyordu;
   // işi biten ya da boştaki yazıcı hiç görünmüyor, "yazıcım nerede" sorusu doğuyordu.
   const yazicilar = yazicilariSirala(snaps);
-  const cevrimici = snaps.filter((s) => s.online).length;
+  const cevrimici = snaps.filter((s) => s.online && !satirBayatMi(s.updatedAt, simdi)).length;
 
   // Filament uyarıları ortak çekirdekten — zil ve Filament ekranıyla AYNI kural.
   const gruplar = groupSpools(spools.data ?? []);
@@ -180,7 +188,9 @@ export default function AtolyeScreen() {
               ? `${basanlar.length} baskı sürüyor · ${cevrimici}/${snaps.length} yazıcı çevrimiçi`
               : yukleniyor
                 ? "yükleniyor…"
-                : "yazıcı yok"
+                : printers.isError
+                  ? "yazıcı bilgisi alınamadı"
+                  : "yazıcı yok"
           }
         />
       }
@@ -227,9 +237,13 @@ export default function AtolyeScreen() {
               </View>
             </PressableScale>
           ) : null}
+          {/* Yazıcılar okunamadıysa "yazıcı yok" denmez — kısa hata + tekrar dene. */}
+          {printers.isError && !printers.data ? (
+            <ErrorState error={printers.error} onRetry={() => void printers.refetch()} retrying={printers.isFetching} />
+          ) : null}
           {yazicilar.map((s, i) => (
             <FadeInView key={s.printerConfigId} index={i}>
-              <YaziciKarti s={s} />
+              <YaziciKarti s={s} bayat={satirBayatMi(s.updatedAt, simdi)} />
             </FadeInView>
           ))}
 

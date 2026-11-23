@@ -27,6 +27,11 @@ import crypto from "node:crypto";
 
 export interface BambuStatus {
   online: boolean;
+  /**
+   * Yazıcının son raporundan bu yana geçen süre (ms). Bağlantı açık ama yazıcı susmuşsa (Bambu
+   * Studio bağlandı → "son bağlanan kazanır") kart bunu "bilgi X sn önce" diye söyler.
+   */
+  raporYasiMs?: number | null;
   gcodeState: string | null;
   percent: number; // 0..100
   remainingSec: number | null;
@@ -299,7 +304,23 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   // bağlantıyı yenile (yeniden bağlanan son istemci oluruz → veri geri gelir).
   if (conn.connected && conn.hasData && conn.lastMessageAt > 0) {
     const stale = now - conn.lastMessageAt;
-    if (stale > 6 * 60_000) {
+    // BASKI SÜRERKEN daha sabırsız: yazıcı basarken saniyede birkaç rapor gönderir; 25 sn sessizlik
+    // susturulduğumuz demek. Eskiden ilk pushall 2 dk, bağlantı yenilemesi 6 dk sonraydı ve bu
+    // arada kart donmuş yüzdeyi canlı gibi gösteriyordu (denetim, 23 Kas 2026).
+    const basiyor = conn.print?.gcode_state === "RUNNING" || conn.print?.gcode_state === "PREPARE";
+    if (basiyor && stale > 75_000) {
+      try { conn.client.end(true); } catch { /* ignore */ }
+      conns.delete(connKey(host, serial, accessCode));
+    } else if (basiyor && stale > 25_000 && now - conn.lastPushallAt > 60_000) {
+      conn.lastPushallAt = now;
+      try {
+        conn.client.publish(
+          `device/${serial}/request`,
+          JSON.stringify({ pushing: { sequence_id: "0", command: "pushall", version: 1, push_target: 1 } }),
+          { qos: 0 }
+        );
+      } catch { /* ignore */ }
+    } else if (stale > 6 * 60_000) {
       try { conn.client.end(true); } catch { /* ignore */ }
       conns.delete(connKey(host, serial, accessCode)); // sonraki sorgu taze bağlantı kurar
     } else if (stale > 2 * 60_000 && now - conn.lastPushallAt > 5 * 60_000) {
@@ -340,6 +361,7 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
   const aktif = aktifYuva(trayNow, amsYuvalariCoz(p));
   return {
     online: true,
+    raporYasiMs: conn.lastMessageAt > 0 ? Math.max(0, now - conn.lastMessageAt) : null,
     gcodeState,
     percent: typeof p.mc_percent === "number" ? p.mc_percent : 0,
     remainingSec: remainingMin != null ? Math.round(remainingMin * 60) : null, // Bambu: DAKİKA
@@ -360,6 +382,16 @@ export async function getBambuStatus(host: string, accessCode: string, serial: s
     activeTray: aktif,
     statusReason: bambuStatusReason(gcodeState, printError, warnings, printErrorText),
   };
+}
+
+/**
+ * Hata/duraklama nedeni — panel ve telefon AYNI metni göstersin. Eskiden masaüstü kodu onaltılık
+ * ("kod 0x0300…"), telefon ondalık ("kod: 50348…") yazıyordu.
+ */
+export function bambuDurumMesaji(durum: string, bs: Pick<BambuStatus, "statusReason" | "printError">): string | null {
+  if (bs.statusReason) return bs.statusReason;
+  if (durum !== "error") return null;
+  return `Baskı hatayla durdu${bs.printError ? ` (kod 0x${(bs.printError >>> 0).toString(16).toUpperCase()})` : ""}`;
 }
 
 function offlineBambuStatus(): BambuStatus {

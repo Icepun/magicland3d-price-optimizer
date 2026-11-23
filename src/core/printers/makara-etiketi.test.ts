@@ -94,14 +94,14 @@ describe("kayıt deposu", () => {
 /* ── Otomatik uygulayıcı ───────────────────────────────────────────────────── */
 
 const db = vi.hoisted(() => ({ value: null as string | null }));
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    appSetting: {
-      findUnique: vi.fn(async () => (db.value == null ? null : { key: "printers.makaraEtiketleri", value: db.value })),
-      upsert: vi.fn(async ({ create }: { create: { value: string } }) => { db.value = create.value; }),
-    },
-  },
-}));
+vi.mock("@/lib/prisma", () => {
+  const appSetting = {
+    findUnique: vi.fn(async () => (db.value == null ? null : { key: "printers.makaraEtiketleri", value: db.value })),
+    upsert: vi.fn(async ({ create }: { create: { value: string } }) => { db.value = create.value; }),
+  };
+  // Okuma artık ayrı bağlantıdan (remotePrisma) — ikisi de aynı sahte tabloyu görür.
+  return { prisma: { appSetting }, remotePrisma: { appSetting } };
+});
 
 describe("otomatik uygulayıcı + yazıcıya gönderim", () => {
   let gonderilen: { url: string; govde: unknown }[];

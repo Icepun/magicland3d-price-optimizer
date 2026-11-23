@@ -26,6 +26,21 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             refetchOnMount: false, // mount'ta otomatik refetch yok → cache anında
             refetchOnWindowFocus: false,
             refetchOnReconnect: false,
+            /**
+             * YEREL SUNUCU — istekler bu bilgisayardaki uygulamaya gider; internet kopukken de
+             * ulaşılır. Varsayılan "online" kipinde Wi-Fi düşünce sorgular "duraklatılıp" iskelet
+             * sonsuza kalıyordu (Ürünler, Siparişler, pencereler — her sayfada tek tek düzeltiliyordu).
+             */
+            networkMode: "always",
+          },
+          mutations: {
+            /**
+             * Aynı sebep, ama burada TEHLİKELİ: Wi-Fi kopukken basılan "Duraklat"/"İptal" kuyruğa
+             * alınıp ağ dakikalar sonra gelince KENDİLİĞİNDEN gönderiliyordu — baskı beklenmedik
+             * anda duruyordu (denetim, 23 Kas 2026). Yerel sunucu yazıcıya ulaşamazsa hatayı
+             * kendisi döner; komut ya şimdi gider ya hiç.
+             */
+            networkMode: "always",
           },
         },
       })

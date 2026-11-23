@@ -94,12 +94,13 @@
   /* Panel vurgu renkleri — koyu temadaki BUGÜNKÜ tonlar birebir korunur. */
   --panel-primary:          oklch(0.62 0.20 278);
   --panel-primary-soft:     oklch(0.62 0.20 278 / 12%);
-  --panel-amber:            oklch(0.75 0.18 75);
-  --panel-amber-soft:       oklch(0.75 0.18 75 / 14%);
-  --panel-amber-line:       oklch(0.75 0.18 75 / 40%);
-  --panel-red:              oklch(0.63 0.22 25);
-  --panel-red-soft:         oklch(0.63 0.22 25 / 14%);
-  --panel-red-line:         oklch(0.63 0.22 25 / 40%);
+  /* "amber" adı tarihsel: uyarı tonu artık LAVANTA (Magicland paleti, turuncu yok — 23 Kas 2026). */
+  --panel-amber:            #A9AEFF;
+  --panel-amber-soft:       rgb(169 174 255 / 12%);
+  --panel-amber-line:       rgb(169 174 255 / 36%);
+  --panel-red:              #FB7185;
+  --panel-red-soft:         rgb(251 113 133 / 13%);
+  --panel-red-line:         rgb(251 113 133 / 40%);
   --panel-green:            oklch(0.72 0.18 145);
   --panel-shopify:          oklch(0.60 0.16 152);
   --panel-shopify-soft:     oklch(0.60 0.16 152 / 15%);
@@ -111,8 +112,8 @@
   --panel-track:            oklch(1 0 0 / 10%);
 
   /* Koyu temada küçük etiketler kendi zemininde zaten yeterli → tonlar birebir aynı kalır. */
-  --panel-amber-on-soft:       oklch(0.75 0.18 75);
-  --panel-red-on-soft:         oklch(0.63 0.22 25);
+  --panel-amber-on-soft:       #A9AEFF;
+  --panel-red-on-soft:         #FB7185;
   --panel-shopify-on-soft:     oklch(0.60 0.16 152);
   --panel-trendyol-on-soft:    oklch(0.72 0.17 60);
   --panel-hepsiburada-on-soft: oklch(0.66 0.19 38);
@@ -134,35 +135,36 @@
      Durum tonu için `--panel-*` KULLANILMAZ (iki palet yan yana durursa aynı ekranda iki
      farklı "Yazdırıyor" rengi çıkar).
      ============================================= */
-  --status-printing:      oklch(0.72 0.155 232);   /* yazdırıyor — camgöbeği mavi */
-  --status-printing-soft: oklch(0.72 0.155 232 / 15%);
-  --status-printing-line: oklch(0.72 0.155 232 / 38%);
-  --status-printing-glow: oklch(0.72 0.155 232 / 28%);
+  /* Magicland paleti (23 Kas 2026): mavi = basıyor, lavanta = dikkat, zümrüt = iyi, gül = sorun. */
+  --status-printing:      #4F8CFF;                 /* yazdırıyor — Magicland mavisi */
+  --status-printing-soft: rgb(79 140 255 / 15%);
+  --status-printing-line: rgb(79 140 255 / 40%);
+  --status-printing-glow: rgb(79 140 255 / 28%);
 
-  --status-paused:        oklch(0.79 0.155 78);    /* duraklatıldı — kehribar */
-  --status-paused-soft:   oklch(0.79 0.155 78 / 15%);
-  --status-paused-line:   oklch(0.79 0.155 78 / 38%);
+  --status-paused:        #A9AEFF;                 /* duraklatıldı — lavanta (turuncu yok) */
+  --status-paused-soft:   rgb(169 174 255 / 15%);
+  --status-paused-line:   rgb(169 174 255 / 40%);
 
-  --status-done:          oklch(0.76 0.175 150);   /* tamamlandı — yeşil */
-  --status-done-soft:     oklch(0.76 0.175 150 / 15%);
-  --status-done-line:     oklch(0.76 0.175 150 / 38%);
+  --status-done:          #34D399;                 /* tamamlandı — zümrüt */
+  --status-done-soft:     rgb(52 211 153 / 15%);
+  --status-done-line:     rgb(52 211 153 / 38%);
 
-  --status-error:         oklch(0.66 0.225 22);    /* hata — tehlike ailesi BİLEREK burada */
-  --status-error-soft:    oklch(0.66 0.225 22 / 15%);
-  --status-error-line:    oklch(0.66 0.225 22 / 42%);
-  --status-error-glow:    oklch(0.66 0.225 22 / 32%);
+  --status-error:         #FB7185;                 /* hata — gül */
+  --status-error-soft:    rgb(251 113 133 / 15%);
+  --status-error-line:    rgb(251 113 133 / 42%);
+  --status-error-glow:    rgb(251 113 133 / 32%);
 
-  --status-idle:          oklch(0.78 0.045 255);   /* hazır — sakin açık gri-mavi */
-  --status-idle-soft:     oklch(0.78 0.045 255 / 12%);
-  --status-idle-line:     oklch(0.78 0.045 255 / 26%);
+  --status-idle:          #C9D2F2;                 /* hazır — sakin açık gri-mavi */
+  --status-idle-soft:     rgb(201 210 242 / 10%);
+  --status-idle-line:     rgb(201 210 242 / 24%);
 
   --status-offline:       oklch(0.56 0.014 265);   /* çevrimdışı — sönük gri */
   --status-offline-soft:  oklch(0.56 0.014 265 / 14%);
   --status-offline-line:  oklch(0.56 0.014 265 / 26%);
 
-  --status-setup:         oklch(0.70 0.135 310);   /* kurulum tamamlanmadı — çevrimdışı DEĞİL */
-  --status-setup-soft:    oklch(0.70 0.135 310 / 14%);
-  --status-setup-line:    oklch(0.70 0.135 310 / 34%);
+  --status-setup:         #C084FC;                 /* kurulum tamamlanmadı — çevrimdışı DEĞİL */
+  --status-setup-soft:    rgb(192 132 252 / 14%);
+  --status-setup-line:    rgb(192 132 252 / 34%);
 
   /* Durum renginin DOLU kullanıldığı yerde (dolu rozet, dolan bar) üstteki yazı. */
   --status-on-solid:      oklch(0.16 0.02 265);

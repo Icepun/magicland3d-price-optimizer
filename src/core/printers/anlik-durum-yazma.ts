@@ -108,10 +108,10 @@ function deger(d: AnlikDurum, k: (typeof KOLONLAR)[number]): unknown {
  */
 export function yazmaIfadeleri(kalemler: readonly YazmaKalemi[], updatedAt: string | number): Ifade[] {
   const ifadeler: Ifade[] = [];
-  const kalpler: string[] = [];
+  const kalpler: YazmaKalemi[] = [];
   for (const k of kalemler) {
     if (k.tur === "kalp") {
-      kalpler.push(k.printerConfigId);
+      kalpler.push(k);
       continue;
     }
     if (k.tur === "tam") {
@@ -136,9 +136,18 @@ export function yazmaIfadeleri(kalemler: readonly YazmaKalemi[], updatedAt: stri
     });
   }
   if (kalpler.length) {
+    // Kalan süre de aynı istekte: telefon bitişi "yazma anı + kalan" diye hesaplıyor; yalnız
+    // damga ilerleyip kalan süre eski kalınca her kalp atışında +30 sn zıplıyordu.
     ifadeler.push({
-      sql: `UPDATE "PrinterSnapshot" SET "updatedAt" = ? WHERE "printerConfigId" IN (${kalpler.map(() => "?").join(", ")})`,
-      args: [updatedAt, ...kalpler],
+      sql:
+        `UPDATE "PrinterSnapshot" SET "updatedAt" = ?, "etaSec" = CASE "printerConfigId" ` +
+        kalpler.map(() => "WHEN ? THEN ?").join(" ") +
+        ` ELSE "etaSec" END WHERE "printerConfigId" IN (${kalpler.map(() => "?").join(", ")})`,
+      args: [
+        updatedAt,
+        ...kalpler.flatMap((k) => [k.printerConfigId, k.durum.etaSec]),
+        ...kalpler.map((k) => k.printerConfigId),
+      ],
     });
   }
   return ifadeler;

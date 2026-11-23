@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 
-import { getCommandStatus, sendPrintCommand, type PrintAction } from "@/lib/db/printers";
+import { bekleyenKomutuGeriCek, getCommandStatus, sendPrintCommand, type PrintAction } from "@/lib/db/printers";
 import { color } from "@/theme/tokens";
 
 export const KOMUT_ADI: Record<PrintAction, string> = {
@@ -32,20 +32,35 @@ export function useYaziciKomutu(simdi: number) {
   const qc = useQueryClient();
   const [gonderilen, setGonderilen] = useState<{ id: string; ad: string; at: number } | null>(null);
   const zamanAsimi = !!gonderilen && simdi - gonderilen.at > ZAMAN_ASIMI_MS;
+  /**
+   * Zaman aşımında komut GERİ ÇEKİLİR: "geri" = beklerken iptal edildi (masaüstü artık uygulamaz);
+   * "suruyor" = masaüstü çoktan almış → sonucu beklemeye devam edilir.
+   */
+  const [geriCekme, setGeriCekme] = useState<{ id: string; sonuc: "geri" | "suruyor" } | null>(null);
+  const geriCekmeSonucu = geriCekme && gonderilen && geriCekme.id === gonderilen.id ? geriCekme.sonuc : null;
+  const bekle = !!gonderilen && (!zamanAsimi || geriCekmeSonucu === "suruyor");
   const { data: komut = null } = useQuery({
     queryKey: ["command-status", gonderilen?.id ?? ""],
     queryFn: () => getCommandStatus(gonderilen!.id),
-    refetchInterval: gonderilen && !zamanAsimi ? 3000 : false,
-    enabled: !!gonderilen && !zamanAsimi,
+    refetchInterval: bekle ? 3000 : false,
+    enabled: bekle,
   });
   const sonuclandi = komut?.status === "done" || komut?.status === "error";
   useEffect(() => {
-    if (!sonuclandi && !zamanAsimi) return;
-    const t = setTimeout(() => setGonderilen(null), zamanAsimi ? 12_000 : 6000);
+    if (!zamanAsimi || !gonderilen || sonuclandi || geriCekmeSonucu) return;
+    const id = gonderilen.id;
+    void bekleyenKomutuGeriCek(id)
+      .then((geri) => setGeriCekme({ id, sonuc: geri ? "geri" : "suruyor" }))
+      .catch(() => setGeriCekme({ id, sonuc: "geri" }));
+  }, [zamanAsimi, gonderilen, sonuclandi, geriCekmeSonucu]);
+  const vazgecildi = zamanAsimi && geriCekmeSonucu === "geri" && !sonuclandi;
+  useEffect(() => {
+    if (!sonuclandi && !vazgecildi) return;
+    const t = setTimeout(() => setGonderilen(null), vazgecildi ? 12_000 : 6000);
     return () => clearTimeout(t);
-  }, [sonuclandi, zamanAsimi]);
+  }, [sonuclandi, vazgecildi]);
 
-  const mesgul = !!gonderilen && !sonuclandi && !zamanAsimi;
+  const mesgul = !!gonderilen && !sonuclandi && !vazgecildi;
 
   /**
    * `param`: parça iptalinde yazıcıdaki parça adı. Parça iptalinin onayı seçim kartında sorulur
@@ -75,13 +90,13 @@ export function useYaziciKomutu(simdi: number) {
   let bant: KomutBandi | null = null;
   if (gonderilen) {
     const renk =
-      komut?.status === "done" ? color.good : komut?.status === "error" || zamanAsimi ? color.bad : color.accentBright;
+      komut?.status === "done" ? color.good : komut?.status === "error" || vazgecildi ? color.bad : color.accentBright;
     const metin =
       komut?.status === "done"
         ? `✓ ${gonderilen.ad} uygulandı`
         : komut?.status === "error"
           ? `✕ ${komut.error ?? "Komut başarısız"}`
-          : zamanAsimi
+          : vazgecildi
             ? `⚠ ${gonderilen.ad} uygulanmadı — masaüstü kapalı görünüyor.`
             : `⏳ ${gonderilen.ad} gönderildi — masaüstü uyguluyor…`;
     bant = { metin, renk };

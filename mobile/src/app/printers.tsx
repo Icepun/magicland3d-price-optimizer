@@ -10,6 +10,7 @@ import {
   Button,
   Count,
   EmptyState,
+  ErrorState,
   FadeInView,
   Glass,
   IconButton,
@@ -24,6 +25,7 @@ import { getPrinterSnapshots, type PrintAction, type PrinterSnapshot } from "@/l
 import { thumbUrl } from "@/lib/image";
 import { useYaziciKomutu } from "@/lib/use-yazici-komut";
 import { YAZICI_DURUM, kalanSure } from "@/lib/yazici-durum";
+import { YAZICI_BAYAT_MS, satirYasiMs } from "@/lib/yazici-tazelik";
 import { color, radius, space } from "@/theme/tokens";
 
 function brandColor(brand: string): string {
@@ -43,7 +45,7 @@ const fmtRemaining = (sec: number | null) => kalanSure(sec) ?? "—";
  * gönderim kilidi, 90 sn zaman aşımı) yazıcı ekranıyla ORTAK: `useYaziciKomutu`.
  */
 export default function PrintersScreen() {
-  const { data: snapshots = [], isLoading } = useQuery({
+  const { data: snapshots = [], isLoading, isError, error, refetch, isFetching, data: hamVeri } = useQuery({
     queryKey: ["printer-snapshots"],
     queryFn: getPrinterSnapshots,
     refetchInterval: 4000,
@@ -59,16 +61,16 @@ export default function PrintersScreen() {
   const printing = snapshots.filter((s) => s.status === "printing").length;
   const online = snapshots.filter((s) => s.online).length;
 
-  const lastUpdate = useMemo(() => {
-    let max = 0;
+  // En taze satırın yaşı — tarih okuyucu yazıcı ekranı ve Atölye ile ORTAK.
+  const ageMs = useMemo(() => {
+    let enKucuk: number | null = null;
     for (const s of snapshots) {
-      const t = Date.parse(s.updatedAt);
-      if (!Number.isNaN(t) && t > max) max = t;
+      const yas = satirYasiMs(s.updatedAt, now);
+      if (yas != null && (enKucuk == null || yas < enKucuk)) enKucuk = yas;
     }
-    return max;
-  }, [snapshots]);
-  const ageMs = lastUpdate > 0 ? Math.max(0, now - lastUpdate) : 0;
-  const stale = lastUpdate > 0 && ageMs > 90_000;
+    return enKucuk;
+  }, [snapshots, now]);
+  const stale = ageMs != null && ageMs > YAZICI_BAYAT_MS;
 
   // Çift gönderim kilidi: komut beklerken düğmeler pasif (`mesgul`).
   const { gonder, mesgul: cmdBusy, bant } = useYaziciKomutu(now);
@@ -89,7 +91,7 @@ export default function PrintersScreen() {
         <View style={styles.liveBar}>
           <View style={[styles.liveDot, { backgroundColor: stale ? color.warn : color.good }]} />
           <Txt v="small" tone={stale ? "warn" : "dim"} numberOfLines={1}>
-            {stale ? `Canlı değil · ${fmtAge(ageMs)} güncellendi — masaüstü açık mı?` : `Canlı · ${fmtAge(ageMs)} güncellendi`}
+            {stale ? `Canlı değil · ${fmtAge(ageMs ?? 0)} güncellendi — masaüstü açık mı?` : `Canlı · ${fmtAge(ageMs ?? 0)} güncellendi`}
           </Txt>
         </View>
       ) : null}
@@ -104,6 +106,9 @@ export default function PrintersScreen() {
 
       {isLoading ? (
         <ShimmerList count={3} height={150} />
+      ) : isError && !hamVeri ? (
+        // Okunamadı ≠ veri yok: "masaüstü açık olmalı" demek yanlış yönlendiriyordu.
+        <ErrorState error={error} onRetry={() => void refetch()} retrying={isFetching} />
       ) : snapshots.length === 0 ? (
         <EmptyState
           icon="printer"

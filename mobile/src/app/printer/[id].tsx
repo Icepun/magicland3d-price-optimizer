@@ -10,6 +10,7 @@ import {
   Button,
   Count,
   EmptyState,
+  ErrorState,
   Glass,
   Progress,
   Ring,
@@ -23,7 +24,7 @@ import {
 import { ParcaIptalKarti } from "@/components/ParcaIptalKarti";
 import { Yazici3B } from "@/components/Yazici3B";
 import { YaziciKamerasi } from "@/components/YaziciKamerasi";
-import { parseDbDate } from "@core/sqlite-date";
+import { YAZICI_BAYAT_MS, satirYasiMs } from "@/lib/yazici-tazelik";
 import type { YaziciDetay, YaziciUyarisi } from "@core/printer-detail";
 import { uyariParcala } from "@core/yazici-uyari";
 import { getPrinterSnapshots, type PrinterSnapshot } from "@/lib/db/printers";
@@ -49,7 +50,7 @@ const UYARI_RENGI: Record<YaziciUyarisi["level"], string> = {
 };
 
 /** Relay bu kadar sessiz kalırsa veri "canlı değil" sayılır (masaüstü kapalı/uyuyor). */
-const BAYAT_MS = 90_000;
+const BAYAT_MS = YAZICI_BAYAT_MS;
 
 type Gorunum = "baski" | "3b" | "kamera";
 
@@ -62,7 +63,7 @@ type Gorunum = "baski" | "3b" | "kamera";
  */
 export default function YaziciEkrani() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { data: yazicilar, isLoading } = useQuery({
+  const { data: yazicilar, isLoading, isError, error, refetch, isFetching } = useQuery({
     queryKey: ["printer-snapshots"],
     queryFn: getPrinterSnapshots,
     refetchInterval: 4000,
@@ -101,6 +102,9 @@ export default function YaziciEkrani() {
       <Screen header={<SubHeader title="Yazıcı" />}>
         {isLoading ? (
           <ShimmerList count={3} height={140} />
+        ) : isError && !yazicilar ? (
+          // Okunamadı ≠ yazıcı silindi.
+          <ErrorState error={error} onRetry={() => void refetch()} retrying={isFetching} />
         ) : (
           <EmptyState icon="printer" title="Yazıcı bulunamadı" hint="Masaüstünde devre dışı bırakılmış ya da silinmiş olabilir." />
         )}
@@ -116,8 +120,9 @@ export default function YaziciEkrani() {
   const katmanOrani = d?.layer && d.totalLayers ? Math.min(1, d.layer / d.totalLayers) : null;
   const gorselOrani = bitti ? 1 : (katmanOrani ?? oran);
 
-  const guncellendi = parseDbDate(s.updatedAt)?.getTime() ?? 0;
-  const yas = guncellendi > 0 ? Math.max(0, simdi - guncellendi) : 0;
+  const satirYasi = satirYasiMs(s.updatedAt, simdi);
+  const guncellendi = satirYasi == null ? 0 : simdi - satirYasi;
+  const yas = satirYasi ?? 0;
   const bayat = guncellendi > 0 && yas > BAYAT_MS;
 
   // Kalan süre satırın yazıldığı ana göre; bitiş anı ondan sabit → saniyeler akarken zıplamaz.
