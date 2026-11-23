@@ -29,6 +29,8 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatPercent, formatRelativeTime } from "@/lib/format";
+import { ozetDonemEtiketi } from "@/lib/ozet-donemi";
+import { useDakika } from "@/lib/client-state";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { PlatformLogo } from "@/components/PlatformLogo";
@@ -829,6 +831,8 @@ interface OrdersSummary {
   days: number;
   /** Pencerenin ilk anı (eski bir gövdede yok — o zaman hesap anından türetilir). */
   from?: string;
+  /** "month" = özet bu ayı sayar (Raporlar'la aynı dönem). */
+  period?: string;
   shopify: OrdersSummaryBucket;
   trendyol: OrdersSummaryBucket;
   hepsiburada: OrdersSummaryBucket;
@@ -978,6 +982,7 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
     refetchOnMount: true,
   });
   const s = data?.summary;
+  const dakika = useDakika();
   /**
    * NET KÂR = sipariş kârı − AYNI 30 günde ödenen giderler (Gider Ödemeleri). Gider ekranı
    * değişince `["actual-expenses"]` önekiyle düşürülür, bu kart da kendiliğinden tazelenir.
@@ -1064,6 +1069,8 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
     { platform: "manual", bucket: s.manual, unavailable: false },
   ];
   const anyUnavailable = rows.some((r) => r.unavailable);
+  // Raporlar'la aynı dönem etiketi ("1–23 Kasım").
+  const donem = ozetDonemEtiketi(s, dakika);
 
   return (
     <Link href="/orders" className="group block">
@@ -1079,7 +1086,8 @@ function OrdersSummaryCard({ delay }: { delay: number }) {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold flex items-center gap-2">
               <ClipboardList className="h-4 w-4" style={{ color: ACCENTS.primary }} />
-              Son {s.days} Gün Siparişleri
+              {donem ? "Bu Ay Siparişleri" : `Son ${s.days} Gün Siparişleri`}
+              {donem && <span className="text-[11px] font-normal text-muted-foreground">· {donem}</span>}
             </h2>
             <span className="text-[11px] text-primary flex items-center gap-0.5 transition-transform group-hover:translate-x-0.5">
               Tümünü gör <ArrowRight className="h-3 w-3" />

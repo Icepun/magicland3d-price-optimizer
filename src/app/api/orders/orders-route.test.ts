@@ -5,7 +5,7 @@
  * ASLA "tam veri" gibi ciro/kâr özetine girmesin. Kâr hesabının kendisi
  * çekirdekte test ediliyor; burada yalnız veri bütünlüğü doğrulanır.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NextRequest } from "next/server";
 
 const h = vi.hoisted(() => ({
@@ -178,6 +178,16 @@ const { trendyolIadeOnbelleginiSifirla } = await import("@/lib/trendyol-iadeleri
 
 const now = () => new Date().toISOString();
 
+// Özet BU AYI sayar: göreli tarihli test siparişleri ayın ilk günlerinde önceki aya düşmesin diye
+// saat ayın ortasına sabitlenir (yalnız Date — zamanlayıcılar gerçek kalır).
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-23T12:00:00+03:00"));
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
+
 async function fetchOrders(): Promise<any> {
   const res = await GET(
     new Request("http://localhost/api/orders?fresh=1") as NextRequest
@@ -291,6 +301,40 @@ describe("siparişler ucu — işi bitmemiş elle sipariş", () => {
     expect(body.summary.manual).toMatchObject({ revenue: 1500, orderCount: 1 });
     // Eski açık sipariş tarihine bakılmadan okunur.
     expect(JSON.stringify(h.state.manualArgs.where)).toContain('"statusKind":{"in":["pending","processing"]}');
+  });
+});
+
+describe("özet dönemi BU AY (Raporlar ve Panel ile aynı)", () => {
+  const gun = 86_400_000;
+  const elle = (id: string, tarih: string, kurus: number) => ({
+    id,
+    orderNumber: `MAN-${id}`,
+    orderedAt: new Date(tarih),
+    statusKind: "delivered",
+    customerName: "Müşteri",
+    currency: "TRY",
+    revenueKurus: kurus,
+    profitKurus: Math.round(kurus * 0.5),
+    profitPartial: false,
+    itemsJson: "{}",
+    breakdownJson: "{}",
+  });
+
+  it("geçen ayın siparişi listede kalır ama özete girmez; özet ayın 1'inden sayar", async () => {
+    h.state.manualRows = [
+      elle("ekim-sonu", "2026-10-31T23:30:00+03:00", 200_000),
+      elle("kasim-basi", "2026-11-01T00:30:00+03:00", 100_000),
+    ];
+    const body = await fetchOrders();
+    const elleler = body.orders.filter((o: any) => o.platform === "manual");
+    expect(elleler.map((o: any) => o.id).sort()).toEqual(["ekim-sonu", "kasim-basi"]);
+    expect(elleler.find((o: any) => o.id === "ekim-sonu")).toMatchObject({ previousMonth: true });
+    expect(elleler.find((o: any) => o.id === "kasim-basi")?.previousMonth).toBeUndefined();
+    expect(body.summary.manual).toMatchObject({ revenue: 1000, orderCount: 1 });
+    expect(body.summary.period).toBe("month");
+    // Ayın 1'i 00:00 Türkiye saati.
+    expect(body.summary.from).toBe("2026-10-31T21:00:00.000Z");
+    void gun;
   });
 });
 

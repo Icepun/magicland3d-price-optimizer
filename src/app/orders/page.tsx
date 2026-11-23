@@ -13,13 +13,14 @@ import {
 import { createPortal } from "react-dom";
 import { useKaliciSecim } from "@/lib/kalici-secim";
 import { gunlereBol } from "./gun-basliklari";
-import { useIsClient } from "@/lib/client-state";
+import { useIsClient, useDakika } from "@/lib/client-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
+import { ozetDonemEtiketi } from "@/lib/ozet-donemi";
 import { formatRelativeTime } from "@/lib/format";
 import {
   ClipboardList,
@@ -74,6 +75,7 @@ import {
   type PrepItem,
 } from "./hazirlik";
 import {
+  countsAsSale,
   countsInSummary,
   filterOrdersBeforeStatus,
   statusChipCounts,
@@ -209,6 +211,8 @@ interface UnifiedOrder {
   editHref?: string | null;
   /** 30 günden önce verilmiş, işi bitmediği için listede duran elle sipariş — özetlere girmez. */
   outsideWindow?: boolean;
+  /** Bu aydan önce verilmiş → ay özetine girmez (sunucu işaretler). */
+  previousMonth?: boolean;
 }
 interface PlatformStatus {
   ok: boolean;
@@ -254,6 +258,10 @@ interface OrdersResponse {
   dataComplete?: boolean;
   summary: {
     days: number;
+    /** Özet döneminin ilk anı (bu ayın 1'i). */
+    from?: string;
+    /** "month" = özet bu ayı sayar (Raporlar'la aynı dönem). */
+    period?: string;
     shopify: SummaryBucket;
     trendyol: SummaryBucket;
     hepsiburada: SummaryBucket;
@@ -398,8 +406,8 @@ function bucketForDay(orders: UnifiedOrder[], key: string | null): DayBucket {
     if (!order.date) continue;
     const date = new Date(order.date);
     if (Number.isNaN(date.getTime()) || dayKey(date) !== key) continue;
-    if (!countsInSummary(order)) {
-      // İade edilen siparişin kargo zararı: ciroya girmez, kârdan düşer (30 günlük özetle aynı kural).
+    if (!countsAsSale(order)) {
+      // İade edilen siparişin kargo zararı: ciroya girmez, kârdan düşer (ay özetiyle aynı kural).
       if (
         order.statusKind === "cancelled" &&
         order.returnLoss &&
@@ -622,6 +630,7 @@ export default function OrdersPage() {
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
   const summary = data?.summary;
+  const dakikaDamgasi = useDakika();
 
   // ── Günlük bakış ────────────────────────────────────────────────────────────
   // Gün sınırı yalnız tarayıcıda hesaplanır (sunucu saatiyle oynamasın); gün anahtarı gün
@@ -727,8 +736,14 @@ export default function OrdersPage() {
       // bitmemiş elle sipariş hariç; o listede kalır ama özetlere girmez.
       const cutoff = windowCutoff(current.summary?.days ?? 30);
       const tarih = yeniSatir?.date ? new Date(yeniSatir.date).getTime() : null;
+      // Özet dönemi sunucudan (bu ayın 1'i); yoksa (eski gövde) 30 günlük pencere.
+      const ozetBas = current.summary?.from ? Date.parse(current.summary.from) : cutoff;
       const next = yeniSatir
-        ? { ...yeniSatir, outsideWindow: tarih != null && !(tarih >= cutoff) }
+        ? {
+            ...yeniSatir,
+            outsideWindow: tarih != null && !(tarih >= cutoff),
+            previousMonth: tarih != null && tarih < ozetBas,
+          }
         : null;
       const visible =
         next &&
@@ -823,10 +838,14 @@ export default function OrdersPage() {
   const statusChips = useMemo(() => statusChipCounts(beforeStatus), [beforeStatus]);
 
   /** Listede görünen ama üstteki toplamlara girmeyen sipariş sayısı (iptal/iade, bilgisi eksik). */
+  /** Listede duran önceki ay siparişleri — özet bu ayı sayar. */
+  const previousMonthCount = useMemo(() => orders.filter((o) => o.previousMonth).length, [orders]);
   const excludedFromSummary = Math.max(
     0,
-    orders.length - (summary?.total.orderCount ?? orders.length)
+    orders.length - previousMonthCount - (summary?.total.orderCount ?? orders.length)
   );
+  // Raporlar'la aynı dönem etiketi ("1–23 Kasım").
+  const ozetDonem = ozetDonemEtiketi(summary, dakikaDamgasi);
   /**
    * Verisi alınamayan kaynaklar. Boşsa toplamlar tam. Doluysa ekrandaki her rakam eksik bir
    * veriyle hesaplanmıştır ve bunu SÖYLEMEK zorundayız — "₺0" da bir cevap gibi görünüyor.
@@ -1004,6 +1023,11 @@ export default function OrdersPage() {
       {summary && (summary.total.orderCount > 0 || missingSources.length > 0) && (
         <Card className="overflow-hidden">
           <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
+            {ozetDonem && (
+              <p className="col-span-full -mb-1 text-[11px] font-medium text-muted-foreground animate-in fade-in duration-300">
+                {ozetDonem} · bu ayın toplamı
+              </p>
+            )}
             <SummaryStat
               label={`${summary.total.orderCount} sipariş`}
               value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />}
@@ -1041,6 +1065,11 @@ export default function OrdersPage() {
               </p>
             )}
             {/* Listedeki sipariş sayısı ile özetteki sayı neden farklı — tek satırda. */}
+            {previousMonthCount > 0 && (
+              <p className="col-span-full text-[10px] text-muted-foreground animate-in fade-in duration-500">
+                Listedeki {previousMonthCount} sipariş geçen aydan — toplamlar bu ayı sayar.
+              </p>
+            )}
             {excludedFromSummary > 0 && (
               <p className="col-span-full text-[10px] text-muted-foreground animate-in fade-in duration-500">
                 Listede {excludedFromSummary} sipariş daha var — iptal/iade ya da tutarı

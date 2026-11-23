@@ -40,6 +40,8 @@ export interface FilterableOrder {
   statusUnknown?: boolean;
   /** 30 günden önce verilmiş, işi bitmediği için listede duran elle sipariş → özet dışında. */
   outsideWindow?: boolean;
+  /** Bu aydan önce verilmiş → ay özetinin dışında (bugün/dün toplamlarına girer). */
+  previousMonth?: boolean;
 }
 
 /**
@@ -89,7 +91,17 @@ export function orderMatchesSearch(
  * toplamların dışında kalır.
  */
 export function countsInSummary(order: FilterableOrder): boolean {
-  // Listede duran eski açık elle sipariş özetin penceresinde değil (sunucu da saymıyor).
+  // Özet BU AYI sayar (sunucuyla aynı dönem); listede duran önceki ay siparişleri girmez.
+  if (order.previousMonth) return false;
+  return countsAsSale(order);
+}
+
+/**
+ * Sipariş SATIŞ sayılır mı (dönemden bağımsız) — "bugün/dün" toplamları bunu kullanır: ayın
+ * 1'inde dünün siparişleri önceki aydır ama "Dün" kutusunda yine sayılmalı.
+ */
+export function countsAsSale(order: FilterableOrder): boolean {
+  // Listede duran eski açık elle sipariş kendi ayında sayıldı (sunucu da saymıyor).
   if (order.outsideWindow) return false;
   if (order.statusKind === "cancelled") return false;
   // Durumu tanınmayan sipariş sunucu özetinde de ciro dışında; burada elenmezse "N siparişte

@@ -144,3 +144,17 @@ describe("durum çipleri listeyle aynı kümeden sayılır", () => {
     expect(chips.find((chip) => chip.kind === "pending")?.count).toBe(1);
   });
 });
+
+describe("ay özeti ↔ satış sayımı", () => {
+  const siparis = (ek: Record<string, unknown> = {}) =>
+    ({ platform: "trendyol", statusKind: "delivered", orderNumber: "1", items: [], currency: "TRY", profit: 10, ...ek }) as never;
+
+  it("geçen ayın siparişi ay özetine girmez ama satış sayılır (Dün kutusu ayın 1'inde)", async () => {
+    const { countsAsSale, countsInSummary, hasMissingCost } = await import("./siparis-filtre");
+    expect(countsInSummary(siparis({ previousMonth: true }))).toBe(false);
+    expect(countsAsSale(siparis({ previousMonth: true }))).toBe(true);
+    expect(hasMissingCost(siparis({ previousMonth: true, profit: null }))).toBe(false);
+    expect(countsInSummary(siparis())).toBe(true);
+    expect(countsAsSale(siparis({ statusKind: "cancelled" }))).toBe(false);
+  });
+});

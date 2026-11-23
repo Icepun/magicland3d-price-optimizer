@@ -94,7 +94,7 @@ import {
   parseManualOrderBreakdown,
   parseManualOrderItems,
 } from "@/lib/manual-orders";
-import { kurusToTl } from "@/lib/monthly-finance";
+import { FINANCE_TIME_ZONE, kurusToTl, monthlyFinanceWindowStart } from "@/lib/monthly-finance";
 
 const WINDOW_DAYS = 30;
 // Aylık geçmişte geç gelen iptal/iade durumlarını yakalamak için görünür listenin
@@ -248,6 +248,11 @@ export interface UnifiedOrder {
    * (core/order-window). Özetlere ve "bugün" toplamlarına GİRMEZ — kendi ayında sayıldı.
    */
   outsideWindow?: boolean;
+  /**
+   * Bu aydan ÖNCE verilmiş (liste son 30 günü gösterir, özet BU AYI sayar). Özete girmez;
+   * "bugün/dün" toplamlarına girer. Raporlar'la aynı dönem — ekranlar aynı rakamı göstersin.
+   */
+  previousMonth?: boolean;
 }
 
 interface PlatformStatus {
@@ -1855,6 +1860,14 @@ async function computeOrdersBodyInner(
     const ms = tarihMs(order);
     return ms != null && !(ms >= cutoff);
   };
+  // ÖZET DÖNEMİ = BU AY (Türkiye saatiyle ayın 1'i 00:00'dan bugüne) — Raporlar ve Panel'le aynı
+  // dönem (Berke'nin kararı, 23 Kas 2026: ekranlar farklı dönem gösterince net kâr her yerde başka
+  // görünüyordu). Liste yine son 30 günü gösterir.
+  const ozetBas = monthlyFinanceWindowStart(1, new Date(), FINANCE_TIME_ZONE).getTime();
+  const oncekiAy = (order: { date: string | null }) => {
+    const ms = tarihMs(order);
+    return ms != null && ms < ozetBas;
+  };
   const visibleOrders = orders
     .filter((order) =>
       siparisListedeKalir(
@@ -1862,7 +1875,11 @@ async function computeOrdersBodyInner(
         cutoff
       )
     )
-    .map((order) => (pencereDisi(order) ? { ...order, outsideWindow: true } : order));
+    .map((order) => (pencereDisi(order) ? { ...order, outsideWindow: true } : order))
+    .map((order) => (oncekiAy(order) ? { ...order, previousMonth: true } : order));
+  // Özet listeden DEĞİL çekilen tüm siparişlerden sayılır: 31 çeken ayın son gününde ayın 1'i
+  // 30 günlük liste penceresinin birkaç saat dışına düşebiliyor.
+  const ozetSiparisleri = orders.filter((order) => !oncekiAy(order));
 
   // Dashboard özeti (iptal/iade hariç) ──────────────────────────────────────
   const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 });
@@ -1884,10 +1901,10 @@ async function computeOrdersBodyInner(
         : platform === "hepsiburada"
           ? sHepsiburada
           : sManual;
-  for (const o of visibleOrders) {
-    // Özet YALNIZ son 30 günde verilen siparişleri sayar; listede kalan eski açık elle sipariş
-    // kendi ayının cirosunda zaten sayıldı.
-    if (o.outsideWindow) continue;
+  for (const o of ozetSiparisleri) {
+    // Özet YALNIZ bu ay verilen siparişleri sayar; listede kalan eski açık elle sipariş kendi
+    // ayının cirosunda zaten sayıldı.
+    if (oncekiAy(o)) continue;
     if (o.statusKind === "cancelled") {
       // İADE edilen siparişin kargo zararı: ciroya ve sipariş sayısına girmez, kârdan DÜŞER.
       if (o.returnLoss && !o.dataIncomplete && normalizedCurrency(o.currency) === "TRY") {
@@ -1989,8 +2006,10 @@ async function computeOrdersBodyInner(
     orders: visibleOrders,
     summary: {
       days: WINDOW_DAYS,
-      // Pencerenin İLK anı — Panel'in net kârı giderleri AYNI andan itibaren düşer.
-      from: new Date(cutoff).toISOString(),
+      // ÖZET DÖNEMİNİN İLK anı (bu ayın 1'i) — Panel'in net kârı giderleri AYNI andan itibaren düşer.
+      from: new Date(ozetBas).toISOString(),
+      // Özet dönemi: "month" = bu ay (eski gövdede yok → istemci 30 günlük başlığı gösterir).
+      period: "month" as const,
       shopify: sShopify,
       trendyol: sTrendyol,
       hepsiburada: sHepsiburada,
