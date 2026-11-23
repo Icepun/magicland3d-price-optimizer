@@ -19,6 +19,7 @@ import {
   type OrderProfitInput,
   type OrderProfitLine,
   type OrderProfitProduct,
+  type ResolvedOrderProfit,
   type ReturnLossActual,
 } from "@/core/order-profit";
 import type { KargoBaglami } from "@/core/kargo-tarife";
@@ -1212,7 +1213,7 @@ const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 // Kayıtlı satırın TAMAMI okunur: kuru tur (prova) "yazsaydık ne değişirdi" sorusunu ancak
 // gerçek yazımla AYNI alanları karşılaştırarak dürüstçe yanıtlayabilir.
-type RecalcSnapshotRow = {
+export type RecalcSnapshotRow = {
   platform: string;
   externalOrderId: string;
   orderNumber: string;
@@ -1440,6 +1441,12 @@ export interface FinanceRecalcOptions {
    * hesaplanmıştır — korunursa sipariş sonsuza dek yanlış kârla ve "eski hesap" uyarısıyla kalırdı.
    */
   bilinmeyenKariYaz?: boolean;
+  /**
+   * Hesaplanan her sipariş için çağrılır — Raporlar'ın "Kâr nereye gitti" dökümü motorun KENDİ
+   * kalemlerinden toplansın diye (yeni formül kurulmaz). Kalem geçmişi olmayan sipariş `null`
+   * sonuçla gelir. Yazma kararını ETKİLEMEZ; genelde `dryRun` ile kullanılır.
+   */
+  dokum?: (row: RecalcSnapshotRow, sonuc: ResolvedOrderProfit | null) => void;
 }
 
 function emptyRecalcResult(month: string, dryRun: boolean): FinanceMonthRecalcResult {
@@ -1599,6 +1606,7 @@ export async function recalculateFinanceMonths(
       // düşmesin (uyarı 18 sipariş diyordu, düğme hiçbirini düzeltemiyordu).
       if (lines.length === 0) {
         blockedOrders++;
+        options.dokum?.(row, null);
         continue;
       }
       const profitLines: OrderProfitLine[] = lines.map((line) => {
@@ -1701,6 +1709,7 @@ export async function recalculateFinanceMonths(
         statusKind: row.statusKind,
         financial: financialByOrder.get(key) ?? null,
       });
+      options.dokum?.(row, resolved);
       // İade zararı yalnız canlı listede "kargolanıp geri geldi" diye işaretlenmiş (zararı kayıtlı)
       // siparişlerde yeniden hesaplanır — iptalin kargolu iade olup olmadığını kalem geçmişi söylemez.
       const iadeZarari =

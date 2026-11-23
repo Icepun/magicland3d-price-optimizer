@@ -454,3 +454,122 @@ export function parseProductSalesItems(
   }
   return items;
 }
+
+/** Bir ayın ürün satışları — Raporlar'da seçilen ayın listeleri. */
+export interface MonthlyProductSales {
+  /** Adet sırasına göre. */
+  topSellers: ProductSalesRow[];
+  /** Gerçekleşen kâr sırasına göre (kârı bilinmeyen ürün yok). */
+  profitLeaders: ProductSalesRow[];
+  /** Ürünle eşleşmemiş satışlar. */
+  unmatched: { lines: number; quantity: number; revenue: number };
+  /** Ürün dökümü olmayan siparişler. */
+  ordersWithoutItems: number;
+}
+
+/**
+ * Kalemleri AY AY ürün kimliğine göre topla — paylaştırma kuralı `aggregateProductSales` ile
+ * birebir aynı (kayıtlı sipariş kârı kalem cirosu payıyla dağıtılır, eşleşmeyen satır pay almaz).
+ * `ayOf` ayın anahtarını verir (saat dilimi çağıranın).
+ */
+export function aggregateProductSalesByMonth({
+  items,
+  orders,
+  productInfo = [],
+  ayOf,
+  limit = 8,
+}: {
+  items: ProductSalesItem[];
+  orders: ProductSalesOrder[];
+  productInfo?: ProductSalesInfo[];
+  ayOf: (tarih: Date) => string;
+  limit?: number;
+}): Record<string, MonthlyProductSales> {
+  const orderByKey = new Map(orders.map((order) => [orderKey(order.platform, order.externalOrderId), order]));
+  const infoById = new Map(productInfo.map((info) => [info.id, info]));
+  const orderLineTotal = new Map<string, number>();
+  for (const item of items) {
+    if (item.statusKind === "cancelled") continue;
+    const key = orderKey(item.platform, item.externalOrderId);
+    orderLineTotal.set(key, (orderLineTotal.get(key) ?? 0) + item.lineRevenueKurus);
+  }
+  const aylar = new Map<
+    string,
+    { buckets: Map<string, Bucket>; names: Map<string, string>; unmatched: { lines: number; quantity: number; revenueKurus: number }; withItems: Set<string> }
+  >();
+  const ay = (key: string) => {
+    let a = aylar.get(key);
+    if (!a) {
+      a = { buckets: new Map(), names: new Map(), unmatched: { lines: 0, quantity: 0, revenueKurus: 0 }, withItems: new Set() };
+      aylar.set(key, a);
+    }
+    return a;
+  };
+
+  for (const item of items) {
+    if (item.statusKind === "cancelled") continue;
+    const key = orderKey(item.platform, item.externalOrderId);
+    const order = orderByKey.get(key);
+    if (!order || order.statusKind === "cancelled") continue;
+    if ((order.currency || "TRY").trim().toUpperCase() !== "TRY") continue;
+    // Ay SİPARİŞİN tarihinden: aylık özetle aynı küme (kalemin damgası ayrı yazılmış olabilir).
+    const a = ay(ayOf(order.orderedAt));
+    a.withItems.add(key);
+    if (!item.productId) {
+      a.unmatched.lines++;
+      a.unmatched.quantity += item.quantity;
+      a.unmatched.revenueKurus += item.lineRevenueKurus;
+      continue;
+    }
+    if (!a.names.has(item.productId)) a.names.set(item.productId, item.productName);
+    const denominator = orderLineTotal.get(key) ?? 0;
+    const share = denominator > 0 ? item.lineRevenueKurus / denominator : 0;
+    const bucket = a.buckets.get(item.productId) ?? emptyBucket();
+    bucket.quantity += item.quantity;
+    bucket.revenueKurus += item.lineRevenueKurus;
+    bucket.orders.add(key);
+    if (order.profitKurus == null) {
+      bucket.profitUnknownLines++;
+    } else {
+      bucket.profitKurus += order.profitKurus * share;
+      bucket.profitKnownLines++;
+      if (order.profitPartial) bucket.profitPartial = true;
+    }
+    a.buckets.set(item.productId, bucket);
+  }
+
+  // Dökümsüz siparişler ay ay sayılır (listeler onları göremez).
+  const dokumsuz = new Map<string, number>();
+  for (const order of orders) {
+    if (order.statusKind === "cancelled") continue;
+    if ((order.currency || "TRY").trim().toUpperCase() !== "TRY") continue;
+    const key = ayOf(order.orderedAt);
+    if (!ay(key).withItems.has(orderKey(order.platform, order.externalOrderId))) {
+      dokumsuz.set(key, (dokumsuz.get(key) ?? 0) + 1);
+    }
+  }
+
+  const sonuc: Record<string, MonthlyProductSales> = {};
+  for (const [key, a] of aylar) {
+    const rows = [...a.buckets.entries()].map(([productId, bucket]) =>
+      toRow(productId, bucket, infoById.get(productId), a.names.get(productId) ?? productId)
+    );
+    sonuc[key] = {
+      topSellers: rows
+        .slice()
+        .sort((x, y) => y.quantity - x.quantity || y.revenue - x.revenue)
+        .slice(0, limit),
+      profitLeaders: rows
+        .filter((row) => row.profit != null)
+        .sort((x, y) => (y.profit ?? 0) - (x.profit ?? 0))
+        .slice(0, limit),
+      unmatched: {
+        lines: a.unmatched.lines,
+        quantity: a.unmatched.quantity,
+        revenue: KURUS(a.unmatched.revenueKurus),
+      },
+      ordersWithoutItems: dokumsuz.get(key) ?? 0,
+    };
+  }
+  return sonuc;
+}

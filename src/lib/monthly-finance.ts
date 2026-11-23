@@ -41,6 +41,8 @@ type SnapshotInput = {
    */
   returnLossKurus?: number | null;
   returnLossVatKurus?: number | null;
+  /** Kârdan düşülen ceza (gecikme + kusurlu ürün bedeli) — kuruş. Kâra zaten dahil; yalnız rapor. */
+  penaltyKurus?: number | null;
 };
 
 type ManualOrderFinanceInput = {
@@ -62,6 +64,8 @@ type ManualOrderFinanceInput = {
 type ExpenseInput = {
   paidAt: Date;
   amountKurus: number;
+  /** Gider kategorisi (boşsa "Diğer"). */
+  category?: string | null;
 };
 
 type PlatformKurus = {
@@ -91,6 +95,10 @@ type MonthKurus = {
   /** Kârdan düşülen iade zararı (net kuruş) ve sipariş sayısı. */
   returnLossKurus: number;
   returnLossOrders: number;
+  /** Ciroya giren siparişlerin kârından düşülmüş cezalar (iade edilenlerinki iade zararında). */
+  penaltyKurus: number;
+  penaltyOrders: number;
+  expenseCategories: Map<string, { kurus: number; count: number }>;
   byPlatform: Record<string, PlatformKurus>;
 };
 
@@ -131,6 +139,11 @@ export interface MonthlyFinanceItem {
   /** Kargolanıp geri gelen siparişlerin kârdan düşülen zararı (TL, net) ve sayısı. */
   returnLoss: number;
   returnLossOrders: number;
+  /** Ciroya giren siparişlerden düşülen gecikme + kusurlu ürün bedeli (TL) ve sipariş sayısı. */
+  penalty: number;
+  penaltyOrders: number;
+  /** Ödeme ayına göre giderler, kategori başına (büyükten küçüğe). */
+  expensesByCategory: { category: string; amount: number; count: number }[];
   vat: MonthlyVatSummary;
   byPlatform: Record<
     string,
@@ -270,6 +283,9 @@ export function aggregateMonthlyFinance({
         vatUnknownRevenueKurus: 0,
         returnLossKurus: 0,
         returnLossOrders: 0,
+        penaltyKurus: 0,
+        penaltyOrders: 0,
+        expenseCategories: new Map(),
         byPlatform: {
           shopify: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
           trendyol: { revenueKurus: 0, orderProfitKurus: 0, orderCount: 0 },
@@ -310,6 +326,10 @@ export function aggregateMonthlyFinance({
 
     bucket.revenueKurus += snapshot.revenueKurus;
     bucket.orderCount++;
+    if (snapshot.penaltyKurus != null && snapshot.penaltyKurus > 0) {
+      bucket.penaltyKurus += snapshot.penaltyKurus;
+      bucket.penaltyOrders++;
+    }
     if (snapshot.profitKurus == null) {
       bucket.missingProfitOrders++;
     } else {
@@ -365,7 +385,13 @@ export function aggregateMonthlyFinance({
 
   for (const expense of expenses) {
     const bucket = months.get(monthKey(expense.paidAt, timeZone));
-    if (bucket) bucket.expensesKurus += expense.amountKurus;
+    if (!bucket) continue;
+    bucket.expensesKurus += expense.amountKurus;
+    const kategori = expense.category?.trim() || "Diğer";
+    const k = bucket.expenseCategories.get(kategori) ?? { kurus: 0, count: 0 };
+    k.kurus += expense.amountKurus;
+    k.count++;
+    bucket.expenseCategories.set(kategori, k);
   }
 
   return keys.map((key) => {
@@ -385,6 +411,11 @@ export function aggregateMonthlyFinance({
       unsupportedCurrencyOrders: bucket.unsupportedCurrencyOrders,
       returnLoss: kurusToTl(bucket.returnLossKurus),
       returnLossOrders: bucket.returnLossOrders,
+      penalty: kurusToTl(bucket.penaltyKurus),
+      penaltyOrders: bucket.penaltyOrders,
+      expensesByCategory: [...bucket.expenseCategories.entries()]
+        .map(([category, v]) => ({ category, amount: kurusToTl(v.kurus), count: v.count }))
+        .sort((a, b) => b.amount - a.amount),
       vat: {
         outputVat: kurusToTl(bucket.outputVatKurus),
         inputVatCredit: kurusToTl(bucket.inputVatCreditKurus),

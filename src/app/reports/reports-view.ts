@@ -28,6 +28,39 @@ export interface FinanceBucket {
   /** Eski hesapla kayıtlı sipariş sayısı — yeniden hesap uyarısının HAM sayısı. */
   outdatedOrders?: number;
   byPlatform: Record<string, unknown>;
+  /** Kargolanıp geri gelen siparişlerin kârdan düşülen zararı (TL) ve sayısı. */
+  returnLoss?: number;
+  returnLossOrders?: number;
+  /** Ciroya giren siparişlerden düşülen gecikme + kusurlu ürün bedeli (v10 gövdesi). */
+  penalty?: number;
+  penaltyOrders?: number;
+  /** Kategori bazında giderler (v10 gövdesi). */
+  expensesByCategory?: { category: string; amount: number; count: number }[];
+}
+
+/** Platformun ay içindeki payı. */
+export interface PlatformBucket {
+  revenue: number;
+  orderProfit: number;
+  orderCount: number;
+}
+
+/** Ayın ürün listeleri (v10 gövdesi). */
+export interface MonthlyProductSales {
+  topSellers: ProductSalesRow[];
+  profitLeaders: ProductSalesRow[];
+  unmatched: { lines: number; quantity: number; revenue: number };
+  ordersWithoutItems: number;
+}
+
+/** "Kâr nereye gitti" — `/api/finance/monthly?section=dokum&month=…` gövdesi. */
+export interface KarDokumuYaniti {
+  month: string;
+  revenue: number;
+  unknownCostRevenue: number;
+  lines: { key: string; label: string; amount: number }[];
+  orderProfitBeforeReturns: number;
+  orderCount: number;
 }
 
 export interface FinanceTotals {
@@ -84,6 +117,8 @@ export interface ProductSalesSummary {
   orphanItems?: { lines: number; quantity: number; revenue: number };
   coverage: SalesCoverage;
   recentCoverage: SalesCoverage;
+  /** Ay ay listeler (v10 gövdesi). */
+  byMonth?: Record<string, MonthlyProductSales>;
 }
 
 export interface CommissionStats {
@@ -164,6 +199,8 @@ export interface FinanceResponse {
   previousToDate?: PreviousToDate | null;
   /** Son 12 hafta (v9 gövdesi). */
   weeks?: WeeklyBucket[];
+  /** Gider kategorilerinin renkleri (v10 gövdesi). */
+  expenseCategories?: { name: string; color: string | null }[];
 }
 
 export interface PreviousToDate {

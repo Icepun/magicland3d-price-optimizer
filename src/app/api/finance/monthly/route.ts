@@ -22,6 +22,7 @@ import { swr } from "@/lib/route-cache";
 import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
 import {
   aggregateProductSales,
+  aggregateProductSalesByMonth,
   parseProductSalesItems,
   productSalesItemsSql,
   type ProductSalesOrder,
@@ -34,6 +35,7 @@ import {
 import { readProductProfitability } from "@/lib/finance-product-profitability";
 import { ensureRecurringExpenses } from "@/lib/recurring-expense-run";
 import { karEksikAdaylari, karEksikSebepleriniOku } from "@/lib/finance-missing-costs";
+import { karDokumuOku } from "@/lib/finance-breakdown";
 
 /**
  * ⚠️ TARİH ALANINDA `aggregate({ _min / _max })` KULLANMA.
@@ -96,6 +98,8 @@ type SnapshotRow = {
   /** İade edilen siparişin zararı (net kuruş) ve içindeki KDV — kârdan düşülür. */
   returnLossKurus: number | null;
   returnLossVatKurus: number | null;
+  /** Kârdan düşülmüş ceza (gecikme + kusurlu ürün bedeli) — rapor için. */
+  penaltyKurus: number | null;
   calculationVersion: number;
 };
 
@@ -104,7 +108,7 @@ async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
   const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
     `SELECT "platform","externalOrderId","orderedAt","revenueKurus","profitKurus","profitPartial",
             "statusKind","currency","outputVatKurus","inputVatCreditKurus","calculationVersion",
-            "returnLossKurus","returnLossVatKurus"
+            "returnLossKurus","returnLossVatKurus","penaltyKurus"
        FROM "OrderFinanceSnapshot"
       WHERE "platform" <> 'manual'
         AND ${dbEpochMs("orderedAt")} >= ?`,
@@ -128,6 +132,7 @@ async function readSnapshots(windowStart: Date): Promise<SnapshotRow[]> {
       inputVatCreditKurus: toNullableInt(row.inputVatCreditKurus),
       returnLossKurus: toNullableInt(row.returnLossKurus),
       returnLossVatKurus: toNullableInt(row.returnLossVatKurus),
+      penaltyKurus: toNullableInt(row.penaltyKurus),
       calculationVersion: toInt(row.calculationVersion),
     });
   }
@@ -190,6 +195,25 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  /**
+   * KÂR DÖKÜMÜ ("Kâr nereye gitti") — bir ay için, AYRI bölüm: motor prova turuyla koşturulduğu
+   * için birkaç saniye sürebilir; sayfanın geri kalanı onu beklemez. Anahtar `finance-monthly:`
+   * ile başlar → sipariş/gider/yeniden hesap düşürücüleri (bustFinanceCaches) bunu da düşürür.
+   */
+  if (req.nextUrl.searchParams.get("section") === "dokum") {
+    const month = req.nextUrl.searchParams.get("month") ?? "";
+    if (!MONTH_PATTERN.test(month)) {
+      return NextResponse.json({ error: "Ay anlaşılmadı." }, { status: 400 });
+    }
+    try {
+      await ensureRuntimeSchema();
+      const data = await swr(`finance-monthly:dokum:v1:${month}`, 5 * 60_000, () => karDokumuOku(month));
+      return NextResponse.json(data, { headers: { "Cache-Control": "no-store" } });
+    } catch (error) {
+      return jsonError(error);
+    }
+  }
+
   const requested = Number(req.nextUrl.searchParams.get("months") ?? 12);
   const monthCount = Number.isFinite(requested)
     ? Math.max(1, Math.min(24, Math.trunc(requested)))
@@ -208,9 +232,10 @@ export async function GET(req: NextRequest) {
   // ve yeni alanlar hiç görünmezdi.
   // v8: "kâr hesabı tam değil" uyarısının sebepleri (maliyetsiz ürünler, bağlanmamış satışlar).
   // v9: geçen ayın bugüne kadarki kısmı (adil kıyas) + haftalık görünüm.
+  // v10: ay başına ceza ve kategori bazında gider, ay ay ürün listeleri, gider kategori renkleri.
   try {
     const data = await swr(
-      `finance-monthly:v9:${monthCount}`,
+      `finance-monthly:v10:${monthCount}`,
       60_000,
       () => computeMonthlyFinance(monthCount)
     );
@@ -325,7 +350,7 @@ async function computeMonthlyFinance(monthCount: number) {
     }),
     remotePrisma.actualExpense.findMany({
       where: { paidAt: { gte: windowStart } },
-      select: { paidAt: true, amountKurus: true },
+      select: { paidAt: true, amountKurus: true, category: true },
     }),
     // Başlıktaki sayı "indirilen komisyon KAYDI" değil, "gerçek komisyonla HESAPLANMIŞ sipariş"
     // olmalı — ikisi aynı değil (canlı: 193 kayıt, 101 uygulanmış sipariş). Gerekçe ve ölçüm:
@@ -475,13 +500,27 @@ async function computeMonthlyFinance(monthCount: number) {
       }))
     );
   }
-  const products = aggregateProductSales({
-    items,
-    orders: salesOrders,
-    productInfo,
-    rangeFrom: windowStart,
-    now,
-  });
+  const products = {
+    ...aggregateProductSales({
+      items,
+      orders: salesOrders,
+      productInfo,
+      rangeFrom: windowStart,
+      now,
+    }),
+    // Raporlar'da seçilen ayın listeleri (aylık özetle aynı küme).
+    byMonth: aggregateProductSalesByMonth({
+      items,
+      orders: salesOrders,
+      productInfo,
+      ayOf: (tarih) => monthKey(tarih, FINANCE_TIME_ZONE),
+    }),
+  };
+
+  // Gider kategorilerinin renkleri (Gider Ödemeleri ekranında seçilen) — grafik aynı rengi kullansın.
+  const expenseCategories = await prisma.expenseCategory
+    .findMany({ select: { name: true, color: true }, orderBy: { sortOrder: "asc" } })
+    .catch(() => [] as Array<{ name: string; color: string | null }>);
 
   // "Kâr hesabı tam değil" uyarısının SEBEPLERİ: hangi ürüne maliyet girilmeli, hangi satış ürüne
   // bağlanmalı. Okuma yalnız eksik sipariş varsa yapılır; düşerse uyarı sayıyla yetinir.
@@ -523,6 +562,7 @@ async function computeMonthlyFinance(monthCount: number) {
     quality,
     karEksik,
     products,
+    expenseCategories,
     // "Kaç siparişin kârı eski hesaplamayla kayıtlı ve kaçı GERÇEKTEN düzeltilebilir?"
     // Ürün dökümü olmayan sipariş yeniden hesaplanamaz; bu ayrım olmadan sayfa 18 sipariş
     // için düğme gösteriyor ve düğmeye basılınca hiçbir şey değişmiyordu.

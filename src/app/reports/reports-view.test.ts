@@ -525,46 +525,49 @@ describe("engel metni sunucudaki sabitle aynı kalır", () => {
  * yüzden kaynak metninden doğrulanır. Hepsi bir kez GERÇEKTEN bozuldu.
  */
 describe("Raporlar sayfası sözleşmeleri", () => {
-  const source = readFileSync(
-    path.join(process.cwd(), "src/app/reports/page.tsx"),
-    "utf8"
-  );
+  const oku = (dosya: string) => readFileSync(path.join(process.cwd(), dosya), "utf8");
+  const sayfa = oku("src/app/reports/page.tsx");
+  const bilesen = (ad: string) => oku(`src/components/reports/${ad}.tsx`);
+  const grafikler = ["rapor-trend", "rapor-ozet", "rapor-platformlar"].map(bilesen);
 
   it("kârlılık sorgusu ÜRÜN ailesinin altında durur ve mount'ta bayatlığı sorar", () => {
+    const urunler = bilesen("rapor-urunler");
     // `["products"]` düşürmeleri (~20 mutasyon) ön ek eşleşmesiyle bu kartı da kapsasın diye.
-    expect(source).toContain('queryKey: ["products", "profitability"]');
+    expect(urunler).toContain('queryKey: ["products", "profitability"]');
     // QueryProvider varsayılanı `refetchOnMount: false`; bu olmadan düşürme mount'ta işe yaramaz.
-    const blok = source.slice(source.indexOf('queryKey: ["products", "profitability"]'));
+    const blok = urunler.slice(urunler.indexOf('queryKey: ["products", "profitability"]'));
     expect(blok.slice(0, 420)).toContain("refetchOnMount: true");
   });
 
   it("çubuk arka plan tazelemesinde ZIPLAMAZ", () => {
-    // Adetler değişince React aynı ögeyi yeniden kullanır; mount animasyonu tekrar çalışmaz,
-    // geçiş olmadan satır içi `width` anında yeni değerine atlıyordu.
-    const kural = source.slice(
-      source.indexOf(".ml-bar {"),
-      source.indexOf("@media (prefers-reduced-motion")
-    );
-    expect(kural).toContain("transition: width");
-    // Gecikme + fill-mode ikilisi kademeli girişi çubuğa yüklüyordu; giriş SATIRIN işi.
-    expect(kural).not.toContain("backwards");
+    // Değer değişince aynı öge yeniden kullanılır; giriş animasyonu tekrar çalışmaz —
+    // geçiş olmadan satır içi `width` anında yeni değerine atlardı.
+    expect(bilesen("rapor-ortak")).toContain("transition-[width]");
   });
 
   it("grafik animasyonu gizli pencerede kapanır", () => {
     // Recharts çubuğu rAF ile büyütüyor; gizli pencerede kare gelmeyince sıfır yükseklikte kalır.
-    expect(source).toContain("const grafikAnimasyonu = !reduceMotion && !sayfaGizli;");
-    expect(source).not.toContain("isAnimationActive={!reduceMotion}");
+    for (const kaynak of grafikler) {
+      expect(kaynak).toContain("const animasyon = !reduce && !gizli;");
+      expect(kaynak).not.toContain("isAnimationActive={!reduce}");
+    }
   });
 
   it("odak halkası Yüksek Kontrast kipinde de görünür", () => {
     // Tailwind v4'te `outline-none` outline'ı tümden kaldırır; forced-colors'ta box-shadow çizilmez.
-    expect(source).not.toContain("outline-none focus-visible:ring-2");
-    expect(source).toContain("outline-hidden focus-visible:ring-2");
+    const urunler = bilesen("rapor-urunler");
+    expect(urunler).not.toContain("outline-none focus-visible:ring-2");
+    expect(urunler).toContain("outline-hidden focus-visible:ring-2");
   });
 
   it("ağ kopukken 'veri yok' DENMEZ", () => {
     // Duraklamış sorguda isError de isFetching de false; bu ayrım olmadan ekran yalan söylüyordu.
-    expect(source).toContain('financeQuery.fetchStatus === "paused"');
+    expect(sayfa).toContain('financeQuery.fetchStatus === "paused"');
+  });
+
+  it("aylık özet mount'ta bayatlığı sorar", () => {
+    const blok = sayfa.slice(sayfa.indexOf('queryKey: ["finance-monthly", 12]'));
+    expect(blok.slice(0, 500)).toContain("refetchOnMount: true");
   });
 });
 
