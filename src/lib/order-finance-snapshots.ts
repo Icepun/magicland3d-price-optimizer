@@ -202,6 +202,7 @@ export function shouldReplaceCapturedProfit(
     microExportCountry?: string | null;
     actualFeesKurus?: number | null;
     penaltyKurus?: number | null;
+    outputVatKurus?: number | null;
   } | null,
   incoming: {
     revenueKurus: number;
@@ -215,6 +216,8 @@ export function shouldReplaceCapturedProfit(
     actualFeesKurus?: number | null;
     /** undefined = çağıran bilmiyor (karşılaştırmaya girmez). */
     penaltyKurus?: number | null;
+    /** Satış KDV'si — null/undefined karşılaştırmaya girmez. */
+    outputVatKurus?: number | null;
   }
 ): boolean {
   // Tam hesap ilk kez yakalandıktan sonra maliyet/rule düzenlemeleri geçmiş ayı
@@ -258,6 +261,20 @@ export function shouldReplaceCapturedProfit(
     incoming.actualFeesKurus !== undefined &&
     incoming.actualFeesKurus !== null &&
     (existing.actualFeesKurus ?? null) !== incoming.actualFeesKurus
+  ) {
+    return true;
+  }
+  /**
+   * SATIŞ KDV'Sİ DEĞİŞTİ → yenile. Kalemin KDV oranı sonradan gelebiliyor (ölçüldü 23 Kas 2026:
+   * Hepsiburada'nın %10'luk ürünü ilk yazımda oran bilinmediği için %20 sayılmış, 20 siparişte
+   * kayıtlı kâr ~₺29 düşük kalmıştı; ciro ve gerçek kesintiler aynı olduğu için hiçbir kural
+   * tetiklenmiyordu). Satış KDV'si yalnız ciroya ve orana bağlıdır, maliyet düzenlemesi onu
+   * oynatmaz — "geçmiş ay maliyetle kaymasın" ilkesi korunur.
+   */
+  if (
+    incoming.outputVatKurus != null &&
+    existing.outputVatKurus != null &&
+    Math.abs(existing.outputVatKurus - incoming.outputVatKurus) > 1
   ) {
     return true;
   }

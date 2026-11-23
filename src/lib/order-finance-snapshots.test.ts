@@ -55,11 +55,12 @@ describe("mikro ihracat — yakalanmış kâr yalnız bu bilgi değişince yenil
   });
 
   it("yurt içi sipariş (null) ve bilgisiz çağrı (undefined) yakalanmış kâra DOKUNMAZ", () => {
-    const yurtIci = resolveSnapshotWriteData(kayitli, siparis({ microExport: null }), kayitli.orderedAt);
+    // Yurt içi siparişin satış KDV'si kayıtlıyla aynı (KDV değişimi ayrı kural).
+    const yurtIci = resolveSnapshotWriteData(kayitli, siparis({ microExport: null, outputVat: 63.75 }), kayitli.orderedAt);
     expect(yurtIci.profitKurus).toBe(5_000);
     const bilgisiz = resolveSnapshotWriteData(
       { ...kayitli, microExportCountry: "SA" },
-      siparis({ microExport: undefined }),
+      siparis({ microExport: undefined, outputVat: 63.75 }),
       kayitli.orderedAt
     );
     // Shopify/HB ya da eski çağrı yeri kayıtlı ülkeyi silmez.
@@ -70,6 +71,15 @@ describe("mikro ihracat — yakalanmış kâr yalnız bu bilgi değişince yenil
   it("ülke bilinmeyen mikro sipariş 'XX' olarak saklanır", () => {
     const yeni = resolveSnapshotWriteData(kayitli, siparis({ microExport: { ulke: null } }), kayitli.orderedAt);
     expect(yeni.microExportCountry).toBe("XX");
+  });
+
+  it("satış KDV'si değişince (oran sonradan geldi) yakalanmış kâr yenilenir; bilinmeyen KDV dokunmaz", () => {
+    const yakalanmis = { ...kayitli, outputVatKurus: 6_333 };
+    const yeni = { revenueKurus: 38_249, profitKurus: 12_130, profitPartial: false };
+    expect(shouldReplaceCapturedProfit(yakalanmis, { ...yeni, outputVatKurus: 3_454 })).toBe(true);
+    expect(shouldReplaceCapturedProfit(yakalanmis, { ...yeni, outputVatKurus: 6_334 })).toBe(false);
+    expect(shouldReplaceCapturedProfit(yakalanmis, { ...yeni, outputVatKurus: null })).toBe(false);
+    expect(shouldReplaceCapturedProfit({ ...yakalanmis, outputVatKurus: null }, { ...yeni, outputVatKurus: 3_454 })).toBe(false);
   });
 
   it("karar fonksiyonu: undefined karşılaştırmaya girmez", () => {
