@@ -65,13 +65,23 @@ export function gunBasi(ms: number): number {
 export type Donem = "bugun" | "hafta" | "ay";
 
 /**
- * Dönemin başlangıcı. "Ay" = son 30 gün: masaüstü özetiyle AYNI kesim (`orderWindowCutoff` —
- * UTC gün başına sabit) dışarıdan verilir ki iki uygulama aynı sayıyı göstersin.
+ * Türkiye takviminde AYIN 1'inin başlangıcı (epoch ms). Türkiye yaz saati uygulamıyor (UTC+3
+ * sabit) → `Europe/Istanbul` ay başıyla birebir.
  */
-export function donemBaslangici(donem: Donem, nowMs: number, ayKesimi: number): number {
+export function ayBasi(ms: number): number {
+  const yerel = new Date(ms + TR_KAYMA_MS);
+  return Date.UTC(yerel.getUTCFullYear(), yerel.getUTCMonth(), 1) - TR_KAYMA_MS;
+}
+
+/**
+ * Dönemin başlangıcı. "Ay" = BU AY (Türkiye takvimi, ayın 1'i): masaüstünde Panel, Siparişler ve
+ * Raporlar aynı dönemi (bu ay) gösterir — Berke'nin kararı, 23 Kas 2026. Telefon da aynı kesimi
+ * kullanır ki iki uygulama aynı rakamı göstersin.
+ */
+export function donemBaslangici(donem: Donem, nowMs: number): number {
   if (donem === "bugun") return gunBasi(nowMs);
   if (donem === "hafta") return gunBasi(nowMs) - 6 * GUN_MS;
-  return ayKesimi;
+  return ayBasi(nowMs);
 }
 
 const AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];

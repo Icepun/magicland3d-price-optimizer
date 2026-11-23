@@ -19,7 +19,7 @@ import {
   Txt,
 } from "@/components/kit";
 import { getAllOrders, isExcludedFromTotals, isUnknownStatusOrder, ORDERS_STALE_MS } from "@/lib/api/orders";
-import { orderWindowCutoff } from "@/lib/api/window";
+import { ayBasi } from "@core/siparis-listesi";
 import { getDashboardData, getOrderMatchProducts } from "@/lib/db/dashboard";
 import { getMonthlyFinanceSummary } from "@/lib/db/finance";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -31,7 +31,8 @@ import { computeProductProfitMemo } from "@/lib/profit";
 import { color, radius, space } from "@/theme/tokens";
 
 /**
- * RAPORLAR — son 30 gün özeti, aylık ciro/net kâr grafiği (12 ay), platform payları, 30 günlük
+ * RAPORLAR — BU AYIN özeti (masaüstü Panel/Siparişler/Raporlar ile aynı dönem — Berke kararı,
+ * 23 Kas 2026), aylık ciro/net kâr grafiği (12 ay), platform payları, bu ayın günlük
  * ciro dalgası, en çok satanlar, en kârlı / zarar eden ürünler. Hesaplar masaüstüyle birebir;
  * aylık geçmişi yazan senkron ortak modülde (lib/finance-sync).
  */
@@ -77,7 +78,8 @@ export default function ReportsScreen() {
       };
     }
     const pm = getProductMap(matchProducts);
-    const visibleCutoff = orderWindowCutoff();
+    // Bu ayın başı (Türkiye takvimi). "Şimdi" = sorgunun çekildiği an (render'da Date.now yok).
+    const visibleCutoff = ayBasi(ordersUpdatedAt || 0);
     for (const o of orders.orders) {
       const op = computeOrderProfit(o, pm, rules, settings);
       if (o.date != null && o.date < visibleCutoff) continue;
@@ -120,7 +122,7 @@ export default function ReportsScreen() {
       unsupportedCurrencyOrders,
       unknownStatusOrders,
     };
-  }, [orders, matchProducts, rules, settings]);
+  }, [orders, matchProducts, rules, settings, ordersUpdatedAt]);
 
   useEffect(() => {
     if (!orders || orders.orders.length === 0) return;
@@ -140,7 +142,7 @@ export default function ReportsScreen() {
   const topSellers = useMemo(() => {
     if (!orders) return [];
     const m = new Map<string, number>();
-    const cutoff = orderWindowCutoff();
+    const cutoff = ayBasi(ordersUpdatedAt || 0);
     for (const o of orders.orders) {
       if (o.date != null && o.date < cutoff) continue;
       if (isExcludedFromTotals(o)) continue;
@@ -150,21 +152,22 @@ export default function ReportsScreen() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8)
       .map(([name, qty]) => ({ name, qty }));
-  }, [orders]);
+  }, [orders, ordersUpdatedAt]);
 
-  /** Son 30 gün, günlük ciro (grafik). "Şimdi" = sorgunun çekildiği an (render'da Date.now yok). */
+  /** Bu ayın günlük cirosu — ayın 1'inden bugüne, Türkiye takvim günleri. "Şimdi" = sorgunun çekildiği an. */
   const gunluk = useMemo(() => {
     const GUN = 86_400_000;
-    const N = 30;
+    const TR = 3 * 60 * 60_000; // Türkiye UTC+3 sabit
     const now = ordersUpdatedAt;
+    if (!orders || !now) return [] as number[];
+    const ilk = Math.floor((ayBasi(now) + TR) / GUN);
+    const N = Math.floor((now + TR) / GUN) - ilk + 1;
     const sums = new Array<number>(N).fill(0);
-    if (orders && now) {
-      for (const o of orders.orders) {
-        if (o.date == null || isExcludedFromTotals(o) || (o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
-        const geri = Math.floor((now - o.date) / GUN);
-        if (geri < 0 || geri >= N) continue;
-        sums[N - 1 - geri] += o.total;
-      }
+    for (const o of orders.orders) {
+      if (o.date == null || isExcludedFromTotals(o) || (o.currency ?? "TRY").trim().toUpperCase() !== "TRY") continue;
+      const i = Math.floor((o.date + TR) / GUN) - ilk;
+      if (i < 0 || i >= N) continue;
+      sums[i] += o.total;
     }
     return sums;
   }, [orders, ordersUpdatedAt]);
@@ -184,7 +187,7 @@ export default function ReportsScreen() {
     };
   }, [products, rules, settings]);
 
-  const header = <Header title="Raporlar" subtitle="Son 30 gün · tüm satışlar" updatedAt={ordersUpdatedAt} />;
+  const header = <Header title="Raporlar" subtitle="Bu ay · tüm satışlar" updatedAt={ordersUpdatedAt} />;
 
   if (isLoading) {
     return (
@@ -364,18 +367,18 @@ export default function ReportsScreen() {
         </Tint>
       </FadeInView>
 
-      {/* 30 GÜN CİRO */}
+      {/* BU AYIN GÜNLÜK CİROSU */}
       {gunlukVar ? (
         <>
           <Txt v="label" tone="faint" style={styles.section}>
-            30 GÜNLÜK CİRO DALGASI
+            BU AYIN GÜNLÜK CİROSU
           </Txt>
           <FadeInView index={3}>
             <Glass style={{ gap: space.sm }}>
               <Bars values={gunluk} height={72} emphasis={(i) => i >= gunluk.length - 7} />
               <View style={styles.rowBetween}>
                 <Txt v="label" tone="faint">
-                  30 GÜN ÖNCE
+                  {"AYIN 1'İ"}
                 </Txt>
                 <Txt v="label" tone="faint">
                   SON 7 GÜN

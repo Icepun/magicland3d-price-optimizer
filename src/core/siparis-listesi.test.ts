@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  donemBaslangici, durumGrubu, durumKovasi, gunBasi, gunEtiketi, gunlereBol, siparisOzeti,
+  ayBasi, donemBaslangici, durumGrubu, durumKovasi, gunBasi, gunEtiketi, gunlereBol, siparisOzeti,
   type OzetGirdisi,
 } from "./siparis-listesi";
 import { gunlereBol as masaustuGunlereBol } from "@/app/orders/gun-basliklari";
@@ -65,11 +65,17 @@ describe("Türkiye takvimi", () => {
     ]);
   });
 
-  it("dönem başlangıcı: bugün, son 7 gün (bugün dahil), 30 gün = verilen kesim", () => {
+  it("dönem başlangıcı: bugün, son 7 gün (bugün dahil), bu ay (Türkiye takvimi)", () => {
     const simdi = TR("2026-11-09T10:00:00");
-    expect(donemBaslangici("bugun", simdi, 0)).toBe(TR("2026-11-09T00:00:00"));
-    expect(donemBaslangici("hafta", simdi, 0)).toBe(TR("2026-11-03T00:00:00"));
-    expect(donemBaslangici("ay", simdi, 12345)).toBe(12345);
+    expect(donemBaslangici("bugun", simdi)).toBe(TR("2026-11-09T00:00:00"));
+    expect(donemBaslangici("hafta", simdi)).toBe(TR("2026-11-03T00:00:00"));
+    expect(donemBaslangici("ay", simdi)).toBe(TR("2026-11-01T00:00:00"));
+  });
+
+  it("ay başı Türkiye takvimine göre: 1 Aralık 01:00 TR (30 Kasım 22:00 UTC) aralık ayıdır", () => {
+    expect(ayBasi(TR("2026-12-01T01:00:00"))).toBe(TR("2026-12-01T00:00:00"));
+    expect(ayBasi(TR("2026-11-30T23:59:00"))).toBe(TR("2026-11-01T00:00:00"));
+    expect(ayBasi(TR("2027-01-01T00:00:00"))).toBe(TR("2027-01-01T00:00:00"));
   });
 });
 

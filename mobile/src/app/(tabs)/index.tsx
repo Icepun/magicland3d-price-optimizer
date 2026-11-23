@@ -30,6 +30,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCompactCurrency, formatNumber, formatPercent } from "@/lib/format";
 import { computeOrderProfit, getProductMap } from "@/lib/order-profit";
 import { donemKesimi, panelCirosu } from "@/lib/panel-ciro";
+import { ayBasi } from "@core/siparis-listesi";
 import {
   ORDER_PLATFORM_COLOR,
   ORDER_PLATFORM_SHORT_LABEL,
@@ -41,10 +42,12 @@ import {
 import { useManualRefresh } from "@/lib/use-refresh";
 import { color, radius, space } from "@/theme/tokens";
 
-const DONEMLER = [
-  { value: 7 as const, label: "7g" },
-  { value: 30 as const, label: "30g" },
-  { value: 60 as const, label: "60g" },
+type PanelDonemi = 7 | "ay" | 60;
+// "Bu ay" varsayılan: masaüstü Panel, Siparişler ve Raporlar bu ayı gösterir (Berke kararı).
+const DONEMLER: { value: PanelDonemi; label: string }[] = [
+  { value: 7, label: "7g" },
+  { value: "ay", label: "Bu ay" },
+  { value: 60, label: "60g" },
 ];
 
 /**
@@ -52,14 +55,14 @@ const DONEMLER = [
  *
  * Veri katmanı öncekiyle AYNI (batch sorgular, 60 günlük sipariş penceresi, masaüstüyle birebir
  * kâr hesabı); yalnız sunum yeniden yazıldı. Dönem süzgeci ek ağ isteği açmaz: 60 günlük veri
- * elde, 7/30/60 yalnız yerel kesim.
+ * elde, 7 gün / bu ay / 60 gün yalnız yerel kesim.
  */
 export default function DashboardScreen() {
   const { data: products, isLoading, isError, error, refetch: refetchProducts } = useQuery({
     queryKey: ["dashboard-data"],
     queryFn: getDashboardData,
   });
-  const [donem, setDonem] = useState<7 | 30 | 60>(30);
+  const [donem, setDonem] = useState<PanelDonemi>("ay");
   const { data: rules } = useQuery({ queryKey: ["rules"], queryFn: getRules });
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
   const { data: ordersData, refetch: refetchOrders, dataUpdatedAt: ordersAt } = useQuery({
@@ -98,8 +101,9 @@ export default function DashboardScreen() {
      * Kesim ve kovalar `panelCirosu` içinde — masaüstü özetiyle aynı UTC gün başı.
      */
     return panelCirosu(ordersData.orders, {
-      gun: donem,
+      gun: donem === "ay" ? 0 : donem,
       simdi: ordersAt || 0,
+      kesimMs: donem === "ay" && ordersAt ? ayBasi(ordersAt) : undefined,
       platformlar: ORDER_PLATFORMS,
       // Masaüstü özetiyle birebir: iptal/iade, tutarı alınamayan ve tanınmayan pazaryeri
       // durumu ciroya girmez (Raporlar da aynı fonksiyonu kullanır).
@@ -113,7 +117,7 @@ export default function DashboardScreen() {
    * NET KÂR = sipariş kârı − AYNI dönemde ödenen giderler (masaüstü Panel'iyle aynı). Kesim ciro
    * penceresiyle birebir; Gider ekranı `["actual-expenses"]` önekini düşürünce bu da tazelenir.
    */
-  const kesim = ordersAt ? donemKesimi(ordersAt, donem) : null;
+  const kesim = ordersAt ? (donem === "ay" ? ayBasi(ordersAt) : donemKesimi(ordersAt, donem)) : null;
   const { data: giderKurus } = useQuery({
     queryKey: ["actual-expenses", "toplam", kesim, ordersAt],
     queryFn: () => getExpenseTotalSince(kesim ?? 0, ordersAt || undefined),
@@ -140,7 +144,7 @@ export default function DashboardScreen() {
             <Glass style={styles.hero}>
               <View style={styles.rowBetween}>
                 <Txt v="label" tone="accent" style={styles.kicker}>
-                  CİRO · SON {donem} GÜN
+                  {donem === "ay" ? "CİRO · BU AY" : `CİRO · SON ${donem} GÜN`}
                 </Txt>
                 <Segmented options={DONEMLER} value={donem} onChange={setDonem} style={styles.segment} />
               </View>
@@ -179,10 +183,15 @@ export default function DashboardScreen() {
                 </Txt>
               ) : null}
 
-              <Bars values={rev?.gunluk ?? []} height={64} emphasis={(i) => i >= donem + 1 - 7} style={styles.bars} />
+              <Bars
+                values={rev?.gunluk ?? []}
+                height={64}
+                emphasis={(i) => i >= (rev?.gunluk.length ?? 0) - 7}
+                style={styles.bars}
+              />
               <View style={styles.rowBetween}>
                 <Txt v="label" tone="faint">
-                  {donem} GÜN ÖNCE
+                  {donem === "ay" ? "AYIN 1'İ" : `${donem} GÜN ÖNCE`}
                 </Txt>
                 <Txt v="label" tone="faint">
                   SON 7 GÜN

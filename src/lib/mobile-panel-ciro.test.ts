@@ -123,3 +123,40 @@ describe("Panel ekranı bu hesabı kullanıyor", () => {
     expect(oku("mobile/src/lib/api/orders.ts")).toContain('from "@core/order-status-kind"');
   });
 });
+
+/**
+ * "BU AY" (23 Kas 2026, Berke kararı): masaüstü Panel/Siparişler/Raporlar bu ayı gösteriyor;
+ * telefon Panel'i de varsayılan olarak ayın 1'inden (Türkiye takvimi) sayar.
+ */
+describe("bu ay kesimi (Türkiye takvimi)", () => {
+  const buAy = (liste: S[], simdiIso: string, kesimIso: string) =>
+    panelCirosu(liste, {
+      gun: 0,
+      simdi: Date.parse(simdiIso),
+      kesimMs: Date.parse(kesimIso),
+      platformlar: PLATFORMLAR,
+      sayilmazMi: (o) => Boolean(o.iptal),
+      hesapla: (o) => ({ revenue: o.tutar, profit: o.tutar / 4 }),
+    });
+
+  it("ayın 1'i 00:00 TR sayılır, bir an öncesi (geçen ay) sayılmaz", () => {
+    const r = buAy(
+      [siparis("2026-11-01T00:00:00+03:00", 100), siparis("2026-10-31T23:59:59+03:00", 999)],
+      "2026-11-23T12:00:00+03:00",
+      "2026-11-01T00:00:00+03:00",
+    );
+    expect(r.total).toBe(100);
+    expect(r.count).toBe(1);
+  });
+
+  it("kovalar Türkiye günü: 1'inden bugüne gün sayısı kadar, gece 01:00 TR siparişi o güne düşer", () => {
+    const r = buAy(
+      [siparis("2026-11-01T01:00:00+03:00", 10), siparis("2026-11-23T00:30:00+03:00", 20)],
+      "2026-11-23T12:00:00+03:00",
+      "2026-11-01T00:00:00+03:00",
+    );
+    expect(r.gunluk).toHaveLength(23);
+    expect(r.gunluk[0]).toBe(10);
+    expect(r.gunluk[22]).toBe(20);
+  });
+});

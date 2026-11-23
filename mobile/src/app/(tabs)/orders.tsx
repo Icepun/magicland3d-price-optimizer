@@ -44,7 +44,6 @@ import {
   visibleOrders,
   type UnifiedOrder,
 } from "@/lib/api/orders";
-import { orderWindowCutoff } from "@/lib/api/window";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { basilanEtiketler } from "@/lib/db/etiket";
 import { basilabilirEtiketAnahtari } from "@/lib/etiket";
@@ -60,7 +59,7 @@ import { color, radius, space } from "@/theme/tokens";
 const DONEM_SECENEKLERI: { value: Donem; label: string }[] = [
   { value: "bugun", label: "Bugün" },
   { value: "hafta", label: "7 gün" },
-  { value: "ay", label: "30 gün" },
+  { value: "ay", label: "Bu ay" },
 ];
 const DURUM_SIRASI: DurumGrubu[] = ["acik", "kargoda", "teslim", "iptal", "diger"];
 const DURUM_RENGI: Record<DurumGrubu, string> = {
@@ -110,9 +109,10 @@ export default function OrdersScreen() {
 
   const gorunur = useMemo(() => (data ? visibleOrders(data.orders) : []), [data]);
 
-  // Dönemin başı — 30 gün masaüstü özetiyle aynı kesim (UTC gün başı).
-  const kesim = useMemo(() => donemBaslangici(donem, simdi, orderWindowCutoff()), [donem, simdi]);
-  // Liste: 30 gün = pencerenin tamamı (işi bitmemiş eski elle sipariş DAHİL); kısa dönemler tarihe göre.
+  // Dönemin başı — "Bu ay" = Türkiye takviminde ayın 1'i (masaüstü Panel/Siparişler/Raporlar ile aynı).
+  const kesim = useMemo(() => donemBaslangici(donem, simdi), [donem, simdi]);
+  // Liste: "Bu ay" = pencerenin tamamı (geçen ayın kargolanmamışı ve işi bitmemiş elle sipariş
+  // DAHİL — masaüstü listesi gibi); ÖZET yalnız bu ayın siparişlerini sayar (aşağıda kesimle).
   const donemdeki = useMemo(
     () => (donem === "ay" ? gorunur : gorunur.filter((o) => o.date != null && o.date >= kesim)),
     [gorunur, donem, kesim],

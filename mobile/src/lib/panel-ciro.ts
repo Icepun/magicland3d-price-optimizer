@@ -12,6 +12,8 @@
  * birden taşıyabiliyordu.
  */
 export const GUN_MS = 86_400_000;
+/** Türkiye UTC+3 sabit (yaz saati yok) — "Bu ay" kovaları Türkiye takvim günüdür. */
+const TR_KAYMA_MS = 3 * 60 * 60_000;
 
 /** `gun` gün önceki UTC günün başı — masaüstü özetinin kesimiyle birebir. */
 export function donemKesimi(simdi: number, gun: number): number {
@@ -39,6 +41,11 @@ export function panelCirosu<O extends PanelSiparis>(
   opts: {
     gun: number;
     simdi: number;
+    /**
+     * Verilirse pencere bu andan başlar ve kovalar TÜRKİYE takvim günüdür ("Bu ay": ayın 1'i,
+     * masaüstü Panel/Siparişler/Raporlar ile aynı dönem). Verilmezse `gun` gün önceki UTC gün başı.
+     */
+    kesimMs?: number;
     platformlar: readonly string[];
     /** Ciroya girmeyecek sipariş: iptal/iade, tutarı alınamayan ve (pazaryerinde) tanınmayan durum. */
     sayilmazMi: (o: O) => boolean;
@@ -47,7 +54,10 @@ export function panelCirosu<O extends PanelSiparis>(
     iadeMi?: (o: O) => boolean;
   }
 ): PanelCiroSonucu {
-  const { gun, simdi } = opts;
+  const { simdi } = opts;
+  const kayma = opts.kesimMs != null ? TR_KAYMA_MS : 0;
+  const gunNo = (ms: number) => Math.floor((ms + kayma) / GUN_MS);
+  const gun = opts.kesimMs != null && simdi ? Math.max(0, gunNo(simdi) - gunNo(opts.kesimMs)) : opts.gun;
   const byPlat: Record<string, { rev: number; n: number }> = Object.fromEntries(
     opts.platformlar.map((p) => [p, { rev: 0, n: 0 }])
   );
@@ -57,8 +67,8 @@ export function panelCirosu<O extends PanelSiparis>(
   let count = 0;
   if (!simdi) return { total, profit, count, byPlat, gunluk };
 
-  const kesim = donemKesimi(simdi, gun);
-  const ilkGun = Math.floor(kesim / GUN_MS);
+  const kesim = opts.kesimMs ?? donemKesimi(simdi, gun);
+  const ilkGun = gunNo(kesim);
   for (const o of orders) {
     if (o.date != null && o.date < kesim) continue;
     // Döviz çevrimi yok: TL dışı sipariş TL toplamına eklenmez (masaüstü özeti de aynı).
@@ -79,7 +89,7 @@ export function panelCirosu<O extends PanelSiparis>(
     if (op.profit != null) profit += op.profit;
     count++;
     if (o.date != null) {
-      const i = Math.min(gun, Math.max(0, Math.floor(o.date / GUN_MS) - ilkGun));
+      const i = Math.min(gun, Math.max(0, gunNo(o.date) - ilkGun));
       gunluk[i] += op.revenue;
     }
   }
