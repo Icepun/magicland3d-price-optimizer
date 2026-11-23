@@ -115,6 +115,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
   const iadelerSozu: Promise<{
     iadeler: Map<string, TrendyolPaketIadesi>;
     kusurlular: Map<string, TyKusurluIade>;
+    basarisiz?: boolean;
   }> = trendyolTalepleriniTopla(
     async (page, size) => {
       const res = await fetchT(
@@ -127,7 +128,8 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
   )
     // Satıcı kusurlu iadeler → kusurlu ürün bedeli (masaüstüyle aynı çekirdek).
     .then((talepler) => ({ iadeler: trendyolIadeleri(talepler), kusurlular: trendyolKusurluIadeleri(talepler) }))
-    .catch(() => ({ iadeler: new Map<string, TrendyolPaketIadesi>(), kusurlular: new Map<string, TyKusurluIade>() }));
+    // Boş liste "iade yok" demek DEĞİL: bilgi alınamadı → siparişler işaretlenir, geçmişe yazılmaz.
+    .catch(() => ({ iadeler: new Map<string, TrendyolPaketIadesi>(), kusurlular: new Map<string, TyKusurluIade>(), basarisiz: true }));
   const perChunk = await Promise.all(
     pencereler.map(async ({ startDate, endDate }) => {
       const rows: { key: string; o: TyOrder }[] = [];
@@ -154,7 +156,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
     })
   );
 
-  const { iadeler, kusurlular } = await iadelerSozu;
+  const { iadeler, kusurlular, basarisiz: iadeBilinmiyor } = await iadelerSozu;
   for (const rows of perChunk) {
     // Masaüstü route.ts:318 ile birebir: PAKET id'siyle tekilleştir (orderNumber DEĞİL).
     // Bölünmüş siparişte (UnPacked/kısmi iptal) aynı orderNumber'ın iki paketi iki kayıttır;
@@ -165,6 +167,7 @@ export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[
       orders.push({
         id: key,
         platform: "trendyol" as const,
+        ...(iadeBilinmiyor ? { iadeBilinmiyor: true } : {}),
         orderNumber: String(o.orderNumber ?? o.id ?? "—"),
         // Masaüstüyle AYNI çeviri: Trendyol'un damgası Türkiye duvar saatini taşıyor,
         // gerçek UTC'ye çevrilmezse sipariş 3 saat ileri görünür.

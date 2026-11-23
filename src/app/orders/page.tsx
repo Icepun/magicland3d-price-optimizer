@@ -48,6 +48,8 @@ import {
   Link2,
   Printer,
   Globe,
+  Coins,
+  ArrowRight,
 } from "lucide-react";
 import { ulkeAdi } from "@/core/mikro-ihracat";
 import { toast } from "sonner";
@@ -82,6 +84,7 @@ import {
 } from "./siparis-filtre";
 import { siparisListedeKalir } from "@/core/order-window";
 import { cn } from "@/lib/utils";
+import { pencereGizliMi } from "@/lib/pencere-gorunur";
 import { SatirMaliyetiDialog, type SatirMaliyetiHedefi } from "@/components/orders/SatirMaliyetiDialog";
 import { UrunBaglaDialog, type UrunBaglaHedefi } from "@/components/orders/UrunBaglaDialog";
 import {
@@ -222,6 +225,8 @@ interface PlatformStatus {
   error?: string;
   /** Bilgisi eksik geldiği için listeye/toplamlara alınamayan sipariş sayısı. */
   incompleteCount?: number;
+  /** Trendyol iade talepleri bu turda okunamadı — iade edilen paket "teslim" görünebilir. */
+  iadeBilinmiyor?: boolean;
 }
 interface SummaryBucket {
   revenue: number;
@@ -284,20 +289,23 @@ interface OrdersResponse {
   };
 }
 
+// Raporlar/Panel ile AYNI palet: Trendyol marka turuncusu, Hepsiburada mavi, Shopify yeşil, Elle lavanta.
 const PLATFORM_INFO = {
-  shopify: { label: "Shopify", color: "oklch(0.60 0.16 152)" },
-  trendyol: { label: "Trendyol", color: "oklch(0.72 0.17 60)" },
-  hepsiburada: { label: "Hepsiburada", color: "oklch(0.66 0.19 38)" },
-  manual: { label: "Manuel", color: "oklch(0.64 0.19 285)" },
+  shopify: { label: "Shopify", color: "#34D399" },
+  trendyol: { label: "Trendyol", color: "#F27A1A" },
+  hepsiburada: { label: "Hepsiburada", color: "#4F8CFF" },
+  manual: { label: "Manuel", color: "#C9D2F2" },
 } as const;
+/** Platform renginin %18 saydam hâli (rozet zemini). */
+const yumusak = (hex: string) => `${hex}2e`;
 
 const STATUS_STYLE: Record<OrderStatusKind, { label: string; cls: string; dot: string }> = {
-  pending: { label: "Bekleyen", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30", dot: "bg-amber-500" },
+  pending: { label: "Bekleyen", cls: "bg-[#7A7EFF]/15 text-[#C9D2F2] border-[#7A7EFF]/35", dot: "bg-[#A9AEFF]" },
   processing: { label: "Hazırlanıyor", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30", dot: "bg-blue-500" },
   shipped: { label: "Kargoda", cls: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30", dot: "bg-indigo-500" },
   // "Teslim" ile "Teslim Edildi" aynı durumun iki adıydı; tek ad kullanılıyor.
-  delivered: { label: "Teslim Edildi", cls: "bg-green-500/15 text-green-400 border-green-500/30", dot: "bg-green-500" },
-  cancelled: { label: "İptal/İade", cls: "bg-destructive/15 text-destructive border-destructive/30", dot: "bg-destructive" },
+  delivered: { label: "Teslim Edildi", cls: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30", dot: "bg-emerald-400" },
+  cancelled: { label: "İptal/İade", cls: "bg-rose-500/15 text-rose-300 border-rose-400/30", dot: "bg-rose-400" },
   other: { label: "Diğer", cls: "bg-muted text-muted-foreground border-border", dot: "bg-muted-foreground" },
 };
 /**
@@ -541,19 +549,46 @@ const YOGUNLUKLAR = ["rahat", "sik"] as const;
 export default function OrdersPage() {
   const queryClient = useQueryClient();
   const forceFresh = useRef(false); // "Yenile" → sunucu önbelleğini atla (?fresh=1), canlı çek.
+  // Otomatik (dakikalık) çekim: sunucudaki hazır listeyi okur, ilerleme çubuğu göstermez.
+  const otomatikCekim = useRef(false);
+  const [sessizCekim, setSessizCekim] = useState(false);
   const { data, isLoading, isFetching, refetch, error } = useQuery<OrdersResponse>({
     queryKey: ["orders"],
-    queryFn: ({ signal }) => {
-      const url = forceFresh.current ? "/api/orders?fresh=1" : "/api/orders";
+    queryFn: async ({ signal }) => {
+      const url = forceFresh.current
+        ? "/api/orders?fresh=1"
+        : otomatikCekim.current
+          ? "/api/orders?pasif=1"
+          : "/api/orders";
       forceFresh.current = false;
-      // fetchJson: sunucu hatası HATA olarak gelir — eskiden hata gövdesi "0 sipariş" diye çiziliyordu.
-      return fetchJson<OrdersResponse>(url, { signal });
+      otomatikCekim.current = false;
+      try {
+        // fetchJson: sunucu hatası HATA olarak gelir — eskiden hata gövdesi "0 sipariş" diye çiziliyordu.
+        return await fetchJson<OrdersResponse>(url, { signal });
+      } finally {
+        setSessizCekim(false);
+      }
     },
     // 5dk taze: sekmeye dönüşte 3 pazaryeri API'sini tekrar çağırma (anında cache). Tazelemek için "Yenile".
     staleTime: 5 * 60_000,
     refetchOnMount: true,
     refetchOnWindowFocus: false,
+    // Yerel sunucu — internet kopukken de ulaşılır; yoksa sorgu "duraklatılıp" iskelet sonsuza kalıyordu.
+    networkMode: "always",
   });
+
+  // DAKİKALIK OTOMATİK YENİLEME (pencere görünürken). Eskiden yeni sipariş ancak "Yenile"ye basınca
+  // görünüyordu. Sunucudaki hazır listeyi okur (?pasif=1 → ağır hesap tetiklemez); yeni sipariş
+  // gelince sunucu listeyi kendisi tazeler (order-watch).
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (pencereGizliMi() || queryClient.isFetching({ queryKey: ["orders"] }) > 0) return;
+      otomatikCekim.current = true;
+      setSessizCekim(true);
+      void refetch({ cancelRefetch: false });
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [queryClient, refetch]);
 
   /** "Yenile" — hem butondan hem tazelik satırından aynı işi yapar. */
   const refreshOrders = () => {
@@ -571,6 +606,10 @@ export default function OrdersPage() {
   /** Özet karttaki "N siparişte maliyet eksik" uyarısına tıklayınca yalnız o siparişler listelenir. */
   const [onlyIncomplete, setOnlyIncomplete] = useState(false);
   const [manualCreateOpen, setManualCreateOpen] = useState(false);
+  // "Maliyet gir" / "Ürüne bağla" pencereleri SAYFADA tutulur: satır sanal listede kaydırınca ya da
+  // liste yenilenince sökülüyor, açık pencere ve içine yazılanlar kayboluyordu (denetim, 23 Kas 2026).
+  const [maliyetHedefi, setMaliyetHedefi] = useState<SatirMaliyetiHedefi | null>(null);
+  const [baglaHedefi, setBaglaHedefi] = useState<UrunBaglaHedefi | null>(null);
   const [editingManual, setEditingManual] =
     useState<ManualOrderEditTarget | null>(null);
   // Arama debounce: kutu anında yazılır (search), filtre 200ms sonra (debouncedSearch).
@@ -606,26 +645,58 @@ export default function OrdersPage() {
   // Ekran yazmayı BEKLEMEZ: kutucuk anında dolar, kayıt arkada gider. Paketleme sırasında
   // ağ turu kadar duraklamak, elinde ürünle bekleyen kullanıcı için kabul edilemez.
   const [prepDone, setPrepDone] = useState<string[]>([]);
-  useEffect(() => {
-    let iptal = false;
-    void loadPrepDone().then((keys) => {
-      if (!iptal) setPrepDone(keys);
-    });
-    return () => {
-      iptal = true;
-    };
+  // Yerel değişiklik sayacı + bekleyen yazma: okuma sürerken atılan işaret, dönen ESKİ okumayla
+  // ezilmesin (eskiden yükleme bitince açılışta tıklanan kutular boşalıyordu).
+  const isaretSurumu = useRef(0);
+  const bekleyenYazma = useRef(0);
+  const isaretleriOku = useCallback(async () => {
+    const surum = isaretSurumu.current;
+    const keys = await loadPrepDone();
+    if (keys == null) return; // okunamadı → elimizdekini koru
+    if (surum !== isaretSurumu.current || bekleyenYazma.current > 0) return;
+    setPrepDone((cur) =>
+      cur.length === keys.length && keys.every((k) => cur.includes(k)) ? cur : keys
+    );
   }, []);
+  useEffect(() => {
+    void isaretleriOku();
+    // Hazırlık açıkken telefonda atılan işaretler de görünsün (paketleme iki cihazda sürebiliyor).
+    if (view !== "hazirlik") return;
+    const t = setInterval(() => {
+      if (!pencereGizliMi()) void isaretleriOku();
+    }, 15_000);
+    return () => clearInterval(t);
+  }, [view, isaretleriOku]);
   const prepDoneSet = useMemo(() => new Set(prepDone), [prepDone]);
   const togglePrepDone = (key: string) => {
-    setPrepDone((current) => {
-      const isaretli = current.includes(key);
-      void savePrepDone(key, !isaretli);
-      return isaretli ? current.filter((k) => k !== key) : [...current, key];
+    const hedef = !prepDone.includes(key);
+    const uygula = (isaretle: boolean) =>
+      setPrepDone((cur) =>
+        isaretle ? (cur.includes(key) ? cur : [...cur, key]) : cur.filter((k) => k !== key)
+      );
+    isaretSurumu.current += 1;
+    bekleyenYazma.current += 1;
+    uygula(hedef); // ekran beklemez
+    void savePrepDone(key, hedef).then((ok) => {
+      bekleyenYazma.current -= 1;
+      if (ok) return;
+      isaretSurumu.current += 1;
+      uygula(!hedef);
+      toast.error("İşaret kaydedilemedi", { description: "Bağlantını kontrol edip tekrar dene." });
     });
   };
   const resetPrepDone = () => {
+    const onceki = prepDone;
+    isaretSurumu.current += 1;
+    bekleyenYazma.current += 1;
     setPrepDone([]);
-    void clearPrepDone();
+    void clearPrepDone().then((ok) => {
+      bekleyenYazma.current -= 1;
+      if (ok) return;
+      isaretSurumu.current += 1;
+      setPrepDone(onceki);
+      toast.error("Liste sıfırlanamadı", { description: "Bağlantını kontrol edip tekrar dene." });
+    });
   };
 
   const orders = useMemo(() => data?.orders ?? [], [data]);
@@ -942,40 +1013,46 @@ export default function OrdersPage() {
     <EtiketSaglayici siparisler={orders} gorunenler={filtered}>
     <div className="p-6 space-y-5 mx-auto w-full max-w-[1600px]">
       {/* Başlık */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ClipboardList className="h-6 w-6 text-primary" /> Siparişler
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Son {summary?.days ?? 30} gündeki platform ve manuel siparişlerin — tek yerde.
-          </p>
-          <FreshnessLine
-            computedAt={data?.computedAt}
-            fetching={isFetching}
-            onRefresh={refreshOrders}
-          />
+      <header className="flex flex-wrap items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <ClipboardList className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Siparişler</h1>
+            <FreshnessLine
+              computedAt={data?.computedAt}
+              fetching={isFetching}
+              onRefresh={refreshOrders}
+            />
+          </div>
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
           <Button
             size="sm"
-            className="gap-2"
+            className="h-9 gap-2 rounded-xl border-0 bg-gradient-to-br from-[#8B6CFF] to-[#5B8CFF] px-3.5 text-white shadow-[0_10px_24px_-12px_rgba(122,126,255,0.95)] transition hover:-translate-y-px hover:brightness-110 active:scale-[0.97] motion-reduce:hover:translate-y-0"
             onClick={() => setManualCreateOpen(true)}
           >
             <Plus className="h-4 w-4" />
             Manuel Sipariş
           </Button>
-          <Button variant="outline" size="sm" disabled={isFetching} onClick={refreshOrders} className="gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isFetching}
+            onClick={refreshOrders}
+            className="h-9 gap-2 rounded-xl border-0 bg-white/[0.04] px-3.5 ring-1 ring-white/[0.08] transition hover:bg-white/[0.08] active:scale-[0.97]"
+          >
             <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
             Yenile
           </Button>
         </div>
-      </div>
+      </header>
 
       {/* Çekim sırasında ne olduğunu göster — "Yenile" üç pazaryerinden CANLI çekiyor ve
           10-20 saniye sürebiliyor. Artık sunucu her kaynağı bitirdikçe bildiriyor: kaçıncı
           adımda olduğumuz ve hangi kaynaktan kaç sipariş geldiği gerçek veriden yazılıyor. */}
-      {isFetching && <FetchProgress active={isFetching} />}
+      {isFetching && !sessizCekim && <FetchProgress active />}
 
       {/* Bugünün özeti — "bugün ne geldi, ne kazandım" için 30 günlük özete inmek gerekmesin. */}
       {isLoading ? (
@@ -983,9 +1060,9 @@ export default function OrdersPage() {
       ) : error && !data ? (
         // Veri HİÇ gelmediyse "bugün 0 sipariş · ₺0 ciro" YAZILMAZ. Sıfır, gerçek bir sıfır
         // gibi okunur ve kullanıcı o gün satış olmadığını sanır (BİLİNMEYEN ≠ SIFIR).
-        <div className="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 flex items-center justify-between gap-3">
+        <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-4 py-3 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-destructive">Bugünün özeti alınamadı</p>
+            <p className="text-sm font-medium text-rose-400">Bugünün özeti alınamadı</p>
             <p className="text-xs text-muted-foreground mt-0.5">Bağlantını kontrol edip tekrar dene.</p>
           </div>
           <Button variant="outline" size="sm" onClick={() => void refetch()} disabled={isFetching}>
@@ -1005,7 +1082,7 @@ export default function OrdersPage() {
 
       {/* İskelet gerçek düzenle aynı hücre sayısında: veri gelince sayfa zıplamaz. */}
       {isLoading && (
-        <Card className="overflow-hidden">
+        <Card className="rounded-2xl border-white/[0.07] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.85)] overflow-hidden">
           <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, i) => (
               <div key={i} className="space-y-1.5">
@@ -1021,26 +1098,26 @@ export default function OrdersPage() {
       {/* 30 günlük özet şeridi — bir kaynak alınamadıysa sipariş olmasa da gösterilir
           (yoksa "sipariş yok" ekranı, aslında alınamamış veriyi sıfır gibi gösteriyordu). */}
       {summary && (summary.total.orderCount > 0 || missingSources.length > 0) && (
-        <Card className="overflow-hidden">
+        <Card className="rounded-2xl border-white/[0.07] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.85)] overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 fill-mode-both">
           <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
             {ozetDonem && (
-              <p className="col-span-full -mb-1 text-[11px] font-medium text-muted-foreground animate-in fade-in duration-300">
-                {ozetDonem} · bu ayın toplamı
+              <p className="col-span-full -mb-1 text-[11px] font-semibold uppercase tracking-wider text-[#A9AEFF]/80 animate-in fade-in duration-300">
+                Bu ay · {ozetDonem}
               </p>
             )}
             <SummaryStat
               label={`${summary.total.orderCount} sipariş`}
               value={<AnimatedNumber value={summary.total.revenue} format={fmtMoney} />}
               sub={missingSources.length > 0 ? "Toplam ciro · eksik veri" : "Toplam ciro"}
-              subColor={missingSources.length > 0 ? "oklch(0.75 0.15 75)" : undefined}
+              subColor={missingSources.length > 0 ? "#A9AEFF" : undefined}
               strong
             />
             <SummaryStat
               label="Sipariş kârı"
               value={<AnimatedNumber value={summary.total.profit} format={fmtMoney} />}
               sub={summary.total.incompleteOrders ? `${summary.total.incompleteOrders} siparişte maliyet eksik` : "tahmini"}
-              subColor={summary.total.incompleteOrders ? "oklch(0.75 0.15 75)" : undefined}
-              color={summary.total.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)"}
+              subColor={summary.total.incompleteOrders ? "#A9AEFF" : undefined}
+              color={summary.total.profit >= 0 ? "#34D399" : "#FB7185"}
               // Uyarıya tıkla → yalnız maliyeti eksik siparişler listelenir (tekrar tıkla → kaldır).
               onSubClick={
                 summary.total.incompleteOrders
@@ -1059,9 +1136,15 @@ export default function OrdersPage() {
             <PlatformStat label="Manuel" platform="manual" bucket={manualSummary} status={data?.manual} />
             {/* Rakamların eksik olduğunu SÖYLE — sessiz yarım toplam en tehlikelisi. */}
             {missingSources.length > 0 && (
-              <p className="col-span-full flex items-center gap-1.5 text-[10px] font-medium text-amber-400 animate-in fade-in duration-500">
+              <p className="col-span-full flex items-center gap-1.5 text-[10px] font-medium text-[#C9D2F2] animate-in fade-in duration-500">
                 <AlertTriangle className="h-3 w-3 shrink-0" />
                 {missingSources.join(", ")} verisi alınamadı — ciro ve kâr toplamları eksik.
+              </p>
+            )}
+            {data?.trendyol?.iadeBilinmiyor && (
+              <p className="col-span-full flex items-center gap-1.5 text-[10px] font-medium text-[#C9D2F2] animate-in fade-in duration-500">
+                <RotateCcw className="h-3 w-3 shrink-0" />
+                Trendyol iadeleri alınamadı — bazı iadeler satış görünebilir.
               </p>
             )}
             {/* Listedeki sipariş sayısı ile özetteki sayı neden farklı — tek satırda. */}
@@ -1081,11 +1164,11 @@ export default function OrdersPage() {
       )}
 
       {(summary?.quality?.unsupportedCurrencyOrders ?? 0) > 0 && (
-        <Card className="border-amber-500/40 bg-amber-500/5">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5">
           <CardContent className="py-3 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-400">
+              <p className="font-medium text-[#C9D2F2]">
                 TRY dışındaki siparişler TL toplamına eklenmedi
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1104,11 +1187,11 @@ export default function OrdersPage() {
       )}
 
       {unknownStatusOrders > 0 && (
-        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5 animate-in fade-in slide-in-from-top-1 duration-300">
           <CardContent className="py-3 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-400">
+              <p className="font-medium text-[#C9D2F2]">
                 {unknownStatusOrders} siparişin durumu tanınmadı
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1125,11 +1208,11 @@ export default function OrdersPage() {
       )}
 
       {(summary?.quality?.partialReturnOrders ?? 0) > 0 && (
-        <Card className="border-amber-500/40 bg-amber-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5 animate-in fade-in slide-in-from-top-1 duration-300">
           <CardContent className="py-3 flex items-start gap-3">
-            <RotateCcw className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <RotateCcw className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-400">
+              <p className="font-medium text-[#C9D2F2]">
                 {summary?.quality?.partialReturnOrders} siparişte iade edilmiş ürün var
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1140,11 +1223,11 @@ export default function OrdersPage() {
         </Card>
       )}
       {(summary?.quality?.returnLossOrders ?? 0) > 0 && (
-        <Card className="border-red-500/30 bg-red-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
+        <Card className="gap-0 py-0 rounded-2xl border-rose-400/30 bg-rose-500/5 animate-in fade-in slide-in-from-top-1 duration-300">
           <CardContent className="py-3 flex items-start gap-3">
-            <TrendingDown className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
+            <TrendingDown className="h-4 w-4 text-rose-400 mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-red-400">
+              <p className="font-medium text-rose-400">
                 {summary?.quality?.returnLossOrders} iade siparişin kargo zararı:{" "}
                 <span className="tabular-nums">
                   −
@@ -1160,13 +1243,32 @@ export default function OrdersPage() {
         </Card>
       )}
 
+      {/* Yenileme düştü ama elde liste var: liste kaybolmaz, yalnız kısa bir şerit çıkar. */}
+      {error && data && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#7A7EFF]/[0.06] px-4 py-2.5 ring-1 ring-[#7A7EFF]/25 animate-in fade-in slide-in-from-top-1 duration-300">
+          <p className="flex min-w-0 items-center gap-2 text-xs font-medium text-[#C9D2F2]">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#A9AEFF]" />
+            Liste güncellenemedi — son alınan gösteriliyor.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 rounded-lg text-xs"
+            onClick={refreshOrders}
+            disabled={isFetching}
+          >
+            {isFetching ? "Deneniyor…" : "Tekrar dene"}
+          </Button>
+        </div>
+      )}
+
       {/* Platform uyarıları */}
       {data?.shopify?.needsAdminToken && (
-        <Card className="border-amber-500/40 bg-amber-500/5">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5">
           <CardContent className="py-3 flex items-start gap-3">
-            <KeyRound className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <KeyRound className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-400">Shopify siparişleri için Client ID + Secret gerekli</p>
+              <p className="font-medium text-[#C9D2F2]">Shopify siparişleri için Client ID + Secret gerekli</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Storefront token siparişleri vermez. Shopify dev dashboard → uygulaman → Ayarlar →
                 Kimlik bilgileri&apos;ndeki <strong>İstemci Kimliği + Gizli anahtar</strong>&apos;ı{" "}
@@ -1190,11 +1292,11 @@ export default function OrdersPage() {
         <PlatformError platform="Manuel" message={data.manual.error} />
       )}
       {(data?.manual?.incompleteCount ?? 0) > 0 && (
-        <Card className="border-amber-500/40 bg-amber-500/5">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5">
           <CardContent className="py-3 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="text-sm">
-              <p className="font-medium text-amber-400">
+              <p className="font-medium text-[#C9D2F2]">
                 {data?.manual?.incompleteCount} manuel sipariş açılamadı
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
@@ -1205,11 +1307,11 @@ export default function OrdersPage() {
         </Card>
       )}
       {data?.financeHistory && !data.financeHistory.ok && (
-        <Card className="border-amber-500/40 bg-amber-500/5">
+        <Card className="gap-0 py-0 rounded-2xl border-[#7A7EFF]/40 bg-[#7A7EFF]/5">
           <CardContent className="py-3 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
             <div className="min-w-0 text-sm">
-              <p className="font-medium text-amber-400">
+              <p className="font-medium text-[#C9D2F2]">
                 Raporlara kaydedilemedi
               </p>
               {/* Ham teknik hata metni kullanıcıya gösterilmez (arayüz kuralı) — sunucu günlüğüne yazılıyor. */}
@@ -1222,7 +1324,7 @@ export default function OrdersPage() {
       )}
 
       {/* Görünüm seçimi — sipariş sipariş bakmak ya da paketleme için ürün bazında toplamak. */}
-      <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
+      <div className="inline-flex gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
         {([
           { key: "liste", label: "Sipariş listesi", icon: ClipboardList },
           { key: "hazirlik", label: "Hazırlık", icon: PackageCheck },
@@ -1231,10 +1333,10 @@ export default function OrdersPage() {
             key={key}
             onClick={() => setView(key)}
             className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all duration-200 active:scale-95",
+              "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium outline-hidden transition-all duration-200 active:scale-95 focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
               view === key
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/15 text-foreground ring-1 ring-[#7A7EFF]/30"
+                : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
             )}
           >
             <Icon className="h-3.5 w-3.5" />
@@ -1250,14 +1352,14 @@ export default function OrdersPage() {
 
       {/* Kontroller */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-lg border border-border p-0.5 bg-muted/30">
+        <div className="inline-flex gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
           {(["all", "shopify", "trendyol", "hepsiburada", "manual"] as const).map((p) => (
             <button
               key={p}
               onClick={() => setPlatform(p)}
               className={cn(
-                "px-3 py-1 text-xs font-medium rounded-md transition-colors flex items-center gap-1.5",
-                platform === p ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"
+                "px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200 flex items-center gap-1.5 active:scale-95",
+                platform === p ? "bg-white/[0.08] text-foreground ring-1 ring-white/[0.1]" : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
               )}
               style={platform === p && p !== "all" ? { color: PLATFORM_INFO[p].color } : undefined}
             >
@@ -1269,14 +1371,14 @@ export default function OrdersPage() {
 
         <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ara: sipariş no, müşteri, ürün..." className="pl-8 h-9" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ara: sipariş no, müşteri, ürün..." className="pl-8 h-9 rounded-xl border-white/[0.08] bg-white/[0.03] dark:bg-white/[0.03] focus-visible:border-[#7A7EFF]/50 focus-visible:ring-[#7A7EFF]/25" />
         </div>
       </div>
 
       {/* "Maliyet eksik" filtresi açıkken kullanıcı NEDEN az sipariş gördüğünü bilsin. */}
       {onlyIncomplete && (
-        <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs animate-in fade-in slide-in-from-top-1 duration-200">
-          <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+        <div className="flex items-center gap-2 rounded-lg border border-[#7A7EFF]/30 bg-[#7A7EFF]/10 px-3 py-2 text-xs animate-in fade-in slide-in-from-top-1 duration-200">
+          <AlertTriangle className="h-3.5 w-3.5 text-[#A9AEFF] shrink-0" />
           <span className="flex-1">
             Yalnız <strong>maliyeti eksik</strong> siparişler gösteriliyor. Bir siparişi açıp
             işaretli ürüne tıkla, maliyetini gir.
@@ -1325,7 +1427,18 @@ export default function OrdersPage() {
       )}
 
       {/* Liste ya da hazırlık görünümü */}
-      {view === "hazirlik" ? (
+      {view === "hazirlik" && error && !data ? (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Siparişler yüklenemedi"
+          description="Bağlantını kontrol edip tekrar dene."
+          action={
+            <Button variant="outline" size="sm" onClick={refreshOrders} disabled={isFetching}>
+              {isFetching ? "Deneniyor…" : "Tekrar dene"}
+            </Button>
+          }
+        />
+      ) : view === "hazirlik" ? (
         <PrepPanel
           items={prepItems}
           doneSet={prepDoneSet}
@@ -1343,8 +1456,17 @@ export default function OrdersPage() {
             <Skeleton key={i} className="h-[76px] w-full rounded-xl" />
           ))}
         </div>
-      ) : error ? (
-        <EmptyState icon={AlertTriangle} title="Siparişler yüklenemedi" description="API bağlantısında sorun oluştu. Yenile'ye basıp tekrar dene." />
+      ) : error && !data ? (
+        <EmptyState
+          icon={AlertTriangle}
+          title="Siparişler yüklenemedi"
+          description="Bağlantını kontrol edip tekrar dene."
+          action={
+            <Button variant="outline" size="sm" onClick={refreshOrders} disabled={isFetching}>
+              {isFetching ? "Deneniyor…" : "Tekrar dene"}
+            </Button>
+          }
+        />
       ) : filtered.length === 0 ? (
         // "Sipariş yok" ile "veri alınamadı" AYNI ŞEY DEĞİL: alınamayan veriyi boş liste
         // olarak göstermek, olmayan bir sıfırı doğru bilgi gibi sunuyordu.
@@ -1402,6 +1524,8 @@ export default function OrdersPage() {
                   }
                   onEdit={manuelSiparisiDuzenle}
                   onDelete={manuelSiparisiSil}
+                  onMaliyetGir={setMaliyetHedefi}
+                  onUrunBagla={setBaglaHedefi}
                 />
               </div>
             );
@@ -1451,6 +1575,11 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
+
+      {maliyetHedefi && (
+        <SatirMaliyetiDialog hedef={maliyetHedefi} onClose={() => setMaliyetHedefi(null)} />
+      )}
+      {baglaHedefi && <UrunBaglaDialog hedef={baglaHedefi} onClose={() => setBaglaHedefi(null)} />}
 
       <ManualOrderDialog
         open={manualCreateOpen || editingManual !== null}
@@ -1534,12 +1663,12 @@ function FreshnessLine({
       onClick={onRefresh}
       className={cn(
         shared,
-        "rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-medium text-amber-400 transition-colors hover:bg-amber-500/20"
+        "rounded-full border border-[#7A7EFF]/30 bg-[#7A7EFF]/10 px-2 py-0.5 font-medium text-[#C9D2F2] transition-colors hover:bg-[#7A7EFF]/20"
       )}
     >
       <span className="relative flex h-1.5 w-1.5">
-        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-70" />
-        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-500" />
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#7A7EFF] opacity-70" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[#7A7EFF]" />
       </span>
       {label}
       <span className="opacity-70">·</span>
@@ -1592,7 +1721,7 @@ function FetchProgress({ active }: { active: boolean }) {
                 source.state === "done" &&
                   "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
                 source.state === "error" &&
-                  "border-destructive/40 bg-destructive/10 text-destructive",
+                  "border-rose-400/40 bg-rose-500/10 text-rose-300",
                 source.state === "skipped" &&
                   "border-border/50 bg-background/40 text-muted-foreground/60",
                 source.state === "pending" &&
@@ -1647,108 +1776,110 @@ function DailyStrip({
   missingSources: string[];
   onOpenPrep: () => void;
 }) {
-  if (!ready) return <Skeleton className="h-[86px] w-full rounded-xl" />;
+  if (!ready) return <Skeleton className="h-[120px] w-full rounded-2xl" />;
 
   const diff = today.revenue - yesterday.revenue;
   const hasCompare = yesterday.orderCount > 0 || today.orderCount > 0;
 
   return (
-    <Card className="overflow-hidden animate-in fade-in slide-in-from-top-1 duration-300">
-      <CardContent className="flex flex-wrap items-center gap-x-6 gap-y-3 py-3">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/12 text-primary">
-            <CalendarDays className="h-4 w-4" />
-          </span>
-          <div>
-            <p className="text-[11px] text-muted-foreground">Bugün</p>
-            <p className="text-xl font-bold tabular-nums leading-tight">
-              <AnimatedNumber value={today.orderCount} /> sipariş
-            </p>
-          </div>
-        </div>
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <BugunKutusu sira={0} ikon={<CalendarDays className="size-3.5" />} baslik="Bugün">
+          <p className="text-2xl font-semibold tracking-tight tabular-nums">
+            <AnimatedNumber value={today.orderCount} />{" "}
+            <span className="text-base font-medium text-muted-foreground">sipariş</span>
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {hasCompare ? `Dün ${yesterday.orderCount} sipariş` : "Henüz sipariş yok"}
+          </p>
+        </BugunKutusu>
 
-        <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">Bugünkü ciro</p>
-          <p className="text-lg font-semibold tabular-nums leading-tight">
+        <BugunKutusu sira={1} ikon={<TrendingUp className="size-3.5" />} baslik="Bugünkü ciro">
+          <p className="text-2xl font-semibold tracking-tight tabular-nums">
             <AnimatedNumber value={today.revenue} format={fmtMoney} />
           </p>
-          {hasCompare && (
-            <p className="text-[10px] text-muted-foreground">
+          {hasCompare ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
               Dün {fmtMoney(yesterday.revenue)}
               {Math.abs(diff) >= 1 && (
-                <span
-                  className={cn(
-                    "ml-1 font-medium",
-                    diff > 0 ? "text-green-500" : "text-destructive"
-                  )}
-                >
+                <span className={cn("ml-1 font-medium", diff > 0 ? "text-emerald-400" : "text-rose-400")}>
                   {diff > 0 ? "+" : "−"}
                   {fmtMoney(Math.abs(diff))}
                 </span>
               )}
             </p>
+          ) : (
+            <p className="mt-0.5 text-xs text-muted-foreground">—</p>
           )}
-        </div>
+        </BugunKutusu>
 
-        <div className="min-w-0">
-          <p className="text-[11px] text-muted-foreground">Bugünkü kâr</p>
-          <p
-            className="text-lg font-semibold tabular-nums leading-tight"
-            style={{
-              color:
-                today.profit >= 0 ? "oklch(0.72 0.18 145)" : "oklch(0.63 0.22 25)",
-            }}
-          >
+        <BugunKutusu sira={2} ikon={<Coins className="size-3.5" />} baslik="Bugünkü kâr">
+          <p className={cn("text-2xl font-semibold tracking-tight tabular-nums", today.profit >= 0 ? "text-emerald-300" : "text-rose-300")}>
             <AnimatedNumber value={today.profit} format={fmtMoney} />
           </p>
-          <p
-            className={cn(
-              "text-[10px]",
-              today.incompleteOrders > 0 ? "text-amber-400" : "text-muted-foreground"
-            )}
-          >
-            {today.incompleteOrders > 0
-              ? `${today.incompleteOrders} siparişte maliyet eksik`
-              : "tahmini"}
+          <p className={cn("mt-0.5 text-xs", today.incompleteOrders > 0 ? "text-[#C9D2F2]" : "text-muted-foreground")}>
+            {today.incompleteOrders > 0 ? `${today.incompleteOrders} siparişte maliyet eksik` : "tahmini"}
           </p>
-        </div>
+        </BugunKutusu>
 
+        {/* Gönderilecek: iş bekliyorsa vurgulu; tıklayınca Hazırlık görünümü açılır. */}
         <button
           type="button"
           onClick={onOpenPrep}
           disabled={openCount === 0}
           className={cn(
-            "ml-auto flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-200",
+            "group relative flex flex-col justify-between overflow-hidden rounded-2xl p-4 text-left ring-1 outline-hidden",
+            "transition-[transform,box-shadow] duration-300 focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
+            "animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none",
             openCount > 0
-              ? "border-amber-500/35 bg-amber-500/10 hover:border-amber-500/60 hover:bg-amber-500/15 active:scale-[0.97]"
-              : "border-border/60 bg-muted/20"
+              ? "bg-gradient-to-br from-[#9B5CFF]/20 to-[#4F8CFF]/10 ring-[#7A7EFF]/30 hover:-translate-y-0.5 hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.7)] active:scale-[0.98] motion-reduce:hover:translate-y-0"
+              : "bg-card ring-white/[0.07]"
           )}
+          style={{ animationDelay: "180ms" }}
         >
-          <PackageCheck
-            className={cn(
-              "h-4 w-4 shrink-0",
-              openCount > 0 ? "text-amber-400" : "text-muted-foreground/60"
+          <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <span className="grid size-7 place-items-center rounded-lg bg-white/[0.05] text-[#C9D2F2] ring-1 ring-white/[0.08]">
+              <PackageCheck className="size-3.5" />
+            </span>
+            Gönderilecek
+            {openCount > 0 && (
+              <ArrowRight className="ml-auto size-3.5 opacity-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:opacity-60" />
             )}
-          />
-          <span>
-            <span className="block text-[11px] text-muted-foreground">
-              Gönderilecek
-            </span>
-            <span className="block text-base font-bold tabular-nums leading-tight">
-              <AnimatedNumber value={openCount} /> sipariş
-            </span>
           </span>
-        </button>
-
-        {/* Bir kaynak alınamadıysa bugünün rakamları da eksiktir — sessiz kalınmaz. */}
-        {missingSources.length > 0 && (
-          <p className="w-full flex items-center gap-1.5 text-[10px] font-medium text-amber-400">
-            <AlertTriangle className="h-3 w-3 shrink-0" />
-            {missingSources.join(", ")} verisi alınamadı — bugünün rakamları eksik.
+          <p className="mt-3 text-2xl font-semibold tracking-tight tabular-nums">
+            <AnimatedNumber value={openCount} />{" "}
+            <span className="text-base font-medium text-muted-foreground">sipariş</span>
           </p>
-        )}
-      </CardContent>
-    </Card>
+          <p className="mt-0.5 text-xs text-muted-foreground">{openCount > 0 ? "Kargo bekliyor · hazırlığa git" : "Bekleyen yok"}</p>
+        </button>
+      </div>
+
+      {/* Bir kaynak alınamadıysa bugünün rakamları da eksiktir — sessiz kalınmaz. */}
+      {missingSources.length > 0 && (
+        <p className="flex items-center gap-1.5 text-[11px] font-medium text-[#C9D2F2]">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          {missingSources.join(", ")} verisi alınamadı — bugünün rakamları eksik.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Panel'deki "Bugün" kutularıyla aynı görünüm. */
+function BugunKutusu({ sira, ikon, baslik, children }: { sira: number; ikon: ReactNode; baslik: string; children: ReactNode }) {
+  return (
+    <div
+      className="group relative flex flex-col justify-between overflow-hidden rounded-2xl bg-card p-4 ring-1 ring-white/[0.07] transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 hover:ring-white/[0.12] hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.55)] animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none motion-reduce:hover:translate-y-0"
+      style={{ animationDelay: `${sira * 60}ms` }}
+    >
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className="grid size-7 place-items-center rounded-lg bg-white/[0.05] text-[#C9D2F2] ring-1 ring-white/[0.08] transition-colors group-hover:bg-[#7A7EFF]/15">
+          {ikon}
+        </span>
+        {baslik}
+      </span>
+      <div className="mt-3">{children}</div>
+    </div>
   );
 }
 
@@ -1834,7 +1965,7 @@ function PlatformStat({
         platform={platform}
         value={<span className="text-muted-foreground">—</span>}
         sub={notSetUp ? "bağlı değil" : needsKey ? "bağlantı gerekli" : "veri alınamadı"}
-        subColor={notSetUp ? undefined : "oklch(0.75 0.15 75)"}
+        subColor={notSetUp ? undefined : "#A9AEFF"}
       />
     );
   }
@@ -1850,11 +1981,11 @@ function PlatformStat({
 
 function PlatformError({ platform, message }: { platform: string; message?: string }) {
   return (
-    <Card className="border-destructive/40 bg-destructive/5">
+    <Card className="border-rose-400/40 bg-rose-500/5">
       <CardContent className="py-3 flex items-start gap-3">
-        <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+        <AlertTriangle className="h-4 w-4 text-rose-400 mt-0.5 shrink-0" />
         <div className="text-sm">
-          <p className="font-medium text-destructive">{platform} siparişleri alınamadı</p>
+          <p className="font-medium text-rose-400">{platform} siparişleri alınamadı</p>
           {message && <p className="text-xs text-muted-foreground mt-0.5 break-all">{message}</p>}
         </div>
       </CardContent>
@@ -1867,11 +1998,13 @@ function StatusChip({ active, onClick, label, count, dot }: { active: boolean; o
     <button
       onClick={onClick}
       className={cn(
-        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
-        active ? "bg-primary text-primary-foreground border-primary" : "bg-transparent text-muted-foreground border-border hover:border-primary/40 hover:text-foreground"
+        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all duration-200 active:scale-95",
+        active
+          ? "border-[#7A7EFF]/40 bg-gradient-to-br from-[#9B5CFF]/30 to-[#4F8CFF]/20 text-foreground shadow-[0_6px_16px_-10px_rgba(122,126,255,0.9)]"
+          : "border-white/[0.08] bg-white/[0.02] text-muted-foreground hover:border-[#7A7EFF]/30 hover:text-foreground"
       )}
     >
-      {dot && <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-primary-foreground" : dot)} />}
+      {dot && <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-white" : dot)} />}
       {label}
       <span className={cn("tabular-nums", active ? "opacity-90" : "opacity-60")}>{count}</span>
     </button>
@@ -2021,7 +2154,7 @@ function PrepPanel({
 
           <div className="flex items-center justify-between gap-2">
             {allDone ? (
-              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-500 animate-in fade-in zoom-in-95 duration-300">
+              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-400 animate-in fade-in zoom-in-95 duration-300">
                 <Sparkles className="h-3.5 w-3.5" />
                 Hepsi hazır
               </span>
@@ -2082,7 +2215,7 @@ function PrepPanel({
                     className={cn(
                       "flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition-all duration-200 active:scale-90",
                       done
-                        ? "border-green-500 bg-green-500 text-white"
+                        ? "border-emerald-400 bg-emerald-500 text-white"
                         : "border-border hover:border-primary/60 hover:bg-primary/10"
                     )}
                   >
@@ -2125,10 +2258,10 @@ function PrepPanel({
                         </span>
                       )}
                       {item.madeToOrder && (
-                        <span className="text-amber-500">· sipariş üzerine</span>
+                        <span className="text-[#A9AEFF]">· sipariş üzerine</span>
                       )}
                       {item.costMissing && (
-                        <span className="text-amber-500">· maliyet girilmemiş</span>
+                        <span className="text-[#A9AEFF]">· maliyet girilmemiş</span>
                       )}
                     </div>
                   </button>
@@ -2181,7 +2314,7 @@ function TrackingNumber({ value }: { value: string }) {
       <span className="text-muted-foreground">Takip:</span>
       <span className="min-w-0 flex-1 truncate font-mono text-foreground/90">{value}</span>
       {copied ? (
-        <Check className="h-3.5 w-3.5 shrink-0 text-green-500 animate-in zoom-in-50 duration-200" />
+        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400 animate-in zoom-in-50 duration-200" />
       ) : (
         <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
       )}
@@ -2206,6 +2339,8 @@ const OrderRow = memo(function OrderRow({
   order,
   onEdit,
   onDelete,
+  onMaliyetGir,
+  onUrunBagla,
   deleting,
   isNew,
   sik = false,
@@ -2214,6 +2349,9 @@ const OrderRow = memo(function OrderRow({
   /** Sabit referanslı olmalı (memo) — siparişi parametre olarak alır. */
   onEdit: (order: UnifiedOrder) => void;
   onDelete: (order: UnifiedOrder) => void;
+  /** "Maliyet gir" / "Ürüne bağla" — pencere SAYFADA açılır (sabit referanslı). */
+  onMaliyetGir: (hedef: SatirMaliyetiHedefi) => void;
+  onUrunBagla: (hedef: UrunBaglaHedefi) => void;
   deleting: boolean;
   /** Bu sipariş son yenilemede geldi → kısa süre vurgulanır. */
   isNew?: boolean;
@@ -2221,10 +2359,6 @@ const OrderRow = memo(function OrderRow({
   sik?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  // "Maliyet gir" — ürünler sayfasında olmayan/maliyeti boş ürünün yalnız bu siparişteki maliyeti.
-  const [maliyetHedefi, setMaliyetHedefi] = useState<SatirMaliyetiHedefi | null>(null);
-  // "Ürüne bağla" — eşleşmeyen satırın ADINI bir ürüne bağlar (o adla gelen tüm siparişler).
-  const [baglaHedefi, setBaglaHedefi] = useState<UrunBaglaHedefi | null>(null);
   const isManualOrder = order.isManual === true || order.platform === "manual";
   const manualId = order.manualOrderId || order.id;
   // Manuel siparişte "hangi kalemin maliyeti eksik" bilgisi listeyle birlikte gelmiyor: eskiden
@@ -2245,6 +2379,7 @@ const OrderRow = memo(function OrderRow({
       (order.profitPartial || order.profit == null),
     staleTime: 60_000,
     retry: false,
+    networkMode: "always",
   });
   const missingCostItems = useMemo(() => {
     const flags = order.items.map((it) => it.costMissing === true);
@@ -2260,7 +2395,7 @@ const OrderRow = memo(function OrderRow({
   const extraItems = order.items.length - 1;
   const orderCurrency = order.currency.trim().toUpperCase() || "TRY";
   const isTryOrder = orderCurrency === "TRY";
-  const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-green-500" : "text-destructive";
+  const profitColor = order.profit == null ? "" : order.profit >= 0 ? "text-emerald-400" : "text-rose-400";
   // Gösterilecek komisyon: pazaryerinin bildirdiği gerçek tutar varsa o, yoksa kurallardan
   // hesaplanan tahmin. İkisi farklıysa fark da yazılır (hesap DEĞİŞMEZ, sadece görünür).
   // ⚠️ 0 ile BİLİNMEYEN ayrı: hiçbir komisyon kuralı eşleşmediğinde tahmin 0 çıkıyor ve satır
@@ -2292,11 +2427,12 @@ const OrderRow = memo(function OrderRow({
   return (
     <Card
       className={cn(
-        "overflow-hidden transition-[color,background-color,border-color,opacity,box-shadow] duration-300 hover:border-primary/30",
+        // py-0 gap-0: kart bileşeninin varsayılan iç boşluğu her satırı ~48 px uzatıyordu (ölçüldü: 122 px).
+        "gap-0 py-0 overflow-hidden rounded-2xl border-white/[0.07] transition-[color,background-color,border-color,opacity,box-shadow,transform] duration-300 hover:-translate-y-px hover:border-[#7A7EFF]/30 hover:shadow-[0_16px_36px_-28px_rgba(122,126,255,0.6)] motion-reduce:hover:translate-y-0",
         // Soluk ama okunur; üzerine gelince tam görünür (kullanıcı iptal satırını da inceleyebilsin).
         isCancelled && "border-dashed bg-muted/25 opacity-70 hover:opacity-100",
         // Yeni gelen sipariş gözden kaçmasın.
-        isNew && "border-primary/60 bg-primary/[0.06] ring-2 ring-primary/35"
+        isNew && "border-[#7A7EFF]/60 bg-[#7A7EFF]/[0.07] ring-2 ring-[#7A7EFF]/35"
       )}
     >
       <div className="flex">
@@ -2306,7 +2442,7 @@ const OrderRow = memo(function OrderRow({
           {/* Ürün görseli / çeşit kutusu + adet & platform rozeti */}
           <div className="relative shrink-0">
             {order.items.length > 1 ? (
-              <div className={cn("flex flex-col items-center justify-center rounded-lg border bg-muted leading-none", sik ? "h-9 w-9" : "h-12 w-12")}>
+              <div className={cn("flex flex-col items-center justify-center rounded-xl bg-white/[0.04] ring-1 ring-white/[0.08] leading-none", sik ? "h-9 w-9" : "h-12 w-12")}>
                 <span className="text-lg font-bold leading-none tabular-nums text-foreground">{order.items.length}</span>
                 <span className="mt-0.5 text-[9px] leading-none text-muted-foreground">çeşit</span>
               </div>
@@ -2324,7 +2460,7 @@ const OrderRow = memo(function OrderRow({
             {/* Platform rozeti */}
             <span
               className="absolute -bottom-1 -right-1 flex items-center justify-center h-5 w-5 rounded-md ring-2 ring-card"
-              style={{ backgroundColor: `${info.color.replace(")", " / 18%)")}` }}
+              style={{ backgroundColor: yumusak(info.color) }}
               title={info.label}
             >
               <PlatformLogo platform={order.platform} className="h-3 w-3" style={{ color: info.color }} />
@@ -2417,12 +2553,12 @@ const OrderRow = memo(function OrderRow({
             ) : order.statusUnknown ? (
               // Durumu tanımadığımız sipariş toplamların dışında — satırda da görünsün ki
               // ekrandaki iki rakam neden tutmuyor belli olsun.
-              <span className="text-[10px] font-medium text-amber-400">
+              <span className="text-[10px] font-medium text-[#C9D2F2]">
                 Durumu belirsiz · toplama girmiyor
               </span>
             ) : !isTryOrder ? (
               <span
-                className="text-[10px] font-medium text-amber-400"
+                className="text-[10px] font-medium text-[#C9D2F2]"
                 title={`${orderCurrency} için döviz kuru dönüşümü tanımlı değil; TL net kâr hesaplanmadı.`}
               >
                 Kâr: kur dönüşümü yok
@@ -2436,7 +2572,7 @@ const OrderRow = memo(function OrderRow({
                 </span>
                 {/* Sarı işaretin anlamı eskiden yalnız fareyle üstüne gelince görünüyordu. */}
                 {(order.profitPartial || order.desiEstimated || order.cargoRuleMissing) && (
-                  <span className="flex items-center gap-1 text-[10px] font-medium text-amber-400">
+                  <span className="flex items-center gap-1 text-[10px] font-medium text-[#C9D2F2]">
                     <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
                     {/* İki uyarı BİRBİRİNİ DIŞLAMAZ: hem maliyeti eksik hem desisi eksik bir
                         siparişte kargonun tahmin edildiği de söylenmeli — yoksa kâr, olduğundan
@@ -2492,8 +2628,8 @@ const OrderRow = memo(function OrderRow({
                   const clickable = Boolean(it.productId) || opensManualEditor;
                   const rowCls = cn(
                     "flex items-center gap-2.5 -mx-1 px-1 py-0.5 rounded-md transition-colors",
-                    costMissing && "bg-amber-500/10 ring-1 ring-inset ring-amber-500/25",
-                    clickable && (costMissing ? "hover:bg-amber-500/20" : "hover:bg-muted/50")
+                    costMissing && "bg-[#7A7EFF]/10 ring-1 ring-inset ring-[#7A7EFF]/25",
+                    clickable && (costMissing ? "hover:bg-[#7A7EFF]/20" : "hover:bg-muted/50")
                   );
                   const body = (
                     <>
@@ -2501,11 +2637,11 @@ const OrderRow = memo(function OrderRow({
                       <span className="flex-1 min-w-0 truncate text-xs text-foreground/90">
                         {it.name}
                         {it.madeToOrder && (
-                          <span className="ml-1.5 text-[9px] text-amber-500">· sipariş üzerine</span>
+                          <span className="ml-1.5 text-[9px] text-[#A9AEFF]">· sipariş üzerine</span>
                         )}
                         {/* Kâra girmeyen satır: ürünü işaretle → kullanıcı hangisini düzelteceğini görür. */}
                         {costMissing && (
-                          <span className="ml-1.5 text-[9px] font-medium text-amber-500">
+                          <span className="ml-1.5 text-[9px] font-medium text-[#A9AEFF]">
                             {it.productId || isManualOrder ? "· maliyet girilmemiş" : "· ürün eşleşmedi"}
                           </span>
                         )}
@@ -2527,7 +2663,7 @@ const OrderRow = memo(function OrderRow({
                     const anahtar = it.satirAnahtari;
                     const ac = () => {
                       if (!anahtar) return;
-                      setMaliyetHedefi({
+                      onMaliyetGir({
                         platform,
                         siparisId: order.id,
                         siparisNo: order.orderNumber,
@@ -2542,7 +2678,7 @@ const OrderRow = memo(function OrderRow({
                       });
                     };
                     const baglaAc = () =>
-                      setBaglaHedefi({
+                      onUrunBagla({
                         platform,
                         satirAdi: it.name,
                         gorsel: it.image,
@@ -2590,7 +2726,7 @@ const OrderRow = memo(function OrderRow({
                                 "shrink-0 rounded-md px-2 py-1 text-[10px] font-semibold transition-all duration-150 active:scale-95",
                                 it.ozelMaliyet && !costMissing
                                   ? "text-sky-500 hover:bg-sky-500/15"
-                                  : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+                                  : "bg-[#7A7EFF]/15 text-[#A9AEFF] hover:bg-[#7A7EFF]/25"
                               )}
                               title={it.ozelMaliyet ? "Girilen maliyeti düzenle" : "Bu ürünün maliyetini gir"}
                             >
@@ -2688,7 +2824,7 @@ const OrderRow = memo(function OrderRow({
                         {fmtMoney2(commission, orderCurrency)}
                       </span>
                       {commissionPartial && (
-                        <span className="block text-[10px] text-amber-400">
+                        <span className="block text-[10px] text-[#C9D2F2]">
                           yalnız maliyeti bilinen ürünler için
                         </span>
                       )}
@@ -2696,7 +2832,7 @@ const OrderRow = memo(function OrderRow({
                         <span
                           className={cn(
                             "block text-[10px] tabular-nums",
-                            commissionGap > 0 ? "text-amber-400" : "text-green-500"
+                            commissionGap > 0 ? "text-[#C9D2F2]" : "text-emerald-400"
                           )}
                         >
                           tahmin {fmtMoney2(order.estimatedCommission ?? 0, orderCurrency)}
@@ -2725,7 +2861,7 @@ const OrderRow = memo(function OrderRow({
                       — {order.statusLabel.toLocaleLowerCase("tr-TR")}, toplama girmiyor
                     </span>
                   ) : !isTryOrder ? (
-                    <span className="text-amber-400">
+                    <span className="text-[#C9D2F2]">
                       — {orderCurrency} için kur dönüşümü yok
                     </span>
                   ) : order.profit != null ? (
@@ -2796,7 +2932,7 @@ const OrderRow = memo(function OrderRow({
                       {order.actualCargo ? (
                         <GercekRozeti />
                       ) : order.desiEstimated ? (
-                        <span className="ml-1 text-amber-400/80">tahmini desi</span>
+                        <span className="ml-1 text-[#C9D2F2]/80">tahmini desi</span>
                       ) : (
                         order.cargoLabel && (
                           <span className="ml-1 text-muted-foreground/60">{order.cargoLabel}</span>
@@ -2896,8 +3032,8 @@ const OrderRow = memo(function OrderRow({
                 {/* Kargo kuralı bulunamadıysa 0 sayıldı — sessiz kalmasın, kâr yüksek görünüyor. */}
                 {!isCancelled && order.cargoRuleMissing && (
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-amber-400">Kargo</span>
-                    <span className="tabular-nums text-amber-400">kural yok → 0 sayıldı</span>
+                    <span className="text-[#C9D2F2]">Kargo</span>
+                    <span className="tabular-nums text-[#C9D2F2]">kural yok → 0 sayıldı</span>
                   </div>
                 )}
                 {/* Reklam payı: günlük bütçenin bu siparişin cirosuna düşen kısmı.
@@ -2927,7 +3063,7 @@ const OrderRow = memo(function OrderRow({
                       <button
                         type="button"
                         onClick={() => onEdit(order)}
-                        className="ml-1 font-medium text-amber-500 underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80"
+                        className="ml-1 font-medium text-[#A9AEFF] underline decoration-dotted underline-offset-2 transition-opacity hover:opacity-80"
                       >
                         Maliyeti gir
                       </button>
@@ -2935,19 +3071,19 @@ const OrderRow = memo(function OrderRow({
                   </p>
                 )}
                 {!isCancelled && order.desiEstimated && (
-                  <p className="text-[10px] text-amber-500/90">
+                  <p className="text-[10px] text-[#A9AEFF]/90">
                     {(order.missingDesiCount ?? 0) > 0
                       ? `${order.missingDesiCount} ürünün desisi eksik — kargo 1 desiyle hesaplandı.`
                       : "Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi."}
                   </p>
                 )}
                 {!isCancelled && (order.returnedLineCount ?? 0) > 0 && (
-                  <p className="text-[10px] text-amber-500/90">
+                  <p className="text-[10px] text-[#A9AEFF]/90">
                     {order.returnedLineCount} ürün iade edilmiş — ciro düşülmedi.
                   </p>
                 )}
                 {order.statusUnknown && (
-                  <p className="text-[10px] text-amber-500/90">
+                  <p className="text-[10px] text-[#A9AEFF]/90">
                     Durumu tanınmadı — ciro ve kâr toplamlarına girmedi.
                   </p>
                 )}
@@ -2974,7 +3110,7 @@ const OrderRow = memo(function OrderRow({
                 type="button"
                 size="sm"
                 variant="ghost"
-                className="h-8 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="h-8 gap-1.5 text-rose-400 hover:bg-rose-500/10 hover:text-rose-400"
                 disabled={deleting}
                 onClick={() => onDelete(order)}
               >
@@ -2989,10 +3125,6 @@ const OrderRow = memo(function OrderRow({
           )}
         </div>
       )}
-      {maliyetHedefi && (
-        <SatirMaliyetiDialog hedef={maliyetHedefi} onClose={() => setMaliyetHedefi(null)} />
-      )}
-      {baglaHedefi && <UrunBaglaDialog hedef={baglaHedefi} onClose={() => setBaglaHedefi(null)} />}
     </Card>
   );
 });

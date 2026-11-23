@@ -51,14 +51,34 @@ async function adaUyanKalemler(
   lineKey: string,
   urunId: string | null
 ): Promise<KalemSatiri[]> {
-  const satirlar = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT "id","externalOrderId","orderedAt","productId","productName"
-       FROM "OrderItemSnapshot"
-      WHERE "platform" = ? AND ${urunId ? `"productId" = ?` : `"productId" IS NULL`}`,
-    ...(urunId ? [platform, urunId] : [platform])
+  // İki adım: önce yalnız FARKLI ADLAR (eşleştirme JS'te, normalize kuralıyla), sonra yalnız uyan
+  // adların satırları. Eskiden platformun bütün eşleşmemiş kalem geçmişi tek seferde indiriliyordu
+  // (denetim, 23 Kas 2026) — aynı adla yüzlerce sipariş tek ada iner.
+  const kosul = urunId ? `"productId" = ?` : `"productId" IS NULL`;
+  const kosulArg = urunId ? [urunId] : [];
+  const adlar = await prisma.$queryRawUnsafe<Array<{ productName: unknown }>>(
+    `SELECT DISTINCT "productName" FROM "OrderItemSnapshot" WHERE "platform" = ? AND ${kosul}`,
+    platform,
+    ...kosulArg
   );
+  const uyanAdlar = adlar
+    .map((r) => String(r.productName ?? ""))
+    .filter((ad) => satirBagiAnahtari(ad) === lineKey);
+  const satirlar: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < uyanAdlar.length; i += OKUMA_DILIMI) {
+    const dilim = uyanAdlar.slice(i, i + OKUMA_DILIMI);
+    satirlar.push(
+      ...(await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+        `SELECT "id","externalOrderId","orderedAt","productId"
+           FROM "OrderItemSnapshot"
+          WHERE "platform" = ? AND ${kosul} AND "productName" IN (${dilim.map(() => "?").join(",")})`,
+        platform,
+        ...kosulArg,
+        ...dilim
+      ))
+    );
+  }
   return satirlar
-    .filter((s) => satirBagiAnahtari(String(s.productName ?? "")) === lineKey)
     .map((s) => ({
       id: String(s.id),
       externalOrderId: String(s.externalOrderId),

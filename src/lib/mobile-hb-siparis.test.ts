@@ -74,11 +74,11 @@ interface TelefonSiparisi {
   dataIncomplete?: boolean;
 }
 
-async function telefonSiparisleri(): Promise<TelefonSiparisi[]> {
+async function telefonSiparisleri(kayittaAciklar?: (cutoff: number) => Promise<string[]>): Promise<TelefonSiparisi[]> {
   const m = (await import(/* @vite-ignore */ TELEFON_HB_MODULU)) as {
-    getHepsiburadaOrders: (gun: number) => Promise<TelefonSiparisi[]>;
+    getHepsiburadaOrders: (gun: number, k?: (cutoff: number) => Promise<string[]>) => Promise<TelefonSiparisi[]>;
   };
-  return m.getHepsiburadaOrders(30);
+  return m.getHepsiburadaOrders(30, kayittaAciklar);
 }
 
 /** Masaüstünün iptal kovası — telefonun `isCancelledOrder`'ı aynı adları kullanır (aşağıda doğrulanıyor). */
@@ -113,6 +113,26 @@ describe("açık siparişler", () => {
 
     expect(siparisler).toHaveLength(130);
     expect(siparisler.reduce((t, o) => t + o.total, 0)).toBe(1300);
+  });
+});
+
+describe("kayıtta açık ama HB listelerinde olmayan sipariş (masaüstüyle aynı yedek)", () => {
+  it("detayda paketlenmiş görünen sipariş listeye girer; iptal olmuşsa iptal; detayı yoksa eklenmez", async () => {
+    h.detaylar = {
+      "4468809025": { orderDate: gunOnce(3), items: [{ status: "Packaged", ...kalem(499.99) }] },
+      "4000000001": { orderDate: gunOnce(2), items: [{ status: "Cancelled", ...kalem(100) }] },
+    };
+    const siparisler = await telefonSiparisleri(async () => ["4468809025", "4000000001", "4000000002"]);
+    const bul = (id: string) => siparisler.find((o) => o.id === id);
+    expect(bul("hb-4468809025")).toMatchObject({ status: "Packaged", total: 499.99 });
+    expect(iptalMi(bul("hb-4000000001")?.status ?? "")).toBe(true);
+    expect(bul("hb-4000000002")).toBeUndefined();
+  });
+
+  it("listede zaten olan sipariş yedekten ikinci kez eklenmez; okuma düşerse liste etkilenmez", async () => {
+    h.acikSayfalar = [[{ orderNumber: "HB-1", status: "Open", orderDate: gunOnce(1), ...kalem(10) }]];
+    expect(await telefonSiparisleri(async () => ["HB-1"])).toHaveLength(1);
+    expect(await telefonSiparisleri(async () => { throw new Error("db yok"); })).toHaveLength(1);
   });
 });
 

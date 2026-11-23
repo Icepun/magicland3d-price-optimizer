@@ -112,6 +112,23 @@ describe("özet", () => {
     expect(siparisOzeti([], 0)).toMatchObject({ adet: 0, ciro: 0, marj: null, platformlar: [] });
   });
 
+  it("iade zararı: hariç sipariş ciroya/adede girmez ama kârdan düşer (masaüstüyle aynı)", () => {
+    const o = siparisOzeti([
+      g({ ciro: 200, kar: 50 }),
+      g({ haric: true, ciro: 999, kar: 999, iadeZarari: 30 }),
+      g({ haric: true, ciro: 999, iadeZarari: null }),
+      g({ haric: true, date: 10, iadeZarari: 70 }), // dönem öncesi → sayılmaz
+    ], 500);
+    expect(o).toMatchObject({ adet: 1, ciro: 200, kar: 20, iadeAdet: 1, iadeZarari: 30 });
+    expect(o.marj).toBeCloseTo(0.1); // (50 − 30) / 200
+  });
+
+  it("tarihsizDahil: tarihi bilinmeyen sipariş 'bu ay' özetine girer, varsayılanda girmez", () => {
+    const girdiler = [g({}), g({ date: null, ciro: 40, kar: 4 })];
+    expect(siparisOzeti(girdiler, 500)).toMatchObject({ adet: 1, ciro: 100 });
+    expect(siparisOzeti(girdiler, 500, { tarihsizDahil: true })).toMatchObject({ adet: 2, ciro: 140, kar: 24 });
+  });
+
   it("platform dağılımı ciroya göre büyükten küçüğe", () => {
     const o = siparisOzeti([
       g({ platform: "shopify", ciro: 50 }),

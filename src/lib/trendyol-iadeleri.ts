@@ -24,6 +24,11 @@ const IADE_TAZE_MS = 10 * 60_000;
 export interface TrendyolTalepSonuclari {
   iadeler: Map<string, TrendyolPaketIadesi>;
   kusurlular: Map<string, TyKusurluIade>;
+  /**
+   * Uç alınamadı ve elde önceki sonuç da yok: iade BİLGİSİ YOK (boş liste "iade yok" demek değil).
+   * Çağıran bu turda iade edilmiş paketi "teslim" sanıp geçmişe yazmamalı (denetim, 23 Kas 2026).
+   */
+  basarisiz?: boolean;
 }
 let onbellek: ({ at: number } & TrendyolTalepSonuclari) | null = null;
 
@@ -66,7 +71,7 @@ export async function trendyolTalepSonuclariniOku(client: TrendyolTalepIstemcisi
       "[trendyol-iade] iade talepleri alınamadı:",
       error instanceof Error ? error.message : error
     );
-    return onbellek ?? { iadeler: new Map(), kusurlular: new Map() };
+    return onbellek ?? { iadeler: new Map(), kusurlular: new Map(), basarisiz: true };
   }
 }
 

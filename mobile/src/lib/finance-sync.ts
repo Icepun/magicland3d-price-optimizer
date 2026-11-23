@@ -46,6 +46,9 @@ export function buildFinanceSnapshots(
     // Durumu tanınmayan sipariş HİÇ yazılmaz: satış mı iade mi bilmiyoruz. Eskiden "aktif" satış
     // olarak yazılıyordu; masaüstü bu siparişi yazmıyor, varsa önceki kaydına dokunmuyor.
     if (isUnknownStatusOrder(o)) continue;
+    // İade bilgisi okunamayan turdaki Trendyol siparişi yazılmaz: iade edilmiş paket "teslim"
+    // diye geçmişe girip Raporlar'da ciro salınıyordu (masaüstüyle aynı kural).
+    if (o.platform === "trendyol" && o.iadeBilinmiyor) continue;
     // Tutarı alınamamış sipariş YAZILMAZ: ₺0 ciroyla yazılırsa masaüstünün (ya da önceki turun)
     // doğru kaydını ezer — yazma ciroyu koşulsuz günceller. Doğru kayıt olduğu gibi kalır,
     // bilgi gelince normal akışta güncellenir. İSTİSNA iptal/iade: "satıldı"da kalmasın diye

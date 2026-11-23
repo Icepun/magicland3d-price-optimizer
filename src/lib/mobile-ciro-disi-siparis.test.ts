@@ -136,6 +136,16 @@ describe("telefonun finans senkronu", () => {
     expect(satirlar.map((s) => s.externalOrderId)).toEqual(["hb-H1", "ty-T1"]);
   });
 
+  it("iade bilgisi okunamayan turdaki Trendyol siparişi YAZILMAZ (iade 'teslim' diye geçmişe girmesin)", async () => {
+    const satirlar = await finansSatirlari([
+      { ...siparis("trendyol", "T1", "Delivered", 100), iadeBilinmiyor: true } as Siparis,
+      siparis("trendyol", "T2", "Delivered", 100),
+      hb("H1", "Delivered", 100),
+    ]);
+
+    expect(satirlar.map((s) => s.externalOrderId)).toEqual(["ty-T2", "hb-H1"]);
+  });
+
   it("eski önbellekten gelen işaretsiz sipariş eskisi gibi yazılır", async () => {
     const eski = { ...hb("ESKI", "Delivered", 80) };
     delete eski.dataIncomplete;

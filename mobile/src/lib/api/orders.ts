@@ -4,6 +4,7 @@ import {
   TRENDYOL_STATUS_KINDS,
 } from "@core/order-status-kind";
 import { siparisListedeKalir } from "@core/order-window";
+import { dbEpochMs } from "@core/sqlite-date";
 import type { KargoBaglami } from "@core/kargo-tarife";
 import {
   gecikmeleriFaturalarlaEsle,
@@ -59,6 +60,11 @@ export interface OrderItem {
 export interface UnifiedOrder {
   id: string;
   platform: OrderPlatform;
+  /**
+   * Trendyol iade talepleri bu turda okunamadı: iade edilmiş paket "teslim" görünebilir → finans
+   * geçmişine YAZILMAZ (masaüstüyle aynı kural, denetim 23 Kas 2026).
+   */
+  iadeBilinmiyor?: boolean;
   orderNumber: string;
   /** Sipariş VERME tarihi (epoch ms). Masaüstüyle birebir: bilinmiyorsa null → listede en alta. */
   date: number | null;
@@ -117,7 +123,7 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   const [sh, ty, hb, manual] = await Promise.allSettled([
     getShopifyOrders(100, historyDays),
     getTrendyolOrders(historyDays),
-    getHepsiburadaOrders(historyDays),
+    getHepsiburadaOrders(historyDays, hbKayittaAciklar),
     getManualOrdersSince(cutoff),
   ]);
   const orders: UnifiedOrder[] = [];
@@ -145,6 +151,18 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   await gecikmeleriEsle(orders);
   return { orders: recent, errors };
+}
+
+/** Finans geçmişinde AÇIK görünen HB sipariş numaraları (HB listelerinin döndürmediği yedek için). */
+async function hbKayittaAciklar(cutoffMs: number): Promise<string[]> {
+  const satirlar = await query<{ orderNumber: string | null }>(
+    `SELECT "orderNumber" FROM "OrderFinanceSnapshot"
+      WHERE "platform" = 'hepsiburada' AND "statusKind" IN ('pending','processing','shipped')
+        AND ${dbEpochMs("orderedAt")} >= ?
+      LIMIT 1000`,
+    [cutoffMs]
+  );
+  return satirlar.map((r) => String(r.orderNumber ?? ""));
 }
 
 /**

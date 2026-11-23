@@ -87,6 +87,7 @@ export function UrunBaglaDialog({ hedef, onClose }: { hedef: UrunBaglaHedefi; on
     queryKey: ["manual-order-options"],
     queryFn: () => fetchJson("/api/manual-orders/options"),
     staleTime: 60_000,
+    networkMode: "always", // yerel sunucu — internet kopukken de ulaşılır
   });
   const onizleme = useQuery<Onizleme>({
     queryKey: ["satir-bagla", hedef.platform, hedef.satirAdi],
@@ -95,6 +96,7 @@ export function UrunBaglaDialog({ hedef, onClose }: { hedef: UrunBaglaHedefi; on
         `/api/orders/satir-bagla?platform=${hedef.platform}&ad=${encodeURIComponent(hedef.satirAdi)}`
       ),
     staleTime: 0,
+    networkMode: "always",
   });
 
   const urunler = useMemo(() => secenekler.data?.products ?? [], [secenekler.data]);
@@ -283,7 +285,7 @@ export function UrunBaglaDialog({ hedef, onClose }: { hedef: UrunBaglaHedefi; on
                       <span
                         className={cn(
                           "block truncate text-[10px]",
-                          urun.costKnown ? "text-muted-foreground" : "text-amber-500"
+                          urun.costKnown ? "text-muted-foreground" : "text-[#A9AEFF]"
                         )}
                       >
                         {urun.variantGroupName ? `${urun.variantGroupName} · ` : ""}
@@ -321,7 +323,7 @@ export function UrunBaglaDialog({ hedef, onClose }: { hedef: UrunBaglaHedefi; on
             </div>
           )}
           {seciliUrun && !seciliUrun.costKnown && !degisiklikYok && (
-            <p className="text-[11px] text-amber-500 animate-in fade-in duration-200">
+            <p className="text-[11px] text-[#A9AEFF] animate-in fade-in duration-200">
               Bu ürünün maliyeti girilmemiş; kâr yine eksik görünür.
             </p>
           )}

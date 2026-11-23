@@ -132,6 +132,11 @@ export interface OzetGirdisi {
   karKismi: boolean;
   /** İptal / bilgisi eksik / durumu tanınmayan → toplamların dışında (masaüstüyle aynı kural). */
   haric: boolean;
+  /**
+   * Kargolanıp geri gelen (iade) siparişin zararı, pozitif TL. Sipariş HARİÇ olsa da kârdan DÜŞER —
+   * ciroya ve adede girmez (masaüstü Siparişler özetiyle aynı, denetim 23 Kas 2026).
+   */
+  iadeZarari?: number | null;
 }
 
 export interface SiparisOzeti {
@@ -144,14 +149,35 @@ export interface SiparisOzeti {
   /** Maliyeti eksik ya da yaklaşık sipariş sayısı. */
   maliyetEksik: number;
   platformlar: { platform: string; adet: number; ciro: number }[];
+  /** Kârdan düşülen iade (geri gelen kargo) zararı — sipariş sayısı ve toplam TL. */
+  iadeAdet: number;
+  iadeZarari: number;
 }
 
-export function siparisOzeti(girdiler: readonly OzetGirdisi[], baslangic: number): SiparisOzeti {
-  let adet = 0, ciro = 0, kar = 0, maliyetEksik = 0;
+export function siparisOzeti(
+  girdiler: readonly OzetGirdisi[],
+  baslangic: number,
+  /**
+   * tarihsizDahil: tarihi bilinmeyen sipariş de sayılır — masaüstü "bu ay" özeti yalnız tarihi
+   * dönemden ÖNCE olanı eler, tarihsizi sayar. Gün/hafta görünümünde kapalı kalır.
+   */
+  secenek: { tarihsizDahil?: boolean } = {}
+): SiparisOzeti {
+  let adet = 0, ciro = 0, kar = 0, maliyetEksik = 0, iadeAdet = 0, iadeZarari = 0;
   let marjCiro = 0, marjKar = 0;
   const pl = new Map<string, { platform: string; adet: number; ciro: number }>();
   for (const g of girdiler) {
-    if (g.haric || g.date == null || g.date < baslangic) continue;
+    const donemde = g.date == null ? secenek.tarihsizDahil === true : g.date >= baslangic;
+    if (!donemde) continue;
+    if (g.haric) {
+      if (g.iadeZarari != null && g.iadeZarari > 0) {
+        kar -= g.iadeZarari;
+        marjKar -= g.iadeZarari;
+        iadeAdet++;
+        iadeZarari += g.iadeZarari;
+      }
+      continue;
+    }
     adet++;
     ciro += g.ciro;
     const p = pl.get(g.platform) ?? { platform: g.platform, adet: 0, ciro: 0 };
@@ -172,5 +198,7 @@ export function siparisOzeti(girdiler: readonly OzetGirdisi[], baslangic: number
     marj: marjCiro > 0 ? marjKar / marjCiro : null,
     maliyetEksik,
     platformlar: [...pl.values()].sort((a, b) => b.ciro - a.ciro),
+    iadeAdet,
+    iadeZarari,
   };
 }

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { Stack } from "expo-router";
@@ -83,7 +83,15 @@ export default function HazirlikScreen() {
   const qc = useQueryClient();
   const orders = useQuery({ queryKey: ["orders"], queryFn: getAllOrders, staleTime: ORDERS_STALE_MS });
   const products = useQuery({ queryKey: ["match-products"], queryFn: getOrderMatchProducts });
-  const done = useQuery({ queryKey: ["prep-done"], queryFn: getPrepDone });
+  // Yazma sürerken yoklama durur: dönen eski okuma, az önce atılan işareti ezmesin.
+  const yaziliyor = useIsMutating({ mutationKey: ["prep-done"] }) > 0;
+  const done = useQuery({
+    queryKey: ["prep-done"],
+    queryFn: getPrepDone,
+    // Masaüstünde atılan işaretler de görünsün (paketleme iki cihazda sürebiliyor). Uygulama
+    // arka plandayken React Query yoklamayı kendisi durdurur.
+    refetchInterval: yaziliyor ? false : 15_000,
+  });
 
   const items = useMemo(
     () => (orders.data ? prepItemsFromOrders(visibleOrders(orders.data.orders), products.data) : []),
@@ -96,6 +104,7 @@ export default function HazirlikScreen() {
   const ilerleme = items.length ? (items.length - kalan.length) / items.length : 0;
 
   const toggle = useMutation({
+    mutationKey: ["prep-done"],
     mutationFn: ({ key, isaretle }: { key: string; isaretle: boolean }) => setPrepDone(key, isaretle),
     onMutate: async ({ key, isaretle }) => {
       await qc.cancelQueries({ queryKey: ["prep-done"] });
@@ -105,10 +114,12 @@ export default function HazirlikScreen() {
     },
     onError: (_e, _v, ctx) => {
       if (ctx) qc.setQueryData(["prep-done"], ctx.onceki);
+      Alert.alert("İşaret kaydedilemedi", "Bağlantını kontrol edip tekrar dene.");
     },
   });
 
   const sifirla = useMutation({
+    mutationKey: ["prep-done"],
     mutationFn: () => clearPrepDone(done.data ?? []),
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: ["prep-done"] });
@@ -118,6 +129,7 @@ export default function HazirlikScreen() {
     },
     onError: (_e, _v, ctx) => {
       if (ctx) qc.setQueryData(["prep-done"], ctx.onceki);
+      Alert.alert("Liste sıfırlanamadı", "Bağlantını kontrol edip tekrar dene.");
     },
   });
 

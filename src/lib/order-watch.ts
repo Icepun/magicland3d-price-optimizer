@@ -611,6 +611,9 @@ async function scanTick(): Promise<void> {
       const products = await loadScanProducts(orders);
       // Yeni sipariş → geldiği andaki stokla TEK bildirim (masaüstü + telefon).
       await notifyNewOrders(matchScanOrders(orders, products));
+      // Siparişler ekranı dakikada bir HAZIR listeyi okur (?pasif=1); yeni sipariş o listeye
+      // ancak gövde tazelenince girer → burada bir kez canlı tazelenir (arkada, beklenmez).
+      siparisGovdesiniTazele();
     }
     const inventory = await loadInventory();
     const bildirimler = buildInventoryNotifications(inventory);
@@ -634,6 +637,18 @@ async function scanTick(): Promise<void> {
   } finally {
     scanning = false;
   }
+}
+
+/** Yeni sipariş görülünce ağır gövdeyi bir kez canlı tazele (en çok 2 dakikada bir). */
+let sonGovdeTazeleme = 0;
+function siparisGovdesiniTazele(): void {
+  if (Date.now() - sonGovdeTazeleme < 2 * 60_000) return;
+  sonGovdeTazeleme = Date.now();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 120_000);
+  void fetch(`${baseUrl()}/api/orders?fresh=1`, { signal: ctrl.signal, cache: "no-store" })
+    .catch(() => {})
+    .finally(() => clearTimeout(t));
 }
 
 /** YAVAŞ TUR — Siparişler gövdesini sıcak tutar + bildirim tablosunu budar. */

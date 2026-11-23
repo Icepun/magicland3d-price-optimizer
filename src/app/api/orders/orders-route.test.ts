@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
     hbDetails: {} as Record<string, any>,
     /** Kayıtta açık görünen HB sipariş numaraları (yedek okuma). */
     hbKayittaAcik: [] as string[],
+    /** Finans/kalem geçmişinde paket numarasıyla kalmış kalıntı kayıtlar (hb-<paketNo>). */
+    hbKalinti: [] as string[],
     persisted: [] as any[],
     /** Son arka plan yazımının durumu (null = henüz tur bitmedi). */
     lastWrite: null as any,
@@ -80,10 +82,16 @@ vi.mock("@/lib/prisma", () => {
       platformOrderFinancial: table(),
       notification: table(),
       orderFinanceSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
+      orderItemSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
       $executeRawUnsafe: vi.fn(async () => 0),
       $queryRawUnsafe: vi.fn(async (sql: string) =>
-        /"platform" = 'hepsiburada' AND "statusKind" IN/.test(sql)
-          ? h.state.hbKayittaAcik.map((orderNumber) => ({ orderNumber }))
+        /UNION/.test(sql)
+          ? h.state.hbKalinti.map((externalOrderId) => ({ externalOrderId }))
+          : /"platform" = 'hepsiburada' AND "statusKind" IN/.test(sql)
+          ? h.state.hbKayittaAcik
+              // SQL'deki LIMIT gerçek veritabanındaki gibi uygulanır.
+              .slice(0, Number(/LIMIT (\d+)/.exec(sql)?.[1] ?? Infinity))
+              .map((orderNumber) => ({ orderNumber }))
           : []
       ),
     },
@@ -216,6 +224,7 @@ beforeEach(async () => {
   h.state.hbClaims = { cancelled: null, returned: null };
   h.state.hbDetails = {};
   h.state.hbKayittaAcik = [];
+  h.state.hbKalinti = [];
   h.state.persisted = [];
   h.state.lastWrite = null;
   h.state.missingCredentials = new Set<string>();
@@ -361,6 +370,30 @@ describe("Hepsiburada listelerinde olmayan ama kayıtta açık sipariş", () => 
     expect(body.summary.hepsiburada.orderCount).toBe(1);
   });
 
+  it("kayıttaki açık siparişlerin 50'den fazlası listede olsa da listede OLMAYAN atlanmaz", async () => {
+    const item = (i: number) => ({
+      orderNumber: `HB-${i}`,
+      status: "Open",
+      orderDate: now(),
+      quantity: 1,
+      unitPrice: 10,
+      productName: "Ürün",
+      merchantSku: `SKU-${i}`,
+    });
+    h.state.hbOpenPages = [Array.from({ length: 60 }, (_, i) => item(i))];
+    // Eskiden SQL'deki LIMIT 50 ilk 50 BİLİNEN satırla doluyordu → 4468809999 hiç okunmuyordu.
+    h.state.hbKayittaAcik = [...Array.from({ length: 60 }, (_, i) => `HB-${i}`), "4468809999"];
+    h.state.hbDetails = {
+      "4468809999": {
+        orderDate: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        items: [{ status: "Packaged", quantity: 1, unitPrice: 200, productName: "Ürün", merchantSku: "S9" }],
+      },
+    };
+    const body = await fetchOrders();
+    expect(body.orders.find((o: any) => o.id === "hb-4468809999")).toMatchObject({ statusKind: "processing" });
+    expect(body.summary.hepsiburada.orderCount).toBe(61);
+  });
+
   it("iptal olmuşsa iptal görünür, özete girmez; detay alınamazsa hiç eklenmez", async () => {
     h.state.hbKayittaAcik = ["4000000001", "4000000002"];
     h.state.hbDetails = {
@@ -373,6 +406,41 @@ describe("Hepsiburada listelerinde olmayan ama kayıtta açık sipariş", () => 
     expect(body.orders.find((o: any) => o.id === "hb-4000000001")?.statusKind).toBe("cancelled");
     expect(body.orders.some((o: any) => o.id === "hb-4000000002")).toBe(false);
     expect(body.summary.hepsiburada.orderCount).toBe(0);
+  });
+});
+
+describe("Hepsiburada paket numarasıyla kalmış kalıntı kayıtlar", () => {
+  const kur = () => {
+    const verilis = new Date(Date.now() - 2 * 86_400_000).toISOString();
+    h.state.hbPackages = { delivered: [{ OrderNumber: "T2", packageNumber: "P2", orderDate: verilis }] };
+    h.state.hbDetails = { T2: { orderDate: verilis, items: [{ quantity: 1, unitPrice: 100, productName: "Ürün", merchantSku: "S" }] } };
+  };
+
+  it("silinecek kalıntı yoksa silme (yazma) sorgusu HİÇ çalışmaz", async () => {
+    const { prisma } = await import("@/lib/prisma");
+    const fin = vi.mocked(prisma.orderFinanceSnapshot.deleteMany);
+    const kalem = vi.mocked(prisma.orderItemSnapshot.deleteMany);
+    fin.mockClear();
+    kalem.mockClear();
+    kur();
+    const body = await fetchOrders();
+    expect(body.hepsiburada).toMatchObject({ ok: true });
+    expect(fin).not.toHaveBeenCalled();
+    expect(kalem).not.toHaveBeenCalled();
+  });
+
+  it("kalıntı varsa yalnız o kimlik iki geçmişten de silinir", async () => {
+    const { prisma } = await import("@/lib/prisma");
+    const fin = vi.mocked(prisma.orderFinanceSnapshot.deleteMany);
+    const kalem = vi.mocked(prisma.orderItemSnapshot.deleteMany);
+    fin.mockClear();
+    kalem.mockClear();
+    kur();
+    h.state.hbKalinti = ["hb-P2"];
+    await fetchOrders();
+    const beklenen = { where: { platform: "hepsiburada", externalOrderId: { in: ["hb-P2"] } } };
+    expect(fin).toHaveBeenCalledWith(beklenen);
+    expect(kalem).toHaveBeenCalledWith(beklenen);
   });
 });
 
@@ -428,6 +496,19 @@ describe("siparişler ucu — Trendyol iadeleri", () => {
     expect(body.trendyol).toMatchObject({ ok: true, count: 1 });
     expect(body.summary.trendyol).toMatchObject({ revenue: 250, orderCount: 1 });
     expect(h.state.gecmisIadeler).toBeNull();
+    // İade bilgisi YOK ≠ iade yok: iade edilmiş paket "teslim" diye geçmişe yazılmasın (denetim, 23 Kas 2026).
+    expect(body.trendyol.iadeBilinmiyor).toBe(true);
+    expect(h.state.persisted.some((o: any) => o.id === "ty-601")).toBe(false);
+  });
+
+  it("iade ucu sorunsuzsa Trendyol geçmişe yazılır ve uyarı yoktur", async () => {
+    h.state.trendyolPages = [[tyPaket(602, 1)]];
+    h.state.trendyolClaims = [];
+
+    const body = await fetchOrders();
+
+    expect(body.trendyol.iadeBilinmiyor).toBeUndefined();
+    expect(h.state.persisted.some((o: any) => o.id === "ty-602")).toBe(true);
   });
 });
 

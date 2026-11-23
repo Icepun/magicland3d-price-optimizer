@@ -454,6 +454,42 @@ export async function getActualExpenses(): Promise<ActualExpense[]> {
  * `/api/actual-expenses?toplam=1` ile aynı küme: pencere başı ≤ ödeme ≤ şimdi (ileri tarihli
  * gider henüz ödenmedi sayılır).
  */
+export interface KayitliSiparisKari {
+  profit: number | null;
+  partial: boolean;
+  status: string;
+}
+
+/**
+ * Dönemin KAYITLI sipariş kârları (Panel/Raporlar'ın kullandığı, ilk tam hesapta sabitlenen) —
+ * Siparişler özeti bunları kullanır; masaüstüyle aynı (Berke onayı, 23 Kas 2026). Anahtar
+ * `platform\u0000externalOrderId`. Okunamazsa boş harita: özet canlı hesaba düşer.
+ */
+export async function kayitliSiparisKarlari(baslangicMs: number): Promise<Map<string, KayitliSiparisKari>> {
+  const out = new Map<string, KayitliSiparisKari>();
+  try {
+    await ensureFinanceSchema();
+    const rows = await query<{
+      platform: string; externalOrderId: string; profitKurus: number | null; profitPartial: number | null; statusKind: string;
+    }>(
+      `SELECT "platform", "externalOrderId", "profitKurus", "profitPartial", "statusKind"
+         FROM "OrderFinanceSnapshot"
+        WHERE "platform" <> 'manual' AND ${dbEpochMs("orderedAt")} >= ?`,
+      [baslangicMs]
+    );
+    for (const r of rows) {
+      out.set(`${r.platform}\u0000${r.externalOrderId}`, {
+        profit: r.profitKurus == null ? null : Number(r.profitKurus) / 100,
+        partial: Boolean(Number(r.profitPartial ?? 0)),
+        status: String(r.statusKind),
+      });
+    }
+  } catch {
+    /* okunamazsa özet canlı hesaba düşer */
+  }
+  return out;
+}
+
 export async function getExpenseTotalSince(fromMs: number, nowMs = Date.now()): Promise<number> {
   await ensureFinanceSchema();
   const rows = await query<{ toplam: number | null }>(

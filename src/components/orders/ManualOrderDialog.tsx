@@ -643,6 +643,7 @@ export function ManualOrderDialog({
     queryFn: () => fetchJson<ManualOrderOptions>("/api/manual-orders/options"),
     enabled: open,
     staleTime: 60_000,
+    networkMode: "always", // yerel sunucu — internet kopukken de ulaşılır
   });
 
   const manualOrderId = editing?.manualOrderId || editing?.id || null;
@@ -654,6 +655,7 @@ export function ManualOrderDialog({
     enabled: open && Boolean(editing && detailHref),
     staleTime: 0,
     retry: false,
+    networkMode: "always",
   });
 
   // Serbest siparişin kargosu desiden çıkar; barem burada sadece ÖNİZLEME için okunur,
@@ -663,6 +665,7 @@ export function ManualOrderDialog({
     queryFn: () => fetchJson<CargoRuleResponse[]>("/api/cargo-rules"),
     enabled: open && form.mode === "freeform",
     staleTime: 60_000,
+    networkMode: "always",
   });
 
   useEffect(() => {
@@ -1452,7 +1455,7 @@ export function ManualOrderDialog({
                     item.required && item.done
                       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
                       : item.required
-                        ? "border-amber-500/40 bg-amber-500/10 text-amber-300"
+                        ? "border-[#7A7EFF]/40 bg-[#7A7EFF]/10 text-[#C9D2F2]"
                         : "border-border/60 text-muted-foreground hover:text-foreground"
                   )}
                 >
@@ -1462,7 +1465,7 @@ export function ManualOrderDialog({
                       item.required && item.done
                         ? "bg-emerald-500/20"
                         : item.required
-                          ? "bg-amber-500/20"
+                          ? "bg-[#7A7EFF]/20"
                           : "bg-muted"
                     )}
                   >
@@ -1477,12 +1480,12 @@ export function ManualOrderDialog({
                 </button>
               ))}
               <span className="ml-auto text-[10px] text-muted-foreground">
-                <span className="text-amber-400">•</span> zorunlu
+                <span className="text-[#A9AEFF]">•</span> zorunlu
               </span>
             </div>
 
             {draftRestored && (
-              <div className="flex shrink-0 items-center gap-2 border-b border-amber-500/25 bg-amber-500/5 px-4 py-2 text-[11px] text-amber-300 sm:px-5 animate-in fade-in slide-in-from-top-1 duration-300">
+              <div className="flex shrink-0 items-center gap-2 border-b border-[#7A7EFF]/25 bg-[#7A7EFF]/5 px-4 py-2 text-[11px] text-[#C9D2F2] sm:px-5 animate-in fade-in slide-in-from-top-1 duration-300">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1">Yarım kalan sipariş geri yüklendi.</span>
                 <Button
@@ -1589,7 +1592,7 @@ export function ManualOrderDialog({
                               className={cn(
                                 "pr-10 text-base font-semibold tabular-nums",
                                 saleTotalMissing &&
-                                  "border-amber-500/60 ring-2 ring-amber-500/15"
+                                  "border-[#7A7EFF]/60 ring-2 ring-[#7A7EFF]/15"
                               )}
                               value={form.saleTotal}
                               placeholder="0,00"
@@ -1725,7 +1728,7 @@ export function ManualOrderDialog({
                                         "text-[10px]",
                                         product.costKnown
                                           ? "text-muted-foreground"
-                                          : "text-amber-400"
+                                          : "text-[#A9AEFF]"
                                       )}
                                     >
                                       {product.costKnown
@@ -1827,7 +1830,7 @@ export function ManualOrderDialog({
                               className={cn(
                                 "flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] transition-colors",
                                 autoCargo.ruleMissing
-                                  ? "border-amber-500/40 bg-amber-500/5 text-amber-300"
+                                  ? "border-[#7A7EFF]/40 bg-[#7A7EFF]/5 text-[#C9D2F2]"
                                   : "bg-muted/30 text-muted-foreground"
                               )}
                             >
@@ -2180,7 +2183,7 @@ export function ManualOrderDialog({
               <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
                 {formError ? (
                   <>
-                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-[#A9AEFF]" />
                     <span className="truncate text-xs text-muted-foreground">
                       {formError}
                     </span>
@@ -2242,7 +2245,7 @@ function SectionTitle({
       </span>
       <h2 className="text-sm font-semibold">{title}</h2>
       {required && (
-        <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[9px] font-semibold text-amber-400">
+        <span className="rounded-full bg-[#7A7EFF]/15 px-1.5 py-px text-[9px] font-semibold text-[#A9AEFF]">
           zorunlu
         </span>
       )}
@@ -2272,11 +2275,11 @@ function Field({
       <div className="flex flex-wrap items-baseline justify-between gap-x-2">
         <Label
           htmlFor={htmlFor}
-          className={cn("text-xs transition-colors", invalid && "text-amber-400")}
+          className={cn("text-xs transition-colors", invalid && "text-[#A9AEFF]")}
         >
           {label}
           {required && (
-            <span className="ml-0.5 font-bold text-amber-400">*</span>
+            <span className="ml-0.5 font-bold text-[#A9AEFF]">*</span>
           )}
         </Label>
         {hint && <span className="text-[10px] text-muted-foreground">{hint}</span>}
@@ -2625,7 +2628,7 @@ function FreeformItemCard({
             )}
           </span>
         ) : (
-          <span className="text-amber-400">
+          <span className="text-[#A9AEFF]">
             {detailed ? "Gramaj veya baskı süresi gir" : "Maliyet girilmedi"}
           </span>
         )}
@@ -2675,7 +2678,7 @@ function AutoCargoCard({
         Girdiğin desiye göre otomatik hesaplanır.
       </p>
       {ruleMissing && (
-        <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/35 bg-amber-500/5 p-2 text-[11px] text-amber-300">
+        <p className="flex items-start gap-1.5 rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/5 p-2 text-[11px] text-[#C9D2F2]">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
         </p>
@@ -2686,7 +2689,7 @@ function AutoCargoCard({
 
 function InlineWarning({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-500/35 bg-amber-500/5 p-3 text-xs text-amber-300">
+    <div className="flex items-start gap-2 rounded-xl border border-[#7A7EFF]/35 bg-[#7A7EFF]/5 p-3 text-xs text-[#C9D2F2]">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
       {children}
     </div>
@@ -2702,7 +2705,7 @@ function ProfitBreakdown({
 }) {
   const netProfitColor =
     breakdown.netProfit == null
-      ? "text-amber-400"
+      ? "text-[#A9AEFF]"
       : breakdown.netProfit >= 0
         ? "text-emerald-400"
         : "text-destructive";
@@ -2777,13 +2780,13 @@ function ProfitBreakdown({
           </p>
         )}
         {breakdown.cargoRuleMissing && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-300">
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#7A7EFF]/30 bg-[#7A7EFF]/5 p-2.5 text-[11px] text-[#C9D2F2]">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             Bu desi için kargo baremi yok; kargo ₺0 sayıldı.
           </div>
         )}
         {breakdown.profitPartial && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5 text-[11px] text-amber-300">
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#7A7EFF]/30 bg-[#7A7EFF]/5 p-2.5 text-[11px] text-[#C9D2F2]">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             {breakdown.missingCostItems} kalemin maliyeti eksik. Maliyeti gir veya
             ürün maliyetini kapat.

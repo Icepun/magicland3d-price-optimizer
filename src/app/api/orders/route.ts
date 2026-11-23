@@ -36,6 +36,7 @@ import {
   satirAnahtari,
   satirMaliyetiBul,
   satirMaliyetliUrun,
+  siparisKimligi,
   type SatirKatalogBilgisi,
 } from "@/core/order-line-cost";
 import { bagliUrunKimligi } from "@/core/order-line-link";
@@ -268,6 +269,11 @@ interface PlatformStatus {
    */
   notConfigured?: boolean;
   error?: string;
+  /**
+   * Trendyol iade talepleri bu turda okunamadı: iade edilmiş paket "teslim" görünebilir. Bu tur
+   * Trendyol siparişleri geçmişe YAZILMAZ ve ekran kısa bir uyarı gösterir.
+   */
+  iadeBilinmiyor?: boolean;
   /**
    * Bu kaynaktan gelen ama bilgisi eksik kalan sipariş sayısı (detayı alınamadı, tek seferde
    * çekilebilecek sınırı aştı ya da manuel kaydı okunamadı). 0/undefined = veri tam.
@@ -528,6 +534,12 @@ type ExpenseRules = ExpenseRuleInput[];
 // products:/dashboard: gövdelerini de düşürür; yalnız burayı düşürmek YETMEZ, çünkü Ürünler ve
 // Panel kârı kendi SWR gövdelerinden okur ve o gövdeler diske de yazılır.
 const ORDERS_SOFT_MS = 60_000;
+/**
+ * Ekranın dakikalık OTOMATİK yenilemesi (?pasif=1) gövdeyi bu kadar eskimeden tazeletmez: sayfa
+ * açık durdukça her dakika üç pazaryeri + finans yazımı koşmasın. Yeni sipariş gelince order-watch
+ * gövdeyi zaten tazeliyor; durum değişiklikleri en geç bu süre içinde görünür.
+ */
+const ORDERS_PASIF_SOFT_MS = 5 * 60_000;
 
 // ── Çekim ilerlemesi ────────────────────────────────────────────────────────────────────────
 // Üç pazaryeri CANLI çekildiği için bekleme 10-20 saniyeyi bulabiliyor ve ekranda yalnız akan
@@ -624,11 +636,12 @@ export async function GET(req: NextRequest) {
       });
     }
     const fresh = params.get("fresh") === "1";
+    const pasif = params.get("pasif") === "1";
     const cached = getOrdersCache();
     // Önbellek YALNIZ aynı UTC gününde hesaplanmışsa anında verilir: gün değişince 30 günlük
     // pencere kayar ve dünkü hesap yanlış pencereyi anlatır (bkz. ayniPencereGunuMu).
     if (!fresh && cached && ayniPencereGunuMu(cached.at)) {
-      if (Date.now() - cached.at > ORDERS_SOFT_MS) arkadaCanliTazele();
+      if (Date.now() - cached.at > (pasif ? ORDERS_PASIF_SOFT_MS : ORDERS_SOFT_MS)) arkadaCanliTazele();
       return NextResponse.json(cached.body);
     }
     try {
@@ -901,7 +914,7 @@ async function computeOrdersBodyInner(
         }
       }
     );
-    const { iadeler, kusurlular } = await iadelerSozu;
+    const { iadeler, kusurlular, basarisiz: iadeBilinmiyor } = await iadelerSozu;
     const seenTy = new Set<string>();
     for (const [rowIndex, o] of tyByWindow.flat().entries()) {
       // Paket id'si 0 olan yeni siparişler (Trendyol ilk saniyelerde böyle veriyor) artık "0"
@@ -971,7 +984,7 @@ async function computeOrdersBodyInner(
     commitRaws(buffer);
     // Pencere dışına düşmüş (ya da telefonun eski sürümünün geri çevirdiği) kayıtlar — arka planda.
     if (iadeler.size > 0) void trendyolIadeleriniGecmiseIsle(iadeler);
-    trendyol = { ok: true, count: buffer.length };
+    trendyol = { ok: true, count: buffer.length, ...(iadeBilinmiyor ? { iadeBilinmiyor: true } : {}) };
     markOrdersSource(runId, "trendyol", "done", buffer.length);
   } catch (e) {
     trendyol = {
@@ -1038,16 +1051,20 @@ async function computeOrdersBodyInner(
     // detayda "Packaged", ama paket listesi boş → Panel siparişi hiç görmüyor, Raporlar (kayıt)
     // sayıyordu. Durum ve kalem detaydan okunur; iptal olmuşsa kayıt da iptale döner.
     try {
+      // ⚠️ Üst sınır BİLİNENLER ELENDİKTEN SONRA uygulanır: eskiden SQL'deki LIMIT 50 listede zaten
+      // görünen açık siparişleri de sayıyordu → 50'den fazla açık siparişte yedek hiç çalışmıyordu.
       const acik = await prisma.$queryRawUnsafe<Array<{ orderNumber: unknown }>>(
         `SELECT "orderNumber" FROM "OrderFinanceSnapshot"
           WHERE "platform" = 'hepsiburada' AND "statusKind" IN ('pending','processing','shipped')
             AND ${dbEpochMs("orderedAt")} >= ?
-          LIMIT 50`,
+          LIMIT 1000`,
         historyCutoff
       );
+      let eklenen = 0;
       for (const r of acik) {
         const on = String(r.orderNumber ?? "").trim();
         if (!on || agg.has(on)) continue;
+        if (++eklenen > 50) break; // detay çağrısı başına sınır — fazlası sonraki turda
         agg.set(on, { status: "", date: null, customer: null, lines: null, paketNo: null, teslimatNo: null, kargoFirmasi: null, kayittan: true });
       }
     } catch {
@@ -1132,7 +1149,28 @@ async function computeOrdersBodyInner(
     //    İKİ satır. Paket↔sipariş eşleşmesini SADECE gerçek veriden bildiğimiz için silme kesin:
     //    tahmin yok, yalnız bu turda ikisini birden gördüğümüz siparişler temizlenir.
     //    (Görünür pencerenin dışında kalan daha eski çiftler bu yolla eşleştirilemez.)
-    const staleIds = [...new Set(hbPackageKeyPairs.map((p) => `hb-${p.packageNo}`))];
+    const adayIds = [...new Set(hbPackageKeyPairs.map((p) => `hb-${p.packageNo}`))];
+    // Önce VAR MI diye tek okuma: eskiden paketli sipariş oldukça her hesapta iki silme (yazma)
+    // sorgusu koşuyordu — çoğu zaman silinecek tek satır yokken (denetim, 23 Kas 2026).
+    const staleIds: string[] = [];
+    for (let i = 0; i < adayIds.length; i += 200) {
+      const dilim = adayIds.slice(i, i + 200);
+      const yer = dilim.map(() => "?").join(",");
+      try {
+        const bulunan = await prisma.$queryRawUnsafe<Array<{ externalOrderId: unknown }>>(
+          `SELECT "externalOrderId" FROM "OrderFinanceSnapshot"
+            WHERE "platform" = 'hepsiburada' AND "externalOrderId" IN (${yer})
+           UNION
+           SELECT "externalOrderId" FROM "OrderItemSnapshot"
+            WHERE "platform" = 'hepsiburada' AND "externalOrderId" IN (${yer})`,
+          ...dilim,
+          ...dilim
+        );
+        for (const r of bulunan) staleIds.push(String(r.externalOrderId));
+      } catch {
+        staleIds.push(...dilim); // okunamadıysa eski yol: doğrudan sil
+      }
+    }
     if (staleIds.length) {
       for (let i = 0; i < staleIds.length; i += 200) {
         const dilim = staleIds.slice(i, i + 200);
@@ -1845,7 +1883,10 @@ async function computeOrdersBodyInner(
   const persistableOrders = orders.filter(
     (order) =>
       !order.statusUnknown &&
-      (!order.dataIncomplete || order.statusKind === "cancelled")
+      (!order.dataIncomplete || order.statusKind === "cancelled") &&
+      // İade bilgisi okunamadıysa Trendyol bu tur YAZILMAZ: iade edilmiş paket "teslim" diye
+      // geçmişe girip Raporlar'da ciro salınıyordu (sonraki başarılı turda geri dönüyordu).
+      !(order.platform === "trendyol" && trendyol.iadeBilinmiyor)
   );
   try {
     // Finans geçmişi yazımı YANIT YOLUNDA DEĞİL: ilk dolumda veya toplu statü değişiminde
@@ -1913,6 +1954,37 @@ async function computeOrdersBodyInner(
   // 30 günlük liste penceresinin birkaç saat dışına düşebiliyor.
   const ozetSiparisleri = orders.filter((order) => !oncekiAy(order));
 
+  /**
+   * KAYITLI KÂR — Panel ve Raporlar'ın kullandığı değer (finans geçmişi, siparişin kârı ilk tam
+   * hesapta sabitlenir). Özet bunu kullanır: canlı hesap güncel maliyetle yapıldığı için ay içinde
+   * maliyet değişince üç ekran farklı kâr gösteriyordu (Berke onayı, 23 Kas 2026). Kaydı olmayan ya
+   * da kârı bilinmeyen sipariş canlı hesaptan sayılır. Satırlar canlı kalır (dökümle tutarlı).
+   */
+  const kayitliOzet = new Map<string, { profit: number | null; partial: boolean; status: string }>();
+  try {
+    const satirlar = await remotePrisma.$queryRawUnsafe<
+      Array<{ platform: string; externalOrderId: string; profitKurus: number | bigint | null; profitPartial: unknown; statusKind: string }>
+    >(
+      `SELECT "platform","externalOrderId","profitKurus","profitPartial","statusKind"
+         FROM "OrderFinanceSnapshot"
+        WHERE "platform" <> 'manual' AND ${dbEpochMs("orderedAt")} >= ?`,
+      ozetBas
+    );
+    for (const r of satirlar) {
+      kayitliOzet.set(JSON.stringify([String(r.platform), String(r.externalOrderId)]), {
+        profit: r.profitKurus == null ? null : Number(r.profitKurus) / 100,
+        partial: Boolean(Number(r.profitPartial ?? 0)),
+        status: String(r.statusKind),
+      });
+    }
+  } catch {
+    /* okunamazsa özet canlı hesaba düşer — eski davranış */
+  }
+  const kayitliOf = (o: { platform: string; id: string }) =>
+    o.platform === "manual"
+      ? undefined
+      : kayitliOzet.get(JSON.stringify([o.platform, siparisKimligi(o.platform, o.id)]));
+
   // Dashboard özeti (iptal/iade hariç) ──────────────────────────────────────
   const empty = (): SummaryBucket => ({ revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 });
   const sShopify = empty();
@@ -1937,6 +2009,11 @@ async function computeOrdersBodyInner(
     // Özet YALNIZ bu ay verilen siparişleri sayar; listede kalan eski açık elle sipariş kendi
     // ayının cirosunda zaten sayıldı.
     if (oncekiAy(o)) continue;
+    const kayit = kayitliOf(o);
+    // İade bilgisi okunamayan turda geçmişte İPTAL/İADE olarak kayıtlı Trendyol siparişi satış sayılmaz.
+    if (o.platform === "trendyol" && trendyol.iadeBilinmiyor && kayit?.status === "cancelled" && o.statusKind !== "cancelled") {
+      continue;
+    }
     if (o.statusKind === "cancelled") {
       // İADE edilen siparişin kargo zararı: ciroya ve sipariş sayısına girmez, kârdan DÜŞER.
       if (o.returnLoss && !o.dataIncomplete && normalizedCurrency(o.currency) === "TRY") {
@@ -1968,10 +2045,13 @@ async function computeOrdersBodyInner(
     }
     const bucket = bucketOf(o.platform);
     bucket.revenue += o.total;
-    bucket.profit += o.profit ?? 0;
+    // Kayıtlı kâr varsa O (Panel/Raporlar ile aynı); yoksa canlı hesap.
+    const ozetKar = kayit && kayit.profit != null ? kayit.profit : o.profit;
+    const ozetKismi = kayit && kayit.profit != null ? kayit.partial : o.profitPartial;
+    bucket.profit += ozetKar ?? 0;
     bucket.orderCount += 1;
     // Maliyeti girilmemiş ürün içeren sipariş → toplam kâr EKSİK; UI uyarı gösterir.
-    if (o.profit == null || o.profitPartial) bucket.incompleteOrders += 1;
+    if (ozetKar == null || ozetKismi) bucket.incompleteOrders += 1;
   }
   const total: SummaryBucket = {
     revenue:

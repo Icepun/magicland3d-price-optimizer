@@ -142,21 +142,27 @@ describe("işaretlerin cihazlar arası paylaşılması", () => {
     await expect(loadPrepDone()).resolves.toEqual(["id:p1"]);
   });
 
-  it("sunucu hata dönerse liste işaretsiz açılır", async () => {
+  it("sunucu hata dönerse 'okunamadı' (null) döner — boş liste DEĞİL, ekrandaki işaretler ezilmez", async () => {
     fetchYanit({ error: "patladı" }, false);
-    await expect(loadPrepDone()).resolves.toEqual([]);
+    await expect(loadPrepDone()).resolves.toBeNull();
   });
 
-  it("ağ yoksa sayfa kırılmaz", async () => {
+  it("ağ yoksa sayfa kırılmaz; yazma tutmadığını bildirir (ekran işareti geri alır)", async () => {
     vi.stubGlobal("fetch", () => Promise.reject(new Error("ağ yok")));
-    await expect(loadPrepDone()).resolves.toEqual([]);
-    await expect(savePrepDone("id:p1", true)).resolves.toBeUndefined();
-    await expect(clearPrepDone()).resolves.toBeUndefined();
+    await expect(loadPrepDone()).resolves.toBeNull();
+    await expect(savePrepDone("id:p1", true)).resolves.toBe(false);
+    await expect(clearPrepDone()).resolves.toBe(false);
+  });
+
+  it("sunucu yazmayı reddederse sonuç false", async () => {
+    fetchYanit({ error: "kilit" }, false);
+    await expect(savePrepDone("id:p1", true)).resolves.toBe(false);
+    await expect(clearPrepDone()).resolves.toBe(false);
   });
 
   it("işaret ve işaret kaldırma aynı uca yazılır", async () => {
     fetchYanit({ ok: true });
-    await savePrepDone("id:p1", true);
+    await expect(savePrepDone("id:p1", true)).resolves.toBe(true);
     await savePrepDone("id:p1", false);
     expect(cagrilar).toHaveLength(2);
     expect(cagrilar[0].url).toBe("/api/prep-done");

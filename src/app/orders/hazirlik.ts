@@ -26,36 +26,46 @@ export {
  */
 export const PREP_DONE_KEY = "mh-list-state:orders-hazirlik";
 
-export async function loadPrepDone(): Promise<string[]> {
+/**
+ * Kayıtlı işaretler. `null` = OKUNAMADI (boş liste değil): çağıran elindekini ezmemeli —
+ * eskiden hata boş liste dönüyordu ve yüklenirken atılan işaretler siliniyordu (denetim, 23 Kas 2026).
+ */
+export async function loadPrepDone(): Promise<string[] | null> {
   try {
     const res = await fetch("/api/prep-done", { cache: "no-store" });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = (await res.json()) as { keys?: unknown };
     return Array.isArray(data.keys)
       ? data.keys.filter((key): key is string => typeof key === "string")
-      : [];
+      : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
-/** Tek satırın işaretini değiştir. Ekran beklemez — iyimser güncellenir. */
-export async function savePrepDone(key: string, done: boolean): Promise<void> {
+/**
+ * Tek satırın işaretini değiştir. Ekran beklemez (iyimser); dönen değer kaydın tuttuğunu söyler —
+ * tutmadıysa çağıran işareti geri alır. Eskiden yanıta bakılmıyordu: kayıt düşse de kutu dolu
+ * kalıyor, telefonda işaretsiz görünüyordu.
+ */
+export async function savePrepDone(key: string, done: boolean): Promise<boolean> {
   try {
-    await fetch("/api/prep-done", {
+    const res = await fetch("/api/prep-done", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key, done }),
     });
+    return res.ok;
   } catch {
-    /* ağ yok → işaret yalnız bu ekranda kalır, liste yine çalışır */
+    return false;
   }
 }
 
-export async function clearPrepDone(): Promise<void> {
+export async function clearPrepDone(): Promise<boolean> {
   try {
-    await fetch("/api/prep-done", { method: "DELETE" });
+    const res = await fetch("/api/prep-done", { method: "DELETE" });
+    return res.ok;
   } catch {
-    /* ağ yok → sıfırlama yalnız bu ekranda görünür */
+    return false;
   }
 }

@@ -209,7 +209,15 @@ export function hbDetayDeposunuKur(d: HbDetayDeposu): void {
   depoOkundu = false;
 }
 
-export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrder[]> {
+export async function getHepsiburadaOrders(
+  historyDays = 30,
+  /**
+   * KAYITTA AÇIK görünen HB sipariş numaraları (finans geçmişi). HB listeleri bazı paketli
+   * siparişleri döndürmüyor (masaüstünde ölçüldü, 23 Kas 2026) → durum ve kalem detaydan okunur.
+   * Veritabanı bu modülün DIŞINDA okunur (hat Node'da da çalışsın diye); verilmezse yedek atlanır.
+   */
+  kayittaAciklar?: (cutoffMs: number) => Promise<string[]>
+): Promise<UnifiedOrder[]> {
   // Kimlik bilgisi eksikse sessizce boş (trendyol.ts/shopify.ts gibi).
   if (!MERCHANT_ID || !SECRET_KEY || !DEV_USERNAME) return [];
 
@@ -237,6 +245,22 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
     hbLineRaw
   );
 
+  // Kayıtta açık ama listelerde olmayanlar (masaüstüyle aynı yedek; en çok 50 — fazlası sonraki turda).
+  const kayittan = new Set<string>();
+  if (kayittaAciklar) {
+    try {
+      for (const ham of await kayittaAciklar(cutoff)) {
+        const on = String(ham ?? "").trim();
+        if (!on || agg.has(on)) continue;
+        if (kayittan.size >= 50) break;
+        kayittan.add(on);
+        agg.set(on, { status: "", date: null, customer: null, lines: null, paketNo: null, teslimatNo: null, kargoFirmasi: null });
+      }
+    } catch {
+      /* kayıt okunamazsa yalnız bu yedek atlanır */
+    }
+  }
+
   // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz çağrı olmasın).
   for (const [on, e] of [...agg]) if (e.date != null && e.date < cutoff) agg.delete(on);
 
@@ -246,7 +270,8 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
   for (const [on, e] of agg) {
     if (e.lines !== null) continue;
     const cached = detailCache.get(on);
-    if (cached) {
+    // Kayıttan gelen siparişin DURUMU detaydan okunur → önbellek yetmez, detay her turda istenir.
+    if (cached && !kayittan.has(on)) {
       e.lines = cached.lines;
       e.customer = e.customer ?? cached.customer;
       if (cached.date != null) e.date = cached.date;
@@ -272,6 +297,11 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
       // göre (masaüstü v0.19.58). Özet listeden gelen tarih (oluşturulma/paket hazır) bununla ezilir.
       const od = hbTarihMs(d.orderDate, d.createdDate);
       if (od != null) e.date = od;
+      // Listelerde olmayan sipariş: durum kalemden (ör. "Packaged"; iptalse "Cancelled").
+      if (kayittan.has(on)) {
+        const kalemler = hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, unknown>[];
+        e.status = hbStr(...kalemler.map((k) => k.status ?? k.Status), d.status) || "";
+      }
       // Başarılı detayı önbelleğe koy (kalem varsa) — kapasite aşımında en eskiyi düş.
       if (e.lines.length > 0) {
         if (detailCache.size >= DETAIL_CACHE_MAX) {
@@ -287,6 +317,12 @@ export async function getHepsiburadaOrders(historyDays = 30): Promise<UnifiedOrd
   });
 
   if (yeniDetay && depo) depo.kaydet(detailCache, DETAIL_CACHE_MAX);
+
+  // Detayı ya da durumu okunamayan yedek sipariş listeye eklenmez (kayıt olduğu gibi kalır).
+  for (const on of kayittan) {
+    const e = agg.get(on);
+    if (e && (e.lines === null || !e.status)) agg.delete(on);
+  }
 
   // d) Birleşik UnifiedOrder'lar (mobil şekil: date = epoch ms, total = Σ unitPrice*qty).
   const orders: UnifiedOrder[] = [];

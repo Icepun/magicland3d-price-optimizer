@@ -22,6 +22,7 @@ import { Chip, Pill } from "@/components/kit/Chip";
 import {
   Count,
   EmptyState,
+  ErrorState,
   FadeInView,
   Glass,
   Header,
@@ -45,6 +46,7 @@ import {
   type UnifiedOrder,
 } from "@/lib/api/orders";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
+import { kayitliSiparisKarlari } from "@/lib/db/finance";
 import { basilanEtiketler } from "@/lib/db/etiket";
 import { basilabilirEtiketAnahtari } from "@/lib/etiket";
 import { getRules, getSettingsMap } from "@/lib/db/rules";
@@ -82,7 +84,7 @@ const platformAdi = (p: string) => (p === "manual" ? "Manuel" : PLATFORM_LABEL[p
  * (iptal, bilgisi eksik ve durumu tanınmayan siparişler ciroya girmez — @core/siparis-listesi).
  */
 export default function OrdersScreen() {
-  const { data, isLoading, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, refetch, dataUpdatedAt, error, isFetching } = useQuery({
     queryKey: ["orders"],
     queryFn: getAllOrders,
     staleTime: ORDERS_STALE_MS,
@@ -111,6 +113,12 @@ export default function OrdersScreen() {
 
   // Dönemin başı — "Bu ay" = Türkiye takviminde ayın 1'i (masaüstü Panel/Siparişler/Raporlar ile aynı).
   const kesim = useMemo(() => donemBaslangici(donem, simdi), [donem, simdi]);
+  // KAYITLI kâr (Panel/Raporlar'ın kullandığı) — özet bunu kullanır, masaüstüyle aynı.
+  const { data: kayitli } = useQuery({
+    queryKey: ["kayitli-siparis-kari", kesim],
+    queryFn: () => kayitliSiparisKarlari(kesim),
+    staleTime: ORDERS_STALE_MS,
+  });
   // Liste: "Bu ay" = pencerenin tamamı (geçen ayın kargolanmamışı ve işi bitmemiş elle sipariş
   // DAHİL — masaüstü listesi gibi); ÖZET yalnız bu ayın siparişlerini sayar (aşağıda kesimle).
   const donemdeki = useMemo(
@@ -154,36 +162,55 @@ export default function OrdersScreen() {
     [aranan, durum],
   );
 
+  // ÖZET listeden değil ÇEKİLEN TÜM siparişlerden sayılır (masaüstüyle aynı): 31 çeken ayın son
+  // gününde ayın 1'i 30 günlük liste penceresinin birkaç saat dışına düşebiliyor.
+  const ozetSiparisleri = useMemo(
+    () =>
+      (data?.orders ?? []).filter(
+        (o) => (platform === "hepsi" || o.platform === platform) && (o.date == null || o.date >= kesim)
+      ),
+    [data, platform, kesim],
+  );
+
   // Kâr: özet (dönem + platform) ve liste için aynı harita.
   const profitOf = useMemo(() => {
     const map = new Map<string, OrderProfit>();
     if (!products || !rules || !settings) return map;
     const pm = getProductMap(products);
     for (const o of platformdaki) map.set(o.id, computeOrderProfit(o, pm, rules, settings));
+    for (const o of ozetSiparisleri) if (!map.has(o.id)) map.set(o.id, computeOrderProfit(o, pm, rules, settings));
     return map;
-  }, [platformdaki, products, rules, settings]);
+  }, [platformdaki, ozetSiparisleri, products, rules, settings]);
   const karHazir = !!products && !!rules && !!settings;
 
   const ozet = useMemo(
     () =>
       siparisOzeti(
-        platformdaki.map((o) => {
+        ozetSiparisleri.map((o) => {
           const p = profitOf.get(o.id);
           const tryDisi = !!o.currency && o.currency.trim().toUpperCase() !== "TRY";
+          const iptal = isCancelledOrder(o);
+          const kayit = o.platform === "manual" ? undefined : kayitli?.get(`${o.platform}\u0000${o.id}`);
+          // İade bilgisi okunamayan turda geçmişte iptal/iade kayıtlı Trendyol siparişi satış sayılmaz.
+          const iadeSuphesi = o.platform === "trendyol" && o.iadeBilinmiyor === true && kayit?.status === "cancelled" && !iptal;
+          // Kayıtlı kâr varsa O (Panel/Raporlar ile aynı); yoksa canlı hesap.
+          const kayitliKar = !iptal && kayit && kayit.profit != null;
           return {
             platform: o.platform,
             date: o.date,
             ciro: o.total,
-            kar: p?.profit ?? null,
-            karKismi: p?.partial === true,
-            haric: isExcludedFromTotals(o) || tryDisi,
+            kar: kayitliKar ? kayit.profit : (p?.profit ?? null),
+            karKismi: kayitliKar ? kayit.partial : p?.partial === true,
+            haric: isExcludedFromTotals(o) || tryDisi || iadeSuphesi,
+            // Kargolanıp geri gelen siparişin zararı kârdan düşer (masaüstü özetiyle aynı).
+            iadeZarari: iptal && !tryDisi && !iadeSuphesi ? (p?.returnLoss ?? null) : null,
           };
         }),
-        // Özet dönemin içindekileri sayar: listede duran eski açık elle sipariş ve tarihsiz
-        // sipariş ciroya girmez (masaüstü özetiyle aynı).
         kesim,
+        // "Bu ay": tarihi bilinmeyen sipariş de sayılır (masaüstü yalnız tarihi önceki ayı eler).
+        { tarihsizDahil: donem === "ay" },
       ),
-    [platformdaki, profitOf, kesim],
+    [ozetSiparisleri, profitOf, kesim, kayitli, donem],
   );
 
   const satirlar = useMemo(() => gunlereBol(shown, simdi), [shown, simdi]);
@@ -275,6 +302,11 @@ export default function OrdersScreen() {
         <View style={styles.list}>
           <ShimmerList count={7} height={84} />
         </View>
+      ) : error && !data ? (
+        // Veri HİÇ gelmediyse "Sipariş yok" yazılmaz — alınamamış veri sıfır gibi okunuyordu.
+        <View style={styles.list}>
+          <ErrorState error={error} onRetry={() => void refetch()} retrying={isFetching} />
+        </View>
       ) : (
         <FlashList<ListeSatiri<UnifiedOrder>>
           data={satirlar}
@@ -294,6 +326,13 @@ export default function OrdersScreen() {
                 karHazir={karHazir}
                 platformSecili={platform !== "hepsi"}
               />
+              {error && data ? (
+                <Tint strong style={styles.errBox}>
+                  <Txt v="small" tone="warn">
+                    Liste güncellenemedi — son alınan gösteriliyor.
+                  </Txt>
+                </Tint>
+              ) : null}
               {data?.errors.length ? (
                 <Tint strong style={styles.errBox}>
                   <Txt v="small" tone="warn">
@@ -410,6 +449,11 @@ function OzetKarti({
       {karHazir && ozet.maliyetEksik > 0 ? (
         <Txt v="small" tone="warn">
           {ozet.maliyetEksik} siparişte maliyet eksik — kâr yaklaşık.
+        </Txt>
+      ) : null}
+      {karHazir && ozet.iadeAdet > 0 ? (
+        <Txt v="small" tone="dim">
+          {ozet.iadeAdet} iadenin kargo zararı ({formatCurrency(ozet.iadeZarari)}) kârdan düşüldü.
         </Txt>
       ) : null}
 

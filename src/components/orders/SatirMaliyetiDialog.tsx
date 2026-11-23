@@ -91,14 +91,26 @@ const sayi = (t: string): number | null => {
  * bu siparişteki maliyeti. Alanlar ürün sayfasındakinin aynısı; hesap da aynı motordan.
  */
 export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHedefi; onClose: () => void }) {
-  const { data: filamentler = [], isLoading: filamentYukleniyor } = useQuery<FilamentTuru[]>({
+  const {
+    data: filamentler = [],
+    isLoading: filamentYukleniyor,
+    isError: filamentHata,
+    refetch: filamentYenile,
+  } = useQuery<FilamentTuru[]>({
     queryKey: ["filament-types"],
     queryFn: () => fetchJson("/api/filament-types"),
     staleTime: 10 * 60_000,
+    networkMode: "always", // yerel sunucu — internet kopukken de ulaşılır
   });
-  const { data: ayarlar, isLoading: ayarYukleniyor } = useQuery<Record<string, string>>({
+  const {
+    data: ayarlar,
+    isLoading: ayarYukleniyor,
+    isError: ayarHata,
+    refetch: ayarYenile,
+  } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
+    networkMode: "always",
   });
   const kayitSorgusu = useQuery<KayitYaniti>({
     queryKey: ["satir-maliyeti", hedef.platform, hedef.siparisId, hedef.satirAnahtari, hedef.kapsam],
@@ -110,7 +122,16 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
       ),
     enabled: hedef.kayitli,
     staleTime: 0,
+    networkMode: "always",
   });
+
+  // Bir bilgi alınamazsa iskelet sonsuza kadar dönüyordu → kısa hata + "Tekrar dene".
+  const hata = filamentHata || ayarHata || (hedef.kayitli && kayitSorgusu.isError);
+  const yenidenDene = () => {
+    if (filamentHata) void filamentYenile();
+    if (ayarHata) void ayarYenile();
+    if (kayitSorgusu.isError) void kayitSorgusu.refetch();
+  };
 
   const hazir =
     !filamentYukleniyor && !ayarYukleniyor && Boolean(ayarlar) && (!hedef.kayitli || kayitSorgusu.isSuccess);
@@ -120,7 +141,7 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
       <DialogContent className="max-w-lg max-h-[88vh] overflow-y-auto">
         <DialogHeader className="space-y-1">
           <DialogTitle className="flex items-center gap-2">
-            <Coins className="h-4 w-4 text-amber-500" />
+            <Coins className="h-4 w-4 text-[#A9AEFF]" />
             {!hedef.kayitli ? "Maliyet gir" : hedef.kapsam === "tum" ? "Sabit maliyet" : "Siparişe özel maliyet"}
           </DialogTitle>
           <div className="flex items-center gap-2.5">
@@ -142,7 +163,14 @@ export function SatirMaliyetiDialog({ hedef, onClose }: { hedef: SatirMaliyetiHe
           </div>
         </DialogHeader>
 
-        {!hazir ? (
+        {hata ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl bg-rose-500/[0.06] px-4 py-6 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+            <p className="text-sm font-medium text-rose-300">Bilgiler yüklenemedi</p>
+            <Button variant="outline" size="sm" onClick={yenidenDene}>
+              Tekrar dene
+            </Button>
+          </div>
+        ) : !hazir ? (
           <div className="space-y-3 pt-1">
             <Skeleton className="h-9 w-full rounded-lg" />
             <Skeleton className="h-24 w-full rounded-lg" />
@@ -203,6 +231,7 @@ function SatirMaliyetiFormu({
       fetchJson(`/api/orders/satir-bagla?platform=${hedef.platform}&ad=${encodeURIComponent(hedef.satirAdi)}`),
     enabled: hedef.tumuneUygulanabilir && kapsam === "tum",
     staleTime: 30_000,
+    networkMode: "always",
   });
 
   const paketlemeAyari = useMemo(() => parsePackagingSettings(ayarlar), [ayarlar]);
@@ -535,7 +564,7 @@ function SatirMaliyetiFormu({
             className={cn("block text-lg font-bold tabular-nums", !biliniyor && "text-muted-foreground")}
           />
           {!biliniyor && (
-            <p className="text-[10px] text-amber-500">
+            <p className="text-[10px] text-[#A9AEFF]">
               {mod === "tutar" ? "Tutar gir" : "Filament ve ağırlık gir"}
             </p>
           )}
