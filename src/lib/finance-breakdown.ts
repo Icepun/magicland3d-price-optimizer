@@ -192,7 +192,8 @@ export function karDokumuTopla(
 
   const lines = (Object.keys(k) as KarDokumuAnahtari[])
     .map((key) => ({ key, label: KAR_DOKUMU_ETIKETLERI[key], amount: yuvarla(k[key]) }))
-    .filter((l) => Math.abs(l.amount) >= 0.01)
+    // "Diğer" kuruş düzeyinde yuvarlama farkı taşır — 1 TL'nin altı gösterilmez.
+    .filter((l) => Math.abs(l.amount) >= (l.key === "diger" ? 1 : 0.01))
     .sort((a, b) => b.amount - a.amount);
 
   return {

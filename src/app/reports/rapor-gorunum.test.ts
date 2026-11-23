@@ -129,6 +129,14 @@ describe("Raporlar görünüm mantığı", () => {
     expect(g.reduce((t, x) => t + x.pay, 0)).toBeCloseTo(1, 6);
   });
 
+  it("tema grafik rengi turuncuya düşmez, marka paletine çevrilir", () => {
+    const g = giderSatirlari(
+      { ...aylar[5], expensesByCategory: [{ category: "Vergi", amount: 100, count: 1 }, { category: "Abonelik", amount: 50, count: 1 }] },
+      [{ name: "Vergi", color: "var(--chart-3)" }, { name: "Abonelik", color: "var(--chart-5)" }]
+    );
+    expect(g.map((x) => x.renk)).toEqual(["#9B5CFF", "#C9D2F2"]);
+  });
+
   it("trend: süren ay işaretli, kısaltılmış ay adıyla", () => {
     const t = aylikTrend(aylar, simdi, TZ);
     expect(t.at(-1)).toMatchObject({ anahtar: "2026-11", etiket: "Kas", suruyor: true });

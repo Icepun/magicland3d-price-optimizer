@@ -102,6 +102,13 @@ describe("kâr dökümü (Kâr nereye gitti)", () => {
     expect(d.revenue - toplamKesinti(d)).toBeCloseTo(500, 2);
   });
 
+  it("1 TL altı 'diğer' (yuvarlama) gösterilmez", () => {
+    const d = karDokumuTopla("2026-11", [
+      { statusKind: "delivered", currency: "TRY", revenueKurus: 40000, profitKurus: 10000, sonuc: motor({ productAndPackagingCost: 139.94 }) },
+    ]);
+    expect(d.lines.some((l) => l.key === "diger")).toBe(false);
+  });
+
   it("satırlar büyükten küçüğe, sıfır olanlar yok", () => {
     const d = karDokumuTopla("2026-10", [
       { statusKind: "delivered", currency: "TRY", revenueKurus: 40000, profitKurus: 10000, sonuc: motor() },

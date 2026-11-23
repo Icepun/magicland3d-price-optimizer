@@ -223,6 +223,17 @@ export function platformSatirlari(ay: FinanceBucket): PlatformSatiri[] {
 /** Kategori rengi seçilmemişse sıradan — marka paletinden (turuncu YOK). */
 export const GIDER_PALETI = ["#7A7EFF", "#4F8CFF", "#9B5CFF", "#38BDF8", "#C9D2F2", "#22C55E", "#E879F9", "#64748B"];
 
+/**
+ * Kategorinin kayıtlı rengi. Tema grafik renkleri (`var(--chart-N)`) marka paletine çevrilir:
+ * temadaki 3. ve 5. grafik rengi turuncu/kırmızı tonunda.
+ */
+export function giderRengi(kayitli: string | null | undefined): string | null {
+  if (!kayitli) return null;
+  const m = /^var\(--chart-(\d+)\)$/.exec(kayitli.trim());
+  if (m) return GIDER_PALETI[(Number(m[1]) - 1 + GIDER_PALETI.length) % GIDER_PALETI.length];
+  return kayitli;
+}
+
 export interface GiderSatiri {
   kategori: string;
   tutar: number;
@@ -243,7 +254,7 @@ export function giderSatirlari(
     tutar: g.amount,
     adet: g.count,
     pay: toplam > 0 ? g.amount / toplam : 0,
-    renk: renk.get(g.category) || GIDER_PALETI[i % GIDER_PALETI.length],
+    renk: giderRengi(renk.get(g.category)) ?? GIDER_PALETI[i % GIDER_PALETI.length],
   }));
 }
 

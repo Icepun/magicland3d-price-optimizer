@@ -70,13 +70,40 @@ describe("açık siparişler", () => {
 
   it("sayfalama tavanda durur (bozuk yanıt sonsuz döngüye sokmaz)", async () => {
     let cagri = 0;
+    const hepsi = await hbTumSayfalar(async (offset) => {
+      cagri++;
+      return Array.from({ length: 100 }, (_, i) => ({ orderNumber: `X${offset + i}` }));
+    }, ["items"]);
+    expect(cagri).toBe(HB_SAYFA_TAVANI / 100);
+    expect(hepsi).toHaveLength(HB_SAYFA_TAVANI);
+  });
+
+  it("ofseti yok sayıp hep aynı sayfayı veren uçta ilk sayfadan sonra durur", async () => {
+    let cagri = 0;
     const dolu = Array.from({ length: 100 }, () => ({ orderNumber: "X" }));
     const hepsi = await hbTumSayfalar(async () => {
       cagri++;
       return dolu;
     }, ["items"]);
-    expect(cagri).toBe(HB_SAYFA_TAVANI / 100);
-    expect(hepsi).toHaveLength(HB_SAYFA_TAVANI);
+    expect(cagri).toBe(2);
+    expect(hepsi).toHaveLength(100);
+  });
+
+  it("HB sayfayı 50'de keser: ofset gelen kayıt kadar ilerler, totalCount'ta biter (ölçülen 118)", async () => {
+    const tumu = Array.from({ length: 118 }, (_, i) => ({ OrderNumber: String(4000 + i) }));
+    const istenen: Array<[number, number]> = [];
+    const hepsi = await hbTumSayfalar(async (offset, limit) => {
+      istenen.push([offset, limit]);
+      return { totalCount: 118, pageCount: 3, items: tumu.slice(offset, offset + Math.min(limit, 50)) };
+    }, ["items"]);
+    expect(hepsi.map((p) => p.OrderNumber)).toEqual(tumu.map((p) => p.OrderNumber));
+    expect(istenen.map(([o]) => o)).toEqual([0, 50, 100]);
+  });
+
+  it("toplam bilinmiyorsa eksik sayfa son sayfa sayılmaz, boş sayfaya kadar okunur", async () => {
+    const tumu = Array.from({ length: 70 }, (_, i) => ({ orderNumber: `K${i}` }));
+    const hepsi = await hbTumSayfalar(async (offset) => tumu.slice(offset, offset + 50), ["items"]);
+    expect(hepsi).toHaveLength(70);
   });
 });
 

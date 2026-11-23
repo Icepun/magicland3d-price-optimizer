@@ -101,24 +101,45 @@ const HB_ACIK_ANAHTARLARI = ["items", "orders", "data", "content", "result"] as 
 /** Paket ve iptal/iade yanıtlarında kayıt dizisinin olabileceği alanlar. */
 const HB_OZET_ANAHTARLARI = ["items", "data", "content", "result"] as const;
 
+/** Yanıttaki toplam kayıt sayısı (`totalCount`); yoksa null. */
+function hbSayfaToplami(sayfa: unknown): number | null {
+  if (!sayfa || typeof sayfa !== "object" || Array.isArray(sayfa)) return null;
+  const o = sayfa as Record<string, unknown>;
+  const t = Number(o.totalCount ?? o.TotalCount);
+  return o.totalCount == null && o.TotalCount == null ? null : Number.isFinite(t) && t >= 0 ? t : null;
+}
+
 /**
- * Bir listenin TÜM sayfaları: boş sayfada, eksik (son) sayfada ya da `null` yanıtta durur.
+ * Bir listenin TÜM sayfaları: boş sayfada, toplam kayda ulaşınca ya da `null` yanıtta durur.
  *
  * Açık siparişler eskiden tek sayfa okunuyordu. O uç sipariş değil KALEM döndürdüğü için
  * 100'den fazla kalem olunca fazlası sessizce düşüyordu.
+ *
+ * 🔴 SAYFA 50'DE KESİLİYOR (ölçüldü 23 Kas 2026): HB `limit=100` istense de en çok 50 kayıt
+ * veriyor (`totalCount 118, pageCount 3`). Eski kod "istenenden az geldi = son sayfa" sayıp
+ * duruyordu ve ofseti 100'er artırıyordu: teslim edilen 118 paketin yalnız ilk 50'si okundu,
+ * Panel son 30 günde 63 Hepsiburada siparişini (~₺31.600) hiç görmedi. Artık ofset GELEN kayıt
+ * kadar ilerler ve bitiş `totalCount`'a (yoksa boş sayfaya) göre verilir.
  */
 export async function hbTumSayfalar(
   sayfaGetir: (offset: number, limit: number) => Promise<unknown>,
   anahtarlar: readonly string[]
 ): Promise<Record<string, unknown>[]> {
   const hepsi: Record<string, unknown>[] = [];
-  for (let offset = 0; offset < HB_SAYFA_TAVANI; offset += HB_SAYFA_BOYU) {
+  let oncekiImza: string | null = null;
+  for (let offset = 0; hepsi.length < HB_SAYFA_TAVANI; ) {
     const sayfa = await sayfaGetir(offset, HB_SAYFA_BOYU);
     if (sayfa == null) break; // iptal/iade: uç yok ya da geçici hata → bu tur atla
     const dizi = hbArray(sayfa, anahtarlar);
     if (!dizi.length) break;
-    hepsi.push(...dizi);
-    if (dizi.length < HB_SAYFA_BOYU) break;
+    // Uç ofseti yok sayıp hep aynı sayfayı döndürürse dur (sonsuz döngü + çift kayıt olmasın).
+    const imza = `${dizi.length}|${JSON.stringify(dizi[0])}|${JSON.stringify(dizi[dizi.length - 1])}`;
+    if (imza === oncekiImza) break;
+    oncekiImza = imza;
+    hepsi.push(...dizi.slice(0, HB_SAYFA_TAVANI - hepsi.length));
+    const toplam = hbSayfaToplami(sayfa);
+    if (toplam != null && hepsi.length >= toplam) break;
+    offset += dizi.length;
   }
   return hepsi;
 }

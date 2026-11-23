@@ -83,7 +83,9 @@ function Govde({ selale }: { selale: Selale }) {
     <div className="space-y-1">
       {selale.satirlar.map((s, i) => {
         const { sol, genislik } = yer[i];
-        const eksi = s.tur === "kesinti" || s.tur === "notr";
+        // Eksi tutarlı kesinti (kayıtlı kâr motorun hesabından yüksek) kâra eklenmiş demektir.
+        const kazanc = s.tur === "kesinti" && s.amount < 0;
+        const eksi = (s.tur === "kesinti" || s.tur === "notr") && !kazanc;
         const vurgu = s.tur === "ara" || s.tur === "sonuc" || s.tur === "baslangic";
         const negatifSonuc = s.tur === "sonuc" && s.amount < 0;
         return (
@@ -118,12 +120,13 @@ function Govde({ selale }: { selale: Selale }) {
                   className={cn(
                     "text-xs tabular-nums",
                     eksi && "text-rose-200/90",
+                    kazanc && "text-emerald-300/90",
                     s.tur === "notr" && "text-slate-300/80",
                     vurgu && "text-sm font-semibold",
                     s.tur === "sonuc" && (negatifSonuc ? "text-rose-300" : "text-emerald-300")
                   )}
                 >
-                  {eksi || s.amount < 0 ? "−" : ""}
+                  {kazanc ? "+" : eksi || s.amount < 0 ? "−" : ""}
                   {formatCurrency(Math.abs(s.amount), { decimals: 0 })}
                 </span>
                 {s.oran != null && s.tur !== "baslangic" && (
