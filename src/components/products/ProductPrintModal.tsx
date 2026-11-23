@@ -114,7 +114,11 @@ export function ProductPrintModal({
       const { uyari } = await runPrintStream(fileId, { ...opts, printerId }, setProgress);
       toast.success("Baskı başlatıldı 🎉");
       if (uyari) toast.warning(uyari, { duration: 12000 });
-      setTimeout(() => qc.invalidateQueries({ queryKey: ["printers"] }), 800);
+      setTimeout(() => {
+        void qc.invalidateQueries({ queryKey: ["printers"] });
+        // Üretim Planı: yazıcı artık "boşta bekleyen" değil, kuyruk da yeni durumla kurulsun.
+        void qc.invalidateQueries({ queryKey: ["planner-queue"] });
+      }, 800);
       setTimeout(onClose, 750);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Baskı başlatılamadı");

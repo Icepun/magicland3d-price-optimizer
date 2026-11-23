@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
-import { DAY_MS, EXCLUDED_STATUS, SALES_WINDOW_DAYS, coverageStart, toInt } from "@/lib/planner-insights";
-import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
+import { EXCLUDED_STATUS, coverageStart, toInt } from "@/lib/planner-insights";
+import { dbEpochMs } from "@/lib/sqlite-date";
+import { kapsamBaslangiclari } from "@/lib/satis-hizi-veri";
+import { satisSayimBasi } from "@/core/satis-hizi";
 import { filamentTuketimi } from "@/lib/filament-tuketim";
 import { swr } from "@/lib/route-cache";
 
@@ -16,35 +18,30 @@ export async function GET() {
     await ensureRuntimeSchema();
     const now = Date.now();
     const toNum = (v: unknown) => (v == null ? null : Number(v));
+    // Pay ile payda aynı dönem (Üretim Planı ile ortak kural).
+    const kapsam = coverageStart(await kapsamBaslangiclari());
+    const sayimBasi = satisSayimBasi(now, kapsam);
     // Satış taraması tüm satış tablosunu okuyor: 10 dk önbellekte tutulur. Makara gramı ise her
     // istekte taze (az önce eklenen makara "elde kalan"a hemen yansısın).
     const [rows, spools] = await Promise.all([
-      swr("spools:tuketim-satis", 10 * 60_000, () => prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      swr("spools:tuketim-satis:v2", 10 * 60_000, () => prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
         // Satış satırları önce TAKMA ADSIZ alt sorguda süzülür: dbEpochMs kolon adını kendisi
         // tırnaklıyor, "i.orderedAt" gibi bir ad bozulurdu.
-        `SELECT 0 AS "kind", s."quantity" AS "quantity", c."filamentWeight" AS "filamentWeight",
-                c."ekFilamentlerJson" AS "ekFilamentlerJson", c."wasteRate" AS "wasteRate", NULL AS "orderedAt"
+        `SELECT s."quantity" AS "quantity", c."filamentWeight" AS "filamentWeight",
+                c."ekFilamentlerJson" AS "ekFilamentlerJson", c."wasteRate" AS "wasteRate"
            FROM (SELECT "productId", "quantity" FROM "OrderItemSnapshot"
                   WHERE "productId" IS NOT NULL
                     AND "statusKind" <> ?
                     AND ${dbEpochMs("orderedAt")} >= ?) s
-           LEFT JOIN "ProductCost" c ON c."productId" = s."productId"
-         UNION ALL
-         SELECT 1 AS "kind", NULL, NULL, NULL, NULL, MIN(${dbEpochMs("orderedAt")}) AS "orderedAt"
-           FROM "OrderItemSnapshot"
-          GROUP BY "platform"`,
+           LEFT JOIN "ProductCost" c ON c."productId" = s."productId"`,
         EXCLUDED_STATUS,
-        now - SALES_WINDOW_DAYS * DAY_MS
+        sayimBasi
       )),
       prisma.filamentSpool.findMany({ where: { isActive: true }, select: { totalGrams: true, remainingGrams: true } }),
     ]);
     const stokGram = spools.reduce((t, s) => t + Math.max(0, s.remainingGrams ?? s.totalGrams ?? 0), 0);
-    const kapsam = coverageStart(
-      rows.filter((r) => Number(r.kind) === 1).map((r) => parseDbDate(r.orderedAt)?.getTime() ?? 0)
-    );
     const sonuc = filamentTuketimi(
       rows
-        .filter((r) => Number(r.kind) === 0)
         .map((r) => ({
           quantity: toInt(r.quantity),
           filamentWeight: toNum(r.filamentWeight),

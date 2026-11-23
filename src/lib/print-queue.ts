@@ -6,16 +6,13 @@
  * `tsc --noEmit` YAKALAMAZ (yalnız üretim derlemesi görür).
  */
 
+import { satisHiziSatirlari } from "@/lib/satis-hizi-veri";
+import { familyMemberIds } from "@/core/printers/printer-family";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { dbEpochMs } from "@/lib/sqlite-date";
 import { toplamFilamentGrami } from "@/core/filament-karisimi";
 import {
-  DAY_MS,
-  EXCLUDED_STATUS,
-  SALES_WINDOW_DAYS,
-  coverageStart,
-  toInt,
+  deriveSalesInsights,
 } from "@/lib/planner-insights";
 import {
   VARSAYILAN_KAPSAM_GUN,
@@ -366,46 +363,17 @@ async function readTargetSetting(): Promise<number> {
 /**
  * Ürün başına GÜNLÜK satış adedi — talep modunun girdisi.
  *
- * Sayım Üretim Planı'nın satış hızı ucuyla AYNI kuralları izler, yoksa kuyruk ile liste farklı
- * hedefler hesaplar ve ekranda iki ayrı gerçek belirir:
- *   • iptal satırları sayılmaz,
- *   • tarih karşılaştırması `dbEpochMs()` ile normalize edilir (kolonda hem epoch-ms tamsayı
- *     hem ISO metin bulunabiliyor; düz `>= ?` bir grubu SESSİZCE elerdi — bkz. sqlite-date.ts),
- *   • bölen ÖLÇÜLEN gün: pencereye bölmek 21 günlük veriyi 90'a yayıp herkesi "satmıyor" yapardı.
+ * Okuma ve hesap Üretim Planı'nın satış hızı ucuyla AYNI (`satisHiziSatirlari` +
+ * `deriveSalesInsights`): manuel siparişler dahil, iptal hariç, pay ile payda aynı dönem.
+ * Eskiden burada ayrı bir SQL vardı ve manuel satışları görmüyordu (denetim, 23 Kas 2026).
  */
-async function readGunlukSatis(): Promise<Map<string, number>> {
+async function readGunlukSatis(): Promise<{ gunluk: Map<string, number>; hazir: boolean }> {
   const now = Date.now();
-  const since = now - SALES_WINDOW_DAYS * DAY_MS;
-  const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    `SELECT 0 AS "kind","productId", SUM("quantity") AS "adet", NULL AS "bas"
-       FROM "OrderItemSnapshot"
-      WHERE "productId" IS NOT NULL
-        AND "statusKind" <> ?
-        AND ${dbEpochMs("orderedAt")} >= ?
-      GROUP BY "productId"
-     UNION ALL
-     SELECT 1 AS "kind", NULL AS "productId", NULL AS "adet",
-            MIN(${dbEpochMs("orderedAt")}) AS "bas"
-       FROM "OrderItemSnapshot"
-      GROUP BY "platform"`,
-    EXCLUDED_STATUS,
-    since
-  );
-
-  const kapsamBasi = coverageStart(
-    rows.filter((r) => Number(r.kind) === 1).map((r) => toInt(r.bas))
-  );
-  const gecmisGun = kapsamBasi == null ? 0 : Math.floor((now - kapsamBasi) / DAY_MS);
-  const olculenGun = Math.max(1, Math.min(gecmisGun, SALES_WINDOW_DAYS));
-
-  const out = new Map<string, number>();
-  for (const row of rows) {
-    if (Number(row.kind) !== 0) continue;
-    const id = row.productId == null ? "" : String(row.productId);
-    if (!id) continue;
-    out.set(id, gunlukSatis(toInt(row.adet), olculenGun));
-  }
-  return out;
+  const { satirlar, kapsamBaslangicMs } = await satisHiziSatirlari(now);
+  const ozet = deriveSalesInsights(satirlar, kapsamBaslangicMs, now);
+  const gunluk = new Map<string, number>();
+  for (const item of ozet.items) gunluk.set(item.productId, gunlukSatis(item.soldInWindow, ozet.measuredDays));
+  return { gunluk, hazir: ozet.ready };
 }
 
 export async function computeQueue(
@@ -423,8 +391,13 @@ export async function computeQueue(
   // Talep modunda ürün başına hedef satış hızından çıkar → hız verisi gerekli.
   // Sabit modda okumaya GEREK YOK: uzak veritabanında her sorgu sıraya girdiği için
   // gereksiz bir tur, sayfanın açılışına doğrudan gecikme olarak yansırdı.
-  const gunlukSatisById =
-    ayar.mod === "talep" ? await readGunlukSatis() : new Map<string, number>();
+  let gunlukSatisById = new Map<string, number>();
+  if (ayar.mod === "talep") {
+    const hiz = await readGunlukSatis();
+    // Satış geçmişi henüz yetersizse talep hedefi uydurulmaz → sabit hedef (ekran da öyle söylüyor).
+    if (hiz.hazir) gunlukSatisById = hiz.gunluk;
+    else ayar.mod = "sabit";
+  }
 
   const [products, modelFiles, printers, snapshots, spools] = await Promise.all([
     prisma.product.findMany({
@@ -443,10 +416,10 @@ export async function computeQueue(
     prisma.productModelFile.findMany({
       select: { productId: true, printerConfigId: true },
     }),
+    // TÜM yazıcılar (kapalılar dahil): aile eşlemesi için. Kuyruk yalnız açık olanlara kurulur.
     prisma.printerConfig.findMany({
-      where: { enabled: true },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-      select: { id: true, name: true, brand: true, accent: true },
+      select: { id: true, name: true, brand: true, accent: true, type: true, model: true, enabled: true },
     }),
     prisma.printerSnapshot.findMany({
       select: {
@@ -464,6 +437,17 @@ export async function computeQueue(
     }),
   ]);
 
+  // YAZICI AİLESİ: aynı model yazıcılar dosyayı paylaşır (2× U1). Dosya bir üyeye bağlıysa ailenin
+  // açık her üyesi o ürünü basabilir — yoksa ikinci yazıcı "kuyruğu boş" kalıyor, kapalı üyeye
+  // bağlı dosya da "dosya yok" sayılıyordu (denetim, 23 Kas 2026).
+  const aile = printers.map((p) => ({ id: p.id, type: p.type ?? null, brand: p.brand ?? null, model: p.model ?? null }));
+  const aileDosyalari = modelFiles.flatMap((f) =>
+    familyMemberIds(aile, f.printerConfigId).map((printerConfigId) => ({ productId: f.productId, printerConfigId }))
+  );
+  const acikYazicilar = printers
+    .filter((p) => p.enabled)
+    .map((p) => ({ id: p.id, name: p.name, brand: p.brand, accent: p.accent }));
+
   return buildPrintQueue({
     products: products.map((p) => ({
       id: p.id,
@@ -475,8 +459,8 @@ export async function computeQueue(
       filamentWeight: p.cost ? toplamFilamentGrami(p.cost) || p.cost.filamentWeight : null,
       target: hedefStok(ayar, gunlukSatisById.get(p.id) ?? 0),
     })),
-    modelFiles,
-    printers,
+    modelFiles: aileDosyalari,
+    printers: acikYazicilar,
     snapshots: snapshots.map((s) => ({
       printerConfigId: s.printerConfigId,
       status: s.status,

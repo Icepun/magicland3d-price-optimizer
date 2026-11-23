@@ -1,5 +1,6 @@
 import { query } from "@/lib/turso";
 import { gunlukSatis } from "@/core/planner-target";
+import { manuelKalemAdetleri, satisSayimBasi } from "@/core/satis-hizi";
 
 /**
  * Ürün başına GÜNLÜK satış adedi — Üretim ekranındaki "satışa göre" hedefin girdisi.
@@ -13,6 +14,8 @@ import { gunlukSatis } from "@/core/planner-target";
 
 const GUN_MS = 86_400_000;
 const PENCERE_GUN = 90;
+/** Masaüstüyle aynı: bundan kısa geçmişle hız uydurulmaz (`MIN_HISTORY_DAYS`). */
+const ASGARI_GECMIS_GUN = 21;
 const IPTAL = "cancelled";
 
 /**
@@ -36,6 +39,8 @@ export interface SatisHizi {
   gunlukById: Map<string, number>;
   /** Hızın hesaplandığı gün sayısı. */
   olculenGun: number;
+  /** Yeterli satış geçmişi var mı? Yoksa "satışa göre" hedef uydurulmaz (sabit hedef). */
+  hazir: boolean;
 }
 
 /**
@@ -50,9 +55,16 @@ function kapsamBasi(baslangiclar: number[]): number | null {
 
 export async function getSatisHizi(): Promise<SatisHizi> {
   const simdi = Date.now();
-  const since = simdi - PENCERE_GUN * GUN_MS;
 
-  const [satislar, kapsam] = await Promise.all([
+  // Önce kapsam: sayım başı pencere ile kapsamın GEÇ olanı (pay ile payda aynı dönem — masaüstüyle
+  // ortak kural, `@core/satis-hizi`).
+  const kapsam = await query<{ bas: number }>(
+    `SELECT MIN(${epochMs("orderedAt")}) AS bas FROM OrderItemSnapshot GROUP BY platform`
+  );
+  const bas = kapsamBasi(kapsam.map((r) => Number(r.bas)));
+  const since = satisSayimBasi(simdi, bas);
+
+  const [satislar, manuel] = await Promise.all([
     query<{ productId: string; adet: number }>(
       `SELECT productId, SUM(quantity) AS adet
          FROM OrderItemSnapshot
@@ -60,20 +72,28 @@ export async function getSatisHizi(): Promise<SatisHizi> {
         GROUP BY productId`,
       [IPTAL, since]
     ),
-    query<{ bas: number }>(
-      `SELECT MIN(${epochMs("orderedAt")}) AS bas FROM OrderItemSnapshot GROUP BY platform`
+    // MANUEL siparişler de satıştır (masaüstü Üretim Planı da sayıyor).
+    query<{ itemsJson: string | null }>(
+      `SELECT itemsJson FROM ManualOrder WHERE statusKind <> ? AND ${epochMs("orderedAt")} >= ?`,
+      [IPTAL, since]
     ),
   ]);
 
-  const bas = kapsamBasi(kapsam.map((r) => Number(r.bas)));
   const gecmisGun = bas == null ? 0 : Math.floor((simdi - bas) / GUN_MS);
   const olculenGun = Math.max(1, Math.min(gecmisGun, PENCERE_GUN));
 
-  const gunlukById = new Map<string, number>();
+  const adetById = new Map<string, number>();
   for (const row of satislar) {
     const id = String(row.productId ?? "");
     if (!id) continue;
-    gunlukById.set(id, gunlukSatis(Number(row.adet ?? 0), olculenGun));
+    adetById.set(id, (adetById.get(id) ?? 0) + Number(row.adet ?? 0));
   }
-  return { gunlukById, olculenGun };
+  for (const m of manuel) {
+    for (const k of manuelKalemAdetleri(m.itemsJson)) {
+      adetById.set(k.productId, (adetById.get(k.productId) ?? 0) + k.quantity);
+    }
+  }
+  const gunlukById = new Map<string, number>();
+  for (const [id, adet] of adetById) gunlukById.set(id, gunlukSatis(adet, olculenGun));
+  return { gunlukById, olculenGun, hazir: gecmisGun >= ASGARI_GECMIS_GUN };
 }

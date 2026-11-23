@@ -3,10 +3,10 @@ import { FlashList } from "@shopify/flash-list";
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useMemo, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, StyleSheet, View } from "react-native";
 
-import { basilacakAdet, hedefStok, parseHedefModu, parseKapsamGun, type HedefAyari } from "@/core/planner-target";
+import { basilacakAdet, hedefStok, parseHedefModu, parseKapsamGun, parseTavan, type HedefAyari } from "@/core/planner-target";
 import { toplamFilamentGrami } from "@/core/filament-karisimi";
 import { Pill } from "@/components/kit/Chip";
 import { Count, EmptyState, ErrorState, FadeInView, Glass, IconButton, Screen, ShimmerList, SubHeader, Tint, Txt } from "@/components/kit";
@@ -36,35 +36,53 @@ const RowGap = () => <View style={{ height: space.sm }} />;
 export default function PlannerScreen() {
   const qc = useQueryClient();
   const { data, isLoading, refetch, error, isFetching } = useQuery({ queryKey: ["dashboard-data"], queryFn: getDashboardData });
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const ayarlar = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
+  const settings = ayarlar.data;
 
-  const savedTarget = Math.max(1, Math.floor(Number(settings?.plannerTargetStock) || 5));
+  // Masaüstüyle AYNI ayrıştırma (1–999); eskiden telefon 1000 kaydedebiliyor, masaüstü 999 gösteriyordu.
+  const savedTarget = parseTavan(settings?.plannerTargetStock);
   const [override, setOverride] = useState<number | null>(null);
   const t = override ?? savedTarget;
 
   const saveTarget = useMutation({
     mutationFn: (v: number) => updateSetting("plannerTargetStock", String(v)),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
+    // Kayıt düşerse ekran yeni değeri göstermeye devam etmesin.
+    onError: () => {
+      setOverride(null);
+      Alert.alert("Kaydedilemedi", "Bağlantını kontrol edip tekrar dene.");
+    },
   });
+  /** Art arda +/- dokunuşları TEK kayıtta birleşir (her dokunuş ayrı yazma yapıyordu). */
+  const kayitZamanlayici = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (kayitZamanlayici.current) clearTimeout(kayitZamanlayici.current);
+  }, []);
   const changeTarget = (delta: number) => {
-    const next = Math.max(1, t + delta);
+    const next = Math.min(999, Math.max(1, t + delta));
+    if (next === t) return;
     setOverride(next);
-    saveTarget.mutate(next);
+    if (kayitZamanlayici.current) clearTimeout(kayitZamanlayici.current);
+    kayitZamanlayici.current = setTimeout(() => saveTarget.mutate(next), 700);
   };
 
   const mod = parseHedefModu(settings?.plannerTargetMode);
   const kapsamGun = parseKapsamGun(settings?.plannerCoverDays);
 
-  const { data: hiz } = useQuery({
+  const satisHizi = useQuery({
     queryKey: ["sales-rate"],
     queryFn: getSatisHizi,
     enabled: mod === "talep",
     staleTime: 5 * 60_000,
   });
+  const hiz = satisHizi.data;
+  /** Hesapta kullanılan mod — masaüstüyle aynı: geçmiş yetersizse sabit hedef. */
+  const etkinMod = mod === "talep" && hiz?.hazir ? "talep" : "sabit";
+  const talepBekliyor = mod === "talep" && !hiz && !satisHizi.error;
 
   const plan = useMemo<PlanItem[]>(() => {
     if (!data) return [];
-    const ayar: HedefAyari = mod === "talep" && hiz ? { mod: "talep", tavan: t, kapsamGun } : { mod: "sabit", tavan: t, kapsamGun };
+    const ayar: HedefAyari = { mod: etkinMod, tavan: t, kapsamGun };
     return data
       .filter((p) => !p.madeToOrder)
       .map((p) => {
@@ -82,7 +100,7 @@ export default function PlannerScreen() {
       })
       .filter((p) => p.printQty > 0)
       .sort((a, b) => a.stock - b.stock);
-  }, [data, t, mod, kapsamGun, hiz]);
+  }, [data, t, etkinMod, kapsamGun, hiz]);
 
   const totalPrints = plan.reduce((s, p) => s + p.printQty, 0);
   const totalFilament = plan.reduce((s, p) => s + p.filament, 0);
@@ -91,7 +109,18 @@ export default function PlannerScreen() {
     <Screen
       scroll={false}
       padded={false}
-      header={<SubHeader title="Üretim planı" subtitle={mod === "talep" ? `satışa göre · ${kapsamGun} gün kapsam` : "sabit hedef"} />}
+      header={
+        <SubHeader
+          title="Üretim planı"
+          subtitle={
+            etkinMod === "talep"
+              ? `satışa göre · ${kapsamGun} gün kapsam`
+              : mod === "talep" && !talepBekliyor
+                ? "sabit hedef · satış geçmişi henüz kısa"
+                : "sabit hedef"
+          }
+        />
+      }
     >
       <View style={styles.pad}>
         <Glass style={styles.target}>
@@ -100,13 +129,13 @@ export default function PlannerScreen() {
               {mod === "talep" ? "EN FAZLA" : "HEDEF STOK"}
             </Txt>
             <Txt v="small" tone="dim">
-              Ürün başına bulunması gereken adet
+              {mod === "talep" ? "Hızlı satan üründe bile stok bunu geçmez" : "Ürün başına bulunması gereken adet"}
             </Txt>
           </View>
           <View style={styles.stepper}>
             <IconButton icon="minus" size={40} onPress={() => changeTarget(-1)} accessibilityLabel="Hedefi azalt" style={t <= 1 ? { opacity: 0.35 } : null} />
             <Count value={t} v="title" style={{ minWidth: 44, textAlign: "center" }} />
-            <IconButton icon="plus" size={40} accent onPress={() => changeTarget(1)} accessibilityLabel="Hedefi artır" />
+            <IconButton icon="plus" size={40} accent onPress={() => changeTarget(1)} accessibilityLabel="Hedefi artır" style={t >= 999 ? { opacity: 0.35 } : null} />
           </View>
         </Glass>
       </View>
@@ -115,12 +144,25 @@ export default function PlannerScreen() {
         <View style={styles.pad}>
           <ErrorState error={error} onRetry={() => void refetch()} retrying={isFetching} />
         </View>
-      ) : isLoading ? (
+      ) : ayarlar.error && !settings ? (
+        // Ayar okunamadan plan kurulmaz: sessizce "sabit, 5" ile hesaplıyordu.
+        <View style={styles.pad}>
+          <ErrorState error={ayarlar.error} onRetry={() => void ayarlar.refetch()} retrying={ayarlar.isFetching} />
+        </View>
+      ) : satisHizi.error && mod === "talep" && !hiz ? (
+        <View style={styles.pad}>
+          <ErrorState error={satisHizi.error} onRetry={() => void satisHizi.refetch()} retrying={satisHizi.isFetching} />
+        </View>
+      ) : isLoading || ayarlar.isLoading || talepBekliyor ? (
         <View style={styles.pad}>
           <ShimmerList count={5} height={76} />
         </View>
       ) : plan.length === 0 ? (
-        <EmptyState icon="checkmark.seal.fill" title="Üretim gerekmiyor" hint="Tüm stoklar hedefin üstünde." />
+        <EmptyState
+          icon="checkmark.seal.fill"
+          title="Üretim gerekmiyor"
+          hint={etkinMod === "talep" ? "Satış hızına göre stoklar yeterli." : "Tüm stoklar hedefin üstünde."}
+        />
       ) : (
         <FlashList
           data={plan}

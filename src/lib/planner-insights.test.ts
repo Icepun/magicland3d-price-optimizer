@@ -77,9 +77,10 @@ describe("yetersiz geçmişte rakam uydurulmaz", () => {
     // 30 günlük geçmiş, ürün 25 gün önce satmış → 30 günlük eşiğin altında, satmıyor DEĞİL.
     const yeni = deriveSalesInsights([satir("a", 25)], gunOnce(30), SIMDI);
     expect(yeni.items[0].deadStock).toBe(false);
-    // Aynı geçmiş, ürün 40 gün önce satmış → eşiği geçti.
+    // Aynı geçmiş, ürün 40 gün önce satmış → ölçülen dönemin (kapsam) DIŞINDA: sayılmaz, listede
+    // hiç görünmez. Ekran listede olmayan ürünü "satmıyor" sayar (pay ile payda aynı dönem, 23 Kas 2026).
     const eski = deriveSalesInsights([satir("a", 40)], gunOnce(30), SIMDI);
-    expect(eski.items[0].deadStock).toBe(true);
+    expect(eski.items.find((i) => i.productId === "a")).toBeUndefined();
   });
 });
 

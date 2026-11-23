@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
 
     // v3: komisyonu bilinmeyen ilanda kâr yok (null) — eski disk kopyası şişkin kârı göstermesin.
     // v4: reklam payı düşülüyor — reklamsız hesaplanmış eski disk kopyası kullanılmasın.
-    const anahtar = `products:v4:${url.searchParams.toString()}`;
+    const anahtar = `products:v5:${url.searchParams.toString()}`;
     const TTL = 2 * 60_000;
     // Gövdenin HESAPLANDIĞI an: istemcinin stok tazelemesi buradan devam eder. Önbellekte kayıt
     // varsa swr onu döndürür (bayat olsa da) → an kaydınki; yoksa şimdi hesaplanır.
@@ -595,6 +595,8 @@ async function computeProducts(urlString: string) {
             packagingCost: product.cost.packagingCost,
             // Planlayıcı kullanıyor — çoklu filamentte ana + ek filamentlerin toplamı.
             filamentWeight: toplamFilamentGrami(product.cost) || product.cost.filamentWeight,
+            // Üretim Planı: "süre girilmemiş" ile "kâr bilinmiyor"u ayırır.
+            printTimeHours: product.cost.printTimeHours ?? null,
           }
         : null,
       // Ham `_count` yerine tek okunur alan: grubun kaç varyantı var (süzülenler dahil).

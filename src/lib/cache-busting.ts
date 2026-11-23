@@ -29,6 +29,7 @@ export function bustProductCaches(): void {
     "order-name-index:", // yeni/silinen ürün veya değişen ad
     "notifications-inventory:",
     "models:", // kütüphane TÜM ürünleri listeliyor: yeni/silinen/gizlenen ürün, ad, varyant grubu
+    "planner-queue:", // yazıcı kuyruğu ürün/stok listesinden kuruluyor
   ]);
   invalidateOrdersCache(); // fiyat + eşleşme değişimi kâr gövdesini etkiler
 }
@@ -47,7 +48,8 @@ export function bustProductCaches(): void {
  * yeniden kurulmamalı (bkz. dosya başlığındaki "dar ve amaca özel" kuralı).
  */
 export function bustProfitInputCaches(): void {
-  bustCaches(["products:", "dashboard:"]);
+  // Kuyruk da düşer: baskı süresi/gramaj maliyet kaydıyla değişiyor (eski süre görünmesin).
+  bustCaches(["products:", "dashboard:", "planner-queue:"]);
   invalidateOrdersCache();
   // Düşen Panel ve Ürünler gövdeleri arkada yeniden hesaplanır — kayıttan sonraki ilk ziyaret soğuk
   // hesabı (Panel ~4 sn, Ürünler ~2,6 sn) beklemesin (denetim, 23 Kas 2026).
@@ -209,6 +211,8 @@ export function modelListesiniBayatla(): void {
 
 export function bustModelCaches(): void {
   bustCache("models:");
+  // Dosya yüklendi/silindi ya da yazıcı değişti → kuyruğun "dosya yok" / yazıcı ataması tazelensin.
+  bustCache("planner-queue:");
   // Yazıcı kartının "basılan dosya → kütüphanedeki model" haritası (status-cache). Eskiden
   // geçersiz kılınmıyor, 30 sn'de bir tablonun tamamı yeniden okunuyordu; artık yalnız burada
   // düşüyor. Ağır modülü içe aktarmamak için adla düşürülür.

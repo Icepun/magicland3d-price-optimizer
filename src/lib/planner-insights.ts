@@ -1,3 +1,4 @@
+import { satisSayimBasi } from "@/core/satis-hizi";
 /**
  * Ürün bazlı SATIŞ HIZI türetmesi (Üretim Planı için) — SAF mantık.
  *
@@ -100,7 +101,8 @@ export function deriveSalesInsights(
 ): PlannerInsightsPayload {
   const historyDays = coverageStartMs == null ? 0 : fullDaysBetween(coverageStartMs, nowMs);
   const recentSince = nowMs - RECENT_WINDOW_DAYS * DAY_MS;
-  const windowSince = nowMs - SALES_WINDOW_DAYS * DAY_MS;
+  // Pay ile payda AYNI dönemi ölçer: kapsam penceresinden kısaysa sayım da kapsamdan başlar.
+  const windowSince = satisSayimBasi(nowMs, coverageStartMs);
 
   const acc = new Map<
     string,

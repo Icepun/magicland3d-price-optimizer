@@ -1,4 +1,5 @@
 import { monthKey } from "./monthly-finance";
+import { satisSayimBasi } from "@/core/satis-hizi";
 import { DAY_MS, MIN_HISTORY_DAYS, SALES_WINDOW_DAYS } from "./planner-insights";
 
 /**
@@ -50,7 +51,8 @@ export function urunSatisOzeti(
   });
   const aylar = new Map(anahtarlar.map((a) => [a, { ay: a, etiket: AYLAR[Number(a.slice(5)) - 1], adet: {} as Record<string, number>, toplam: 0 }]));
 
-  const pencereBasi = nowMs - SALES_WINDOW_DAYS * DAY_MS;
+  // Hız penceresi Üretim Planı'yla aynı: pay ile payda aynı dönem (kapsam kısaysa kapsamdan).
+  const pencereBasi = satisSayimBasi(nowMs, kapsamBaslangicMs);
   let son90Adet = 0;
   for (const s of satirlar) {
     if (!Number.isFinite(s.orderedAt) || s.quantity <= 0) continue;

@@ -5,7 +5,7 @@ import { jsonError } from "@/lib/api-error";
 import { DAY_MS, EXCLUDED_STATUS, coverageStart, toInt } from "@/lib/planner-insights";
 import { dbEpochMs, parseDbDate } from "@/lib/sqlite-date";
 import { urunSatisOzeti } from "@/lib/urun-satis";
-import { swr } from "@/lib/route-cache";
+import { kapsamBaslangiclari } from "@/lib/satis-hizi-veri";
 import { parseManualOrderItems } from "@/lib/manual-orders";
 
 /**
@@ -14,21 +14,6 @@ import { parseManualOrderItems } from "@/lib/manual-orders";
  * tarih `dbEpochMs` ile normalize, kapsam başlangıcı aynı sorguda (TEK gidiş-dönüş).
  */
 const PENCERE_GUN = 200; // 6 ay + pay
-
-/**
- * Kapsam başlangıcı (platform başına ilk kayıt) TÜM tabloyu tarar ve ürüne bağlı değildir →
- * 10 dk önbellekli. Eskiden her ürün detayı açılışında koşuyordu; Turso soğukken 5 sn sürdüğü
- * ölçüldü (23 Kas 2026 tıkanması). Manuel siparişler kapsama GİRMEZ: kapsam kanalların en geç
- * başlayanıdır, sonradan başlayan manuel satış satış hızının penceresini yanlışlıkla daraltırdı.
- */
-function kapsamBaslangiclari(): Promise<number[]> {
-  return swr("urun-satis:kapsam:v1", 10 * 60_000, async () => {
-    const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT MIN(${dbEpochMs("orderedAt")}) AS "orderedAt" FROM "OrderItemSnapshot" GROUP BY "platform"`
-    );
-    return rows.map((r) => parseDbDate(r.orderedAt)?.getTime() ?? 0).filter((t) => t > 0);
-  });
-}
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
