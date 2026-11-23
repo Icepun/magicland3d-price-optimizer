@@ -70,7 +70,7 @@ const TUR_IKON: Record<BildirimTuru, ComponentType<{ className?: string }>> = {
 const TUR_RENK: Record<BildirimTuru, string> = {
   siparis: "text-emerald-500",
   "baski-bitti": "text-sky-500",
-  "baski-sorun": "text-amber-500",
+  "baski-sorun": "text-[#C9D2F2]",
   stok: "text-rose-500",
   filament: "text-violet-500",
   kargo: "text-sky-400",
@@ -307,7 +307,7 @@ function Telefonlar() {
   }
   if (isError) {
     return (
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm animate-in fade-in duration-300">
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06] p-3 text-sm animate-in fade-in duration-300">
         <span>Telefon listesi alınamadı.</span>
         <Button size="sm" variant="outline" onClick={() => void refetch()}>
           Tekrar dene
@@ -317,9 +317,9 @@ function Telefonlar() {
   }
   if (telefonlar.length === 0) {
     return (
-      <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 animate-in fade-in slide-in-from-bottom-1 duration-400">
+      <div className="rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06] p-3 animate-in fade-in slide-in-from-bottom-1 duration-400">
         <p className="text-sm font-medium flex items-center gap-2">
-          <Smartphone className="h-4 w-4 text-amber-500" />
+          <Smartphone className="h-4 w-4 text-[#C9D2F2]" />
           Kayıtlı telefon yok
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
@@ -473,7 +473,7 @@ function TelefonSatiri({
   );
 
   const altYazi = eski ? (
-    <span className="text-amber-500">Uzun süredir açılmadı · {formatRelativeTime(telefon.sonAcilis)}</span>
+    <span className="text-[#C9D2F2]">Uzun süredir açılmadı · {formatRelativeTime(telefon.sonAcilis)}</span>
   ) : telefon.sonAcilis ? (
     <>Son açılış {formatRelativeTime(telefon.sonAcilis)}</>
   ) : (
@@ -585,13 +585,13 @@ function SonucKutusu({ sonuc }: { sonuc: TestSonucu }) {
     <div
       className={cn(
         "flex items-start gap-2 rounded-md border px-2.5 py-2 text-xs animate-in fade-in zoom-in-95 duration-300",
-        basarili ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/40 bg-amber-500/5"
+        basarili ? "border-emerald-500/30 bg-emerald-500/5" : "border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06]"
       )}
     >
       {basarili ? (
         <Check className="h-3.5 w-3.5 shrink-0 mt-px text-emerald-500" />
       ) : (
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px text-amber-500" />
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px text-[#C9D2F2]" />
       )}
       <div>
         <p className="font-medium">{sonuc.mesaj}</p>

@@ -18,16 +18,24 @@ export interface BaglantiDurumu {
 
 export function baglantiDurumu(d: {
   bagli: boolean | undefined;
-  siparis: { ok?: boolean; count?: number } | null | undefined;
+  siparis: { ok?: boolean; count?: number; needsAdminToken?: boolean; notConfigured?: boolean } | null | undefined;
   sonEsitlemeIso: string | null | undefined;
   nowMs: number;
 }): BaglantiDurumu {
   if (!d.bagli) return { ton: "kapali", bagli: false, siparisMetni: null, esitlemeGun: null };
   const t = d.sonEsitlemeIso ? Date.parse(d.sonEsitlemeIso) : NaN;
   const esitlemeGun = Number.isFinite(t) ? Math.max(0, Math.floor((d.nowMs - t) / 86_400_000)) : null;
-  const siparisHata = d.siparis != null && d.siparis.ok === false;
+  // Sipariş bağlantısı hiç KURULMAMIŞSA (Shopify'da isteğe bağlı) bu hata değil, bilgi notu.
+  const kurulmadi = d.siparis != null && (d.siparis.needsAdminToken === true || d.siparis.notConfigured === true);
+  const siparisHata = d.siparis != null && d.siparis.ok === false && !kurulmadi;
   const siparisMetni =
-    d.siparis == null ? null : siparisHata ? "Siparişler alınamadı" : `${d.siparis.count ?? 0} sipariş çekildi`;
+    d.siparis == null
+      ? null
+      : kurulmadi
+        ? "Sipariş bağlantısı kurulmadı"
+        : siparisHata
+          ? "Siparişler alınamadı"
+          : `${d.siparis.count ?? 0} sipariş çekildi`;
   const ton: BaglantiTonu = siparisHata
     ? "hata"
     : esitlemeGun == null || esitlemeGun > ESITLEME_BAYAT_GUN

@@ -224,7 +224,9 @@ export async function POST(req: NextRequest) {
     else if (input.mode === "add-new") result = await addNew();
     else result = { ...(await addNew()), ...(await refreshPrices()) };
 
-    await prisma.appSetting.upsert({
+    // Yalnız fiyatlar GERÇEKTEN kontrol edildiyse "eşitlendi" denir: boş yanıt ya da yalnız liste
+    // tazeleme kartta yeşil "bugün eşitlendi" yazdırıyordu (denetim, 23 Kas 2026).
+    if (Number((result as Record<string, unknown>).checked ?? 0) > 0) await prisma.appSetting.upsert({
       where: { key: "hepsiburadaLastSyncAt" },
       create: { key: "hepsiburadaLastSyncAt", value: new Date().toISOString() },
       update: { value: new Date().toISOString() },

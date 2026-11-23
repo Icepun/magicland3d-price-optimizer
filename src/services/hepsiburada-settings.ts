@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
 import type { HepsiburadaCredentials, HbEnvironment } from "./hepsiburada-client";
 
@@ -29,19 +29,13 @@ function getSettingsFilePath() {
 }
 
 async function readStoredSettings(): Promise<StoredHepsiburadaSettings> {
-  try {
-    const raw = await fs.readFile(getSettingsFilePath(), "utf8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed ? parsed : {};
-  } catch {
-    return {};
-  }
+  // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
+  return ayarDosyasiOku<StoredHepsiburadaSettings>(getSettingsFilePath());
 }
 
 async function writeStoredSettings(settings: StoredHepsiburadaSettings) {
-  const filePath = getSettingsFilePath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(settings, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
+  await ayarDosyasiYaz(getSettingsFilePath(), settings);
 }
 
 /** secret key: yeni alan → yoksa eski `password`. developerUsername: yeni düz alan → yoksa eski şifreli `username`. */

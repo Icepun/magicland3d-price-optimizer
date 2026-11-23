@@ -273,7 +273,8 @@ export async function POST(req: NextRequest) {
       result = { ...a, ...r };
     }
 
-    await stampSync();
+    // Yalnız fiyatlar gerçekten kontrol edildiyse "eşitlendi" zamanı yazılır.
+    if (Number((result as Record<string, unknown>).checked ?? 0) > 0) await stampSync();
     // Senkron DB'yi değiştirdi → ürün/panel önbellekleri ve sipariş kârı tazelensin.
     // (Bu olmadan "Yenile" bitiyor ama liste 2 dakika ESKİ fiyatı gösteriyordu.)
     bustProductCaches();

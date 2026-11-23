@@ -7,6 +7,7 @@ import { bustCache, swr } from "@/lib/route-cache";
 import { invalidateR2Config } from "@/lib/r2";
 import { batchWrite } from "@/lib/libsql-batch";
 import { jsonError } from "@/lib/api-error";
+import { isSecretSettingKey } from "@/lib/backup-payload";
 
 /** Maliyet girdisi olan sayısal ayarlar — negatif ya da sayı olmayan değer KAYDEDİLMEZ. */
 const SAYISAL_MALIYET_ANAHTARLARI = new Set([
@@ -16,14 +17,21 @@ const SAYISAL_MALIYET_ANAHTARLARI = new Set([
 ]);
 
 export async function GET() {
-  const data = await swr("settings:v1", 60_000, computeSettings);
+  const data = await swr("settings:v2", 60_000, computeSettings);
   return NextResponse.json(data);
 }
 
+/**
+ * GİZLİ ANAHTARLAR (R2 erişim/gizli anahtar vb.) ÇIKARILIR: bu uç her sayfanın ayar sorgusu;
+ * eskiden değerler tarayıcıya ve diskteki önbellek dosyasına düz metin gidiyordu
+ * (denetim, 23 Kas 2026). Kayıtlı olup olmadıkları `/api/storage/r2-durum` ile sorulur.
+ */
 async function computeSettings() {
   const settings = await prisma.appSetting.findMany();
   return Object.fromEntries(
-    settings.map((s: { key: string; value: string }) => [s.key, s.value])
+    settings
+      .filter((s: { key: string }) => !isSecretSettingKey(s.key))
+      .map((s: { key: string; value: string }) => [s.key, s.value])
   );
 }
 
@@ -35,13 +43,16 @@ export async function POST(req: NextRequest) {
   // KDV oranı TÜM kâr hesabına giriyor: bozuk bir değer sessizce kaydedilirse hesap
   // varsayılana düşer ve rakamlar aylarca yanlış kalabilir. Kaynakta reddet.
   if (body.vatRate !== undefined) {
-    const rate = Number(body.vatRate);
+    // Boş/null KDV eskiden saklanıyor ya da anahtar siliniyordu → hesap sessizce %20'ye düşüyordu.
+    const ham = body.vatRate == null ? "" : String(body.vatRate).trim().replace(",", ".");
+    const rate = ham ? Number(ham) : NaN;
     if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
       return NextResponse.json(
         { error: "KDV oranı 0 ile 100 arasında bir sayı olmalı." },
         { status: 400 }
       );
     }
+    body.vatRate = String(rate);
   }
 
   // Shopify sabit komisyonu TÜM Shopify siparişlerine giriyor: boş "" kaydı %0 sayılıyordu.
@@ -59,11 +70,18 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(n) || n < 0) {
       return NextResponse.json({ error: "Maliyet alanları sıfır ya da pozitif bir sayı olmalı." }, { status: 400 });
     }
+    // Doğrulanan SAYI yazılır: "4,6" ham saklanınca hesap tarafında Number("4,6") = NaN oluyordu.
+    body[key] = String(n);
   }
 
   // Yalnız DEĞİŞEN anahtarlar yazılır, hepsi TEK atomik istekte. Eskiden anahtar başına ayrı yazma
   // sırayla koşuyordu (~2 sn) ve biri düşerse ayarların bir kısmı yeni bir kısmı eski kalıyor,
   // önbellek de hiç düşmüyordu (denetim, 23 Kas 2026).
+  // Boş gönderilen GİZLİ değer "değiştirme" demektir (form kayıtlı anahtarı göstermiyor):
+  // kayıtlı anahtar silinmesin.
+  for (const [key, value] of Object.entries(body)) {
+    if (isSecretSettingKey(key) && (value == null || !String(value).trim())) delete body[key];
+  }
   const anahtarlar = Object.keys(body);
   let degisen: [string, string][] = Object.entries(body)
     .filter(([, v]) => v !== null)

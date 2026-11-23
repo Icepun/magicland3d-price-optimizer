@@ -66,10 +66,10 @@ export function ImageMobileFixCard() {
   if (localImages.length === 0) return null; // hepsi uyumlu → kartı gösterme
 
   return (
-    <Card className="border-amber-500/30 bg-amber-500/5">
+    <Card className="rounded-2xl border-0 bg-[#7A7EFF]/[0.06] ring-1 ring-[#7A7EFF]/30 animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
-          <Smartphone className="h-4 w-4 text-amber-500" /> Mobil görsel uyumu
+          <Smartphone className="h-4 w-4 text-[#A9AEFF]" /> Mobil görsel uyumu
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">

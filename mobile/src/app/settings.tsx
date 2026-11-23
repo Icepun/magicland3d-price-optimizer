@@ -6,6 +6,7 @@ import { StyleSheet, View } from "react-native";
 import { FadeInView, Screen, SubHeader, Tint, Txt } from "@/components/kit";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency } from "@/lib/format";
+import { resolveVatRate } from "@/core/vat";
 import { color, radius, space } from "@/theme/tokens";
 
 /**
@@ -30,8 +31,10 @@ function tl(deger: string | null | undefined): string {
 export default function SettingsScreen() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
+  const vat = resolveVatRate(settings);
   const rows: { label: string; value: string }[] = [
-    { label: "KDV oranı", value: `%${settings?.vatRate ?? "—"}` },
+    // Hesapla AYNI kural: geçersiz/boş oran %20 sayılır — kart da bunu söylesin.
+    { label: "KDV oranı", value: settings ? (vat.invalid ? `%${vat.rate} (okunamadı)` : `%${vat.rate}`) : "—" },
     { label: "Shopify komisyon", value: `%${settings?.shopifyCommissionRate ?? "3.2"}` },
     { label: "İndirim payı", value: `%${settings?.discountBuffer ?? "0"}` },
     {

@@ -69,7 +69,7 @@ export function BackupCard() {
           {healthy ? (
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
           ) : (
-            <ShieldAlert className="h-4 w-4 text-amber-500" />
+            <ShieldAlert className="h-4 w-4 text-[#C9D2F2]" />
           )}
           Otomatik Yedek
         </CardTitle>
@@ -78,7 +78,7 @@ export function BackupCard() {
         {isLoading ? (
           <Skeleton className="h-16 w-full rounded-lg" />
         ) : !data?.enabled ? (
-          <p className="text-sm text-amber-400">
+          <p className="text-sm text-[#C9D2F2]">
             Bu bilgisayarda otomatik yedek kapalı. Aşağıdan elle yedek alabilirsin.
           </p>
         ) : (
@@ -87,7 +87,7 @@ export function BackupCard() {
               "rounded-lg border p-3 animate-in fade-in slide-in-from-bottom-1 duration-400",
               healthy
                 ? "border-emerald-500/30 bg-emerald-500/5"
-                : "border-amber-500/40 bg-amber-500/5"
+                : "border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06]"
             )}
           >
             <p className="text-sm font-medium">
@@ -103,7 +103,7 @@ export function BackupCard() {
               </p>
             )}
             {stale && (
-              <p className="text-xs text-amber-400 mt-1.5">
+              <p className="text-xs text-[#C9D2F2] mt-1.5">
                 İki günden uzun süredir yedek alınmadı.
               </p>
             )}

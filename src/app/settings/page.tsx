@@ -6,11 +6,11 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { useForm } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet, AlertTriangle } from "lucide-react";
+import { Download, Upload, Database, Cloud, CloudOff, FileSpreadsheet, AlertTriangle, Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { ImageMobileFixCard } from "@/components/settings/ImageMobileFixCard";
@@ -21,8 +21,12 @@ import { fetchJson } from "@/lib/fetch-json";
 import { DEFAULT_VAT_RATE, resolveVatRate } from "@/core/vat";
 import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 
+/** Boş KDV alanı %0 DEĞİL (kârlar ~%16,7 şişerdi) — "gerekli" hatası. */
 const Schema = z.object({
-  vatRate: z.coerce.number().min(0).max(100).default(20),
+  vatRate: z.preprocess(
+    (v) => (v === "" || v == null ? undefined : typeof v === "string" ? v.replace(",", ".") : v),
+    z.coerce.number({ message: "KDV oranı gir" }).min(0, "0 ile 100 arasında olmalı").max(100, "0 ile 100 arasında olmalı")
+  ),
 });
 
 type FormData = z.infer<typeof Schema>;
@@ -30,21 +34,29 @@ type FormData = z.infer<typeof Schema>;
 export default function SettingsPage() {
   const queryClient = useQueryClient();
 
-  const { data: settings } = useQuery<Record<string, string>>({
+  const {
+    data: settings,
+    isLoading: ayarYukleniyor,
+    isError: ayarHatasi,
+    isFetching: ayarCekiliyor,
+    refetch: ayarlariYenidenCek,
+  } = useQuery<Record<string, string>>({
     queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
 
   const form = useForm<FormData>({
-    resolver: zodResolver(Schema),
+    resolver: zodResolver(Schema) as unknown as Resolver<FormData>,
     defaultValues: { vatRate: 20 },
   });
 
   // Kayıtlı oran okunamıyorsa hesap varsayılana düşer; kullanıcı bunu BİLMELİ.
   const vat = resolveVatRate(settings);
 
+  // Kayıtlı oran değişince forma yansır — kullanıcı yazıyorsa (kirli) ezilmez (eskiden R2 kaydı
+  // ayarları tazeleyince yazılmış KDV kayboluyordu).
   useEffect(() => {
-    if (settings) {
+    if (settings && !form.formState.isDirty) {
       form.reset({ vatRate: vat.rate });
     }
   }, [settings, form, vat.rate]);
@@ -59,14 +71,23 @@ export default function SettingsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-settings"] });
       clearPricingQueryCache(queryClient);
-      toast.success("Ayarlar kaydedildi — tüm ürünlere uygulandı");
+      toast.success("KDV oranı kaydedildi");
+      form.reset(form.getValues());
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Kaydedilemedi"),
   });
 
   return (
     <div className="p-6 space-y-6 mx-auto w-full max-w-3xl">
-      <h1 className="text-2xl font-bold">Ayarlar</h1>
+      <header className="flex min-w-0 items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+          <SettingsIcon className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Ayarlar</h1>
+          <p className="text-xs text-muted-foreground">Vergi, bildirimler, bulut depolama ve yedekler.</p>
+        </div>
+      </header>
 
       <ImageMobileFixCard />
 
@@ -86,22 +107,33 @@ export default function SettingsPage() {
                 step="1"
                 min="0"
                 max="100"
+                disabled={!settings}
                 {...form.register("vatRate")}
               />
+              {form.formState.errors.vatRate?.message && (
+                <p className="mt-1 text-xs font-medium text-rose-300">{String(form.formState.errors.vatRate.message)}</p>
+              )}
+              {ayarHatasi && !settings && (
+                <p className="mt-2 flex items-center gap-2 text-xs text-rose-300">
+                  Ayarlar alınamadı.
+                  <button type="button" className="font-medium text-[#A9AEFF] hover:underline disabled:opacity-50" disabled={ayarCekiliyor} onClick={() => void ayarlariYenidenCek()}>
+                    Tekrar dene
+                  </button>
+                </p>
+              )}
               {settings && vat.invalid && (
-                <p className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 text-xs text-amber-400 animate-in fade-in slide-in-from-bottom-1 duration-400">
+                <p className="mt-2 flex items-start gap-2 rounded-xl bg-[#7A7EFF]/[0.07] p-2.5 text-xs text-[#E4E7FF] ring-1 ring-[#7A7EFF]/30 animate-in fade-in slide-in-from-bottom-1 duration-400">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                   KDV oranı okunamadı, geçici olarak %{DEFAULT_VAT_RATE} kullanılıyor. Doğru
                   oranı girip kaydet.
                 </p>
               )}
               <p className="text-xs text-muted-foreground mt-1">
-                Satış fiyatları KDV dahil kabul edilir; net kâr KDV hariç tutardan hesaplanır.
-                Türkiye&apos;de standart oran %20. Sıfır girersen KDV uygulanmaz.
+                Satış fiyatları KDV dahil kabul edilir. Standart oran %20. Geçmiş siparişlerin kârı değişmez.
               </p>
             </div>
 
-            <Button type="submit" disabled={saveMutation.isPending}>
+            <Button type="submit" disabled={saveMutation.isPending || !settings || ayarYukleniyor || !form.formState.isDirty}>
               {saveMutation.isPending ? "Kaydediliyor..." : "Kaydet"}
             </Button>
           </form>
@@ -219,7 +251,18 @@ function DataManagementCard() {
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) handleImport(file);
+              if (!file) return;
+              // Geri yükleme mevcut ürün, maliyet, ayar ve sipariş finansını yedekteki değerlerle EZER.
+              const tarih = new Date(file.lastModified).toLocaleString("tr-TR");
+              if (
+                window.confirm(
+                  `"${file.name}" (${tarih}) yedeği geri yüklensin mi?\n\nMevcut ürünler, maliyetler, ayarlar ve sipariş kârları bu yedekteki değerlerle değiştirilir. Önce "Yedeği İndir" ile bugünkü hâlini saklaman önerilir.`
+                )
+              ) {
+                handleImport(file);
+              } else if (fileRef.current) {
+                fileRef.current.value = "";
+              }
             }}
           />
         </div>

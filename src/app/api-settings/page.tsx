@@ -108,14 +108,20 @@ function TrendyolTab() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["trendyol-settings"] });
+      qc.invalidateQueries({ queryKey: ["integrations-status"] });
+      qc.invalidateQueries({ queryKey: ["orders"] });
       toast.success("Trendyol ayarları kaydedildi");
+      form.reset(form.getValues());
     },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const test = useMutation({
-    mutationFn: () => fetchJson("/api/trendyol/test", { method: "POST" }),
-    onSuccess: () => toast.success("Trendyol bağlantısı başarılı"),
+    mutationFn: () => fetchJson<{ fiyatOkunuyor?: boolean }>("/api/trendyol/test", { method: "POST" }),
+    onSuccess: (r) =>
+      r?.fiyatOkunuyor === false
+        ? toast.warning("Bağlantı kuruldu ama fiyatlar okunamadı")
+        : toast.success("Trendyol bağlantısı başarılı"),
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -138,6 +144,7 @@ function TrendyolTab() {
       }
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -185,9 +192,15 @@ function TrendyolTab() {
       </Card>
 
       <div className="grid grid-cols-2 gap-3">
-        <Button variant="outline" disabled={test.isPending} onClick={() => test.mutate()}>
+        {/* Test KAYITLI bilgiyi dener: kaydedilmemiş değişiklik varken "başarılı" yanıltıcı olurdu. */}
+        <Button
+          variant="outline"
+          disabled={test.isPending || form.formState.isDirty}
+          title={form.formState.isDirty ? "Önce kaydet" : undefined}
+          onClick={() => test.mutate()}
+        >
           <PlugZap className="h-4 w-4 mr-2" />
-          {test.isPending ? "Test ediliyor…" : "Bağlantıyı Test Et"}
+          {test.isPending ? "Test ediliyor…" : form.formState.isDirty ? "Önce kaydet" : "Bağlantıyı Test Et"}
         </Button>
         <Button disabled={sync.isPending} onClick={() => sync.mutate("refresh-prices")}>
           <RefreshCw className={`h-4 w-4 mr-2 ${sync.isPending ? "animate-spin" : ""}`} />
@@ -341,6 +354,7 @@ function ShopifyTab() {
       }
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -373,7 +387,7 @@ function ShopifyTab() {
                 placeholder={
                   settings?.hasStorefrontAccessToken
                     ? settings.storefrontAccessTokenMasked
-                    : "shpat_..."
+                    : "Erişim anahtarı"
                 }
               />
               <p className="text-[10px] text-muted-foreground mt-1">
@@ -402,7 +416,7 @@ function ShopifyTab() {
                 <Input
                   {...form.register("clientSecret")}
                   type="password"
-                  placeholder={settings?.hasClientSecret ? settings.clientSecretMasked : "shpss_..."}
+                  placeholder={settings?.hasClientSecret ? settings.clientSecretMasked : "Gizli anahtar"}
                 />
                 {settings?.hasClientSecret && (
                   <p className="text-[10px] text-muted-foreground mt-1">
@@ -493,7 +507,7 @@ function ShopifyStorefrontGuide() {
   return (
     <details className="text-[11px] bg-muted/40 rounded-md leading-relaxed group" open>
       <summary className="cursor-pointer p-2.5 font-medium hover:bg-muted/60 rounded-md select-none">
-        🔑 Erişim anahtarı nasıl alınır? (tıkla aç)
+        🔑 Erişim anahtarı nasıl alınır?
       </summary>
       <ol className="list-decimal pl-7 pr-3 pb-3 space-y-1.5 text-muted-foreground">
         <li>
@@ -538,7 +552,7 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
   const allOk = result.steps.every((s) => s.status === "ok");
   const okCount = result.steps.filter((s) => s.status === "ok").length;
   return (
-    <Card className={allOk ? "border-green-500/40 bg-green-500/5" : "border-amber-500/40 bg-amber-500/5"}>
+    <Card className={allOk ? "border-green-500/40 bg-green-500/5" : "border-[#7A7EFF]/35 bg-[#7A7EFF]/[0.06]"}>
       <CardHeader className="pb-3">
         <CardTitle className="text-sm">
           {allOk ? "Bağlantı çalışıyor" : "Bağlantı kurulamadı"}
@@ -555,12 +569,12 @@ function ShopifyDebugCard({ result }: { result: ShopifyDebugResult }) {
             style={{ animationDelay: `${i * 60}ms`, animationFillMode: "both" }}
           >
             <span className="font-semibold flex items-center gap-1.5">
-              <span className={step.status === "ok" ? "text-emerald-500" : "text-amber-500"}>
+              <span className={step.status === "ok" ? "text-emerald-500" : "text-[#C9D2F2]"}>
                 {step.status === "ok" ? "✓" : "✗"}
               </span>
               {step.name}
             </span>
-            <p className={step.status === "ok" ? "text-muted-foreground" : "text-amber-500"}>
+            <p className={step.status === "ok" ? "text-muted-foreground" : "text-[#C9D2F2]"}>
               {step.detail}
             </p>
             {/* Ham yanıt ARTIK GİZLİ. Eskiden durum kodu ve JSON gövdesi doğrudan ekrana
@@ -668,6 +682,7 @@ function HepsiburadaTab() {
       }
       qc.invalidateQueries({ queryKey: ["products"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
       qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
     },
     onError: (e: Error) => toast.error(e.message),
@@ -698,8 +713,8 @@ function HepsiburadaTab() {
                       "rounded-md py-1.5 text-xs font-medium transition-colors",
                       environment === env
                         ? env === "prod"
-                          ? "bg-green-600 text-white shadow-sm"
-                          : "bg-amber-500 text-white shadow-sm"
+                          ? "bg-emerald-600 text-white shadow-sm"
+                          : "bg-[#7A7EFF] text-white shadow-sm"
                         : "text-muted-foreground hover:bg-muted"
                     )}
                   >
@@ -945,20 +960,22 @@ function HepsijetTab() {
 export default function ApiSettingsPage() {
   return (
     <div className="p-6 space-y-5 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Settings2 className="h-6 w-6" /> Platform Bağlantıları
-        </h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Shopify ana ürün kaynağın; Trendyol ve Hepsiburada satış kanalların. Bu
-          kanallardaki ilanlar ana ürünlere bağlanır.
-        </p>
-      </div>
+      <header className="flex min-w-0 items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+          <Settings2 className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Platform Bağlantıları</h1>
+          <p className="text-xs text-muted-foreground">
+            Shopify ana ürün kaynağın; Trendyol ve Hepsiburada ilanları ana ürünlere bağlanır.
+          </p>
+        </div>
+      </header>
 
       <BaglantiOzetiKarti />
 
       <Tabs defaultValue="shopify">
-        <TabsList>
+        <TabsList className="h-auto gap-0.5 rounded-xl bg-white/[0.03] p-0.5 ring-1 ring-white/[0.08]">
           <TabsTrigger value="shopify">
             <ShoppingBag className="h-3.5 w-3.5 mr-1.5" /> Shopify
           </TabsTrigger>
@@ -997,11 +1014,12 @@ const OZET_PLATFORMLARI = [
 ] as const;
 
 const TON_SINIFI: Record<BaglantiTonu, string> = {
-  iyi: "border-emerald-500/30 bg-emerald-500/5",
-  uyari: "border-amber-500/40 bg-amber-500/5",
-  hata: "border-destructive/40 bg-destructive/5",
-  kapali: "border-dashed",
+  iyi: "ring-emerald-400/25 bg-emerald-500/[0.04]",
+  uyari: "ring-[#7A7EFF]/30 bg-[#7A7EFF]/[0.05]",
+  hata: "ring-rose-400/30 bg-rose-500/[0.05]",
+  kapali: "ring-white/[0.08] bg-white/[0.02]",
 };
+const PLATFORM_NOKTASI: Record<string, string> = { shopify: "#34D399", trendyol: "#F27A1A", hepsiburada: "#4F8CFF" };
 
 /** Üç platformun durumu tek bakışta: bağlı mı, siparişler geliyor mu, fiyatlar ne zaman eşitlendi. */
 function BaglantiOzetiKarti() {
@@ -1015,7 +1033,7 @@ function BaglantiOzetiKarti() {
     queryKey: ["app-settings"],
     queryFn: () => fetchJson("/api/settings"),
   });
-  const siparis = useQuery<Record<string, { ok?: boolean; count?: number } | undefined>>({
+  const siparis = useQuery<Record<string, { ok?: boolean; count?: number; needsAdminToken?: boolean; notConfigured?: boolean } | undefined>>({
     queryKey: ["orders"],
     queryFn: ({ signal }) => fetchJson("/api/orders", { signal }),
     staleTime: 5 * 60_000,
@@ -1030,18 +1048,32 @@ function BaglantiOzetiKarti() {
           nowMs: simdi,
         });
         return (
-          <div key={p.anahtar} className={cn("rounded-lg border px-3 py-2.5 text-sm", TON_SINIFI[d.ton])}>
-            <p className="font-medium">{p.ad}</p>
+          <div
+            key={p.anahtar}
+            className={cn("rounded-2xl px-3 py-2.5 text-sm ring-1 transition-colors animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500", TON_SINIFI[d.ton])}
+          >
+            <p className="flex items-center gap-2 font-medium">
+              <span className="size-1.5 rounded-full" style={{ background: PLATFORM_NOKTASI[p.anahtar] }} />
+              {p.ad}
+            </p>
             {durum.isLoading ? (
               <p className="text-xs text-muted-foreground">…</p>
+            ) : durum.isError && !durum.data ? (
+              // Okunamadı ≠ bağlı değil: kullanıcı doğru anahtarı yeniden girip ezmeye yönelmesin.
+              <p className="text-xs text-rose-300">
+                Durum alınamadı ·{" "}
+                <button type="button" className="font-medium text-[#A9AEFF] hover:underline" onClick={() => void durum.refetch()}>
+                  Tekrar dene
+                </button>
+              </p>
             ) : !d.bagli ? (
               <p className="text-xs text-muted-foreground">Bağlı değil</p>
             ) : (
               <>
-                <p className={cn("text-xs", d.ton === "hata" ? "text-destructive" : "text-muted-foreground")}>
-                  {d.siparisMetni ?? "Siparişler okunuyor…"}
+                <p className={cn("text-xs", d.ton === "hata" ? "text-rose-300" : "text-muted-foreground")}>
+                  {d.siparisMetni ?? (siparis.isError ? "Siparişler alınamadı" : "Siparişler okunuyor…")}
                 </p>
-                <p className={cn("text-xs", d.ton === "uyari" ? "text-amber-500" : "text-muted-foreground")}>
+                <p className={cn("text-xs", d.ton === "uyari" ? "text-[#C9D2F2]" : "text-muted-foreground")}>
                   {d.esitlemeGun == null
                     ? "Fiyatlar hiç eşitlenmedi"
                     : d.esitlemeGun === 0

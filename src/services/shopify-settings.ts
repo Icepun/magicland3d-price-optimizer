@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
 
 /**
@@ -43,22 +43,13 @@ function getSettingsFilePath() {
 }
 
 async function readStoredSettings(): Promise<StoredShopifySettings> {
-  try {
-    const raw = await fs.readFile(getSettingsFilePath(), "utf8");
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed ? parsed : {};
-  } catch {
-    return {};
-  }
+  // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
+  return ayarDosyasiOku<StoredShopifySettings>(getSettingsFilePath());
 }
 
 async function writeStoredSettings(settings: StoredShopifySettings) {
-  const filePath = getSettingsFilePath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(settings, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
+  await ayarDosyasiYaz(getSettingsFilePath(), settings);
 }
 
 export async function getShopifyCredentials(): Promise<ShopifyCredentials> {

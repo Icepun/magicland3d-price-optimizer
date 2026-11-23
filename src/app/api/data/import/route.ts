@@ -430,7 +430,12 @@ type ImportPayload = z.infer<typeof ImportSchema>;
 
 const CUSTOM_PRINT_PRODUCT_ID = "__custom__";
 /** Migration kilidi yedekten geri gelirse açılış migration'ını 3 dakika bloklar → asla yazma. */
-const SKIPPED_SETTING_KEYS = new Set(["schemaMigrationLock"]);
+/**
+ * Geri yüklenmeyen İÇ DURUM anahtarları. `schemaVersion` başka sürümün yedeğinden gelirse açılış
+ * göçü "zaten güncel" sanıp DDL'i atlıyor (no such column); `orderNotifyBaseline` yeni veritabanında
+ * son günlerin siparişlerini telefona "yeni sipariş" diye düşürüyordu (denetim, 23 Kas 2026).
+ */
+const SKIPPED_SETTING_KEYS = new Set(["schemaMigrationLock", "schemaVersion", "orderNotifyBaseline"]);
 /** Tek libSQL isteğine konacak ifade sayısı (batch içinde de 500'lük dilim var). */
 const CHUNK = 500;
 

@@ -50,13 +50,23 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
 
   const [accountId, setAccountId] = useState(settings.r2AccountId ?? "");
   const [bucket, setBucket] = useState(settings.r2Bucket ?? "");
-  const [accessKeyId, setAccessKeyId] = useState(settings.r2AccessKeyId ?? "");
-  const [secret, setSecret] = useState(settings.r2SecretKey ?? "");
+  // Gizli anahtarlar ekrana GELMEZ: boş alan = kayıtlı olan korunur.
+  const { data: kayit } = useQuery<{ erisimAnahtariKayitli: boolean; gizliAnahtarKayitli: boolean }>({
+    queryKey: ["r2-durum"],
+    queryFn: () => fetchJson("/api/storage/r2-durum"),
+  });
+  const [accessKeyId, setAccessKeyId] = useState("");
+  const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [test, setTest] = useState<TestState>({ kind: "idle" });
   const [showSetup, setShowSetup] = useState(false);
 
-  const configured = !!(accountId.trim() && bucket.trim() && accessKeyId.trim() && secret.trim());
+  const configured = !!(
+    accountId.trim() &&
+    bucket.trim() &&
+    (accessKeyId.trim() || kayit?.erisimAnahtariKayitli) &&
+    (secret.trim() || kayit?.gizliAnahtarKayitli)
+  );
 
   async function saveAndTest() {
     if (busy) return;
@@ -76,6 +86,9 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
       });
       if (!save.ok) throw new Error("Ayarlar kaydedilemedi");
       qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["r2-durum"] });
+      setAccessKeyId("");
+      setSecret("");
 
       if (!configured) {
         setTest({ kind: "error", msg: "Önce 4 alanı da doldur." });
@@ -140,11 +153,11 @@ function R2StorageForm({ settings }: { settings: Record<string, string> }) {
           </div>
           <div>
             <Label className="text-xs">Access Key ID</Label>
-            <Input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder="R2 API token" className="font-mono text-xs" />
+            <Input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder={kayit?.erisimAnahtariKayitli ? "Kayıtlı — değiştirmek için yaz" : "R2 API token"} className="font-mono text-xs" />
           </div>
           <div>
             <Label className="text-xs">Secret Access Key</Label>
-            <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="••••••••" className="font-mono text-xs" />
+            <Input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={kayit?.gizliAnahtarKayitli ? "Kayıtlı — değiştirmek için yaz" : "••••••••"} className="font-mono text-xs" />
           </div>
         </div>
 
