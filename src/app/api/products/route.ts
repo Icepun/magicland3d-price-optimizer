@@ -16,7 +16,8 @@ import {
   thresholdCandidatePrices,
 } from "@/lib/product-metrics";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
-import { swr } from "@/lib/route-cache";
+import { swr, swrKayitZamani } from "@/lib/route-cache";
+import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
 import { jsonError } from "@/lib/api-error";
 import { z } from "zod";
 
@@ -68,15 +69,25 @@ export async function GET(req: NextRequest) {
       // Ayar ÖNİZLEMESİ (Maliyet & Paketleme → "Etkiyi gör") hiçbir önbelleğe girmez.
       !url.searchParams.has("ayarOnizleme");
 
-    const data = cacheable
-      ? await swr(
-          // v2: gövdeye kâr kaynağı platformu eklendi — eski disk kopyası rozetsiz kalmasın.
-          `products:v2:${url.searchParams.toString()}`,
-          2 * 60_000,
-          () => computeProducts(req.url)
-        )
-      : await computeProducts(req.url);
-    return NextResponse.json(data);
+    // v3: komisyonu bilinmeyen ilanda kâr yok (null) — eski disk kopyası şişkin kârı göstermesin.
+    const anahtar = `products:v3:${url.searchParams.toString()}`;
+    const TTL = 2 * 60_000;
+    // Gövdenin HESAPLANDIĞI an: istemcinin stok tazelemesi buradan devam eder. Önbellekte kayıt
+    // varsa swr onu döndürür (bayat olsa da) → an kaydınki; yoksa şimdi hesaplanır.
+    let zaman = Date.now();
+    let data: Awaited<ReturnType<typeof computeProducts>>;
+    if (cacheable) {
+      const onceki = swrKayitZamani(anahtar);
+      data = await swr(anahtar, TTL, () => computeProducts(req.url));
+      if (onceki != null) zaman = onceki;
+    } else {
+      data = await computeProducts(req.url);
+    }
+    const res = NextResponse.json(data);
+    res.headers.set("x-liste-zamani", String(zaman));
+    // Bayat gövde (arkada tazeleniyor) → istemci kısa süre sonra bir kez daha çeker.
+    if (Date.now() - zaman > TTL) res.headers.set("x-liste-bayat", "1");
+    return res;
   } catch (error) {
     return jsonError(error);
   }
@@ -383,11 +394,9 @@ async function computeProducts(urlString: string) {
           vatableProductCost: filamentMatCost,
         });
 
-        // Trendyol/Hepsiburada'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi)
-        const commissionMissing =
-          (listing.platform === "trendyol" || listing.platform === "hepsiburada") &&
-          listing.commissionRate == null &&
-          !sim.appliedCommissionRule;
+        // Trendyol/Hepsiburada'da komisyon kaynağı yoksa uyar (override yok + kural eşleşmedi) —
+        // ve KÂR YAZILMAZ: komisyon 0 sayılıp şişkin kâr gösteriliyordu (bkz. lib/komisyon-bilinmiyor).
+        const commissionMissing = komisyonBilinmiyor(listing, sim);
 
         // Kargo kaynağı yoksa uyar. Komisyonda bu uyarı VARDI, kargoda YOKTU: hiçbir barem
         // eşleşmediğinde kargo sessizce ₺0 sayılıyor ve kâr 100₺'ye kadar şişik görünüyordu.
@@ -404,8 +413,8 @@ async function computeProducts(urlString: string) {
           listingId: listing.id,
           salePrice: listing.salePrice,
           stock: listing.stock,
-          netProfit: sim.netProfit,
-          profitMargin: sim.profitMargin,
+          netProfit: commissionMissing ? null : sim.netProfit,
+          profitMargin: commissionMissing ? null : sim.profitMargin,
           commissionMissing,
           cargoMissing,
           minOrderQty: sim.minOrderQty, // Trendyol >1 → liste "×N" rozeti gösterir
@@ -444,7 +453,8 @@ async function computeProducts(urlString: string) {
           price: primary.salePrice,
           orderQty: primary.minOrderQty ?? 1,
         };
-      } else {
+      } else if (!platformSummaries.some((summary) => summary.commissionMissing)) {
+        // İlanı olup komisyonu bilinmeyen ürüne ürünün kendi fiyatıyla kâr UYDURULMAZ (bilinmiyor).
         const fallbackPlatform =
           platformFilter === "trendyol" ||
           platformFilter === "hepsiburada" ||

@@ -24,12 +24,15 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { formatCurrency, formatPercent } from "@/lib/utils";
-import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal, X, ShoppingBag } from "lucide-react";
+import { Plus, Minus, Search, Trash2, Package, Link2, Loader2, AlertTriangle, EyeOff, Eye, RefreshCw, ChevronRight, Layers, Tag, Hammer, Printer, ArrowUp, ArrowDown, ChevronsUpDown, TrendingUp, SlidersHorizontal, X, ShoppingBag, TrendingDown, Coins, Ruler, PackageX, CheckCircle2, ArrowRight } from "lucide-react";
+import { Adet } from "@/components/reports/rapor-ortak";
+import { PLATFORM_RENGI } from "@/components/reports/rapor-platformlar";
 import { cn } from "@/lib/utils";
 import { StockInput } from "@/components/products/StockInput";
 import { loadListState, LIST_STATE_EVENT, type ListState, saveListState, scrollContainer } from "@/lib/list-state";
 import { useStockWriter } from "@/lib/use-stock-writer";
 import { useFreshStocks } from "@/lib/use-fresh-stocks";
+import { listeCekiminiDurdur, listeZamani, urunListesiGetir, urunListesiniYamala } from "@/lib/products-cache";
 import { thumbUrl } from "@/lib/image";
 import { ProductPrintModal } from "@/components/products/ProductPrintModal";
 import { MatchListingModal } from "@/components/products/MatchListingModal";
@@ -178,17 +181,23 @@ interface Product {
   variantGroup?: { id: string; name: string; variantCount?: number } | null;
 }
 
-/** Sütun başlıklarının platform renkleri — globals.css'teki tek kaynaktan. */
+/** Platform renkleri — Raporlar ve Panel ile aynı palet (`PLATFORM_RENGI`). */
 const PLATFORM_COLOR: Record<PlatformKey, string> = {
-  shopify: "var(--panel-shopify)",
-  trendyol: "var(--panel-trendyol)",
-  hepsiburada: "var(--panel-hepsiburada)",
+  shopify: PLATFORM_RENGI.shopify,
+  trendyol: PLATFORM_RENGI.trendyol,
+  hepsiburada: PLATFORM_RENGI.hepsiburada,
 };
 const PLATFORM_SOFT: Record<PlatformKey, string> = {
-  shopify: "var(--panel-shopify-soft)",
-  trendyol: "var(--panel-trendyol-soft)",
-  hepsiburada: "var(--panel-hepsiburada-soft)",
+  shopify: `${PLATFORM_RENGI.shopify}24`,
+  trendyol: `${PLATFORM_RENGI.trendyol}24`,
+  hepsiburada: `${PLATFORM_RENGI.hepsiburada}24`,
 };
+
+/** Başlık düğmeleri — Panel/Raporlar ile aynı dil. */
+const ANA_DUGME =
+  "h-9 rounded-xl border-0 bg-gradient-to-br from-[#8B6CFF] to-[#5B8CFF] px-3.5 text-sm text-white shadow-[0_10px_24px_-12px_rgba(122,126,255,0.95)] transition hover:-translate-y-px hover:brightness-110 active:scale-[0.97] motion-reduce:hover:translate-y-0";
+const HAFIF_DUGME =
+  "h-9 rounded-xl border-0 bg-white/[0.04] px-3.5 text-sm text-foreground/90 ring-1 ring-white/[0.08] transition hover:bg-white/[0.08] hover:text-foreground active:scale-[0.97]";
 
 /**
  * YAPIŞKAN SÜTUNLAR — seçim kutusu, görsel ve ürün adı yatay kaydırmada ekranda kalır.
@@ -396,9 +405,9 @@ function readFilterFromUrl(): FilterMode {
     f === "missing-cost" ||
     f === "missing-desi" ||
     f === "hidden" ||
-    f === "most-profitable" ||
-    f === "near-threshold"
+    f === "most-profitable"
   ) {
+    // "Eşiğe Yakın" sekmesi kaldırıldı (23 Kas 2026, kurgusu gereği hiç dolmuyordu) → Aktif.
     return f;
   }
   return "active";
@@ -551,13 +560,13 @@ const ProductRow = memo(function ProductRow({
           <span className="truncate">{product.categoryName}</span>
         </div>
         {product.missingDesi && (
-          <span className="inline-flex mt-1 text-[10px] font-medium text-amber-500">
+          <span className="inline-flex mt-1 text-[10px] font-medium text-[#A9AEFF]">
             Desi eksik · kargo 1 desi
           </span>
         )}
         {product.priceThreshold && (
           <span
-            className="inline-flex items-center gap-1 mt-1 rounded-full border border-green-500/40 bg-green-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-green-500 transition-colors hover:bg-green-500/20"
+            className="inline-flex items-center gap-1 mt-1 rounded-full border border-emerald-400/30 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400 transition-colors hover:bg-emerald-500/20"
             title={`Fiyatı ${formatCurrency(product.priceThreshold.targetPrice)} yaparsan kâr ${formatCurrency(product.priceThreshold.targetProfit)} olur`}
           >
             <TrendingUp className="h-3 w-3" />
@@ -635,7 +644,7 @@ const ProductRow = memo(function ProductRow({
                 <FlowNumber
                   value={product.profitPerHour}
                   format={(n) => formatCurrency(n)}
-                  className={cn("font-medium", product.profitPerHour < 0 && "text-destructive")}
+                  className={cn("font-medium", product.profitPerHour < 0 && "text-rose-400")}
                 />
                 <span className="text-[10px] text-muted-foreground">/sa</span>
               </span>
@@ -647,7 +656,7 @@ const ProductRow = memo(function ProductRow({
                 <FlowNumber
                   value={product.profitPerGram}
                   format={(n) => formatCurrency(n)}
-                  className={cn(product.profitPerGram < 0 && "text-destructive")}
+                  className={cn(product.profitPerGram < 0 && "text-rose-400")}
                 />
                 <span className="text-[10px]">/g</span>
               </span>
@@ -706,31 +715,32 @@ const ProductRow = memo(function ProductRow({
               <FlowNumber value={p.salePrice} format={(n) => formatCurrency(n)} />
             </div>
             {p.commissionMissing && (
-              <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
-                <AlertTriangle className="h-3 w-3" /> Komisyon gir!
+              <div className="text-[10px] text-rose-400 font-semibold mt-0.5 flex items-center justify-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Komisyon gir
               </div>
             )}
             {/* Kargo bareni eşleşmediyse kâr olduğundan yüksek görünür — sessiz kalmasın. */}
             {p.cargoMissing && (
-              <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
+              <div className="text-[10px] text-[#A9AEFF] font-semibold mt-0.5 flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> Kargo tanımlı değil
               </div>
             )}
             {p.netProfit !== null ? (
               <div
                 className={`text-[11px] tabular-nums mt-0.5 ${
-                  isLoss ? "text-destructive font-medium" : isThin ? "text-amber-500" : "text-green-500"
+                  isLoss ? "text-rose-400 font-medium" : isThin ? "text-[#A9AEFF]" : "text-emerald-400"
                 }`}
               >
                 <FlowNumber value={p.netProfit} format={(n) => formatCurrency(n)} />{" "}
                 <span className="opacity-70">({formatPercent(p.profitMargin ?? 0)})</span>
               </div>
-            ) : (
+            ) : p.commissionMissing ? null : (
+              // Komisyonu bilinmeyen ilanda kâr yok — üstteki "Komisyon gir" yeter.
               <div className="text-[10px] text-muted-foreground/60 mt-0.5">Maliyet girilmemiş</div>
             )}
             {(p.minOrderQty ?? 1) > 1 && (
               <div
-                className="text-[9px] text-amber-500/90 mt-0.5"
+                className="text-[9px] text-[#A9AEFF]/90 mt-0.5"
                 title={`Trendyol min sipariş ${p.minOrderQty} adet — kâr ${p.minOrderQty} ürün üzerinden hesaplandı`}
               >
                 min {p.minOrderQty} adet
@@ -775,7 +785,7 @@ const ProductRow = memo(function ProductRow({
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-destructive/70 hover:text-destructive transition-transform active:scale-90"
+            className="h-8 w-8 text-rose-400/70 hover:text-rose-400 transition-transform active:scale-90"
             title="Sil"
             onClick={() => onDelete(product.id, product.name)}
           >
@@ -921,7 +931,7 @@ const GroupRow = memo(function GroupRow({
         {/* Maliyeti girilmemiş varyantlar aralığa GİRMEZ; kaç tane olduğu burada yazar,
             yoksa eksik maliyet grup satırında tamamen görünmez oluyordu. */}
         {ozet.maliyetiEksik > 0 && (
-          <div className="text-[10px] text-amber-500 mt-0.5">
+          <div className="text-[10px] text-[#A9AEFF] mt-0.5">
             {ozet.maliyetiEksik} varyantta maliyet yok
           </div>
         )}
@@ -933,7 +943,7 @@ const GroupRow = memo(function GroupRow({
               "whitespace-nowrap",
               ozet.karSaat
                 ? ozet.karSaat.max < 0
-                  ? "text-destructive font-medium"
+                  ? "text-rose-400 font-medium"
                   : "text-muted-foreground"
                 : "text-muted-foreground/40"
             )}
@@ -947,7 +957,7 @@ const GroupRow = memo(function GroupRow({
               "whitespace-nowrap",
               ozet.karGram
                 ? ozet.karGram.max < 0
-                  ? "text-destructive"
+                  ? "text-rose-400"
                   : "text-muted-foreground/80"
                 : "text-muted-foreground/40"
             )}
@@ -990,7 +1000,7 @@ const GroupRow = memo(function GroupRow({
               <div
                 className={cn(
                   "text-[11px] tabular-nums mt-0.5",
-                  zarar ? "text-destructive font-medium" : karisik ? "text-amber-500" : "text-green-500"
+                  zarar ? "text-rose-400 font-medium" : karisik ? "text-[#A9AEFF]" : "text-emerald-400"
                 )}
                 title={rangeHint(ps.kar, "Kâr")}
               >
@@ -1006,16 +1016,16 @@ const GroupRow = memo(function GroupRow({
                   </span>
                 )}
               </div>
-            ) : (
+            ) : ps.komisyonEksik === ps.ilanli ? null : (
               <div className="text-[10px] text-muted-foreground/60 mt-0.5">Maliyet girilmemiş</div>
             )}
             {ps.komisyonEksik > 0 && (
-              <div className="text-[10px] text-destructive font-semibold mt-0.5 flex items-center justify-center gap-1">
+              <div className="text-[10px] text-rose-400 font-semibold mt-0.5 flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> {ps.komisyonEksik} varyantta komisyon yok
               </div>
             )}
             {ps.kargoEksik > 0 && (
-              <div className="text-[10px] text-amber-500 font-semibold mt-0.5 flex items-center justify-center gap-1">
+              <div className="text-[10px] text-[#A9AEFF] font-semibold mt-0.5 flex items-center justify-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> {ps.kargoEksik} varyantta kargo yok
               </div>
             )}
@@ -1161,7 +1171,8 @@ export default function ProductsPage() {
       // basınca "Gizlenenler" listesi açılıyordu.
       if (filterMode !== "active") setFilterMode("active");
     } else if (saved.filterMode && saved.filterMode !== filterMode) {
-      setFilterMode(saved.filterMode as FilterMode);
+      // Kaldırılan "Eşiğe Yakın" sekmesi oturumda kayıtlı kalmış olabilir → Aktif.
+      setFilterMode(saved.filterMode === "near-threshold" ? "active" : (saved.filterMode as FilterMode));
     }
     if (saved.search) {
       setGlobalFilter(saved.search);
@@ -1224,29 +1235,38 @@ export default function ProductsPage() {
     enabled: urlOkundu,
     queryKey: listQueryKey,
     queryFn: ({ signal }) =>
-      // "En Kârlı" / "Eşiğe Yakın" sunucuda yok → aktif ürünleri çek, client'ta süz/sırala.
+      // "En Kârlı" sunucuda yok → aktif ürünleri çek, client'ta süz/sırala.
       // signal: başka sayfaya geçince bu (ağır) fetch iptal olur → birikme/boşa parse yok.
-      fetchJson<Product[]>(
+      // Gövdenin hesaplandığı an da kaydedilir (stok tazelemesi oradan devam eder).
+      urunListesiGetir<Product[]>(
+        queryClient,
+        listQueryKey,
         `/api/products?filter=${serverFilterOf(filterMode)}` +
           (platformParam ? `&platform=${platformParam}` : ""),
-        { signal }
+        signal
       ),
     // CACHE-FIRST: liste cache'te yaşar, KENDİLİĞİNDEN tazelenmez (staleTime: Infinity).
     // Yalnızca bir değişiklik onu invalidate edince refetch olur:
     //   • stok/maliyet/gizle/alias/madeToOrder düzeni → optimistic (zaten cache'te güncel)
     //   • Maliyet&Paketleme / Kargo / Ek Giderler / KDV değişimi → invalidate ["products"]
     //   • "Fiyatları Güncelle" butonu / ürün ekle-sil → invalidate ["products"]
-    // refetchOnMount:false → sayfaya her DÖNÜŞTE otomatik refetch YOK. Bir düzenleme listeyi yalnızca
-    // BAYAT işaretler; gerçek tazeleme SADECE "Yenile"/sync ile olur (o an mounted query'yi invalidate
-    // edince aktif refetch tetiklenir). Böylece her geri dönüşte 368 ürün + ~736 kâr simülasyonu baştan
-    // çekilip uygulama donmuyor. (Kullanıcı isteği: "ben Yenile demedikçe sürekli veri çekme.")
+    // refetchOnMount:true + staleTime:Infinity → sayfaya dönüşte YALNIZ liste bayat işaretliyse
+    // (başka ekranda ürün gizlendi, içe aktarıldı, maliyet değişti…) yeniden çekilir; değişiklik
+    // yoksa önbellekten anında gelir. Eskiden false'tu: başka ekrandaki değişiklik Yenile'ye basana
+    // kadar görünmüyordu (denetim, 23 Kas 2026). Kullanıcı isteği korunuyor: "ben Yenile demedikçe
+    // sürekli veri çekme" — sebepsiz çekim yok. Yamalar bayat işaretini SİLMEZ (urunListesiniYamala).
     staleTime: Infinity,
-    refetchOnMount: false,
+    refetchOnMount: true,
     refetchOnWindowFocus: false,
+    // Uç bu bilgisayardaki sunucu: internet kopsa da ulaşılır. "online" kipte sorgu duraklıyor,
+    // ekran "Henüz ürün yok" diyor ve Yenile asılı kalıyordu.
+    networkMode: "always",
   });
 
   // Ağır liste yeniden çekilmez; yalnız son okumadan beri (telefonda da) DEĞİŞEN stoklar gelir.
-  useFreshStocks(listeAlindi || undefined);
+  // Başlangıç: gövdenin HESAPLANDIĞI an (sunucu açılışta eski bir gövde verebilir).
+  const govdeAni = listeZamani(listQueryKey);
+  useFreshStocks(govdeAni ? Math.min(govdeAni, listeAlindi || govdeAni) : listeAlindi || undefined, govdeAni);
 
   // Entegrasyon durumu — hangi platformlar konfigüre
   const { data: integrations } = useQuery<{
@@ -1256,6 +1276,7 @@ export default function ProductsPage() {
   }>({
     queryKey: ["integrations-status"],
     queryFn: () => fetchJson("/api/integrations/status"),
+    networkMode: "always", // yerel sunucu — internet kopukken de ulaşılır
   });
 
   // Shopify'da olup uygulamada olmayan ürün sayısı → "Shopify'dan Ekle" rozeti.
@@ -1263,6 +1284,7 @@ export default function ProductsPage() {
     queryKey: SHOPIFY_OZET_ANAHTARI,
     queryFn: () => fetchJson("/api/shopify/katalog?ozet=1"),
     enabled: Boolean(integrations?.shopify),
+    networkMode: "always",
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -1274,12 +1296,15 @@ export default function ProductsPage() {
       fetchJson(`/api/products/${id}`, { method: "DELETE" }),
     // Optimistic: ürünü listeden ANINDA çıkar (fetch YOK); hata olursa geri al.
     onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData({ queryKey: ["products"] });
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.filter((p) => p.id !== id) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.filter((p) => p.id !== id)
       );
-      return { prev };
+      return { durduruldu, prev };
+    },
+    onSettled: (_d, _e, _v, ctx) => {
+      if (ctx?.durduruldu) void queryClient.invalidateQueries({ queryKey: ["products"] });
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
@@ -1355,22 +1380,24 @@ export default function ProductsPage() {
       }),
     // Optimistic: seçilenleri listeden ANINDA çıkar + seçimi/dialog'u kapat; hata olursa geri al.
     onMutate: async (ids) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData({ queryKey: ["products"] });
       const idset = new Set(ids);
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.filter((p) => !idset.has(p.id)) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.filter((p) => !idset.has(p.id))
       );
       setSelectedIds(new Set());
       setBulkDeleteOpen(false);
-      return { prev };
+      return { durduruldu, prev };
     },
     onError: (e: Error, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error(`Ürünler silinemedi — listeye geri alındı (${e.message})`);
     },
     onSuccess: (data) => toast.success(`${data.deleted} ürün silindi`),
-    onSettled: () => {
+    onSettled: (_d, _e, _v, ctx) => {
+      // İyimser yama süren bir çekimi (ör. Yenile) durdurduysa liste şimdi yeniden çekilir.
+      if (ctx?.durduruldu) void queryClient.invalidateQueries({ queryKey: ["products"] });
       // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
@@ -1385,7 +1412,7 @@ export default function ProductsPage() {
       }),
     // Optimistic: seçilenler mevcut görünümden ANINDA kalkar + seçim temizlenir; hata olursa geri al.
     onMutate: async ({ ids }) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData<Product[]>({ queryKey: ["products"] });
       const idset = new Set(ids);
       // Geri alma satırları: "Geri al"a basılınca listeyi baştan çekmeden yerine koyabilmek için.
@@ -1394,11 +1421,11 @@ export default function ProductsPage() {
         if (!Array.isArray(data)) continue;
         for (const p of data) if (idset.has(p.id) && !kaldirilan.has(p.id)) kaldirilan.set(p.id, p);
       }
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.filter((p) => !idset.has(p.id)) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.filter((p) => !idset.has(p.id))
       );
       setSelectedIds(new Set());
-      return { prev, kaldirilan: [...kaldirilan.values()] };
+      return { durduruldu, prev, kaldirilan: [...kaldirilan.values()] };
     },
     onError: (e: Error, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
@@ -1429,7 +1456,9 @@ export default function ProductsPage() {
         },
       });
     },
-    onSettled: () => {
+    onSettled: (_d, _e, _v, ctx) => {
+      // İyimser yama süren bir çekimi (ör. Yenile) durdurduysa liste şimdi yeniden çekilir.
+      if (ctx?.durduruldu) void queryClient.invalidateQueries({ queryKey: ["products"] });
       // Optimistic kaldırma yeterli → liste refetch YOK; yalnız panel bayat işaretlenir.
       queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
     },
@@ -1446,16 +1475,19 @@ export default function ProductsPage() {
     // Optimistic: ürün ANINDA mevcut listeden çıkar (gizlenince aktif görünümde, geri
     // gelince gizli görünümünde kalmamalı). UI beklemez; hata olursa geri alınır.
     onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData<Product[]>({ queryKey: ["products"] });
       // Geri alma satırı: "Geri al"a basılınca listeyi baştan çekmeden yerine koyabilmek için.
       const kaldirilan = prev
         .map(([, data]) => (Array.isArray(data) ? data.find((p) => p.id === id) : undefined))
         .find((p): p is Product => p != null);
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.filter((p) => p.id !== id) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.filter((p) => p.id !== id)
       );
-      return { prev, kaldirilan };
+      return { durduruldu, prev, kaldirilan };
+    },
+    onSettled: (_d, _e, _v, ctx) => {
+      if (ctx?.durduruldu) void queryClient.invalidateQueries({ queryKey: ["products"] });
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
@@ -1509,19 +1541,20 @@ export default function ProductsPage() {
     retry: 2,
     // Optimistic: çip anında güncellenir; kısa kopmada sessizce tekrar dener, kalıcı hatada geri alır.
     onMutate: async ({ id, alias }) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData({ queryKey: ["products"] });
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, alias } : p)) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, alias } : p))
       );
-      return { prev };
+      return { durduruldu, prev };
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error("Takma ad kaydedilemedi — bağlantını kontrol et");
     },
     // Optimistic zaten çipi güncelledi → tüm listeyi refetch ETME (refetchType:none = sadece bayat işaretle).
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["products"], refetchType: "none" }),
+    onSettled: (_d, _e, _v, ctx) =>
+      queryClient.invalidateQueries({ queryKey: ["products"], refetchType: ctx?.durduruldu ? "active" : "none" }),
   });
 
   // aliasEdit'i ref'te tut → commitAlias her render'da yeni closure olmaz (memo kırılmaz).
@@ -1593,18 +1626,21 @@ export default function ProductsPage() {
         return r.json();
       }),
     onMutate: async ({ id, madeToOrder }) => {
-      await queryClient.cancelQueries({ queryKey: ["products"] });
+      const durduruldu = await listeCekiminiDurdur(queryClient);
       const prev = queryClient.getQueriesData({ queryKey: ["products"] });
-      queryClient.setQueriesData<Product[] | undefined>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, madeToOrder } : p)) : old
+      urunListesiniYamala<Product>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, madeToOrder } : p))
       );
-      return { prev };
+      return { durduruldu, prev };
     },
     onError: (_e, _v, ctx) => {
       ctx?.prev?.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error("İşlem başarısız — değişiklik geri alındı");
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" }),
+    onSettled: (_d, _e, _v, ctx) => {
+      void queryClient.invalidateQueries({ queryKey: ["dashboard"], refetchType: "none" });
+      if (ctx?.durduruldu) void queryClient.invalidateQueries({ queryKey: ["products"] });
+    },
   });
   const mutateMadeToOrder = setMadeToOrderMutation.mutate;
   const handleToggleMadeToOrder = useCallback(
@@ -1617,7 +1653,22 @@ export default function ProductsPage() {
   const [refreshProgress, setRefreshProgress] = useState<{ total: number; done: number; label: string } | null>(null);
   const runRefreshAll = async () => {
     if (refreshProgress) return; // zaten çalışıyor
-    const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter((p) => integrations?.[p]);
+    // Entegrasyon durumu henüz gelmediyse önce onu al: yoksa hiçbir platform eşitlenmez ama
+    // ekran "Fiyatlar zaten güncel · 0 ürün" derdi (denetim bulgusu).
+    let baglantilar: Partial<Record<string, boolean>> | undefined = integrations;
+    if (!baglantilar) {
+      try {
+        baglantilar = await queryClient.fetchQuery<Record<string, boolean>>({
+          queryKey: ["integrations-status"],
+          queryFn: () => fetchJson("/api/integrations/status"),
+        });
+      } catch {
+        toast.error("Bağlantı bilgisi alınamadı, tekrar dene");
+        return;
+      }
+    }
+    const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter((p) => baglantilar?.[p]);
+    const listeOnce = queryClient.getQueryState(listQueryKey)?.dataUpdatedAt ?? 0;
     const label = (p: string) =>
       `${p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : "Shopify"} fiyatları çekiliyor…`;
     const total = platforms.length + 1; // +1: liste/panel tazeleme adımı
@@ -1676,6 +1727,10 @@ export default function ProductsPage() {
       queryClient.removeQueries({ queryKey: ["product"] }),
       queryClient.removeQueries({ queryKey: ["price-history"] }),
     ]);
+    // Bu arada bir satır işlemi çekimi durdurduysa liste eski kalmış olabilir → bir kez daha çek.
+    if ((queryClient.getQueryState(listQueryKey)?.dataUpdatedAt ?? 0) <= listeOnce) {
+      await queryClient.refetchQueries({ queryKey: listQueryKey, exact: true }).catch(() => {});
+    }
     done += 1;
     setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
     // DÜRÜST sonuç: hata varsa AÇIKÇA göster, yoksa platform-bazlı kaç fiyat değişti / kaç kontrol edildi.
@@ -1785,25 +1840,33 @@ export default function ProductsPage() {
         }),
       });
 
+      // Ürün OLUŞTU; maliyet ikinci adımda yazılır. O adım düşerse "eklenemedi" demek yanlış olur
+      // (kullanıcı tekrar dener, ürün iki kez oluşur) → ayrı bildirilir (denetim bulgusu).
+      let maliyetYazilamadi = false;
       if (data.productCost || data.packagingCost) {
         const totalCost = (Number(data.productCost) || 0) + (Number(data.packagingCost) || 0);
-        await fetchJson(`/api/products/${product.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            cost: {
-              manualCost: Number(data.productCost) || 0,
-              packagingCost: Number(data.packagingCost) || 0,
-              totalCost,
-            },
-          }),
-        });
+        try {
+          await fetchJson(`/api/products/${product.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              cost: {
+                manualCost: Number(data.productCost) || 0,
+                packagingCost: Number(data.packagingCost) || 0,
+                totalCost,
+              },
+            }),
+          });
+        } catch {
+          maliyetYazilamadi = true;
+        }
       }
-      return product;
+      return { product, maliyetYazilamadi };
     },
-    onSuccess: () => {
+    onSuccess: ({ maliyetYazilamadi }) => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
-      toast.success("Ürün eklendi");
+      if (maliyetYazilamadi) toast.warning("Ürün eklendi, maliyet kaydedilemedi", { description: "Ürünün sayfasından maliyeti gir." });
+      else toast.success("Ürün eklendi");
       setAddOpen(false);
       form.reset();
     },
@@ -2061,7 +2124,6 @@ export default function ProductsPage() {
   const FILTER_OPTIONS: { value: FilterMode; label: string; countKey?: keyof ListCounts }[] = [
     { value: "active", label: "Aktif", countKey: "active" },
     { value: "most-profitable", label: "En Kârlı" },
-    { value: "near-threshold", label: "Eşiğe Yakın", countKey: "near-threshold" },
     { value: "negative-profit", label: "Zarar Eden", countKey: "negative-profit" },
     { value: "missing-cost", label: "Maliyet Eksik", countKey: "missing-cost" },
     { value: "missing-desi", label: "Desi Eksik", countKey: "missing-desi" },
@@ -2138,18 +2200,24 @@ export default function ProductsPage() {
       {/* Başlık satırı SARMALI: seçim yapıldığında altı düğme çıkıyor (~1000px) ve düğmeler
           `shrink-0 whitespace-nowrap` olduğu için ne daralıyor ne sarıyordu. 1100px'lik
           minimum pencerede içerik alanı 812px olduğundan TÜM SAYFA yatay kayıyordu. */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight">Ürünler</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Tüm ürünlerin fiyatı, maliyeti ve kârı · varyantlar tek satırda toplanır
-          </p>
+      <header className="flex flex-wrap items-center justify-between gap-4 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <Package className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Ürünler</h1>
+            <p className="text-xs text-muted-foreground">
+              Fiyat, maliyet ve kâr · varyantlar tek satırda
+            </p>
+          </div>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           {selectedCount > 0 && (
             <>
               <Button
                 variant="outline"
+                className={HAFIF_DUGME}
                 size="sm"
                 onClick={() => setBulkEditOpen(true)}
                 title="Seçili ürünlerin desi, kategori ve sipariş üzerine üretim bilgisini birlikte değiştir"
@@ -2160,6 +2228,7 @@ export default function ProductsPage() {
               {filterMode === "hidden" ? (
                 <Button
                   variant="outline"
+                className={HAFIF_DUGME}
                   size="sm"
                   disabled={bulkVisibilityMutation.isPending}
                   onClick={() =>
@@ -2172,6 +2241,7 @@ export default function ProductsPage() {
               ) : (
                 <Button
                   variant="outline"
+                className={HAFIF_DUGME}
                   size="sm"
                   disabled={bulkVisibilityMutation.isPending}
                   onClick={() =>
@@ -2184,6 +2254,7 @@ export default function ProductsPage() {
               )}
               <Button
                 variant="destructive"
+                className="h-9 rounded-xl bg-rose-500/90 px-3.5 text-sm text-white hover:bg-rose-500"
                 size="sm"
                 onClick={() => setBulkDeleteOpen(true)}
               >
@@ -2214,19 +2285,22 @@ export default function ProductsPage() {
               onClick={runRefreshAll}
               size="sm"
               variant="outline"
+                className={HAFIF_DUGME}
               title="Tüm platformlardan güncel fiyatları çeker ve listeyi tazeler"
             >
               <RefreshCw className="h-4 w-4 mr-2" />
               Fiyatları Güncelle &amp; Yenile
             </Button>
           )}
-          <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline" title="Shopify'da olmayan, sadece Trendyol veya Hepsiburada'daki ürünü ekle">
+          <Button onClick={() => setMarketplaceOpen(true)} size="sm" variant="outline"
+                className={HAFIF_DUGME} title="Shopify'da olmayan, sadece Trendyol veya Hepsiburada'daki ürünü ekle">
             <Package className="h-4 w-4 mr-2" /> Pazaryeri Ürünü Ekle
           </Button>
           <Button
             onClick={() => setAddOpen(true)}
             size="sm"
             variant={integrations?.shopify ? "outline" : "default"}
+            className={integrations?.shopify ? HAFIF_DUGME : ANA_DUGME}
             title="Hiçbir platformda olmayan ürünü elle ekle"
           >
             <Plus className="h-4 w-4 mr-2" /> Elle Ekle
@@ -2236,21 +2310,21 @@ export default function ProductsPage() {
               onClick={() => setShopifyEkle(shopifyYeni === 0 && shopifyKalkan > 0 ? "kalkan" : "yeni")}
               size="sm"
               title="Shopify'daki yeni ürünleri seçip ekle"
-              className="group"
+              className={cn("group", ANA_DUGME)}
             >
               <ShoppingBag className="h-4 w-4 mr-2 transition-transform duration-200 group-hover:-rotate-6 group-hover:scale-110" />
               Shopify&apos;dan Ekle
               {shopifyYeni > 0 ? (
                 <span
                   key={shopifyYeni}
-                  className="ml-2 min-w-[20px] rounded-full bg-emerald-500 px-1.5 text-[11px] font-semibold leading-5 text-white tabular-nums animate-in zoom-in-50 fade-in duration-300"
+                  className="ml-2 min-w-[20px] rounded-full bg-white/25 px-1.5 text-[11px] font-semibold leading-5 text-white tabular-nums animate-in zoom-in-50 fade-in duration-300"
                 >
                   {shopifyYeni}
                 </span>
               ) : shopifyKalkan > 0 ? (
                 <span
                   title="Shopify'dan kaldırılan ürün var"
-                  className="ml-2 min-w-[20px] rounded-full bg-amber-500 px-1.5 text-[11px] font-semibold leading-5 text-black tabular-nums animate-in zoom-in-50 fade-in duration-300"
+                  className="ml-2 min-w-[20px] rounded-full bg-[#7A7EFF] px-1.5 text-[11px] font-semibold leading-5 text-white tabular-nums animate-in zoom-in-50 fade-in duration-300"
                 >
                   {shopifyKalkan}
                 </span>
@@ -2258,18 +2332,32 @@ export default function ProductsPage() {
             </Button>
           )}
         </div>
-      </div>
+      </header>
 
       {/* Arama KENDİ satırında: filtre çipleriyle aynı satırdayken dar pencerede 124 piksele
           eziliyor, yer tutucu yazının ilk kelimesi bile sığmıyordu. */}
-      <div className="space-y-2.5">
+      {/* Dikkat isteyenler — tıklayınca liste o gruba daralır, tekrar tıklayınca açılır. */}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {DIKKAT_KUTULARI.map((k, i) => (
+          <DikkatKutusu
+            key={k.value}
+            sira={i}
+            kutu={k}
+            adet={tabCounts ? tabCounts[k.countKey] : null}
+            secili={filterMode === k.value}
+            onClick={() => setFilterMode(filterMode === k.value ? "active" : k.value)}
+          />
+        ))}
+      </div>
+
+      <div className="space-y-3">
         <div className="relative w-full max-w-2xl min-w-[240px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             placeholder="Ürün adı, barkod, stok kodu veya kategori ara"
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
-            className="pl-9 pr-9"
+            className="h-10 rounded-xl border-white/[0.08] bg-white/[0.03] pl-9 pr-9 transition-colors focus-visible:border-[#7A7EFF]/50 focus-visible:ring-[#7A7EFF]/25 dark:bg-white/[0.03]"
           />
           {globalFilter && (
             <button
@@ -2284,8 +2372,8 @@ export default function ProductsPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center rounded-md border bg-muted/30 p-0.5 gap-0.5 flex-wrap">
-            {FILTER_OPTIONS.map((opt) => {
+          <div className="flex flex-wrap items-center gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
+            {FILTER_OPTIONS.filter((opt) => !DIKKAT_FILTRELERI.has(opt.value)).map((opt) => {
               const secili = filterMode === opt.value;
               const adet = opt.countKey && tabCounts ? tabCounts[opt.countKey] : null;
               return (
@@ -2293,10 +2381,10 @@ export default function ProductsPage() {
                   key={opt.value}
                   onClick={() => setFilterMode(opt.value)}
                   className={cn(
-                    "px-3 py-1.5 text-sm font-medium rounded-sm transition-all duration-150 active:scale-[0.97] flex items-center gap-1.5",
+                    "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium outline-hidden transition-all duration-200 active:scale-[0.97] focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
                     secili
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-background/40",
+                      ? "bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/15 text-foreground ring-1 ring-[#7A7EFF]/30 shadow-[0_8px_20px_-14px_rgba(122,126,255,0.9)]"
+                      : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
                     // Boş sekme soluk: "Eşiğe Yakın 0" gibi sekmeler dolu olanlarla aynı ağırlıkta
                     // duruyor ve göz onlarda da duruyordu. Tıklanabilir kalır.
                     adet === 0 && !secili && "opacity-45"
@@ -2308,7 +2396,7 @@ export default function ProductsPage() {
                     <span
                       className={cn(
                         "rounded-full px-1.5 text-[10px] font-semibold tabular-nums leading-[1.6] transition-colors",
-                        secili ? "bg-primary/20 text-primary" : "bg-muted-foreground/15 text-muted-foreground"
+                        secili ? "bg-[#7A7EFF]/25 text-[#C9D2F2]" : "bg-white/[0.06] text-muted-foreground"
                       )}
                     >
                       {adet}
@@ -2325,7 +2413,7 @@ export default function ProductsPage() {
               type="button"
               onClick={() => setPlatformParam(null)}
               title="Bu platform daraltmasını kaldır"
-              className="inline-flex items-center gap-1.5 rounded-md border bg-muted/30 px-2.5 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted/60 active:scale-[0.97]"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/[0.04] px-3 py-1.5 text-sm font-medium text-foreground ring-1 ring-white/[0.08] transition-colors hover:bg-white/[0.08] active:scale-[0.97]"
             >
               <span
                 className="h-2 w-2 rounded-full"
@@ -2362,7 +2450,10 @@ export default function ProductsPage() {
         </div>
       )}
 
-      <div ref={tableWrapRef} className="rounded-lg border bg-card overflow-x-auto">
+      <div
+        ref={tableWrapRef}
+        className="overflow-x-auto rounded-2xl bg-card ring-1 ring-white/[0.07] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.85)] animate-in fade-in slide-in-from-bottom-2 duration-500 fill-mode-both motion-reduce:animate-none"
+      >
         <Table>
           <TableHeader>
             <TableRow>
@@ -2406,14 +2497,14 @@ export default function ProductsPage() {
                   />
                 </div>
               </TableHead>
-              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.shopify }}>
-                Shopify
+              <TableHead className="text-center w-[140px]">
+                <PlatformBasligi platform="shopify" />
               </TableHead>
-              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.trendyol }}>
-                Trendyol
+              <TableHead className="text-center w-[140px]">
+                <PlatformBasligi platform="trendyol" />
               </TableHead>
-              <TableHead className="text-center w-[140px]" style={{ color: PLATFORM_COLOR.hepsiburada }}>
-                Hepsiburada
+              <TableHead className="text-center w-[140px]">
+                <PlatformBasligi platform="hepsiburada" />
               </TableHead>
               <TableHead className="w-[80px]" />
             </TableRow>
@@ -2473,7 +2564,7 @@ export default function ProductsPage() {
                 <TableCell colSpan={10} className="py-10">
                   <div className="flex flex-col items-center gap-3 text-center animate-in fade-in duration-300">
                     <span className="rounded-full bg-destructive/15 p-2.5">
-                      <AlertTriangle className="h-5 w-5 text-destructive" />
+                      <AlertTriangle className="h-5 w-5 text-rose-400" />
                     </span>
                     <div className="space-y-1">
                       <p className="text-sm font-medium">Ürünler yüklenemedi</p>
@@ -2606,7 +2697,7 @@ export default function ProductsPage() {
                 <Label>Barkod *</Label>
                 <Input {...form.register("barcode")} />
                 {form.formState.errors.barcode && (
-                  <p className="text-xs text-destructive">{form.formState.errors.barcode.message}</p>
+                  <p className="text-xs text-rose-400">{form.formState.errors.barcode.message}</p>
                 )}
               </div>
               <div>
@@ -2618,7 +2709,7 @@ export default function ProductsPage() {
               <Label>Ürün Adı *</Label>
               <Input {...form.register("name")} />
               {form.formState.errors.name && (
-                <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
+                <p className="text-xs text-rose-400">{form.formState.errors.name.message}</p>
               )}
             </div>
             <div>
@@ -2698,7 +2789,7 @@ export default function ProductsPage() {
                     value={bulkEdit.desi}
                     onChange={(e) => setBulkEdit((s) => ({ ...s, desi: e.target.value }))}
                   />
-                  <p className="text-[11px] text-amber-500 mt-1">Desi değişince kargo ve kâr yeniden hesaplanır.</p>
+                  <p className="text-[11px] text-[#A9AEFF] mt-1">Desi değişince kargo ve kâr yeniden hesaplanır.</p>
                 </div>
               )}
             </div>
@@ -2718,7 +2809,7 @@ export default function ProductsPage() {
                     value={bulkEdit.category}
                     onChange={(e) => setBulkEdit((s) => ({ ...s, category: e.target.value }))}
                   />
-                  <p className="text-[11px] text-amber-500 mt-1">Kategori değişince komisyon ve kâr yeniden hesaplanır.</p>
+                  <p className="text-[11px] text-[#A9AEFF] mt-1">Kategori değişince komisyon ve kâr yeniden hesaplanır.</p>
                 </div>
               )}
             </div>
@@ -2903,7 +2994,17 @@ function MarketplaceAddModal({
     return () => clearTimeout(t);
   }, [search]);
 
-  const { data: unmatched = [], isLoading } = useQuery<
+  // Eklenen ürünler pencere kapanınca TEK seferde listeye gelir: her "Ekle"de bütün liste soğuktan
+  // yeniden hesaplanıyordu (denetim bulgusu).
+  const eklendiRef = useRef(false);
+  useEffect(
+    () => () => {
+      if (eklendiRef.current) void qc.invalidateQueries({ queryKey: ["products"] });
+    },
+    [qc]
+  );
+
+  const { data: unmatched = [], isLoading, isError: havuzHatasi, refetch: havuzuYenidenDene, isFetching: havuzYukleniyor } = useQuery<
     Array<{
       id: string;
       barcode: string;
@@ -2934,9 +3035,10 @@ function MarketplaceAddModal({
       return res.json();
     },
     onSuccess: () => {
-      // Modal AÇIK kalır (peş peşe ekleme): eklenen listeden düşer, ürün listesine girer.
+      // Modal AÇIK kalır (peş peşe ekleme): eklenen listeden düşer; ürün listesi kapanışta tazelenir.
+      eklendiRef.current = true;
       qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
-      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["products"], refetchType: "none" });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success("Ürün eklendi");
     },
@@ -3037,6 +3139,18 @@ function MarketplaceAddModal({
                 <div className="py-8 flex items-center justify-center text-muted-foreground">
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Yükleniyor...
                 </div>
+              ) : havuzHatasi && unmatched.length === 0 ? (
+                <div className="flex flex-col items-center gap-2.5 py-8 text-center text-sm text-muted-foreground">
+                  Liste şu an yüklenemedi.
+                  <button
+                    type="button"
+                    onClick={() => void havuzuYenidenDene()}
+                    disabled={havuzYukleniyor}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-white/10 transition hover:bg-white/[0.1] active:scale-[0.97] disabled:opacity-60"
+                  >
+                    <RefreshCw className={cn("h-3.5 w-3.5", havuzYukleniyor && "animate-spin")} /> Tekrar dene
+                  </button>
+                </div>
               ) : unmatched.length === 0 ? (
                 <div className="py-8 text-center text-sm text-muted-foreground">
                   {search
@@ -3101,5 +3215,96 @@ function MarketplaceAddModal({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ── Raporlar görünümü: dikkat kutuları ve platform başlığı ───────────────────────────── */
+
+type DikkatKutusuTanimi = {
+  value: FilterMode;
+  countKey: keyof ListCounts;
+  baslik: string;
+  alt: string;
+  ikon: typeof Package;
+  kotu?: boolean;
+};
+
+const DIKKAT_KUTULARI: DikkatKutusuTanimi[] = [
+  { value: "negative-profit", countKey: "negative-profit", baslik: "Zarar eden", alt: "En az bir ilanda zararda", ikon: TrendingDown, kotu: true },
+  { value: "missing-cost", countKey: "missing-cost", baslik: "Maliyet eksik", alt: "Kârı hesaplanamıyor", ikon: Coins },
+  { value: "missing-desi", countKey: "missing-desi", baslik: "Desi eksik", alt: "Kargo 1 desiden hesaplanıyor", ikon: Ruler },
+  { value: "out-of-stock", countKey: "out-of-stock", baslik: "Stoğu biten", alt: "Stokta ürün kalmadı", ikon: PackageX },
+];
+const DIKKAT_FILTRELERI = new Set<FilterMode>(DIKKAT_KUTULARI.map((k) => k.value));
+
+function DikkatKutusu({
+  kutu,
+  adet,
+  secili,
+  sira,
+  onClick,
+}: {
+  kutu: DikkatKutusuTanimi;
+  adet: number | null;
+  secili: boolean;
+  sira: number;
+  onClick: () => void;
+}) {
+  const Ikon = kutu.ikon;
+  const temiz = adet === 0;
+  const kirmizi = !!kutu.kotu && !!adet;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={secili}
+      className={cn(
+        "group relative flex flex-col justify-between overflow-hidden rounded-2xl bg-card p-4 text-left ring-1 ring-white/[0.07] outline-hidden",
+        "transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 hover:ring-white/[0.12] hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.55)] focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
+        "animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none motion-reduce:hover:translate-y-0",
+        kirmizi && "bg-gradient-to-br from-rose-500/15 to-rose-500/5 ring-rose-400/25",
+        secili && "bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/10 ring-2 ring-[#7A7EFF]/60"
+      )}
+      style={{ animationDelay: `${sira * 60}ms` }}
+    >
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span
+          className={cn(
+            "grid size-7 place-items-center rounded-lg ring-1 transition-colors",
+            temiz
+              ? "bg-emerald-500/12 text-emerald-300 ring-emerald-400/20"
+              : kirmizi
+                ? "bg-rose-500/15 text-rose-300 ring-rose-400/20"
+                : "bg-white/[0.05] text-[#C9D2F2] ring-white/[0.08] group-hover:bg-[#7A7EFF]/15"
+          )}
+        >
+          {temiz ? <CheckCircle2 className="size-3.5" /> : <Ikon className="size-3.5" />}
+        </span>
+        {kutu.baslik}
+        {secili ? (
+          <X className="ml-auto size-3.5 opacity-70" />
+        ) : (
+          <ArrowRight className="ml-auto size-3.5 opacity-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:opacity-60" />
+        )}
+      </span>
+      <div className={cn("mt-3 text-2xl font-semibold tracking-tight", kirmizi && "text-rose-200")}>
+        {adet == null ? <Skeleton className="h-7 w-14" /> : <Adet deger={adet} />}
+      </div>
+      <p className="mt-0.5 truncate text-xs text-muted-foreground">
+        {secili ? "Listede gösteriliyor" : temiz ? "Hepsi tamam" : kutu.alt}
+      </p>
+    </button>
+  );
+}
+
+function PlatformBasligi({ platform }: { platform: PlatformKey }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span
+        className="size-2 rounded-full"
+        style={{ backgroundColor: PLATFORM_COLOR[platform], boxShadow: `0 0 0 3px ${PLATFORM_SOFT[platform]}` }}
+      />
+      {PLATFORM_LABEL[platform]}
+    </span>
   );
 }

@@ -136,6 +136,15 @@ export interface SwrSecenek {
   bayatSiniriMs?: number;
 }
 
+/**
+ * Anahtarın önbellekteki gövdesinin HESAPLANDIĞI an (yoksa null; disk kopyası da yüklenir).
+ * `swr`'den ÖNCE okunursa, `swr`'nin döndüreceği gövdenin anıdır (kayıt varsa onu döndürür).
+ */
+export function swrKayitZamani(key: string): number | null {
+  loadDiskOnce(key);
+  return store.get(key)?.at ?? null;
+}
+
 export async function swr<T>(key: string, ttlMs: number, compute: () => Promise<T>, secenek?: SwrSecenek): Promise<T> {
   loadDiskOnce(key);
   const now = Date.now();

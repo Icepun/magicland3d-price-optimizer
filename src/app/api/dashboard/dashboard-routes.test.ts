@@ -141,6 +141,7 @@ async function seedProduct(opts: {
   isActive?: boolean;
   imageUrl?: string | null;
   withListing?: boolean;
+  commissionRate?: number | null;
 }) {
   const {
     id,
@@ -154,6 +155,7 @@ async function seedProduct(opts: {
     isActive = true,
     imageUrl = null,
     withListing = true,
+    commissionRate = 0,
   } = opts;
 
   await db.product.create({
@@ -179,6 +181,9 @@ async function seedProduct(opts: {
                 platform,
                 salePrice: listingPrice,
                 cargoCost: 0, // kargo kuralı devre dışı — test kâr matematiği sade kalsın
+                // Komisyon BİLİNİYOR (%0): komisyonu bilinmeyen pazaryeri ilanı kâra / marja hiç
+                // girmez (lib/komisyon-bilinmiyor). Hesap eskisiyle aynı kalsın diye açıkça sıfır.
+                commissionRate,
               },
             },
           }
@@ -268,6 +273,19 @@ describe("GET /api/dashboard", () => {
     // Kâr yalnız maliyeti bilinen ilandan gelir. Hepsiburada ilanında tahsilat bedeli de düşülür
     // (KDV hariç fiyatın %0,96'sı; içindeki KDV indirilir) — bkz. core/hb-kesinti.
     expect(hb.totalProfit).toBeCloseTo(400 / 1.2 - 100 - (400 / 1.2) * 0.0096 * (5 / 6), 6);
+  });
+
+  it("komisyonu BİLİNMEYEN ilan sayılır ama kâra, marja ve zarar sayısına girmez", async () => {
+    // Kural yok + ilanın kendi oranı yok → komisyon bilinmiyor. Eskiden 0 sayılıp şişkin kâr yazılıyordu.
+    await seedProduct({ id: "bilinen", salePrice: 400, manualCost: 100 });
+    await seedProduct({ id: "bilinmeyen", salePrice: 400, manualCost: 100, commissionRate: null });
+
+    const body = await readDashboard();
+    const hb = platformOf(body, "hepsiburada");
+
+    expect(hb.activeListings).toBe(2);
+    expect(hb.totalProfit).toBeCloseTo(400 / 1.2 - 100 - (400 / 1.2) * 0.0096 * (5 / 6), 6);
+    expect(hb.negativeProfitCount).toBe(0);
   });
 
   it("ortalama marj CİROYA GÖRE ağırlıklı — düz ortalamadan farklı çıkar", async () => {

@@ -29,12 +29,17 @@ export async function POST(req: NextRequest) {
     // geri yüklemesi yetim satırlar yüzünden hataya düşüyor.
     await cleanupProductOrphans(ids);
 
-    // Boş kalan grupları sil
-    for (const gid of groupIds) {
-      const remaining = await prisma.product.count({ where: { variantGroupId: gid } });
-      if (remaining === 0) {
-        await prisma.variantGroup.delete({ where: { id: gid } }).catch(() => {});
-      }
+    // Boş kalan grupları sil — TEK sayım + TEK silme (grup başına iki sıralı sorgu, uzak
+    // veritabanında her biri ~100 ms ve tüm uygulamayı bekletiyordu).
+    if (groupIds.length) {
+      const kalan = await prisma.product.groupBy({
+        by: ["variantGroupId"],
+        where: { variantGroupId: { in: groupIds } },
+        _count: { _all: true },
+      });
+      const dolu = new Set(kalan.map((k) => k.variantGroupId));
+      const bos = groupIds.filter((gid) => !dolu.has(gid));
+      if (bos.length) await prisma.variantGroup.deleteMany({ where: { id: { in: bos } } }).catch(() => {});
     }
     await yoksayilanlariGuncelle(shopifyVaryantIdleri, []).catch(() => {});
     // Silinen ürünler sipariş eşleşmesinden ve listelerden düşmeli (tekil DELETE zaten düşürüyordu).

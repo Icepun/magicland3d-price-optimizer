@@ -1,4 +1,104 @@
-import type { QueryClient } from "@tanstack/react-query";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
+
+// ── Bayatlığı koruyan yama ─────────────────────────────────────────────────────────────────
+
+/** Aynı uzunlukta ve her eleman aynı nesne → değişiklik yok. */
+function ayniDizi(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/**
+ * Önbelleğe yama — "BAYAT" İŞARETİ KORUNUR, değişmeyen önbelleğe dokunulmaz.
+ *
+ * NEDEN (Ürünler denetimi, 23 Kas 2026): React Query'de `setQueryData` sorguyu taze işaretler
+ * (`isInvalidated = false`). Ürün listesi `staleTime: Infinity` olduğu için tek tazelik işareti
+ * budur. Bir sekmede toplu desi girilip liste geçersiz kılındıktan sonra gelen tek bir stok yaması
+ * bu işareti TÜM sekmelerde siliyordu → diğer sekmeye geçince liste yeniden çekilmiyor, eski
+ * "Desi eksik" satırları duruyordu. Burada önceden bayat olan sorgu yamadan sonra yine bayat
+ * işaretlenir (yeniden çekim tetiklemeden); değişmeyen dizide `setQueryData` hiç çağrılmaz.
+ */
+export function yamalaBayatligiKoru<T>(qc: QueryClient, anahtar: QueryKey, yama: (eski: T) => T): void {
+  for (const q of qc.getQueryCache().findAll({ queryKey: anahtar })) {
+    const eski = q.state.data as T | undefined;
+    if (eski === undefined) continue;
+    const yeni = yama(eski);
+    if (yeni === eski) continue;
+    if (Array.isArray(eski) && Array.isArray(yeni) && ayniDizi(eski, yeni)) continue;
+    const bayatti = q.state.isInvalidated;
+    qc.setQueryData(q.queryKey, yeni);
+    if (bayatti) void qc.invalidateQueries({ queryKey: q.queryKey, exact: true, refetchType: "none" });
+  }
+}
+
+/** Ürün listesi önbelleklerinin (`["products", *]`) hepsine yama; dizi olmayanlar atlanır. */
+export function urunListesiniYamala<T>(qc: QueryClient, yama: (eski: T[]) => T[]): void {
+  yamalaBayatligiKoru<unknown>(qc, ["products"], (eski) => (Array.isArray(eski) ? yama(eski as T[]) : eski));
+}
+
+/**
+ * İyimser güncellemeden ÖNCE süren liste çekimini durdurur (eski yanıt yamanın üstüne yazmasın).
+ * Bir çekim durdurulduysa true döner: çağıran işlem bitince listeyi yeniden çekmeli — yoksa
+ * "Yenile"nin sonucu sessizce kaybolur (denetim bulgusu).
+ */
+export async function listeCekiminiDurdur(qc: QueryClient): Promise<boolean> {
+  const suruyordu = qc.isFetching({ queryKey: ["products"] }) > 0;
+  await qc.cancelQueries({ queryKey: ["products"] });
+  return suruyordu;
+}
+
+// ── Liste yanıtı: gövdenin hesaplandığı an ────────────────────────────────────────────────
+
+/**
+ * Liste anahtarı → sunucunun gövdeyi HESAPLADIĞI an. Sunucu açılışta diskteki eski bir gövdeyi
+ * hemen verebiliyor; stok tazelemesi istemcinin yanıtı ALDIĞI andan değil bu andan devam etmeli,
+ * yoksa aradaki (ör. telefonda yapılan) stok değişiklikleri hiç gelmez (denetim bulgusu).
+ */
+const listeZamanlari = new Map<string, number>();
+/** Bayat gövde için otomatik yeniden çekim — anahtar başına en çok 5 dakikada bir. */
+const sonOtomatikTazeleme = new Map<string, number>();
+
+export function listeZamani(anahtar: QueryKey): number | undefined {
+  return listeZamanlari.get(JSON.stringify(anahtar));
+}
+
+/**
+ * Ürün listesini çeker; gövdenin hesaplandığı anı kaydeder. Sunucu bayat (diskten) bir gövde
+ * verdiyse ve arkada tazeliyorsa listeyi ~20 sn sonra bir kez daha çeker.
+ */
+export async function urunListesiGetir<T>(
+  qc: QueryClient,
+  anahtar: QueryKey,
+  url: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  const istekAni = Date.now();
+  const res = await fetch(url, { signal });
+  if (!res.ok) await yanitHatasiFirlat(res);
+  const veri = (await res.json()) as T;
+  const zaman = Number(res.headers.get("x-liste-zamani")) || istekAni;
+  const k = JSON.stringify(anahtar);
+  listeZamanlari.set(k, zaman);
+  // Yeni gövde önceki yamaların yerine geçti: stok tazelemesi gövdenin anından yeniden başlar.
+  stokTazeleme.sonMs = Math.min(stokTazeleme.sonMs || zaman, zaman);
+  if (res.headers.get("x-liste-bayat") === "1") {
+    const son = sonOtomatikTazeleme.get(k) ?? 0;
+    if (Date.now() - son > 5 * 60_000) {
+      sonOtomatikTazeleme.set(k, Date.now());
+      setTimeout(() => void qc.invalidateQueries({ queryKey: anahtar, exact: true }), 20_000);
+    }
+  }
+  return veri;
+}
+
+/** `fetchJson` ile aynı hata dili: sunucunun açıklaması varsa o, yoksa sade bir cümle. */
+async function yanitHatasiFirlat(res: Response): Promise<never> {
+  const payload: unknown = await res.json().catch(() => null);
+  const detail =
+    payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+      ? payload.error
+      : null;
+  throw new Error(detail || (res.status >= 500 ? "Sunucuda bir sorun oluştu, tekrar dene." : "İstek tamamlanamadı."));
+}
 
 /**
  * MİNİMUM DB OKUMA: yalnız verilen ürün(ler)i `/api/products?ids=` ile çek (TÜM listeyi değil),
@@ -23,9 +123,7 @@ export async function patchProductsInCache(
     const fresh = (await res.json()) as Array<{ id: string }>;
     if (!Array.isArray(fresh) || fresh.length === 0) return;
     const byId = new Map(fresh.map((p) => [p.id, p]));
-    qc.setQueriesData<Array<{ id: string }>>({ queryKey: ["products"] }, (old) =>
-      Array.isArray(old) ? old.map((p) => byId.get(p.id) ?? p) : old
-    );
+    urunListesiniYamala<{ id: string }>(qc, (old) => old.map((p) => byId.get(p.id) ?? p));
   } catch {
     /* sessiz: liste bir sonraki global tazelemede/"Yenile"de güncellenir */
   }
@@ -69,10 +167,8 @@ export function patchStocksInCache(
     const yeni = harita.get(p.id);
     return yeni === undefined || yeni === p.stock ? p : { ...p, stock: yeni };
   };
-  qc.setQueriesData<StokluUrun[] | undefined>({ queryKey: ["products"] }, (old) =>
-    Array.isArray(old) ? old.map(yama) : old
-  );
-  qc.setQueriesData<StokluDetay | undefined>({ queryKey: ["product"] }, (old) => {
+  urunListesiniYamala<StokluUrun>(qc, (old) => old.map(yama));
+  yamalaBayatligiKoru<StokluDetay | undefined>(qc, ["product"], (old) => {
     if (!old || typeof old !== "object" || !("id" in old)) return old;
     let sonuc = yama(old);
     const uyeler = old.variantGroup?.products;

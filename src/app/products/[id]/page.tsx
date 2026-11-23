@@ -2,7 +2,7 @@
 
 import { use, useState, useEffect, useMemo, memo, useCallback, useDeferredValue, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { patchProductsInCache } from "@/lib/products-cache";
+import { patchProductsInCache, urunListesiniYamala } from "@/lib/products-cache";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -540,8 +540,8 @@ export default function ProductDetailPage({
       await queryClient.cancelQueries({ queryKey: ["product", id] });
       const prev = queryClient.getQueryData<ProductDetail>(["product", id]);
       queryClient.setQueryData<ProductDetail | undefined>(["product", id], (old) => (old ? { ...old, name } : old));
-      queryClient.setQueriesData<Array<{ id: string; name?: string }>>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old) ? old.map((p) => (p.id === id ? { ...p, name } : p)) : old
+      urunListesiniYamala<{ id: string; name?: string }>(queryClient, (old) =>
+        old.map((p) => (p.id === id ? { ...p, name } : p))
       );
       return { prev };
     },
@@ -569,12 +569,8 @@ export default function ProductDetailPage({
     },
     onSuccess: (tur) => {
       setKaldirSor(false);
-      queryClient.setQueriesData<Array<{ id: string; hidden?: boolean }>>({ queryKey: ["products"] }, (old) =>
-        Array.isArray(old)
-          ? tur === "sil"
-            ? old.filter((p) => p.id !== id)
-            : old.map((p) => (p.id === id ? { ...p, hidden: tur === "gizle" } : p))
-          : old
+      urunListesiniYamala<{ id: string; hidden?: boolean }>(queryClient, (old) =>
+        tur === "sil" ? old.filter((p) => p.id !== id) : old.map((p) => (p.id === id ? { ...p, hidden: tur === "gizle" } : p))
       );
       void queryClient.invalidateQueries({ queryKey: ["products"] });
       void queryClient.invalidateQueries({ queryKey: ["shopify-katalog-ozet"] });
@@ -1557,7 +1553,7 @@ function PlatformProfitCardImpl({
               <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-md px-2.5 py-2 font-medium">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>
-                  {info.label} komisyonu girilmemiş! Kâr olduğundan yüksek görünüyor.
+                  {info.label} komisyonu girilmemiş, kâr hesaplanamıyor.
                   Düzenle&apos;den komisyon oranını gir veya Komisyon Kuralları&apos;na ekle.
                 </span>
               </div>
@@ -1577,7 +1573,8 @@ function PlatformProfitCardImpl({
                 <Skeleton className="h-3 w-full" />
                 <Skeleton className="h-3 w-2/3" />
               </div>
-            ) : missingCost ? (
+            ) : commissionMissing ? null : missingCost ? (
+              // Komisyonu bilinmeyen ilanda kâr gösterilmez (lib/komisyon-bilinmiyor) — uyarı yukarıda.
               <div className="flex items-start gap-2 text-xs text-amber-500">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                 <span>Üretim maliyeti girilmedi — net kâr hesaplanamaz</span>

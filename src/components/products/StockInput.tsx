@@ -60,7 +60,7 @@ export function StockInput({
   };
 
   const tone =
-    value === 0 ? "text-destructive" : value === 1 ? "text-amber-500" : "text-foreground";
+    value === 0 ? "text-rose-400" : value === 1 ? "text-[#A9AEFF]" : "text-foreground";
 
   return (
     <input

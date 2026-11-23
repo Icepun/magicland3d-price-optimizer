@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { vatRateOf } from "@/core/vat";
 import { prisma } from "@/lib/prisma";
 import { simulatePrice } from "@/core/pricing-engine";
+import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
 import { platformMinOrderQty, shopifyCargoOverride } from "@/core/platform-rules";
 import { withProductCommissionRule, resolveListingCommissionOverride } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
@@ -216,6 +217,8 @@ async function computeDashboard() {
         minOrderQty: platformMinOrderQty(listing.platform, listing.salePrice),
         vatableProductCost: filamentCost,
       });
+      // Komisyonu bilinmeyen ilan kâra / marja / zarar sayısına girmez (lib/komisyon-bilinmiyor).
+      if (komisyonBilinmiyor(listing, sim)) continue;
 
       platformStats[platform].totalProfit += sim.netProfit;
 

@@ -22,6 +22,7 @@ import {
 } from "@/core/product-commission";
 import { filterCargoRulesByPlatform, filterRulesByPlatform } from "@/core/cargo-calculator";
 import { simulatePrice, trendyolMinQty } from "@/core/pricing-engine";
+import { komisyonBilinmiyor } from "@/lib/komisyon-bilinmiyor";
 import { packagingScopeInput, resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 
@@ -201,14 +202,22 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
     // Rapor metriği TEK bir gerçek platform sonucundan gelir; platform kurallarını birbirine
     // karıştırmak bir platformun kargosunu diğerinin ürününe uygulardı.
     const preferred = [product.source, "shopify", "trendyol", "hepsiburada"];
+    let komisyonuBilinmeyenVar = false;
     for (const platform of preferred) {
       const listing = product.listings.find((row) => row.platform === platform);
       if (!listing) continue;
       const sim = simulate(platform, listing, listing.salePrice);
       if (sim.netProfit == null) continue;
+      // Ürünler listesiyle aynı: komisyonu bilinmeyen ilan kâr kaynağı olamaz.
+      if (komisyonBilinmiyor({ platform, commissionRate: listing.commissionRate }, sim)) {
+        komisyonuBilinmeyenVar = true;
+        continue;
+      }
       return { ...base, netProfit: sim.netProfit, profitMargin: sim.profitMargin };
     }
 
+    // İlanı var ama komisyonu bilinmiyor → kâr bilinmiyor (ürün fiyatıyla UYDURULMAZ).
+    if (komisyonuBilinmeyenVar) return base;
     // Hiç aktif ilan yok → ürünün kendi satış fiyatıyla, kaynağının platform kurallarıyla.
     const fallback =
       product.source === "trendyol" ||
