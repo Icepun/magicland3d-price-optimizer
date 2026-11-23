@@ -65,28 +65,31 @@ export function OzetSerit({
   adet,
   degisimYuzde,
   periyot,
+  hazir = true,
 }: {
   toplam: number;
   adet: number;
   degisimYuzde: number | null;
   periyot: PeriyotTipi;
+  /** Veri gelmeden ya da gelemezse rakam yerine "—" (eskiden "₺0 / 0 ödeme" görünüyordu). */
+  hazir?: boolean;
 }) {
   const etiket = PERIYOTLAR.find((p) => p.id === periyot)?.label ?? "Bu dönem";
   const artti = degisimYuzde != null && degisimYuzde > 0;
   const azaldi = degisimYuzde != null && degisimYuzde < 0;
   return (
-    <Card className="border-primary/25 bg-primary/5">
+    <Card className="rounded-2xl border-0 bg-card ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
       <CardContent className="py-4 grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3">
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">{etiket}</p>
           <p className="mt-0.5 text-2xl font-bold tabular-nums leading-none">
-            <AnimatedNumber value={toplam} format={(n) => formatCurrency(n)} />
+            {hazir ? <AnimatedNumber value={toplam} format={(n) => formatCurrency(n)} /> : <span className="text-muted-foreground/50">—</span>}
           </p>
         </div>
         <div className="min-w-0">
           <p className="text-[11px] text-muted-foreground">Ödeme sayısı</p>
           <p className="mt-0.5 text-2xl font-bold tabular-nums leading-none">
-            <AnimatedNumber value={adet} />
+            {hazir ? <AnimatedNumber value={adet} /> : <span className="text-muted-foreground/50">—</span>}
           </p>
         </div>
         <div className="min-w-0">
@@ -95,13 +98,13 @@ export function OzetSerit({
           <p
             className={cn(
               "mt-0.5 text-2xl font-bold tabular-nums leading-none",
-              artti && "text-amber-400",
-              azaldi && "text-green-400"
+              artti && "text-[#C9D2F2]",
+              azaldi && "text-emerald-300"
             )}
           >
             {/* BİLİNMEYEN ≠ SIFIR: önceki dönemde hiç ödeme yoksa oran tanımsızdır;
                 "%100 arttı" demek yanlış olurdu. */}
-            {degisimYuzde == null ? (
+            {!hazir || degisimYuzde == null ? (
               <span className="text-muted-foreground/50">—</span>
             ) : (
               <>

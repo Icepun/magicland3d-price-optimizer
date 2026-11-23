@@ -14,6 +14,7 @@ import {
   type AdPlatform,
 } from "@/lib/db/ad-budgets";
 import { getRules } from "@/lib/db/rules";
+import { trTutarOku } from "@core/tr-sayi";
 import { syncFinanceFromCache } from "@/lib/finance-sync";
 import { color, space } from "@/theme/tokens";
 
@@ -40,7 +41,8 @@ export default function AdBudgetScreen() {
 
   const kaydet = useMutation({
     mutationFn: async () => {
-      const deger = Number(tutar.replace(",", "."));
+      const deger = trTutarOku(tutar);
+      if (deger == null || deger < 0) throw new Error("Geçersiz tutar.");
       await saveAdBudget({ platform, dailyAmount: deger, startsAt: new Date() });
     },
     onSuccess: async () => {
@@ -62,10 +64,13 @@ export default function AdBudgetScreen() {
       await qc.invalidateQueries({ queryKey: ["rules"] });
       void syncFinanceFromCache(qc, { zorlaKarYaz: true });
     },
+    onError: () => Alert.alert("Durdurulamadı", "Bağlantını kontrol edip tekrar dene."),
   });
 
   const liste = butceler.data ?? [];
-  const gecerliTutar = Number(tutar.replace(",", ".")) >= 0 && tutar.trim().length > 0;
+  // "1.500" = bin beş yüz (eskiden 1,5 ₺ okunuyordu); geçersiz giriş kaydedilmez.
+  const tutarSayi = trTutarOku(tutar);
+  const gecerliTutar = tutarSayi != null && tutarSayi >= 0;
   const yururlukteSayisi = liste.filter((b) => b.isActive === 1 && b.validTo == null).length;
 
   return (

@@ -17,7 +17,8 @@ export async function GET(req: NextRequest) {
   await ensureRuntimeSchema();
   // Vakti gelen sabit giderler burada gerçek kayda dönüşür. Sayfayı açmak bu yüzden yeterli;
   // ayrı bir "oluştur" adımı yok. Yazılacak bir şey yoksa iki sorguda çıkar.
-  await ensureRecurringExpenses();
+  // Üretim düşerse liste yine gelsin (Raporlar da aynı çağrıyı korumalı yapıyor); bir sonraki açılış tamamlar.
+  await ensureRecurringExpenses().catch((e) => console.error("[sabit-gider] üretilemedi:", e));
 
   // Panel'in net kârı: verilen andan BUGÜNE kadar ödenen giderlerin toplamı. Sipariş özetiyle
   // AYNI pencere başlangıcı kullanılır (`summary.from`), yoksa iki rakam farklı günleri anlatır.

@@ -13,6 +13,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { trTutarOku } from "@/core/tr-sayi";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,9 +31,9 @@ import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
  */
 const PLATFORMLAR = [
   { id: "all", ad: "Tüm platformlar", renk: "text-primary" },
-  { id: "trendyol", ad: "Trendyol", renk: "text-orange-500" },
+  { id: "trendyol", ad: "Trendyol", renk: "text-[#F27A1A]" },
   { id: "shopify", ad: "Shopify", renk: "text-emerald-500" },
-  { id: "hepsiburada", ad: "Hepsiburada", renk: "text-violet-500" },
+  { id: "hepsiburada", ad: "Hepsiburada", renk: "text-[#4F8CFF]" },
 ] as const;
 
 interface Butce {
@@ -78,7 +79,7 @@ const kisaTarih = (iso: string) =>
 
 export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: number }) {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery<Yanit>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<Yanit>({
     queryKey: ["ad-budgets"],
     queryFn: () => fetchJson("/api/ad-budgets"),
     staleTime: 60_000,
@@ -87,6 +88,16 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
   const [acikPlatform, setAcikPlatform] = useState<string | null>(null);
   const [tutar, setTutar] = useState("");
   const [baslangic, setBaslangic] = useState(bugunInput);
+  const [kaldirSor, setKaldirSor] = useState(false);
+  /** Türkçe tutar ("1.500" = bin beş yüz); geçersiz → null, kayıt düğmesi kilitli. */
+  const tutarSayi = trTutarOku(tutar);
+  const tutarHatasi = tutar.trim() && (tutarSayi == null || tutarSayi < 0) ? "Geçersiz tutar" : null;
+  /** Bütçe değişince Raporlar'ın aylık rakamları da tazelensin. */
+  const tazele = () => {
+    void queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
+    void queryClient.invalidateQueries({ queryKey: ["finance-monthly"] });
+    clearPricingQueryCache(queryClient);
+  };
 
   /** Mevcut dönemi YERİNDE düzelt — "yanlış girdim" durumu. Geçmişe de işler. */
   const duzelt = useMutation({
@@ -95,13 +106,12 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          dailyAmount: Number(tutar.replace(",", ".")) || 0,
+          dailyAmount: tutarSayi ?? 0,
           startsAt: `${baslangic}T00:00:00.000+03:00`,
         }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
-      clearPricingQueryCache(queryClient);
+      tazele();
       toast.success("Reklam bütçesi güncellendi");
       setAcikPlatform(null);
       setTutar("");
@@ -112,9 +122,9 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
   const kaldir = useMutation({
     mutationFn: (id: string) => fetchJson(`/api/ad-budgets/${id}`, { method: "DELETE" }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
-      clearPricingQueryCache(queryClient);
+      tazele();
       toast.success("Reklam bütçesi kaldırıldı");
+      setKaldirSor(false);
       setAcikPlatform(null);
       setTutar("");
     },
@@ -128,14 +138,13 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           platform,
-          dailyAmount: Number(tutar.replace(",", ".")) || 0,
+          dailyAmount: tutarSayi ?? 0,
           startsAt: `${baslangic}T00:00:00.000+03:00`,
         }),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ad-budgets"] });
       // Kâr rakamı değişti → ürün/sipariş/rapor önbelleklerinin hepsi tazelensin.
-      clearPricingQueryCache(queryClient);
+      tazele();
       toast.success("Reklam bütçesi kaydedildi");
       setAcikPlatform(null);
       setTutar("");
@@ -147,34 +156,49 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
     data?.butceler.find((b) => b.platform === p && !b.validTo && b.isActive) ?? null;
 
   return (
-    <Card>
+    <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start gap-2.5">
-          <Megaphone className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+          <Megaphone className="h-4 w-4 text-[#A9AEFF] mt-0.5 shrink-0" />
           <div className="min-w-0">
             <h2 className="text-sm font-semibold leading-tight">Reklam Bütçesi</h2>
             <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
-              Günlük reklam harcaman ürünlerin maliyetine dağıtılır; kâr rakamları buna göre
-              görünür. Giderler listesine ayrıca eklenmez. Marka reklamı için &quot;Tüm
-              platformlar&quot; kullan — pay tüm satışlara yayılır.
+              Günlük reklam harcaman ürün kârlarına dağıtılır; marka reklamı için &quot;Tüm platformlar&quot;.
             </p>
           </div>
         </div>
 
         {/* Reklam GİDER olarak girilmiş ama bütçe yok: tutar aylık net kâra giriyor, ürün kârlarına
             dağıtılmıyor. Otomatik taşıma YOK — ikisini birden tutmak aynı parayı iki kez sayar. */}
-        {!isLoading && buAyReklamGideri > 0 && PLATFORMLAR.every((p) => !yururlukte(p.id)) && (
-          <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed">
-            Bu ay Giderler&apos;de <strong className="tabular-nums">{formatCurrency(buAyReklamGideri)}</strong> reklam
-            ödemesi var: aylık net kâra giriyor ama ürün kârlarına dağıtılmıyor. Ürün bazında görmek
-            istersen aşağıdan günlük bütçe gir —{" "}
-            <strong>o zaman aynı ödemeyi giderden çıkar</strong>, yoksa reklam iki kez sayılır.
+        {/* İki durum: bütçe yokken reklam gideri → ürün kârlarına dağıtılmıyor; bütçe VARKEN reklam
+            gideri → aynı para iki kez düşülüyor (eskiden bu durumda uyarı kayboluyordu). */}
+        {!isLoading && data && buAyReklamGideri > 0 && (
+          <div className="rounded-xl bg-[#7A7EFF]/[0.07] px-3 py-2 text-[11px] leading-relaxed ring-1 ring-[#7A7EFF]/30 text-[#E4E7FF]">
+            {PLATFORMLAR.every((p) => !yururlukte(p.id)) ? (
+              <>
+                Bu ay Giderler&apos;de <strong className="tabular-nums">{formatCurrency(buAyReklamGideri)}</strong> reklam
+                ödemesi var — ürün kârlarına dağıtılmıyor. Bütçe girersen o ödemeyi giderden çıkar.
+              </>
+            ) : (
+              <>
+                Bütçe varken Giderler&apos;de de <strong className="tabular-nums">{formatCurrency(buAyReklamGideri)}</strong>{" "}
+                reklam ödemesi var — reklam iki kez düşülüyor olabilir.
+              </>
+            )}
           </div>
         )}
 
         {isLoading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground py-3">
             <Loader2 className="h-3.5 w-3.5 animate-spin" /> yükleniyor…
+          </div>
+        ) : isError && !data ? (
+          // Okunamadı ≠ bütçe yok: "Bütçe gir" denince mükerrer dönem açılabiliyordu.
+          <div className="flex items-center gap-3 py-2 text-sm">
+            <span className="text-rose-300">Reklam bütçeleri yüklenemedi.</span>
+            <Button variant="outline" size="sm" className="h-7 rounded-lg text-xs" disabled={isFetching} onClick={() => void refetch()}>
+              Tekrar dene
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -183,7 +207,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
               const o = data?.oranlar[p.id];
               const acik = acikPlatform === p.id;
               return (
-                <div key={p.id} className="rounded-lg border bg-muted/20 overflow-hidden">
+                <div key={p.id} className="rounded-xl bg-white/[0.02] ring-1 ring-white/[0.06] overflow-hidden transition-colors hover:bg-white/[0.03]">
                   <div className="flex items-center gap-2 px-3 py-2">
                     <span className={cn("text-xs font-medium w-24 shrink-0", p.renk)}>{p.ad}</span>
 
@@ -199,7 +223,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                       <span
                         className={cn(
                           "text-[11px] tabular-nums px-1.5 py-0.5 rounded",
-                          o.cirodanBuyuk ? "bg-destructive/15 text-destructive" : "bg-primary/10 text-primary"
+                          o.cirodanBuyuk ? "bg-rose-500/15 text-rose-300" : "bg-[#7A7EFF]/12 text-[#C9D2F2]"
                         )}
                         title={p.id === "all" ? "Toplam ciroya oranlandı" : `Yalnız ${p.ad} cirosuna oranlandı`}
                       >
@@ -207,7 +231,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                       </span>
                     )}
                     {o && !o.guvenilir && b && b.dailyAmount > 0 && (
-                      <span className="text-[11px] text-amber-500 flex items-center gap-1">
+                      <span className="text-[11px] text-[#C9D2F2] flex items-center gap-1">
                         <TriangleAlert className="h-3 w-3" /> ciro yok, oran hesaplanamadı
                       </span>
                     )}
@@ -218,6 +242,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                       className="h-6 text-[11px] ml-auto"
                       onClick={() => {
                         setAcikPlatform(acik ? null : p.id);
+                        setKaldirSor(false);
                         setTutar(b ? String(b.dailyAmount) : "");
                         // Mevcut dönemin tarihi forma gelsin — kullanıcı onu düzeltmek istiyor.
                         if (b?.validFrom) {
@@ -247,6 +272,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                             value={tutar}
                             onChange={(e) => setTutar(e.target.value)}
                           />
+                          {tutarHatasi && <p className="mt-1 text-[10px] font-medium text-rose-300">{tutarHatasi}</p>}
                         </div>
                         <div>
                           <Label className="text-[11px]">Şu tarihten itibaren</Label>
@@ -260,7 +286,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                       </div>
                       <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">
                         {b
-                          ? "Düzelt: mevcut dönemi değiştirir, geçmiş siparişler de yeni tutara göre hesaplanır. Yeni dönem: bu tarihe kadarki siparişler eski bütçeyle kalır."
+                          ? "Düzelt: geçmiş siparişler de yeni tutarla hesaplanır. Yeni dönem: bu tarihten sonrası için."
                           : "Bu tarihten sonraki siparişlerin kârı reklam payını içerir."}
                       </p>
                       <div className="flex items-center gap-1.5 mt-2">
@@ -268,11 +294,12 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 text-xs text-destructive/80 hover:text-destructive mr-auto"
+                            className={cn("h-7 text-xs mr-auto", kaldirSor ? "bg-rose-500 text-white hover:bg-rose-500/90" : "text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-200")}
                             disabled={kaldir.isPending}
-                            onClick={() => kaldir.mutate(b.id)}
+                            // İki adım: ilk tık sorar, ikinci tık kaldırır (eskiden onaysızdı).
+                            onClick={() => (kaldirSor ? kaldir.mutate(b.id) : setKaldirSor(true))}
                           >
-                            {kaldir.isPending ? "Kaldırılıyor…" : "Kaldır"}
+                            {kaldir.isPending ? "Kaldırılıyor…" : kaldirSor ? "Kaldırılsın mı? Evet" : "Kaldır"}
                           </Button>
                         )}
                         {b ? (
@@ -281,7 +308,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                               variant="outline"
                               size="sm"
                               className="h-7 text-xs"
-                              disabled={duzelt.isPending || tutar.trim() === ""}
+                              disabled={duzelt.isPending || tutarSayi == null || tutarSayi < 0}
                               onClick={() => duzelt.mutate({ id: b.id })}
                             >
                               {duzelt.isPending ? "…" : "Düzelt"}
@@ -289,7 +316,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                             <Button
                               size="sm"
                               className="h-7 text-xs"
-                              disabled={kaydet.isPending || tutar.trim() === ""}
+                              disabled={kaydet.isPending || tutarSayi == null || tutarSayi < 0}
                               onClick={() => kaydet.mutate(p.id)}
                             >
                               {kaydet.isPending ? "…" : "Yeni dönem başlat"}
@@ -299,7 +326,7 @@ export function AdBudgetCard({ buAyReklamGideri = 0 }: { buAyReklamGideri?: numb
                           <Button
                             size="sm"
                             className="h-7 text-xs ml-auto"
-                            disabled={kaydet.isPending || tutar.trim() === ""}
+                            disabled={kaydet.isPending || tutarSayi == null || tutarSayi < 0}
                             onClick={() => kaydet.mutate(p.id)}
                           >
                             {kaydet.isPending ? "Kaydediliyor…" : "Kaydet"}

@@ -232,6 +232,8 @@ export default function ExpensesPage() {
       return Array.isArray(response) ? response : response.expenses;
     },
     staleTime: 30_000,
+    // Telefondan eklenen gider sayfaya dönünce görünsün.
+    refetchOnMount: true,
   });
 
   const expenses = useMemo(
@@ -437,14 +439,15 @@ export default function ExpensesPage() {
 
   return (
     <div className="p-4 sm:p-6 space-y-5 mx-auto w-full max-w-[1400px]">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <WalletCards className="h-6 w-6 text-primary" /> Gider Ödemeleri
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Her ödeme, yapıldığı ayın net kârından düşer.
-          </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <WalletCards className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Gider Ödemeleri</h1>
+            <p className="text-xs text-muted-foreground">Her ödeme, yapıldığı ayın net kârından düşer.</p>
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => void yenile()} disabled={yenileniyor}>
@@ -476,6 +479,7 @@ export default function ExpensesPage() {
         adet={ozet.adet}
         degisimYuzde={ozet.degisimYuzde}
         periyot={periyot}
+        hazir={!query.isLoading && !(query.isError && !query.data)}
       />
 
       {!query.isLoading && !query.isError && donemGiderleri.length > 0 && (
@@ -497,9 +501,9 @@ export default function ExpensesPage() {
           ))}
         </div>
       ) : query.isError ? (
-        <Card className="border-destructive/40">
+        <Card className="rounded-2xl border-0 bg-rose-500/[0.05] ring-1 ring-rose-400/25">
           <CardContent className="p-6 text-center space-y-3">
-            <p className="text-sm text-destructive">Gider kayıtları alınamadı.</p>
+            <p className="text-sm text-rose-300">Gider kayıtları alınamadı.</p>
             <Button variant="outline" size="sm" onClick={() => query.refetch()}>
               Yeniden Dene
             </Button>
@@ -571,7 +575,7 @@ export default function ExpensesPage() {
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button
-                        variant="ghost" size="icon" className="h-8 w-8 text-destructive" title="Sil"
+                        variant="ghost" size="icon" className="h-8 w-8 text-rose-300 hover:bg-rose-500/10 hover:text-rose-200" title="Sil"
                         disabled={deleteMutation.isPending}
                         onClick={() => {
                           if (window.confirm(`"${expense.name}" giderini silmek istiyor musun?`)) {
@@ -599,7 +603,7 @@ export default function ExpensesPage() {
             kategoriler={categories}
             pending={kategoriMutation.isPending}
             onEkle={(name, color) =>
-              kategoriMutation.mutate({ method: "POST", body: { name, color } })
+              kategoriMutation.mutateAsync({ method: "POST", body: { name, color } })
             }
             onSil={(id) => kategoriMutation.mutate({ method: "DELETE", id })}
           />
@@ -617,7 +621,7 @@ export default function ExpensesPage() {
             varOlanDonemler={girilmisDonemler}
             bugun={nowMs}
             pending={tekrarMutation.isPending}
-            onEkle={(v) => tekrarMutation.mutate({ method: "POST", body: v })}
+            onEkle={(v) => tekrarMutation.mutateAsync({ method: "POST", body: v })}
             onSil={(id) => tekrarMutation.mutate({ method: "DELETE", id })}
           />
         </DialogContent>

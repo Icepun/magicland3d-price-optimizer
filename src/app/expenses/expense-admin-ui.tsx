@@ -54,7 +54,7 @@ export function KategoriYonetimi({
 }: {
   kategoriler: KategoriKaydi[];
   pending: boolean;
-  onEkle: (name: string, color: string) => void;
+  onEkle: (name: string, color: string) => Promise<unknown> | void;
   onSil: (id: string) => void;
 }) {
   const [ad, setAd] = useState("");
@@ -94,8 +94,8 @@ export function KategoriYonetimi({
           className="h-9 shrink-0"
           disabled={!temiz || pending}
           onClick={() => {
-            onEkle(temiz, renk);
-            setAd("");
+            // Yalnız BAŞARIDA temizlenir: hata olursa yazılan kaybolmasın.
+            void Promise.resolve(onEkle(temiz, renk)).then(() => setAd(""), () => {});
           }}
         >
           Ekle
@@ -119,9 +119,11 @@ export function KategoriYonetimi({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 text-xs text-destructive"
+                className="h-7 text-xs text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
                 disabled={pending}
-                onClick={() => onSil(k.id)}
+                onClick={() => {
+                  if (window.confirm(`"${k.name}" kategorisi kaldırılsın mı?`)) onSil(k.id);
+                }}
               >
                 Kaldır
               </Button>
@@ -173,7 +175,7 @@ export function SabitGiderYonetimi({
     amount: number;
     dayOfMonth: number;
     startsAt: string;
-  }) => void;
+  }) => Promise<unknown> | void;
   onSil: (id: string) => void;
 }) {
   const [ad, setAd] = useState("");
@@ -287,7 +289,7 @@ export function SabitGiderYonetimi({
           className={cn(
             "rounded-lg border p-2.5 text-xs space-y-1",
             onizleme.cakisanlar.length > 0
-              ? "border-amber-500/45 bg-amber-500/5"
+              ? "border-[#7A7EFF]/40 bg-[#7A7EFF]/[0.06]"
               : "border-border bg-muted/30"
           )}
         >
@@ -308,7 +310,7 @@ export function SabitGiderYonetimi({
             </p>
           )}
           {onizleme.cakisanlar.length > 0 && (
-            <p className="text-amber-400">
+            <p className="text-[#C9D2F2]">
               {onizleme.cakisanlar.map(ayEtiketi).join(", ")} için aynı adla girilmiş ödeme
               zaten var — bu aylar iki kez sayılır.
             </p>
@@ -321,15 +323,21 @@ export function SabitGiderYonetimi({
         className="w-full"
         disabled={!gecerli || pending}
         onClick={() => {
-          onEkle({
-            name: ad.trim(),
-            category: kategori || null,
-            amount: tutarSayi,
-            dayOfMonth: Math.min(31, Math.max(1, Number(gun) || 1)),
-            startsAt: `${baslangic}T00:00:00+03:00`,
-          });
-          setAd("");
-          setTutar("");
+          void Promise.resolve(
+            onEkle({
+              name: ad.trim(),
+              category: kategori || null,
+              amount: tutarSayi,
+              dayOfMonth: Math.min(31, Math.max(1, Number(gun) || 1)),
+              startsAt: `${baslangic}T00:00:00+03:00`,
+            })
+          ).then(
+            () => {
+              setAd("");
+              setTutar("");
+            },
+            () => {}
+          );
         }}
       >
         Sabit gider ekle
@@ -353,9 +361,11 @@ export function SabitGiderYonetimi({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-7 text-xs text-destructive shrink-0"
+                className="h-7 text-xs text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 shrink-0"
                 disabled={pending}
-                onClick={() => onSil(r.id)}
+                onClick={() => {
+                  if (window.confirm(`"${r.name}" sabit gideri kaldırılsın mı? Daha önce açılan kayıtlar listede kalır.`)) onSil(r.id);
+                }}
               >
                 Kaldır
               </Button>
