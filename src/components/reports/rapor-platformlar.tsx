@@ -45,7 +45,9 @@ export function RaporPlatformlar({
       {satirlar.length === 0 ? (
         <BosDurum metin="Bu ay satış yok." />
       ) : (
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+        // Kart darsa (yan sütun) halka üstte, satırlar tam genişlikte — rakamlar ikiye kırılmasın.
+        <div className="@container">
+        <div className="flex flex-col gap-5 @[36rem]:flex-row @[36rem]:items-center">
           <div className="relative mx-auto size-40 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -129,6 +131,7 @@ export function RaporPlatformlar({
               </li>
             ))}
           </ul>
+        </div>
         </div>
       )}
     </RaporKart>
