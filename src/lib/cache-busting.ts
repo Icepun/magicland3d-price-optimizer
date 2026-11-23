@@ -49,6 +49,9 @@ export function bustProductCaches(): void {
 export function bustProfitInputCaches(): void {
   bustCaches(["products:", "dashboard:"]);
   invalidateOrdersCache();
+  // Düşen Panel ve Ürünler gövdeleri arkada yeniden hesaplanır — kayıttan sonraki ilk ziyaret soğuk
+  // hesabı (Panel ~4 sn, Ürünler ~2,6 sn) beklemesin (denetim, 23 Kas 2026).
+  arkadaYenidenDoldur();
 }
 
 /** Yalnız ürün GÖRÜNÜMLERİ değişti (kâr/eşleşme etkilenmiyor) — ör. görsel, sıralama. */

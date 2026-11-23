@@ -132,7 +132,8 @@ export function resolveProductCost(
       // Malzeme payı da 0 olmamalı: filament türü seçilmeden girilen süre/gramaj eksik maliyettir
       // (gram maliyeti 0 → malzeme 0₺), kâr olduğundan yüksek çıkar.
       // Ek filamentin fiyatı bilinmiyorsa (tür silinmiş/fiyatsız) malzeme eksik hesaplanmıştır.
-      productionCostKnown: calc.productionCost > 0 && calc.filamentCost > 0 && !ek.eksik,
+      // Seçili poşet/kutu silinmişse paketleme tutarı bilinmiyor → maliyet tam değil (BİLİNMEYEN ≠ SIFIR).
+      productionCostKnown: calc.productionCost > 0 && calc.filamentCost > 0 && !ek.eksik && !packaging.secenekBulunamadi,
     };
   }
 

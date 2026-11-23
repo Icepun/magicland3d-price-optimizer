@@ -5,6 +5,15 @@ import { settingsBodyAffectsProfit } from "@/lib/pricing-inputs";
 import { FILAMENT_SETTING_PREFIX } from "@/lib/filament-settings";
 import { bustCache, swr } from "@/lib/route-cache";
 import { invalidateR2Config } from "@/lib/r2";
+import { batchWrite } from "@/lib/libsql-batch";
+import { jsonError } from "@/lib/api-error";
+
+/** Maliyet girdisi olan sayısal ayarlar — negatif ya da sayı olmayan değer KAYDEDİLMEZ. */
+const SAYISAL_MALIYET_ANAHTARLARI = new Set([
+  "costElectricityPerHour", "costMachineWearPerHour", "costLaborPerHour",
+  "nylonRollPrice", "nylonRollGrams", "nylonLowGrams", "nylonMediumGrams", "nylonHighGrams",
+  "tapePrice", "tapeProductsPerRoll", "cardQty", "cardPrice", "stickerQty", "stickerPrice", "sakizQty", "sakizPrice",
+]);
 
 export async function GET() {
   const data = await swr("settings:v1", 60_000, computeSettings);
@@ -33,29 +42,48 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  await Promise.all(
-    Object.entries(body).map(([key, value]) =>
-      prisma.appSetting.upsert({
-        where: { key },
-        create: { key, value: String(value) },
-        update: { value: String(value) },
-      })
-    )
-  );
+  for (const [key, value] of Object.entries(body)) {
+    if (!SAYISAL_MALIYET_ANAHTARLARI.has(key)) continue;
+    const n = Number(String(value).replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) {
+      return NextResponse.json({ error: "Maliyet alanları sıfır ya da pozitif bir sayı olmalı." }, { status: 400 });
+    }
+  }
 
-  // Yalnız kâr girdisi (vat/komisyon/maliyet/paketleme) değişince pahalı orders
-  // önbelleğini düş. Planner hedef stok / R2 ayarları / UI tercihleri gibi finans-dışı
-  // anahtarlar önbelleği KORUR → Siparişler sekmesi gereksiz yere 1-3sn yeniden çekmez.
-  if (settingsBodyAffectsProfit(body)) {
-    bustProfitInputCaches();
+  // Yalnız DEĞİŞEN anahtarlar yazılır, hepsi TEK atomik istekte. Eskiden anahtar başına ayrı yazma
+  // sırayla koşuyordu (~2 sn) ve biri düşerse ayarların bir kısmı yeni bir kısmı eski kalıyor,
+  // önbellek de hiç düşmüyordu (denetim, 23 Kas 2026).
+  const anahtarlar = Object.keys(body);
+  let degisen: [string, string][] = Object.entries(body).map(([k, v]) => [k, String(v)]);
+  try {
+    if (anahtarlar.length) {
+      const mevcut = await prisma.appSetting.findMany({ where: { key: { in: anahtarlar } }, select: { key: true, value: true } });
+      const eski = new Map(mevcut.map((m) => [m.key, m.value]));
+      degisen = degisen.filter(([k, v]) => eski.get(k) !== v);
+    }
+    if (degisen.length) {
+      const ifadeler = degisen.map(([k, v]) => ({
+        sql: `INSERT INTO "AppSetting" ("key", "value") VALUES (?, ?) ON CONFLICT ("key") DO UPDATE SET "value" = excluded."value"`,
+        args: [k, v] as unknown[],
+      }));
+      if (!(await batchWrite(ifadeler))) {
+        await prisma.$transaction(
+          degisen.map(([k, v]) => prisma.appSetting.upsert({ where: { key: k }, create: { key: k, value: v }, update: { value: v } })),
+        );
+      }
+    }
+  } catch (error) {
+    return jsonError(error);
+  } finally {
+    // Önbellekler HER HÂLDE düşer — yarım kalmış bir yazmada bile ekran veritabanındakini göstersin.
+    const yazilan = Object.fromEntries(degisen);
+    // Yalnız kâr girdisi (vat/komisyon/maliyet/paketleme) değişince pahalı orders önbelleğini düş.
+    if (settingsBodyAffectsProfit(yazilan)) bustProfitInputCaches();
+    // Filament eşiği / grup susturma bu uçtan yazılıyor; zil 90 saniyelik önbellekten okuyor.
+    if (Object.keys(yazilan).some((key) => key.startsWith(FILAMENT_SETTING_PREFIX))) bustInventoryAlertCaches();
+    // R2 anahtarları değişmiş olabilir → yeni ayar ANINDA geçerli olsun.
+    invalidateR2Config();
+    bustCache("settings:");
   }
-  // Filament eşiği / grup susturma bu uçtan yazılıyor ama uyarıyı zil 90 saniyelik önbellekten
-  // okuyor: kullanıcı az önce susturduğu uyarıyı görmeye devam ederdi.
-  if (Object.keys(body).some((key) => key.startsWith(FILAMENT_SETTING_PREFIX))) {
-    bustInventoryAlertCaches();
-  }
-  // R2 anahtarları değişmiş olabilir → önbelleği düşür, yeni ayar ANINDA geçerli olsun
-  invalidateR2Config();
-  bustCache("settings:");
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, degisen: degisen.length });
 }

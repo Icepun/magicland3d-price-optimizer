@@ -74,6 +74,11 @@ export interface PackagingBreakdown {
     cost: number;
   }[];
   total: number;
+  /**
+   * Üründe seçili poşet/kutu ayarlarda YOK (seçenek silinmiş). Fiyatı bilinmiyor — 0 SAYILMAZ:
+   * eskiden sessizce 0 alınıyor, o ürünlerin kârı kutu fiyatı kadar şişiyordu (denetim, 23 Kas 2026).
+   */
+  secenekBulunamadi?: boolean;
 }
 
 export const DEFAULT_PACKAGING_OPTIONS: PackagingOption[] = [
@@ -190,8 +195,10 @@ export function computePackagingCost(
   selection: PackagingSelection,
   s: PackagingSettings
 ): PackagingBreakdown {
-  const poset =
-    s.options.find((o) => o.id === selection.packagingOptionId)?.price ?? 0;
+  const secili = selection.packagingOptionId ? s.options.find((o) => o.id === selection.packagingOptionId) : undefined;
+  // Seçim var ama seçenek yok → BİLİNMİYOR (aşağıda işaretlenir; tutar 0 kalır ama maliyet "tam" sayılmaz).
+  const secenekBulunamadi = !!selection.packagingOptionId && !secili;
+  const poset = secili?.price ?? 0;
 
   const nylonGrams = nylonGramsForLevel(selection.nylonLevel, s);
   const nylonPerGram = s.nylonRollGrams > 0 ? s.nylonRollPrice / s.nylonRollGrams : 0;
@@ -232,5 +239,6 @@ export function computePackagingCost(
     perShipment: perShipmentTotal,
     components,
     total,
+    ...(secenekBulunamadi ? { secenekBulunamadi: true } : {}),
   };
 }

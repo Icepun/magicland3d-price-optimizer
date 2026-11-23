@@ -5,6 +5,7 @@ import { StyleSheet, View } from "react-native";
 
 import { FadeInView, Screen, SubHeader, Tint, Txt } from "@/components/kit";
 import { getSettingsMap } from "@/lib/db/rules";
+import { formatCurrency } from "@/lib/format";
 import { color, radius, space } from "@/theme/tokens";
 
 /**
@@ -19,6 +20,13 @@ const NAV: { label: string; hint: string; href: Href; icon: SymbolViewProps["nam
   { label: "Reklam bütçesi", hint: "Platform bazlı, dönemli reklam payı", href: "/rules/ad-budget", icon: "megaphone.fill", tint: color.manual },
 ];
 
+/** Ayar metni ("4.6") → "₺4,60"; okunamazsa "—". */
+function tl(deger: string | null | undefined): string {
+  if (deger == null || deger === "") return formatCurrency(0);
+  const n = Number(String(deger).replace(",", "."));
+  return Number.isFinite(n) ? formatCurrency(n) : "—";
+}
+
 export default function SettingsScreen() {
   const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: getSettingsMap });
 
@@ -28,9 +36,11 @@ export default function SettingsScreen() {
     { label: "İndirim payı", value: `%${settings?.discountBuffer ?? "0"}` },
     {
       label: "Elektrik / saat",
-      value: settings?.costElectricityIncluded === "true" ? `₺${settings?.costElectricityPerHour ?? "0"} · dahil` : "Dahil değil",
+      value: settings?.costElectricityIncluded === "true" ? `${tl(settings?.costElectricityPerHour)} · dahil` : "Dahil değil",
     },
-    { label: "İşçilik / saat", value: `₺${settings?.costLaborPerHour ?? "0"}` },
+    // Asıl dolu oran — eskiden kartta hiç yoktu (denetim, 23 Kas 2026).
+    { label: "Makine aşınması / saat", value: tl(settings?.costMachineWearPerHour) },
+    { label: "İşçilik / saat", value: tl(settings?.costLaborPerHour) },
   ];
 
   return (

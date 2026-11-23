@@ -611,7 +611,16 @@ function CostEditorImpl({
                   {o.name} ({formatCurrency(o.price)})
                 </option>
               ))}
+              {/* Seçili seçenek ayarlardan silinmiş: "Yok" gibi görünmesin, maliyet eksik sayılıyor. */}
+              {packagingOptionId && !packagingSettings.options.some((o) => o.id === packagingOptionId) && (
+                <option value={packagingOptionId} disabled>
+                  Silinmiş seçenek — yenisini seç
+                </option>
+              )}
             </select>
+            {packagingOptionId && !packagingSettings.options.some((o) => o.id === packagingOptionId) && (
+              <p className="mt-1 text-[11px] text-[#C9D2F2]">Seçili poşet/kutu silinmiş — maliyet eksik sayılıyor, yenisini seç.</p>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { gezinebilirMi } from "@/lib/gezinme-korumasi";
 import {
   useCallback,
   useEffect,
@@ -768,6 +769,8 @@ export function CommandPalette() {
     (item: PaletteItem | undefined) => {
       if (!item) return;
       close();
+      // Açık sayfada kaydedilmemiş değişiklik varsa önce ona sorulur (Maliyet & Paketleme).
+      const git = (hedef: string) => { if (gezinebilirMi(hedef)) router.push(hedef); };
       if (item.action === "tum-urunler") {
         // Arama Ürünler sayfasına taşınır; sayfa açılırken oturumdaki aramayı geri yükler.
         // Kaydırma sıfırlanır: yeni aramanın ilk satırı ekranda olsun.
@@ -777,12 +780,12 @@ export function CommandPalette() {
           filterMode: "all",
           scrollTop: 0,
         });
-        router.push("/products");
+        git("/products");
         return;
       }
       if (item.kind === "siparis") {
         requestOrdersView({ search: item.title, view: "liste" });
-        router.push("/orders");
+        git("/orders");
         return;
       }
       if (item.id === HIZLI_HESAP_ID) {
@@ -791,10 +794,10 @@ export function CommandPalette() {
       }
       if (item.id === HAZIRLIK_ID) {
         requestOrdersView({ view: "hazirlik" });
-        router.push("/orders");
+        git("/orders");
         return;
       }
-      if (item.href) router.push(item.href);
+      if (item.href) git(item.href);
     },
     [close, query, router]
   );

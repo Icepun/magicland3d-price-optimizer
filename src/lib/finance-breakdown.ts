@@ -147,7 +147,15 @@ export function karDokumuTopla(
     const bilinen = R - U;
     const komisyon = r.actualCommission ?? sayi(r.estimatedCommission);
     const kargo = r.actualCargo ?? sayi(r.cargoCost);
-    const urun = sayi(r.productAndPackagingCost);
+    /**
+     * ÜRÜN SATIRI KAYITLI KÂRLA TUTARLI. Prova turu kalemleri BUGÜNKÜ maliyetle hesaplıyor; siparişin
+     * kârı ise ilk tam hesapta sabitlendi. Filament/paketleme fiyatı o günden beri değiştiyse fark
+     * eskiden "Diğer kesintiler"e düşüyor, satır küçülüyor hatta EKSİYE geçiyordu (denetim, 23 Kas
+     * 2026). Fark (bugünkü hesap − kayıtlı kâr) ürün maliyetine yazılır: satır, sipariş anında
+     * düşülen maliyeti gösterir. Toplam kâr DEĞİŞMEZ; yalnız satırlar arası dağılım düzelir.
+     */
+    const kayitFarki = sayi(r.profit) - P; // ikisi de aynı tabanda: maliyeti bilinen satırların kârı
+    const urun = Math.max(0, sayi(r.productAndPackagingCost) + kayitFarki);
     const bedeller =
       (r.actualOrderFee ?? sayi(r.fixedExpense)) + (r.actualPaymentFee ?? sayi(r.paymentFee)) + sayi(r.internationalFee);
     const reklam = sayi(r.adCost);

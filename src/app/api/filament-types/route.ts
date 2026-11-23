@@ -1,27 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { z } from "zod";
+import { jsonError } from "@/lib/api-error";
+import { FilamentSemasi } from "@/lib/filament-semasi";
 
-const Schema = z.object({
-  name: z.string().min(1),
-  costPerGram: z.number().min(0),
-  isActive: z.boolean().default(true),
-});
 
 export async function GET() {
-  const filaments = await prisma.filamentType.findMany({
-    orderBy: { name: "asc" },
-  });
-  return NextResponse.json(filaments);
+  try {
+    const filaments = await prisma.filamentType.findMany({ orderBy: { name: "asc" } });
+    return NextResponse.json(filaments);
+  } catch (error) {
+    return jsonError(error);
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const data = Schema.parse(await req.json());
+    const data = FilamentSemasi.parse(await req.json());
+    // Yeni filament henüz hiçbir üründe yok → kâr önbelleğine dokunmaya gerek yok.
     const filament = await prisma.filamentType.create({ data });
     return NextResponse.json(filament, { status: 201 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Hata olustu";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return jsonError(error, 400);
   }
 }
