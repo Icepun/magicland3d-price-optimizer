@@ -7,6 +7,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getModelsDir } from "@/lib/storage";
 import { createModelRows } from "@/lib/model-files";
+import { gorselliKimlikler } from "@/lib/model-gorseli";
 import { getR2Config, isValidModelKey, headObjectSize, getObjectRange } from "@/lib/r2";
 import { readModelBundle, readModelBundleAralikli } from "@/core/printers/model-colors";
 import { saklanabilirGorsel } from "@/lib/model-gramaj";
@@ -24,10 +25,10 @@ const olcum = (v: number | null | undefined) => (typeof v === "number" && Number
  * Yeni satırı ekranın beklediği HAFİF biçime indirger: önizleme görseli (ortalama 61 KB) ve
  * renk tablosu satırla birlikte gönderilmez; "görsel var mı" ve çizilecek renkler yeter.
  */
-function hafifYanit<T extends { thumbnail?: string | null; colorsJson?: string | null; plateJson?: string | null }>(row: T) {
-  const { thumbnail, colorsJson, plateJson: _plateJson, ...kalan } = row;
+function hafifYanit<T extends { colorsJson?: string | null; plateJson?: string | null }>(row: T, gorselVar: boolean) {
+  const { colorsJson, plateJson: _plateJson, ...kalan } = row;
   void _plateJson;
-  return { ...kalan, hasThumbnail: !!thumbnail, renkler: renkleriCoz(colorsJson) };
+  return { ...kalan, hasThumbnail: gorselVar, renkler: renkleriCoz(colorsJson) };
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -52,14 +53,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       },
       orderBy: [{ printerConfigId: "asc" }, { sortOrder: "asc" }, { createdAt: "asc" }],
     });
-    const thumbIds = new Set(
-      (
-        await prisma.$queryRawUnsafe<{ id: string }[]>(
-          `SELECT id FROM ProductModelFile WHERE productId = ? AND typeof(thumbnail) = 'text'`,
-          id,
-        )
-      ).map((r) => r.id),
-    );
+    // Görsel kendi tablosunda; yalnız kimlikler okunur (lib/model-gorseli.ts).
+    const thumbIds = await gorselliKimlikler(files.map((f) => f.id));
     return NextResponse.json(
       files.map(({ colorsJson, ...f }) => ({ ...f, hasThumbnail: thumbIds.has(f.id), renkler: renkleriCoz(colorsJson) })),
     );
@@ -146,7 +141,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         storedPath: "",
       });
       bustModelCaches(); // kütüphane yeni dosyayı hemen görsün
-      return NextResponse.json(hafifYanit(mine), { status: 201 });
+      return NextResponse.json(hafifYanit(mine, gorsel != null), { status: 201 });
     }
 
     // ── YEREL (R2 kapalı / fallback): multipart upload → diske yaz ──
@@ -204,7 +199,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       thumbnail: gorsel,
     });
     bustModelCaches();
-    return NextResponse.json(hafifYanit(mine), { status: 201 });
+    return NextResponse.json(hafifYanit(mine, gorsel != null), { status: 201 });
   } catch (error) {
     return jsonError(error);
   }

@@ -6,6 +6,7 @@
  * döndürdüğü özetle AYNI biçimdedir — ekran hangisinden geldiğini ayırt etmeden kullanır.
  */
 import { prisma } from "./prisma";
+import { gorselVarMi } from "./model-gorseli";
 
 const CUSTOM_PID = "__custom__";
 
@@ -35,9 +36,7 @@ export async function mevcutOzelBaskiOzeti(
   if (!satir) return null;
   // Önizleme görseli satırda data URL olarak duruyor ve yüzlerce KB — burada taşınmaz, kalıcı
   // önbellekli önizleme ucunun adresi verilir. Görsel yoksa uç 404 döner, ekran yedek simgeyi çizer.
-  const gorselVar = await prisma.$queryRaw<{ var_mi: number }[]>`
-    SELECT (typeof(thumbnail) = 'text') AS var_mi FROM ProductModelFile WHERE id = ${satir.id} LIMIT 1
-  `;
+  const gorselVar = await gorselVarMi(satir.id);
   let renkSayisi = 0;
   try {
     const renk = satir.colorsJson ? (JSON.parse(satir.colorsJson) as { colors?: unknown[] }) : null;
@@ -51,7 +50,7 @@ export async function mevcutOzelBaskiOzeti(
     sizeBytes: satir.sizeBytes,
     grams: satir.gramaj,
     estPrintMin: satir.estPrintMin,
-    thumbnail: Number(gorselVar?.[0]?.var_mi ?? 0) === 1 ? `/api/models/${satir.id}/preview` : null,
+    thumbnail: gorselVar ? `/api/models/${satir.id}/preview` : null,
     colorCount: renkSayisi,
     mevcut: true,
   };

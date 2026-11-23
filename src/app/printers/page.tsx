@@ -3460,7 +3460,7 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
   const qc = useQueryClient();
   const multiColor = target.brand === "bambu" || target.brand === "snapmaker";
   const isBambu = target.brand === "bambu";
-  const { data, isLoading, isError, error } = useQuery<{ models: PrintableModel[] }>({
+  const { data, isLoading, isError, isPending, isFetching, fetchStatus, refetch } = useQuery<{ models: PrintableModel[] }>({
     queryKey: ["printable-models", target.id],
     queryFn: () => fetchJson<{ models: PrintableModel[] }>(`/api/printers/${target.id}/printable-models`),
     // Model ekle/sil/düzenle yolları bu anahtarı invalidate ediyor (ModelFilesCard) → 10dk taze:
@@ -3470,6 +3470,9 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
     // NOT: global refetchOnMount:false; burada AÇIKÇA true — yoksa invalidate sonrası tazelenmezdi.
     staleTime: 10 * 60_000,
     refetchOnMount: true,
+    // Veritabanı anlık takılabiliyor (6 sn tavanı) — kullanıcı hata görmeden önce iki kez dene.
+    retry: 2,
+    retryDelay: (deneme) => 1500 * (deneme + 1),
   });
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<PrintableModel | null>(null);
@@ -3549,10 +3552,23 @@ function StartModal({ target, onClose }: { target: { id: string; name: string; b
         )}
 
         <div className="flex-1 overflow-y-auto -mx-1 px-1 space-y-0.5 min-h-[140px]">
-          {isLoading ? (
+          {isPending && fetchStatus === "paused" ? (
+            <p className="py-8 text-center text-xs text-muted-foreground">Bağlantı yok — bağlanınca liste gelir.</p>
+          ) : isLoading ? (
             <div className="py-8 text-center text-muted-foreground"><Loader2 className="h-4 w-4 mx-auto animate-spin" /></div>
-          ) : isError ? (
-            <p className="text-xs text-destructive text-center py-6">{(error as Error)?.message || "Modeller alınamadı"}</p>
+          ) : isError && !data ? (
+            // Ham hata metni gösterilmez (son kullanıcı için anlamsız) — kısa mesaj + yeniden dene.
+            <div className="flex flex-col items-center gap-2.5 py-8 text-center animate-in fade-in duration-300">
+              <p className="text-xs text-muted-foreground">Liste şu an yüklenemedi.</p>
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                disabled={isFetching}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-foreground ring-1 ring-white/10 transition hover:bg-white/[0.1] active:scale-[0.97] disabled:opacity-60"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} /> Tekrar dene
+              </button>
+            </div>
           ) : !openNode ? (
             filtered.length === 0 ? (
               <div className="py-8 text-center">

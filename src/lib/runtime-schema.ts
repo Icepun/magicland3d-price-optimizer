@@ -61,6 +61,11 @@ let schemaReady: Promise<void> | null = null;
 //      Listing.createdAt/updatedAt/lastSyncedAt, UnmatchedListing×2, Notification.createdAt,
 //      PushToken.createdAt). Sürüm artırılmazsa fast-path TAM EŞİTLİK aradığı için onarım
 //      hiç koşmaz. Bu göç tüm makinelerde bir kez tam tarama yapar (ölçülen ~2-3,5 sn).
+// v63: Model önizleme görseli AYRI TABLODA — `ProductModelFileThumb` (fileId PK, thumbnail).
+//      Görsel `ProductModelFile` satırını büyütünce orta kolonlar taşma sayfasına düşüyor, sunucu
+//      soğukken "Baskı Başlat" listesi 52 sn sürüp zaman aşımına uğruyordu. Var olan görseller
+//      açılış bakımında taşınır (lib/model-gorseli.ts `gorselleriTasi`); eski kolon eski sürüm
+//      cihazlar için kalır. Yeni tablo → eski sürümler etkilenmez (görselsiz görünürler).
 // v62: Kargo denetimi — `PlatformOrderFinancial.chargedDesi` + `parcelNo` (itiraz için paket no) (pazaryerinin kestiği desi: Trendyol kargo
 //      faturası kalemi, Hepsiburada tutardan), `OrderFinanceSnapshot.penaltyKurus` (Trendyol termin gecikme
 //      bedeli, kârdan düşülür) ve `delayInfo` (gecikme bilgisi, JSON). NULLABLE.
@@ -134,7 +139,7 @@ let schemaReady: Promise<void> | null = null;
 //      Son ikisi otomatik üretilen satırı kaynağına bağlar; üzerlerindeki KISMİ UNIQUE indeks
 //      aynı kuralın aynı ayı iki kez eklemesini engeller (otomatik üretim her açılışta koşuyor,
 //      koruma olmadan o ayın gideri her açılışta bir kat daha artardı).
-const CURRENT_SCHEMA_VERSION = "62";
+const CURRENT_SCHEMA_VERSION = "63";
 
 /** Açılış/perf ölçümünü userData/perf.log'a yaz (packaged app'te görünür). */
 function logPerf(msg: string) {
@@ -1613,7 +1618,16 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // satırda görselin tamamını okur (19 Kas 2026: eşleştirme sorgusu 40 sn, uygulama kullanılamaz).
     // Bu sıra yalnız YENİ kurulan veritabanını korur; var olan veritabanında yeni kolon yine
     // sona eklenir — onu açılıştaki bakım düzeltir (bkz. lib/buyuk-kolon-sonda.ts).
+    // v63: kolon artık YAZILMIYOR (görsel `ProductModelFileThumb`'ta). Eski sürüm cihazlar hâlâ
+    // yazabildiği için duruyor; oraya düşeni açılış bakımı yeni tabloya taşır (lib/model-gorseli.ts).
     await ensureColumn("ProductModelFile", "thumbnail", "TEXT");
+    // v63: önizleme görseli kendi tablosunda — satır = tek görsel, "var mı" PK dizininden okunur.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "ProductModelFileThumb" (
+        "fileId" TEXT NOT NULL PRIMARY KEY,
+        "thumbnail" TEXT NOT NULL
+      )
+    `);
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "ProductModelFile_productId_printerConfigId_idx" ON "ProductModelFile"("productId", "printerConfigId")`
     );

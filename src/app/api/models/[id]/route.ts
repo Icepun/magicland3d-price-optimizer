@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { gorselOku } from "@/lib/model-gorseli";
 import { getR2Config, deleteObject } from "@/lib/r2";
 import { bustModelCaches } from "@/lib/cache-busting";
 
@@ -20,10 +21,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     const { id } = await params;
     const mf = await prisma.productModelFile.findUnique({
       where: { id },
-      select: { id: true, originalName: true, sizeBytes: true, contentMd5: true, thumbnail: true, fileType: true, printerConfigId: true },
+      select: { id: true, originalName: true, sizeBytes: true, contentMd5: true, fileType: true, printerConfigId: true },
     });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
-    return NextResponse.json(mf);
+    return NextResponse.json({ ...mf, thumbnail: await gorselOku(id) });
   } catch (error) {
     return jsonError(error);
   }
@@ -65,7 +66,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     // ?allVariants=1 → "Tüm varyantlara uygula" AÇIKKEN silme: aynı dosyayı (ortak r2Key/storedPath)
     // paylaşan TÜM varyant satırlarını sil (kullanıcı kutucuk seçiliyken hepsinden gitsin bekliyor).
     const allVariants = new URL(req.url).searchParams.get("allVariants") === "1";
-    const mf = await prisma.productModelFile.findUnique({ where: { id }, omit: { thumbnail: true } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ ok: true });
 
     if (allVariants && mf.r2Key) {

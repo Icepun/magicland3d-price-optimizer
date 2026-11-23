@@ -70,27 +70,37 @@ const GORSEL_PARCA = 20;
  * plan şeridinden okunur; parçalar arasında başka sorgular araya girebilir.
  */
 export async function modelDosyalariniOku() {
-  const satirlar = await remotePrisma.productModelFile.findMany({ omit: { thumbnail: true } });
-  // `typeof()` görselin içeriğini OKUMAZ (bkz. lib/buyuk-kolon-sonda.ts).
-  const gorselliler = (
+  const satirlar = await remotePrisma.productModelFile.findMany();
+  const gorseller = new Map<string, string>();
+  // Görseller kendi tablosunda (v63, bkz. lib/model-gorseli.ts). Kimlikler PK dizininden gelir.
+  const yeni = (
+    await remotePrisma.$queryRawUnsafe<Array<{ fileId: string }>>(`SELECT "fileId" FROM "ProductModelFileThumb"`)
+  ).map((r) => String(r.fileId));
+  for (let i = 0; i < yeni.length; i += GORSEL_PARCA) {
+    const dilim = yeni.slice(i, i + GORSEL_PARCA);
+    const parca = await remotePrisma.$queryRawUnsafe<Array<{ fileId: string; thumbnail: string }>>(
+      `SELECT "fileId", "thumbnail" FROM "ProductModelFileThumb" WHERE "fileId" IN (${dilim.map(() => "?").join(",")})`,
+      ...dilim
+    );
+    for (const g of parca) gorseller.set(String(g.fileId), g.thumbnail);
+  }
+  // Taşıma henüz koşmadıysa görsel eski kolonda kalmış olabilir. `typeof()` içeriği OKUMAZ.
+  const eski = (
     await remotePrisma.$queryRawUnsafe<Array<{ id: string }>>(
       `SELECT "id" FROM "ProductModelFile" WHERE typeof("thumbnail") = 'text'`
     )
-  ).map((r) => String(r.id));
-  const gorseller = new Map<string, string | null>();
-  for (let i = 0; i < gorselliler.length; i += GORSEL_PARCA) {
-    const parca = await remotePrisma.productModelFile.findMany({
-      where: { id: { in: gorselliler.slice(i, i + GORSEL_PARCA) } },
-      select: { id: true, thumbnail: true },
-    });
-    for (const p of parca) gorseller.set(p.id, p.thumbnail);
+  )
+    .map((r) => String(r.id))
+    .filter((id) => !gorseller.has(id));
+  for (let i = 0; i < eski.length; i += GORSEL_PARCA) {
+    const dilim = eski.slice(i, i + GORSEL_PARCA);
+    const parca = await remotePrisma.$queryRawUnsafe<Array<{ id: string; thumbnail: string | null }>>(
+      `SELECT "id", "thumbnail" FROM "ProductModelFile" WHERE "id" IN (${dilim.map(() => "?").join(",")})`,
+      ...dilim
+    );
+    for (const g of parca) if (g.thumbnail) gorseller.set(String(g.id), g.thumbnail);
   }
-  return satirlar.map((satir) => ({
-    ...satir,
-    thumbnail: gorseller.has(satir.id)
-      ? (gorseller.get(satir.id) ?? null)
-      : ((satir as { thumbnail?: string | null }).thumbnail ?? null),
-  }));
+  return satirlar.map((satir) => ({ ...satir, thumbnail: gorseller.get(satir.id) ?? null }));
 }
 
 /**

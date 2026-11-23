@@ -216,7 +216,7 @@ export function getVizPack(modelFileId: string): Promise<PackResult> {
   if (existing) return existing;
   const job = (async (): Promise<PackResult> => {
     // Önizleme görseli (ortalama 38 KB) burada kullanılmıyor — satırla birlikte çekilmesin.
-    const mf = await prisma.productModelFile.findUnique({ where: { id: modelFileId }, omit: { thumbnail: true } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id: modelFileId } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
 
     const key = packCacheKey(mf);

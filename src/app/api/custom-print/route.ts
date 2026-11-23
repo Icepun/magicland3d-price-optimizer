@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { gorselliKimlikler } from "@/lib/model-gorseli";
 
 export const dynamic = "force-dynamic";
 
@@ -30,14 +31,8 @@ export async function GET() {
       },
       orderBy: { createdAt: "desc" },
     });
-    const thumbIds = new Set(
-      (
-        await prisma.$queryRawUnsafe<{ id: string }[]>(
-          `SELECT id FROM ProductModelFile WHERE productId = ? AND typeof(thumbnail) = 'text'`,
-          CUSTOM_PID,
-        )
-      ).map((r) => r.id),
-    );
+    // Görsel kendi tablosunda; yalnız kimlikler (lib/model-gorseli.ts).
+    const thumbIds = await gorselliKimlikler(files.map((f) => f.id));
 
     const printerIds = [...new Set(files.map((f) => f.printerConfigId))];
     const printers = printerIds.length

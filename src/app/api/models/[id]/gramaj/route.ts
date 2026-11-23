@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { gorselKaydet } from "@/lib/model-gorseli";
 import { readModelBilgisi } from "@/lib/model-gramaj";
 import { bustModelCaches } from "@/lib/cache-busting";
 
@@ -21,7 +22,7 @@ interface Satir {
  * Tek bir model dosyasının gramajını, süresini ve önizleme görselini dosyadan OKU ve kaydet.
  *
  * ⚠️ ÜRÜN MALİYETİNE DOKUNMAZ. Yazılan alanlar `ProductModelFile.gramaj` / `estPrintMin` /
- * `thumbnail`; bunlar yalnız gösterim içindir (Modeller sayfası, ürünün Baskı Dosyaları kartı).
+ * önizleme görseli (`ProductModelFileThumb`); bunlar yalnız gösterim içindir (Modeller sayfası, ürünün Baskı Dosyaları kartı).
  * Kâr ve maliyet hesaplarının kaynağı olan `ProductCost.filamentWeight` (Berke'nin elle
  * girdiği değer) buradan HİÇ etkilenmez — gerekçe ve koruma: `src/lib/model-gramaj.ts`.
  *
@@ -32,11 +33,11 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    // Görselin KENDİSİ çekilmez (ortalama 61 KB) — yalnız "var mı" sorulur. Tek sorgu:
-    // uzak veritabanında her ek sorgu ~96 ms ve sıralı.
+    // Görselin KENDİSİ çekilmez (ortalama 61 KB) — yalnız "var mı" sorulur (görsel kendi
+    // tablosunda, PK dizininden; bkz. lib/model-gorseli.ts). Tek sorgu: uzakta her sorgu sıralı.
     const [mf] = await prisma.$queryRawUnsafe<Satir[]>(
       `SELECT id, r2Key, storedPath, fileType, gramaj, estPrintMin,
-              (typeof(thumbnail) = 'text') AS gorselVar
+              EXISTS (SELECT 1 FROM "ProductModelFileThumb" t WHERE t."fileId" = ProductModelFile.id) AS gorselVar
          FROM ProductModelFile WHERE id = ?`,
       id,
     );
@@ -51,21 +52,20 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const olcum = await readModelBilgisi(mf);
     // Okunamayanı 0 YAZMA — "bilinmiyor" ile "sıfır" aynı şey değil. Yalnız GERÇEKTEN
     // okunabilen ve henüz kayıtlı OLMAYAN alan yazılır; diğerleri eski değerinde kalır.
-    const data: { gramaj?: number; estPrintMin?: number; thumbnail?: string } = {};
+    const data: { gramaj?: number; estPrintMin?: number } = {};
     if (olcum.gramaj != null && mf.gramaj == null) data.gramaj = olcum.gramaj;
     if (olcum.estPrintMin != null && mf.estPrintMin == null) data.estPrintMin = Math.round(olcum.estPrintMin);
-    if (olcum.thumbnail != null && !gorselVar) data.thumbnail = olcum.thumbnail;
+    const yeniGorsel = olcum.thumbnail != null && !gorselVar ? olcum.thumbnail : null;
 
-    if (Object.keys(data).length > 0) {
-      await prisma.productModelFile.update({ where: { id }, data });
-      bustModelCaches();
-    }
+    if (Object.keys(data).length > 0) await prisma.productModelFile.update({ where: { id }, data });
+    if (yeniGorsel) await gorselKaydet(id, yeniGorsel);
+    if (Object.keys(data).length > 0 || yeniGorsel) bustModelCaches();
     const gramaj = data.gramaj ?? mf.gramaj;
     const estPrintMin = data.estPrintMin ?? mf.estPrintMin;
     return NextResponse.json({
       gramaj,
       estPrintMin,
-      hasThumbnail: gorselVar || data.thumbnail != null,
+      hasThumbnail: gorselVar || yeniGorsel != null,
       ...(gramaj == null && estPrintMin == null ? { reason: "Bu dosyada gramaj ve süre yazmıyor" } : {}),
     });
   } catch (error) {

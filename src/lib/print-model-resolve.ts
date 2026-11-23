@@ -5,6 +5,7 @@ import {
   type ModelFileCandidate,
 } from "@/lib/print-file-signature";
 import { familyMemberIds } from "@/core/printers/printer-family";
+import { gorselVarMi } from "@/lib/model-gorseli";
 
 /**
  * Yazıcıda ŞU AN basılan işi (currentFilename) bir model kaydına eşler.
@@ -80,21 +81,14 @@ export async function resolvePrintModel(printerId: string, filename: string): Pr
    * kendisi zaten `/api/models/<id>/preview` ucundan bir yıllık `immutable` önbellekle
    * servis ediliyor — tarayıcı ikinci kez hiç istemiyor.
    *
-   * ⚠️ `select: { thumbnail: true }` YETMEZ: o da 285 KB'ı Turso'dan çeker (ve her sorgu
-   * tek mutex'te sıralı). Bu yüzden ham SQL ile yalnız boolean okunuyor.
-   *
-   * ⚠️ `typeof()` BİLEREK: SQLite yalnız bu işlev için kolonun içeriğini okumaz (türüne
-   * bakar). `thumbnail IS NOT NULL AND thumbnail <> ''` aynı sonucu verir ama görselin
-   * TAMAMINI okur — tablo taramalarında 24 MB (19 Kas 2026). Boş metin hiç yazılmıyor.
+   * Görsel kendi tablosunda (v63, lib/model-gorseli.ts): "var mı" PK dizininden okunur,
+   * görsel baytına hiç dokunulmaz.
    */
-  const satir = await prisma.$queryRaw<{ var_mi: number }[]>`
-    SELECT (typeof(thumbnail) = 'text') AS var_mi
-    FROM ProductModelFile WHERE id = ${hit.id} LIMIT 1
-  `;
+  const thumbnailVar = await gorselVarMi(hit.id);
   return {
     id: hit.id,
     contentMd5: hit.contentMd5,
-    thumbnailVar: Number(satir?.[0]?.var_mi ?? 0) === 1,
+    thumbnailVar,
     sizeBytes: hit.sizeBytes,
   };
 }

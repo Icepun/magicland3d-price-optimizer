@@ -643,9 +643,8 @@ model ProductModelFile {
   sliced          Boolean?
   /** Bambu plaka meta (JSON: {plateParam,filamentCount}) — ilk baskıda parse edilip saklanır. */
   plateJson       String?
-  /** Dilimleyicinin gcode/3mf'e gömdüğü önizleme görseli (data URL) — arşiv/listelerde küçük
-      görsel için. Yüklemede çıkarılır; eski dosyalar ilk baskıda dolar (backfill). */
-  thumbnail       String?
+  // Önizleme görseli BU TABLODA DEĞİL → `ProductModelFileThumb` (v63). Veritabanındaki eski
+  // `thumbnail` kolonu yalnız eski sürüm cihazlar için duruyor; açılış bakımı oraya yazılanı taşır.
   /** Dosya içeriğinin MD5'i (hex) — yazıcıda "zaten var" tespiti için kimlik. Yükleme adına
       gömülür (stem-md5ilk10.ext); ad+boyut eşleşmesi = kesin aynı içerik (isim tahmini değil). */
   contentMd5      String?
@@ -670,6 +669,18 @@ model ProductModelFile {
 
   @@index([printerConfigId])
   @@index([productId, printerConfigId])
+}
+
+/// Model dosyasının dilimleyici önizleme görseli (data URL). AYRI TABLODA, çünkü (23 Kas 2026
+/// ölçümü) görsel `ProductModelFile` satırını büyütünce SQLite satırın yalnız küçük bir kısmını
+/// ana sayfada tutuyor; renkler/içerik imzası gibi kolonlar taşma sayfalarına düşüyor ve sunucu
+/// soğukken baskı listesi sorgusu 52 sn sürüyordu (aynı sorgu ısınınca 0,3 sn). Burada satır =
+/// tek görsel; "görsel var mı" denetimi birincil anahtar dizininden okunur, görselin kendisine
+/// dokunmaz. Yabancı anahtar yok: dosya silinince kalan satırı açılış bakımı temizler.
+/// Okuma/yazma yalnız `src/lib/model-gorseli.ts` üzerinden.
+model ProductModelFileThumb {
+  fileId    String @id
+  thumbnail String
 }
 
 /**

@@ -16,7 +16,6 @@
  */
 import zlib from "node:zlib";
 import { promisify } from "node:util";
-import { prisma } from "@/lib/prisma";
 import { getR2Config, headObjectSize, listModelObjects, deleteObject, presignGetUrl, putObjectBytes } from "@/lib/r2";
 import { resolvePrintModel, type PrintModelInfo } from "@/lib/print-model-resolve";
 import {
@@ -27,6 +26,7 @@ import {
 } from "@/lib/gcode-viz/pack-server";
 import { ModelCokBuyukHatasi } from "@/lib/gcode-viz/parse-gcode";
 import { processSingleton } from "./process-singleton";
+import { gorselOku } from "@/lib/model-gorseli";
 
 const gzip = promisify(zlib.gzip);
 
@@ -169,8 +169,7 @@ async function hazirla(yaziciId: string, dosya: string, onceki: Kayit | undefine
     if (onceki?.plateKey?.startsWith(onek)) {
       plateKey = onceki.plateKey;
     } else {
-      const satir = await prisma.productModelFile.findUnique({ where: { id: model.id }, select: { thumbnail: true } });
-      const gorsel = veriAdresiniCoz(satir?.thumbnail);
+      const gorsel = veriAdresiniCoz(await gorselOku(model.id));
       if (gorsel) {
         plateKey = `${onek}${gorsel.uzanti}`;
         if ((await headObjectSize(plateKey, cfg)) == null) {

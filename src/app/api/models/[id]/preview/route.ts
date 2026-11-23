@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
+import { gorselKaydet, gorselOku, gorselVarMi } from "@/lib/model-gorseli";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    const mf = await prisma.productModelFile.findUnique({
-      where: { id },
-      select: { thumbnail: true },
-    });
-    const thumb = mf?.thumbnail ?? "";
+    const thumb = (await gorselOku(id)) ?? "";
     const match = /^data:(image\/(?:png|webp|jpeg));base64,(.+)$/.exec(thumb);
     // Görsel yok → 404. Boş bir gövde döndürmek yerine açıkça yok demek, arayüzün yer
     // tutucuya düşmesini sağlar (kırık resim ikonu göstermez).
@@ -53,11 +50,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (!/^data:image\/(png|webp|jpeg);base64,/.test(thumb) || thumb.length > 1_000_000) {
       return NextResponse.json({ error: "Geçersiz görsel" }, { status: 400 });
     }
-    const mf = await prisma.productModelFile.findUnique({ where: { id }, select: { id: true, thumbnail: true } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id }, select: { id: true } });
     if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
-    if (mf.thumbnail) return NextResponse.json({ ok: true, kept: true }); // mevcut görsel korunur
+    if (await gorselVarMi(id)) return NextResponse.json({ ok: true, kept: true }); // mevcut görsel korunur
 
-    await prisma.productModelFile.update({ where: { id }, data: { thumbnail: thumb } });
+    await gorselKaydet(id, thumb);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return jsonError(error);

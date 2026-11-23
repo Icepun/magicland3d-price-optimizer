@@ -1387,7 +1387,7 @@ async function runImport(data: ImportPayload, emit: Emit) {
       colorsJson: file.colorsJson ?? null,
       sliced: file.sliced ?? null,
       plateJson: file.plateJson ?? null,
-      thumbnail: file.thumbnail ?? null,
+      // Önizleme görseli model dosyası satırına DEĞİL, kendi tablosuna yazılır (aşağıda; v63).
       contentMd5: file.contentMd5 ?? null,
       sortOrder: file.sortOrder ?? 0,
     };
@@ -1406,9 +1406,15 @@ async function runImport(data: ImportPayload, emit: Emit) {
         update
       )
     );
+    if (file.thumbnail) {
+      modelStmts.push(
+        upsert("ProductModelFileThumb", ["fileId"], { fileId: file.id, thumbnail: file.thumbnail }, { thumbnail: file.thumbnail })
+      );
+    }
   }
   jobs.push({ label: "Baskı dosyaları", statKey: "productModelFiles", stmts: modelStmts });
-  stats.productModelFiles = modelStmts.length;
+  // Görsel ifadeleri ayrı satır değildir — sayaç yalnız model dosyalarını sayar.
+  stats.productModelFiles = modelStmts.filter((m) => !m.sql.includes('"ProductModelFileThumb"')).length;
 
   const mappingIdByKey = new Map<string, string>();
   if (printFileProducts.length) {

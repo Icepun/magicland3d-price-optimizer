@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { swr } from "@/lib/route-cache";
 import { renkleriCoz } from "@/lib/model-dosya-gorunum";
+import { gorselliKimlikler } from "@/lib/model-gorseli";
 
 export const dynamic = "force-dynamic";
 
@@ -155,14 +156,9 @@ async function computeModels() {
   ]);
   const urunById = new Map(urunler.map((u) => [u.id, u]));
 
-  // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler döner (içerik değil, ~20 MB fark).
-  const thumbIds = new Set(
-    (
-      await prisma.$queryRawUnsafe<{ id: string }[]>(
-        `SELECT id FROM ProductModelFile WHERE typeof(thumbnail) = 'text'`,
-      )
-    ).map((r) => r.id),
-  );
+  // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler (görsel kendi tablosunda, PK dizininden
+  // okunur; bkz. lib/model-gorseli.ts).
+  const thumbIds = await gorselliKimlikler();
 
   // Aynı bulut nesnesini kaç kayıt gösteriyor — silme onayı bunu söyleyecek.
   const paylasim = new Map<string, number>();

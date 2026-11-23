@@ -12,6 +12,7 @@ import { printerCfgCached } from "@/core/printers/config-cache";
 import { getR2Config, isValidModelKey, headObjectSize, getObjectRange, deleteObject } from "@/lib/r2";
 import { familyMemberIds } from "@/core/printers/printer-family";
 import { mevcutOzelBaskiOzeti } from "@/lib/custom-print-existing";
+import { gorselKaydet } from "@/lib/model-gorseli";
 
 /** Yazıcının ailesi (aynı marka + model) — özel baskılar aile içinde ortak. */
 async function aileKimlikleri(printerConfigId: string): Promise<string[]> {
@@ -142,10 +143,11 @@ export async function POST(req: NextRequest) {
           estPrintMin: meta.estPrintMin,
           colorsJson: JSON.stringify(colors),
           sliced,
-          thumbnail: meta.thumbnail ?? null, // arşivde küçük görsel — zaten çıkarılıyordu, artık saklanıyor
           sortOrder: 0,
         },
       });
+      // Arşivde küçük görsel — kendi tablosunda (bkz. lib/model-gorseli.ts).
+      await gorselKaydet(saved.id, meta.thumbnail);
       // Yazıcı kartı bu dosyayı basarken görselini bulabilsin (dosya haritası uzun önbellekli).
       bayatOnbellegiDusur(BAYAT_ONBELLEK.modelDosyalari);
       return NextResponse.json({

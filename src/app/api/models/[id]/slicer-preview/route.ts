@@ -28,7 +28,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   await ensureRuntimeSchema();
   const { id } = await params;
   try {
-    const mf = await prisma.productModelFile.findUnique({ where: { id }, omit: { thumbnail: true } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id } });
     if (!mf) return NextResponse.json({ error: "Model dosyası yok" }, { status: 404 });
 
     const ad = (mf.originalName || mf.storedPath || "").toLowerCase();

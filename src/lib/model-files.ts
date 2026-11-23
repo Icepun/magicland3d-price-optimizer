@@ -4,6 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { prisma } from "./prisma";
 import { getR2Config, getObjectBytes } from "./r2";
+import { gorselKaydet } from "./model-gorseli";
 
 export interface LocalModelFile {
   /** Okunabilir yerel yol (R2 ise geçici dosya, değilse storedPath). */
@@ -102,7 +103,8 @@ export async function createModelRows(input: CreateModelRowsInput) {
     _count: { _all: true },
   });
   const countMap = new Map(counts.map((c) => [c.productId, c._count._all]));
-  const common = { printerConfigId, label, originalName, storedPath, r2Key, fileType, sizeBytes, gramaj, estPrintMin, colorsJson, sliced, thumbnail };
+  // Görsel model dosyası satırına YAZILMAZ — kendi tablosunda (lib/model-gorseli.ts).
+  const common = { printerConfigId, label, originalName, storedPath, r2Key, fileType, sizeBytes, gramaj, estPrintMin, colorsJson, sliced };
 
   // ANA ürün: create → id'li satırı döndürür. İstemci bunu cache'e ekler → yükleme sonrası refetch
   // GEREKMEZ (yazma-sonrası-okuma blokajı/donma yok).
@@ -112,10 +114,13 @@ export async function createModelRows(input: CreateModelRowsInput) {
 
   // VARYANTLAR: tek createMany (eskiden N ayrı bulut yazması, her biri ~1sn → artık tek yazma).
   const siblings = targetIds.filter((t) => t !== productId);
-  if (siblings.length) {
-    await prisma.productModelFile.createMany({
-      data: siblings.map((t) => ({ ...common, productId: t, sortOrder: countMap.get(t) ?? 0 })),
-    });
+  // Kimlikler burada üretilir: her varyant satırının görseli kendi kimliğiyle saklanacak.
+  const kardesler = siblings.map((t) => ({ ...common, id: crypto.randomUUID(), productId: t, sortOrder: countMap.get(t) ?? 0 }));
+  if (kardesler.length) {
+    await prisma.productModelFile.createMany({ data: kardesler });
+  }
+  if (thumbnail) {
+    for (const fileId of [mine.id, ...kardesler.map((k) => k.id)]) await gorselKaydet(fileId, thumbnail);
   }
   return mine;
 }

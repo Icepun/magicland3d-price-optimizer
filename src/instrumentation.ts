@@ -63,7 +63,12 @@ export async function register() {
     // Önizleme görseli tabloda son kolon mu? (bkz. lib/buyuk-kolon-sonda.ts) Açılış telaşı
     // geçtikten sonra, kimseyi bekletmeden. Normalde tek hafif sorgu; hata yutulur.
     setTimeout(() => {
-      void import("./lib/buyuk-kolon-bakimi")
+      // Önce görseller kendi tablosuna (v63, bkz. lib/model-gorseli.ts) — eski kolonda bir şey
+      // yoksa tek hafif sayım. Sonra kolon sırası bakımı.
+      void import("./lib/model-gorseli-bakimi")
+        .then((m) => m.modelGorseliBakimi())
+        .catch(() => {})
+        .then(() => import("./lib/buyuk-kolon-bakimi"))
         .then((m) => m.buyukKolonBakimi())
         .catch(() => {});
     }, 45_000);

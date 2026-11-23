@@ -5,6 +5,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { dedupeFiles, familyMemberIds } from "@/core/printers/printer-family";
 import { renkleriCoz } from "@/lib/model-dosya-gorunum";
+import { gorselliKimlikler } from "@/lib/model-gorseli";
 
 export const dynamic = "force-dynamic";
 
@@ -61,19 +62,9 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       urunBasina.set(f.productId, liste);
     }
     const tekil = [...urunBasina.values()].flatMap((liste) => dedupeFiles(liste));
-    // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler (içerik ayrı uçtan, uzun önbellekle).
-    // `typeof()` görselin içeriğini OKUMAZ; `<> ''` yazılsaydı her satırda görselin tamamı okunurdu.
-    const gorselli = new Set(
-      aile.length
-        ? (
-            await prisma.$queryRawUnsafe<{ id: string }[]>(
-              `SELECT id FROM ProductModelFile WHERE printerConfigId IN (${aile.map(() => "?").join(",")})
-                 AND typeof(thumbnail) = 'text'`,
-              ...aile,
-            )
-          ).map((r) => r.id)
-        : [],
-    );
+    // Hangi dosyada gömülü önizleme VAR — yalnız kimlikler (görsel kendi tablosunda, içerik
+    // ayrı uçtan uzun önbellekle gelir; bkz. lib/model-gorseli.ts).
+    const gorselli = await gorselliKimlikler(tekil.map((f) => f.id));
     const sira = new Map(files.map((f, i) => [f.id, i]));
     tekil.sort((a, b) => (sira.get(a.id) ?? 0) - (sira.get(b.id) ?? 0));
 

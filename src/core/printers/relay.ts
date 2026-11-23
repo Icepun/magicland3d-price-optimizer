@@ -437,7 +437,7 @@ async function executeCommand(c: Cfg, cmd: { action: string; modelFileId: string
   if (cmd.action === "start") {
     if (!cmd.modelFileId) throw new Error("Model dosyası belirtilmedi");
     if (c.type !== "moonraker") throw new Error("Bambu'da uzaktan baskı başlatma henüz desteklenmiyor");
-    const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId }, omit: { thumbnail: true } });
+    const mf = await prisma.productModelFile.findUnique({ where: { id: cmd.modelFileId } });
     if (!mf) throw new Error("Model dosyası bulunamadı");
     // Dosya bu yazıcı ya da AYNI AİLEDEN bir yazıcı için yüklenmiş olmalı (iki U1 aynı dosyayı
     // basar). Eskiden hiç bakılmıyordu: telefondan gelen komut her dosyayı her yazıcıya gönderebilirdi.

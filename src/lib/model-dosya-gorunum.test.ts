@@ -130,7 +130,8 @@ describe("yükleme ucu dosyadaki bilgiyi artık ATMIYOR", () => {
   });
 
   it("yanıt hafiftir: görselin kendisi değil 'var mı' bilgisi döner", () => {
-    expect(yukleme.match(/NextResponse\.json\(hafifYanit\(mine\)/g)?.length).toBe(2);
+    // İkinci argüman "görsel var mı": görsel kendi tablosunda, satırla dönmüyor (v63).
+    expect(yukleme.match(/NextResponse\.json\(hafifYanit\(mine, gorsel != null\)/g)?.length).toBe(2);
     expect(yukleme).not.toMatch(/NextResponse\.json\(mine,/);
   });
 

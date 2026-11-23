@@ -17,6 +17,7 @@ import { invalidatePrintFileMatches } from "@/core/printers/status-cache";
 import { buildSignedUploadName } from "@/lib/print-file-signature";
 import { sameFamily } from "@/core/printers/printer-family";
 import { baskiAktarimiBaslat } from "@/lib/print-transfer";
+import { gorselKaydet, gorselVarMi } from "@/lib/model-gorseli";
 
 export const dynamic = "force-dynamic";
 
@@ -314,11 +315,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             }
 
             // Önizleme backfill: dosya bu baskı için ZATEN açıldıysa ve kayıtta görsel yoksa çıkar.
-            if (!mf.thumbnail && parsePath) {
-              try {
-                const t = readModelMeta(parsePath).thumbnail;
-                if (t) persist.thumbnail = t;
-              } catch { /* önizleme çıkarılamadı — kritik değil */ }
+            // Görsel kendi tablosunda (lib/model-gorseli.ts) — `persist`'e KONMAZ: o nesne model
+            // dosyası satırına yazılıyor, bilinmeyen alan bütün güncellemeyi düşürürdü.
+            if (parsePath) {
+              const yol = parsePath;
+              void gorselVarMi(mf.id)
+                .then((var_) => {
+                  if (var_) return;
+                  const t = readModelMeta(yol).thumbnail;
+                  return t ? gorselKaydet(mf.id, t) : undefined;
+                })
+                .catch(() => { /* önizleme çıkarılamadı — kritik değil */ });
             }
             // İlk baskıda parse edilen meta kalıcılaşsın (fire-and-forget; baskıyı yavaşlatmaz).
             if (Object.keys(persist).length) {
