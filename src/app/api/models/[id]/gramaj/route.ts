@@ -4,7 +4,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { gorselKaydet } from "@/lib/model-gorseli";
 import { readModelBilgisi } from "@/lib/model-gramaj";
-import { bustModelCaches } from "@/lib/cache-busting";
+import { modelListesiniBayatla } from "@/lib/cache-busting";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +41,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
          FROM ProductModelFile WHERE id = ?`,
       id,
     );
-    if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
+    if (!mf) return NextResponse.json({ error: "Dosya bulunamadı — silinmiş olabilir" }, { status: 404 });
     const gorselVar = Number(mf.gorselVar ?? 0) === 1;
 
     // Üçü de biliniyorsa dosyaya hiç gitme.
@@ -59,7 +59,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
 
     if (Object.keys(data).length > 0) await prisma.productModelFile.update({ where: { id }, data });
     if (yeniGorsel) await gorselKaydet(id, yeniGorsel);
-    if (Object.keys(data).length > 0 || yeniGorsel) bustModelCaches();
+    // Yalnız gösterim bilgisi: liste silinmez, bayat sayılır (her parça için tüm önbelleği silmek
+    // sonraki açılışı soğuk hesaba düşürüyordu).
+    if (Object.keys(data).length > 0 || yeniGorsel) modelListesiniBayatla();
     const gramaj = data.gramaj ?? mf.gramaj;
     const estPrintMin = data.estPrintMin ?? mf.estPrintMin;
     return NextResponse.json({

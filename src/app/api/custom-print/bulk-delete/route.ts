@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { getR2Config, deleteObject } from "@/lib/r2";
+import { gorselleriSil } from "@/lib/model-gorseli";
 
 const CUSTOM_PID = "__custom__";
 
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
 
     await prisma.productModelFile.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
     bustModelCaches(); // yazıcı kartının dosya haritası silinenleri göstermesin
+    await gorselleriSil(rows.map((r) => r.id)).catch(() => { /* günlük bakım yetimleri temizler */ });
 
     // Dosya temizliği — referans kalmadıysa (özel baskılarda paylaşım yok ama yine de kontrol).
     const r2Keys = [...new Set(rows.map((r) => r.r2Key).filter((k): k is string => !!k))];

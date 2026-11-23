@@ -6,7 +6,7 @@
  * gerekiyordu. Burada dosya doğrudan o model + yazıcı için yüklenir, tablo yerinde yeşile döner.
  */
 import { useRef, useState } from "react";
-import { CloudUpload, Layers, Loader2, Printer } from "lucide-react";
+import { CloudUpload, Layers, Loader2, Printer, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -29,6 +29,11 @@ export interface DosyaEkleHedefi {
   varyantSayisi: number;
   /** Açılışta "tüm varyantlara ekle" seçili mi? (grup satırından açıldıysa evet) */
   tumVaryantlar: boolean;
+  /**
+   * Grup satırından açıldı: dosya TÜM varyantlara eklenir, anahtar kilitli. Eskiden kapatılabiliyordu
+   * ve dosya adı ekranda hiç yazmayan ilk varyanta gidiyordu (denetim, 23 Kas 2026).
+   */
+  grupSabit?: boolean;
 }
 
 function fmtSize(b: number) {
@@ -52,39 +57,52 @@ export function DosyaEkleDialog({
   const [yukleme, setYukleme] = useState<{ sira: number; toplam: number; ad: string; p: UploadProgress } | null>(null);
   const mesgul = yukleme !== null;
   const coklu = hedef.varyantSayisi > 1;
+  const kilitli = coklu && hedef.grupSabit === true;
+  /** "İptal" — süren yüklemeyi keser (askıda kalan bağlantıda pencere kilitlenmesin). */
+  const iptalRef = useRef<AbortController | null>(null);
 
   const yukle = async (liste: File[]) => {
     const uygun = liste.filter((f) => baskiDosyasiMi(f.name));
     if (uygun.length < liste.length) toast.error("Yalnız .gcode ve .3mf dosyaları eklenebilir");
     if (!uygun.length || mesgul) return;
     let tamam = 0;
+    /** Sunucunun dosyayı GERÇEKTEN yazdığı ürün sayısı (gizli varyantlar dahil). */
+    let hedefSayisi = 1;
+    const iptal = new AbortController();
+    iptalRef.current = iptal;
     setUploadsActive(1); // arka plan görselleştirme üretimi yükleme boyunca beklesin
     try {
       for (const [i, f] of uygun.entries()) {
+        if (iptal.signal.aborted) break;
         const ilerle = (p: UploadProgress) => setYukleme({ sira: i + 1, toplam: uygun.length, ad: f.name, p });
         ilerle({ loaded: 0, total: f.size, bytesPerSec: 0 });
         try {
-          await uploadProductModel({
+          const yanit = (await uploadProductModel({
             productId: hedef.productId,
             printerConfigId: hedef.printerConfigId,
             file: f,
-            applyToVariants: coklu && tumVaryantlar,
+            applyToVariants: coklu && (tumVaryantlar || kilitli),
             onProgress: ilerle,
-          });
+            signal: iptal.signal,
+          })) as { hedefSayisi?: number } | null;
+          if (typeof yanit?.hedefSayisi === "number") hedefSayisi = Math.max(hedefSayisi, yanit.hedefSayisi);
           tamam++;
         } catch (e) {
+          if (iptal.signal.aborted) break;
           toast.error(`${f.name}: ${e instanceof Error ? e.message : "yüklenemedi"}`);
         }
       }
     } finally {
+      iptalRef.current = null;
       setUploadsActive(-1);
       setYukleme(null);
       if (inputRef.current) inputRef.current.value = "";
     }
+    if (iptal.signal.aborted) toast("Yükleme iptal edildi");
     if (tamam > 0) {
-      toast.success(`${tamam} parça eklendi${coklu && tumVaryantlar ? ` · ${hedef.varyantSayisi} varyanta` : ""}`);
+      toast.success(`${tamam} parça eklendi${hedefSayisi > 1 ? ` · ${hedefSayisi} varyanta` : ""}`);
       onEklendi();
-      onClose();
+      if (!iptal.signal.aborted) onClose();
     }
   };
 
@@ -109,7 +127,15 @@ export function DosyaEkleDialog({
           </p>
         </div>
 
-        {coklu && (
+        {kilitli ? (
+          <div className="flex items-center gap-2.5 rounded-lg border border-[#7A7EFF]/30 bg-[#7A7EFF]/[0.06] p-2.5 text-xs">
+            <Layers className="h-4 w-4 shrink-0 text-[#A9AEFF]" />
+            <span className="min-w-0 flex-1">
+              <span className="font-medium">Grubun tüm varyantlarına eklenir</span>
+              <span className="block text-[11px] text-muted-foreground">Tek varyanta eklemek için satırı açıp o varyantın hücresine tıkla.</span>
+            </span>
+          </div>
+        ) : coklu && (
           <button
             type="button"
             role="switch"
@@ -230,9 +256,15 @@ export function DosyaEkleDialog({
         )}
 
         <div className="flex justify-end">
-          <Button variant="outline" size="sm" onClick={onClose} disabled={mesgul}>
-            {mesgul ? "Yükleniyor…" : "Kapat"}
-          </Button>
+          {mesgul ? (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => iptalRef.current?.abort()}>
+              <X className="h-3.5 w-3.5" /> İptal
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={onClose}>
+              Kapat
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

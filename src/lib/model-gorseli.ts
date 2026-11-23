@@ -38,6 +38,25 @@ export async function gorselKaydet(fileId: string, thumbnail: string | null | un
   );
 }
 
+/**
+ * AYNI görseli birden çok dosyaya yaz (varyantlara uygulanan yükleme) — uzakta TEK istek.
+ * Eskiden varyant başına ayrı yazma sırayla koşuyordu: 10 varyant = 10 yazma, tek kuyruk.
+ */
+export async function gorselleriKaydet(fileIds: readonly string[], thumbnail: string | null | undefined): Promise<void> {
+  const idler = [...new Set(fileIds.filter(Boolean))];
+  if (idler.length === 0 || !gecerli(thumbnail)) return;
+  const ifadeler = idler.map((fileId) => ({
+    sql: `INSERT INTO ${TABLO} ("fileId", "thumbnail") VALUES (?, ?)
+            ON CONFLICT ("fileId") DO UPDATE SET "thumbnail" = excluded."thumbnail"`,
+    args: [fileId, thumbnail] as unknown[],
+  }));
+  if (await batchWrite(ifadeler)) return;
+  for (const fileId of idler) await gorselKaydet(fileId, thumbnail);
+}
+
+/** Model dosyası kalmamış görseller — günlük bakım temizler (yalnız birincil anahtar dizini okunur). */
+export const YETIM_GORSEL_TEMIZLIGI = `DELETE FROM ${TABLO} WHERE "fileId" NOT IN (SELECT "id" FROM "ProductModelFile")`;
+
 /** Görselin kendisi — yalnız gösteren uç kullanır. Yoksa null. */
 export async function gorselOku(fileId: string): Promise<string | null> {
   if (!fileId) return null;

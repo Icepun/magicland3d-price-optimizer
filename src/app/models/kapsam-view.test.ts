@@ -223,16 +223,19 @@ describe("kütüphane ucu ve önbellek", () => {
   });
 
   it("dosya yazan HER uç kütüphane önbelleğini düşürür — yoksa liste 2 dakika eski kalır", () => {
-    for (const yol of [
-      "src/app/api/products/[id]/models/route.ts",
-      "src/app/api/models/[id]/route.ts",
-      "src/app/api/models/[id]/gramaj/route.ts",
-    ]) {
-      expect(oku(yol), yol).toContain("bustModelCaches()");
-    }
-    // Yükleme (bulut + yerel) ve ad değiştirme + silme.
+    // Yükleme (bulut + yerel) ve ad değiştirme doğrudan düşürür.
     expect(oku("src/app/api/products/[id]/models/route.ts").match(/bustModelCaches\(\)/g)?.length).toBe(2);
-    expect(oku("src/app/api/models/[id]/route.ts").match(/bustModelCaches\(\)/g)?.length).toBe(2);
+    expect(oku("src/app/api/models/[id]/route.ts").match(/bustModelCaches\(\)/g)?.length).toBe(1);
+    // Silme TEK güvenli yoldan gider; o yol önbelleği düşürür (ve görselleri siler).
+    expect(oku("src/app/api/models/[id]/route.ts")).toContain("modelSatirlariniSil(");
+    const temizlik = oku("src/lib/model-file-cleanup.ts");
+    expect(temizlik).toContain("bustModelCaches()");
+    expect(temizlik).toContain("gorselleriSil(");
+    // Dosyadan okunan gramaj/süre yalnız GÖSTERİM: liste silinmez, bayat sayılır (sonraki açılış
+    // eldeki listeyi hemen gösterir) — her parça için tüm önbelleği silmek soğuk hesaba düşürüyordu.
+    const gramaj = oku("src/app/api/models/[id]/gramaj/route.ts");
+    expect(gramaj).toContain("modelListesiniBayatla()");
+    expect(gramaj).not.toContain("bustModelCaches()");
   });
 
   it("ürün değişince de düşer: kütüphane artık tüm ürünleri listeliyor", () => {

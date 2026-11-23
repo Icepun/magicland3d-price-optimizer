@@ -15,6 +15,7 @@ import { bustModelCaches } from "@/lib/cache-busting";
 import fs from "node:fs";
 import { prisma } from "./prisma";
 import { getR2Config, deleteObject } from "./r2";
+import { gorselleriSil } from "./model-gorseli";
 
 export interface ModelSatiri {
   id: string;
@@ -63,6 +64,8 @@ export async function modelSatirlariniSil(
   // Tek deleteMany — dosya başına ayrı yazma yüzlerce dosyada dakikalar sürüyordu.
   await prisma.productModelFile.deleteMany({ where: { id: { in: idler } } });
   bustModelCaches(); // kütüphane listesi + yazıcı kartının dosya haritası
+  // Önizleme görselleri (ortalama 61 KB, varyant sayısı kadar) — eskiden silinmeyip sonsuza dek kalıyordu.
+  await gorselleriSil(idler).catch(() => { /* günlük bakım yetimleri temizler */ });
 
   const anahtarlar = [
     ...new Set(satirlar.flatMap((r) => [r.r2Key, r.meshR2Key]).filter((k): k is string => !!k)),

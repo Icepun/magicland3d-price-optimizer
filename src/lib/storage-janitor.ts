@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { prisma } from "./prisma";
+import { remotePrisma } from "./prisma";
 import { getR2Config, listModelObjects, deleteObject } from "./r2";
+import { perfYaz } from "./server-perf-log";
+
+/**
+ * EMNİYET FRENİ — bir turda bundan fazlası "sahipsiz" görünürse HİÇBİRİ silinmez, günlüğe yazılır.
+ * Normalde sahipsiz nesne yarım kalmış bir-iki yüklemedir; yüzlercesi yanlış veritabanına bağlı
+ * olunduğunu gösterir (denetim, 23 Kas 2026).
+ */
+const FREN_ADET = 20;
+const FREN_ORAN = 0.05;
 
 /**
  * Depo hademesi — oturum başına BİR KEZ, arka planda:
@@ -34,7 +43,10 @@ export async function runStorageJanitor(): Promise<void> {
     }
   } catch { /* temp okunamadı — kritik değil */ }
 
-  // 2) R2 orphan süpürme
+  // 2) R2 orphan süpürme — YALNIZ bulut veritabanına bağlıyken. Ayar dosyası bozulup uygulama yerel
+  // veritabanıyla açılırsa o veritabanında kaydı olmayan HER baskı dosyası "sahipsiz" görünür ve
+  // silinirdi (kalıcı veri kaybı).
+  if (!process.env.TURSO_DATABASE_URL?.trim()) return;
   try {
     const cfg = await getR2Config();
     if (!cfg) return;
@@ -51,14 +63,17 @@ export async function runStorageJanitor(): Promise<void> {
       referanslar: Set<string>,
     ): Promise<void> => {
       const objects = await listModelObjects(cfg, prefix);
-      for (const o of objects) {
-        if (referanslar.has(o.key)) continue;
-        if (!o.lastModified || o.lastModified.getTime() > cutoff) continue; // taze — confirm gelebilir
-        await deleteObject(o.key, cfg).catch(() => {});
+      const adaylar = objects.filter(
+        (o) => !referanslar.has(o.key) && !!o.lastModified && o.lastModified.getTime() <= cutoff, // taze — confirm gelebilir
+      );
+      if (adaylar.length > FREN_ADET || (objects.length > 0 && adaylar.length / objects.length > FREN_ORAN && adaylar.length > 3)) {
+        perfYaz(`DEPO-HADEMESI durdu: ${prefix} ${adaylar.length}/${objects.length} nesne sahipsiz göründü — silinmedi`);
+        return;
       }
+      for (const o of adaylar) await deleteObject(o.key, cfg).catch(() => {});
     };
 
-    const rows = await prisma.productModelFile.findMany({
+    const rows = await remotePrisma.productModelFile.findMany({
       where: { OR: [{ r2Key: { not: null } }, { meshR2Key: { not: null } }] },
       select: { r2Key: true, meshR2Key: true },
     });

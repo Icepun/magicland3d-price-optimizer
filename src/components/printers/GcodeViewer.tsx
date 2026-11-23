@@ -185,7 +185,12 @@ function YolIzleyiciDialog({
         if (g.totalSegments > 0) { setProgress({ label: "Hazır", pct: 100 }); setGeom(g); }
         else setError("Bu dosyadan çizim çıkarılamadı");
       })
-      .catch((e) => { if (alive) setError(e instanceof Error ? e.message : "Dosya işlenemedi"); });
+      // Teknik metin (HTTP kodu, İngilizce hata) kullanıcıya gösterilmez.
+      .catch((e) => {
+        if (!alive) return;
+        const m = e instanceof Error ? e.message : "";
+        setError(m && !/HTTP|fetch|Error|Failed|JSON|undefined|null|NetworkError/i.test(m) ? m : "Bu dosya şu an açılamadı — tekrar dene");
+      });
     return () => { alive = false; };
   }, [cacheKey, fileId]);
 

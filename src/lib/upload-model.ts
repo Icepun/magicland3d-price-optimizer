@@ -21,20 +21,37 @@ interface PresignResp {
 }
 
 /** Genel XHR gönderimi + upload progress (hız EMA ile yumuşatılır). */
+/** Bu kadar süre hiç bayt gitmezse yükleme "takıldı" sayılır ve kesilir (Wi-Fi askıda kalınca pencere kilitleniyordu). */
+const TAKILMA_MS = 60_000;
+
 function xhrSend(
   method: string,
   url: string,
   body: XMLHttpRequestBodyInit,
   onProgress?: (p: UploadProgress) => void,
+  signal?: AbortSignal,
 ): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("Yükleme iptal edildi"));
     const xhr = new XMLHttpRequest();
     xhr.open(method, url);
+    let sonIlerleme = Date.now();
+    const bekci = setInterval(() => {
+      if (Date.now() - sonIlerleme > TAKILMA_MS) {
+        clearInterval(bekci);
+        xhr.abort();
+        reject(new Error("Bağlantı koptu — yükleme durdu, tekrar dene"));
+      }
+    }, 5_000);
+    const iptal = () => { clearInterval(bekci); xhr.abort(); reject(new Error("Yükleme iptal edildi")); };
+    signal?.addEventListener("abort", iptal, { once: true });
+    const bitir = () => { clearInterval(bekci); signal?.removeEventListener("abort", iptal); };
     const t0 = performance.now();
     let lastT = t0;
     let lastLoaded = 0;
     let speed = 0;
     xhr.upload.onprogress = (e) => {
+      sonIlerleme = Date.now();
       if (!e.lengthComputable || !onProgress) return;
       const now = performance.now();
       const dt = (now - lastT) / 1000;
@@ -52,9 +69,9 @@ function xhrSend(
       }
       onProgress({ loaded: e.loaded, total: e.total, bytesPerSec: speed });
     };
-    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
-    xhr.onerror = () => reject(new Error("Ağ hatası — bağlantını kontrol et"));
-    xhr.ontimeout = () => reject(new Error("Zaman aşımı"));
+    xhr.onload = () => { bitir(); resolve({ status: xhr.status, text: xhr.responseText }); };
+    xhr.onerror = () => { bitir(); reject(new Error("Bağlantı hatası — bağlantını kontrol et")); };
+    xhr.ontimeout = () => { bitir(); reject(new Error("Bağlantı koptu — yükleme durdu, tekrar dene")); };
     xhr.send(body);
   });
 }
@@ -106,24 +123,23 @@ export async function uploadPartMesh(opts: {
   return { tur: onayJson.tur || "", boyut: onayJson.boyut || file.size };
 }
 
-async function presign(originalName: string): Promise<PresignResp> {
+async function presign(originalName: string, signal?: AbortSignal): Promise<PresignResp> {
   const r = await fetch("/api/storage/presign", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ originalName }),
+    signal,
   });
   const data = (await r.json().catch(() => ({}))) as PresignResp;
-  if (!r.ok) throw new Error(data?.error || `Hazırlık hatası (HTTP ${r.status})`);
+  if (!r.ok) throw new Error(data?.error || "Yükleme başlatılamadı — tekrar dene");
   return data;
 }
 
 /** Dosyayı imzalı URL ile doğrudan R2'ye PUT et (gerçek progress). */
-async function putToR2(uploadUrl: string, file: File, onProgress?: (p: UploadProgress) => void) {
-  const res = await xhrSend("PUT", uploadUrl, file, onProgress);
+async function putToR2(uploadUrl: string, file: File, onProgress?: (p: UploadProgress) => void, signal?: AbortSignal) {
+  const res = await xhrSend("PUT", uploadUrl, file, onProgress, signal);
   if (res.status < 200 || res.status >= 300) {
-    throw new Error(
-      `Buluta yükleme reddedildi (HTTP ${res.status}). R2 CORS ayarı eksik olabilir — Ayarlar → Cloud Depolama'dan "Bağlantıyı test et".`,
-    );
+    throw new Error("Dosya buluta yüklenemedi — Ayarlar → Bulut Depolama'dan bağlantıyı test et");
   }
 }
 
@@ -134,13 +150,16 @@ export async function uploadProductModel(opts: {
   file: File;
   applyToVariants?: boolean;
   onProgress?: (p: UploadProgress) => void;
+  /** "İptal" düğmesi. */
+  signal?: AbortSignal;
 }): Promise<unknown> {
-  const { productId, printerConfigId, file, applyToVariants, onProgress } = opts;
-  const pre = await presign(file.name);
+  const { productId, printerConfigId, file, applyToVariants, onProgress, signal } = opts;
+  const pre = await presign(file.name, signal);
 
   if (pre.mode === "r2" && pre.uploadUrl && pre.key) {
-    await putToR2(pre.uploadUrl, file, onProgress);
+    await putToR2(pre.uploadUrl, file, onProgress, signal);
     const r = await fetch(`/api/products/${productId}/models`, {
+      signal,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -161,7 +180,7 @@ export async function uploadProductModel(opts: {
   fd.append("file", file);
   fd.append("printerConfigId", printerConfigId);
   if (applyToVariants) fd.append("applyToVariants", "true");
-  const res = await xhrSend("POST", `/api/products/${productId}/models`, fd, onProgress);
+  const res = await xhrSend("POST", `/api/products/${productId}/models`, fd, onProgress, signal);
   if (res.status < 200 || res.status >= 300) throw new Error(errFromText(res.text, "Yüklenemedi"));
   try { return JSON.parse(res.text); } catch { return null; }
 }

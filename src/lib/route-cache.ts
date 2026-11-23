@@ -221,6 +221,19 @@ function diskFilesWithPrefix(prefixes: string[]): string[] {
   return matches;
 }
 
+/**
+ * Ön eke uyan kayıtları SİLMEDEN bayat say: sonraki istek eldeki gövdeyi hemen alır, arkada tek
+ * tazeleme başlar. Yalnız gösterim amaçlı küçük değişiklikler için (ör. bir dosyanın okunan gramajı) —
+ * `bustCaches` her çağrıda disk klasörünü baştan tarıyor ve gövdeyi siliyordu; pencerede eksik
+ * bilgisi tamamlanan her parça sonraki açılışı soğuk hesaba düşürüyordu (denetim, 23 Kas 2026).
+ */
+export function swrBayatla(prefix: string): void {
+  if (!prefix) return;
+  for (const [k, kayit] of store) {
+    if (k.startsWith(prefix)) store.set(k, { ...kayit, at: 0 });
+  }
+}
+
 /** Verilen ön ekle başlayan tüm anahtarları temizle (argümansız: hepsi). Yazma sonrası tazelik için. */
 export function bustCache(prefix?: string): void {
   if (!prefix) {

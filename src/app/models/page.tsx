@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   Boxes, Search, Package, Play, Loader2, Layers, Pencil, Trash2, Check, X, Plus,
-  ChevronRight, Printer, CircleDashed, ArrowUpRight,
+  ChevronRight, Printer, CircleDashed, ArrowUpRight, AlertTriangle, RefreshCw, HardDrive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,7 +29,7 @@ import { useDisariBirakmayiYut } from "@/lib/dosya-birakma";
 import { ParcaBilgiSatiri, ParcaGorseli } from "@/components/printers/parca-gorunum";
 import { bilgiyiIsle, useEksikBilgiyiTamamla } from "@/lib/dosya-bilgisi";
 import { gorunenAd } from "@/lib/model-dosya-gorunum";
-import { aileDosyalari, gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
+import { aileDosyalari, aileIkizleri, gramajByPrinter, gramajCompareText, missingGramajFiles } from "./models-view";
 import {
   hucreAciklamasi, kapsamAileleri, kapsamOzeti, modelSatirlari, satirAra, satirSirala, satirUyar, varyantAdi,
   type KapsamAilesi, type KapsamFiltresi, type KapsamHucresi, type KapsamSirasi, type ModelSatiri,
@@ -52,9 +52,9 @@ interface LibStorage {
   rowBytes: number;
   sharedBytes: number;
   fileCount: number;
-  byPrinter: Array<{ printerConfigId: string; bytes: number; files: number }>;
-  largest: Array<{ id: string; productId: string; productName: string; printerConfigId: string; name: string; sizeBytes: number }>;
 }
+/** Kapalı ya da silinmiş yazıcıya ait (hiçbir sütunda görünmeyen) dosya. */
+interface SahipsizDosya extends LibFile { productId: string; productName: string; yaziciAdi: string | null }
 
 type Satir = ModelSatiri<LibProduct>;
 
@@ -63,7 +63,8 @@ function fmtSize(b: number) {
   return b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
 }
 
-const YESIL = "var(--panel-green)";
+// Magicland paleti: zümrüt = dosyası var, lavanta = eksik (turuncu yok).
+const YESIL = "#34D399";
 const SIRALAR: Array<[KapsamSirasi, string]> = [
   ["ad", "Ad"],
   ["eksik", "Eksikler önce"],
@@ -75,10 +76,19 @@ export default function ModelsPage() {
   const qc = useQueryClient();
   // Elde doğru veri varken ekranı gri kutulara çevirmiyoruz: önbellek gösterilir, tazeleme
   // arka planda olur. (Eskiden `staleTime: 0` yüzünden her girişte tüm liste yeniden iniyordu.)
-  const { data, isLoading } = useQuery<{ products: LibProduct[]; printers: LibPrinter[]; storage?: LibStorage }>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<{
+    products: LibProduct[];
+    printers: LibPrinter[];
+    storage?: LibStorage;
+    kapaliYazicilar?: Array<{ id: string; name: string }>;
+  }>({
     queryKey: ["models"],
     queryFn: () => fetchJson("/api/models"),
     staleTime: 60_000,
+    // Açılışta TAZELE (elde liste varsa o gösterilir, yenisi arkada gelir). Eskiden genel ayar yüzünden
+    // hiç tazelenmiyordu: ürün sayfasında yüklenen dosya burada "Ekle" görünüyor, aynı dosya ikinci
+    // kez yükleniyordu (denetim, 23 Kas 2026).
+    refetchOnMount: true,
   });
   const [q, setQ] = useState("");
   // 280+ satır her tuşta yeniden süzülmesin: yazı akıcı kalır, liste bir an sonra yetişir.
@@ -86,13 +96,36 @@ export default function ModelsPage() {
   const [filtre, setFiltre] = useState<KapsamFiltresi>({ tur: "tumu" });
   const [sira, setSira] = useState<KapsamSirasi>("ad");
   const [acik, setAcik] = useState<ReadonlySet<string>>(() => new Set());
-  const [parts, setParts] = useState<{ product: LibProduct; aile: KapsamAilesi } | null>(null);
+  // Parça penceresi ürünün KİMLİĞİNİ tutar, ürün her çizimde güncel listeden okunur. Eskiden açılış
+  // anındaki kopya tutuluyordu: silinen parça pencerede kalıyor, yeni ad görünmüyordu.
+  const [parts, setParts] = useState<{ productId: string; aile: KapsamAilesi } | null>(null);
+  const [sahipsizAcik, setSahipsizAcik] = useState(false);
   const [ekle, setEkle] = useState<DosyaEkleHedefi | null>(null);
   useDisariBirakmayiYut();
 
   const printers = useMemo(() => data?.printers ?? [], [data]);
-  const allProducts = useMemo(() => data?.products ?? [], [data]);
+  const hamUrunler = useMemo(() => data?.products ?? [], [data]);
   const storage = data?.storage;
+  /**
+   * Görünen (açık) yazıcıların dosyaları tabloya, KAPALI/SİLİNMİŞ yazıcılarınkiler ayrı listeye.
+   * Eskiden ikisi karışıktı: hiçbir hücrede görünmeyen dosyalar başlıktaki parça sayısına ve satır
+   * boyutuna giriyor, bu sayfadan da silinemiyordu.
+   */
+  const { allProducts, sahipsizler } = useMemo(() => {
+    const acik = new Set(printers.map((p) => p.id));
+    const adlar = new Map((data?.kapaliYazicilar ?? []).map((y) => [y.id, y.name]));
+    const yetim: SahipsizDosya[] = [];
+    const urunler = hamUrunler.map((u) => {
+      const gorunen = u.files.filter((f) => acik.has(f.printerConfigId));
+      if (gorunen.length === u.files.length) return u;
+      for (const f of u.files) {
+        if (!acik.has(f.printerConfigId)) yetim.push({ ...f, productId: u.productId, productName: u.name, yaziciAdi: adlar.get(f.printerConfigId) ?? null });
+      }
+      return { ...u, files: gorunen, totalBytes: gorunen.reduce((t, f) => t + (f.sizeBytes ?? 0), 0) };
+    });
+    return { allProducts: urunler, sahipsizler: yetim };
+  }, [hamUrunler, printers, data?.kapaliYazicilar]);
+  const parcaUrunu = parts ? hamUrunler.find((u) => u.productId === parts.productId) ?? null : null;
 
   // İki Snapmaker U1 aynı dosyayı basar → TEK sütun.
   const aileler = useMemo(() => kapsamAileleri(printers), [printers]);
@@ -136,17 +169,18 @@ export default function ModelsPage() {
     if (idx != null) {
       const urun = satir.urunler[idx];
       const h = satir.varyantHucreleri[idx][aileIdx];
-      if (h.durum === "var") setParts({ product: urun, aile });
+      if (h.durum === "var") setParts({ productId: urun.productId, aile });
       else setEkle(ekleHedefi(urun.productId, urun.name, false));
       return;
     }
     const h = satir.hucreler[aileIdx];
     if (h.durum === "yok") {
       // Hiçbir varyantta yok → dosya grubun tamamına eklenir (pencerede kapatılabilir).
-      setEkle(ekleHedefi(satir.urunler[0].productId, satir.ad, true));
+      // Anahtar kilitli (grupSabit): kapatılınca dosya adı görünmeyen ilk varyanta gidiyordu.
+      setEkle({ ...ekleHedefi(satir.urunler[0].productId, satir.ad, true), grupSabit: true });
     } else if (h.durum === "var" && h.ayniDosyalar) {
       // Renk varyantları aynı dosyayı taşıyor → hangisinden açıldığı fark etmez.
-      setParts({ product: satir.urunler[0], aile });
+      setParts({ productId: satir.urunler[0].productId, aile });
     } else {
       // Kısmen dolu ya da varyantların dosyaları farklı → hangisi olduğunu kullanıcı seçsin.
       setAcik((eski) => new Set(eski).add(satir.anahtar));
@@ -166,23 +200,24 @@ export default function ModelsPage() {
   return (
     <div className="mx-auto w-full max-w-[1280px] space-y-4 p-6">
       {/* Başlık — tek satır; sayfanın işi aşağıdaki tablo. */}
-      <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+      <header className="flex flex-wrap items-center gap-x-6 gap-y-3 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/12">
-            <Boxes className="h-5 w-5 text-primary" />
-          </div>
+          <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+            <Boxes className="size-5" />
+          </span>
           <div className="min-w-0">
-            <h1 className="text-xl font-bold leading-tight tracking-tight">Model Kütüphanesi</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Model Kütüphanesi</h1>
             <p className="text-xs text-muted-foreground">
               Hangi modelin baskı dosyası var, hangisinin yok.{" "}
-              <Link href="/planner" className="font-medium text-primary hover:underline">
+              <Link href="/planner" className="group/plan inline-flex items-center gap-0.5 font-medium text-[#A9AEFF] transition-colors hover:text-[#C9D2F2]">
                 Üretim Planı
+                <ArrowUpRight className="h-3 w-3 transition-transform group-hover/plan:-translate-y-px group-hover/plan:translate-x-px" />
               </Link>
             </p>
           </div>
         </div>
-        {!isLoading && (
-          <div className="flex items-center gap-5 animate-in fade-in duration-500">
+        {!isLoading && !(isError && !data) && (
+          <div className="flex items-stretch gap-2">
             <Stat value={ozet.toplam} label="model" />
             <Stat value={toplamParca} label="parça" />
             {/*
@@ -203,10 +238,33 @@ export default function ModelsPage() {
             )}
           </div>
         )}
-      </div>
+      </header>
+
+      {/* Yenileme düştü ama elde liste var: liste kalır, kısa şerit çıkar. */}
+      {isError && data && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl bg-[#7A7EFF]/[0.06] px-4 py-2.5 ring-1 ring-[#7A7EFF]/25 animate-in fade-in slide-in-from-top-1 duration-300">
+          <p className="flex min-w-0 items-center gap-2 text-xs font-medium text-[#C9D2F2]">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[#A9AEFF]" />
+            Liste güncellenemedi — son alınan gösteriliyor.
+          </p>
+          <Button variant="outline" size="sm" className="h-7 shrink-0 gap-1.5 rounded-lg text-xs" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} /> Tekrar dene
+          </Button>
+        </div>
+      )}
 
       {isLoading ? (
         <Iskelet />
+      ) : isError && !data ? (
+        // Okunamadı ≠ yazıcı/ürün yok: eskiden "Önce yazıcı ekle" ve "0 model" yazıyordu.
+        <div className="rounded-2xl bg-rose-500/[0.05] py-14 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+          <AlertTriangle className="mx-auto h-9 w-9 text-rose-300/80" />
+          <p className="mt-3 font-medium">Model listesi yüklenemedi</p>
+          <p className="mt-1 text-sm text-muted-foreground">Bağlantını kontrol edip tekrar dene.</p>
+          <Button variant="outline" size="sm" className="mt-4 gap-1.5" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} /> Tekrar dene
+          </Button>
+        </div>
       ) : printers.length === 0 ? (
         <EmptyHint title="Önce yazıcı ekle" desc="Yazıcılar → Yönet'ten yazıcılarını ekledikten sonra ürünlere baskı dosyası yükleyebilirsin." />
       ) : tumSatirlar.length === 0 ? (
@@ -238,7 +296,7 @@ export default function ModelsPage() {
             <div className="relative min-w-[200px] max-w-sm flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               {/* Arama parça adlarında da çalışır — dosya adı çoğu zaman aranan bilgiyi taşır. */}
-              <Input placeholder="Model veya parça ara…" value={q} onChange={(e) => setQ(e.target.value)} className="h-9 pl-9 pr-8" />
+              <Input placeholder="Model veya parça ara…" value={q} onChange={(e) => setQ(e.target.value)} className="h-9 rounded-xl border-white/[0.08] bg-white/[0.03] pl-9 pr-8 dark:bg-white/[0.03] focus-visible:border-[#7A7EFF]/50 focus-visible:ring-[#7A7EFF]/25" />
               {q && (
                 <button
                   type="button"
@@ -251,7 +309,7 @@ export default function ModelsPage() {
               )}
             </div>
 
-            <div className="flex items-center rounded-lg border bg-muted/30 p-0.5">
+            <div className="flex items-center gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
               <Sekme active={filtre.tur === "tumu"} onClick={() => setFiltre({ tur: "tumu" })} sayi={ozet.toplam}>Tümü</Sekme>
               <Sekme active={filtre.tur === "dosyali"} onClick={() => setFiltre({ tur: "dosyali" })} sayi={ozet.dosyali}>Dosyası var</Sekme>
               <Sekme active={filtre.tur === "dosyasiz"} onClick={() => setFiltre({ tur: "dosyasiz" })} sayi={ozet.dosyasiz}>Dosyası yok</Sekme>
@@ -269,9 +327,9 @@ export default function ModelsPage() {
 
           {/* TABLO — satır = model, sütun = yazıcı. Sütunlar hizalı olduğu için boşluklar yukarıdan aşağı okunur. */}
           {/* `overflow-clip` (hidden DEĞİL): hidden kaydırma bağlamı açar ve başlık yapışmaz. */}
-          <div className="overflow-clip rounded-xl border bg-card">
+          <div className="overflow-clip rounded-2xl bg-card ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none">
             <div
-              className="sticky top-0 z-10 grid items-center gap-2 rounded-t-xl border-b bg-card/95 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur"
+              className="sticky top-0 z-10 grid items-center gap-2 rounded-t-2xl border-b border-white/[0.06] bg-card/95 px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur"
               style={{ gridTemplateColumns: kolonlar }}
             >
               <span className="pl-7">
@@ -299,7 +357,7 @@ export default function ModelsPage() {
                 )}
               </div>
             ) : (
-              <div className="divide-y divide-border/50">
+              <div className="divide-y divide-white/[0.05]">
                 {satirlar.map((s, i) => (
                   <SatirGorunumu
                     key={s.anahtar}
@@ -317,6 +375,30 @@ export default function ModelsPage() {
             )}
           </div>
 
+          {/* Kapalı / silinmiş yazıcıların dosyaları: görünmüyor ama bulutta yer tutuyor → göster, silinebilsin. */}
+          {sahipsizler.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSahipsizAcik(true)}
+              className="group flex w-full items-center gap-3 rounded-2xl bg-[#7A7EFF]/[0.05] px-4 py-3 text-left ring-1 ring-[#7A7EFF]/20 transition-[background-color,transform] hover:bg-[#7A7EFF]/[0.09] active:scale-[0.995] animate-in fade-in slide-in-from-bottom-1 duration-300"
+            >
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#7A7EFF]/15 text-[#C9D2F2] ring-1 ring-[#7A7EFF]/25">
+                <HardDrive className="h-4 w-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium">
+                  {sahipsizler.length} dosya kapalı ya da silinmiş yazıcılara ait
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Tabloda görünmüyor · {fmtSize(sahipsizler.reduce((t, f) => t + (f.sizeBytes ?? 0), 0))} yer tutuyor
+                </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-[#A9AEFF]">
+                Gör ve sil <ChevronRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+              </span>
+            </button>
+          )}
+
           {/* Açıklama — renkler tek başına bilgi taşımasın. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[11px] text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -332,13 +414,17 @@ export default function ModelsPage() {
         </>
       )}
 
-      {parts && (
+      {parts && parcaUrunu && (
         <PartsModal
-          product={parts.product}
+          product={parcaUrunu}
           aile={parts.aile}
           printers={printers}
           onClose={() => setParts(null)}
+          onDegisti={tazele}
         />
+      )}
+      {sahipsizAcik && (
+        <SahipsizDosyalarPenceresi dosyalar={sahipsizler} onClose={() => setSahipsizAcik(false)} onSilindi={tazele} />
       )}
       {ekle && <DosyaEkleDialog hedef={ekle} onClose={() => setEkle(null)} onEklendi={tazele} />}
     </div>
@@ -362,32 +448,35 @@ function KapsamKarti({
   return (
     <div
       className={cn(
-        "rounded-xl border bg-card p-3 transition-[border-color,box-shadow] duration-200 animate-in fade-in slide-in-from-bottom-1",
-        secili ? "border-primary/50 shadow-[0_0_0_3px] shadow-primary/10" : "hover:border-border",
+        "rounded-2xl p-4 ring-1 transition-[box-shadow,transform,background-color] duration-300 hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
+        "animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none",
+        secili
+          ? "bg-gradient-to-br from-[#9B5CFF]/15 to-[#4F8CFF]/[0.06] ring-[#7A7EFF]/40 shadow-[0_20px_40px_-30px_rgba(122,126,255,0.7)]"
+          : "bg-card ring-white/[0.07] hover:ring-white/[0.12] hover:shadow-[0_20px_40px_-30px_rgba(122,126,255,0.55)]",
       )}
-      style={{ animationDelay: `${sira * 60}ms`, animationFillMode: "both", animationDuration: "400ms" }}
+      style={{ animationDelay: `${sira * 60}ms` }}
     >
       <div className="flex items-center gap-2.5">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-muted/40">
-          <Printer className="h-4 w-4 text-muted-foreground" />
-        </div>
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/20 text-[#C9D2F2] ring-1 ring-white/10">
+          <Printer className="h-4 w-4" />
+        </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold leading-tight">{aile.ad}</p>
           {altAd && altAd !== aile.ad && <p className="truncate text-[10px] text-muted-foreground" title={altAd}>{altAd}</p>}
         </div>
         <p className="shrink-0 text-right tabular-nums leading-none">
-          <AnimatedNumber value={Math.round(oran * 100)} format={(n) => `%${Math.round(n)}`} className="text-lg font-bold" />
+          <AnimatedNumber value={Math.round(oran * 100)} format={(n) => `%${Math.round(n)}`} className="text-xl font-semibold tracking-tight" />
         </p>
       </div>
 
-      <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuemin={0} aria-valuemax={toplam} aria-valuenow={varSayisi} aria-label={`${aile.ad}: ${varSayisi}/${toplam} modelin dosyası var`}>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]" role="progressbar" aria-valuemin={0} aria-valuemax={toplam} aria-valuenow={varSayisi} aria-label={`${aile.ad}: ${varSayisi}/${toplam} modelin dosyası var`}>
         <div
-          className="h-full rounded-full transition-[width] duration-700 ease-out"
-          style={{ width: `${Math.round(oran * 1000) / 10}%`, backgroundColor: YESIL }}
+          className="h-full origin-left rounded-full transition-[width] duration-700 ease-out [animation:panel-bar-fill_0.8s_cubic-bezier(.2,.8,.2,1)_both] motion-reduce:[animation:none]"
+          style={{ width: `${Math.round(oran * 1000) / 10}%`, background: `linear-gradient(90deg, rgb(52 211 153 / 0.55), ${YESIL})`, animationDelay: `${120 + sira * 70}ms` }}
         />
       </div>
 
-      <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+      <div className="mt-3 grid grid-cols-2 gap-1.5">
         <KapsamDugmesi active={secili === "var"} onClick={() => onSec("var")} renk={YESIL} sayi={varSayisi} etiket="dosyası var" ipucu={`Yalnız ${aile.ad} dosyası olanları göster`} ikon={<Check className="h-3 w-3" />} />
         <KapsamDugmesi active={secili === "yok"} onClick={() => onSec("yok")} renk="var(--panel-amber)" sayi={yok} etiket="eksik" ipucu={`Yalnız ${aile.ad} dosyası eksik olanları göster`} ikon={<CircleDashed className="h-3 w-3" />} />
       </div>
@@ -405,9 +494,9 @@ function KapsamDugmesi({
       aria-pressed={active}
       title={active ? "Süzgeci kaldır" : ipucu}
       className={cn(
-        "flex items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-[11px] transition-all active:scale-[0.97]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "font-semibold" : "border-border/70 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+        "flex items-center justify-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-all active:scale-[0.97]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
+        active ? "font-semibold" : "border-white/[0.08] bg-white/[0.02] text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
       )}
       style={active ? { borderColor: `color-mix(in oklch, ${renk} 55%, transparent)`, backgroundColor: `color-mix(in oklch, ${renk} 14%, transparent)`, color: renk } : undefined}
     >
@@ -420,7 +509,7 @@ function KapsamDugmesi({
 
 /** Tablo hücresi: var (yeşil, parça sayısı) · kısmen (amber, kaç varyantta) · yok (kesikli, "ekle"). */
 function Hucre({ h, aciklama, onClick }: { h: KapsamHucresi; aciklama: string; onClick: () => void }) {
-  const ortak = "group/h flex h-7 w-full items-center justify-center gap-1 rounded-md border text-[11px] transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const ortak = "group/h flex h-7 w-full items-center justify-center gap-1 rounded-lg border text-[11px] transition-all duration-150 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60";
   if (h.durum === "var") {
     return (
       <button
@@ -454,7 +543,7 @@ function Hucre({ h, aciklama, onClick }: { h: KapsamHucresi; aciklama: string; o
       type="button"
       onClick={onClick}
       title={`${aciklama} — dosya ekle`}
-      className={cn(ortak, "border-dashed border-border/60 text-muted-foreground/35 hover:border-primary/50 hover:bg-primary/10 hover:text-primary")}
+      className={cn(ortak, "border-dashed border-white/[0.09] text-muted-foreground/35 hover:border-[#7A7EFF]/50 hover:bg-[#7A7EFF]/10 hover:text-[#C9D2F2]")}
     >
       <span className="group-hover/h:hidden">—</span>
       <span className="hidden items-center gap-1 font-medium group-hover/h:inline-flex">
@@ -487,7 +576,7 @@ const SatirGorunumu = memo(function SatirGorunumu({
       style={{ animationDelay: `${Math.min(sira, 14) * 18}ms`, animationFillMode: "both", animationDuration: "260ms" }}
     >
       <div
-        className={cn("relative grid items-center gap-2 px-3 py-1.5 transition-colors hover:bg-muted/40", acik && "bg-muted/25")}
+        className={cn("relative grid items-center gap-2 px-3 py-1.5 transition-colors duration-200 hover:bg-white/[0.03]", acik && "bg-white/[0.025]")}
         style={{ gridTemplateColumns: kolonlar }}
       >
         {/* Durum çizgisi: tam yeşil · eksik amber · dosyasız boş — tabloyu kenardan da okunur kılar. */}
@@ -537,7 +626,7 @@ const SatirGorunumu = memo(function SatirGorunumu({
                     {satir.urunler.map((u) => varyantAdi(u, satir.ad)).join(" · ")}
                   </span>
                 )}
-                {eslesenParca > 0 && <span className="shrink-0 font-medium text-primary/90">{eslesenParca} parça eşleşti</span>}
+                {eslesenParca > 0 && <span className="shrink-0 font-medium text-[#A9AEFF]">{eslesenParca} parça eşleşti</span>}
               </p>
             )}
           </div>
@@ -559,15 +648,15 @@ const SatirGorunumu = memo(function SatirGorunumu({
 
       {/* Varyantlar — her biri kendi ürün sayfasına gider, hücreleri ayrı ayrı doldurulur. */}
       {coklu && acik && (
-        <div className="border-t border-border/40 bg-muted/15 animate-in fade-in slide-in-from-top-1 duration-200">
+        <div className="border-t border-white/[0.05] bg-white/[0.015] animate-in fade-in slide-in-from-top-1 duration-200">
           {satir.urunler.map((u, ui) => (
             <div
               key={u.productId}
-              className="grid items-center gap-2 px-3 py-1 transition-colors hover:bg-muted/40"
+              className="grid items-center gap-2 px-3 py-1 transition-colors hover:bg-white/[0.03]"
               style={{ gridTemplateColumns: kolonlar }}
             >
               <div className="flex min-w-0 items-center gap-2 pl-[52px]">
-                <span className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+                <span className="h-1 w-1 shrink-0 rounded-full bg-[#A9AEFF]/50" />
                 <Link
                   href={`/products/${u.productId}`}
                   className="group/v flex min-w-0 items-center gap-1 text-xs text-foreground/85 hover:text-foreground hover:underline"
@@ -602,7 +691,7 @@ function KartGorseli({ src }: { src: string | null }) {
   const [kirik, setKirik] = useState(false);
   const url = src ? thumbUrl(src) : null;
   return (
-    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/60">
+    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08]">
       {url && !kirik
         ? <img src={url} alt="" loading="lazy" decoding="async" className="max-h-full max-w-full object-contain" onError={() => setKirik(true)} />
         : <Package className="h-4 w-4 text-muted-foreground/35" />}
@@ -618,13 +707,15 @@ function Sekme({ active, onClick, sayi, children }: { active: boolean; onClick: 
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all active:scale-[0.97]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+        "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-all duration-200 active:scale-[0.97]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
+        active
+          ? "bg-gradient-to-br from-[#9B5CFF]/25 to-[#4F8CFF]/15 text-foreground ring-1 ring-[#7A7EFF]/30"
+          : "text-muted-foreground hover:bg-white/[0.05] hover:text-foreground",
       )}
     >
       {children}
-      <span className={cn("font-mono text-[10px] tabular-nums", active ? "text-primary" : "text-muted-foreground/70")}>
+      <span className={cn("font-mono text-[10px] tabular-nums", active ? "text-[#C9D2F2]" : "text-muted-foreground/70")}>
         <AnimatedNumber value={sayi} />
       </span>
     </button>
@@ -640,11 +731,11 @@ function FilterChip({
       onClick={onClick}
       title={title}
       className={cn(
-        "rounded-md border px-2 py-1 text-[11px] font-medium transition-colors",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "rounded-lg border px-2 py-1 text-[11px] font-medium transition-all active:scale-[0.97]",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7A7EFF]/60",
         active
-          ? "border-primary/40 bg-primary/12 text-primary"
-          : "border-border text-muted-foreground hover:bg-muted"
+          ? "border-[#7A7EFF]/35 bg-[#7A7EFF]/15 text-[#C9D2F2]"
+          : "border-white/[0.08] text-muted-foreground hover:bg-white/[0.05] hover:text-foreground"
       )}
     >
       {children}
@@ -654,8 +745,11 @@ function FilterChip({
 
 function Stat({ value, text, label, title }: { value?: number; text?: string; label: string; title?: string }) {
   return (
-    <div title={title} className="text-right">
-      <p className="text-lg font-bold leading-none tabular-nums">
+    <div
+      title={title}
+      className="min-w-[76px] rounded-xl bg-card px-3.5 py-2 ring-1 ring-white/[0.07] transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 hover:ring-white/[0.12] animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none"
+    >
+      <p className="text-lg font-semibold leading-none tracking-tight tabular-nums">
         {text ?? <AnimatedNumber value={value ?? 0} />}
       </p>
       <p className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p>
@@ -668,10 +762,10 @@ function Iskelet() {
   return (
     <div className="space-y-4" aria-busy="true">
       <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(230px,1fr))]">
-        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[106px] w-full rounded-xl" />)}
+        {[0, 1, 2].map((i) => <Skeleton key={i} className="h-[118px] w-full rounded-2xl" />)}
       </div>
-      <Skeleton className="h-9 w-full max-w-xl rounded-lg" />
-      <div className="overflow-hidden rounded-xl border">
+      <Skeleton className="h-9 w-full max-w-xl rounded-xl" />
+      <div className="overflow-hidden rounded-2xl ring-1 ring-white/[0.07]">
         {Array.from({ length: 10 }).map((_, i) => (
           <div key={i} className="flex items-center gap-3 border-b border-border/50 px-3 py-2 last:border-b-0">
             <Skeleton className="h-8 w-8 rounded-md" />
@@ -690,7 +784,7 @@ function Iskelet() {
 
 function EmptyHint({ title, desc }: { title: string; desc: string }) {
   return (
-    <div className="rounded-xl border border-dashed py-16 text-center animate-in fade-in duration-300">
+    <div className="rounded-2xl py-16 text-center ring-1 ring-white/[0.07] animate-in fade-in duration-300">
       <Boxes className="h-10 w-10 mx-auto text-muted-foreground/30" />
       <p className="mt-3 font-medium">{title}</p>
       <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">{desc}</p>
@@ -698,9 +792,84 @@ function EmptyHint({ title, desc }: { title: string; desc: string }) {
   );
 }
 
+/** Kapalı / silinmiş yazıcıların dosyaları — listele ve tek seferde sil. */
+function SahipsizDosyalarPenceresi({
+  dosyalar, onClose, onSilindi,
+}: { dosyalar: SahipsizDosya[]; onClose: () => void; onSilindi: () => void }) {
+  const [onay, setOnay] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const toplam = dosyalar.reduce((t, f) => t + (f.sizeBytes ?? 0), 0);
+  const sil = async () => {
+    setBusy(true);
+    try {
+      const r = await fetchJson<{ silinen: number }>("/api/models/sahipsiz-sil", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: dosyalar.map((f) => f.id) }),
+      });
+      toast.success(`${r.silinen} dosya silindi`);
+      onSilindi();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Silinemedi");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <HardDrive className="h-4 w-4 text-[#A9AEFF]" /> Sahipsiz dosyalar
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground">
+            Kapalı ya da silinmiş yazıcılara ait {dosyalar.length} dosya · {fmtSize(toplam)}
+          </p>
+        </DialogHeader>
+        <div className="-mx-1 max-h-[50vh] space-y-1 overflow-y-auto px-1">
+          {dosyalar.map((f, i) => (
+            <div
+              key={f.id}
+              className="flex items-center gap-2.5 rounded-lg border border-white/[0.06] px-2.5 py-1.5 text-xs animate-in fade-in slide-in-from-bottom-1 fill-mode-both duration-300"
+              style={{ animationDelay: `${Math.min(i, 12) * 25}ms` }}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium">{f.label || f.originalName}</p>
+                <p className="truncate text-[11px] text-muted-foreground">
+                  {f.productName} · {f.yaziciAdi ? `${f.yaziciAdi} (kapalı)` : "silinmiş yazıcı"}
+                </p>
+              </div>
+              <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{fmtSize(f.sizeBytes ?? 0)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>Kapat</Button>
+          {onay ? (
+            <Button size="sm" className="gap-1.5 bg-rose-500 text-white hover:bg-rose-500/90" disabled={busy} onClick={() => void sil()}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Evet, {dosyalar.length} dosyayı sil
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="gap-1.5 text-rose-400 hover:bg-rose-500/10 hover:text-rose-300" onClick={() => setOnay(true)}>
+              <Trash2 className="h-3.5 w-3.5" /> Hepsini sil
+            </Button>
+          )}
+        </div>
+        {onay && <p className="text-right text-[11px] text-muted-foreground">Bu işlem geri alınamaz.</p>}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PartsModal({
-  product, aile, printers, onClose,
-}: { product: LibProduct; aile: KapsamAilesi; printers: LibPrinter[]; onClose: () => void }) {
+  product, aile, printers, onClose, onDegisti,
+}: {
+  product: LibProduct; aile: KapsamAilesi; printers: LibPrinter[]; onClose: () => void;
+  /** Silme / ad değişikliğinden sonra: liste + diğer ekranların model listeleri tazelensin. */
+  onDegisti: () => void;
+}) {
   const qc = useQueryClient();
   // Tablo iki U1'i tek sütunda gösteriyor; hangisinde basılacağı BURADA seçilir.
   const [printerId, setPrinterId] = useState(aile.yazicilar[0].id);
@@ -718,9 +887,19 @@ function PartsModal({
   /** Dosyadan okunan değerler (düğmeyle ya da arka planda) — sunucu listesi tazelenene dek üstte durur. */
   const [okunan, setOkunan] = useState<Record<string, { gramaj: number | null; estPrintMin: number | null; hasThumbnail?: boolean }>>({});
   const [okuma, setOkuma] = useState<{ done: number; total: number } | null>(null);
+  /**
+   * Silinen parçalar ve yeni adlar, liste tazelenene kadar ÜSTTE tutulur — "Dosya silindi" deyip
+   * parçayı göstermeye devam etmesin, yeni ad hemen görünsün.
+   */
+  const [silinenler, setSilinenler] = useState<ReadonlySet<string>>(() => new Set());
+  const [yeniAdlar, setYeniAdlar] = useState<Record<string, string | null>>({});
   const dosyalar = useMemo(
-    () => product.files.map((f) => (okunan[f.id] ? bilgiyiIsle(f, okunan[f.id]) : f)),
-    [product.files, okunan]
+    () =>
+      product.files
+        .filter((f) => !silinenler.has(f.id))
+        .map((f) => (f.id in yeniAdlar ? { ...f, label: yeniAdlar[f.id] } : f))
+        .map((f) => (okunan[f.id] ? bilgiyiIsle(f, okunan[f.id]) : f)),
+    [product.files, okunan, silinenler, yeniAdlar]
   );
   const printerIds = useMemo(() => printers.map((p) => p.id), [printers]);
   const karsilastirma = useMemo(() => gramajByPrinter(dosyalar, printerIds), [dosyalar, printerIds]);
@@ -741,7 +920,7 @@ function PartsModal({
       setOkuma({ done: i + 1, total: eksikler.length });
     }
     setOkuma(null);
-    qc.invalidateQueries({ queryKey: ["models"] });
+    void qc.invalidateQueries({ queryKey: ["models"] });
   };
 
   // Aile: ikinci U1, ilk U1'e yüklenen dosyaları da görür ve basar (aynı içerik bir kez).
@@ -765,16 +944,20 @@ function PartsModal({
   const renameSave = async () => {
     if (!renaming) return;
     const label = renaming.value.trim();
+    const hedef = dosyalar.find((f) => f.id === renaming.id);
     setBusy(true);
     try {
-      await fetchJson(`/api/models/${renaming.id}`, {
+      // Paylaşılan dosyada ad TÜM varyantlarda değişir (eskiden yalnız bu satırda değişiyordu).
+      const tumu = hedef && hedef.sharedWith > 1 ? "?allVariants=1" : "";
+      await fetchJson(`/api/models/${renaming.id}${tumu}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         // Boş bırakılırsa etiket kaldırılır → dosyanın kendi adı görünür.
         body: JSON.stringify({ label: label || null }),
       });
+      setYeniAdlar((m) => ({ ...m, [renaming.id]: label || null }));
       setRenaming(null);
-      await qc.invalidateQueries({ queryKey: ["models"] });
+      onDegisti(); // beklenmez — düğmeler soğuk hesap boyunca kilitli kalmasın
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Kaydedilemedi");
     } finally {
@@ -782,17 +965,25 @@ function PartsModal({
     }
   };
 
+  /** Silinecek parçanın ailedeki ikiz kopyaları (aynı içerik, ailenin başka yazıcısında). */
+  const ikizler = useMemo(() => (deleting ? aileIkizleri(dosyalar, deleting, printers) : []), [deleting, dosyalar, printers]);
+
   const confirmDelete = async () => {
     if (!deleting) return;
     setBusy(true);
     try {
-      // Paylaşılan dosyada TÜM kayıtlar silinir (kullanıcı onay penceresinde bunu gördü);
-      // bulut nesnesi zaten yalnız son referans kalkınca siliniyor.
-      const allVariants = deleting.sharedWith > 1 ? "?allVariants=1" : "";
-      await fetchJson(`/api/models/${deleting.id}${allVariants}`, { method: "DELETE" });
-      toast.success("Dosya silindi");
+      // Paylaşılan dosyada TÜM kayıtlar silinir (kullanıcı onay penceresinde bunu gördü); ikiz
+      // kopyalar da birlikte gider. Bulut nesnesi yalnız son referans kalkınca silinir.
+      const sorgu = new URLSearchParams();
+      if (deleting.sharedWith > 1 || ikizler.some((f) => f.sharedWith > 1)) sorgu.set("allVariants", "1");
+      if (ikizler.length) sorgu.set("ek", ikizler.map((f) => f.id).join(","));
+      const qs = sorgu.toString();
+      await fetchJson(`/api/models/${deleting.id}${qs ? `?${qs}` : ""}`, { method: "DELETE" });
+      const giden = [deleting.id, ...ikizler.map((f) => f.id)];
+      setSilinenler((m) => new Set([...m, ...giden]));
+      toast.success(ikizler.length ? `Dosya ve ${ikizler.length} kopyası silindi` : "Dosya silindi");
       setDeleting(null);
-      await qc.invalidateQueries({ queryKey: ["models"] });
+      onDegisti(); // beklenmez
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Silinemedi");
     } finally {
@@ -846,7 +1037,7 @@ function PartsModal({
         {aile.yazicilar.length > 1 && (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] text-muted-foreground">Hangi yazıcıda?</span>
-            <div className="flex items-center rounded-lg border bg-muted/30 p-0.5">
+            <div className="flex items-center gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
               {aile.yazicilar.map((y) => (
                 <button
                   key={y.id}
@@ -869,7 +1060,7 @@ function PartsModal({
 
         {/* Hangi makine bu ürünü daha az filamentle basıyor? */}
         {karsilastirma.length > 1 && (
-          <div className="rounded-lg border bg-muted/30 p-2.5 space-y-2">
+          <div className="rounded-xl bg-white/[0.03] p-2.5 space-y-2 ring-1 ring-white/[0.07]">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[11px] font-medium text-muted-foreground">Filament tüketimi</p>
               {eksikler.length > 0 && !okuma && (
@@ -886,7 +1077,7 @@ function PartsModal({
             {okuma && (
               <div className="h-1 rounded-full bg-border overflow-hidden">
                 <div
-                  className="h-full bg-primary transition-[width] duration-300"
+                  className="h-full bg-gradient-to-r from-[#9B5CFF] to-[#4F8CFF] transition-[width] duration-300"
                   style={{ width: `${okuma.total ? (okuma.done / okuma.total) * 100 : 0}%` }}
                 />
               </div>
@@ -901,7 +1092,7 @@ function PartsModal({
                     className={cn(
                       "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] tabular-nums",
                       row.lowest
-                        ? "border-green-500/40 bg-green-500/10 text-green-400 font-medium"
+                        ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-300 font-medium"
                         : "border-border text-muted-foreground"
                     )}
                     title={eksikVar ? `${row.total} parçanın ${row.known} tanesi ölçüldü` : undefined}
@@ -921,7 +1112,7 @@ function PartsModal({
         )}
         <div className="space-y-1.5 max-h-[55vh] overflow-y-auto -mx-1 px-1">
           {parts.map((part, i) => (
-            <div key={part.id} className="flex items-center gap-2.5 rounded-lg border p-2">
+            <div key={part.id} className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.015] p-2 transition-colors hover:border-white/[0.12] animate-in fade-in duration-200">
               {/*
                 ÖNİZLEME: dosya adı tek başına "hangi parça bu?" sorusunu cevaplamıyordu —
                 altı parçalı bir üründe hangisini basacağını addan tahmin etmek gerekiyordu.
@@ -940,6 +1131,7 @@ function PartsModal({
                         if (e.key === "Escape") setRenaming(null);
                       }}
                       placeholder={part.originalName}
+                      maxLength={80}
                       className="h-7 text-sm"
                     />
                     <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" disabled={busy} onClick={() => void renameSave()} title="Kaydet">
@@ -954,7 +1146,7 @@ function PartsModal({
                     <p className="text-sm font-medium truncate" title={part.originalName}>{gorunenAd(part)}</p>
                     <ParcaBilgiSatiri p={part} okunuyor={okunanlar.has(part.id)} className="mt-1" />
                     {part.sharedWith > 1 && (
-                      <p className="mt-0.5 text-[10px] text-amber-400/80" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
+                      <p className="mt-0.5 text-[10px] text-[#A9AEFF]" title={`Bu dosya ${part.sharedWith} üründe kullanılıyor`}>
                         {part.sharedWith} üründe kullanılıyor
                       </p>
                     )}
@@ -971,7 +1163,7 @@ function PartsModal({
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   <Button
-                    size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-400"
                     title="Sil"
                     onClick={() => setDeleting(part)}
                   >
@@ -990,7 +1182,7 @@ function PartsModal({
             ne olduğunu olduğu gibi yaz; planlama Üretim Planı'nda. */}
         <p className="text-[11px] text-muted-foreground/70">
           Parçalar tek tek basılır: biri bitince buradan diğerini başlat.{" "}
-          <Link href="/planner" className="text-primary hover:underline">
+          <Link href="/planner" className="text-[#A9AEFF] hover:underline">
             Üretim Planı
           </Link>{" "}
           sıranın ne olduğunu gösterir.
@@ -1004,17 +1196,24 @@ function PartsModal({
         <Dialog open onOpenChange={(o) => !o && !busy && setDeleting(null)}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
-              <DialogTitle className="text-destructive">Bu dosya silinsin mi?</DialogTitle>
+              <DialogTitle className="text-rose-400">Bu dosya silinsin mi?</DialogTitle>
             </DialogHeader>
             <div className="space-y-2 text-sm">
               <p className="font-medium break-words">{deleting.label || deleting.originalName}</p>
               <p className="text-xs text-muted-foreground">
-                {printer.name} · {fmtSize(deleting.sizeBytes)}
+                {printers.find((p) => p.id === deleting.printerConfigId)?.name ?? printer.name} · {fmtSize(deleting.sizeBytes)}
                 {deleting.gramaj ? ` · ${deleting.gramaj} gr` : ""}
               </p>
               {deleting.sharedWith > 1 && (
-                <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-300">
+                <p className="rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/10 p-2 text-xs text-[#C9D2F2]">
                   Bu dosya {deleting.sharedWith} üründe kullanılıyor. Silersen hepsinden kalkar.
+                </p>
+              )}
+              {ikizler.length > 0 && (
+                <p className="rounded-lg border border-[#7A7EFF]/35 bg-[#7A7EFF]/10 p-2 text-xs text-[#C9D2F2]">
+                  Aynı dosyanın {ikizler.length} kopyası daha var (
+                  {[...new Set(ikizler.map((f) => printers.find((p) => p.id === f.printerConfigId)?.name ?? "başka yazıcı"))].join(", ")}
+                  ) — onlar da silinir.
                 </p>
               )}
               <p className="text-xs text-muted-foreground">Bu işlem geri alınamaz.</p>
@@ -1023,7 +1222,7 @@ function PartsModal({
               <Button variant="outline" size="sm" onClick={() => setDeleting(null)} disabled={busy}>
                 Vazgeç
               </Button>
-              <Button variant="destructive" size="sm" onClick={() => void confirmDelete()} disabled={busy}>
+              <Button size="sm" className="gap-1.5 bg-rose-500 text-white hover:bg-rose-500/90" onClick={() => void confirmDelete()} disabled={busy}>
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />} Sil
               </Button>
             </div>

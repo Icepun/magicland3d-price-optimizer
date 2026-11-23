@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { gorselleriTasi } from "@/lib/model-gorseli";
+import { YETIM_GORSEL_TEMIZLIGI, gorselleriTasi } from "@/lib/model-gorseli";
 import { remotePrisma } from "@/lib/prisma";
 import { perfYaz } from "@/lib/server-perf-log";
 
@@ -37,6 +37,9 @@ export async function modelGorseliBakimi(): Promise<void> {
   const bas = Date.now();
   try {
     const sonuc = await gorselleriTasi(remotePrisma);
+    // Silinen dosyaların görselleri (silme yolları artık kendisi siler; eskiden kalanlar burada gider).
+    const yetim = await remotePrisma.$executeRawUnsafe(YETIM_GORSEL_TEMIZLIGI).catch(() => 0);
+    if (yetim > 0) perfYaz(`MODEL-GORSELI ${yetim} yetim görsel silindi`);
     if (yol) {
       try {
         fs.writeFileSync(yol, String(Date.now()));

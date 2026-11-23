@@ -13,7 +13,7 @@
  * Karşı tuzak da gerçek: aşırı-geniş bust pahalı önbelleği işlevsiz bırakır (bkz. pricing-inputs.ts
  * — kâr-etkileyen değişiklik ayrımı). Bu yüzden her yardımcı DAR ve amaca özel.
  */
-import { bustCache, bustCaches } from "@/lib/route-cache";
+import { bustCache, bustCaches, swrBayatla } from "@/lib/route-cache";
 import { invalidateOrdersCache } from "@/lib/orders-cache";
 import { bayatOnbellegiDusur, BAYAT_ONBELLEK } from "@/core/printers/bayat-onbellek";
 
@@ -196,6 +196,14 @@ export async function bustFinanceCachesAfterOrderSnapshots(
  * ⚠️ Her yazan uç çağırmalı. Eskiden yalnız kopya temizliği çağırıyordu: kütüphanede bir parçayı
  * silip yeniden adlandırınca liste 2 dakika boyunca ESKİ hâlini gösteriyordu.
  */
+/**
+ * Yalnız GÖSTERİM bilgisi değişti (dosyadan okunan gramaj / süre / önizleme): liste silinmez,
+ * bayat sayılır — sonraki açılış eldeki listeyi hemen gösterir, arkada tazeler.
+ */
+export function modelListesiniBayatla(): void {
+  swrBayatla("models:");
+}
+
 export function bustModelCaches(): void {
   bustCache("models:");
   // Yazıcı kartının "basılan dosya → kütüphanedeki model" haritası (status-cache). Eskiden

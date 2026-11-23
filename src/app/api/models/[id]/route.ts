@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "node:fs";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { gorselOku } from "@/lib/model-gorseli";
-import { getR2Config, deleteObject } from "@/lib/r2";
 import { bustModelCaches } from "@/lib/cache-busting";
+import { modelSatirlariniSil, type ModelSatiri } from "@/lib/model-file-cleanup";
 
 const PatchSchema = z.object({
-  label: z.string().trim().max(80).nullable().optional(),
+  label: z.string().trim().max(80, "Ad en çok 80 karakter olabilir").nullable().optional(),
   gramaj: z.coerce.number().min(0).nullable().optional(),
   estPrintMin: z.coerce.number().int().min(0).nullable().optional(),
 });
@@ -23,7 +22,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       where: { id },
       select: { id: true, originalName: true, sizeBytes: true, contentMd5: true, fileType: true, printerConfigId: true },
     });
-    if (!mf) return NextResponse.json({ error: "Model dosyası bulunamadı" }, { status: 404 });
+    if (!mf) return NextResponse.json({ error: "Dosya bulunamadı — silinmiş olabilir" }, { status: 404 });
     return NextResponse.json({ ...mf, thumbnail: await gorselOku(id) });
   } catch (error) {
     return jsonError(error);
@@ -35,6 +34,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     await ensureRuntimeSchema();
     const { id } = await params;
     const data = PatchSchema.parse(await req.json());
+    // Silinmiş dosyayı adlandırma: ham veritabanı hatası yerine kısa Türkçe ileti.
+    const varMi = await prisma.productModelFile.findUnique({ where: { id }, select: { id: true } });
+    if (!varMi) return NextResponse.json({ error: "Dosya bulunamadı — silinmiş olabilir" }, { status: 404 });
     const updated = await prisma.productModelFile.update({
       where: { id },
       data,
@@ -59,57 +61,52 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
+/**
+ * Parçayı sil. Tek güvenli yol `modelSatirlariniSil`: satırları siler, artık kimsenin kullanmadığı
+ * bulut nesnelerini (baskı dosyası + kaynak model) ve önizleme görsellerini temizler.
+ *
+ * - `?allVariants=1` → aynı dosyayı (ortak r2Key / gerçek storedPath) paylaşan TÜM varyant satırları.
+ *   Eskiden yalnız tıklanan satırın kaynak modeline bakılıyordu; kardeşlerinki sahipsiz kalıyordu.
+ * - `?ek=<id>,<id>` → ailedeki İKİZ kopyalar (aynı içerik iki U1'e ayrı yüklenmiş). Pencere onları
+ *   tek parça gösterdiği için yalnız biri siliniyor, öbürü yeniden açınca geri çıkıyordu.
+ */
 export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     await ensureRuntimeSchema();
     const { id } = await params;
-    // ?allVariants=1 → "Tüm varyantlara uygula" AÇIKKEN silme: aynı dosyayı (ortak r2Key/storedPath)
-    // paylaşan TÜM varyant satırlarını sil (kullanıcı kutucuk seçiliyken hepsinden gitsin bekliyor).
-    const allVariants = new URL(req.url).searchParams.get("allVariants") === "1";
-    const mf = await prisma.productModelFile.findUnique({ where: { id } });
-    if (!mf) return NextResponse.json({ ok: true });
+    const url = new URL(req.url);
+    const allVariants = url.searchParams.get("allVariants") === "1";
+    const ek = (url.searchParams.get("ek") ?? "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 50);
+    const secim = { id: true, r2Key: true, meshR2Key: true, storedPath: true, productId: true } as const;
 
-    if (allVariants && mf.r2Key) {
-      await prisma.productModelFile.deleteMany({ where: { r2Key: mf.r2Key } });
-    } else if (allVariants && mf.storedPath) {
-      // storedPath="" R2 satırlarının ortak değeri → onunla deleteMany YAPMA (yalnız gerçek yerel yol).
-      await prisma.productModelFile.deleteMany({ where: { storedPath: mf.storedPath } });
-    } else {
-      await prisma.productModelFile.delete({ where: { id } });
+    const temel = await prisma.productModelFile.findMany({
+      where: { id: { in: [id, ...ek] }, NOT: { productId: "__custom__" } },
+      select: secim,
+    });
+    if (!temel.some((r) => r.id === id)) {
+      return NextResponse.json({ error: "Dosya bulunamadı — zaten silinmiş olabilir" }, { status: 404 });
     }
-    bustModelCaches(); // satır gitti — kütüphane silineni göstermeye devam etmesin
-
-    /**
-     * KAYNAK MODEL de aynı kuralla temizlenir: parça silindiyse ona bağlı görüntüleme dosyası
-     * da gitmeli, ama başka satır (varyant) hâlâ referans veriyorsa DOKUNULMAZ.
-     * Eklenmezse R2'de sahipsiz nesne kalır; hademe 24 saat sonra toplar ama gereksiz durur.
-     */
-    if (mf.meshR2Key) {
-      const meshKullanan = await prisma.productModelFile.count({ where: { meshR2Key: mf.meshR2Key } });
-      if (meshKullanan === 0) {
-        const cfg = await getR2Config();
-        if (cfg) {
-          try { await deleteObject(mf.meshR2Key, cfg); } catch { /* R2 silme kritik değil */ }
-        }
+    const silinecek = new Map<string, ModelSatiri>(temel.map((r) => [r.id, r]));
+    if (allVariants) {
+      const r2Keyler = [...new Set(temel.map((r) => r.r2Key).filter((k): k is string => !!k))];
+      // storedPath="" R2 satırlarının ortak değeri → onunla eşleştirme YAPMA (yalnız gerçek yerel yol).
+      const yollar = [...new Set(temel.filter((r) => !r.r2Key && r.storedPath).map((r) => r.storedPath))];
+      if (r2Keyler.length || yollar.length) {
+        const kardesler = await prisma.productModelFile.findMany({
+          where: {
+            NOT: { productId: "__custom__" },
+            OR: [
+              ...(r2Keyler.length ? [{ r2Key: { in: r2Keyler } }] : []),
+              ...(yollar.length ? [{ storedPath: { in: yollar } }] : []),
+            ],
+          },
+          select: secim,
+        });
+        for (const k of kardesler) silinecek.set(k.id, k);
       }
     }
-
-    // Dosyayı (R2 objesi / disk) YALNIZCA hiç referans kalmayınca sil.
-    if (mf.r2Key) {
-      const stillUsed = await prisma.productModelFile.count({ where: { r2Key: mf.r2Key } });
-      if (stillUsed === 0) {
-        const cfg = await getR2Config();
-        if (cfg) {
-          try { await deleteObject(mf.r2Key, cfg); } catch { /* R2 silme kritik değil */ }
-        }
-      }
-    } else if (mf.storedPath) {
-      const stillUsed = await prisma.productModelFile.count({ where: { storedPath: mf.storedPath } });
-      if (stillUsed === 0) {
-        try { fs.unlinkSync(mf.storedPath); } catch { /* yoksa boşver */ }
-      }
-    }
-    return NextResponse.json({ ok: true });
+    const sonuc = await modelSatirlariniSil([...silinecek.values()]);
+    return NextResponse.json({ ok: true, silinen: sonuc.satir });
   } catch (error) {
     return jsonError(error);
   }

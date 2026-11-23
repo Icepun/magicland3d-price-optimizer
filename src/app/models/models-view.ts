@@ -5,7 +5,7 @@
  * yazıcılar arası karşılaştırma için. Ürün maliyetiyle ilgisi YOKTUR
  * (gerekçe ve koruma: `src/lib/model-gramaj.ts`, `src/lib/model-gramaj.test.ts`).
  */
-import { dedupeFiles, familyMemberIds, type AileUyesi } from "@/core/printers/printer-family";
+import { dedupeFiles, familyMemberIds, fileContentKeys, type AileUyesi } from "@/core/printers/printer-family";
 
 /**
  * Yazıcının AİLESİNDEKİ dosyalar: aynı tür + marka + modeldeki yazıcılar aynı dosyayı basar
@@ -19,6 +19,21 @@ export function aileDosyalari<
 >(files: F[], printerId: string, printers: AileUyesi[] = []): F[] {
   const uyeler = new Set(printers.length ? familyMemberIds(printers, printerId) : [printerId]);
   return dedupeFiles(files.filter((f) => uyeler.has(f.printerConfigId)));
+}
+
+/**
+ * Silinen parçanın AİLEDEKİ ikiz kopyaları: aynı içerik ailenin başka bir yazıcısına ayrı yüklenmiş.
+ * Pencere ikisini tek parça gösterdiği için yalnız görüneni silmek yetmiyordu — öbürü yeniden
+ * açınca geri çıkıyordu (denetim, 23 Kas 2026).
+ */
+export function aileIkizleri<
+  F extends { id: string; printerConfigId: string; originalName: string; contentMd5?: string | null; sizeBytes?: number | null },
+>(files: F[], hedef: F, printers: AileUyesi[] = []): F[] {
+  const uyeler = new Set(printers.length ? familyMemberIds(printers, hedef.printerConfigId) : [hedef.printerConfigId]);
+  const anahtarlar = new Set(fileContentKeys(hedef));
+  return files.filter(
+    (f) => f.id !== hedef.id && uyeler.has(f.printerConfigId) && fileContentKeys(f).some((k) => anahtarlar.has(k)),
+  );
 }
 
 /**

@@ -74,9 +74,13 @@ describe("silmeden önce referans sayılıyor", () => {
   });
 
   it("parça silme yolu mesh'i de temizliyor ve orada da sayıyor", () => {
+    // Silme tek güvenli yoldan: kalan satırlar kaynak modeli hâlâ gösteriyorsa nesne SİLİNMEZ.
     const kaynak = OKU("src/app/api/models/[id]/route.ts");
     expect(kaynak).toContain("meshR2Key");
-    expect(kaynak).toMatch(/count\(\{ where: \{ meshR2Key: mf\.meshR2Key \} \}\)/);
+    expect(kaynak).toContain("modelSatirlariniSil(");
+    const temizlik = OKU("src/lib/model-file-cleanup.ts");
+    expect(temizlik).toMatch(/meshR2Key: \{ in: anahtarlar \}/);
+    expect(temizlik).toMatch(/if \(s\.meshR2Key && !kalanR2\.has\(s\.meshR2Key\)\)/);
   });
 });
 

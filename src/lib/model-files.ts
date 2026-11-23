@@ -4,7 +4,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { prisma } from "./prisma";
 import { getR2Config, getObjectBytes } from "./r2";
-import { gorselKaydet } from "./model-gorseli";
+import { gorselleriKaydet } from "./model-gorseli";
 
 export interface LocalModelFile {
   /** Okunabilir yerel yol (R2 ise geçici dosya, değilse storedPath). */
@@ -119,8 +119,7 @@ export async function createModelRows(input: CreateModelRowsInput) {
   if (kardesler.length) {
     await prisma.productModelFile.createMany({ data: kardesler });
   }
-  if (thumbnail) {
-    for (const fileId of [mine.id, ...kardesler.map((k) => k.id)]) await gorselKaydet(fileId, thumbnail);
-  }
-  return mine;
+  if (thumbnail) await gorselleriKaydet([mine.id, ...kardesler.map((k) => k.id)], thumbnail);
+  // hedefSayisi: dosyanın GERÇEKTEN yazıldığı ürün sayısı (gizli varyantlar dahil) — bildirim bunu yazar.
+  return Object.assign(mine, { hedefSayisi: targetIds.length });
 }
