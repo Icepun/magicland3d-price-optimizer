@@ -85,12 +85,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const kapanan = await prisma.cargoRule.updateMany({
-      where: { platform, validTo: null },
-      data: { validTo: eskiBitis },
-    });
-
-    await prisma.cargoRule.createMany({
+    // Kapatma ve ekleme TEK işlemde: ekleme ağ hatasıyla düşerse başlangıçtan sonra hiç kural
+    // kalmıyor, kargo 0 sayılıyordu (denetim, 23 Kas 2026).
+    const [kapanan] = await prisma.$transaction([
+      prisma.cargoRule.updateMany({
+        where: { platform, validTo: null },
+        data: { validTo: eskiBitis },
+      }),
+      prisma.cargoRule.createMany({
       data: rules.map((r) => ({
         name: r.name,
         platform,
@@ -107,7 +109,8 @@ export async function POST(req: NextRequest) {
         priority: r.priority,
         isActive: r.isActive,
       })),
-    });
+      }),
+    ]);
 
     // Kargo değişti → sipariş kârı bir sonraki istekte yeni baremle hesaplansın.
     bustProfitInputCaches();

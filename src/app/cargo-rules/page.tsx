@@ -18,13 +18,13 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight, CalendarClock } from "lucide-react";
+import { Plus, Pencil, Trash2, Settings2, ChevronDown, ChevronRight, CalendarClock, Truck } from "lucide-react";
 import { NewTariffDialog } from "./new-tariff-dialog";
 import { PazaryeriTarifesi } from "./pazaryeri-tarifesi";
 import { KargoDenetimiGorunumu } from "./kargo-denetimi";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { useForm, useWatch } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -57,23 +57,31 @@ interface CargoRule {
 type Platform = "shopify" | "trendyol" | "hepsiburada";
 type Sekme = Platform | "denetim";
 
-const Schema = z.object({
-  name: z.string().min(1, "Ad zorunlu"),
-  // Trendyol / Hepsiburada kargosu pazaryeri tarifesinden; elle kural yalnız Shopify için.
-  platform: z.enum(["shopify"]).default("shopify"),
-  cargoProvider: z.string().optional(),
-  categoryName: z.string().optional(),
-  minPrice: z.coerce.number().min(0).default(0),
-  maxPrice: z.coerce.number().min(0).default(999999),
-  minDesi: z.coerce.number().min(0).default(0),
-  maxDesi: z.coerce.number().min(0).default(999),
-  cargoCost: z.coerce.number().min(0),
-  vatIncluded: z.boolean().default(true),
-  priority: z.coerce.number().int().default(10),
-  isActive: z.boolean().default(true),
-});
+/** Boş alan → tanımsız (varsayılan ya da "gerekli" hatası); BOŞ ≠ SIFIR. Virgül kabul. */
+const bos = (v: unknown) => (v === "" || v == null ? undefined : typeof v === "string" ? v.replace(",", ".") : v);
+const Schema = z
+  .object({
+    name: z.string().trim().min(1, "Kural adı gerekli"),
+    // Trendyol / Hepsiburada kargosu pazaryeri tarifesinden; elle kural yalnız Shopify için.
+    platform: z.enum(["shopify"]).default("shopify"),
+    cargoProvider: z.string().optional(),
+    categoryName: z.string().optional(),
+    minPrice: z.preprocess(bos, z.coerce.number({ message: "Geçersiz fiyat" }).min(0, "Fiyat eksi olamaz").default(0)),
+    maxPrice: z.preprocess(bos, z.coerce.number({ message: "Geçersiz fiyat" }).min(0, "Fiyat eksi olamaz").default(999999)),
+    minDesi: z.preprocess(bos, z.coerce.number({ message: "Geçersiz desi" }).min(0, "Desi eksi olamaz").default(0)),
+    maxDesi: z.preprocess(bos, z.coerce.number({ message: "Geçersiz desi" }).min(0, "Desi eksi olamaz").default(999)),
+    // Boş kargo bedeli eskiden 0 TL'lik kural oluşturuyordu (kâr şişerdi).
+    cargoCost: z.preprocess(bos, z.coerce.number({ message: "Kargo bedeli gerekli" }).min(0, "Kargo bedeli eksi olamaz")),
+    vatIncluded: z.boolean().default(true),
+    priority: z.preprocess(bos, z.coerce.number().int("Öncelik tam sayı olmalı").default(10)),
+    isActive: z.boolean().default(true),
+  })
+  .superRefine((d, ctx) => {
+    if (d.maxPrice < d.minPrice) ctx.addIssue({ code: "custom", path: ["maxPrice"], message: "Max fiyat min fiyattan küçük olamaz" });
+    if (d.maxDesi < d.minDesi) ctx.addIssue({ code: "custom", path: ["maxDesi"], message: "Max desi min desiden küçük olamaz" });
+  });
 
-type FormData = z.infer<typeof Schema>;
+type FormData = z.output<typeof Schema>;
 
 function RuleForm({
   defaultValues,
@@ -85,7 +93,8 @@ function RuleForm({
   isPending: boolean;
 }) {
   const form = useForm<FormData>({
-    resolver: zodResolver(Schema),
+    // Ön işleme (boş alan → varsayılan) girdi tipini değiştirdiği için çözümleyici tipi daraltılıyor.
+    resolver: zodResolver(Schema) as unknown as Resolver<FormData>,
     defaultValues: {
       platform: "shopify",
       minPrice: 0,
@@ -100,6 +109,7 @@ function RuleForm({
   });
   const isActive = useWatch({ control: form.control, name: "isActive" });
   const vatIncluded = useWatch({ control: form.control, name: "vatIncluded" });
+  const ilkHata = Object.values(form.formState.errors)[0]?.message;
 
   return (
     <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
@@ -152,7 +162,7 @@ function RuleForm({
         </div>
         <div>
           <Label>Öncelik</Label>
-          <Input type="number" {...form.register("priority")} />
+          <Input type="number" {...form.register("priority")} title="Aynı siparişe birden çok kural uyarsa yüksek olan geçerli" />
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -171,13 +181,23 @@ function RuleForm({
           onCheckedChange={(v) => form.setValue("vatIncluded", v)}
         />
       </div>
+      {typeof ilkHata === "string" && (
+        <p className="text-[12px] font-medium text-rose-300 animate-in fade-in duration-200">{ilkHata}</p>
+      )}
       <DialogFooter>
         <Button type="submit" disabled={isPending}>
-          {isPending ? "Kaydediliyor..." : "Kaydet"}
+          {isPending ? "Kaydediliyor…" : "Kaydet"}
         </Button>
       </DialogFooter>
     </form>
   );
+}
+
+/** Dönemi bitmiş kural (validTo geçmişte) — düzenlenemez/silinemez. */
+function suresiDoldu(r: { validTo?: string | Date | null }, simdiMs: number): boolean {
+  if (!r.validTo) return false;
+  const t = new Date(r.validTo).getTime();
+  return Number.isFinite(t) && t < simdiMs;
 }
 
 /** Bir platformun kargo kurallarını ham tablo halinde gösterir (gelişmiş düzenleme). */
@@ -230,7 +250,7 @@ function RulesTable({
                   <div className="text-[10px] text-muted-foreground">{r.cargoProvider}</div>
                 )}
                 {!yururlukteMi(r, simdiMs) && r.validTo && (
-                  <div className="text-[10px] text-amber-500/80">
+                  <div className="text-[10px] text-[#A9AEFF]">
                     süresi doldu · {kisaTarih(r.validTo)}
                   </div>
                 )}
@@ -248,17 +268,26 @@ function RulesTable({
                 </div>
               </td>
               <td className="text-center px-3 py-2">
-                <Switch checked={r.isActive} onCheckedChange={(v) => onToggle(r, v)} />
+                <Switch
+                  checked={r.isActive}
+                  disabled={suresiDoldu(r, simdiMs)}
+                  onCheckedChange={(v) => onToggle(r, v)}
+                />
               </td>
               <td className="px-2 py-2">
+                {/* Geçmiş dönemin kuralı KİLİTLİ: değiştirmek o dönemin siparişlerinin kargosunu sessizce değiştirirdi. */}
+                {suresiDoldu(r, simdiMs) ? (
+                  <span className="block text-right text-[10px] text-muted-foreground">kilitli</span>
+                ) : (
                 <div className="flex items-center justify-end gap-0.5">
                   <Button variant="ghost" size="icon" className="h-7 w-7" title="Düzenle" onClick={() => onEdit(r)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/70 hover:text-destructive" title="Sil" onClick={() => onDelete(r.id)}>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-200" title="Sil" onClick={() => onDelete(r.id)}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+                )}
               </td>
             </tr>
           ))}
@@ -644,8 +673,7 @@ function GecmisTarifeler({ rules, simdiMs }: { rules: CargoRule[]; simdiMs: numb
       {acik && (
         <div className="px-3 pb-3 space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Bu fiyatlar artık kullanılmıyor. O tarihlerde verilmiş siparişlerin kârı hâlâ bunlara
-            göre hesaplandığı için duruyorlar.
+            Bu fiyatlar artık kullanılmıyor; o tarihlerdeki siparişler için saklanıyor.
           </p>
           {donemler.map((d) => {
             const barem = baremKur(d.kurallar.filter((r) => r.isActive));
@@ -755,10 +783,21 @@ export default function CargoRulesPage() {
   // önbelleği SİLER → sayfaya girince taze çeker. Orders sunucu önbeleği ayrıca route'ta düşürüldü.
   const bustPricingQueries = () => clearPricingQueryCache(queryClient);
 
-  const { data: rules = [], isLoading } = useQuery<CargoRule[]>({
+  const {
+    data: rules = [],
+    isLoading,
+    isError: kuralHatasi,
+    isFetching: kurallarCekiliyor,
+    refetch: kurallariYenidenCek,
+  } = useQuery<CargoRule[]>({
     queryKey: ["cargo-rules"],
     queryFn: () => fetchJson("/api/cargo-rules"),
+    // Telefondan yapılan değişiklik görünsün.
+    refetchOnMount: "always",
   });
+  /** Okunamadı ≠ kural yok: "kural ekleyebilirsin" denince mükerrer kural doğuyordu. */
+  const kuralYok = kuralHatasi && rules.length === 0;
+  const [silinecekId, setSilinecekId] = useState<string | null>(null);
 
   // ── Shopify kuralları (platform-bazlı + eski platformsuz kurallar; TEX'li olanlar Trendyol'undu) ──
   // Trendyol ve Hepsiburada kargosu artık pazaryeri tarifesinden (düzenlenmez) — kural tablosundaki
@@ -778,7 +817,7 @@ export default function CargoRulesPage() {
       toast.success("Kural eklendi");
       setOpen(false);
     },
-    onError: () => toast.error("Eklenemedi"),
+    onError: (e: Error) => toast.error(e.message || "Kural eklenemedi"),
   });
 
   const updateMutation = useMutation({
@@ -794,6 +833,7 @@ export default function CargoRulesPage() {
       toast.success("Kural güncellendi");
       setEditing(null);
     },
+    onError: (e: Error) => toast.error(e.message || "Kural güncellenemedi"),
   });
 
   const deleteMutation = useMutation({
@@ -803,7 +843,9 @@ export default function CargoRulesPage() {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
       bustPricingQueries();
       toast.success("Kural silindi");
+      setSilinecekId(null);
     },
+    onError: (e: Error) => toast.error(e.message || "Kural silinemedi"),
   });
 
   const onToggleRule = (r: CargoRule, v: boolean) =>
@@ -820,29 +862,54 @@ export default function CargoRulesPage() {
 
   return (
     <div className="p-6 space-y-5 mx-auto w-full max-w-6xl">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Kargo</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Trendyol ve Hepsiburada fiyatları pazaryerinin kendi listesi. Shopify kargonu buradan düzenlersin.
-        </p>
-      </div>
+      <header className="flex min-w-0 items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none">
+        <span className="grid size-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] text-white shadow-[0_12px_30px_-12px_rgba(122,126,255,0.9)]">
+          <Truck className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h1 className="text-2xl font-semibold tracking-tight">Kargo</h1>
+          <p className="text-xs text-muted-foreground">
+            Trendyol ve Hepsiburada fiyatları pazaryerinin kendi listesi — Shopify kargonu buradan düzenlersin.
+          </p>
+        </div>
+      </header>
 
       {/* Kurallar doğru olsa bile ürünün desisi yoksa kargo bedeli tahmin ediliyor —
           sayfanın söylemediği en önemli şey buydu. */}
       <CargoCoverageCard />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Sekme)}>
-        <TabsList>
-          <TabsTrigger value="trendyol" className="data-[state=active]:text-primary">Trendyol</TabsTrigger>
-          <TabsTrigger value="hepsiburada" className="data-[state=active]:text-violet-400">Hepsiburada</TabsTrigger>
-          <TabsTrigger value="shopify" className="data-[state=active]:text-emerald-500">Shopify</TabsTrigger>
-          <TabsTrigger value="denetim" className="data-[state=active]:text-violet-400">Denetim</TabsTrigger>
+        <TabsList className="h-auto gap-0.5 rounded-xl bg-white/[0.03] p-0.5 ring-1 ring-white/[0.08]">
+          {([
+            ["trendyol", "Trendyol", "#F27A1A"],
+            ["hepsiburada", "Hepsiburada", "#4F8CFF"],
+            ["shopify", "Shopify", "#34D399"],
+            ["denetim", "Denetim", "#A9AEFF"],
+          ] as const).map(([deger, ad, renk]) => (
+            <TabsTrigger
+              key={deger}
+              value={deger}
+              className="gap-1.5 rounded-lg px-3 py-1.5 transition-all active:scale-[0.97] data-[state=active]:bg-white/[0.07] data-[state=active]:shadow-[0_6px_18px_-10px_rgba(122,126,255,0.9)]"
+            >
+              <span className="size-1.5 rounded-full" style={{ background: renk }} />
+              {ad}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         {/* SHOPIFY — temiz barem görünümü (flag yok) */}
         <TabsContent value="shopify" className="space-y-4 mt-4">
-          <Card>
+          <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
             <CardContent className="pt-4 space-y-4">
+              {kuralYok ? (
+                <div className="flex flex-col items-center gap-3 rounded-2xl bg-rose-500/[0.05] px-4 py-10 text-center ring-1 ring-rose-400/25 animate-in fade-in duration-300">
+                  <p className="font-medium">Kargo kuralları yüklenemedi</p>
+                  <p className="text-sm text-muted-foreground">Bağlantını kontrol edip tekrar dene.</p>
+                  <Button variant="outline" size="sm" className="rounded-xl" disabled={kurallarCekiliyor} onClick={() => void kurallariYenidenCek()}>
+                    Tekrar dene
+                  </Button>
+                </div>
+              ) : (
               <CargoBaremView
                 maxDesi={kapsam?.maxDesi ?? null}
                 provider={shopifyBarem.provider}
@@ -852,18 +919,19 @@ export default function CargoRulesPage() {
                 desiThreshold={shopifyBarem.desiThreshold}
                 loading={isLoading}
               />
-              {!isLoading && (
+              )}
+              {!isLoading && !kuralYok && (
                 <YeniTarifeAksiyonu platform="shopify" platformAdi="Shopify" rules={shopifyRules} simdiMs={simdiMs} />
               )}
-              {!isLoading && <YaklasanTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
-              {!isLoading && <GecmisTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
-              {!isLoading && (
+              {!isLoading && !kuralYok && <YaklasanTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
+              {!isLoading && !kuralYok && <GecmisTarifeler rules={shopifyRules} simdiMs={simdiMs} />}
+              {!isLoading && !kuralYok && (
                 <AdvancedRules
                   rules={shopifyRules}
                   simdiMs={simdiMs}
                   onAdd={() => setOpen(true)}
                   onEdit={setEditing}
-                  onDelete={(id) => deleteMutation.mutate(id)}
+                  onDelete={(id) => setSilinecekId(id)}
                   onToggle={onToggleRule}
                 />
               )}
@@ -873,7 +941,7 @@ export default function CargoRulesPage() {
 
         {/* TRENDYOL / HEPSİBURADA — pazaryerinin fiyat listesi; düzenlenmez (core/kargo-tarife). */}
         <TabsContent value="trendyol" className="space-y-4 mt-4">
-          <Card>
+          <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
             <CardContent className="pt-4">
               <PazaryeriTarifesi platform="trendyol" maxDesi={kapsam?.maxDesi ?? null} />
             </CardContent>
@@ -881,7 +949,7 @@ export default function CargoRulesPage() {
         </TabsContent>
 
         <TabsContent value="hepsiburada" className="space-y-4 mt-4">
-          <Card>
+          <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
             <CardContent className="pt-4">
               <PazaryeriTarifesi platform="hepsiburada" maxDesi={kapsam?.maxDesi ?? null} />
             </CardContent>
@@ -889,13 +957,39 @@ export default function CargoRulesPage() {
         </TabsContent>
 
         <TabsContent value="denetim" className="space-y-4 mt-4">
-          <Card>
+          <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
             <CardContent className="pt-4">
               <KargoDenetimiGorunumu />
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Silme onayı — eskiden tek tıkla kalıcı siliyordu. */}
+      <Dialog open={silinecekId != null} onOpenChange={(o) => !o && !deleteMutation.isPending && setSilinecekId(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base text-rose-300">Kural silinsin mi?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm font-medium">{rules.find((r) => r.id === silinecekId)?.name}</p>
+          <p className="text-xs text-muted-foreground">
+            Bu işlem geri alınamaz. Kuralın geçtiği siparişlerin kargosu yeniden hesaplanır — istersen pasif yapabilirsin.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" disabled={deleteMutation.isPending} onClick={() => setSilinecekId(null)}>
+              Vazgeç
+            </Button>
+            <Button
+              size="sm"
+              className="bg-rose-500 text-white hover:bg-rose-500/90"
+              disabled={deleteMutation.isPending}
+              onClick={() => silinecekId && deleteMutation.mutate(silinecekId)}
+            >
+              {deleteMutation.isPending ? "Siliniyor…" : "Sil"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>

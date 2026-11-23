@@ -5,18 +5,17 @@ import { useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 
 import { DeleteButton, Field, PrimaryButton, Segmented, TextField } from "@/components/form";
-import { ErrorState, Screen, SubHeader, Tint } from "@/components/kit";
+import { ErrorState, Screen, SubHeader, Tint, Txt } from "@/components/kit";
 import { FormShimmer } from "@/components/kit/FormShimmer";
 import { createCargoRule, deleteCargoRule, getAllCargoRules, updateCargoRule, type CargoRuleFull } from "@/lib/db/rule-crud";
 import { parseTrNumber } from "@/lib/number";
 import { space } from "@/theme/tokens";
 
-const PLATFORMS = [
-  { key: "all", label: "Tümü" },
-  { key: "shopify", label: "Shopify" },
-  { key: "trendyol", label: "Trendyol" },
-  { key: "hepsiburada", label: "HB" },
-];
+/**
+ * Elle kargo kuralı YALNIZ Shopify içindir (Trendyol/HB pazaryerinin listesinden gelir).
+ * "Tümü" seçeneği kaldırıldı: platformsuz kural bir sonraki güncellemede Trendyol'a taşınıp
+ * Shopify siparişlerinde etkisiz kalıyordu (denetim, 23 Kas 2026).
+ */
 
 export default function CargoEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -56,7 +55,8 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
   const qc = useQueryClient();
 
   const [name, setName] = useState(existing?.name ?? "");
-  const [platform, setPlatform] = useState(existing?.platform ?? "all");
+  const platform = existing?.platform ?? "shopify";
+  const pazaryeriKurali = platform === "trendyol" || platform === "hepsiburada";
   const [minDesi, setMinDesi] = useState(existing ? String(existing.minDesi) : "0");
   const [maxDesi, setMaxDesi] = useState(existing ? String(existing.maxDesi) : "999");
   const [minPrice, setMinPrice] = useState(existing ? String(existing.minPrice) : "0");
@@ -93,7 +93,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
 
       const draft = {
         name: name.trim() || "Kargo",
-        platform: platform === "all" ? null : platform,
+        platform,
         minDesi: parsedMinDesi,
         maxDesi: parsedMaxDesi,
         minPrice: parsedMinPrice,
@@ -119,7 +119,18 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
       invalidate();
       router.back();
     },
+    onError: () => Alert.alert("Silinemedi", "Bağlantını kontrol edip tekrar dene."),
   });
+
+  if (pazaryeriKurali) {
+    return (
+      <Screen header={<SubHeader title="Kargo kuralı" subtitle={existing?.name} />}>
+        <Tint strong style={styles.card}>
+          <Txt v="body">Bu fiyat pazaryerinin kendi listesinden gelir; buradan değiştirilemez.</Txt>
+        </Tint>
+      </Screen>
+    );
+  }
 
   return (
     <Screen header={<SubHeader title={isNew ? "Yeni kargo kuralı" : "Kargo kuralı"} subtitle={existing?.name} />}>
@@ -128,7 +139,7 @@ function CargoEditForm({ id, existing }: { id: string; existing: CargoRuleFull |
           <TextField value={name} onChange={setName} placeholder="Trendyol 0-1 Desi" />
         </Field>
         <Field label="Platform">
-          <Segmented items={PLATFORMS} selected={platform} onSelect={setPlatform} />
+          <Txt v="body" tone="dim">Shopify</Txt>
         </Field>
         <View style={styles.row}>
           <View style={{ flex: 1 }}>

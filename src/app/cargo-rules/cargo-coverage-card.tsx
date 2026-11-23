@@ -33,26 +33,46 @@ interface Kapsam {
  * kapatıyor. Uzun bir "eksikler" listesi kimseyi harekete geçirmez.
  */
 export function CargoCoverageCard() {
-  const { data, isLoading } = useQuery<Kapsam>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<Kapsam>({
     queryKey: ["cargo-coverage"],
     queryFn: () => fetchJson<Kapsam>("/api/cargo-rules/coverage"),
     staleTime: 5 * 60_000,
   });
 
-  if (isLoading) return <Skeleton className="h-28 rounded-xl" />;
-  if (!data) return null;
+  if (isLoading) return <Skeleton className="h-28 rounded-2xl" />;
+  // Okunamadıysa kart sessizce kaybolmasın: desi eksikleri görünmez kalırdı.
+  if (!data) {
+    return isError ? (
+      <div className="flex items-center gap-3 rounded-2xl bg-rose-500/[0.05] px-4 py-3 text-sm ring-1 ring-rose-400/25">
+        <span className="text-rose-300">Desi kapsamı yüklenemedi.</span>
+        <button
+          type="button"
+          className="font-medium text-[#A9AEFF] hover:underline disabled:opacity-50"
+          disabled={isFetching}
+          onClick={() => void refetch()}
+        >
+          Tekrar dene
+        </button>
+      </div>
+    ) : null;
+  }
 
   const oran = data.soldUnits > 0 ? (data.missingUnits / data.soldUnits) * 100 : 0;
   const temiz = data.missingProducts === 0;
 
   return (
-    <Card className={cn(temiz ? "border-green-500/30 bg-green-500/5" : "border-amber-500/40 bg-amber-500/5")}>
+    <Card
+      className={cn(
+        "rounded-2xl border-0 ring-1 animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none",
+        temiz ? "bg-emerald-500/[0.05] ring-emerald-400/25" : "bg-[#7A7EFF]/[0.06] ring-[#7A7EFF]/30"
+      )}
+    >
       <CardContent className="p-4 space-y-3">
         <div className="flex items-start gap-2.5">
           {temiz ? (
-            <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0 mt-0.5" />
+            <CheckCircle2 className="h-4 w-4 text-emerald-300 shrink-0 mt-0.5" />
           ) : (
-            <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+            <AlertTriangle className="h-4 w-4 text-[#A9AEFF] shrink-0 mt-0.5" />
           )}
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">
@@ -63,7 +83,7 @@ export function CargoCoverageCard() {
             <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">
               {temiz
                 ? `Son ${data.measuredDays} günde satan ${data.soldProducts} ürünün hepsinde desi var; kargo bedeli tahmin edilmiyor.`
-                : `Son ${data.measuredDays} günde satılan ${data.soldUnits} adedin ${data.missingUnits}'i (%${oran.toFixed(0)}) bu ürünlerden. Desisi olmayan üründe kargo bedeli TAHMİN ediliyor, dolayısıyla kârı da tahmini.`}
+                : `Son ${data.measuredDays} günde satılan ${data.soldUnits} adedin ${data.missingUnits}'i (%${oran.toFixed(0)}) bu ürünlerden — bunların kargosu ve kârı tahmini.`}
             </p>
           </div>
         </div>
@@ -84,8 +104,7 @@ export function CargoCoverageCard() {
         {data.maxDesi != null && (
           <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <Ruler className="h-3.5 w-3.5 shrink-0" />
-            Ürünlerinin en büyüğü {data.maxDesi} desi — kuralların bunun üstündeki baremleri
-            pratikte kullanılmıyor.
+            Ürünlerinin en büyüğü {data.maxDesi} desi.
           </p>
         )}
       </CardContent>

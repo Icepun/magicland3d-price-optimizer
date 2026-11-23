@@ -14,6 +14,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { clearPricingQueryCache } from "@/lib/pricing-query-cache";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -140,6 +141,8 @@ export function NewTariffDialog({
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cargo-rules"] });
+      // Ürünler / ürün detayı / Siparişler eski kargoyla kalmasın (sayfanın diğer akışları gibi).
+      clearPricingQueryCache(queryClient);
       toast.success(`${platformAdi} için yeni tarife başladı`);
       setFiyatlar({});
       setZamYuzde("");
@@ -168,6 +171,11 @@ export function NewTariffDialog({
             <div>
               <Label>Başlangıç tarihi</Label>
               <Input type="date" value={baslangic} onChange={(e) => setBaslangic(e.target.value)} />
+              {baslangic && baslangic < bugunInput() && (
+                <p className="mt-1 text-[11px] font-medium text-[#C9D2F2] animate-in fade-in duration-200">
+                  Geçmiş tarih: o günden bu yana verilen siparişlerin kargosu yeni fiyatla hesaplanır.
+                </p>
+              )}
             </div>
             <div>
               <Label>Toplu zam (%)</Label>

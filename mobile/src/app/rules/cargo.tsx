@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert } from "react-native";
 
 import { RuleList } from "@/components/RuleList";
 import { getAllCargoRules, kuralYururlukte, setCargoRuleActive } from "@/lib/db/rule-crud";
@@ -24,6 +25,7 @@ export default function CargoRulesScreen() {
       qc.invalidateQueries({ queryKey: ["cargo-rules-all"] });
       qc.invalidateQueries({ queryKey: ["rules"] });
     },
+    onError: () => Alert.alert("Kaydedilemedi", "Bağlantını kontrol edip tekrar dene."),
   });
 
   /**
@@ -42,14 +44,15 @@ export default function CargoRulesScreen() {
    * saf bir değer; liste zaten her veri tazelenmesinde yeniden hesaplanıyor, davranış aynı.
    */
   const simdiMs = dataUpdatedAt || 0;
-  const yururlukteOlanlar = data?.filter((r) => kuralYururlukte(r, simdiMs));
-  const gizlenen = (data?.length ?? 0) - (yururlukteOlanlar?.length ?? 0);
+  // Trendyol / Hepsiburada kargosu pazaryerinin kendi listesinden gelir (masaüstünde de salt-okunur):
+  // burada düzenlenebilir görünmeleri yanıltıcıydı. Yalnız Shopify kuralları listelenir.
+  const yururlukteOlanlar = data?.filter((r) => kuralYururlukte(r, simdiMs) && (r.platform ?? "shopify") === "shopify");
 
   const items = yururlukteOlanlar?.map((r) => ({
     id: r.id,
     name: r.name,
     badge: platformLabel(r.platform),
-    subtitle: `Desi ${r.minDesi}–${r.maxDesi >= 999 ? "∞" : r.maxDesi} · ₺${r.cargoCost.toFixed(2)}`,
+    subtitle: `Desi ${r.minDesi}–${r.maxDesi >= 999 ? "∞" : r.maxDesi} · ₺${r.cargoCost.toFixed(2).replace(".", ",")}`,
     isActive: !!r.isActive,
   }));
 
@@ -59,11 +62,7 @@ export default function CargoRulesScreen() {
       onRetry={() => void refetch()}
       retrying={isFetching}
       title="Kargo Kuralları"
-      note={
-        gizlenen > 0
-          ? `Platform + desi aralığına göre kargo baremi. ${gizlenen} eski barem gizli — geçmiş siparişler için duruyor.`
-          : "Platform + desi aralığına göre kargo baremi."
-      }
+      note="Shopify kargo baremi. Trendyol ve Hepsiburada fiyatları pazaryerinin listesinden gelir."
       addHref="/rules/cargo-edit/new"
       editHrefBase="/rules/cargo-edit"
       items={items}

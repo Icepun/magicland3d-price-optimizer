@@ -75,7 +75,7 @@ function Ozet({ ikon: Ikon, baslik, adet, tutar, ton }: { ikon: typeof Ruler; ba
 }
 
 export function KargoDenetimiGorunumu() {
-  const { data, isLoading, error } = useQuery<KargoDenetimi>({
+  const { data, isLoading, error, isFetching, refetch } = useQuery<KargoDenetimi>({
     queryKey: ["cargo-audit"],
     queryFn: () => fetchJson("/api/cargo-audit"),
     staleTime: 2 * 60_000,
@@ -93,7 +93,19 @@ export function KargoDenetimiGorunumu() {
     );
   }
   if (error || !data) {
-    return <p className="text-sm text-muted-foreground">Kargo denetimi yüklenemedi. Sayfayı yenileyip tekrar dene.</p>;
+    return (
+      <div className="flex items-center gap-3 text-sm">
+        <span className="text-rose-300">Kargo denetimi yüklenemedi.</span>
+        <button
+          type="button"
+          className="font-medium text-[#A9AEFF] hover:underline disabled:opacity-50"
+          disabled={isFetching}
+          onClick={() => void refetch()}
+        >
+          Tekrar dene
+        </button>
+      </div>
+    );
   }
 
   const cezalilar = data.gecikmeler.filter((g) => g.durum !== "zamaninda");
@@ -102,7 +114,7 @@ export function KargoDenetimiGorunumu() {
     <div className="space-y-6">
       <div className="grid gap-3 sm:grid-cols-2">
         <Ozet ikon={Ruler} baslik="Fazla desi kesilen" adet={data.fazlaDesi.length} tutar={data.toplamFazla} ton="bg-violet-500/15 text-violet-300" />
-        <Ozet ikon={Clock} baslik="Gecikme bedeli" adet={cezalilar.filter((g) => g.ceza > 0 && (g.durum === "gercek" || g.durum === "tahmini")).length} tutar={data.toplamCeza} ton="bg-red-500/15 text-red-300" />
+        <Ozet ikon={Clock} baslik="Gecikme bedeli" adet={cezalilar.filter((g) => g.ceza > 0 && (g.durum === "gercek" || g.durum === "tahmini")).length} tutar={data.toplamCeza} ton="bg-rose-500/15 text-rose-300" />
       </div>
 
       {/* FAZLA DESİ */}
