@@ -95,6 +95,7 @@ import {
   parseManualOrderItems,
 } from "@/lib/manual-orders";
 import { FINANCE_TIME_ZONE, kurusToTl, monthlyFinanceWindowStart } from "@/lib/monthly-finance";
+import { dbEpochMs } from "@/lib/sqlite-date";
 
 const WINDOW_DAYS = 30;
 // Aylık geçmişte geç gelen iptal/iade durumlarını yakalamak için görünür listenin
@@ -1017,6 +1018,8 @@ async function computeOrdersBodyInner(
       paketNo: string | null;
       teslimatNo: string | null;
       kargoFirmasi: string | null;
+      /** HB listelerinde yok, kayıtta AÇIK görünüyordu → durum ve kalem detaydan okunur. */
+      kayittan?: boolean;
     };
     const agg = new Map<string, HbAgg>();
     for (const [on, s] of hbSiparisler) {
@@ -1029,6 +1032,26 @@ async function computeOrdersBodyInner(
         teslimatNo: s.teslimatNo ?? null,
         kargoFirmasi: s.kargoFirmasi ?? null,
       });
+    }
+
+    // KAYITTA AÇIK ama HB listelerinin DÖNDÜRMEDİĞİ siparişler. Ölçüldü 23 Kas 2026: 4468809025
+    // detayda "Packaged", ama paket listesi boş → Panel siparişi hiç görmüyor, Raporlar (kayıt)
+    // sayıyordu. Durum ve kalem detaydan okunur; iptal olmuşsa kayıt da iptale döner.
+    try {
+      const acik = await prisma.$queryRawUnsafe<Array<{ orderNumber: unknown }>>(
+        `SELECT "orderNumber" FROM "OrderFinanceSnapshot"
+          WHERE "platform" = 'hepsiburada' AND "statusKind" IN ('pending','processing','shipped')
+            AND ${dbEpochMs("orderedAt")} >= ?
+          LIMIT 50`,
+        historyCutoff
+      );
+      for (const r of acik) {
+        const on = String(r.orderNumber ?? "").trim();
+        if (!on || agg.has(on)) continue;
+        agg.set(on, { status: "", date: null, customer: null, lines: null, paketNo: null, teslimatNo: null, kargoFirmasi: null, kayittan: true });
+      }
+    } catch {
+      /* kayıt okunamazsa yalnız bu yedek atlanır */
     }
 
     // 30 güne filtrele (tarihsizleri tut) — detay çekmeden ÖNCE (gereksiz detay çağrısı olmasın).
@@ -1061,8 +1084,17 @@ async function computeOrdersBodyInner(
         // sipariş tarihine göre. Paketten gelen tarih (ShippedDate/DeliveredDate) bununla ezilir.
         const od = hbDate(d.orderDate, d.createdDate);
         if (od) e.date = od;
+        // Listelerde olmayan sipariş: durum kalemden (ör. "Packaged"; iptalse "Cancelled").
+        if (e.kayittan) {
+          const kalemler = hbArray(d, ["items", "lineItems", "details", "lines", "orderItems"]) as Record<string, any>[];
+          e.status = hbStr(...kalemler.map((k) => k.status ?? k.Status), d.status) || "";
+        }
       } catch { /* detay alınamadı → aşağıda "bilgisi eksik" işaretlenir */ }
     });
+    // Detayı alınamayan ya da durumu okunamayan yedek sipariş listeye eklenmez (kayıt olduğu gibi kalır).
+    for (const [on, e] of [...agg]) {
+      if (e.kayittan && (e.lines === null || !e.status)) agg.delete(on);
+    }
 
     // d) Birleşik satırlar (henüz ortak listeye değil — çekim sorunsuz bitmeden aktarmıyoruz).
     let hbIncomplete = 0;

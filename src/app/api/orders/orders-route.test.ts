@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
     /** İptal/iade listeleri. null = uç yok (istemci null döner) → akış etkilenmemeli. */
     hbClaims: {} as Record<string, any[] | null>,
     hbDetails: {} as Record<string, any>,
+    /** Kayıtta açık görünen HB sipariş numaraları (yedek okuma). */
+    hbKayittaAcik: [] as string[],
     persisted: [] as any[],
     /** Son arka plan yazımının durumu (null = henüz tur bitmedi). */
     lastWrite: null as any,
@@ -79,6 +81,11 @@ vi.mock("@/lib/prisma", () => {
       notification: table(),
       orderFinanceSnapshot: { deleteMany: vi.fn(async () => ({ count: 0 })) },
       $executeRawUnsafe: vi.fn(async () => 0),
+      $queryRawUnsafe: vi.fn(async (sql: string) =>
+        /"platform" = 'hepsiburada' AND "statusKind" IN/.test(sql)
+          ? h.state.hbKayittaAcik.map((orderNumber) => ({ orderNumber }))
+          : []
+      ),
     },
     remotePrisma: {
       manualOrder: {
@@ -208,6 +215,7 @@ beforeEach(async () => {
   h.state.hbPackages = {};
   h.state.hbClaims = { cancelled: null, returned: null };
   h.state.hbDetails = {};
+  h.state.hbKayittaAcik = [];
   h.state.persisted = [];
   h.state.lastWrite = null;
   h.state.missingCredentials = new Set<string>();
@@ -335,6 +343,36 @@ describe("özet dönemi BU AY (Raporlar ve Panel ile aynı)", () => {
     // Ayın 1'i 00:00 Türkiye saati.
     expect(body.summary.from).toBe("2026-10-31T21:00:00.000Z");
     void gun;
+  });
+});
+
+describe("Hepsiburada listelerinde olmayan ama kayıtta açık sipariş", () => {
+  it("detayda paketlenmiş görünen sipariş listeye ve özete girer (Panel = Raporlar)", async () => {
+    h.state.hbKayittaAcik = ["4468809025"];
+    h.state.hbDetails = {
+      "4468809025": {
+        orderDate: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+        items: [{ status: "Packaged", quantity: 1, unitPrice: 499.99, productName: "Ürün", merchantSku: "S1" }],
+      },
+    };
+    const body = await fetchOrders();
+    const s = body.orders.find((o: any) => o.id === "hb-4468809025");
+    expect(s).toMatchObject({ statusKind: "processing" });
+    expect(body.summary.hepsiburada.orderCount).toBe(1);
+  });
+
+  it("iptal olmuşsa iptal görünür, özete girmez; detay alınamazsa hiç eklenmez", async () => {
+    h.state.hbKayittaAcik = ["4000000001", "4000000002"];
+    h.state.hbDetails = {
+      "4000000001": {
+        orderDate: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+        items: [{ status: "Cancelled", quantity: 1, unitPrice: 100, productName: "Ürün", merchantSku: "S1" }],
+      },
+    };
+    const body = await fetchOrders();
+    expect(body.orders.find((o: any) => o.id === "hb-4000000001")?.statusKind).toBe("cancelled");
+    expect(body.orders.some((o: any) => o.id === "hb-4000000002")).toBe(false);
+    expect(body.summary.hepsiburada.orderCount).toBe(0);
   });
 });
 
