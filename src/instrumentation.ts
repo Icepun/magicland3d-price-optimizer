@@ -71,6 +71,7 @@ export async function register() {
         .then(() => import("./lib/buyuk-kolon-bakimi"))
         .then((m) => m.buyukKolonBakimi())
         .catch(() => {});
-    }, 45_000);
+      // 3 dk: açılış telaşı (şema, sipariş taraması t+90 sn, ısıtma) bittikten sonra.
+    }, 180_000);
   })();
 }

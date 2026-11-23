@@ -110,19 +110,27 @@ export const TASIMA_IFADELERI: readonly string[] = [
 
 export type TasimaSonucu = { tasinan: number; yontem: "yok" | "toplu" | "islem" };
 
-export async function gorselleriTasi(): Promise<TasimaSonucu> {
-  const sayim = await prisma.$queryRawUnsafe<Array<{ n: number | bigint }>>(
+type HamIstemci = Pick<typeof prisma, "$queryRawUnsafe" | "$executeRawUnsafe" | "$transaction">;
+
+/**
+ * ⚠️ HAFİF TUT (23 Kas 2026 olayı): açılışta `COUNT(*)` tam tarama + yetim `DELETE` her seferinde
+ * koşuyordu. Turso soğukken aynı tarama 9 sn sürüyor; 13:41 açılışında 59 sn'de kesildi, kesilen
+ * istek sunucuda sürdü ve uygulamanın geri kalanını tıkadı (Panel/Raporlar/Yazıcılar boş kaldı).
+ * Artık: varlık denetimi ilk eşleşmede durur, yetim temizliği yalnız gerçekten taşıma varken,
+ * çağıran da günde en çok bir kez ve ayrı bağlantıdan çağırır (lib/model-gorseli-bakimi).
+ */
+export async function gorselleriTasi(istemci: HamIstemci = prisma): Promise<TasimaSonucu> {
+  const var_ = await istemci.$queryRawUnsafe<Array<{ x: number }>>(
+    `SELECT 1 AS x FROM "ProductModelFile" WHERE typeof("thumbnail") = 'text' LIMIT 1`,
+  );
+  if (var_.length === 0) return { tasinan: 0, yontem: "yok" };
+  const sayim = await istemci.$queryRawUnsafe<Array<{ n: number | bigint }>>(
     `SELECT COUNT(*) AS n FROM "ProductModelFile" WHERE typeof("thumbnail") = 'text'`,
   );
   const tasinacak = Number(sayim[0]?.n ?? 0);
-  if (tasinacak === 0) {
-    // Yine de yetimleri temizle — ucuz (yalnız kimlikler karşılaştırılır).
-    await prisma.$executeRawUnsafe(TASIMA_IFADELERI[2]!);
-    return { tasinan: 0, yontem: "yok" };
-  }
   // Uzak veritabanında tek istek (onlarca MB sunucuda taşınır, ağdan geçmez; 6 sn'lik okuma
   // tavanına takılmaz). Yerel/gömülü modda Prisma işlemi.
   if (await batchWrite(TASIMA_IFADELERI.map((sql) => ({ sql })))) return { tasinan: tasinacak, yontem: "toplu" };
-  await prisma.$transaction(TASIMA_IFADELERI.map((sql) => prisma.$executeRawUnsafe(sql)));
+  await istemci.$transaction(TASIMA_IFADELERI.map((sql) => istemci.$executeRawUnsafe(sql)));
   return { tasinan: tasinacak, yontem: "islem" };
 }
