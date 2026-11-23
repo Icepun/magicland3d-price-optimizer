@@ -468,6 +468,7 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
         <Money value={p.salePrice} v="heading" />
       </View>
 
+      {p.commissionMissing ? null : (
       <View style={styles.kpiRow}>
         <View style={{ flex: 1 }}>
           <Txt v="label" tone="faint" style={styles.kicker}>
@@ -486,16 +487,19 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
           </Txt>
         </View>
       </View>
+      )}
 
       {p.commissionMissing ? (
         <View style={styles.warnBox}>
           <SymbolView name="exclamationmark.triangle.fill" tintColor={color.bad} style={{ width: 16, height: 16 }} />
           <Txt v="small" tone="bad" style={{ flex: 1 }}>
-            {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş — kâr olduğundan yüksek görünüyor.
+            {PLATFORM_LABEL[p.platform]} komisyonu girilmemiş, kâr hesaplanamıyor.
           </Txt>
         </View>
       ) : null}
 
+      {p.commissionMissing ? null : (
+      <>
       <View style={styles.divider} />
       <Dokum label={`KDV (%${r.vatRate})`} value={r.vatAmount} />
       <Dokum label="Ürün + paketleme" value={r.productCost + r.packagingCost} />
@@ -507,6 +511,8 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
           <Dokum key={e.id} label={e.name} value={e.amount} />
         ))}
       {r.inputVatCredit > 0 ? <Dokum label="KDV iadesi" value={r.inputVatCredit} positive /> : null}
+      </>
+      )}
     </Glass>
   );
 }

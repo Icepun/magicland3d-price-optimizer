@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
@@ -210,15 +209,18 @@ const HAFIF_DUGME =
 const STICKY_1 = "sticky left-0 z-20";
 const STICKY_2 = "sticky left-[var(--pcol2,36px)] z-20";
 const STICKY_3 = "sticky left-[var(--pcol3,88px)] z-20 border-r border-border/50";
-/** Normal satır: kart zemini + hover tonu. */
+/** Normal satır: kart zemini + hover tonu (satırın hover'ıyla aynı). */
 const STICKY_TONE_ROW =
-  "bg-card group-hover:bg-[color-mix(in_oklab,var(--muted)_50%,var(--card))]";
-/** Varyant üyesi satırı biraz daha koyu durur. */
+  "bg-card group-hover:bg-[color-mix(in_oklab,white_3%,var(--card))]";
+/** Varyant üyesi satırı: grubun lavanta tonunun açığı — hangi gruba ait olduğu belli olsun. */
 const STICKY_TONE_MEMBER =
-  "bg-[color-mix(in_oklab,var(--muted)_15%,var(--card))] group-hover:bg-[color-mix(in_oklab,var(--muted)_50%,var(--card))]";
-/** Grup başlığı mor zeminlidir. */
+  "bg-[color-mix(in_oklab,#7A7EFF_3.5%,var(--card))] group-hover:bg-[color-mix(in_oklab,#7A7EFF_7%,var(--card))]";
+/** Grup başlığı lavanta zeminlidir (satırın kendi tonuyla aynı karışım, opak). */
 const STICKY_TONE_GROUP =
-  "bg-[color-mix(in_oklab,var(--primary)_7%,var(--card))] group-hover:bg-[color-mix(in_oklab,var(--primary)_13%,var(--card))]";
+  "bg-[color-mix(in_oklab,#7A7EFF_6%,var(--card))] group-hover:bg-[color-mix(in_oklab,#7A7EFF_11%,var(--card))]";
+/** Açık grup başlığı: biraz daha koyu — varyantların başlığı olduğu belli olsun. */
+const STICKY_TONE_GROUP_OPEN =
+  "bg-[color-mix(in_oklab,#7A7EFF_12%,var(--card))] group-hover:bg-[color-mix(in_oklab,#7A7EFF_16%,var(--card))]";
 
 /** Kâr/saat · kâr/gram rakamının hangi platformdan geldiğini söyleyen küçük rozet. */
 function ProfitSourceBadge({ platform }: { platform: PlatformKey }) {
@@ -322,14 +324,14 @@ function ProductImage({ src, name }: { src: string | null; name: string }) {
 
   if (!src || errored) {
     return (
-      <div className="w-10 h-10 rounded-md bg-muted flex items-center justify-center flex-shrink-0">
+      <div className="w-10 h-10 rounded-lg bg-white/[0.04] ring-1 ring-white/[0.08] flex items-center justify-center flex-shrink-0">
         <Package className="h-5 w-5 text-muted-foreground" />
       </div>
     );
   }
 
   return (
-    <div className="w-10 h-10 rounded-md border bg-white flex items-center justify-center flex-shrink-0 overflow-hidden">
+    <div className="w-10 h-10 rounded-lg ring-1 ring-white/10 bg-white flex items-center justify-center flex-shrink-0 overflow-hidden transition-transform duration-200 group-hover:scale-[1.04] motion-reduce:group-hover:scale-100">
       {/* Pazaryeri CDN alan adları kullanıcıya göre değişir; URL zaten küçük thumbnail'e çevriliyor. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -440,9 +442,18 @@ const ProductRow = memo(function ProductRow({
   measureRef,
   dataIndex,
   enterDelayMs,
+  memberLast = false,
+  memberEnterMs = null,
+  memberLeaving = false,
 }: {
   product: Product;
   isMember: boolean;
+  /** Grubun son varyantı: ağaç çizgisi burada biter, grup alttan kapanır. */
+  memberLast?: boolean;
+  /** Grup az önce açıldı → varyant sırayla kayarak girer (ms gecikme). */
+  memberEnterMs?: number | null;
+  /** Grup kapanıyor → kısa solma, sonra satır kalkar. */
+  memberLeaving?: boolean;
   isSelected: boolean;
   isEditingAlias: boolean;
   aliasValue: string;
@@ -487,17 +498,38 @@ const ProductRow = memo(function ProductRow({
       ref={measureRef}
       data-index={dataIndex}
       className={cn(
-        "group hover:bg-muted/50",
+        "group border-white/[0.05] transition-colors hover:bg-white/[0.03]",
         !product.isActive && "opacity-50",
-        isMember && "bg-muted/15",
-        enterDelayMs != null && "animate-in fade-in slide-in-from-bottom-1 duration-300 fill-mode-both"
+        isMember && "bg-[#7A7EFF]/[0.035] hover:bg-[#7A7EFF]/[0.07]",
+        isMember && memberLast && "border-b-[#7A7EFF]/25",
+        memberLeaving && "animate-out fade-out slide-out-to-top-1 duration-150 fill-mode-forwards",
+        !memberLeaving && memberEnterMs != null && "animate-in fade-in slide-in-from-top-2 duration-300 ease-out fill-mode-both",
+        !memberLeaving && memberEnterMs == null && enterDelayMs != null && "animate-in fade-in slide-in-from-bottom-1 duration-300 fill-mode-both"
       )}
-      style={enterDelayMs != null ? { animationDelay: `${enterDelayMs}ms` } : undefined}
+      style={
+        memberEnterMs != null
+          ? { animationDelay: `${memberEnterMs}ms` }
+          : enterDelayMs != null
+            ? { animationDelay: `${enterDelayMs}ms` }
+            : undefined
+      }
     >
-      <TableCell className={cn("py-2", STICKY_1, stickyTone)}>
+      <TableCell
+        className={cn("py-2", STICKY_1, stickyTone, isMember && "border-l-[3px] border-l-[#7A7EFF]/35")}
+      >
         <Checkbox checked={isSelected} onCheckedChange={(v) => onToggleSelect(product.id, !!v)} />
       </TableCell>
-      <TableCell className={cn("py-2 pr-0", STICKY_2, stickyTone, isMember && "pl-6")}>
+      <TableCell className={cn("py-2 pr-0", STICKY_2, stickyTone, isMember && "pl-7")}>
+        {/* Varyantı gruba bağlayan ağaç çizgisi: dikey hat + ürüne uzanan kısa kol. */}
+        {isMember && (
+          <>
+            <span
+              aria-hidden
+              className={cn("pointer-events-none absolute left-3 top-0 w-px bg-[#7A7EFF]/35", memberLast ? "h-1/2" : "bottom-0")}
+            />
+            <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 h-px w-3 bg-[#7A7EFF]/35" />
+          </>
+        )}
         <ProductImage src={product.imageUrl} name={product.name} />
       </TableCell>
       {/* max-w-0: uzun ürün adı sütunu şişirmesin, üç nokta ile kırpılsın.
@@ -575,7 +607,7 @@ const ProductRow = memo(function ProductRow({
           </span>
         )}
         {isMember && product.variantLabel && (
-          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-medium text-primary">
+          <span className="mt-1 inline-flex w-fit items-center gap-1 rounded-md bg-[#7A7EFF]/12 px-1.5 py-0.5 text-[10px] font-semibold text-[#C9D2F2] ring-1 ring-[#7A7EFF]/25">
             <Layers className="h-3 w-3" /> {product.variantLabel}
           </span>
         )}
@@ -584,7 +616,7 @@ const ProductRow = memo(function ProductRow({
         {product.madeToOrder ? (
           <div className="flex justify-center">
             <span
-              className="text-[10px] leading-tight text-center text-muted-foreground bg-muted/60 rounded px-1.5 py-0.5"
+              className="text-[10px] leading-tight text-center text-muted-foreground bg-white/[0.04] ring-1 ring-white/[0.08] rounded-md px-1.5 py-0.5"
               title="Sipariş üzerine üretilir — stok takip edilmez"
             >
               Sipariş<br />üzerine
@@ -600,7 +632,7 @@ const ProductRow = memo(function ProductRow({
             <Button
               variant="outline"
               size="icon"
-              className="h-7 w-7 text-muted-foreground transition-transform active:scale-90"
+              className="h-7 w-7 rounded-lg border-white/10 bg-white/[0.03] text-muted-foreground transition hover:bg-[#7A7EFF]/15 hover:text-foreground active:scale-90"
               disabled={product.stock <= 0}
               onClick={() => onAdjustStock(product.id, -1, product.stock, product.name)}
             >
@@ -619,7 +651,7 @@ const ProductRow = memo(function ProductRow({
             <Button
               variant="outline"
               size="icon"
-              className="h-7 w-7 text-muted-foreground transition-transform active:scale-90"
+              className="h-7 w-7 rounded-lg border-white/10 bg-white/[0.03] text-muted-foreground transition hover:bg-[#7A7EFF]/15 hover:text-foreground active:scale-90"
               onClick={() => onAdjustStock(product.id, 1, product.stock, product.name)}
             >
               <Plus className="h-4 w-4" />
@@ -697,7 +729,7 @@ const ProductRow = memo(function ProductRow({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-[11px] px-2 transition-transform active:scale-95"
+                className="h-7 rounded-lg border-white/10 bg-white/[0.03] px-2 text-[11px] transition hover:bg-[#7A7EFF]/15 hover:text-foreground active:scale-95"
                 title={`Bu ürünü ${PLATFORM_LABEL[platform]} ilanıyla eşleştir`}
                 onClick={() => onMatch(product.id, product.name, platform as "trendyol" | "hepsiburada")}
               >
@@ -809,7 +841,15 @@ interface GroupRowData {
 
 type DisplayRow =
   | ({ kind: "group" } & GroupRowData)
-  | { kind: "product"; key: string; product: Product; isMember: boolean };
+  | {
+      kind: "product";
+      key: string;
+      product: Product;
+      isMember: boolean;
+      memberLast?: boolean;
+      memberEnterMs?: number | null;
+      memberLeaving?: boolean;
+    };
 
 /**
  * Varyant grubu başlık satırı — genel ad + görünen varyantlar + özet rakamlar.
@@ -860,16 +900,24 @@ const GroupRow = memo(function GroupRow({
       data-index={dataIndex}
       onClick={() => onToggleExpand(row.groupId)}
       title={expanded ? "Varyantları gizle" : "Varyantları aç"}
-      // Grup başlığı normal satıra benzemesin: mor zemin + sol kenar çubuğu + kalın ad.
-      // Koyu temada nötr gri tonlar birbirinden ayırt edilemiyordu.
+      // Grup başlığı normal satıra benzemesin: lavanta zemin + sol kenar çubuğu + kalın ad.
+      // Açıkken zemin koyulaşır ve alt çizgi kalkar → varyantlar başlığa yapışık görünür.
       className={cn(
-        "group bg-primary/[0.07] hover:bg-primary/[0.13] border-y border-border/60 cursor-pointer transition-colors",
+        "group cursor-pointer border-y border-white/[0.06] transition-colors duration-200",
+        expanded
+          ? "bg-[#7A7EFF]/[0.12] hover:bg-[#7A7EFF]/[0.16] border-b-transparent"
+          : "bg-[#7A7EFF]/[0.06] hover:bg-[#7A7EFF]/[0.11]",
         enterDelayMs != null && "animate-in fade-in slide-in-from-bottom-1 duration-300 fill-mode-both"
       )}
       style={enterDelayMs != null ? { animationDelay: `${enterDelayMs}ms` } : undefined}
     >
       <TableCell
-        className={cn("py-2 border-l-2 border-l-primary/70", STICKY_1, STICKY_TONE_GROUP)}
+        className={cn(
+          "py-2 border-l-[3px] transition-colors duration-200",
+          expanded ? "border-l-[#9B8CFF]" : "border-l-[#7A7EFF]/60",
+          STICKY_1,
+          expanded ? STICKY_TONE_GROUP_OPEN : STICKY_TONE_GROUP
+        )}
         onClick={(e) => e.stopPropagation()}
       >
         <Checkbox
@@ -877,32 +925,48 @@ const GroupRow = memo(function GroupRow({
           onCheckedChange={(v) => onToggleSelectGroup(row.members.map((m) => m.id), !!v)}
         />
       </TableCell>
-      <TableCell className={cn("py-2 pr-0", STICKY_2, STICKY_TONE_GROUP)}>
+      <TableCell className={cn("py-2 pr-0", STICKY_2, expanded ? STICKY_TONE_GROUP_OPEN : STICKY_TONE_GROUP)}>
         <span className="relative block w-fit">
           <ProductImage src={firstImg} name={row.groupName} />
-          <span className="absolute -bottom-1 -right-1 rounded bg-primary text-primary-foreground p-0.5 leading-none">
+          <span className="absolute -bottom-1 -right-1 rounded-md bg-gradient-to-br from-[#9B5CFF] to-[#4F8CFF] p-0.5 leading-none text-white shadow-[0_4px_10px_-4px_rgba(122,126,255,0.9)]">
             <Layers className="h-2.5 w-2.5" />
           </span>
         </span>
+        {/* Açıkken ağaç çizgisi başlıktan aşağı iner. */}
+        {expanded && (
+          <span aria-hidden className="pointer-events-none absolute left-3 top-1/2 bottom-0 w-px bg-[#7A7EFF]/35 animate-in fade-in duration-300" />
+        )}
       </TableCell>
       {/* Ürün satırıyla aynı taban genişlik — grup ve varyant satırları hizalı kalsın. */}
-      <TableCell className={cn("max-w-0 min-w-[260px]", STICKY_3, STICKY_TONE_GROUP)}>
-        <div className="flex items-center gap-1.5 w-full">
-          <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200", expanded && "rotate-90")} />
-          <span className="font-semibold text-sm truncate">{row.groupName}</span>
-          <Badge
-            variant="secondary"
+      <TableCell className={cn("max-w-0 min-w-[260px]", STICKY_3, expanded ? STICKY_TONE_GROUP_OPEN : STICKY_TONE_GROUP)}>
+        <div className="flex items-center gap-2 w-full">
+          <span
             className={cn(
-              "shrink-0 tabular-nums",
+              "grid size-6 shrink-0 place-items-center rounded-md ring-1 transition-all duration-300 ease-out",
+              expanded
+                ? "rotate-90 bg-[#7A7EFF]/25 text-[#E4E7FF] ring-[#7A7EFF]/40"
+                : "bg-white/[0.05] text-muted-foreground ring-white/10 group-hover:bg-[#7A7EFF]/15 group-hover:text-foreground",
+              "motion-reduce:transition-none"
+            )}
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </span>
+          <span className="font-semibold text-sm truncate">{row.groupName}</span>
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ring-1",
               // Kısmi görünüm göze çarpsın: satırdaki rakamlar grubun TAMAMINI anlatmıyor.
-              sayim.kismi && "bg-primary/20 text-primary"
+              sayim.kismi
+                ? "bg-[#7A7EFF]/25 text-[#E4E7FF] ring-[#7A7EFF]/40"
+                : "bg-[#7A7EFF]/12 text-[#C9D2F2] ring-[#7A7EFF]/25"
             )}
             title={sayim.ipucu}
           >
+            <Layers className="h-3 w-3" />
             {sayim.metin}
-          </Badge>
+          </span>
         </div>
-        <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-6">
+        <div className="text-[11px] text-muted-foreground/70 truncate mt-0.5 pl-8">
           {labels}
           {priceText && <span className="opacity-80"> · {priceText}</span>}
         </div>
@@ -1937,15 +2001,44 @@ export default function ProductsPage() {
 
   // Varyant grubu üyelerini tek satırda topla: grup başlığı + (açıkken) üyeler.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  // Az önce açılan grup (varyantları sırayla kayarak girer) ve kapanmakta olan grup (kısa solma).
+  const [acilanGrup, setAcilanGrup] = useState<string | null>(null);
+  const [kapananGrup, setKapananGrup] = useState<string | null>(null);
+  const expandedRef = useRef(expandedGroups);
+  useEffect(() => {
+    expandedRef.current = expandedGroups;
+  }, [expandedGroups]);
   // useCallback: memo'lu grup satırı bu fonksiyonu prop olarak alıyor, her render'da yenilenmemeli.
   const toggleGroup = useCallback((id: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+    const hareketsiz =
+      typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (expandedRef.current.has(id)) {
+      const kapat = () =>
+        setExpandedGroups((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      if (hareketsiz) {
+        kapat();
+        return;
+      }
+      setKapananGrup(id);
+      setTimeout(() => {
+        kapat();
+        setKapananGrup((k) => (k === id ? null : k));
+      }, 150);
+      return;
+    }
+    setAcilanGrup(hareketsiz ? null : id);
+    setExpandedGroups((prev) => new Set(prev).add(id));
   }, []);
+  // Giriş animasyonu bir kez oynar; sonra işaret kalkar (kaydırıp geri gelince yeniden oynamasın).
+  useEffect(() => {
+    if (!acilanGrup) return;
+    const t = setTimeout(() => setAcilanGrup(null), 900);
+    return () => clearTimeout(t);
+  }, [acilanGrup]);
   const handleToggleSelectGroup = useCallback((ids: string[], checked: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -2029,13 +2122,24 @@ export default function ProductsPage() {
     for (const row of displayRows) {
       out.push(row);
       if (row.kind === "group" && expandedGroups.has(row.groupId)) {
-        for (const m of row.members) {
-          out.push({ kind: "product", key: `${row.groupId}_${m.id}`, product: m, isMember: true });
-        }
+        const acilan = acilanGrup === row.groupId;
+        const kapanan = kapananGrup === row.groupId;
+        row.members.forEach((m, i) => {
+          out.push({
+            kind: "product",
+            key: `${row.groupId}_${m.id}`,
+            product: m,
+            isMember: true,
+            memberLast: i === row.members.length - 1,
+            // En fazla 12 adım (~420 ms): kalabalık grupta sonuncular beklemesin.
+            memberEnterMs: acilan ? Math.min(i, 12) * 35 : null,
+            memberLeaving: kapanan,
+          });
+        });
       }
     }
     return out;
-  }, [displayRows, expandedGroups]);
+  }, [displayRows, expandedGroups, acilanGrup, kapananGrup]);
 
   // ── Virtualization (sanallaştırma) ──
   // Sayfa <main> ile scroll olur. Eski windowing DOM'u biriktiriyordu (40→368 satır, hiç düşmüyor)
@@ -2631,7 +2735,7 @@ export default function ProductsPage() {
                     <GroupRow
                       key={row.key}
                       row={row}
-                      expanded={expandedGroups.has(row.groupId)}
+                      expanded={expandedGroups.has(row.groupId) && kapananGrup !== row.groupId}
                       allSelected={
                         row.members.length > 0 && row.members.every((m) => selectedIds.has(m.id))
                       }
@@ -2653,6 +2757,9 @@ export default function ProductsPage() {
                     enterDelayMs={enterDelayMs}
                     product={product}
                     isMember={row.isMember}
+                    memberLast={row.memberLast}
+                    memberEnterMs={row.memberEnterMs ?? null}
+                    memberLeaving={row.memberLeaving}
                     isSelected={selectedIds.has(product.id)}
                     isEditingAlias={aliasEdit?.id === product.id}
                     aliasValue={aliasEdit?.id === product.id ? aliasEdit.value : ""}

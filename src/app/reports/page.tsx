@@ -113,7 +113,7 @@ export default function ReportsPage() {
     : "";
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] space-y-5 pb-10">
+    <div className="mx-auto w-full max-w-[1400px] space-y-5 p-6 pb-10">
       {/* BAŞLIK */}
       <header className="flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-500 motion-reduce:animate-none lg:flex-row lg:items-end lg:justify-between">
         <div className="flex items-center gap-3">

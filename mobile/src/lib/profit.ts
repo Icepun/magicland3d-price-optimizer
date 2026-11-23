@@ -31,8 +31,9 @@ export interface PlatformProfit {
   result: SimulationResult;
   /** Trendyol min sipariş adedi (>1 ise liste "×N" rozeti gösterir). */
   minOrderQty: number;
-  /** Pazaryeri (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi) → kâr
-   *  olduğundan yüksek görünür. Masaüstü ürün detayı v0.19.66 ile aynı uyarı koşulu. */
+  /** Pazaryeri (Trendyol/HB) komisyon kaynağı yok (override yok + kural eşleşmedi). Bu ilanda
+   *  kâr GÖSTERİLMEZ, özetlere / ortalamalara girmez (Berke kararı 23 Kas 2026; masaüstünde
+   *  `src/lib/komisyon-bilinmiyor.ts`) — eskiden komisyon 0 sayılıp şişkin kâr çıkıyordu. */
   commissionMissing: boolean;
 }
 
@@ -188,12 +189,14 @@ export function computeProductProfit(
       "trendyol",
       "hepsiburada",
     ];
+    // Komisyonu bilinmeyen ilan kâr kaynağı olamaz (masaüstüyle aynı).
     const primary = preferredPlatforms
-      .map((platform) => platforms.find((summary) => summary.platform === platform))
+      .map((platform) => platforms.find((summary) => summary.platform === platform && !summary.commissionMissing))
       .find(Boolean);
     if (primary) {
       currentNetProfit = primary.result.netProfit;
-    } else {
+    } else if (!platforms.some((summary) => summary.commissionMissing)) {
+      // Hiç ilan yok → ürünün kendi fiyatıyla. İlanı olup komisyonu bilinmeyene kâr UYDURULMAZ.
       const fallbackPlatform: Platform =
         detail.source === "trendyol" ||
         detail.source === "hepsiburada" ||

@@ -44,6 +44,8 @@ export function computeDashboard(
     for (const pl of profit.platforms) {
       const m = acc[pl.platform];
       if (!m) continue;
+      // Komisyonu bilinmeyen ilan kâra / marja / zarar sayısına girmez (masaüstüyle aynı).
+      if (pl.commissionMissing) continue;
       m.profit += pl.result.netProfit;
       m.margin += pl.result.profitMargin;
       m.count++;

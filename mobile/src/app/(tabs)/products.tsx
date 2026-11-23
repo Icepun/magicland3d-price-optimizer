@@ -130,10 +130,11 @@ export default function ProductsScreen() {
         madeToOrder: p.madeToOrder,
         hasCost: profit.hasCost,
         missingDesi: p.desi == null || p.desi <= 0,
-        anyLoss: profit.platforms.some((pl) => pl.result.netProfit < 0),
+        // Komisyonu bilinmeyen ilanın kârı yok: zarar sayılmaz, rakam gösterilmez.
+        anyLoss: profit.platforms.some((pl) => !pl.commissionMissing && pl.result.netProfit < 0),
         platforms: profit.platforms.map((pl) => ({
           platform: pl.platform,
-          netProfit: profit.hasCost ? pl.result.netProfit : null,
+          netProfit: profit.hasCost && !pl.commissionMissing ? pl.result.netProfit : null,
           minOrderQty: pl.minOrderQty,
         })),
         variantGroupId: p.variantGroupId,
