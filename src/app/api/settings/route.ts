@@ -44,6 +44,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Shopify sabit komisyonu TÜM Shopify siparişlerine giriyor: boş "" kaydı %0 sayılıyordu.
+  if (body.shopifyCommissionRate !== undefined) {
+    const oran = Number(String(body.shopifyCommissionRate ?? "").trim().replace(",", "."));
+    if (body.shopifyCommissionRate === null || !String(body.shopifyCommissionRate).trim() || !Number.isFinite(oran) || oran < 0 || oran > 100) {
+      return NextResponse.json({ error: "Shopify komisyonu 0 ile 100 arasında bir sayı olmalı." }, { status: 400 });
+    }
+    body.shopifyCommissionRate = String(oran);
+  }
+
   for (const [key, value] of Object.entries(body)) {
     if (!SAYISAL_MALIYET_ANAHTARLARI.has(key) || value === null) continue;
     const n = Number(String(value).replace(",", "."));

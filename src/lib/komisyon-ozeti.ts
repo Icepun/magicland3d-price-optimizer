@@ -13,6 +13,8 @@ export interface KomisyonSiparisi {
   statusKind?: string | null;
   actualCommission?: number | null;
   estimatedCommission?: number | null;
+  /** Maliyeti/ürünü eşleşmeyen satır sayısı — >0 ise tahmini komisyon eksik (yalnız eşleşen satırlar). */
+  unmatchedCount?: number | null;
 }
 
 export interface PlatformKomisyonu {
@@ -20,8 +22,10 @@ export interface PlatformKomisyonu {
   siparis: number;
   ciro: number;
   komisyon: number;
-  /** Komisyon ÷ ciro; ciro yoksa null. */
+  /** Komisyon ÷ komisyonu BİLİNEN siparişlerin cirosu; yoksa null. */
   oran: number | null;
+  /** Komisyonu bilinen siparişlerin cirosu (ortalamanın paydası). */
+  bilinenCiro: number;
   gercekAdet: number;
   tahminAdet: number;
   /** Ne gerçek ne tahmin — komisyonu bilinmeyen sipariş. */
@@ -36,14 +40,19 @@ export function komisyonOzeti(siparisler: readonly KomisyonSiparisi[]): Platform
     if ((s.currency || "TRY").trim().toUpperCase() !== "TRY") continue;
     const p =
       harita.get(s.platform) ??
-      { platform: s.platform, siparis: 0, ciro: 0, komisyon: 0, oran: null, gercekAdet: 0, tahminAdet: 0, bilinmeyenAdet: 0 };
+      { platform: s.platform, siparis: 0, ciro: 0, komisyon: 0, oran: null, bilinenCiro: 0, gercekAdet: 0, tahminAdet: 0, bilinmeyenAdet: 0 };
     p.siparis++;
     p.ciro += s.total;
+    // Eşleşmeyen satırı olan siparişin TAHMİNİ yalnız eşleşen satırları kapsıyor (tümü eşleşmezse 0):
+    // ortalamaya girerse oranı düşük gösterir → "bilinmiyor" sayılır (denetim, 23 Kas 2026).
+    const eksikTahmin = (s.unmatchedCount ?? 0) > 0;
     if (s.actualCommission != null && Number.isFinite(s.actualCommission)) {
       p.komisyon += s.actualCommission;
+      p.bilinenCiro += s.total;
       p.gercekAdet++;
-    } else if (s.estimatedCommission != null && Number.isFinite(s.estimatedCommission)) {
+    } else if (s.estimatedCommission != null && Number.isFinite(s.estimatedCommission) && !eksikTahmin) {
       p.komisyon += s.estimatedCommission;
+      p.bilinenCiro += s.total;
       p.tahminAdet++;
     } else {
       p.bilinmeyenAdet++;
@@ -51,6 +60,6 @@ export function komisyonOzeti(siparisler: readonly KomisyonSiparisi[]): Platform
     harita.set(s.platform, p);
   }
   return [...harita.values()]
-    .map((p) => ({ ...p, oran: p.ciro > 0 ? p.komisyon / p.ciro : null }))
+    .map((p) => ({ ...p, oran: p.bilinenCiro > 0 ? p.komisyon / p.bilinenCiro : null }))
     .sort((a, b) => b.komisyon - a.komisyon);
 }

@@ -56,10 +56,12 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
 
   const [name, setName] = useState(existing?.name ?? "");
   const [category, setCategory] = useState(existing?.categoryName ?? "");
-  const [rate, setRate] = useState(existing ? String(existing.commissionRate * 100) : "");
+  // %7 → "7" (eskiden "7.000000000000001" görünüyordu).
+  const [rate, setRate] = useState(existing ? String(Math.round(existing.commissionRate * 10000) / 100).replace(".", ",") : "");
   const [fixed, setFixed] = useState(existing?.fixedCommission ? String(existing.fixedCommission) : "");
   const [minP, setMinP] = useState(existing ? String(existing.minPrice) : "0");
   const [maxP, setMaxP] = useState(existing ? String(existing.maxPrice) : "999999");
+  const [priority, setPriority] = useState(String(existing?.priority ?? 10));
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["commission-rules-all"] });
@@ -85,6 +87,10 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
       if (parsedMinPrice < 0 || parsedMaxPrice < parsedMinPrice) {
         throw new Error("Fiyat aralığı geçersiz.");
       }
+      const parsedPriority = priority.trim() ? parseTrNumber(priority) : 10;
+      if (parsedPriority === null || !Number.isInteger(parsedPriority)) {
+        throw new Error("Öncelik tam sayı olmalı.");
+      }
 
       const draft = {
         name: name.trim() || "Komisyon",
@@ -93,6 +99,7 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
         fixedCommission: parsedFixed,
         minPrice: parsedMinPrice,
         maxPrice: parsedMaxPrice,
+        priority: parsedPriority,
       };
       if (isNew) await createCommissionRule(draft);
       else await updateCommissionRule(id, draft);
@@ -111,6 +118,7 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
       invalidate();
       router.back();
     },
+    onError: () => Alert.alert("Silinemedi", "Bağlantını kontrol edip tekrar dene."),
   });
 
   return (
@@ -146,6 +154,9 @@ function CommissionEditForm({ id, existing }: { id: string; existing: Commission
             </Field>
           </View>
         </View>
+        <Field label="Öncelik (aynı ürüne birden çok kural uyarsa yüksek olan geçerli)">
+          <TextField value={priority} onChange={setPriority} placeholder="10" numeric />
+        </Field>
       </Tint>
 
       <PrimaryButton label={isNew ? "Oluştur" : "Kaydet"} onPress={() => save.mutate()} loading={save.isPending} />

@@ -109,6 +109,8 @@ export interface CommissionDraft {
   fixedCommission: number;
   minPrice: number;
   maxPrice: number;
+  /** Aynı ürüne birden çok kural uyarsa yüksek olan geçerli (masaüstüyle aynı alan). */
+  priority?: number;
 }
 
 export async function getAllCommissionRules(): Promise<CommissionRuleFull[]> {
@@ -121,15 +123,15 @@ export async function getAllCommissionRules(): Promise<CommissionRuleFull[]> {
 export async function createCommissionRule(d: CommissionDraft): Promise<void> {
   await execute(
     `INSERT INTO CommissionRule (id, name, categoryName, minPrice, maxPrice, commissionRate, fixedCommission, priority, isActive)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 10, 1)`,
-    [newId(), d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission]
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [newId(), d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission, d.priority ?? 10]
   );
 }
 
 export async function updateCommissionRule(id: string, d: CommissionDraft): Promise<void> {
   await execute(
-    `UPDATE CommissionRule SET name=?, categoryName=?, minPrice=?, maxPrice=?, commissionRate=?, fixedCommission=? WHERE id=?`,
-    [d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission, id]
+    `UPDATE CommissionRule SET name=?, categoryName=?, minPrice=?, maxPrice=?, commissionRate=?, fixedCommission=?, priority=COALESCE(?, priority) WHERE id=?`,
+    [d.name, d.categoryName, d.minPrice, d.maxPrice, d.commissionRate, d.fixedCommission, d.priority ?? null, id]
   );
 }
 

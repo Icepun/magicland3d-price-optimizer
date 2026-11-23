@@ -11,7 +11,8 @@ describe("komisyon özeti", () => {
       { platform: "trendyol", total: 50 },
     ]);
     expect(o[0]).toMatchObject({ platform: "trendyol", siparis: 3, ciro: 250, komisyon: 38, gercekAdet: 1, tahminAdet: 1, bilinmeyenAdet: 1 });
-    expect(o[0].oran).toBeCloseTo(38 / 250, 10);
+    // Ortalama yalnız komisyonu BİLİNEN siparişlerin cirosundan (komisyonu bilinmeyen 50 ₺ paydaya girmez).
+    expect(o[0].oran).toBeCloseTo(38 / 200, 10);
     expect(o[1]).toMatchObject({ platform: "hepsiburada", oran: 0.1 });
   });
 
