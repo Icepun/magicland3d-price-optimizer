@@ -41,6 +41,8 @@ import {
 } from "@/core/order-line-cost";
 import { bagliUrunKimligi } from "@/core/order-line-link";
 import { satirMaliyetleriniOku } from "@/lib/order-line-costs";
+import { kargoDesileriniOku } from "@/lib/kargo-desileri";
+import { kargoDesiBul } from "@/core/kargo-desi";
 import { satirBaglariniOku } from "@/lib/order-line-links";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
 import { trendyolDateToIso } from "@/core/trendyol-date";
@@ -179,6 +181,10 @@ export interface UnifiedOrder {
   cargoRuleMissing?: boolean;
   /** Kargo pazaryeri tarifesinden tahmin edildiyse kısa açıklaması ("Trendyol Express · sabit fiyat"). */
   cargoLabel?: string | null;
+  /** Kargonun hesaplandığı desi (ilana elle girilen kargoda null). */
+  cargoDesi?: number | null;
+  /** Desi kullanıcı tarafından elle girildi (Shopify — siparişin gerçekte çıktığı desi). */
+  cargoDesiManual?: boolean;
   /** Kargo tarifesinin fiyatı seçtiği bilgiler — finans geçmişine yazılır (yeniden hesap aynı fiyatı seçsin). */
   cargoContext?: KargoBaglami | null;
   /**
@@ -1466,6 +1472,8 @@ async function computeOrdersBodyInner(
   // SİPARİŞE ÖZEL MALİYET: kataloğa eklenmemiş / maliyeti girilmemiş ürünün yalnız o siparişteki
   // maliyeti (Siparişler → "Maliyet gir"). Hesap katalog ürünüyle AYNI çekirdekten geçer.
   const satirMaliyetleri = await satirMaliyetleriniOku(historyRows);
+  // ELLE GİRİLEN KARGO DESİSİ (Shopify): sipariş gerçekte hangi desiyle çıktıysa kargo onunla hesaplanır.
+  const kargoDesileri = await kargoDesileriniOku(historyRows);
 
   // TRENDYOL GECİKME BEDELİ — geciken paketler haftalık "Termin Gecikme Bedeli" faturasıyla eşleştirilir
   // (fatura siparişe bağlı gelmiyor). Fatura geldiyse gerçek; beklenen sürede gelmediyse kesilmedi.
@@ -1622,6 +1630,8 @@ async function computeOrdersBodyInner(
       kargo: r.kargo ?? null,
       // Trendyol termin gecikme + kusurlu ürün bedeli (tahmini ya da haftalık faturayla doğrulanmış).
       penalty: tyCezaToplami(gecikmeSonuclari.get(r.id)?.ceza, kusurluSonuclari.get(r.id)?.ceza),
+      // Shopify: kullanıcının girdiği gerçek kargo desisi (yoksa ürün desilerinin toplamı).
+      kargoDesi: kargoDesiBul(kargoDesileri, r.platform, r.id),
     };
     // İADE (kargolanıp geri gelen) sipariş: ciro ve komisyon geri verildi, iki yön kargo + hizmet
     // bedeli kesildi → siparişin kârı bu zarardır. Gerçek kayıt varsa tahminin yerine geçer.
@@ -1703,6 +1713,9 @@ async function computeOrdersBodyInner(
       // Kargo pazaryeri tarifesinden geldiyse hangi fiyat (gerçek kargo biliniyorsa gösterilmez).
       // Kargonun kaç desiden ve nereden hesaplandığı (gerçek fatura → pazaryerinin kestiği desi).
       cargoLabel: kargoSatiriEtiketi(pr, { kesilenDesi: platformFinancial?.chargedDesi ?? null }),
+      // Kargonun hesaplandığı desi + elle mi girildi (Siparişler'deki "Desi" düzenleme alanı için).
+      cargoDesi: pr.cargoDesi,
+      cargoDesiManual: pr.cargoDesiManual,
       ...(r.platform === "trendyol" || r.platform === "hepsiburada" ? { cargoContext: r.kargo ?? null } : {}),
       returnLoss: returnLoss
         ? {

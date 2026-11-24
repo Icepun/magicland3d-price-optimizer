@@ -184,6 +184,8 @@ function ozel(model: string, tur: number): Row {
       return { platform: "trendyol", externalOrderId: "ty-1", lineKey: `p:${URUN}` };
     case "OrderLineLink":
       return { platform: "trendyol", lineKey: "n:test kalemi", productId: URUN };
+    case "OrderCargoDesi":
+      return { platform: "shopify", externalOrderId: "sh-1" };
     case "PriceHistory":
       return { productId: URUN };
     case "PrinterConfig":

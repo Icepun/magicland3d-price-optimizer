@@ -10,6 +10,8 @@ import {
 import { bagliUrunKimligi } from "@/core/order-line-link";
 import { filamentFiyatlariOku } from "./filament-fiyatlari";
 import { satirMaliyetleriniOku } from "./order-line-costs";
+import { kargoDesileriniOku } from "./kargo-desileri";
+import { kargoDesiBul } from "@/core/kargo-desi";
 import { satirBaglariniOku } from "./order-line-links";
 import {
   computeReturnLoss,
@@ -1621,6 +1623,10 @@ export async function recalculateFinanceMonths(
   const satirMaliyetleri = await satirMaliyetleriniOku(
     rows.map((row) => ({ platform: row.platform, id: row.externalOrderId }))
   );
+  // Elle girilen kargo desileri (Shopify) — Siparişler ekranıyla AYNI kural.
+  const kargoDesileri = await kargoDesileriniOku(
+    rows.map((row) => ({ platform: row.platform, id: row.externalOrderId }))
+  );
 
   const updates: FinanceSnapshotOrder[] = [];
   /** Kuru turda "yazsaydık değişirdi" sayımı için: güncelleme ↔ kayıtlı satır eşlemesi. */
@@ -1741,6 +1747,8 @@ export async function recalculateFinanceMonths(
         kargo,
         // Kayıtlı gecikme bedeli (Siparişler ekranının hesapladığı; yeniden hesap gecikmeyi bilmez).
         penalty: row.penaltyKurus == null ? 0 : kurusToTl(row.penaltyKurus),
+        // Shopify: kullanıcının girdiği gerçek kargo desisi (Siparişler ekranıyla aynı).
+        kargoDesi: kargoDesiBul(kargoDesileri, row.platform, row.externalOrderId),
       };
       const resolved = resolveOrderProfit(profitInput, {
         statusKind: row.statusKind,

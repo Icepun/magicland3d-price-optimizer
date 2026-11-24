@@ -1,8 +1,13 @@
-import { StyleSheet, View } from "react-native";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import * as Haptics from "expo-haptics";
+import { useState } from "react";
+import { Alert, StyleSheet, View } from "react-native";
 
 import { Pill } from "@/components/kit/Chip";
-import { Count, FadeInView, Glass, Money, Txt, type TxtTone } from "@/components/kit";
+import { Button, Count, FadeInView, Glass, Input, Money, Txt, type TxtTone } from "@/components/kit";
+import { kargoDesisiKaydet } from "@/lib/db/kargo-desi";
 import { formatCurrency } from "@/lib/format";
+import { kargoDesiOku } from "@core/kargo-desi";
 import type { OrderProfit, SiparisDokumu } from "@/lib/order-profit";
 import { color, space } from "@/theme/tokens";
 
@@ -11,7 +16,18 @@ import { color, space } from "@/theme/tokens";
  * komisyon, ürün + paketleme, kargo, pazaryeri bedelleri, cezalar, reklam payı; iade edilen
  * siparişte iade zararının kalemleri. Rakamlar AYNI çekirdek hesabından gelir (`order-profit`).
  */
-export function SiparisDokumKarti({ profit, iptal, baslangic = 0 }: { profit: OrderProfit; iptal: boolean; baslangic?: number }) {
+export function SiparisDokumKarti({
+  profit,
+  iptal,
+  baslangic = 0,
+  siparis,
+}: {
+  profit: OrderProfit;
+  iptal: boolean;
+  baslangic?: number;
+  /** Shopify siparişinde kargo desisi buradan düzeltilebilir. */
+  siparis?: { platform: string; id: string };
+}) {
   const d = profit.dokum;
   if (!d) return null;
   if (iptal) return d.iade ? <IadeDokumu d={d} baslangic={baslangic} /> : null;
@@ -98,6 +114,10 @@ export function SiparisDokumKarti({ profit, iptal, baslangic = 0 }: { profit: Or
   }
   if (d.uluslararasiBedel > 0) ekle("uluslararasi", <Satir ad="Uluslararası hizmet bedeli" tutar={d.uluslararasiBedel} />);
   if (d.kargoKuralYok) ekle("kargo-yok", <Not metin="Kargo kuralı yok — kargo 0 sayıldı." vurgu />);
+  // Shopify: kargoyu gerçekte kaç desiyle çıkardıysan düzelt (masaüstündeki "Desi" ile aynı kayıt).
+  if (siparis?.platform === "shopify" && !d.kargoGercek) {
+    ekle("kargo-desi", <KargoDesiDuzenleyici siparisId={siparis.id} desi={d.kargoDesi} elle={d.kargoDesiElle} />);
+  }
   if (d.reklamPayi > 0) ekle("reklam", <Satir ad="Reklam payı" tutar={d.reklamPayi} />);
   if (Math.abs(d.kargoGeliri) >= 0.01) {
     ekle(
@@ -130,6 +150,71 @@ export function SiparisDokumKarti({ profit, iptal, baslangic = 0 }: { profit: Or
         </View>
       </FadeInView>
     </Glass>
+  );
+}
+
+/**
+ * SHOPIFY KARGO DESİSİ — "Desiyi düzelt": sipariş gerçekte kaç desiyle çıktıysa yazılır, kargo bedeli
+ * ürün desilerinin toplamı yerine bununla hesaplanır (masaüstüyle aynı kayıt).
+ */
+function KargoDesiDuzenleyici({ siparisId, desi, elle }: { siparisId: string; desi: number | null; elle: boolean }) {
+  const qc = useQueryClient();
+  const [acik, setAcik] = useState(false);
+  const [metin, setMetin] = useState("");
+  const gecerli = kargoDesiOku(metin);
+  const kaydet = useMutation({
+    mutationFn: (yeni: number | null) => kargoDesisiKaydet(siparisId, yeni),
+    onSuccess: () => {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Elle girilen desiler kurallarla birlikte okunuyor → kâr ve döküm yeni desiyle yeniden hesaplanır.
+      void qc.invalidateQueries({ queryKey: ["rules"] });
+      setAcik(false);
+    },
+    onError: (e: Error) => Alert.alert("Kaydedilemedi", e.message || "Bağlantını kontrol edip tekrar dene."),
+  });
+
+  if (!acik) {
+    return (
+      <View style={styles.satir}>
+        <Txt v="small" tone={elle ? "accent" : "faint"} style={{ flexShrink: 1 }}>
+          {elle ? "Kargo desisini sen girdin" : "Paket farklı desiyle mi çıktı?"}
+        </Txt>
+        <Button
+          label="Desiyi düzelt"
+          icon="pencil"
+          size="sm"
+          variant="secondary"
+          onPress={() => {
+            setMetin(desi != null ? String(desi).replace(".", ",") : "");
+            setAcik(true);
+          }}
+        />
+      </View>
+    );
+  }
+  return (
+    <FadeInView index={0} step={0}>
+      <View style={styles.duzenleyici}>
+        <Input
+          value={metin}
+          onChangeText={setMetin}
+          numeric
+          suffix="desi"
+          placeholder={desi != null ? String(desi) : "4"}
+          autoFocus
+          style={{ flex: 1 }}
+        />
+        <Button label="Kaydet" size="sm" disabled={gecerli == null} loading={kaydet.isPending} onPress={() => gecerli != null && kaydet.mutate(gecerli)} />
+      </View>
+      <View style={[styles.satir, { marginTop: space.xs }]}>
+        {elle ? (
+          <Button label="Ürün desisine dön" icon="arrow.uturn.backward" size="sm" variant="secondary" disabled={kaydet.isPending} onPress={() => kaydet.mutate(null)} />
+        ) : (
+          <View />
+        )}
+        <Button label="Vazgeç" size="sm" variant="secondary" disabled={kaydet.isPending} onPress={() => setAcik(false)} />
+      </View>
+    </FadeInView>
   );
 }
 
@@ -237,4 +322,5 @@ const styles = StyleSheet.create({
   alt: { textAlign: "right" },
   toplam: { flexDirection: "row", alignItems: "baseline", gap: 4 },
   cizgi: { height: StyleSheet.hairlineWidth, backgroundColor: color.line, marginVertical: 2 },
+  duzenleyici: { flexDirection: "row", alignItems: "center", gap: space.sm },
 });

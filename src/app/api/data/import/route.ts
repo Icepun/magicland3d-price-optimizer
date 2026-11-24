@@ -331,6 +331,16 @@ const OrderLineCostSchema = table({
   updatedAt: optionalDate,
 });
 
+/** Elle girilen Shopify kargo desisi — eski yedeklerde YOK (opsiyonel). */
+const OrderCargoDesiSchema = table({
+  id,
+  platform: id,
+  externalOrderId: id,
+  desi: z.number().positive(),
+  createdAt: optionalDate,
+  updatedAt: optionalDate,
+});
+
 /** Elle ürün bağı ("Ürüne bağla") — eski yedeklerde YOK (opsiyonel). */
 const OrderLineLinkSchema = table({
   id,
@@ -504,6 +514,7 @@ const ImportSchema = z.object({
   orderItemSnapshots: z.array(OrderItemSnapshotSchema).optional().default([]),
   orderLineCosts: z.array(OrderLineCostSchema).optional().default([]),
   orderLineLinks: z.array(OrderLineLinkSchema).optional().default([]),
+  orderCargoDesis: z.array(OrderCargoDesiSchema).optional().default([]),
   platformOrderFinancials: z.array(PlatformOrderFinancialSchema).optional().default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
   // ESKİ YEDEKLER İÇİN TOLERANS: maliyet şablonu özelliği kaldırıldı (arayüzü hiç yoktu).
@@ -648,6 +659,7 @@ interface ImportStats {
   orderItemSnapshots: number;
   orderLineCosts: number;
   orderLineLinks: number;
+  orderCargoDesis: number;
   platformOrderFinancials: number;
   manualOrders: number;
   costTemplates: number;
@@ -728,6 +740,7 @@ async function runImport(data: ImportPayload, emit: Emit, options: { oldBackup: 
     orderItemSnapshots: 0,
     orderLineCosts: 0,
     orderLineLinks: 0,
+    orderCargoDesis: 0,
     platformOrderFinancials: 0,
     manualOrders: 0,
     costTemplates: 0,
@@ -1549,6 +1562,22 @@ async function runImport(data: ImportPayload, emit: Emit, options: { oldBackup: 
     }),
   });
   stats.orderLineLinks = jobs[jobs.length - 1].stmts.length;
+
+  // Elle girilen Shopify kargo desileri (sipariş başına tek kayıt).
+  jobs.push({
+    label: "Kargo desileri",
+    statKey: "orderCargoDesis",
+    stmts: data.orderCargoDesis.map((row) => {
+      const update = touched(columnsFrom("OrderCargoDesi", row, ["id", "platform", "externalOrderId"]), row);
+      return upsert(
+        "OrderCargoDesi",
+        ["platform", "externalOrderId"],
+        { id: row.id, platform: row.platform, externalOrderId: row.externalOrderId, createdAt: stamp, ...update },
+        update
+      );
+    }),
+  });
+  stats.orderCargoDesis = jobs[jobs.length - 1].stmts.length;
 
   // ── Yazım: 500'lük gruplar, tek istek; başarısızsa satır satır güvenli yol ─
   const total = jobs.reduce((sum, job) => sum + job.stmts.length, 0);

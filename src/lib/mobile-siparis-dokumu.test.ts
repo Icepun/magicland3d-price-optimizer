@@ -20,7 +20,7 @@ vi.mock("@/lib/api/orders", () => ({
 /** Telefon modülünün kullanılan yüzü (tip doğrudan içe aktarılmaz: kök tsc telefonun takma adlarını çözemez). */
 type Dokum = {
   komisyon: number; komisyonKaynagi: string; komisyonOranlari: number[]; komisyonTahmini: number;
-  urunVePaketleme: number; kargo: number; kargoEtiketi: string | null;
+  urunVePaketleme: number; kargo: number; kargoEtiketi: string | null; kargoDesi: number | null; kargoDesiElle: boolean;
   iade: { outboundCargo: number; loss: number } | null;
 };
 type KarModulu = {
@@ -116,6 +116,23 @@ describe("telefon sipariş dökümü", () => {
     });
     expect(r.dokum!.kargo).toBeCloseTo(cekirdek.cargoCost, 6);
     expect(r.dokum!.komisyon).toBeCloseTo(cekirdek.estimatedCommission, 6);
+  });
+
+  it("Shopify siparişinde elle girilen kargo desisi kullanılır (masaüstüyle aynı kayıt)", async () => {
+    const barem = (min: number, max: number, cost: number) => ({
+      id: `k${min}`, name: `${min}-${max}`, platform: "shopify", categoryName: null, minPrice: 0, maxPrice: 999999,
+      minDesi: min, maxDesi: max, cargoCost: cost, priority: 10, isActive: true, validFrom: null, validTo: null,
+    });
+    const shopify = { ...siparis(), id: "sh-1227", platform: "shopify", items: [{ name: "Kedi Figürü", quantity: 6, unitPrice: 50, productId: "p1", barcodes: ["KEDI-1"] }] };
+    const kural = { ...kurallar, cargo: [barem(0, 4, 115), barem(5, 10, 145)] };
+    const once = await hesapla(shopify, kural);
+    expect(once.dokum!.kargoDesi).toBe(6);
+    expect(once.dokum!.kargoDesiElle).toBe(false);
+    const sonra = await hesapla(shopify, { ...kural, kargoDesileri: new Map([["shopify|sh-1227", 4]]) });
+    expect(sonra.dokum!.kargoDesi).toBe(4);
+    expect(sonra.dokum!.kargoDesiElle).toBe(true);
+    expect(sonra.dokum!.kargo).toBe(115);
+    expect(sonra.dokum!.kargoEtiketi).toBe("4 desi · 0–4 desi baremi · elle girildi");
   });
 
   it("iade edilen siparişte iade zararının kalemleri gelir", async () => {

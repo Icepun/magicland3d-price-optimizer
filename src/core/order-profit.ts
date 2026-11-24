@@ -162,6 +162,11 @@ export interface OrderProfitInput {
    * düzeltebildiğinde kullanılır; çağıranlar geçmez.
    */
   bilinmeyenKomisyonSifir?: boolean;
+  /**
+   * Kargonun GERÇEKTE çıktığı desi (elle girilen — Shopify, `core/kargo-desi.ts`). Verilirse kargo
+   * bedeli ürün desilerinin toplamı yerine bununla hesaplanır; ilana elle girilen kargo devre dışı.
+   */
+  kargoDesi?: number | null;
 }
 
 export interface OrderProfitResult {
@@ -208,6 +213,8 @@ export interface OrderProfitResult {
   cargoDesi: number | null;
   /** Kargo bir KURALDAN geldiyse (Shopify, tarife öncesi siparişler) o kuralın desi bandı. */
   cargoBand: { minDesi: number; maxDesi: number } | null;
+  /** Kargo desisi elle girildi (siparişin gerçekte çıktığı desi). */
+  cargoDesiManual: boolean;
   matchedLines: number;
   unmatchedLines: number;
   unmatchedQty: number;
@@ -472,6 +479,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       cargoDetail: null,
       cargoDesi: null,
       cargoBand: null,
+      cargoDesiManual: false,
       matchedLines: 0,
       unmatchedLines,
       unmatchedQty,
@@ -564,7 +572,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
    * Yuvarlama YUKARI değil, en yakına: kullanıcı "4,1 ise 4, 4,5 ise 5" dedi.
    * Sonuç 0'a düşerse (tek 0,1 desilik ürün) en az 1 sayılır — kargo bedava değildir.
    */
-  const baremDesi = baremDesisi(totalDesi);
+  // Elle girilen gerçek desi varsa ürün toplamının yerine geçer (Shopify'da paket daha küçük çıkabilir).
+  const elleDesi =
+    typeof input.kargoDesi === "number" && Number.isFinite(input.kargoDesi) && input.kargoDesi > 0 ? input.kargoDesi : null;
+  const baremDesi = baremDesisi(elleDesi ?? totalDesi);
 
   // KARGO — siparişe BİR KEZ. Tek ürünlü ve eksiksiz siparişte listing'e ELLE girilen bedel kazanır
   // (Ürünler ekranı da onu kullanıyor → iki ekran aynı rakamı gösterir).
@@ -573,6 +584,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     matchedQty === 1 &&
     unmatchedLines === 0 &&
     commissionUnknownLines === 0 &&
+    elleDesi == null &&
     soloCargo != null;
   // PAZARYERİ TARİFESİ (Trendyol / Hepsiburada) — siparişin tarihinde tarife varsa kural tablosunun
   // yerine geçer: fiyat; tutar bandı, desi, firma, hızlı teslimat ve kargoya verme süresine göre
@@ -683,6 +695,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     cargoDetail,
     cargoDesi: canUseSoloCargo ? null : baremDesi,
     cargoBand: appliedCargoRule ? { minDesi: appliedCargoRule.minDesi, maxDesi: appliedCargoRule.maxDesi } : null,
+    cargoDesiManual: elleDesi != null,
     matchedLines,
     unmatchedLines,
     unmatchedQty,
@@ -691,7 +704,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     totalQty,
     missingDesiLines,
     missingDesiQty,
-    desiEstimated: missingDesiLines > 0 || unmatchedQty > 0,
+    // Desi elle girildiyse kargo tahmine dayanmıyor.
+    desiEstimated: elleDesi == null && (missingDesiLines > 0 || unmatchedQty > 0),
     orderRevenueAdjustment,
     orderRevenueAdjustmentNet,
     outputVat,
@@ -710,7 +724,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
  * Desi tahmin edildiyse (eksik desi / eşleşmeyen ürün) başına "~" konur.
  */
 export function kargoSatiriEtiketi(
-  r: Pick<OrderProfitResult, "cargoDetail" | "cargoDesi" | "cargoBand" | "desiEstimated"> & { actualCargo?: number | null },
+  r: Pick<OrderProfitResult, "cargoDetail" | "cargoDesi" | "cargoBand" | "desiEstimated"> & {
+    actualCargo?: number | null;
+    cargoDesiManual?: boolean;
+  },
   secenek: { kesilenDesi?: number | null } = {}
 ): string | null {
   const desiMetni = (n: number) => `${n.toLocaleString("tr-TR", { maximumFractionDigits: 1 })} desi`;
@@ -724,7 +741,7 @@ export function kargoSatiriEtiketi(
   const bant = r.cargoBand
     ? ` · ${r.cargoBand.minDesi.toLocaleString("tr-TR")}–${r.cargoBand.maxDesi.toLocaleString("tr-TR")} desi baremi`
     : "";
-  return `${yaklasik}${desiMetni(r.cargoDesi)}${bant}`;
+  return `${yaklasik}${desiMetni(r.cargoDesi)}${bant}${r.cargoDesiManual ? " · elle girildi" : ""}`;
 }
 
 /** Pazaryerinin settlement kaydı (TL) — Trendyol gerçek komisyonu. */
@@ -834,7 +851,9 @@ export function computeReturnLoss(input: OrderProfitInput, actual?: ReturnLossAc
     toplamDesi += (d != null && d >= 0 ? d : 1) * adet;
     if (line.product?.categoryName) kategoriler.add(line.product.categoryName);
   }
-  const desi = fiyatDesisi(toplamDesi);
+  const elleDesi =
+    typeof input.kargoDesi === "number" && Number.isFinite(input.kargoDesi) && input.kargoDesi > 0 ? input.kargoDesi : null;
+  const desi = fiyatDesisi(elleDesi ?? toplamDesi);
   const kategoriListesi = kategoriler.size > 0 ? [...kategoriler] : [""];
 
   const gidisDetay = kargoTahmini(platform, tutar, desi, kuralTarihi, input.kargo);

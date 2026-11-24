@@ -10,6 +10,7 @@ import {
   type ReturnLoss,
 } from "@core/order-profit";
 import { fazlaDesiBul, type FazlaDesi } from "@core/kargo-denetim";
+import { kargoDesiBul } from "@core/kargo-desi";
 import { kargoluIadeMi } from "@core/siparis-kargo";
 import { hbHizmetBedeli } from "@core/hb-kesinti";
 import { tyCezaToplami } from "@core/trendyol-kusurlu";
@@ -163,6 +164,9 @@ export interface SiparisDokumu {
   /** Tarifeden tahmin edildiyse hangi fiyat ("Trendyol Express · sabit fiyat"). */
   kargoEtiketi: string | null;
   kargoKuralYok: boolean;
+  /** Kargonun hesaplandığı desi (ilana elle girilen kargoda null) ve elle girilip girilmediği. */
+  kargoDesi: number | null;
+  kargoDesiElle: boolean;
   fazlaDesi: FazlaDesi | null;
   gecikmeBedeli: number;
   gecikmeGercek: boolean;
@@ -335,6 +339,8 @@ export function computeOrderProfit(
       kargo: order.kargo ?? null,
       // Trendyol termin gecikme + kusurlu ürün bedeli (haftalık faturayla eşleşmiş) — masaüstüyle aynı.
       penalty: tyCezaToplami(order.gecikmeSonucu?.ceza, order.kusurluSonucu?.ceza),
+      // Shopify: kullanıcının girdiği gerçek kargo desisi — masaüstüyle aynı kayıt.
+      kargoDesi: kargoDesiBul(rules.kargoDesileri, order.platform, order.id),
   };
   const r = resolveOrderProfit(
     profitInput,
@@ -375,6 +381,8 @@ export function computeOrderProfit(
     // Kaç desiden ve nereden hesaplandığı — masaüstüyle AYNI çekirdek metni.
     kargoEtiketi: kargoSatiriEtiketi(r, { kesilenDesi: (financial as TelefonFinansKaydi | null)?.kesilenDesi ?? null }),
     kargoKuralYok: r.cargoRuleMissing,
+    kargoDesi: r.cargoDesi,
+    kargoDesiElle: r.cargoDesiManual,
     // Masaüstüyle aynı kural (core/kargo-denetim): pazaryeri ürün desisinden büyük kesti ve fiyatı artırdı.
     fazlaDesi: fazlaDesiBul({
       kesilenDesi: (financial as TelefonFinansKaydi | null)?.kesilenDesi ?? null,

@@ -4,6 +4,7 @@ import { dbEpochMs } from "@core/sqlite-date";
 import { filamentFiyatHaritasi } from "@core/filament-karisimi";
 import { satirMaliyetiHaritaAnahtari, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { satirBaglariHaritasi, type SatirBagiKaydi } from "@core/order-line-link";
+import { kargoDesiAnahtari } from "@core/kargo-desi";
 import { batch, query, type SqlValue } from "@/lib/turso";
 import type {
   CommissionRuleInput,
@@ -244,6 +245,18 @@ export async function getRules(): Promise<Rules> {
     /* tablo henüz yok → elle bağ yok */
   }
 
+  // ELLE GİRİLEN KARGO DESİLERİ (Shopify — masaüstü/telefon "Desi"). Tablo masaüstü v65'e geçene
+  // kadar olmayabilir → okunamazsa boş, kargo ürün desilerinden hesaplanır.
+  const kargoDesileri = new Map<string, number>();
+  try {
+    const satirlar = await query<{ platform: string; externalOrderId: string; desi: number }>(
+      `SELECT platform, externalOrderId, desi FROM OrderCargoDesi`
+    );
+    for (const s of satirlar) kargoDesileri.set(kargoDesiAnahtari(s.platform, s.externalOrderId), Number(s.desi));
+  } catch {
+    /* tablo henüz yok → elle desi yok */
+  }
+
   return {
     commission: (c.rows as unknown as CommissionRuleInput[]).map(normalizeRuleDates),
     cargo: (k.rows as unknown as CargoRuleInput[]).map(normalizeRuleDates),
@@ -257,6 +270,7 @@ export async function getRules(): Promise<Rules> {
     ),
     satirMaliyetleri,
     satirBaglari,
+    kargoDesileri,
   };
 }
 

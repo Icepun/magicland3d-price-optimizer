@@ -145,7 +145,10 @@ let schemaReady: Promise<void> | null = null;
 //      `ActualExpense.vatRate` / `RecurringExpense.vatRate` (giderin KDV oranı; boş = indirilmez, eski
 //      kayıtların rakamı değişmez). Kargo platform/TEX göçü tek seferlik bayrağa bağlandı.
 //      Hepsi NULLABLE / yeni tablo → eski sürüm cihazlar etkilenmez.
-const CURRENT_SCHEMA_VERSION = "64";
+// v65: `OrderCargoDesi` — Shopify siparişinin gerçekte çıktığı kargo desisi (elle girilen, Berke 24 Kas
+//      2026: "8 desi hesaplanan kargoyu 4 desiyle çıkarsam düzenleyebilmeliyim"). Kargo bedeli ürün
+//      desilerinin toplamı yerine bununla hesaplanır. Yeni tablo → eski sürüm cihazlar etkilenmez.
+const CURRENT_SCHEMA_VERSION = "65";
 
 /** Kargo kuralı platform/TEX göçü bir kez koştu mu (iç durum; yedekten geri yüklenmez). */
 export const KARGO_PLATFORM_GOCU_ANAHTARI = "gocKargoPlatformTamam";
@@ -1255,6 +1258,21 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await bufDDL(
       `CREATE UNIQUE INDEX IF NOT EXISTS "OrderLineCost_platform_externalOrderId_lineKey_key"
        ON "OrderLineCost"("platform", "externalOrderId", "lineKey")`
+    );
+    // v65: Siparişin gerçekte ÇIKTIĞI kargo desisi (elle girilen, Shopify) — sipariş başına tek kayıt.
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "OrderCargoDesi" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalOrderId" TEXT NOT NULL,
+        "desi" REAL NOT NULL,
+        "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await bufDDL(
+      `CREATE UNIQUE INDEX IF NOT EXISTS "OrderCargoDesi_platform_externalOrderId_key"
+       ON "OrderCargoDesi"("platform", "externalOrderId")`
     );
     // v51: Elle ürün bağı — eşleşmeyen satır ADI (platform başına) → ürün. Tek kayıt/ad.
     await bufDDL(`

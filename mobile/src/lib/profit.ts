@@ -58,6 +58,8 @@ export interface Rules {
    * `satirMaliyetiHaritaAnahtari`. Telefon da aynı siparişte aynı kârı göstersin.
    */
   satirMaliyetleri?: Map<string, SatirMaliyetKaydi>;
+  /** Elle girilen Shopify kargo desileri (`core/kargo-desi` anahtarıyla) — masaüstüyle aynı kayıt. */
+  kargoDesileri?: Map<string, number>;
   /**
    * Elle ürün bağları (masaüstü Siparişler → "Ürüne bağla"): eşleşmeyen satır ADI → ürün kimliği.
    * Yalnız satır kendi anahtarıyla eşleşmediğinde kullanılır (bkz. @core/order-line-link).

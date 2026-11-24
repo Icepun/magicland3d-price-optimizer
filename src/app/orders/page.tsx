@@ -20,6 +20,7 @@ import { AnimatedNumber } from "@/components/ui/animated-number";
 import Link from "next/link";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
+import { KargoDesiDuzenle } from "@/components/orders/KargoDesiDuzenle";
 import { ozetDonemEtiketi } from "@/lib/ozet-donemi";
 import { formatRelativeTime } from "@/lib/format";
 import {
@@ -159,6 +160,9 @@ interface UnifiedOrder {
   cargoRuleMissing?: boolean;
   /** Kargo pazaryeri tarifesinden tahmin edildiyse hangi fiyat ("Trendyol Express · sabit fiyat"). */
   cargoLabel?: string | null;
+  /** Kargonun hesaplandığı desi ve elle girilip girilmediği (Shopify "Desi" düzenleme alanı). */
+  cargoDesi?: number | null;
+  cargoDesiManual?: boolean;
   /** İade edilen (kargolanıp geri gelen) siparişin zararı — kârdan düşülür. Tutarlar brüt, `loss` net. */
   returnLoss?: {
     loss: number;
@@ -2945,8 +2949,12 @@ const OrderRow = memo(function OrderRow({
                           {order.cargoLabel}
                         </span>
                       )}
+                      {/* Shopify: kargoyu gerçekte kaç desiyle çıkardıysan buradan düzelt. */}
+                      {order.platform === "shopify" && (
+                        <KargoDesiDuzenle siparisId={order.id} desi={order.cargoDesi} elle={order.cargoDesiManual === true} />
+                      )}
                     </span>
-                    <span className="tabular-nums text-muted-foreground">
+                    <span className="shrink-0 whitespace-nowrap tabular-nums text-muted-foreground">
                       −{fmtMoney2(order.cargoCost ?? 0, orderCurrency)}
                     </span>
                   </div>
@@ -3039,8 +3047,13 @@ const OrderRow = memo(function OrderRow({
                 {/* Kargo kuralı bulunamadıysa 0 sayıldı — sessiz kalmasın, kâr yüksek görünüyor. */}
                 {!isCancelled && order.cargoRuleMissing && (
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-[#C9D2F2]">Kargo</span>
-                    <span className="tabular-nums text-[#C9D2F2]">kural yok → 0 sayıldı</span>
+                    <span className="text-[#C9D2F2]">
+                      Kargo
+                      {order.platform === "shopify" && (
+                        <KargoDesiDuzenle siparisId={order.id} desi={order.cargoDesi} elle={order.cargoDesiManual === true} />
+                      )}
+                    </span>
+                    <span className="shrink-0 whitespace-nowrap tabular-nums text-[#C9D2F2]">kural yok → 0 sayıldı</span>
                   </div>
                 )}
                 {/* Reklam payı: günlük bütçenin bu siparişin cirosuna düşen kısmı.

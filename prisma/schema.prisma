@@ -436,6 +436,20 @@ model OrderFinanceSnapshot {
  * hepsi buna dayanır). İptaller de yazılır; raporlar statusKind ile ayıklar.
  * Tekilleştirme: (platform, externalOrderId, lineIndex) → aynı sipariş tekrar işlenince çoğalmaz.
  */
+/// Siparişin gerçekte ÇIKTIĞI kargo desisi (elle girilen, Shopify — v65). Kargo bedeli ürün
+/// desilerinin toplamı yerine bununla hesaplanır (core/order-profit `kargoDesi`).
+model OrderCargoDesi {
+  id              String   @id
+  platform        String
+  /// Kanonik sipariş kimliği (finans kayıtlarıyla aynı biçim; Shopify'da "sh-<no>").
+  externalOrderId String
+  desi            Float
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([platform, externalOrderId])
+}
+
 /**
  * Siparişe özel maliyet (v50) — katalogda olmayan ya da maliyeti girilmemiş ürünün YALNIZ o
  * siparişteki maliyeti. Kâr hesabı katalog ürünüyle aynı motordan geçer (core/order-line-cost).

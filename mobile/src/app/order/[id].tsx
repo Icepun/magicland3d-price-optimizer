@@ -211,7 +211,14 @@ export default function OrderDetailScreen() {
       </FadeInView>
 
       {/* Kalem kalem kesintiler — masaüstü Siparişler'deki "Kargo & Kâr" dökümüyle aynı. */}
-      {profit ? <SiparisDokumKarti profit={profit} iptal={isCancelledOrder(order)} baslangic={2} /> : null}
+      {profit ? (
+        <SiparisDokumKarti
+          profit={profit}
+          iptal={isCancelledOrder(order)}
+          baslangic={2}
+          siparis={{ platform: order.platform, id: order.id }}
+        />
+      ) : null}
 
       {notlar.length > 0 ? (
         <Tint style={styles.notes}>
