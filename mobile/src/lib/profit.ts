@@ -77,10 +77,13 @@ export interface Rules {
    * Masaüstü bunu kâra uyguluyordu, mobil uygulamıyordu → aynı sipariş iki cihazda farklı
    * kâr gösteriyordu. Artık iki taraf da çekirdekteki resolveOrderProfit'i besliyor.
    */
-  financialByExternalId?: Map<string, OrderProfitFinancial>;
+  financialByExternalId?: Map<string, TelefonFinansKaydi>;
   /** Aynı sipariş numarası TEKİLSE güvenli fallback (settlement'ta shipmentPackageId yoksa). */
-  financialByOrderNumber?: Map<string, OrderProfitFinancial[]>;
+  financialByOrderNumber?: Map<string, TelefonFinansKaydi[]>;
 }
+
+/** Pazaryeri kaydı + pazaryerinin kestiği desi (sipariş dökümündeki "fazla desi" satırı için). */
+export type TelefonFinansKaydi = OrderProfitFinancial & { kesilenDesi?: number | null };
 
 /**
  * Ürün-nesnesi kimliğine göre kâr önbelleği. Kural/ayar referansı da aynıysa yeniden hesaplamaz.

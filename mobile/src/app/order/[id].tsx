@@ -20,7 +20,8 @@ import {
   Tint,
   Txt,
 } from "@/components/kit";
-import { getAllOrders, isIncompleteOrder, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
+import { getAllOrders, isCancelledOrder, isIncompleteOrder, ORDERS_STALE_MS, statusInfo } from "@/lib/api/orders";
+import { SiparisDokumKarti } from "@/components/SiparisDokumKarti";
 import { getOrderMatchProducts } from "@/lib/db/dashboard";
 import { basilanEtiketler } from "@/lib/db/etiket";
 import { basilabilirEtiketAnahtari } from "@/lib/etiket";
@@ -121,11 +122,7 @@ export default function OrderDetailScreen() {
         : "Eşleşmeyen ürünlerin desisi ortalamayla tahmin edildi (◆)."
     );
   }
-  if (profit && Math.abs(profit.orderRevenueAdjustment) >= 0.01) {
-    notlar.push(
-      `Kargo geliri / sipariş indirimi: ${profit.orderRevenueAdjustment >= 0 ? "+" : ""}${formatCurrency(profit.orderRevenueAdjustment)}`
-    );
-  }
+  // Kargo geliri / sipariş indirimi artık kâr dökümünde kendi satırında.
 
   return (
     <Screen header={<SubHeader title={order.orderNumber} subtitle={formatDate(order.date)} />}>
@@ -212,6 +209,9 @@ export default function OrderDetailScreen() {
           </View>
         </Glass>
       </FadeInView>
+
+      {/* Kalem kalem kesintiler — masaüstü Siparişler'deki "Kargo & Kâr" dökümüyle aynı. */}
+      {profit ? <SiparisDokumKarti profit={profit} iptal={isCancelledOrder(order)} baslangic={2} /> : null}
 
       {notlar.length > 0 ? (
         <Tint style={styles.notes}>

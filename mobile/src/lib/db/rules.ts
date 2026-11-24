@@ -1,7 +1,6 @@
 import { TUM_PLATFORMLAR, reklamOrani, donemGunSayisi, type DonemliButce } from "@core/ad-cost";
 // Tarih biçimi bilgisi TEK yerde (ortak çekirdek) — karşılaştırmalar biçimden bağımsız olsun diye.
 import { dbEpochMs } from "@core/sqlite-date";
-import type { OrderProfitFinancial } from "@core/order-profit";
 import { filamentFiyatHaritasi } from "@core/filament-karisimi";
 import { satirMaliyetiHaritaAnahtari, type SatirMaliyetKaydi } from "@core/order-line-cost";
 import { satirBaglariHaritasi, type SatirBagiKaydi } from "@core/order-line-link";
@@ -11,7 +10,7 @@ import type {
   CargoRuleInput,
   ExpenseRuleInput,
 } from "@core/types";
-import type { Rules } from "@/lib/profit";
+import type { Rules, TelefonFinansKaydi } from "@/lib/profit";
 import { ensureCargoVatSchema, ensureCommissionPlatformSchema } from "@/lib/db/schema";
 
 function parseRuleDate(value: unknown): Date | null {
@@ -96,8 +95,8 @@ export async function getRules(): Promise<Rules> {
   ]);
 
   // Settlement haritaları — masaüstü /api/orders ile aynı iki anahtar (kimlik + tekil sipariş no).
-  const financialByExternalId = new Map<string, OrderProfitFinancial>();
-  const financialByOrderNumber = new Map<string, OrderProfitFinancial[]>();
+  const financialByExternalId = new Map<string, TelefonFinansKaydi>();
+  const financialByOrderNumber = new Map<string, TelefonFinansKaydi[]>();
   type FinancialRow = {
     platform?: string;
     externalOrderId: string;
@@ -108,12 +107,13 @@ export async function getRules(): Promise<Rules> {
     paymentFeeKurus?: number | null;
     cargoKurus?: number | null;
     returnCargoKurus?: number | null;
+    chargedDesi?: number | null;
   };
   const tlYaDaNull = (kurus: number | null | undefined) =>
     kurus == null || !Number.isFinite(Number(kurus)) ? null : Number(kurus) / 100;
   for (const row of (f?.rows ?? []) as unknown as FinancialRow[]) {
     const hepsiburada = row.platform === "hepsiburada";
-    const entry: OrderProfitFinancial = {
+    const entry: TelefonFinansKaydi = {
       actualCommission: Number(row.commissionKurus) / 100,
       settlementRevenue: Number(row.grossRevenueKurus) / 100,
       // Komisyon dışındaki gerçek kesintiler (masaüstü /api/orders ile aynı alanlar): Hepsiburada'da
@@ -123,6 +123,8 @@ export async function getRules(): Promise<Rules> {
       actualCargo: tlYaDaNull(row.cargoKurus),
       // İade edilen siparişin gerçek dönüş kargosu (masaüstü şema v61; eski kayıtta yok → null).
       actualReturnCargo: tlYaDaNull(row.returnCargoKurus),
+      // Pazaryerinin kestiği desi (masaüstü şema v62) — dökümdeki "fazla desi" satırı için.
+      kesilenDesi: row.chargedDesi == null || !Number.isFinite(Number(row.chargedDesi)) ? null : Number(row.chargedDesi),
     };
     financialByExternalId.set(String(row.externalOrderId), entry);
     // Sipariş numarasıyla yedek eşleşme yalnız Trendyol içindir.

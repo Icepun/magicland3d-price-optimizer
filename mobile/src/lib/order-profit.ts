@@ -1,7 +1,15 @@
 import { reklamOraniIcin } from "@core/ad-cost";
 import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
-import { computeReturnLoss, resolveOrderProfit, type OrderProfitInput, type OrderProfitLine } from "@core/order-profit";
+import {
+  computeReturnLoss,
+  resolveOrderProfit,
+  type OrderProfitInput,
+  type OrderProfitLine,
+  type ReturnLoss,
+} from "@core/order-profit";
+import { kargoTahminiEtiketi } from "@core/kargo-tarife";
+import { fazlaDesiBul, type FazlaDesi } from "@core/kargo-denetim";
 import { kargoluIadeMi } from "@core/siparis-kargo";
 import { hbHizmetBedeli } from "@core/hb-kesinti";
 import { tyCezaToplami } from "@core/trendyol-kusurlu";
@@ -9,7 +17,7 @@ import { satirMaliyetiBul, satirMaliyetliUrun, type SatirMaliyetKaydi } from "@c
 import { bagliUrunKimligi, type SatirBaglari } from "@core/order-line-link";
 
 import type { ProductDetail } from "@/lib/db/product-detail";
-import { kuralFilamentFiyatlari, type Rules } from "@/lib/profit";
+import { kuralFilamentFiyatlari, type Rules, type TelefonFinansKaydi } from "@/lib/profit";
 import { isCancelledOrder, type UnifiedOrder } from "@/lib/api/orders";
 
 export interface MatchedProduct {
@@ -131,6 +139,49 @@ export interface OrderProfit {
    * toplamından DÜŞÜLÜR (masaüstü Siparişler/Raporlar ile aynı kural). Değilse null.
    */
   returnLoss: number | null;
+  /** Kalem kalem kesintiler — masaüstü Siparişler'deki "Kargo & Kâr" dökümüyle AYNI kalemler. */
+  dokum: SiparisDokumu | null;
+}
+
+/**
+ * SİPARİŞ DÖKÜMÜ — masaüstü Siparişler satırının "Kargo & Kâr" kutusundaki kalemlerin aynısı
+ * (brüt TL). Rakamlar AYNI çekirdek hesabından (resolveOrderProfit) gelir; burada yeni formül yok.
+ */
+export interface SiparisDokumu {
+  /** Gerçek komisyon varsa o, yoksa tahmini. */
+  komisyon: number;
+  komisyonKaynagi: "gercek" | "siparis" | "tahmini";
+  /** Siparişte kesilen oranlar (kesir). */
+  komisyonOranlari: number[];
+  /** Tahmini komisyon yalnız maliyeti bilinen ürünler için (kısmi sipariş). */
+  komisyonEksik: boolean;
+  /** Gerçek komisyon geldiyse tahminle farkı göstermek için. */
+  komisyonTahmini: number;
+  urunVePaketleme: number;
+  kargo: number;
+  kargoGercek: boolean;
+  /** Tarifeden tahmin edildiyse hangi fiyat ("Trendyol Express · sabit fiyat"). */
+  kargoEtiketi: string | null;
+  kargoKuralYok: boolean;
+  fazlaDesi: FazlaDesi | null;
+  gecikmeBedeli: number;
+  gecikmeGercek: boolean;
+  /** Geç kargolandı ama bedel kesilmedi. */
+  gecikmeKesilmedi: boolean;
+  kusurluBedeli: number;
+  kusurluGercek: boolean;
+  hizmetBedeli: number;
+  hizmetGercek: boolean;
+  tahsilatBedeli: number;
+  tahsilatGercek: boolean;
+  uluslararasiBedel: number;
+  /** Bilgi — kâra girmez. */
+  stopaj: number;
+  reklamPayi: number;
+  /** Kargo geliri (+) / sipariş indirimi (−). */
+  kargoGeliri: number;
+  /** Kargolanıp geri gelen siparişin zarar kalemleri; değilse null. */
+  iade: ReturnLoss | null;
 }
 
 export function computeOrderProfit(
@@ -160,6 +211,7 @@ export function computeOrderProfit(
       desiEstimated: false,
       orderRevenueAdjustment: 0,
       returnLoss: null,
+      dokum: null,
     };
   }
 
@@ -294,6 +346,57 @@ export function computeOrderProfit(
     }
   );
 
+  // İade edilen (kargolanıp geri gelen) sipariş: iki yön kargo + hizmet bedeli (gerçek kayıt varsa o).
+  const iade =
+    isCancelledOrder(order) && !order.dataIncomplete && kargoluIadeMi(order.platform, order.status)
+      ? computeReturnLoss(profitInput, {
+          outboundCargo: financial?.actualCargo ?? null,
+          returnCargo: financial?.actualReturnCargo ?? null,
+          serviceFee: order.platform === "hepsiburada" ? financial?.actualOrderFee ?? null : null,
+        })
+      : null;
+  const kusurluCeza = order.kusurluSonucu?.ceza ?? 0;
+  const dokum: SiparisDokumu = {
+    komisyon: r.actualCommission ?? r.estimatedCommission,
+    komisyonKaynagi:
+      r.actualCommission != null ? "gercek" : r.matchedLines > 0 && r.orderRateLines === r.matchedLines ? "siparis" : "tahmini",
+    komisyonOranlari: [
+      ...new Set(
+        order.items
+          .map((l) => l.commissionRate)
+          .filter((oran): oran is number => typeof oran === "number" && Number.isFinite(oran) && oran > 0)
+      ),
+    ],
+    komisyonEksik: r.actualCommission == null && r.profitPartial,
+    komisyonTahmini: r.estimatedCommission,
+    urunVePaketleme: r.productAndPackagingCost,
+    kargo: r.cargoCost,
+    kargoGercek: r.actualCargo != null,
+    kargoEtiketi: r.actualCargo == null && r.cargoDetail ? kargoTahminiEtiketi(r.cargoDetail) : null,
+    kargoKuralYok: r.cargoRuleMissing,
+    // Masaüstüyle aynı kural (core/kargo-denetim): pazaryeri ürün desisinden büyük kesti ve fiyatı artırdı.
+    fazlaDesi: fazlaDesiBul({
+      kesilenDesi: (financial as TelefonFinansKaydi | null)?.kesilenDesi ?? null,
+      bizimDesi: r.cargoDetail?.desi ?? null,
+      gercekKargo: r.actualCargo,
+      tahminiKargo: r.estimatedCargoCost,
+    }),
+    gecikmeBedeli: Math.max(0, r.penalty - kusurluCeza),
+    gecikmeGercek: order.gecikmeSonucu?.durum === "gercek",
+    gecikmeKesilmedi: !!order.gecikme?.gecikti && order.gecikmeSonucu?.durum === "kesilmedi",
+    kusurluBedeli: kusurluCeza,
+    kusurluGercek: order.kusurluSonucu?.durum === "gercek",
+    hizmetBedeli: r.fixedExpense,
+    hizmetGercek: r.actualOrderFee != null,
+    tahsilatBedeli: r.paymentFee,
+    tahsilatGercek: r.actualPaymentFee != null,
+    uluslararasiBedel: r.internationalFee,
+    stopaj: r.stoppage,
+    reklamPayi: r.adCost,
+    kargoGeliri: r.orderRevenueAdjustment,
+    iade,
+  };
+
   const distinctCount = order.items.length;
   return {
     revenue: order.total,
@@ -311,13 +414,7 @@ export function computeOrderProfit(
     desiEstimated: r.desiEstimated,
     orderRevenueAdjustment: r.orderRevenueAdjustment,
     // Kargolanıp geri gelen sipariş: iki yön kargo + hizmet bedeli (gerçek kayıt varsa o).
-    returnLoss:
-      isCancelledOrder(order) && !order.dataIncomplete && kargoluIadeMi(order.platform, order.status)
-        ? computeReturnLoss(profitInput, {
-            outboundCargo: financial?.actualCargo ?? null,
-            returnCargo: financial?.actualReturnCargo ?? null,
-            serviceFee: order.platform === "hepsiburada" ? financial?.actualOrderFee ?? null : null,
-          }).loss
-        : null,
+    returnLoss: iade ? iade.loss : null,
+    dokum,
   };
 }
