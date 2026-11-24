@@ -141,9 +141,12 @@
   --status-printing-line: rgb(79 140 255 / 40%);
   --status-printing-glow: rgb(79 140 255 / 28%);
 
-  --status-paused:        #A9AEFF;                 /* duraklatıldı — lavanta (turuncu yok) */
-  --status-paused-soft:   rgb(169 174 255 / 15%);
-  --status-paused-line:   rgb(169 174 255 / 40%);
+  /* duraklatıldı — SARI (telefonla aynı #FBBF24). 23 Kas'ta lavantaya çevrilmişti; lavanta "yazdırıyor"
+     mavisine ve kart çerçevesine çok yakın kaldı, filamenti biten yazıcı fark edilmedi (24 Kas 2026). */
+  --status-paused:        #FBBF24;
+  --status-paused-soft:   rgb(251 191 36 / 16%);
+  --status-paused-line:   rgb(251 191 36 / 60%);
+  --status-paused-glow:   rgb(251 191 36 / 38%);
 
   --status-done:          #34D399;                 /* tamamlandı — zümrüt */
   --status-done-soft:     rgb(52 211 153 / 15%);
@@ -233,6 +236,11 @@
 }
 
 /* Belirsiz (indeterminate) ilerleme barı — sync sırasında sürekli akar */
+/* Müdahale bekleyen yazıcı kartının nabız gibi atan çerçevesi (duraklatıldı / hata). */
+@keyframes yazici-dikkat {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
 @keyframes indeterminate-bar {
   0%   { transform: translateX(-120%); }
   100% { transform: translateX(420%); }

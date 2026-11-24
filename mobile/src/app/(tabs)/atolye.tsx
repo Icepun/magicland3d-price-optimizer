@@ -56,7 +56,13 @@ function YaziciKarti({ s, bayat }: { s: PrinterSnapshot; bayat: boolean }) {
     <Glass
       strong={s.status === "error"}
       onPress={() => router.push(`/printer/${s.printerConfigId}` as never)}
-      style={[styles.printCard, s.status === "error" ? { borderColor: color.bad + "88" } : null, cevrimdisi ? { opacity: 0.6 } : null]}
+      style={[
+        styles.printCard,
+        // Duraklatılan (sarı) ve duran (kırmızı) yazıcı ilk bakışta ayrılsın — masaüstüyle aynı.
+        !cevrimdisi && s.status === "error" ? { borderColor: color.bad, borderWidth: 1.5 } : null,
+        !cevrimdisi && s.status === "paused" ? { borderColor: color.warn, borderWidth: 1.5 } : null,
+        cevrimdisi ? { opacity: 0.6 } : null,
+      ]}
       accessibilityLabel={`${s.name}, ${info.label}${kalan ? `, ${kalan} kaldı` : ""}. Yazıcının ayrıntısını ve kamerasını açar`}
     >
       <Ring value={isVar ? oran : 0} size={60} stroke={5} color={info.color}>

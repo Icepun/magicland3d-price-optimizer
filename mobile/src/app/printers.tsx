@@ -144,10 +144,12 @@ function PrinterCard({
   const active = s.status === "printing" || s.status === "paused";
   const showControls = active && !stale && s.online;
   const busy = !offline && (s.status === "printing" || s.status === "paused" || s.status === "finished");
+  // Müdahale bekleyen yazıcı (duraklatıldı / durdu) ilk bakışta ayrılsın — masaüstü kartıyla aynı.
+  const dikkat = !offline && !stale && (s.status === "paused" || s.status === "error");
 
   return (
     <Glass
-      style={styles.card}
+      style={[styles.card, dikkat ? { borderColor: info.color, borderWidth: 1.5 } : null]}
       onPress={() => router.push(`/printer/${s.printerConfigId}` as never)}
       accessibilityLabel={`${s.name}, ${info.label}. Yazıcının ayrıntısını ve kamerasını açar`}
     >

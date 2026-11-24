@@ -654,7 +654,10 @@ export default function PrintersPage() {
                 <AnimatedNumber value={printingCount} />{" "}
                 <span className="text-base font-medium text-muted-foreground">yazıcı</span>
               </p>
-              <p className={cn("mt-0.5 text-xs", pausedCount > 0 ? "text-[#C9D2F2]" : "text-muted-foreground")}>
+              <p
+                className={cn("mt-0.5 text-xs", pausedCount > 0 ? "font-medium" : "text-muted-foreground")}
+                style={pausedCount > 0 ? { color: "var(--status-paused)" } : undefined}
+              >
                 {pausedCount > 0 ? `${pausedCount} baskı duraklatıldı` : printingCount > 0 ? "şu an basıyor" : "basan yok"}
               </p>
             </OzetKutusu>
@@ -803,9 +806,9 @@ function TroubleChip({ item, onClick }: { item: TroubleItem; onClick: () => void
       onClick={onClick}
       className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border font-medium transition-all hover:brightness-125 active:scale-[0.97] motion-safe:animate-in motion-safe:fade-in duration-300"
       style={{
-        color: item.severe ? "var(--panel-red)" : "var(--panel-amber)",
-        backgroundColor: item.severe ? "var(--panel-red-soft)" : "var(--panel-amber-soft)",
-        borderColor: item.severe ? "var(--panel-red-line)" : "var(--panel-amber-line)",
+        color: item.severe ? "var(--panel-red)" : "var(--status-paused)",
+        backgroundColor: item.severe ? "var(--panel-red-soft)" : "var(--status-paused-soft)",
+        borderColor: item.severe ? "var(--panel-red-line)" : "var(--status-paused-line)",
       }}
       title="Karta git"
     >
@@ -1166,6 +1169,10 @@ function PrinterCardInner({
   });
   // Duraklama nedeni "Duraklatıldı"nın yanında (ilk cümle); tamamı üstteki uyarı bandında.
   const pauseReason = isPaused ? pauseReasonText(printer.statusMessage) : null;
+  // MÜDAHALE BEKLİYOR (duraklatıldı ya da durdu): kart ilk bakışta ayrılsın — sarı/gül nabızlı
+  // çerçeve, durum renginde üst çizgi ve parlama. İptal edilen baskı arıza değil, sakin kalır.
+  const dikkat = !offline && (isPaused || (isError && !iptalEdildi));
+  const dikkatParlama = isPaused ? "var(--status-paused-glow)" : "var(--status-error-glow)";
 
   // CANLI 3B MODEL: süren (ya da yeni biten) baskı hangi modele aitse — dosya adından çözülür,
   // yeniden yükleme GEREKMEZ — o modelin paketi yüklenir ve kart onu canlı çizer (KartUcBoyut).
@@ -1291,12 +1298,27 @@ function PrinterCardInner({
         // MADDE 5: çerçeve DURUM rengini taşır (kimlik rengi değil) — sağlıklı kart artık
         // arızalı karttan ilk bakışta ayrılıyor.
         borderColor: sv.emphasize ? sv.line : undefined,
-        boxShadow: sv.emphasize ? `0 10px 32px -14px ${sv.soft}` : undefined,
+        boxShadow: dikkat
+          ? `0 14px 44px -12px ${dikkatParlama}`
+          : sv.emphasize ? `0 10px 32px -14px ${sv.soft}` : undefined,
       }}
     >
+      {/* Müdahale bekleyen kart: nabız gibi atan durum rengi çerçeve (hareket azaltılmışsa sabit). */}
+      {dikkat && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-10 rounded-2xl"
+          style={{
+            boxShadow: `inset 0 0 0 2px ${sv.color}, inset 0 0 56px -22px ${sv.color}`,
+            animation: reduceMotion ? undefined : "yazici-dikkat 1.6s ease-in-out infinite",
+          }}
+        />
+      )}
       {/* Kimlik rengi yalnız burada ve ikonda: ince üst çizgi (baskıda akar). */}
       <div className="absolute inset-x-0 top-0 h-[2px] overflow-hidden">
-        {isPrinting && online && !reduceMotion
+        {dikkat
+          ? <div className="h-full w-full" style={{ background: sv.color, boxShadow: `0 0 10px ${sv.color}` }} />
+          : isPrinting && online && !reduceMotion
           ? <div className="h-full w-1/3" style={{ background: accent, animation: "indeterminate-bar 2.2s ease-in-out infinite", boxShadow: `0 0 8px ${accent}` }} />
           : <div className="h-full w-full" style={{ background: alpha(accent, offline ? 22 : 55) }} />}
       </div>
@@ -1327,6 +1349,25 @@ function PrinterCardInner({
           </div>
         )}
 
+        {/* Duraklatılan baskı: hatadaki gibi belirgin bant (nedeni varsa hemen altındaki uyarı satırında — başlıkta tekrarlanmaz).
+            MADDE 18: uzun süredir duruyorsa ikinci satır bunu söyler. */}
+        {isPaused && !offline && (
+          <div
+            className="flex items-center gap-2.5 rounded-lg border px-3 py-2 motion-safe:animate-in motion-safe:fade-in duration-300"
+            style={{ borderColor: "var(--status-paused-line)", backgroundColor: "var(--status-paused-soft)" }}
+          >
+            <Pause className="h-4 w-4 shrink-0 motion-safe:animate-pulse" style={{ color: "var(--status-paused)" }} />
+            <div className="min-w-0">
+              <p className="text-xs font-bold leading-tight" style={{ color: "var(--status-paused)" }}>
+                Baskı duraklatıldı{pauseReason && warnings.length === 0 ? ` — ${pauseReason}` : ""}
+              </p>
+              <p className="text-[11px] truncate text-foreground/70">
+                {pausedReminderText ?? (job?.productName || "Yazıcıyı kontrol et")}
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* MADDE 14: yazıcının uyarıları (neden duraklattı, ne oldu) */}
         {warnings.length > 0 && !offline && (
           <div className="space-y-1">
@@ -1335,12 +1376,12 @@ function PrinterCardInner({
                 key={`${w.code ?? "w"}-${i}`}
                 className="flex items-start gap-2 rounded-lg border px-2.5 py-1.5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1 duration-300"
                 style={{
-                  borderColor: w.severe ? "var(--panel-red-line)" : "var(--panel-amber-line)",
-                  backgroundColor: w.severe ? "var(--panel-red-soft)" : "var(--panel-amber-soft)",
+                  borderColor: w.severe ? "var(--panel-red-line)" : "var(--status-paused-line)",
+                  backgroundColor: w.severe ? "var(--panel-red-soft)" : "var(--status-paused-soft)",
                   animationDelay: `${i * 60}ms`, animationFillMode: "both",
                 }}
               >
-                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" style={{ color: w.severe ? "var(--panel-red)" : "var(--panel-amber)" }} />
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-px" style={{ color: w.severe ? "var(--panel-red)" : "var(--status-paused)" }} />
                 {/* Ne oldu (kalın) + ne yapmalı — yazıcının kendi açıklaması. */}
                 <div className="min-w-0 text-[11px] leading-snug">
                   <p className="font-semibold text-foreground/90">{w.baslik}</p>
@@ -1351,16 +1392,6 @@ function PrinterCardInner({
           </div>
         )}
 
-        {/* MADDE 18: uzun süredir duraklamış baskı unutulmasın */}
-        {pausedReminderText && isPaused && !offline && (
-          <div
-            className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 motion-safe:animate-in motion-safe:fade-in duration-300"
-            style={{ borderColor: "var(--panel-amber-line)", backgroundColor: "var(--panel-amber-soft)" }}
-          >
-            <Clock className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--panel-amber)" }} />
-            <p className="text-[11px] leading-snug text-foreground/85">{pausedReminderText}</p>
-          </div>
-        )}
 
         {/* Üst: marka + durum */}
         <div className="flex items-start justify-between gap-2">
