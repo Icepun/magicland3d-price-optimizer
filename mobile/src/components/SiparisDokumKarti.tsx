@@ -63,20 +63,11 @@ export function SiparisDokumKarti({ profit, iptal, baslangic = 0 }: { profit: Or
       "kargo",
       <Satir
         ad="Kargo"
-        rozet={
-          d.kargoGercek ? (
-            <Pill color={color.good}>gerçek</Pill>
-          ) : profit.desiEstimated ? (
-            <Txt v="small" style={{ color: color.info }}>
-              tahmini desi
-            </Txt>
-          ) : d.kargoEtiketi ? (
-            <Txt v="small" tone="faint" numberOfLines={1}>
-              {d.kargoEtiketi}
-            </Txt>
-          ) : null
-        }
+        rozet={d.kargoGercek ? <Pill color={color.good}>gerçek</Pill> : null}
         tutar={d.kargo}
+        // Kaç desiden hesaplandığı her zaman yazar ("~" = desi tahmini).
+        alt={d.kargoEtiketi ?? undefined}
+        altSolda
       />
     );
   }
@@ -186,6 +177,7 @@ function Satir({
   isaret = "−",
   ton = "default",
   alt,
+  altSolda = false,
 }: {
   ad: string;
   adTon?: TxtTone;
@@ -194,6 +186,8 @@ function Satir({
   isaret?: "−" | "+" | "";
   ton?: TxtTone;
   alt?: string;
+  /** Açıklama satırı solda (kalemin altında) — tutar farkı gibi notlar sağda kalır. */
+  altSolda?: boolean;
 }) {
   return (
     <View style={styles.satirKutu}>
@@ -207,7 +201,7 @@ function Satir({
         <Count value={tutar} v="smallStrong" tone={ton} format={(n) => `${isaret}${formatCurrency(n)}`} />
       </View>
       {alt ? (
-        <Txt v="small" tone="faint" style={styles.alt} num>
+        <Txt v="small" tone="faint" style={altSolda ? undefined : styles.alt} num numberOfLines={1}>
           {alt}
         </Txt>
       ) : null}

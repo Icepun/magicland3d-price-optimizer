@@ -2938,14 +2938,12 @@ const OrderRow = memo(function OrderRow({
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">
                       Kargo
-                      {order.actualCargo ? (
-                        <GercekRozeti />
-                      ) : order.desiEstimated ? (
-                        <span className="ml-1 text-[#C9D2F2]/80">tahmini desi</span>
-                      ) : (
-                        order.cargoLabel && (
-                          <span className="ml-1 text-muted-foreground/60">{order.cargoLabel}</span>
-                        )
+                      {order.actualCargo && <GercekRozeti />}
+                      {/* Kaç desiden hesaplandığı her zaman yazar ("~" = desi tahmini). */}
+                      {order.cargoLabel && (
+                        <span className={cn("ml-1", order.desiEstimated && !order.actualCargo ? "text-[#C9D2F2]/80" : "text-muted-foreground/60")}>
+                          {order.cargoLabel}
+                        </span>
                       )}
                     </span>
                     <span className="tabular-nums text-muted-foreground">

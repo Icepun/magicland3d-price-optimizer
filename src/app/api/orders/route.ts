@@ -58,11 +58,12 @@ import {
 import {
   computeReturnLoss,
   gercekKesintiToplami,
+  kargoSatiriEtiketi,
   resolveOrderProfit,
   type OrderProfitInput,
   type OrderProfitLine,
 } from "@/core/order-profit";
-import { kargoTahminiEtiketi, type KargoBaglami } from "@/core/kargo-tarife";
+import type { KargoBaglami } from "@/core/kargo-tarife";
 import { hepsiburadaKargoBaglami, kargoluIadeMi, trendyolKargoBaglami } from "@/core/siparis-kargo";
 import { fazlaDesiBul } from "@/core/kargo-denetim";
 import {
@@ -1700,7 +1701,8 @@ async function computeOrdersBodyInner(
       desiEstimated: pr.desiEstimated,
       cargoRuleMissing: pr.cargoRuleMissing,
       // Kargo pazaryeri tarifesinden geldiyse hangi fiyat (gerçek kargo biliniyorsa gösterilmez).
-      cargoLabel: pr.actualCargo == null && pr.cargoDetail ? kargoTahminiEtiketi(pr.cargoDetail) : null,
+      // Kargonun kaç desiden ve nereden hesaplandığı (gerçek fatura → pazaryerinin kestiği desi).
+      cargoLabel: kargoSatiriEtiketi(pr, { kesilenDesi: platformFinancial?.chargedDesi ?? null }),
       ...(r.platform === "trendyol" || r.platform === "hepsiburada" ? { cargoContext: r.kargo ?? null } : {}),
       returnLoss: returnLoss
         ? {

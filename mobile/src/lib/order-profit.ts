@@ -3,12 +3,12 @@ import { resolveProductCost } from "@core/product-cost";
 import { satiriEsle, urunIndeksiKur, type UrunIndeksi } from "@core/order-match";
 import {
   computeReturnLoss,
+  kargoSatiriEtiketi,
   resolveOrderProfit,
   type OrderProfitInput,
   type OrderProfitLine,
   type ReturnLoss,
 } from "@core/order-profit";
-import { kargoTahminiEtiketi } from "@core/kargo-tarife";
 import { fazlaDesiBul, type FazlaDesi } from "@core/kargo-denetim";
 import { kargoluIadeMi } from "@core/siparis-kargo";
 import { hbHizmetBedeli } from "@core/hb-kesinti";
@@ -372,7 +372,8 @@ export function computeOrderProfit(
     urunVePaketleme: r.productAndPackagingCost,
     kargo: r.cargoCost,
     kargoGercek: r.actualCargo != null,
-    kargoEtiketi: r.actualCargo == null && r.cargoDetail ? kargoTahminiEtiketi(r.cargoDetail) : null,
+    // Kaç desiden ve nereden hesaplandığı — masaüstüyle AYNI çekirdek metni.
+    kargoEtiketi: kargoSatiriEtiketi(r, { kesilenDesi: (financial as TelefonFinansKaydi | null)?.kesilenDesi ?? null }),
     kargoKuralYok: r.cargoRuleMissing,
     // Masaüstüyle aynı kural (core/kargo-denetim): pazaryeri ürün desisinden büyük kesti ve fiyatı artırdı.
     fazlaDesi: fazlaDesiBul({

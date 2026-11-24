@@ -15,6 +15,7 @@ import {
   fiyatDesisi,
   iadeKargoTahmini,
   kargoTahmini,
+  kargoTahminiEtiketi,
   type KargoBaglami,
   type KargoTahmini,
 } from "./kargo-tarife";
@@ -200,6 +201,13 @@ export interface OrderProfitResult {
   cargoRuleMissing: boolean;
   /** Kargo pazaryeri tarifesinden hesaplandıysa nasıl (tablo, firma, desi); kuraldan geldiyse null. */
   cargoDetail: KargoTahmini | null;
+  /**
+   * Kargonun hesaplandığı desi (paketin toplam desisi, barem için yuvarlanmış). İlana elle girilen
+   * kargo kullanıldıysa null. Dökümde "kaç desiden hesaplandı" sorusunun cevabı.
+   */
+  cargoDesi: number | null;
+  /** Kargo bir KURALDAN geldiyse (Shopify, tarife öncesi siparişler) o kuralın desi bandı. */
+  cargoBand: { minDesi: number; maxDesi: number } | null;
   matchedLines: number;
   unmatchedLines: number;
   unmatchedQty: number;
@@ -462,6 +470,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       // Hiçbir satırın maliyeti bilinmiyor → kâr zaten gösterilmiyor; kargo kuralı aranmadı bile.
       cargoRuleMissing: false,
       cargoDetail: null,
+      cargoDesi: null,
+      cargoBand: null,
       matchedLines: 0,
       unmatchedLines,
       unmatchedQty,
@@ -671,6 +681,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     partial: unmatchedLines > 0 || commissionUnknownLines > 0,
     cargoRuleMissing,
     cargoDetail,
+    cargoDesi: canUseSoloCargo ? null : baremDesi,
+    cargoBand: appliedCargoRule ? { minDesi: appliedCargoRule.minDesi, maxDesi: appliedCargoRule.maxDesi } : null,
     matchedLines,
     unmatchedLines,
     unmatchedQty,
@@ -685,6 +697,34 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     outputVat,
     inputVatCredit,
   };
+}
+
+/**
+ * Dökümdeki KARGO satırının kısa açıklaması — masaüstü Siparişler ve telefon AYNI metni gösterir.
+ * Her durumda kargonun KAÇ DESİDEN hesaplandığı yazar (Berke, 24 Kas 2026: "kargoyu kaç desi
+ * hesapladığını anlamıyorum").
+ *   • Pazaryeri faturası geldiyse ("gerçek" rozeti ayrıca): pazaryerinin kestiği desi, biliniyorsa.
+ *   • Tarifeden: firma + fiyat türü + desi.
+ *   • Kuraldan (Shopify): desi + kuralın bandı.
+ *   • İlana elle girilen kargo: bunu söyler.
+ * Desi tahmin edildiyse (eksik desi / eşleşmeyen ürün) başına "~" konur.
+ */
+export function kargoSatiriEtiketi(
+  r: Pick<OrderProfitResult, "cargoDetail" | "cargoDesi" | "cargoBand" | "desiEstimated"> & { actualCargo?: number | null },
+  secenek: { kesilenDesi?: number | null } = {}
+): string | null {
+  const desiMetni = (n: number) => `${n.toLocaleString("tr-TR", { maximumFractionDigits: 1 })} desi`;
+  if (r.actualCargo != null) {
+    const k = secenek.kesilenDesi;
+    return typeof k === "number" && Number.isFinite(k) && k > 0 ? `${desiMetni(k)} kesildi` : null;
+  }
+  const yaklasik = r.desiEstimated ? "~" : "";
+  if (r.cargoDetail) return kargoTahminiEtiketi(r.cargoDetail).replace(/(\d[\d.,]*) desi$/, `${yaklasik}$1 desi`);
+  if (r.cargoDesi == null) return "ilana girilen kargo";
+  const bant = r.cargoBand
+    ? ` · ${r.cargoBand.minDesi.toLocaleString("tr-TR")}–${r.cargoBand.maxDesi.toLocaleString("tr-TR")} desi baremi`
+    : "";
+  return `${yaklasik}${desiMetni(r.cargoDesi)}${bant}`;
 }
 
 /** Pazaryerinin settlement kaydı (TL) — Trendyol gerçek komisyonu. */

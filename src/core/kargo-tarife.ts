@@ -385,7 +385,8 @@ export function desiFiyatindanDesi(
 /** Bir tahminin kısa açıklaması (sipariş dökümü için, son kullanıcı dili). */
 export function kargoTahminiEtiketi(t: Pick<KargoTahmini, "tur" | "firma" | "desi">): string {
   const firma = KARGO_FIRMA_ADLARI[t.firma];
-  if (t.tur === "barem-avantajli") return `${firma} · hızlı teslimat fiyatı`;
-  if (t.tur === "barem") return `${firma} · sabit fiyat`;
+  // Sabit fiyatlı baremde de paketin desisi yazar ("kaç desiden hesaplandı" her zaman görünsün).
+  if (t.tur === "barem-avantajli") return `${firma} · hızlı teslimat fiyatı · ${t.desi} desi`;
+  if (t.tur === "barem") return `${firma} · sabit fiyat · ${t.desi} desi`;
   return `${firma} · ${t.desi} desi`;
 }
