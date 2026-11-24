@@ -198,6 +198,50 @@ export class HepsijetClient {
       await this.getir(`/settlement/town/${ilceId}/districts?productCode=HX_STD&serviceType=&deliveryType=MARKET_PLACE`),
     );
   }
+
+  /**
+   * Token'lı POST — yanıtı OLDUĞU GİBİ döner (HepsiJet hatayı 200 içinde `{status:"FAIL", message}`
+   * olarak da verebiliyor; yorum çağırana ait). Token süresinden önce düştüyse bir kez yeniden girer.
+   */
+  private async postla(yol: string, govde: unknown, zamanAsimiMs = 30_000): Promise<{ durum: number; govde: unknown }> {
+    for (let deneme = 0; deneme < 2; deneme++) {
+      const yanit = await this.cagir(
+        yol,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            "X-Origin": "integration",
+            "X-Client-Id": "hj-integration",
+            "X-Auth-Token": await this.token(),
+          },
+          body: JSON.stringify(govde),
+        },
+        zamanAsimiMs,
+      );
+      if (yanit.durum === 401 && deneme === 0) {
+        tokenlar.delete(this.tokenAnahtari);
+        continue;
+      }
+      return yanit;
+    }
+    throw new HepsijetHatasi("HepsiJet oturumu açılamadı.", 401);
+  }
+
+  /** Gönderi oluştur + etiketi anında al (ZPL) — `sendDeliveryOrderEnhanced`. Gövde: `lib/kargo/hepsijet-govde`. */
+  async gonderiOlustur(govde: unknown): Promise<{ durum: number; govde: unknown }> {
+    return this.postla("/delivery/sendDeliveryOrderEnhanced", govde);
+  }
+
+  /**
+   * İade randevu tarihleri (`findAvailableDeliveryDatesV2`) — iade gönderisinin tarihi rastgele
+   * olamaz, buradan dönen bir tarih olmalı. İl/ilçe müşterinin (iadeyi gönderenin) adresi.
+   */
+  async iadeTarihleri(il: string, ilce: string, bas: string, bit: string): Promise<unknown> {
+    const q = new URLSearchParams({ startDate: bas, endDate: bit, deliveryType: "RETURNED", city: il, town: ilce });
+    return this.getir(`/delivery/findAvailableDeliveryDatesV2?${q.toString()}`);
+  }
 }
 
 /**
