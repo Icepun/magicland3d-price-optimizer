@@ -186,6 +186,8 @@ function ozel(model: string, tur: number): Row {
       return { platform: "trendyol", lineKey: "n:test kalemi", productId: URUN };
     case "OrderCargoDesi":
       return { platform: "shopify", externalOrderId: "sh-1" };
+    case "CargoShipment":
+      return { platform: "shopify", externalOrderId: "sh-1", barcode: "CPR100000000009" };
     case "PriceHistory":
       return { productId: URUN };
     case "PrinterConfig":

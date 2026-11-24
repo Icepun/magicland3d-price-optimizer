@@ -4,6 +4,7 @@
  * • Trendyol: takip numarası şart (ortak etiket Trendyol Express / "Trendyol öder" Aras).
  * • Hepsiburada: PAKET numarası şart — etiket ancak paketlenmiş (panelde "Gönderime hazır")
  *   siparişte var.
+ * • Shopify: yalnız uygulamadan HepsiJet gönderisi açıldıysa (barkod = etiket anahtarı).
  * İptal ve teslim edilmiş siparişte anlamsız.
  *
  * Çekirdekte: telefon da aynı kuralla "Etiketi yazdır" düğmesini gösterir ve aynı anahtarla
@@ -16,6 +17,8 @@ export interface EtiketSiparisi {
   orderNumber: string;
   trackingNumber: string | null;
   packageNumber?: string | null;
+  /** Shopify siparişine uygulamadan açılan HepsiJet gönderisinin barkodu. */
+  hepsijetBarkodu?: string | null;
   statusKind: string;
 }
 
@@ -27,11 +30,13 @@ export function etiketBasilabilir(s: EtiketSiparisi): boolean {
   if (s.statusKind === "cancelled" || s.statusKind === "delivered") return false;
   if (s.platform === "trendyol") return dolu(s.trackingNumber);
   if (s.platform === "hepsiburada") return dolu(s.packageNumber);
+  if (s.platform === "shopify") return dolu(s.hepsijetBarkodu);
   return false;
 }
 
-/** Seçim ve "basıldı" işaretinin anahtarı: takip/teslimat no, yoksa paket no. */
+/** Seçim ve "basıldı" işaretinin anahtarı: takip/teslimat no, yoksa paket no (Shopify: HepsiJet barkodu). */
 export function etiketAnahtari(s: EtiketSiparisi): string | null {
+  if (s.platform === "shopify") return dolu(s.hepsijetBarkodu) ? s.hepsijetBarkodu.trim() : null;
   if (dolu(s.trackingNumber)) return s.trackingNumber.trim();
   if (dolu(s.packageNumber)) return s.packageNumber.trim();
   return null;
@@ -53,6 +58,9 @@ export function etiketIstegi(s: EtiketSiparisi): { url: string; govde: Record<st
       url: "/api/trendyol/etiket",
       govde: { takipNo: (s.trackingNumber as string).trim(), siparisNo: s.orderNumber },
     };
+  }
+  if (s.platform === "shopify") {
+    return { url: "/api/kargo/etiket", govde: { barkod: (s.hepsijetBarkodu as string).trim(), siparisNo: s.orderNumber } };
   }
   const govde: Record<string, string> = { paketNo: (s.packageNumber as string).trim(), siparisNo: s.orderNumber };
   if (dolu(s.trackingNumber)) govde.takipNo = s.trackingNumber.trim();

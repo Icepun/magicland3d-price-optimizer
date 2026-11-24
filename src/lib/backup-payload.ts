@@ -83,6 +83,7 @@ export const BACKUP_TABLES = {
   OrderLineCost: "orderLineCosts",
   OrderLineLink: "orderLineLinks",
   OrderCargoDesi: "orderCargoDesis",
+  CargoShipment: "cargoShipments",
 } as const satisfies Partial<Record<Prisma.ModelName, string>>;
 
 export type BackupModel = keyof typeof BACKUP_TABLES;
@@ -308,6 +309,7 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     orderLineCosts,
     orderLineLinks,
     orderCargoDesis,
+    cargoShipments,
   ] = await Promise.all([
     q(() => prisma.variantGroup.findMany()),
     q(() => prisma.product.findMany()),
@@ -350,6 +352,8 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     q(() => prisma.orderLineLink.findMany()),
     // Elle girilen Shopify kargo desileri — yedeğe girmezse geri yüklemede kargo yeniden ürün desilerinden hesaplanır.
     q(() => prisma.orderCargoDesi.findMany()),
+    // Uygulamadan açılan kargo gönderileri — yedeğe girmezse geri yüklemede sipariş ↔ barkod bağı kaybolur.
+    q(() => prisma.cargoShipment.findMany()),
   ]);
 
   const excludedSettingKeys = rawAppSettings
@@ -421,6 +425,7 @@ export async function buildBackupPayload(options: BuildBackupOptions = {}) {
     orderLineCosts,
     orderLineLinks,
     orderCargoDesis,
+    cargoShipments,
   };
 }
 

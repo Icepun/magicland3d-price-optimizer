@@ -148,7 +148,9 @@ let schemaReady: Promise<void> | null = null;
 // v65: `OrderCargoDesi` — Shopify siparişinin gerçekte çıktığı kargo desisi (elle girilen, Berke 24 Kas
 //      2026: "8 desi hesaplanan kargoyu 4 desiyle çıkarsam düzenleyebilmeliyim"). Kargo bedeli ürün
 //      desilerinin toplamı yerine bununla hesaplanır. Yeni tablo → eski sürüm cihazlar etkilenmez.
-const CURRENT_SCHEMA_VERSION = "65";
+// v66: `CargoShipment` — uygulamadan açılan HepsiJet gönderisi (barkod, durum, hareket geçmişi,
+//      Shopify'a yazılma durumu). Müşteri adresi tutulmaz. Yeni tablo → eski sürümler etkilenmez.
+const CURRENT_SCHEMA_VERSION = "66";
 
 /** Kargo kuralı platform/TEX göçü bir kez koştu mu (iç durum; yedekten geri yüklenmez). */
 export const KARGO_PLATFORM_GOCU_ANAHTARI = "gocKargoPlatformTamam";
@@ -1779,6 +1781,37 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     await bufDDL(
       `CREATE INDEX IF NOT EXISTS "LabelPrintRequest_labelKey_idx" ON "LabelPrintRequest"("labelKey")`
     );
+    // v66: uygulamadan açılan kargo gönderisi (bkz. lib/kargo/kargo-gonderileri).
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "CargoShipment" (
+        "id" TEXT NOT NULL PRIMARY KEY,
+        "platform" TEXT NOT NULL,
+        "externalOrderId" TEXT NOT NULL,
+        "orderNumber" TEXT NOT NULL,
+        "carrier" TEXT NOT NULL,
+        "environment" TEXT NOT NULL,
+        "kind" TEXT NOT NULL DEFAULT 'STD',
+        "barcode" TEXT NOT NULL,
+        "status" TEXT NOT NULL DEFAULT 'olusturuldu',
+        "statusText" TEXT,
+        "carrierStatus" TEXT,
+        "lastEventAtMs" REAL,
+        "lastCheckedAtMs" REAL,
+        "shopifyFulfillmentId" TEXT,
+        "shopifyShippedAtMs" REAL,
+        "shopifyDeliveredAtMs" REAL,
+        "shopifyError" TEXT,
+        "createdAtMs" REAL NOT NULL,
+        "updatedAtMs" REAL NOT NULL,
+        "cancelledAtMs" REAL,
+        "eventsJson" TEXT
+      )
+    `);
+    await bufDDL(`CREATE UNIQUE INDEX IF NOT EXISTS "CargoShipment_barcode_key" ON "CargoShipment"("barcode")`);
+    await bufDDL(
+      `CREATE INDEX IF NOT EXISTS "CargoShipment_platform_externalOrderId_idx" ON "CargoShipment"("platform", "externalOrderId")`
+    );
+    await bufDDL(`CREATE INDEX IF NOT EXISTS "CargoShipment_status_idx" ON "CargoShipment"("status")`);
 
     // Kalıcı bildirimler (v21) — olay-anı uyarıları (stoğu biten/sipariş-üzerine ürüne sipariş).
     // id = tekilleştirme anahtarı (createMany skipDuplicates ile tekrar yazılmaz).

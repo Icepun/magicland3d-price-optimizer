@@ -24,7 +24,7 @@ function tabloYok(e: unknown): boolean {
 }
 
 export async function etiketIstegiGonder(s: {
-  platform: "trendyol" | "hepsiburada";
+  platform: "trendyol" | "hepsiburada" | "shopify";
   orderNumber: string;
   labelKey: string;
   trackingNumber: string | null;

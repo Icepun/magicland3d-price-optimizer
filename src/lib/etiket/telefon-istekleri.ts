@@ -3,7 +3,7 @@ import { remotePrisma } from "@/lib/prisma";
 import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { etiketIstegiBayat } from "@/core/etiket-uygunluk";
 import { yaziciDurumu } from "@/lib/etiket/ham-yazici";
-import { EtiketBasilamadi, hbEtiketiBas, trendyolEtiketiBas } from "@/lib/etiket/bas";
+import { EtiketBasilamadi, hbEtiketiBas, hepsijetEtiketiBas, trendyolEtiketiBas } from "@/lib/etiket/bas";
 import { takipNoTemizle } from "@/lib/etiket/kayit";
 import { nabizDinle, startTelefonNabzi } from "@/core/printers/telefon-nabzi";
 
@@ -102,6 +102,11 @@ export async function bekleyenleriIsle(): Promise<void> {
         const paketNo = takipNoTemizle(istek.packageNumber);
         if (!paketNo) throw new EtiketBasilamadi("Sipariş henüz paketlenmemiş.");
         await hbEtiketiBas(paketNo, takipNoTemizle(istek.trackingNumber));
+      } else if (istek.platform === "shopify") {
+        // Shopify siparişine uygulamadan açılan HepsiJet gönderisi (barkod = etiket anahtarı).
+        const barkod = takipNoTemizle(istek.trackingNumber);
+        if (!barkod) throw new EtiketBasilamadi("Bu siparişin kargosu oluşturulmamış.");
+        await hepsijetEtiketiBas(barkod);
       } else {
         throw new EtiketBasilamadi("Bu platformun etiketi uygulamadan basılamıyor.");
       }
@@ -129,7 +134,7 @@ export async function bekleyenleriIsle(): Promise<void> {
  * yazılamazsa baskı yine başarılıdır (yerel işaret ayrıca tutuluyor).
  */
 export async function basildiBulutaYaz(kayit: {
-  platform: "trendyol" | "hepsiburada";
+  platform: "trendyol" | "hepsiburada" | "shopify";
   orderNumber: string | null;
   labelKey: string;
   trackingNumber: string | null;

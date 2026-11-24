@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { baglantiDurumu, type BaglantiTonu } from "@/lib/baglanti-ozeti";
+import { HepsijetHesapKarti } from "@/components/kargo/HepsijetHesapKarti";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store, Truck, CheckCircle2 } from "lucide-react";
 
 interface TrendyolPublicSettings {
@@ -952,6 +953,8 @@ function HepsijetTab() {
           </CardContent>
         </Card>
       )}
+
+      <HepsijetHesapKarti />
     </div>
   );
 }

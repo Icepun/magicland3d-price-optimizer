@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Share, StyleSheet, View } from "react-native";
 
 import { ETIKET_ISTEGI_OMRU_MS } from "@core/etiket-uygunluk";
+import { KARGO_DURUM_ETIKETI, type KargoDurumu, type KargoGonderiOzeti } from "@core/kargo-gonderisi";
 import { Button, FadeInView, PressableScale, Tint, Txt } from "@/components/kit";
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { etiketIstegiGonder, etiketIstegiIptal, etiketIstegiOku } from "@/lib/db/etiket";
@@ -63,10 +64,84 @@ export function KargoKarti({ order, basildiAt }: { order: UnifiedOrder; basildiA
           Takip numarası yok
         </Txt>
       )}
-      {anahtar && (order.platform === "trendyol" || order.platform === "hepsiburada") ? (
+      {order.kargoGonderisi ? <HepsijetDurumu g={order.kargoGonderisi} /> : null}
+      {anahtar && (order.platform === "trendyol" || order.platform === "hepsiburada" || order.platform === "shopify") ? (
         <EtiketDugmesi order={order} platform={order.platform} anahtar={anahtar} basildiAt={basildiAt} />
       ) : null}
     </Tint>
+  );
+}
+
+const DURUM_RENGI: Record<KargoDurumu, string> = {
+  olusturuldu: color.info,
+  yolda: color.accentBright,
+  dagitimda: color.accent,
+  teslim: color.good,
+  sorun: color.bad,
+  iade: color.warn,
+  iptal: color.textFaint,
+};
+
+/** Masaüstünden açılan HepsiJet gönderisi: durum, Shopify işareti, hareketler (masaüstüyle aynı bilgi). */
+function HepsijetDurumu({ g }: { g: KargoGonderiOzeti }) {
+  const [acik, setAcik] = useState(false);
+  const renk = DURUM_RENGI[g.durum];
+  const shopify =
+    g.ortam === "test"
+      ? "Test gönderisi · Shopify'a yazılmaz"
+      : g.shopifyTeslim
+        ? `Shopify'da teslim edildi · ${formatDateTime(g.shopifyTeslim)}`
+        : g.shopifyGonderildi
+          ? `Shopify'da gönderildi · ${formatDateTime(g.shopifyGonderildi)}`
+          : g.durum === "iptal"
+            ? null
+            : (g.shopifyHata ?? "Kurye alınca Shopify'da gönderildi işaretlenecek");
+  return (
+    <FadeInView style={styles.hj}>
+      <View style={styles.satir}>
+        <View style={[styles.nokta, { backgroundColor: renk }]} />
+        <Txt v="bodyStrong" style={{ color: renk, flex: 1 }} numberOfLines={1}>
+          {KARGO_DURUM_ETIKETI[g.durum]}
+          {g.ortam === "test" ? " · test" : ""}
+        </Txt>
+      </View>
+      {g.durum !== "iptal" && g.metin !== KARGO_DURUM_ETIKETI[g.durum] ? (
+        <Txt v="small" tone="dim">
+          {g.metin}
+        </Txt>
+      ) : null}
+      {shopify ? (
+        <Txt v="small" tone={g.shopifyHata && !g.shopifyGonderildi ? "warn" : "faint"}>
+          {shopify}
+        </Txt>
+      ) : null}
+      {g.olaylar.length > 0 ? (
+        <PressableScale
+          onPress={() => setAcik((v) => !v)}
+          style={styles.satir}
+          accessibilityRole="button"
+          accessibilityLabel={acik ? "Hareketleri gizle" : "Hareketleri göster"}
+        >
+          <SymbolView name={acik ? "chevron.up" : "chevron.down"} tintColor={color.textFaint} style={styles.ikon} />
+          <Txt v="small" tone="faint">
+            Hareketler ({g.olaylar.length})
+          </Txt>
+        </PressableScale>
+      ) : null}
+      {acik
+        ? [...g.olaylar].reverse().map((o, i) => (
+            <FadeInView key={`${o.an}-${i}`} index={i} style={styles.olay}>
+              <View style={[styles.olayNokta, { backgroundColor: i === 0 ? renk : color.lineStrong }]} />
+              <View style={{ flex: 1 }}>
+                <Txt v="small">{o.metin}</Txt>
+                <Txt v="small" tone="faint" num>
+                  {formatDateTime(o.an)}
+                </Txt>
+              </View>
+            </FadeInView>
+          ))
+        : null}
+    </FadeInView>
   );
 }
 
@@ -77,7 +152,7 @@ function EtiketDugmesi({
   basildiAt,
 }: {
   order: UnifiedOrder;
-  platform: "trendyol" | "hepsiburada";
+  platform: "trendyol" | "hepsiburada" | "shopify";
   anahtar: string;
   basildiAt?: number;
 }) {
@@ -90,7 +165,8 @@ function EtiketDugmesi({
         platform,
         orderNumber: order.orderNumber,
         labelKey: anahtar,
-        trackingNumber: order.trackingNumber ?? null,
+        // Shopify: masaüstü etiketi HepsiJet barkoduyla basar (Shopify'daki takip no başka olabilir).
+        trackingNumber: platform === "shopify" ? anahtar : (order.trackingNumber ?? null),
         packageNumber: order.packageNumber ?? null,
       }),
     onSuccess: (id) => setIstekId(id),
@@ -221,4 +297,8 @@ const styles = StyleSheet.create({
   satir: { flexDirection: "row", alignItems: "center", gap: space.md },
   ikon: { width: 16, height: 16 },
   durum: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 24 },
+  hj: { gap: space.xs, paddingTop: space.xs, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.line },
+  nokta: { width: 8, height: 8, borderRadius: 4 },
+  olay: { flexDirection: "row", gap: space.sm, paddingLeft: space.xs },
+  olayNokta: { width: 6, height: 6, borderRadius: 3, marginTop: 6 },
 });

@@ -341,6 +341,31 @@ const OrderCargoDesiSchema = table({
   updatedAt: optionalDate,
 });
 
+/** Uygulamadan açılan kargo gönderisi — eski yedeklerde YOK (opsiyonel). */
+const CargoShipmentSchema = table({
+  id,
+  platform: id,
+  externalOrderId: id,
+  orderNumber: z.string(),
+  carrier: id,
+  environment: id,
+  kind: z.string().optional(),
+  barcode: id,
+  status: z.string().optional(),
+  statusText: nullableString,
+  carrierStatus: nullableString,
+  lastEventAtMs: nullableFinite,
+  lastCheckedAtMs: nullableFinite,
+  shopifyFulfillmentId: nullableString,
+  shopifyShippedAtMs: nullableFinite,
+  shopifyDeliveredAtMs: nullableFinite,
+  shopifyError: nullableString,
+  createdAtMs: finite,
+  updatedAtMs: finite,
+  cancelledAtMs: nullableFinite,
+  eventsJson: nullableString,
+});
+
 /** Elle ürün bağı ("Ürüne bağla") — eski yedeklerde YOK (opsiyonel). */
 const OrderLineLinkSchema = table({
   id,
@@ -515,6 +540,7 @@ const ImportSchema = z.object({
   orderLineCosts: z.array(OrderLineCostSchema).optional().default([]),
   orderLineLinks: z.array(OrderLineLinkSchema).optional().default([]),
   orderCargoDesis: z.array(OrderCargoDesiSchema).optional().default([]),
+  cargoShipments: z.array(CargoShipmentSchema).optional().default([]),
   platformOrderFinancials: z.array(PlatformOrderFinancialSchema).optional().default([]),
   manualOrders: z.array(ManualOrderSchema).optional().default([]),
   // ESKİ YEDEKLER İÇİN TOLERANS: maliyet şablonu özelliği kaldırıldı (arayüzü hiç yoktu).
@@ -660,6 +686,7 @@ interface ImportStats {
   orderLineCosts: number;
   orderLineLinks: number;
   orderCargoDesis: number;
+  cargoShipments: number;
   platformOrderFinancials: number;
   manualOrders: number;
   costTemplates: number;
@@ -741,6 +768,7 @@ async function runImport(data: ImportPayload, emit: Emit, options: { oldBackup: 
     orderLineCosts: 0,
     orderLineLinks: 0,
     orderCargoDesis: 0,
+    cargoShipments: 0,
     platformOrderFinancials: 0,
     manualOrders: 0,
     costTemplates: 0,
@@ -1578,6 +1606,18 @@ async function runImport(data: ImportPayload, emit: Emit, options: { oldBackup: 
     }),
   });
   stats.orderCargoDesis = jobs[jobs.length - 1].stmts.length;
+
+  // Uygulamadan açılan kargo gönderileri (barkod başına tek kayıt).
+  jobs.push({
+    label: "Kargo gönderileri",
+    statKey: "cargoShipments",
+    stmts: data.cargoShipments.map((row) => {
+      // Tabloda "updatedAt" yok (zamanlar epoch-ms kolonlarında) → touched() kullanılmaz.
+      const update = columnsFrom("CargoShipment", row, ["id", "barcode"]);
+      return upsert("CargoShipment", ["barcode"], { id: row.id, barcode: row.barcode, ...update }, update);
+    }),
+  });
+  stats.cargoShipments = jobs[jobs.length - 1].stmts.length;
 
   // ── Yazım: 500'lük gruplar, tek istek; başarısızsa satır satır güvenli yol ─
   const total = jobs.reduce((sum, job) => sum + job.stmts.length, 0);

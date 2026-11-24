@@ -329,7 +329,7 @@ export function EtiketSecimKutusu({ siparis }: { siparis: EtiketSiparisi }) {
 export function EtiketBasildiIsareti({ siparis }: { siparis: EtiketSiparisi }) {
   const e = useEtiket();
   const takipNo = etiketAnahtari(siparis) ?? "";
-  if (!e || (siparis.platform !== "trendyol" && siparis.platform !== "hepsiburada") || !takipNo || !e.durum?.basilanlar[takipNo]) return null;
+  if (!e || !["trendyol", "hepsiburada", "shopify"].includes(siparis.platform) || !takipNo || !e.durum?.basilanlar[takipNo]) return null;
   return (
     <span
       className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/12 px-1.5 py-px text-[9px] font-semibold text-emerald-500 animate-in fade-in zoom-in-95 duration-300"

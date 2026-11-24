@@ -21,6 +21,8 @@ import Link from "next/link";
 import { thumbUrl } from "@/lib/image";
 import { fetchJson } from "@/lib/fetch-json";
 import { KargoDesiDuzenle } from "@/components/orders/KargoDesiDuzenle";
+import { KargoDurumRozeti, KargoPaneli, kargoyuSipariseEkle, useKargoGonderileri } from "@/components/kargo/KargoPaneli";
+import type { KargoGonderiOzeti } from "@/core/kargo-gonderisi";
 import { ozetDonemEtiketi } from "@/lib/ozet-donemi";
 import { formatRelativeTime } from "@/lib/format";
 import {
@@ -209,6 +211,9 @@ interface UnifiedOrder {
   cargoProvider: string | null;
   /** Hepsiburada paket numarası (paketlendiyse) — kargo etiketi için. */
   packageNumber?: string | null;
+  /** Shopify: uygulamadan açılan HepsiJet gönderisi (ayrı uçtan, canlı — `kargoyuSipariseEkle`). */
+  hepsijetBarkodu?: string | null;
+  kargoGonderisi?: KargoGonderiOzeti | null;
   /** Mikro ihracat (Trendyol) — müşterinin ülkesi; satış KDV'siz hesaplanır. */
   microExport?: { ulke: string | null } | null;
   /** Kalem/tutar bilgisi platformdan alınamadı → üstteki toplamlara girmez. */
@@ -707,7 +712,12 @@ export default function OrdersPage() {
     });
   };
 
-  const orders = useMemo(() => data?.orders ?? [], [data]);
+  // Kargo durumu sipariş listesinden ayrı ve sık tazelenir (liste önbellekli, kargo canlı).
+  const kargoGonderileri = useKargoGonderileri(Boolean(data?.orders?.some((o) => o.platform === "shopify")));
+  const orders = useMemo(
+    () => (data?.orders ?? []).map((o) => kargoyuSipariseEkle(o, kargoGonderileri)),
+    [data, kargoGonderileri]
+  );
   const summary = data?.summary;
   const dakikaDamgasi = useDakika();
 
@@ -2481,6 +2491,7 @@ const OrderRow = memo(function OrderRow({
               <span className="font-semibold text-sm tabular-nums">{order.orderNumber}</span>
               <span className="text-[11px] text-muted-foreground">{fmtDate(order.date)}</span>
               <EtiketBasildiIsareti siparis={order} />
+              <KargoDurumRozeti gonderi={order.kargoGonderisi} />
               {order.microExport && (
                 <span
                   className="inline-flex items-center gap-1 rounded-full bg-sky-500/12 px-1.5 py-px text-[9px] font-semibold text-sky-500 animate-in fade-in zoom-in-95 duration-300"
@@ -2792,6 +2803,7 @@ const OrderRow = memo(function OrderRow({
                   <div className="text-muted-foreground">Takip numarası yok</div>
                 )}
                 <EtiketYazdirDugmesi siparis={order} />
+                {order.platform === "shopify" && <KargoPaneli siparis={order} />}
                 <div className="flex items-center justify-between pt-1.5 border-t border-border/40">
                   <span className="text-muted-foreground">Ciro</span>
                   <span

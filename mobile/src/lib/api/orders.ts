@@ -13,7 +13,9 @@ import {
   type TyGecikmeSonucu,
 } from "@core/trendyol-gecikme";
 import { kusurluIadeleriFaturalarlaEsle, type TyKusurluIade, type TyKusurluSonucu } from "@core/trendyol-kusurlu";
+import type { KargoGonderiOzeti } from "@core/kargo-gonderisi";
 import { query } from "@/lib/turso";
+import { kargoGonderileriOku } from "@/lib/db/kargo-gonderileri";
 
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
@@ -90,6 +92,9 @@ export interface UnifiedOrder {
   cargoProvider?: string | null;
   /** Hepsiburada paket numarası (paketlendiyse) — HB kargo etiketi bununla basılır. */
   packageNumber?: string | null;
+  /** Shopify: masaüstünden açılan HepsiJet gönderisi (barkod = etiket anahtarı). */
+  hepsijetBarkodu?: string | null;
+  kargoGonderisi?: KargoGonderiOzeti | null;
   /** Kargo tarifesinin fiyat seçtiği bilgiler (firma, hızlı teslimat, süre) — masaüstüyle aynı çekirdek. */
   kargo?: KargoBaglami | null;
   /** Trendyol termin gecikmesi (@core/trendyol-gecikme). */
@@ -120,16 +125,20 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
     historyDays === 30
       ? orderWindowCutoff()
       : (Math.floor(Date.now() / 86_400_000) - historyDays) * 86_400_000;
-  const [sh, ty, hb, manual] = await Promise.allSettled([
+  const [sh, ty, hb, manual, kargolar] = await Promise.allSettled([
     getShopifyOrders(100, historyDays),
     getTrendyolOrders(historyDays),
     getHepsiburadaOrders(historyDays, hbKayittaAciklar),
     getManualOrdersSince(cutoff),
+    kargoGonderileriOku(),
   ]);
   const orders: UnifiedOrder[] = [];
   const errors: string[] = [];
 
-  if (sh.status === "fulfilled") orders.push(...sh.value);
+  // HepsiJet gönderisi Shopify siparişine işlenir (masaüstü `kargoyuSipariseEkle` ile aynı):
+  // etiket anahtarı barkod; Shopify'da henüz takip yoksa takip no + firma.
+  const gonderiler = kargolar.status === "fulfilled" ? kargolar.value : {};
+  if (sh.status === "fulfilled") orders.push(...sh.value.map((o) => kargoyuIsle(o, gonderiler)));
   else errors.push(`Shopify: ${sh.reason?.message ?? sh.reason}`);
   if (ty.status === "fulfilled") orders.push(...ty.value);
   else errors.push(`Trendyol: ${ty.reason?.message ?? ty.reason}`);
@@ -151,6 +160,19 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   recent.sort((a, b) => (b.date ?? 0) - (a.date ?? 0));
   await gecikmeleriEsle(orders);
   return { orders: recent, errors };
+}
+
+function kargoyuIsle(o: UnifiedOrder, gonderiler: Record<string, KargoGonderiOzeti>): UnifiedOrder {
+  const g = gonderiler[o.id];
+  if (!g) return o;
+  const gecerli = g.durum !== "iptal";
+  return {
+    ...o,
+    kargoGonderisi: g,
+    hepsijetBarkodu: gecerli ? g.barkod : null,
+    trackingNumber: o.trackingNumber ?? (gecerli ? g.barkod : null),
+    cargoProvider: o.cargoProvider ?? (gecerli ? "HepsiJet" : null),
+  };
 }
 
 /** Finans geçmişinde AÇIK görünen HB sipariş numaraları (HB listelerinin döndürmediği yedek için). */

@@ -242,6 +242,62 @@ export class HepsijetClient {
     const q = new URLSearchParams({ startDate: bas, endDate: bit, deliveryType: "RETURNED", city: il, town: ilce });
     return this.getir(`/delivery/findAvailableDeliveryDatesV2?${q.toString()}`);
   }
+
+  /**
+   * Takip (`/deliveryTransaction/getDeliveryTracking` — dokümanda adres yazmıyor, test ortamında
+   * 24 Kas 2026 bulundu). Kurye almamış gönderi yanıtta hiç yer almaz. Çözümü:
+   * `core/kargo-gonderisi#hepsijetTakipCoz`.
+   */
+  async takip(barkodlar: string[]): Promise<unknown> {
+    if (barkodlar.length === 0) return { status: "OK", data: [] };
+    const { durum, govde } = await this.postla("/deliveryTransaction/getDeliveryTracking", {
+      deliveries: barkodlar.map((customerDeliveryNo) => ({ customerDeliveryNo })),
+    });
+    if (durum >= 400) throw new HepsijetHatasi("HepsiJet takip bilgisi vermedi. Biraz sonra tekrar dene.");
+    return govde;
+  }
+
+  /** Gönderinin termal etiketi (ZPL) — kayıp kopya için yeniden alınır. */
+  async etiketZpl(barkod: string): Promise<string | null> {
+    const govde = await this.getir(`/delivery/generateZplBarcode/${encodeURIComponent(barkod)}/1`);
+    return zplBul(govde);
+  }
+
+  /** Kurye almadan önce gönderiyi siler. HepsiJet'in yanıtı olduğu gibi döner. */
+  async gonderiSil(barkod: string): Promise<{ durum: number; govde: unknown }> {
+    return this.postla(`/delivery/deleteDeliveryOrder/${encodeURIComponent(barkod)}`, { deleteReason: "IPTAL" });
+  }
+}
+
+/** Yanıttaki ilk ZPL etiketi (`data.zplBarcodeDTOList[]` ya da `data[]` içindeki `zplBarcode`). */
+export function zplBul(govde: unknown): string | null {
+  const ara = (v: unknown, derinlik: number): string | null => {
+    if (derinlik > 5 || v == null) return null;
+    if (Array.isArray(v)) {
+      for (const x of v) {
+        const z = ara(x, derinlik + 1);
+        if (z) return z;
+      }
+      return null;
+    }
+    if (typeof v !== "object") return null;
+    const o = v as Record<string, unknown>;
+    if (typeof o.zplBarcode === "string" && /\^XA[\s\S]*\^XZ/.test(o.zplBarcode)) return o.zplBarcode;
+    for (const k of Object.keys(o)) {
+      const z = ara(o[k], derinlik + 1);
+      if (z) return z;
+    }
+    return null;
+  };
+  return ara(govde, 0);
+}
+
+/** HepsiJet yanıtı "başarılı" mı (`status: "OK"`)? Değilse kullanıcıya gösterilebilir mesaj. */
+export function hepsijetSonucu(yanit: { durum: number; govde: unknown }): { ok: true } | { ok: false; mesaj: string } {
+  const g = (yanit.govde ?? {}) as { status?: unknown; message?: unknown };
+  if (yanit.durum < 400 && String(g.status ?? "").toUpperCase() === "OK") return { ok: true };
+  const mesaj = metin(g.message);
+  return { ok: false, mesaj: mesaj ? `HepsiJet: ${mesaj}` : "HepsiJet isteği kabul etmedi. Tekrar dene." };
 }
 
 /**

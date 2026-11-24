@@ -97,6 +97,8 @@ export interface ShopifyKargoBilgisi {
   /** Gönderim açılabilecek emirler (boşsa sipariş zaten gönderilmiş / iptal). */
   acikGonderimEmirleri: string[];
   gonderimler: { id: string; takipNo: string | null; teslimEdildi: boolean }[];
+  /** Kargo içeriği için kalemler (iade/çıkarılan adetler düşülmüş). */
+  kalemler: { ad: string; adet: number; sku: string | null }[];
 }
 
 /** Client ID/Secret tanımlı değilken fırlatılır — UI "kimlik bilgileri gerekli" gösterir. */
@@ -682,6 +684,7 @@ export class ShopifyClient {
           } | null;
           fulfillmentOrders: { nodes: Array<{ id: string; supportedActions: Array<{ action: string }> }> };
           fulfillments: Array<{ id: string; status: string | null; displayStatus: string | null; trackingInfo: Array<{ number: string | null }> | null }>;
+          lineItems?: { nodes: Array<{ title: string | null; quantity: number | null; currentQuantity?: number | null; sku: string | null }> };
         } | null;
       };
     }>(
@@ -691,6 +694,7 @@ export class ShopifyClient {
           shippingAddress { firstName lastName address1 address2 city province zip phone }
           fulfillmentOrders(first: 10) { nodes { id supportedActions { action } } }
           fulfillments(first: 10) { id status displayStatus trackingInfo { number } }
+          lineItems(first: 50) { nodes { title quantity${supportsCurrentQuantity(this.credentials.apiVersion) ? " currentQuantity" : ""} sku } }
         }
       }`,
       { id: siparisId }
@@ -718,6 +722,13 @@ export class ShopifyClient {
           takipNo: f.trackingInfo?.[0]?.number ?? null,
           teslimEdildi: f.displayStatus === "DELIVERED",
         })),
+      kalemler: (o.lineItems?.nodes ?? [])
+        .map((l) => ({
+          ad: (l.title ?? "").trim(),
+          adet: Math.max(0, Math.floor(Number(l.currentQuantity ?? l.quantity ?? 0))),
+          sku: l.sku?.trim() || null,
+        }))
+        .filter((l) => l.ad && l.adet > 0),
     };
   }
 

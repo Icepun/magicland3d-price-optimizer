@@ -5,7 +5,7 @@ import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
 import { hamYazdir, yaziciDurumu } from "@/lib/etiket/ham-yazici";
 import { trendyolEtiketiGetir } from "@/lib/etiket/trendyol-etiket";
 import { hbEtiketiGetir } from "@/lib/etiket/hb-etiket";
-import { basildiIsaretle, eskiKopyalariSupur, etiketleriBirlestir } from "@/lib/etiket/kayit";
+import { basildiIsaretle, eskiKopyalariSupur, etiketleriBirlestir, kopyaKaydet, kopyaOku } from "@/lib/etiket/kayit";
 import { KullaniciHatasi } from "@/lib/etiket/kullanici-hatasi";
 
 /**
@@ -77,6 +77,41 @@ export async function hbEtiketiBas(paketNo: string, takipNo: string | null): Pro
         ? error.message
         : error instanceof Error && /okunamad|eksik/i.test(error.message)
           ? "Hepsiburada bağlantısı kurulmamış."
+          : "Etiket basılamadı. Tekrar dene."
+    );
+  }
+}
+
+/**
+ * HepsiJet gönderi etiketi (ZPL, ~80×76 mm → 100×100 etikete olduğu gibi sığar). Gönderi açılırken
+ * gelen etiket yerel kopyada durur; yoksa (başka bilgisayar, 60 günden eski) HepsiJet'ten yeniden alınır.
+ */
+export async function hepsijetEtiketiBas(barkod: string): Promise<EtiketBaskisi> {
+  const yazici = await seciliYazici();
+  try {
+    let etiketler = kopyaOku(barkod);
+    let kaynak = "kopya";
+    if (!etiketler) {
+      const { HepsijetClient } = await import("@/services/hepsijet-client");
+      const { hepsijetKimligi } = await import("@/services/hepsijet-settings");
+      const zpl = await new HepsijetClient(await hepsijetKimligi()).etiketZpl(barkod);
+      if (!zpl) throw new KullaniciHatasi("HepsiJet bu gönderi için etiket vermedi.");
+      etiketler = [zpl];
+      kopyaKaydet(barkod, etiketler);
+      kaynak = "hepsijet";
+    }
+    await hamYazdir(yazici, etiketleriBirlestir(etiketler));
+    const basildi = basildiIsaretle(barkod);
+    eskiKopyalariSupur();
+    console.info(`[etiket] HepsiJet ${barkod} → ${yazici} (${kaynak})`);
+    return { anahtar: barkod, basildi, etiketSayisi: etiketler.length };
+  } catch (error) {
+    console.error(`[etiket] HepsiJet ${barkod} basılamadı:`, error);
+    throw new EtiketBasilamadi(
+      error instanceof KullaniciHatasi
+        ? error.message
+        : error instanceof Error && /girilmedi|okunamad|eksik/i.test(error.message)
+          ? "HepsiJet bağlantısı kurulmamış."
           : "Etiket basılamadı. Tekrar dene."
     );
   }

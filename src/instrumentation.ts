@@ -30,6 +30,14 @@ export async function register() {
       console.error("[instrumentation] etiket istekleri başlatılamadı:", e);
     }
 
+    // HepsiJet kargo takibi: durumları çeker, kurye alınca/teslimde Shopify'ı işaretler (yalnız canlı ortam).
+    try {
+      const { startKargoTakibi } = await import("./lib/kargo/kargo-takip");
+      startKargoTakibi();
+    } catch (e) {
+      console.error("[instrumentation] kargo takibi başlatılamadı:", e);
+    }
+
     // Ağır sayfaların (Raporlar, Panel, Ürünler) sunucu önbelleği boşsa açılıştan kısa süre sonra
     // sırayla doldurulur — güncellemeden sonraki ilk ziyaret 4 sn beklemesin.
     try {

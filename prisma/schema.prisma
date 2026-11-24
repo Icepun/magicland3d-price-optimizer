@@ -777,6 +777,41 @@ model LabelPrintRequest {
   @@index([labelKey])
 }
 
+/// Uygulamadan açılan kargo gönderisi (HepsiJet, Shopify siparişleri için). Müşterinin adı/adresi
+/// burada TUTULMAZ; etiket (ZPL) yerel kopyada ya da HepsiJet'ten yeniden alınır.
+model CargoShipment {
+  id                   String  @id
+  platform             String
+  /// Kanonik sipariş kimliği (Shopify'da "sh-<no>").
+  externalOrderId      String
+  orderNumber          String
+  /// hepsijet
+  carrier              String
+  /// test | prod — test gönderisi Shopify'a hiç yazılmaz.
+  environment          String
+  /// STD | RETURNED
+  kind                 String  @default("STD")
+  barcode              String  @unique
+  /// olusturuldu | yolda | dagitimda | teslim | sorun | iade | iptal (`@/core/kargo-gonderisi`)
+  status               String  @default("olusturuldu")
+  statusText           String?
+  carrierStatus        String?
+  lastEventAtMs        Float?
+  lastCheckedAtMs      Float?
+  shopifyFulfillmentId String?
+  shopifyShippedAtMs   Float?
+  shopifyDeliveredAtMs Float?
+  shopifyError         String?
+  createdAtMs          Float
+  updatedAtMs          Float
+  cancelledAtMs        Float?
+  /// [{an, metin, durum}] — HepsiJet hareket geçmişi.
+  eventsJson           String?
+
+  @@index([platform, externalOrderId])
+  @@index([status])
+}
+
 model PrinterStatusSample {
   printerConfigId String
   /** Dilim başlangıcı — epoch-ms, 5 dakikanın katı. */
