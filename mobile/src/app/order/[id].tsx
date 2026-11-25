@@ -197,7 +197,7 @@ export default function OrderDetailScreen() {
               value={margin ?? 0}
               size={84}
               stroke={9}
-              color={margin == null ? color.textFaint : margin < 0 ? color.bad : margin < 0.2 ? color.warn : color.good}
+              color={margin == null ? color.textFaint : margin < 0 ? color.bad : margin < 0.2 ? color.caution : color.good}
             >
               <Txt v="smallStrong" num>
                 {margin == null ? "—" : formatPercent(margin, 0)}

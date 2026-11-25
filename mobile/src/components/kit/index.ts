@@ -1,12 +1,13 @@
 /**
- * ARAYÜZ KİTİ — yeni tasarım dilinin (koyu cam + Magicland moru) tek giriş noktası.
+ * ARAYÜZ KİTİ — masaüstüyle aynı tasarım dilinin tek giriş noktası.
  * Yeni/dokunulan her ekran yalnız buradan beslenir; `components/ui` ve `theme/colors` (ML) eski dil.
  */
 export { Backdrop } from "./Backdrop";
 export { Bars } from "./Bars";
 export { Button } from "./Button";
 export { Chip, Pill } from "./Chip";
-export { Glass, Tint } from "./Glass";
+export { Bolum, Glass, IkonKutusu, Tint } from "./Glass";
+export { BolumEtiketi, CubukSatiri, DegerSatiri, NotSatiri, StatKutu } from "./Parcalar";
 export { Bell, Header, MenuButton } from "./Header";
 export { CornerArrow, IconButton } from "./IconButton";
 export { Input, SearchInput } from "./Input";

@@ -35,14 +35,15 @@ export const ORDER_PLATFORM_SHORT_LABEL: Record<OrderPlatform, string> = {
   manual: "Manuel",
 };
 
-/** Marka renkleri (UI rozet/kart). */
+/** Marka renkleri (UI rozet/kart) — masaüstüyle AYNI (`PLATFORM_RENGI`): Trendyol HER YERDE turuncu,
+ * Hepsiburada Magicland mavisi (iki turuncu yan yana karışıyordu), Shopify zümrüt. */
 export const PLATFORM_COLOR: Record<Platform, string> = {
-  shopify: "#4FBF67", // yeşil (ML teması ile birebir)
-  trendyol: "#F27A1A", // turuncu
-  hepsiburada: "#FF6000", // HB turuncu
+  shopify: "#34D399",
+  trendyol: "#F27A1A",
+  hepsiburada: "#4F8CFF",
 };
 
 export const ORDER_PLATFORM_COLOR: Record<OrderPlatform, string> = {
   ...PLATFORM_COLOR,
-  manual: "#A78BFA",
+  manual: "#C9D2F2",
 };

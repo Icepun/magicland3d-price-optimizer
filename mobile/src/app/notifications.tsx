@@ -139,7 +139,7 @@ function fmtAgo(ts: number): string {
 function AlertRow({ alert, onAck }: { alert: AppAlert; onAck: () => void }) {
   const crit = alert.severity === "critical";
   const ok = alert.severity === "success";
-  const renk = crit ? color.bad : ok ? color.good : color.warn;
+  const renk = crit ? color.bad : ok ? color.good : color.caution;
   // Kalıcı bildirimlerde tür masaüstünden geliyor; başlık "Filament/makara" diyorsa makara ikonu.
   const filament = alert.type === "filament" || /filament|makara/i.test(alert.title);
   const icon: SymbolViewProps["name"] = filament

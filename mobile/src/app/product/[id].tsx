@@ -10,6 +10,8 @@ import { Pill } from "@/components/kit/Chip";
 import {
   Button,
   Count,
+  Bolum,
+  BolumEtiketi,
   ErrorState,
   FadeInView,
   Glass,
@@ -223,10 +225,8 @@ export default function ProductDetailScreen() {
       {/* Varyant grubu */}
       {variantGroup && variantGroup.members.length > 1 ? (
         <FadeInView index={1}>
-          <Tint strong padded={false} style={styles.section}>
-            <Txt v="label" tone="faint" style={styles.kicker}>
-              VARYANT GRUBU · {variantGroup.name.toLocaleUpperCase("tr-TR")}
-            </Txt>
+          <Bolum title="Varyant grubu" desc={variantGroup.name} icon="square.stack.3d.up.fill">
+            <View>
             {variantGroup.members.map((m) => {
               const isCurrent = m.id === product.id;
               return (
@@ -258,19 +258,18 @@ export default function ProductDetailScreen() {
                 </Pressable>
               );
             })}
-          </Tint>
+            </View>
+          </Bolum>
         </FadeInView>
       ) : null}
 
       {/* Stok */}
       <FadeInView index={2}>
-        <Glass>
-          <View style={styles.rowBetween}>
-            <Txt v="label" tone="faint" style={styles.kicker}>
-              STOK
-            </Txt>
-            {product.madeToOrder ? <Pill color={color.manual}>Siparişle üretilir</Pill> : null}
-          </View>
+        <Bolum
+          title="Stok"
+          icon="archivebox.fill"
+          right={product.madeToOrder ? <Pill color={color.lavender}>Siparişle üretilir</Pill> : null}
+        >
           <View style={styles.stockRow}>
             <IconButton
               icon="minus"
@@ -287,7 +286,7 @@ export default function ProductDetailScreen() {
             </View>
             <IconButton icon="plus" size={56} accent onPress={() => stockMutation.mutate(1)} accessibilityLabel="Stoğu bir artır" />
           </View>
-        </Glass>
+        </Bolum>
       </FadeInView>
 
       {/* Maliyet */}
@@ -304,27 +303,25 @@ export default function ProductDetailScreen() {
             <ShimmerCard height={120} />
           )
         ) : profit?.hasCost ? (
-          <Tint strong style={styles.section}>
-            <View style={styles.rowBetween}>
-              <Txt v="label" tone="faint" style={styles.kicker}>
-                MALİYET
-              </Txt>
-              <Button label="Düzenle" icon="pencil" size="sm" variant="secondary" onPress={() => router.push(`/edit-cost/${product.id}`)} />
+          <Bolum
+            title="Maliyet"
+            icon="tag.fill"
+            right={<Button label="Düzenle" icon="pencil" size="sm" variant="secondary" onPress={() => router.push(`/edit-cost/${product.id}`)} />}
+          >
+            <View style={styles.icerik}>
+              <Satir label="Üretim" value={formatCurrency(profit.productionCost)} />
+              <Satir label="Paketleme" value={formatCurrency(profit.packagingCost)} />
+              <View style={styles.divider} />
+              <Satir label="Toplam maliyet" value={formatCurrency(profit.totalCost)} bold />
             </View>
-            <Satir label="Üretim" value={formatCurrency(profit.productionCost)} />
-            <Satir label="Paketleme" value={formatCurrency(profit.packagingCost)} />
-            <View style={styles.divider} />
-            <Satir label="Toplam maliyet" value={formatCurrency(profit.totalCost)} bold />
-          </Tint>
+          </Bolum>
         ) : (
           <Button label="Maliyet ekle" icon="plus" onPress={() => router.push(`/edit-cost/${product.id}`)} />
         )}
       </FadeInView>
 
       {/* Platform kâr / zarar */}
-      <Txt v="label" tone="faint" style={styles.sectionTitle}>
-        PLATFORM KÂR / ZARAR
-      </Txt>
+      <BolumEtiketi>Platformlarda kâr</BolumEtiketi>
       {!kurallarHazir ? null : profit?.hasCost && profit.platforms.length > 0 ? (
         profit.platforms.map((p, i) => (
           <FadeInView key={p.listingId} index={i + 4}>
@@ -342,9 +339,7 @@ export default function ProductDetailScreen() {
       {/* Fiyat laboratuvarı */}
       {priceLab?.hasCost ? (
         <>
-          <Txt v="label" tone="faint" style={styles.sectionTitle}>
-            FİYAT LABORATUVARI
-          </Txt>
+          <BolumEtiketi>Fiyat laboratuvarı</BolumEtiketi>
           {priceLab.targets.map((t) => {
             const marka = PLATFORM_COLOR[t.platform];
             return (
@@ -385,10 +380,8 @@ export default function ProductDetailScreen() {
             );
           })}
           {priceLab.campaign ? (
-            <Tint strong style={styles.section}>
-              <Txt v="label" tone="faint" style={styles.kicker}>
-                SHOPIFY KAMPANYA SİMÜLATÖRÜ
-              </Txt>
+            <Bolum title="Shopify kampanya simülatörü" desc="İndirimde kâr ne olur" icon="percent">
+              <View style={styles.icerik}>
               <View style={styles.campHead}>
                 <Txt v="label" tone="faint" style={{ flex: 1 }}>
                   İndirim
@@ -422,7 +415,8 @@ export default function ProductDetailScreen() {
               <Txt v="small" tone="faint">
                 Kırmızı satır = o indirimde zarara geçiyorsun
               </Txt>
-            </Tint>
+              </View>
+            </Bolum>
           ) : null}
         </>
       ) : null}
@@ -430,10 +424,7 @@ export default function ProductDetailScreen() {
       {/* Fiyat geçmişi */}
       {priceHistory && priceHistory.length > 0 ? (
         <>
-          <Txt v="label" tone="faint" style={styles.sectionTitle}>
-            FİYAT GEÇMİŞİ
-          </Txt>
-          <Tint strong padded={false} style={styles.section}>
+          <Bolum title="Fiyat geçmişi" desc="Son fiyat değişiklikleri" icon="clock.arrow.circlepath">
             {priceHistory.map((h: PriceChange, i) => (
               <View key={h.id} style={[styles.histRow, i > 0 ? styles.histBorder : null]}>
                 <View style={{ flex: 1 }}>
@@ -449,7 +440,7 @@ export default function ProductDetailScreen() {
                 </Txt>
               </View>
             ))}
-          </Tint>
+          </Bolum>
         </>
       ) : null}
 
@@ -494,7 +485,7 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
         <Txt v="heading" style={{ color: marka, flex: 1 }} numberOfLines={1}>
           {PLATFORM_LABEL[p.platform]}
         </Txt>
-        {p.minOrderQty > 1 ? <Pill color={color.warn}>×{p.minOrderQty} sipariş</Pill> : null}
+        {p.minOrderQty > 1 ? <Pill color={color.caution}>×{p.minOrderQty} sipariş</Pill> : null}
         <Money value={p.salePrice} v="heading" />
       </View>
 
@@ -507,7 +498,7 @@ function PlatformCard({ p }: { p: PlatformProfit }) {
           <Money value={r.netProfit} v="title" tone={loss ? "bad" : "good"} />
         </View>
         <View style={{ alignItems: "center", gap: 2 }}>
-          <Ring value={marj} size={64} stroke={7} color={loss ? color.bad : marj < 0.2 ? color.warn : color.good}>
+          <Ring value={marj} size={64} stroke={7} color={loss ? color.bad : marj < 0.2 ? color.caution : color.good}>
             <Txt v="label" num>
               {formatPercent(marj, 0)}
             </Txt>
@@ -580,6 +571,7 @@ const styles = StyleSheet.create({
   thumb: { width: 72, height: 72, borderRadius: radius.md, backgroundColor: color.tintStrong },
   thumbEmpty: { alignItems: "center", justifyContent: "center" },
   section: { gap: 6, padding: space.lg },
+  icerik: { gap: 6 },
   sectionTitle: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
   kicker: { letterSpacing: 1 },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },

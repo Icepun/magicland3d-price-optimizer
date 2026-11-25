@@ -4,12 +4,11 @@ import {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import { BlurView } from "expo-blur";
 import { forwardRef, useCallback, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { blur, color, radius, space } from "@/theme/tokens";
+import { color, radius, space } from "@/theme/tokens";
 
 /**
  * ALTTAN AÇILAN SAYFA — filtreler, eylem menüleri, kısa formlar.
@@ -53,8 +52,7 @@ export const Sheet = forwardRef<
 function SheetBackground() {
   return (
     <View style={styles.bg}>
-      <BlurView intensity={blur.sheet} tint="dark" style={StyleSheet.absoluteFill} />
-      <View style={[StyleSheet.absoluteFill, { backgroundColor: color.glassStrong }]} />
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: color.card }]} />
     </View>
   );
 }

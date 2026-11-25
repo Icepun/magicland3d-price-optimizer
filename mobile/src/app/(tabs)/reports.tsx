@@ -3,18 +3,19 @@ import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View, type LayoutChangeEvent } from "react-native";
 import Svg, { G, Rect } from "react-native-svg";
 
-import { Pill } from "@/components/kit/Chip";
 import {
   Bars,
+  Bolum,
   Count,
+  CubukSatiri,
   FadeInView,
-  Glass,
   Header,
   Money,
   Progress,
   Screen,
   Shimmer,
   ShimmerCard,
+  StatKutu,
   Tint,
   Txt,
 } from "@/components/kit";
@@ -187,7 +188,7 @@ export default function ReportsScreen() {
     };
   }, [products, rules, settings]);
 
-  const header = <Header title="Raporlar" subtitle="Bu ay · tüm satışlar" updatedAt={ordersUpdatedAt} />;
+  const header = <Header title="Raporlar" icon="chart.bar.fill" subtitle="Bu ay · tüm satışlar" updatedAt={ordersUpdatedAt} />;
 
   if (isLoading) {
     return (
@@ -221,32 +222,20 @@ export default function ReportsScreen() {
       {/* ÖZET */}
       <FadeInView index={0}>
         <View style={styles.grid}>
-          <Tint strong style={styles.stat}>
-            <Txt v="small" tone="dim">
-              Ciro
-            </Txt>
+          <StatKutu icon="turkishlirasign.circle.fill" label="Ciro">
             <Money value={rev.total} v="heading" compact />
-          </Tint>
-          <Tint strong style={styles.stat}>
-            <Txt v="small" tone="dim">
-              Sipariş kârı
-            </Txt>
+          </StatKutu>
+          <StatKutu icon="chart.line.uptrend.xyaxis" label="Sipariş kârı">
             <Money value={rev.profit} v="heading" tone={rev.profit < 0 ? "bad" : "good"} compact />
-          </Tint>
+          </StatKutu>
         </View>
         <View style={[styles.grid, { marginTop: space.sm }]}>
-          <Tint strong style={styles.stat}>
-            <Txt v="small" tone="dim">
-              Sipariş
-            </Txt>
+          <StatKutu icon="bag.fill" label="Sipariş">
             <Count value={rev.count} v="heading" />
-          </Tint>
-          <Tint strong style={styles.stat}>
-            <Txt v="small" tone="dim">
-              Ortalama sepet
-            </Txt>
+          </StatKutu>
+          <StatKutu icon="cart.fill" label="Ortalama sepet">
             <Money value={avgBasket} v="heading" compact />
-          </Tint>
+          </StatKutu>
         </View>
       </FadeInView>
       {rev.unsupportedCurrencyOrders > 0 ? (
@@ -257,207 +246,194 @@ export default function ReportsScreen() {
       ) : null}
 
       {/* AYLIK CİRO VE NET KÂR */}
-      <Txt v="label" tone="faint" style={styles.section}>
-        AYLIK CİRO VE NET KÂR
-      </Txt>
       <FadeInView index={1}>
-        <Glass style={{ gap: space.md }}>
-          {monthlyQuery.isLoading ? (
-            <View style={{ gap: space.md }}>
-              <Shimmer width="100%" height={120} radius={radius.sm} />
-              <Shimmer width="60%" height={12} delay={80} />
-            </View>
-          ) : monthlyQuery.error ? (
-            <Uyari>Aylık özet şu an yüklenemedi.</Uyari>
-          ) : !monthlyHasData ? (
-            <Txt v="small" tone="faint">
-              Siparişler yüklendikçe aylık geçmiş burada birikecek.
-            </Txt>
-          ) : (
-            <>
-              <View style={styles.legend}>
-                <View style={[styles.legendDot, { backgroundColor: color.accent }]} />
-                <Txt v="label" tone="dim">
-                  Ciro
-                </Txt>
-                <View style={[styles.legendDot, { backgroundColor: color.good, marginLeft: space.sm }]} />
-                <Txt v="label" tone="dim">
-                  Net kâr
-                </Txt>
-                <View style={[styles.legendDot, { backgroundColor: color.bad, marginLeft: space.sm }]} />
-                <Txt v="label" tone="dim">
-                  Zarar
-                </Txt>
+        <Bolum title="Aylık ciro ve net kâr" desc="Son aylar" icon="chart.bar.fill">
+          <View style={{ gap: space.md }}>
+            {monthlyQuery.isLoading ? (
+              <View style={{ gap: space.md }}>
+                <Shimmer width="100%" height={120} radius={radius.sm} />
+                <Shimmer width="60%" height={12} delay={80} />
               </View>
-              <AylikGrafik
-                data={monthly.map((p) => ({
-                  label: p.label,
-                  revenue: p.revenueKurus / 100,
-                  profit: p.netProfitKurus / 100,
-                }))}
-              />
-              {currentMonth && (currentMonth.revenueKurus !== 0 || currentMonth.expensesKurus !== 0) ? (
-                <View style={styles.rowBetween}>
-                  <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                    <Txt v="small" tone="dim">
-                      Bu ay gider
-                    </Txt>
-                    <Money value={currentMonth.expensesKurus / 100} v="smallStrong" compact />
-                  </View>
-                  <View style={{ flexDirection: "row", alignItems: "baseline", gap: 6 }}>
-                    <Txt v="small" tone="dim">
-                      Net
-                    </Txt>
-                    <Money
-                      value={currentMonth.netProfitKurus / 100}
-                      v="bodyStrong"
-                      tone={currentMonth.netProfitKurus < 0 ? "bad" : "good"}
-                      compact
-                    />
-                  </View>
+            ) : monthlyQuery.error ? (
+              <Uyari>Aylık özet şu an yüklenemedi.</Uyari>
+            ) : !monthlyHasData ? (
+              <Txt v="small" tone="faint">
+                Siparişler yüklendikçe aylık geçmiş burada birikecek.
+              </Txt>
+            ) : (
+              <>
+                <AylikGrafik
+                  data={monthly.map((p) => ({
+                    label: p.label,
+                    revenue: p.revenueKurus / 100,
+                    profit: p.netProfitKurus / 100,
+                  }))}
+                />
+                <View style={styles.legend}>
+                  <View style={[styles.legendDot, { backgroundColor: CIRO_RENGI }]} />
+                  <Txt v="label" tone="dim">
+                    Ciro
+                  </Txt>
+                  <View style={[styles.legendDot, { backgroundColor: color.good, marginLeft: space.sm }]} />
+                  <Txt v="label" tone="dim">
+                    Net kâr
+                  </Txt>
+                  <View style={[styles.legendDot, { backgroundColor: color.bad, marginLeft: space.sm }]} />
+                  <Txt v="label" tone="dim">
+                    Zarar
+                  </Txt>
                 </View>
-              ) : null}
-            </>
-          )}
-          {monthlyQuery.data?.historyStartedAt ? (
-            <Txt v="small" tone="faint">
-              Geçmiş {formatMonthYear(monthlyQuery.data.historyStartedAt)} ayından beri birikiyor.
-            </Txt>
-          ) : null}
-          {monthlyIncomplete > 0 ? <Uyari>{monthlyIncomplete} siparişin kârı henüz kesinleşmedi.</Uyari> : null}
-          {unsupportedCurrencyOrders > 0 ? (
-            <Uyari>{unsupportedCurrencyOrders} sipariş farklı para biriminde — aylık toplama katılmadı.</Uyari>
-          ) : null}
-          {snapshotError ? <Uyari>{snapshotError}</Uyari> : null}
-        </Glass>
+                {currentMonth && (currentMonth.revenueKurus !== 0 || currentMonth.expensesKurus !== 0) ? (
+                  <Tint style={styles.buAy}>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Txt v="small" tone="faint">
+                        Bu ay gider
+                      </Txt>
+                      <Money value={currentMonth.expensesKurus / 100} v="bodyStrong" compact />
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Txt v="small" tone="faint">
+                        Net
+                      </Txt>
+                      <Money
+                        value={currentMonth.netProfitKurus / 100}
+                        v="bodyStrong"
+                        tone={currentMonth.netProfitKurus < 0 ? "bad" : "good"}
+                        compact
+                      />
+                    </View>
+                  </Tint>
+                ) : null}
+              </>
+            )}
+            {monthlyQuery.data?.historyStartedAt ? (
+              <Txt v="small" tone="faint">
+                Geçmiş {formatMonthYear(monthlyQuery.data.historyStartedAt)} ayından beri birikiyor.
+              </Txt>
+            ) : null}
+            {monthlyIncomplete > 0 ? <Uyari>{monthlyIncomplete} siparişin kârı henüz kesinleşmedi.</Uyari> : null}
+            {unsupportedCurrencyOrders > 0 ? (
+              <Uyari>{unsupportedCurrencyOrders} sipariş farklı para biriminde — aylık toplama katılmadı.</Uyari>
+            ) : null}
+            {snapshotError ? <Uyari>{snapshotError}</Uyari> : null}
+          </View>
+        </Bolum>
       </FadeInView>
 
       {/* PLATFORM */}
-      <Txt v="label" tone="faint" style={styles.section}>
-        PLATFORM PAYI
-      </Txt>
       <FadeInView index={2}>
-        <Tint strong style={{ gap: space.md }}>
-          {ORDER_PLATFORMS.map((plat) => {
-            const b = rev.byPlat[plat];
-            return (
-              <View key={plat} style={{ gap: 6 }}>
-                <View style={styles.rowBetween}>
-                  <View style={styles.rowGap}>
-                    <View style={[styles.legendDot, { backgroundColor: ORDER_PLATFORM_COLOR[plat] }]} />
-                    <Txt v="bodyStrong">{ORDER_PLATFORM_LABEL[plat]}</Txt>
-                    {b.n > 0 ? (
-                      <Txt v="small" tone="faint" num>
-                        {formatNumber(b.n)} sipariş
-                      </Txt>
-                    ) : null}
+        <Bolum title="Platform payı" desc="Bu ay ciro ve kâr" icon="storefront.fill">
+          <View style={{ gap: space.md }}>
+            {ORDER_PLATFORMS.map((plat) => {
+              const b = rev.byPlat[plat];
+              return (
+                <View key={plat} style={{ gap: 4 }}>
+                  <CubukSatiri
+                    renk={ORDER_PLATFORM_COLOR[plat]}
+                    label={ORDER_PLATFORM_LABEL[plat]}
+                    meta={b.n > 0 ? `${formatNumber(b.n)} sip.` : undefined}
+                    sag={<Money value={b.rev} v="smallStrong" compact />}
+                    oran={b.rev / maxPlat}
+                  />
+                  <View style={[styles.rowGap, { alignSelf: "flex-end" }]}>
+                    <Txt v="label" tone="faint">
+                      Kâr
+                    </Txt>
+                    <Money value={b.profit} v="smallStrong" tone={b.profit < 0 ? "bad" : "good"} compact />
                   </View>
-                  <Money value={b.rev} v="bodyStrong" compact />
                 </View>
-                <Progress value={b.rev / maxPlat} color={ORDER_PLATFORM_COLOR[plat]} height={8} />
-                <View style={styles.rowBetween}>
-                  <Txt v="small" tone="faint">
-                    Kâr
-                  </Txt>
-                  <Money value={b.profit} v="smallStrong" tone={b.profit < 0 ? "bad" : "good"} compact />
-                </View>
-              </View>
-            );
-          })}
-        </Tint>
+              );
+            })}
+          </View>
+        </Bolum>
       </FadeInView>
 
       {/* BU AYIN GÜNLÜK CİROSU */}
       {gunlukVar ? (
-        <>
-          <Txt v="label" tone="faint" style={styles.section}>
-            BU AYIN GÜNLÜK CİROSU
-          </Txt>
-          <FadeInView index={3}>
-            <Glass style={{ gap: space.sm }}>
-              <Bars values={gunluk} height={72} emphasis={(i) => i >= gunluk.length - 7} />
-              <View style={styles.rowBetween}>
-                <Txt v="label" tone="faint">
-                  {"AYIN 1'İ"}
-                </Txt>
-                <Txt v="label" tone="faint">
-                  SON 7 GÜN
-                </Txt>
-              </View>
-            </Glass>
-          </FadeInView>
-        </>
+        <FadeInView index={3}>
+          <Bolum title="Bu ayın günlük cirosu" desc="Son 7 gün vurgulu" icon="calendar">
+            <Bars values={gunluk} height={72} emphasis={(i) => i >= gunluk.length - 7} />
+            <View style={[styles.rowBetween, { marginTop: space.xs }]}>
+              <Txt v="label" tone="faint">
+                {"AYIN 1'İ"}
+              </Txt>
+              <Txt v="label" tone="faint">
+                SON 7 GÜN
+              </Txt>
+            </View>
+          </Bolum>
+        </FadeInView>
       ) : null}
 
       {/* EN ÇOK SATANLAR */}
       {topSellers.length > 0 ? (
-        <>
-          <Txt v="label" tone="faint" style={styles.section}>
-            EN ÇOK SATANLAR
-          </Txt>
-          <FadeInView index={4}>
-            <Tint strong style={{ gap: space.md }}>
-              {topSellers.map((s) => (
+        <FadeInView index={4}>
+          <Bolum title="En çok satanlar" desc="Bu ay, adet" icon="trophy.fill">
+            <View style={{ gap: space.md }}>
+              {topSellers.map((s, i) => (
                 <View key={s.name} style={{ gap: 5 }}>
-                  <View style={styles.rowBetween}>
+                  <View style={styles.rowGap}>
+                    <View style={[styles.sira, i === 0 ? styles.siraIlk : null]}>
+                      <Txt v="label" tone={i === 0 ? "onAccent" : "faint"} num>
+                        {i + 1}
+                      </Txt>
+                    </View>
                     <Txt v="small" numberOfLines={1} style={{ flex: 1 }}>
                       {s.name}
                     </Txt>
                     <Count value={s.qty} v="smallStrong" />
                   </View>
-                  <Progress value={s.qty / maxQty} height={5} />
+                  <Progress value={s.qty / maxQty} height={4} />
                 </View>
               ))}
-            </Tint>
-          </FadeInView>
-        </>
+            </View>
+          </Bolum>
+        </FadeInView>
       ) : null}
 
       {/* KÂRLILIK */}
       {profitability.top.length > 0 ? (
-        <>
-          <Txt v="label" tone="faint" style={styles.section}>
-            EN KÂRLI ÜRÜNLER
-          </Txt>
-          <FadeInView index={5}>
-            <Tint strong padded={false} style={styles.listCard}>
+        <FadeInView index={5}>
+          <Bolum title="En kârlı ürünler" desc="Ürün başına net kâr" icon="dollarsign.circle.fill" padded={false}>
+            <View style={styles.listCard}>
               {profitability.top.map((p, i) => (
                 <View key={p.id} style={[styles.profitRow, i > 0 ? styles.rowBorder : null]}>
                   <Txt v="small" numberOfLines={1} style={{ flex: 1 }}>
                     {p.name}
                   </Txt>
-                  <Pill color={color.good}>+{formatCompactCurrency(p.profit)}</Pill>
+                  <Txt v="smallStrong" tone="good" num>
+                    +{formatCompactCurrency(p.profit)}
+                  </Txt>
                 </View>
               ))}
-            </Tint>
-          </FadeInView>
-        </>
+            </View>
+          </Bolum>
+        </FadeInView>
       ) : null}
       {profitability.loss.length > 0 ? (
-        <>
-          <Txt v="label" tone="bad" style={styles.section}>
-            ZARAR EDENLER
-          </Txt>
-          <FadeInView index={6}>
-            <Tint strong padded={false} style={styles.listCard}>
+        <FadeInView index={6}>
+          <Bolum title="Zarar edenler" desc="En az bir platformda zararda" icon="chart.line.downtrend.xyaxis" padded={false}>
+            <View style={styles.listCard}>
               {profitability.loss.map((p, i) => (
                 <View key={p.id} style={[styles.profitRow, i > 0 ? styles.rowBorder : null]}>
                   <Txt v="small" numberOfLines={1} style={{ flex: 1 }}>
                     {p.name}
                   </Txt>
-                  <Pill color={color.bad}>{formatCurrency(p.profit)}</Pill>
+                  <Txt v="smallStrong" tone="bad" num>
+                    {formatCurrency(p.profit)}
+                  </Txt>
                 </View>
               ))}
-            </Tint>
-          </FadeInView>
-        </>
+            </View>
+          </Bolum>
+        </FadeInView>
       ) : null}
     </Screen>
   );
 }
 
 /**
- * AYLIK GRAFİK — ay başına iki ince çubuk: ciro (mor) ve net kâr (yeşil, zararda kırmızı ve
+ * AYLIK GRAFİK — ay başına iki ince çubuk: ciro (soluk lavanta) ve net kâr (zümrüt, zararda gül ve
  * sıfır çizgisinin altına iner). Genişliği kendi ölçer; etiketler ay kısaltması.
  */
 function AylikGrafik({ data }: { data: { label: string; revenue: number; profit: number }[] }) {
@@ -493,7 +469,7 @@ function AylikGrafik({ data }: { data: { label: string; revenue: number; profit:
               const karH = kar >= 0 ? Math.max(kar > 0 ? 3 : 0, (kar / maxRev) * (posH - 4)) : Math.max(3, (-kar / Math.max(1, maxLoss)) * (negH - 4));
               return (
                 <G key={d.label}>
-                  <Rect x={x0} y={zeroY - revH} width={bw} height={revH} rx={bw / 2} fill={color.accent} opacity={0.9} />
+                  <Rect x={x0} y={zeroY - revH} width={bw} height={revH} rx={bw / 2} fill={CIRO_RENGI} />
                   {kar >= 0 ? (
                     <Rect x={x0 + bw + gap} y={zeroY - karH} width={bw} height={karH} rx={bw / 2} fill={color.good} />
                   ) : (
@@ -518,10 +494,14 @@ function AylikGrafik({ data }: { data: { label: string; revenue: number; profit:
   );
 }
 
+/** Ciro çubuğu — masaüstü Raporlar'daki soluk lavanta. */
+const CIRO_RENGI = "rgba(201, 210, 242, 0.32)";
+
+/** Sakin veri notu (lavanta) — eksik / farklı para birimi gibi. */
 function Uyari({ children }: { children: React.ReactNode }) {
   return (
     <View style={styles.warn}>
-      <Txt v="small" tone="warn">
+      <Txt v="small" style={{ color: color.caution }}>
         {children}
       </Txt>
     </View>
@@ -530,15 +510,16 @@ function Uyari({ children }: { children: React.ReactNode }) {
 
 const styles = StyleSheet.create({
   grid: { flexDirection: "row", gap: space.sm },
-  stat: { flex: 1, gap: 4, minHeight: 84, padding: space.md },
-  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
+  buAy: { flexDirection: "row", gap: space.md, padding: space.md },
+  sira: { width: 22, height: 22, borderRadius: 7, alignItems: "center", justifyContent: "center", backgroundColor: color.tintStrong },
+  siraIlk: { backgroundColor: color.accent },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
   rowGap: { flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 1 },
   legend: { flexDirection: "row", alignItems: "center", gap: 4 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   axis: { flexDirection: "row", marginTop: 4 },
-  listCard: { paddingHorizontal: space.lg },
+  listCard: { paddingHorizontal: space.lg, paddingBottom: space.sm },
   profitRow: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.md },
   rowBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.line },
-  warn: { backgroundColor: color.warnSoft, borderRadius: radius.sm, padding: space.sm },
+  warn: { backgroundColor: color.cautionSoft, borderRadius: radius.sm, padding: space.sm },
 });

@@ -140,13 +140,13 @@ export default function SpoolsScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={color.accentBright} />}
           ListHeaderComponent={
             sorunlu > 0 ? (
-              <Tint strong style={[styles.alert, { borderColor: (ozet.biten > 0 ? color.bad : color.warn) + "66" }]}>
+              <Tint strong style={[styles.alert, { borderColor: (ozet.biten > 0 ? color.bad : color.caution) + "66" }]}>
                 <SymbolView
                   name="exclamationmark.triangle.fill"
-                  tintColor={ozet.biten > 0 ? color.bad : color.warn}
+                  tintColor={ozet.biten > 0 ? color.bad : color.caution}
                   style={{ width: 16, height: 16 }}
                 />
-                <Txt v="smallStrong" tone={ozet.biten > 0 ? "bad" : "warn"} style={{ flex: 1 }}>
+                <Txt v="smallStrong" tone={ozet.biten > 0 ? "bad" : "caution"} style={{ flex: 1 }}>
                   {[
                     ozet.biten > 0 ? `${ozet.biten} renk bitti` : null,
                     ozet.azalan > 0 ? `${ozet.azalan} renk azaldı` : null,

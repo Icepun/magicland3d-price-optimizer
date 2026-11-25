@@ -3,7 +3,7 @@ import { Text, type TextProps } from "react-native";
 import { color, tabular, type as typo } from "@/theme/tokens";
 
 export type TxtVariant = keyof typeof typo;
-export type TxtTone = "default" | "dim" | "faint" | "accent" | "good" | "bad" | "warn" | "info" | "onAccent";
+export type TxtTone = "default" | "dim" | "faint" | "accent" | "good" | "bad" | "warn" | "caution" | "info" | "onAccent";
 
 const TONE: Record<TxtTone, string> = {
   default: color.text,
@@ -13,6 +13,8 @@ const TONE: Record<TxtTone, string> = {
   good: color.good,
   bad: color.bad,
   warn: color.warn,
+  /** Sakin uyarı (masaüstündeki lavanta) — maliyet eksik, stok azaldı, ince marj. */
+  caution: color.caution,
   info: color.info,
   onAccent: color.onAccent,
 };

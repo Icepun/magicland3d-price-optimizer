@@ -3,7 +3,7 @@ import { router, type Href } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { StyleSheet, View } from "react-native";
 
-import { FadeInView, Screen, SubHeader, Tint, Txt } from "@/components/kit";
+import { FadeInView, IkonKutusu, Screen, SubHeader, Tint, Txt } from "@/components/kit";
 import { getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency } from "@/lib/format";
 import { resolveVatRate } from "@/core/vat";
@@ -52,9 +52,7 @@ export default function SettingsScreen() {
         <View style={{ gap: space.sm }}>
           {NAV.map((n) => (
             <Tint key={n.label} strong onPress={() => router.push(n.href)} style={styles.row} accessibilityLabel={n.label}>
-              <View style={[styles.icon, { backgroundColor: n.tint + "26" }]}>
-                <SymbolView name={n.icon} tintColor={n.tint} style={{ width: 20, height: 20 }} />
-              </View>
+              <IkonKutusu icon={n.icon} size={40} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Txt v="bodyStrong" numberOfLines={1}>
                   {n.label}
@@ -74,9 +72,7 @@ export default function SettingsScreen() {
       </Txt>
       <FadeInView index={1}>
         <Tint strong onPress={() => router.push("/expenses")} style={styles.row} accessibilityLabel="Gider ödemeleri">
-          <View style={[styles.icon, { backgroundColor: color.good + "26" }]}>
-            <SymbolView name="creditcard.fill" tintColor={color.good} style={{ width: 20, height: 20 }} />
-          </View>
+          <IkonKutusu icon="creditcard.fill" size={40} />
           <View style={{ flex: 1 }}>
             <Txt v="bodyStrong">Gider ödemeleri</Txt>
             <Txt v="small" tone="dim">

@@ -6,7 +6,7 @@ import { ActivityIndicator, Alert, Share, StyleSheet, View } from "react-native"
 
 import { ETIKET_ISTEGI_OMRU_MS } from "@core/etiket-uygunluk";
 import { KARGO_DURUM_ETIKETI, type KargoDurumu, type KargoGonderiOzeti } from "@core/kargo-gonderisi";
-import { Button, FadeInView, PressableScale, Tint, Txt } from "@/components/kit";
+import { Bolum, Button, FadeInView, PressableScale, Txt } from "@/components/kit";
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { etiketIstegiGonder, etiketIstegiIptal, etiketIstegiOku } from "@/lib/db/etiket";
 import { basilabilirEtiketAnahtari } from "@/lib/etiket";
@@ -29,18 +29,8 @@ export function KargoKarti({ order, basildiAt }: { order: UnifiedOrder; basildiA
   const firma = order.cargoProvider && order.cargoProvider !== "Other" ? order.cargoProvider : null;
   if (order.isManual || (!firma && !order.trackingNumber && !anahtar)) return null;
   return (
-    <Tint strong style={styles.kart}>
-      <Txt v="label" tone="faint" style={styles.etiket}>
-        KARGO
-      </Txt>
-      {firma ? (
-        <View style={styles.satir}>
-          <SymbolView name="shippingbox" tintColor={color.textFaint} style={styles.ikon} />
-          <Txt v="body" style={{ flex: 1 }} numberOfLines={1}>
-            {firma}
-          </Txt>
-        </View>
-      ) : null}
+    <Bolum title="Kargo" desc={firma ?? undefined} icon="shippingbox.fill">
+      <View style={styles.kart}>
       {order.trackingNumber ? (
         <PressableScale
           onPress={() => void Share.share({ message: order.trackingNumber ?? "" }).catch(() => {})}
@@ -68,14 +58,15 @@ export function KargoKarti({ order, basildiAt }: { order: UnifiedOrder; basildiA
       {anahtar && (order.platform === "trendyol" || order.platform === "hepsiburada" || order.platform === "shopify") ? (
         <EtiketDugmesi order={order} platform={order.platform} anahtar={anahtar} basildiAt={basildiAt} />
       ) : null}
-    </Tint>
+      </View>
+    </Bolum>
   );
 }
 
 const DURUM_RENGI: Record<KargoDurumu, string> = {
-  olusturuldu: color.info,
-  yolda: color.accentBright,
-  dagitimda: color.accent,
+  olusturuldu: "#7DD3FC",
+  yolda: "#A5B4FC",
+  dagitimda: "#C4B5FD",
   teslim: color.good,
   sorun: color.bad,
   iade: color.warn,

@@ -1,9 +1,10 @@
+import { LinearGradient } from "expo-linear-gradient";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 
 import { Txt } from "@/components/kit/Txt";
 import { PressableScale, type HapticStyle } from "@/components/kit/PressableScale";
-import { color, radius } from "@/theme/tokens";
+import { color, gradient, radius } from "@/theme/tokens";
 
 /**
  * YUVARLAK İKON DÜĞMESİ — başlıktaki zil/menü, kart köşesindeki ok (şablonun "↗" düğmesi).
@@ -28,7 +29,7 @@ export function IconButton({
   /** Sağ üstte rozet sayısı; 0/undefined ise çizilmez. */
   badge?: number;
   badgeColor?: string;
-  /** Mor dolgulu (birincil eylem). */
+  /** Mor→mavi geçişli (birincil eylem). */
   accent?: boolean;
   haptic?: HapticStyle;
   style?: StyleProp<ViewStyle>;
@@ -51,6 +52,14 @@ export function IconButton({
         style,
       ]}
     >
+      {accent ? (
+        <LinearGradient
+          colors={gradient.brand}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={[StyleSheet.absoluteFill, { borderRadius: size / 2 }]}
+        />
+      ) : null}
       <SymbolView
         name={icon}
         tintColor={accent ? color.onAccent : tint}
@@ -87,11 +96,18 @@ const styles = StyleSheet.create({
   btn: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: color.tint,
+    backgroundColor: color.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.lineStrong,
   },
-  accent: { backgroundColor: color.accent, borderColor: color.accentBright },
+  accent: {
+    backgroundColor: color.accent,
+    borderColor: "rgba(255,255,255,0.18)",
+    shadowColor: color.accent,
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+  },
   badge: {
     position: "absolute",
     top: -3,

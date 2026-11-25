@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 
 import { Pill } from "@/components/kit/Chip";
-import { Button, Count, FadeInView, Glass, Input, Money, Txt, type TxtTone } from "@/components/kit";
+import { Bolum, Button, Count, FadeInView, Input, Money, Txt, type TxtTone } from "@/components/kit";
 import { kargoDesisiKaydet } from "@/lib/db/kargo-desi";
 import { formatCurrency } from "@/lib/format";
 import { kargoDesiOku } from "@core/kargo-desi";
@@ -130,10 +130,8 @@ export function SiparisDokumKarti({
   }
 
   return (
-    <Glass style={styles.kart}>
-      <Txt v="label" tone="faint" style={styles.kicker}>
-        KÂR DÖKÜMÜ
-      </Txt>
+    <Bolum title="Kâr dökümü" desc="Kalem kalem kesintiler" icon="list.bullet.rectangle.portrait.fill">
+      <View style={styles.kart}>
       {satirlar}
       <View style={styles.cizgi} />
       <FadeInView index={baslangic + sira} step={45}>
@@ -149,7 +147,8 @@ export function SiparisDokumKarti({
           </View>
         </View>
       </FadeInView>
-    </Glass>
+      </View>
+    </Bolum>
   );
 }
 
@@ -229,10 +228,8 @@ function IadeDokumu({ d, baslangic }: { d: SiparisDokumu; baslangic: number }) {
     { ad: "Kusurlu ürün bedeli", tutar: d.kusurluBedeli, gercek: d.kusurluGercek },
   ].filter((k) => k.tutar > 0);
   return (
-    <Glass style={styles.kart}>
-      <Txt v="label" tone="faint" style={styles.kicker}>
-        İADE ZARARI
-      </Txt>
+    <Bolum title="İade zararı" desc="İadenin kâra etkisi" icon="arrow.uturn.backward.circle.fill">
+      <View style={styles.kart}>
       {kalemler.map((k, i) => (
         <FadeInView key={k.ad} index={baslangic + i} step={45}>
           <Satir ad={k.ad} rozet={<Kaynak gercek={k.gercek} />} tutar={k.tutar} />
@@ -250,7 +247,8 @@ function IadeDokumu({ d, baslangic }: { d: SiparisDokumu; baslangic: number }) {
         <Count value={z.loss} v="bodyStrong" tone="bad" format={(n) => `−${formatCurrency(n)}`} />
       </View>
       <Not metin="Satış tutarı ve komisyon iade edildi." />
-    </Glass>
+      </View>
+    </Bolum>
   );
 }
 

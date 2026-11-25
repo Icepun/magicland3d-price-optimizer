@@ -24,10 +24,11 @@ describe("yazıcı durumu — Atölye ve Yazıcılar AYNI tablo", () => {
     expect(oku("mobile/src/app/(tabs)/atolye.tsx")).not.toMatch(/const DURUM: Record</);
   });
 
-  it("yeşil = tamamlandı, mor = basıyor", () => {
+  it("yeşil = tamamlandı, mavi = basıyor, sarı = duraklatıldı (masaüstü --status-* ile aynı, onay 25 Kas 2026)", () => {
     expect(YAZICI_DURUM_ADI.finished).toBe("Tamamlandı");
     const renk = oku("mobile/src/lib/yazici-durum.ts");
-    expect(renk).toContain("printing: color.accentBright");
+    expect(renk).toContain("printing: color.info");
+    expect(renk).toContain("paused: color.warn");
     expect(renk).toContain("finished: color.good");
   });
 
@@ -89,8 +90,8 @@ describe("Atölye — dört yazıcının dördü, dokunulabilir olduğu belli", 
     expect(atolye).toContain("Tümü");
   });
 
-  it("kartta baskının görseli ilerleme halkasının içinde", () => {
-    expect(atolye).toMatch(/<Ring value=\{isVar \? oran : 0\}/);
+  it("kartta baskının görseli ve ilerleme çubuğu var (onaylı tasarım: halka yerine çubuk)", () => {
+    expect(atolye).toMatch(/<Progress value=\{oran\}/);
     expect(atolye).toContain("thumbUrl(s.productImage, 120)");
   });
 });

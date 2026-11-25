@@ -831,7 +831,7 @@ function ManualOrderForm({
             </Txt>
           </View>
           {breakdown.netProfit == null ? (
-            <Txt v="heading" tone="warn">
+            <Txt v="heading" tone="caution">
               Maliyet eksik
             </Txt>
           ) : (
@@ -840,7 +840,7 @@ function ManualOrderForm({
         </View>
         {breakdown.missingCostItems > 0 ? (
           <View style={styles.warn}>
-            <Txt v="small" tone="warn">
+            <Txt v="small" tone="caution">
               {breakdown.missingCostItems} kalemin maliyeti boş. Maliyet gir veya “Ürün maliyetini düş” seçeneğini kapat.
             </Txt>
           </View>
@@ -1120,7 +1120,7 @@ function AutoCargoCard({ amount, desi, ruleMissing }: { amount: number; desi: nu
       </View>
       {ruleMissing && desi > 0 ? (
         <View style={styles.warn}>
-          <Txt v="small" tone="warn">
+          <Txt v="small" tone="caution">
             Bu desi için kargo fiyatı tanımlı değil.
           </Txt>
         </View>
@@ -1326,7 +1326,7 @@ const styles = StyleSheet.create({
   imageEmpty: { alignItems: "center", justifyContent: "center" },
   detailedBox: { gap: space.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.line, paddingTop: space.md },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.lineStrong },
-  warn: { backgroundColor: color.warnSoft, borderRadius: radius.sm, padding: space.sm },
+  warn: { backgroundColor: color.cautionSoft, borderRadius: radius.sm, padding: space.sm },
   pickerSearch: { paddingHorizontal: space.lg, paddingBottom: space.sm },
   pickerList: { paddingHorizontal: space.lg, paddingBottom: space.xxl },
   pickerItem: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },

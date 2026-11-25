@@ -214,6 +214,7 @@ export default function ProductsScreen() {
       header={
         <Header
           title="Ürünler"
+          icon="shippingbox.fill"
           updatedAt={dataUpdatedAt}
           right={
             <IconButton
@@ -350,7 +351,7 @@ function ProductRow({ item, member }: { item: ListItem; member?: boolean }) {
             {madeToOrder ? "Siparişle üretilir" : out ? "Bitti" : `${item.stock} adet`}
           </Txt>
           {item.missingDesi ? (
-            <Txt v="label" tone="warn" style={[styles.sabit, { fontSize: 10, lineHeight: 12 }]} numberOfLines={1}>
+            <Txt v="label" style={[styles.sabit, { fontSize: 10, lineHeight: 12, color: color.caution }]} numberOfLines={1}>
               desi eksik
             </Txt>
           ) : null}
@@ -423,7 +424,7 @@ const styles = StyleSheet.create({
   chips: { gap: space.sm, paddingRight: space.lg },
   list: { paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.xxl },
   card: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
-  groupCard: { borderColor: color.accent + "55" },
+  groupCard: { borderColor: "rgba(122, 126, 255, 0.35)" },
   memberCard: { marginLeft: space.xl },
   thumb: { width: 52, height: 52, borderRadius: radius.sm, backgroundColor: color.tint },
   thumbEmpty: { alignItems: "center", justifyContent: "center" },

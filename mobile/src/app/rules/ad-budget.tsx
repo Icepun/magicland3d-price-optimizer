@@ -135,7 +135,7 @@ export default function AdBudgetScreen() {
                       {tarihYaz(b.validFrom)} → {b.validTo == null ? "devam ediyor" : tarihYaz(b.validTo)}
                     </Txt>
                     {yururlukte && oran != null ? (
-                      <Txt v="smallStrong" tone="warn" num>
+                      <Txt v="smallStrong" tone="caution" num>
                         Ciroya oranı %{(oran * 100).toFixed(2)}
                       </Txt>
                     ) : null}

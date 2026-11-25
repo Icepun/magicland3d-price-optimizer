@@ -64,7 +64,7 @@ export function Segmented<T extends string | number>({
               onChange(o.value);
             }}
           >
-            <Txt v="smallStrong" tone={secili ? "default" : "dim"} num numberOfLines={1}>
+            <Txt v="smallStrong" tone={secili ? "onAccent" : "dim"} num numberOfLines={1}>
               {o.label}
             </Txt>
           </Pressable>
@@ -91,9 +91,11 @@ const styles = StyleSheet.create({
     bottom: PAD,
     left: PAD,
     borderRadius: radius.pill,
-    backgroundColor: color.accentSoft,
-    borderWidth: 1,
-    borderColor: color.accent,
+    backgroundColor: color.accent,
+    shadowColor: color.accent,
+    shadowOpacity: 0.45,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
   },
   seg: {
     flex: 1,

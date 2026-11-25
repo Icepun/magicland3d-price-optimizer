@@ -9,17 +9,18 @@ export { bitisSaati, kalanSure, katmanMetni, yazicilariSirala } from "@core/prin
  *
  * Bir tur iki ayrı tablo vardı ve birbirini tutmuyordu: Atölye'de basan yazıcı yeşil
  * "Yazdırıyor", biten mor "Bitti"; Yazıcılar ekranında basan mor, biten yeşil "Tamamlandı".
- * Aynı yazıcı iki ekranda farklı renkte görünüyordu. Anlam: yeşil = iş başarıyla bitti,
- * mor (marka) = şu an basıyor. Adlar ve sıralama `@core/printer-status`te (kökte test edilir).
+ * Aynı yazıcı iki ekranda farklı renkte görünüyordu. Anlam (masaüstü `--status-*` ile aynı):
+ * mavi = şu an basıyor, sarı = duraklatıldı (müdahale bekliyor), zümrüt = bitti, gül = hata,
+ * lavanta = hazır. Adlar ve sıralama `@core/printer-status`te (kökte test edilir).
  *
  * ⚠️ Kökteki testler bu dosyayı İÇE AKTARMAMALI: tema dosyası `react-native` tiplerini çekiyor,
  * kökteki `tsc` de onların global `FormData`'sını görüp masaüstü rotalarında sahte hata veriyor.
  */
 const RENK: Record<string, string> = {
-  printing: color.accentBright,
+  printing: color.info,
   paused: color.warn,
   finished: color.good,
-  idle: color.textDim,
+  idle: color.lavender,
   error: color.bad,
   offline: color.textFaint,
 };

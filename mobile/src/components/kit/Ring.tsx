@@ -18,7 +18,7 @@ export function Ring({
   size = 72,
   stroke = 8,
   color = C.accent,
-  track = C.tintStrong,
+  track = "rgba(255, 255, 255, 0.08)",
   animate = true,
   children,
   style,

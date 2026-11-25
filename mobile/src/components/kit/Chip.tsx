@@ -4,7 +4,7 @@ import { Txt } from "@/components/kit/Txt";
 import { PressableScale } from "@/components/kit/PressableScale";
 import { color, radius, space } from "@/theme/tokens";
 
-/** SÜZGEÇ ÇİPİ — seçiliyken mor ton + mor kenarlık; sayı varsa yanında soluk. */
+/** SÜZGEÇ ÇİPİ — masaüstündeki gibi: seçiliyken periwinkle ton + kenarlık; sayı varsa yanında. */
 export function Chip({
   label,
   count,
@@ -53,7 +53,7 @@ export function Pill({
   style?: StyleProp<ViewStyle>;
 }) {
   return (
-    <View style={[styles.pill, { backgroundColor: renk + "26" }, style]}>
+    <View style={[styles.pill, { backgroundColor: renk + "1F", borderColor: renk + "40" }, style]}>
       <Txt v="label" style={{ color: renk }} numberOfLines={1}>
         {children}
       </Txt>
@@ -73,7 +73,13 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.lineStrong,
   },
-  on: { backgroundColor: color.accentSoft, borderColor: color.accent, borderWidth: 1 },
+  on: { backgroundColor: "rgba(122, 126, 255, 0.15)", borderColor: "rgba(122, 126, 255, 0.45)", borderWidth: 1 },
   dot: { width: 7, height: 7, borderRadius: 4 },
-  pill: { paddingHorizontal: space.sm, paddingVertical: 3, borderRadius: radius.pill, alignSelf: "flex-start" },
+  pill: {
+    paddingHorizontal: space.sm,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+    alignSelf: "flex-start",
+    borderWidth: StyleSheet.hairlineWidth,
+  },
 });

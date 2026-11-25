@@ -1,9 +1,10 @@
+import { LinearGradient } from "expo-linear-gradient";
 import { useEffect } from "react";
 import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 
 import { useReduceMotion } from "@/components/kit/motion";
-import { color as C, motion, radius } from "@/theme/tokens";
+import { color as C, gradient, motion, radius } from "@/theme/tokens";
 
 /**
  * İLERLEME ÇUBUĞU — 0..1 doluluk, UI thread'de genişler. Hazırlık listesi, baskı ilerlemesi,
@@ -11,13 +12,14 @@ import { color as C, motion, radius } from "@/theme/tokens";
  */
 export function Progress({
   value,
-  color = C.accent,
-  track = C.tintStrong,
+  color,
+  track = C.track,
   height = 6,
   minPercent = 2,
   style,
 }: {
   value: number;
+  /** Verilmezse mor→mavi geçiş. */
   color?: string;
   track?: string;
   height?: number;
@@ -37,12 +39,21 @@ export function Progress({
 
   return (
     <View style={[styles.track, { height, borderRadius: height / 2, backgroundColor: track }, style]}>
-      <Animated.View style={[styles.fill, { backgroundColor: color, borderRadius: height / 2 }, fill]} />
+      <Animated.View style={[styles.fill, { backgroundColor: color ?? C.accent, borderRadius: height / 2 }, fill]}>
+        {color ? null : (
+          <LinearGradient
+            colors={gradient.brand}
+            start={{ x: 0, y: 0.5 }}
+            end={{ x: 1, y: 0.5 }}
+            style={[StyleSheet.absoluteFill, { borderRadius: height / 2 }]}
+          />
+        )}
+      </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   track: { overflow: "hidden", width: "100%" },
-  fill: { height: "100%", borderRadius: radius.pill },
+  fill: { height: "100%", borderRadius: radius.pill, overflow: "hidden" },
 });

@@ -23,8 +23,8 @@ import {
   Count,
   EmptyState,
   ErrorState,
+  Bolum,
   FadeInView,
-  Glass,
   Header,
   IconButton,
   Money,
@@ -65,8 +65,8 @@ const DONEM_SECENEKLERI: { value: Donem; label: string }[] = [
 ];
 const DURUM_SIRASI: DurumGrubu[] = ["acik", "kargoda", "teslim", "iptal", "diger"];
 const DURUM_RENGI: Record<DurumGrubu, string> = {
-  acik: color.warn,
-  kargoda: color.accentBright,
+  acik: color.accentBright,
+  kargoda: "#818CF8",
   teslim: color.good,
   iptal: color.bad,
   diger: color.textFaint,
@@ -230,6 +230,7 @@ export default function OrdersScreen() {
       header={
         <Header
           title="Siparişler"
+          icon="list.clipboard.fill"
           updatedAt={dataUpdatedAt}
           subtitle={
             counts
@@ -395,29 +396,32 @@ function OzetKarti({
   platformSecili: boolean;
 }) {
   const marjYuzde = ozet.marj != null ? ozet.marj * 100 : null;
+  const baslik = DONEM_SECENEKLERI.find((d) => d.value === donem)?.label ?? "Bu ay";
   return (
-    <Glass style={{ gap: space.md }}>
+    <Bolum
+      title={baslik}
+      desc={karHazir && marjYuzde != null ? `Marj %${marjYuzde.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}` : undefined}
+      icon="chart.line.uptrend.xyaxis"
+      style={{ gap: 0 }}
+    >
       <Segmented<Donem> options={DONEM_SECENEKLERI} value={donem} onChange={onDonem} />
 
       <View style={styles.ozetSatir}>
-        <View style={{ flex: 1, gap: 2 }}>
-          <Txt v="label" tone="faint">
-            CİRO
+        <View style={styles.ozetHucre}>
+          <Txt v="small" tone="faint">
+            Sipariş
           </Txt>
-          <Money value={ozet.ciro} v="stat" compact />
+          <Count value={ozet.adet} v="heading" />
         </View>
-        <View style={{ alignItems: "flex-end", gap: 2 }}>
-          <Txt v="label" tone="faint">
-            SİPARİŞ
+        <View style={styles.ozetHucre}>
+          <Txt v="small" tone="faint">
+            Ciro
           </Txt>
-          <Count value={ozet.adet} v="stat" />
+          <Money value={ozet.ciro} v="heading" compact />
         </View>
-      </View>
-
-      <View style={styles.ozetSatir}>
-        <View style={{ flex: 1, gap: 2 }}>
-          <Txt v="label" tone="faint">
-            KÂR
+        <View style={styles.ozetHucre}>
+          <Txt v="small" tone="faint">
+            Kâr
           </Txt>
           {karHazir ? (
             <Money value={ozet.kar} v="heading" compact tone={ozet.kar < 0 ? "bad" : "good"} />
@@ -427,39 +431,22 @@ function OzetKarti({
             </Txt>
           )}
         </View>
-        <View style={{ alignItems: "flex-end", gap: 2 }}>
-          <Txt v="label" tone="faint">
-            MARJ
-          </Txt>
-          {karHazir && marjYuzde != null ? (
-            <Count
-              value={marjYuzde}
-              v="heading"
-              tone={marjYuzde < 0 ? "bad" : "good"}
-              format={(n) => `%${n.toLocaleString("tr-TR", { maximumFractionDigits: 1 })}`}
-            />
-          ) : (
-            <Txt v="heading" tone="dim">
-              —
-            </Txt>
-          )}
-        </View>
       </View>
 
       {karHazir && ozet.maliyetEksik > 0 ? (
-        <Txt v="small" tone="warn">
+        <Txt v="small" style={{ color: color.caution, marginTop: space.md }}>
           {ozet.maliyetEksik} siparişte maliyet eksik — kâr yaklaşık.
         </Txt>
       ) : null}
       {karHazir && ozet.iadeAdet > 0 ? (
-        <Txt v="small" tone="dim">
+        <Txt v="small" tone="dim" style={{ marginTop: space.sm }}>
           {ozet.iadeAdet} iadenin kargo zararı ({formatCurrency(ozet.iadeZarari)}) kârdan düşüldü.
         </Txt>
       ) : null}
 
       {/* Platform dağılımı — yalnız birden çok platform görünürken anlamlı. */}
       {!platformSecili && ozet.platformlar.length > 1 && ozet.ciro > 0 ? (
-        <View style={{ gap: space.sm }}>
+        <View style={{ gap: space.sm, marginTop: space.md }}>
           <View style={styles.dagilim}>
             {ozet.platformlar.map((p) => (
               <View
@@ -491,7 +478,7 @@ function OzetKarti({
           </View>
         </View>
       ) : null}
-    </Glass>
+    </Bolum>
   );
 }
 
@@ -507,13 +494,16 @@ function failedChannels(errors: string[]): string {
 function PhotoBox({ profit, accent, orderId }: { profit?: OrderProfit; accent: string; orderId: string }) {
   if (profit && profit.distinctCount > 1) {
     return (
-      <View style={[styles.photo, styles.countBox]}>
-        <Txt v="heading" num>
-          {profit.distinctCount}
-        </Txt>
-        <Txt v="label" tone="faint" style={{ fontSize: 10, lineHeight: 12 }}>
-          çeşit
-        </Txt>
+      <View>
+        <View style={[styles.photo, styles.countBox]}>
+          <Txt v="heading" num>
+            {profit.distinctCount}
+          </Txt>
+          <Txt v="label" tone="faint" style={{ fontSize: 10, lineHeight: 12 }}>
+            çeşit
+          </Txt>
+        </View>
+        <View style={[styles.platRozet, { backgroundColor: accent }]} />
       </View>
     );
   }
@@ -531,9 +521,10 @@ function PhotoBox({ profit, accent, orderId }: { profit?: OrderProfit; accent: s
         />
       ) : (
         <View style={[styles.photo, styles.photoEmpty]}>
-          <View style={[styles.platDotBig, { backgroundColor: accent }]} />
+          <SymbolView name="cube.box" tintColor={color.textFaint} style={{ width: 20, height: 20 }} />
         </View>
       )}
+      <View style={[styles.platRozet, { backgroundColor: accent }]} />
       {qty > 1 ? (
         <View style={styles.qtyBadge}>
           <Txt v="label" tone="onAccent" num style={{ fontSize: 11, lineHeight: 13 }}>
@@ -572,10 +563,10 @@ function OrderRow({
 
       <View style={styles.body}>
         <View style={styles.bodyTop}>
-          <View style={[styles.platDot, { backgroundColor: accent }]} />
           <Txt v="bodyStrong" num numberOfLines={1} style={{ flexShrink: 1 }}>
             {order.orderNumber}
           </Txt>
+          <Pill color={STATUS_TONE[st.tone]}>{st.label}</Pill>
           {order.isManual ? <Pill color={color.manual}>Manuel</Pill> : null}
           {order.microExport ? <Pill color={color.info}>Mikro ihracat</Pill> : null}
           {etiketBasildi ? (
@@ -599,7 +590,6 @@ function OrderRow({
         <Txt v="bodyStrong" num tone={tutarYok ? "dim" : undefined}>
           {formatCurrency(tutarYok ? null : order.total)}
         </Txt>
-        <Pill color={STATUS_TONE[st.tone]}>{st.label}</Pill>
         {!tutarYok && profit && profit.profit != null ? (
           <Txt v="smallStrong" tone={profit.profit < 0 ? "bad" : "good"} num>
             {profit.partial ? "~" : ""}
@@ -618,7 +608,8 @@ const styles = StyleSheet.create({
   chips: { gap: space.sm, paddingRight: space.lg },
   list: { paddingHorizontal: space.lg, paddingTop: space.xs, paddingBottom: space.xxl },
   errBox: { padding: space.md, borderColor: color.warn + "66" },
-  ozetSatir: { flexDirection: "row", alignItems: "flex-end", gap: space.md },
+  ozetSatir: { flexDirection: "row", alignItems: "flex-end", gap: space.md, marginTop: space.lg },
+  ozetHucre: { flex: 1, gap: 2, minWidth: 0 },
   dagilim: { flexDirection: "row", height: 8, borderRadius: radius.pill, overflow: "hidden", gap: 2 },
   lejant: { flexDirection: "row", flexWrap: "wrap", columnGap: space.md, rowGap: space.xs },
   lejantOge: { flexDirection: "row", alignItems: "center", gap: space.xs },
@@ -634,7 +625,16 @@ const styles = StyleSheet.create({
   card: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   photo: { width: 52, height: 52, borderRadius: radius.sm, backgroundColor: color.tintStrong },
   photoEmpty: { alignItems: "center", justifyContent: "center" },
-  platDotBig: { width: 12, height: 12, borderRadius: 6 },
+  platRozet: {
+    position: "absolute",
+    right: -3,
+    bottom: -3,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: color.card,
+  },
   countBox: { alignItems: "center", justifyContent: "center" },
   qtyBadge: {
     position: "absolute",
@@ -652,6 +652,5 @@ const styles = StyleSheet.create({
   },
   body: { flex: 1, gap: 2, minWidth: 0 },
   bodyTop: { flexDirection: "row", alignItems: "center", gap: 6 },
-  platDot: { width: 7, height: 7, borderRadius: 4 },
   right: { alignItems: "flex-end", gap: 4 },
 });

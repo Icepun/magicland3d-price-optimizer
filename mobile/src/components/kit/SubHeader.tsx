@@ -7,8 +7,8 @@ import { Txt } from "@/components/kit/Txt";
 import { space } from "@/theme/tokens";
 
 /**
- * ALT EKRAN BAŞLIĞI — yuvarlak cam geri düğmesi solda, başlık ortada, sağda isteğe bağlı eylem.
- * Tüm alt ekranlar (sipariş, ürün, hazırlık, kurallar, formlar) aynı çubuğu kullanır.
+ * ALT EKRAN BAŞLIĞI — yuvarlak geri düğmesi solda, yanında sola hizalı başlık + alt satır, sağda
+ * isteğe bağlı eylem (masaüstündeki alt sayfa başlığı). Tüm alt ekranlar aynı çubuğu kullanır.
  */
 export function SubHeader({
   title,
@@ -30,11 +30,11 @@ export function SubHeader({
         haptic="yok"
       />
       <View style={styles.center}>
-        <Txt v="heading" center numberOfLines={1}>
+        <Txt v="heading" numberOfLines={1}>
           {title}
         </Txt>
         {subtitle ? (
-          <Txt v="label" tone="faint" center numberOfLines={1}>
+          <Txt v="small" tone="faint" numberOfLines={1}>
             {subtitle}
           </Txt>
         ) : null}
@@ -50,9 +50,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: space.lg,
     paddingVertical: space.sm,
-    gap: space.sm,
-    minHeight: 56,
+    gap: space.md,
+    minHeight: 60,
   },
   center: { flex: 1, minWidth: 0, gap: 1 },
-  right: { minWidth: 40, alignItems: "flex-end" },
+  right: { alignItems: "flex-end" },
 });

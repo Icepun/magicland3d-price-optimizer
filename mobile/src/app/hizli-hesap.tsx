@@ -318,7 +318,7 @@ export default function HizliHesapEkrani() {
             <FadeInView>
               <Tint style={styles.dokum}>
                 {sonuc.minOrderQty > 1 ? (
-                  <Txt v="small" tone="warn">
+                  <Txt v="small" tone="caution">
                     Trendyol bu fiyatta en az {sonuc.minOrderQty} adet sattırır — rakamlar {sonuc.minOrderQty} adet için.
                   </Txt>
                 ) : null}
@@ -597,10 +597,10 @@ function Uyari({ children, kirmizi }: { children: string; kirmizi?: boolean }) {
     <FadeInView style={styles.uyari}>
       <SymbolView
         name="exclamationmark.triangle.fill"
-        tintColor={kirmizi ? color.bad : color.warn}
+        tintColor={kirmizi ? color.bad : color.caution}
         style={{ width: 14, height: 14, marginTop: 1 }}
       />
-      <Txt v="small" tone={kirmizi ? "bad" : "warn"} style={{ flex: 1 }}>
+      <Txt v="small" tone={kirmizi ? "bad" : "caution"} style={{ flex: 1 }}>
         {children}
       </Txt>
     </FadeInView>

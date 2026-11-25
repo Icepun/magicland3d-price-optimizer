@@ -192,7 +192,7 @@ export default function PlannerScreen() {
                   <Txt v="bodyStrong" numberOfLines={1}>
                     {item.name}
                   </Txt>
-                  <Pill color={item.stock <= 0 ? color.bad : color.warn}>{item.stock <= 0 ? "Stok bitti" : `${item.stock} adet`}</Pill>
+                  <Pill color={item.stock <= 0 ? color.bad : color.caution}>{item.stock <= 0 ? "Stok bitti" : `${item.stock} adet`}</Pill>
                 </View>
                 <View style={{ alignItems: "flex-end" }}>
                   <Txt v="title" tone="accent" num>

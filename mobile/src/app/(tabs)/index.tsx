@@ -2,25 +2,25 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { useMemo, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 import {
   Bars,
-  CornerArrow,
+  Bolum,
   Count,
+  CubukSatiri,
   ErrorState,
   FadeInView,
-  Glass,
   Header,
   Money,
-  Ring,
+  NotSatiri,
+  Pill,
   Screen,
   Segmented,
   Shimmer,
   ShimmerCard,
-  Tint,
+  StatKutu,
   Txt,
-  type TxtTone,
 } from "@/components/kit";
 import { getAllOrders, isCancelledOrder, isExcludedFromTotals, ORDERS_STALE_MS } from "@/lib/api/orders";
 import { computeDashboard, type PlatformSummary } from "@/lib/dashboard";
@@ -33,14 +33,13 @@ import { donemKesimi, panelCirosu } from "@/lib/panel-ciro";
 import { ayBasi } from "@core/siparis-listesi";
 import {
   ORDER_PLATFORM_COLOR,
-  ORDER_PLATFORM_SHORT_LABEL,
+  ORDER_PLATFORM_LABEL,
   ORDER_PLATFORMS,
   PLATFORM_COLOR,
   PLATFORM_LABEL,
-  type OrderPlatform,
 } from "@/lib/platforms";
 import { useManualRefresh } from "@/lib/use-refresh";
-import { color, radius, space } from "@/theme/tokens";
+import { color, space } from "@/theme/tokens";
 
 type PanelDonemi = 7 | "ay" | 60;
 // "Bu ay" varsayılan: masaüstü Panel, Siparişler ve Raporlar bu ayı gösterir (Berke kararı).
@@ -129,7 +128,7 @@ export default function DashboardScreen() {
 
   return (
     <Screen
-      header={<Header title="Panel" subtitle="Pazaryerleri + manuel satışlar" updatedAt={ordersAt} />}
+      header={<Header title="Panel" icon="square.grid.2x2.fill" updatedAt={ordersAt} />}
       refreshing={refreshing}
       onRefresh={onRefresh}
     >
@@ -139,21 +138,15 @@ export default function DashboardScreen() {
         <PanelIskeleti />
       ) : (
         <>
-          {/* CİRO KARTI — dönem seçici, büyük tutar, kâr, günlük dalga, platform çipleri */}
+          {/* CİRO — dönem seçici, büyük tutar, net kâr, günlük dalga, platform payları */}
           <FadeInView index={0}>
-            <Glass style={styles.hero}>
-              <View style={styles.rowBetween}>
-                <Txt v="label" tone="accent" style={styles.kicker}>
-                  {donem === "ay" ? "CİRO · BU AY" : `CİRO · SON ${donem} GÜN`}
-                </Txt>
-                <Segmented options={DONEMLER} value={donem} onChange={setDonem} style={styles.segment} />
-              </View>
-
-              {rev ? (
-                <Money value={rev.total} v="hero" />
-              ) : (
-                <Shimmer width={210} height={40} radius={10} />
-              )}
+            <Bolum
+              title={donem === "ay" ? "Ciro · Bu ay" : `Ciro · Son ${donem} gün`}
+              desc={rev ? `${formatNumber(rev.count)} sipariş` : undefined}
+              icon="chart.line.uptrend.xyaxis"
+              right={<Segmented options={DONEMLER} value={donem} onChange={setDonem} style={styles.segment} />}
+            >
+              {rev ? <Money value={rev.total} v="hero" /> : <Shimmer width={210} height={40} radius={10} />}
 
               <View style={styles.profitRow}>
                 <Txt v="small" tone="dim">
@@ -161,27 +154,20 @@ export default function DashboardScreen() {
                 </Txt>
                 {rev ? (
                   <>
-                    <Money value={gosterilenKar} v="heading" tone={gosterilenKar < 0 ? "bad" : "good"} compact />
+                    <Money value={gosterilenKar} v="bodyStrong" tone={gosterilenKar < 0 ? "bad" : "good"} compact />
                     {rev.total > 0 ? (
-                      <View style={[styles.deltaPill, { backgroundColor: gosterilenKar < 0 ? color.badSoft : color.goodSoft }]}>
-                        <Txt v="label" tone={gosterilenKar < 0 ? "bad" : "good"} num>
-                          {formatPercent(gosterilenKar / rev.total)}
-                        </Txt>
-                      </View>
+                      <Pill color={gosterilenKar < 0 ? color.bad : color.good}>{formatPercent(gosterilenKar / rev.total)}</Pill>
                     ) : null}
-                    <Txt v="small" tone="faint" num>
-                      · {formatNumber(rev.count)} sipariş
-                    </Txt>
+                    {gider != null && gider > 0 ? (
+                      <Txt v="small" tone="faint" num>
+                        · {formatCompactCurrency(gider)} gider düşüldü
+                      </Txt>
+                    ) : null}
                   </>
                 ) : (
                   <Shimmer width={120} height={16} />
                 )}
               </View>
-              {gider != null && gider > 0 ? (
-                <Txt v="label" tone="faint" num>
-                  {formatCompactCurrency(gider)} gider düşüldü
-                </Txt>
-              ) : null}
 
               <Bars
                 values={rev?.gunluk ?? []}
@@ -198,67 +184,80 @@ export default function DashboardScreen() {
                 </Txt>
               </View>
 
-              <View style={styles.chips}>
-                {ORDER_PLATFORMS.map((plat) => (
-                  <PlatformChip key={plat} platform={plat} rev={rev?.byPlat[plat].rev} n={rev?.byPlat[plat].n} />
-                ))}
+              <View style={styles.platformlar}>
+                {ORDER_PLATFORMS.map((plat) => {
+                  const b = rev?.byPlat[plat];
+                  const enCok = rev ? Math.max(1, ...ORDER_PLATFORMS.map((p) => rev.byPlat[p].rev)) : 1;
+                  return (
+                    <CubukSatiri
+                      key={plat}
+                      renk={ORDER_PLATFORM_COLOR[plat]}
+                      label={ORDER_PLATFORM_LABEL[plat]}
+                      meta={b ? `${formatNumber(b.n)} sip.` : undefined}
+                      sag={b ? formatCompactCurrency(b.rev) : "—"}
+                      oran={b ? b.rev / enCok : 0}
+                    />
+                  );
+                })}
               </View>
-            </Glass>
+            </Bolum>
           </FadeInView>
 
           {/* STOK / ZARAR SAYILARI */}
           <FadeInView index={1}>
             <View style={styles.tiles}>
-              <StatTile
+              <StatKutu
+                icon="shippingbox.fill"
                 label="Ürünler"
-                value={summary.totalProducts}
-                tone="accent"
                 onPress={() => router.push({ pathname: "/products", params: { filter: "all" } })}
-              />
-              <StatTile
+                accessibilityLabel={`Ürünler: ${formatNumber(summary.totalProducts)}`}
+              >
+                <Count value={summary.totalProducts} v="stat" />
+              </StatKutu>
+              <StatKutu
+                icon="xmark.bin.fill"
                 label="Stoksuz"
-                value={summary.outOfStock}
-                tone={summary.outOfStock > 0 ? "warn" : "default"}
                 onPress={() => router.push({ pathname: "/products", params: { filter: "out-of-stock" } })}
-              />
-              <StatTile
+                accessibilityLabel={`Stoksuz: ${formatNumber(summary.outOfStock)}`}
+              >
+                <Count value={summary.outOfStock} v="stat" style={summary.outOfStock > 0 ? { color: color.caution } : null} />
+              </StatKutu>
+              <StatKutu
+                icon="chart.line.downtrend.xyaxis"
                 label="Zarar eden"
-                value={summary.lossListings}
-                tone={summary.lossListings > 0 ? "bad" : "default"}
                 onPress={() => router.push({ pathname: "/products", params: { filter: "loss" } })}
-              />
+                accessibilityLabel={`Zarar eden: ${formatNumber(summary.lossListings)}`}
+              >
+                <Count value={summary.lossListings} v="stat" tone={summary.lossListings > 0 ? "bad" : "default"} />
+              </StatKutu>
             </View>
           </FadeInView>
 
           {/* PLATFORM MARJI */}
-          <Txt v="label" tone="faint" style={styles.section}>
-            PLATFORM MARJI
-          </Txt>
-          {summary.platforms.map((p, i) => (
-            <FadeInView key={p.platform} index={i + 2}>
-              <PlatformCard p={p} />
-            </FadeInView>
-          ))}
+          <FadeInView index={2}>
+            <Bolum title="Platform marjı" desc="Aktif ilanların ortalaması" icon="storefront.fill">
+              <View style={styles.platformlar}>
+                {summary.platforms.map((p) => (
+                  <PlatformMarji key={p.platform} p={p} />
+                ))}
+              </View>
+            </Bolum>
+          </FadeInView>
 
           {summary.missingCost > 0 ? (
-            <FadeInView index={5}>
-              <Tint
-                strong
+            <FadeInView index={3}>
+              <NotSatiri
+                icon="wrench.and.screwdriver.fill"
                 onPress={() => router.push({ pathname: "/products", params: { filter: "no-cost" } })}
-                style={styles.note}
-                accessibilityLabel="Maliyeti girilmemiş ürünler"
+                sag={<SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />}
               >
-                <View style={[styles.noteIcon, { backgroundColor: color.warnSoft }]}>
-                  <SymbolView name="exclamationmark.triangle.fill" tintColor={color.warn} style={{ width: 18, height: 18 }} />
-                </View>
-                <Txt v="small" tone="dim" style={{ flex: 1 }}>
+                <Txt v="small">
                   <Txt v="smallStrong" num>
                     {formatNumber(summary.missingCost)}
                   </Txt>{" "}
-                  üründe maliyet girilmemiş — kâr hesabı dışı.
+                  üründe maliyet girilmemiş
                 </Txt>
-                <SymbolView name="chevron.right" tintColor={color.textFaint} style={{ width: 14, height: 14 }} />
-              </Tint>
+              </NotSatiri>
             </FadeInView>
           ) : null}
         </>
@@ -267,83 +266,24 @@ export default function DashboardScreen() {
   );
 }
 
-function PlatformChip({ platform, rev, n }: { platform: OrderPlatform; rev?: number; n?: number }) {
-  return (
-    <Tint strong radius={radius.pill} padded={false} style={styles.chip}>
-      <View style={[styles.dot, { backgroundColor: ORDER_PLATFORM_COLOR[platform] }]} />
-      <Txt v="smallStrong" numberOfLines={1} style={styles.chipLabel}>
-        {ORDER_PLATFORM_SHORT_LABEL[platform]}
-      </Txt>
-      <Txt v="small" tone="dim" num numberOfLines={1}>
-        {rev != null ? formatCompactCurrency(rev) : "—"}
-      </Txt>
-      {n != null && n > 0 ? (
-        <Txt v="small" tone="faint" num>
-          {formatNumber(n)}
-        </Txt>
-      ) : null}
-    </Tint>
-  );
-}
-
-function StatTile({
-  label,
-  value,
-  tone,
-  onPress,
-}: {
-  label: string;
-  value: number;
-  tone: TxtTone;
-  onPress?: () => void;
-}) {
-  return (
-    <Tint strong onPress={onPress} style={styles.tile} accessibilityLabel={`${label}: ${formatNumber(value)}`}>
-      <View style={styles.tileHead}>
-        <Txt v="small" tone="dim" numberOfLines={1} style={{ flex: 1 }}>
-          {label}
-        </Txt>
-        <SymbolView name="arrow.up.right" tintColor={color.textFaint} style={styles.tileArrow} />
-      </View>
-      <Count value={value} v="stat" tone={tone} />
-    </Tint>
-  );
-}
-
-function PlatformCard({ p }: { p: PlatformSummary }) {
+function PlatformMarji({ p }: { p: PlatformSummary }) {
   const marka = PLATFORM_COLOR[p.platform];
   const marj = Number.isFinite(p.avgMargin) ? p.avgMargin : 0;
-  const halka = marj < 0 ? color.bad : marj < 0.2 ? color.warn : marka;
-  const zarar = p.lossCount > 0;
   return (
-    <Tint strong padded={false} style={styles.platform}>
-      <Ring value={marj} size={64} stroke={7} color={halka}>
-        <Txt v="label" num>
-          {formatPercent(marj, 0)}
-        </Txt>
-      </Ring>
-      <View style={{ flex: 1, gap: 2 }}>
-        <View style={styles.rowGap}>
-          <View style={[styles.dot, { backgroundColor: marka }]} />
-          <Txt v="heading" numberOfLines={1}>
-            {PLATFORM_LABEL[p.platform]}
-          </Txt>
-        </View>
-        <Txt v="small" tone="dim" num>
-          Ortalama marj {formatPercent(marj)} · {formatNumber(p.listingCount)} listing
-        </Txt>
-        <View style={styles.rowGap}>
-          <View style={[styles.deltaPill, { backgroundColor: zarar ? color.badSoft : color.tintStrong }]}>
-            <Txt v="label" tone={zarar ? "bad" : "faint"} num>
-              {formatNumber(p.lossCount)} zarar eden
-            </Txt>
-          </View>
-        </View>
-      </View>
-      <CornerArrow
-        onPress={() => router.push({ pathname: "/products", params: { filter: zarar ? "loss" : "all" } })}
+    <Pressable
+      onPress={() => router.push({ pathname: "/products", params: { filter: p.lossCount > 0 ? "loss" : "all" } })}
+      accessibilityRole="button"
+      accessibilityLabel={`${PLATFORM_LABEL[p.platform]} ortalama marj ${formatPercent(marj)}`}
+    >
+      <CubukSatiri
+        renk={marj < 0 ? color.bad : marka}
+        label={PLATFORM_LABEL[p.platform]}
+        rozet={p.lossCount > 0 ? <Pill color={color.bad}>{`${formatNumber(p.lossCount)} zarar eden`}</Pill> : null}
+        sag={formatPercent(marj, 0)}
+        oran={Math.max(0, marj) / 0.6}
+        alt={`${formatNumber(p.listingCount)} ilan`}
       />
-    </Tint>
+    </Pressable>
   );
 }
 
@@ -351,52 +291,22 @@ function PlatformCard({ p }: { p: PlatformSummary }) {
 function PanelIskeleti() {
   return (
     <>
-      <ShimmerCard height={292} />
+      <ShimmerCard height={380} />
       <View style={styles.tiles}>
-        <ShimmerCard height={92} delay={60} style={{ flex: 1 }} />
-        <ShimmerCard height={92} delay={120} style={{ flex: 1 }} />
-        <ShimmerCard height={92} delay={180} style={{ flex: 1 }} />
+        <ShimmerCard height={104} delay={60} style={{ flex: 1 }} />
+        <ShimmerCard height={104} delay={120} style={{ flex: 1 }} />
+        <ShimmerCard height={104} delay={180} style={{ flex: 1 }} />
       </View>
-      <ShimmerCard height={96} delay={240} />
-      <ShimmerCard height={96} delay={300} />
-      <ShimmerCard height={96} delay={360} />
+      <ShimmerCard height={220} delay={240} />
     </>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: { gap: space.md },
-  kicker: { letterSpacing: 1.2 },
-  segment: { width: 172 },
+  segment: { width: 150 },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm },
-  rowGap: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  profitRow: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap" },
-  deltaPill: { paddingHorizontal: space.sm, paddingVertical: 3, borderRadius: radius.pill },
-  bars: { marginTop: space.xs },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-  chip: {
-    flexGrow: 1,
-    flexBasis: "46%",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: space.md,
-    minHeight: 36,
-  },
-  chipLabel: { flexShrink: 1 },
-  dot: { width: 8, height: 8, borderRadius: 4 },
+  profitRow: { flexDirection: "row", alignItems: "center", gap: space.sm, flexWrap: "wrap", marginTop: space.sm },
+  bars: { marginTop: space.lg },
+  platformlar: { gap: space.md, marginTop: space.lg },
   tiles: { flexDirection: "row", gap: space.sm },
-  tile: { flex: 1, gap: 6, minHeight: 92, padding: space.md },
-  tileHead: { flexDirection: "row", alignItems: "center", gap: 4 },
-  tileArrow: { width: 13, height: 13 },
-  section: { letterSpacing: 1.2, marginTop: space.sm, marginLeft: space.xs },
-  platform: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.md,
-    padding: space.md,
-    paddingRight: space.md,
-  },
-  note: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
-  noteIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" },
 });

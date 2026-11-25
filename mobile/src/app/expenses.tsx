@@ -170,7 +170,7 @@ export default function ExpensesScreen() {
     return {
       ozet: donemOzeti(satirlar, aralik),
       aylar: aylaraGore(icindekiler),
-      kategoriler: kategoriDagilimi(icindekiler, () => color.warn),
+      kategoriler: kategoriDagilimi(icindekiler, () => color.accent),
     };
   }, [expensesQuery.data, periyot, simdi]);
   const periyotBilgisi = PERIYOTLAR.find((p) => p.id === periyot) ?? PERIYOTLAR[1];
@@ -196,7 +196,7 @@ export default function ExpensesScreen() {
           <Txt v="label" tone="faint" style={styles.kicker}>
             {periyotBilgisi.label.toLocaleUpperCase("tr-TR")}
           </Txt>
-          <Money value={donem.ozet.toplam} v="hero" tone="warn" />
+          <Money value={donem.ozet.toplam} v="hero" />
           <Txt v="small" tone="dim">
             {donem.ozet.adet > 0 ? `${formatNumber(donem.ozet.adet)} ödeme` : "Bu dönemde ödeme yok"}
             {donem.ozet.degisimYuzde != null
@@ -337,7 +337,7 @@ export default function ExpensesScreen() {
                     ) : null}
                   </View>
                   <View style={styles.cardRight}>
-                    <Money value={expense.amountKurus / 100} v="bodyStrong" tone="warn" animate={false} />
+                    <Money value={expense.amountKurus / 100} v="bodyStrong" animate={false} />
                     <IconButton
                       icon="trash"
                       size={30}

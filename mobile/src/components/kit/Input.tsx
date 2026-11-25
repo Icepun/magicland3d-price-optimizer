@@ -2,7 +2,7 @@ import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { StyleSheet, TextInput, View, type StyleProp, type TextInputProps, type ViewStyle } from "react-native";
 
 import { Txt } from "@/components/kit/Txt";
-import { color, font, radius, space } from "@/theme/tokens";
+import { color, font, space } from "@/theme/tokens";
 
 /**
  * METİN GİRİŞİ — saydam yüzey, ince kenarlık, yeni yazı tipi. Odaklanınca kenarlık mora döner
@@ -72,10 +72,10 @@ const styles = StyleSheet.create({
     gap: space.sm,
     minHeight: 46,
     paddingHorizontal: space.md,
-    borderRadius: radius.md,
-    backgroundColor: color.tint,
+    borderRadius: 12,
+    backgroundColor: "rgba(8, 12, 20, 0.7)",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.lineStrong,
+    borderColor: "rgba(255, 255, 255, 0.14)",
   },
   icon: { width: 16, height: 16 },
   input: {

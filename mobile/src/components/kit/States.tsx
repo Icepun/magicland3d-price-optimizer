@@ -1,11 +1,11 @@
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
-import { Glass } from "@/components/kit/Glass";
+import { Glass, IkonKutusu } from "@/components/kit/Glass";
 import { Txt } from "@/components/kit/Txt";
 import { PressableScale } from "@/components/kit/PressableScale";
 import { friendlyError } from "@/lib/format";
-import { color, radius, space } from "@/theme/tokens";
+import { color, space } from "@/theme/tokens";
 
 /**
  * HATA DURUMU — boş durumdan AYRI. Ağ kopunca "0 uyarı" / "henüz makara yok" gibi yalan
@@ -62,9 +62,7 @@ export function EmptyState({
 }) {
   return (
     <View style={styles.empty}>
-      <View style={[styles.icon, { backgroundColor: color.tintStrong }]}>
-        <SymbolView name={icon} tintColor={color.textDim} style={{ width: 26, height: 26 }} />
-      </View>
+      <IkonKutusu icon={icon} size={56} style={{ marginBottom: space.xs }} />
       <Txt v="heading" center>
         {title}
       </Txt>
@@ -93,9 +91,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: space.xl,
-    borderRadius: radius.pill,
-    backgroundColor: color.accentSoft,
+    borderRadius: 12,
+    backgroundColor: "rgba(122, 126, 255, 0.15)",
     borderWidth: 1,
-    borderColor: color.accent,
+    borderColor: "rgba(122, 126, 255, 0.45)",
   },
 });

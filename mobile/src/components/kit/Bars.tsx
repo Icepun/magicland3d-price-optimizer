@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
-import Svg, { Rect } from "react-native-svg";
+import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 
 import { useReduceMotion } from "@/components/kit/motion";
 import { color as C, motion } from "@/theme/tokens";
@@ -10,7 +10,8 @@ import { color as C, motion } from "@/theme/tokens";
  * İNCE ÇUBUK GRAFİĞİ — şablonun imza grafiği (ses dalgası gibi dizilmiş ince dikey çubuklar).
  *
  * Genişliği kendi ölçer (onLayout) ve çubuk kalınlığını sayıya göre paylaştırır; 7 günde kalın,
- * 60 günde ince. Vurgu (`emphasis`) verilen çubuklar mor, kalanı soluk. Girişte tek bir
+ * 60 günde ince. Vurgu (`emphasis`) verilen çubuklar logodaki mor→mavi geçişle, kalanı soluk lavanta
+ * (masaüstü Panel'iyle aynı). Girişte tek bir
  * scaleY ile "yerden biter" — çubuk başına animasyon YOK (60 çubuk × prop = boşa iş).
  */
 export function Bars({
@@ -19,8 +20,8 @@ export function Bars({
   gap = 3,
   maxBarWidth = 22,
   emphasis,
-  barColor = C.accent,
-  dimColor = C.tintStrong,
+  barColor,
+  dimColor = C.barDim,
   animate = true,
   style,
 }: {
@@ -30,6 +31,7 @@ export function Bars({
   maxBarWidth?: number;
   /** Bu çubuk vurgulu mu? (ör. seçili dönem, bugün) */
   emphasis?: (index: number, value: number) => boolean;
+  /** Verilmezse vurgulu çubuklar mor→mavi geçiş. */
   barColor?: string;
   dimColor?: string;
   animate?: boolean;
@@ -70,6 +72,12 @@ export function Bars({
       {width > 0 && n > 0 ? (
         <Animated.View style={[{ height, transformOrigin: "bottom" }, growStyle]}>
           <Svg width={width} height={height}>
+            <Defs>
+              <LinearGradient id="cubuk-vurgu" x1="0" y1="0" x2="0" y2="1">
+                <Stop offset="0" stopColor={C.gradStart} />
+                <Stop offset="1" stopColor={C.gradEnd} />
+              </LinearGradient>
+            </Defs>
             {values.map((raw, i) => {
               const v = Number.isFinite(raw) && raw > 0 ? raw : 0;
               const h = v > 0 ? Math.max(3, (v / max) * height) : 2;
@@ -83,7 +91,7 @@ export function Bars({
                   width={bw}
                   height={h}
                   rx={bw / 2}
-                  fill={vurgu ? barColor : dimColor}
+                  fill={vurgu ? (barColor ?? "url(#cubuk-vurgu)") : dimColor}
                 />
               );
             })}

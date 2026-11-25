@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { Image } from "expo-image";
 import { router } from "expo-router";
 import { SymbolView, type SymbolViewProps } from "expo-symbols";
 import type { BottomSheetModal } from "@gorhom/bottom-sheet";
@@ -7,7 +6,7 @@ import { useRef, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { FreshnessStamp } from "@/components/FreshnessStamp";
-import { Tint } from "@/components/kit/Glass";
+import { IkonKutusu, Tint } from "@/components/kit/Glass";
 import { IconButton } from "@/components/kit/IconButton";
 import { Sheet } from "@/components/kit/Sheet";
 import { Txt } from "@/components/kit/Txt";
@@ -15,22 +14,18 @@ import { getNotifications } from "@/lib/db/notifications";
 import { color, space } from "@/theme/tokens";
 
 /**
- * EKRAN BAŞLIĞI — şablonun (Ledgerix) iki satırlı başlığı.
- *
- * 1. satır: marka (küçük logo + "MAGICLAND 3D") ve sağda yuvarlak cam düğmeler
- *    (ekrana özel eylem · zil · menü). Zil ve menü HER sekmede aynı yerde.
- * 2. satır: büyük başlık + alt başlık + tazelik damgası ("az önce").
- *
- * "Daha" sekmesi kalktı; Raporlar, Bildirimler ve Kurallar artık menü sayfasından açılır.
+ * EKRAN BAŞLIĞI — masaüstündeki sayfa başlığı: mor→mavi geçişli ikon kutusu + büyük başlık + alt
+ * satırda yeşil noktalı tazelik ("2 dk önce güncellendi"). Sağda ekrana özel düğme, zil ve menü
+ * (Raporlar, Hızlı hesap, Bildirimler, Kurallar menüden de açılır) — her sekmede aynı yerde.
  */
 export function Header({
   title,
   subtitle,
   updatedAt,
   right,
+  icon = "sparkles",
   bell = true,
   menu = true,
-  brand = true,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -38,34 +33,22 @@ export function Header({
   updatedAt?: number;
   /** Ekrana özel düğme(ler) — zilin solunda. */
   right?: ReactNode;
+  /** Başlıktaki ikon kutusunun SF Symbol'ü. */
+  icon?: SymbolViewProps["name"];
   bell?: boolean;
   menu?: boolean;
+  /** Eski çağıranlar için duruyor (marka satırı kalktı). */
   brand?: boolean;
 }) {
   return (
     <View style={styles.wrap}>
-      <View style={styles.row}>
-        {brand ? (
-          <View style={styles.brand}>
-            <Image source={require("../../../assets/images/logo-mark.png")} style={styles.logo} contentFit="contain" />
-            <Txt v="label" tone="faint" style={styles.brandText}>
-              MAGICLAND 3D
-            </Txt>
-          </View>
-        ) : (
-          <View style={{ flex: 1 }} />
-        )}
-        <View style={styles.actions}>
-          {right}
-          {bell ? <Bell /> : null}
-          {menu ? <MenuButton /> : null}
-        </View>
-      </View>
+      <IkonKutusu icon={icon} size={44} dolu />
       <View style={styles.titleBlock}>
         <Txt v="title" numberOfLines={1}>
           {title}
         </Txt>
         <View style={styles.subRow}>
+          {updatedAt ? <View style={styles.canli} /> : null}
           {typeof subtitle === "string" ? (
             <Txt v="small" tone="dim" numberOfLines={1} style={{ flexShrink: 1 }}>
               {subtitle}
@@ -80,10 +63,15 @@ export function Header({
                   ·
                 </Txt>
               ) : null}
-              <FreshnessStamp updatedAt={updatedAt} suffix={false} />
+              <FreshnessStamp updatedAt={updatedAt} suffix={!subtitle} />
             </>
           ) : null}
         </View>
+      </View>
+      <View style={styles.actions}>
+        {right}
+        {bell ? <Bell /> : null}
+        {menu ? <MenuButton /> : null}
       </View>
     </View>
   );
@@ -101,6 +89,7 @@ export function Bell() {
   return (
     <IconButton
       icon="bell.fill"
+      size={36}
       tint={toplam > 0 ? color.text : color.textDim}
       badge={toplam}
       badgeColor={kritik ? color.bad : color.warn}
@@ -122,7 +111,7 @@ export function MenuButton() {
   const sheet = useRef<BottomSheetModal>(null);
   return (
     <>
-      <IconButton icon="line.3.horizontal" onPress={() => sheet.current?.present()} accessibilityLabel="Menü" />
+      <IconButton icon="line.3.horizontal" size={36} onPress={() => sheet.current?.present()} accessibilityLabel="Menü" />
       <Sheet ref={sheet}>
         <Txt v="label" tone="faint" style={styles.menuLabel}>
           MENÜ
@@ -158,14 +147,18 @@ export function MenuButton() {
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xs, gap: space.md },
-  row: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 40 },
-  brand: { flex: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minWidth: 0 },
-  logo: { width: 26, height: 26 },
-  brandText: { letterSpacing: 1.6 },
-  actions: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  titleBlock: { gap: 2 },
+  wrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
+    paddingBottom: space.md,
+  },
+  actions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  titleBlock: { flex: 1, minWidth: 0, gap: 1 },
   subRow: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 },
+  canli: { width: 6, height: 6, borderRadius: 3, backgroundColor: color.good },
   menuLabel: { marginBottom: space.md, letterSpacing: 1.2 },
   menuRow: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
   menuIcon: { width: 40, height: 40, borderRadius: 12, alignItems: "center", justifyContent: "center" },

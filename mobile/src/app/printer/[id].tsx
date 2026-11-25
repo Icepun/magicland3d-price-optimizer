@@ -11,6 +11,7 @@ import {
   Count,
   EmptyState,
   ErrorState,
+  Bolum,
   Glass,
   Progress,
   Ring,
@@ -199,21 +200,25 @@ export default function YaziciEkrani() {
 
       {/* ── İlerleme ─────────────────────────────────────────────────────────── */}
       {isVar ? (
-        <Glass style={{ gap: space.md }}>
+        <Bolum
+          title="İlerleme"
+          icon="gauge.with.dots.needle.50percent"
+          right={katmanMetni(d?.layer, d?.totalLayers) ? (
+            <View style={{ alignItems: "flex-end" }}>
+              <Txt v="label" tone="faint">
+                KATMAN
+              </Txt>
+              <Txt v="bodyStrong" num>
+                {katmanMetni(d?.layer, d?.totalLayers)}
+              </Txt>
+            </View>
+          ) : null}
+        >
+          <View style={{ gap: space.md }}>
           <View style={styles.ilerlemeUst}>
-            <Count value={oran * 100} v="stat" style={{ color: info.color }} format={(n) => `%${Math.round(n)}`} />
-            {katmanMetni(d?.layer, d?.totalLayers) ? (
-              <View style={{ alignItems: "flex-end" }}>
-                <Txt v="label" tone="faint">
-                  KATMAN
-                </Txt>
-                <Txt v="heading" num>
-                  {katmanMetni(d?.layer, d?.totalLayers)}
-                </Txt>
-              </View>
-            ) : null}
+            <Count value={oran * 100} v="hero" style={{ color: info.color }} format={(n) => `%${Math.round(n)}`} />
           </View>
-          <Progress value={oran} color={info.color} height={10} />
+          <Progress value={oran} color={s.status === "printing" ? undefined : info.color} height={10} />
           <View style={styles.istatistikler}>
             <Istatistik etiket="KALAN" deger={aktif ? (kalanSure(kalanSn) ?? "—") : bitti ? "Bitti" : "—"} />
             <Istatistik
@@ -222,7 +227,8 @@ export default function YaziciEkrani() {
             />
             <Istatistik etiket="GEÇEN" deger={kalanSure(gecenSn) ?? "—"} />
           </View>
-        </Glass>
+          </View>
+        </Bolum>
       ) : null}
 
       {/* ── Komutlar ─────────────────────────────────────────────────────────── */}
@@ -256,14 +262,13 @@ export default function YaziciEkrani() {
 
       {/* ── İş ayrıntıları ───────────────────────────────────────────────────── */}
       {d && (d.speed || d.currentObject || (isVar && d.filamentGrams)) ? (
-        <Glass style={{ gap: space.sm }}>
-          <Txt v="label" tone="faint">
-            AYRINTILAR
-          </Txt>
+        <Bolum title="Ayrıntılar" icon="info.circle.fill">
+          <View style={{ gap: space.sm }}>
           {d.speed ? <Satir etiket="Hız" deger={d.speed} /> : null}
           {isVar && d.filamentGrams ? <Satir etiket="Filament" deger={`${d.filamentGrams} g`} /> : null}
           {d.currentObject ? <Satir etiket="Basılan parça" deger={d.currentObject} /> : null}
-        </Glass>
+          </View>
+        </Bolum>
       ) : null}
     </Screen>
   );
@@ -404,10 +409,8 @@ function Sicakliklar({ s, d }: { s: PrinterSnapshot; d: YaziciDetay | null }) {
   const hedefMetni = (h: number | null | undefined) => (h && h > 0 ? ` / ${Math.round(h)}°` : "");
   const isiniyor = (t: number, h: number | null | undefined) => !!h && h > 0 && t < h - 3;
   return (
-    <Glass style={{ gap: space.md }}>
-      <Txt v="label" tone="faint">
-        SICAKLIK
-      </Txt>
+    <Bolum title="Sıcaklık" icon="thermometer.medium">
+      <View style={{ gap: space.md }}>
       <View style={styles.sicaklikSatiri}>
         <SicaklikKutusu
           ikon="flame.fill"
@@ -447,7 +450,8 @@ function Sicakliklar({ s, d }: { s: PrinterSnapshot; d: YaziciDetay | null }) {
           })}
         </View>
       ) : null}
-    </Glass>
+      </View>
+    </Bolum>
   );
 }
 
@@ -480,23 +484,22 @@ function SicaklikKutusu({
 
 function Filamentler({ d, isVar }: { d: YaziciDetay; isVar: boolean }) {
   return (
-    <Glass style={{ gap: space.md }}>
-      <View style={styles.satir}>
-        <Txt v="label" tone="faint">
-          FİLAMENT
+    <Bolum
+      title="Filament"
+      icon="circle.grid.cross.fill"
+      right={isVar && d.filamentType ? (
+        <Txt v="smallStrong" tone="dim">
+          {d.filamentType}
         </Txt>
-        {isVar && d.filamentType ? (
-          <Txt v="smallStrong" tone="dim">
-            {d.filamentType}
-          </Txt>
-        ) : null}
-      </View>
+      ) : null}
+    >
+      <View style={{ gap: space.md }}>
       {d.slots.length ? (
         <View style={styles.slotlar}>
           {d.slots.map((sl) => (
             <View
               key={sl.slot}
-              style={[styles.slot, sl.active ? { borderColor: color.accentBright, backgroundColor: color.accentSoft } : null]}
+              style={[styles.slot, sl.active ? { borderColor: color.accent, backgroundColor: "rgba(122, 126, 255, 0.15)" } : null]}
             >
               <View
                 style={[
@@ -513,7 +516,8 @@ function Filamentler({ d, isVar }: { d: YaziciDetay; isVar: boolean }) {
           ))}
         </View>
       ) : null}
-    </Glass>
+      </View>
+    </Bolum>
   );
 }
 
