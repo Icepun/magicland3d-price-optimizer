@@ -1,5 +1,6 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { ortakKimlik } from "@/lib/kimlik";
 import { trendyolDateToUtc } from "@core/trendyol-date";
 import { buildTrendyolWindows } from "@core/trendyol-windows";
 import { trendyolOrderId } from "@core/trendyol-order-id";
@@ -19,10 +20,22 @@ import {
   type TrendyolTalepSayfasi,
 } from "@core/trendyol-iade";
 
-const SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
-const KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
-const SECRET = process.env.EXPO_PUBLIC_TRENDYOL_API_SECRET;
-const INTEGRATOR = process.env.EXPO_PUBLIC_TRENDYOL_INTEGRATOR || "SelfIntegration";
+// Bilgiler: masaüstünde girilen ortak kayıt (lib/kimlik); yoksa uygulamaya gömülü olanlar.
+let SELLER = process.env.EXPO_PUBLIC_TRENDYOL_SELLER_ID;
+let KEY = process.env.EXPO_PUBLIC_TRENDYOL_API_KEY;
+let SECRET = process.env.EXPO_PUBLIC_TRENDYOL_API_SECRET;
+let INTEGRATOR = process.env.EXPO_PUBLIC_TRENDYOL_INTEGRATOR || "SelfIntegration";
+
+/** Ortak kayıt TAM ise onu kullan (yarım set gömülüyle karışıp hatalı istek atılmasın). */
+async function kimligiYukle(): Promise<void> {
+  const o = await ortakKimlik("trendyol");
+  if (o.sellerId && o.apiKey && o.apiSecret) {
+    SELLER = o.sellerId;
+    KEY = o.apiKey;
+    SECRET = o.apiSecret;
+    INTEGRATOR = o.integratorName || "SelfIntegration";
+  }
+}
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -83,6 +96,7 @@ interface TyOrder {
  * limiti ≤2 hafta) tara + her pencerede sayfala; id'ye göre tekilleştir.
  */
 export async function getTrendyolOrders(historyDays = 30): Promise<UnifiedOrder[]> {
+  await kimligiYukle();
   if (!SELLER || !KEY || !SECRET) return [];
   const token = base64(`${KEY}:${SECRET}`);
   const ua = `${SELLER} - ${INTEGRATOR.replace(/[^a-zA-Z0-9]/g, "").slice(0, 30) || "SelfIntegration"}`;

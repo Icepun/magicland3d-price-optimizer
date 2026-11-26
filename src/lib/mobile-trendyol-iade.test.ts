@@ -25,6 +25,9 @@ const h = vi.hoisted(() => ({
   istekler: [] as string[],
 }));
 
+// Ortak entegrasyon kaydı (telefon lib/kimlik) bu testte yok → istemci gömülü (env) bilgilerle çalışır.
+vi.mock("@/lib/kimlik", () => ({ ortakKimlik: async () => ({}) }));
+
 vi.mock("@/lib/api/http", () => ({
   fetchT: async (url: string) => {
     h.istekler.push(url);

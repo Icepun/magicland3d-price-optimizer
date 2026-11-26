@@ -3,17 +3,26 @@ import { anahtarListesi } from "@core/order-match";
 
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { ortakKimlik } from "@/lib/kimlik";
 
 /**
  * n11 siparişleri (telefon) — masaüstü `/api/orders` n11 bloğunun karşılığı. Çözümleme ORTAK
  * çekirdekte (`@core/n11-siparis`): tarih, durum, gelir, kesintiler, kargo şablonu iki cihazda aynı.
  *
- * Kimlik: her istekte `appkey` + `appsecret` başlığı. Değerler derlemede `.env`'den gelir
- * (EXPO_PUBLIC_N11_APP_KEY / EXPO_PUBLIC_N11_APP_SECRET — Mac'te girilir, repoya YAZILMAZ).
+ * Kimlik: her istekte `appkey` + `appsecret` başlığı. Değerler masaüstünde girilen ortak kayıttan
+ * (lib/kimlik); yoksa uygulamaya gömülü EXPO_PUBLIC_N11_APP_KEY / _SECRET'tan (repoya YAZILMAZ).
  * Yalnız OKUMA. n11 en çok 1 aylık pencere verir, sayfa başına en çok 100 paket.
  */
-const APP_KEY = process.env.EXPO_PUBLIC_N11_APP_KEY;
-const APP_SECRET = process.env.EXPO_PUBLIC_N11_APP_SECRET;
+let APP_KEY = process.env.EXPO_PUBLIC_N11_APP_KEY;
+let APP_SECRET = process.env.EXPO_PUBLIC_N11_APP_SECRET;
+
+async function kimligiYukle(): Promise<void> {
+  const o = await ortakKimlik("n11");
+  if (o.appKey && o.appSecret) {
+    APP_KEY = o.appKey;
+    APP_SECRET = o.appSecret;
+  }
+}
 const TABAN = "https://api.n11.com/rest/delivery/v1/shipmentPackages";
 
 async function paketSayfasi(baslangic: number, bitis: number, sayfa: number): Promise<{ icerik: Record<string, unknown>[]; toplamSayfa: number }> {
@@ -38,6 +47,7 @@ async function paketSayfasi(baslangic: number, bitis: number, sayfa: number): Pr
 }
 
 export async function getN11Orders(historyDays = 30): Promise<UnifiedOrder[]> {
+  await kimligiYukle();
   // Kimlik bilgisi eksikse sessizce boş (diğer pazaryerleri gibi).
   if (!APP_KEY || !APP_SECRET) return [];
   const gun = Math.max(1, Math.min(60, Math.trunc(historyDays)));

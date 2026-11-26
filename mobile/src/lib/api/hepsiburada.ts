@@ -14,6 +14,7 @@ import { hepsiburadaKargoBaglami } from "@core/siparis-kargo";
 import type { HbDetayKaydi } from "@/lib/api/hb-detay-bicim";
 import type { OrderItem, UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { ortakKimlik } from "@/lib/kimlik";
 
 /**
  * Hepsiburada siparişleri (mobil) — masaüstü src/app/api/orders/route.ts HB bloğunun
@@ -32,11 +33,28 @@ import { fetchT } from "@/lib/api/http";
  * tarihi sipariş tarihi sayılıyordu, açık siparişler tek sayfaydı).
  */
 
-const MERCHANT_ID = process.env.EXPO_PUBLIC_HEPSIBURADA_MERCHANT_ID;
-const SECRET_KEY = process.env.EXPO_PUBLIC_HEPSIBURADA_SECRET_KEY;
-const DEV_USERNAME = process.env.EXPO_PUBLIC_HEPSIBURADA_DEV_USERNAME;
+// Bilgiler: masaüstünde girilen ortak kayıt (lib/kimlik); yoksa uygulamaya gömülü olanlar.
+let MERCHANT_ID = process.env.EXPO_PUBLIC_HEPSIBURADA_MERCHANT_ID;
+let SECRET_KEY = process.env.EXPO_PUBLIC_HEPSIBURADA_SECRET_KEY;
+let DEV_USERNAME = process.env.EXPO_PUBLIC_HEPSIBURADA_DEV_USERNAME;
 // env: "live" → canlı; aksi (test/boş) → SIT test ortamı.
-const ENV = (process.env.EXPO_PUBLIC_HEPSIBURADA_ENV || "live").toLowerCase();
+let ENV = (process.env.EXPO_PUBLIC_HEPSIBURADA_ENV || "live").toLowerCase();
+
+/**
+ * Ortak kayıt TAM ise onu kullan. Masaüstü ortamı "prod"/"test" yazar (eski kayıtta gizli alanlar
+ * password/username) — masaüstü getHepsiburadaCredentials ile aynı okuma.
+ */
+async function kimligiYukle(): Promise<void> {
+  const o = await ortakKimlik("hepsiburada");
+  const sifre = o.secretKey || o.password;
+  const gelistirici = o.developerUsername || o.username;
+  if (o.merchantId && sifre && gelistirici) {
+    MERCHANT_ID = o.merchantId;
+    SECRET_KEY = sifre;
+    DEV_USERNAME = gelistirici;
+    ENV = o.environment === "prod" ? "live" : "test";
+  }
+}
 
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -218,8 +236,10 @@ export async function getHepsiburadaOrders(
    */
   kayittaAciklar?: (cutoffMs: number) => Promise<string[]>
 ): Promise<UnifiedOrder[]> {
+  await kimligiYukle();
   // Kimlik bilgisi eksikse sessizce boş (trendyol.ts/shopify.ts gibi).
   if (!MERCHANT_ID || !SECRET_KEY || !DEV_USERNAME) return [];
+  const merchantId = MERCHANT_ID; // değişken modül düzeyinde `let` → kapanışlarda daraltma kalmıyor
 
   if (depo && !depoOkundu) {
     depoOkundu = true;
@@ -240,7 +260,7 @@ export async function getHepsiburadaOrders(
       acikSiparisler: (offset, limit) => listOrders({ offset, limit }),
       paketler: (durum, offset, limit) => listPackages(durum, { offset, limit }),
       talepler: (tur, offset, limit) =>
-        hbTalepSayfasi(tur, { offset, limit }, { merchantId: MERCHANT_ID, hafiza: talepYollari, iste: hbRequest }),
+        hbTalepSayfasi(tur, { offset, limit }, { merchantId, hafiza: talepYollari, iste: hbRequest }),
     },
     hbLineRaw
   );

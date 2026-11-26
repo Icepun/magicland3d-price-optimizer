@@ -1,12 +1,26 @@
 import type { UnifiedOrder } from "@/lib/api/orders";
 import { fetchT } from "@/lib/api/http";
+import { ortakKimlik } from "@/lib/kimlik";
 import { anahtarListesi } from "@core/order-match";
 import { shopifyTeslimEdildi, type ShopifyGonderim } from "@core/order-status-kind";
 
-const SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
+// Bilgiler: masaüstünde girilen ortak kayıt (lib/kimlik); yoksa uygulamaya gömülü olanlar.
+// API sürümü (VER) sipariş sorgusunun metnine modül yüklenirken girdiği için gömülü değerde kalır.
+let SHOP = process.env.EXPO_PUBLIC_SHOPIFY_SHOP_DOMAIN;
 const VER = process.env.EXPO_PUBLIC_SHOPIFY_API_VERSION || "2024-10";
-const CID = process.env.EXPO_PUBLIC_SHOPIFY_CLIENT_ID;
-const CSECRET = process.env.EXPO_PUBLIC_SHOPIFY_CLIENT_SECRET;
+let CID = process.env.EXPO_PUBLIC_SHOPIFY_CLIENT_ID;
+let CSECRET = process.env.EXPO_PUBLIC_SHOPIFY_CLIENT_SECRET;
+
+/** Ortak kayıt TAM ise onu kullan; bilgi değiştiyse önbellekteki yönetici anahtarı da geçersiz. */
+async function kimligiYukle(): Promise<void> {
+  const o = await ortakKimlik("shopify");
+  if (o.shopDomain && o.clientId && o.clientSecret) {
+    if (o.shopDomain !== SHOP || o.clientId !== CID || o.clientSecret !== CSECRET) cached = null;
+    SHOP = o.shopDomain;
+    CID = o.clientId;
+    CSECRET = o.clientSecret;
+  }
+}
 
 let cached: { token: string; exp: number } | null = null;
 
@@ -118,6 +132,7 @@ export async function getShopifyOrders(
   limit = 100,
   historyDays = 30
 ): Promise<UnifiedOrder[]> {
+  await kimligiYukle();
   if (!SHOP || !CID || !CSECRET) return [];
   const token = await getAdminToken();
   // Rapor görünümü 30 gün, kalıcı finans geçmişi ilk dolumda 60 gün ister.
