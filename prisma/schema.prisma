@@ -754,6 +754,21 @@ model PrinterSnapshot {
  * Kargo etiketi baskıları: telefonun istediği (masaüstü basar) ve masaüstünden basılanlar.
  * Telefon "basıldı" işaretini buradan okur. Tarihler epoch-ms — istemciler arası biçim derdi yok.
  */
+/**
+ * Entegrasyon bilgileri (Trendyol, Hepsiburada, Shopify, n11, HepsiJet) — bütün cihazların ORTAK
+ * kopyası, entegrasyon başına tek şifreli satır (`@/core/ortak-kimlik`). Bir bilgisayarda girilen
+ * bilgi diğerlerinde ve telefonda da geçerli. Günlük yedeğe GİRMEZ.
+ */
+model IntegrationSecret {
+  /** trendyol | hepsiburada | shopify | n11 | hepsijet */
+  name        String  @id
+  /** Şifreli alan haritası (`v1.nonce.metin.imza`). */
+  payload     String
+  /** Bilginin kaydedildiği an (epoch-ms) — iki bilgisayarda farklıysa en son kaydedilen kazanır. */
+  updatedAtMs Float
+  updatedBy   String?
+}
+
 model LabelPrintRequest {
   id             String  @id @default(cuid())
   /** trendyol | hepsiburada */

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, tryDecryptSecret } from "@/lib/crypto";
+import { ortaklaOku, ortagaYaz, type KimlikTanimi } from "@/lib/ortak-kimlik-deposu";
 import type { HepsijetKimligi, HepsijetOrtami } from "./hepsijet-client";
 
 /**
@@ -26,14 +27,23 @@ function dosyaYolu() {
   );
 }
 
+/** Bütün cihazlarda ortak kopya (bkz. lib/ortak-kimlik-deposu); iki ortamın bilgisi de taşınır. */
+export const HEPSIJET_KIMLIK: KimlikTanimi = {
+  ad: "hepsijet",
+  dosyaYolu,
+  gizli: ["test.sifre", "prod.sifre"],
+  acik: ["ortam", "test.kullaniciAdi", "prod.kullaniciAdi"],
+};
+
 async function oku(): Promise<KayitliAyarlar> {
   // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
-  return ayarDosyasiOku<KayitliAyarlar>(dosyaYolu());
+  return ortaklaOku(HEPSIJET_KIMLIK, await ayarDosyasiOku<KayitliAyarlar>(dosyaYolu()));
 }
 
 async function yaz(a: KayitliAyarlar) {
   // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
   await ayarDosyasiYaz(dosyaYolu(), a);
+  await ortagaYaz(HEPSIJET_KIMLIK, a);
 }
 
 const ortamOku = (v: unknown): HepsijetOrtami => (v === "prod" ? "prod" : "test");

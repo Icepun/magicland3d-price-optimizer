@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
+import { ortaklaOku, ortagaYaz, type KimlikTanimi } from "@/lib/ortak-kimlik-deposu";
 
 /**
  * Shopify auth — Storefront API (GraphQL).
@@ -42,14 +43,24 @@ function getSettingsFilePath() {
   );
 }
 
+/** Bütün cihazlarda ortak kopya (bkz. lib/ortak-kimlik-deposu). */
+export const SHOPIFY_KIMLIK: KimlikTanimi = {
+  ad: "shopify",
+  dosyaYolu: getSettingsFilePath,
+  gizli: ["storefrontAccessToken", "clientSecret"],
+  acik: ["shopDomain", "apiVersion", "clientId"],
+};
+
 async function readStoredSettings(): Promise<StoredShopifySettings> {
   // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
-  return ayarDosyasiOku<StoredShopifySettings>(getSettingsFilePath());
+  // Ortak kayıt varsa o geçerli (başka bilgisayarda girilen bilgi burada da çalışsın).
+  return ortaklaOku(SHOPIFY_KIMLIK, await ayarDosyasiOku<StoredShopifySettings>(getSettingsFilePath()));
 }
 
 async function writeStoredSettings(settings: StoredShopifySettings) {
   // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
   await ayarDosyasiYaz(getSettingsFilePath(), settings);
+  await ortagaYaz(SHOPIFY_KIMLIK, settings);
 }
 
 export async function getShopifyCredentials(): Promise<ShopifyCredentials> {

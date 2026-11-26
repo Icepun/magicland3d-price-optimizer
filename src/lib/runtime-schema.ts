@@ -148,9 +148,11 @@ let schemaReady: Promise<void> | null = null;
 // v65: `OrderCargoDesi` — Shopify siparişinin gerçekte çıktığı kargo desisi (elle girilen, Berke 24 Kas
 //      2026: "8 desi hesaplanan kargoyu 4 desiyle çıkarsam düzenleyebilmeliyim"). Kargo bedeli ürün
 //      desilerinin toplamı yerine bununla hesaplanır. Yeni tablo → eski sürüm cihazlar etkilenmez.
+// v67: `IntegrationSecret` — entegrasyon bilgilerinin bütün cihazlarda ortak, şifreli kopyası
+//      (lib/ortak-kimlik-deposu). Yeni tablo → eski sürümler etkilenmez (yerel dosyayla devam eder).
 // v66: `CargoShipment` — uygulamadan açılan HepsiJet gönderisi (barkod, durum, hareket geçmişi,
 //      Shopify'a yazılma durumu). Müşteri adresi tutulmaz. Yeni tablo → eski sürümler etkilenmez.
-const CURRENT_SCHEMA_VERSION = "66";
+const CURRENT_SCHEMA_VERSION = "67";
 
 /** Kargo kuralı platform/TEX göçü bir kez koştu mu (iç durum; yedekten geri yüklenmez). */
 export const KARGO_PLATFORM_GOCU_ANAHTARI = "gocKargoPlatformTamam";
@@ -1759,6 +1761,15 @@ CREATE TABLE IF NOT EXISTS "AdBudget" (
     // v53: telefondan parça iptali — `exclude` komutunun parça adı.
     await ensureColumn("PrintCommand", "param", "TEXT");
     // v55: telefondan kargo etiketi (bkz. lib/etiket/telefon-istekleri).
+    // v67: entegrasyon bilgilerinin ortak şifreli kopyası (bkz. lib/ortak-kimlik-deposu).
+    await bufDDL(`
+      CREATE TABLE IF NOT EXISTS "IntegrationSecret" (
+        "name" TEXT NOT NULL PRIMARY KEY,
+        "payload" TEXT NOT NULL,
+        "updatedAtMs" REAL NOT NULL,
+        "updatedBy" TEXT
+      )
+    `);
     await bufDDL(`
       CREATE TABLE IF NOT EXISTS "LabelPrintRequest" (
         "id" TEXT NOT NULL PRIMARY KEY,

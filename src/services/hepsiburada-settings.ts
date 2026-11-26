@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
+import { ortaklaOku, ortagaYaz, type KimlikTanimi } from "@/lib/ortak-kimlik-deposu";
 import type { HepsiburadaCredentials, HbEnvironment } from "./hepsiburada-client";
 
 interface StoredHepsiburadaSettings {
@@ -28,14 +29,24 @@ function getSettingsFilePath() {
   );
 }
 
+/** Bütün cihazlarda ortak kopya (bkz. lib/ortak-kimlik-deposu). Eski şifreli alanlar da taşınır. */
+export const HEPSIBURADA_KIMLIK: KimlikTanimi = {
+  ad: "hepsiburada",
+  dosyaYolu: getSettingsFilePath,
+  gizli: ["secretKey", "username", "password"],
+  acik: ["merchantId", "developerUsername", "environment"],
+};
+
 async function readStoredSettings(): Promise<StoredHepsiburadaSettings> {
   // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
-  return ayarDosyasiOku<StoredHepsiburadaSettings>(getSettingsFilePath());
+  // Ortak kayıt varsa o geçerli (başka bilgisayarda girilen bilgi burada da çalışsın).
+  return ortaklaOku(HEPSIBURADA_KIMLIK, await ayarDosyasiOku<StoredHepsiburadaSettings>(getSettingsFilePath()));
 }
 
 async function writeStoredSettings(settings: StoredHepsiburadaSettings) {
   // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
   await ayarDosyasiYaz(getSettingsFilePath(), settings);
+  await ortagaYaz(HEPSIBURADA_KIMLIK, settings);
 }
 
 /** secret key: yeni alan → yoksa eski `password`. developerUsername: yeni düz alan → yoksa eski şifreli `username`. */

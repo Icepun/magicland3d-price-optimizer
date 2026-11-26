@@ -1,12 +1,14 @@
 import path from "node:path";
 import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
+import { ortaklaOku, ortagaYaz, type KimlikTanimi } from "@/lib/ortak-kimlik-deposu";
 import type { N11Kimligi } from "./n11-client";
 
 /**
  * n11 API bilgileri — diğer pazaryerleriyle aynı düzen: bu bilgisayarda, kullanıcı klasöründe
  * (`N11_SETTINGS_FILE`, Electron ayarlar), API şifresi AES ile şifreli. API anahtarı da şifreli
- * tutulur (ikisi birlikte mağazaya tam erişim verir).
+ * tutulur (ikisi birlikte mağazaya tam erişim verir). Ortak şifreli kopyası bütün cihazlarda ve
+ * telefonda geçerli (bkz. lib/ortak-kimlik-deposu).
  */
 interface KayitliN11Ayarlari {
   appKey?: string; // şifreli
@@ -20,9 +22,16 @@ function dosyaYolu() {
   );
 }
 
+export const N11_KIMLIK: KimlikTanimi = {
+  ad: "n11",
+  dosyaYolu,
+  gizli: ["appKey", "appSecret"],
+  acik: [],
+};
+
 async function oku(): Promise<KayitliN11Ayarlari> {
   // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
-  return ayarDosyasiOku<KayitliN11Ayarlari>(dosyaYolu());
+  return ortaklaOku(N11_KIMLIK, await ayarDosyasiOku<KayitliN11Ayarlari>(dosyaYolu()));
 }
 
 export interface N11AcikAyarlar {
@@ -69,4 +78,5 @@ export async function n11AyarlariniKaydet(girdi: { appKey?: string; appSecret?: 
     appSecret: sifre ? encryptSecret(sifre) : a.appSecret,
   };
   await ayarDosyasiYaz(dosyaYolu(), yeni);
+  await ortagaYaz(N11_KIMLIK, yeni);
 }

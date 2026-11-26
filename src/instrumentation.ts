@@ -22,6 +22,14 @@ export async function register() {
       console.error("[instrumentation] sipariş izleyici başlatılamadı:", e);
     }
 
+    // Entegrasyon bilgileri bütün cihazlarda ortak: bu bilgisayardakini ortak kayda taşı.
+    try {
+      const { startOrtakKimlikEsitleme } = await import("./lib/ortak-kimlik-esitleme");
+      startOrtakKimlikEsitleme();
+    } catch (e) {
+      console.error("[instrumentation] ortak kimlik eşitlemesi başlatılamadı:", e);
+    }
+
     // Telefondan kargo etiketi: telefonun isteğini etiket yazıcısı bağlı bu bilgisayar basar.
     try {
       const { startEtiketIstekleri } = await import("./lib/etiket/telefon-istekleri");

@@ -94,6 +94,7 @@ export const BACKUP_EXCLUDED_MODELS = {
   ProductModelFileThumb: "Önizleme görseli productModelFiles[].thumbnail içinde taşınır.",
   PrinterSnapshot: "Yazıcının anlık canlı durumu; masaüstü sürekli yeniden yazar.",
   LabelPrintRequest: "Kargo etiketi baskı kuyruğu (geçici iş kaydı).",
+  IntegrationSecret: "Pazaryeri ve kargo giriş bilgileri: yedek dosyasına şifre düşmesin; her bilgisayardaki yerel kopyadan yeniden oluşur.",
   PrinterStatusSample: "Yazıcı doluluk örnekleri; 30 günden eskileri zaten silinir.",
   PrinterCamera: "Telefonun anlık kamera isteği.",
   PrintCommand: "Telefondan gelen anlık baskı komutu kuyruğu.",

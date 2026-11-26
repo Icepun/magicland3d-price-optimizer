@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ayarDosyasiOku, ayarDosyasiYaz } from "@/lib/ayar-dosyasi";
 import { encryptSecret, maskSecret, tryDecryptSecret } from "@/lib/crypto";
+import { ortaklaOku, ortagaYaz, type KimlikTanimi } from "@/lib/ortak-kimlik-deposu";
 import type { TrendyolCredentials, TrendyolEnvironment } from "./trendyol-client";
 
 interface StoredTrendyolSettings {
@@ -31,14 +32,24 @@ function getSettingsFilePath() {
   );
 }
 
+/** Bütün cihazlarda ortak kopya (bkz. lib/ortak-kimlik-deposu). */
+export const TRENDYOL_KIMLIK: KimlikTanimi = {
+  ad: "trendyol",
+  dosyaYolu: getSettingsFilePath,
+  gizli: ["apiKey", "apiSecret", "integrationReferenceCode"],
+  acik: ["sellerId", "environment", "integratorName"],
+};
+
 async function readStoredSettings(): Promise<StoredTrendyolSettings> {
   // Yalnız dosya yoksa boş; bozuksa yedek, o da yoksa HATA (anahtarlar boş dosyanın üstüne yazılmasın).
-  return ayarDosyasiOku<StoredTrendyolSettings>(getSettingsFilePath());
+  // Ortak kayıt varsa o geçerli (başka bilgisayarda girilen bilgi burada da çalışsın).
+  return ortaklaOku(TRENDYOL_KIMLIK, await ayarDosyasiOku<StoredTrendyolSettings>(getSettingsFilePath()));
 }
 
 async function writeStoredSettings(settings: StoredTrendyolSettings) {
   // Geçici dosya + yeniden adlandırma: yazarken çökme yarım dosya bırakmaz; önceki iyi kopya yedekte.
   await ayarDosyasiYaz(getSettingsFilePath(), settings);
+  await ortagaYaz(TRENDYOL_KIMLIK, settings);
 }
 
 function decryptRequired(value: string | undefined, label: string) {
