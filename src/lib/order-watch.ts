@@ -726,7 +726,7 @@ async function warmTick(): Promise<void> {
   }
 }
 
-/** Gerçek kesinti kayıtları: açılıştan kısa süre sonra ve ardından 3 saatte bir. */
+/** Gerçek kesinti kayıtları + n11 ilan eşitlemesi: açılıştan kısa süre sonra ve ardından 3 saatte bir. */
 const FINANS_MS = 3 * 60 * 60_000;
 const FIRST_FINANS_MS = 4 * 60_000;
 let finansCalisiyor = false;
@@ -735,6 +735,10 @@ let finansCalisiyor = false;
  * FİNANS TURU — Hepsiburada'nın teslim edilen siparişler için yazdığı gerçek kesintileri çeker.
  * Sipariş hattından AYRI: Siparişler ekranı hiçbir zaman muhasebe servisini beklemez. Kimlik
  * bilgisi yoksa uç hata döner ve sessizce geçilir.
+ *
+ * n11 İLANLARI da bu turda eşitlenir (yeni ilan bağlanır, fiyat/stok/komisyon tazelenir). Elle düğmeye
+ * bağlı kaldığında hiç basılmamış, n11 Ürünler/ürün detayı/Panel'de hiç görünmemişti (26 Kas 2026).
+ * Yalnız OKUMA — n11'e hiçbir şey yazılmaz; bağlı değilse uç 400 döner, geçilir.
  */
 async function financeTick(): Promise<void> {
   if (finansCalisiyor || dbPaused()) return;
@@ -747,6 +751,13 @@ async function financeTick(): Promise<void> {
       for (const yol of ["/api/finance/hepsiburada-financials?days=35", "/api/finance/trendyol-commissions?days=45"]) {
         await fetch(`${baseUrl()}${yol}`, { method: "POST", signal: ctrl.signal, cache: "no-store" }).catch(() => {});
       }
+      await fetch(`${baseUrl()}/api/n11/sync-products`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "full" }),
+        signal: ctrl.signal,
+        cache: "no-store",
+      }).catch(() => {});
     } finally {
       clearTimeout(t);
     }

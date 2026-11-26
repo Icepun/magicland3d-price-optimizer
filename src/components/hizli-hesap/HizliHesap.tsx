@@ -61,13 +61,15 @@ const BOS_FORM: Form = {
   paket: "poset-kucuk",
   naylon: "low",
   bant: false,
-  komisyon: { trendyol: "", hepsiburada: "", shopify: "" },
+  // n11 bugün tüm ilanlarda %0 (kampanya) → varsayılan 0; kullanıcı değiştirebilir.
+  komisyon: { trendyol: "", hepsiburada: "", n11: "0", shopify: "" },
   fiyat: "",
 };
 
 const PLATFORMLAR: { id: HizliPlatform; ad: string }[] = [
   { id: "trendyol", ad: "Trendyol" },
   { id: "hepsiburada", ad: "Hepsiburada" },
+  { id: "n11", ad: "n11" },
   { id: "shopify", ad: "Shopify" },
 ];
 
@@ -178,7 +180,7 @@ function HizliHesapIcerik({ acik, onKapat }: { acik: boolean; onKapat: () => voi
   const reklamQ = useQuery<{ oranlar: Record<string, { oran: number }> }>({
     queryKey: ["ad-budgets"], queryFn: () => fetchJson("/api/ad-budgets"), staleTime: 5 * 60_000,
   });
-  const sikQ = useQuery<{ komisyonlar: Record<"trendyol" | "hepsiburada", number[]> }>({
+  const sikQ = useQuery<{ komisyonlar: Partial<Record<"trendyol" | "hepsiburada" | "n11", number[]>> }>({
     queryKey: ["hizli-hesap"], queryFn: () => fetchJson("/api/hizli-hesap"), staleTime: 10 * 60_000,
   });
 
@@ -273,7 +275,7 @@ function HizliHesapIcerik({ acik, onKapat }: { acik: boolean; onKapat: () => voi
       {/* Form */}
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {/* Platform */}
-        <div className="grid grid-cols-3 gap-1 rounded-xl bg-muted/40 p-1">
+        <div className="grid grid-cols-4 gap-1 rounded-xl bg-muted/40 p-1">
           {PLATFORMLAR.map((p) => (
             <button
               key={p.id}
@@ -326,7 +328,7 @@ function HizliHesapIcerik({ acik, onKapat }: { acik: boolean; onKapat: () => voi
             deger={komisyonMetni}
             onDegis={(v) => setForm((f) => ({ ...f, komisyon: { ...f.komisyon, [f.platform]: v } }))}
             birim="%"
-            yer={form.platform === "shopify" ? String(shopifyVarsayilan).replace(".", ",") : "örn. 21"}
+            yer={form.platform === "shopify" ? String(shopifyVarsayilan).replace(".", ",") : form.platform === "n11" ? "örn. 0" : "örn. 21"}
           />
           {sik.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1 motion-safe:animate-in motion-safe:fade-in duration-300">

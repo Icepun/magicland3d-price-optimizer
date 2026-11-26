@@ -42,6 +42,8 @@ export function N11Karti() {
       setSifre("");
       setSonuc(null);
       toast.success("n11 bilgileri kaydedildi");
+      // İlanlar hemen eşitlensin — n11 Ürünler, ürün detayı ve Panel'de beklemeden görünsün.
+      if (d.anahtarVar && d.sifreVar) esitle.mutate();
     },
     onError: (e: Error) => toast.error(e.message),
   });

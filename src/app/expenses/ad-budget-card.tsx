@@ -36,6 +36,7 @@ const PLATFORMLAR = [
   { id: "trendyol", ad: "Trendyol", renk: "text-[#F27A1A]" },
   { id: "shopify", ad: "Shopify", renk: "text-emerald-500" },
   { id: "hepsiburada", ad: "Hepsiburada", renk: "text-[#4F8CFF]" },
+  { id: "n11", ad: "n11", renk: "text-[#FF44EE]" },
 ] as const;
 
 interface Butce {

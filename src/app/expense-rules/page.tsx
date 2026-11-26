@@ -49,7 +49,7 @@ interface ExpenseRule {
 
 const Schema = z.object({
   name: z.string().min(1, "Ad zorunlu"),
-  platform: z.enum(["all", "trendyol", "shopify", "hepsiburada"]).default("all"),
+  platform: z.enum(["all", "trendyol", "shopify", "hepsiburada", "n11"]).default("all"),
   type: z.enum(["fixed", "percentage", "per_order"]),
   value: z.coerce.number().min(0),
   categoryName: z.string().optional(),
@@ -71,6 +71,7 @@ const PLATFORM_BADGE: Record<string, { label: string; cls: string }> = {
   trendyol: { label: "Trendyol", cls: "bg-orange-500/10 text-orange-500 border-orange-500/20" },
   shopify: { label: "Shopify", cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" },
   hepsiburada: { label: "Hepsiburada", cls: "bg-violet-500/10 text-violet-500 border-violet-500/20" },
+  n11: { label: "n11", cls: "bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20" },
 };
 
 function RuleForm({
@@ -110,13 +111,14 @@ function RuleForm({
           <Label>Platform *</Label>
           <select
             value={platform}
-            onChange={(e) => form.setValue("platform", e.target.value as "all" | "trendyol" | "shopify" | "hepsiburada")}
+            onChange={(e) => form.setValue("platform", e.target.value as "all" | "trendyol" | "shopify" | "hepsiburada" | "n11")}
             className="w-full h-9 rounded-md border bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <option value="all">Tüm platformlar</option>
             <option value="trendyol">Sadece Trendyol</option>
             <option value="shopify">Sadece Shopify</option>
             <option value="hepsiburada">Sadece Hepsiburada</option>
+            <option value="n11">Sadece n11</option>
           </select>
         </div>
       </div>
@@ -372,7 +374,7 @@ export default function ExpenseRulesPage() {
             <RuleForm
               defaultValues={{
                 ...editing,
-                platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada") ?? "all",
+                platform: (editing.platform as "trendyol" | "shopify" | "hepsiburada" | "n11") ?? "all",
                 type: editing.type === "fixed" ? "per_order" : editing.type as "percentage" | "per_order",
                 value: editing.type === "percentage" ? editing.value * 100 : editing.value,
                 categoryName: editing.categoryName ?? undefined,

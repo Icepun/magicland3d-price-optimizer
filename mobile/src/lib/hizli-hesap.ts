@@ -40,11 +40,12 @@ export const BOS_FORM: HizliForm = {
   paket: "poset-kucuk",
   naylon: "low",
   bant: false,
-  komisyon: { trendyol: "", hepsiburada: "", shopify: "" },
+  // n11 bugün tüm ilanlarda %0 (kampanya) — masaüstüyle aynı varsayılan.
+  komisyon: { trendyol: "", hepsiburada: "", n11: "0", shopify: "" },
   fiyat: "",
 };
 
-const PLATFORMLAR: readonly HizliPlatform[] = ["trendyol", "hepsiburada", "shopify"];
+const PLATFORMLAR: readonly HizliPlatform[] = ["trendyol", "hepsiburada", "n11", "shopify"];
 
 /** Kayıttan okunan platform hâlâ geçerli mi (eski/bozuk dosyaya karşı). */
 export function gecerliPlatformMu(p: unknown): p is HizliPlatform {

@@ -56,10 +56,12 @@ export function PlatformLogo({
 
   // ── Yerleşik SVG fallback (logo yüklenmemişse) ──
   if (platform === "n11") {
+    // Küçük boyutta da okunsun: marka pembesi zemin üstünde beyaz "n11" (yazı kutuya sığdırılır).
     return (
       <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true">
-        <text x="12" y="16.2" textAnchor="middle" fontSize="11.5" fontWeight="800" fill="currentColor"
-          fontFamily="ui-sans-serif, system-ui, sans-serif" letterSpacing="-0.6">n11</text>
+        <rect x="0.5" y="4" width="23" height="16" rx="5" fill="#FF44EE" />
+        <text x="12" y="15.6" textAnchor="middle" fontSize="10.5" fontWeight="800" fill="#fff"
+          fontFamily="ui-sans-serif, system-ui, sans-serif" textLength="17" lengthAdjust="spacingAndGlyphs">n11</text>
       </svg>
     );
   }

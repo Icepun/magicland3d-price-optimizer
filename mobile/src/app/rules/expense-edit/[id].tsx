@@ -23,6 +23,7 @@ const PLATFORMS = [
   { key: "shopify", label: "Shopify" },
   { key: "trendyol", label: "Trendyol" },
   { key: "hepsiburada", label: "HB" },
+  { key: "n11", label: "n11" },
 ];
 const TYPES: { key: ExpenseType; label: string }[] = [
   { key: "percentage", label: "Yüzde %" },

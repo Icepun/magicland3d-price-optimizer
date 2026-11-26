@@ -14,6 +14,7 @@ function platformLabel(p: string | null): string {
   if (p === "shopify") return "Shopify";
   if (p === "trendyol") return "Trendyol";
   if (p === "hepsiburada") return "Hepsiburada";
+  if (p === "n11") return "n11";
   return p;
 }
 

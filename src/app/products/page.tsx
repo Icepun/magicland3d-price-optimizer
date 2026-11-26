@@ -1801,7 +1801,8 @@ export default function ProductsPage() {
     done += 1;
     setRefreshProgress({ total, done, label: "Tamamlandı ✓" });
     // DÜRÜST sonuç: hata varsa AÇIKÇA göster, yoksa platform-bazlı kaç fiyat değişti / kaç kontrol edildi.
-    const short = (p: string) => (p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : "Shopify");
+    const short = (p: string) =>
+      p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : p === "n11" ? "n11" : "Shopify";
     const errs = results.filter((r) => !r.ok);
     if (errs.length) {
       toast.error(`Fiyat güncellenemedi → ${errs.map((e) => `${short(e.p)}: ${e.error}`).join(" · ")}`, { duration: 9000 });

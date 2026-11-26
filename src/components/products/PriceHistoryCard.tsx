@@ -32,6 +32,7 @@ interface PriceHistoryEntry {
 const SOURCE_META: Record<string, { label: string; color: string }> = {
   shopify_sync: { label: "Shopify", color: "#34D399" }, // yeşil
   trendyol_sync: { label: "Trendyol", color: "#F27A1A" }, // Trendyol turuncusu (marka rengi)
+  n11_sync: { label: "n11", color: "#FF44EE" },
   hepsiburada_sync: { label: "Hepsiburada", color: "#4F8CFF" }, // turuncu-kırmızı (HB)
   manual: { label: "Manuel", color: "#C9D2F2" }, // mor
 };

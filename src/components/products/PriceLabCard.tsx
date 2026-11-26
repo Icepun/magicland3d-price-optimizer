@@ -24,6 +24,8 @@ export interface PriceThresholdInfo {
 const PLATFORM = {
   shopify: { label: "Shopify", color: "#34D399" },
   trendyol: { label: "Trendyol", color: "#F27A1A" },
+  hepsiburada: { label: "Hepsiburada", color: "#4F8CFF" },
+  n11: { label: "n11", color: "#FF44EE" },
 } as const;
 
 function platformInfo(p: string) {

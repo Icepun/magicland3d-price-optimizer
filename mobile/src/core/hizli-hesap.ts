@@ -14,7 +14,7 @@ import { computePriceLab, computeProfitPreview, type ClientPricingInput } from "
 import type { CargoRuleInput, CommissionRuleInput, ExpenseRuleInput, SimulationResult } from "./types";
 import { belowShopifyMinBasket } from "./platform-rules";
 
-export type HizliPlatform = "trendyol" | "hepsiburada" | "shopify";
+export type HizliPlatform = "trendyol" | "hepsiburada" | "n11" | "shopify";
 
 export interface HizliHesapGirdi {
   platform: HizliPlatform;
@@ -162,16 +162,18 @@ export function fiyatDagilimi(s: SimulationResult): {
 /**
  * İlanlarda en sık kullanılan komisyon oranları (yüzde, sıklığa göre) — formda tek tıklık kısayol.
  * Ör. canlı veri: Trendyol %14 · %21 · %28 · %22 · %22,5; Hepsiburada %10 · %22 · %15 · %18.
+ * n11'de %0 da geçerli bir orandır (kampanya — 26 Kas 2026'da tüm ilanlar %0).
  */
 export function sikKomisyonlar(
   satirlar: Array<{ platform: string; commissionRate: number | null }>,
   adet = 5,
-): Record<"trendyol" | "hepsiburada", number[]> {
-  const out: Record<"trendyol" | "hepsiburada", number[]> = { trendyol: [], hepsiburada: [] };
-  for (const pf of ["trendyol", "hepsiburada"] as const) {
+): Record<"trendyol" | "hepsiburada" | "n11", number[]> {
+  const out: Record<"trendyol" | "hepsiburada" | "n11", number[]> = { trendyol: [], hepsiburada: [], n11: [] };
+  for (const pf of ["trendyol", "hepsiburada", "n11"] as const) {
     const sayac = new Map<number, number>();
     for (const s of satirlar) {
-      if (s.platform !== pf || s.commissionRate == null || !(s.commissionRate > 0) || s.commissionRate >= 1) continue;
+      if (s.platform !== pf || s.commissionRate == null || s.commissionRate >= 1) continue;
+      if (pf === "n11" ? s.commissionRate < 0 : !(s.commissionRate > 0)) continue;
       const yuzde = Math.round(s.commissionRate * 1000) / 10;
       sayac.set(yuzde, (sayac.get(yuzde) ?? 0) + 1);
     }

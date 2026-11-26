@@ -5,10 +5,10 @@ import { query } from "@/lib/turso";
  * Hızlı hesap formunun kısayolları: ilanlarda en sık kullanılan komisyon oranları.
  * Masaüstü /api/hizli-hesap ile aynı süzgeç ve aynı çekirdek sayımı (`sikKomisyonlar`).
  */
-export async function getSikKomisyonlar(): Promise<Record<"trendyol" | "hepsiburada", number[]>> {
+export async function getSikKomisyonlar(): Promise<Record<"trendyol" | "hepsiburada" | "n11", number[]>> {
   const satirlar = await query<{ platform: string; commissionRate: number | null }>(
     `SELECT platform, commissionRate FROM Listing
-      WHERE isActive = 1 AND commissionRate IS NOT NULL AND platform IN ('trendyol', 'hepsiburada')`
+      WHERE isActive = 1 AND commissionRate IS NOT NULL AND platform IN ('trendyol', 'hepsiburada', 'n11')`
   );
   return sikKomisyonlar(
     satirlar.map((s) => ({

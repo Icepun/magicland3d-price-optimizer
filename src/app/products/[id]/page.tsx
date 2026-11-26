@@ -41,6 +41,7 @@ import { buttonVariants } from "@/components/ui/button";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
+import { ilanGiderSatirlari } from "@/core/ilan-dokumu";
 import type { SimulationResult, CommissionRuleInput, CargoRuleInput, ExpenseRuleInput } from "@/core/types";
 import { parsePackagingSettings, type NylonLevel } from "@/core/packaging";
 import { ekFilamentleriOku, ekFilamentleriYaz } from "@/core/filament-karisimi";
@@ -1788,24 +1789,15 @@ function PlatformProfitCardImpl({
                       <span>−{formatCurrency(result.adCost)}</span>
                     </div>
                   )}
-                  {result.appliedExpenseRules
-                    .filter((exp) => exp.amount !== 0)
-                    .map((exp) => (
-                      <div
-                        key={exp.id}
-                        className="flex justify-between text-muted-foreground"
-                      >
-                        <span>{exp.name}</span>
-                        {/* Ciroyla orantılı gider her adette tekrar eder, sabit gider siparişe bir
-                            kez — motor da böyle hesaplıyor. Döküm sipariş ölçeğinde gösterilir. */}
-                        <span>
-                          −
-                          {formatCurrency(
-                            exp.type === "percentage" ? exp.amount * result.minOrderQty : exp.amount
-                          )}
-                        </span>
-                      </div>
-                    ))}
+                  {/* Gider kuralları + pazaryerinin kendi kesintileri (tahsilat / pazarlama ve hizmet
+                      bedeli, kuralın yerine geçen hizmet bedeli) — satırların toplamı motorun düştüğü
+                      tutar (core/ilan-dokumu). Sipariş ölçeğinde gösterilir. */}
+                  {ilanGiderSatirlari(platform, result).map((satir) => (
+                    <div key={satir.key} className="flex justify-between text-muted-foreground">
+                      <span>{satir.ad}</span>
+                      <span>−{formatCurrency(satir.tutar)}</span>
+                    </div>
+                  ))}
                   {result.inputVatCredit > 0 && (
                     <div
                       className="flex justify-between text-emerald-400 font-medium pt-0.5"

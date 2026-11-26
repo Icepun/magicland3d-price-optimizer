@@ -419,6 +419,8 @@ export default function CommissionRulesPage() {
 
       <ShopifyCommissionCard />
 
+      <N11KomisyonKarti />
+
       <section className={cn(KART, "space-y-4 p-4")} style={{ animationDelay: "160ms" }}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -708,7 +710,54 @@ function ShopifyCommissionCard() {
   );
 }
 
-const PLATFORM_ADI: Record<string, string> = { trendyol: "Trendyol", hepsiburada: "Hepsiburada", shopify: "Shopify" };
+/**
+ * n11 komisyonu — kural girilmez: oranı n11 her siparişte bildirir (kampanyada %0) ve kâra o girer.
+ * Kart ilanlardaki oranları özetler; n11 ilanı yoksa hiç görünmez.
+ */
+function N11KomisyonKarti() {
+  const { data } = useQuery<Array<{ commissionRate: number | null }>>({
+    queryKey: ["listings", "n11"],
+    queryFn: () => fetchJson("/api/listings?platform=n11"),
+    staleTime: 5 * 60_000,
+  });
+  const ozet = useMemo(() => {
+    const sayac = new Map<number, number>();
+    for (const l of data ?? []) {
+      if (l.commissionRate == null) continue;
+      // İlanda KDV hariç oran saklı; n11 "%X + KDV" diye bildirir — ekranda n11'in yazdığı gibi.
+      const yuzde = Math.round(l.commissionRate * 1000) / 10;
+      sayac.set(yuzde, (sayac.get(yuzde) ?? 0) + 1);
+    }
+    return [...sayac.entries()].sort((a, b) => b[1] - a[1]);
+  }, [data]);
+  if (!data || data.length === 0) return null;
+  return (
+    <section
+      className="rounded-2xl bg-card p-4 ring-1 ring-[#FF44EE]/25 animate-in fade-in slide-in-from-bottom-2 fill-mode-both duration-500 motion-reduce:animate-none"
+      style={{ animationDelay: "120ms" }}
+    >
+      <h2 className="flex items-center gap-2 text-sm font-semibold tracking-tight">
+        <span className="grid size-7 place-items-center rounded-lg bg-[#FF44EE]/10 text-[#FF44EE] ring-1 ring-[#FF44EE]/25">
+          <Percent className="size-3.5" />
+        </span>
+        n11 komisyonu
+      </h2>
+      <div className="mt-3 flex flex-wrap items-end gap-x-6 gap-y-2">
+        {ozet.slice(0, 4).map(([yuzde, adet], i) => (
+          <div key={yuzde} className="animate-in fade-in zoom-in-95 fill-mode-both duration-500" style={{ animationDelay: `${150 + i * 70}ms` }}>
+            <p className="text-xl font-semibold tabular-nums">%{String(yuzde).replace(".", ",")}</p>
+            <p className="text-[11px] text-muted-foreground tabular-nums">{formatNumber(adet, 0)} ilanda</p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        Oranı n11 belirler; her siparişte kendiliğinden kullanılır, kural girmen gerekmez.
+      </p>
+    </section>
+  );
+}
+
+const PLATFORM_ADI: Record<string, string> = { trendyol: "Trendyol", hepsiburada: "Hepsiburada", n11: "n11", shopify: "Shopify" };
 
 /**
  * Son 30 günde GERÇEKLEŞEN komisyon — platform başına. Siparişler sayfasıyla aynı önbellek.

@@ -24,7 +24,7 @@ export interface AdBudgetRow {
   isActive: number;
 }
 
-export const AD_PLATFORMS = ["all", "trendyol", "shopify", "hepsiburada"] as const;
+export const AD_PLATFORMS = ["all", "trendyol", "shopify", "hepsiburada", "n11"] as const;
 export type AdPlatform = (typeof AD_PLATFORMS)[number];
 
 export const AD_PLATFORM_LABEL: Record<AdPlatform, string> = {
@@ -32,6 +32,7 @@ export const AD_PLATFORM_LABEL: Record<AdPlatform, string> = {
   trendyol: "Trendyol",
   shopify: "Shopify",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
 };
 
 /** Kayıtlı bütçeler — yeni dönem üstte. */

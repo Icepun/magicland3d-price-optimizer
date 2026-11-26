@@ -53,7 +53,7 @@ export async function GET() {
 
 const Body = z.object({
   /** "all" = tüm platformlar (marka reklamı) — paydası TOPLAM cirodur. */
-  platform: z.enum(["all", "trendyol", "shopify", "hepsiburada"]),
+  platform: z.enum(["all", "trendyol", "shopify", "hepsiburada", "n11"]),
   /** Günlük reklam harcaması (TL). 0 = reklamı durdur (dönem kapanır, yenisi 0 ile açılır). */
   dailyAmount: z.coerce.number().min(0),
   /** Bu andan itibaren geçerli (ISO). */

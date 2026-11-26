@@ -11,7 +11,7 @@ export async function GET() {
   try {
     await ensureRuntimeSchema();
     const satirlar = await prisma.listing.findMany({
-      where: { isActive: true, commissionRate: { not: null }, platform: { in: ["trendyol", "hepsiburada"] } },
+      where: { isActive: true, commissionRate: { not: null }, platform: { in: ["trendyol", "hepsiburada", "n11"] } },
       select: { platform: true, commissionRate: true },
     });
     return NextResponse.json({ komisyonlar: sikKomisyonlar(satirlar) });

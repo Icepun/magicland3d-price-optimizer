@@ -181,8 +181,9 @@ describe("kâr dökümünün toplamı net kâra eşittir", () => {
     expect(SAYFA).toContain("result.vatAmount * result.minOrderQty");
     expect(SAYFA).not.toContain("−{formatCurrency(result.vatAmount)}");
     expect(SAYFA).toContain("adetlik sipariş üzerinden");
-    // Ciroyla orantılı gider adetle çarpılır, sabit gider siparişe bir kez.
-    expect(SAYFA).toContain('exp.type === "percentage" ? exp.amount * result.minOrderQty : exp.amount');
+    // Gider satırları (oransal ×adet, sabit bir kez, pazaryeri kesintisi) core/ilan-dokumu'da —
+    // kuralları orada test ediliyor; sayfa onu kullanmalı.
+    expect(SAYFA).toContain("ilanGiderSatirlari(platform, result)");
   });
 });
 

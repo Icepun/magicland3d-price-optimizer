@@ -142,4 +142,24 @@ describe("hızlı hesap", () => {
     expect(r.trendyol).toEqual([14, 21, 22.5]);
     expect(r.hepsiburada).toEqual([10]);
   });
+
+  it("n11: %0 kısayol olarak sunulur (kampanya oranı), diğer pazaryerlerinde 0 elenir", () => {
+    const r = sikKomisyonlar([
+      { platform: "n11", commissionRate: 0 }, { platform: "n11", commissionRate: 0 },
+      { platform: "n11", commissionRate: 0.12 }, { platform: "trendyol", commissionRate: 0 },
+    ]);
+    expect(r.n11).toEqual([0, 12]);
+    expect(r.trendyol).toEqual([]);
+  });
+
+  it("n11: pazarlama + hizmet bedeli ve DHL tarifesi ürün ekranıyla aynı çekirdekten", () => {
+    const { sonuc } = hizliHesapla(girdi({ platform: "n11", komisyonPct: 0, fiyat: 349.99 }), baglam);
+    expect(sonuc).not.toBeNull();
+    expect(sonuc!.commissionCost).toBe(0);
+    // Brüt fiyatın %2'si = 7,00 TL; Trendyol'un sabit hizmet bedeli n11'e uygulanmaz.
+    expect(sonuc!.variableExpenses).toBeCloseTo(7, 2);
+    expect(sonuc!.fixedExpenses).toBe(0);
+    // 349,99 >= 300 → DHL desi listesi, 1 desi 101,49 + KDV
+    expect(sonuc!.cargoCost).toBeCloseTo(121.79, 2);
+  });
 });

@@ -30,7 +30,7 @@ import { getRules, getSettingsMap } from "@/lib/db/rules";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { BOS_FORM, formdanGirdi, hizliHesapBaglami, sayiMetni, type HizliForm } from "@/lib/hizli-hesap";
 import { formuOku, formuYaz } from "@/lib/hizli-hesap-kayit";
-import { PLATFORM_LABEL } from "@/lib/platforms";
+import { PLATFORM_SHORT_LABEL } from "@/lib/platforms";
 import type { Rules } from "@/lib/profit";
 import { color, motion, radius, space } from "@/theme/tokens";
 
@@ -42,7 +42,7 @@ import { color, motion, radius, space } from "@/theme/tokens";
  * Fiyat ve sonuç alttaki çubukta durur; klavye açılınca onunla birlikte yükselir.
  */
 
-const PLATFORMLAR: HizliPlatform[] = ["trendyol", "hepsiburada", "shopify"];
+const PLATFORMLAR: HizliPlatform[] = ["trendyol", "hepsiburada", "n11", "shopify"];
 
 const NAYLON = [
   { value: "none", label: "Yok" },
@@ -192,7 +192,8 @@ export default function HizliHesapEkrani() {
           ) : null}
 
           <Segmented
-            options={PLATFORMLAR.map((p) => ({ value: p, label: PLATFORM_LABEL[p] }))}
+            // Dört pazaryeri dar ekrana sığsın diye kısa adlar (Hepsiburada → HB).
+            options={PLATFORMLAR.map((p) => ({ value: p, label: PLATFORM_SHORT_LABEL[p] }))}
             value={form.platform}
             onChange={(p) => set("platform", p)}
           />
@@ -222,7 +223,7 @@ export default function HizliHesapEkrani() {
             <SayiAlani
               etiket="Komisyon"
               birim="%"
-              yer={form.platform === "shopify" ? yuzdeMetni(shopifyVarsayilan) : "örn. 21"}
+              yer={form.platform === "shopify" ? yuzdeMetni(shopifyVarsayilan) : form.platform === "n11" ? "örn. 0" : "örn. 21"}
               deger={komisyonMetni}
               onDegis={komisyonYaz}
             />

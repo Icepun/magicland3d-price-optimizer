@@ -5,7 +5,7 @@ import { bustProfitInputCaches } from "@/lib/cache-busting";
 
 const Schema = z.object({
   name: z.string().min(1).optional(),
-  platform: z.enum(["trendyol", "shopify", "hepsiburada"]).nullable().optional(),
+  platform: z.enum(["trendyol", "shopify", "hepsiburada", "n11"]).nullable().optional(),
   type: z.enum(["fixed", "percentage", "per_order"]).optional(),
   value: z.number().min(0).optional(),
   categoryName: z.string().nullable().optional(),
