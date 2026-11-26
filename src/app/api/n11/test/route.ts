@@ -16,8 +16,9 @@ export async function POST() {
     const n11 = new N11Client(kimlik);
     const urunler = await n11.urunler(0, 1);
     const simdi = Date.now();
-    const siparisler = await n11.siparisPaketleri({ baslangic: simdi - 30 * 86_400_000, bitis: simdi, boyut: 1 });
-    return NextResponse.json({ ok: true, urunSayisi: urunler.toplam, siparisSayisi: siparisler.toplam });
+    // Sipariş zarfında toplam alanı yok → son 30 günün paketleri sayfa sayfa sayılır.
+    const siparisler = await n11.tumSiparisPaketleri({ baslangic: simdi - 30 * 86_400_000, bitis: simdi });
+    return NextResponse.json({ ok: true, urunSayisi: urunler.toplam ?? 0, siparisSayisi: siparisler.length });
   } catch (error) {
     if (error instanceof N11Hatasi) {
       return NextResponse.json({ error: error.message }, { status: error.durum });

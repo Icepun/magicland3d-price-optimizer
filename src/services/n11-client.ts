@@ -8,6 +8,10 @@
  *    en çok 100; dakikada en çok 1000 istek; 2024 Kasım öncesi veri yok; tarih verilmezse/aralık
  *    büyükse yalnız 1 aylık pencere döner; `status` tek değer alır.
  * Kimlik: her istekte `appkey` + `appsecret` başlığı (Authorization yok).
+ * ⚠️ Sipariş zarfında `totalElements` YOK (dokümanın aksine; 26 Kas 2026 ölçüldü: pageCount,
+ *    totalPages, page, size, content) → sipariş sayısı sayfalar dolaşılarak bulunur. Ürün zarfında var.
+ * Satırlarda komisyon ve kesinti ORANLARI gelir (commissionRate, netMarketingFeeRate,
+ * netMarketplaceFeeRate, taxDeductionRate = stopaj, vatRate) — dokümanda yazmıyor.
  * Tarihler epoch-ms, GMT+3.
  */
 
@@ -28,7 +32,8 @@ export class N11Hatasi extends Error {
 
 export interface N11Sayfa<T> {
   icerik: T[];
-  toplam: number;
+  /** Zarfta toplam yoksa (siparişler) null. */
+  toplam: number | null;
   toplamSayfa: number;
 }
 
@@ -91,6 +96,17 @@ export class N11Client {
       })
     );
   }
+
+  /** Aralıktaki TÜM paketler (sayfa sayfa; n11 en çok 1 aylık pencere verir). Güvenlik sınırı 50 sayfa. */
+  async tumSiparisPaketleri(secenek: { baslangic: number; bitis: number; durum?: N11PaketDurumu }): Promise<Record<string, unknown>[]> {
+    const hepsi: Record<string, unknown>[] = [];
+    for (let sayfa = 0; sayfa < 50; sayfa++) {
+      const s = await this.siparisPaketleri({ ...secenek, sayfa, boyut: 100 });
+      hepsi.push(...s.icerik);
+      if (s.icerik.length === 0 || sayfa + 1 >= s.toplamSayfa) break;
+    }
+    return hepsi;
+  }
 }
 
 /** `{content, totalElements, totalPages}` zarfını çözer; beklenmeyen biçimde boş sayfa. */
@@ -98,5 +114,5 @@ export function sayfaCoz(govde: unknown): N11Sayfa<Record<string, unknown>> {
   const g = (govde ?? {}) as { content?: unknown; totalElements?: unknown; totalPages?: unknown };
   const icerik = Array.isArray(g.content) ? (g.content.filter((x) => x && typeof x === "object") as Record<string, unknown>[]) : [];
   const sayi = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0);
-  return { icerik, toplam: sayi(g.totalElements), toplamSayfa: sayi(g.totalPages) };
+  return { icerik, toplam: g.totalElements == null ? null : sayi(g.totalElements), toplamSayfa: sayi(g.totalPages) };
 }

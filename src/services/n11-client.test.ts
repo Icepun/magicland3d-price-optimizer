@@ -44,8 +44,20 @@ describe("n11 istemcisi (yalnız okuma)", () => {
     await expect(n11().urunler()).rejects.toBeInstanceOf(N11Hatasi);
   });
 
+  it("sipariş zarfında toplam yok → tüm sayfalar dolaşılır", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      n++;
+      const body = { pageCount: 100, totalPages: 2, page: n - 1, size: 100, content: n === 1 ? Array.from({ length: 100 }, (_, i) => ({ id: i })) : [{ id: 100 }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
+    const hepsi = await n11().tumSiparisPaketleri({ baslangic: 0, bitis: 1 });
+    expect(hepsi).toHaveLength(101);
+    expect(n).toBe(2);
+  });
+
   it("beklenmeyen zarf boş sayfa sayılır", () => {
-    expect(sayfaCoz(null)).toEqual({ icerik: [], toplam: 0, toplamSayfa: 0 });
+    expect(sayfaCoz(null)).toEqual({ icerik: [], toplam: null, toplamSayfa: 0 });
     expect(sayfaCoz({ content: [null, 3, { a: 1 }], totalElements: "5" })).toEqual({ icerik: [{ a: 1 }], toplam: 5, toplamSayfa: 0 });
   });
 });
