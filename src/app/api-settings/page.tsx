@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { baglantiDurumu, type BaglantiTonu } from "@/lib/baglanti-ozeti";
 import { HepsijetHesapKarti } from "@/components/kargo/HepsijetHesapKarti";
+import { N11Karti } from "@/components/entegrasyon/N11Karti";
 import { PlugZap, RefreshCw, ShieldCheck, ShoppingBag, Settings2, Plus, KeyRound, Store, Truck, CheckCircle2 } from "lucide-react";
 
 interface TrendyolPublicSettings {
@@ -988,6 +989,9 @@ export default function ApiSettingsPage() {
           <TabsTrigger value="hepsiburada">
             <Store className="h-3.5 w-3.5 mr-1.5" /> Hepsiburada
           </TabsTrigger>
+          <TabsTrigger value="n11">
+            <Store className="h-3.5 w-3.5 mr-1.5" /> n11
+          </TabsTrigger>
           <TabsTrigger value="hepsijet">
             <Truck className="h-3.5 w-3.5 mr-1.5" /> HepsiJet
           </TabsTrigger>
@@ -1001,6 +1005,9 @@ export default function ApiSettingsPage() {
         </TabsContent>
         <TabsContent value="hepsiburada">
           <HepsiburadaTab />
+        </TabsContent>
+        <TabsContent value="n11">
+          <N11Karti />
         </TabsContent>
         <TabsContent value="hepsijet">
           <HepsijetTab />

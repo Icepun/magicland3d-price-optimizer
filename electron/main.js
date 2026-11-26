@@ -714,6 +714,9 @@ function ensureCredentialKey() {
   if (!process.env.HEPSIJET_SETTINGS_FILE) {
     process.env.HEPSIJET_SETTINGS_FILE = `${slashedUserData}/hepsijet-settings.json`;
   }
+  if (!process.env.N11_SETTINGS_FILE) {
+    process.env.N11_SETTINGS_FILE = `${slashedUserData}/n11-settings.json`;
+  }
   if (!process.env.MLHUB_ORDERS_CACHE_FILE) {
     process.env.MLHUB_ORDERS_CACHE_FILE = `${slashedUserData}/orders-cache.json`;
   }
