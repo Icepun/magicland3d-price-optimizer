@@ -23,7 +23,7 @@ import { prisma } from "./prisma";
 import { pushToAllDevices } from "./push-notify";
 import { toDbDate } from "./sqlite-date";
 
-export type NotifyPlatform = "shopify" | "trendyol" | "hepsiburada";
+export type NotifyPlatform = "shopify" | "trendyol" | "hepsiburada" | "n11";
 
 export interface NotifyLine {
   name: string;
@@ -55,6 +55,7 @@ const PLATFORM_LABEL: Record<NotifyPlatform, string> = {
   shopify: "Shopify",
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
 };
 
 /**

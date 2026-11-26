@@ -208,7 +208,7 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
 
     // Rapor metriği TEK bir gerçek platform sonucundan gelir; platform kurallarını birbirine
     // karıştırmak bir platformun kargosunu diğerinin ürününe uygulardı.
-    const preferred = [product.source, "shopify", "trendyol", "hepsiburada"];
+    const preferred = [product.source, "shopify", "trendyol", "hepsiburada", "n11"];
     let komisyonuBilinmeyenVar = false;
     for (const platform of preferred) {
       const listing = product.listings.find((row) => row.platform === platform);
@@ -229,6 +229,7 @@ export async function readProductProfitability(): Promise<ProductProfitability> 
     const fallback =
       product.source === "trendyol" ||
       product.source === "hepsiburada" ||
+      product.source === "n11" ||
       product.source === "shopify"
         ? product.source
         : "shopify";

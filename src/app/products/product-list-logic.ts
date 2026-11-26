@@ -25,19 +25,20 @@
  * toplar/aralıklar. Bilinmeyen değer 0'a indirgenmez — "—" olarak kalır (BİLİNMEYEN ≠ SIFIR).
  */
 
-export type PlatformKey = "shopify" | "trendyol" | "hepsiburada";
+export type PlatformKey = "shopify" | "trendyol" | "hepsiburada" | "n11";
 
-export const PLATFORM_KEYS: readonly PlatformKey[] = ["shopify", "trendyol", "hepsiburada"];
+export const PLATFORM_KEYS: readonly PlatformKey[] = ["shopify", "trendyol", "hepsiburada", "n11"];
 
 /** Platform adlarının ekranda yazılan hâli — tek kaynak (kısaltma/İngilizce yazım yok). */
 export const PLATFORM_LABEL: Record<PlatformKey, string> = {
   shopify: "Shopify",
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
 };
 
 export function isPlatformKey(value: unknown): value is PlatformKey {
-  return value === "shopify" || value === "trendyol" || value === "hepsiburada";
+  return value === "shopify" || value === "trendyol" || value === "hepsiburada" || value === "n11";
 }
 
 // ── 1) Liste önbelleği ────────────────────────────────────────────────────────────────────────

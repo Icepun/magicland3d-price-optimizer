@@ -971,7 +971,7 @@ export default function ApiSettingsPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Platform Bağlantıları</h1>
           <p className="text-xs text-muted-foreground">
-            Shopify ana ürün kaynağın; Trendyol ve Hepsiburada ilanları ana ürünlere bağlanır.
+            Shopify ana ürün kaynağın; Trendyol, Hepsiburada ve n11 ilanları ana ürünlere bağlanır.
           </p>
         </div>
       </header>
@@ -1021,6 +1021,7 @@ const OZET_PLATFORMLARI = [
   { anahtar: "shopify", ad: "Shopify" },
   { anahtar: "trendyol", ad: "Trendyol" },
   { anahtar: "hepsiburada", ad: "Hepsiburada" },
+  { anahtar: "n11", ad: "n11" },
 ] as const;
 
 const TON_SINIFI: Record<BaglantiTonu, string> = {
@@ -1029,9 +1030,9 @@ const TON_SINIFI: Record<BaglantiTonu, string> = {
   hata: "ring-rose-400/30 bg-rose-500/[0.05]",
   kapali: "ring-white/[0.08] bg-white/[0.02]",
 };
-const PLATFORM_NOKTASI: Record<string, string> = { shopify: "#34D399", trendyol: "#F27A1A", hepsiburada: "#4F8CFF" };
+const PLATFORM_NOKTASI: Record<string, string> = { shopify: "#34D399", trendyol: "#F27A1A", hepsiburada: "#4F8CFF", n11: "#FF44EE" };
 
-/** Üç platformun durumu tek bakışta: bağlı mı, siparişler geliyor mu, fiyatlar ne zaman eşitlendi. */
+/** Platformların durumu tek bakışta: bağlı mı, siparişler geliyor mu, fiyatlar ne zaman eşitlendi. */
 function BaglantiOzetiKarti() {
   const [simdi] = useState(() => Date.now());
   const durum = useQuery<Record<string, boolean>>({
@@ -1049,7 +1050,7 @@ function BaglantiOzetiKarti() {
     staleTime: 5 * 60_000,
   });
   return (
-    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
       {OZET_PLATFORMLARI.map((p) => {
         const d = baglantiDurumu({
           bagli: durum.data?.[p.anahtar],

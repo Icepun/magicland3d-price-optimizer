@@ -14,9 +14,10 @@ const PLATFORM: Record<string, { ad: string; renk: string }> = {
   shopify: { ad: "Shopify", renk: "#34D399" },
   trendyol: { ad: "Trendyol", renk: "#F27A1A" },
   hepsiburada: { ad: "Hepsiburada", renk: "#4F8CFF" },
+  n11: { ad: "n11", renk: "#FF44EE" },
   manual: { ad: "Manuel", renk: "#C9D2F2" },
 };
-const SIRA = ["shopify", "trendyol", "hepsiburada", "manual"];
+const SIRA = ["shopify", "trendyol", "hepsiburada", "n11", "manual"];
 
 /**
  * SATIŞ GEÇMİŞİ — son 6 ay platform başına adet, satış hızı ve "stok kaç gün yeter".

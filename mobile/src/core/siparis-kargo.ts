@@ -79,6 +79,8 @@ export function hepsiburadaKargoBaglami(
 const TRENDYOL_KARGOLU_IADE = new Set(["Returned", "UnDeliveredAndReturned", "UnDelivered"]);
 /** Hepsiburada: aynı anlamdaki sipariş durumları. */
 const HEPSIBURADA_KARGOLU_IADE = new Set(["Returned", "UnDelivered"]);
+/** n11: iade edilen paket (`isReturned`) çekirdekte "Returned" ham durumuna çevrilir (core/n11-siparis). */
+const N11_KARGOLU_IADE = new Set(["Returned"]);
 
 /**
  * Sipariş kargoya verildikten sonra mı geri geldi? (Kargo zararı doğar.) Kargolanmadan iptal
@@ -89,5 +91,6 @@ export function kargoluIadeMi(platform: string, durum: string | null | undefined
   const d = String(durum ?? "");
   if (platform === "trendyol") return TRENDYOL_KARGOLU_IADE.has(d);
   if (platform === "hepsiburada") return HEPSIBURADA_KARGOLU_IADE.has(d);
+  if (platform === "n11") return N11_KARGOLU_IADE.has(d);
   return false;
 }

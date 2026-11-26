@@ -70,7 +70,7 @@ export interface PaletteItem {
   muted?: boolean;
   /** Sonuç değil, eylem satırı (sıralamaya girmez). */
   action?: "tum-urunler";
-  platform?: "shopify" | "trendyol" | "hepsiburada" | "manual";
+  platform?: "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
   icon?: LucideIcon;
 }
 
@@ -482,7 +482,7 @@ interface LiteSpool {
 }
 
 interface LiteOrder {
-  platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
   id: string;
   orderNumber: string;
   customer: string | null;

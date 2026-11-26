@@ -16,7 +16,7 @@ import { satirBagiAnahtari } from "@/core/order-line-link";
  * Bağ o ADLA gelen tüm siparişlere uygulanır (kural: core/order-line-link).
  */
 
-const Platform = z.enum(["shopify", "trendyol", "hepsiburada"]);
+const Platform = z.enum(["shopify", "trendyol", "hepsiburada", "n11"]);
 const Ad = z
   .string()
   .max(300)

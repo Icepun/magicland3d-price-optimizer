@@ -57,7 +57,7 @@ interface FilamentType {
 interface Listing {
   id: string;
   productId: string;
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   externalId: string | null;
   externalSku: string | null;
   barcode: string | null;
@@ -134,6 +134,7 @@ const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "#34D399" },
   trendyol: { label: "Trendyol", color: "#F27A1A" },
   hepsiburada: { label: "Hepsiburada", color: "#4F8CFF" },
+  n11: { label: "n11", color: "#FF44EE" },
 } as const;
 
 /** Kâr hesabının durumu — "veri yok" ile "hesaplanamadı" ayrı ekranlar gösterir. */
@@ -1160,7 +1161,12 @@ export default function ProductDetailPage({
           </div>
 
           <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
-            {(["shopify", "trendyol", "hepsiburada"] as const).map((platform, i) => {
+            {([
+              "shopify",
+              "trendyol",
+              "hepsiburada",
+              ...(product.listings.some((l) => l.platform === "n11") ? (["n11"] as const) : []),
+            ] as const).map((platform, i) => {
               const listing = product.listings.find((l) => l.platform === platform);
               const platformPreview = preview?.platforms.find((p) => p.platform === platform);
               return (
@@ -1278,7 +1284,7 @@ function PlatformProfitCardImpl({
   profitState,
   onRetryProfit,
 }: {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   listing: Listing | null;
   productId: string;
   productName: string;

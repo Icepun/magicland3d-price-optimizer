@@ -1,7 +1,7 @@
 import { execute, query, writeBatch } from "@/lib/turso";
 import { ensureFinanceSchema, ensureManualOrderSchema } from "@/lib/db/schema";
 import { FINANCE_CALCULATION_VERSION } from "@core/finance-version";
-import { gecerliSiparisOrani } from "@core/order-commission";
+import { gecerliSiparisOrani, gecerliSiparisOraniSifirDahil } from "@core/order-commission";
 import { dbEpochMs, toDbDate } from "@core/sqlite-date";
 import { TUM_PLATFORMLAR } from "@core/ad-cost";
 import { gecerliGiderKdvOrani, giderNetKurus } from "@core/gider-kdv";
@@ -451,7 +451,10 @@ export async function syncOrderFinanceSnapshots(
           snapshot.statusKind,
           snapshot.currency ?? "TRY",
           now,
-          gecerliSiparisOrani(item.commissionRate),
+          // n11'de %0 gerçek oran (kampanya) — masaüstü kalem yazıcısıyla aynı kural.
+          snapshot.platform === "n11"
+            ? gecerliSiparisOraniSifirDahil(item.commissionRate)
+            : gecerliSiparisOrani(item.commissionRate),
           typeof item.vatRate === "number" && Number.isFinite(item.vatRate) && item.vatRate >= 0 && item.vatRate < 100
             ? item.vatRate
             : null,

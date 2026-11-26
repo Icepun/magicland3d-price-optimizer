@@ -71,7 +71,7 @@ const DURUM_RENGI: Record<DurumGrubu, string> = {
   iptal: color.bad,
   diger: color.textFaint,
 };
-const PLATFORM_SIRASI = ["shopify", "trendyol", "hepsiburada", "manual"] as const;
+const PLATFORM_SIRASI = ["shopify", "trendyol", "hepsiburada", "n11", "manual"] as const;
 const grupOf = (o: UnifiedOrder): DurumGrubu => durumGrubu(durumKovasi(o.platform, o.status));
 const platformAdi = (p: string) => (p === "manual" ? "Manuel" : PLATFORM_LABEL[p as Exclude<OrderPlatform, "manual">] ?? p);
 

@@ -50,7 +50,7 @@ import {
 } from "./panel-tipler";
 
 const TZ = "Europe/Istanbul";
-const PLATFORM_ADI = { trendyol: "Trendyol", hepsiburada: "Hepsiburada", shopify: "Shopify" } as const;
+const PLATFORM_ADI = { trendyol: "Trendyol", hepsiburada: "Hepsiburada", n11: "n11", shopify: "Shopify" } as const;
 const gunAnahtari = (ms: number) => new Date(ms).toLocaleDateString("sv-SE", { timeZone: TZ });
 
 /** Panel — Raporlar'ın görsel dili: günün işleri, bu ayın özeti, katalog sağlığı, uyarılar. */

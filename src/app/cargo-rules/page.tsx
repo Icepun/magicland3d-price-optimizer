@@ -55,7 +55,7 @@ interface CargoRule {
 }
 
 type Platform = "shopify" | "trendyol" | "hepsiburada";
-type Sekme = Platform | "denetim";
+type Sekme = Platform | "n11" | "denetim";
 
 /** Boş alan → tanımsız (varsayılan ya da "gerekli" hatası); BOŞ ≠ SIFIR. Virgül kabul. */
 const bos = (v: unknown) => (v === "" || v == null ? undefined : typeof v === "string" ? v.replace(",", ".") : v);
@@ -869,7 +869,7 @@ export default function CargoRulesPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Kargo</h1>
           <p className="text-xs text-muted-foreground">
-            Trendyol ve Hepsiburada fiyatları pazaryerinin kendi listesi — Shopify kargonu buradan düzenlersin.
+            Trendyol, Hepsiburada ve n11 fiyatları pazaryerinin kendi listesi — Shopify kargonu buradan düzenlersin.
           </p>
         </div>
       </header>
@@ -883,6 +883,7 @@ export default function CargoRulesPage() {
           {([
             ["trendyol", "Trendyol", "#F27A1A"],
             ["hepsiburada", "Hepsiburada", "#4F8CFF"],
+            ["n11", "n11", "#FF44EE"],
             ["shopify", "Shopify", "#34D399"],
             ["denetim", "Denetim", "#A9AEFF"],
           ] as const).map(([deger, ad, renk]) => (
@@ -952,6 +953,14 @@ export default function CargoRulesPage() {
           <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
             <CardContent className="pt-4">
               <PazaryeriTarifesi platform="hepsiburada" maxDesi={kapsam?.maxDesi ?? null} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="n11" className="space-y-4 mt-4">
+          <Card className="rounded-2xl border-0 ring-1 ring-white/[0.07] shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_18px_40px_-28px_rgba(0,0,0,0.8)] animate-in fade-in slide-in-from-bottom-2 duration-500 motion-reduce:animate-none">
+            <CardContent className="pt-4">
+              <PazaryeriTarifesi platform="n11" maxDesi={kapsam?.maxDesi ?? null} />
             </CardContent>
           </Card>
         </TabsContent>

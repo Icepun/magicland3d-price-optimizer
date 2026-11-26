@@ -185,11 +185,13 @@ const PLATFORM_COLOR: Record<PlatformKey, string> = {
   shopify: PLATFORM_RENGI.shopify,
   trendyol: PLATFORM_RENGI.trendyol,
   hepsiburada: PLATFORM_RENGI.hepsiburada,
+  n11: PLATFORM_RENGI.n11,
 };
 const PLATFORM_SOFT: Record<PlatformKey, string> = {
   shopify: `${PLATFORM_RENGI.shopify}24`,
   trendyol: `${PLATFORM_RENGI.trendyol}24`,
   hepsiburada: `${PLATFORM_RENGI.hepsiburada}24`,
+  n11: `${PLATFORM_RENGI.n11}24`,
 };
 
 /** Başlık düğmeleri — Panel/Raporlar ile aynı dil. */
@@ -457,7 +459,7 @@ const ProductRow = memo(function ProductRow({
   isSelected: boolean;
   isEditingAlias: boolean;
   aliasValue: string;
-  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean; n11?: boolean } | undefined;
   /** Virtualizer: satırın gerçek yüksekliğini ölçmek için (dinamik) + flatRows indexi. */
   measureRef?: (node: HTMLTableRowElement | null) => void;
   dataIndex?: number;
@@ -485,7 +487,7 @@ const ProductRow = memo(function ProductRow({
   const cost = product.hasCost
     ? (product.resolvedTotalCost ?? product.cost?.totalCost ?? product.cost?.manualCost)
     : null;
-  const findPlatform = (p: "shopify" | "trendyol" | "hepsiburada") =>
+  const findPlatform = (p: PlatformKey) =>
     product.platforms.find((x) => x.platform === p);
   const karKaynagi = isPlatformKey(product.profitBasisPlatform)
     ? product.profitBasisPlatform
@@ -701,7 +703,7 @@ const ProductRow = memo(function ProductRow({
           <span className="text-muted-foreground/40">—</span>
         )}
       </TableCell>
-      {(["shopify", "trendyol", "hepsiburada"] as const).map((platform) => {
+      {PLATFORM_KEYS.map((platform) => {
         const p = findPlatform(platform);
         const integrationActive = integrations?.[platform] ?? false;
         if (!p) {
@@ -875,7 +877,7 @@ const GroupRow = memo(function GroupRow({
   row: GroupRowData;
   expanded: boolean;
   allSelected: boolean;
-  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean; n11?: boolean } | undefined;
   onToggleExpand: (groupId: string) => void;
   onToggleSelectGroup: (ids: string[], checked: boolean) => void;
   measureRef?: (node: HTMLTableRowElement | null) => void;
@@ -1337,6 +1339,7 @@ export default function ProductsPage() {
     shopify: boolean;
     trendyol: boolean;
     hepsiburada: boolean;
+    n11?: boolean;
   }>({
     queryKey: ["integrations-status"],
     queryFn: () => fetchJson("/api/integrations/status"),
@@ -1731,10 +1734,10 @@ export default function ProductsPage() {
         return;
       }
     }
-    const platforms = (["shopify", "trendyol", "hepsiburada"] as const).filter((p) => baglantilar?.[p]);
+    const platforms = (["shopify", "trendyol", "hepsiburada", "n11"] as const).filter((p) => baglantilar?.[p]);
     const listeOnce = queryClient.getQueryState(listQueryKey)?.dataUpdatedAt ?? 0;
     const label = (p: string) =>
-      `${p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : "Shopify"} fiyatları çekiliyor…`;
+      `${p === "hepsiburada" ? "Hepsiburada" : p === "trendyol" ? "Trendyol" : p === "n11" ? "n11" : "Shopify"} fiyatları çekiliyor…`;
     const total = platforms.length + 1; // +1: liste/panel tazeleme adımı
     let done = 0;
     let changed = 0;
@@ -2610,6 +2613,9 @@ export default function ProductsPage() {
               <TableHead className="text-center w-[140px]">
                 <PlatformBasligi platform="hepsiburada" />
               </TableHead>
+              <TableHead className="text-center w-[140px]">
+                <PlatformBasligi platform="n11" />
+              </TableHead>
               <TableHead className="w-[80px]" />
             </TableRow>
           </TableHeader>
@@ -3087,12 +3093,12 @@ function MarketplaceAddModal({
   integrations,
   onClose,
 }: {
-  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean } | undefined;
+  integrations: { shopify: boolean; trendyol: boolean; hepsiburada: boolean; n11?: boolean } | undefined;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const configured = (["trendyol", "hepsiburada"] as const).filter((p) => integrations?.[p]);
-  const [platform, setPlatform] = useState<"trendyol" | "hepsiburada">(configured[0] ?? "trendyol");
+  const configured = (["trendyol", "hepsiburada", "n11"] as const).filter((p) => integrations?.[p]);
+  const [platform, setPlatform] = useState<"trendyol" | "hepsiburada" | "n11">(configured[0] ?? "trendyol");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   // Arama debounce: her tuşta fetch + yeni cache anahtarı oluşturma (250ms sonra bir kez).
@@ -3166,7 +3172,7 @@ function MarketplaceAddModal({
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
+  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : platform === "n11" ? "n11" : "Trendyol";
 
   // Windowed render: 300+ satırı tek seferde basmak modalı kasıyordu → başta 60, scroll'da artar.
   const windowKey = `${platform}:${debouncedSearch}`;
@@ -3187,7 +3193,7 @@ function MarketplaceAddModal({
 
         {configured.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
-            Önce Trendyol veya Hepsiburada entegrasyonunu yapılandır.
+            Önce Trendyol, Hepsiburada ya da n11 bağlantısını kur.
           </div>
         ) : (
           <>
@@ -3202,7 +3208,7 @@ function MarketplaceAddModal({
                       platform === p ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
                     )}
                   >
-                    {p === "hepsiburada" ? "Hepsiburada" : "Trendyol"}
+                    {p === "hepsiburada" ? "Hepsiburada" : p === "n11" ? "n11" : "Trendyol"}
                   </button>
                 ))}
               </div>
@@ -3406,7 +3412,8 @@ function DikkatKutusu({
 
 function PlatformBasligi({ platform }: { platform: PlatformKey }) {
   return (
-    <span className="inline-flex items-center gap-1.5">
+    // Marka küçük harfle yazılır ("n11") — başlık satırının büyük harf dönüşümü ona uygulanmaz.
+    <span className={cn("inline-flex items-center gap-1.5", platform === "n11" && "normal-case")}>
       <span
         className="size-2 rounded-full"
         style={{ backgroundColor: PLATFORM_COLOR[platform], boxShadow: `0 0 0 3px ${PLATFORM_SOFT[platform]}` }}

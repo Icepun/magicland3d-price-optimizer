@@ -46,6 +46,19 @@ export async function n11Kimligi(): Promise<N11Kimligi> {
   return { appKey, appSecret };
 }
 
+/**
+ * Sipariş çekimi için: hiç girilmemişse null ("kurulu değil" — hata değil). Girilmiş ama ÇÖZÜLEMİYORSA
+ * hata fırlatır: sessizce "bağlı değil" sayılırsa n11 cirosu uyarısız eksik kalırdı.
+ */
+export async function n11KimligiVarsa(): Promise<N11Kimligi | null> {
+  const a = await oku();
+  if (!a.appKey || !a.appSecret) return null;
+  const appKey = tryDecryptSecret(a.appKey)?.trim() ?? "";
+  const appSecret = tryDecryptSecret(a.appSecret)?.trim() ?? "";
+  if (!appKey || !appSecret) throw new Error("Kayıtlı n11 bilgileri okunamadı. Entegrasyonlar'dan yeniden gir.");
+  return { appKey, appSecret };
+}
+
 /** Boş bırakılan alan mevcut değeri korur (kart şifreyi geri göstermez). */
 export async function n11AyarlariniKaydet(girdi: { appKey?: string; appSecret?: string }): Promise<void> {
   const a = await oku();

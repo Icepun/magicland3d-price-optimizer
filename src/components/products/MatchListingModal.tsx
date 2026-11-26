@@ -42,12 +42,12 @@ export function MatchListingModal({
 }: {
   productId: string;
   productName: string;
-  platform: "trendyol" | "hepsiburada";
+  platform: "trendyol" | "hepsiburada" | "n11";
   onClose: () => void;
   onMatched?: () => void;
 }) {
   const qc = useQueryClient();
-  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
+  const platformLabel = platform === "hepsiburada" ? "Hepsiburada" : platform === "n11" ? "n11" : "Trendyol";
   const [search, setSearch] = useState("");
   const [quickCode, setQuickCode] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");

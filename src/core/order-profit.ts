@@ -7,7 +7,7 @@ import {
 import { vatRateOf } from "./vat";
 import { withProductCommissionRule, resolveListingCommissionOnly } from "./product-commission";
 import { applyActualCommissionToProfit } from "./platform-financials";
-import { gecerliSiparisOrani } from "./order-commission";
+import { gecerliSiparisOrani, gecerliSiparisOraniSifirDahil } from "./order-commission";
 import { baremDesisi, filterRulesByPlatform, findCargoRule } from "./cargo-calculator";
 import { findCommissionRule } from "./commission-calculator";
 import { donemliAyarlar } from "./donemli-oran";
@@ -380,7 +380,12 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     }
     // KOMİSYON ÖNCELİĞİ: siparişte kesilen oran > ilana elle girilen > ürün oranı > kategori kuralı.
     // Siparişin kendi oranı o satışta GERÇEKTEN uygulanan orandır; diğerleri satış öncesi tahmindir.
-    const siparisOrani = gecerliSiparisOrani(line.orderCommissionRate);
+    // n11 oranı her kalemde açıkça bildirir ve kampanyada GERÇEKTEN %0'dır → sıfır geçerli. Diğer
+    // pazaryerlerinde 0 "alan boş gelmiş" demektir; eski güvence aynen kalır.
+    const siparisOrani =
+      platform === "n11"
+        ? gecerliSiparisOraniSifirDahil(line.orderCommissionRate)
+        : gecerliSiparisOrani(line.orderCommissionRate);
     const commissionOverride =
       siparisOrani != null
         ? { commissionRateOverride: siparisOrani }
@@ -391,7 +396,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     // bilindiği için kargo hesabına yine girer. Ücretsiz (0 ₺) satırın komisyonu zaten 0'dır.
     if (
       !input.bilinmeyenKomisyonSifir &&
-      (platform === "trendyol" || platform === "hepsiburada") &&
+      (platform === "trendyol" || platform === "hepsiburada" || platform === "n11") &&
       unitPrice > 0 &&
       commissionOverride.commissionRateOverride === undefined &&
       commissionOverride.commissionFixedOverride === undefined &&

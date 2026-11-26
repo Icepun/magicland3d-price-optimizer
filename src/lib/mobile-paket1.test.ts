@@ -106,7 +106,7 @@ describe("Ürünler — satır ve yükleme", () => {
   });
 
   it("platform tutarları kısa adla ayırt ediliyor (turuncular karışıyordu)", () => {
-    expect(urunler).toContain('const PLATFORM_KISA: Record<Platform, string> = { shopify: "S", trendyol: "TY", hepsiburada: "HB" };');
+    expect(urunler).toContain('const PLATFORM_KISA: Record<Platform, string> = { shopify: "S", trendyol: "TY", hepsiburada: "HB", n11: "n11" };');
   });
 
   it("yüklenirken filtre sayıları gösterilmiyor", () => {

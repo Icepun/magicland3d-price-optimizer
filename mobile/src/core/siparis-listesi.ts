@@ -9,7 +9,7 @@
  * hesaplanır; masaüstünün `Europe/Istanbul` takvimiyle aynı günü verir.
  */
 import {
-  HEPSIBURADA_STATUS_KINDS, MANUAL_STATUS_KINDS, SHOPIFY_STATUS_KINDS, TRENDYOL_STATUS_KINDS,
+  HEPSIBURADA_STATUS_KINDS, MANUAL_STATUS_KINDS, N11_STATUS_KINDS, SHOPIFY_STATUS_KINDS, TRENDYOL_STATUS_KINDS,
   type OrderStatusKind,
 } from "./order-status-kind";
 
@@ -20,6 +20,7 @@ const GUN_MS = 86_400_000;
 export function durumKovasi(platform: string, status: string): OrderStatusKind {
   if (platform === "trendyol") return TRENDYOL_STATUS_KINDS[status]?.kind ?? "other";
   if (platform === "hepsiburada") return HEPSIBURADA_STATUS_KINDS[status]?.kind ?? "other";
+  if (platform === "n11") return N11_STATUS_KINDS[status]?.kind ?? "other";
   if (platform === "manual") return MANUAL_STATUS_KINDS[status]?.kind ?? "other";
   if (platform === "shopify") return SHOPIFY_STATUS_KINDS[status] ?? "other";
   return "other";

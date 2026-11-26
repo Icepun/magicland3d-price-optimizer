@@ -30,9 +30,24 @@
  *   • 24 Ağustos 2026 öncesi farklıydı (72 TL barem, 78,50 desi) → o tarihten eski siparişler
  *     eski kurallara (CargoRule) düşer.
  *   • İADE: dönüş bacağı gidişle aynı fiyattan kesiliyor (43,99+43,99 · 81,99+81,99).
+ *
+ * N11 (n11.com/kampanyalar/ozel-kargo-kampanyasi, "n11 Anlaşmalı Kargo Ücretleri", 26 Kas 2026):
+ *   • Fiyatlar KDV ve %2,35 Posta Hizmet Bedeli HARİÇ → `ekBedelOrani` fiyata eklenir, KDV motorda.
+ *   • Desi KÜMÜLATİF (paketin toplamı); DHL e-Commerce 50 desiye kadar tabloda, sonrası +35,16/desi
+ *     (tablonun 100 desi fiyatı 3.054,25 bu artışla birebir).
+ *   • ŞARTLI KARGO (kalemin `deliveryFeeType` = 3): sepet 300 TL altı ve ≤ 10 desi → firmaya göre
+ *     SABİT ücret (0–149,99 / 149,99–299,99). Ücret satıcının hesabından düşülür (sayfa SSS).
+ *   • `deliveryFeeType` 1 = alıcı öder, 4 = n11 öder → satıcıya kargo kesilmez.
+ *   • İade kargosu da tablodaki fiyattan (sayfa SSS: "kampanya iade ürünler için de geçerli").
  */
 
-export type KargoPlatformu = "trendyol" | "hepsiburada";
+export type KargoPlatformu = "trendyol" | "hepsiburada" | "n11";
+
+/**
+ * Kargoyu kim öder — n11 kargo şablonunun ödeme yöntemi (kalemin `deliveryFeeType`): 1 alıcı,
+ * 2 mağaza, 3 şartlı kargo, 4 n11. Diğer pazaryerlerinde boş kalır (kargo hep satıcıda).
+ */
+export type KargoOdeyen = "alici" | "magaza" | "sartli" | "pazaryeri";
 
 export type FirmaKodu =
   | "tex"
@@ -80,14 +95,20 @@ export interface TarifeDonemi {
     /**
      * "hizli": avantajlı fiyat hızlı teslimat + zamanında gönderimde (Trendyol).
      * "gun1": barem yalnız kargoya verme süresi ≤ 1 günse (Hepsiburada).
+     * "sartli": barem yalnız kargo şablonu şartlı kargoysa (n11, `KargoBaglami.odeyen`).
      */
-    kosul: "hizli" | "gun1";
+    kosul: "hizli" | "gun1" | "sartli";
     bantlar: BaremBandi[];
   };
-  /** Desi listesi: dizinin i. elemanı i desinin fiyatı (0–30). */
+  /** Desi listesi: dizinin i. elemanı i desinin fiyatı (0–30; n11'de 0–50). */
   desi: Partial<Record<FirmaKodu, readonly number[]>>;
   /** İade kargosu: "desi" = desi listesinden; "gidis" = gidişle aynı fiyat. */
   iade: "desi" | "gidis";
+  /**
+   * Fiyata eklenen oransal bedel (KDV hariç fiyat üzerinden) — n11'de Posta Hizmet Bedeli %2,35.
+   * Barem ve desi fiyatının ikisine de eklenir; KDV bunun üstüne motorda hesaplanır.
+   */
+  ekBedelOrani?: number;
   /** Fiyatların en son kontrol edildiği gün (gösterim için). */
   kontrol: string;
 }
@@ -214,10 +235,40 @@ const HEPSIBURADA_2026_08: TarifeDonemi = {
   kontrol: "23 Kasım 2026",
 };
 
+const N11_2026_11: TarifeDonemi = {
+  id: "n11-2026-11",
+  platform: "n11",
+  // Mağaza 26 Kas 2026'da açıldı; tablo o ayın fiyatı.
+  baslangic: istanbul(2026, 11, 1),
+  varsayilanFirma: "dhl",
+  barem: {
+    sinir: 300,
+    desiSiniri: 10,
+    kosul: "sartli",
+    bantlar: [
+      { ust: 149.99, standart: { ptt: 38.74, aras: 48.33, surat: 54.58, kolaygelsin: 55.83, dhl: 57.08, yurtici: 83.33 } },
+      { ust: 299.99, standart: { ptt: 70.41, aras: 79.16, surat: 85.41, kolaygelsin: 86.66, dhl: 87.91, yurtici: 113.33 } },
+    ],
+  },
+  desi: {
+    // DHL e-Commerce, 0–50 desi (0 ve "dosya" 1 desiyle aynı). 50 üstü son adımla (+35,16) uzar.
+    dhl: [
+      99.16, 99.16, 99.16, 112.35, 126.03, 137.75, 151.43, 160.22, 170, 181.72, 191.49, 201.26, 212.01, 221.78,
+      231.55, 246.2, 283.33, 297.01, 316.55, 341.95, 359.54, 373.22, 381.04, 408.39, 433.8, 460.18, 486.56,
+      512.94, 539.32, 565.7, 593.05, 628.21, 663.37, 698.53, 733.69, 768.85, 804.01, 839.17, 874.33, 909.49,
+      944.65, 979.81, 1014.97, 1050.13, 1085.29, 1120.45, 1155.61, 1190.77, 1225.93, 1261.09, 1296.25,
+    ],
+  },
+  iade: "desi",
+  ekBedelOrani: 0.0235,
+  kontrol: "26 Kasım 2026",
+};
+
 /** Dönemler — eskiden yeniye. Yeni tarife: sona ekle, öncekine `bitis` ver. */
 export const KARGO_TARIFELERI: Record<KargoPlatformu, readonly TarifeDonemi[]> = {
   trendyol: [TRENDYOL_2026_08],
   hepsiburada: [HEPSIBURADA_2026_08],
+  n11: [N11_2026_11],
 };
 
 /** Siparişin kargo bilgileri — pazaryeri siparişinden okunur. Hepsi isteğe bağlı. */
@@ -232,9 +283,12 @@ export interface KargoBaglami {
   kargoyaVermeGunu?: number | null;
   /** Barem bandına bakılacak tutar; verilmezse sipariş toplamı. (Hepsiburada: müşterinin ödediği.) */
   baremTutari?: number | null;
+  /** n11: kargoyu kim öder (kargo şablonu). Alıcı ya da pazaryeri öderse satıcıya kargo kesilmez. */
+  odeyen?: KargoOdeyen | null;
 }
 
-export type KargoFiyatTuru = "barem-avantajli" | "barem" | "desi";
+/** "alici" / "pazaryeri": kargo satıcıya kesilmedi (n11 şablonu alıcı ya da n11 öder). */
+export type KargoFiyatTuru = "barem-avantajli" | "barem" | "desi" | "alici" | "pazaryeri";
 
 export interface KargoTahmini {
   /** KDV HARİÇ TL. */
@@ -246,7 +300,13 @@ export interface KargoTahmini {
   donemId: string;
 }
 
-const PLATFORMLAR = new Set<string>(["trendyol", "hepsiburada"]);
+const PLATFORMLAR = new Set<string>(["trendyol", "hepsiburada", "n11"]);
+
+/** Dönemin oransal ek bedeli (posta hizmet bedeli) eklenmiş fiyat — kuruşa yuvarlı. */
+function ekBedelli(donem: TarifeDonemi, fiyat: number): number {
+  const oran = donem.ekBedelOrani ?? 0;
+  return oran > 0 ? Math.round(fiyat * (1 + oran) * 100) / 100 : fiyat;
+}
 
 /** Pazaryerinin verdiği firma adı → firma kodu; tanınmazsa null. */
 export function kargoFirmasiKodu(ad: string | null | undefined): FirmaKodu | null {
@@ -301,7 +361,7 @@ function desiTahmini(donem: TarifeDonemi, firma: FirmaKodu, desi: number): Kargo
   const kendi = donem.desi[firma];
   const liste = kendi ?? donem.desi[donem.varsayilanFirma]!;
   return {
-    fiyat: desiListesiFiyati(liste, desi),
+    fiyat: ekBedelli(donem, desiListesiFiyati(liste, desi)),
     tur: "desi",
     firma: kendi ? firma : donem.varsayilanFirma,
     desi: fiyatDesisi(desi),
@@ -326,19 +386,30 @@ export function kargoTahmini(
   const tutarHam = baglam?.baremTutari ?? siparisTutari;
   const tutar = Number.isFinite(tutarHam) ? Math.max(0, tutarHam as number) : 0;
   const d = fiyatDesisi(desi);
+  // Kargoyu alıcı ya da pazaryeri ödüyorsa (n11 şablonu) satıcıya kesilen kargo yok.
+  if (baglam?.odeyen === "alici" || baglam?.odeyen === "pazaryeri") {
+    return { fiyat: 0, tur: baglam.odeyen, firma, desi: d, donemId: donem.id };
+  }
   const { barem } = donem;
   const baremde =
     tutar < barem.sinir &&
     (barem.desiSiniri == null || d <= barem.desiSiniri) &&
     (barem.kosul !== "gun1" ||
-      (typeof baglam?.kargoyaVermeGunu === "number" && baglam.kargoyaVermeGunu <= 1));
+      (typeof baglam?.kargoyaVermeGunu === "number" && baglam.kargoyaVermeGunu <= 1)) &&
+    (barem.kosul !== "sartli" || baglam?.odeyen === "sartli");
   if (baremde) {
     const bant = barem.bantlar.find((b) => tutar <= b.ust) ?? barem.bantlar[barem.bantlar.length - 1];
     const avantajli =
       barem.kosul === "hizli" && baglam?.hizliTeslimat === true && baglam?.gecKargolandi !== true;
     const fiyat = (avantajli ? bant.avantajli?.[firma] : undefined) ?? bant.standart[firma];
     if (typeof fiyat === "number") {
-      return { fiyat, tur: avantajli && bant.avantajli?.[firma] != null ? "barem-avantajli" : "barem", firma, desi: d, donemId: donem.id };
+      return {
+        fiyat: ekBedelli(donem, fiyat),
+        tur: avantajli && bant.avantajli?.[firma] != null ? "barem-avantajli" : "barem",
+        firma,
+        desi: d,
+        donemId: donem.id,
+      };
     }
     // Firma barem kapsamında değil → desi listesi.
   }
@@ -377,13 +448,15 @@ export function desiFiyatindanDesi(
   if (!donem || !Number.isFinite(fiyatKdvHaric)) return null;
   const liste = donem.desi[firmaSec(donem, firma)] ?? donem.desi[donem.varsayilanFirma]!;
   for (let d = 1; d < liste.length; d++) {
-    if (Math.abs(liste[d] - fiyatKdvHaric) < 0.02) return d;
+    if (Math.abs(ekBedelli(donem, liste[d]) - fiyatKdvHaric) < 0.02) return d;
   }
   return null;
 }
 
 /** Bir tahminin kısa açıklaması (sipariş dökümü için, son kullanıcı dili). */
 export function kargoTahminiEtiketi(t: Pick<KargoTahmini, "tur" | "firma" | "desi">): string {
+  if (t.tur === "alici") return "Kargoyu alıcı ödüyor";
+  if (t.tur === "pazaryeri") return "Kargoyu pazaryeri ödüyor";
   const firma = KARGO_FIRMA_ADLARI[t.firma];
   // Sabit fiyatlı baremde de paketin desisi yazar ("kaç desiden hesaplandı" her zaman görünsün).
   if (t.tur === "barem-avantajli") return `${firma} · hızlı teslimat fiyatı · ${t.desi} desi`;

@@ -63,6 +63,23 @@ export const HEPSIBURADA_STATUS_KINDS: Record<string, StatusInfo> = {
   ReturnRequested: { kind: "delivered", label: "İade talebi" },
 };
 
+/**
+ * n11 paket durumları (REST shipmentPackages `shipmentPackageStatus`, doküman v10). İade edilen paket
+ * ayrı bir durum değil, `isReturned` işaretiyle gelir → `core/n11-siparis.ts` ham durumu "Returned"
+ * yapar (aşağıdaki son satır; n11'in kendi adı değil).
+ */
+export const N11_STATUS_KINDS: Record<string, StatusInfo> = {
+  Created: { kind: "pending", label: "Yeni Sipariş" },
+  Picking: { kind: "processing", label: "Hazırlanıyor" },
+  Shipped: { kind: "shipped", label: "Kargoda" },
+  Delivered: { kind: "delivered", label: "Teslim Edildi" },
+  Cancelled: { kind: "cancelled", label: "İptal" },
+  // Trendyol'daki gibi: paket bölündü, satış duruyor (iptal değil).
+  UnPacked: { kind: "processing", label: "Paket Bölündü" },
+  UnSupplied: { kind: "cancelled", label: "Tedarik Edilemedi" },
+  Returned: { kind: "cancelled", label: "İade" },
+};
+
 // ⚠️ Etiketler manuel sipariş penceresindeki durum listesiyle AYNI olmak zorunda
 // (components/orders/ManualOrderDialog.tsx): kullanıcı orada seçtiği adı burada aynen görmeli.
 export const MANUAL_STATUS_KINDS: Record<string, StatusInfo> = {

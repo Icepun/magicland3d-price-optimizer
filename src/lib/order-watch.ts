@@ -15,6 +15,9 @@ import { TrendyolClient } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
+import { N11Client } from "@/services/n11-client";
+import { n11KimligiVarsa } from "@/services/n11-settings";
+import { n11PaketiCoz } from "@/core/n11-siparis";
 
 /**
  * Sipariş & stok izleyici — sunucu tarafında periyodik çalışır (yazıcı relay'i gibi).
@@ -95,7 +98,7 @@ export interface ScanLine extends ScanKeys {
 }
 
 export interface ScanOrder {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   id: string;
   orderNumber: string;
   /** Siparişin verildiği an (epoch ms) — "yeni mi?" kararı için; bilinmiyorsa null. */
@@ -358,11 +361,37 @@ async function fetchHepsiburadaScan(): Promise<ScanOrder[]> {
   return [...byOrder.values()];
 }
 
+/** n11: tarama penceresindeki paketler; bekleyen + hazırlanan siparişler aksiyon bekler. Bağlı değilse boş. */
+async function fetchN11Scan(): Promise<ScanOrder[]> {
+  const kimlik = await n11KimligiVarsa();
+  if (!kimlik) return [];
+  const sayfa = await new N11Client(kimlik).siparisPaketleri({ baslangic: Date.now() - SCAN_WINDOW_MS, bitis: Date.now(), boyut: 100 });
+  return sayfa.icerik.map((paket) => {
+    const s = n11PaketiCoz(paket);
+    return {
+      platform: "n11" as const,
+      id: s.id,
+      orderNumber: s.orderNumber,
+      orderedAtMs: s.tarihMs,
+      actionable: s.durum.kind === "pending" || s.durum.kind === "processing",
+      // Anahtarlar Siparişler ucuyla aynı: stok kodu barkod kovasında da aranır, kimlik önekli.
+      lines: s.kalemler.map((k) => ({
+        name: k.name,
+        quantity: k.quantity,
+        barcodes: keyList(k.barcode, k.stockCode),
+        externalIds: keyList(k.productId ? `n11-${k.productId}` : null),
+        skus: keyList(k.stockCode),
+      })),
+    };
+  });
+}
+
 async function fetchScanOrders(): Promise<ScanOrder[]> {
   const results = await Promise.all([
     fetchShopifyScan().catch(() => [] as ScanOrder[]),
     fetchTrendyolScan().catch(() => [] as ScanOrder[]),
     fetchHepsiburadaScan().catch(() => [] as ScanOrder[]),
+    fetchN11Scan().catch(() => [] as ScanOrder[]),
   ]);
   return results.flat();
 }

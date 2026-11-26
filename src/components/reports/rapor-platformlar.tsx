@@ -14,6 +14,7 @@ import { BosDurum, DolanCubuk, RaporKart } from "./rapor-ortak";
 export const PLATFORM_RENGI: Record<PlatformAnahtari, string> = {
   trendyol: "#F27A1A", // Trendyol marka turuncusu — Berke: "trendyol her yerde turuncu olmalı"
   hepsiburada: "#4F8CFF",
+  n11: "#FF44EE", // n11 marka pembesi
   shopify: "#34D399",
   manual: "#C9D2F2",
 };

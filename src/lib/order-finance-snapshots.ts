@@ -42,7 +42,8 @@ import {
 // "Bu satır güncel hesapla mı yazılmış?" — karşılaştırma TEK yerde (bkz. core/finance-version.ts).
 import { isFinanceSnapshotOutdated } from "@/core/finance-version";
 import { isPersistableOrderId } from "@/core/trendyol-order-id";
-import { gecerliSiparisOrani } from "@/core/order-commission";
+import { gecerliSiparisOrani, gecerliSiparisOraniSifirDahil } from "@/core/order-commission";
+import { n11KayitliKalemEk } from "@/core/n11-siparis";
 import { hbHizmetBedeli, hbKalemHesabi } from "@/core/hb-kesinti";
 import { tyKalemHesabi } from "@/core/ty-kesinti";
 import { bustCache } from "./route-cache";
@@ -180,7 +181,7 @@ export function kargoBaglamiOku(metin: string | null | undefined): KargoBaglami 
 export function kargoBaglamiYaz(baglam: KargoBaglami | null | undefined): string | null {
   if (!baglam) return null;
   const temiz: Record<string, unknown> = {};
-  for (const anahtar of ["firma", "hizliTeslimat", "gecKargolandi", "kargoyaVermeGunu", "baremTutari"] as const) {
+  for (const anahtar of ["firma", "hizliTeslimat", "gecKargolandi", "kargoyaVermeGunu", "baremTutari", "odeyen"] as const) {
     const deger = baglam[anahtar];
     if (deger !== undefined && deger !== null && deger !== "") temiz[anahtar] = deger;
   }
@@ -611,6 +612,14 @@ function countReason(into: Record<string, number>, keys: string[]): void {
   for (const key of keys) into[key] = (into[key] ?? 0) + 1;
 }
 
+/**
+ * Kalem geçmişindeki komisyon oranı. n11'de %0 GERÇEK bir orandır (kampanya); null yazılsaydı yeniden
+ * hesap ilanın/ürünün varsayılan oranına (Trendyol %21) düşerdi. Diğer pazaryerlerinde 0 = bilinmiyor.
+ */
+function kalemOrani(platform: string, oran: unknown): number | null {
+  return platform === "n11" ? gecerliSiparisOraniSifirDahil(oran) : gecerliSiparisOrani(oran);
+}
+
 /** Ham sorgu sonucu tamsayıları sürücüye göre BigInt gelebilir — karşılaştırmadan önce sadeleştir. */
 function toInt(value: unknown): number {
   return typeof value === "bigint" ? Number(value) : Number(value ?? 0);
@@ -646,7 +655,7 @@ async function readExistingItems(
         statusKind: String(row.statusKind ?? ""),
         currency: String(row.currency ?? "TRY"),
         commissionRate:
-          row.commissionRate == null ? null : gecerliSiparisOrani(Number(row.commissionRate)),
+          row.commissionRate == null ? null : kalemOrani(String(row.platform), Number(row.commissionRate)),
         vatRate: row.vatRate == null ? null : kdvYaDaNull(Number(row.vatRate)),
         dispatchDays: row.dispatchDays == null ? null : gunYaDaNull(toInt(row.dispatchDays)),
       });
@@ -954,7 +963,7 @@ export async function persistOrderFinanceSnapshots(
           lineRevenueKurus: unitPriceKurus * quantity,
           statusKind: order.statusKind,
           currency: order.currency || "TRY",
-          commissionRate: gecerliSiparisOrani(line.commissionRate),
+          commissionRate: kalemOrani(order.platform, line.commissionRate),
           vatRate: kdvYaDaNull(line.vatRate),
           dispatchDays: gunYaDaNull(line.dispatchDays),
         });
@@ -1674,12 +1683,17 @@ export async function recalculateFinanceMonths(
                 { mikroIhracat: row.microExportCountry != null }
               )
             : null;
+        // n11: pazarlama + pazaryeri hizmet bedeli ve stopaj kayıtlı kalemden, sabit oranlarla.
+        const n11Ek =
+          row.platform === "n11"
+            ? n11KayitliKalemEk({ unitPrice: kurusToTl(line.unitPriceKurus), quantity: line.quantity, vatRate: line.vatRate })
+            : null;
         const satirEk = {
           orderCommissionRate: line.commissionRate,
           saleVatRate: tyEk ? tyEk.saleVatRate : line.vatRate,
-          paymentFee: hbEk?.paymentFee ?? null,
+          paymentFee: hbEk?.paymentFee ?? n11Ek?.paymentFee ?? null,
           internationalFee: tyEk?.internationalFee ?? null,
-          stoppage: hbEk?.stoppage ?? tyEk?.stoppage ?? null,
+          stoppage: hbEk?.stoppage ?? tyEk?.stoppage ?? n11Ek?.stoppage ?? null,
         };
         const urunId = kalemUrunu(row.platform, line);
         const match = urunId ? productById.get(urunId) ?? null : null;

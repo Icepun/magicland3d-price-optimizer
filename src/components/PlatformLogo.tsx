@@ -15,7 +15,7 @@ export function PlatformLogo({
   className,
   style,
 }: {
-  platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
   className?: string;
   style?: CSSProperties;
 }) {
@@ -55,6 +55,14 @@ export function PlatformLogo({
   }
 
   // ── Yerleşik SVG fallback (logo yüklenmemişse) ──
+  if (platform === "n11") {
+    return (
+      <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true">
+        <text x="12" y="16.2" textAnchor="middle" fontSize="11.5" fontWeight="800" fill="currentColor"
+          fontFamily="ui-sans-serif, system-ui, sans-serif" letterSpacing="-0.6">n11</text>
+      </svg>
+    );
+  }
   if (platform === "hepsiburada") {
     return (
       <svg viewBox="0 0 24 24" className={className} style={style} aria-hidden="true"

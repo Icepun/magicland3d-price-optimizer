@@ -1,6 +1,8 @@
 import type { CommissionRuleInput } from "./types";
 import { HB_KOMISYON_KDV, hbSatisOncesiKesintiler } from "./hb-kesinti";
 import type { KargoBaglami } from "./kargo-tarife";
+import { n11SatisOncesiKesintiler } from "./n11-siparis";
+import { vatRateOf } from "./vat";
 
 /** Shopify sabit komisyon oranı (kesir, örn. 0.032). AppSetting'ten okunur, default %3.2. */
 export function getShopifyCommissionRate(
@@ -55,6 +57,9 @@ export function resolveListingCommissionOverride(
   if (listing.platform === "trendyol") {
     return { ...komisyon, kargoTarifesi: ilanKargoTarifesi(listing) };
   }
+  if (listing.platform === "n11") {
+    return { ...komisyon, ...n11SatisOncesiKesintiler(listing, vatRateOf(settings)), kargoTarifesi: ilanKargoTarifesi(listing) };
+  }
   if (listing.platform !== "hepsiburada") return komisyon;
   return { ...komisyon, ...hbSatisOncesiKesintiler(listing, settings), kargoTarifesi: ilanKargoTarifesi(listing) };
 }
@@ -65,12 +70,15 @@ export function resolveListingCommissionOverride(
  *    → avantajlı tablo (ölçüldü 22 Kas 2026: hızlı işaretli siparişlerin hepsi ~1 gün terminli).
  *    Termin bilinmiyorsa standart tablo (tedbirli).
  *  • Hepsiburada: barem kargoya verme süresi ≤ 1 günse; bilinmiyorsa desi listesi (tedbirli).
+ *  • n11: mağazanın kargo şablonu şartlı kargo (ilk siparişin `deliveryFeeType` = 3) → 300 TL altı
+ *    ve ≤ 10 desi sabit ücret, üstü DHL desi listesi.
  */
 export function ilanKargoTarifesi(listing: { platform: string; dispatchDays?: number | null }): {
   platform: string;
 } & KargoBaglami {
   const gun = typeof listing.dispatchDays === "number" && Number.isFinite(listing.dispatchDays) ? listing.dispatchDays : null;
   if (listing.platform === "trendyol") return { platform: "trendyol", hizliTeslimat: gun != null && gun <= 1 };
+  if (listing.platform === "n11") return { platform: "n11", odeyen: "sartli" };
   return { platform: listing.platform, kargoyaVermeGunu: gun };
 }
 
@@ -85,7 +93,8 @@ export function resolveListingCommissionOnly(
     // aynı ürün için "%12 KDV dahil" yazıyor). Motor oranı KDV DAHİL beklediği için burada çevrilir;
     // çevrilmezken Hepsiburada komisyonu her yerde %16,7 eksik düşülüyordu. Trendyol oranları
     // zaten KDV dahildir (ödeme kayıtlarıyla doğrulandı) → dokunulmaz.
-    const kdvCarpani = listing.platform === "hepsiburada" ? 1 + HB_KOMISYON_KDV / 100 : 1;
+    // n11 de oranı "%X + KDV" diye bildirir; senkron ilana KDV hariç kesri yazar.
+    const kdvCarpani = listing.platform === "hepsiburada" || listing.platform === "n11" ? 1 + HB_KOMISYON_KDV / 100 : 1;
     return {
       commissionRateOverride:
         listing.commissionRate != null ? listing.commissionRate * kdvCarpani : undefined,
@@ -96,7 +105,7 @@ export function resolveListingCommissionOnly(
     return { commissionRateOverride: getShopifyCommissionRate(settings) };
   }
   // Oran yok → kurallara düşülür: yalnız BU pazaryerinin kuralları (motor girdisine yayılır).
-  if (listing.platform === "trendyol" || listing.platform === "hepsiburada") {
+  if (listing.platform === "trendyol" || listing.platform === "hepsiburada" || listing.platform === "n11") {
     return { commissionPlatform: listing.platform };
   }
   return {};

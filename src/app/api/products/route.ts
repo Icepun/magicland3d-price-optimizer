@@ -36,7 +36,7 @@ const CreateProductSchema = z.object({
 });
 
 interface PlatformSummary {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   listingId: string;
   salePrice: number;
   stock: number;
@@ -448,6 +448,7 @@ async function computeProducts(urlString: string) {
         "shopify",
         "trendyol",
         "hepsiburada",
+        "n11",
       ];
       const primary = preferredPlatforms
         .map((platform) => platformSummaries.find((summary) => summary.platform === platform))
@@ -467,10 +468,12 @@ async function computeProducts(urlString: string) {
         const fallbackPlatform =
           platformFilter === "trendyol" ||
           platformFilter === "hepsiburada" ||
+          platformFilter === "n11" ||
           platformFilter === "shopify"
             ? platformFilter
             : product.source === "trendyol" ||
                 product.source === "hepsiburada" ||
+                product.source === "n11" ||
                 product.source === "shopify"
               ? product.source
               : "shopify";

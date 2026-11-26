@@ -31,7 +31,7 @@ import {
  * maliyet Raporlar'a hiç yansımazdı.
  */
 
-const Platform = z.enum(["shopify", "trendyol", "hepsiburada"]);
+const Platform = z.enum(["shopify", "trendyol", "hepsiburada", "n11"]);
 const Anahtar = z.object({
   platform: Platform,
   siparisId: z.string().min(1).max(200),

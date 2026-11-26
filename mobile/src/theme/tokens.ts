@@ -77,6 +77,7 @@ export const color = {
   shopify: "#34D399",
   trendyol: "#F27A1A",
   hepsiburada: "#4F8CFF",
+  n11: "#FF44EE",
   manual: "#C9D2F2",
 
   /** Çubuk grafiğin vurgusuz çubuğu ve ilerleme izi. */

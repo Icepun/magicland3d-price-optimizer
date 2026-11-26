@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { baglanacakUrunler } from "@/lib/urun-bagla-oneri";
 
 export interface UrunBaglaHedefi {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   satirAdi: string;
   gorsel: string | null;
   /** Satır şu an elle bağlıysa bağlı ürün (bağı değiştirme/kaldırma). */
@@ -45,6 +45,7 @@ const PLATFORM_ADI: Record<UrunBaglaHedefi["platform"], string> = {
   shopify: "Shopify",
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
 };
 
 function gorunenAd(u: Pick<UrunSecenegi, "name" | "alias" | "variantLabel">): string {

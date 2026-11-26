@@ -110,7 +110,7 @@ export function SiparisDokumKarti({
     ekle("hizmet", <Satir ad="Hizmet bedeli" rozet={d.hizmetGercek ? <Pill color={color.good}>gerçek</Pill> : null} tutar={d.hizmetBedeli} />);
   }
   if (d.tahsilatBedeli > 0) {
-    ekle("tahsilat", <Satir ad="Tahsilat bedeli" rozet={d.tahsilatGercek ? <Pill color={color.good}>gerçek</Pill> : null} tutar={d.tahsilatBedeli} />);
+    ekle("tahsilat", <Satir ad={siparis?.platform === "n11" ? "Pazarlama ve hizmet bedeli" : "Tahsilat bedeli"} rozet={d.tahsilatGercek ? <Pill color={color.good}>gerçek</Pill> : null} tutar={d.tahsilatBedeli} />);
   }
   if (d.uluslararasiBedel > 0) ekle("uluslararasi", <Satir ad="Uluslararası hizmet bedeli" tutar={d.uluslararasiBedel} />);
   if (d.kargoKuralYok) ekle("kargo-yok", <Not metin="Kargo kuralı yok — kargo 0 sayıldı." vurgu />);

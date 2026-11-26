@@ -80,7 +80,7 @@ type Row =
 const RowGap = () => <View style={{ height: space.sm }} />;
 
 /** Satırın kâr sütununa sığan en kısa platform adı (sabit genişlikte hizalanır). */
-const PLATFORM_KISA: Record<Platform, string> = { shopify: "S", trendyol: "TY", hepsiburada: "HB" };
+const PLATFORM_KISA: Record<Platform, string> = { shopify: "S", trendyol: "TY", hepsiburada: "HB", n11: "n11" };
 
 /**
  * ÜRÜNLER — arama (Türkçe duyarsız, çok kelimeli), dört süzgeç, varyant grupları (açılır).

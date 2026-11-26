@@ -99,7 +99,7 @@ import {
 } from "./etiket-yazdirma";
 
 type OrderStatusKind = "pending" | "processing" | "shipped" | "delivered" | "cancelled" | "other";
-type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "manual";
+type OrderPlatform = "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
 
 interface UnifiedOrderItem {
   name: string;
@@ -283,6 +283,8 @@ interface OrdersResponse {
     shopify: SummaryBucket;
     trendyol: SummaryBucket;
     hepsiburada: SummaryBucket;
+    /** n11 öncesi gövdede yok. */
+    n11?: SummaryBucket;
     manual?: SummaryBucket;
     total: SummaryBucket;
     quality?: SummaryQuality;
@@ -290,6 +292,7 @@ interface OrdersResponse {
   shopify: PlatformStatus;
   trendyol: PlatformStatus;
   hepsiburada: PlatformStatus;
+  n11?: PlatformStatus;
   /** Manuel siparişlerin okunma durumu — bozuk kayıt listeyi düşürmesin diye ayrı taşınır. */
   manual?: PlatformStatus;
   financeHistory?: {
@@ -307,6 +310,7 @@ const PLATFORM_INFO = {
   shopify: { label: "Shopify", color: "#34D399" },
   trendyol: { label: "Trendyol", color: "#F27A1A" },
   hepsiburada: { label: "Hepsiburada", color: "#4F8CFF" },
+  n11: { label: "n11", color: "#FF44EE" },
   manual: { label: "Manuel", color: "#C9D2F2" },
 } as const;
 /** Platform renginin %18 saydam hâli (rozet zemini). */
@@ -338,6 +342,7 @@ const SOURCE_LABEL: Record<string, string> = {
   shopify: "Shopify",
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
   manual: "Manuel",
 };
 
@@ -940,6 +945,8 @@ export default function OrdersPage() {
    * veriyle hesaplanmıştır ve bunu SÖYLEMEK zorundayız — "₺0" da bir cevap gibi görünüyor.
    */
   const missingSources = summary?.quality?.missingSources ?? [];
+  // n11 yalnız bağlıysa (ya da bu ay siparişi varsa) özet şeridinde ve süzgeçte görünür.
+  const n11Gorunur = Boolean((data?.n11 && !data.n11.notConfigured) || (summary?.n11?.orderCount ?? 0) > 0);
   const unknownStatusOrders = summary?.quality?.unknownStatusOrders ?? 0;
 
   const filtered = useMemo(
@@ -1117,7 +1124,7 @@ export default function OrdersPage() {
           (yoksa "sipariş yok" ekranı, aslında alınamamış veriyi sıfır gibi gösteriyordu). */}
       {summary && (summary.total.orderCount > 0 || missingSources.length > 0) && (
         <Card className="rounded-2xl border-white/[0.07] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.85)] overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-500 fill-mode-both">
-          <CardContent className="grid grid-cols-2 gap-3 py-3 md:grid-cols-3 xl:grid-cols-6">
+          <CardContent className={cn("grid grid-cols-2 gap-3 py-3 md:grid-cols-3", n11Gorunur ? "md:grid-cols-4 xl:grid-cols-7" : "xl:grid-cols-6")}>
             {ozetDonem && (
               <p className="col-span-full -mb-1 text-[11px] font-semibold uppercase tracking-wider text-[#A9AEFF]/80 animate-in fade-in duration-300">
                 Bu ay · {ozetDonem}
@@ -1151,6 +1158,14 @@ export default function OrdersPage() {
             <PlatformStat label="Shopify" platform="shopify" bucket={summary.shopify} status={data?.shopify} />
             <PlatformStat label="Trendyol" platform="trendyol" bucket={summary.trendyol} status={data?.trendyol} />
             <PlatformStat label="Hepsiburada" platform="hepsiburada" bucket={summary.hepsiburada} status={data?.hepsiburada} />
+            {n11Gorunur && (
+              <PlatformStat
+                label="n11"
+                platform="n11"
+                bucket={summary.n11 ?? { revenue: 0, profit: 0, orderCount: 0, incompleteOrders: 0 }}
+                status={data?.n11}
+              />
+            )}
             <PlatformStat label="Manuel" platform="manual" bucket={manualSummary} status={data?.manual} />
             {/* Rakamların eksik olduğunu SÖYLE — sessiz yarım toplam en tehlikelisi. */}
             {missingSources.length > 0 && (
@@ -1306,6 +1321,9 @@ export default function OrdersPage() {
       {data?.hepsiburada && !data.hepsiburada.ok && !data.hepsiburada.notConfigured && (
         <PlatformError platform="Hepsiburada" message={data.hepsiburada.error} />
       )}
+      {data?.n11 && !data.n11.ok && !data.n11.notConfigured && (
+        <PlatformError platform="n11" message={data.n11.error} />
+      )}
       {data?.manual && !data.manual.ok && (
         <PlatformError platform="Manuel" message={data.manual.error} />
       )}
@@ -1371,7 +1389,7 @@ export default function OrdersPage() {
       {/* Kontroller */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex gap-0.5 rounded-xl bg-white/[0.03] p-1 ring-1 ring-white/[0.07]">
-          {(["all", "shopify", "trendyol", "hepsiburada", "manual"] as const).map((p) => (
+          {(["all", "shopify", "trendyol", "hepsiburada", ...(n11Gorunur ? (["n11"] as const) : []), "manual"] as const).map((p) => (
             <button
               key={p}
               onClick={() => setPlatform(p)}
@@ -3028,7 +3046,7 @@ const OrderRow = memo(function OrderRow({
                 {!isCancelled && (order.paymentFee ?? 0) > 0 && (
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">
-                      Tahsilat bedeli
+                      {order.platform === "n11" ? "Pazarlama ve hizmet bedeli" : "Tahsilat bedeli"}
                       {order.actualPaymentFee && <GercekRozeti />}
                     </span>
                     <span className="tabular-nums text-muted-foreground">

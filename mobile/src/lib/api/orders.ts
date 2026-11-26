@@ -1,6 +1,7 @@
 import {
   HEPSIBURADA_STATUS_KINDS,
   MANUAL_STATUS_KINDS,
+  N11_STATUS_KINDS,
   TRENDYOL_STATUS_KINDS,
 } from "@core/order-status-kind";
 import { siparisListedeKalir } from "@core/order-window";
@@ -20,6 +21,7 @@ import { kargoGonderileriOku } from "@/lib/db/kargo-gonderileri";
 import { getShopifyOrders } from "@/lib/api/shopify";
 import { getTrendyolOrders } from "@/lib/api/trendyol";
 import { getHepsiburadaOrders } from "@/lib/api/hepsiburada";
+import { getN11Orders } from "@/lib/api/n11";
 import { orderWindowCutoff } from "@/lib/api/window";
 import { getManualOrdersSince, type ManualOrder } from "@/lib/db/manual-orders";
 import type { OrderPlatform } from "@/lib/platforms";
@@ -125,10 +127,11 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
     historyDays === 30
       ? orderWindowCutoff()
       : (Math.floor(Date.now() / 86_400_000) - historyDays) * 86_400_000;
-  const [sh, ty, hb, manual, kargolar] = await Promise.allSettled([
+  const [sh, ty, hb, n11, manual, kargolar] = await Promise.allSettled([
     getShopifyOrders(100, historyDays),
     getTrendyolOrders(historyDays),
     getHepsiburadaOrders(historyDays, hbKayittaAciklar),
+    getN11Orders(historyDays),
     getManualOrdersSince(cutoff),
     kargoGonderileriOku(),
   ]);
@@ -144,6 +147,8 @@ async function getOrdersForDays(historyDays: 30 | 60): Promise<OrdersResult> {
   else errors.push(`Trendyol: ${ty.reason?.message ?? ty.reason}`);
   if (hb.status === "fulfilled") orders.push(...hb.value);
   else errors.push(`Hepsiburada: ${hb.reason?.message ?? hb.reason}`);
+  if (n11.status === "fulfilled") orders.push(...n11.value);
+  else errors.push(`n11: ${n11.reason?.message ?? n11.reason}`);
   if (manual.status === "fulfilled") orders.push(...manual.value.map(manualOrderToUnified));
   else errors.push(`Manuel: ${manual.reason?.message ?? manual.reason}`);
 
@@ -318,6 +323,18 @@ const HEPSIBURADA_STATUS: Record<string, { label: string; tone: StatusTone }> = 
   Returned: { label: "İade", tone: "red" },
 };
 
+// n11 ham durumları (@core/n11-siparis: iade edilen paket "Returned") → rozet.
+const N11_STATUS: Record<string, { label: string; tone: StatusTone }> = {
+  Created: { label: "Yeni", tone: "orange" },
+  Picking: { label: "Hazırlanıyor", tone: "orange" },
+  UnPacked: { label: "Paket bölündü", tone: "orange" },
+  Shipped: { label: "Kargoda", tone: "accent" },
+  Delivered: { label: "Teslim", tone: "green" },
+  Cancelled: { label: "İptal", tone: "red" },
+  UnSupplied: { label: "Tedarik edilemedi", tone: "red" },
+  Returned: { label: "İade", tone: "red" },
+};
+
 const MANUAL_STATUS: Record<string, { label: string; tone: StatusTone }> = {
   pending: { label: "Bekliyor", tone: "orange" },
   processing: { label: "Hazırlanıyor", tone: "orange" },
@@ -334,7 +351,9 @@ export function statusInfo(o: UnifiedOrder): { label: string; tone: StatusTone }
       ? TRENDYOL_STATUS
       : o.platform === "hepsiburada"
         ? HEPSIBURADA_STATUS
-        : SHOPIFY_STATUS;
+        : o.platform === "n11"
+          ? N11_STATUS
+          : SHOPIFY_STATUS;
   return map[o.status] ?? { label: o.status, tone: "dim" };
 }
 
@@ -356,6 +375,12 @@ const CANCELLED_STATUS: Record<OrderPlatform, Set<string>> = {
     "UnSupplied",
   ]),
   hepsiburada: new Set(["UnDelivered", "Cancelled", "CancelledByMerchant", "CancelledByCustomer", "Returned"]),
+  // Ortak tablodaki "cancelled" kovası (@core/order-status-kind N11_STATUS_KINDS) ile birebir.
+  n11: new Set(
+    Object.entries(N11_STATUS_KINDS)
+      .filter(([, d]) => d.kind === "cancelled")
+      .map(([ad]) => ad)
+  ),
   manual: new Set(["cancelled"]),
 };
 
@@ -378,11 +403,12 @@ export function isIncompleteOrder(o: UnifiedOrder): boolean {
 /**
  * Pazaryeri tanımadığımız bir durum adı mı gönderdi? Sipariş satış da olabilir iade de —
  * masaüstü (api/orders route `statusUnknown`) onu ciroya KATMAZ ve finans geçmişine hiç YAZMAZ.
- * Yalnız Trendyol ve Hepsiburada: Shopify'ın kovası türetilir, manuel siparişi kullanıcı girer.
+ * Yalnız pazaryerleri: Shopify'ın kovası türetilir, manuel siparişi kullanıcı girer.
  */
 export function isUnknownStatusOrder(o: UnifiedOrder): boolean {
   if (o.platform === "trendyol") return !(o.status in TRENDYOL_STATUS_KINDS);
   if (o.platform === "hepsiburada") return !(o.status in HEPSIBURADA_STATUS_KINDS);
+  if (o.platform === "n11") return !(o.status in N11_STATUS_KINDS);
   return false;
 }
 

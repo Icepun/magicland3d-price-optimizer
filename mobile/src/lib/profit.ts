@@ -179,7 +179,7 @@ export function computeProductProfit(
       result,
       minOrderQty: result.minOrderQty,
       commissionMissing:
-        (listing.platform === "trendyol" || listing.platform === "hepsiburada") &&
+        (listing.platform === "trendyol" || listing.platform === "hepsiburada" || listing.platform === "n11") &&
         !result.appliedCommissionRule &&
         listing.commissionRate == null,
     };
@@ -193,6 +193,7 @@ export function computeProductProfit(
       "shopify",
       "trendyol",
       "hepsiburada",
+      "n11",
     ];
     // Komisyonu bilinmeyen ilan kâr kaynağı olamaz (masaüstüyle aynı).
     const primary = preferredPlatforms
@@ -205,6 +206,7 @@ export function computeProductProfit(
       const fallbackPlatform: Platform =
         detail.source === "trendyol" ||
         detail.source === "hepsiburada" ||
+        detail.source === "n11" ||
         detail.source === "shopify"
           ? detail.source
           : "shopify";

@@ -24,7 +24,7 @@ interface FilamentTuru {
 }
 
 export interface SatirMaliyetiHedefi {
-  platform: "shopify" | "trendyol" | "hepsiburada";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
   siparisId: string;
   siparisNo: string;
   satirAnahtari: string;

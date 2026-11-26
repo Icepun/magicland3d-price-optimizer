@@ -6,7 +6,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 
 const CreateSchema = z.object({
   productId: z.string().min(1),
-  platform: z.enum(["shopify", "trendyol", "hepsiburada"]),
+  platform: z.enum(["shopify", "trendyol", "hepsiburada", "n11"]),
   externalId: z.string().nullable().optional(),
   externalSku: z.string().nullable().optional(),
   barcode: z.string().trim().nullable().optional(),

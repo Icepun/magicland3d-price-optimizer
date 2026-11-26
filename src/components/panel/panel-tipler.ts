@@ -1,7 +1,7 @@
 /** Panel verilerinin tipleri — `/api/dashboard`, fiyat hareketleri, Bugün şeridi, sipariş özeti. */
 import type { BugunYazici } from "@/lib/panel-bugun";
 
-export type PanelPlatform = "shopify" | "trendyol" | "hepsiburada";
+export type PanelPlatform = "shopify" | "trendyol" | "hepsiburada" | "n11";
 
 export interface PlatformStats {
   platform: PanelPlatform;
@@ -99,6 +99,8 @@ export interface PanelSiparisleri {
     shopify: OzetKovasi;
     trendyol: OzetKovasi;
     hepsiburada: OzetKovasi;
+    /** n11 öncesi gövdede yok. */
+    n11?: OzetKovasi;
     manual?: OzetKovasi;
     total: OzetKovasi;
   };

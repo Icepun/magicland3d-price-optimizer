@@ -37,6 +37,7 @@ const yol = vi.hoisted(() => ({
 vi.mock("@/lib/api/shopify", () => ({ getShopifyOrders: async () => [] }));
 vi.mock("@/lib/api/trendyol", () => ({ getTrendyolOrders: async () => [] }));
 vi.mock("@/lib/api/hepsiburada", () => ({ getHepsiburadaOrders: async () => [] }));
+vi.mock("@/lib/api/n11", () => ({ getN11Orders: async () => [] }));
 vi.mock("@/lib/api/window", () => ({ orderWindowCutoff: () => 0 }));
 vi.mock("@/lib/db/manual-orders", () => ({ getManualOrdersSince: async () => [] }));
 vi.mock("@/lib/db/kargo-gonderileri", () => ({ kargoGonderileriOku: async () => ({}) }));
@@ -58,7 +59,7 @@ vi.mock("@/lib/order-profit", () => ({
   }),
 }));
 
-type Platform = "hepsiburada" | "trendyol" | "shopify";
+type Platform = "hepsiburada" | "trendyol" | "shopify" | "n11";
 
 interface Siparis {
   id: string;
@@ -78,7 +79,7 @@ interface FinansSatiri {
   statusKind: string;
 }
 
-const ONEK: Record<Platform, string> = { hepsiburada: "hb", trendyol: "ty", shopify: "sh" };
+const ONEK: Record<Platform, string> = { hepsiburada: "hb", trendyol: "ty", shopify: "sh", n11: "n11" };
 
 /** `tutar` null = kalem/tutar alınamadı. */
 const siparis = (platform: Platform, no: string, status: string, tutar: number | null): Siparis => ({
@@ -166,6 +167,18 @@ describe("ciro/kâr toplamlarının kümesi", () => {
     expect(isExcludedFromTotals(hb("E", "YeniBirDurum", 100))).toBe(true);
     expect(isExcludedFromTotals(siparis("trendyol", "F", "BilinmeyenDurum", 100))).toBe(true);
     expect(isExcludedFromTotals(siparis("trendyol", "G", "Picking", 100))).toBe(false);
+  });
+
+  it("n11: iade edilen paket (\"Returned\"), iptal ve tedarik edilemedi toplama girmez; tanınmayan durum da", async () => {
+    const { isExcludedFromTotals, isUnknownStatusOrder } = await kararlar();
+
+    expect(isExcludedFromTotals(siparis("n11", "1", "Picking", 349.99))).toBe(false);
+    expect(isExcludedFromTotals(siparis("n11", "2", "Delivered", 349.99))).toBe(false);
+    expect(isExcludedFromTotals(siparis("n11", "3", "UnPacked", 349.99))).toBe(false);
+    expect(isExcludedFromTotals(siparis("n11", "4", "Returned", 349.99))).toBe(true);
+    expect(isExcludedFromTotals(siparis("n11", "5", "Cancelled", 349.99))).toBe(true);
+    expect(isExcludedFromTotals(siparis("n11", "6", "UnSupplied", 349.99))).toBe(true);
+    expect(isUnknownStatusOrder(siparis("n11", "7", "Yeni", 349.99))).toBe(true);
   });
 
   it("Shopify'da 'tanınmayan durum' kuralı yok (masaüstüyle aynı)", async () => {

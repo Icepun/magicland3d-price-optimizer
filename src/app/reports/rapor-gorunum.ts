@@ -168,11 +168,12 @@ export function selaleSatirlari(dokum: KarDokumuYaniti, ay: FinanceBucket): Sela
 
 /* ── Platformlar ──────────────────────────────────────────────────────────────────────── */
 
-export type PlatformAnahtari = "trendyol" | "hepsiburada" | "shopify" | "manual";
+export type PlatformAnahtari = "trendyol" | "hepsiburada" | "n11" | "shopify" | "manual";
 
 export const PLATFORM_ADLARI: Record<PlatformAnahtari, string> = {
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
   shopify: "Shopify",
   manual: "Elle",
 };

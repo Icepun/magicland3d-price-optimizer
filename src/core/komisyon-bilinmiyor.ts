@@ -14,7 +14,7 @@ export function komisyonBilinmiyor(
   sim: { appliedCommissionRule?: unknown },
 ): boolean {
   return (
-    (listing.platform === "trendyol" || listing.platform === "hepsiburada") &&
+    (listing.platform === "trendyol" || listing.platform === "hepsiburada" || listing.platform === "n11") &&
     listing.commissionRate == null &&
     !sim.appliedCommissionRule
   );

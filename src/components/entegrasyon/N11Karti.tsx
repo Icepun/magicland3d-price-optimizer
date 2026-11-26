@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CheckCircle2, KeyRound, PlugZap } from "lucide-react";
+import { CheckCircle2, KeyRound, PlugZap, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ export function N11Karti() {
   const [anahtar, setAnahtar] = useState("");
   const [sifre, setSifre] = useState("");
   const [sonuc, setSonuc] = useState<{ urun: number; siparis: number } | null>(null);
+  const [esitleme, setEsitleme] = useState<{ bagli: number; bekleyen: number; degisen: number } | null>(null);
 
   const kaydet = useMutation({
     mutationFn: () =>
@@ -36,6 +37,7 @@ export function N11Karti() {
       }),
     onSuccess: (d) => {
       qc.setQueryData(["n11-settings"], d);
+      qc.invalidateQueries({ queryKey: ["integrations-status"] });
       setAnahtar("");
       setSifre("");
       setSonuc(null);
@@ -52,6 +54,29 @@ export function N11Karti() {
     },
     onError: (e: Error) => {
       setSonuc(null);
+      toast.error(e.message);
+    },
+  });
+
+  // Ürünleri eşitle: stok kodu tutan ilanlar ürünlere bağlanır, kalanlar "Ürün Seç" havuzuna düşer,
+  // bağlı ilanların fiyatı tazelenir. n11'e hiçbir şey yazılmaz.
+  const esitle = useMutation({
+    mutationFn: () =>
+      fetchJson<{ linked?: number; unmatched?: number; checked?: number; changed?: number }>("/api/n11/sync-products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "full" }),
+      }),
+    onSuccess: (d) => {
+      setEsitleme({ bagli: d.linked ?? 0, bekleyen: d.unmatched ?? 0, degisen: d.changed ?? 0 });
+      toast.success("n11 ürünleri eşitlendi");
+      qc.invalidateQueries({ queryKey: ["products"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      qc.invalidateQueries({ queryKey: ["unmatched-listings"] });
+    },
+    onError: (e: Error) => {
+      setEsitleme(null);
       toast.error(e.message);
     },
   });
@@ -109,10 +134,48 @@ export function N11Karti() {
         </CardContent>
       </Card>
 
-      <Button variant="outline" className="w-full" disabled={dene.isPending || !hazir || degisti} onClick={() => dene.mutate()}>
-        <PlugZap className={`h-4 w-4 mr-2 ${dene.isPending ? "animate-spin" : ""}`} />
-        {dene.isPending ? "Deneniyor…" : "Bağlantıyı Dene"}
-      </Button>
+      <div className="grid grid-cols-2 gap-3">
+        <Button variant="outline" disabled={dene.isPending || !hazir || degisti} onClick={() => dene.mutate()}>
+          <PlugZap className={`h-4 w-4 mr-2 ${dene.isPending ? "animate-spin" : ""}`} />
+          {dene.isPending ? "Deneniyor…" : "Bağlantıyı Dene"}
+        </Button>
+        <Button variant="outline" disabled={esitle.isPending || !hazir || degisti} onClick={() => esitle.mutate()}>
+          <RefreshCw className={`h-4 w-4 mr-2 ${esitle.isPending ? "animate-spin" : ""}`} />
+          {esitle.isPending ? "Eşitleniyor…" : "Ürünleri Eşitle"}
+        </Button>
+      </div>
+
+      {esitle.isPending && (
+        <div className="space-y-1.5 animate-in fade-in duration-300" role="status">
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div className="h-full w-1/3 rounded-full bg-gradient-to-r from-[#9B5CFF] to-[#4F8CFF] animate-[n11-kayan_1.2s_ease-in-out_infinite] motion-reduce:animate-none motion-reduce:w-full motion-reduce:opacity-60" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">n11 ürünleri okunuyor ve ürünlerinle eşleştiriliyor…</p>
+          <style>{`@keyframes n11-kayan { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
+        </div>
+      )}
+
+      {esitleme && !esitle.isPending && (
+        <Card className="border-[#7A7EFF]/40 bg-[#7A7EFF]/5 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <CardContent className="grid grid-cols-3 gap-3 py-4 text-center">
+            {([
+              ["Bağlandı", esitleme.bagli],
+              ["Eşleşme bekliyor", esitleme.bekleyen],
+              ["Fiyatı değişti", esitleme.degisen],
+            ] as const).map(([ad, sayi], i) => (
+              <div key={ad} className="animate-in fade-in zoom-in-95 duration-500 fill-mode-both" style={{ animationDelay: `${i * 90}ms` }}>
+                <p className="text-lg font-semibold tabular-nums">{sayi.toLocaleString("tr-TR")}</p>
+                <p className="text-[11px] text-muted-foreground">{ad}</p>
+              </div>
+            ))}
+            {esitleme.bekleyen > 0 && (
+              <p className="col-span-3 text-[11px] text-muted-foreground">
+                Eşleşmeyenleri Ürünler sayfasında &quot;Ürün Seç&quot; ile bağlayabilirsin.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {sonuc && (
         <Card className="border-green-500/40 bg-green-500/5 animate-in fade-in slide-in-from-bottom-2 duration-300">

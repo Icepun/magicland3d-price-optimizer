@@ -30,6 +30,9 @@ import { TrendyolClient, type TrendyolOrder } from "@/services/trendyol-client";
 import { getTrendyolCredentials } from "@/services/trendyol-settings";
 import { HepsiburadaClient } from "@/services/hepsiburada-client";
 import { getHepsiburadaCredentials } from "@/services/hepsiburada-settings";
+import { N11Client } from "@/services/n11-client";
+import { n11KimligiVarsa } from "@/services/n11-settings";
+import { n11PaketiCoz, n11Pencereleri } from "@/core/n11-siparis";
 import { resolveProductCost } from "@/core/product-cost";
 import { filamentFiyatlariOku } from "@/lib/filament-fiyatlari";
 import {
@@ -135,7 +138,7 @@ export interface UnifiedOrderItem {
 }
 
 export interface UnifiedOrder {
-  platform: "shopify" | "trendyol" | "hepsiburada" | "manual";
+  platform: "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
   id: string;
   orderNumber: string;
   date: string | null;
@@ -557,12 +560,13 @@ const ORDERS_PASIF_SOFT_MS = 5 * 60_000;
 // bir çizgi vardı: ne kadar kaldığı belli değildi. Burada her kaynak bittikçe durumu işaretlenir;
 // arayüz `GET /api/orders?stage=1` ile "3/4 kaynak alındı" diyebiliyor. Bu uç veritabanına ve
 // pazaryerlerine HİÇ dokunmaz (yalnız bellekteki durumu okur) → beklerken sorulması bedava.
-type OrdersSourceKey = "shopify" | "trendyol" | "hepsiburada" | "manual";
+type OrdersSourceKey = "shopify" | "trendyol" | "hepsiburada" | "n11" | "manual";
 type OrdersSourceState = "pending" | "done" | "error" | "skipped";
 const ORDERS_SOURCE_KEYS: OrdersSourceKey[] = [
   "shopify",
   "trendyol",
   "hepsiburada",
+  "n11",
   "manual",
 ];
 interface OrdersFetchStage {
@@ -577,6 +581,7 @@ function emptyStageSources(): OrdersFetchStage["sources"] {
     shopify: { state: "pending", count: 0 },
     trendyol: { state: "pending", count: 0 },
     hepsiburada: { state: "pending", count: 0 },
+    n11: { state: "pending", count: 0 },
     manual: { state: "pending", count: 0 },
   };
 }
@@ -737,13 +742,14 @@ async function computeOrdersBodyInner(
   let shopify: PlatformStatus = { ok: false, count: 0 };
   let trendyol: PlatformStatus = { ok: false, count: 0 };
   let hepsiburada: PlatformStatus = { ok: false, count: 0 };
+  let n11: PlatformStatus = { ok: false, count: 0 };
   // Manuel siparişler de kendi durumunu taşır: okunamayan TEK kayıt yüzünden üç pazaryerinden
   // yeni çekilmiş bütün veriyi çöpe atmıyoruz (aşağıya bkz.).
   let manualSource: PlatformStatus = { ok: true, count: 0 };
 
   // Ham siparişleri çek (her platform bağımsız) ──────────────────────────────
   type Raw = {
-    platform: "shopify" | "trendyol" | "hepsiburada";
+    platform: "shopify" | "trendyol" | "hepsiburada" | "n11";
     id: string;
     orderNumber: string;
     date: string | null;
@@ -783,14 +789,23 @@ async function computeOrdersBodyInner(
 
   // AŞAMA 1'i ATLA: kâr girdisi az önce değiştiyse ve birkaç dakikalık TAM bir ham çekim varsa
   // pazaryerlerine yeniden gidilmez (bkz. lib/orders-cache "AŞAMA 1"). Ham veri derin kopyadır.
-  type HamCekimVerisi = { raws: Raw[]; shopify: PlatformStatus; trendyol: PlatformStatus; hepsiburada: PlatformStatus };
+  type HamCekimVerisi = {
+    raws: Raw[];
+    shopify: PlatformStatus;
+    trendyol: PlatformStatus;
+    hepsiburada: PlatformStatus;
+    /** Eski ham çekimde yok (n11 öncesi) → "kurulu değil" sayılır, sonraki canlı çekim getirir. */
+    n11?: PlatformStatus;
+  };
   const hazirHam = hamCekimAl<HamCekimVerisi>(hamYasSiniriMs);
   if (hazirHam) {
     commitRaws(hazirHam.veri.raws);
     ({ shopify, trendyol, hepsiburada } = hazirHam.veri);
+    n11 = hazirHam.veri.n11 ?? { ok: false, count: 0, notConfigured: true };
     markOrdersSource(runId, "shopify", "done", shopify.count);
     markOrdersSource(runId, "trendyol", "done", trendyol.count);
     markOrdersSource(runId, "hepsiburada", "done", hepsiburada.count);
+    markOrdersSource(runId, "n11", "done", n11.count);
     // Ham veri bir dakikadan eskiyse kâr gövdesi yayınlandıktan hemen sonra canlı tazelensin.
     if (Date.now() - hazirHam.at > ORDERS_SOFT_MS) setTimeout(arkadaCanliTazele, 0);
   }
@@ -1209,11 +1224,82 @@ async function computeOrdersBodyInner(
     markOrdersSource(runId, "hepsiburada", "error");
   }
    })(),
+   (async () => {
+   // n11 (26 Kas 2026): paketler 1 aylık pencerelerle çekilir; çözümleme telefonla ORTAK çekirdekte
+   // (core/n11-siparis.ts). Yalnız okuma.
+   const buffer: Raw[] = [];
+   let kimlik: Awaited<ReturnType<typeof n11KimligiVarsa>>;
+   try {
+     kimlik = await n11KimligiVarsa();
+   } catch (error) {
+     n11 = { ok: false, count: 0, error: errorMessage(error) };
+     markOrdersSource(runId, "n11", "error");
+     return;
+   }
+   if (!kimlik) {
+     n11 = { ok: false, count: 0, notConfigured: true };
+     markOrdersSource(runId, "n11", "skipped");
+     return;
+   }
+   try {
+    const client = new N11Client(kimlik);
+    const gorulen = new Set<string>();
+    let eksik = 0;
+    // +1 gün pay: aşağıdaki historyRows süzgeci tam kırpar.
+    for (const pencere of n11Pencereleri(Date.now(), historyCutoff - 86_400_000)) {
+      const paketler = await client.tumSiparisPaketleri({ baslangic: pencere.baslangic, bitis: pencere.bitis });
+      for (const paket of paketler) {
+        const s = n11PaketiCoz(paket);
+        if (gorulen.has(s.id)) continue; // pencereler örtüşüyor
+        gorulen.add(s.id);
+        if (s.eksik) eksik++;
+        buffer.push({
+          platform: "n11",
+          id: s.id,
+          orderNumber: s.orderNumber,
+          date: s.tarihMs == null ? null : new Date(s.tarihMs).toISOString(),
+          statusKind: s.durum.kind,
+          statusLabel: s.durum.label,
+          statusUnknown: s.durum.unknown,
+          total: s.toplam,
+          currency: "TRY",
+          customer: s.musteri,
+          lines: s.kalemler.map((k) => ({
+            name: k.name,
+            quantity: k.quantity,
+            unitPrice: k.unitPrice,
+            image: null,
+            // Stok kodu Trendyol barkodlarıyla aynı biçimde → barkod kovasında da aranır.
+            barcodes: matchKeyList(k.barcode, k.stockCode),
+            // Sayısal n11 kimliği başka pazaryerinin kimliğiyle çakışmasın diye önekli.
+            externalIds: matchKeyList(k.productId ? "n11-" + k.productId : null),
+            skus: matchKeyList(k.stockCode),
+            commissionRate: k.commissionRate,
+            saleVatRate: k.saleVatRate,
+            paymentFee: k.paymentFee,
+            stoppage: k.stoppage,
+          })),
+          trackingNumber: s.takipNo,
+          cargoProvider: s.kargoFirmasi,
+          dataIncomplete: s.eksik,
+          kargo: s.kargo,
+          kargoIadesi: s.kargoIadesi,
+        });
+      }
+    }
+    commitRaws(buffer);
+    n11 = { ok: true, count: buffer.length, incompleteCount: eksik };
+    markOrdersSource(runId, "n11", "done", buffer.length);
+   } catch (e) {
+    n11 = { ok: false, count: 0, error: e instanceof Error ? e.message : "n11 siparişleri alınamadı" };
+    markOrdersSource(runId, "n11", "error");
+   }
+   })(),
   ]);
 
   // TAM bir canlı çekimi sakla (bir pazaryeri alınamadıysa saklanmaz: sonraki hesap yeniden dener).
-  if (!hazirHam && [shopify, trendyol, hepsiburada].every((p) => p.ok || p.notConfigured)) {
-    hamCekimYaz({ raws, shopify, trendyol, hepsiburada } satisfies HamCekimVerisi);
+  if (!hazirHam && [shopify, trendyol, hepsiburada, n11].every((p) => p.ok || p.notConfigured)) {
+    hamCekimYaz({ raws, shopify, trendyol, hepsiburada, n11 } satisfies HamCekimVerisi);
   }
 
   // Finans geçmişi için son 60 günü yeniden değerlendir (tarihsiz olanları da tut).
@@ -1716,7 +1802,7 @@ async function computeOrdersBodyInner(
       // Kargonun hesaplandığı desi + elle mi girildi (Siparişler'deki "Desi" düzenleme alanı için).
       cargoDesi: pr.cargoDesi,
       cargoDesiManual: pr.cargoDesiManual,
-      ...(r.platform === "trendyol" || r.platform === "hepsiburada" ? { cargoContext: r.kargo ?? null } : {}),
+      ...(r.platform === "trendyol" || r.platform === "hepsiburada" || r.platform === "n11" ? { cargoContext: r.kargo ?? null } : {}),
       returnLoss: returnLoss
         ? {
             loss: returnLoss.loss,
@@ -2011,6 +2097,7 @@ async function computeOrdersBodyInner(
   const sShopify = empty();
   const sTrendyol = empty();
   const sHepsiburada = empty();
+  const sN11 = empty();
   const sManual = empty();
   const unsupportedCurrencies = new Map<string, number>();
   const unknownStatuses = new Map<string, number>();
@@ -2025,7 +2112,9 @@ async function computeOrdersBodyInner(
         ? sTrendyol
         : platform === "hepsiburada"
           ? sHepsiburada
-          : sManual;
+          : platform === "n11"
+            ? sN11
+            : sManual;
   for (const o of ozetSiparisleri) {
     // Özet YALNIZ bu ay verilen siparişleri sayar; listede kalan eski açık elle sipariş kendi
     // ayının cirosunda zaten sayıldı.
@@ -2079,21 +2168,25 @@ async function computeOrdersBodyInner(
       sShopify.revenue +
       sTrendyol.revenue +
       sHepsiburada.revenue +
+      sN11.revenue +
       sManual.revenue,
     profit:
       sShopify.profit +
       sTrendyol.profit +
       sHepsiburada.profit +
+      sN11.profit +
       sManual.profit,
     orderCount:
       sShopify.orderCount +
       sTrendyol.orderCount +
       sHepsiburada.orderCount +
+      sN11.orderCount +
       sManual.orderCount,
     incompleteOrders:
       sShopify.incompleteOrders +
       sTrendyol.incompleteOrders +
       sHepsiburada.incompleteOrders +
+      sN11.incompleteOrders +
       sManual.incompleteOrders,
   };
   // Verisi ALINAMAYAN kaynaklar. "Kurulu değil" bu listeye girmez — o bir eksiklik değil,
@@ -2103,6 +2196,7 @@ async function computeOrdersBodyInner(
       [shopify, "Shopify"],
       [trendyol, "Trendyol"],
       [hepsiburada, "Hepsiburada"],
+      [n11, "n11"],
       [manualSource, "Manuel siparişler"],
     ] as Array<[PlatformStatus, string]>
   )
@@ -2146,6 +2240,7 @@ async function computeOrdersBodyInner(
       shopify: sShopify,
       trendyol: sTrendyol,
       hepsiburada: sHepsiburada,
+      n11: sN11,
       manual: sManual,
       total,
       quality,
@@ -2153,6 +2248,7 @@ async function computeOrdersBodyInner(
     shopify,
     trendyol,
     hepsiburada,
+    n11,
     manual: manualSource,
     financeHistory,
   };

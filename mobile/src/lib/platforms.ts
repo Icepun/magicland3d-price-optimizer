@@ -1,19 +1,20 @@
 /**
  * Tek kaynak: desteklenen satış platformları (Hepsiburada dahil).
  * Veri katmanı + UI buradan okur; yeni platform tek yerden eklenir.
- * Masaüstüyle aynı 3 platform: Shopify, Trendyol, Hepsiburada.
+ * Masaüstüyle aynı platformlar: Shopify, Trendyol, Hepsiburada, n11.
  */
-export type Platform = "shopify" | "trendyol" | "hepsiburada";
+export type Platform = "shopify" | "trendyol" | "hepsiburada" | "n11";
 export type OrderPlatform = Platform | "manual";
 
 /** Görüntü/işlem sırası. */
-export const PLATFORMS: readonly Platform[] = ["shopify", "trendyol", "hepsiburada"] as const;
+export const PLATFORMS: readonly Platform[] = ["shopify", "trendyol", "hepsiburada", "n11"] as const;
 export const ORDER_PLATFORMS: readonly OrderPlatform[] = [...PLATFORMS, "manual"] as const;
 
 export const PLATFORM_LABEL: Record<Platform, string> = {
   shopify: "Shopify",
   trendyol: "Trendyol",
   hepsiburada: "Hepsiburada",
+  n11: "n11",
 };
 
 export const ORDER_PLATFORM_LABEL: Record<OrderPlatform, string> = {
@@ -41,6 +42,8 @@ export const PLATFORM_COLOR: Record<Platform, string> = {
   shopify: "#34D399",
   trendyol: "#F27A1A",
   hepsiburada: "#4F8CFF",
+  // n11 marka pembesi (masaüstü `PLATFORM_RENGI` ile aynı).
+  n11: "#FF44EE",
 };
 
 export const ORDER_PLATFORM_COLOR: Record<OrderPlatform, string> = {

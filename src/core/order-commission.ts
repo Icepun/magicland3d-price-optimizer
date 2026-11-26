@@ -37,6 +37,31 @@ export function gecerliSiparisOrani(kesir: unknown): number | null {
   return kesir;
 }
 
+/**
+ * Sipariş kârına giren oran — SIFIR DAHİL. YALNIZ n11 siparişlerinde kullanılır (kâr motoru, masaüstü
+ * ve telefon kalem geçmişi): n11 oranı her kalemde AÇIKÇA bildirir ve kampanya döneminde gerçekten
+ * %0'dır (26 Kas 2026: 346 ürünün ve ilk siparişin hepsinde 0). Diğer pazaryerlerinde 0 "alan boş
+ * gelmiş" demektir → orada `gecerliSiparisOrani` (0 = bilinmiyor) kalır.
+ */
+export function gecerliSiparisOraniSifirDahil(kesir: unknown): number | null {
+  if (typeof kesir !== "number" || !Number.isFinite(kesir)) return null;
+  if (kesir < 0 || kesir >= 1) return null;
+  return kesir;
+}
+
+/**
+ * n11 kalemindeki komisyon YÜZDESİ → KDV dahil kesir. 0 geçerlidir (kampanya), alan yoksa null.
+ * n11 komisyonu "%X + KDV" diye bildirir (Hepsiburada gibi) → motorun beklediği KDV dahil orana
+ * çevrilir. Bugün tüm oranlar 0 olduğu için bu çarpanın rakama etkisi yok; ilk komisyonlu siparişte
+ * gerçek kesintiyle doğrulanmalı.
+ */
+export function n11SiparisKomisyonKesri(yuzde: unknown, kdvYuzde = 20): number | null {
+  if (yuzde == null || yuzde === "") return null;
+  const sayi = typeof yuzde === "number" ? yuzde : Number(yuzde);
+  if (!Number.isFinite(sayi) || sayi < 0 || sayi >= 100) return null;
+  return gecerliSiparisOraniSifirDahil(Math.round((sayi / 100) * (1 + kdvYuzde / 100) * 1_000_000) / 1_000_000);
+}
+
 /** `{ amount }` nesnesi ya da düz sayı → sayı (HB tutarları iki biçimde de gelebiliyor). */
 function tutarOku(v: unknown): number {
   if (typeof v === "number") return v;

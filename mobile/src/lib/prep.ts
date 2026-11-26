@@ -1,6 +1,7 @@
 import {
   HEPSIBURADA_STATUS_KINDS,
   MANUAL_STATUS_KINDS,
+  N11_STATUS_KINDS,
   SHOPIFY_STATUS_KINDS,
   TRENDYOL_STATUS_KINDS,
 } from "@core/order-status-kind";
@@ -22,6 +23,7 @@ export function orderPrepKind(o: UnifiedOrder): PrepStatusKind {
   if (o.platform === "manual") return MANUAL_STATUS_KINDS[o.status]?.kind ?? "other";
   if (o.platform === "trendyol") return TRENDYOL_STATUS_KINDS[o.status]?.kind ?? "other";
   if (o.platform === "hepsiburada") return HEPSIBURADA_STATUS_KINDS[o.status]?.kind ?? "other";
+  if (o.platform === "n11") return N11_STATUS_KINDS[o.status]?.kind ?? "other";
   return SHOPIFY_STATUS_KINDS[(o.status || "").toUpperCase()] ?? "other";
 }
 

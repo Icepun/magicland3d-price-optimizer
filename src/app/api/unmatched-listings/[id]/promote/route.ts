@@ -51,7 +51,7 @@ export async function POST(
       );
     }
 
-    const platformLabel = u.platform === "hepsiburada" ? "Hepsiburada" : "Trendyol";
+    const platformLabel = u.platform === "hepsiburada" ? "Hepsiburada" : u.platform === "n11" ? "n11" : "Trendyol";
     const product = await prisma.product
       .create({
         data: {

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * PAZARYERİ KARGO TARİFESİ — salt okunur görünüm (Trendyol / Hepsiburada).
+ * PAZARYERİ KARGO TARİFESİ — salt okunur görünüm (Trendyol / Hepsiburada / n11).
  *
  * Fiyatlar kullanıcı tarafından düzenlenmez: pazaryerinin kendi listesidir ve `core/kargo-tarife.ts`
  * içinde dönem dönem tutulur. Sipariş kârı ve Ürünler ekranı aynı tabloyu kullanır.
@@ -44,10 +44,14 @@ function bantEtiketi(donem: TarifeDonemi, i: number): string {
   return `${para.format(alt).replace(",00", "")}–${para.format(donem.barem.bantlar[i].ust)} ₺`;
 }
 
-/** Tutar hücresi — KDV anahtarı değişince yumuşak geçiş. */
-function Tutar({ deger, kdvli, vurgu }: { deger: number | undefined; kdvli: boolean; vurgu?: boolean }) {
+/**
+ * Tutar hücresi — KDV anahtarı değişince yumuşak geçiş. `ek`: fiyata eklenen oransal bedel (n11 posta
+ * hizmet bedeli) → tabloda kesilen tutarın kendisi görünür.
+ */
+function Tutar({ deger, kdvli, vurgu, ek = 0 }: { deger: number | undefined; kdvli: boolean; vurgu?: boolean; ek?: number }) {
   if (deger == null) return <span className="text-muted-foreground/40">—</span>;
-  const gosterilen = kdvli ? Math.round(deger * 1.2 * 100) / 100 : deger;
+  const ekli = ek > 0 ? Math.round(deger * (1 + ek) * 100) / 100 : deger;
+  const gosterilen = kdvli ? Math.round(ekli * 1.2 * 100) / 100 : ekli;
   return (
     <span
       key={kdvli ? "k" : "h"}
@@ -77,6 +81,15 @@ const ACIKLAMA: Record<KargoPlatformu, { barem: string; desi: string; kurallar: 
     kurallar: [
       { ikon: Truck, metin: "Kargoya verme süresi 2 gün olan ürüne ayrıca hizmet bedeli kesilir." },
       { ikon: RotateCcw, metin: "İade kargosu gidişle aynı fiyattan kesilir." },
+    ],
+  },
+  n11: {
+    barem: "Şartlı kargoda 300 ₺ altı ve 10 desiye kadar siparişlerde sabit fiyat.",
+    desi: "300 ₺ ve üstü, 10 desi üstü siparişler ve iade kargosu.",
+    kurallar: [
+      { ikon: Truck, metin: "Fiyatlara %2,35 posta hizmet bedeli dahildir." },
+      { ikon: Zap, metin: "Kargoyu alıcı ya da n11 öderse sana kargo kesilmez." },
+      { ikon: RotateCcw, metin: "İade kargosu desi fiyatından kesilir." },
     ],
   },
 };
@@ -189,16 +202,16 @@ export function PazaryeriTarifesi({
                         <td key={i} colSpan={2} className="px-0 py-1.5">
                           <div className="grid grid-cols-2">
                             <span className="px-3 text-right">
-                              <Tutar deger={b.avantajli?.[f]} kdvli={kdvli} vurgu={bizim} />
+                              <Tutar deger={b.avantajli?.[f]} kdvli={kdvli} vurgu={bizim} ek={donem.ekBedelOrani} />
                             </span>
                             <span className="px-3 text-right">
-                              <Tutar deger={b.standart[f]} kdvli={kdvli} vurgu={bizim} />
+                              <Tutar deger={b.standart[f]} kdvli={kdvli} vurgu={bizim} ek={donem.ekBedelOrani} />
                             </span>
                           </div>
                         </td>
                       ) : (
                         <td key={i} className="px-3 py-1.5 text-right">
-                          <Tutar deger={b.standart[f]} kdvli={kdvli} vurgu={bizim} />
+                          <Tutar deger={b.standart[f]} kdvli={kdvli} vurgu={bizim} ek={donem.ekBedelOrani} />
                         </td>
                       )
                     )}
@@ -261,7 +274,7 @@ export function PazaryeriTarifesi({
                     </td>
                     {firmalarD.map((f) => (
                       <td key={f} className="px-3 py-1.5 text-right">
-                        <Tutar deger={donem.desi[f]?.[d]} kdvli={kdvli} vurgu={f === donem.varsayilanFirma} />
+                        <Tutar deger={donem.desi[f]?.[d]} kdvli={kdvli} vurgu={f === donem.varsayilanFirma} ek={donem.ekBedelOrani} />
                       </td>
                     ))}
                   </tr>

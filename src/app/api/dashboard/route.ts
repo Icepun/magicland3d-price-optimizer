@@ -13,7 +13,7 @@ import { ensureRuntimeSchema } from "@/lib/runtime-schema";
 import { jsonError } from "@/lib/api-error";
 import { bustCache, swr } from "@/lib/route-cache";
 
-type Platform = "shopify" | "trendyol" | "hepsiburada";
+type Platform = "shopify" | "trendyol" | "hepsiburada" | "n11";
 
 interface PlatformStats {
   platform: Platform;
@@ -115,6 +115,7 @@ async function computeDashboard() {
     shopify: { platform: "shopify", activeListings: 0, missingCostListings: 0, totalProfit: 0, averageMargin: null, negativeProfitCount: 0, thinMarginCount: 0 },
     trendyol: { platform: "trendyol", activeListings: 0, missingCostListings: 0, totalProfit: 0, averageMargin: null, negativeProfitCount: 0, thinMarginCount: 0 },
     hepsiburada: { platform: "hepsiburada", activeListings: 0, missingCostListings: 0, totalProfit: 0, averageMargin: null, negativeProfitCount: 0, thinMarginCount: 0 },
+    n11: { platform: "n11", activeListings: 0, missingCostListings: 0, totalProfit: 0, averageMargin: null, negativeProfitCount: 0, thinMarginCount: 0 },
   };
 
   /**
@@ -126,6 +127,7 @@ async function computeDashboard() {
     shopify: { profit: 0, revenue: 0 },
     trendyol: { profit: 0, revenue: 0 },
     hepsiburada: { profit: 0, revenue: 0 },
+    n11: { profit: 0, revenue: 0 },
   };
 
   const problemProducts: Array<{
@@ -256,14 +258,17 @@ async function computeDashboard() {
 
   // Ortalama marjları hesapla — HB dahil (eskiden atlanıyordu → masaüstü HB marjı hep 0,
   // mobil hesaplıyordu; iki cihaz farklı değer gösteriyordu).
-  for (const platform of ["shopify", "trendyol", "hepsiburada"] as Platform[]) {
+  for (const platform of ["shopify", "trendyol", "hepsiburada", "n11"] as Platform[]) {
     const m = platformMargin[platform];
     // Ciro yoksa marj BİLİNMİYOR; 0 yazmak "marjımız sıfır" demek olurdu.
     platformStats[platform].averageMargin = m.revenue > 0 ? m.profit / m.revenue : null;
   }
 
   const grandTotalProfit =
-    platformStats.shopify.totalProfit + platformStats.trendyol.totalProfit + platformStats.hepsiburada.totalProfit;
+    platformStats.shopify.totalProfit +
+    platformStats.trendyol.totalProfit +
+    platformStats.hepsiburada.totalProfit +
+    platformStats.n11.totalProfit;
 
   // Stoğu bitenler en üstte, sonra stoğu 1 olanlar; eşitlikte ada göre (liste her açılışta aynı sırada).
   lowStockProducts.sort(
@@ -308,7 +313,8 @@ async function computeDashboard() {
     missingCost,
     negativeListings: totalNegativeListings,
     grandTotalProfit,
-    platforms: Object.values(platformStats),
+    // n11 yalnız ilanı varsa (bağlı olmayan kurulumda boş satır görünmesin).
+    platforms: Object.values(platformStats).filter((p) => p.platform !== "n11" || p.activeListings > 0),
     problemProducts: problemShown,
     problemTotal: problemProducts.length,
     problemShown: problemShown.length,
